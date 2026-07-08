@@ -20,15 +20,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/engine"
-	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 	"github.com/majorcontext/harness/provider/anthropic"
 )
 
 var version = "0.1.0-dev"
-
-const defaultModel = "anthropic/claude-fable-5"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -83,7 +81,7 @@ func runFlags(opts *runOptions) *flag.FlagSet {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fs.StringVar(&opts.prompt, "p", "", "the prompt (required)")
-	fs.StringVar(&opts.model, "model", defaultModel, "model ref, provider/model; overrides the persisted model when resuming")
+	fs.StringVar(&opts.model, "model", "", "model ref (provider/model) or alias; overrides the persisted model when resuming; default from config, else "+config.DefaultModel)
 	fs.StringVar(&opts.system, "system", "", "extra system prompt segment")
 	fs.IntVar(&opts.maxTokens, "max-tokens", 0, "per-response output token cap")
 	fs.BoolVar(&opts.jsonOut, "json", false, "emit the event stream as JSON lines instead of text")
@@ -95,16 +93,19 @@ func runFlags(opts *runOptions) *flag.FlagSet {
 	return fs
 }
 
-// sessionDir resolves where session logs live: $HARNESS_SESSION_DIR if set,
-// else $HOME/.harness/sessions. noSave yields "" (persistence disabled).
-// Nothing is created here; the engine creates the directory lazily on first
-// write.
-func sessionDir(noSave bool) (string, error) {
+// sessionDir resolves where session logs live, in precedence order:
+// -no-save (yields "", persistence disabled) > $HARNESS_SESSION_DIR >
+// configDir (config session_dir) > $HOME/.harness/sessions. Nothing is
+// created here; the engine creates the directory lazily on first write.
+func sessionDir(noSave bool, configDir string) (string, error) {
 	if noSave {
 		return "", nil
 	}
 	if dir := os.Getenv("HARNESS_SESSION_DIR"); dir != "" {
 		return dir, nil
+	}
+	if configDir != "" {
+		return configDir, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -166,7 +167,11 @@ func formatSessions(infos []engine.SessionInfo) string {
 }
 
 func sessionsCmd() error {
-	dir, err := sessionDir(false)
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	dir, err := sessionDir(false, cfg.SessionDir)
 	if err != nil {
 		return err
 	}
@@ -184,8 +189,9 @@ func runCmd(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	// -model has a non-empty default, so an explicit flag is only
-	// detectable via Visit (which walks flags that were actually set).
+	// Visit walks only flags that were actually set, so modelSet is true
+	// exactly when -model was passed explicitly — the signal resolveSession
+	// uses to let the flag override a resumed session's persisted model.
 	var modelSet bool
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "model" {
@@ -195,7 +201,13 @@ func runCmd(args []string) error {
 	if opts.prompt == "" {
 		return fmt.Errorf("-p <prompt> is required")
 	}
-	model, err := message.ParseModelRef(opts.model)
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	// Aliases resolve here; an empty -model falls back to the config's
+	// model, then the hard default.
+	model, err := cfg.ResolveModel(opts.model)
 	if err != nil {
 		return err
 	}
@@ -203,7 +215,7 @@ func runCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	sesDir, err := sessionDir(opts.noSave)
+	sesDir, err := sessionDir(opts.noSave, cfg.SessionDir)
 	if err != nil {
 		return err
 	}
@@ -232,7 +244,7 @@ func runCmd(args []string) error {
 	}
 
 	s, err := resolveSession(engine.Config{
-		Providers:  registry(),
+		Providers:  registry(cfg),
 		Model:      model,
 		System:     systemPrompt(workDir, opts.system),
 		MaxTokens:  opts.maxTokens,
@@ -260,12 +272,42 @@ func runCmd(args []string) error {
 	return nil
 }
 
-// registry wires up all known provider adapters. Keys are ModelRef.Provider
-// values. Auth is read here but validated only on first send.
-func registry() provider.Registry {
-	return provider.Registry{
-		anthropic.Family: &anthropic.Client{APIKey: os.Getenv("ANTHROPIC_API_KEY")},
+// loadConfig loads the effective configuration once: the user config file
+// plus, if present, the current directory's project override. This is the only
+// disk access on the boot path (one read, one stat) — no network, no process
+// spawn, no directory creation.
+func loadConfig() (*config.Config, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return nil, err
 	}
+	return config.LoadProject(dir)
+}
+
+// registry wires up all known provider adapters. Keys are ModelRef.Provider
+// values. Auth is read here but validated only on first send. Adding another
+// provider family is a two-line change: resolve its config with providerAuth
+// and add one entry to the returned map.
+func registry(cfg *config.Config) provider.Registry {
+	akey, base := providerAuth(cfg, anthropic.Family, "ANTHROPIC_API_KEY")
+	return provider.Registry{
+		anthropic.Family: &anthropic.Client{APIKey: akey, BaseURL: base},
+	}
+}
+
+// providerAuth resolves the API key and base URL for a provider family from
+// config, falling back to defaultKeyEnv when no api_key_env is configured.
+func providerAuth(cfg *config.Config, family, defaultKeyEnv string) (apiKey, baseURL string) {
+	keyEnv := defaultKeyEnv
+	if cfg != nil {
+		if p, ok := cfg.Providers[family]; ok {
+			if p.APIKeyEnv != "" {
+				keyEnv = p.APIKeyEnv
+			}
+			baseURL = p.BaseURL
+		}
+	}
+	return os.Getenv(keyEnv), baseURL
 }
 
 func systemPrompt(workDir, extra string) []string {
