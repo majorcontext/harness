@@ -218,18 +218,46 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
 }
 
+// handleAbort interrupts a session's in-flight prompt. Unknown session (not
+// resident and no session log on disk) is 404; a known session is 204 whether
+// or not anything was running (idempotent). A non-resident session cannot
+// have a prompt in flight, so a bare existence check suffices — the abort
+// never loads it into memory.
 func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
-	// Idempotent: cancel the in-flight prompt if any; always 204.
+	id := r.PathValue("id")
 	s.mu.Lock()
+	st := s.sessions[id]
 	var cancel context.CancelFunc
-	if st := s.sessions[r.PathValue("id")]; st != nil {
+	if st != nil {
 		cancel = st.cancel
 	}
 	s.mu.Unlock()
+	if st == nil && !s.sessionOnDisk(id) {
+		writeErr(w, http.StatusNotFound, "no such session")
+		return
+	}
 	if cancel != nil {
 		cancel()
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// sessionOnDisk reports whether a session log for id exists in the session
+// directory, without loading the session.
+func (s *Server) sessionOnDisk(id string) bool {
+	if s.opts.SessionDir == "" {
+		return false
+	}
+	infos, err := engine.ListSessions(s.opts.SessionDir)
+	if err != nil {
+		return false
+	}
+	for _, info := range infos {
+		if info.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // lookup resolves a session for read endpoints: the in-memory session (with

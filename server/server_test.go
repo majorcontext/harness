@@ -692,11 +692,58 @@ func TestAbortCancels(t *testing.T) {
 	}
 }
 
-func TestAbortUnknownSessionIsIdempotent(t *testing.T) {
+func TestAbortUnknownSessionNotFound(t *testing.T) {
 	h := newHarness(t, &scriptedProvider{name: "test"})
-	resp, _ := h.do("POST", "/session/ses_nope/abort", nil)
+	resp, data := h.do("POST", "/session/ses_nope/abort", nil)
+	if resp.StatusCode != 404 {
+		t.Fatalf("abort unknown status = %d, want 404", resp.StatusCode)
+	}
+	var e struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(data, &e); e.Error == "" {
+		t.Errorf("404 body missing error: %s", data)
+	}
+}
+
+func TestAbortIdleSessionIsIdempotent(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	id := h.createSession("test/m1")
+	resp, _ := h.do("POST", "/session/"+id+"/abort", nil)
 	if resp.StatusCode != 204 {
-		t.Fatalf("abort unknown status = %d, want 204", resp.StatusCode)
+		t.Fatalf("abort idle status = %d, want 204", resp.StatusCode)
+	}
+}
+
+func TestAbortColdSessionIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+
+	// Seed a session on disk only (a prior process wrote its log).
+	seedProv := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("hi")}}
+	seed := engine.NewSession(engine.Config{
+		Providers:  provider.Registry{"test": seedProv},
+		Model:      message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir: dir,
+	})
+	if _, err := seed.Prompt(context.Background(), "seed"); err != nil {
+		t.Fatal(err)
+	}
+	id := seed.ID
+
+	h := newHarnessDir(t, dir, &scriptedProvider{name: "test"})
+
+	resp, _ := h.do("POST", "/session/"+id+"/abort", nil)
+	if resp.StatusCode != 204 {
+		t.Fatalf("abort cold status = %d, want 204", resp.StatusCode)
+	}
+
+	// Nothing was running, so the abort must not have pulled the session
+	// into memory — an existence check against the session log is enough.
+	h.srv.mu.Lock()
+	_, loaded := h.srv.sessions[id]
+	h.srv.mu.Unlock()
+	if loaded {
+		t.Errorf("abort on a cold session loaded it into memory")
 	}
 }
 
