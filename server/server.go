@@ -55,6 +55,13 @@ type Options struct {
 	// unloaded from memory; they remain listable and promptable via a
 	// transparent reload from disk. 0 defaults to 32.
 	MaxResident int
+	// CORSOrigin, when non-empty, enables browser CORS support. Its literal
+	// value is echoed in the Access-Control-Allow-Origin header on every
+	// response (including 401s, so a browser can read the error), and "*" is
+	// honored as-is. OPTIONS preflight requests to any route are answered 204
+	// without authentication (preflights carry no credentials by spec). Empty
+	// (the default) disables CORS entirely — no CORS headers are emitted.
+	CORSOrigin string
 }
 
 // Server implements http.Handler for the harness serve API.
@@ -147,8 +154,26 @@ func (s *Server) routes() {
 	s.mux = mux
 }
 
-// ServeHTTP implements http.Handler.
+// ServeHTTP implements http.Handler. When CORS is enabled it layers the CORS
+// contract over the mux: the allow-origin/Vary headers on every response and a
+// short-circuited 204 for OPTIONS preflights (which carry no credentials, so
+// they bypass auth entirely).
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.opts.CORSOrigin != "" {
+		h := w.Header()
+		// Echo the configured origin (literal, including "*"). Setting it here,
+		// before the mux runs, means it rides along on every downstream response
+		// — success, 401, 404, or SSE — so a browser can always read the result.
+		h.Set("Access-Control-Allow-Origin", s.opts.CORSOrigin)
+		h.Set("Vary", "Origin")
+		if r.Method == http.MethodOptions {
+			h.Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Last-Event-ID")
+			h.Set("Access-Control-Max-Age", "600")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
 	s.mux.ServeHTTP(w, r)
 }
 
