@@ -69,6 +69,9 @@ func parseFrontmatter(fm string) (fields map[string]string, meta map[string]stri
 		}
 
 		if key == "metadata" {
+			if meta != nil {
+				return nil, nil, errors.New("duplicate frontmatter key: \"metadata\"")
+			}
 			if value != "" {
 				return nil, nil, errors.New("metadata must be a block mapping, not an inline value")
 			}

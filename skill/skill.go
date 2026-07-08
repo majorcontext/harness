@@ -40,6 +40,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // Filename is the fixed name of the skill definition file within a skill
@@ -133,19 +134,21 @@ func (s *Skill) validate() error {
 	if s.Description == "" {
 		return errors.New("missing or empty required field: description")
 	}
-	if len(s.Description) > maxDescriptionLen {
-		return fmt.Errorf("description is %d chars, exceeds maximum of %d", len(s.Description), maxDescriptionLen)
+	if n := utf8.RuneCountInString(s.Description); n > maxDescriptionLen {
+		return fmt.Errorf("description is %d chars, exceeds maximum of %d", n, maxDescriptionLen)
 	}
 
-	if s.Compatibility != "" && len(s.Compatibility) > maxCompatibilityLen {
-		return fmt.Errorf("compatibility is %d chars, exceeds maximum of %d", len(s.Compatibility), maxCompatibilityLen)
+	if s.Compatibility != "" {
+		if n := utf8.RuneCountInString(s.Compatibility); n > maxCompatibilityLen {
+			return fmt.Errorf("compatibility is %d chars, exceeds maximum of %d", n, maxCompatibilityLen)
+		}
 	}
 	return nil
 }
 
 // validateName enforces the name character and shape rules.
 func validateName(name string) error {
-	if len(name) < 1 || len(name) > maxNameLen {
+	if n := utf8.RuneCountInString(name); n < 1 || n > maxNameLen {
 		return fmt.Errorf("name %q must be 1-%d characters", name, maxNameLen)
 	}
 	if strings.HasPrefix(name, "-") || strings.HasSuffix(name, "-") {

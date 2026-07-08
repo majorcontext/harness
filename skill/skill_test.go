@@ -166,6 +166,48 @@ func TestLoadDescriptionRules(t *testing.T) {
 	}
 }
 
+func TestLoadMultibyteLengthLimits(t *testing.T) {
+	root := t.TempDir()
+	// Description of exactly 1024 multi-byte runes must be valid (character
+	// count, not byte count).
+	desc1024 := strings.Repeat("é", 1024)
+	d := writeSkill(t, root, "my-skill", "---\nname: my-skill\ndescription: "+desc1024+"\n---\nbody\n")
+	if _, err := Load(d); err != nil {
+		t.Fatalf("1024-rune description should be valid: %v", err)
+	}
+
+	desc1025 := strings.Repeat("é", 1025)
+	d = writeSkill(t, root, "my-skill", "---\nname: my-skill\ndescription: "+desc1025+"\n---\nbody\n")
+	if _, err := Load(d); err == nil || !strings.Contains(err.Error(), "description") {
+		t.Fatalf("1025-rune description should be invalid, got err=%v", err)
+	}
+
+	compat500 := strings.Repeat("é", 500)
+	d = writeSkill(t, root, "my-skill", "---\nname: my-skill\ndescription: ok\ncompatibility: "+compat500+"\n---\nbody\n")
+	if _, err := Load(d); err != nil {
+		t.Fatalf("500-rune compatibility should be valid: %v", err)
+	}
+
+	compat501 := strings.Repeat("é", 501)
+	d = writeSkill(t, root, "my-skill", "---\nname: my-skill\ndescription: ok\ncompatibility: "+compat501+"\n---\nbody\n")
+	if _, err := Load(d); err == nil || !strings.Contains(err.Error(), "compatibility") {
+		t.Fatalf("501-rune compatibility should be invalid, got err=%v", err)
+	}
+}
+
+func TestLoadDuplicateMetadataBlock(t *testing.T) {
+	root := t.TempDir()
+	body := "---\nname: my-skill\ndescription: ok\nmetadata:\n  a: 1\nmetadata:\n  b: 2\n---\nbody\n"
+	d := writeSkill(t, root, "my-skill", body)
+	_, err := Load(d)
+	if err == nil {
+		t.Fatalf("expected error for duplicate metadata block")
+	}
+	if !strings.Contains(err.Error(), "duplicate") || !strings.Contains(err.Error(), "metadata") {
+		t.Errorf("error %q should name a duplicate metadata key", err)
+	}
+}
+
 func TestLoadCompatibilityOversize(t *testing.T) {
 	root := t.TempDir()
 	body := "---\nname: my-skill\ndescription: ok\ncompatibility: " + strings.Repeat("y", 501) + "\n---\nbody\n"
