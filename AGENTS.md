@@ -71,6 +71,26 @@ Events v1: `session.status`, `question.asked`, `file.edited`.
 
 Reference for capability parity: the opencode plugins in `~/dev/web/.opencode/plugins/` — the protocol must be able to express everything they do.
 
+## External Protocol Surfaces
+
+Standards we conform to at the edges. The internal model (event log, canonical
+messages, hook protocol) is ours; these are adapters, never the internal
+representation.
+
+- **ACP (Agent Client Protocol, agentclientprotocol.com)** — the editor ↔ agent
+  standard (Zed, JetBrains, Neovim, Emacs). Implemented as a thin adapter in
+  `server/` mapping the event log to `session/update` notifications. Where our
+  event vocabulary has arbitrary naming choices, prefer ACP's names to keep the
+  adapter mechanical. We never send `session/request_permission` (no permission
+  system) — an agent that never asks is fully conformant. Note: this is Zed's
+  Agent *Client* Protocol, not IBM's dead Agent Communication Protocol.
+- **MCP** — client (consume tool servers) and server (expose sessions/tools)
+  modes. ACP forwards editor MCP config to us, so the two compose.
+- **OpenTelemetry GenAI semantic conventions** — for span/metric naming when
+  observability lands. Configuration via standard `OTEL_*` env vars only.
+- **A2A** — deliberately not implemented. Cross-org agent meshes are a
+  different layer; revisit only if a concrete need appears.
+
 ## Startup Speed Rules
 
 - Nothing touches network, subprocesses, or disk beyond one config file before first paint. Provider auth validates on first message send, not at boot.
