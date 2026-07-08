@@ -165,6 +165,33 @@ func TestLoadSessionCorruptMiddleLine(t *testing.T) {
 	}
 }
 
+func TestListSessionsSkipsCorruptFile(t *testing.T) {
+	dir := t.TempDir()
+	good := `{"type":"session","id":"ses_good","created_at":"2025-01-02T03:04:05Z"}
+{"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"hi"}]}}
+`
+	// Corrupt middle line: the shared corruption rule (scanLog) must make
+	// this file unlistable without breaking the listing of others.
+	bad := `{"type":"session","id":"ses_bad","created_at":"2025-01-02T03:04:05Z"}
+{"type":"message","message":{"id":"msg_1","ro
+{"type":"message","message":{"id":"msg_2","role":"user","parts":[{"type":"text","text":"hi"}]}}
+`
+	if err := os.WriteFile(filepath.Join(dir, "ses_good.jsonl"), []byte(good), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ses_bad.jsonl"), []byte(bad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	infos, err := ListSessions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 1 || infos[0].ID != "ses_good" {
+		t.Errorf("ListSessions = %+v, want just ses_good", infos)
+	}
+}
+
 func TestListSessions(t *testing.T) {
 	dir := t.TempDir()
 
