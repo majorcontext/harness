@@ -49,8 +49,10 @@ type apiBlock struct {
 	Content   []apiBlock `json:"content,omitempty"`
 	IsError   bool       `json:"is_error,omitempty"`
 
-	Thinking  string `json:"thinking,omitempty"`
-	Signature string `json:"signature,omitempty"`
+	// Thinking is a pointer because the API requires the field on thinking
+	// blocks even when empty — omitempty on a plain string drops it.
+	Thinking  *string `json:"thinking,omitempty"`
+	Signature string  `json:"signature,omitempty"`
 
 	Data string `json:"data,omitempty"` // redacted_thinking
 
@@ -214,7 +216,8 @@ func transcodeParts(parts message.Parts) ([]apiBlock, error) {
 			if data.Redacted != "" {
 				blocks = append(blocks, apiBlock{Type: "redacted_thinking", Data: data.Redacted})
 			} else {
-				blocks = append(blocks, apiBlock{Type: "thinking", Thinking: v.Text, Signature: data.Signature})
+				thinking := v.Text
+				blocks = append(blocks, apiBlock{Type: "thinking", Thinking: &thinking, Signature: data.Signature})
 			}
 
 		default:

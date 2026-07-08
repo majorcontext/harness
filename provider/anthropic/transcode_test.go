@@ -90,7 +90,8 @@ func TestTranscodeThinkingReplay(t *testing.T) {
 	if asst.Role != "assistant" {
 		t.Fatalf("role = %s", asst.Role)
 	}
-	if asst.Content[0].Type != "thinking" || asst.Content[0].Thinking != "let me think" || asst.Content[0].Signature != "sig123" {
+	if asst.Content[0].Type != "thinking" || asst.Content[0].Thinking == nil ||
+		*asst.Content[0].Thinking != "let me think" || asst.Content[0].Signature != "sig123" {
 		t.Errorf("thinking block = %+v", asst.Content[0])
 	}
 	if asst.Content[1].Type != "redacted_thinking" || asst.Content[1].Data != "opaque" {
@@ -127,6 +128,30 @@ func TestTranscodeToolCallAndResult(t *testing.T) {
 	}
 	if len(tr.Content) != 2 || tr.Content[0].Text != "file.go" || tr.Content[1].Source.Type != "base64" {
 		t.Errorf("tool_result content = %+v", tr.Content)
+	}
+}
+
+func TestTranscodeEmptyThinkingKeepsField(t *testing.T) {
+	// The API requires the "thinking" field on thinking blocks even when the
+	// text is empty; omitempty dropping it causes an invalid_request_error
+	// (found by harness building harness — a replayed empty thinking block
+	// 400ed mid-session).
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.Reasoning{Text: "", ProviderData: message.ProviderData{
+				Family: json.RawMessage(`{"signature":"sig123"}`),
+			}},
+			&message.Text{Text: "answer"},
+		}},
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "next"}}},
+	))
+	raw, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"thinking":""`) {
+		t.Errorf("empty thinking field omitted from wire request:\n%s", raw)
 	}
 }
 
