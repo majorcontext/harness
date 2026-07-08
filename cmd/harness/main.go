@@ -24,6 +24,7 @@ import (
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/provider"
 	"github.com/majorcontext/harness/provider/anthropic"
+	"github.com/majorcontext/harness/provider/openai"
 )
 
 var version = "0.1.0-dev"
@@ -289,9 +290,11 @@ func loadConfig() (*config.Config, error) {
 // provider family is a two-line change: resolve its config with providerAuth
 // and add one entry to the returned map.
 func registry(cfg *config.Config) provider.Registry {
-	akey, base := providerAuth(cfg, anthropic.Family, "ANTHROPIC_API_KEY")
+	akey, abase := providerAuth(cfg, anthropic.Family, "ANTHROPIC_API_KEY")
+	okey, obase := providerAuth(cfg, openai.Family, "OPENAI_API_KEY")
 	return provider.Registry{
-		anthropic.Family: &anthropic.Client{APIKey: akey, BaseURL: base},
+		anthropic.Family: &anthropic.Client{APIKey: akey, BaseURL: abase},
+		openai.Family:    &openai.Client{APIKey: okey, BaseURL: obase},
 	}
 }
 
