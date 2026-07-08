@@ -175,25 +175,21 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	}
 	text := strings.Join(texts, "\n")
 
-	st, ok := s.getOrLoad(id)
-	if !ok {
-		writeErr(w, http.StatusNotFound, "no such session")
+	// Resolve the session and atomically claim its prompt slot (also does the
+	// wg.Add under the admission gate). See claimForPrompt for the ordering that
+	// makes eviction races and drain admission impossible.
+	st, ctx, fromSeq, code := s.claimForPrompt(id)
+	if code != 0 {
+		switch code {
+		case http.StatusConflict:
+			writeErr(w, code, "session is busy with another prompt")
+		case http.StatusServiceUnavailable:
+			writeErr(w, code, "server shutting down")
+		default:
+			writeErr(w, http.StatusNotFound, "no such session")
+		}
 		return
 	}
-
-	// Claim the prompt slot before doing anything observable: only one prompt
-	// per session at a time.
-	s.mu.Lock()
-	if st.running {
-		s.mu.Unlock()
-		writeErr(w, http.StatusConflict, "session is busy with another prompt")
-		return
-	}
-	fromSeq := s.seq
-	ctx, cancel := context.WithCancel(context.Background())
-	st.running = true
-	st.cancel = cancel
-	s.mu.Unlock()
 
 	// Explicit model wins over the session's persisted model (CLI -model rule).
 	if !body.Model.IsZero() {
@@ -205,7 +201,6 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	}
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 
-	s.wg.Add(1)
 	go s.runPrompt(ctx, id, st, text)
 	writeJSON(w, http.StatusAccepted, map[string]int64{"seq": fromSeq})
 }
@@ -327,33 +322,69 @@ func (s *Server) lookup(id string) (*engine.Session, string, bool) {
 	return sess, "idle", true
 }
 
-// getOrLoad returns the in-memory session state for id, transparently loading
-// and registering an on-disk session when it is not resident.
-func (s *Server) getOrLoad(id string) (*sessionState, bool) {
+// claimForPrompt atomically resolves the session for id and claims its single
+// prompt slot. It replaces the old getOrLoad-then-claim two-step on the write
+// path, which left a gap between resolving the resident session and setting
+// st.running: in that gap a concurrent evictResidentLocked could unload the
+// session and a racing cold-load could insert a second, divergent
+// *engine.Session for the same log. Here the resolve and the claim complete in
+// ONE s.mu critical section, so a claimed (running) session can never be evicted
+// (evictResidentLocked skips running sessions) and no duplicate can appear.
+//
+// Loading an on-disk session may block, so it happens outside the lock; the
+// re-lock then re-checks both that no resident appeared meanwhile and that Drain
+// has not begun. On success it sets st.running, records the cancel func, and
+// does wg.Add(1) — all before releasing the lock. The wg.Add sits in the same
+// critical section that observed draining==false, so by mutex ordering it always
+// happens-before Drain's draining=true (and thus before wg.Wait): a WaitGroup
+// Add after Wait is impossible, and a prompt admitted during drain is impossible.
+//
+// On failure it returns a non-zero HTTP status and leaves nothing claimed:
+// StatusServiceUnavailable (draining), StatusNotFound (unknown session), or
+// StatusConflict (already running). code == 0 means success.
+func (s *Server) claimForPrompt(id string) (st *sessionState, ctx context.Context, fromSeq int64, code int) {
 	s.mu.Lock()
-	if st := s.sessions[id]; st != nil {
+	if s.draining {
 		s.mu.Unlock()
-		return st, true
+		return nil, nil, 0, http.StatusServiceUnavailable
 	}
+	st = s.sessions[id]
+	if st == nil {
+		// Not resident: load from disk with the lock released, then re-acquire.
+		s.mu.Unlock()
+		sess, err := s.opts.LoadSession(id)
+		if err != nil {
+			return nil, nil, 0, http.StatusNotFound
+		}
+		loaded := &sessionState{sess: sess, lastUsed: time.Now()}
+		s.mu.Lock()
+		// Drain may have begun during the unlocked load: re-check before we
+		// insert or claim, so no wg.Add slips past the admission gate.
+		if s.draining {
+			s.mu.Unlock()
+			return nil, nil, 0, http.StatusServiceUnavailable
+		}
+		if ex := s.sessions[id]; ex != nil {
+			st = ex // a resident appeared while we loaded; use the winner
+		} else {
+			s.sessions[id] = loaded
+			st = loaded
+		}
+	}
+	if st.running {
+		s.mu.Unlock()
+		return nil, nil, 0, http.StatusConflict
+	}
+	fromSeq = s.seq
+	ctx, cancel := context.WithCancel(context.Background())
+	st.running = true
+	st.cancel = cancel
+	s.wg.Add(1)
+	// A cold load grew the resident set; cap it now. st is running, so
+	// evictResidentLocked will not evict the session we just claimed.
+	s.evictResidentLocked()
 	s.mu.Unlock()
-
-	sess, err := s.opts.LoadSession(id)
-	if err != nil {
-		return nil, false
-	}
-	st := &sessionState{sess: sess, lastUsed: time.Now()}
-	s.mu.Lock()
-	if ex := s.sessions[id]; ex != nil {
-		st = ex // lost a race; use the winner
-	} else {
-		s.sessions[id] = st
-		// A cold load grows the resident set; cap it. The just-loaded session
-		// is the newest, so it is never the one evicted, and every other
-		// resident session is already on disk.
-		s.evictResidentLocked()
-	}
-	s.mu.Unlock()
-	return st, true
+	return st, ctx, fromSeq, 0
 }
 
 // buildSession assembles the Session shape without holding s.mu across engine

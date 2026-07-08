@@ -74,12 +74,13 @@ type Server struct {
 	closing   chan struct{}
 	closeOnce sync.Once
 
-	mu      sync.Mutex
-	seq     int64                    // global monotonic durable sequence
-	journal []Event                  // in-memory durable records, for replay
-	jf      *os.File                 // events.jsonl handle (nil when disabled)
-	lastErr error                    // most recent journal write failure
-	subs    map[*subscriber]struct{} // connected SSE clients
+	mu       sync.Mutex
+	draining bool                     // set once by Drain; gates prompt admission
+	seq      int64                    // global monotonic durable sequence
+	journal  []Event                  // in-memory durable records, for replay
+	jf       *os.File                 // events.jsonl handle (nil when disabled)
+	lastErr  error                    // most recent journal write failure
+	subs     map[*subscriber]struct{} // connected SSE clients
 	// seen maps session ID -> journaled message IDs; it is authoritative for
 	// journal idempotency (syncMessages skips already-journaled IDs), so it is
 	// never evicted when resident sessions are unloaded for MaxResident. It is
@@ -151,19 +152,32 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
-// Drain waits for in-flight prompts to finish, then returns. Its first act is
-// to close the server's closing signal (once), which ends every connected SSE
-// stream promptly: shutdown runs Drain before http.Server.Shutdown, so closing
-// the streams here is what lets Shutdown see idle connections and return
-// quickly instead of blocking on a live /event tail for the whole grace budget.
-// It then waits up to ctx's deadline for prompts to complete on their own; if
-// ctx expires while prompts are still running, it cancels their contexts (which
-// journals a durable session.aborted for each) and waits for them to unwind. It
-// must be called before Close so the journal file stays open while the trailing
-// records — the final assistant message and the session.aborted/idle
-// transitions — are written; otherwise those records are lost on shutdown.
+// Drain waits for in-flight prompts to finish, then returns. Under s.mu, and
+// before it starts waiting, it sets the draining flag and closes the closing
+// signal (once). Setting draining before wg.Wait is what makes the prompt
+// admission gate correct: a new prompt's wg.Add(1) happens in the same s.mu
+// critical section that checks draining (see claimForPrompt), so by mutex
+// ordering every Add that ever runs either preceded draining=true — and is
+// therefore counted by the Wait below — or observes draining and is rejected
+// with 503. A WaitGroup Add can never race after this Wait begins.
+//
+// Closing the signal ends every connected SSE stream promptly, which lets a
+// concurrently-running http.Server.Shutdown see idle connections and return
+// instead of blocking on a live /event tail for the whole grace budget;
+// disconnected orchestrators recover the trailing records via replay-from-seq.
+//
+// Drain then waits up to ctx's deadline for prompts to complete on their own;
+// if ctx expires while prompts are still running, it cancels their contexts
+// (which journals a durable session.aborted for each) and waits for them to
+// unwind. It must be called before Close so the journal file stays open while
+// the trailing records — the final assistant message and the
+// session.aborted/idle transitions — are written; otherwise those records are
+// lost on shutdown.
 func (s *Server) Drain(ctx context.Context) {
+	s.mu.Lock()
+	s.draining = true
 	s.closeOnce.Do(func() { close(s.closing) })
+	s.mu.Unlock()
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
@@ -185,6 +199,38 @@ func (s *Server) Drain(ctx context.Context) {
 	}
 	s.mu.Unlock()
 	s.wg.Wait()
+}
+
+// Shutdown gracefully stops a harness serve instance. It runs the HTTP server's
+// Shutdown and the Server's Drain CONCURRENTLY under one deadline, waits for
+// both, and returns Shutdown's error.
+//
+// The two must overlap, not run in sequence:
+//
+//   - httpSrv.Shutdown closes the listener as its first synchronous action, so
+//     no new request is accepted the instant shutdown begins. It then waits for
+//     open connections to go idle.
+//   - Drain closes the closing signal at entry, which ends connected SSE tails
+//     promptly; that is what lets the concurrent Shutdown see idle connections
+//     and return quickly instead of blocking on a live /event tail for the whole
+//     grace budget. In parallel, Drain gives the detached prompt goroutines
+//     (their 202 already returned; Shutdown does not track them) the full grace
+//     budget to finish before it cancels them and journals their trailing
+//     records.
+//
+// Running them sequentially either way loses: Shutdown-then-Drain would block
+// Shutdown on the SSE tail, and Drain-then-Shutdown would keep the listener open
+// for the whole drain window, admitting new prompts mid-drain (a data-loss bug
+// the draining gate exists to prevent).
+func Shutdown(ctx context.Context, httpSrv *http.Server, srv *Server) error {
+	drained := make(chan struct{})
+	go func() {
+		srv.Drain(ctx)
+		close(drained)
+	}()
+	err := httpSrv.Shutdown(ctx)
+	<-drained
+	return err
 }
 
 // Close releases the journal file, if any.

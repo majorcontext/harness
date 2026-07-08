@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -73,6 +74,7 @@ type blockingProvider struct {
 	started chan struct{}
 	release chan struct{}
 	once    sync.Once
+	relOnce sync.Once
 }
 
 func newBlockingProvider(name string) *blockingProvider {
@@ -80,6 +82,10 @@ func newBlockingProvider(name string) *blockingProvider {
 }
 
 func (p *blockingProvider) Name() string { return p.name }
+
+// releaseAll unblocks every parked Next; safe to call more than once (a test may
+// release explicitly and a t.Cleanup may release again).
+func (p *blockingProvider) releaseAll() { p.relOnce.Do(func() { close(p.release) }) }
 
 func (p *blockingProvider) Stream(ctx context.Context, _ *provider.Request) (provider.Stream, error) {
 	return &blockingStream{p: p, ctx: ctx}, nil
@@ -1407,6 +1413,85 @@ func TestDrainClosesStreamsThenHonorsGraceBudget(t *testing.T) {
 	})
 }
 
+// createSessionDirect drives handleCreate without an HTTP listener (for
+// synctest bubbles, where real sockets are unavailable) and returns the new id.
+func createSessionDirect(t *testing.T, srv *Server, model string) string {
+	t.Helper()
+	body := `{}`
+	if model != "" {
+		body = `{"model":"` + model + `"}`
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/session", strings.NewReader(body))
+	srv.handleCreate(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status %d: %s", rec.Code, rec.Body)
+	}
+	var c struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &c); err != nil {
+		t.Fatal(err)
+	}
+	return c.ID
+}
+
+// TestPromptDuringDrainRejected verifies the admission gate: once Drain has set
+// the draining flag, a new prompt_async is rejected with 503 and never spawns a
+// runPrompt goroutine — the provider is never asked to stream and the journal
+// gains no busy/message/idle record for that session. This is the data-loss
+// guard: a 202 accepted during drain would acknowledge a prompt whose records
+// could be lost on shutdown. Run in a synctest bubble; handlers driven directly.
+func TestPromptDuringDrainRejected(t *testing.T) {
+	dir := t.TempDir()
+	synctest.Test(t, func(t *testing.T) {
+		prov := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("nope")}}
+		srv := newServer(t, dir, prov, 0)
+		id := createSessionDirect(t, srv, "test/m1")
+
+		// Drain with no in-flight prompt returns at once but leaves draining set.
+		dctx, dcancel := context.WithCancel(context.Background())
+		defer dcancel()
+		srv.Drain(dctx)
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/session/"+id+"/prompt_async",
+			strings.NewReader(`{"parts":[{"type":"text","text":"go"}]}`))
+		req.SetPathValue("id", id)
+		srv.handlePrompt(rec, req)
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("prompt during drain status %d, want 503: %s", rec.Code, rec.Body)
+		}
+		var e struct {
+			Error string `json:"error"`
+		}
+		json.Unmarshal(rec.Body.Bytes(), &e)
+		if e.Error == "" {
+			t.Errorf("503 body missing error: %s", rec.Body)
+		}
+
+		// Let any erroneously-spawned goroutine run to completion on fake time.
+		synctest.Wait()
+
+		// The provider was never asked to stream: runPrompt never ran.
+		prov.mu.Lock()
+		calls := prov.call
+		prov.mu.Unlock()
+		if calls != 0 {
+			t.Errorf("provider Stream called %d times; runPrompt spawned despite drain", calls)
+		}
+		// The journal holds only session.created for this session — no busy
+		// status, no message, no idle.
+		srv.mu.Lock()
+		for _, ev := range srv.journal {
+			if ev.SessionID == id && ev.Type != evtSessionCreated {
+				t.Errorf("unexpected journal record after drained prompt: type=%s seq=%d", ev.Type, ev.Seq)
+			}
+		}
+		srv.mu.Unlock()
+	})
+}
+
 // TestMaxResidentEvictsOnCreate verifies that resident sessions are capped even
 // when sessions are created but never prompted: with MaxResident=2, three
 // creates leave only two resident, and all three remain listed (the evicted one
@@ -1446,6 +1531,302 @@ func TestMaxResidentEvictsOnCreate(t *testing.T) {
 	for _, id := range ids {
 		if !listed[id] {
 			t.Errorf("session %s missing from list (evicted create-only session must persist to disk)", id)
+		}
+	}
+}
+
+// TestShutdownConcurrentDrainAndAdmissionGate is the end-to-end shutdown test,
+// driven through a real http.Server + TCP listener (not a synctest bubble) with
+// the actual serveCmd-style concurrent server.Shutdown+Drain. It sets up a
+// connected SSE client and an in-flight (blocked) prompt, then shuts down under
+// a grace budget and asserts:
+//
+//   - shutdown completes within a bounded time (it does not hang);
+//   - the in-flight prompt's terminal record (session.aborted, since the
+//     blocked prompt is cancelled at grace expiry) is journaled to the still-open
+//     file BEFORE Close;
+//   - a prompt_async attempted mid-drain (after the SSE stream has ended, which
+//     proves draining is set) gets 503 or a connection error — never a
+//     lost-record 202.
+func TestShutdownConcurrentDrainAndAdmissionGate(t *testing.T) {
+	dir := t.TempDir()
+	prov := newBlockingProvider("test")
+	t.Cleanup(prov.releaseAll)
+	srv := newServer(t, dir, prov, 0)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpSrv := &http.Server{Handler: srv}
+	go func() { _ = httpSrv.Serve(ln) }()
+	base := "http://" + ln.Addr().String()
+	const token = "secret-run-token"
+	client := &http.Client{}
+	t.Cleanup(client.CloseIdleConnections)
+
+	req := func(method, path, body string) (*http.Response, []byte, error) {
+		var r io.Reader
+		if body != "" {
+			r = strings.NewReader(body)
+		}
+		rq, err := http.NewRequest(method, base+path, r)
+		if err != nil {
+			return nil, nil, err
+		}
+		rq.Header.Set("Authorization", "Bearer "+token)
+		resp, err := client.Do(rq)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer resp.Body.Close()
+		data, _ := io.ReadAll(resp.Body)
+		return resp, data, nil
+	}
+
+	newSession := func() string {
+		t.Helper()
+		resp, data, err := req("POST", "/session", `{"model":"test/m1"}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != 201 {
+			t.Fatalf("create status %d: %s", resp.StatusCode, data)
+		}
+		var c struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(data, &c); err != nil {
+			t.Fatal(err)
+		}
+		return c.ID
+	}
+
+	// Session A carries the blocked in-flight prompt; session B is idle and used
+	// for the mid-drain admission attempt.
+	idA := newSession()
+	idB := newSession()
+
+	resp, data, err := req("POST", "/session/"+idA+"/prompt_async", `{"parts":[{"type":"text","text":"go"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 202 {
+		t.Fatalf("prompt A status %d: %s", resp.StatusCode, data)
+	}
+	<-prov.started // prompt A is now blocked mid-stream
+
+	// A connected SSE client. Its reader goroutine drains frames into a channel
+	// and closes sseClosed when the server ends the stream (EOF).
+	sseReq, _ := http.NewRequest("GET", base+"/event?from=0", nil)
+	sseReq.Header.Set("Authorization", "Bearer "+token)
+	sseResp, err := client.Do(sseReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sseResp.StatusCode != 200 {
+		t.Fatalf("sse status %d", sseResp.StatusCode)
+	}
+	sseData := make(chan string, 64)
+	sseClosed := make(chan struct{})
+	go func() {
+		defer close(sseClosed)
+		defer sseResp.Body.Close()
+		br := bufio.NewReader(sseResp.Body)
+		for {
+			line, err := br.ReadString('\n')
+			if err != nil {
+				return
+			}
+			if strings.HasPrefix(line, "data: ") {
+				select {
+				case sseData <- line:
+				default:
+				}
+			}
+		}
+	}()
+	// Read at least one replayed frame to confirm the stream is live and the
+	// subscriber is registered before shutdown begins.
+	select {
+	case <-sseData:
+	case <-time.After(5 * time.Second):
+		t.Fatal("SSE stream produced no events; not live before shutdown")
+	}
+
+	// Shut down exactly like serveCmd: Shutdown and Drain run concurrently under
+	// one grace budget.
+	grace := 300 * time.Millisecond
+	shutCtx, cancel := context.WithTimeout(context.Background(), grace)
+	defer cancel()
+	start := time.Now()
+	shutDone := make(chan error, 1)
+	go func() { shutDone <- Shutdown(shutCtx, httpSrv, srv) }()
+
+	// Drain's first act closes the SSE tail; the client's stream must end
+	// promptly, well before the grace deadline (the blocked prompt keeps running).
+	select {
+	case <-sseClosed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("SSE stream did not end after shutdown began (closing signal)")
+	}
+
+	// The SSE stream ending means Drain closed the closing signal, which it does
+	// in the same critical section that sets draining=true. So a prompt now must
+	// be refused: 503 (admission gate) or a connection error (listener closed) —
+	// never a 202 whose record could be lost.
+	dresp, ddata, derr := req("POST", "/session/"+idB+"/prompt_async", `{"parts":[{"type":"text","text":"late"}]}`)
+	if derr == nil {
+		if dresp.StatusCode == http.StatusAccepted {
+			t.Fatalf("mid-drain prompt returned 202 (lost-record risk): %s", ddata)
+		}
+		if dresp.StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("mid-drain prompt status %d, want 503 or connection error: %s", dresp.StatusCode, ddata)
+		}
+	}
+
+	// Shutdown returns within a bounded time (the blocked prompt is aborted at
+	// grace expiry; the helper then returns) — it must not hang.
+	select {
+	case err := <-shutDone:
+		// Shutdown returns nil normally; a context.DeadlineExceeded is tolerable
+		// if a connection lingered to the deadline. Either way it returned.
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Shutdown error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Shutdown did not return; concurrent Drain+Shutdown hung")
+	}
+	if elapsed := time.Since(start); elapsed > grace+3*time.Second {
+		t.Fatalf("shutdown took %v, far beyond grace budget %v", elapsed, grace)
+	}
+
+	// The in-flight prompt's terminal record is journaled (aborted at grace
+	// expiry) and the file was still open when it landed (Shutdown waited for
+	// Drain, and Close has not run yet).
+	srv.mu.Lock()
+	var terminal, fileOpen bool
+	for _, ev := range srv.journal {
+		if ev.SessionID == idA && (ev.Type == evtSessionAborted || ev.Type == evtMessage) {
+			terminal = true
+		}
+	}
+	fileOpen = srv.jf != nil
+	srv.mu.Unlock()
+	if !terminal {
+		t.Fatal("in-flight prompt terminal record not journaled by shutdown")
+	}
+	if !fileOpen {
+		t.Fatal("journal file closed before shutdown returned")
+	}
+	onDisk, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(onDisk, []byte(`"type":"`+evtSessionAborted+`"`)) {
+		t.Fatalf("events.jsonl missing terminal record before Close:\n%s", onDisk)
+	}
+	if err := srv.Close(); err != nil {
+		t.Fatalf("Close after shutdown: %v", err)
+	}
+}
+
+// TestClaimForPromptSurvivesEvictionRace guards FIX 2: with MaxResident=1, a
+// running session must never be evicted when a second session appears, and the
+// atomic claim must never leave two divergent *engine.Session objects for one
+// log. The old getOrLoad-then-claim two-step had a window where a concurrent
+// eviction could unload the session between resolve and claim, letting a racing
+// cold-load insert a duplicate. claimForPrompt closes that window: resolve and
+// claim happen under one lock, and a running session is skipped by eviction.
+func TestClaimForPromptSurvivesEvictionRace(t *testing.T) {
+	dir := t.TempDir()
+	prov := newBlockingProvider("test")
+	t.Cleanup(prov.releaseAll)
+	h := newHarnessOpts(t, dir, prov, 1) // MaxResident=1: any 2nd resident evicts
+
+	idA := h.createSession("test/m1")
+	h.srv.mu.Lock()
+	origSess := h.srv.sessions[idA].sess
+	h.srv.mu.Unlock()
+
+	// Watch A's stream so we can wait for it to reach idle later.
+	sse := h.openSSE("?from=0&session="+idA, "")
+
+	// Claim A for a prompt; claimForPrompt sets running before releasing the
+	// lock, then the provider parks the prompt (A is now running).
+	resp, data := h.do("POST", "/session/"+idA+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "go"}},
+	})
+	if resp.StatusCode != 202 {
+		t.Fatalf("prompt A status %d: %s", resp.StatusCode, data)
+	}
+	<-prov.started
+
+	// Create B. Under MaxResident=1 this drives eviction, but running A must be
+	// spared (evictResidentLocked skips running sessions); idle B is the victim.
+	idB := h.createSession("test/m1")
+
+	h.srv.mu.Lock()
+	stA, aResident := h.srv.sessions[idA]
+	h.srv.mu.Unlock()
+	if !aResident {
+		t.Fatal("running session A was evicted under MaxResident pressure")
+	}
+	if stA.sess != origSess {
+		t.Fatal("session A engine identity changed while running (divergent duplicate created)")
+	}
+
+	// A concurrent prompt on the running A must be a clean 409, not a second
+	// claim that could diverge state.
+	resp, data = h.do("POST", "/session/"+idA+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "again"}},
+	})
+	if resp.StatusCode != 409 {
+		t.Fatalf("concurrent prompt on running A = %d, want 409: %s", resp.StatusCode, data)
+	}
+	_ = idB
+
+	// Release; A completes and returns to idle.
+	prov.releaseAll()
+	sse.collectUntilIdle(t)
+	sse.stop()
+
+	// Re-prompt A and wait for it to fully complete (idle) so the log is stable:
+	// it must resolve to one consistent state. Whether A is still resident or was
+	// evicted after completing, the session the server prompts has a history
+	// consistent with its on-disk log — there is no second, divergent session.
+	sse2 := h.openSSE("?from=0&session="+idA, "")
+	resp, data = h.do("POST", "/session/"+idA+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "final"}},
+	})
+	if resp.StatusCode != 202 {
+		t.Fatalf("re-prompt A status %d: %s", resp.StatusCode, data)
+	}
+	sse2.collectUntilIdle(t)
+	sse2.stop()
+
+	// The messages endpoint (server's view) and a fresh independent load from
+	// disk must agree on the message IDs — proof there is one consistent state.
+	_, data = h.do("GET", "/session/"+idA+"/message", nil)
+	var serverMsgs []message.Message
+	if err := json.Unmarshal(data, &serverMsgs); err != nil {
+		t.Fatal(err)
+	}
+	diskSess, err := engine.LoadSession(engine.Config{
+		Providers:  provider.Registry{"test": &scriptedProvider{name: "test"}},
+		Model:      message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir: dir,
+	}, idA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diskMsgs := diskSess.History()
+	if len(serverMsgs) != len(diskMsgs) {
+		t.Fatalf("server history (%d msgs) diverges from disk (%d msgs)", len(serverMsgs), len(diskMsgs))
+	}
+	for i := range serverMsgs {
+		if serverMsgs[i].ID != diskMsgs[i].ID {
+			t.Fatalf("message %d id mismatch: server %q vs disk %q (divergent sessions)", i, serverMsgs[i].ID, diskMsgs[i].ID)
 		}
 	}
 }
