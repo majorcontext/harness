@@ -8,14 +8,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/provider/anthropic"
 )
 
 func TestSessionDir(t *testing.T) {
 	t.Run("no-save disables persistence", func(t *testing.T) {
 		t.Setenv("HARNESS_SESSION_DIR", "/somewhere")
-		dir, err := sessionDir(true)
+		dir, err := sessionDir(true, "/config/sessions")
 		if err != nil {
 			t.Fatalf("sessionDir: %v", err)
 		}
@@ -25,7 +27,7 @@ func TestSessionDir(t *testing.T) {
 	})
 	t.Run("env var wins", func(t *testing.T) {
 		t.Setenv("HARNESS_SESSION_DIR", "/custom/sessions")
-		dir, err := sessionDir(false)
+		dir, err := sessionDir(false, "/config/sessions")
 		if err != nil {
 			t.Fatalf("sessionDir: %v", err)
 		}
@@ -33,17 +35,50 @@ func TestSessionDir(t *testing.T) {
 			t.Errorf("sessionDir = %q, want /custom/sessions", dir)
 		}
 	})
+	t.Run("config dir beats default when env unset", func(t *testing.T) {
+		t.Setenv("HARNESS_SESSION_DIR", "")
+		dir, err := sessionDir(false, "/config/sessions")
+		if err != nil {
+			t.Fatalf("sessionDir: %v", err)
+		}
+		if dir != "/config/sessions" {
+			t.Errorf("sessionDir = %q, want /config/sessions", dir)
+		}
+	})
 	t.Run("defaults to HOME/.harness/sessions", func(t *testing.T) {
 		t.Setenv("HARNESS_SESSION_DIR", "")
 		home := t.TempDir()
 		t.Setenv("HOME", home)
-		dir, err := sessionDir(false)
+		dir, err := sessionDir(false, "")
 		if err != nil {
 			t.Fatalf("sessionDir: %v", err)
 		}
 		want := filepath.Join(home, ".harness", "sessions")
 		if dir != want {
 			t.Errorf("sessionDir = %q, want %q", dir, want)
+		}
+	})
+	t.Run("full precedence chain", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		// -no-save beats everything.
+		t.Setenv("HARNESS_SESSION_DIR", "/env")
+		if dir, _ := sessionDir(true, "/config"); dir != "" {
+			t.Errorf("no-save: got %q, want empty", dir)
+		}
+		// env beats config.
+		if dir, _ := sessionDir(false, "/config"); dir != "/env" {
+			t.Errorf("env: got %q, want /env", dir)
+		}
+		// config beats default.
+		t.Setenv("HARNESS_SESSION_DIR", "")
+		if dir, _ := sessionDir(false, "/config"); dir != "/config" {
+			t.Errorf("config: got %q, want /config", dir)
+		}
+		// default when nothing set.
+		want := filepath.Join(home, ".harness", "sessions")
+		if dir, _ := sessionDir(false, ""); dir != want {
+			t.Errorf("default: got %q, want %q", dir, want)
 		}
 	})
 }
@@ -231,6 +266,44 @@ func TestResolveSessionModelFlag(t *testing.T) {
 		}
 		if got := s.Model(); got != flagModel {
 			t.Errorf("s.Model() = %v, want %v", got, flagModel)
+		}
+	})
+}
+
+func TestRegistry(t *testing.T) {
+	t.Run("defaults to ANTHROPIC_API_KEY and empty base url", func(t *testing.T) {
+		t.Setenv("ANTHROPIC_API_KEY", "sk-default")
+		reg := registry(&config.Config{})
+		c, ok := reg[anthropic.Family].(*anthropic.Client)
+		if !ok {
+			t.Fatalf("anthropic provider is %T, want *anthropic.Client", reg[anthropic.Family])
+		}
+		if c.APIKey != "sk-default" {
+			t.Errorf("APIKey = %q, want sk-default", c.APIKey)
+		}
+		if c.BaseURL != "" {
+			t.Errorf("BaseURL = %q, want empty", c.BaseURL)
+		}
+	})
+	t.Run("config api_key_env and base_url are honored", func(t *testing.T) {
+		t.Setenv("ANTHROPIC_API_KEY", "ignored")
+		t.Setenv("MY_ANTHROPIC_KEY", "sk-custom")
+		reg := registry(&config.Config{Providers: map[string]config.Provider{
+			"anthropic": {APIKeyEnv: "MY_ANTHROPIC_KEY", BaseURL: "http://proxy"},
+		}})
+		c := reg[anthropic.Family].(*anthropic.Client)
+		if c.APIKey != "sk-custom" {
+			t.Errorf("APIKey = %q, want sk-custom", c.APIKey)
+		}
+		if c.BaseURL != "http://proxy" {
+			t.Errorf("BaseURL = %q, want http://proxy", c.BaseURL)
+		}
+	})
+	t.Run("nil config is safe", func(t *testing.T) {
+		t.Setenv("ANTHROPIC_API_KEY", "sk-nil")
+		reg := registry(nil)
+		if c := reg[anthropic.Family].(*anthropic.Client); c.APIKey != "sk-nil" {
+			t.Errorf("APIKey = %q, want sk-nil", c.APIKey)
 		}
 	})
 }
