@@ -32,6 +32,14 @@ type Config struct {
 	SessionDir string `json:"session_dir,omitempty"`
 	// Providers configures each provider family by name (e.g. "anthropic").
 	Providers map[string]Provider `json:"providers,omitempty"`
+	// Instructions, when set to false, disables project-instruction
+	// (AGENTS.md) injection into the system prompt. A nil value (the field
+	// omitted) leaves injection enabled — a *bool so "unset" and "false" are
+	// distinguishable across the project-config merge.
+	Instructions *bool `json:"instructions,omitempty"`
+	// InstructionsPath overrides the auto-discovered AGENTS.md with a specific
+	// file to load instead of walking up from the working directory.
+	InstructionsPath string `json:"instructions_path,omitempty"`
 }
 
 // Provider is per-family provider configuration.
@@ -83,7 +91,8 @@ func Path() string {
 // exists, merges it on top. Merge rules, applied field by field (no
 // reflection):
 //
-//   - Model, SessionDir: a non-empty project value overrides the user value.
+//   - Model, SessionDir, InstructionsPath: a non-empty project value overrides
+//     the user value. Instructions (*bool): a non-nil project value overrides.
 //   - Aliases, Providers: maps are merged key by key — project keys are added
 //     and override user keys of the same name. Within a Provider, a non-empty
 //     project field (APIKeyEnv, BaseURL) overrides the user field.
@@ -116,6 +125,12 @@ func merge(base, over *Config) *Config {
 	}
 	if over.SessionDir != "" {
 		out.SessionDir = over.SessionDir
+	}
+	if over.Instructions != nil {
+		out.Instructions = over.Instructions
+	}
+	if over.InstructionsPath != "" {
+		out.InstructionsPath = over.InstructionsPath
 	}
 	if n := len(base.Aliases) + len(over.Aliases); n > 0 {
 		m := make(map[string]string, n)

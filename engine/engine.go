@@ -76,6 +76,11 @@ type Config struct {
 	Hooks   Hooks       // optional plugin host
 	OnEvent func(Event) // optional; called synchronously, keep it fast
 
+	// Instructions controls project-instruction (AGENTS.md) injection into
+	// the system prompt. A nil value is the default: auto-discover AGENTS.md
+	// by walking up from WorkDir. See InstructionsConfig.
+	Instructions *InstructionsConfig
+
 	// Tools are additional built-in tools. The bash tool is always
 	// installed.
 	Tools       []Tool
@@ -99,6 +104,14 @@ type Session struct {
 	logFile        *os.File // session log; nil until first write (see store.go)
 	logStarted     bool     // the log file exists on disk
 	lastPersistErr error
+
+	// Project-instruction segment, loaded once on the first Prompt (see
+	// instructions.go). instrLoaded gates the one-time disk read; instrSeg is
+	// the cached system-prompt segment (empty when none); instrErr records a
+	// present-but-unusable instructions file so every Prompt fails alike.
+	instrLoaded bool
+	instrSeg    string
+	instrErr    error
 }
 
 // NewSession creates a session. Nothing touches the network, spawns
@@ -214,6 +227,12 @@ func (s *Session) emitStatus(status string) {
 // execute any tool calls, feed results back — until the model ends its turn.
 // It returns the final assistant message.
 func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, error) {
+	// Load project instructions once, before mutating history: a
+	// present-but-unusable AGENTS.md fails the prompt without recording a
+	// user message or calling the provider.
+	if err := s.ensureInstructions(); err != nil {
+		return nil, err
+	}
 	s.append(message.Message{
 		ID:        newID("msg"),
 		Role:      message.RoleUser,
@@ -255,6 +274,11 @@ func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, er
 func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.StopReason, provider.Usage, error) {
 	params := plugin.ChatParams{Model: s.Model()}
 	system := append([]string(nil), s.cfg.System...)
+	// Project instructions sit after the base system prompt and before any
+	// hook-contributed segments (see ensureInstructions in instructions.go).
+	if seg := s.instructionSegment(); seg != "" {
+		system = append(system, seg)
+	}
 	if s.cfg.Hooks != nil {
 		params = s.cfg.Hooks.ChatParams(ctx, &plugin.ChatParamsRequest{SessionID: s.ID, Params: params})
 		if params.Model.IsZero() {

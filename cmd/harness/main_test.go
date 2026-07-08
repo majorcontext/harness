@@ -323,6 +323,49 @@ func TestResolveSessionModelFlag(t *testing.T) {
 	})
 }
 
+func TestInstructionsConfig(t *testing.T) {
+	trueV, falseV := true, false
+	t.Run("no-instructions flag disables", func(t *testing.T) {
+		ic := instructionsConfig(&config.Config{}, true)
+		if ic == nil || !ic.Disabled {
+			t.Errorf("ic = %+v, want disabled", ic)
+		}
+	})
+	t.Run("config instructions:false disables", func(t *testing.T) {
+		ic := instructionsConfig(&config.Config{Instructions: &falseV}, false)
+		if ic == nil || !ic.Disabled {
+			t.Errorf("ic = %+v, want disabled", ic)
+		}
+	})
+	t.Run("flag wins over config instructions:true", func(t *testing.T) {
+		ic := instructionsConfig(&config.Config{Instructions: &trueV}, true)
+		if ic == nil || !ic.Disabled {
+			t.Errorf("ic = %+v, want disabled (flag wins)", ic)
+		}
+	})
+	t.Run("config path override", func(t *testing.T) {
+		ic := instructionsConfig(&config.Config{InstructionsPath: "x/AGENTS.md"}, false)
+		if ic == nil || ic.Disabled || ic.Path != "x/AGENTS.md" {
+			t.Errorf("ic = %+v, want path override", ic)
+		}
+	})
+	t.Run("default nil enables auto-discovery", func(t *testing.T) {
+		if ic := instructionsConfig(&config.Config{}, false); ic != nil {
+			t.Errorf("ic = %+v, want nil (default enabled)", ic)
+		}
+	})
+	t.Run("instructions:true without path stays nil", func(t *testing.T) {
+		if ic := instructionsConfig(&config.Config{Instructions: &trueV}, false); ic != nil {
+			t.Errorf("ic = %+v, want nil", ic)
+		}
+	})
+	t.Run("nil config is safe", func(t *testing.T) {
+		if ic := instructionsConfig(nil, false); ic != nil {
+			t.Errorf("ic = %+v, want nil", ic)
+		}
+	})
+}
+
 func TestRegistry(t *testing.T) {
 	t.Run("defaults to ANTHROPIC_API_KEY and empty base url", func(t *testing.T) {
 		t.Setenv("ANTHROPIC_API_KEY", "sk-default")
