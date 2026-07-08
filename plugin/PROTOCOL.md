@@ -1,0 +1,88 @@
+# Harness Plugin Protocol — v1
+
+Plugins are separate processes speaking **JSON-RPC 2.0 over stdio, one
+message per line** (NDJSON). Any language works; `github.com/andybons/harness/plugin`
+is the Go SDK. Log to stderr — stdout belongs to the protocol.
+
+The channel is **bidirectional**: the harness sends hook dispatches and tool
+executions; the plugin sends client API calls back — including while one of
+its hooks is in flight. Request IDs are JSON numbers. Each side numbers its
+own requests independently.
+
+## Lifecycle
+
+1. Harness spawns the plugin process (lazily, on first hook dispatch or tool
+   call — never at startup; manifests are cached at install time, keyed by
+   binary hash).
+2. Harness → `initialize` (request) with `InitializeParams`. Plugin responds
+   with its `Manifest`. A protocol-version mismatch is an initialize error.
+   The harness verifies the live manifest matches the cached one.
+3. Hook dispatches, tool executions, and client API calls flow until:
+4. Harness → `shutdown` (notification), then closes stdin. Plugin exits.
+
+A plugin that fails to start or errors on a dispatch is skipped — **hook
+chains fail open**; a plugin can never wedge a session. Every sync dispatch
+carries a deadline (default 5s).
+
+## Methods: harness → plugin
+
+| Method | Kind | Params → Result |
+|---|---|---|
+| `initialize` | request | `InitializeParams` → `Manifest` |
+| `shutdown` | notification | — |
+| `hook/event` | notification | `EventBatch` |
+| `hook/chat.params` | request | `ChatParamsRequest` → `ChatParamsResponse` |
+| `hook/chat.message` | request | `ChatMessageRequest` → `ChatMessageResponse` |
+| `hook/system.transform` | request | `SystemTransformRequest` → `SystemTransformResponse` |
+| `hook/shell.env` | request | `ShellEnvRequest` → `ShellEnvResponse` |
+| `hook/tool.execute.before` | request | `ToolExecuteBeforeRequest` → `ToolExecuteBeforeResponse` |
+| `hook/tool.execute.after` | request | `ToolExecuteAfterRequest` → `ToolExecuteAfterResponse` |
+| `tool/execute` | request | `ToolExecuteRequest` → `ToolExecuteResponse` |
+
+Only hooks named in the plugin's manifest are dispatched to it.
+
+## Methods: plugin → harness (client API)
+
+| Method | Params → Result |
+|---|---|
+| `client/session.messages` | `SessionMessagesRequest` → `SessionMessagesResponse` |
+| `client/mcp.call` | `MCPCallRequest` → `MCPCallResult` |
+| `client/generate` | `GenerateRequest` → `GenerateResponse` |
+
+`client/generate` routes through the harness provider layer: plugins inherit
+model routing, credentials, and observability, and never carry API keys.
+
+## Chaining semantics
+
+Sync hooks run across plugins in config order; each plugin sees the previous
+plugin's mutations.
+
+- `chat.params`, `chat.message`: response replaces the request value for the
+  next plugin.
+- `system.transform`: additive — segments append; nothing is replaced.
+- `shell.env`: maps merge; later plugins win on key conflicts.
+- `tool.execute.before`: non-nil `args` replaces; non-empty `deny` blocks the
+  tool call, returns the message to the model as an error result, and stops
+  the chain.
+- `tool.execute.after`: non-nil `output` replaces.
+- `event`: async fan-out, batched, no ordering or delivery guarantees.
+
+An empty-object response (or the SDK returning `nil`) means "no changes".
+
+## Message content
+
+Tool outputs and generate results use the canonical `message.Parts` encoding:
+a JSON array of objects, each with a `"type"` discriminator (`text`, `blob`,
+`tool_call`, `tool_result`, `reasoning`). See package
+`github.com/andybons/harness/message`.
+
+## Versioning
+
+`ProtocolVersion` is a single integer, declared in both `InitializeParams`
+and `Manifest`. v1 is this document. Additions (new hooks, new event types,
+new optional fields) bump the minor behavior but not the version — unknown
+hooks are simply never subscribed, and unknown fields are ignored. Breaking
+changes to existing payload shapes bump the version.
+
+Deliberately absent from this protocol, by design (see AGENTS.md): permission
+hooks, plan mode, and auth hooks.
