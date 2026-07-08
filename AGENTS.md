@@ -150,6 +150,14 @@ Rules:
 - Standard Go conventions, `go fmt`, `go vet` clean.
 - Type annotations in exported APIs over cleverness; small interfaces.
 
+## Code Review Protocol
+
+PRs merge only after the latest automated review round has been read **in
+full — including the summary comment**. Inline-thread count is not a merge
+gate: the reviewer files findings both as inline threads and as items in the
+top-level summary, and both must be addressed (or explicitly acknowledged as
+deferred) before merge. Iterate until a round produces zero findings.
+
 ## Git Commits
 
 - [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): description` (e.g. `feat(plugin): add shell.env hook`).
