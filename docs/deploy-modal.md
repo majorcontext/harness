@@ -64,7 +64,8 @@ and/or `OPENAI_API_KEY`.
 `HARNESS_SESSION_DIR=/sessions` points harness at the mounted Volume, so the
 append-only session log outlives the sandbox. A later sandbox on the same
 Volume can `harness run -c` (continue the most recent session) or `-r <id>`
-(resume a specific one); server mode replays the same log-backed sessions.
+(resume a specific one). The upcoming `harness serve` mode (see
+`server/openapi.yaml`) will resume the same log-backed sessions.
 Commit the Volume after a run so writes are durable:
 
 ```python
