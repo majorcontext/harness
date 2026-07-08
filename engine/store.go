@@ -10,12 +10,10 @@
 package engine
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -177,39 +175,57 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 	s.ID = id
 	s.logStarted = true
 
-	lines := bytes.Split(data, []byte("\n"))
-	last := len(lines) - 1
-	for last >= 0 && len(bytes.TrimSpace(lines[last])) == 0 {
-		last--
-	}
-	for i, line := range lines[:last+1] {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		var rec record
-		if err := json.Unmarshal(line, &rec); err != nil {
-			if i == last {
-				break // truncated final line: crash mid-write, ignore
-			}
-			return nil, fmt.Errorf("engine: session %s: corrupt record at line %d: %v", id, i+1, err)
-		}
+	err = scanLog(data, func(rec record, line int, isLast bool) error {
 		switch rec.Type {
 		case recSession:
 			s.createdAt = rec.CreatedAt
 		case recMessage:
 			if rec.Message == nil {
-				if i == last {
-					break
+				if isLast {
+					return nil
 				}
-				return nil, fmt.Errorf("engine: session %s: message record without message at line %d", id, i+1)
+				return fmt.Errorf("message record without message at line %d", line)
 			}
 			s.history = append(s.history, *rec.Message)
 		case recModel:
 			s.model = rec.Model
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("engine: session %s: %w", id, err)
 	}
 	return s, nil
+}
+
+// scanLog iterates the JSONL records of a session log, decoding each line
+// into T and calling fn with the 1-based line number. It owns the log's
+// corruption discipline — shared by every reader so the rules cannot drift:
+// a corrupt or truncated final line (crash mid-write) ends iteration
+// silently; corruption anywhere else is an error.
+func scanLog[T any](data []byte, fn func(rec T, line int, isLast bool) error) error {
+	lines := bytes.Split(data, []byte("\n"))
+	last := len(lines) - 1
+	for last >= 0 && len(bytes.TrimSpace(lines[last])) == 0 {
+		last--
+	}
+	for i := range lines[:last+1] {
+		line := bytes.TrimSpace(lines[i])
+		if len(line) == 0 {
+			continue
+		}
+		var rec T
+		if err := json.Unmarshal(line, &rec); err != nil {
+			if i == last {
+				return nil // truncated final line: crash mid-write, ignore
+			}
+			return fmt.Errorf("corrupt record at line %d: %v", i+1, err)
+		}
+		if err := fn(rec, i+1, i == last); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ListSessions lists persisted sessions in dir, sorted by creation time. A
@@ -239,47 +255,36 @@ func ListSessions(dir string) ([]SessionInfo, error) {
 }
 
 func readSessionInfo(path string) (SessionInfo, error) {
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return SessionInfo{}, err
 	}
-	defer f.Close()
 
-	r := bufio.NewReader(f)
+	// headRecord decodes only the fields listings need — never message
+	// bodies, which keeps ListSessions cheap on large sessions.
+	type headRecord struct {
+		Type      string    `json:"type"`
+		ID        string    `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+
 	var info SessionInfo
 	first := true
-	for {
-		line, err := r.ReadBytes('\n')
-		if len(bytes.TrimSpace(line)) > 0 {
-			var rec struct {
-				Type      string    `json:"type"`
-				ID        string    `json:"id"`
-				CreatedAt time.Time `json:"created_at"`
+	err = scanLog(data, func(rec headRecord, line int, isLast bool) error {
+		if first {
+			if rec.Type != recSession {
+				return fmt.Errorf("engine: %s: missing session header", path)
 			}
-			if uerr := json.Unmarshal(line, &rec); uerr != nil {
-				if first || err == nil {
-					return SessionInfo{}, uerr
-				}
-				// truncated final line: ignore
-			} else {
-				if first {
-					if rec.Type != recSession {
-						return SessionInfo{}, fmt.Errorf("engine: %s: missing session header", path)
-					}
-					info.ID = rec.ID
-					info.CreatedAt = rec.CreatedAt
-					first = false
-				} else if rec.Type == recMessage {
-					info.Messages++
-				}
-			}
+			info.ID = rec.ID
+			info.CreatedAt = rec.CreatedAt
+			first = false
+		} else if rec.Type == recMessage {
+			info.Messages++
 		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return SessionInfo{}, err
-		}
+		return nil
+	})
+	if err != nil {
+		return SessionInfo{}, err
 	}
 	if first {
 		return SessionInfo{}, fmt.Errorf("engine: %s: empty session file", path)
