@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -177,6 +178,56 @@ func TestFormatSessions(t *testing.T) {
 			t.Errorf("formatSessions = %q, want %q", got, want)
 		}
 	})
+}
+
+func TestFormatSessionsJSON(t *testing.T) {
+	base := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name  string
+		infos []engine.SessionInfo
+		want  []sessionJSON
+	}{
+		{
+			name:  "empty list yields empty JSON array",
+			infos: nil,
+			want:  []sessionJSON{},
+		},
+		{
+			name: "multiple sessions marshal in order",
+			infos: []engine.SessionInfo{
+				{ID: "ses_a", CreatedAt: base, Messages: 2},
+				{ID: "ses_b", CreatedAt: base.Add(90 * time.Minute), Messages: 5},
+			},
+			want: []sessionJSON{
+				{ID: "ses_a", CreatedAt: "2024-06-01T12:00:00Z", Messages: 2},
+				{ID: "ses_b", CreatedAt: "2024-06-01T13:30:00Z", Messages: 5},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := formatSessionsJSON(tt.infos)
+			if err != nil {
+				t.Fatalf("formatSessionsJSON: %v", err)
+			}
+			// Empty list must print "[]", not "null" or nothing.
+			if len(tt.infos) == 0 && !strings.HasPrefix(strings.TrimSpace(out), "[]") {
+				t.Errorf("empty list = %q, want %q", out, "[]")
+			}
+			var got []sessionJSON
+			if err := json.Unmarshal([]byte(out), &got); err != nil {
+				t.Fatalf("output is not valid JSON: %v\noutput: %q", err, out)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %d sessions, want %d", len(got), len(tt.want))
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("session[%d] = %+v, want %+v", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
 }
 
 func TestResolveSessionNoSave(t *testing.T) {

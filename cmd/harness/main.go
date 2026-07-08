@@ -46,7 +46,7 @@ func main() {
 			os.Exit(1)
 		}
 	case "sessions":
-		if err := sessionsCmd(); err != nil {
+		if err := sessionsCmd(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "harness:", err)
 			os.Exit(1)
 		}
@@ -66,7 +66,7 @@ func usage() {
   harness run -p <prompt> [flags]   run a one-shot prompt
   harness serve [-addr host:port] [-cors-origin origin]
                                     serve the HTTP+SSE session API
-  harness sessions                  list persisted sessions
+  harness sessions [--json]         list persisted sessions
   harness version                   print version
 
 run flags:
@@ -177,7 +177,42 @@ func formatSessions(infos []engine.SessionInfo) string {
 	return b.String()
 }
 
-func sessionsCmd() error {
+// sessionJSON is the wire shape for `harness sessions --json`: one object
+// per session with created_at as an RFC3339 string, mirroring
+// engine.SessionInfo.
+type sessionJSON struct {
+	ID        string `json:"id"`
+	CreatedAt string `json:"created_at"`
+	Messages  int    `json:"messages"`
+}
+
+// formatSessionsJSON renders the session list as a JSON array. An empty
+// list yields "[]" rather than "null" so consumers always get an array.
+func formatSessionsJSON(infos []engine.SessionInfo) (string, error) {
+	out := make([]sessionJSON, 0, len(infos))
+	for _, info := range infos {
+		out = append(out, sessionJSON{
+			ID:        info.ID,
+			CreatedAt: info.CreatedAt.Format(time.RFC3339),
+			Messages:  info.Messages,
+		})
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return "", err
+	}
+	return string(b) + "\n", nil
+}
+
+func sessionsCmd(args []string) error {
+	fs := flag.NewFlagSet("sessions", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	var jsonOut bool
+	fs.BoolVar(&jsonOut, "json", false, "emit the session list as a JSON array")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
@@ -189,6 +224,14 @@ func sessionsCmd() error {
 	infos, err := engine.ListSessions(dir)
 	if err != nil {
 		return err
+	}
+	if jsonOut {
+		out, err := formatSessionsJSON(infos)
+		if err != nil {
+			return err
+		}
+		fmt.Print(out)
+		return nil
 	}
 	fmt.Print(formatSessions(infos))
 	return nil
