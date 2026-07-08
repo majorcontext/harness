@@ -366,6 +366,32 @@ func TestInstructionsConfig(t *testing.T) {
 	})
 }
 
+func TestSkillsDirs(t *testing.T) {
+	t.Run("default nil when nothing configured", func(t *testing.T) {
+		if dirs := skillsDirs(&config.Config{}, nil, "/work"); dirs != nil {
+			t.Errorf("dirs = %v, want nil (engine default)", dirs)
+		}
+	})
+	t.Run("config dirs resolved against workDir", func(t *testing.T) {
+		dirs := skillsDirs(&config.Config{SkillsDirs: []string{"a/skills", "/abs/skills"}}, nil, "/work")
+		want := []string{filepath.Join("/work", "a/skills"), "/abs/skills"}
+		if len(dirs) != 2 || dirs[0] != want[0] || dirs[1] != want[1] {
+			t.Errorf("dirs = %v, want %v", dirs, want)
+		}
+	})
+	t.Run("flag overrides config entirely", func(t *testing.T) {
+		dirs := skillsDirs(&config.Config{SkillsDirs: []string{"cfg/skills"}}, []string{"flag/skills"}, "/work")
+		if len(dirs) != 1 || dirs[0] != filepath.Join("/work", "flag/skills") {
+			t.Errorf("dirs = %v, want flag override", dirs)
+		}
+	})
+	t.Run("nil config is safe", func(t *testing.T) {
+		if dirs := skillsDirs(nil, nil, "/work"); dirs != nil {
+			t.Errorf("dirs = %v, want nil", dirs)
+		}
+	})
+}
+
 func TestRegistry(t *testing.T) {
 	t.Run("defaults to ANTHROPIC_API_KEY and empty base url", func(t *testing.T) {
 		t.Setenv("ANTHROPIC_API_KEY", "sk-default")
