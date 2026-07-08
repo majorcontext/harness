@@ -25,6 +25,26 @@ docker push <registry>/harness:latest
 image = modal.Image.from_registry("<registry>/harness:latest")
 ```
 
+## The scratch image is a distribution artifact
+
+The image this Dockerfile produces contains only the harness binary and CA
+certificates (~3 MB). Inside it, the in-process tools (`read_file`,
+`write_file`, `edit_file`) and model API calls work, but the `bash` tool
+fails — there is no `/bin/sh`, no git, no toolchain. Verified behavior: the
+engine surfaces the failure as a tool error the model can see and route
+around, but a coding agent without a shell is crippled.
+
+For real agentic work, layer the binary into your project's toolchain image
+instead:
+
+```dockerfile
+FROM ghcr.io/majorcontext/harness:latest AS harness
+FROM your-project-toolchain:latest
+COPY --from=harness /harness /usr/local/bin/harness
+```
+
+The scratch image exists so that copy is small, fast, and versioned.
+
 ## Minimal Sandbox
 
 ```python
@@ -64,8 +84,8 @@ and/or `OPENAI_API_KEY`.
 `HARNESS_SESSION_DIR=/sessions` points harness at the mounted Volume, so the
 append-only session log outlives the sandbox. A later sandbox on the same
 Volume can `harness run -c` (continue the most recent session) or `-r <id>`
-(resume a specific one). The upcoming `harness serve` mode (see
-`server/openapi.yaml`) will resume the same log-backed sessions.
+(resume a specific one). The upcoming `harness serve` mode will resume the
+same log-backed sessions.
 Commit the Volume after a run so writes are durable:
 
 ```python
