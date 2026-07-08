@@ -87,6 +87,11 @@ func (s *Server) stream(ctx context.Context, w io.Writer, flusher http.Flusher, 
 		select {
 		case <-ctx.Done():
 			return
+		case <-s.closing:
+			// Shutdown has begun (Drain closed the signal). End the stream so
+			// http.Server.Shutdown sees an idle connection; a disconnected
+			// orchestrator recovers the trailing records via replay-from-seq.
+			return
 		case ev := <-sub.ch:
 			writeSSE(w, ev)
 			flusher.Flush()

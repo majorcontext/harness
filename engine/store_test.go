@@ -165,6 +165,50 @@ func TestLoadSessionCorruptMiddleLine(t *testing.T) {
 	}
 }
 
+// TestPersistCreatesLogBeforePrompt verifies that Persist gives a
+// never-prompted session a durable on-disk backing (header + model record), so
+// it survives eviction from memory and reloads with its model intact.
+func TestPersistCreatesLogBeforePrompt(t *testing.T) {
+	dir := t.TempDir()
+	prov := &scriptedProvider{name: "test"}
+	cfg := persistCfg(dir, prov)
+	s := NewSession(cfg)
+
+	if infos, err := ListSessions(dir); err != nil || len(infos) != 0 {
+		t.Fatalf("precondition: ListSessions = %+v, %v; want empty (lazy log)", infos, err)
+	}
+
+	if err := s.Persist(); err != nil {
+		t.Fatalf("Persist = %v", err)
+	}
+
+	infos, err := ListSessions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 1 || infos[0].ID != s.ID {
+		t.Fatalf("after Persist: ListSessions = %+v, want [%s]", infos, s.ID)
+	}
+
+	loaded, err := LoadSession(cfg, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession after Persist: %v", err)
+	}
+	if loaded.Model() != cfg.Model {
+		t.Errorf("loaded model = %v, want %v", loaded.Model(), cfg.Model)
+	}
+
+	// Persist is idempotent: a second call adds no records.
+	before, _ := os.ReadFile(filepath.Join(dir, s.ID+".jsonl"))
+	if err := s.Persist(); err != nil {
+		t.Fatalf("second Persist = %v", err)
+	}
+	after, _ := os.ReadFile(filepath.Join(dir, s.ID+".jsonl"))
+	if string(before) != string(after) {
+		t.Errorf("second Persist changed the log:\nbefore=%s\nafter=%s", before, after)
+	}
+}
+
 func TestListSessionsSkipsCorruptFile(t *testing.T) {
 	dir := t.TempDir()
 	good := `{"type":"session","id":"ses_good","created_at":"2025-01-02T03:04:05Z"}

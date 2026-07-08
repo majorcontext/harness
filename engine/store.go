@@ -59,6 +59,26 @@ func (s *Session) PersistErr() error {
 	return s.lastPersistErr
 }
 
+// Persist forces the session log to exist on disk now (header plus a model
+// record), rather than waiting for the first message append. NewSession creates
+// the log lazily, so a session that is created but never prompted has no
+// on-disk backing; callers that must be able to reload such a session — the
+// serve API, which may evict an idle session from memory — call Persist to give
+// it durable state. It is a no-op when SessionDir is empty or the log already
+// exists, and is safe to call repeatedly.
+func (s *Session) Persist() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cfg.SessionDir == "" {
+		return nil
+	}
+	if err := s.ensureLog(); err != nil {
+		s.lastPersistErr = err
+		return err
+	}
+	return nil
+}
+
 // persistMessage appends a message record to the session log. Caller holds
 // s.mu.
 func (s *Session) persistMessage(m *message.Message) {

@@ -41,8 +41,16 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "cannot create session")
 		return
 	}
+	// Persist the log now so the session has durable state even if it is
+	// evicted before its first prompt; otherwise eviction below would drop a
+	// never-prompted session with no on-disk backing to reload from.
+	if err := sess.Persist(); err != nil {
+		writeErr(w, http.StatusInternalServerError, "cannot create session")
+		return
+	}
 	s.mu.Lock()
-	s.sessions[sess.ID] = &sessionState{sess: sess}
+	s.sessions[sess.ID] = &sessionState{sess: sess, lastUsed: time.Now()}
+	s.evictResidentLocked()
 	s.mu.Unlock()
 
 	s.emitDurable(Event{Type: evtSessionCreated, SessionID: sess.ID, Model: sess.Model()})
@@ -67,7 +75,11 @@ func (s *Server) handleList(w http.ResponseWriter, _ *http.Request) {
 		out = append(out, s.buildSession(m.sess, statusStr(m.running)))
 		seen[m.sess.ID] = true
 	}
-	infos, _ := engine.ListSessions(s.opts.SessionDir)
+	infos, err := engine.ListSessions(s.opts.SessionDir)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "cannot list sessions")
+		return
+	}
 	for _, info := range infos {
 		if seen[info.ID] {
 			continue
@@ -123,7 +135,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	for _, m := range mem {
 		result[m.id] = entry{Type: statusStr(m.running)}
 	}
-	infos, _ := engine.ListSessions(s.opts.SessionDir)
+	infos, err := engine.ListSessions(s.opts.SessionDir)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "cannot list sessions")
+		return
+	}
 	for _, info := range infos {
 		if _, ok := result[info.ID]; !ok {
 			result[info.ID] = entry{Type: "idle"}
@@ -159,25 +175,21 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	}
 	text := strings.Join(texts, "\n")
 
-	st, ok := s.getOrLoad(id)
-	if !ok {
-		writeErr(w, http.StatusNotFound, "no such session")
+	// Resolve the session and atomically claim its prompt slot (also does the
+	// wg.Add under the admission gate). See claimForPrompt for the ordering that
+	// makes eviction races and drain admission impossible.
+	st, ctx, fromSeq, code := s.claimForPrompt(id)
+	if code != 0 {
+		switch code {
+		case http.StatusConflict:
+			writeErr(w, code, "session is busy with another prompt")
+		case http.StatusServiceUnavailable:
+			writeErr(w, code, "server shutting down")
+		default:
+			writeErr(w, http.StatusNotFound, "no such session")
+		}
 		return
 	}
-
-	// Claim the prompt slot before doing anything observable: only one prompt
-	// per session at a time.
-	s.mu.Lock()
-	if st.running {
-		s.mu.Unlock()
-		writeErr(w, http.StatusConflict, "session is busy with another prompt")
-		return
-	}
-	fromSeq := s.seq
-	ctx, cancel := context.WithCancel(context.Background())
-	st.running = true
-	st.cancel = cancel
-	s.mu.Unlock()
 
 	// Explicit model wins over the session's persisted model (CLI -model rule).
 	if !body.Model.IsZero() {
@@ -202,6 +214,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 // disconnected orchestrator learns the outcome on replay; the 202 only
 // acknowledged receipt.
 func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, text string) {
+	defer s.wg.Done()
 	_, err := st.sess.Prompt(ctx, text)
 	s.syncMessages(id) // catch any message not yet journaled
 	switch {
@@ -214,8 +227,37 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	s.mu.Lock()
 	st.running = false
 	st.cancel = nil
+	st.lastUsed = time.Now()
+	s.evictResidentLocked()
 	s.mu.Unlock()
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
+}
+
+// evictResidentLocked unloads the longest-idle non-busy sessions from memory
+// when the resident count exceeds Options.MaxResident. Busy sessions are never
+// evicted; s.seen is retained so journal idempotency survives the unload (the
+// session reloads transparently from disk on its next access). Caller holds
+// s.mu.
+func (s *Server) evictResidentLocked() {
+	excess := len(s.sessions) - s.opts.MaxResident
+	if excess <= 0 {
+		return
+	}
+	type cand struct {
+		id   string
+		last time.Time
+	}
+	cands := make([]cand, 0, len(s.sessions))
+	for id, st := range s.sessions {
+		if st.running {
+			continue // busy sessions hold an in-flight prompt; keep them resident
+		}
+		cands = append(cands, cand{id, st.lastUsed})
+	}
+	sort.Slice(cands, func(i, j int) bool { return cands[i].last.Before(cands[j].last) })
+	for i := 0; i < excess && i < len(cands); i++ {
+		delete(s.sessions, cands[i].id)
+	}
 }
 
 // handleAbort interrupts a session's in-flight prompt. Unknown session (not
@@ -280,29 +322,69 @@ func (s *Server) lookup(id string) (*engine.Session, string, bool) {
 	return sess, "idle", true
 }
 
-// getOrLoad returns the in-memory session state for id, transparently loading
-// and registering an on-disk session when it is not resident.
-func (s *Server) getOrLoad(id string) (*sessionState, bool) {
+// claimForPrompt atomically resolves the session for id and claims its single
+// prompt slot. It replaces the old getOrLoad-then-claim two-step on the write
+// path, which left a gap between resolving the resident session and setting
+// st.running: in that gap a concurrent evictResidentLocked could unload the
+// session and a racing cold-load could insert a second, divergent
+// *engine.Session for the same log. Here the resolve and the claim complete in
+// ONE s.mu critical section, so a claimed (running) session can never be evicted
+// (evictResidentLocked skips running sessions) and no duplicate can appear.
+//
+// Loading an on-disk session may block, so it happens outside the lock; the
+// re-lock then re-checks both that no resident appeared meanwhile and that Drain
+// has not begun. On success it sets st.running, records the cancel func, and
+// does wg.Add(1) — all before releasing the lock. The wg.Add sits in the same
+// critical section that observed draining==false, so by mutex ordering it always
+// happens-before Drain's draining=true (and thus before wg.Wait): a WaitGroup
+// Add after Wait is impossible, and a prompt admitted during drain is impossible.
+//
+// On failure it returns a non-zero HTTP status and leaves nothing claimed:
+// StatusServiceUnavailable (draining), StatusNotFound (unknown session), or
+// StatusConflict (already running). code == 0 means success.
+func (s *Server) claimForPrompt(id string) (st *sessionState, ctx context.Context, fromSeq int64, code int) {
 	s.mu.Lock()
-	if st := s.sessions[id]; st != nil {
+	if s.draining {
 		s.mu.Unlock()
-		return st, true
+		return nil, nil, 0, http.StatusServiceUnavailable
 	}
+	st = s.sessions[id]
+	if st == nil {
+		// Not resident: load from disk with the lock released, then re-acquire.
+		s.mu.Unlock()
+		sess, err := s.opts.LoadSession(id)
+		if err != nil {
+			return nil, nil, 0, http.StatusNotFound
+		}
+		loaded := &sessionState{sess: sess, lastUsed: time.Now()}
+		s.mu.Lock()
+		// Drain may have begun during the unlocked load: re-check before we
+		// insert or claim, so no wg.Add slips past the admission gate.
+		if s.draining {
+			s.mu.Unlock()
+			return nil, nil, 0, http.StatusServiceUnavailable
+		}
+		if ex := s.sessions[id]; ex != nil {
+			st = ex // a resident appeared while we loaded; use the winner
+		} else {
+			s.sessions[id] = loaded
+			st = loaded
+		}
+	}
+	if st.running {
+		s.mu.Unlock()
+		return nil, nil, 0, http.StatusConflict
+	}
+	fromSeq = s.seq
+	ctx, cancel := context.WithCancel(context.Background())
+	st.running = true
+	st.cancel = cancel
+	s.wg.Add(1)
+	// A cold load grew the resident set; cap it now. st is running, so
+	// evictResidentLocked will not evict the session we just claimed.
+	s.evictResidentLocked()
 	s.mu.Unlock()
-
-	sess, err := s.opts.LoadSession(id)
-	if err != nil {
-		return nil, false
-	}
-	st := &sessionState{sess: sess}
-	s.mu.Lock()
-	if ex := s.sessions[id]; ex != nil {
-		st = ex // lost a race; use the winner
-	} else {
-		s.sessions[id] = st
-	}
-	s.mu.Unlock()
-	return st, true
+	return st, ctx, fromSeq, 0
 }
 
 // buildSession assembles the Session shape without holding s.mu across engine
