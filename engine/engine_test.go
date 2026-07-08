@@ -330,3 +330,59 @@ func contains(ss []string, want string) bool {
 	}
 	return false
 }
+
+func TestUsageAccumulation(t *testing.T) {
+	turn1 := asstTurn(provider.StopToolUse,
+		&message.Text{Text: "running"},
+		toolCall("tc1", "bash", `{"command":"echo hi"}`))
+	turn1[len(turn1)-1].Usage = provider.Usage{
+		InputTokens: 10, OutputTokens: 20, CacheReadTokens: 3, CacheWriteTokens: 4,
+	}
+	turn2 := asstTurn(provider.StopEndTurn, &message.Text{Text: "done"})
+	turn2[len(turn2)-1].Usage = provider.Usage{
+		InputTokens: 100, OutputTokens: 200, CacheReadTokens: 30, CacheWriteTokens: 40,
+	}
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{turn1, turn2}}
+
+	var events []Event
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+		OnEvent:   func(ev Event) { events = append(events, ev) },
+	})
+
+	if got := s.Usage(); got != (provider.Usage{}) {
+		t.Errorf("initial Usage = %+v, want zero", got)
+	}
+
+	if _, err := s.Prompt(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+
+	want := provider.Usage{
+		InputTokens: 110, OutputTokens: 220, CacheReadTokens: 33, CacheWriteTokens: 44,
+	}
+	if got := s.Usage(); got != want {
+		t.Errorf("Usage = %+v, want %+v", got, want)
+	}
+
+	// Each message event carries that turn's usage.
+	var msgUsages []provider.Usage
+	for _, ev := range events {
+		if ev.Type == EventMessage {
+			if ev.Usage == nil {
+				t.Fatalf("message event missing usage: %+v", ev)
+			}
+			msgUsages = append(msgUsages, *ev.Usage)
+		}
+	}
+	if len(msgUsages) != 2 {
+		t.Fatalf("message events = %d, want 2", len(msgUsages))
+	}
+	if msgUsages[0] != (provider.Usage{InputTokens: 10, OutputTokens: 20, CacheReadTokens: 3, CacheWriteTokens: 4}) {
+		t.Errorf("turn 1 usage = %+v", msgUsages[0])
+	}
+	if msgUsages[1] != (provider.Usage{InputTokens: 100, OutputTokens: 200, CacheReadTokens: 30, CacheWriteTokens: 40}) {
+		t.Errorf("turn 2 usage = %+v", msgUsages[1])
+	}
+}

@@ -89,6 +89,7 @@ type Session struct {
 	mu      sync.Mutex
 	model   message.ModelRef
 	history []message.Message
+	usage   provider.Usage
 }
 
 // NewSession creates a session. Nothing touches the network or spawns
@@ -127,6 +128,22 @@ func (s *Session) Model() message.ModelRef {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.model
+}
+
+// Usage returns cumulative token usage across all turns.
+func (s *Session) Usage() provider.Usage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.usage
+}
+
+func (s *Session) addUsage(u provider.Usage) {
+	s.mu.Lock()
+	s.usage.InputTokens += u.InputTokens
+	s.usage.OutputTokens += u.OutputTokens
+	s.usage.CacheReadTokens += u.CacheReadTokens
+	s.usage.CacheWriteTokens += u.CacheWriteTokens
+	s.mu.Unlock()
 }
 
 // History returns a copy of the session's message history.
@@ -175,12 +192,13 @@ func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, er
 	defer s.emitStatus("idle")
 
 	for {
-		asst, stop, err := s.streamTurn(ctx)
+		asst, stop, usage, err := s.streamTurn(ctx)
 		if err != nil {
 			return nil, err
 		}
+		s.addUsage(usage)
 		s.append(*asst)
-		s.emit(Event{Type: EventMessage, Message: asst, StopReason: stop})
+		s.emit(Event{Type: EventMessage, Message: asst, StopReason: stop, Usage: &usage})
 
 		if stop != provider.StopToolUse {
 			return asst, nil
@@ -202,7 +220,7 @@ func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, er
 
 // streamTurn makes one model call and returns the assembled assistant
 // message.
-func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.StopReason, error) {
+func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.StopReason, provider.Usage, error) {
 	params := plugin.ChatParams{Model: s.Model()}
 	system := append([]string(nil), s.cfg.System...)
 	if s.cfg.Hooks != nil {
@@ -218,7 +236,7 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 
 	prov, err := s.cfg.Providers.For(params.Model)
 	if err != nil {
-		return nil, "", err
+		return nil, "", provider.Usage{}, err
 	}
 
 	maxTokens := s.cfg.MaxTokens
@@ -237,14 +255,14 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 
 	stream, err := prov.Stream(ctx, req)
 	if err != nil {
-		return nil, "", err
+		return nil, "", provider.Usage{}, err
 	}
 	defer stream.Close()
 
 	for {
 		ev, err := stream.Next()
 		if err != nil {
-			return nil, "", err
+			return nil, "", provider.Usage{}, err
 		}
 		switch ev.Type {
 		case provider.EventTextDelta:
@@ -252,7 +270,7 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 		case provider.EventReasoningDelta:
 			s.emit(Event{Type: EventReasoningDelta, Text: ev.Text})
 		case provider.EventDone:
-			return ev.Message, ev.StopReason, nil
+			return ev.Message, ev.StopReason, ev.Usage, nil
 		}
 	}
 }
