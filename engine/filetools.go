@@ -82,6 +82,9 @@ func readFileTool() Tool {
 			if limit <= 0 {
 				limit = readFileDefaultLimit
 			}
+			if total == 0 {
+				return message.Parts{&message.Text{Text: "(empty file)"}}, nil
+			}
 			if offset > total {
 				return nil, fmt.Errorf("read_file: offset %d is past end of file (%d lines)", offset, total)
 			}

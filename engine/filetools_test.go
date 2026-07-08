@@ -48,6 +48,19 @@ func TestReadFileBasic(t *testing.T) {
 	}
 }
 
+func TestReadFileEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "empty.txt"), "")
+
+	out, err := runTool(t, readFileTool(), dir, `{"path":"empty.txt"}`)
+	if err != nil {
+		t.Fatalf("read_file on empty file: %v", err)
+	}
+	if out != "(empty file)" {
+		t.Errorf("out = %q, want %q", out, "(empty file)")
+	}
+}
+
 func TestReadFileOffsetLimit(t *testing.T) {
 	dir := t.TempDir()
 	var lines []string
