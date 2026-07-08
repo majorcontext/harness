@@ -88,8 +88,14 @@ type Config struct {
 	// session. Empty disables persistence entirely.
 	SessionDir string
 
-	Hooks   Hooks       // optional plugin host
-	OnEvent func(Event) // optional; called synchronously, keep it fast
+	Hooks Hooks // optional plugin host
+	// OnEvent is optional; called synchronously, keep it fast. The goal.*
+	// events (see goal.go) are emitted while Session.mu is held so the event
+	// stream can never invert relative to the journaled log order under a
+	// concurrent ClearGoal/evaluation race — so OnEvent must NEVER call back
+	// into the Session that raised the event (Prompt, ClearGoal, ActiveGoal,
+	// etc.), which would deadlock on that same mutex.
+	OnEvent func(Event)
 
 	// OnRequest, when non-nil, is invoked synchronously in streamTurn with the
 	// exact final request about to be sent to the provider — after params,

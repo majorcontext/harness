@@ -136,8 +136,13 @@ func (s *Session) ClearGoal() bool {
 	s.goalActive = false
 	s.goalCondition = ""
 	s.persistGoalLocked(recGoalCleared, goalRecord{})
-	s.mu.Unlock()
+	// Emit while still holding s.mu: this keeps the event stream (-> server
+	// journal/SSE seqs) ordered the same as the log write above under a
+	// concurrent recordGoalEval/achieveGoal race (see those functions).
+	// OnEvent must not call back into this Session — doing so would
+	// deadlock on s.mu, which is still held here.
 	s.emit(Event{Type: EventGoalCleared})
+	s.mu.Unlock()
 	return true
 }
 
@@ -163,8 +168,11 @@ func (s *Session) recordGoalEval(met bool, reason string, turn int) bool {
 		return false
 	}
 	s.persistGoalLocked(recGoalEval, goalRecord{Met: met, Reason: reason, Turn: turn})
-	s.mu.Unlock()
+	// Emit while still holding s.mu (see ClearGoal): keeps event order
+	// matching log order under a concurrent clear. OnEvent must not call
+	// back into this Session — that would deadlock on s.mu, held here.
 	s.emit(Event{Type: EventGoalEval, GoalMet: met, GoalReason: reason, GoalTurn: turn})
+	s.mu.Unlock()
 	return true
 }
 
@@ -181,8 +189,11 @@ func (s *Session) achieveGoal(reason string, turns int) bool {
 	s.goalActive = false
 	s.goalCondition = ""
 	s.persistGoalLocked(recGoalAchieved, goalRecord{Reason: reason, Turns: turns})
-	s.mu.Unlock()
+	// Emit while still holding s.mu (see ClearGoal): keeps event order
+	// matching log order under a concurrent clear. OnEvent must not call
+	// back into this Session — that would deadlock on s.mu, held here.
 	s.emit(Event{Type: EventGoalAchieved, GoalReason: reason, GoalTurns: turns})
+	s.mu.Unlock()
 	return true
 }
 

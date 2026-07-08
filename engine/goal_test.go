@@ -409,3 +409,102 @@ func TestClearGoalDuringPendingEvaluationIsCleanStop(t *testing.T) {
 		t.Errorf("session log contains a goal.eval record for an evaluation that resolved after ClearGoal:\n%s", log)
 	}
 }
+
+// TestGoalEventsEmitWhileLockHeld pins the follow-up ordering fix:
+// recordGoalEval, achieveGoal, and ClearGoal must emit their goal.* event
+// while still holding s.mu, not after releasing it — otherwise the emitted
+// event order (-> server journal/SSE seqs) can invert relative to the
+// journaled log order under the same ClearGoal-vs-evaluation race exercised
+// by TestClearGoalDuringPendingEvaluationIsCleanStop.
+//
+// A deterministic "red" reproduction of the actual inversion (two goroutines
+// racing so that goroutine B's write+emit both complete while goroutine A is
+// paused between its own write and its own emit) is not constructible from
+// outside the package without adding a production-only test seam: which
+// goroutine's emit callback runs first, once both are runnable, is a plain
+// scheduler race with no available happens-before edge to pin from a test.
+// Forcing it via a real second sync.Mutex.Lock from inside the OnEvent
+// callback would risk a genuine runtime self-deadlock (fatal, not a clean
+// test failure) if the fix were absent. So instead this pins the invariant
+// that makes the inversion impossible in the first place — the event fires
+// synchronously inside the same critical section as the log write — using a
+// non-blocking sync.Mutex.TryLock from the test goroutine, which can never
+// block or deadlock either way.
+func TestGoalEventsEmitWhileLockHeld(t *testing.T) {
+	tests := []struct {
+		name string
+		want string
+		run  func(s *Session)
+	}{
+		{
+			name: "recordGoalEval",
+			want: EventGoalEval,
+			run: func(s *Session) {
+				s.setGoal("cond")
+				s.recordGoalEval(true, "reason", 1)
+			},
+		},
+		{
+			name: "achieveGoal",
+			want: EventGoalAchieved,
+			run: func(s *Session) {
+				s.setGoal("cond")
+				s.achieveGoal("reason", 1)
+			},
+		},
+		{
+			name: "ClearGoal",
+			want: EventGoalCleared,
+			run: func(s *Session) {
+				s.setGoal("cond")
+				s.ClearGoal()
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			s := goalSession(t, &goalProvider{}, dir)
+
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			t.Cleanup(func() {
+				select {
+				case <-release:
+				default:
+					close(release)
+				}
+			})
+			s.cfg.OnEvent = func(ev Event) {
+				if ev.Type != tt.want {
+					return
+				}
+				close(entered)
+				<-release
+			}
+
+			done := make(chan struct{})
+			go func() {
+				tt.run(s)
+				close(done)
+			}()
+
+			<-entered // the target event's handler is now parked inside emit
+
+			// Non-blocking: if the write's lock had already been released
+			// before emit (the pre-fix bug), TryLock succeeds here and must
+			// be undone immediately so the emitter's later Unlock doesn't
+			// panic on an unlocked mutex. If the fix holds, s.mu is still
+			// held by the emitting goroutine and TryLock reports that
+			// honestly — no blocking, no risk of deadlock, either way.
+			if s.mu.TryLock() {
+				s.mu.Unlock()
+				t.Fatalf("s.mu was free while the %s event handler was still running: emit must happen inside the same critical section as the log write, not after its Unlock", tt.want)
+			}
+
+			close(release) // let the emitter finish
+			<-done
+		})
+	}
+}
