@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/majorcontext/harness/engine"
@@ -119,6 +120,24 @@ func newHarness(t *testing.T, prov provider.Provider) *harness {
 
 func newHarnessDir(t *testing.T, dir string, prov provider.Provider) *harness {
 	t.Helper()
+	return newHarnessOpts(t, dir, prov, 0)
+}
+
+// newHarnessOpts builds a harness with an explicit MaxResident (0 = default).
+func newHarnessOpts(t *testing.T, dir string, prov provider.Provider, maxResident int) *harness {
+	t.Helper()
+	const token = "secret-run-token"
+	srv := newServer(t, dir, prov, maxResident)
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	return &harness{t: t, dir: dir, token: token, srv: srv, ts: ts}
+}
+
+// newServer builds a *Server without an HTTP listener, so its handlers can be
+// driven directly (e.g. inside a synctest bubble, where real sockets are
+// unavailable).
+func newServer(t *testing.T, dir string, prov provider.Provider, maxResident int) *Server {
+	t.Helper()
 	const token = "secret-run-token"
 	model := message.ModelRef{Provider: prov.Name(), Model: "m1"}
 	var srv *Server
@@ -138,6 +157,7 @@ func newHarnessDir(t *testing.T, dir string, prov provider.Provider) *harness {
 		RunToken:          token,
 		Version:           "9.9.9",
 		HeartbeatInterval: 20 * time.Millisecond,
+		MaxResident:       maxResident,
 		NewSession: func(m message.ModelRef) (*engine.Session, error) {
 			return engine.NewSession(mkCfg(m)), nil
 		},
@@ -148,9 +168,7 @@ func newHarnessDir(t *testing.T, dir string, prov provider.Provider) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts := httptest.NewServer(srv)
-	t.Cleanup(ts.Close)
-	return &harness{t: t, dir: dir, token: token, srv: srv, ts: ts}
+	return srv
 }
 
 func (h *harness) do(method, path string, body any) (*http.Response, []byte) {
@@ -858,16 +876,49 @@ func TestBootReconcileAppendsMissingMessages(t *testing.T) {
 	}
 }
 
+// chanWriter is an io.Writer that hands each write to a channel, so a test can
+// observe stream output and synchronize on it without a data race.
+type chanWriter struct{ ch chan string }
+
+func (w chanWriter) Write(p []byte) (int, error) {
+	w.ch <- string(p)
+	return len(p), nil
+}
+
+// noopFlusher satisfies http.Flusher for direct s.stream calls.
+type noopFlusher struct{}
+
+func (noopFlusher) Flush() {}
+
+// TestHeartbeat exercises the heartbeat ticker on fake time: inside a synctest
+// bubble the fake clock advances only when every goroutine is durably blocked,
+// so the ticker fires deterministically with no wall-clock wait. s.stream needs
+// only an io.Writer and http.Flusher, so it is driven directly — no httptest
+// server, no real ticker.
 func TestHeartbeat(t *testing.T) {
-	h := newHarness(t, &scriptedProvider{name: "test"})
-	sse := h.openSSE("?from=0", "")
-	// Heartbeat interval is 20ms in tests; block until one arrives.
-	for it := range sse.items {
-		if it.heartbeat {
-			return
+	synctest.Test(t, func(t *testing.T) {
+		var s Server
+		ctx, cancel := context.WithCancel(context.Background())
+		writes := make(chan string) // unbuffered: each write blocks until read
+		sub := &subscriber{ch: make(chan Event)}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			s.stream(ctx, chanWriter{writes}, noopFlusher{}, sub, nil, time.Second)
+		}()
+
+		// With the test goroutine parked here and stream blocked in its select,
+		// the fake clock advances a full second and fires the ticker; the first
+		// (and only) write must be the heartbeat comment.
+		if got := <-writes; got != ": heartbeat\n\n" {
+			t.Fatalf("first stream write = %q, want heartbeat", got)
 		}
-	}
-	t.Fatal("no heartbeat received")
+
+		// End the stream before the bubble exits so fake time can stop and the
+		// goroutine is not reported as a leak.
+		cancel()
+		<-done
+	})
 }
 
 // errThenOKProvider fails its first Stream call and succeeds afterward.
@@ -1005,4 +1056,198 @@ func TestModelOverridePersists(t *testing.T) {
 	if d.Model != "test/m2" {
 		t.Fatalf("detail model = %q, want test/m2", d.Model)
 	}
+}
+
+// TestListStatusErrorOnBadSessionDir verifies that a disk failure enumerating
+// sessions surfaces as a 500, not an empty listing. SessionDir is repointed at
+// a regular file so engine.ListSessions fails (ENOTDIR) — a real error a caller
+// must not mistake for "no sessions".
+func TestListStatusErrorOnBadSessionDir(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+
+	bad := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(bad, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.opts.SessionDir = bad
+
+	for _, path := range []string{"/session", "/session/status"} {
+		resp, data := h.do("GET", path, nil)
+		if resp.StatusCode != 500 {
+			t.Fatalf("%s status = %d, want 500: %s", path, resp.StatusCode, data)
+		}
+		var e struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(data, &e); e.Error == "" {
+			t.Errorf("%s 500 body missing error: %s", path, data)
+		}
+	}
+}
+
+// TestMaxResidentEvictsLongestIdle verifies that resident sessions are capped:
+// with MaxResident=2, prompting three sessions unloads the longest-idle one
+// from memory while it stays listable, status-reportable, and promptable from
+// disk, with its journal records intact.
+func TestMaxResidentEvictsLongestIdle(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn("a"), asstTurn("b"), asstTurn("c"), asstTurn("reload"),
+	}}
+	h := newHarnessOpts(t, t.TempDir(), prov, 2)
+
+	var ids []string
+	for i := 0; i < 3; i++ {
+		id := h.createSession("test/m1")
+		ids = append(ids, id)
+		sse := h.openSSE("?from=0&session="+id, "")
+		resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+			"parts": []map[string]string{{"type": "text", "text": "go"}},
+		})
+		if resp.StatusCode != 202 {
+			t.Fatalf("prompt %d status %d: %s", i, resp.StatusCode, data)
+		}
+		sse.collectUntilIdle(t) // wait for the prompt (and its eviction) to finish
+		sse.stop()
+	}
+
+	// The longest-idle session (the first) is unloaded; the two newest remain.
+	h.srv.mu.Lock()
+	_, resident0 := h.srv.sessions[ids[0]]
+	_, resident1 := h.srv.sessions[ids[1]]
+	_, resident2 := h.srv.sessions[ids[2]]
+	nResident := len(h.srv.sessions)
+	h.srv.mu.Unlock()
+	if resident0 {
+		t.Errorf("oldest session %s still resident, want evicted", ids[0])
+	}
+	if !resident1 || !resident2 {
+		t.Errorf("newer sessions evicted, want resident (%s=%v %s=%v)", ids[1], resident1, ids[2], resident2)
+	}
+	if nResident != 2 {
+		t.Errorf("resident count = %d, want 2 (MaxResident)", nResident)
+	}
+
+	// The evicted session is still listed by /session (loaded from disk).
+	_, data := h.do("GET", "/session", nil)
+	var list []map[string]any
+	if err := json.Unmarshal(data, &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 3 {
+		t.Fatalf("list = %d sessions, want 3: %s", len(list), data)
+	}
+
+	// ... and by /session/status, as idle.
+	_, data = h.do("GET", "/session/status", nil)
+	var status map[string]struct {
+		Type string `json:"type"`
+	}
+	json.Unmarshal(data, &status)
+	if status[ids[0]].Type != "idle" {
+		t.Fatalf("evicted session status = %q, want idle: %s", status[ids[0]].Type, data)
+	}
+
+	// Its journal records are unaffected: the messages endpoint reloads the two
+	// messages (user + assistant) from disk without re-resident-ing it.
+	_, data = h.do("GET", "/session/"+ids[0]+"/message", nil)
+	var msgs []message.Message
+	json.Unmarshal(data, &msgs)
+	if len(msgs) != 2 {
+		t.Fatalf("evicted session messages = %d, want 2: %s", len(msgs), data)
+	}
+
+	// It remains promptable via a transparent reload.
+	sse := h.openSSE("?from=0&session="+ids[0], "")
+	resp, data := h.do("POST", "/session/"+ids[0]+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "again"}},
+	})
+	if resp.StatusCode != 202 {
+		t.Fatalf("reload prompt status %d: %s", resp.StatusCode, data)
+	}
+	var got bool
+	for !got {
+		ev := sse.nextEvent(t)
+		if ev.Type == "message" && ev.Message != nil && ev.Message.Role == message.RoleAssistant &&
+			ev.Message.Parts.Text() == "reload" {
+			got = true
+		}
+	}
+	sse.stop()
+}
+
+// TestDrainAbortsInFlightPromptBeforeClose verifies shutdown drain: a prompt
+// blocked mid-stream is cancelled by Drain when its deadline expires, the
+// resulting session.aborted is journaled to the still-open file, and the file
+// is not closed until Drain returns. Run inside a synctest bubble so the Drain
+// deadline fires on fake time; handlers are driven directly (no real socket).
+func TestDrainAbortsInFlightPromptBeforeClose(t *testing.T) {
+	dir := t.TempDir()
+	synctest.Test(t, func(t *testing.T) {
+		prov := newBlockingProvider("test")
+		t.Cleanup(func() { close(prov.release) })
+		srv := newServer(t, dir, prov, 0)
+
+		// Create a session directly through the handler.
+		crec := httptest.NewRecorder()
+		creq := httptest.NewRequest("POST", "/session", strings.NewReader(`{"model":"test/m1"}`))
+		srv.handleCreate(crec, creq)
+		if crec.Code != 201 {
+			t.Fatalf("create status %d: %s", crec.Code, crec.Body)
+		}
+		var created struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(crec.Body.Bytes(), &created); err != nil {
+			t.Fatal(err)
+		}
+		id := created.ID
+
+		// Start a prompt; the blocking provider parks in Next.
+		prec := httptest.NewRecorder()
+		preq := httptest.NewRequest("POST", "/session/"+id+"/prompt_async",
+			strings.NewReader(`{"parts":[{"type":"text","text":"go"}]}`))
+		preq.SetPathValue("id", id)
+		srv.handlePrompt(prec, preq)
+		if prec.Code != 202 {
+			t.Fatalf("prompt status %d: %s", prec.Code, prec.Body)
+		}
+		<-prov.started // the prompt is now blocked mid-stream
+
+		// Drain with a short deadline: on fake time the deadline expires (the
+		// prompt never completes on its own), Drain cancels it, and the
+		// resulting session.aborted must be journaled before Drain returns.
+		dctx, dcancel := context.WithTimeout(context.Background(), time.Second)
+		defer dcancel()
+		srv.Drain(dctx)
+
+		// After Drain: the aborted record is in the journal and the file is
+		// still open (Drain must precede Close).
+		srv.mu.Lock()
+		var aborted bool
+		for _, ev := range srv.journal {
+			if ev.Type == evtSessionAborted && ev.SessionID == id {
+				aborted = true
+			}
+		}
+		fileOpen := srv.jf != nil
+		srv.mu.Unlock()
+		if !aborted {
+			t.Fatal("Drain returned without journaling session.aborted")
+		}
+		if !fileOpen {
+			t.Fatal("journal file closed before Drain returned")
+		}
+
+		// The record reached the on-disk journal while the file was open.
+		data, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(data, []byte(`"type":"`+evtSessionAborted+`"`)) {
+			t.Fatalf("events.jsonl missing session.aborted:\n%s", data)
+		}
+		if err := srv.Close(); err != nil {
+			t.Fatalf("Close after Drain: %v", err)
+		}
+	})
 }

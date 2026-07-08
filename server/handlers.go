@@ -42,7 +42,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	s.sessions[sess.ID] = &sessionState{sess: sess}
+	s.sessions[sess.ID] = &sessionState{sess: sess, lastUsed: time.Now()}
 	s.mu.Unlock()
 
 	s.emitDurable(Event{Type: evtSessionCreated, SessionID: sess.ID, Model: sess.Model()})
@@ -67,7 +67,11 @@ func (s *Server) handleList(w http.ResponseWriter, _ *http.Request) {
 		out = append(out, s.buildSession(m.sess, statusStr(m.running)))
 		seen[m.sess.ID] = true
 	}
-	infos, _ := engine.ListSessions(s.opts.SessionDir)
+	infos, err := engine.ListSessions(s.opts.SessionDir)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "cannot list sessions")
+		return
+	}
 	for _, info := range infos {
 		if seen[info.ID] {
 			continue
@@ -123,7 +127,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	for _, m := range mem {
 		result[m.id] = entry{Type: statusStr(m.running)}
 	}
-	infos, _ := engine.ListSessions(s.opts.SessionDir)
+	infos, err := engine.ListSessions(s.opts.SessionDir)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "cannot list sessions")
+		return
+	}
 	for _, info := range infos {
 		if _, ok := result[info.ID]; !ok {
 			result[info.ID] = entry{Type: "idle"}
@@ -189,6 +197,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	}
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 
+	s.wg.Add(1)
 	go s.runPrompt(ctx, id, st, text)
 	writeJSON(w, http.StatusAccepted, map[string]int64{"seq": fromSeq})
 }
@@ -202,6 +211,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 // disconnected orchestrator learns the outcome on replay; the 202 only
 // acknowledged receipt.
 func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, text string) {
+	defer s.wg.Done()
 	_, err := st.sess.Prompt(ctx, text)
 	s.syncMessages(id) // catch any message not yet journaled
 	switch {
@@ -214,8 +224,37 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	s.mu.Lock()
 	st.running = false
 	st.cancel = nil
+	st.lastUsed = time.Now()
+	s.evictResidentLocked()
 	s.mu.Unlock()
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
+}
+
+// evictResidentLocked unloads the longest-idle non-busy sessions from memory
+// when the resident count exceeds Options.MaxResident. Busy sessions are never
+// evicted; s.seen is retained so journal idempotency survives the unload (the
+// session reloads transparently from disk on its next access). Caller holds
+// s.mu.
+func (s *Server) evictResidentLocked() {
+	excess := len(s.sessions) - s.opts.MaxResident
+	if excess <= 0 {
+		return
+	}
+	type cand struct {
+		id   string
+		last time.Time
+	}
+	cands := make([]cand, 0, len(s.sessions))
+	for id, st := range s.sessions {
+		if st.running {
+			continue // busy sessions hold an in-flight prompt; keep them resident
+		}
+		cands = append(cands, cand{id, st.lastUsed})
+	}
+	sort.Slice(cands, func(i, j int) bool { return cands[i].last.Before(cands[j].last) })
+	for i := 0; i < excess && i < len(cands); i++ {
+		delete(s.sessions, cands[i].id)
+	}
 }
 
 // handleAbort interrupts a session's in-flight prompt. Unknown session (not
@@ -294,7 +333,7 @@ func (s *Server) getOrLoad(id string) (*sessionState, bool) {
 	if err != nil {
 		return nil, false
 	}
-	st := &sessionState{sess: sess}
+	st := &sessionState{sess: sess, lastUsed: time.Now()}
 	s.mu.Lock()
 	if ex := s.sessions[id]; ex != nil {
 		st = ex // lost a race; use the winner

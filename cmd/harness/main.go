@@ -402,7 +402,14 @@ func serveCmd(args []string) error {
 	case <-ctx.Done():
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		return httpSrv.Shutdown(shutCtx)
+		// Stop accepting connections and let in-flight HTTP handlers return,
+		// then drain the detached prompt goroutines (which Shutdown does not
+		// track — their 202 already returned). Draining before the deferred
+		// srv.Close keeps the journal file open until the trailing assistant
+		// message and session.aborted/idle records are written.
+		shutErr := httpSrv.Shutdown(shutCtx)
+		srv.Drain(shutCtx)
+		return shutErr
 	}
 }
 
