@@ -444,10 +444,19 @@ func serveCmd(args []string) error {
 			if model.IsZero() {
 				model = defModel
 			}
-			return engine.NewSession(mkCfg(model)), nil
+			cfg := mkCfg(model)
+			var sess *engine.Session
+			cfg.OnRequest = func(turn int, req *provider.Request) { srv.OnRequest(sess.ID, turn, req) }
+			sess = engine.NewSession(cfg)
+			return sess, nil
 		},
 		LoadSession: func(id string) (*engine.Session, error) {
-			return engine.LoadSession(mkCfg(defModel), id)
+			cfg := mkCfg(defModel)
+			var sess *engine.Session
+			cfg.OnRequest = func(turn int, req *provider.Request) { srv.OnRequest(sess.ID, turn, req) }
+			var err error
+			sess, err = engine.LoadSession(cfg, id)
+			return sess, err
 		},
 	})
 	if err != nil {

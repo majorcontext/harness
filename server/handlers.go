@@ -116,6 +116,56 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, msgs)
 }
 
+// requestJSON is the openapi Request shape: the latest fully-assembled model
+// request for a session (canonical, in-memory only).
+type requestJSON struct {
+	Model    message.ModelRef `json:"model"`
+	System   []string         `json:"system"`
+	Tools    []string         `json:"tools"`
+	Messages int              `json:"messages"`
+	Params   paramsJSON       `json:"params"`
+}
+
+type paramsJSON struct {
+	Temperature *float64 `json:"temperature,omitempty"`
+	TopP        *float64 `json:"top_p,omitempty"`
+	MaxTokens   int      `json:"max_tokens,omitempty"`
+}
+
+// handleRequest returns the latest fully-assembled request the process was
+// about to send for a session. It reads memory only (full requests are never
+// persisted), so a session that has not prompted this process is 404 —
+// including a valid, on-disk session that has only been created.
+func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	s.mu.Lock()
+	snap := s.lastRequest[id]
+	s.mu.Unlock()
+	if snap == nil {
+		writeErr(w, http.StatusNotFound, "no assembled request for session")
+		return
+	}
+	system := snap.system
+	if system == nil {
+		system = []string{}
+	}
+	tools := snap.tools
+	if tools == nil {
+		tools = []string{}
+	}
+	writeJSON(w, http.StatusOK, requestJSON{
+		Model:    snap.model,
+		System:   system,
+		Tools:    tools,
+		Messages: snap.messages,
+		Params: paramsJSON{
+			Temperature: snap.temperature,
+			TopP:        snap.topP,
+			MaxTokens:   snap.maxTokens,
+		},
+	})
+}
+
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	type entry struct {
 		Type string `json:"type"`

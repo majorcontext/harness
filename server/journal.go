@@ -2,14 +2,19 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/provider"
 )
 
 // Event is one server-sent event, matching the openapi Event schema. Durable
@@ -27,6 +32,19 @@ type Event struct {
 	Output    message.Parts     `json:"output,omitempty"`
 	IsError   bool              `json:"is_error,omitempty"`
 	Error     string            `json:"error,omitempty"`
+
+	// request.meta fields: a durable, replayable record of the assembled model
+	// request. SystemHash fingerprints the joined system segments; the full
+	// System array is included only when the hash differs from the session's
+	// previous request (the hash-on-change trick), so unchanged prompts stay
+	// cheap. SystemLen is the byte length of the joined system, Segments the
+	// count, Tools the offered tool names, and Messages the history length.
+	SystemHash string   `json:"system_hash,omitempty"`
+	SystemLen  int      `json:"system_len,omitempty"`
+	Segments   int      `json:"segments,omitempty"`
+	Tools      []string `json:"tools,omitempty"`
+	Messages   int      `json:"messages,omitempty"`
+	System     []string `json:"system,omitempty"`
 }
 
 // Durable and live event types (a superset of engine.Event types plus the
@@ -38,6 +56,7 @@ const (
 	evtSessionAborted = "session.aborted"
 	evtMessage        = "message"
 	evtModel          = "model"
+	evtRequestMeta    = "request.meta"
 )
 
 const journalName = "events.jsonl"
@@ -62,6 +81,65 @@ func (s *Server) Publish(ev engine.Event) {
 			ToolCall: ev.ToolCall, Output: ev.Output, IsError: ev.IsError,
 		})
 	}
+}
+
+// requestSnapshot is the latest fully-assembled model request for a session,
+// held in memory only (never persisted) to answer GET /session/{id}/request.
+type requestSnapshot struct {
+	model       message.ModelRef
+	system      []string
+	tools       []string
+	messages    int
+	temperature *float64
+	topP        *float64
+	maxTokens   int
+}
+
+// OnRequest is the engine's OnRequest callback (wired per session at
+// construction). It runs synchronously in the engine's prompt goroutine with
+// the exact final request about to hit the provider. It journals a durable
+// request.meta record — including the full system segments only when their hash
+// differs from this session's previous request — and stashes the latest
+// assembled request in memory for the /request endpoint. It does not mutate req.
+func (s *Server) OnRequest(sessionID string, _ int, req *provider.Request) {
+	tools := make([]string, len(req.Tools))
+	for i, td := range req.Tools {
+		tools[i] = td.Name
+	}
+	sort.Strings(tools)
+
+	joined := strings.Join(req.System, "\n")
+	sum := sha256.Sum256([]byte(joined))
+	hash := hex.EncodeToString(sum[:])
+	system := append([]string(nil), req.System...)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := s.lastReqHash[sessionID] != hash
+	s.lastReqHash[sessionID] = hash
+	s.lastRequest[sessionID] = &requestSnapshot{
+		model:       req.Model,
+		system:      system,
+		tools:       tools,
+		messages:    len(req.Messages),
+		temperature: req.Temperature,
+		topP:        req.TopP,
+		maxTokens:   req.MaxTokens,
+	}
+	ev := &Event{
+		Type:       evtRequestMeta,
+		SessionID:  sessionID,
+		Model:      req.Model,
+		SystemHash: hash,
+		SystemLen:  len(joined),
+		Segments:   len(req.System),
+		Tools:      tools,
+		Messages:   len(req.Messages),
+	}
+	if changed {
+		ev.System = system
+	}
+	s.emitDurableLocked(ev)
 }
 
 // syncMessages appends a durable message record for every message in the

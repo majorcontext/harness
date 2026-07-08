@@ -95,6 +95,14 @@ type Server struct {
 	// unloaded sessions is cheap and keeps replay/reconcile correct.
 	seen     map[string]map[string]bool
 	sessions map[string]*sessionState // in-memory (resident) sessions
+
+	// lastRequest holds the latest fully-assembled model request per session,
+	// in memory only (never persisted): GET /session/{id}/request reads it, and
+	// its absence is the 404 for a session that has not prompted this process.
+	// lastReqHash carries the previous request's system-segment hash per session
+	// so request.meta includes the full system only when it changes.
+	lastRequest map[string]*requestSnapshot
+	lastReqHash map[string]string
 }
 
 // sessionState tracks an in-memory session and any in-flight prompt. lastUsed
@@ -125,11 +133,13 @@ func New(opts Options) (*Server, error) {
 		opts.MaxResident = 32
 	}
 	s := &Server{
-		opts:     opts,
-		subs:     make(map[*subscriber]struct{}),
-		seen:     make(map[string]map[string]bool),
-		sessions: make(map[string]*sessionState),
-		closing:  make(chan struct{}),
+		opts:        opts,
+		subs:        make(map[*subscriber]struct{}),
+		seen:        make(map[string]map[string]bool),
+		sessions:    make(map[string]*sessionState),
+		lastRequest: make(map[string]*requestSnapshot),
+		lastReqHash: make(map[string]string),
+		closing:     make(chan struct{}),
 	}
 	if err := s.reconcile(); err != nil {
 		return nil, err
@@ -148,6 +158,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /session/status", s.auth(s.handleStatus))
 	mux.HandleFunc("GET /session/{id}", s.auth(s.handleGet))
 	mux.HandleFunc("GET /session/{id}/message", s.auth(s.handleMessages))
+	mux.HandleFunc("GET /session/{id}/request", s.auth(s.handleRequest))
 	mux.HandleFunc("POST /session/{id}/prompt_async", s.auth(s.handlePrompt))
 	mux.HandleFunc("POST /session/{id}/abort", s.auth(s.handleAbort))
 	mux.HandleFunc("GET /event", s.auth(s.handleEvent))
