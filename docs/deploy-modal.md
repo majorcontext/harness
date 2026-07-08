@@ -70,7 +70,7 @@ code.
 import modal
 
 app = modal.App.lookup("harness", create_if_missing=True)
-sessions = modal.Volume.from_name("harness-sessions", create_if_missing=True)
+sessions = modal.Volume.from_name("harness-sessions", create_if_missing=True, version=2)
 
 CPU = 2.0  # sandbox vCPU allocation
 
@@ -103,13 +103,15 @@ and/or `OPENAI_API_KEY`.
 `HARNESS_SESSION_DIR=/sessions` points harness at the mounted Volume, so the
 append-only session log outlives the sandbox. A later sandbox on the same
 Volume can `harness run -c` (continue the most recent session) or `-r <id>`
-(resume a specific one). The upcoming `harness serve` mode will resume the
-same log-backed sessions.
-Commit the Volume after a run so writes are durable:
+(resume a specific one). `harness serve` resumes the same log-backed
+sessions.
 
-```python
-sessions.commit()
-```
+**Use Volumes v2 (`version=2`).** Classic Volumes commit in the background
+and can silently lose the tail of the session log and event journal when a
+sandbox is terminated abruptly — verified empirically: an abrupt kill on a
+classic Volume preserved 1 of 7 messages; the same test on a v2 Volume
+preserved all of them. v2 syncs continuously and needs no explicit
+`commit()` calls.
 
 ### (c) Keys via a credential-injecting proxy (alternative to Secrets)
 
