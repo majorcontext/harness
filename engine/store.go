@@ -1,7 +1,8 @@
 // Session persistence: an append-only JSONL log, one file per session at
 // <SessionDir>/<session-id>.jsonl. Each line is one record: a "session"
-// header, a "message" for every appended message (canonical message JSON),
-// or a "model" written when SetModel changes the model.
+// header (always followed by a "model" record naming the session's model at
+// creation), a "message" for every appended message (canonical message
+// JSON), or a "model" written when SetModel changes the model.
 //
 // Nothing touches disk until the first message append (startup budget rule);
 // the directory and file are created lazily on first write.
@@ -111,7 +112,16 @@ func (s *Session) ensureLog() error {
 	}
 	s.logFile = f
 	if fi.Size() == 0 {
+		// Header plus a model record for the session's current model, so
+		// every persisted session names its model explicitly — a SetModel
+		// before the first append would otherwise be silently lost and
+		// LoadSession would wrongly fall back to Config.Model.
 		if err := s.writeRecord(record{Type: recSession, ID: s.ID, CreatedAt: s.createdAt}); err != nil {
+			f.Close()
+			s.logFile = nil
+			return err
+		}
+		if err := s.writeRecord(record{Type: recModel, Model: s.model}); err != nil {
 			f.Close()
 			s.logFile = nil
 			return err

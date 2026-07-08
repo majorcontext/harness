@@ -284,3 +284,32 @@ func TestPersistErrSurfacesWriteFailure(t *testing.T) {
 		t.Error("PersistErr = nil, want error")
 	}
 }
+
+func TestPersistModelSetBeforeFirstAppend(t *testing.T) {
+	dir := t.TempDir()
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "ok"}),
+	}}
+	cfg := persistCfg(dir, prov)
+	s := NewSession(cfg)
+
+	// SetModel before anything is on disk: the persisted log must still
+	// name the swapped model explicitly.
+	swapped := message.ModelRef{Provider: "test", Model: "m2"}
+	s.SetModel(swapped)
+
+	if _, err := s.Prompt(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PersistErr(); err != nil {
+		t.Fatalf("PersistErr = %v", err)
+	}
+
+	loaded, err := LoadSession(cfg, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Model() != swapped {
+		t.Errorf("loaded model = %v, want %v", loaded.Model(), swapped)
+	}
+}
