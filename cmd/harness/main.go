@@ -64,7 +64,7 @@ func main() {
 func usage() {
 	fmt.Fprint(os.Stderr, `usage:
   harness run -p <prompt> [flags]   run a one-shot prompt
-  harness serve [-addr host:port] [-cors-origin origin]
+  harness serve [-addr host:port] [-cors-origin origin] [-no-instructions]
                                     serve the HTTP+SSE session API
   harness sessions [--json]         list persisted sessions
   harness version                   print version
@@ -381,6 +381,8 @@ func serveCmd(args []string) error {
 	fs.StringVar(&addr, "addr", "localhost:4096", "listen address")
 	var corsOrigin string
 	fs.StringVar(&corsOrigin, "cors-origin", "", "enable browser CORS by echoing this Access-Control-Allow-Origin value (e.g. your inspector origin, or * for dev); empty disables CORS")
+	var noInstructions bool
+	fs.BoolVar(&noInstructions, "no-instructions", false, "disable automatic AGENTS.md injection for sessions served by this instance")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -417,7 +419,7 @@ func serveCmd(args []string) error {
 			WorkDir:      workDir,
 			SessionDir:   sesDir,
 			OnEvent:      func(ev engine.Event) { srv.Publish(ev) },
-			Instructions: instructionsConfig(cfg, false),
+			Instructions: instructionsConfig(cfg, noInstructions),
 		}
 	}
 	srv, err = server.New(server.Options{
