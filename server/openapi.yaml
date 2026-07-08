@@ -235,8 +235,11 @@ components:
           $ref: "#/components/schemas/ToolCallPart"
         output:
           type: array
+          description: Tool output for tool.end — same union as ToolResultPart.content.
           items:
-            $ref: "#/components/schemas/Part"
+            oneOf:
+              - $ref: "#/components/schemas/TextPart"
+              - $ref: "#/components/schemas/BlobPart"
         is_error: { type: boolean }
 
     Error:
