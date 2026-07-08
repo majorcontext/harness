@@ -149,6 +149,22 @@ Agent Skills discovered under `<WorkDir>/.agents/skills` (or config
 `skills_dirs` / the repeatable `-skills-dir` flag) are advertised the same way,
 so a cloned repo's skills are offered to box sessions automatically.
 
+### Verifying what reaches the model
+
+Because the box injects instructions and skills silently, you sometimes want to
+confirm they actually landed in the prompt. Three surfaces answer that without
+guesswork: `GET /session/{id}/request` returns the exact request the process
+most recently assembled for a session — the ordered system segments, offered
+tool names, message count, and sampling params — read from memory (full requests
+are never persisted, so a session that has not prompted this process is `404`).
+Every turn also journals a durable `request.meta` event carrying the system
+hash, segment/tool/message counts, and (only when the hash changes) the full
+system, so a `from=0` replay reconstructs exactly what each turn sent. And the
+built-in `session_info` tool lets the model itself report the instructions
+provenance, discovered skills, and system segments it received this turn. The
+`e2e/` suite asserts a real repo's `AGENTS.md` body and skill catalog line reach
+the assembled system, in that order, so this contract is CI-enforced.
+
 ## Inspecting sessions
 
 `tools/inspector/index.html` is a standalone browser UI for a running
