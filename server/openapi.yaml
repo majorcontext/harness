@@ -217,12 +217,20 @@ components:
           enum:
             - session.created
             - session.status
+            - session.error
             - message
             - model
             - text.delta
             - reasoning.delta
             - tool.start
             - tool.end
+          description: >
+            session.error is durable (journaled with a seq): it reports a
+            prompt that failed outright — provider error, transcode failure,
+            context cancellation — since prompt_async's 202 acknowledges
+            receipt only. The session returns to idle afterward (a
+            session.status event follows). Disconnected orchestrators see
+            the failure on replay.
         session_id: { type: string }
         seq:
           type: integer
@@ -246,6 +254,9 @@ components:
               - $ref: "#/components/schemas/TextPart"
               - $ref: "#/components/schemas/BlobPart"
         is_error: { type: boolean }
+        error:
+          type: string
+          description: Failure detail for session.error events.
 
     Error:
       type: object
@@ -440,6 +451,13 @@ paths:
         - name: session
           in: query
           schema: { type: string }
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema: { type: integer }
+          description: >
+            Standard EventSource reconnection header; equivalent to `from`.
+            When both are present, `from` wins.
       responses:
         "200":
           description: text/event-stream of Event objects.
