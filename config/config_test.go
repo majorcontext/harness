@@ -286,6 +286,44 @@ func TestMergeInstructions(t *testing.T) {
 	})
 }
 
+func TestGoalEvaluatorModel(t *testing.T) {
+	t.Run("load", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"goal_evaluator_model": "anthropic/claude-opus-4-8"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.GoalEvaluatorModel != "anthropic/claude-opus-4-8" {
+			t.Errorf("GoalEvaluatorModel = %q", c.GoalEvaluatorModel)
+		}
+	})
+	t.Run("project overrides user", func(t *testing.T) {
+		base := &Config{GoalEvaluatorModel: "anthropic/user-model"}
+		merged := merge(base, &Config{GoalEvaluatorModel: "anthropic/proj-model"})
+		if merged.GoalEvaluatorModel != "anthropic/proj-model" {
+			t.Errorf("merged = %q, want proj-model", merged.GoalEvaluatorModel)
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{GoalEvaluatorModel: "anthropic/user-model"}
+		merged := merge(base, &Config{})
+		if merged.GoalEvaluatorModel != "anthropic/user-model" {
+			t.Errorf("merged = %q, want inherited user-model", merged.GoalEvaluatorModel)
+		}
+	})
+	t.Run("resolves through aliases", func(t *testing.T) {
+		c := &Config{Aliases: map[string]string{"judge": "anthropic/claude-opus-4-8"}}
+		ref, err := c.ResolveModel("judge")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ref.String() != "anthropic/claude-opus-4-8" {
+			t.Errorf("ResolveModel(judge) = %q", ref.String())
+		}
+	})
+}
+
 func TestMergeDoesNotAliasBaseMaps(t *testing.T) {
 	base := &Config{
 		Aliases:   map[string]string{"fast": "anthropic/claude-haiku-4-5"},

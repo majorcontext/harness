@@ -45,6 +45,13 @@ type Event struct {
 	Tools      []string `json:"tools,omitempty"`
 	Messages   int      `json:"messages,omitempty"`
 	System     []string `json:"system,omitempty"`
+
+	// Goal-loop fields, carried by the goal.* durable records (see goal.go).
+	GoalCondition string `json:"goal_condition,omitempty"`
+	GoalReason    string `json:"goal_reason,omitempty"`
+	GoalMet       bool   `json:"goal_met,omitempty"`
+	GoalTurn      int    `json:"goal_turn,omitempty"`
+	GoalTurns     int    `json:"goal_turns,omitempty"`
 }
 
 // Durable and live event types (a superset of engine.Event types plus the
@@ -57,6 +64,10 @@ const (
 	evtMessage        = "message"
 	evtModel          = "model"
 	evtRequestMeta    = "request.meta"
+	evtGoalSet        = "goal.set"
+	evtGoalEval       = "goal.eval"
+	evtGoalAchieved   = "goal.achieved"
+	evtGoalCleared    = "goal.cleared"
 )
 
 const journalName = "events.jsonl"
@@ -80,7 +91,47 @@ func (s *Server) Publish(ev engine.Event) {
 			Type: engine.EventToolEnd, SessionID: ev.SessionID,
 			ToolCall: ev.ToolCall, Output: ev.Output, IsError: ev.IsError,
 		})
+	case engine.EventGoalSet, engine.EventGoalEval, engine.EventGoalAchieved, engine.EventGoalCleared:
+		s.publishGoal(ev)
 	}
+}
+
+// publishGoal journals a durable goal.* record and folds the event into the
+// per-session goal tracker that backs the Session JSON goal field.
+func (s *Server) publishGoal(ev engine.Event) {
+	out := &Event{
+		Type:          ev.Type,
+		SessionID:     ev.SessionID,
+		GoalCondition: ev.GoalCondition,
+		GoalReason:    ev.GoalReason,
+		GoalMet:       ev.GoalMet,
+		GoalTurn:      ev.GoalTurn,
+		GoalTurns:     ev.GoalTurns,
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g := s.goalState[ev.SessionID]
+	if g == nil {
+		g = &goalTracker{}
+		s.goalState[ev.SessionID] = g
+	}
+	switch ev.Type {
+	case engine.EventGoalSet:
+		g.condition = ev.GoalCondition
+		g.active = true
+		g.turns = 0
+		g.lastReason = ""
+	case engine.EventGoalEval:
+		g.turns = ev.GoalTurn
+		g.lastReason = ev.GoalReason
+	case engine.EventGoalAchieved:
+		g.active = false
+		g.turns = ev.GoalTurns
+		g.lastReason = ev.GoalReason
+	case engine.EventGoalCleared:
+		g.active = false
+	}
+	s.emitDurableLocked(out)
 }
 
 // requestSnapshot is the latest fully-assembled model request for a session,

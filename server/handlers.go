@@ -22,6 +22,16 @@ type sessionJSON struct {
 	Status    string           `json:"status"`
 	Messages  int              `json:"messages"`
 	Seq       int64            `json:"seq,omitempty"`
+	Goal      *goalJSON        `json:"goal,omitempty"`
+}
+
+// goalJSON is the Session.goal sub-object: present only when a goal has been
+// set for the session in this process.
+type goalJSON struct {
+	Condition  string `json:"condition"`
+	Active     bool   `json:"active"`
+	Turns      int    `json:"turns"`
+	LastReason string `json:"last_reason,omitempty"`
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -283,6 +293,107 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
 }
 
+// handleGoal starts a goal loop on a session. Like prompt_async it claims the
+// session's single run slot (busy sessions are 409, shutdown is 503) and runs
+// PursueGoal on a tracked goroutine under the same wg/drain/abort semantics —
+// the goal occupies the session, so a concurrent prompt_async is 409. The
+// evaluator model comes from Options.GoalEvaluator (config goal_evaluator_model);
+// when unset, goals are rejected with 400.
+func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.opts.GoalEvaluator.IsZero() {
+		writeErr(w, http.StatusBadRequest, "goal_evaluator_model is not configured; goals are unavailable")
+		return
+	}
+	var body struct {
+		Condition string `json:"condition"`
+		MaxTurns  int    `json:"max_turns"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(body.Condition) == "" {
+		writeErr(w, http.StatusBadRequest, "condition must be non-empty")
+		return
+	}
+
+	st, ctx, fromSeq, code := s.claimForPrompt(id)
+	if code != 0 {
+		switch code {
+		case http.StatusConflict:
+			writeErr(w, code, "session is busy")
+		case http.StatusServiceUnavailable:
+			writeErr(w, code, "server shutting down")
+		default:
+			writeErr(w, http.StatusNotFound, "no such session")
+		}
+		return
+	}
+	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
+
+	go s.runGoal(ctx, id, st, body.Condition, body.MaxTurns)
+	writeJSON(w, http.StatusAccepted, map[string]int64{"seq": fromSeq})
+}
+
+// runGoal drives one PursueGoal to completion, then flips the session back to
+// idle. The loop's context is cancelled only by DELETE /goal (which also
+// journals goal.cleared) or by Drain at shutdown; a context.Canceled result is
+// therefore a deliberate stop, not a failure, and needs no session.error. Any
+// other error is journaled as session.error. Message journaling piggybacks on
+// the same syncMessages path as runPrompt.
+func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condition string, maxTurns int) {
+	defer s.wg.Done()
+	_, err := st.sess.PursueGoal(ctx, condition, engine.GoalOptions{
+		MaxTurns:  maxTurns,
+		Evaluator: s.opts.GoalEvaluator,
+	})
+	s.syncMessages(id)
+	switch {
+	case err == nil:
+	case errors.Is(err, context.Canceled):
+		// Cleared via DELETE (goal.cleared already journaled) or drained.
+	default:
+		s.emitDurable(Event{Type: evtSessionError, SessionID: id, Error: err.Error()})
+	}
+	s.mu.Lock()
+	st.running = false
+	st.cancel = nil
+	st.lastUsed = time.Now()
+	s.evictResidentLocked()
+	s.mu.Unlock()
+	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
+}
+
+// handleGoalDelete cancels an active goal loop: it cancels the loop context
+// (stopping further turns) and clears the goal (journaling goal.cleared and
+// resetting the engine's goal state). Unknown session (not resident, no log on
+// disk) is 404; a known session is 204 whether or not a goal was active
+// (idempotent — no goal.cleared is journaled when nothing was active).
+func (s *Server) handleGoalDelete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	s.mu.Lock()
+	st := s.sessions[id]
+	var cancel context.CancelFunc
+	if st != nil {
+		cancel = st.cancel
+	}
+	s.mu.Unlock()
+	if st == nil && !s.sessionOnDisk(id) {
+		writeErr(w, http.StatusNotFound, "no such session")
+		return
+	}
+	if cancel != nil {
+		cancel() // stop the loop; runGoal treats context.Canceled as a clean stop
+	}
+	if st != nil {
+		// ClearGoal journals goal.cleared (via OnEvent -> publishGoal) and
+		// resets the engine goal state; a no-op when no goal is active.
+		st.sess.ClearGoal()
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // evictResidentLocked unloads the longest-idle non-busy sessions from memory
 // when the resident count exceeds Options.MaxResident. Busy sessions are never
 // evicted; s.seen is retained so journal idempotency survives the unload (the
@@ -448,6 +559,10 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 	id := sess.ID
 	s.mu.Lock()
 	seq := s.sessionSeqLocked(id)
+	var goal *goalJSON
+	if g := s.goalState[id]; g != nil {
+		goal = &goalJSON{Condition: g.condition, Active: g.active, Turns: g.turns, LastReason: g.lastReason}
+	}
 	s.mu.Unlock()
 	return sessionJSON{
 		ID:        id,
@@ -456,6 +571,7 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 		Status:    status,
 		Messages:  len(sess.History()),
 		Seq:       seq,
+		Goal:      goal,
 	}
 }
 

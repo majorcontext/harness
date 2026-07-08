@@ -45,6 +45,11 @@ type Config struct {
 	// <WorkDir>/.agents/skills when it exists. In the project-config merge a
 	// non-empty project value replaces the user value entirely.
 	SkillsDirs []string `json:"skills_dirs,omitempty"`
+	// GoalEvaluatorModel names the model ref (or alias) used to evaluate goal
+	// completion for `harness run --goal` and the server's goal endpoints.
+	// There is no default — goal use requires this field to be set. Resolve it
+	// with ResolveModel so aliases apply.
+	GoalEvaluatorModel string `json:"goal_evaluator_model,omitempty"`
 }
 
 // Provider is per-family provider configuration.
@@ -96,8 +101,9 @@ func Path() string {
 // exists, merges it on top. Merge rules, applied field by field (no
 // reflection):
 //
-//   - Model, SessionDir, InstructionsPath: a non-empty project value overrides
-//     the user value. Instructions (*bool): a non-nil project value overrides.
+//   - Model, SessionDir, InstructionsPath, GoalEvaluatorModel: a non-empty
+//     project value overrides the user value. Instructions (*bool): a non-nil
+//     project value overrides.
 //   - SkillsDirs: a non-empty project slice replaces the user slice entirely
 //     (arrays override, they do not concatenate); an empty/omitted project
 //     value inherits the user value.
@@ -139,6 +145,9 @@ func merge(base, over *Config) *Config {
 	}
 	if over.InstructionsPath != "" {
 		out.InstructionsPath = over.InstructionsPath
+	}
+	if over.GoalEvaluatorModel != "" {
+		out.GoalEvaluatorModel = over.GoalEvaluatorModel
 	}
 	// Arrays override wholesale: a non-empty project value replaces the user
 	// value entirely; otherwise inherit. Copy so the merged config never
