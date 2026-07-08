@@ -52,6 +52,18 @@ FROM your-project-toolchain:latest
 COPY --from=harness /harness /usr/local/bin/harness
 ```
 
+### Repos with a devcontainer
+
+When the target repo declares its environment via `.devcontainer/`
+(containers.dev), prefer that over the generic `sandbox` toolbelt: build the
+repo's image with `devcontainer build` in trusted CI (features and lifecycle
+hooks run arbitrary scripts — always at bake time, never per-workspace), then
+copy the harness binary in from `dist` as above. The agent then works in the
+same environment a human contributor would. `sandbox` remains the fallback
+for repos without one. Never rebuild an image from a `devcontainer.json` an
+agent has modified in-workspace; image changes go through PR review like
+code.
+
 ## Minimal Sandbox
 
 ```python
