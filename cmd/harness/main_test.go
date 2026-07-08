@@ -199,8 +199,8 @@ func TestFormatSessionsJSON(t *testing.T) {
 				{ID: "ses_b", CreatedAt: base.Add(90 * time.Minute), Messages: 5},
 			},
 			want: []sessionJSON{
-				{ID: "ses_a", CreatedAt: "2024-06-01T12:00:00Z", Messages: 2},
-				{ID: "ses_b", CreatedAt: "2024-06-01T13:30:00Z", Messages: 5},
+				{ID: "ses_a", CreatedAt: base, Messages: 2},
+				{ID: "ses_b", CreatedAt: base.Add(90 * time.Minute), Messages: 5},
 			},
 		},
 	}
@@ -222,7 +222,8 @@ func TestFormatSessionsJSON(t *testing.T) {
 				t.Fatalf("got %d sessions, want %d", len(got), len(tt.want))
 			}
 			for i := range tt.want {
-				if got[i] != tt.want[i] {
+				if got[i].ID != tt.want[i].ID || got[i].Messages != tt.want[i].Messages ||
+					!got[i].CreatedAt.Equal(tt.want[i].CreatedAt) {
 					t.Errorf("session[%d] = %+v, want %+v", i, got[i], tt.want[i])
 				}
 			}

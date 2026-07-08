@@ -181,9 +181,9 @@ func formatSessions(infos []engine.SessionInfo) string {
 // per session with created_at as an RFC3339 string, mirroring
 // engine.SessionInfo.
 type sessionJSON struct {
-	ID        string `json:"id"`
-	CreatedAt string `json:"created_at"`
-	Messages  int    `json:"messages"`
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	Messages  int       `json:"messages"`
 }
 
 // formatSessionsJSON renders the session list as a JSON array. An empty
@@ -193,7 +193,7 @@ func formatSessionsJSON(infos []engine.SessionInfo) (string, error) {
 	for _, info := range infos {
 		out = append(out, sessionJSON{
 			ID:        info.ID,
-			CreatedAt: info.CreatedAt.Format(time.RFC3339),
+			CreatedAt: info.CreatedAt,
 			Messages:  info.Messages,
 		})
 	}
