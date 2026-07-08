@@ -305,3 +305,48 @@ func (h *varyingHooks) ExecuteTool(_ context.Context, _ *plugin.ToolExecuteReque
 }
 func (h *varyingHooks) Emit(_ []plugin.Event)   {}
 func (h *varyingHooks) Tools() []plugin.ToolDef { return nil }
+
+func TestRequestSnapshotEvictedWithSession(t *testing.T) {
+	// Snapshots hold full system copies; eviction must release them
+	// (review finding on #22). The hash entry survives deliberately so
+	// hash-on-change journaling stays correct across eviction cycles.
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn("a"), asstTurn("b"),
+	}}
+	h := newRequestHarness(t, prov)
+	h.srv.opts.MaxResident = 1
+
+	sidA := h.createSession("test/m1")
+	sse := h.openSSE("?from=0", "")
+	h.do("POST", "/session/"+sidA+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "one"}},
+	})
+	sse.collectUntilIdle(t)
+
+	sidB := h.createSession("test/m1")
+	h.do("POST", "/session/"+sidB+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "two"}},
+	})
+	sse2 := h.openSSE("?from=0&session="+sidB, "")
+	sse2.collectUntilIdle(t)
+
+	h.srv.mu.Lock()
+	_, snapA := h.srv.lastRequest[sidA]
+	_, hashA := h.srv.lastReqHash[sidA]
+	_, residentA := h.srv.sessions[sidA]
+	h.srv.mu.Unlock()
+	if residentA {
+		t.Fatal("session A should have been evicted (MaxResident=1)")
+	}
+	if snapA {
+		t.Error("evicted session A still holds a request snapshot")
+	}
+	if !hashA {
+		t.Error("session A hash entry should survive eviction")
+	}
+
+	resp, _ := h.do("GET", "/session/"+sidA+"/request", nil)
+	if resp.StatusCode != 404 {
+		t.Errorf("evicted session /request = %d, want 404", resp.StatusCode)
+	}
+}

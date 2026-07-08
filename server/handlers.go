@@ -307,6 +307,11 @@ func (s *Server) evictResidentLocked() {
 	sort.Slice(cands, func(i, j int) bool { return cands[i].last.Before(cands[j].last) })
 	for i := 0; i < excess && i < len(cands); i++ {
 		delete(s.sessions, cands[i].id)
+		// Release the request snapshot (it holds a full copy of the
+		// assembled system segments). lastReqHash survives deliberately:
+		// it is small and keeps hash-on-change journaling correct if the
+		// session is later reloaded.
+		delete(s.lastRequest, cands[i].id)
 	}
 }
 
