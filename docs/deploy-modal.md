@@ -170,6 +170,12 @@ Then:
    The inspector reconnects automatically with backoff if the sandbox restarts
    or the tunnel URL drops, replaying from the last durable event it saw.
 
+The base URL and run token are stored in the browser's `localStorage` in
+plaintext so a reload reconnects without re-entering them. Treat the inspector
+as a dev tool: don't host it on a shared origin with a long-lived token. Run
+tokens are workspace-scoped and rotate with the workspace, so the blast radius
+of a leaked token is one workspace until its next rotation.
+
 ## Ephemerality e2e
 
 `scripts/modal-e2e.py` is an on-demand test (not run in CI) that proves session

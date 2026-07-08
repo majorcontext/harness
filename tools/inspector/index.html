@@ -11,6 +11,11 @@
   instance must be started with -cors-origin set to this page's origin (or "*"
   for local hacking). See docs/deploy-modal.md ("Inspecting sessions").
 
+  SECURITY: the base URL and run token are persisted in this browser's
+  localStorage in plaintext so a reload can reconnect. Treat this as a dev tool
+  — don't host it on a shared origin with a long-lived token. Tokens are
+  workspace-scoped and rotate with the workspace.
+
   The pure helpers below (SSE parser + formatters) are unit-tested by
   inspector_test.mjs (run: node --test tools/inspector/*_test.mjs). The steps
   here cover the DOM/network behavior that can only be checked by hand:
@@ -132,7 +137,8 @@
 <body>
   <header>
     <input id="base" placeholder="http://localhost:4096" autocomplete="off" spellcheck="false">
-    <input id="token" type="password" placeholder="run token" autocomplete="off">
+    <input id="token" type="password" placeholder="run token" autocomplete="off"
+           title="stored in this browser's localStorage in plaintext — use a dev token on a private origin">
     <button id="connect" class="primary">Connect</button>
     <span class="status"><span id="dot" class="dot"></span><span id="statusText">disconnected</span></span>
   </header>
