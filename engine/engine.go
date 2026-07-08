@@ -76,6 +76,15 @@ type Config struct {
 	Hooks   Hooks       // optional plugin host
 	OnEvent func(Event) // optional; called synchronously, keep it fast
 
+	// OnRequest, when non-nil, is invoked synchronously in streamTurn with the
+	// exact final request about to be sent to the provider — after params,
+	// system-segment, and hook assembly, immediately before prov.Stream. turn
+	// counts from 1 for the first model call of the session and increments once
+	// per model call, so a tool loop advances it. The *provider.Request is
+	// SHARED with the provider call: callbacks MUST NOT mutate it or anything it
+	// references (System, Messages, Tools). A nil OnRequest costs nothing.
+	OnRequest func(turn int, req *provider.Request)
+
 	// Instructions controls project-instruction (AGENTS.md) injection into
 	// the system prompt. A nil value is the default: auto-discover AGENTS.md
 	// by walking up from WorkDir. See InstructionsConfig.
@@ -116,10 +125,25 @@ type Session struct {
 	// Project-instruction segment, loaded once on the first Prompt (see
 	// instructions.go). instrLoaded gates the one-time disk read; instrSeg is
 	// the cached system-prompt segment (empty when none); instrErr records a
-	// present-but-unusable instructions file so every Prompt fails alike.
+	// present-but-unusable instructions file so every Prompt fails alike;
+	// instrPath is the display path of the source file (empty when none), used
+	// by the session_info tool to report instruction provenance.
 	instrLoaded bool
 	instrSeg    string
 	instrErr    error
+	instrPath   string
+
+	// turn counts model calls made in this session (from 1); lastSystem holds
+	// the system segments assembled for the most recent model call. Both feed
+	// OnRequest and the session_info tool (see session_info.go). Guarded by mu.
+	turn       int
+	lastSystem []string
+
+	// skills is the structured catalog discovered on the first Prompt (name +
+	// absolute SKILL.md path), used by the session_info tool. The advertised
+	// prompt segment lives in skillsSeg below; this is the same catalog, kept
+	// structured so session_info can report skill provenance.
+	skills []skillInfo
 
 	// Agent Skills catalog segment, discovered once on the first Prompt (see
 	// skills.go). Same load-once-cache-error pattern as instructions:
@@ -155,7 +179,7 @@ func newSession(cfg Config) *Session {
 		tools:     make(map[string]Tool),
 		createdAt: time.Now().UTC(),
 	}
-	for _, t := range []Tool{bashTool(cfg.BashTimeout), readFileTool(), writeFileTool(), editFileTool()} {
+	for _, t := range []Tool{bashTool(cfg.BashTimeout), readFileTool(), writeFileTool(), editFileTool(), sessionInfoTool()} {
 		s.tools[t.Def.Name] = t
 	}
 	for _, t := range cfg.Tools {
@@ -336,6 +360,19 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 		Temperature: params.Temperature,
 		TopP:        params.TopP,
 		MaxTokens:   maxTokens,
+	}
+
+	// Record this turn's assembled system for the session_info tool, bump the
+	// per-session turn counter, then hand the exact final request to the
+	// observer immediately before the provider call. OnRequest must not mutate
+	// req (it is shared with prov.Stream below).
+	s.mu.Lock()
+	s.turn++
+	turn := s.turn
+	s.lastSystem = append([]string(nil), system...)
+	s.mu.Unlock()
+	if s.cfg.OnRequest != nil {
+		s.cfg.OnRequest(turn, req)
 	}
 
 	stream, err := prov.Stream(ctx, req)
