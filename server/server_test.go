@@ -142,7 +142,7 @@ func newHarnessOpts(t *testing.T, dir string, prov provider.Provider, maxResiden
 // newServer builds a *Server without an HTTP listener, so its handlers can be
 // driven directly (e.g. inside a synctest bubble, where real sockets are
 // unavailable).
-func newServer(t *testing.T, dir string, prov provider.Provider, maxResident int) *Server {
+func newServer(t *testing.T, dir string, prov provider.Provider, maxResident int, mutate ...func(*Options)) *Server {
 	t.Helper()
 	const token = "secret-run-token"
 	model := message.ModelRef{Provider: prov.Name(), Model: "m1"}
@@ -158,7 +158,7 @@ func newServer(t *testing.T, dir string, prov provider.Provider, maxResident int
 			OnEvent:    func(ev engine.Event) { srv.Publish(ev) },
 		}
 	}
-	srv, err := New(Options{
+	opts := Options{
 		SessionDir:        dir,
 		RunToken:          token,
 		Version:           "9.9.9",
@@ -170,11 +170,28 @@ func newServer(t *testing.T, dir string, prov provider.Provider, maxResident int
 		LoadSession: func(id string) (*engine.Session, error) {
 			return engine.LoadSession(mkCfg(message.ModelRef{}), id)
 		},
-	})
+	}
+	for _, m := range mutate {
+		m(&opts)
+	}
+	srv, err := New(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return srv
+}
+
+// newCORSHarness builds a harness whose server echoes origin in CORS headers.
+func newCORSHarness(t *testing.T, origin string) *harness {
+	t.Helper()
+	const token = "secret-run-token"
+	dir := t.TempDir()
+	srv := newServer(t, dir, &scriptedProvider{name: "test"}, 0, func(o *Options) {
+		o.CORSOrigin = origin
+	})
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	return &harness{t: t, dir: dir, token: token, srv: srv, ts: ts}
 }
 
 func (h *harness) do(method, path string, body any) (*http.Response, []byte) {
@@ -393,6 +410,99 @@ func TestAuthRequired(t *testing.T) {
 	resp2, _ := h.do("GET", "/session", nil)
 	if resp2.StatusCode != 200 {
 		t.Fatalf("good-token status = %d, want 200", resp2.StatusCode)
+	}
+}
+
+func TestCORSPreflightUnauthenticated(t *testing.T) {
+	h := newCORSHarness(t, "https://inspector.example")
+	// Preflight to an authed route, carrying no Authorization header.
+	req, _ := http.NewRequest("OPTIONS", h.ts.URL+"/session/abc/prompt_async", nil)
+	req.Header.Set("Origin", "https://inspector.example")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	resp, err := h.ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("preflight status = %d, want 204", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://inspector.example" {
+		t.Errorf("ACAO = %q, want origin echoed", got)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Methods"); got != "GET, POST, OPTIONS" {
+		t.Errorf("ACAM = %q", got)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Headers"); got != "Authorization, Content-Type, Last-Event-ID" {
+		t.Errorf("ACAH = %q", got)
+	}
+	if got := resp.Header.Get("Access-Control-Max-Age"); got != "600" {
+		t.Errorf("Max-Age = %q, want 600", got)
+	}
+	if got := resp.Header.Get("Vary"); got != "Origin" {
+		t.Errorf("Vary = %q, want Origin", got)
+	}
+}
+
+func TestCORSAllowedOnAuthedResponse(t *testing.T) {
+	h := newCORSHarness(t, "https://inspector.example")
+	resp, _ := h.do("GET", "/session", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://inspector.example" {
+		t.Errorf("ACAO = %q, want origin echoed", got)
+	}
+	if got := resp.Header.Get("Vary"); got != "Origin" {
+		t.Errorf("Vary = %q, want Origin", got)
+	}
+}
+
+func TestCORSWildcardEchoed(t *testing.T) {
+	h := newCORSHarness(t, "*")
+	resp, _ := h.do("GET", "/session", nil)
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Errorf("ACAO = %q, want *", got)
+	}
+}
+
+func TestCORSHeaderOnUnauthorized(t *testing.T) {
+	h := newCORSHarness(t, "https://inspector.example")
+	// A real (non-preflight) request without credentials must still carry ACAO
+	// so the browser can read the 401 body.
+	req, _ := http.NewRequest("GET", h.ts.URL+"/session", nil)
+	req.Header.Set("Origin", "https://inspector.example")
+	resp, err := h.ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://inspector.example" {
+		t.Errorf("ACAO on 401 = %q, want origin echoed", got)
+	}
+}
+
+func TestCORSDisabledByDefault(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	// No CORS headers on a normal response.
+	resp, _ := h.do("GET", "/session", nil)
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("ACAO = %q, want empty when CORS disabled", got)
+	}
+	// OPTIONS gets no special handling (mux has no OPTIONS route → 405), and
+	// certainly no CORS headers.
+	req, _ := http.NewRequest("OPTIONS", h.ts.URL+"/session", nil)
+	req.Header.Set("Origin", "https://inspector.example")
+	resp2, err := h.ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if got := resp2.Header.Get("Access-Control-Allow-Origin"); got != "" {
+		t.Errorf("ACAO on OPTIONS = %q, want empty when CORS disabled", got)
 	}
 }
 
