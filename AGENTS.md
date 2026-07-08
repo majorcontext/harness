@@ -107,6 +107,40 @@ go test -race -run TestName ./engine/
 go vet ./...
 ```
 
+## Testing
+
+**TDD is mandatory.** Write the failing test first, watch it fail, then
+implement until it passes. New behavior lands in the same commit as its test;
+a bug fix starts with a test that reproduces the bug.
+
+Rules:
+
+- **Timer-dependent and concurrency-timeout logic is tested inside a
+  `testing/synctest` bubble** (Go 1.25+): time is fake and advances only when
+  every goroutine in the bubble is durably blocked, so timeouts fire
+  deterministically and instantly. `net.Pipe` and channel-based plumbing work
+  in bubbles; real network and file I/O do not. Note fake time stops
+  advancing once the test function returns — a goroutine parked in
+  `time.Sleep` at bubble end is reported as a deadlock, which is the bubble's
+  goroutine-leak detection working for you.
+- **No raw `time.Sleep` for synchronization — ever, bubble or not.** To
+  simulate a hung component, block on a channel closed in `t.Cleanup`; in a
+  bubble the hang deterministically outlasts any timeout with zero wall-clock
+  cost, and the cleanup release lets the goroutine exit before bubble end.
+- **No guessed deadlines.** Block directly on channels for expected events
+  and let the test binary timeout catch hangs; don't wrap waits in short
+  arbitrary `time.After` failsafes that flake under load.
+- Always run with `-race`; CI runs `go test -race ./...`.
+- `t.Helper()` in every test helper; `t.Cleanup` over `defer` in helpers so
+  cleanup composes.
+- `httptest` for HTTP surfaces; in-process pipes (`net.Pipe`) for protocol
+  tests — never spawn real subprocess fixtures unless the subprocess
+  machinery itself is under test.
+- Table tests where cases multiply; golden JSON comparisons for transcoders
+  (struct field order makes marshaled output deterministic).
+- Production timers use `time.NewTimer` + `defer Stop()`, not `time.After`,
+  when the surrounding function can return before the timer fires.
+
 ## Code Style
 
 - Standard Go conventions, `go fmt`, `go vet` clean.

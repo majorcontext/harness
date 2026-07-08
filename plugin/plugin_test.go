@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/andybons/harness/message"
@@ -216,43 +217,50 @@ func TestEventDelivery(t *testing.T) {
 	h := newTestHost(t, Options{}, listener)
 	h.Emit([]Event{{Type: EventSessionStatus, SessionID: "s1", Properties: json.RawMessage(`{"status":"busy"}`)}})
 
-	select {
-	case ev := <-got:
-		if ev.Type != EventSessionStatus || ev.SessionID != "s1" {
-			t.Errorf("event = %+v", ev)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("event not delivered")
+	// Block directly; a delivery bug fails via the test binary timeout
+	// rather than a guessed deadline.
+	ev := <-got
+	if ev.Type != EventSessionStatus || ev.SessionID != "s1" {
+		t.Errorf("event = %+v", ev)
 	}
 }
 
 func TestHookTimeoutFailsOpen(t *testing.T) {
-	var errs []Hook
-	slow := testPlugin(t, "slow", &Hooks{
-		SystemTransform: func(ctx context.Context, _ *Client, _ *SystemTransformRequest) (*SystemTransformResponse, error) {
-			time.Sleep(500 * time.Millisecond)
-			return &SystemTransformResponse{Segments: []string{"late"}}, nil
-		},
-	})
-	fast := testPlugin(t, "fast", &Hooks{
-		SystemTransform: func(_ context.Context, _ *Client, _ *SystemTransformRequest) (*SystemTransformResponse, error) {
-			return &SystemTransformResponse{Segments: []string{"on time"}}, nil
-		},
-	})
-	h := newTestHost(t, Options{
-		HookTimeout: 50 * time.Millisecond,
-		OnError: func(_ string, hook Hook, _ error) {
-			errs = append(errs, hook)
-		},
-	}, slow, fast)
+	synctest.Test(t, func(t *testing.T) {
+		var errs []Hook
+		// The slow hook hangs until cleanup. Inside the bubble, fake time
+		// advances to the host's timeout the moment every goroutine is
+		// durably blocked — the timeout fires deterministically and the
+		// test costs no wall clock. (A time.Sleep here would leak past the
+		// bubble's end, which synctest reports as a deadlock.)
+		release := make(chan struct{})
+		t.Cleanup(func() { close(release) })
+		slow := testPlugin(t, "slow", &Hooks{
+			SystemTransform: func(ctx context.Context, _ *Client, _ *SystemTransformRequest) (*SystemTransformResponse, error) {
+				<-release
+				return &SystemTransformResponse{Segments: []string{"late"}}, nil
+			},
+		})
+		fast := testPlugin(t, "fast", &Hooks{
+			SystemTransform: func(_ context.Context, _ *Client, _ *SystemTransformRequest) (*SystemTransformResponse, error) {
+				return &SystemTransformResponse{Segments: []string{"on time"}}, nil
+			},
+		})
+		h := newTestHost(t, Options{
+			HookTimeout: 50 * time.Millisecond,
+			OnError: func(_ string, hook Hook, _ error) {
+				errs = append(errs, hook)
+			},
+		}, slow, fast)
 
-	got := h.SystemTransform(context.Background(), &SystemTransformRequest{SessionID: "s1"})
-	if len(got) != 1 || got[0] != "on time" {
-		t.Errorf("segments = %v, want [on time]", got)
-	}
-	if len(errs) != 1 || errs[0] != HookSystemTransform {
-		t.Errorf("OnError calls = %v", errs)
-	}
+		got := h.SystemTransform(context.Background(), &SystemTransformRequest{SessionID: "s1"})
+		if len(got) != 1 || got[0] != "on time" {
+			t.Errorf("segments = %v, want [on time]", got)
+		}
+		if len(errs) != 1 || errs[0] != HookSystemTransform {
+			t.Errorf("OnError calls = %v", errs)
+		}
+	})
 }
 
 func TestUnsubscribedPluginNeverSpawns(t *testing.T) {

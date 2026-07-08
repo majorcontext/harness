@@ -400,9 +400,11 @@ func (p *procConn) Close() error {
 		p.cmd.Wait() //nolint:errcheck
 		close(done)
 	}()
+	kill := time.NewTimer(2 * time.Second)
+	defer kill.Stop()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-kill.C:
 		_ = p.cmd.Process.Kill()
 		<-done
 	}
