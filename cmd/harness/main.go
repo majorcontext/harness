@@ -14,10 +14,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/andybons/harness/engine"
-	"github.com/andybons/harness/message"
-	"github.com/andybons/harness/provider"
-	"github.com/andybons/harness/provider/anthropic"
+	"github.com/majorcontext/harness/engine"
+	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/provider"
+	"github.com/majorcontext/harness/provider/anthropic"
 )
 
 var version = "0.1.0-dev"

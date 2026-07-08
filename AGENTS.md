@@ -69,7 +69,11 @@ Plugins are API clients over the same channel: `Session.Messages`, `MCP.Call`, `
 
 Events v1: `session.status`, `question.asked`, `file.edited`.
 
-Reference for capability parity: the opencode plugins in `~/dev/web/.opencode/plugins/` — the protocol must be able to express everything they do.
+Capability parity bar: the protocol must be able to express the plugin
+patterns common in opencode setups — event-driven activity tracking, token
+refresh via `shell.env`, tool-call rewriting/vetoing and result guards via
+`tool.execute.*`, path-scoped system prompt injection, and custom tools that
+call back into the platform.
 
 ## External Protocol Surfaces
 

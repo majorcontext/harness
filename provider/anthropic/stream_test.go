@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/andybons/harness/message"
-	"github.com/andybons/harness/provider"
+	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/provider"
 )
 
 // sse formats one server-sent event.

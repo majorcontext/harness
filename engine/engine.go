@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/andybons/harness/message"
-	"github.com/andybons/harness/plugin"
-	"github.com/andybons/harness/provider"
+	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/plugin"
+	"github.com/majorcontext/harness/provider"
 )
 
 // Hooks is the slice of the plugin host the engine uses. *plugin.Host

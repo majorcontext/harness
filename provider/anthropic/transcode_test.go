@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/andybons/harness/message"
-	"github.com/andybons/harness/provider"
+	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/provider"
 )
 
 func mustTranscode(t *testing.T, req *provider.Request) *apiRequest {

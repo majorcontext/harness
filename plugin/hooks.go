@@ -3,7 +3,7 @@ package plugin
 import (
 	"encoding/json"
 
-	"github.com/andybons/harness/message"
+	"github.com/majorcontext/harness/message"
 )
 
 // Hook names a dispatch point in the engine. Sync hooks chain across plugins

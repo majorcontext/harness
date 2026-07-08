@@ -13,7 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/andybons/harness/message"
+	"github.com/majorcontext/harness/message"
 )
 
 // ToolDef describes a tool offered to the model.

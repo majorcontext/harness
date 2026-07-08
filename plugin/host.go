@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/andybons/harness/message"
+	"github.com/majorcontext/harness/message"
 )
 
 // ClientAPI is implemented by the engine to serve plugin → harness calls.

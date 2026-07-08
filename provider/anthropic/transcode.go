@@ -7,8 +7,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/andybons/harness/message"
-	"github.com/andybons/harness/provider"
+	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/provider"
 )
 
 // Family is the provider family key: ModelRef.Provider values and

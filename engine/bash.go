@@ -9,8 +9,8 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/andybons/harness/message"
-	"github.com/andybons/harness/provider"
+	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/provider"
 )
 
 // maxToolOutput caps captured output; the tail is kept since errors usually

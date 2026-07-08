@@ -9,7 +9,7 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/andybons/harness/message"
+	"github.com/majorcontext/harness/message"
 )
 
 // testPlugin runs a plugin in-process over a net.Pipe and returns a Spec for
@@ -163,7 +163,7 @@ func TestShellEnvMerge(t *testing.T) {
 func TestCustomToolWithClientAPI(t *testing.T) {
 	api := &stubClientAPI{
 		mcp: func(req *MCPCallRequest) (*MCPCallResult, error) {
-			if req.Server != "neptune" || req.Tool != "slack_post_message" {
+			if req.Server != "gateway" || req.Tool != "slack_post_message" {
 				t.Errorf("unexpected MCP call: %+v", req)
 			}
 			return &MCPCallResult{Content: message.Parts{&message.Text{Text: "ok"}}}, nil
@@ -178,7 +178,7 @@ func TestCustomToolWithClientAPI(t *testing.T) {
 			},
 			Execute: func(ctx context.Context, c *Client, args json.RawMessage) (message.Parts, error) {
 				// Exercise the plugin → harness client API mid-execution.
-				res, err := c.MCPCall(ctx, "neptune", "slack_post_message", map[string]string{"text": "hi"})
+				res, err := c.MCPCall(ctx, "gateway", "slack_post_message", map[string]string{"text": "hi"})
 				if err != nil {
 					return nil, err
 				}

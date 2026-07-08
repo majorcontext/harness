@@ -11,8 +11,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/andybons/harness/message"
-	"github.com/andybons/harness/provider"
+	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/provider"
 )
 
 const (
