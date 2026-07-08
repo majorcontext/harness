@@ -186,6 +186,7 @@ func (s *Session) buildInstructionSegment() (string, error) {
 		if err != nil {
 			return "", err
 		}
+		s.instrPath = ic.Path
 		return formatInstructions(ic.Path, body), nil
 	}
 	content, path, err := loadInstructions(s.cfg.WorkDir)
@@ -195,6 +196,7 @@ func (s *Session) buildInstructionSegment() (string, error) {
 	if path == "" {
 		return "", nil
 	}
+	s.instrPath = path
 	return formatInstructions(path, content), nil
 }
 

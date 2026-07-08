@@ -221,6 +221,7 @@ components:
             - session.aborted
             - message
             - model
+            - request.meta
             - text.delta
             - reasoning.delta
             - tool.start
@@ -233,6 +234,13 @@ components:
             error, transcode failure); session.aborted confirms an
             orchestrator-requested abort ended the in-flight prompt. Both
             are followed by a session.status idle transition.
+            request.meta is a durable record of the model request the engine
+            assembled for one turn: system_hash, system_len, segments (count),
+            tools (names), messages (history count), and the model. The full
+            system segments array is attached (in the `system` field) only when
+            system_hash differs from the session's previous request — the
+            hash-on-change trick keeps unchanged prompts cheap while still
+            making the exact system recoverable from a from=0 replay.
         session_id: { type: string }
         seq:
           type: integer
@@ -259,6 +267,56 @@ components:
         error:
           type: string
           description: Failure detail for session.error events.
+        system_hash:
+          type: string
+          description: SHA-256 of the joined system segments (request.meta).
+        system_len:
+          type: integer
+          description: Byte length of the joined system segments (request.meta).
+        segments:
+          type: integer
+          description: Number of system segments (request.meta).
+        tools:
+          type: array
+          items: { type: string }
+          description: Names of the tools offered this turn (request.meta).
+        messages:
+          type: integer
+          description: Message-history count for the request (request.meta).
+        system:
+          type: array
+          items: { type: string }
+          description: >
+            Full ordered system segments. Present on a request.meta record only
+            when system_hash changed from the session's previous request.
+
+    Request:
+      type: object
+      description: >
+        The latest fully-assembled model request for a session, held in memory
+        only (never persisted). GET /session/{id}/request returns it; a session
+        that has not prompted this process is 404.
+      required: [model, system, tools, messages, params]
+      properties:
+        model:
+          $ref: "#/components/schemas/ModelRef"
+        system:
+          type: array
+          items: { type: string }
+          description: Ordered system-prompt segments as sent.
+        tools:
+          type: array
+          items: { type: string }
+          description: Names of the offered tools.
+        messages:
+          type: integer
+          description: Message-history count for the request.
+        params:
+          type: object
+          properties:
+            temperature: { type: number }
+            top_p: { type: number }
+            max_tokens: { type: integer }
 
     Error:
       type: object
@@ -360,6 +418,29 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Message" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /session/{id}/request:
+    get:
+      operationId: getRequest
+      summary: The latest fully-assembled model request (self-inspection).
+      description: >
+        Returns the exact request the process most recently assembled for this
+        session — model, ordered system segments, offered tool names, message
+        count, and sampling params — read from memory only (full requests are
+        never persisted). A session that has not prompted this process is 404,
+        even if its log exists on disk. Pairs with the durable request.meta
+        event and the built-in session_info tool for verifying what reaches the
+        model.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Request" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 

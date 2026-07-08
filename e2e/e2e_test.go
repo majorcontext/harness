@@ -198,12 +198,20 @@ type serveProc struct {
 
 // startServe launches `harness serve` on a free port with the given session
 // dir and config, then waits (bounded) for /health. The process is killed at
-// test cleanup.
+// test cleanup. Its working directory is a throwaway temp dir.
 func startServe(t *testing.T, sessDir, configPath string) *serveProc {
+	t.Helper()
+	return startServeIn(t, sessDir, configPath, t.TempDir())
+}
+
+// startServeIn is startServe with an explicit working directory, so a test can
+// place an AGENTS.md / .agents/skills tree the served sessions will discover
+// (the engine sets each session's WorkDir to the serve process's cwd).
+func startServeIn(t *testing.T, sessDir, configPath, workDir string) *serveProc {
 	t.Helper()
 	addr := freeAddr(t)
 	cmd := exec.Command(harnessBin, "serve", "-addr", addr)
-	cmd.Dir = t.TempDir()
+	cmd.Dir = workDir
 	cmd.Env = cleanEnv(map[string]string{
 		"HARNESS_RUN_TOKEN":   testToken,
 		"HARNESS_SESSION_DIR": sessDir,
@@ -743,6 +751,73 @@ func TestTruncatedFinalLine(t *testing.T) {
 	// And still promptable.
 	p2.prompt(id, "again")
 	p2.waitMessages(id, 4)
+}
+
+// TestInstructionsAndSkillsReachModel is the CI-enforced proof that a project's
+// AGENTS.md and its Agent Skills actually reach the model. It stands up a real
+// serve process whose working directory holds a real AGENTS.md and a real
+// .agents/skills/demo-skill/SKILL.md, drives one prompt through the fake
+// provider, and then asks GET /session/{id}/request what the process was about
+// to send — asserting the assembled system carries the instructions body AND
+// the skill's catalog line, with instructions ordered before skills.
+func TestInstructionsAndSkillsReachModel(t *testing.T) {
+	skipShort(t)
+
+	fake := newFakeAnthropic(0)
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	t.Cleanup(fake.close)
+
+	sessDir := t.TempDir()
+	cfgPath := writeConfig(t, srv.URL)
+
+	// The served process's working directory: a real project with instructions
+	// and one skill discovered under the default <WorkDir>/.agents/skills.
+	workDir := t.TempDir()
+	const instrMarker = "The secret project rule is FLUX-CAPACITOR."
+	if err := os.WriteFile(filepath.Join(workDir, "AGENTS.md"), []byte(instrMarker+"\n"), 0o644); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+	skillDir := filepath.Join(workDir, ".agents", "skills", "demo-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("mkdir skill: %v", err)
+	}
+	const skillDesc = "Demonstrates skill discovery end to end."
+	skillMD := "---\nname: demo-skill\ndescription: " + skillDesc + "\n---\n\nThe skill body.\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillMD), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+
+	p := startServeIn(t, sessDir, cfgPath, workDir)
+	id := p.createSession()
+	p.prompt(id, "hello")
+	// Wait for the assistant reply, which lands only after OnRequest has captured
+	// the assembled request (OnRequest fires just before the provider stream).
+	p.waitMessages(id, 2)
+
+	resp, data := p.do(http.MethodGet, "/session/"+id+"/request", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /request status %d: %s", resp.StatusCode, data)
+	}
+	var rq struct {
+		System []string `json:"system"`
+	}
+	if err := json.Unmarshal(data, &rq); err != nil {
+		t.Fatalf("decode /request: %v (%s)", err, data)
+	}
+	joined := strings.Join(rq.System, "\n")
+
+	if !strings.Contains(joined, instrMarker) {
+		t.Errorf("assembled system missing AGENTS.md content:\n%s", joined)
+	}
+	skillLine := "demo-skill — " + skillDesc
+	if !strings.Contains(joined, skillLine) {
+		t.Errorf("assembled system missing skill catalog line %q:\n%s", skillLine, joined)
+	}
+	// Documented order: instructions before skills.
+	if ii, si := strings.Index(joined, instrMarker), strings.Index(joined, skillLine); ii < 0 || si < 0 || ii > si {
+		t.Errorf("instructions must appear before skills (instr idx %d, skill idx %d)", ii, si)
+	}
 }
 
 // --- small helpers -----------------------------------------------------

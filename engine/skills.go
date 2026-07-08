@@ -121,6 +121,8 @@ func (s *Session) buildSkillsSegment() (string, error) {
 			absPath = sk.Path
 		}
 		fmt.Fprintf(&b, "\n%s — %s (path: %s)", sk.Name, sk.Description, absPath)
+		// Keep the structured catalog for the session_info tool.
+		s.skills = append(s.skills, skillInfo{Name: sk.Name, Path: absPath})
 	}
 	return b.String(), nil
 }
