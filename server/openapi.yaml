@@ -139,6 +139,11 @@ components:
     BlobPart:
       type: object
       required: [type, media_type]
+      # A blob must carry content: inline data or a URL (transcoders reject
+      # blobs with neither).
+      anyOf:
+        - required: [data]
+        - required: [url]
       properties:
         type: { const: blob }
         media_type: { type: string }
