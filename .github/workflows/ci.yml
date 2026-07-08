@@ -16,6 +16,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          # No go.sum: the module has zero dependencies (by design).
+          cache: false
 
       - run: go build ./...
 
