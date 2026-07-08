@@ -1,0 +1,4 @@
+/harness
+*.test
+*.out
+.DS_Store
