@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/plugin"
@@ -121,6 +122,18 @@ func TestPromptToolLoop(t *testing.T) {
 	}
 	if toolStarts != 1 || toolEnds != 1 {
 		t.Errorf("tool events = %d/%d", toolStarts, toolEnds)
+	}
+}
+
+func TestCreatedAt(t *testing.T) {
+	before := time.Now().UTC()
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": &scriptedProvider{name: "test"}},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+	})
+	after := time.Now().UTC()
+	if got := s.CreatedAt(); got.Before(before) || got.After(after) {
+		t.Errorf("CreatedAt() = %v, not within [%v, %v]", got, before, after)
 	}
 }
 
