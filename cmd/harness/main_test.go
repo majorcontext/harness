@@ -366,6 +366,23 @@ func TestInstructionsConfig(t *testing.T) {
 	})
 }
 
+func TestSkillsDirsExplicitEmptyDisables(t *testing.T) {
+	// A config file with "skills_dirs": [] is an explicit opt-out and must
+	// reach the engine as a non-nil empty slice (disable), not nil
+	// (default-on). Review finding on #21.
+	got := skillsDirs(&config.Config{SkillsDirs: []string{}}, nil, "/w")
+	if got == nil {
+		t.Fatal("explicit empty skills_dirs collapsed to nil (re-enables default)")
+	}
+	if len(got) != 0 {
+		t.Fatalf("got %v, want empty", got)
+	}
+	// Absent config stays nil → engine default applies.
+	if got := skillsDirs(&config.Config{}, nil, "/w"); got != nil {
+		t.Fatalf("absent skills_dirs = %v, want nil", got)
+	}
+}
+
 func TestSkillsDirs(t *testing.T) {
 	t.Run("default nil when nothing configured", func(t *testing.T) {
 		if dirs := skillsDirs(&config.Config{}, nil, "/work"); dirs != nil {

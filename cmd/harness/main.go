@@ -508,11 +508,17 @@ func instructionsConfig(cfg *config.Config, noInstructions bool) *engine.Instruc
 // default in place (use <workDir>/.agents/skills when it exists).
 func skillsDirs(cfg *config.Config, flagDirs []string, workDir string) []string {
 	dirs := flagDirs
-	if len(dirs) == 0 && cfg != nil {
+	if len(dirs) == 0 && cfg != nil && cfg.SkillsDirs != nil {
+		// A config file's explicit "skills_dirs": [] is an opt-out and must
+		// stay a non-nil empty slice; only a truly absent field falls
+		// through to nil (engine default discovery).
 		dirs = cfg.SkillsDirs
 	}
-	if len(dirs) == 0 {
+	if dirs == nil {
 		return nil
+	}
+	if len(dirs) == 0 {
+		return []string{}
 	}
 	out := make([]string, len(dirs))
 	for i, d := range dirs {
