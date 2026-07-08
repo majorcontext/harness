@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -22,9 +23,11 @@ import (
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/engine"
+	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 	"github.com/majorcontext/harness/provider/anthropic"
 	"github.com/majorcontext/harness/provider/openai"
+	"github.com/majorcontext/harness/server"
 )
 
 var version = "0.1.0-dev"
@@ -47,6 +50,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "harness:", err)
 			os.Exit(1)
 		}
+	case "serve":
+		if err := serveCmd(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "harness:", err)
+			os.Exit(1)
+		}
 	default:
 		usage()
 		os.Exit(2)
@@ -56,6 +64,7 @@ func main() {
 func usage() {
 	fmt.Fprint(os.Stderr, `usage:
   harness run -p <prompt> [flags]   run a one-shot prompt
+  harness serve [-addr host:port]   serve the HTTP+SSE session API
   harness sessions                  list persisted sessions
   harness version                   print version
 
@@ -311,6 +320,90 @@ func providerAuth(cfg *config.Config, family, defaultKeyEnv string) (apiKey, bas
 		}
 	}
 	return os.Getenv(keyEnv), baseURL
+}
+
+// serveCmd starts the HTTP+SSE session API. The run token comes from
+// HARNESS_RUN_TOKEN (required); the listener opens at boot, but nothing here
+// touches network egress, spawns processes, or scans beyond the session dir —
+// provider auth still validates on first message send.
+func serveCmd(args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	var addr string
+	fs.StringVar(&addr, "addr", "localhost:4096", "listen address")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	token := os.Getenv("HARNESS_RUN_TOKEN")
+	if token == "" {
+		return fmt.Errorf("HARNESS_RUN_TOKEN is required")
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	defModel, err := cfg.ResolveModel("")
+	if err != nil {
+		return err
+	}
+	workDir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	sesDir, err := sessionDir(false, cfg.SessionDir)
+	if err != nil {
+		return err
+	}
+	reg := registry(cfg)
+
+	// The event journal owner needs each engine session to report events to
+	// it, so the session wrappers wire OnEvent to the server's Publish.
+	var srv *server.Server
+	mkCfg := func(model message.ModelRef) engine.Config {
+		return engine.Config{
+			Providers:  reg,
+			Model:      model,
+			System:     systemPrompt(workDir, ""),
+			WorkDir:    workDir,
+			SessionDir: sesDir,
+			OnEvent:    func(ev engine.Event) { srv.Publish(ev) },
+		}
+	}
+	srv, err = server.New(server.Options{
+		SessionDir: sesDir,
+		RunToken:   token,
+		Version:    version,
+		NewSession: func(model message.ModelRef) (*engine.Session, error) {
+			if model.IsZero() {
+				model = defModel
+			}
+			return engine.NewSession(mkCfg(model)), nil
+		},
+		LoadSession: func(id string) (*engine.Session, error) {
+			return engine.LoadSession(mkCfg(defModel), id)
+		},
+	})
+	if err != nil {
+		return err
+	}
+	defer srv.Close()
+
+	httpSrv := &http.Server{Addr: addr, Handler: srv}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	errc := make(chan error, 1)
+	go func() { errc <- httpSrv.ListenAndServe() }()
+	fmt.Fprintln(os.Stderr, "harness serve listening on", addr)
+
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return httpSrv.Shutdown(shutCtx)
+	}
 }
 
 func systemPrompt(workDir, extra string) []string {

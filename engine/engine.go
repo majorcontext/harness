@@ -153,6 +153,14 @@ func (s *Session) Model() message.ModelRef {
 	return s.model
 }
 
+// CreatedAt returns when the session was created (or, for a loaded session,
+// when it was originally created per its log header).
+func (s *Session) CreatedAt() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.createdAt
+}
+
 // Usage returns cumulative token usage across all turns.
 func (s *Session) Usage() provider.Usage {
 	s.mu.Lock()
