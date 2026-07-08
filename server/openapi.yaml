@@ -1,0 +1,473 @@
+openapi: 3.1.0
+info:
+  title: Harness Server API
+  version: 0.1.0
+  description: |
+    The HTTP surface `harness serve` exposes inside a sandbox. It is a
+    protocol, not a product: no static assets, no UI — a single external
+    orchestrator drives many harness instances through this API.
+
+    ## Design notes
+
+    - **The session log is the wire contract.** Durable records (messages,
+      model swaps, session lifecycle) carry monotonic sequence numbers and
+      are replayable; live deltas (text, reasoning, tool progress) stream
+      between them and are not persisted. A client that reconnects with
+      `from=<last seq>` reconstructs exactly what it missed.
+    - **Session status is engine truth.** `busy` means a prompt is being
+      processed by the engine — it has nothing to do with whether any client
+      is connected. (This deliberately fixes the opencode `/session/status`
+      footgun where idle-but-usable sessions reported as absent.)
+    - **Sessions outlive the process.** Session logs persist on disk; a
+      prompt to a session that is not in memory transparently resumes it
+      from its log. "Stored session gone after sandbox restart" is not an
+      error mode — orchestrators keep one session ID per task and reuse it.
+    - **Prompting is always asynchronous.** The endpoint keeps opencode's
+      `prompt_async` name so existing orchestration code ports with a URL
+      and auth swap; there is no synchronous variant.
+    - Endpoint naming follows opencode's `/session` shapes where the
+      semantics match, so Neptune's handlers port mechanically. Everything
+      opencode exposes for its in-box UI (tui, pty, lsp, find, file, config,
+      provider/mcp auth, permissions, share/fork/revert) is deliberately
+      absent: rendering belongs to the orchestrator, credentials belong to
+      gatekeeper, and permissions do not exist by design.
+
+servers:
+  - url: http://localhost:4096
+    description: In-sandbox listener (fronted by the platform's box proxy)
+
+security:
+  - runToken: []
+
+components:
+  securitySchemes:
+    runToken:
+      type: http
+      scheme: bearer
+      description: |
+        The workspace's run token — the same per-sandbox token gatekeeper
+        scopes credentials with. Compared in constant time. The box proxy
+        terminates human/service auth in front of this.
+
+  schemas:
+    Health:
+      type: object
+      required: [version]
+      properties:
+        version:
+          type: string
+          example: 0.1.0
+
+    Session:
+      type: object
+      required: [id, created_at, model, status, messages]
+      properties:
+        id:
+          type: string
+          example: ses_77aa9a7c6f323a7b
+        created_at:
+          type: string
+          format: date-time
+        model:
+          $ref: "#/components/schemas/ModelRef"
+        status:
+          $ref: "#/components/schemas/SessionStatus"
+        messages:
+          type: integer
+          description: Count of messages in the session log.
+        seq:
+          type: integer
+          description: Sequence number of the latest durable record.
+
+    SessionStatus:
+      type: string
+      enum: [idle, busy]
+      description: >
+        Engine truth: busy while a prompt is being processed, idle
+        otherwise. Independent of client connections.
+
+    ModelRef:
+      type: string
+      description: Compact "provider/model" form, or a config alias.
+      example: anthropic/claude-fable-5
+
+    Message:
+      type: object
+      description: Canonical message (see package message).
+      required: [id, role, parts]
+      properties:
+        id:
+          type: string
+        role:
+          type: string
+          enum: [user, assistant, tool]
+        parts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Part"
+        model:
+          $ref: "#/components/schemas/ModelRef"
+        created_at:
+          type: string
+          format: date-time
+
+    Part:
+      type: object
+      required: [type]
+      discriminator:
+        propertyName: type
+        mapping:
+          text: "#/components/schemas/TextPart"
+          blob: "#/components/schemas/BlobPart"
+          tool_call: "#/components/schemas/ToolCallPart"
+          tool_result: "#/components/schemas/ToolResultPart"
+          reasoning: "#/components/schemas/ReasoningPart"
+      oneOf:
+        - $ref: "#/components/schemas/TextPart"
+        - $ref: "#/components/schemas/BlobPart"
+        - $ref: "#/components/schemas/ToolCallPart"
+        - $ref: "#/components/schemas/ToolResultPart"
+        - $ref: "#/components/schemas/ReasoningPart"
+
+    TextPart:
+      type: object
+      required: [type, text]
+      properties:
+        type: { const: text }
+        text: { type: string }
+
+    BlobPart:
+      type: object
+      required: [type, media_type]
+      # A blob must carry content: inline data or a URL (transcoders reject
+      # blobs with neither).
+      anyOf:
+        - required: [data]
+        - required: [url]
+      properties:
+        type: { const: blob }
+        media_type: { type: string }
+        data: { type: string, contentEncoding: base64 }
+        url: { type: string }
+
+    ToolCallPart:
+      type: object
+      required: [type, call_id, name, arguments]
+      properties:
+        type: { const: tool_call }
+        call_id: { type: string }
+        name: { type: string }
+        arguments: { type: object, additionalProperties: true }
+
+    ToolResultPart:
+      type: object
+      required: [type, call_id, content]
+      properties:
+        type: { const: tool_result }
+        call_id: { type: string }
+        content:
+          type: array
+          description: >
+            Text and Blob parts only, matching the canonical format's
+            documented constraint on ToolResult content.
+          items:
+            oneOf:
+              - $ref: "#/components/schemas/TextPart"
+              - $ref: "#/components/schemas/BlobPart"
+        is_error: { type: boolean }
+
+    ReasoningPart:
+      type: object
+      required: [type]
+      properties:
+        type: { const: reasoning }
+        text: { type: string }
+        provider_data:
+          type: object
+          additionalProperties: true
+
+    PromptRequest:
+      type: object
+      required: [parts]
+      properties:
+        parts:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/TextPart"
+          description: v1 accepts text parts only.
+        model:
+          $ref: "#/components/schemas/ModelRef"
+          description: >
+            Optional explicit model for this and subsequent turns. Explicit
+            values always win over the session's persisted model (same rule
+            as the CLI -model flag).
+
+    Event:
+      type: object
+      description: |
+        One server-sent event. Durable records carry `seq` and are
+        replayable; live events have no `seq` and stream only while
+        connected. The SSE `id:` field mirrors `seq` for durable records so
+        `Last-Event-ID` reconnection works with standard clients.
+      required: [type, session_id]
+      properties:
+        type:
+          type: string
+          enum:
+            - session.created
+            - session.status
+            - session.error
+            - session.aborted
+            - message
+            - model
+            - text.delta
+            - reasoning.delta
+            - tool.start
+            - tool.end
+          description: >
+            session.error and session.aborted are durable (journaled with a
+            seq) because prompt_async's 202 acknowledges receipt only, so
+            disconnected orchestrators must see terminal outcomes on replay.
+            session.error reports a prompt that failed outright (provider
+            error, transcode failure); session.aborted confirms an
+            orchestrator-requested abort ended the in-flight prompt. Both
+            are followed by a session.status idle transition.
+        session_id: { type: string }
+        seq:
+          type: integer
+          description: Present on durable records only.
+        status:
+          $ref: "#/components/schemas/SessionStatus"
+        message:
+          $ref: "#/components/schemas/Message"
+        model:
+          $ref: "#/components/schemas/ModelRef"
+        text:
+          type: string
+          description: Delta text for text.delta / reasoning.delta.
+        tool_call:
+          $ref: "#/components/schemas/ToolCallPart"
+        output:
+          type: array
+          description: Tool output for tool.end — same union as ToolResultPart.content.
+          items:
+            oneOf:
+              - $ref: "#/components/schemas/TextPart"
+              - $ref: "#/components/schemas/BlobPart"
+        is_error: { type: boolean }
+        error:
+          type: string
+          description: Failure detail for session.error events.
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+
+  parameters:
+    sessionID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid run token.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: No session log with that ID.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+paths:
+  /health:
+    get:
+      operationId: health
+      summary: Liveness and version.
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+
+  /session:
+    get:
+      operationId: listSessions
+      summary: List sessions (in-memory and persisted).
+      responses:
+        "200":
+          description: All sessions known to this instance's session dir.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Session" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: createSession
+      summary: Create a session.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                model: { $ref: "#/components/schemas/ModelRef" }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /session/{id}:
+    get:
+      operationId: getSession
+      summary: Session detail.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /session/{id}/message:
+    get:
+      operationId: getMessages
+      summary: Full canonical message history (bootstrap for renderers).
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Message" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /session/{id}/prompt_async:
+    post:
+      operationId: promptAsync
+      summary: Deliver a prompt; processing happens in the background.
+      description: |
+        Works on any session with a log, regardless of in-memory state — a
+        session not currently loaded is resumed from disk first. Progress
+        and results arrive on /event.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PromptRequest" }
+      responses:
+        "202":
+          description: Accepted. Body carries the seq to tail events from.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [seq]
+                properties:
+                  seq: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Session is busy with another prompt.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /session/{id}/abort:
+    post:
+      operationId: abortSession
+      summary: Interrupt the in-flight prompt, if any.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      responses:
+        "204": { description: Interrupted (or nothing was running). }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /session/status:
+    get:
+      operationId: sessionStatus
+      summary: Map of session ID to engine-truth status.
+      description: >
+        Unlike opencode's endpoint of the same name, this reflects engine
+        state for every known session — it does not depend on any client
+        being connected.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                description: >
+                  Values are deliberately wrapped as {"type": <status>} —
+                  byte-compatible with opencode's /session/status response
+                  shape, so existing orchestration handlers port without
+                  parsing changes. Session.status and Event.status use the
+                  bare SessionStatus string; only this endpoint wraps it,
+                  and only for compatibility.
+                additionalProperties:
+                  type: object
+                  required: [type]
+                  properties:
+                    type: { $ref: "#/components/schemas/SessionStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /event:
+    get:
+      operationId: events
+      summary: Server-sent event stream with replay.
+      description: |
+        One stream for the whole instance (the hub holds exactly one of
+        these per box). `from` (or the standard `Last-Event-ID` header)
+        replays durable records with seq greater than the given value, in
+        order, then continues with live events. Optional `session` filter
+        restricts to one session.
+      parameters:
+        - name: from
+          in: query
+          schema: { type: integer }
+        - name: session
+          in: query
+          schema: { type: string }
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema: { type: integer }
+          description: >
+            Standard EventSource reconnection header; equivalent to `from`.
+            When both are present, `from` wins.
+      responses:
+        "200":
+          description: text/event-stream of Event objects.
+          content:
+            text/event-stream:
+              schema: { $ref: "#/components/schemas/Event" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # Candidate for v1.1, deliberately deferred: GET /session/{id}/diff
+  # (working-tree diff for orchestrator PR-preview rendering). Needs a
+  # position on git ownership inside the engine first.
