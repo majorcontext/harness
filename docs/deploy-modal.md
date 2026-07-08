@@ -25,25 +25,32 @@ docker push <registry>/harness:latest
 image = modal.Image.from_registry("<registry>/harness:latest")
 ```
 
-## The scratch image is a distribution artifact
+## Two image targets: dist and sandbox
 
-The image this Dockerfile produces contains only the harness binary and CA
-certificates (~3 MB). Inside it, the in-process tools (`read_file`,
-`write_file`, `edit_file`) and model API calls work, but the `bash` tool
-fails — there is no `/bin/sh`, no git, no toolchain. Verified behavior: the
-engine surfaces the failure as a tool error the model can see and route
-around, but a coding agent without a shell is crippled.
+The Dockerfile has two named targets:
 
-For real agentic work, layer the binary into your project's toolchain image
-instead:
+- **`dist`** (the default): harness binary + CA certificates on `scratch`,
+  ~3 MB. A distribution artifact — in-process tools and model API calls
+  work, but there is no `/bin/sh`, so the `bash` tool cannot. Use it as a
+  versioned layer to copy the binary from.
+- **`sandbox`** (`docker build --target sandbox`): the binary on
+  `debian:stable-slim` with a curated toolbelt — shell, git, curl, jq,
+  ripgrep, procps (`ps`/`pkill`), patch, file, unzip, zstd. ~75 MB. This is
+  the image to run agents in; both the bash tool and the full agent loop
+  are verified working inside it.
+
+In-sandbox tools do not weaken the security model: with egress default-deny
+through a credential-injecting proxy, a `curl` inside the sandbox has no
+secrets to read and nowhere to send them.
+
+Project-specific toolchains layer on top of `sandbox` (or copy the binary
+from `dist` into an existing toolchain image):
 
 ```dockerfile
-FROM ghcr.io/majorcontext/harness:latest AS harness
+FROM ghcr.io/majorcontext/harness:latest AS harness   # dist target
 FROM your-project-toolchain:latest
 COPY --from=harness /harness /usr/local/bin/harness
 ```
-
-The scratch image exists so that copy is small, fast, and versioned.
 
 ## Minimal Sandbox
 
