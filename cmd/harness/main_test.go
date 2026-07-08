@@ -366,6 +366,49 @@ func TestInstructionsConfig(t *testing.T) {
 	})
 }
 
+func TestSkillsDirsExplicitEmptyDisables(t *testing.T) {
+	// A config file with "skills_dirs": [] is an explicit opt-out and must
+	// reach the engine as a non-nil empty slice (disable), not nil
+	// (default-on). Review finding on #21.
+	got := skillsDirs(&config.Config{SkillsDirs: []string{}}, nil, "/w")
+	if got == nil {
+		t.Fatal("explicit empty skills_dirs collapsed to nil (re-enables default)")
+	}
+	if len(got) != 0 {
+		t.Fatalf("got %v, want empty", got)
+	}
+	// Absent config stays nil → engine default applies.
+	if got := skillsDirs(&config.Config{}, nil, "/w"); got != nil {
+		t.Fatalf("absent skills_dirs = %v, want nil", got)
+	}
+}
+
+func TestSkillsDirs(t *testing.T) {
+	t.Run("default nil when nothing configured", func(t *testing.T) {
+		if dirs := skillsDirs(&config.Config{}, nil, "/work"); dirs != nil {
+			t.Errorf("dirs = %v, want nil (engine default)", dirs)
+		}
+	})
+	t.Run("config dirs resolved against workDir", func(t *testing.T) {
+		dirs := skillsDirs(&config.Config{SkillsDirs: []string{"a/skills", "/abs/skills"}}, nil, "/work")
+		want := []string{filepath.Join("/work", "a/skills"), "/abs/skills"}
+		if len(dirs) != 2 || dirs[0] != want[0] || dirs[1] != want[1] {
+			t.Errorf("dirs = %v, want %v", dirs, want)
+		}
+	})
+	t.Run("flag overrides config entirely", func(t *testing.T) {
+		dirs := skillsDirs(&config.Config{SkillsDirs: []string{"cfg/skills"}}, []string{"flag/skills"}, "/work")
+		if len(dirs) != 1 || dirs[0] != filepath.Join("/work", "flag/skills") {
+			t.Errorf("dirs = %v, want flag override", dirs)
+		}
+	})
+	t.Run("nil config is safe", func(t *testing.T) {
+		if dirs := skillsDirs(nil, nil, "/work"); dirs != nil {
+			t.Errorf("dirs = %v, want nil", dirs)
+		}
+	})
+}
+
 func TestRegistry(t *testing.T) {
 	t.Run("defaults to ANTHROPIC_API_KEY and empty base url", func(t *testing.T) {
 		t.Setenv("ANTHROPIC_API_KEY", "sk-default")

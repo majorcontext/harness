@@ -40,6 +40,11 @@ type Config struct {
 	// InstructionsPath overrides the auto-discovered AGENTS.md with a specific
 	// file to load instead of walking up from the working directory.
 	InstructionsPath string `json:"instructions_path,omitempty"`
+	// SkillsDirs lists directories scanned for Agent Skills (agentskills.io).
+	// A nil (omitted) value leaves the engine default in place: use
+	// <WorkDir>/.agents/skills when it exists. In the project-config merge a
+	// non-empty project value replaces the user value entirely.
+	SkillsDirs []string `json:"skills_dirs,omitempty"`
 }
 
 // Provider is per-family provider configuration.
@@ -93,6 +98,9 @@ func Path() string {
 //
 //   - Model, SessionDir, InstructionsPath: a non-empty project value overrides
 //     the user value. Instructions (*bool): a non-nil project value overrides.
+//   - SkillsDirs: a non-empty project slice replaces the user slice entirely
+//     (arrays override, they do not concatenate); an empty/omitted project
+//     value inherits the user value.
 //   - Aliases, Providers: maps are merged key by key — project keys are added
 //     and override user keys of the same name. Within a Provider, a non-empty
 //     project field (APIKeyEnv, BaseURL) overrides the user field.
@@ -131,6 +139,16 @@ func merge(base, over *Config) *Config {
 	}
 	if over.InstructionsPath != "" {
 		out.InstructionsPath = over.InstructionsPath
+	}
+	// Arrays override wholesale: a non-empty project value replaces the user
+	// value entirely; otherwise inherit. Copy so the merged config never
+	// aliases either input's slice.
+	src := out.SkillsDirs
+	if len(over.SkillsDirs) > 0 {
+		src = over.SkillsDirs
+	}
+	if len(src) > 0 {
+		out.SkillsDirs = append([]string(nil), src...)
 	}
 	if n := len(base.Aliases) + len(over.Aliases); n > 0 {
 		m := make(map[string]string, n)

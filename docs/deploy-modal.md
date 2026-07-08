@@ -145,6 +145,10 @@ the clone (set the sandbox working directory to the repo root, or `cd` into it
 before `serve`). Disable per-run with `-no-instructions`, or globally with
 `instructions: false` (or an `instructions_path` override) in config.
 
+Agent Skills discovered under `<WorkDir>/.agents/skills` (or config
+`skills_dirs` / the repeatable `-skills-dir` flag) are advertised the same way,
+so a cloned repo's skills are offered to box sessions automatically.
+
 ## Inspecting sessions
 
 `tools/inspector/index.html` is a standalone browser UI for a running

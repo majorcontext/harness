@@ -81,6 +81,14 @@ type Config struct {
 	// by walking up from WorkDir. See InstructionsConfig.
 	Instructions *InstructionsConfig
 
+	// SkillsDirs are the directories scanned for Agent Skills
+	// (agentskills.io), each holding skill subdirectories with a SKILL.md.
+	// A nil value is the default: use <WorkDir>/.agents/skills when that
+	// directory exists. An explicit empty (non-nil) slice disables skill
+	// discovery entirely. Duplicate skill names across dirs are an error.
+	// See skills.go.
+	SkillsDirs []string
+
 	// Tools are additional built-in tools. The bash tool is always
 	// installed.
 	Tools       []Tool
@@ -112,6 +120,15 @@ type Session struct {
 	instrLoaded bool
 	instrSeg    string
 	instrErr    error
+
+	// Agent Skills catalog segment, discovered once on the first Prompt (see
+	// skills.go). Same load-once-cache-error pattern as instructions:
+	// skillsLoaded gates the one-time disk scan, skillsSeg is the cached
+	// stage-1 catalog (empty when none), skillsErr records a discovery
+	// failure so every Prompt fails alike.
+	skillsLoaded bool
+	skillsSeg    string
+	skillsErr    error
 }
 
 // NewSession creates a session. Nothing touches the network, spawns
@@ -233,6 +250,12 @@ func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, er
 	if err := s.ensureInstructions(); err != nil {
 		return nil, err
 	}
+	// Discover Agent Skills once, before mutating history: a malformed
+	// SKILL.md or a duplicate skill name fails the prompt without recording a
+	// user message or calling the provider (see skills.go).
+	if err := s.ensureSkills(); err != nil {
+		return nil, err
+	}
 	s.append(message.Message{
 		ID:        newID("msg"),
 		Role:      message.RoleUser,
@@ -277,6 +300,12 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 	// Project instructions sit after the base system prompt and before any
 	// hook-contributed segments (see ensureInstructions in instructions.go).
 	if seg := s.instructionSegment(); seg != "" {
+		system = append(system, seg)
+	}
+	// The Agent Skills catalog sits after project instructions and, like
+	// them, before any hook-contributed segments (see ensureSkills in
+	// skills.go).
+	if seg := s.skillsSegment(); seg != "" {
 		system = append(system, seg)
 	}
 	if s.cfg.Hooks != nil {

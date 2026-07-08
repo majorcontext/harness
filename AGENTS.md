@@ -49,6 +49,26 @@ silently without them. A missing file is fine. Oversize files are truncated at
 64 KiB with a marker. Disable with `-no-instructions`, config `instructions:
 false`, or point at a specific file with config `instructions_path`.
 
+### Agent Skills
+
+The engine advertises [Agent Skills](https://agentskills.io) in the system
+prompt following the spec's progressive-disclosure model. On the first `Prompt`
+(alongside instructions loading, same load-once-cache-error pattern) it runs
+`skill.Discover` over each configured directory, merges the results sorted by
+name, and injects one system segment **after** the instructions segment and
+before hook (`system.transform`) segments. That segment is stage 1 only: a
+header telling the model it MUST read a skill's `SKILL.md` with the `read_file`
+tool before relying on it, then one line per skill — `name — description (path:
+<abs SKILL.md>)`. Stage 2 (the body) is deferred to that read.
+
+`Config.SkillsDirs` selects the directories: nil (the default) uses
+`<WorkDir>/.agents/skills` when it exists; an explicit empty slice disables
+discovery. A malformed `SKILL.md` or a duplicate skill name across dirs fails
+the first `Prompt` loudly (same semantics as a malformed AGENTS.md). Skills are
+never written to the session log — a resumed session rediscovers them. Config
+`skills_dirs` (array; a non-empty project value overrides the user value
+entirely) and the repeatable `-skills-dir` run/serve flag drive it.
+
 ### Deliberately absent — do not add
 
 - **No permission system.** Tool calls are never gated. There is no `permission.ask` hook, no approval UI, no pre-flight rule evaluation.
