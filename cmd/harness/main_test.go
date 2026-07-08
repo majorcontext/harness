@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -136,6 +137,35 @@ func TestFormatSessions(t *testing.T) {
 		want := "ses_a\t2024-06-01T12:00:00Z\t2\nses_b\t2024-06-01T13:30:00Z\t5\n"
 		if got := formatSessions(infos); got != want {
 			t.Errorf("formatSessions = %q, want %q", got, want)
+		}
+	})
+}
+
+func TestResolveSessionNoSave(t *testing.T) {
+	// -no-save yields an empty SessionDir; resuming must fail with a
+	// clear error before touching the engine.
+	cfg := engine.Config{SessionDir: ""}
+	t.Run("resume with no-save errors clearly", func(t *testing.T) {
+		_, err := resolveSession(cfg, "ses_x", false)
+		if err == nil {
+			t.Fatal("expected error for -r with -no-save")
+		}
+		if !strings.Contains(err.Error(), "-no-save") {
+			t.Errorf("error = %q, want mention of -no-save", err)
+		}
+	})
+	t.Run("continue with no-save errors clearly", func(t *testing.T) {
+		_, err := resolveSession(cfg, "", true)
+		if err == nil {
+			t.Fatal("expected error for -c with -no-save")
+		}
+		if !strings.Contains(err.Error(), "-no-save") {
+			t.Errorf("error = %q, want mention of -no-save", err)
+		}
+	})
+	t.Run("new session with no-save is fine", func(t *testing.T) {
+		if _, err := resolveSession(cfg, "", false); err != nil {
+			t.Errorf("resolveSession: %v", err)
 		}
 	})
 }

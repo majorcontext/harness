@@ -119,6 +119,8 @@ func resolveSession(cfg engine.Config, resume string, cont bool) (*engine.Sessio
 	switch {
 	case resume != "" && cont:
 		return nil, fmt.Errorf("-r and -c are mutually exclusive")
+	case (resume != "" || cont) && cfg.SessionDir == "":
+		return nil, fmt.Errorf("cannot resume a session with -no-save")
 	case resume != "":
 		return engine.LoadSession(cfg, resume)
 	case cont:
