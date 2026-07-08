@@ -283,6 +283,18 @@ func TestInstructionsPathOverride(t *testing.T) {
 	}
 }
 
+func TestInstructionsPathOverrideRelative(t *testing.T) {
+	// A relative override resolves against WorkDir, not the process cwd
+	// (review observation on #19).
+	dir := t.TempDir()
+	writeInstr(t, filepath.Join(dir, "custom.md"), "relative override rules")
+	prov := instrSession(t, Config{WorkDir: dir, Instructions: &InstructionsConfig{Path: "custom.md"}}, 1)
+	sys := prov.requests[0].System
+	if len(sys) != 2 || !strings.Contains(sys[1], "relative override rules") {
+		t.Fatalf("system = %v, want relative override injected", sys)
+	}
+}
+
 func TestInstructionsLoadedOncePerSession(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "AGENTS.md")

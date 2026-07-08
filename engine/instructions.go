@@ -172,11 +172,17 @@ func (s *Session) buildInstructionSegment() (string, error) {
 		return "", nil
 	}
 	if ic != nil && ic.Path != "" {
-		data, err := os.ReadFile(ic.Path)
+		// A relative override resolves against the session's WorkDir, not
+		// the process cwd — embedders may set WorkDir independently.
+		path := ic.Path
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(s.cfg.WorkDir, path)
+		}
+		data, err := os.ReadFile(path)
 		if err != nil {
 			return "", nil // missing/unreadable override: no segment, no error
 		}
-		body, err := validateInstructions(ic.Path, data)
+		body, err := validateInstructions(path, data)
 		if err != nil {
 			return "", err
 		}
