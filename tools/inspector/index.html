@@ -121,6 +121,17 @@
     background: var(--err-bg); border: 1px solid var(--err-border);
   }
   .banner.abort { background: var(--reason); border-color: var(--border); color: var(--dim); }
+  .goalchip {
+    border-radius: 8px; padding: 8px 12px; margin: 0 0 12px; max-width: 860px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .goalchip.active { border-left: 3px solid var(--warn); }
+  .goalchip.achieved { border-left: 3px solid var(--ok); }
+  .goalchip.cleared { border-left: 3px solid var(--off); color: var(--dim); }
+  .goaltag { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); }
+  .goalcond { font-weight: 600; }
+  .goalreason { color: var(--dim); font-size: 13px; }
   .streaming { opacity: .85; }
   .streaming .role::after { content: " · streaming…"; color: var(--accent); }
   #composer { border-top: 1px solid var(--border); padding: 10px 12px; background: var(--panel); }
@@ -210,6 +221,33 @@ function maxSeq(list) {
   return m;
 }
 
+// reduceGoal folds one goal.* journal event into a goal-summary object
+// ({condition, active, achieved, reason}). Non-goal events return prev
+// unchanged (same reference); goal events return a fresh object so the input is
+// never mutated. Drives the goal chip purely from journal events.
+function reduceGoal(prev, ev) {
+  const isGoal = ev && typeof ev.type === "string" && ev.type.indexOf("goal.") === 0;
+  if (!isGoal) return prev;
+  const g = Object.assign({ condition: "", active: false, achieved: false, reason: "" }, prev);
+  switch (ev.type) {
+    case "goal.set":
+      g.condition = ev.goal_condition || "";
+      g.active = true; g.achieved = false; g.reason = "";
+      break;
+    case "goal.eval":
+      if (ev.goal_reason) g.reason = ev.goal_reason;
+      break;
+    case "goal.achieved":
+      g.active = false; g.achieved = true;
+      if (ev.goal_reason) g.reason = ev.goal_reason;
+      break;
+    case "goal.cleared":
+      g.active = false;
+      break;
+  }
+  return g;
+}
+
 /* ---------- SSE frame parser ----------
    Feed it decoded stream text; it invokes onEvent({id, data}) once per complete
    frame (terminated by a blank line). Handles: multi-line data (joined with
@@ -256,6 +294,7 @@ const state = {
   base: "", token: "",
   running: false, abort: null, timer: null, backoff: 500, lastSeq: 0,
   sessions: new Map(),          // id -> {id, model, status, messages, created_at, seq}
+  goals: new Map(),             // id -> {condition, active, achieved, reason} (from goal.* events)
   selected: null,
   messages: [],                 // durable messages for the selected session
   banners: [],                  // {type, text} inline banners for selected session
@@ -325,6 +364,8 @@ function renderTimeline() {
   const tl = $("timeline");
   tl.textContent = "";
   if (!state.selected) { tl.append(el("div", { class: "empty", text: "select a session" })); return; }
+  const goal = state.goals.get(state.selected);
+  if (goal && goal.condition) tl.append(renderGoalChip(goal));
   const msgs = state.messages.slice().sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
   if (!msgs.length && !state.draft && !state.banners.length) {
     tl.append(el("div", { class: "empty", text: "no messages yet" }));
@@ -368,6 +409,18 @@ function renderToolResult(content, isErr) {
   return el("div", { class: "toolres" + (isErr ? " err" : "") },
     el("div", { class: "role", text: isErr ? "tool result (error)" : "tool result" }),
     el("div", { class: "text", text: partsText(content) }));
+}
+
+// renderGoalChip shows the selected session's goal state: condition, a state
+// label (active / achieved / cleared), and the latest evaluator reason. Driven
+// purely from journal events via reduceGoal.
+function renderGoalChip(g) {
+  const state = g.achieved ? "achieved" : g.active ? "active" : "cleared";
+  const chip = el("div", { class: "goalchip " + state },
+    el("span", { class: "goaltag", text: "🎯 goal · " + state }),
+    el("span", { class: "goalcond", text: g.condition }));
+  if (g.reason) chip.append(el("div", { class: "goalreason", text: g.reason }));
+  return chip;
 }
 
 function renderBanner(b) {
@@ -442,6 +495,13 @@ function handleEvent(ev) {
       break;
     case "session.aborted":
       if (sel) { state.banners.push({ type: ev.type, text: ev.error }); renderTimeline(); }
+      break;
+    case "goal.set":
+    case "goal.eval":
+    case "goal.achieved":
+    case "goal.cleared":
+      state.goals.set(sid, reduceGoal(state.goals.get(sid), ev));
+      if (sel) renderTimeline();
       break;
     case "text.delta":
       if (sel) { (state.draft || (state.draft = freshDraft())).text += ev.text || ""; renderTimeline(); }
