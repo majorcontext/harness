@@ -125,8 +125,9 @@ func newSession(cfg Config) *Session {
 		tools:     make(map[string]Tool),
 		createdAt: time.Now().UTC(),
 	}
-	bash := bashTool(cfg.BashTimeout)
-	s.tools[bash.Def.Name] = bash
+	for _, t := range []Tool{bashTool(cfg.BashTimeout), readFileTool(), writeFileTool(), editFileTool()} {
+		s.tools[t.Def.Name] = t
+	}
 	for _, t := range cfg.Tools {
 		s.tools[t.Def.Name] = t
 	}
