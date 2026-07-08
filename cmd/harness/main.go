@@ -274,8 +274,8 @@ func runCmd(args []string) error {
 
 // loadConfig loads the effective configuration once: the user config file
 // plus, if present, the current directory's project override. This is the only
-// disk access on the boot path (one read, one stat) — no network, no process
-// spawn, no directory creation.
+// disk access on the boot path (at most two file reads; missing files are
+// fine) — no network, no process spawn, no directory creation.
 func loadConfig() (*config.Config, error) {
 	dir, err := os.Getwd()
 	if err != nil {

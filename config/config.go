@@ -88,37 +88,37 @@ func Path() string {
 //     and override user keys of the same name. Within a Provider, a non-empty
 //     project field (APIKeyEnv, BaseURL) overrides the user field.
 //
-// A missing project file is not an error; the user config is returned as-is.
+// A missing project file is not an error; the user config is returned as-is
+// (Load yields a zero-value Config for a missing file, and merging a zero
+// override is a no-op).
 func LoadProject(dir string) (*Config, error) {
 	user, err := Load(Path())
 	if err != nil {
 		return nil, err
 	}
-	projPath := filepath.Join(dir, ".harness.json")
-	if _, err := os.Stat(projPath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return user, nil
-		}
-		return nil, err
-	}
-	proj, err := Load(projPath)
+	proj, err := Load(filepath.Join(dir, ".harness.json"))
 	if err != nil {
 		return nil, err
 	}
 	return merge(user, proj), nil
 }
 
-// merge returns base overlaid with the non-zero fields of over.
+// merge returns base overlaid with the non-zero fields of over. The result
+// never aliases either input's maps: fresh maps are always built, even when
+// over contributes no entries, so mutating the merged config cannot corrupt
+// the inputs.
 func merge(base, over *Config) *Config {
 	out := *base // copy scalar fields; maps are rebuilt below
+	out.Aliases = nil
+	out.Providers = nil
 	if over.Model != "" {
 		out.Model = over.Model
 	}
 	if over.SessionDir != "" {
 		out.SessionDir = over.SessionDir
 	}
-	if len(over.Aliases) > 0 {
-		m := make(map[string]string, len(base.Aliases)+len(over.Aliases))
+	if n := len(base.Aliases) + len(over.Aliases); n > 0 {
+		m := make(map[string]string, n)
 		for k, v := range base.Aliases {
 			m[k] = v
 		}
@@ -127,8 +127,8 @@ func merge(base, over *Config) *Config {
 		}
 		out.Aliases = m
 	}
-	if len(over.Providers) > 0 {
-		m := make(map[string]Provider, len(base.Providers)+len(over.Providers))
+	if n := len(base.Providers) + len(over.Providers); n > 0 {
+		m := make(map[string]Provider, n)
 		for k, v := range base.Providers {
 			m[k] = v
 		}

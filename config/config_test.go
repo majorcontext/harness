@@ -172,6 +172,32 @@ func TestResolveModel(t *testing.T) {
 	})
 }
 
+func TestMergeDoesNotAliasBaseMaps(t *testing.T) {
+	base := &Config{
+		Aliases:   map[string]string{"fast": "anthropic/claude-haiku-4-5"},
+		Providers: map[string]Provider{"anthropic": {APIKeyEnv: "USER_KEY"}},
+	}
+	// An override contributing no map entries must still yield fresh maps.
+	merged := merge(base, &Config{Model: "openai/gpt-5"})
+	merged.Aliases["fast"] = "mutated"
+	merged.Aliases["new"] = "added"
+	merged.Providers["anthropic"] = Provider{APIKeyEnv: "MUTATED"}
+	merged.Providers["openai"] = Provider{APIKeyEnv: "ADDED"}
+
+	if base.Aliases["fast"] != "anthropic/claude-haiku-4-5" {
+		t.Errorf("base alias fast = %q, mutated through merged config", base.Aliases["fast"])
+	}
+	if _, ok := base.Aliases["new"]; ok {
+		t.Error("base aliases gained a key added to the merged config")
+	}
+	if base.Providers["anthropic"].APIKeyEnv != "USER_KEY" {
+		t.Errorf("base provider anthropic = %+v, mutated through merged config", base.Providers["anthropic"])
+	}
+	if _, ok := base.Providers["openai"]; ok {
+		t.Error("base providers gained a key added to the merged config")
+	}
+}
+
 func TestLoadProject(t *testing.T) {
 	t.Run("no project file returns user config", func(t *testing.T) {
 		userPath := filepath.Join(t.TempDir(), "config.json")
