@@ -120,6 +120,11 @@ class Client:
         if status != 202:
             raise RuntimeError(f"prompt_async: {status} {resp!r}")
 
+    def list_sessions(self) -> list:
+        status, body = self._req("GET", "/session", None, auth=True)
+        assert status == 200, f"list sessions: {status} {body!r}"
+        return json.loads(body)
+
     def session(self, sid: str) -> dict:
         status, body = self._req("GET", f"/session/{sid}", None, auth=True)
         if status != 200:
@@ -222,7 +227,7 @@ def run_flow(image, app, volume, label: str, strict: bool) -> bool:
 
         # Phase 3: relaunch on the SAME volume and check durability.
         c2 = runner.launch()
-        ids = [s["id"] for s in json.loads(c2._req("GET", "/session", None, auth=True)[1])]
+        ids = [s["id"] for s in c2.list_sessions()]
         listed = sid in ids
         boot = c2.session(sid)
         n2 = len(c2.messages(sid))
