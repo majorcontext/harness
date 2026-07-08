@@ -116,6 +116,12 @@ components:
       required: [type]
       discriminator:
         propertyName: type
+        mapping:
+          text: "#/components/schemas/TextPart"
+          blob: "#/components/schemas/BlobPart"
+          tool_call: "#/components/schemas/ToolCallPart"
+          tool_result: "#/components/schemas/ToolResultPart"
+          reasoning: "#/components/schemas/ReasoningPart"
       oneOf:
         - $ref: "#/components/schemas/TextPart"
         - $ref: "#/components/schemas/BlobPart"
@@ -156,8 +162,13 @@ components:
         call_id: { type: string }
         content:
           type: array
+          description: >
+            Text and Blob parts only, matching the canonical format's
+            documented constraint on ToolResult content.
           items:
-            $ref: "#/components/schemas/Part"
+            oneOf:
+              - $ref: "#/components/schemas/TextPart"
+              - $ref: "#/components/schemas/BlobPart"
         is_error: { type: boolean }
 
     ReasoningPart:
@@ -390,6 +401,13 @@ paths:
             application/json:
               schema:
                 type: object
+                description: >
+                  Values are deliberately wrapped as {"type": <status>} —
+                  byte-compatible with opencode's /session/status response
+                  shape, so existing orchestration handlers port without
+                  parsing changes. Session.status and Event.status use the
+                  bare SessionStatus string; only this endpoint wraps it,
+                  and only for compatibility.
                 additionalProperties:
                   type: object
                   required: [type]
