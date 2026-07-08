@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/engine"
+	"github.com/majorcontext/harness/message"
 )
 
 func TestSessionDir(t *testing.T) {
@@ -48,11 +49,12 @@ func TestSessionDir(t *testing.T) {
 }
 
 // writeSessionFile writes a session log in the JSONL format documented in
-// engine/store.go: a session header followed by message records.
+// engine/store.go: a session header, a model record, then message records.
 func writeSessionFile(t *testing.T, dir, id string, createdAt time.Time, messages int) {
 	t.Helper()
 	f := fmt.Sprintf("{\"type\":\"session\",\"id\":%q,\"created_at\":%q}\n",
 		id, createdAt.Format(time.RFC3339Nano))
+	f += "{\"type\":\"model\",\"model\":\"anthropic/persisted-model\"}\n"
 	for i := 0; i < messages; i++ {
 		f += fmt.Sprintf("{\"type\":\"message\",\"message\":{\"id\":\"msg_%d\",\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"text\":\"hello %d\"}],\"created_at\":%q}}\n",
 			i, i, createdAt.Format(time.RFC3339Nano))
@@ -70,7 +72,7 @@ func TestResolveSession(t *testing.T) {
 	cfg := engine.Config{SessionDir: dir}
 
 	t.Run("new session by default", func(t *testing.T) {
-		s, err := resolveSession(cfg, "", false)
+		s, err := resolveSession(cfg, "", false, false)
 		if err != nil {
 			t.Fatalf("resolveSession: %v", err)
 		}
@@ -82,7 +84,7 @@ func TestResolveSession(t *testing.T) {
 		}
 	})
 	t.Run("resume by id", func(t *testing.T) {
-		s, err := resolveSession(cfg, "ses_old", false)
+		s, err := resolveSession(cfg, "ses_old", false, false)
 		if err != nil {
 			t.Fatalf("resolveSession: %v", err)
 		}
@@ -94,7 +96,7 @@ func TestResolveSession(t *testing.T) {
 		}
 	})
 	t.Run("continue picks most recent", func(t *testing.T) {
-		s, err := resolveSession(cfg, "", true)
+		s, err := resolveSession(cfg, "", true, false)
 		if err != nil {
 			t.Fatalf("resolveSession: %v", err)
 		}
@@ -106,18 +108,18 @@ func TestResolveSession(t *testing.T) {
 		}
 	})
 	t.Run("resume and continue are mutually exclusive", func(t *testing.T) {
-		if _, err := resolveSession(cfg, "ses_old", true); err == nil {
+		if _, err := resolveSession(cfg, "ses_old", true, false); err == nil {
 			t.Error("expected error for -r with -c")
 		}
 	})
 	t.Run("continue with no sessions errors", func(t *testing.T) {
 		empty := engine.Config{SessionDir: t.TempDir()}
-		if _, err := resolveSession(empty, "", true); err == nil {
+		if _, err := resolveSession(empty, "", true, false); err == nil {
 			t.Error("expected error when no sessions exist")
 		}
 	})
 	t.Run("resume unknown id errors", func(t *testing.T) {
-		if _, err := resolveSession(cfg, "ses_missing", false); err == nil {
+		if _, err := resolveSession(cfg, "ses_missing", false, false); err == nil {
 			t.Error("expected error for unknown session id")
 		}
 	})
@@ -146,7 +148,7 @@ func TestResolveSessionNoSave(t *testing.T) {
 	// clear error before touching the engine.
 	cfg := engine.Config{SessionDir: ""}
 	t.Run("resume with no-save errors clearly", func(t *testing.T) {
-		_, err := resolveSession(cfg, "ses_x", false)
+		_, err := resolveSession(cfg, "ses_x", false, false)
 		if err == nil {
 			t.Fatal("expected error for -r with -no-save")
 		}
@@ -155,7 +157,7 @@ func TestResolveSessionNoSave(t *testing.T) {
 		}
 	})
 	t.Run("continue with no-save errors clearly", func(t *testing.T) {
-		_, err := resolveSession(cfg, "", true)
+		_, err := resolveSession(cfg, "", true, false)
 		if err == nil {
 			t.Fatal("expected error for -c with -no-save")
 		}
@@ -164,8 +166,71 @@ func TestResolveSessionNoSave(t *testing.T) {
 		}
 	})
 	t.Run("new session with no-save is fine", func(t *testing.T) {
-		if _, err := resolveSession(cfg, "", false); err != nil {
+		if _, err := resolveSession(cfg, "", false, false); err != nil {
 			t.Errorf("resolveSession: %v", err)
+		}
+	})
+}
+
+func TestResolveSessionModelFlag(t *testing.T) {
+	persisted := message.ModelRef{Provider: "anthropic", Model: "persisted-model"}
+	flagModel := message.ModelRef{Provider: "anthropic", Model: "flag-model"}
+	base := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	newCfg := func(t *testing.T) engine.Config {
+		t.Helper()
+		dir := t.TempDir()
+		writeSessionFile(t, dir, "ses_m", base, 2)
+		return engine.Config{SessionDir: dir, Model: flagModel}
+	}
+
+	t.Run("explicit -model wins on resume", func(t *testing.T) {
+		cfg := newCfg(t)
+		s, err := resolveSession(cfg, "ses_m", false, true)
+		if err != nil {
+			t.Fatalf("resolveSession: %v", err)
+		}
+		if got := s.Model(); got != flagModel {
+			t.Errorf("s.Model() = %v, want %v (explicit flag must win)", got, flagModel)
+		}
+		// SetModel persists a model record, so a subsequent load sees the
+		// override too.
+		s2, err := engine.LoadSession(cfg, "ses_m")
+		if err != nil {
+			t.Fatalf("LoadSession after override: %v", err)
+		}
+		if got := s2.Model(); got != flagModel {
+			t.Errorf("reloaded s.Model() = %v, want %v (override must persist)", got, flagModel)
+		}
+	})
+	t.Run("persisted model retained without explicit -model", func(t *testing.T) {
+		cfg := newCfg(t)
+		s, err := resolveSession(cfg, "ses_m", false, false)
+		if err != nil {
+			t.Fatalf("resolveSession: %v", err)
+		}
+		if got := s.Model(); got != persisted {
+			t.Errorf("s.Model() = %v, want %v (persisted model must be retained)", got, persisted)
+		}
+	})
+	t.Run("explicit -model on continue wins too", func(t *testing.T) {
+		cfg := newCfg(t)
+		s, err := resolveSession(cfg, "", true, true)
+		if err != nil {
+			t.Fatalf("resolveSession: %v", err)
+		}
+		if got := s.Model(); got != flagModel {
+			t.Errorf("s.Model() = %v, want %v (explicit flag must win)", got, flagModel)
+		}
+	})
+	t.Run("fresh session uses flag model regardless", func(t *testing.T) {
+		cfg := newCfg(t)
+		s, err := resolveSession(cfg, "", false, true)
+		if err != nil {
+			t.Fatalf("resolveSession: %v", err)
+		}
+		if got := s.Model(); got != flagModel {
+			t.Errorf("s.Model() = %v, want %v", got, flagModel)
 		}
 	})
 }

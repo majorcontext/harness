@@ -83,7 +83,7 @@ func runFlags(opts *runOptions) *flag.FlagSet {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	fs.StringVar(&opts.prompt, "p", "", "the prompt (required)")
-	fs.StringVar(&opts.model, "model", defaultModel, "model ref, provider/model")
+	fs.StringVar(&opts.model, "model", defaultModel, "model ref, provider/model; overrides the persisted model when resuming")
 	fs.StringVar(&opts.system, "system", "", "extra system prompt segment")
 	fs.IntVar(&opts.maxTokens, "max-tokens", 0, "per-response output token cap")
 	fs.BoolVar(&opts.jsonOut, "json", false, "emit the event stream as JSON lines instead of text")
@@ -115,14 +115,23 @@ func sessionDir(noSave bool) (string, error) {
 
 // resolveSession creates or resumes the session for a run: a fresh session
 // by default, the named one for -r, the most recently created one for -c.
-func resolveSession(cfg engine.Config, resume string, cont bool) (*engine.Session, error) {
+//
+// modelSet reports whether -model was passed explicitly. Explicit flags
+// always win: on resume, cfg.Model then overrides the session's persisted
+// model via SetModel (which also persists a model record). Without an
+// explicit -model the persisted model is retained.
+func resolveSession(cfg engine.Config, resume string, cont bool, modelSet bool) (*engine.Session, error) {
 	switch {
 	case resume != "" && cont:
 		return nil, fmt.Errorf("-r and -c are mutually exclusive")
 	case (resume != "" || cont) && cfg.SessionDir == "":
 		return nil, fmt.Errorf("cannot resume a session with -no-save")
+	}
+
+	var id string
+	switch {
 	case resume != "":
-		return engine.LoadSession(cfg, resume)
+		id = resume
 	case cont:
 		infos, err := engine.ListSessions(cfg.SessionDir)
 		if err != nil {
@@ -131,10 +140,19 @@ func resolveSession(cfg engine.Config, resume string, cont bool) (*engine.Sessio
 		if len(infos) == 0 {
 			return nil, fmt.Errorf("no sessions to continue")
 		}
-		return engine.LoadSession(cfg, infos[len(infos)-1].ID)
+		id = infos[len(infos)-1].ID
 	default:
 		return engine.NewSession(cfg), nil
 	}
+
+	s, err := engine.LoadSession(cfg, id)
+	if err != nil {
+		return nil, err
+	}
+	if modelSet {
+		s.SetModel(cfg.Model)
+	}
+	return s, nil
 }
 
 // formatSessions renders one session per line: id, created_at (RFC3339),
@@ -162,9 +180,18 @@ func sessionsCmd() error {
 
 func runCmd(args []string) error {
 	var opts runOptions
-	if err := runFlags(&opts).Parse(args); err != nil {
+	fs := runFlags(&opts)
+	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	// -model has a non-empty default, so an explicit flag is only
+	// detectable via Visit (which walks flags that were actually set).
+	var modelSet bool
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "model" {
+			modelSet = true
+		}
+	})
 	if opts.prompt == "" {
 		return fmt.Errorf("-p <prompt> is required")
 	}
@@ -212,7 +239,7 @@ func runCmd(args []string) error {
 		WorkDir:    workDir,
 		SessionDir: sesDir,
 		OnEvent:    onEvent,
-	}, opts.resume, opts.cont)
+	}, opts.resume, opts.cont, modelSet)
 	if err != nil {
 		return err
 	}
