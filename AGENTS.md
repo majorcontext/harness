@@ -127,6 +127,11 @@ Rules:
   advancing once the test function returns — a goroutine parked in
   `time.Sleep` at bubble end is reported as a deadlock, which is the bubble's
   goroutine-leak detection working for you.
+- **Exception — cross-process e2e** (`e2e/` only): tests driving a real
+  subprocess may observe out-of-process state with deadline-bounded poll
+  loops, because no in-process channel can cross an OS process boundary.
+  Intervals stay tight, deadlines explicit; anything observable in-process
+  still uses channels or synctest.
 - **No raw `time.Sleep` for synchronization — ever, bubble or not.** To
   simulate a hung component, block on a channel closed in `t.Cleanup`; in a
   bubble the hang deterministically outlasts any timeout with zero wall-clock
