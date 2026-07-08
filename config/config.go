@@ -1,8 +1,8 @@
 // Package config loads the harness CLI configuration: a single JSON file
 // (plus an optional per-project override) parsed in one flat pass with the
 // standard library only. Nothing here touches the network or spawns
-// processes — config loading sits on the startup path, so it is one file read
-// (and, for LoadProject, one extra stat).
+// processes — config loading sits on the startup path, so it is at most two
+// file reads (the user config, plus the project override when present).
 package config
 
 import (
