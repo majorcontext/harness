@@ -172,6 +172,22 @@ func TestTranscodeUserImage(t *testing.T) {
 	}
 }
 
+func TestTranscodeUserNonImageBlobErrors(t *testing.T) {
+	req := baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{
+			&message.Text{Text: "what is this"},
+			&message.Blob{MediaType: "application/pdf", Data: []byte{1, 2, 3}},
+		}},
+	)
+	_, err := transcodeRequest(req, testFamily)
+	if err == nil {
+		t.Fatal("expected error for non-image blob, got nil")
+	}
+	if !strings.Contains(err.Error(), "application/pdf") {
+		t.Errorf("error = %q, want it to name the media type application/pdf", err.Error())
+	}
+}
+
 func TestTranscodeAssistantTextAndToolCalls(t *testing.T) {
 	out := mustTranscode(t, baseRequest(
 		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "run it"}}},

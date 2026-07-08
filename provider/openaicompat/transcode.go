@@ -283,8 +283,15 @@ func toolResultOutput(v *message.ToolResult) string {
 }
 
 // blobURL maps a Blob to an image_url string: the URL verbatim when
-// URL-referenced, or a data: URL when carrying inline data.
+// URL-referenced, or a data: URL when carrying inline data. Only image/*
+// media types are supported — the chat-completions wire's content parts have
+// no non-image form, so anything else is a loud error rather than a
+// silent mis-typing of a document as an image (mirrors provider/openai's
+// transcodeBlob).
 func blobURL(b *message.Blob) (string, error) {
+	if !strings.HasPrefix(b.MediaType, "image/") {
+		return "", fmt.Errorf("unsupported blob media type %q", b.MediaType)
+	}
 	if b.URL != "" {
 		return b.URL, nil
 	}
