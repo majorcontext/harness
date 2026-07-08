@@ -135,6 +135,44 @@ env={
 The API keys then live only in gatekeeper's config, never in the sandbox image,
 env, or Modal Secret attached to the workload.
 
+## Ephemerality e2e
+
+`scripts/modal-e2e.py` is an on-demand test (not run in CI) that proves session
+durability survives an abrupt sandbox kill on a Modal Volume — the real-infra
+counterpart to the in-repo `e2e/` package (which fakes the provider and kills a
+local process). It exercises the exact deployment shape this guide documents:
+a `golang:1.25` image plus a linux/amd64 `harness` binary, `harness serve`
+behind an `encrypted_ports` tunnel, a generated run token, and a named Volume
+mounted at `/sessions`.
+
+What it does:
+
+1. Builds a static linux/amd64 binary (`CGO_ENABLED=0 GOOS=linux GOARCH=amd64`).
+2. Launches a sandbox on a **v2** Volume, creates a session, and drives one
+   tiny real prompt through the tunnel (a bash `echo`) using the real
+   `ANTHROPIC_API_KEY` from the environment. Records the message count `N` and
+   the max event seq.
+3. `sb.terminate()`s the sandbox abruptly (no graceful shutdown).
+4. Relaunches a fresh sandbox on the same Volume and asserts: the session is
+   listed, the message count is still `N`, the event journal's seq continues
+   above the prior max (the counter resumed from disk rather than resetting),
+   and the session is still promptable with one more tiny prompt.
+
+Sandboxes it creates are terminated on exit (including on exception), and it
+prints a final `PASS`/`FAIL` line with the counts.
+
+```bash
+# Auth: ~/.modal.toml for Modal; ANTHROPIC_API_KEY for the live prompt.
+python scripts/modal-e2e.py                    # v2 durability test (the real one)
+python scripts/modal-e2e.py --classic-volume   # also run the v1 negative control
+```
+
+The optional `--classic-volume` flag repeats the flow on a `version=1` Volume as
+an **informational negative control**: classic Volumes commit in the background
+and can lose the tail of the session log / event journal on an abrupt kill (see
+"Use Volumes v2" above). The control only reports its delta — it never affects
+the exit code either way.
+
 ## (d) Memory snapshots
 
 Modal memory snapshots after boot are safe for harness: it holds no open
