@@ -162,6 +162,61 @@ func TestTranscodeToolCallAndResult(t *testing.T) {
 	}
 }
 
+func TestTranscodeToolResultIsError(t *testing.T) {
+	// function_call_output has no boolean error field; IsError is encoded as
+	// a marker prefix on the output text so the model can distinguish a
+	// failed/denied call from a successful one.
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "run it"}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolCall{CallID: "call_ok", Name: "bash", Arguments: json.RawMessage(`{}`)},
+			&message.ToolCall{CallID: "call_bad", Name: "bash", Arguments: json.RawMessage(`{}`)},
+		}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "call_ok", Content: message.Parts{&message.Text{Text: "fine"}}},
+			&message.ToolResult{CallID: "call_bad", Content: message.Parts{&message.Text{Text: "permission denied"}}, IsError: true},
+		}},
+	))
+	ok := probeItem(t, out.Input[3])
+	if ok.CallID != "call_ok" || ok.Output != "fine" {
+		t.Errorf("success output = %+v", ok)
+	}
+	bad := probeItem(t, out.Input[4])
+	if bad.CallID != "call_bad" || bad.Output != "[tool error] permission denied" {
+		t.Errorf("error output = %+v", bad)
+	}
+}
+
+func TestTranscodeToolResultBlobNotSilentlyDropped(t *testing.T) {
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "shot"}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolCall{CallID: "call_mix", Name: "screenshot", Arguments: json.RawMessage(`{}`)},
+			&message.ToolCall{CallID: "call_img", Name: "screenshot", Arguments: json.RawMessage(`{}`)},
+		}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			// Text plus two images.
+			&message.ToolResult{CallID: "call_mix", Content: message.Parts{
+				&message.Text{Text: "captured"},
+				&message.Blob{MediaType: "image/png", Data: []byte{1}},
+				&message.Blob{MediaType: "image/png", Data: []byte{2}},
+			}},
+			// Image only: the output must still surface the attachment.
+			&message.ToolResult{CallID: "call_img", Content: message.Parts{
+				&message.Blob{MediaType: "image/png", Data: []byte{3}},
+			}},
+		}},
+	))
+	mix := probeItem(t, out.Input[3])
+	if mix.Output != "captured\n[2 image attachment(s) omitted]" {
+		t.Errorf("mixed output = %q", mix.Output)
+	}
+	img := probeItem(t, out.Input[4])
+	if img.Output != "[1 image attachment(s) omitted]" {
+		t.Errorf("image-only output = %q", img.Output)
+	}
+}
+
 func TestTranscodeToolCallEmptyArguments(t *testing.T) {
 	out := mustTranscode(t, baseRequest(
 		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},

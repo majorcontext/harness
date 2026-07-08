@@ -191,7 +191,7 @@ func transcodeMessage(m *message.Message) ([]json.RawMessage, error) {
 			raw, err := json.Marshal(apiFunctionCallOutput{
 				Type:   "function_call_output",
 				CallID: wireCallID(v.CallID),
-				Output: v.Content.Text(),
+				Output: toolResultOutput(v),
 			})
 			if err != nil {
 				return nil, err
@@ -219,6 +219,34 @@ func transcodeMessage(m *message.Message) ([]json.RawMessage, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+// toolResultOutput flattens a ToolResult into the string-valued output field
+// of a function_call_output item, which has no boolean error field and (as
+// far as this adapter assumes) no array content form. IsError is encoded as a
+// marker prefix so the model can distinguish failed/denied calls, and Blob
+// parts — which cannot be carried in the string — are surfaced with an
+// explicit omission note rather than dropped silently.
+func toolResultOutput(v *message.ToolResult) string {
+	out := v.Content.Text()
+	blobs := 0
+	for _, p := range v.Content {
+		if _, ok := p.(*message.Blob); ok {
+			blobs++
+		}
+	}
+	if blobs > 0 {
+		note := fmt.Sprintf("[%d image attachment(s) omitted]", blobs)
+		if out == "" {
+			out = note
+		} else {
+			out += "\n" + note
+		}
+	}
+	if v.IsError {
+		out = "[tool error] " + out
+	}
+	return out
 }
 
 func transcodeBlob(b *message.Blob) (apiContentPart, error) {
