@@ -11,7 +11,9 @@
   instance must be started with -cors-origin set to this page's origin (or "*"
   for local hacking). See docs/deploy-modal.md ("Inspecting sessions").
 
-  Manual-test checklist (no JS test harness ships with this repo):
+  The pure helpers below (SSE parser + formatters) are unit-tested by
+  inspector_test.mjs (run: node --test tools/inspector/*_test.mjs). The steps
+  here cover the DOM/network behavior that can only be checked by hand:
     1. Start:  HARNESS_RUN_TOKEN=t harness serve -cors-origin '*'
     2. Open this file, paste the base URL (http://localhost:4096) + token, Connect.
        -> status dot turns green; existing sessions list on the left, newest first.
@@ -153,6 +155,10 @@
 "use strict";
 
 /* ---------- pure helpers (kept small and side-effect free) ---------- */
+/* TESTABLE-BEGIN — the region below is extracted verbatim by
+   inspector_test.mjs and evaluated in a node:vm sandbox. Keep it pure
+   (no DOM, no globals beyond Date/JSON) so the single-file page stays
+   build-free while its logic is still unit-tested. */
 
 // shortId trims a "prefix_hexhex…" id to its prefix plus a few hex chars.
 function shortId(id) {
@@ -215,7 +221,10 @@ function createSSEParser(onEvent) {
       if (line.endsWith("\r")) line = line.slice(0, -1);
       if (line === "") {                      // blank line: dispatch frame
         if (data.length) onEvent({ id, data: data.join("\n") });
-        data = []; id = null;
+        // Per the WHATWG SSE spec the last-event-ID buffer persists across
+        // frames — it is replaced only by a new `id:` line, never cleared when
+        // a frame omits one. Reset only the data buffer here.
+        data = [];
         continue;
       }
       if (line[0] === ":") continue;          // comment / heartbeat
@@ -233,6 +242,7 @@ function createSSEParser(onEvent) {
     }
   };
 }
+/* TESTABLE-END */
 
 /* ---------- app state ---------- */
 
