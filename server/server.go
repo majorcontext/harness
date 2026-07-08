@@ -67,6 +67,13 @@ type Server struct {
 	// not wait for them; Drain does, via this group.
 	wg sync.WaitGroup
 
+	// closing is closed exactly once, at the top of Drain, to signal that
+	// shutdown has begun. Connected SSE streams select on it and return
+	// promptly so http.Server.Shutdown sees idle connections; disconnected
+	// orchestrators recover the records they miss via replay-from-seq.
+	closing   chan struct{}
+	closeOnce sync.Once
+
 	mu      sync.Mutex
 	seq     int64                    // global monotonic durable sequence
 	journal []Event                  // in-memory durable records, for replay
@@ -114,6 +121,7 @@ func New(opts Options) (*Server, error) {
 		subs:     make(map[*subscriber]struct{}),
 		seen:     make(map[string]map[string]bool),
 		sessions: make(map[string]*sessionState),
+		closing:  make(chan struct{}),
 	}
 	if err := s.reconcile(); err != nil {
 		return nil, err
@@ -143,14 +151,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
 
-// Drain waits for in-flight prompts to finish, then returns. It first waits up
-// to ctx's deadline for prompts to complete on their own; if ctx expires while
-// prompts are still running, it cancels their contexts (which journals a
-// durable session.aborted for each) and waits for them to unwind. It must be
-// called before Close so the journal file stays open while the trailing
+// Drain waits for in-flight prompts to finish, then returns. Its first act is
+// to close the server's closing signal (once), which ends every connected SSE
+// stream promptly: shutdown runs Drain before http.Server.Shutdown, so closing
+// the streams here is what lets Shutdown see idle connections and return
+// quickly instead of blocking on a live /event tail for the whole grace budget.
+// It then waits up to ctx's deadline for prompts to complete on their own; if
+// ctx expires while prompts are still running, it cancels their contexts (which
+// journals a durable session.aborted for each) and waits for them to unwind. It
+// must be called before Close so the journal file stays open while the trailing
 // records — the final assistant message and the session.aborted/idle
 // transitions — are written; otherwise those records are lost on shutdown.
 func (s *Server) Drain(ctx context.Context) {
+	s.closeOnce.Do(func() { close(s.closing) })
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()

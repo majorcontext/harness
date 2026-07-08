@@ -1251,3 +1251,201 @@ func TestDrainAbortsInFlightPromptBeforeClose(t *testing.T) {
 		}
 	})
 }
+
+// TestStreamStopsOnClosing verifies that an SSE stream parked in its select
+// returns promptly when the server's closing signal fires (drain start), even
+// though its request context is never cancelled. Run inside a synctest bubble:
+// the heartbeat ticker fires on fake time to prove the stream is idle in its
+// loop, and the closing signal must then end it without any wall-clock wait.
+func TestStreamStopsOnClosing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := &Server{closing: make(chan struct{})}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		sub := &subscriber{ch: make(chan Event)}
+		writes := make(chan string) // unbuffered: heartbeat write blocks until read
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			s.stream(ctx, chanWriter{writes}, noopFlusher{}, sub, nil, time.Second)
+		}()
+
+		// The stream parks in its select; fake time advances to the heartbeat,
+		// which it emits — proof it is looping idle with a live request context.
+		if got := <-writes; got != ": heartbeat\n\n" {
+			t.Fatalf("first write = %q, want heartbeat", got)
+		}
+		select {
+		case <-done:
+			t.Fatal("stream returned before the closing signal")
+		default:
+		}
+		if ctx.Err() != nil {
+			t.Fatal("precondition: request context must still be live")
+		}
+
+		// Drain begins: the closing signal must end the stream promptly, even
+		// though its request context is never cancelled.
+		close(s.closing)
+		synctest.Wait()
+		select {
+		case <-done:
+		default:
+			t.Fatal("stream did not return after the closing signal (ctx still live)")
+		}
+		if ctx.Err() != nil {
+			t.Fatal("request context should still be live after the stream returned")
+		}
+	})
+}
+
+// TestDrainClosesStreamsThenHonorsGraceBudget is the end-to-end shutdown-order
+// test: a blocked prompt plus a connected SSE client. Drain's first act is to
+// close the streams (so http.Server.Shutdown, run after Drain, sees idle
+// connections), while the blocked prompt still gets the full grace budget
+// before it is aborted. On fake time, the SSE stream must end at drain start —
+// before the deadline, with the prompt still running — and Drain must not
+// return (abort the prompt) until the grace budget has elapsed.
+func TestDrainClosesStreamsThenHonorsGraceBudget(t *testing.T) {
+	dir := t.TempDir()
+	synctest.Test(t, func(t *testing.T) {
+		prov := newBlockingProvider("test")
+		t.Cleanup(func() { close(prov.release) })
+		srv := newServer(t, dir, prov, 0)
+
+		// Create a session and start a prompt that parks in the provider.
+		crec := httptest.NewRecorder()
+		creq := httptest.NewRequest("POST", "/session", strings.NewReader(`{"model":"test/m1"}`))
+		srv.handleCreate(crec, creq)
+		if crec.Code != 201 {
+			t.Fatalf("create status %d: %s", crec.Code, crec.Body)
+		}
+		var created struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(crec.Body.Bytes(), &created); err != nil {
+			t.Fatal(err)
+		}
+		id := created.ID
+
+		prec := httptest.NewRecorder()
+		preq := httptest.NewRequest("POST", "/session/"+id+"/prompt_async",
+			strings.NewReader(`{"parts":[{"type":"text","text":"go"}]}`))
+		preq.SetPathValue("id", id)
+		srv.handlePrompt(prec, preq)
+		if prec.Code != 202 {
+			t.Fatalf("prompt status %d: %s", prec.Code, prec.Body)
+		}
+		<-prov.started // prompt is now blocked mid-stream
+
+		// A connected SSE client, driven directly (no socket inside a bubble).
+		sub := &subscriber{ch: make(chan Event, 8)}
+		srv.mu.Lock()
+		srv.subs[sub] = struct{}{}
+		srv.mu.Unlock()
+		sseCtx, sseCancel := context.WithCancel(context.Background())
+		defer sseCancel()
+		sseDone := make(chan struct{})
+		var runningAtSSEEnd bool
+		go func() {
+			defer close(sseDone)
+			// A large interval so the heartbeat never fires ahead of the drain
+			// deadline; an unbuffered writer so a broken build blocks (not
+			// spins) — the closing signal is what must end this stream.
+			srv.stream(sseCtx, chanWriter{make(chan string)}, noopFlusher{}, sub, nil, time.Hour)
+			srv.mu.Lock()
+			if st := srv.sessions[id]; st != nil {
+				runningAtSSEEnd = st.running
+			}
+			srv.mu.Unlock()
+		}()
+		synctest.Wait() // SSE client parks in its select
+
+		// Shut down like serveCmd: Drain first (full grace budget for prompts).
+		grace := time.Second
+		drainStart := time.Now()
+		dctx, dcancel := context.WithTimeout(context.Background(), grace)
+		defer dcancel()
+		drainDone := make(chan struct{})
+		var drainReturn time.Time
+		go func() {
+			srv.Drain(dctx)
+			drainReturn = time.Now()
+			close(drainDone)
+		}()
+
+		// Drain's first act closes the SSE stream — at drain start, before the
+		// grace deadline, with the prompt still running.
+		synctest.Wait()
+		select {
+		case <-sseDone:
+		default:
+			t.Fatal("SSE stream did not end at drain start (closing signal)")
+		}
+		if sseCtx.Err() != nil {
+			t.Fatal("SSE request context was cancelled; the stream must end via the closing signal, not ctx")
+		}
+		if !runningAtSSEEnd {
+			t.Fatal("prompt was already aborted when the SSE stream ended; want SSE end at drain start, before the grace deadline")
+		}
+
+		<-drainDone
+		if elapsed := drainReturn.Sub(drainStart); elapsed < grace {
+			t.Fatalf("Drain returned after %v, want >= full grace budget %v (blocked prompt must get the whole budget)", elapsed, grace)
+		}
+		srv.mu.Lock()
+		var aborted bool
+		for _, ev := range srv.journal {
+			if ev.Type == evtSessionAborted && ev.SessionID == id {
+				aborted = true
+			}
+		}
+		srv.mu.Unlock()
+		if !aborted {
+			t.Fatal("no session.aborted journaled after the grace expiry")
+		}
+	})
+}
+
+// TestMaxResidentEvictsOnCreate verifies that resident sessions are capped even
+// when sessions are created but never prompted: with MaxResident=2, three
+// creates leave only two resident, and all three remain listed (the evicted one
+// reloads from its persisted-on-create disk log).
+func TestMaxResidentEvictsOnCreate(t *testing.T) {
+	prov := &scriptedProvider{name: "test"}
+	dir := t.TempDir()
+	h := newHarnessOpts(t, dir, prov, 2)
+
+	var ids []string
+	for i := 0; i < 3; i++ {
+		ids = append(ids, h.createSession("test/m1"))
+	}
+
+	h.srv.mu.Lock()
+	nResident := len(h.srv.sessions)
+	h.srv.mu.Unlock()
+	if nResident != 2 {
+		t.Fatalf("resident count = %d, want 2 (MaxResident) after 3 creates with no prompts", nResident)
+	}
+
+	// All three are still listed (the evicted one loaded from disk).
+	_, data := h.do("GET", "/session", nil)
+	var list []map[string]any
+	if err := json.Unmarshal(data, &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 3 {
+		t.Fatalf("list = %d sessions, want 3: %s", len(list), data)
+	}
+	listed := map[string]bool{}
+	for _, s := range list {
+		if id, ok := s["id"].(string); ok {
+			listed[id] = true
+		}
+	}
+	for _, id := range ids {
+		if !listed[id] {
+			t.Errorf("session %s missing from list (evicted create-only session must persist to disk)", id)
+		}
+	}
+}

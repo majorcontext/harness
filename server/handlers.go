@@ -41,8 +41,16 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "cannot create session")
 		return
 	}
+	// Persist the log now so the session has durable state even if it is
+	// evicted before its first prompt; otherwise eviction below would drop a
+	// never-prompted session with no on-disk backing to reload from.
+	if err := sess.Persist(); err != nil {
+		writeErr(w, http.StatusInternalServerError, "cannot create session")
+		return
+	}
 	s.mu.Lock()
 	s.sessions[sess.ID] = &sessionState{sess: sess, lastUsed: time.Now()}
+	s.evictResidentLocked()
 	s.mu.Unlock()
 
 	s.emitDurable(Event{Type: evtSessionCreated, SessionID: sess.ID, Model: sess.Model()})
@@ -339,6 +347,10 @@ func (s *Server) getOrLoad(id string) (*sessionState, bool) {
 		st = ex // lost a race; use the winner
 	} else {
 		s.sessions[id] = st
+		// A cold load grows the resident set; cap it. The just-loaded session
+		// is the newest, so it is never the one evicted, and every other
+		// resident session is already on disk.
+		s.evictResidentLocked()
 	}
 	s.mu.Unlock()
 	return st, true

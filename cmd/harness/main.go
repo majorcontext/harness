@@ -402,14 +402,18 @@ func serveCmd(args []string) error {
 	case <-ctx.Done():
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		// Stop accepting connections and let in-flight HTTP handlers return,
-		// then drain the detached prompt goroutines (which Shutdown does not
-		// track — their 202 already returned). Draining before the deferred
-		// srv.Close keeps the journal file open until the trailing assistant
-		// message and session.aborted/idle records are written.
-		shutErr := httpSrv.Shutdown(shutCtx)
+		// Drain first: it ends the SSE streams (so no connection stays live on
+		// an /event tail) and gives the detached prompt goroutines — which
+		// Shutdown does not track, their 202 already returned — the full grace
+		// budget to finish before it cancels them. Only then Shutdown, which now
+		// returns promptly because every connection is idle. Sharing one
+		// context the other way round let Shutdown block on the SSE tail for the
+		// whole budget and handed Drain an already-expired deadline, collapsing
+		// "wait gracefully then cancel" into "cancel immediately". Draining
+		// before the deferred srv.Close keeps the journal file open until the
+		// trailing assistant message and session.aborted/idle records land.
 		srv.Drain(shutCtx)
-		return shutErr
+		return httpSrv.Shutdown(shutCtx)
 	}
 }
 
