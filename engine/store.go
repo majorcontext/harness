@@ -26,9 +26,13 @@ import (
 
 // Record types, one JSON object per line.
 const (
-	recSession = "session"
-	recMessage = "message"
-	recModel   = "model"
+	recSession      = "session"
+	recMessage      = "message"
+	recModel        = "model"
+	recGoalSet      = "goal.set"
+	recGoalEval     = "goal.eval"
+	recGoalAchieved = "goal.achieved"
+	recGoalCleared  = "goal.cleared"
 )
 
 // record is one line of a session log file.
@@ -38,6 +42,16 @@ type record struct {
 	CreatedAt time.Time        `json:"created_at,omitzero"`
 	Message   *message.Message `json:"message,omitempty"`
 	Model     message.ModelRef `json:"model,omitzero"`
+	Goal      *goalRecord      `json:"goal,omitempty"`
+}
+
+// goalRecord carries the durable payload of a goal.* record (see goal.go).
+type goalRecord struct {
+	Condition string `json:"condition,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	Met       bool   `json:"met,omitempty"`
+	Turn      int    `json:"turn,omitempty"`
+	Turns     int    `json:"turns,omitempty"`
 }
 
 // SessionInfo summarizes one persisted session for listings.
@@ -106,6 +120,22 @@ func (s *Session) persistModel(ref message.ModelRef) {
 		return
 	}
 	if err := s.writeRecord(record{Type: recModel, Model: ref}); err != nil {
+		s.lastPersistErr = err
+	}
+}
+
+// persistGoalLocked appends a goal.* record to the session log. It forces the
+// log to exist (a goal.set may be the first thing written to a fresh session).
+// Caller holds s.mu.
+func (s *Session) persistGoalLocked(recType string, g goalRecord) {
+	if s.cfg.SessionDir == "" {
+		return
+	}
+	if err := s.ensureLog(); err != nil {
+		s.lastPersistErr = err
+		return
+	}
+	if err := s.writeRecord(record{Type: recType, Goal: &g}); err != nil {
 		s.lastPersistErr = err
 	}
 }
@@ -209,6 +239,19 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			s.history = append(s.history, *rec.Message)
 		case recModel:
 			s.model = rec.Model
+		case recGoalSet:
+			// An active goal is one set without a later achieved/cleared. The
+			// condition is restored; per Claude Code semantics the run counters
+			// reset, so nothing else carries over.
+			s.goalActive = true
+			if rec.Goal != nil {
+				s.goalCondition = rec.Goal.Condition
+			}
+		case recGoalAchieved, recGoalCleared:
+			s.goalActive = false
+			s.goalCondition = ""
+		case recGoalEval:
+			// Per-turn evaluation trace; no resume state (counters reset).
 		}
 		return nil
 	})
