@@ -203,6 +203,64 @@ func TestLoadInstructionsFields(t *testing.T) {
 	})
 }
 
+func TestLoadSkillsDirs(t *testing.T) {
+	t.Run("array parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"skills_dirs": ["a/skills", "b/skills"]}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if len(c.SkillsDirs) != 2 || c.SkillsDirs[0] != "a/skills" || c.SkillsDirs[1] != "b/skills" {
+			t.Errorf("SkillsDirs = %v", c.SkillsDirs)
+		}
+	})
+	t.Run("unset leaves nil", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.SkillsDirs != nil {
+			t.Errorf("SkillsDirs = %v, want nil (unset)", c.SkillsDirs)
+		}
+	})
+}
+
+func TestMergeSkillsDirs(t *testing.T) {
+	t.Run("non-empty project overrides user entirely", func(t *testing.T) {
+		base := &Config{SkillsDirs: []string{"user/a", "user/b"}}
+		over := &Config{SkillsDirs: []string{"proj/x"}}
+		merged := merge(base, over)
+		if len(merged.SkillsDirs) != 1 || merged.SkillsDirs[0] != "proj/x" {
+			t.Errorf("merged SkillsDirs = %v, want [proj/x]", merged.SkillsDirs)
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{SkillsDirs: []string{"user/a"}}
+		merged := merge(base, &Config{})
+		if len(merged.SkillsDirs) != 1 || merged.SkillsDirs[0] != "user/a" {
+			t.Errorf("merged SkillsDirs = %v, want inherited [user/a]", merged.SkillsDirs)
+		}
+	})
+	t.Run("empty project slice inherits user (only non-empty overrides)", func(t *testing.T) {
+		base := &Config{SkillsDirs: []string{"user/a"}}
+		merged := merge(base, &Config{SkillsDirs: []string{}})
+		if len(merged.SkillsDirs) != 1 || merged.SkillsDirs[0] != "user/a" {
+			t.Errorf("merged SkillsDirs = %v, want inherited [user/a]", merged.SkillsDirs)
+		}
+	})
+	t.Run("does not alias base slice", func(t *testing.T) {
+		base := &Config{SkillsDirs: []string{"user/a"}}
+		merged := merge(base, &Config{})
+		merged.SkillsDirs[0] = "mutated"
+		if base.SkillsDirs[0] != "user/a" {
+			t.Errorf("base SkillsDirs mutated through merged config: %v", base.SkillsDirs)
+		}
+	})
+}
+
 func TestMergeInstructions(t *testing.T) {
 	trueV, falseV := true, false
 	t.Run("project overrides user", func(t *testing.T) {

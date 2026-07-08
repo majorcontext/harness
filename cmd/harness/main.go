@@ -65,6 +65,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `usage:
   harness run -p <prompt> [flags]   run a one-shot prompt
   harness serve [-addr host:port] [-cors-origin origin] [-no-instructions]
+                [-skills-dir dir ...]
                                     serve the HTTP+SSE session API
   harness sessions [--json]         list persisted sessions
   harness version                   print version
@@ -82,6 +83,7 @@ type runOptions struct {
 	jsonOut        bool
 	noSave         bool
 	noInstructions bool
+	skillsDirs     []string
 	resume         string
 	cont           bool
 }
@@ -99,6 +101,10 @@ func runFlags(opts *runOptions) *flag.FlagSet {
 	fs.BoolVar(&opts.jsonOut, "json", false, "emit the event stream as JSON lines instead of text")
 	fs.BoolVar(&opts.noSave, "no-save", false, "disable session persistence")
 	fs.BoolVar(&opts.noInstructions, "no-instructions", false, "do not inject the project's AGENTS.md into the system prompt")
+	fs.Func("skills-dir", "directory of Agent Skills to advertise (repeatable); overrides config skills_dirs; default <workdir>/.agents/skills when present", func(v string) error {
+		opts.skillsDirs = append(opts.skillsDirs, v)
+		return nil
+	})
 	fs.StringVar(&opts.resume, "r", "", "resume the session with this id")
 	fs.StringVar(&opts.resume, "resume", "", "resume the session with this id")
 	fs.BoolVar(&opts.cont, "c", false, "continue the most recent session")
@@ -309,6 +315,7 @@ func runCmd(args []string) error {
 		SessionDir:   sesDir,
 		OnEvent:      onEvent,
 		Instructions: instructionsConfig(cfg, opts.noInstructions),
+		SkillsDirs:   skillsDirs(cfg, opts.skillsDirs, workDir),
 	}, opts.resume, opts.cont, modelSet)
 	if err != nil {
 		return err
@@ -383,6 +390,11 @@ func serveCmd(args []string) error {
 	fs.StringVar(&corsOrigin, "cors-origin", "", "enable browser CORS by echoing this Access-Control-Allow-Origin value (e.g. your inspector origin, or * for dev); empty disables CORS")
 	var noInstructions bool
 	fs.BoolVar(&noInstructions, "no-instructions", false, "disable automatic AGENTS.md injection for sessions served by this instance")
+	var skillDirs []string
+	fs.Func("skills-dir", "directory of Agent Skills to advertise (repeatable); overrides config skills_dirs", func(v string) error {
+		skillDirs = append(skillDirs, v)
+		return nil
+	})
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -420,6 +432,7 @@ func serveCmd(args []string) error {
 			SessionDir:   sesDir,
 			OnEvent:      func(ev engine.Event) { srv.Publish(ev) },
 			Instructions: instructionsConfig(cfg, noInstructions),
+			SkillsDirs:   skillsDirs(cfg, skillDirs, workDir),
 		}
 	}
 	srv, err = server.New(server.Options{
@@ -486,6 +499,36 @@ func instructionsConfig(cfg *config.Config, noInstructions bool) *engine.Instruc
 		return &engine.InstructionsConfig{Path: cfg.InstructionsPath}
 	}
 	return nil
+}
+
+// skillsDirs resolves the effective Agent Skills directories for the engine.
+// Precedence: repeatable -skills-dir flags override config skills_dirs
+// entirely; otherwise config skills_dirs is used. Relative entries resolve
+// against workDir. When neither is set it returns nil, leaving the engine
+// default in place (use <workDir>/.agents/skills when it exists).
+func skillsDirs(cfg *config.Config, flagDirs []string, workDir string) []string {
+	dirs := flagDirs
+	if len(dirs) == 0 && cfg != nil && cfg.SkillsDirs != nil {
+		// A config file's explicit "skills_dirs": [] is an opt-out and must
+		// stay a non-nil empty slice; only a truly absent field falls
+		// through to nil (engine default discovery).
+		dirs = cfg.SkillsDirs
+	}
+	if dirs == nil {
+		return nil
+	}
+	if len(dirs) == 0 {
+		return []string{}
+	}
+	out := make([]string, len(dirs))
+	for i, d := range dirs {
+		if filepath.IsAbs(d) {
+			out[i] = d
+		} else {
+			out[i] = filepath.Join(workDir, d)
+		}
+	}
+	return out
 }
 
 func systemPrompt(workDir, extra string) []string {
