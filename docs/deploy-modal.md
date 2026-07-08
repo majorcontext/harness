@@ -135,6 +135,16 @@ env={
 The API keys then live only in gatekeeper's config, never in the sandbox image,
 env, or Modal Secret attached to the workload.
 
+### Project instructions in the box
+
+`harness serve` (and `harness run`) sets each session's `WorkDir` to the
+process's current directory, and the engine auto-injects the nearest `AGENTS.md`
+found by walking up from `WorkDir`. So box sessions automatically pick up the
+cloned repo's `AGENTS.md` — as long as `harness serve` is launched from inside
+the clone (set the sandbox working directory to the repo root, or `cd` into it
+before `serve`). Disable per-run with `-no-instructions`, or globally with
+`instructions: false` (or an `instructions_path` override) in config.
+
 ## Inspecting sessions
 
 `tools/inspector/index.html` is a standalone browser UI for a running

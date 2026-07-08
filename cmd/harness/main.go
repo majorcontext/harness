@@ -75,14 +75,15 @@ run flags:
 }
 
 type runOptions struct {
-	prompt    string
-	model     string
-	system    string
-	maxTokens int
-	jsonOut   bool
-	noSave    bool
-	resume    string
-	cont      bool
+	prompt         string
+	model          string
+	system         string
+	maxTokens      int
+	jsonOut        bool
+	noSave         bool
+	noInstructions bool
+	resume         string
+	cont           bool
 }
 
 func runFlags(opts *runOptions) *flag.FlagSet {
@@ -97,6 +98,7 @@ func runFlags(opts *runOptions) *flag.FlagSet {
 	fs.IntVar(&opts.maxTokens, "max-tokens", 0, "per-response output token cap")
 	fs.BoolVar(&opts.jsonOut, "json", false, "emit the event stream as JSON lines instead of text")
 	fs.BoolVar(&opts.noSave, "no-save", false, "disable session persistence")
+	fs.BoolVar(&opts.noInstructions, "no-instructions", false, "do not inject the project's AGENTS.md into the system prompt")
 	fs.StringVar(&opts.resume, "r", "", "resume the session with this id")
 	fs.StringVar(&opts.resume, "resume", "", "resume the session with this id")
 	fs.BoolVar(&opts.cont, "c", false, "continue the most recent session")
@@ -299,13 +301,14 @@ func runCmd(args []string) error {
 	}
 
 	s, err := resolveSession(engine.Config{
-		Providers:  registry(cfg),
-		Model:      model,
-		System:     systemPrompt(workDir, opts.system),
-		MaxTokens:  opts.maxTokens,
-		WorkDir:    workDir,
-		SessionDir: sesDir,
-		OnEvent:    onEvent,
+		Providers:    registry(cfg),
+		Model:        model,
+		System:       systemPrompt(workDir, opts.system),
+		MaxTokens:    opts.maxTokens,
+		WorkDir:      workDir,
+		SessionDir:   sesDir,
+		OnEvent:      onEvent,
+		Instructions: instructionsConfig(cfg, opts.noInstructions),
 	}, opts.resume, opts.cont, modelSet)
 	if err != nil {
 		return err
@@ -408,12 +411,13 @@ func serveCmd(args []string) error {
 	var srv *server.Server
 	mkCfg := func(model message.ModelRef) engine.Config {
 		return engine.Config{
-			Providers:  reg,
-			Model:      model,
-			System:     systemPrompt(workDir, ""),
-			WorkDir:    workDir,
-			SessionDir: sesDir,
-			OnEvent:    func(ev engine.Event) { srv.Publish(ev) },
+			Providers:    reg,
+			Model:        model,
+			System:       systemPrompt(workDir, ""),
+			WorkDir:      workDir,
+			SessionDir:   sesDir,
+			OnEvent:      func(ev engine.Event) { srv.Publish(ev) },
+			Instructions: instructionsConfig(cfg, false),
 		}
 	}
 	srv, err = server.New(server.Options{
@@ -459,6 +463,27 @@ func serveCmd(args []string) error {
 		// trailing assistant message and session.aborted/idle records land.
 		return server.Shutdown(shutCtx, httpSrv, srv)
 	}
+}
+
+// instructionsConfig translates the -no-instructions flag and config file
+// fields into the engine's InstructionsConfig. Precedence: the flag disables
+// unconditionally; otherwise config `instructions: false` disables, config
+// `instructions_path` names an override, and anything else returns nil (the
+// engine default: auto-discover AGENTS.md by walking up from WorkDir).
+func instructionsConfig(cfg *config.Config, noInstructions bool) *engine.InstructionsConfig {
+	if noInstructions {
+		return &engine.InstructionsConfig{Disabled: true}
+	}
+	if cfg == nil {
+		return nil
+	}
+	if cfg.Instructions != nil && !*cfg.Instructions {
+		return &engine.InstructionsConfig{Disabled: true}
+	}
+	if cfg.InstructionsPath != "" {
+		return &engine.InstructionsConfig{Path: cfg.InstructionsPath}
+	}
+	return nil
 }
 
 func systemPrompt(workDir, extra string) []string {

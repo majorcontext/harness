@@ -172,6 +172,62 @@ func TestResolveModel(t *testing.T) {
 	})
 }
 
+func TestLoadInstructionsFields(t *testing.T) {
+	t.Run("instructions false and path", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"instructions": false, "instructions_path": "docs/AGENTS.md"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.Instructions == nil || *c.Instructions != false {
+			t.Errorf("Instructions = %v, want *false", c.Instructions)
+		}
+		if c.InstructionsPath != "docs/AGENTS.md" {
+			t.Errorf("InstructionsPath = %q", c.InstructionsPath)
+		}
+	})
+	t.Run("unset leaves nil", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.Instructions != nil {
+			t.Errorf("Instructions = %v, want nil (unset)", c.Instructions)
+		}
+		if c.InstructionsPath != "" {
+			t.Errorf("InstructionsPath = %q, want empty", c.InstructionsPath)
+		}
+	})
+}
+
+func TestMergeInstructions(t *testing.T) {
+	trueV, falseV := true, false
+	t.Run("project overrides user", func(t *testing.T) {
+		base := &Config{Instructions: &trueV, InstructionsPath: "user/AGENTS.md"}
+		over := &Config{Instructions: &falseV, InstructionsPath: "proj/AGENTS.md"}
+		merged := merge(base, over)
+		if merged.Instructions == nil || *merged.Instructions != false {
+			t.Errorf("merged Instructions = %v, want *false", merged.Instructions)
+		}
+		if merged.InstructionsPath != "proj/AGENTS.md" {
+			t.Errorf("merged InstructionsPath = %q, want proj/AGENTS.md", merged.InstructionsPath)
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{Instructions: &trueV, InstructionsPath: "user/AGENTS.md"}
+		merged := merge(base, &Config{})
+		if merged.Instructions == nil || *merged.Instructions != true {
+			t.Errorf("merged Instructions = %v, want *true (inherited)", merged.Instructions)
+		}
+		if merged.InstructionsPath != "user/AGENTS.md" {
+			t.Errorf("merged InstructionsPath = %q, want inherited user/AGENTS.md", merged.InstructionsPath)
+		}
+	})
+}
+
 func TestMergeDoesNotAliasBaseMaps(t *testing.T) {
 	base := &Config{
 		Aliases:   map[string]string{"fast": "anthropic/claude-haiku-4-5"},
