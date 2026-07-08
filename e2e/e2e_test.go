@@ -419,6 +419,10 @@ type apiEvent struct {
 	Message   *struct {
 		ID string `json:"id"`
 	} `json:"message"`
+	GoalCondition string `json:"goal_condition"`
+	GoalReason    string `json:"goal_reason"`
+	GoalMet       bool   `json:"goal_met"`
+	GoalTurn      int    `json:"goal_turn"`
 }
 
 // eventReplay connects to GET /event?from=0, reads the durable replay batch,
@@ -818,6 +822,290 @@ func TestInstructionsAndSkillsReachModel(t *testing.T) {
 	if ii, si := strings.Index(joined, instrMarker), strings.Index(joined, skillLine); ii < 0 || si < 0 || ii > si {
 		t.Errorf("instructions must appear before skills (instr idx %d, skill idx %d)", ii, si)
 	}
+}
+
+// --- goal loop ---------------------------------------------------------
+
+// fakeGoalAnthropic serves both the worker model and the tool-less evaluator
+// model from one endpoint, keyed by the presence of a "tools" array in the
+// request body (the evaluator call is deliberately tool-less). Worker turn 1
+// does not satisfy the condition and turn 2 does; the evaluator answers NOT MET
+// then MET. It records each worker request body so a test can prove the second
+// worker turn received the guidance carrying the evaluator's reason.
+//
+// When stallWorker is set, the first worker request streams a partial turn,
+// signals firstDelta, then blocks until the request context dies (a DELETE
+// /goal cancels it) or unblock is closed — so a goal DELETE can land mid-loop.
+type fakeGoalAnthropic struct {
+	stallWorker bool
+	firstDelta  chan struct{}
+	unblock     chan struct{}
+
+	mu           sync.Mutex
+	workerBodies []string
+	workerCount  int
+	evalCount    int
+	fdOne        sync.Once
+}
+
+const goalNotMetReason = "needs the magic word"
+
+func (f *fakeGoalAnthropic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	var req struct {
+		Tools []json.RawMessage `json:"tools"`
+	}
+	_ = json.Unmarshal(body, &req)
+	isEval := len(req.Tools) == 0
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "no flusher", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+
+	if isEval {
+		f.mu.Lock()
+		n := f.evalCount
+		f.evalCount++
+		f.mu.Unlock()
+		text := "NOT MET: " + goalNotMetReason
+		if n >= 1 {
+			text = "MET: the magic word is present"
+		}
+		io.WriteString(w, completeTurn(fmt.Sprintf("eval_%d", n), text))
+		flusher.Flush()
+		return
+	}
+
+	f.mu.Lock()
+	n := f.workerCount
+	f.workerCount++
+	f.workerBodies = append(f.workerBodies, string(body))
+	f.mu.Unlock()
+
+	if f.stallWorker && n == 0 {
+		io.WriteString(w, sse("message_start", `{"type":"message_start","message":{"id":"msg_goalstall","usage":{"input_tokens":5}}}`))
+		io.WriteString(w, sse("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`))
+		io.WriteString(w, sse("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"working"}}`))
+		flusher.Flush()
+		f.fdOne.Do(func() { close(f.firstDelta) })
+		select {
+		case <-r.Context().Done():
+		case <-f.unblock:
+		}
+		return
+	}
+
+	text := "I am working on it"
+	if n >= 1 {
+		text = "Done, magic word applied"
+	}
+	io.WriteString(w, completeTurn(fmt.Sprintf("work_%d", n), text))
+	flusher.Flush()
+}
+
+// writeGoalConfig writes a config pointing the anthropic provider at baseURL and
+// naming a distinct evaluator model, so goal requests are enabled.
+func writeGoalConfig(t *testing.T, baseURL string) string {
+	t.Helper()
+	cfg := map[string]any{
+		"model":                "anthropic/claude-fable-5",
+		"goal_evaluator_model": "anthropic/eval-model",
+		"providers": map[string]any{
+			"anthropic": map[string]any{
+				"api_key_env": "ANTHROPIC_API_KEY",
+				"base_url":    baseURL,
+			},
+		},
+	}
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return path
+}
+
+// goal posts a goal (expects 202).
+func (p *serveProc) goal(id, condition string) {
+	p.t.Helper()
+	resp, data := p.do(http.MethodPost, "/session/"+id+"/goal", map[string]any{"condition": condition})
+	if resp.StatusCode != http.StatusAccepted {
+		p.t.Fatalf("POST goal: status %d body %s", resp.StatusCode, data)
+	}
+}
+
+// waitStatus polls GET /session/{id} until its status equals want or a deadline.
+func (p *serveProc) waitStatus(id, want string) {
+	p.t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	var last string
+	for time.Now().Before(deadline) {
+		resp, data := p.do(http.MethodGet, "/session/"+id, nil)
+		if resp.StatusCode == http.StatusOK {
+			var s struct {
+				Status string `json:"status"`
+			}
+			if json.Unmarshal(data, &s) == nil {
+				last = s.Status
+				if s.Status == want {
+					return
+				}
+			}
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	p.t.Fatalf("session %s status = %q, want %q\nstderr:\n%s", id, last, want, p.stderr.String())
+}
+
+func goalEventsFor(events []apiEvent, id string) []apiEvent {
+	var out []apiEvent
+	for _, ev := range events {
+		if ev.SessionID != id {
+			continue
+		}
+		switch ev.Type {
+		case "goal.set", "goal.eval", "goal.achieved", "goal.cleared":
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+// TestGoalLoopReachesAchieved is the keystone: a real serve binary drives a
+// two-turn goal loop against a fake provider that serves both the worker and
+// the evaluator. Turn 1 fails the condition (NOT MET), the guidance carries the
+// evaluator's reason into turn 2, which passes (MET). The durable journal must
+// replay goal.set, goal.eval(not met), goal.eval(met), goal.achieved, and the
+// session must return to idle.
+func TestGoalLoopReachesAchieved(t *testing.T) {
+	skipShort(t)
+
+	fake := &fakeGoalAnthropic{}
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+
+	sessDir := t.TempDir()
+	cfgPath := writeGoalConfig(t, srv.URL)
+
+	p := startServe(t, sessDir, cfgPath)
+	id := p.createSession()
+	p.goal(id, "apply the magic word")
+
+	// user(cond) + asst(turn1) + user(guidance) + asst(turn2) = 4.
+	p.waitMessages(id, 4)
+	p.waitStatus(id, "idle")
+
+	goals := goalEventsFor(p.eventReplay(), id)
+	var types []string
+	for _, ev := range goals {
+		types = append(types, ev.Type)
+	}
+	want := []string{"goal.set", "goal.eval", "goal.eval", "goal.achieved"}
+	if strings.Join(types, ",") != strings.Join(want, ",") {
+		t.Fatalf("goal events = %v, want %v", types, want)
+	}
+	if goals[0].GoalCondition != "apply the magic word" {
+		t.Errorf("goal.set condition = %q", goals[0].GoalCondition)
+	}
+	if goals[1].GoalMet || !strings.Contains(goals[1].GoalReason, goalNotMetReason) {
+		t.Errorf("first goal.eval = %+v, want not met with reason %q", goals[1], goalNotMetReason)
+	}
+	if !goals[2].GoalMet {
+		t.Errorf("second goal.eval = %+v, want met", goals[2])
+	}
+
+	// The second worker turn's request carried the guidance with the reason.
+	fake.mu.Lock()
+	bodies := append([]string(nil), fake.workerBodies...)
+	fake.mu.Unlock()
+	if len(bodies) < 2 {
+		t.Fatalf("worker requests = %d, want at least 2", len(bodies))
+	}
+	if !strings.Contains(bodies[1], goalNotMetReason) {
+		t.Errorf("second worker request did not carry the evaluator reason %q:\n%s", goalNotMetReason, bodies[1])
+	}
+
+	assertContiguousSeqs(t, p.eventReplay())
+}
+
+// TestGoalDeleteMidLoop starts a goal that stalls on turn 1, deletes it
+// mid-loop, and asserts the journal records goal.cleared, the loop stops
+// turning (no second worker turn, evaluator never consulted), and the session
+// returns to idle.
+func TestGoalDeleteMidLoop(t *testing.T) {
+	skipShort(t)
+
+	fake := &fakeGoalAnthropic{
+		stallWorker: true,
+		firstDelta:  make(chan struct{}),
+		unblock:     make(chan struct{}),
+	}
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(fake.unblock) })
+
+	sessDir := t.TempDir()
+	cfgPath := writeGoalConfig(t, srv.URL)
+
+	p := startServe(t, sessDir, cfgPath)
+	id := p.createSession()
+	p.goal(id, "never satisfied")
+
+	select {
+	case <-fake.firstDelta:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("worker never streamed first delta\nstderr:\n%s", p.stderr.String())
+	}
+
+	resp, data := p.do(http.MethodDelete, "/session/"+id+"/goal", nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE goal = %d body %s", resp.StatusCode, data)
+	}
+	p.waitStatus(id, "idle")
+
+	goals := goalEventsFor(p.eventReplay(), id)
+	var sawSet, sawCleared, sawAchieved bool
+	for _, ev := range goals {
+		switch ev.Type {
+		case "goal.set":
+			sawSet = true
+		case "goal.cleared":
+			sawCleared = true
+		case "goal.achieved":
+			sawAchieved = true
+		}
+	}
+	if !sawSet || !sawCleared {
+		t.Errorf("goal events = %v, want goal.set and goal.cleared", goals)
+	}
+	if sawAchieved {
+		t.Error("goal.achieved present, want the goal cleared before achievement")
+	}
+
+	// The loop stopped turning: exactly one worker turn ran (stalled, then
+	// cancelled) and the evaluator was never consulted.
+	fake.mu.Lock()
+	wc, ec := fake.workerCount, fake.evalCount
+	fake.mu.Unlock()
+	if wc != 1 || ec != 0 {
+		t.Errorf("worker=%d eval=%d, want worker=1 eval=0 (no further turns)", wc, ec)
+	}
+
+	// Only the user message is durable (the stalled assistant turn never
+	// assembled).
+	msgs := p.messages(id)
+	if len(msgs) != 1 || msgs[0].Role != "user" {
+		t.Errorf("messages = %+v, want a single user message", msgs)
+	}
+
+	assertContiguousSeqs(t, p.eventReplay())
 }
 
 // --- small helpers -----------------------------------------------------
