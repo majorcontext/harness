@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -68,6 +69,10 @@ type Config struct {
 	MaxTokens int              // per-response cap; defaults to 8192
 	WorkDir   string           // working directory for built-in tools
 
+	// SessionDir is where session logs are persisted, one JSONL file per
+	// session. Empty disables persistence entirely.
+	SessionDir string
+
 	Hooks   Hooks       // optional plugin host
 	OnEvent func(Event) // optional; called synchronously, keep it fast
 
@@ -86,15 +91,28 @@ type Session struct {
 	cfg   Config
 	tools map[string]Tool
 
-	mu      sync.Mutex
-	model   message.ModelRef
-	history []message.Message
-	usage   provider.Usage
+	mu             sync.Mutex
+	model          message.ModelRef
+	history        []message.Message
+	usage          provider.Usage
+	createdAt      time.Time
+	logFile        *os.File // session log; nil until first write (see store.go)
+	logStarted     bool     // the log file exists on disk
+	lastPersistErr error
 }
 
-// NewSession creates a session. Nothing touches the network or spawns
-// processes here — provider auth and plugin spawns happen on first use.
+// NewSession creates a session. Nothing touches the network, spawns
+// processes, or writes to disk here — provider auth and plugin spawns happen
+// on first use, and the session log is created on first message append.
 func NewSession(cfg Config) *Session {
+	s := newSession(cfg)
+	s.ID = newID("ses")
+	return s
+}
+
+// newSession builds a session minus its ID; NewSession and LoadSession
+// share it.
+func newSession(cfg Config) *Session {
 	if cfg.MaxTokens <= 0 {
 		cfg.MaxTokens = 8192
 	}
@@ -102,10 +120,10 @@ func NewSession(cfg Config) *Session {
 		cfg.BashTimeout = 2 * time.Minute
 	}
 	s := &Session{
-		ID:    newID("ses"),
-		cfg:   cfg,
-		model: cfg.Model,
-		tools: make(map[string]Tool),
+		cfg:       cfg,
+		model:     cfg.Model,
+		tools:     make(map[string]Tool),
+		createdAt: time.Now().UTC(),
 	}
 	bash := bashTool(cfg.BashTimeout)
 	s.tools[bash.Def.Name] = bash
@@ -120,7 +138,11 @@ func NewSession(cfg Config) *Session {
 func (s *Session) SetModel(ref message.ModelRef) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if ref == s.model {
+		return
+	}
 	s.model = ref
+	s.persistModel(ref)
 }
 
 // Model returns the session's current model.
@@ -156,6 +178,7 @@ func (s *Session) History() []message.Message {
 func (s *Session) append(m message.Message) {
 	s.mu.Lock()
 	s.history = append(s.history, m)
+	s.persistMessage(&m)
 	s.mu.Unlock()
 }
 
