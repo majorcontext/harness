@@ -12,6 +12,7 @@ import (
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider/anthropic"
+	"github.com/majorcontext/harness/provider/openai"
 )
 
 func TestSessionDir(t *testing.T) {
@@ -283,6 +284,17 @@ func TestRegistry(t *testing.T) {
 		}
 		if c.BaseURL != "" {
 			t.Errorf("BaseURL = %q, want empty", c.BaseURL)
+		}
+	})
+	t.Run("openai wired with OPENAI_API_KEY default", func(t *testing.T) {
+		t.Setenv("OPENAI_API_KEY", "sk-oai")
+		reg := registry(&config.Config{})
+		c, ok := reg[openai.Family].(*openai.Client)
+		if !ok {
+			t.Fatalf("openai provider is %T, want *openai.Client", reg[openai.Family])
+		}
+		if c.APIKey != "sk-oai" {
+			t.Errorf("APIKey = %q, want sk-oai", c.APIKey)
 		}
 	})
 	t.Run("config api_key_env and base_url are honored", func(t *testing.T) {
