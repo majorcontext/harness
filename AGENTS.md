@@ -32,6 +32,23 @@ tui/               a client, nothing more
 - **Provider-specific opaque data (reasoning/thinking blocks, encrypted reasoning items) is stored as provider-tagged attachments** on canonical messages: replayed verbatim to the same provider, dropped when crossing providers. Tool-call IDs are internal; each transcoder maps deterministically to provider-compliant IDs. Prompt-cache markers are injected at transcode time, never stored.
 - **Model refs are `provider/model`** plus user-defined aliases (`fast`, `smart`) from config. The models.dev catalog snapshot is embedded at build time and refreshed async — never on the startup path.
 
+### Project instructions (AGENTS.md)
+
+The engine auto-injects a project's `AGENTS.md` into the system prompt. On the
+first `Prompt` of a session (never at `NewSession` — the startup budget rule)
+it walks up from `Config.WorkDir` for `AGENTS.md` (falling back to `AGENT.md`),
+stopping at the git root or filesystem root; the closest file wins, per the
+[agents.md](https://agents.md/) convention. The file is schema-less Markdown —
+no headings are required or parsed. The segment is appended after
+`Config.System` and before hook (`system.transform`) segments, cached for the
+session, and never written to the session log (loaded fresh on resume).
+
+A present-but-unusable file (invalid UTF-8, or empty/whitespace-only) fails the
+first `Prompt` — a project that meant to supply instructions must not run
+silently without them. A missing file is fine. Oversize files are truncated at
+64 KiB with a marker. Disable with `-no-instructions`, config `instructions:
+false`, or point at a specific file with config `instructions_path`.
+
 ### Deliberately absent — do not add
 
 - **No permission system.** Tool calls are never gated. There is no `permission.ask` hook, no approval UI, no pre-flight rule evaluation.
