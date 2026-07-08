@@ -178,8 +178,9 @@ func formatSessions(infos []engine.SessionInfo) string {
 }
 
 // sessionJSON is the wire shape for `harness sessions --json`: one object
-// per session with created_at as an RFC3339 string, mirroring
-// engine.SessionInfo.
+// per session with created_at marshaled via time.Time's default JSON
+// encoding (RFC3339 with nanoseconds), matching the server's session wire
+// shape and mirroring engine.SessionInfo.
 type sessionJSON struct {
 	ID        string    `json:"id"`
 	CreatedAt time.Time `json:"created_at"`
