@@ -94,9 +94,18 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 		if err != nil {
 			return nil, err
 		}
-		s.recordGoalEval(met, reason, turn)
+		if !s.recordGoalEval(met, reason, turn) {
+			// ClearGoal fired while this evaluation was in flight: the goal is
+			// no longer active, so its verdict must not land in the journal.
+			// Treat this as a clean stop, never an achievement.
+			return &GoalResult{Achieved: false, Turns: turn, Reason: "goal cleared"}, nil
+		}
 		if met {
-			s.achieveGoal(reason, turn)
+			if !s.achieveGoal(reason, turn) {
+				// Cleared in the narrow window between recordGoalEval and
+				// achieveGoal — still a clean stop, not an achievement.
+				return &GoalResult{Achieved: false, Turns: turn, Reason: "goal cleared"}, nil
+			}
 			return &GoalResult{Achieved: true, Turns: turn, Reason: reason}, nil
 		}
 		directive = goalGuidance(condition, reason)
@@ -142,22 +151,39 @@ func (s *Session) setGoal(condition string) {
 	s.emit(Event{Type: EventGoalSet, GoalCondition: condition})
 }
 
-// recordGoalEval records one evaluator verdict for a turn.
-func (s *Session) recordGoalEval(met bool, reason string, turn int) {
+// recordGoalEval records one evaluator verdict for a turn. It is a no-op —
+// no journal write, no event — when the goal is no longer active: a
+// concurrent ClearGoal may have raced this evaluation to completion, and its
+// verdict must never land in the log after goal.cleared. Reports whether the
+// record was written.
+func (s *Session) recordGoalEval(met bool, reason string, turn int) bool {
 	s.mu.Lock()
+	if !s.goalActive {
+		s.mu.Unlock()
+		return false
+	}
 	s.persistGoalLocked(recGoalEval, goalRecord{Met: met, Reason: reason, Turn: turn})
 	s.mu.Unlock()
 	s.emit(Event{Type: EventGoalEval, GoalMet: met, GoalReason: reason, GoalTurn: turn})
+	return true
 }
 
-// achieveGoal records goal.achieved and clears the active goal.
-func (s *Session) achieveGoal(reason string, turns int) {
+// achieveGoal records goal.achieved and clears the active goal. It is a
+// no-op when the goal is no longer active (already cleared concurrently),
+// so a cleared-then-achieved sequence can never reach the log. Reports
+// whether the goal was achieved.
+func (s *Session) achieveGoal(reason string, turns int) bool {
 	s.mu.Lock()
+	if !s.goalActive {
+		s.mu.Unlock()
+		return false
+	}
 	s.goalActive = false
 	s.goalCondition = ""
 	s.persistGoalLocked(recGoalAchieved, goalRecord{Reason: reason, Turns: turns})
 	s.mu.Unlock()
 	s.emit(Event{Type: EventGoalAchieved, GoalReason: reason, GoalTurns: turns})
+	return true
 }
 
 // evaluateGoal runs a single tool-less evaluator request and parses its

@@ -3,7 +3,10 @@ package engine
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/majorcontext/harness/message"
@@ -311,5 +314,98 @@ func TestClearGoalRecordsAndResets(t *testing.T) {
 	}
 	if _, ok := loaded.ActiveGoal(); ok {
 		t.Error("resumed ActiveGoal active after clear, want inactive")
+	}
+}
+
+// blockingEvalProvider serves the worker turn immediately but parks the
+// evaluator's Stream call on a channel released by the test, so a test can
+// race ClearGoal against an in-flight evaluation. entered is closed the
+// moment the evaluator request arrives, letting the test know it is safe to
+// call ClearGoal.
+type blockingEvalProvider struct {
+	worker  [][]provider.Event
+	wi      int
+	entered chan struct{}
+	release chan struct{}
+	evalOut string
+
+	once sync.Once
+}
+
+func (p *blockingEvalProvider) Name() string { return "test" }
+
+func (p *blockingEvalProvider) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
+	if len(req.Tools) == 0 {
+		p.once.Do(func() { close(p.entered) })
+		select {
+		case <-p.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return &scriptedStream{events: evalTurn(p.evalOut)}, nil
+	}
+	ev := p.worker[p.wi]
+	p.wi++
+	return &scriptedStream{events: ev}, nil
+}
+
+// TestClearGoalDuringPendingEvaluationIsCleanStop reproduces the concurrency
+// finding: a ClearGoal (DELETE /goal) racing an in-flight evaluation must not
+// let that evaluation's verdict land in the journal after goal.cleared, and
+// PursueGoal must treat the race as a clean stop rather than an achievement.
+func TestClearGoalDuringPendingEvaluationIsCleanStop(t *testing.T) {
+	dir := t.TempDir()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+
+	prov := &blockingEvalProvider{
+		worker:  [][]provider.Event{asstTurn(provider.StopEndTurn, &message.Text{Text: "working"})},
+		entered: entered,
+		release: release,
+		evalOut: "MET: looks done",
+	}
+	s := goalSession(t, prov, dir)
+
+	type outcome struct {
+		res *GoalResult
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := s.PursueGoal(context.Background(), "goalx", GoalOptions{Evaluator: evalModel})
+		done <- outcome{res, err}
+	}()
+
+	<-entered // the evaluation is in flight, blocked on release
+
+	if !s.ClearGoal() {
+		t.Fatal("ClearGoal returned false for an active goal")
+	}
+
+	releaseOnce.Do(func() { close(release) }) // let the pending MET verdict land
+
+	out := <-done
+	if out.err != nil {
+		t.Fatalf("PursueGoal error = %v", out.err)
+	}
+	if out.res.Achieved {
+		t.Fatalf("result = %+v, want a clean stop (Achieved=false) since the goal was cleared mid-evaluation", out.res)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, s.ID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	if !strings.Contains(log, `"type":"goal.cleared"`) {
+		t.Fatalf("session log missing goal.cleared record:\n%s", log)
+	}
+	if strings.Contains(log, `"type":"goal.achieved"`) {
+		t.Errorf("session log contains goal.achieved after a ClearGoal raced an in-flight evaluation:\n%s", log)
+	}
+	if strings.Contains(log, `"type":"goal.eval"`) {
+		t.Errorf("session log contains a goal.eval record for an evaluation that resolved after ClearGoal:\n%s", log)
 	}
 }
