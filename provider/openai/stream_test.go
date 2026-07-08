@@ -174,6 +174,59 @@ func TestStreamEndTurnNoTools(t *testing.T) {
 	}
 }
 
+func TestStreamIncomplete(t *testing.T) {
+	cases := []struct {
+		name   string
+		reason string
+		want   provider.StopReason
+	}{
+		{"max_output_tokens", "max_output_tokens", provider.StopMaxTokens},
+		{"content_filter", "content_filter", provider.StopRefusal},
+		{"unknown reason", "mystery", provider.StopOther},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := strings.Join([]string{
+				sse("response.created", `{"type":"response.created","response":{"id":"resp_inc"}}`),
+				sse("response.output_text.delta", `{"type":"response.output_text.delta","output_index":0,"delta":"partial"}`),
+				sse("response.output_item.done", `{"type":"response.output_item.done","output_index":0,"item":{"id":"msg_inc","type":"message","role":"assistant","content":[{"type":"output_text","text":"partial"}]}}`),
+				sse("response.incomplete", `{"type":"response.incomplete","response":{"id":"resp_inc","incomplete_details":{"reason":"`+tc.reason+`"},"usage":{"input_tokens":7,"output_tokens":9,"input_tokens_details":{"cached_tokens":2}}}}`),
+			}, "")
+			c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				io.WriteString(w, fixture) //nolint:errcheck
+			})
+			s, err := c.Stream(context.Background(), &provider.Request{
+				Model:     message.ModelRef{Provider: Family, Model: "gpt-5"},
+				Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+				MaxTokens: 10,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			events := collect(t, s)
+			done := events[len(events)-1]
+			if done.Type != provider.EventDone {
+				t.Fatalf("last event = %+v", done)
+			}
+			if done.StopReason != tc.want {
+				t.Errorf("stop reason = %s, want %s", done.StopReason, tc.want)
+			}
+			if done.Usage.InputTokens != 7 || done.Usage.OutputTokens != 9 || done.Usage.CacheReadTokens != 2 {
+				t.Errorf("usage = %+v", done.Usage)
+			}
+			msg := done.Message
+			if msg == nil || msg.ID != "resp_inc" || len(msg.Parts) != 1 {
+				t.Fatalf("message = %+v", msg)
+			}
+			if txt, ok := msg.Parts[0].(*message.Text); !ok || txt.Text != "partial" {
+				t.Errorf("part 0 = %+v", msg.Parts[0])
+			}
+		})
+	}
+}
+
 func TestStreamHTTPError(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

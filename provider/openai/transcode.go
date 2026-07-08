@@ -49,9 +49,11 @@ type apiMessageItem struct {
 }
 
 type apiContentPart struct {
-	Type     string `json:"type"` // input_text | output_text | input_image
+	Type     string `json:"type"` // input_text | output_text | input_image | input_file
 	Text     string `json:"text,omitempty"`
 	ImageURL string `json:"image_url,omitempty"`
+	Filename string `json:"filename,omitempty"`
+	FileData string `json:"file_data,omitempty"`
 }
 
 type apiFunctionCall struct {
@@ -249,13 +251,34 @@ func toolResultOutput(v *message.ToolResult) string {
 	return out
 }
 
+// transcodeBlob maps a Blob to a Responses content part by media type:
+// image/* → input_image, application/pdf → input_file. Anything else is a
+// loud error — silently mis-typing a document as an image is worse.
 func transcodeBlob(b *message.Blob) (apiContentPart, error) {
-	if b.URL != "" {
-		return apiContentPart{Type: "input_image", ImageURL: b.URL}, nil
+	switch {
+	case strings.HasPrefix(b.MediaType, "image/"):
+		if b.URL != "" {
+			return apiContentPart{Type: "input_image", ImageURL: b.URL}, nil
+		}
+		if len(b.Data) == 0 {
+			return apiContentPart{}, fmt.Errorf("blob has neither data nor url")
+		}
+		return apiContentPart{Type: "input_image", ImageURL: dataURL(b)}, nil
+
+	case b.MediaType == "application/pdf":
+		if len(b.Data) == 0 {
+			// The input_file part is only emitted with inline file_data; a
+			// URL-referenced form is not verified against the API, so fail
+			// loudly rather than guess at the wire shape.
+			return apiContentPart{}, fmt.Errorf("application/pdf blob by URL is not supported; provide inline data")
+		}
+		return apiContentPart{Type: "input_file", Filename: "file.pdf", FileData: dataURL(b)}, nil
+
+	default:
+		return apiContentPart{}, fmt.Errorf("unsupported blob media type %q", b.MediaType)
 	}
-	if len(b.Data) == 0 {
-		return apiContentPart{}, fmt.Errorf("blob has neither data nor url")
-	}
-	url := "data:" + b.MediaType + ";base64," + base64.StdEncoding.EncodeToString(b.Data)
-	return apiContentPart{Type: "input_image", ImageURL: url}, nil
+}
+
+func dataURL(b *message.Blob) string {
+	return "data:" + b.MediaType + ";base64," + base64.StdEncoding.EncodeToString(b.Data)
 }

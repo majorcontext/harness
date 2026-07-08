@@ -266,9 +266,14 @@ func (s *stream) handle(name string, data []byte) error {
 			}
 		}
 
-	case "response.completed":
+	case "response.completed", "response.incomplete":
+		// Both are terminal: response.incomplete is a truncated-but-usable
+		// response whose incomplete_details.reason maps to the stop reason.
 		var ev struct {
 			Response struct {
+				IncompleteDetails struct {
+					Reason string `json:"reason"`
+				} `json:"incomplete_details"`
 				Usage struct {
 					InputTokens        int `json:"input_tokens"`
 					OutputTokens       int `json:"output_tokens"`
@@ -279,15 +284,20 @@ func (s *stream) handle(name string, data []byte) error {
 			} `json:"response"`
 		}
 		if err := json.Unmarshal(data, &ev); err != nil {
-			return fmt.Errorf("openai: bad response.completed: %w", err)
+			return fmt.Errorf("openai: bad %s: %w", name, err)
 		}
 		s.usage.InputTokens = ev.Response.Usage.InputTokens
 		s.usage.OutputTokens = ev.Response.Usage.OutputTokens
 		s.usage.CacheReadTokens = ev.Response.Usage.InputTokensDetails.CachedTokens
 
-		stop := provider.StopEndTurn
-		if s.hasToolCall {
+		var stop provider.StopReason
+		switch {
+		case name == "response.incomplete":
+			stop = mapIncompleteReason(ev.Response.IncompleteDetails.Reason)
+		case s.hasToolCall:
 			stop = provider.StopToolUse
+		default:
+			stop = provider.StopEndTurn
 		}
 		s.queue = append(s.queue, provider.Event{
 			Type:       provider.EventDone,
@@ -326,6 +336,19 @@ func (s *stream) handle(name string, data []byte) error {
 		}
 	}
 	return nil
+}
+
+// mapIncompleteReason maps response.incomplete_details.reason to a canonical
+// stop reason.
+func mapIncompleteReason(reason string) provider.StopReason {
+	switch reason {
+	case "max_output_tokens":
+		return provider.StopMaxTokens
+	case "content_filter":
+		return provider.StopRefusal
+	default:
+		return provider.StopOther
+	}
 }
 
 func argsRaw(args string) json.RawMessage {

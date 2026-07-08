@@ -43,6 +43,26 @@ type probe struct {
 	Output    string `json:"output"`
 }
 
+// probeContent mirrors apiContentPart including file fields for inspection.
+type probeContent struct {
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	ImageURL string `json:"image_url"`
+	Filename string `json:"filename"`
+	FileData string `json:"file_data"`
+}
+
+func probeContents(t *testing.T, raw json.RawMessage) []probeContent {
+	t.Helper()
+	var item struct {
+		Content []probeContent `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &item); err != nil {
+		t.Fatalf("bad item %s: %v", raw, err)
+	}
+	return item.Content
+}
+
 func probeItem(t *testing.T, raw json.RawMessage) probe {
 	t.Helper()
 	var p probe
@@ -116,6 +136,49 @@ func TestTranscodeUserMessageAndImage(t *testing.T) {
 	}
 	if p.Content[2].Type != "input_image" || p.Content[2].ImageURL != "https://example.com/x.jpg" {
 		t.Errorf("url image content = %+v", p.Content[2])
+	}
+}
+
+func TestTranscodeBlobPDFData(t *testing.T) {
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{
+			&message.Text{Text: "summarize"},
+			&message.Blob{MediaType: "application/pdf", Data: []byte("%PDF-fake")},
+		}},
+	))
+	content := probeContents(t, out.Input[0])
+	if len(content) != 2 {
+		t.Fatalf("content parts = %d", len(content))
+	}
+	pdf := content[1]
+	if pdf.Type != "input_file" || pdf.Filename != "file.pdf" ||
+		!strings.HasPrefix(pdf.FileData, "data:application/pdf;base64,") {
+		t.Errorf("pdf content = %+v", pdf)
+	}
+	if pdf.ImageURL != "" {
+		t.Errorf("pdf typed as image: %+v", pdf)
+	}
+}
+
+func TestTranscodeBlobPDFURLUnsupported(t *testing.T) {
+	_, err := transcodeRequest(baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{
+			&message.Blob{MediaType: "application/pdf", URL: "https://example.com/doc.pdf"},
+		}},
+	))
+	if err == nil || !strings.Contains(err.Error(), "application/pdf") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestTranscodeBlobUnsupportedMediaType(t *testing.T) {
+	_, err := transcodeRequest(baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{
+			&message.Blob{MediaType: "audio/mpeg", Data: []byte{1, 2}},
+		}},
+	))
+	if err == nil || !strings.Contains(err.Error(), "audio/mpeg") {
+		t.Fatalf("err = %v", err)
 	}
 }
 
