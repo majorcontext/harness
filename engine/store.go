@@ -116,12 +116,28 @@ func (s *Session) ensureLog() error {
 		// every persisted session names its model explicitly — a SetModel
 		// before the first append would otherwise be silently lost and
 		// LoadSession would wrongly fall back to Config.Model.
-		if err := s.writeRecord(record{Type: recSession, ID: s.ID, CreatedAt: s.createdAt}); err != nil {
-			f.Close()
-			s.logFile = nil
-			return err
+		//
+		// Both records go out in ONE Write call: written separately, a
+		// transient failure after the header would leave a non-empty file
+		// that retries (gated on size == 0) never complete, permanently
+		// dropping the model record. With a single write the worst case
+		// under a mid-write crash is a truncated final line, which
+		// LoadSession already tolerates.
+		var buf bytes.Buffer
+		for _, rec := range []record{
+			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt},
+			{Type: recModel, Model: s.model},
+		} {
+			b, err := json.Marshal(rec)
+			if err != nil {
+				f.Close()
+				s.logFile = nil
+				return err
+			}
+			buf.Write(b)
+			buf.WriteByte('\n')
 		}
-		if err := s.writeRecord(record{Type: recModel, Model: s.model}); err != nil {
+		if _, err := f.Write(buf.Bytes()); err != nil {
 			f.Close()
 			s.logFile = nil
 			return err

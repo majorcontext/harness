@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/message"
@@ -311,5 +312,54 @@ func TestPersistModelSetBeforeFirstAppend(t *testing.T) {
 	}
 	if loaded.Model() != swapped {
 		t.Errorf("loaded model = %v, want %v", loaded.Model(), swapped)
+	}
+}
+
+func TestFirstAppendFileLayout(t *testing.T) {
+	dir := t.TempDir()
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "ok"}),
+	}}
+	cfg := persistCfg(dir, prov)
+	s := NewSession(cfg)
+
+	if _, err := s.Prompt(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PersistErr(); err != nil {
+		t.Fatalf("PersistErr = %v", err)
+	}
+
+	// The header and the initial model record are written with a single
+	// Write call: a transient failure between them would otherwise leave a
+	// header-only file that retries (gated on size == 0) never complete,
+	// permanently dropping the model record. With one write the worst case
+	// under a mid-write crash is a truncated final line, which LoadSession
+	// already tolerates. This test pins the resulting on-disk layout: line 1
+	// session header, line 2 model record, line 3 first message.
+	data, err := os.ReadFile(filepath.Join(dir, s.ID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("session file has %d lines, want at least 3:\n%s", len(lines), data)
+	}
+	var recs []record
+	for i, line := range lines {
+		var rec record
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("line %d: %v", i+1, err)
+		}
+		recs = append(recs, rec)
+	}
+	if recs[0].Type != recSession || recs[0].ID != s.ID {
+		t.Errorf("line 1 = %+v, want session header with ID %q", recs[0], s.ID)
+	}
+	if recs[1].Type != recModel || recs[1].Model != s.Model() {
+		t.Errorf("line 2 = %+v, want model record %v", recs[1], s.Model())
+	}
+	if recs[2].Type != recMessage || recs[2].Message == nil || recs[2].Message.Role != message.RoleUser {
+		t.Errorf("line 3 = %+v, want first (user) message record", recs[2])
 	}
 }
