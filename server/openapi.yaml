@@ -218,6 +218,7 @@ components:
             - session.created
             - session.status
             - session.error
+            - session.aborted
             - message
             - model
             - text.delta
@@ -225,12 +226,13 @@ components:
             - tool.start
             - tool.end
           description: >
-            session.error is durable (journaled with a seq): it reports a
-            prompt that failed outright — provider error, transcode failure,
-            context cancellation — since prompt_async's 202 acknowledges
-            receipt only. The session returns to idle afterward (a
-            session.status event follows). Disconnected orchestrators see
-            the failure on replay.
+            session.error and session.aborted are durable (journaled with a
+            seq) because prompt_async's 202 acknowledges receipt only, so
+            disconnected orchestrators must see terminal outcomes on replay.
+            session.error reports a prompt that failed outright (provider
+            error, transcode failure); session.aborted confirms an
+            orchestrator-requested abort ended the in-flight prompt. Both
+            are followed by a session.status idle transition.
         session_id: { type: string }
         seq:
           type: integer
