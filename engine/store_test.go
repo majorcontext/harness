@@ -66,6 +66,53 @@ func TestPersistRoundTrip(t *testing.T) {
 	}
 }
 
+// TestPersistReasoningEmptyProviderData is the round-2 forensic regression
+// guard reconstructed at the full worker-turn level: a scripted provider
+// producing the exact incident shape — an assistant message whose Reasoning
+// part carries a present-but-zero-length (non-nil) provider_data entry, the
+// map-indirected twin of the ToolCall.Arguments footgun #42 fixed (see
+// message.ProviderData's doc comment) — must not break the turn. Before
+// message.ProviderData grew its MarshalJSON/Get guards, this failed inside
+// engine.Session.append's persistMessage -> json.Marshal(rec) call with
+// exactly "json: error calling MarshalJSON for type json.RawMessage:
+// unexpected end of JSON input", the production error, and (unlike a
+// provider-transcode failure) that particular call site swallows its error
+// into PersistErr rather than returning it from Prompt — which is why this
+// test also asserts PersistErr and a clean reload, not just that Prompt
+// itself succeeds. This exercises the exact path the incident logs show:
+// worker turn -> assemble message -> persist to the session log, no
+// provider or transcoder involved, proving the fix lives at the message
+// layer and protects every producer, not just the shipped providers'
+// currently-safe ones.
+func TestPersistReasoningEmptyProviderData(t *testing.T) {
+	dir := t.TempDir()
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn(provider.StopEndTurn,
+			&message.Reasoning{
+				Text:         "thinking it through",
+				ProviderData: message.ProviderData{"test": json.RawMessage{}},
+			},
+			&message.Text{Text: "done"}),
+	}}
+	cfg := persistCfg(dir, prov)
+	s := NewSession(cfg)
+
+	if _, err := s.Prompt(context.Background(), "go"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if err := s.PersistErr(); err != nil {
+		t.Fatalf("PersistErr = %v, want nil", err)
+	}
+
+	loaded, err := LoadSession(cfg, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if got, want := historyJSON(t, loaded.History()), historyJSON(t, s.History()); got != want {
+		t.Errorf("loaded history = %s\nwant %s", got, want)
+	}
+}
+
 func TestPersistModelChangeReplay(t *testing.T) {
 	dir := t.TempDir()
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
