@@ -308,7 +308,13 @@ components:
           type: string
         role:
           type: string
-          enum: [user, assistant, tool]
+          description: >
+            The message's role, verbatim (string(m.Role) in the handler) —
+            deliberately NOT constrained to the Message.role enum here: this
+            is a degraded-path fallback for a message the server could not
+            even marshal, so it must never itself risk rejecting a value the
+            handler actually produced (e.g. if Role ever gains a new variant
+            before this schema is updated to match).
         marshal_error:
           type: string
           description: The encoding/json error raised while marshaling this message.
