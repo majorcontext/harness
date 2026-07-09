@@ -9,7 +9,14 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+	"time"
 )
+
+// cancelledNotifyTimeout bounds the best-effort notifications/cancelled
+// write sent when a call's context is done. It is deliberately short and
+// detached from the caller's ctx (which is already done) so a peer that
+// stopped reading can't hang this cleanup goroutine indefinitely.
+const cancelledNotifyTimeout = 1 * time.Second
 
 // transport is the abstraction both the stdio and Streamable HTTP
 // transports implement. call sends a request and decodes the peer's
@@ -162,10 +169,21 @@ func (c *conn) call(ctx context.Context, method string, params, result any) erro
 		// cancellation utility. The initialize request MUST NOT be
 		// cancelled per spec; callers are responsible for not cancelling
 		// it (a race is harmless here since it's advisory).
-		_ = c.notify(context.Background(), notificationCancelled, cancelledParams{
-			RequestID: idJSON,
-			Reason:    ctx.Err().Error(),
-		})
+		//
+		// This must never make the already-cancelled/timed-out call wait
+		// any longer: it fires in its own goroutine, bounded by a short
+		// deadline, so a write stuck behind wmu (e.g. a peer that stopped
+		// reading) can't defeat the very timeout/cancellation that
+		// triggered it.
+		reason := ctx.Err().Error()
+		go func() {
+			notifyCtx, cancel := context.WithTimeout(context.Background(), cancelledNotifyTimeout)
+			defer cancel()
+			_ = c.notify(notifyCtx, notificationCancelled, cancelledParams{
+				RequestID: idJSON,
+				Reason:    reason,
+			})
+		}()
 		return ctx.Err()
 	case <-c.closed:
 		return fmt.Errorf("mcp: connection closed: %w", c.closeErr)
