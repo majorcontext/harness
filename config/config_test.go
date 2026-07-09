@@ -50,6 +50,93 @@ func TestLoadBasic(t *testing.T) {
 	}
 }
 
+func TestLoadProviderOpenAICompat(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.json")
+	writeFile(t, p, `{
+		"providers": {
+			"openrouter": {
+				"type": "openai-compat",
+				"base_url": "https://openrouter.ai/api/v1",
+				"api_key_env": "OPENROUTER_API_KEY",
+				"family": "openrouter-quirks",
+				"extra_headers": {"HTTP-Referer": "https://example.com", "X-Title": "harness"}
+			}
+		}
+	}`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	pr, ok := c.Providers["openrouter"]
+	if !ok {
+		t.Fatal("providers.openrouter missing")
+	}
+	if pr.Type != TypeOpenAICompat {
+		t.Errorf("Type = %q, want %q", pr.Type, TypeOpenAICompat)
+	}
+	if pr.BaseURL != "https://openrouter.ai/api/v1" {
+		t.Errorf("BaseURL = %q", pr.BaseURL)
+	}
+	if pr.APIKeyEnv != "OPENROUTER_API_KEY" {
+		t.Errorf("APIKeyEnv = %q", pr.APIKeyEnv)
+	}
+	if pr.Family != "openrouter-quirks" {
+		t.Errorf("Family = %q", pr.Family)
+	}
+	if pr.ExtraHeaders["HTTP-Referer"] != "https://example.com" || pr.ExtraHeaders["X-Title"] != "harness" {
+		t.Errorf("ExtraHeaders = %+v", pr.ExtraHeaders)
+	}
+}
+
+func TestLoadProviderUnknownTypeFails(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.json")
+	writeFile(t, p, `{"providers": {"mystery": {"type": "carrier-pigeon", "base_url": "http://x"}}}`)
+	_, err := Load(p)
+	if err == nil {
+		t.Fatal("Load did not fail on unknown provider type")
+	}
+	if !strings.Contains(err.Error(), "carrier-pigeon") {
+		t.Errorf("error %q does not name the offending type", err)
+	}
+}
+
+func TestLoadProviderOpenAICompatMissingBaseURLFails(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.json")
+	writeFile(t, p, `{"providers": {"ollama": {"type": "openai-compat"}}}`)
+	_, err := Load(p)
+	if err == nil {
+		t.Fatal("Load did not fail on missing base_url for openai-compat")
+	}
+	if !strings.Contains(err.Error(), "base_url") {
+		t.Errorf("error %q does not mention base_url", err)
+	}
+}
+
+func TestMergeProviderExtraHeaders(t *testing.T) {
+	base := &Config{Providers: map[string]Provider{
+		"openrouter": {Type: TypeOpenAICompat, BaseURL: "http://base", ExtraHeaders: map[string]string{"A": "1"}},
+	}}
+	over := &Config{Providers: map[string]Provider{
+		"openrouter": {ExtraHeaders: map[string]string{"B": "2"}},
+	}}
+	merged := merge(base, over)
+	pr := merged.Providers["openrouter"]
+	if pr.BaseURL != "http://base" {
+		t.Errorf("BaseURL = %q, want http://base (unset override field should not clobber)", pr.BaseURL)
+	}
+	if pr.ExtraHeaders["A"] != "1" || pr.ExtraHeaders["B"] != "2" {
+		t.Errorf("ExtraHeaders = %+v, want merged A and B", pr.ExtraHeaders)
+	}
+	// Mutating the merged map must not alias the base config's map.
+	pr.ExtraHeaders["A"] = "mutated"
+	if base.Providers["openrouter"].ExtraHeaders["A"] != "1" {
+		t.Error("merge aliased the base provider's ExtraHeaders map")
+	}
+}
+
 func TestLoadUnknownField(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.json")
 	writeFile(t, p, `{"modle": "typo"}`)

@@ -85,12 +85,39 @@ type PluginSpec struct {
 	Config json.RawMessage `json:"config,omitempty"`
 }
 
+// TypeOpenAICompat selects the generic OpenAI-compatible chat-completions
+// adapter (provider/openaicompat) for a Provider config entry — the wire
+// format spoken by OpenRouter, Ollama, vLLM, and similar deployments. It is
+// the only non-empty Provider.Type value Load accepts today.
+const TypeOpenAICompat = "openai-compat"
+
 // Provider is per-family provider configuration.
 type Provider struct {
+	// Type selects the adapter to build for this entry. Empty (the
+	// default) means a built-in native adapter — anthropic or openai — is
+	// expected, wired directly by name in cmd/harness's registry; those
+	// entries need no Type. TypeOpenAICompat ("openai-compat") builds a
+	// generic provider/openaicompat client instead: the providers map key
+	// becomes the new provider family, routed by the first segment of a
+	// "provider/model" ref exactly like any built-in family. Any other
+	// value fails Load loudly — a typo'd type must not silently produce no
+	// adapter at startup.
+	Type string `json:"type,omitempty"`
 	// APIKeyEnv names the environment variable to read the API key from.
 	APIKeyEnv string `json:"api_key_env,omitempty"`
 	// BaseURL overrides the provider's default API base URL when non-empty.
+	// Required when Type is TypeOpenAICompat — there is no built-in default
+	// base URL for an arbitrary compat entry (the one exception, the
+	// built-in "openrouter" entry, is supplied by cmd/harness, not here).
 	BaseURL string `json:"base_url,omitempty"`
+	// Family overrides the ProviderData tag / wire-quirk key the
+	// openaicompat adapter uses (some deployments need family-specific
+	// transcoding quirks). Only meaningful when Type is TypeOpenAICompat;
+	// defaults to the providers map key when empty.
+	Family string `json:"family,omitempty"`
+	// ExtraHeaders are sent verbatim on every request by the openaicompat
+	// adapter, e.g. OpenRouter's HTTP-Referer/X-Title attribution headers.
+	ExtraHeaders map[string]string `json:"extra_headers,omitempty"`
 }
 
 // Load reads a single config file. A missing file yields a zero-value Config
@@ -117,7 +144,31 @@ func Load(path string) (*Config, error) {
 	if err := validatePlugins(c.Plugins); err != nil {
 		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
 	}
+	if err := validateProviders(c.Providers); err != nil {
+		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
+	}
 	return &c, nil
+}
+
+// validateProviders fails loudly on a providers entry that cannot possibly
+// be wired: an unrecognized Type (a typo must not silently produce no
+// adapter at startup — same philosophy as validatePlugins) or a
+// TypeOpenAICompat entry missing the BaseURL it has no built-in default for.
+func validateProviders(providers map[string]Provider) error {
+	for name, p := range providers {
+		switch p.Type {
+		case "":
+			// Legacy/native provider entry (anthropic, openai, ...); no
+			// further validation here.
+		case TypeOpenAICompat:
+			if p.BaseURL == "" {
+				return fmt.Errorf("providers.%s: base_url is required for type %q", name, TypeOpenAICompat)
+			}
+		default:
+			return fmt.Errorf("providers.%s: unknown type %q", name, p.Type)
+		}
+	}
+	return nil
 }
 
 // validatePlugins fails loudly on a plugin spec that cannot possibly be
@@ -234,14 +285,37 @@ func merge(base, over *Config) *Config {
 		}
 		for k, v := range over.Providers {
 			if ex, ok := m[k]; ok {
+				if v.Type != "" {
+					ex.Type = v.Type
+				}
 				if v.APIKeyEnv != "" {
 					ex.APIKeyEnv = v.APIKeyEnv
 				}
 				if v.BaseURL != "" {
 					ex.BaseURL = v.BaseURL
 				}
+				if v.Family != "" {
+					ex.Family = v.Family
+				}
+				if n := len(ex.ExtraHeaders) + len(v.ExtraHeaders); n > 0 {
+					hm := make(map[string]string, n)
+					for hk, hv := range ex.ExtraHeaders {
+						hm[hk] = hv
+					}
+					for hk, hv := range v.ExtraHeaders {
+						hm[hk] = hv
+					}
+					ex.ExtraHeaders = hm
+				}
 				m[k] = ex
 			} else {
+				if len(v.ExtraHeaders) > 0 {
+					hm := make(map[string]string, len(v.ExtraHeaders))
+					for hk, hv := range v.ExtraHeaders {
+						hm[hk] = hv
+					}
+					v.ExtraHeaders = hm
+				}
 				m[k] = v
 			}
 		}
