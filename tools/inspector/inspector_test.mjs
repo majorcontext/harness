@@ -41,6 +41,7 @@ const {
   maxSeq,
   createSSEParser,
   reduceGoal,
+  goalFromSession,
 } = sandbox;
 
 // collect gathers every frame the parser dispatches for the given chunks.
@@ -115,6 +116,23 @@ test("reduceGoal folds a full goal lifecycle from journal events", () => {
 
   g = reduceGoal(g, { type: "goal.achieved", goal_reason: "done now" });
   assert.deepEqual(plain(g), { condition: "ship it", active: false, achieved: true, reason: "done now" });
+});
+
+test("goalFromSession seeds chip state from the session record", () => {
+  // Bootstrap gap: a goal.set predating connection is never replayed
+  // (stream cursor starts at the global high-water seq), so selecting a
+  // session must seed the chip from its JSON goal field.
+  assert.equal(goalFromSession(null), null);
+  assert.equal(goalFromSession({}), null);
+  assert.equal(goalFromSession({ goal: { active: true } }), null); // no condition
+  assert.deepEqual(
+    plain(goalFromSession({ goal: { condition: "ship", active: true, last_reason: "not yet" } })),
+    { condition: "ship", active: true, achieved: false, reason: "not yet" },
+  );
+  assert.deepEqual(
+    plain(goalFromSession({ goal: { condition: "ship", active: false, achieved: true, last_reason: "done" } })),
+    { condition: "ship", active: false, achieved: true, reason: "done" },
+  );
 });
 
 test("reduceGoal marks a cleared goal inactive without achievement", () => {

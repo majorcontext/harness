@@ -120,6 +120,7 @@ type Server struct {
 type goalTracker struct {
 	condition  string
 	active     bool
+	achieved   bool
 	turns      int
 	lastReason string
 }

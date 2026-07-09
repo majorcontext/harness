@@ -248,6 +248,23 @@ function reduceGoal(prev, ev) {
   return g;
 }
 
+// goalFromSession maps a session JSON's `goal` field into the same
+// goal-summary shape reduceGoal produces. Goal state is otherwise sourced
+// only from the event stream, whose replay cursor starts at the global
+// high-water seq — so a goal.set predating connection is never replayed.
+// Seeding from the session record on select closes that bootstrap gap,
+// exactly as message history is fetched on select rather than replayed.
+function goalFromSession(sess) {
+  const g = sess && sess.goal;
+  if (!g || !g.condition) return null;
+  return {
+    condition: g.condition,
+    active: !!g.active,
+    achieved: !g.active && !!g.achieved,
+    reason: g.last_reason || "",
+  };
+}
+
 /* ---------- SSE frame parser ----------
    Feed it decoded stream text; it invokes onEvent({id, data}) once per complete
    frame (terminated by a blank line). Handles: multi-line data (joined with
@@ -451,11 +468,21 @@ async function selectSession(id) {
   renderTimeline();
   updateComposer();
   try {
-    const resp = await api("GET", "/session/" + id + "/message");
-    if (resp.ok && state.selected === id) {
-      state.messages = await resp.json();
-      renderTimeline();
+    // allSettled, not all: a transient failure of either fetch must not
+    // discard the other's good response.
+    const [msgR, sessR] = await Promise.allSettled([
+      api("GET", "/session/" + id + "/message"),
+      api("GET", "/session/" + id),
+    ]);
+    if (state.selected !== id) return;
+    if (sessR.status === "fulfilled" && sessR.value.ok) {
+      const g = goalFromSession(await sessR.value.json());
+      if (g) state.goals.set(id, g);
     }
+    if (msgR.status === "fulfilled" && msgR.value.ok) {
+      state.messages = await msgR.value.json();
+    }
+    renderTimeline();
   } catch { /* transient; the stream will refill */ }
 }
 
