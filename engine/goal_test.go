@@ -350,6 +350,67 @@ func TestPursueGoalUnparseableTwice(t *testing.T) {
 	}
 }
 
+// TestPursueGoalUnparseableTwiceClearsGoal reproduces the round-3 forensic
+// finding directly (ses_01kx3ts0pjfap950bmr9b2js0b.jsonl): the worker turn
+// succeeds, but the evaluator returns unparseable output twice in a row.
+// Before the fix, PursueGoal returned that error bare and left the goal
+// active forever — turns=0, no goal.eval, nothing durable explaining the
+// silence beyond a single session.error. The evaluator-failure edge must
+// obey the exact same no-zombie guarantee as a permanently failing worker
+// turn: clear the goal, carrying the error as the reason, before returning.
+func TestPursueGoalUnparseableTwiceClearsGoal(t *testing.T) {
+	dir := t.TempDir()
+	prov := &goalProvider{
+		worker: [][]provider.Event{
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "work"}),
+		},
+		eval: [][]provider.Event{
+			evalTurn("I am not sure about this"),
+			evalTurn("still rambling with no verdict"),
+		},
+	}
+	var evs []Event
+	s := goalSession(t, prov, dir)
+	s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
+
+	_, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+	if err == nil {
+		t.Fatal("PursueGoal with two unparseable evaluations succeeded, want error")
+	}
+
+	// No zombie: the goal must no longer be active in memory.
+	if cond, ok := s.ActiveGoal(); ok {
+		t.Fatalf("ActiveGoal = %q, still active after permanent evaluator failure — zombie goal", cond)
+	}
+
+	var sawCleared bool
+	for _, ev := range evs {
+		if ev.Type == EventGoalCleared {
+			sawCleared = true
+			if !strings.Contains(ev.GoalReason, err.Error()) && !strings.Contains(ev.GoalReason, "unparseable") {
+				t.Errorf("goal.cleared GoalReason = %q, want it to carry the evaluator error", ev.GoalReason)
+			}
+		}
+		if ev.Type == EventGoalAchieved {
+			t.Error("goal.achieved emitted after an evaluator failure, want none")
+		}
+	}
+	if !sawCleared {
+		t.Fatal("no goal.cleared event emitted after permanent evaluator failure")
+	}
+
+	// Nor on disk: a resumed session must not see an active goal either —
+	// the exact check that would have caught ses_01kx3ts0pjfap950bmr9b2js0b
+	// staying active forever.
+	loaded, err := LoadSession(s.cfg, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cond, ok := loaded.ActiveGoal(); ok {
+		t.Errorf("resumed ActiveGoal = %q, active after permanent evaluator failure — zombie goal survives reload", cond)
+	}
+}
+
 func TestPursueGoalUnparseableThenRecovers(t *testing.T) {
 	prov := &goalProvider{
 		worker: [][]provider.Event{
