@@ -13,6 +13,48 @@
 // Durable goal.* records land in the session log so a resumed session can tell
 // whether a goal is still active (see store.go, ActiveGoal). The loop also
 // emits goal.* engine events so a server can journal them.
+//
+// # State machine
+//
+// A goal is a single boolean, goalActive, plus its condition string, both
+// guarded by Session.mu (see the Session struct). There are exactly two
+// terminal transitions out of "active" — achieved and cleared — and one
+// transient sub-state, "stalled", that a worker-turn failure passes through
+// on its way to either a retry (back to "active", same turn) or a permanent
+// clear:
+//
+//	          RegisterGoal
+//	               |
+//	               v
+//	+-------- ACTIVE (goal.set) ----------+
+//	|              |                       |
+//	|   worker turn errors                 | evaluator: MET
+//	|              |                       v
+//	|              v                  ACHIEVED (goal.achieved)
+//	|         STALLED (goal.stalled, carries the error)
+//	|              |
+//	|    retries < goalWorkerRetries?
+//	|         /              \
+//	|       yes               no
+//	|        |                 |
+//	+--------+                 v
+//	                      CLEARED (goal.cleared, carries the error reason)
+//	ClearGoal (caller/DELETE) ----------> CLEARED (goal.cleared, no reason)
+//
+// The critical invariant this enforces — the one a real incident violated
+// (see the forensic note below) — is that ACTIVE has no third way out. Every
+// path from ACTIVE terminates in ACHIEVED or CLEARED, both of which are
+// durable, journaled records; there is no path that leaves goalActive true
+// with nothing further ever happening. Before this fix, a worker-turn error
+// (s.Prompt returning non-nil) took a third, undocumented way out: PursueGoal
+// returned the bare error immediately, goalActive stayed true, and nothing
+// was ever recorded to explain why the loop had stopped — a zombie goal,
+// active in the log forever, that only a human noticing the silence could
+// clear. Two production sessions hit exactly this
+// (ses_41813d5a411c2ba5.jsonl, ses_55e4ae35d8344540.jsonl): each died right
+// after a "goal not met" guidance message was appended, mid-turn, with no
+// goal.eval and no error record — the log simply stopped, for hours, until a
+// human forced a goal.cleared. See docs/goal-loop.md for the write-up.
 package engine
 
 import (
@@ -69,6 +111,16 @@ const goalPartCap = 4096
 // cannot be parsed — the loop errors rather than spinning.
 var errEvaluatorUnparseable = errors.New("engine: goal evaluator returned unparseable output twice in a row")
 
+// goalWorkerRetries is how many additional attempts PursueGoal makes on a
+// worker-turn error (s.Prompt failing) before giving up on that turn. A
+// transient provider failure (a rate limit, a momentary 5xx, a hiccup while
+// the model handles a large tool result) is indistinguishable from a
+// permanent one from here, so every worker-turn error gets the same bounded
+// retry — 2 extra attempts, 3 total — rather than deciding "transient" from
+// error text (fragile, provider-specific, and the false negative is a
+// zombie goal, whereas the false positive is at worst two wasted requests).
+const goalWorkerRetries = 2
+
 // PursueGoal runs the goal loop: prompt the condition, then after every turn
 // ask the evaluator whether it is met, feeding the evaluator's reason back as
 // guidance until the condition is met or MaxTurns is exhausted.
@@ -76,8 +128,19 @@ var errEvaluatorUnparseable = errors.New("engine: goal evaluator returned unpars
 // Turn 1 prompts the raw condition as the directive. A NOT MET verdict makes
 // the next directive a fixed-template guidance message carrying the evaluator's
 // reason. Returns Achieved=true on the first MET verdict; Achieved=false with
-// reason "max turns" when the budget runs out. A cancelled context, a provider
-// error, or two unparseable evaluator replies in a row return an error.
+// reason "max turns" when the budget runs out.
+//
+// A worker-turn error (s.Prompt failing) is retried up to goalWorkerRetries
+// times — see promptTurnWithRetry — recording a goal.stalled record for every
+// failed attempt so the session log always explains a pause instead of going
+// silent. If every attempt fails, the goal is cleared (goal.cleared carrying
+// the error as its reason, so no zombie active-goal state survives) and the
+// error is returned. A cancelled context is never retried or treated as a
+// worker failure — it is a deliberate abort (DELETE /goal, shutdown drain)
+// and is returned immediately with the goal left exactly as it was, since a
+// drain must be resumable. Two unparseable evaluator replies in a row also
+// return an error without clearing the goal, since that failure is in the
+// evaluator, not the worker, and the existing goal state is still accurate.
 //
 // Must not be called concurrently with itself or Prompt (it drives Prompt).
 func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOptions) (*GoalResult, error) {
@@ -111,10 +174,25 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			// concurrent DELETE): clean stop, no turn runs.
 			return &GoalResult{Achieved: false, Turns: turn - 1, Reason: "goal cleared"}, nil
 		}
-		if _, err := s.Prompt(ctx, directive); err != nil {
-			// Prompt already emitted session.error for its own failure
-			// (instructions/skills load, or streamTurn) — do not double-emit.
-			return nil, err
+		if err := s.promptTurnWithRetry(ctx, directive, turn); err != nil {
+			if errors.Is(err, context.Canceled) {
+				// Deliberate abort: leave the goal exactly as it is (a
+				// drain must be resumable), no goal.stalled, no clear.
+				return nil, err
+			}
+			if !s.goalActiveWith(condition) {
+				// Cleared concurrently (DELETE /goal) while a retry was in
+				// flight: clean stop, same as the checks above/below.
+				return &GoalResult{Achieved: false, Turns: turn - 1, Reason: "goal cleared"}, nil
+			}
+			// Every attempt failed: this is the fix for the zombie-goal
+			// incident (see the package doc's state machine) — the goal
+			// must never stay active with nothing further recorded. Clear
+			// it, carrying the error as the reason, then return the error
+			// so the caller (e.g. the server) still journals the failure.
+			reason := fmt.Sprintf("worker turn failed after %d attempts: %v", goalWorkerRetries+1, err)
+			s.clearGoal(reason)
+			return nil, fmt.Errorf("engine: goal loop stalled: %w", err)
 		}
 		met, reason, err := s.evaluateGoal(ctx, condition, opts.Evaluator)
 		if err != nil {
@@ -144,6 +222,58 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 	return &GoalResult{Achieved: false, Turns: opts.MaxTurns, Reason: "max turns"}, nil
 }
 
+// promptTurnWithRetry runs one worker turn (s.Prompt), retrying on error up
+// to goalWorkerRetries additional times (goalWorkerRetries+1 attempts total).
+// context.Canceled is never retried — it is a deliberate abort, not a
+// transient failure, and is returned immediately. Every failed attempt is
+// recorded via recordGoalStalled; if that reports the goal was concurrently
+// cleared, retrying stops immediately (nothing left to retry for) and the
+// triggering error is returned as-is.
+//
+// Each retry re-issues the same directive through Prompt, which re-appends it
+// as a fresh user message — Prompt has no partial-turn resume point to retry
+// from below itself, so this is the same "ask again" a human operator would
+// do by hand, just automatic and bounded.
+func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, turn int) error {
+	var err error
+	for attempt := 1; attempt <= goalWorkerRetries+1; attempt++ {
+		_, perr := s.Prompt(ctx, directive)
+		if perr == nil {
+			return nil
+		}
+		err = perr
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
+		if !s.recordGoalStalled(err, turn, attempt) {
+			// Concurrently cleared: stop retrying, nothing left to retry for.
+			return err
+		}
+	}
+	return err
+}
+
+// recordGoalStalled records one failed worker-turn attempt for a turn. Like
+// recordGoalEval, it is a no-op — no journal write, no event — when the goal
+// is no longer active (a concurrent ClearGoal), so a stalled record can never
+// land in the log after goal.cleared. Reports whether the record was
+// written, i.e. whether the goal is still active and retrying is worthwhile.
+func (s *Session) recordGoalStalled(err error, turn, attempt int) bool {
+	s.mu.Lock()
+	if !s.goalActive {
+		s.mu.Unlock()
+		return false
+	}
+	reason := err.Error()
+	s.persistGoalLocked(recGoalStalled, goalRecord{Reason: reason, Turn: turn, Attempt: attempt})
+	// Emit while still holding s.mu (see ClearGoal): keeps event order
+	// matching log order under a concurrent clear. OnEvent must not call
+	// back into this Session — that would deadlock on s.mu, held here.
+	s.emit(Event{Type: EventGoalStalled, GoalReason: reason, GoalTurn: turn, GoalAttempt: attempt})
+	s.mu.Unlock()
+	return true
+}
+
 // ActiveGoal reports the current goal's condition when one is set but not yet
 // achieved or cleared. On a resumed session it reflects the session log's
 // goal.* records (condition only; run counters reset per Claude Code semantics).
@@ -157,7 +287,9 @@ func (s *Session) ActiveGoal() (condition string, ok bool) {
 // ClearGoal cancels an active goal: it writes a durable goal.cleared record,
 // resets the in-memory goal state, and emits a goal.cleared event. It reports
 // whether a goal was active (false is a no-op, so a repeated clear is
-// idempotent).
+// idempotent). This is the caller-initiated clear (DELETE /goal, CLI abort);
+// it carries no reason. See clearGoal for the reason-carrying variant
+// PursueGoal uses when a worker turn fails permanently.
 //
 // Ordering guarantee: ClearGoal journals and emits goal.cleared synchronously,
 // under s.mu, before it returns. A caller that also needs to cancel the loop's
@@ -169,6 +301,16 @@ func (s *Session) ActiveGoal() (condition string, ok bool) {
 // structurally impossible: by the time cancellation can wake the worker,
 // goal.cleared is already durable.
 func (s *Session) ClearGoal() bool {
+	return s.clearGoal("")
+}
+
+// clearGoal is ClearGoal's implementation, parameterized on the reason
+// recorded with goal.cleared. An empty reason (ClearGoal's case) matches the
+// pre-existing on-disk shape exactly (goalRecord.Reason omitempty); a
+// non-empty reason (PursueGoal's permanent-failure case) is what lets a
+// resumed session's log — and a live event subscriber — tell "a caller
+// cancelled this" apart from "the worker kept failing and the loop gave up".
+func (s *Session) clearGoal(reason string) bool {
 	s.mu.Lock()
 	if !s.goalActive {
 		s.mu.Unlock()
@@ -176,13 +318,13 @@ func (s *Session) ClearGoal() bool {
 	}
 	s.goalActive = false
 	s.goalCondition = ""
-	s.persistGoalLocked(recGoalCleared, goalRecord{})
+	s.persistGoalLocked(recGoalCleared, goalRecord{Reason: reason})
 	// Emit while still holding s.mu: this keeps the event stream (-> server
 	// journal/SSE seqs) ordered the same as the log write above under a
 	// concurrent recordGoalEval/achieveGoal race (see those functions).
 	// OnEvent must not call back into this Session — doing so would
 	// deadlock on s.mu, which is still held here.
-	s.emit(Event{Type: EventGoalCleared})
+	s.emit(Event{Type: EventGoalCleared, GoalReason: reason})
 	s.mu.Unlock()
 	return true
 }
