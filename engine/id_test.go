@@ -3,6 +3,7 @@ package engine
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/typeid"
 )
@@ -30,15 +31,66 @@ func TestNewIDGeneratesTypeID(t *testing.T) {
 	}
 }
 
-// TestNewIDIsTimeOrdered checks the bonus property (not a hard requirement,
-// but the whole reason to move to TypeID): two IDs minted back to back sort
-// the same way lexicographically as they were generated, because a TypeID's
-// suffix encodes a UUIDv7 whose leading bits are a millisecond timestamp.
-func TestNewIDIsTimeOrdered(t *testing.T) {
+// TestNewIDIsUniquePrefixedAndParseable checks what two back-to-back newID
+// calls actually guarantee: distinct values, each still bearing the
+// requested prefix and parseable as a TypeID. It does NOT assert ordering —
+// typeid.New cannot guarantee intra-millisecond ordering (its tail bits are
+// crypto/rand, per its doc comment), so two IDs minted back to back within
+// the same millisecond may legitimately sort in either lexical order. The
+// cross-millisecond ordering guarantee typeid.New DOES make is exercised
+// separately by TestNewIDOrderedAcrossMillisecond.
+func TestNewIDIsUniquePrefixedAndParseable(t *testing.T) {
 	a := newID("ses")
 	b := newID("ses")
 	if a == b {
 		t.Fatalf("newID produced a duplicate: %q", a)
+	}
+	for _, id := range []string{a, b} {
+		if !strings.HasPrefix(id, "ses_") {
+			t.Errorf("newID(%q) = %q, want prefix %q", "ses", id, "ses")
+		}
+		if _, err := typeid.Parse(id); err != nil {
+			t.Errorf("typeid.Parse(%q) = %v, want valid TypeID", id, err)
+		}
+	}
+}
+
+// TestNewIDOrderedAcrossMillisecond verifies newID's real, end-to-end
+// cross-millisecond ordering guarantee: two IDs minted in different
+// milliseconds sort lexicographically in timestamp order (typeid.New's doc
+// comment: "IDs generated in different milliseconds always sort in
+// timestamp order"). newID has no injectable clock (it calls typeid.New,
+// which uses the real wall clock), so this test waits for a real
+// millisecond boundary — deterministically, by polling the freshly minted
+// ID's own embedded TypeID timestamp until it advances past the first ID's,
+// never with a raw sleep. The poll is bounded by an explicit deadline so a
+// wedged clock fails the test instead of hanging it.
+func TestNewIDOrderedAcrossMillisecond(t *testing.T) {
+	a := newID("ses")
+	tidA, err := typeid.Parse(a)
+	if err != nil {
+		t.Fatalf("typeid.Parse(%q) = %v", a, err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	var b string
+	var tidB typeid.TypeID
+	for {
+		b = newID("ses")
+		tidB, err = typeid.Parse(b)
+		if err != nil {
+			t.Fatalf("typeid.Parse(%q) = %v", b, err)
+		}
+		if tidB.Time().After(tidA.Time()) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("millisecond never advanced after %v of polling", 5*time.Second)
+		}
+	}
+
+	if !(a < b) {
+		t.Errorf("a, b = %q, %q: want a < b (earlier millisecond must sort first)", a, b)
 	}
 }
 
