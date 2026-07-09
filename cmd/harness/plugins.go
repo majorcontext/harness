@@ -373,7 +373,7 @@ func buildPluginSpecs(ctx context.Context, plugins []config.PluginSpec, cache *p
 // Callers must route the result through pluginHooks rather than assigning it
 // to an engine.Hooks-typed field directly: a typed-nil *plugin.Host in an
 // interface is not a nil interface.
-func buildPluginHost(ctx context.Context, plugins []config.PluginSpec, harnessVersion, workDir string, httpHeaders map[string]string) (*plugin.Host, error) {
+func buildPluginHost(ctx context.Context, plugins []config.PluginSpec, harnessVersion, workDir string, httpHeaders map[string]string, client plugin.ClientAPI, serveURL, runToken string) (*plugin.Host, error) {
 	if len(plugins) == 0 {
 		return nil, nil
 	}
@@ -392,6 +392,9 @@ func buildPluginHost(ctx context.Context, plugins []config.PluginSpec, harnessVe
 		}
 	}
 	return plugin.NewHost(plugin.Options{
+		Client:         client,
+		ServeURL:       serveURL,
+		RunToken:       runToken,
 		HarnessVersion: harnessVersion,
 		WorkspaceDir:   workDir,
 		HTTPHeaders:    httpHeaders,

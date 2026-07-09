@@ -325,7 +325,8 @@ func runCmd(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	host, err := buildPluginHost(ctx, cfg.Plugins, version, workDir, cfg.PluginHTTPHeaders)
+	lateAPI := newLateClientAPI()
+	host, err := buildPluginHost(ctx, cfg.Plugins, version, workDir, cfg.PluginHTTPHeaders, lateAPI, "", "")
 	if err != nil {
 		return err
 	}
@@ -605,7 +606,8 @@ func serveCmd(args []string) error {
 	// closed on exit (deferred before srv's own defer below, so — since
 	// defers unwind LIFO — the host outlives the server's shutdown/drain and
 	// closes only after it, matching a served session's own lifetime).
-	pluginHost, err := buildPluginHost(context.Background(), cfg.Plugins, version, workDir, cfg.PluginHTTPHeaders)
+	lateAPI := newLateClientAPI()
+	pluginHost, err := buildPluginHost(context.Background(), cfg.Plugins, version, workDir, cfg.PluginHTTPHeaders, lateAPI, "http://"+addr, token)
 	if err != nil {
 		return err
 	}
@@ -623,6 +625,10 @@ func serveCmd(args []string) error {
 
 	// The event journal owner needs each engine session to report events to
 	// it, so the session wrappers wire OnEvent to the server's Publish.
+	// host is built just below, once srv exists (its ClientAPI is
+	// server-backed — see server/clientapi.go); mkCfg closes over the srv
+	// variable, so it can reference it before it is assigned — same pattern
+	// as the OnEvent closure above it.
 	var srv *server.Server
 	mkCfg := func(model message.ModelRef) engine.Config {
 		return engine.Config{
@@ -653,6 +659,8 @@ func serveCmd(args []string) error {
 		return err
 	}
 	defer srv.Close()
+
+	lateAPI.Bind(srv.ClientAPI())
 
 	httpSrv := &http.Server{Addr: addr, Handler: srv}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
