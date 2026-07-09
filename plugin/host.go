@@ -163,6 +163,39 @@ func (h *Host) EventsDropped(pluginName string) uint64 {
 	return 0
 }
 
+// NotificationsDropped returns the number of low-level JSON-RPC
+// notifications dropped on pluginName's connection because its receive
+// queue (conn.notifyCh) was saturated when they arrived — see
+// conn.dispatchNotification. Zero for plugins that were never throttled,
+// that don't exist, or whose connection was never started.
+//
+// This stays at zero under normal operation: of the two notification
+// methods this protocol defines, hook/event and shutdown flow from the
+// harness to the plugin, never the other way (see PROTOCOL.md's method
+// tables), so a well-behaved plugin process never sends the harness a
+// notification at all. NotificationsDropped exists as the defensive,
+// symmetric counterpart to EventsDropped anyway: dispatchNotification's
+// non-blocking-send-or-drop rule applies to any conn regardless of which
+// side of the protocol it serves, so even a malformed or adversarial
+// plugin that emits its own notification-shaped messages back at the
+// harness cannot wedge Host's read loop by flooding it — and this makes
+// that fact observable and testable rather than merely asserted.
+func (h *Host) NotificationsDropped(pluginName string) uint64 {
+	for _, inst := range h.instances {
+		if inst.spec.Manifest.Name != pluginName {
+			continue
+		}
+		inst.mu.Lock()
+		c := inst.conn
+		inst.mu.Unlock()
+		if c == nil {
+			return 0
+		}
+		return c.notifyDropped.Load()
+	}
+	return 0
+}
+
 // ChatParams runs the chat.params chain and returns the final params.
 func (h *Host) ChatParams(ctx context.Context, req *ChatParamsRequest) ChatParams {
 	dispatchChain(ctx, h, HookChatParams, req, func(req *ChatParamsRequest, resp *ChatParamsResponse) bool {
