@@ -435,6 +435,51 @@ func TestFirstAppendFileLayout(t *testing.T) {
 	}
 }
 
+// TestListSessionsOrdersByCreatedAtNotID pins the existing ordering rule
+// (created_at, not lexicographic ID) through the switch to TypeID: a legacy
+// "ses_" + hex ID sorts alphabetically before any "ses_..." TypeID (both
+// share the "ses_" prefix, and hex digits sort before TypeID's base32
+// alphabet), so if ListSessions ever regressed to sorting by ID this legacy
+// fixture — despite being created LAST — would wrongly land first. Giving it
+// the latest created_at and asserting it lands last catches that.
+func TestListSessionsOrdersByCreatedAtNotID(t *testing.T) {
+	dir := t.TempDir()
+
+	const legacyID = "ses_0000000000000000" // sorts before any "ses_<base32>..." TypeID
+	legacy := `{"type":"session","id":"` + legacyID + `","created_at":"2030-01-01T00:00:00Z"}
+{"type":"model","model":"test/m1"}
+`
+	if err := os.WriteFile(filepath.Join(dir, legacyID+".jsonl"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "a"}),
+	}}
+	cfg := persistCfg(dir, prov)
+	s := NewSession(cfg)
+	if _, err := s.Prompt(context.Background(), "one"); err != nil {
+		t.Fatal(err)
+	}
+
+	infos, err := ListSessions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 2 {
+		t.Fatalf("ListSessions = %d entries, want 2", len(infos))
+	}
+	if legacyID > s.ID {
+		t.Fatalf("test fixture invalid: legacy ID %q must sort before TypeID %q for this test to be meaningful", legacyID, s.ID)
+	}
+	// created_at order: s (created first, in 2025-ish "now") before the
+	// legacy fixture (stamped 2030), which is the OPPOSITE of ID order.
+	if infos[0].ID != s.ID || infos[1].ID != legacyID {
+		t.Errorf("ListSessions order = [%s, %s], want [%s, %s] (created_at order, not ID order)",
+			infos[0].ID, infos[1].ID, s.ID, legacyID)
+	}
+}
+
 // TestLoadLegacySessionFixture is the RED test for legacy read-compat: a
 // session log written by the pre-TypeID engine (id "ses_" + 16 hex digits,
 // no TypeID in sight) must still LoadSession, appear in ListSessions, and
