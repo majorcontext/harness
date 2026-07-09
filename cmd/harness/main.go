@@ -15,6 +15,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -558,6 +559,28 @@ func providerAuth(cfg *config.Config, family, defaultKeyEnv string) (apiKey, bas
 	return os.Getenv(keyEnv), baseURL
 }
 
+// serveURLForAddr derives the URL plugins should use to reach this
+// process's `harness serve` HTTP API from the -addr flag's listen address.
+// A bind-all address isn't reliably dialable as-is from another process on
+// the same host, so an empty host or an unspecified IP (0.0.0.0 or ::,
+// meaning "listen on every interface") is rewritten to the loopback address
+// 127.0.0.1; any other, explicit host (e.g. localhost, 10.0.0.5) is kept
+// as-is.
+func serveURLForAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		// Not a valid host:port (shouldn't happen for a listen address); fall
+		// back to the previous verbatim behavior.
+		return "http://" + addr
+	}
+	if host == "" {
+		host = "127.0.0.1"
+	} else if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
+}
+
 // serveCmd starts the HTTP+SSE session API. The run token comes from
 // HARNESS_RUN_TOKEN (required); the listener opens at boot, but nothing here
 // touches network egress, spawns processes, or scans beyond the session dir —
@@ -615,7 +638,7 @@ func serveCmd(args []string) error {
 	// defers unwind LIFO — the host outlives the server's shutdown/drain and
 	// closes only after it, matching a served session's own lifetime).
 	lateAPI := newLateClientAPI()
-	pluginHost, err := buildPluginHost(context.Background(), cfg.Plugins, version, workDir, cfg.PluginHTTPHeaders, lateAPI, "http://"+addr, token)
+	pluginHost, err := buildPluginHost(context.Background(), cfg.Plugins, version, workDir, cfg.PluginHTTPHeaders, lateAPI, serveURLForAddr(addr), token)
 	if err != nil {
 		return err
 	}
