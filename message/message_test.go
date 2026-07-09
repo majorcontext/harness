@@ -523,6 +523,85 @@ func TestProviderDataGetOversizedEntryIsAbsent(t *testing.T) {
 	}
 }
 
+// TestToolCallInvalidTruncatedArgumentsMarshal is the defense-in-depth
+// regression guard from the incident behind two production goal sessions,
+// ses_01kx453ewfedqrg7p3c64f8sca and ses_01kx453ev9ejattygpf7rbzptw: both
+// died at the start of a worker turn with "json: error calling MarshalJSON
+// for type json.RawMessage: unexpected end of JSON input", and
+// GET /session/{id}/message on them then 500'd with the message.Parts
+// wrapper of the same error.
+//
+// Every guard here at the time (TestToolCallEmptyArgumentsMarshal,
+// TestReasoningProviderDataEmptyMarshal) special-cased len(Arguments) == 0
+// only. A provider stream that dies mid tool_use block — a dropped
+// connection during input_json_delta accumulation, or (as audited in
+// provider/anthropic/anthropic.go) a max_tokens cutoff mid tool-call, which
+// the Anthropic wire protocol still closes out with a normal
+// content_block_stop/message_delta/message_stop sequence — can leave
+// Arguments non-empty but syntactically invalid (truncated) JSON. That
+// value sails straight past the len==0 guard, and
+// json.RawMessage.MarshalJSON does not validate its bytes at all: the
+// failure only appears once the value is embedded in a larger document and
+// encoding/json compacts it to validate, which is exactly why it looked
+// like two different bugs (a bare marshal "succeeds", the same value one
+// layer deeper fails) before this test pinned both call sites at once.
+//
+// This is the second, independent half of the incident's fix (see
+// TestNormalizeDropsInvalidToolCallArguments for the primary, ingest-time
+// half in Message.Normalize): even if a future producer bypasses Normalize
+// entirely — a plugin's chat.message hook building a Message by hand, a
+// hand-rolled provider adapter, a test's scripted provider — safeArguments
+// itself must never let invalid Arguments reach the encoder.
+func TestToolCallInvalidTruncatedArgumentsMarshal(t *testing.T) {
+	cases := []struct {
+		name string
+		args json.RawMessage
+	}{
+		{"truncated-object", json.RawMessage(`{"command":"echo hel`)},
+		{"truncated-string", json.RawMessage(`{"command":"ls`)},
+		{"lone-open-brace", json.RawMessage(`{`)},
+		{"garbage", json.RawMessage(`not json`)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tc := &ToolCall{CallID: "tc_1", Name: "bash", Arguments: c.args}
+
+			// Bare ToolCall value, as any direct struct field would encode
+			// it (e.g. an event's ToolCall pointer) — this is the shape
+			// that would otherwise marshal "successfully" (RawMessage's own
+			// MarshalJSON does not validate) only to fail once nested.
+			bareRaw, err := json.Marshal(*tc)
+			if err != nil {
+				t.Fatalf("marshal bare ToolCall: %v", err)
+			}
+			if !strings.Contains(string(bareRaw), `"arguments":{}`) {
+				t.Errorf("bare ToolCall arguments = %s, want normalized to {}", bareRaw)
+			}
+
+			// As a Parts element: the tagged-union path every session
+			// message goes through, and the exact nesting (Parts inside a
+			// Message inside a []Message) that turned this into "message:
+			// unexpected end of JSON input" in persistMessage and
+			// "message.Parts: ..." from GET /message.
+			raw, err := json.Marshal(Parts{tc})
+			if err != nil {
+				t.Fatalf("marshal Parts: %v", err)
+			}
+			if !strings.Contains(string(raw), `"arguments":{}`) {
+				t.Errorf("Parts element arguments = %s, want normalized to {}", raw)
+			}
+
+			m := Message{ID: "msg_1", Role: RoleAssistant, Parts: Parts{tc}}
+			if _, err := json.Marshal(m); err != nil {
+				t.Fatalf("marshal message: %v", err)
+			}
+			if _, err := json.Marshal([]Message{m}); err != nil {
+				t.Fatalf("marshal []Message (the /message response shape): %v", err)
+			}
+		})
+	}
+}
+
 // TestNormalizeDropsInvalidToolCallArguments is the primary-fix regression
 // guard for the incident behind two production goal sessions,
 // ses_01kx453ewfedqrg7p3c64f8sca and ses_01kx453ev9ejattygpf7rbzptw: both

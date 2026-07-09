@@ -193,8 +193,24 @@ func (*ToolCall) partType() PartType { return PartToolCall }
 // round-tripped through canonical JSON would carry Arguments: null, which is
 // not a valid tool-call arguments object and does not match what was
 // actually sent on the wire.
+//
+// A non-empty but syntactically invalid Arguments — the truncated-JSON
+// shape a stream that dies mid tool_use block can leave behind (see
+// Message.Normalize's doc comment for the full incident,
+// ses_01kx453ewfedqrg7p3c64f8sca / ses_01kx453ev9ejattygpf7rbzptw) — is
+// normalized the same way as empty: json.RawMessage.MarshalJSON does not
+// validate its bytes either, so an invalid value "succeeds" in isolation and
+// only fails once nested inside a larger document that encoding/json must
+// compact to validate, which is exactly the shape that error took in
+// production. Normalize is the primary fix (it sanitizes at the one ingest
+// choke point every message passes through, replacing invalid Arguments
+// with nil so this branch never even fires for a message that went through
+// it), but safeArguments checks json.Valid here too as defense in depth: a
+// producer that bypasses Normalize entirely — a plugin's chat.message hook
+// building a Message by hand, a hand-rolled provider adapter, a test's
+// scripted provider — must still never be able to make a marshal fail.
 func (tc ToolCall) safeArguments() json.RawMessage {
-	if len(tc.Arguments) == 0 {
+	if len(tc.Arguments) == 0 || !json.Valid(tc.Arguments) {
 		return json.RawMessage("{}")
 	}
 	return tc.Arguments
