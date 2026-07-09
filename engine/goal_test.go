@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,8 +11,27 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/plugin"
 	"github.com/majorcontext/harness/provider"
 )
+
+// sessionErrorMessages returns the message property of every session.error
+// event recorded by hooks, in order.
+func sessionErrorMessages(t *testing.T, hooks *fakeHooks) []string {
+	t.Helper()
+	var msgs []string
+	for _, ev := range hooks.events {
+		if ev.Type != plugin.EventSessionError {
+			continue
+		}
+		var props plugin.SessionErrorProperties
+		if err := json.Unmarshal(ev.Properties, &props); err != nil {
+			t.Fatal(err)
+		}
+		msgs = append(msgs, props.Message)
+	}
+	return msgs
+}
 
 // goalProvider serves both the worker model and the evaluator model from one
 // registry entry. It keys the two apart by the presence of tools: the worker
@@ -57,8 +77,14 @@ func evalTurn(text string) []provider.Event {
 	return []provider.Event{{Type: provider.EventDone, Message: msg, StopReason: provider.StopEndTurn}}
 }
 
-func goalSession(t *testing.T, prov provider.Provider, dir string) *Session {
+// goalSession builds a session for goal-loop tests. An optional Hooks
+// (fakeHooks in practice) may be passed to observe emitted plugin events.
+func goalSession(t *testing.T, prov provider.Provider, dir string, hooks ...Hooks) *Session {
 	t.Helper()
+	var h Hooks
+	if len(hooks) > 0 {
+		h = hooks[0]
+	}
 	return NewSession(Config{
 		Providers:    provider.Registry{prov.Name(): prov},
 		Model:        message.ModelRef{Provider: prov.Name(), Model: "m1"},
@@ -66,6 +92,7 @@ func goalSession(t *testing.T, prov provider.Provider, dir string) *Session {
 		SessionDir:   dir,
 		Instructions: &InstructionsConfig{Disabled: true},
 		SkillsDirs:   []string{},
+		Hooks:        h,
 	})
 }
 
@@ -140,9 +167,34 @@ func TestPursueGoalAchievedSecondTurn(t *testing.T) {
 
 func TestPursueGoalRequiresEvaluator(t *testing.T) {
 	prov := &goalProvider{}
-	s := goalSession(t, prov, t.TempDir())
-	if _, err := s.PursueGoal(context.Background(), "do it", GoalOptions{}); err == nil {
+	hooks := &fakeHooks{}
+	s := goalSession(t, prov, t.TempDir(), hooks)
+	_, err := s.PursueGoal(context.Background(), "do it", GoalOptions{})
+	if err == nil {
 		t.Fatal("PursueGoal with zero evaluator succeeded, want error")
+	}
+	if msgs := sessionErrorMessages(t, hooks); len(msgs) != 1 || msgs[0] != err.Error() {
+		t.Errorf("session.error messages = %v, want [%q]", msgs, err.Error())
+	}
+}
+
+// TestPursueGoalRegisterErrorEmitsSessionError covers the goal-loop-specific
+// error path that never reaches Prompt: RegisterGoal failing because a goal
+// is already active.
+func TestPursueGoalRegisterErrorEmitsSessionError(t *testing.T) {
+	prov := &goalProvider{}
+	hooks := &fakeHooks{}
+	s := goalSession(t, prov, t.TempDir(), hooks)
+	if err := s.RegisterGoal("already running"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := s.PursueGoal(context.Background(), "do it", GoalOptions{Evaluator: evalModel})
+	if err == nil {
+		t.Fatal("PursueGoal with a goal already active succeeded, want error")
+	}
+	if msgs := sessionErrorMessages(t, hooks); len(msgs) != 1 || msgs[0] != err.Error() {
+		t.Errorf("session.error messages = %v, want [%q]", msgs, err.Error())
 	}
 }
 
@@ -184,9 +236,17 @@ func TestPursueGoalUnparseableTwice(t *testing.T) {
 			evalTurn("still rambling with no verdict"),
 		},
 	}
-	s := goalSession(t, prov, t.TempDir())
-	if _, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel}); err == nil {
+	hooks := &fakeHooks{}
+	s := goalSession(t, prov, t.TempDir(), hooks)
+	_, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+	if err == nil {
 		t.Fatal("PursueGoal with two unparseable evaluations succeeded, want error")
+	}
+	// The worker turn (Prompt) succeeded; the error comes from evaluateGoal,
+	// a goal-loop-specific error path that never goes through Prompt's own
+	// session.error emission. Exactly one session.error, for this error.
+	if msgs := sessionErrorMessages(t, hooks); len(msgs) != 1 || msgs[0] != err.Error() {
+		t.Errorf("session.error messages = %v, want [%q]", msgs, err.Error())
 	}
 }
 
@@ -218,12 +278,19 @@ func TestPursueGoalContextCancel(t *testing.T) {
 		},
 		eval: [][]provider.Event{evalTurn("MET: fine")},
 	}
-	s := goalSession(t, prov, t.TempDir())
+	hooks := &fakeHooks{}
+	s := goalSession(t, prov, t.TempDir(), hooks)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := s.PursueGoal(ctx, "cond", GoalOptions{Evaluator: evalModel})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	// This error surfaces from within Prompt's own streamTurn, which already
+	// emits session.error itself — the goal loop must not double-emit for an
+	// error it merely propagated from Prompt.
+	if msgs := sessionErrorMessages(t, hooks); len(msgs) != 1 || msgs[0] != err.Error() {
+		t.Errorf("session.error messages = %v, want exactly [%q]", msgs, err.Error())
 	}
 }
 
