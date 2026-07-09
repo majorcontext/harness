@@ -61,6 +61,37 @@ type Config struct {
 	// (plugin.Options.HTTPHeaders, e.g. workspace attribution). Maps merge
 	// key by key in the project-config merge, like Aliases and Providers.
 	PluginHTTPHeaders map[string]string `json:"plugin_http_headers,omitempty"`
+	// MCPServers declares named MCP servers the engine connects to (lazily,
+	// on first use) and registers as namespaced tools (mcp__<server>__<tool>,
+	// the Claude Code convention — see package engine). Keyed by server name;
+	// a nil (omitted) value configures no MCP servers. In the project-config
+	// merge, keys merge like Providers/Aliases (new keys from either layer
+	// are kept) but a same-name project entry replaces the user entry
+	// wholesale (see merge) — MCPServerSpec's Command/Env/Headers slices
+	// make field-by-field merging (as Provider gets) more confusing than
+	// useful here.
+	MCPServers map[string]MCPServerSpec `json:"mcp_servers,omitempty"`
+}
+
+// MCPServerSpec configures one MCP server (package mcp's client, wired by
+// package engine). Exactly one of Command (a stdio server: argv, env,
+// working directory) or URL (a Streamable HTTP server: endpoint, headers)
+// must be set — validateMCPServers rejects an entry with neither or both,
+// the same "cannot possibly be wired" philosophy as validatePlugins.
+type MCPServerSpec struct {
+	// Command is the argv of a stdio MCP server process; Command[0] is
+	// resolved via PATH like any exec.
+	Command []string `json:"command,omitempty"`
+	// Env is appended to the harness environment when the stdio server is
+	// spawned.
+	Env []string `json:"env,omitempty"`
+	// Dir is the stdio server process's working directory.
+	Dir string `json:"dir,omitempty"`
+	// URL is a Streamable HTTP MCP server's endpoint.
+	URL string `json:"url,omitempty"`
+	// Headers are static headers sent on every request to a Streamable
+	// HTTP server, e.g. {"Authorization": "Bearer <token>"}.
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // PluginSpec configures one plugin process, loaded verbatim into a
@@ -241,6 +272,9 @@ func Load(path string) (*Config, error) {
 	if err := validatePlugins(c.Plugins); err != nil {
 		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
 	}
+	if err := validateMCPServers(c.MCPServers); err != nil {
+		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
+	}
 	return &c, nil
 }
 
@@ -292,6 +326,49 @@ func validatePlugins(plugins []PluginSpec) error {
 			return fmt.Errorf("plugins[%d]: duplicate plugin name %q", i, p.Name)
 		}
 		seen[p.Name] = true
+	}
+	return nil
+}
+
+// validateMCPServers fails loudly on an MCP server entry that cannot
+// possibly be wired: exactly one of Command (stdio) or URL (Streamable
+// HTTP) must be set, and the map key naming it must be non-empty (it is
+// both the tool-namespace segment — mcp__<name>__<tool> — and, like a
+// plugin's Name, the identity a caller would use to refer to the server).
+// A silently-skipped malformed entry would run without the server its
+// author expected — same philosophy as validatePlugins.
+//
+// The server name also must not contain "__" or start with "mcp__": the
+// namespaced tool name engine/mcp.go builds is mcp__<server>__<tool>, and
+// that encoding is only uniquely decodable back into (server, tool) if
+// "__" cannot occur inside server. Without this check, server "a__b" tool
+// "c" and server "a" tool "b__c" both produce the identical namespaced
+// name mcp__a__b__c — two unrelated servers' tools silently colliding and
+// becoming indistinguishable at call time. Rejecting "mcp__" as a prefix
+// closes the same hole from the other end (server "mcp__weather" would
+// itself already contain "__" and be caught by that check, but a bare
+// "mcp" server with an empty-string-shaped remainder is worth naming
+// explicitly since "mcp__" is the literal namespace prefix a config
+// author could plausibly type by mistake).
+func validateMCPServers(servers map[string]MCPServerSpec) error {
+	for name, s := range servers {
+		if name == "" {
+			return fmt.Errorf("mcp_servers: server name is required (empty key)")
+		}
+		if strings.Contains(name, "__") {
+			return fmt.Errorf("mcp_servers.%s: server name must not contain \"__\" (the namespaced tool name mcp__<server>__<tool> would not be uniquely decodable)", name)
+		}
+		if strings.HasPrefix(name, "mcp__") {
+			return fmt.Errorf("mcp_servers.%s: server name must not start with \"mcp__\" (reserved for the tool-namespace prefix)", name)
+		}
+		hasCommand := len(s.Command) > 0
+		hasURL := s.URL != ""
+		switch {
+		case !hasCommand && !hasURL:
+			return fmt.Errorf("mcp_servers.%s: exactly one of command (stdio) or url (streamable HTTP) is required", name)
+		case hasCommand && hasURL:
+			return fmt.Errorf("mcp_servers.%s: command and url are mutually exclusive", name)
+		}
 	}
 	return nil
 }
@@ -481,7 +558,42 @@ func merge(base, over *Config) *Config {
 	} else {
 		out.PluginHTTPHeaders = nil
 	}
+	if n := len(base.MCPServers) + len(over.MCPServers); n > 0 {
+		m := make(map[string]MCPServerSpec, n)
+		for k, v := range base.MCPServers {
+			m[k] = copyMCPServerSpec(v)
+		}
+		for k, v := range over.MCPServers {
+			// A same-name project entry replaces the user entry wholesale
+			// (see the MCPServers field doc) rather than merging field by
+			// field.
+			m[k] = copyMCPServerSpec(v)
+		}
+		out.MCPServers = m
+	} else {
+		out.MCPServers = nil
+	}
 	return &out
+}
+
+// copyMCPServerSpec deep-copies s's slice/map fields so a merged config
+// never aliases either input layer's — mutating the merged result must not
+// be able to corrupt base or over.
+func copyMCPServerSpec(s MCPServerSpec) MCPServerSpec {
+	if len(s.Command) > 0 {
+		s.Command = append([]string(nil), s.Command...)
+	}
+	if len(s.Env) > 0 {
+		s.Env = append([]string(nil), s.Env...)
+	}
+	if len(s.Headers) > 0 {
+		hm := make(map[string]string, len(s.Headers))
+		for k, v := range s.Headers {
+			hm[k] = v
+		}
+		s.Headers = hm
+	}
+	return s
 }
 
 // ResolveModel turns a model string into a ModelRef. An empty string falls

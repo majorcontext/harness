@@ -79,10 +79,16 @@ list for any session the harness process owns (live or reloaded from disk
 in serve mode; the one in-flight session in run mode). An unknown session
 id is an RPC error, never an empty/silent success.
 
-`client/mcp.call` and `client/generate` are wired into the dispatch path and
-type-check end to end, but neither is implemented yet: both return a clear
-RPC error (not a panic, not a silently empty result) until MCP engine
-integration and provider-layer routing land, in separate PRs.
+`client/mcp.call` routes to the harness's configured `mcp_servers` (see the
+config package doc and engine/mcp.go): `Server` names one of them, `Tool` is
+the tool's unnamespaced name on that server (not the
+`mcp__<server>__<tool>` form a model-issued tool call uses). It reaches the
+exact same connected MCP clients the engine's own namespaced tool calls
+use. An unconfigured or connection-failed server is a clear RPC error, not
+a panic or a silently empty result. `client/generate` is wired into the
+dispatch path and type-checks end to end, but is not implemented yet:
+provider-layer routing for plugin-initiated LLM calls is a separate PR, and
+it returns a clear RPC error until then.
 
 Any language implementing this protocol (the Go SDK in this package, a
 future TypeScript SDK, etc.) gets `serve_url`/`run_token` for free once it

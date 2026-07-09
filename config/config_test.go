@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -824,4 +825,155 @@ func TestMergePluginHTTPHeaders(t *testing.T) {
 	if merged.PluginHTTPHeaders["X-A"] != "1" || merged.PluginHTTPHeaders["X-B"] != "override" {
 		t.Errorf("merged PluginHTTPHeaders = %v", merged.PluginHTTPHeaders)
 	}
+}
+
+func TestLoadMCPServers(t *testing.T) {
+	t.Run("stdio and http parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {
+			"fs": {"command": ["mcp-fs", "--root", "/tmp"], "env": ["A=1"], "dir": "/tmp"},
+			"weather": {"url": "https://weather.example/mcp", "headers": {"Authorization": "Bearer tok"}}
+		}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if len(c.MCPServers) != 2 {
+			t.Fatalf("MCPServers = %+v, want 2 entries", c.MCPServers)
+		}
+		fs := c.MCPServers["fs"]
+		if len(fs.Command) != 3 || fs.Command[0] != "mcp-fs" {
+			t.Errorf("fs.Command = %+v", fs.Command)
+		}
+		if len(fs.Env) != 1 || fs.Env[0] != "A=1" || fs.Dir != "/tmp" {
+			t.Errorf("fs env/dir = %+v", fs)
+		}
+		weather := c.MCPServers["weather"]
+		if weather.URL != "https://weather.example/mcp" {
+			t.Errorf("weather.URL = %q", weather.URL)
+		}
+		if weather.Headers["Authorization"] != "Bearer tok" {
+			t.Errorf("weather.Headers = %v", weather.Headers)
+		}
+	})
+	t.Run("unset leaves nil", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.MCPServers != nil {
+			t.Errorf("MCPServers = %v, want nil (unset)", c.MCPServers)
+		}
+	})
+	t.Run("neither command nor url fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {"bad": {}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for mcp server with neither command nor url")
+		}
+		if !strings.Contains(err.Error(), "bad") {
+			t.Errorf("error %q does not name the offending key", err)
+		}
+	})
+	t.Run("both command and url fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {"bad": {"command": ["x"], "url": "https://x"}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for mcp server with both command and url")
+		}
+	})
+	t.Run("empty name key fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {"": {"command": ["x"]}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for empty mcp server name")
+		}
+	})
+	t.Run("malformed entry fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {"bad": {"command": "not-an-array"}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for malformed mcp server command")
+		}
+	})
+	// A namespaced tool name is mcp__<server>__<tool>. If a server name may
+	// itself contain "__" or start with "mcp__", the encoding is not
+	// uniquely decodable: server "a__b" tool "c" produces the exact same
+	// namespaced name, mcp__a__b__c, as server "a" tool "b__c" — two
+	// entirely different servers' tools would collide and be
+	// indistinguishable. Reject both shapes at load, loudly, rather than
+	// let two configs silently alias each other's tools.
+	for _, tc := range []struct {
+		name   string
+		server string
+	}{
+		{"double underscore in the middle", "a__b"},
+		{"double underscore at the end", "svc__"},
+		{"double underscore at the start", "__svc"},
+		{"starts with mcp__", "mcp__weather"},
+		{"exactly mcp__", "mcp__"},
+	} {
+		t.Run(tc.name+" fails loudly", func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "config.json")
+			writeFile(t, p, fmt.Sprintf(`{"mcp_servers": {%q: {"command": ["x"]}}}`, tc.server))
+			_, err := Load(p)
+			if err == nil {
+				t.Fatalf("expected error for mcp server name %q (undecodable namespaced tool name)", tc.server)
+			}
+			if !strings.Contains(err.Error(), tc.server) {
+				t.Errorf("error %q does not name the offending key %q", err, tc.server)
+			}
+		})
+	}
+	t.Run("single underscore is fine", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {"my_server": {"command": ["x"]}}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v, want a single underscore to be accepted", err)
+		}
+		if _, ok := c.MCPServers["my_server"]; !ok {
+			t.Errorf("MCPServers = %+v, want my_server present", c.MCPServers)
+		}
+	})
+}
+
+func TestMergeMCPServers(t *testing.T) {
+	t.Run("keys merge, project entry replaces same-name user entry wholesale", func(t *testing.T) {
+		base := &Config{MCPServers: map[string]MCPServerSpec{
+			"fs": {Command: []string{"user-fs"}},
+			"gh": {URL: "https://user.example/mcp"},
+		}}
+		over := &Config{MCPServers: map[string]MCPServerSpec{
+			"fs": {Command: []string{"proj-fs", "--flag"}},
+		}}
+		merged := merge(base, over)
+		if len(merged.MCPServers) != 2 {
+			t.Fatalf("merged MCPServers = %+v, want 2 entries", merged.MCPServers)
+		}
+		if fs := merged.MCPServers["fs"]; len(fs.Command) != 2 || fs.Command[0] != "proj-fs" {
+			t.Errorf("merged fs = %+v, want project's entry", fs)
+		}
+		if gh := merged.MCPServers["gh"]; gh.URL != "https://user.example/mcp" {
+			t.Errorf("merged gh = %+v, want inherited user entry", gh)
+		}
+		// Mutating the merged map/slices must not alias the inputs.
+		merged.MCPServers["fs"].Command[0] = "mutated"
+		if base.MCPServers["fs"].Command[0] == "mutated" {
+			t.Error("merge aliased base's MCPServers slice")
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{MCPServers: map[string]MCPServerSpec{"fs": {Command: []string{"a"}}}}
+		merged := merge(base, &Config{})
+		if len(merged.MCPServers) != 1 {
+			t.Errorf("merged MCPServers = %+v, want inherited", merged.MCPServers)
+		}
+	})
 }

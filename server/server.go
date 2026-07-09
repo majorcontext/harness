@@ -94,6 +94,15 @@ type Options struct {
 	// achieveGoal/ClearGoal emit under Session.mu). Logging or forwarding to an
 	// external sink is the intended use.
 	OnError func(context.Context, error)
+	// MCP is the MCP client integration shared by every session this server
+	// hosts (see engine.MCPRegistry): it is the same *engine.MCPManager the
+	// NewSession/LoadSession wrapper wires into each session's
+	// engine.Config.MCP, injected here too so ClientAPI.MCPCall (a
+	// plugin-initiated client/mcp.call, which names a server and tool
+	// directly rather than a session) reaches the exact same connected
+	// clients without needing a session lookup. Nil disables MCP entirely
+	// for plugin calls, matching a nil engine.Config.MCP.
+	MCP engine.MCPRegistry
 }
 
 // Server implements http.Handler for the harness serve API.
