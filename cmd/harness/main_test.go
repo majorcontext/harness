@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +19,7 @@ import (
 	"github.com/majorcontext/harness/provider"
 	"github.com/majorcontext/harness/provider/anthropic"
 	"github.com/majorcontext/harness/provider/openai"
+	"github.com/majorcontext/harness/provider/openaicompat"
 )
 
 func TestSessionDir(t *testing.T) {
@@ -459,6 +462,140 @@ func TestRegistry(t *testing.T) {
 			t.Errorf("APIKey = %q, want sk-nil", c.APIKey)
 		}
 	})
+	t.Run("openai-compat entry builds a named provider", func(t *testing.T) {
+		t.Setenv("MY_COMPAT_KEY", "sk-compat")
+		reg := registry(&config.Config{Providers: map[string]config.Provider{
+			"mycompat": {
+				Type:         config.TypeOpenAICompat,
+				BaseURL:      "http://compat.example",
+				APIKeyEnv:    "MY_COMPAT_KEY",
+				Family:       "mycompat-quirks",
+				ExtraHeaders: map[string]string{"X-Extra": "yes"},
+			},
+		}})
+		c, ok := reg["mycompat"].(*openaicompat.Client)
+		if !ok {
+			t.Fatalf("mycompat provider is %T, want *openaicompat.Client", reg["mycompat"])
+		}
+		if c.Family != "mycompat-quirks" {
+			t.Errorf("Family = %q, want mycompat-quirks", c.Family)
+		}
+		if c.APIKey != "sk-compat" {
+			t.Errorf("APIKey = %q, want sk-compat", c.APIKey)
+		}
+		if c.BaseURL != "http://compat.example" {
+			t.Errorf("BaseURL = %q, want http://compat.example", c.BaseURL)
+		}
+		if c.ExtraHeaders["X-Extra"] != "yes" {
+			t.Errorf("ExtraHeaders = %+v, want X-Extra=yes", c.ExtraHeaders)
+		}
+	})
+	t.Run("default openrouter registered when absent from config", func(t *testing.T) {
+		t.Setenv("OPENROUTER_API_KEY", "sk-or-default")
+		reg := registry(&config.Config{})
+		c, ok := reg["openrouter"].(*openaicompat.Client)
+		if !ok {
+			t.Fatalf("openrouter provider is %T, want *openaicompat.Client", reg["openrouter"])
+		}
+		if c.Family != "openrouter" {
+			t.Errorf("Family = %q, want openrouter", c.Family)
+		}
+		if c.BaseURL != "https://openrouter.ai/api/v1" {
+			t.Errorf("BaseURL = %q, want https://openrouter.ai/api/v1", c.BaseURL)
+		}
+		if c.APIKey != "sk-or-default" {
+			t.Errorf("APIKey = %q, want sk-or-default", c.APIKey)
+		}
+	})
+	t.Run("default openrouter registered for nil config", func(t *testing.T) {
+		reg := registry(nil)
+		if _, ok := reg["openrouter"].(*openaicompat.Client); !ok {
+			t.Fatalf("openrouter provider is %T, want *openaicompat.Client", reg["openrouter"])
+		}
+	})
+	t.Run("config overrides the default openrouter entry", func(t *testing.T) {
+		t.Setenv("CUSTOM_OR_KEY", "sk-custom-or")
+		reg := registry(&config.Config{Providers: map[string]config.Provider{
+			"openrouter": {
+				Type:      config.TypeOpenAICompat,
+				BaseURL:   "http://openrouter.proxy.internal",
+				APIKeyEnv: "CUSTOM_OR_KEY",
+			},
+		}})
+		c := reg["openrouter"].(*openaicompat.Client)
+		if c.BaseURL != "http://openrouter.proxy.internal" {
+			t.Errorf("BaseURL = %q, want overridden value", c.BaseURL)
+		}
+		if c.APIKey != "sk-custom-or" {
+			t.Errorf("APIKey = %q, want sk-custom-or", c.APIKey)
+		}
+	})
+}
+
+// TestRegistryOpenAICompatHitsConfiguredBaseURL proves a config-declared
+// openai-compat entry resolves a ModelRef through the registry and actually
+// talks to its configured base URL — with the auth header derived from the
+// configured env var and any extra_headers attached.
+func TestRegistryOpenAICompatHitsConfiguredBaseURL(t *testing.T) {
+	var gotAuth, gotReferer, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotReferer = r.Header.Get("HTTP-Referer")
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"id\":\"x\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	t.Setenv("FAKE_PROVIDER_KEY", "sk-fake-123")
+	cfg := &config.Config{Providers: map[string]config.Provider{
+		"fakecompat": {
+			Type:         config.TypeOpenAICompat,
+			BaseURL:      srv.URL,
+			APIKeyEnv:    "FAKE_PROVIDER_KEY",
+			ExtraHeaders: map[string]string{"HTTP-Referer": "https://harness.example"},
+		},
+	}}
+	reg := registry(cfg)
+
+	ref, err := message.ParseModelRef("fakecompat/some-model")
+	if err != nil {
+		t.Fatalf("ParseModelRef: %v", err)
+	}
+	p, err := reg.For(ref)
+	if err != nil {
+		t.Fatalf("reg.For: %v", err)
+	}
+	stream, err := p.Stream(context.Background(), &provider.Request{
+		Model: ref,
+		Messages: []message.Message{
+			{ID: "msg_1", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hello"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer stream.Close()
+	for {
+		_, err := stream.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next: %v", err)
+		}
+	}
+
+	if gotPath != "/chat/completions" {
+		t.Errorf("path = %q, want /chat/completions", gotPath)
+	}
+	if gotAuth != "Bearer sk-fake-123" {
+		t.Errorf("Authorization = %q, want Bearer sk-fake-123", gotAuth)
+	}
+	if gotReferer != "https://harness.example" {
+		t.Errorf("HTTP-Referer = %q, want https://harness.example", gotReferer)
+	}
 }
 
 // scriptedProvider returns one pre-built assistant turn per call and records
