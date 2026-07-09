@@ -125,12 +125,35 @@ var nativeDefaultProviders = map[string]Provider{
 	},
 }
 
-// applyProviderDefaults fills empty fields of any nativeDefaultProviders
-// entry present in providers from the built-in default, in place. It must
-// run on the fully merged config, after layering user and project files
-// together and before validateProviders — a per-layer entry (e.g. a
-// project override naming only api_key_env) is not itself a complete
-// entry, but the merged result must be.
+// EnsureProviderDefaults fills empty fields of any nativeDefaultProviders
+// entry present in providers (in place) from the built-in default — the
+// same defaulting mergeAndValidate applies to every *Config LoadProject
+// returns, exported here so a caller that builds providers by some other
+// route (a hand-built *Config in a test, an embedder that skips
+// LoadProject) can apply the identical guarantee itself.
+//
+// It is idempotent: every field it sets is only set when empty, so calling
+// it twice, or calling it on a map LoadProject already defaulted, is a
+// no-op the second time. That idempotence is what makes it safe to use
+// defensively — e.g. cmd/harness's registry() calls this on cfg.Providers
+// before building provider clients, so a minimal {"openrouter": {...}}
+// entry resolves to the same adapter whether or not the *Config in hand
+// ever passed through LoadProject. Without that call, registry() would
+// instead silently depend on its caller already having run this — an
+// init-order dependency that fails by producing no adapter at all rather
+// than an error, exactly the failure mode this package's provider
+// validation otherwise refuses to allow (see validateProviders).
+func EnsureProviderDefaults(providers map[string]Provider) {
+	applyProviderDefaults(providers)
+}
+
+// applyProviderDefaults is EnsureProviderDefaults' unexported
+// implementation, shared by mergeAndValidate (the load-path choke point)
+// and EnsureProviderDefaults (the defensive entry point for callers that
+// bypass it). It must run on the fully merged config, after layering user
+// and project files together and before validateProviders — a per-layer
+// entry (e.g. a project override naming only api_key_env) is not itself a
+// complete entry, but the merged result must be.
 func applyProviderDefaults(providers map[string]Provider) {
 	for name, def := range nativeDefaultProviders {
 		p, ok := providers[name]

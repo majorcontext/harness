@@ -452,7 +452,19 @@ func loadConfig() (*config.Config, error) {
 // providers entry with type "openai-compat" needs no code at all — see
 // registerOpenAICompatProviders — and OpenRouter itself needs no config
 // entry either, see ensureDefaultOpenRouter.
+//
+// registry does not assume cfg came from config.LoadProject (the load path
+// that guarantees nativeDefaultProviders fields are filled in — see
+// config.EnsureProviderDefaults): it calls EnsureProviderDefaults itself
+// first, idempotently, so a hand-built *config.Config (as tests use, and
+// any future embedder that skips LoadProject might too) resolves a minimal
+// {"openrouter": {"api_key_env": "..."}} entry identically to one that went
+// through the full config-loading choke point, rather than silently
+// registering no adapter for it at all.
 func registry(cfg *config.Config) provider.Registry {
+	if cfg != nil {
+		config.EnsureProviderDefaults(cfg.Providers)
+	}
 	akey, abase := providerAuth(cfg, anthropic.Family, "ANTHROPIC_API_KEY")
 	okey, obase := providerAuth(cfg, openai.Family, "OPENAI_API_KEY")
 	reg := provider.Registry{

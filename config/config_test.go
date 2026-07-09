@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -188,6 +189,36 @@ func TestProviderNativeDefaultKeyOnlyOverride(t *testing.T) {
 	}
 	if pr.APIKeyEnv != "MY_OPENROUTER_KEY" {
 		t.Errorf("APIKeyEnv = %q, want the entry's own override", pr.APIKeyEnv)
+	}
+}
+
+// TestEnsureProviderDefaultsIdempotent covers the exported defensive entry
+// point: calling it once on a raw providers map (never merged through
+// LoadProject) yields the same result as mergeAndValidate's own call, and
+// calling it a second time on an already-defaulted map changes nothing —
+// the property that makes it safe for a caller like cmd/harness's
+// registry() to call unconditionally, regardless of how its *Config was
+// built.
+func TestEnsureProviderDefaultsIdempotent(t *testing.T) {
+	providers := map[string]Provider{
+		"openrouter": {APIKeyEnv: "MY_OPENROUTER_KEY"},
+	}
+	EnsureProviderDefaults(providers)
+	pr := providers["openrouter"]
+	if pr.Type != TypeOpenAICompat {
+		t.Errorf("Type = %q, want inherited %q", pr.Type, TypeOpenAICompat)
+	}
+	if pr.BaseURL != nativeDefaultProviders["openrouter"].BaseURL {
+		t.Errorf("BaseURL = %q, want inherited default", pr.BaseURL)
+	}
+	if pr.APIKeyEnv != "MY_OPENROUTER_KEY" {
+		t.Errorf("APIKeyEnv = %q, want preserved override", pr.APIKeyEnv)
+	}
+
+	before := providers["openrouter"]
+	EnsureProviderDefaults(providers)
+	if after := providers["openrouter"]; !reflect.DeepEqual(after, before) {
+		t.Errorf("second call changed the entry: before %+v, after %+v", before, after)
 	}
 }
 

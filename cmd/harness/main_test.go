@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -528,6 +529,44 @@ func TestRegistry(t *testing.T) {
 		}
 		if c.APIKey != "sk-custom-or" {
 			t.Errorf("APIKey = %q, want sk-custom-or", c.APIKey)
+		}
+	})
+	t.Run("minimal openrouter entry resolves identically without pre-applied defaults", func(t *testing.T) {
+		// registry() must not silently depend on its caller (e.g.
+		// config.LoadProject) already having run applyProviderDefaults on
+		// cfg — a *config.Config built by hand, with a minimal openrouter
+		// entry that leaves Type/BaseURL empty, must wire the exact same
+		// adapter registry() would build from the fully-defaulted
+		// equivalent, never a silently missing "openrouter" key.
+		t.Setenv("CUSTOM_OR_KEY", "sk-custom-or")
+		raw := &config.Config{Providers: map[string]config.Provider{
+			"openrouter": {APIKeyEnv: "CUSTOM_OR_KEY"},
+		}}
+		reg := registry(raw)
+		c, ok := reg["openrouter"].(*openaicompat.Client)
+		if !ok {
+			t.Fatalf("openrouter provider is %T, want *openaicompat.Client (silently misregistered)", reg["openrouter"])
+		}
+		if c.BaseURL != "https://openrouter.ai/api/v1" {
+			t.Errorf("BaseURL = %q, want the default OpenRouter base URL", c.BaseURL)
+		}
+		if c.Family != "openrouter" {
+			t.Errorf("Family = %q, want openrouter", c.Family)
+		}
+		if c.APIKey != "sk-custom-or" {
+			t.Errorf("APIKey = %q, want sk-custom-or", c.APIKey)
+		}
+
+		// And confirm it's identical to the pre-defaulted case, not a
+		// coincidentally-equal one-off.
+		defaulted := &config.Config{Providers: map[string]config.Provider{
+			"openrouter": {APIKeyEnv: "CUSTOM_OR_KEY"},
+		}}
+		config.EnsureProviderDefaults(defaulted.Providers)
+		want := registry(defaulted)["openrouter"].(*openaicompat.Client)
+		want.HTTPClient, c.HTTPClient = nil, nil // both default to http.DefaultClient; not comparable/meaningful here
+		if !reflect.DeepEqual(c, want) {
+			t.Errorf("registry(raw) openrouter = %+v, want %+v (identical to pre-defaulted)", c, want)
 		}
 	})
 	t.Run("a valid non-openrouter key does not suppress the openrouter default", func(t *testing.T) {
