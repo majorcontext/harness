@@ -164,6 +164,30 @@ components:
         it over this field alone when inferring whether a session is
         actually available for a new interaction.
 
+    StatusEntry:
+      type: object
+      description: >
+        One session's entry in the GET /session/status map. The "type" key is
+        deliberately byte-compatible with opencode's /session/status response
+        shape (existing orchestration handlers port without parsing changes);
+        "state" is additive — see SessionState for its precedence rule.
+      required: [type, state]
+      properties:
+        type:
+          $ref: "#/components/schemas/SessionStatus"
+        state:
+          $ref: "#/components/schemas/SessionState"
+
+    StatusResponse:
+      type: object
+      description: >
+        GET /session/status's body: every known session ID mapped to its
+        StatusEntry. Unlike opencode's endpoint of the same name, this
+        reflects engine state for every known session, resident or not —
+        it does not depend on any client being connected.
+      additionalProperties:
+        $ref: "#/components/schemas/StatusEntry"
+
     WaitResponse:
       type: object
       description: >
@@ -736,22 +760,7 @@ paths:
           description: OK
           content:
             application/json:
-              schema:
-                type: object
-                description: >
-                  Values are deliberately wrapped as {"type": <status>,
-                  "state": <state>} — the "type" key is byte-compatible with
-                  opencode's /session/status response shape, so existing
-                  orchestration handlers port without parsing changes;
-                  "state" is additive. Session.status and Event.status use
-                  the bare SessionStatus string; only this endpoint wraps it,
-                  and only for compatibility.
-                additionalProperties:
-                  type: object
-                  required: [type, state]
-                  properties:
-                    type: { $ref: "#/components/schemas/SessionStatus" }
-                    state: { $ref: "#/components/schemas/SessionState" }
+              schema: { $ref: "#/components/schemas/StatusResponse" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /session/{id}/wait:
