@@ -14,6 +14,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -488,6 +489,12 @@ func serveCmd(args []string) error {
 	}
 	reg := registry(cfg)
 
+	// Structured logging: JSON to stderr, stdlib log/slog only (no new
+	// dependency). serve start and every OnError go through it; this is
+	// intentionally minimal — no request-level access logging, no metrics, no
+	// OTel (a separate future cmd-scoped task).
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+
 	// The event journal owner needs each engine session to report events to
 	// it, so the session wrappers wire OnEvent to the server's Publish.
 	var srv *server.Server
@@ -509,8 +516,11 @@ func serveCmd(args []string) error {
 		Version:       version,
 		CORSOrigin:    corsOrigin,
 		GoalEvaluator: goalEval,
-		NewSession:    newSessionFn(mkCfg, defModel, cfg, skillDirs, func(id string, turn int, req *provider.Request) { srv.OnRequest(id, turn, req) }),
-		LoadSession:   loadSessionFn(mkCfg, defModel, cfg, skillDirs, func(id string, turn int, req *provider.Request) { srv.OnRequest(id, turn, req) }),
+		OnError: func(_ context.Context, err error) {
+			logger.Error("serve error", "error", err.Error())
+		},
+		NewSession:  newSessionFn(mkCfg, defModel, cfg, skillDirs, func(id string, turn int, req *provider.Request) { srv.OnRequest(id, turn, req) }),
+		LoadSession: loadSessionFn(mkCfg, defModel, cfg, skillDirs, func(id string, turn int, req *provider.Request) { srv.OnRequest(id, turn, req) }),
 	})
 	if err != nil {
 		return err
@@ -523,7 +533,7 @@ func serveCmd(args []string) error {
 
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.ListenAndServe() }()
-	fmt.Fprintln(os.Stderr, "harness serve listening on", addr)
+	logger.Info("serve start", "addr", addr, "version", version)
 
 	select {
 	case err := <-errc:
