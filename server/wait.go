@@ -61,7 +61,10 @@ func (s *Server) handleWait(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, _, ok := s.lookup(id); !ok {
+	s.mu.Lock()
+	_, resident := s.sessions[id]
+	s.mu.Unlock()
+	if !resident && !s.sessionOnDisk(id) {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
 	}

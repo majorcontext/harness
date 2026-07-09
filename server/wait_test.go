@@ -11,6 +11,7 @@ import (
 	"testing"
 	"testing/synctest"
 
+	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 )
@@ -231,6 +232,49 @@ func TestWaitRejectsBadParams(t *testing.T) {
 	resp, _ = h.do("GET", "/session/ses_nope/wait?until=idle", nil)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("unknown session = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestWaitColdSessionDoesNotLoad verifies the existence check /wait uses is
+// the same cheap resident-or-on-disk stat handleAbort and handleGoalDelete
+// use (see TestAbortColdSessionIsIdempotent), not the full-deserializing
+// s.lookup: a session that exists only on disk (never touched by this
+// process) must resolve to a 200 idle response without becoming resident.
+func TestWaitColdSessionDoesNotLoad(t *testing.T) {
+	dir := t.TempDir()
+
+	// Seed a session on disk only (a prior process wrote its log).
+	seedProv := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("hi")}}
+	seed := engine.NewSession(engine.Config{
+		Providers:  provider.Registry{"test": seedProv},
+		Model:      message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir: dir,
+	})
+	if _, err := seed.Prompt(context.Background(), "seed"); err != nil {
+		t.Fatal(err)
+	}
+	id := seed.ID
+
+	h := newHarnessDir(t, dir, &scriptedProvider{name: "test"})
+
+	resp, data := h.do("GET", "/session/"+id+"/wait?until=idle&timeout_s=5", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("wait on cold session status = %d, want 200: %s", resp.StatusCode, data)
+	}
+	var wr waitJSON
+	if err := json.Unmarshal(data, &wr); err != nil {
+		t.Fatal(err)
+	}
+	if wr.State != "idle" {
+		t.Errorf("wait on cold session state = %q, want idle", wr.State)
+	}
+
+	// The existence check must not have pulled the session into memory.
+	h.srv.mu.Lock()
+	_, loaded := h.srv.sessions[id]
+	h.srv.mu.Unlock()
+	if loaded {
+		t.Errorf("wait on a cold session loaded it into memory")
 	}
 }
 
