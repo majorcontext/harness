@@ -47,8 +47,8 @@ func sessionInfoTool() Tool {
 				"Takes no arguments.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
 		},
-		Run: func(_ context.Context, s *Session, _ json.RawMessage) (message.Parts, error) {
-			info := s.sessionInfo()
+		Run: func(ctx context.Context, s *Session, _ json.RawMessage) (message.Parts, error) {
+			info := s.sessionInfo(ctx)
 			b, err := json.MarshalIndent(info, "", "  ")
 			if err != nil {
 				return nil, err
@@ -61,9 +61,9 @@ func sessionInfoTool() Tool {
 // sessionInfo snapshots the session's current self-description. Tool names are
 // gathered outside the lock (toolDefs may call into the plugin host), then the
 // mutable state is read under mu.
-func (s *Session) sessionInfo() sessionInfoResult {
+func (s *Session) sessionInfo(ctx context.Context) sessionInfoResult {
 	tools := make([]string, 0, len(s.tools))
-	for _, d := range s.toolDefs() {
+	for _, d := range s.toolDefs(ctx) {
 		tools = append(tools, d.Name)
 	}
 	sort.Strings(tools)

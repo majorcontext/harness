@@ -37,12 +37,20 @@ func (c *clientAPI) SessionMessages(_ context.Context, req *plugin.SessionMessag
 	return &plugin.SessionMessagesResponse{Messages: msgs}, nil
 }
 
-// MCPCall implements plugin.ClientAPI. MCP engine integration (routing a
-// plugin's call through this server's configured MCP client servers) is a
-// separate PR; until then this returns a clear, typed error rather than
-// panicking or silently returning an empty result.
-func (c *clientAPI) MCPCall(_ context.Context, _ *plugin.MCPCallRequest) (*plugin.MCPCallResult, error) {
-	return nil, plugin.ErrMCPNotImplemented
+// MCPCall implements plugin.ClientAPI: it routes to this server's shared MCP
+// registry (Options.MCP, the same one every session's engine.Config.MCP
+// points at — see that field's doc comment), by explicit server + tool
+// name rather than any particular session's namespaced tool list, since an
+// MCPCallRequest names neither.
+func (c *clientAPI) MCPCall(ctx context.Context, req *plugin.MCPCallRequest) (*plugin.MCPCallResult, error) {
+	if c.srv.opts.MCP == nil {
+		return nil, fmt.Errorf("client API: no MCP servers configured")
+	}
+	content, isErr, err := c.srv.opts.MCP.CallServerTool(ctx, req.Server, req.Tool, req.Args)
+	if err != nil {
+		return nil, err
+	}
+	return &plugin.MCPCallResult{Content: content, IsError: isErr}, nil
 }
 
 // Generate implements plugin.ClientAPI. Routing plugin-initiated LLM calls

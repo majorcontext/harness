@@ -28,13 +28,6 @@ type ClientAPI interface {
 	Generate(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error)
 }
 
-// ErrMCPNotImplemented is the error a ClientAPI.MCPCall implementation
-// should return until MCP engine integration lands (tracked as a separate
-// PR): a clear, typed failure rather than a panic or a silently empty
-// result. Both bundled ClientAPI implementations (server-backed, and the
-// direct engine-backed adapter used by `harness run`) return it verbatim.
-var ErrMCPNotImplemented = errors.New("plugin: MCP call not implemented yet (MCP engine integration is a separate PR)")
-
 // ErrGenerateNotImplemented is the analogous sentinel for
 // ClientAPI.Generate: routing a plugin's LLM call through the harness
 // provider layer is not yet wired. Returned instead of panicking or
