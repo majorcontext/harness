@@ -522,3 +522,74 @@ func TestProviderDataGetOversizedEntryIsAbsent(t *testing.T) {
 		t.Error(`Get("over") = present, want absent (one byte over the cap — the request-size-bomb entry)`)
 	}
 }
+
+// TestNormalizeDropsInvalidToolCallArguments is the primary-fix regression
+// guard for the incident behind two production goal sessions,
+// ses_01kx453ewfedqrg7p3c64f8sca and ses_01kx453ev9ejattygpf7rbzptw: both
+// died at the start of a worker turn with "json: error calling MarshalJSON
+// for type json.RawMessage: unexpected end of JSON input" — three identical
+// attempts, because every retry re-transcoded the same poisoned history —
+// and GET /session/{id}/message on them then 500'd with the message.Parts
+// wrapper of the same error, while the on-disk log stayed clean (the
+// poisoned message failed to persist and was never journaled).
+//
+// Message.Normalize is the one ingest choke point every message passes
+// through before entering a session's history (engine.Session.append), so
+// it is where a salvaged, truncated tool call — left behind by a provider
+// stream that dies mid tool_use block, e.g. a connection drop during
+// input_json_delta accumulation, or a max_tokens cutoff mid tool-call that
+// the wire protocol still closes out normally (see
+// provider/anthropic/anthropic.go) — must be sanitized once, rather than
+// leaving every downstream consumer (persist, GET /message, a future
+// transcoder) to separately guard against it.
+//
+// Dropping only Arguments (not the whole ToolCall part) preserves the most
+// information safely: CallID and Name say which tool the model was in the
+// middle of calling, which is useful context for a human or a next turn,
+// and neither can be malformed the way a truncated JSON blob can — they are
+// plain strings the provider adapter set directly from wire fields, never
+// json.RawMessage. Only Arguments carries the footgun, so only Arguments is
+// cleared, to nil (not "{}") at this layer: safeArguments and every
+// transcoder already coerce a nil/zero-length Arguments to an empty JSON
+// object at the one place each of them needs to, so nil here is the same
+// "no usable arguments" signal Normalize already sends for a
+// present-but-zero-length ProviderData entry, not a third distinct shape
+// for downstream code to learn.
+func TestNormalizeDropsInvalidToolCallArguments(t *testing.T) {
+	m := Message{
+		ID:   "msg_1",
+		Role: RoleAssistant,
+		Parts: Parts{
+			&Text{Text: "running"},
+			&ToolCall{CallID: "tc_1", Name: "bash", Arguments: json.RawMessage(`{"command":"echo hel`)},
+		},
+	}
+	m.Normalize()
+
+	tc, ok := m.Parts[1].(*ToolCall)
+	if !ok {
+		t.Fatalf("m.Parts[1] = %T, want *ToolCall", m.Parts[1])
+	}
+	if tc.CallID != "tc_1" || tc.Name != "bash" {
+		t.Errorf("Normalize must preserve CallID/Name, got %+v", tc)
+	}
+	if len(tc.Arguments) != 0 {
+		t.Errorf("Normalize left invalid Arguments = %s, want cleared", tc.Arguments)
+	}
+
+	// A genuinely empty (already-handled) Arguments is left exactly as
+	// Normalize found it — Normalize does not need to touch what
+	// safeArguments already normalizes at marshal time.
+	m2 := Message{Parts: Parts{&ToolCall{CallID: "tc_2", Name: "bash", Arguments: json.RawMessage{}}}}
+	m2.Normalize()
+	if len(m2.Parts[0].(*ToolCall).Arguments) != 0 {
+		t.Errorf("Normalize should not add content to an already-empty Arguments")
+	}
+
+	// Valid, complete Arguments must survive untouched.
+	m3 := Message{Parts: Parts{&ToolCall{CallID: "tc_3", Name: "bash", Arguments: json.RawMessage(`{"a":1}`)}}}
+	m3.Normalize()
+	if string(m3.Parts[0].(*ToolCall).Arguments) != `{"a":1}` {
+		t.Errorf("Normalize altered valid Arguments: %s, want unchanged {\"a\":1}", m3.Parts[0].(*ToolCall).Arguments)
+	}
+}
