@@ -36,6 +36,13 @@ type fakeHTTPServer struct {
 	callTool        func(name string, arguments json.RawMessage) (*CallToolResult, error)
 	streamToolsCall bool // answer tools/call over SSE with a leading unrelated notification
 
+	// jsonContentType / sseContentType override the Content-Type header
+	// value written for JSON / SSE responses, for exercising case
+	// sensitivity in the client's media type handling. Empty means the
+	// standard lowercase value.
+	jsonContentType string
+	sseContentType  string
+
 	mu          sync.Mutex
 	seenAuth    []string
 	seenSession []string
@@ -159,13 +166,21 @@ func (s *fakeHTTPServer) writeJSON(w http.ResponseWriter, id json.RawMessage, re
 		msg.Result = raw
 	}
 	body, _ := json.Marshal(msg)
-	w.Header().Set("Content-Type", "application/json")
+	ct := s.jsonContentType
+	if ct == "" {
+		ct = "application/json"
+	}
+	w.Header().Set("Content-Type", ct)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
 }
 
 func (s *fakeHTTPServer) writeSSE(w http.ResponseWriter, id json.RawMessage, result any, rerr *RPCError) {
-	w.Header().Set("Content-Type", "text/event-stream")
+	ct := s.sseContentType
+	if ct == "" {
+		ct = "text/event-stream"
+	}
+	w.Header().Set("Content-Type", ct)
 	w.WriteHeader(http.StatusOK)
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -331,6 +346,52 @@ func TestHTTPCallToolIsError(t *testing.T) {
 	}
 	if !res.IsError {
 		t.Fatal("IsError = false, want true")
+	}
+}
+
+func TestHTTPContentTypeCaseInsensitiveJSON(t *testing.T) {
+	// RFC 9110 media types are case-insensitive; a server sending
+	// "Application/json" (or initialize's response, which shares this
+	// server's Content-Type) must be accepted just like the canonical
+	// lowercase form.
+	srv := &fakeHTTPServer{
+		jsonContentType: "Application/json",
+		callTool: func(string, json.RawMessage) (*CallToolResult, error) {
+			return &CallToolResult{Content: []Content{{Type: ContentTypeText, Text: "hi"}}}, nil
+		},
+	}
+	c := newHTTPTestClient(t, srv, nil)
+	mustInitialize(t, c)
+
+	res, err := c.CallTool(context.Background(), "greet", nil)
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Error("IsError = true, want false")
+	}
+}
+
+func TestHTTPContentTypeCaseInsensitiveSSE(t *testing.T) {
+	srv := &fakeHTTPServer{
+		streamToolsCall: true,
+		sseContentType:  "TEXT/EVENT-STREAM",
+		callTool: func(string, json.RawMessage) (*CallToolResult, error) {
+			return &CallToolResult{Content: []Content{{Type: ContentTypeText, Text: "done"}}}, nil
+		},
+	}
+	c := newHTTPTestClient(t, srv, nil)
+	mustInitialize(t, c)
+
+	res, err := c.CallTool(context.Background(), "greet", nil)
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if res.IsError {
+		t.Error("IsError = true, want false")
+	}
+	if len(res.Content) != 1 || res.Content[0].Text != "done" {
+		t.Fatalf("Content = %+v", res.Content)
 	}
 }
 

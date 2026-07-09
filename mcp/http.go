@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -141,7 +142,11 @@ func (t *httpTransport) call(ctx context.Context, method string, params, result 
 		return httpStatusError(resp)
 	}
 
-	contentType := stripParams(resp.Header.Get("Content-Type"))
+	// RFC 9110 §8.3.1: media types (and their parameters' names) are
+	// case-insensitive, so a server sending "Application/JSON" or
+	// "Text/Event-Stream" is conformant and must be treated the same as
+	// the canonical lowercase form.
+	contentType := strings.ToLower(stripParams(resp.Header.Get("Content-Type")))
 	switch contentType {
 	case "application/json":
 		respBody, err := io.ReadAll(resp.Body)
