@@ -323,7 +323,18 @@ func (inst *instance) dial() (io.ReadWriteCloser, error) {
 	if len(inst.spec.Command) == 0 {
 		return nil, fmt.Errorf("no command configured")
 	}
-	cmd := exec.Command(inst.spec.Command[0], inst.spec.Command[1:]...)
+	resolved, err := ResolveExecutable(inst.spec.Command, inst.spec.Dir)
+	if err != nil {
+		return nil, err
+	}
+	// Path is the resolved executable (guaranteed to be the same file the
+	// manifest cache hashed — see ResolveExecutable); Args[0] stays the
+	// configured name, matching exec.Command's own convention ("Args[0] is
+	// always name, not the possibly resolved Path").
+	cmd := &exec.Cmd{
+		Path: resolved,
+		Args: append([]string{inst.spec.Command[0]}, inst.spec.Command[1:]...),
+	}
 	cmd.Dir = inst.spec.Dir
 	cmd.Env = append(os.Environ(), inst.spec.Env...)
 	cmd.Stderr = os.Stderr // plugin logging

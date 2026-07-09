@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -89,20 +88,15 @@ func (c *pluginManifestCache) save(path string) error {
 func pluginCacheKey(name, hash string) string { return name + "@" + hash }
 
 // pluginBinaryHash hashes the plugin's executable so a changed binary
-// invalidates its cache entry, without spawning it. Command[0] is resolved
-// via PATH exactly as exec.Command resolves it, so the hash tracks the same
-// file that would actually run.
-func pluginBinaryHash(command []string) (string, error) {
-	if len(command) == 0 {
-		return "", fmt.Errorf("plugin: empty command")
-	}
-	path := command[0]
-	if _, err := os.Stat(path); err != nil {
-		resolved, lerr := exec.LookPath(path)
-		if lerr != nil {
-			return "", fmt.Errorf("resolving %q: %w", path, lerr)
-		}
-		path = resolved
+// invalidates its cache entry, without spawning it. command[0] is resolved
+// via plugin.ResolveExecutable — the exact same rules (and the exact same
+// function) the real spawn path (plugin.Host's instance.dial) uses, keyed
+// off the same dir — so the hash can never track a different file than the
+// one that executes.
+func pluginBinaryHash(command []string, dir string) (string, error) {
+	path, err := plugin.ResolveExecutable(command, dir)
+	if err != nil {
+		return "", err
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -123,7 +117,7 @@ func pluginBinaryHash(command []string) (string, error) {
 // reports whether the cache changed, so the caller knows to persist it.
 func buildPluginSpecs(ctx context.Context, plugins []config.PluginSpec, cache *pluginManifestCache) (specs []plugin.Spec, dirty bool, err error) {
 	for _, p := range plugins {
-		hash, herr := pluginBinaryHash(p.Command)
+		hash, herr := pluginBinaryHash(p.Command, p.Dir)
 		if herr != nil {
 			return nil, dirty, fmt.Errorf("plugin %s: %w", p.Name, herr)
 		}
@@ -245,7 +239,7 @@ func pluginProbeCmd(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), pluginProbeTimeout*time.Duration(len(cfg.Plugins)))
 	defer cancel()
 	for _, p := range cfg.Plugins {
-		hash, err := pluginBinaryHash(p.Command)
+		hash, err := pluginBinaryHash(p.Command, p.Dir)
 		if err != nil {
 			return fmt.Errorf("plugin %s: %w", p.Name, err)
 		}

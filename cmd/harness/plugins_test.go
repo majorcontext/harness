@@ -366,18 +366,99 @@ func TestPluginBinaryHashDetectsChange(t *testing.T) {
 	if err := os.WriteFile(p, []byte("v1"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	h1, err := pluginBinaryHash([]string{p})
+	h1, err := pluginBinaryHash([]string{p}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(p, []byte("v2"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	h2, err := pluginBinaryHash([]string{p})
+	h2, err := pluginBinaryHash([]string{p}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if h1 == h2 {
 		t.Errorf("hash unchanged after binary content changed: %q", h1)
+	}
+}
+
+// TestPluginBinaryHashMatchesResolvedExecutable proves finding (1): the
+// manifest-cache hash and the actual spawn must resolve a bare command name
+// identically. The old implementation hashed whatever os.Stat found relative
+// to the *harness process's current directory* before falling back to
+// exec.LookPath, while a real spawn of a bare name (no path separator) always
+// resolves via PATH — independent of cwd or spec.Dir. Put two different
+// files named "plug" in play, one on PATH and one in the process's cwd, and
+// prove the cache hashes the PATH one: the same file exec.Command would
+// actually run.
+func TestPluginBinaryHashMatchesResolvedExecutable(t *testing.T) {
+	pathDir := t.TempDir()
+	cwdDir := t.TempDir()
+
+	pathBin := filepath.Join(pathDir, "plug")
+	if err := os.WriteFile(pathBin, []byte("path-version"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cwdBin := filepath.Join(cwdDir, "plug")
+	if err := os.WriteFile(cwdBin, []byte("cwd-version"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", pathDir)
+	t.Chdir(cwdDir)
+
+	got, err := pluginBinaryHash([]string{"plug"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := pluginBinaryHash([]string{pathBin}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Errorf("pluginBinaryHash(bare name %q) = %s, want hash of PATH-resolved binary %s (hashed the cwd file instead — hash and spawn can diverge)", "plug", got, want)
+	}
+}
+
+// TestPluginBinaryHashRelativeToDir proves the other half of finding (1): a
+// command given as a Dir-relative path (containing a path separator) must
+// hash the file that a real spawn resolves relative to spec.Dir — not
+// relative to the harness process's own cwd, which is what a real spawn
+// never consults for a relative Path once Dir is set (Cmd.Path: "If Path is
+// relative, it is evaluated relative to Dir.").
+func TestPluginBinaryHashRelativeToDir(t *testing.T) {
+	specDir := t.TempDir()
+	otherDir := t.TempDir()
+
+	relBin := filepath.Join(specDir, "sub", "plug")
+	if err := os.MkdirAll(filepath.Dir(relBin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(relBin, []byte("dir-version"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A same-named-but-different file at the same relative path from the
+	// harness's own cwd, so a cwd-relative resolution would (wrongly) hash
+	// this one instead.
+	decoy := filepath.Join(otherDir, "sub", "plug")
+	if err := os.MkdirAll(filepath.Dir(decoy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(decoy, []byte("decoy-version"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(otherDir)
+
+	got, err := pluginBinaryHash([]string{"sub/plug"}, specDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := pluginBinaryHash([]string{relBin}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Errorf("pluginBinaryHash(%q, dir=%q) = %s, want hash of spec.Dir-relative file %s (hashed the cwd-relative decoy instead)", "sub/plug", specDir, got, want)
 	}
 }
