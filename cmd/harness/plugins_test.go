@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -413,6 +414,148 @@ func TestProbeSpecEnvAndDirReachProbedProcess(t *testing.T) {
 	}
 	if want := "cwd=" + wantDir; !strings.Contains(m.Version, want) {
 		t.Errorf("manifest.Version = %q, want it to contain %q (spec.Dir did not reach the probed process)", m.Version, want)
+	}
+}
+
+// TestLoadPluginManifestCacheCorruptFileIsMiss proves finding (3): a corrupt
+// on-disk cache file (e.g. left behind by a concurrent reader observing a
+// half-written file under the old non-atomic save, or any other corruption)
+// must be treated as a cache miss — every plugin simply re-probes — never a
+// startup failure.
+func TestLoadPluginManifestCacheCorruptFileIsMiss(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plugin_cache.json")
+	if err := os.WriteFile(path, []byte(`{"entries": this is not valid json`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cache, err := loadPluginManifestCache(path)
+	if err != nil {
+		t.Fatalf("loadPluginManifestCache(corrupt file) returned an error, want a cache miss: %v", err)
+	}
+	if cache == nil || cache.Entries == nil {
+		t.Fatal("loadPluginManifestCache(corrupt file) returned a nil cache/Entries")
+	}
+	if len(cache.Entries) != 0 {
+		t.Errorf("cache.Entries = %v, want empty (cache miss)", cache.Entries)
+	}
+}
+
+// TestBuildPluginHostCorruptCacheReprobes is the end-to-end version of the
+// above: buildPluginHost must succeed (re-probing and rewriting the cache)
+// when the on-disk cache file is corrupt, rather than failing startup.
+func TestBuildPluginHostCorruptCacheReprobes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a real plugin subprocess")
+	}
+	tmp := t.TempDir()
+	cachePath := filepath.Join(tmp, "plugin_cache.json")
+	t.Setenv("HARNESS_PLUGIN_CACHE", cachePath)
+	t.Setenv("GO_WANT_PLUGIN_HELPER", "1")
+	t.Setenv("PLUGIN_NAME", "corruptplug")
+
+	if err := os.WriteFile(cachePath, []byte("{not valid json at all, half-written"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	plugins := []config.PluginSpec{helperPluginCommand(t, "corruptplug")}
+	host, err := buildPluginHost(context.Background(), plugins, "v", tmp, nil)
+	if err != nil {
+		t.Fatalf("buildPluginHost with a corrupt cache file failed startup, want it to treat the file as a miss and re-probe: %v", err)
+	}
+	t.Cleanup(host.Close)
+
+	b, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c pluginManifestCache
+	if err := json.Unmarshal(b, &c); err != nil {
+		t.Fatalf("cache file after buildPluginHost is not valid JSON: %v", err)
+	}
+	found := false
+	for k := range c.Entries {
+		if strings.HasPrefix(k, "corruptplug@") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("cache entries after re-probe = %v, want an entry for corruptplug", c.Entries)
+	}
+}
+
+// TestPluginManifestCacheSaveAtomic proves save() never leaves a reader
+// able to observe a half-written cache file: a concurrent reader polls the
+// file throughout many overlapping saves, and any successfully-opened,
+// non-empty read must parse as valid JSON. save() achieves this by writing
+// to a temp file in the same directory and renaming over the target — a
+// rename is atomic from a reader's point of view; a truncating WriteFile is
+// not.
+func TestPluginManifestCacheSaveAtomic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plugin_cache.json")
+
+	stop := make(chan struct{})
+	corrupt := make(chan error, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				continue // not created yet, or renamed away mid-read; both fine
+			}
+			if len(b) == 0 {
+				continue
+			}
+			var c pluginManifestCache
+			if err := json.Unmarshal(b, &c); err != nil {
+				select {
+				case corrupt <- fmt.Errorf("read a half-written cache file: %w", err):
+				default:
+				}
+				return
+			}
+		}
+	}()
+
+	for i := 0; i < 300; i++ {
+		c := &pluginManifestCache{Entries: map[string]plugin.Manifest{}}
+		for j := 0; j < 50; j++ {
+			name := fmt.Sprintf("plugin-%d-%d", i, j)
+			c.Entries[name+"@hash"] = plugin.Manifest{
+				Name:            name,
+				ProtocolVersion: 1,
+				Hooks:           []plugin.Hook{plugin.HookEvent, plugin.HookChatParams, plugin.HookSystemTransform, plugin.HookShellEnv},
+			}
+		}
+		if err := c.save(path); err != nil {
+			close(stop)
+			<-done
+			t.Fatalf("save: %v", err)
+		}
+	}
+	close(stop)
+	<-done
+
+	select {
+	case err := <-corrupt:
+		t.Fatal(err)
+	default:
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "plugin_cache.json" {
+			t.Errorf("leftover file in cache dir after save: %s (want a temp file used for the atomic rename to clean up after itself)", e.Name())
+		}
 	}
 }
 

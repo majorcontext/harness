@@ -52,6 +52,13 @@ type pluginManifestCache struct {
 	Entries map[string]plugin.Manifest `json:"entries"`
 }
 
+// loadPluginManifestCache reads the on-disk manifest cache. A missing file
+// is an empty cache (nothing has ever been probed). A present-but-corrupt
+// file — most commonly a concurrent reader catching an in-progress write
+// under the pre-atomic-rename save(), but any other corruption too — is
+// treated the same as a cache miss: every plugin simply re-probes and the
+// next save() overwrites the bad file. It is never a startup failure; only
+// an I/O error opening the file (permissions, etc.) is.
 func loadPluginManifestCache(path string) (*pluginManifestCache, error) {
 	c := &pluginManifestCache{Entries: map[string]plugin.Manifest{}}
 	f, err := os.Open(path)
@@ -63,7 +70,8 @@ func loadPluginManifestCache(path string) (*pluginManifestCache, error) {
 	}
 	defer f.Close()
 	if err := json.NewDecoder(f).Decode(c); err != nil {
-		return nil, fmt.Errorf("plugin cache: parsing %s: %w", path, err)
+		fmt.Fprintf(os.Stderr, "plugin cache: ignoring corrupt cache file %s (re-probing): %v\n", path, err)
+		return &pluginManifestCache{Entries: map[string]plugin.Manifest{}}, nil
 	}
 	if c.Entries == nil {
 		c.Entries = map[string]plugin.Manifest{}
@@ -71,15 +79,52 @@ func loadPluginManifestCache(path string) (*pluginManifestCache, error) {
 	return c, nil
 }
 
+// save persists the cache atomically: it writes the full content to a temp
+// file in the same directory (so the rename below is on the same
+// filesystem) and renames it over path. A rename is atomic from any
+// concurrent reader's point of view — it either sees the old file or the
+// complete new one, never a half-written one — unlike a truncating
+// os.WriteFile, which a concurrent loadPluginManifestCache could catch
+// mid-write and (pre-fix) fail startup on.
 func (c *pluginManifestCache) save(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o644)
+	tmp, err := os.CreateTemp(dir, ".plugin_cache-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	ok := false
+	defer func() {
+		if !ok {
+			os.Remove(tmpPath)
+		}
+	}()
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	ok = true
+	return nil
 }
 
 // pluginCacheKey identifies one cache entry: the config name (so chaining
