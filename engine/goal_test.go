@@ -206,6 +206,65 @@ func TestPursueGoalAchievedSecondTurn(t *testing.T) {
 	}
 }
 
+// TestPursueGoalWorkerReasoningEmptyProviderData is the round-2 forensic
+// regression guard reconstructed at the goal-loop level: the actual shape
+// the incident logs show (two complete goal-supervised turns, then death
+// mid-turn with "json: error calling MarshalJSON for type json.RawMessage:
+// unexpected end of JSON input", surfacing as goal.stalled on every retry
+// attempt because the same poisoned in-memory history got resent
+// unchanged). The worker's assistant message here carries a Reasoning part
+// with a present-but-zero-length provider_data entry — the map-indirected
+// twin of the ToolCall.Arguments footgun #42 fixed, left unguarded by that
+// fix (see message.ProviderData's doc comment) — appended mid-loop, exactly
+// where the incident sessions died. Before the fix this turn's own
+// s.append (persistMessage's json.Marshal) failed, and — because that
+// failure is swallowed into PersistErr rather than returned — the *next*
+// worker call re-sent the same now-poisoned in-memory history to the
+// provider's transcoder, which is where the incident's observed error
+// actually surfaced. The goal must complete normally, not stall.
+func TestPursueGoalWorkerReasoningEmptyProviderData(t *testing.T) {
+	prov := &goalProvider{
+		worker: [][]provider.Event{
+			asstTurn(provider.StopEndTurn,
+				&message.Reasoning{
+					Text:         "thinking it through",
+					ProviderData: message.ProviderData{"test": json.RawMessage{}},
+				},
+				&message.Text{Text: "working on it"}),
+			asstTurn(provider.StopEndTurn,
+				&message.Reasoning{
+					Text:         "thinking some more",
+					ProviderData: message.ProviderData{"test": json.RawMessage{}},
+				},
+				&message.Text{Text: "all done"}),
+		},
+		eval: [][]provider.Event{
+			evalTurn("NOT MET: the summary is missing"),
+			evalTurn("MET: the summary is present"),
+		},
+	}
+	s := goalSession(t, prov, t.TempDir())
+
+	res, err := s.PursueGoal(context.Background(), "write a summary", GoalOptions{Evaluator: evalModel})
+	if err != nil {
+		t.Fatalf("PursueGoal: %v", err)
+	}
+	if !res.Achieved || res.Turns != 2 {
+		t.Fatalf("result = %+v, want achieved in 2 turns", res)
+	}
+	if err := s.PersistErr(); err != nil {
+		t.Fatalf("PersistErr = %v, want nil", err)
+	}
+
+	loaded, err := LoadSession(s.cfg, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if got, want := historyJSON(t, loaded.History()), historyJSON(t, s.History()); got != want {
+		t.Errorf("loaded history = %s\nwant %s", got, want)
+	}
+}
+
 func TestPursueGoalRequiresEvaluator(t *testing.T) {
 	prov := &goalProvider{}
 	hooks := &fakeHooks{}

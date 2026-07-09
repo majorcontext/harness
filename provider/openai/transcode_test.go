@@ -377,6 +377,65 @@ func TestTranscodeForeignReasoningDropped(t *testing.T) {
 	}
 }
 
+// TestTranscodeReasoningEmptyProviderDataMarshal is the round-2 forensic
+// regression guard, reconstructed at the transcoder layer: a Reasoning part
+// whose "openai" provider_data entry is present but zero-length (non-nil)
+// — the shape #42 left unguarded, one map-indirection away from the
+// ToolCall.Arguments field #42 actually fixed (see message.ProviderData's
+// doc comment). Before message.ProviderData grew a Get accessor,
+// transcodeMessage read this entry straight out of the map
+// (v.ProviderData[Family]) and copied it via append(json.RawMessage(nil),
+// raw...) — which Go's append happens to normalize to a nil slice when
+// raw has zero length, so this particular call site never actually hit
+// the json.Marshal crash (unlike the direct-marshal path guarded by
+// message.ProviderData.MarshalJSON, and unlike the anthropic transcoder's
+// json.Unmarshal call on the same shape — see
+// TestTranscodeReasoningEmptyProviderDataDropped). It was still a real bug:
+// a nil json.RawMessage marshals as the JSON literal null, so the request
+// sent to the wire carried a spurious `null` item in its input list instead
+// of the reasoning item being dropped like a foreign-provider one. This
+// test exercises the full path (transcodeRequest, then json.Marshal(out) —
+// the "AND marshal request" the incident's method requires, not just the
+// per-item transcode step) and asserts the empty entry is dropped
+// entirely, matching TestTranscodeForeignReasoningDropped, with no
+// spurious item and no error either before or after the fix.
+func TestTranscodeReasoningEmptyProviderDataMarshal(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		data json.RawMessage
+	}{
+		{"empty-non-nil", json.RawMessage{}},
+		{"empty-string-literal", json.RawMessage("")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			req := baseRequest(
+				message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+				message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+					&message.Reasoning{Text: "hmm", ProviderData: message.ProviderData{
+						Family: c.data,
+					}},
+					&message.Text{Text: "answer"},
+				}},
+			)
+			out, err := transcodeRequest(req)
+			if err != nil {
+				t.Fatalf("transcodeRequest: %v", err)
+			}
+			// The full wire-request marshal: this is the exact call that
+			// failed in production with "json: error calling MarshalJSON
+			// for type json.RawMessage: unexpected end of JSON input".
+			if _, err := json.Marshal(out); err != nil {
+				t.Fatalf("marshal apiRequest: %v", err)
+			}
+			// user, assistant message (empty reasoning item dropped, same
+			// as a foreign-provider reasoning item).
+			if len(out.Input) != 2 {
+				t.Fatalf("input items = %d: %s", len(out.Input), out.Input)
+			}
+		})
+	}
+}
+
 func TestTranscodeTools(t *testing.T) {
 	req := baseRequest(
 		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}},

@@ -395,3 +395,91 @@ func TestMessageWithEmptyToolCallArgumentsMarshal(t *testing.T) {
 		t.Fatalf("marshal []Message (the /message response shape): %v", err)
 	}
 }
+
+// TestReasoningProviderDataEmptyMarshal is the round-2 forensic regression
+// guard: #42 normalized ToolCall.Arguments (a bare json.RawMessage field)
+// but left Reasoning.ProviderData — a map[string]json.RawMessage carrying
+// the exact same footgun one layer of indirection away — completely
+// unguarded. This reproduces the incident shape directly: a Reasoning part
+// whose provider_data entry is present but zero-length (non-nil), the same
+// "no data yet" shape a partially-assembled provider stream item can leave
+// behind. Before the ProviderData.MarshalJSON guard this failed with
+// exactly "json: error calling MarshalJSON for type json.RawMessage:
+// unexpected end of JSON input" — the production error.
+func TestReasoningProviderDataEmptyMarshal(t *testing.T) {
+	cases := []struct {
+		name string
+		data json.RawMessage
+	}{
+		{"nil", nil},
+		{"empty-non-nil", json.RawMessage{}},
+		{"empty-string-literal", json.RawMessage("")},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := &Reasoning{
+				Text:         "thinking",
+				ProviderData: ProviderData{"anthropic": c.data},
+			}
+
+			// Bare Reasoning value, as a direct struct field would encode
+			// it (e.g. an Event's Message field, or a plugin hook payload
+			// carrying a message.Message) — no tagged-union wrapper
+			// involved.
+			if _, err := json.Marshal(*r); err != nil {
+				t.Fatalf("marshal bare Reasoning: %v", err)
+			}
+
+			// As a Parts element: the tagged-union path every session
+			// message goes through.
+			raw, err := json.Marshal(Parts{r})
+			if err != nil {
+				t.Fatalf("marshal Parts: %v", err)
+			}
+			var out Parts
+			if err := json.Unmarshal(raw, &out); err != nil {
+				t.Fatalf("unmarshal Parts: %v (raw=%s)", err, raw)
+			}
+			if len(out) != 1 {
+				t.Fatalf("len(out) = %d, want 1 (raw=%s)", len(out), raw)
+			}
+			got, ok := out[0].(*Reasoning)
+			if !ok {
+				t.Fatalf("out[0] = %T, want *Reasoning (raw=%s)", out[0], raw)
+			}
+			// The empty entry must not survive as spurious "present" data:
+			// Get must report it absent, exactly as ToolCall.Arguments
+			// normalizes an empty entry to a well-defined shape rather than
+			// silently keeping a footgun around for the next consumer.
+			if _, ok := got.ProviderData.Get("anthropic"); ok {
+				t.Errorf("got.ProviderData.Get(\"anthropic\") = present, want absent (raw=%s)", raw)
+			}
+		})
+	}
+}
+
+// TestMessageWithEmptyReasoningProviderDataMarshal proves the full incident
+// shape end to end: an assistant Message carrying a Reasoning part whose
+// provider_data entry is empty-non-nil — the shape engine.Session.append
+// persists to the session log and the server journals — marshals
+// successfully, both alone and as the []Message shape GET
+// /session/{id}/message returns.
+func TestMessageWithEmptyReasoningProviderDataMarshal(t *testing.T) {
+	m := Message{
+		ID:   "msg_1",
+		Role: RoleAssistant,
+		Parts: Parts{
+			&Reasoning{
+				Text:         "thinking",
+				ProviderData: ProviderData{"anthropic": json.RawMessage{}},
+			},
+			&Text{Text: "hello"},
+		},
+	}
+	if _, err := json.Marshal(m); err != nil {
+		t.Fatalf("marshal message with empty-non-nil reasoning provider_data: %v", err)
+	}
+	if _, err := json.Marshal([]Message{m}); err != nil {
+		t.Fatalf("marshal []Message (the /message response shape): %v", err)
+	}
+}

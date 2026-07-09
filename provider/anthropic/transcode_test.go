@@ -71,6 +71,54 @@ func TestTranscodeForeignReasoningDroppedAndMerged(t *testing.T) {
 	}
 }
 
+// TestTranscodeReasoningEmptyProviderDataDropped is the round-2 forensic
+// regression guard at the anthropic transcoder: a Reasoning part whose
+// "anthropic" provider_data entry is present but zero-length (non-nil) —
+// the exact shape #42 left unguarded, one map-indirection away from the
+// ToolCall.Arguments field #42 actually fixed (see message.ProviderData's
+// doc comment). Before message.ProviderData grew a Get accessor, this
+// transcoder read the entry straight out of the map (ok == true) and handed
+// the empty bytes to json.Unmarshal, which failed with "bad anthropic
+// reasoning data: unexpected end of JSON input" instead of ever reaching
+// the request marshal below — a related but distinct crash from the
+// production "MarshalJSON for type json.RawMessage" error, closed by the
+// same fix. A present-but-empty entry must now be treated exactly like a
+// foreign-provider one: dropped, not unmarshaled.
+func TestTranscodeReasoningEmptyProviderDataDropped(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		data json.RawMessage
+	}{
+		{"empty-non-nil", json.RawMessage{}},
+		{"empty-string-literal", json.RawMessage("")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			req := baseRequest(
+				message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+				message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+					&message.Reasoning{Text: "let me think", ProviderData: message.ProviderData{
+						Family: c.data,
+					}},
+					&message.Text{Text: "answer"},
+				}},
+			)
+			out, err := transcodeRequest(req)
+			if err != nil {
+				t.Fatalf("transcodeRequest: %v", err)
+			}
+			// The full wire-request marshal, same as the incident's actual
+			// failure point.
+			if _, err := json.Marshal(out); err != nil {
+				t.Fatalf("marshal apiRequest: %v", err)
+			}
+			asst := out.Messages[1]
+			if len(asst.Content) != 1 || asst.Content[0].Text != "answer" {
+				t.Errorf("assistant content = %+v, want the empty reasoning block dropped", asst.Content)
+			}
+		})
+	}
+}
+
 func TestTranscodeThinkingReplay(t *testing.T) {
 	out := mustTranscode(t, baseRequest(
 		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
