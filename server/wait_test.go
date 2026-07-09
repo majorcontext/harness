@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
@@ -275,6 +276,84 @@ func TestWaitColdSessionDoesNotLoad(t *testing.T) {
 	h.srv.mu.Unlock()
 	if loaded {
 		t.Errorf("wait on a cold session loaded it into memory")
+	}
+}
+
+// TestWaitUnblocksOnPromptIdle covers the plain-prompt symmetry that
+// TestWaitUnblocksOnGoalCompletion and TestWaitUnblocksOnGoalCleared leave
+// untested: a wait registered while a PLAIN prompt_async (no goal at all) is
+// still in flight must be woken by the same durable-event fanout when that
+// prompt completes and the session goes idle — not just when a goal
+// terminates. gateProvider's worker branch (tool-bearing Stream call) fires
+// for an ordinary prompt too, since every session's default tools (bash and
+// friends) make req.Tools non-empty; only the goal evaluator call is
+// tool-less. waitForWaiterCount proves the waiter was actually registered
+// before release, so the release below races the notification path, not the
+// immediate-check fast path. The elapsed-time bound is what actually makes
+// this test fail on a broken notify rather than merely surviving to its own
+// generous timeout_s=30 and reporting the (by-then genuinely idle) state
+// anyway — see the mutation-check note in the commit message.
+func TestWaitUnblocksOnPromptIdle(t *testing.T) {
+	prov := &gateProvider{
+		name:           "test",
+		workerStarted:  make(chan struct{}),
+		workerReleased: make(chan struct{}),
+	}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "hello"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST prompt_async status %d: %s", resp.StatusCode, data)
+	}
+	<-prov.workerStarted // prompt turn in flight; session is busy
+
+	type result struct {
+		resp *http.Response
+		data []byte
+	}
+	waitDone := make(chan result, 1)
+	start := time.Now()
+	go func() {
+		resp, data := h.do("GET", "/session/"+id+"/wait?until=idle&timeout_s=30", nil)
+		waitDone <- result{resp, data}
+	}()
+
+	// Block until the wait handler has actually registered its waiter, so the
+	// release below races the notification path, not the immediate-check
+	// fast path.
+	waitForWaiterCount(t, h.srv, 1)
+
+	close(prov.workerReleased) // prompt turn completes -> session goes idle
+
+	res := <-waitDone
+	elapsed := time.Since(start)
+	if res.resp.StatusCode != 200 {
+		t.Fatalf("wait status %d: %s", res.resp.StatusCode, res.data)
+	}
+	var wr waitJSON
+	if err := json.Unmarshal(res.data, &wr); err != nil {
+		t.Fatal(err)
+	}
+	if wr.State != "idle" {
+		t.Errorf("wait response state = %q, want idle", wr.State)
+	}
+	// A working notify resolves this near-instantly; surviving anywhere close
+	// to the 30s timeout_s means the wake relied on the timer, not the fanout
+	// (waitSnapshot re-derives fresh state regardless of path, so state alone
+	// can't tell the two apart — see the mutation-check note in the commit
+	// message).
+	if elapsed >= 5*time.Second {
+		t.Errorf("wait took %v, want well under its 30s timeout (should be woken by notify, not the deadline)", elapsed)
+	}
+
+	h.srv.mu.Lock()
+	n := len(h.srv.waiters)
+	h.srv.mu.Unlock()
+	if n != 0 {
+		t.Errorf("waiters left registered after completion = %d, want 0", n)
 	}
 }
 
