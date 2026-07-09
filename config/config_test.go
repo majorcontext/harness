@@ -89,36 +89,43 @@ func TestLoadProviderOpenAICompat(t *testing.T) {
 	}
 }
 
+// Provider validation runs once, on the merged config (see mergeAndValidate
+// and LoadProject) — never per file (see Load) — so a single incomplete
+// layer is not itself rejected; only the merged, defaulted result is
+// judged. Tests below exercise validation through mergeAndValidate,
+// merging the config under test against a zero-value override (equivalent
+// to "no project file"), which is exactly what LoadProject does when
+// .harness.json is absent.
+
 func TestLoadProviderUnknownTypeFails(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "config.json")
-	writeFile(t, p, `{"providers": {"mystery": {"type": "carrier-pigeon", "base_url": "http://x"}}}`)
-	_, err := Load(p)
+	c := &Config{Providers: map[string]Provider{
+		"mystery": {Type: "carrier-pigeon", BaseURL: "http://x"},
+	}}
+	_, err := mergeAndValidate(c, &Config{})
 	if err == nil {
-		t.Fatal("Load did not fail on unknown provider type")
+		t.Fatal("mergeAndValidate did not fail on unknown provider type")
 	}
 	if !strings.Contains(err.Error(), "carrier-pigeon") {
 		t.Errorf("error %q does not name the offending type", err)
 	}
 }
 
-// TestLoadProviderEmptyTypeOnNonNativeKeyFails guards against the
-// suppress-but-register-nothing bug: an "openrouter" entry with a missing
-// or typo'd type used to silently disable ensureDefaultOpenRouter's
-// zero-config default (any entry present under that key suppresses it)
-// while never itself registering a client (only Type ==
-// config.TypeOpenAICompat entries register in
-// cmd/harness/main.go's registerOpenAICompatProviders). Load must now
-// reject this at config load, naming the key and the valid types.
-func TestLoadProviderEmptyTypeOnNonNativeKeyFails(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "config.json")
-	writeFile(t, p, `{"providers": {"openrouter": {"base_url": "http://x"}}}`)
-	_, err := Load(p)
+// TestLoadProviderEmptyTypeOnUnknownKeyFails guards against the
+// suppress-but-register-nothing bug: an entry with a missing or typo'd
+// type used to silently disable a zero-config default the moment the key
+// was present at all, while never itself registering a client. A partial
+// entry for a key with no built-in default (see nativeDefaultProviders)
+// must still fail loudly, naming the key and the valid types, even though
+// validation now runs post-merge.
+func TestLoadProviderEmptyTypeOnUnknownKeyFails(t *testing.T) {
+	c := &Config{Providers: map[string]Provider{
+		"mycompat": {BaseURL: "http://x"},
+	}}
+	_, err := mergeAndValidate(c, &Config{})
 	if err == nil {
-		t.Fatal("Load did not fail on empty type for non-native providers.openrouter entry")
+		t.Fatal("mergeAndValidate did not fail on empty type for unknown providers.mycompat entry")
 	}
-	if !strings.Contains(err.Error(), "openrouter") {
+	if !strings.Contains(err.Error(), "mycompat") {
 		t.Errorf("error %q does not name the offending key", err)
 	}
 	if !strings.Contains(err.Error(), TypeOpenAICompat) {
@@ -130,34 +137,98 @@ func TestLoadProviderEmptyTypeOnNonNativeKeyFails(t *testing.T) {
 // regress the legacy zero-Type override path for the two built-in native
 // adapters cmd/harness's registry wires directly by name.
 func TestLoadProviderEmptyTypeOnNativeKeysOK(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "config.json")
-	writeFile(t, p, `{"providers": {
-		"anthropic": {"api_key_env": "MY_ANTHROPIC_KEY"},
-		"openai": {"api_key_env": "MY_OPENAI_KEY"}
-	}}`)
-	c, err := Load(p)
+	c := &Config{Providers: map[string]Provider{
+		"anthropic": {APIKeyEnv: "MY_ANTHROPIC_KEY"},
+		"openai":    {APIKeyEnv: "MY_OPENAI_KEY"},
+	}}
+	merged, err := mergeAndValidate(c, &Config{})
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("mergeAndValidate: %v", err)
 	}
-	if c.Providers["anthropic"].APIKeyEnv != "MY_ANTHROPIC_KEY" {
-		t.Errorf("anthropic APIKeyEnv = %q", c.Providers["anthropic"].APIKeyEnv)
+	if merged.Providers["anthropic"].APIKeyEnv != "MY_ANTHROPIC_KEY" {
+		t.Errorf("anthropic APIKeyEnv = %q", merged.Providers["anthropic"].APIKeyEnv)
 	}
-	if c.Providers["openai"].APIKeyEnv != "MY_OPENAI_KEY" {
-		t.Errorf("openai APIKeyEnv = %q", c.Providers["openai"].APIKeyEnv)
+	if merged.Providers["openai"].APIKeyEnv != "MY_OPENAI_KEY" {
+		t.Errorf("openai APIKeyEnv = %q", merged.Providers["openai"].APIKeyEnv)
 	}
 }
 
 func TestLoadProviderOpenAICompatMissingBaseURLFails(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "config.json")
-	writeFile(t, p, `{"providers": {"ollama": {"type": "openai-compat"}}}`)
-	_, err := Load(p)
+	c := &Config{Providers: map[string]Provider{
+		"ollama": {Type: TypeOpenAICompat},
+	}}
+	_, err := mergeAndValidate(c, &Config{})
 	if err == nil {
-		t.Fatal("Load did not fail on missing base_url for openai-compat")
+		t.Fatal("mergeAndValidate did not fail on missing base_url for openai-compat")
 	}
 	if !strings.Contains(err.Error(), "base_url") {
 		t.Errorf("error %q does not mention base_url", err)
+	}
+}
+
+// TestProviderNativeDefaultKeyOnlyOverride is the key finding of this
+// group: an "openrouter" entry may set only the field it cares about
+// (api_key_env here) and inherit type/base_url from the built-in default
+// (nativeDefaultProviders) — it is a complete, valid entry without ever
+// naming type or base_url itself.
+func TestProviderNativeDefaultKeyOnlyOverride(t *testing.T) {
+	c := &Config{Providers: map[string]Provider{
+		"openrouter": {APIKeyEnv: "MY_OPENROUTER_KEY"},
+	}}
+	merged, err := mergeAndValidate(c, &Config{})
+	if err != nil {
+		t.Fatalf("mergeAndValidate: %v", err)
+	}
+	pr := merged.Providers["openrouter"]
+	if pr.Type != TypeOpenAICompat {
+		t.Errorf("Type = %q, want inherited %q", pr.Type, TypeOpenAICompat)
+	}
+	if pr.BaseURL != nativeDefaultProviders["openrouter"].BaseURL {
+		t.Errorf("BaseURL = %q, want inherited default", pr.BaseURL)
+	}
+	if pr.APIKeyEnv != "MY_OPENROUTER_KEY" {
+		t.Errorf("APIKeyEnv = %q, want the entry's own override", pr.APIKeyEnv)
+	}
+}
+
+// TestProviderPartialEntryUnknownKeyFails covers the "partial entry for an
+// unknown key" case explicitly: a key with no built-in default gets no
+// free pass just because another key (openrouter) does.
+func TestProviderPartialEntryUnknownKeyFails(t *testing.T) {
+	c := &Config{Providers: map[string]Provider{
+		"unknown-provider": {APIKeyEnv: "SOME_KEY"},
+	}}
+	_, err := mergeAndValidate(c, &Config{})
+	if err == nil {
+		t.Fatal("mergeAndValidate did not fail on partial entry for an unknown providers key")
+	}
+	if !strings.Contains(err.Error(), "unknown-provider") {
+		t.Errorf("error %q does not name the offending key", err)
+	}
+}
+
+// TestProviderLayeredPartialOverrideMergesThenValidates is the general
+// form of the design fix: a project layer may override just one field of a
+// provider entry that the user layer defines fully — this is only valid
+// because validation now runs on the merged config, not per file (a
+// project-only Load of this fragment would fail: no type, no base_url).
+func TestProviderLayeredPartialOverrideMergesThenValidates(t *testing.T) {
+	base := &Config{Providers: map[string]Provider{
+		"mycompat": {Type: TypeOpenAICompat, BaseURL: "http://user.example", APIKeyEnv: "USER_KEY"},
+	}}
+	over := &Config{Providers: map[string]Provider{
+		"mycompat": {APIKeyEnv: "PROJECT_KEY"},
+	}}
+	merged, err := mergeAndValidate(base, over)
+	if err != nil {
+		t.Fatalf("mergeAndValidate: %v", err)
+	}
+	pr := merged.Providers["mycompat"]
+	if pr.BaseURL != "http://user.example" {
+		t.Errorf("BaseURL = %q, want inherited from base layer", pr.BaseURL)
+	}
+	if pr.APIKeyEnv != "PROJECT_KEY" {
+		t.Errorf("APIKeyEnv = %q, want project override", pr.APIKeyEnv)
 	}
 }
 
@@ -533,6 +604,55 @@ func TestLoadProject(t *testing.T) {
 		}
 		if got.BaseURL != "http://project" {
 			t.Errorf("anthropic base_url = %q, want project override", got.BaseURL)
+		}
+	})
+	// The design fix in full, end to end: neither file's providers.openrouter
+	// entry is complete on its own (the user file has no type/base_url at
+	// all — it relies on the native default — and the project file
+	// overrides only api_key_env), but LoadProject merges the two layers
+	// and the native default, then validates the result.
+	t.Run("layered partial provider override merges then validates", func(t *testing.T) {
+		userPath := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, userPath, `{
+			"providers": {"openrouter": {"api_key_env": "USER_OR_KEY"}}
+		}`)
+		t.Setenv("HARNESS_CONFIG", userPath)
+		projDir := t.TempDir()
+		writeFile(t, filepath.Join(projDir, ".harness.json"), `{
+			"providers": {"openrouter": {"api_key_env": "PROJECT_OR_KEY"}}
+		}`)
+		c, err := LoadProject(projDir)
+		if err != nil {
+			t.Fatalf("LoadProject: %v", err)
+		}
+		pr := c.Providers["openrouter"]
+		if pr.Type != TypeOpenAICompat {
+			t.Errorf("Type = %q, want inherited native default %q", pr.Type, TypeOpenAICompat)
+		}
+		if pr.BaseURL != nativeDefaultProviders["openrouter"].BaseURL {
+			t.Errorf("BaseURL = %q, want inherited native default", pr.BaseURL)
+		}
+		if pr.APIKeyEnv != "PROJECT_OR_KEY" {
+			t.Errorf("APIKeyEnv = %q, want project override", pr.APIKeyEnv)
+		}
+	})
+	// A project-only providers entry naming an unknown key with no type is
+	// still rejected once merged — the native default only applies to
+	// nativeDefaultProviders keys.
+	t.Run("project layer cannot smuggle in an incomplete non-default provider", func(t *testing.T) {
+		userPath := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, userPath, `{"model": "anthropic/claude-fable-5"}`)
+		t.Setenv("HARNESS_CONFIG", userPath)
+		projDir := t.TempDir()
+		writeFile(t, filepath.Join(projDir, ".harness.json"), `{
+			"providers": {"mycompat": {"api_key_env": "PROJECT_KEY"}}
+		}`)
+		_, err := LoadProject(projDir)
+		if err == nil {
+			t.Fatal("LoadProject did not fail on an incomplete non-default provider entry")
+		}
+		if !strings.Contains(err.Error(), "mycompat") {
+			t.Errorf("error %q does not name the offending key", err)
 		}
 	})
 }

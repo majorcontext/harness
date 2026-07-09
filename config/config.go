@@ -91,19 +91,66 @@ type PluginSpec struct {
 // the only non-empty Provider.Type value Load accepts today.
 const TypeOpenAICompat = "openai-compat"
 
-// nativeProviderKeys are the only providers map keys allowed an empty Type:
-// the built-in adapters cmd/harness's registry wires directly by name
-// (provider/anthropic.Family and provider/openai.Family). Every other key —
-// including "openrouter", which cmd/harness/main.go's ensureDefaultOpenRouter
-// treats as suppressing its zero-config OpenRouter default the moment the
-// key is present at all — must say what it is via Type. Without this an
-// entry named "openrouter" with a missing or typo'd type would suppress the
-// default and, since only TypeOpenAICompat entries actually register a
-// client, register nothing: a silent no-provider state. Requiring a real
-// Type for any non-native key makes that state impossible to express.
+// nativeProviderKeys are the only providers map keys allowed an empty Type
+// with no further defaulting: the built-in adapters cmd/harness's registry
+// wires directly by name (provider/anthropic.Family and
+// provider/openai.Family). A missing or typo'd Type on any other key must
+// not silently produce no adapter at startup — see nativeDefaultProviders
+// for the one key ("openrouter") that gets real built-in field defaults
+// instead of a bare pass, and validateProviders for the loud failure every
+// other key gets.
 var nativeProviderKeys = map[string]bool{
 	"anthropic": true,
 	"openai":    true,
+}
+
+// nativeDefaultProviders holds the built-in field values for providers map
+// keys that have a zero-config default outside this package — today just
+// "openrouter" (cmd/harness's ensureDefaultOpenRouter registers it with
+// these same values when the providers map has no "openrouter" key at
+// all). When the key *is* present, applyProviderDefaults fills in whatever
+// fields the entry leaves empty from here before validateProviders runs, so
+// {"openrouter": {"api_key_env": "X"}} is a complete, valid entry: type and
+// base_url are inherited, only api_key_env is overridden. This is what
+// keeps the unrepresentable-bad-state property (see validateProviders)
+// from overcorrecting into requiring a full entry for the one key that has
+// a sensible built-in default to begin with — a typo'd or unsupported type
+// still fails loudly, but a same-name key with only one field set to
+// override does not.
+var nativeDefaultProviders = map[string]Provider{
+	"openrouter": {
+		Type:      TypeOpenAICompat,
+		BaseURL:   "https://openrouter.ai/api/v1",
+		APIKeyEnv: "OPENROUTER_API_KEY",
+	},
+}
+
+// applyProviderDefaults fills empty fields of any nativeDefaultProviders
+// entry present in providers from the built-in default, in place. It must
+// run on the fully merged config, after layering user and project files
+// together and before validateProviders — a per-layer entry (e.g. a
+// project override naming only api_key_env) is not itself a complete
+// entry, but the merged result must be.
+func applyProviderDefaults(providers map[string]Provider) {
+	for name, def := range nativeDefaultProviders {
+		p, ok := providers[name]
+		if !ok {
+			continue // wholly absent: cmd/harness's own default registration handles this case
+		}
+		if p.Type == "" {
+			p.Type = def.Type
+		}
+		if p.BaseURL == "" {
+			p.BaseURL = def.BaseURL
+		}
+		if p.APIKeyEnv == "" {
+			p.APIKeyEnv = def.APIKeyEnv
+		}
+		if p.Family == "" {
+			p.Family = def.Family
+		}
+		providers[name] = p
+	}
 }
 
 // Provider is per-family provider configuration.
@@ -141,6 +188,16 @@ type Provider struct {
 // and a nil error (config is optional). Malformed JSON or an unknown field
 // (json.Decoder with DisallowUnknownFields, so typos surface) yields an error
 // naming the path.
+//
+// Load does not validate providers: a single file is only ever one layer of
+// the final config (see LoadProject), and a layer may legitimately be
+// incomplete on its own — a project override naming only a provider's
+// api_key_env is not a complete providers entry by itself, but the merged
+// result must be. Provider validation therefore runs once, on the merged
+// config; see validateProviders and mergeAndValidate. Plugins are not
+// merged field by field (a non-empty project list replaces the user list
+// wholesale — see merge), so a per-file plugin is already the whole entry
+// and is validated here.
 func Load(path string) (*Config, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -161,16 +218,19 @@ func Load(path string) (*Config, error) {
 	if err := validatePlugins(c.Plugins); err != nil {
 		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
 	}
-	if err := validateProviders(c.Providers); err != nil {
-		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
-	}
 	return &c, nil
 }
 
 // validateProviders fails loudly on a providers entry that cannot possibly
 // be wired: an unrecognized Type (a typo must not silently produce no
-// adapter at startup — same philosophy as validatePlugins) or a
-// TypeOpenAICompat entry missing the BaseURL it has no built-in default for.
+// adapter at startup — same philosophy as validatePlugins), an empty Type
+// on a key that is neither native (nativeProviderKeys) nor native-default
+// (nativeDefaultProviders), or a TypeOpenAICompat entry missing the BaseURL
+// it has no built-in default for. Callers must run applyProviderDefaults on
+// the same (fully merged) providers map first, so a nativeDefaultProviders
+// key that only overrides one field is validated as the complete entry it
+// becomes after defaulting, not the partial one a single config layer
+// wrote.
 func validateProviders(providers map[string]Provider) error {
 	for name, p := range providers {
 		switch p.Type {
@@ -243,6 +303,13 @@ func Path() string {
 // A missing project file is not an error; the user config is returned as-is
 // (Load yields a zero-value Config for a missing file, and merging a zero
 // override is a no-op).
+//
+// Providers are validated once, here, after the two layers are merged and
+// applyProviderDefaults has filled in any nativeDefaultProviders field an
+// entry left empty — never per file (see Load) — so a project override
+// naming only a provider's api_key_env is validated as the complete entry
+// it becomes once merged with the user layer (or with a native default),
+// not rejected as incomplete on its own.
 func LoadProject(dir string) (*Config, error) {
 	user, err := Load(Path())
 	if err != nil {
@@ -252,7 +319,21 @@ func LoadProject(dir string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	return merge(user, proj), nil
+	return mergeAndValidate(user, proj)
+}
+
+// mergeAndValidate merges over onto base (see merge), applies built-in
+// field defaults to any nativeDefaultProviders entry present in the result
+// (see applyProviderDefaults), and validates the merged providers map (see
+// validateProviders). This is the single point where a providers entry is
+// judged complete or incomplete: always after layering, never per file.
+func mergeAndValidate(base, over *Config) (*Config, error) {
+	out := merge(base, over)
+	applyProviderDefaults(out.Providers)
+	if err := validateProviders(out.Providers); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	return out, nil
 }
 
 // merge returns base overlaid with the non-zero fields of over. The result
