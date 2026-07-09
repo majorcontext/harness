@@ -211,6 +211,15 @@ func (s *Session) writeRecord(rec record) error {
 	return err
 }
 
+// ErrInvalidSessionID is returned (wrapped) by LoadSession when id fails
+// ValidSessionID's two-format rule. It is checked before sessionPath ever
+// builds a filesystem path, so a path-traversal-shaped id (e.g.
+// "../../etc/passwd") is rejected without touching disk — defense in depth
+// alongside the HTTP boundary's own ValidSessionID check (server/handlers.go),
+// since not every caller (e.g. the CLI's -r/-c resume flags) goes through
+// that boundary.
+var ErrInvalidSessionID = errors.New("engine: invalid session id")
+
 // LoadSession rebuilds a session from its log file: history and current
 // model (the last model record wins; Config.Model otherwise), preserving the
 // session ID. Subsequent appends continue the same file.
@@ -220,6 +229,9 @@ func (s *Session) writeRecord(rec record) error {
 func LoadSession(cfg Config, id string) (*Session, error) {
 	if cfg.SessionDir == "" {
 		return nil, errors.New("engine: LoadSession requires Config.SessionDir")
+	}
+	if !ValidSessionID(id) {
+		return nil, fmt.Errorf("%w: %q", ErrInvalidSessionID, id)
 	}
 	data, err := os.ReadFile(sessionPath(cfg.SessionDir, id))
 	if err != nil {

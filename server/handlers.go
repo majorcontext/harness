@@ -37,6 +37,24 @@ type goalJSON struct {
 	LastReason string `json:"last_reason,omitempty"`
 }
 
+// sessionIDOrNotFound extracts {id} from the request path and validates it
+// with engine.ValidSessionID (legacy "ses_" + 16 hex, or a well-formed "ses"
+// TypeID), writing 404 and returning ok=false otherwise. Every handler
+// keyed by {id} must call this before touching the session directory or
+// s.sessions: net/http's ServeMux splits routing segments on the RAW,
+// still-percent-encoded path, so a single segment spelled "..%2fleaked"
+// matches "/session/{id}" and PathValue decodes it to "../leaked" — parsing
+// at this boundary, rather than trusting whatever came back from
+// os.ReadFile/filepath.Join, is what keeps that from escaping SessionDir.
+func (s *Server) sessionIDOrNotFound(w http.ResponseWriter, r *http.Request) (string, bool) {
+	id := r.PathValue("id")
+	if !engine.ValidSessionID(id) {
+		writeErr(w, http.StatusNotFound, "no such session")
+		return "", false
+	}
+	return id, true
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"version": s.opts.Version})
 }
@@ -115,7 +133,11 @@ func (s *Server) handleList(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
-	sess, status, ok := s.lookup(r.PathValue("id"))
+	id, ok := s.sessionIDOrNotFound(w, r)
+	if !ok {
+		return
+	}
+	sess, status, ok := s.lookup(id)
 	if !ok {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
@@ -124,7 +146,11 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
-	sess, _, ok := s.lookup(r.PathValue("id"))
+	id, ok := s.sessionIDOrNotFound(w, r)
+	if !ok {
+		return
+	}
+	sess, _, ok := s.lookup(id)
 	if !ok {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
@@ -157,7 +183,10 @@ type paramsJSON struct {
 // persisted), so a session that has not prompted this process is 404 —
 // including a valid, on-disk session that has only been created.
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id, ok := s.sessionIDOrNotFound(w, r)
+	if !ok {
+		return
+	}
 	s.mu.Lock()
 	snap := s.lastRequest[id]
 	s.mu.Unlock()
@@ -219,7 +248,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id, ok := s.sessionIDOrNotFound(w, r)
+	if !ok {
+		return
+	}
 	var body struct {
 		Parts []struct {
 			Type string `json:"type"`
@@ -312,7 +344,10 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 // evaluator model comes from Options.GoalEvaluator (config goal_evaluator_model);
 // when unset, goals are rejected with 400.
 func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id, ok := s.sessionIDOrNotFound(w, r)
+	if !ok {
+		return
+	}
 	if s.opts.GoalEvaluator.IsZero() {
 		writeErr(w, http.StatusBadRequest, "goal_evaluator_model is not configured; goals are unavailable")
 		return
@@ -400,7 +435,10 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 // disk) is 404; a known session is 204 whether or not a goal was active
 // (idempotent — no goal.cleared is journaled when nothing was active).
 func (s *Server) handleGoalDelete(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id, ok := s.sessionIDOrNotFound(w, r)
+	if !ok {
+		return
+	}
 	s.mu.Lock()
 	st := s.sessions[id]
 	var cancel context.CancelFunc
@@ -461,7 +499,10 @@ func (s *Server) evictResidentLocked() {
 // have a prompt in flight, so a bare existence check suffices — the abort
 // never loads it into memory.
 func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id, ok := s.sessionIDOrNotFound(w, r)
+	if !ok {
+		return
+	}
 	s.mu.Lock()
 	st := s.sessions[id]
 	var cancel context.CancelFunc
