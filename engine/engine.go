@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -346,8 +347,15 @@ func (s *Session) emitToolExecuteEnd(tool, callID string, ok bool) {
 // emitSessionError notifies plugins that a prompt/turn terminated with an
 // error. Only the error string is carried — no stack traces, request/response
 // bodies, or secrets.
+//
+// context.Canceled is deliberately excluded: a cancelled context is an
+// operator-initiated stop (POST /abort, DELETE /goal, server drain), not a
+// failure — the server layer draws the same line (runPrompt/runGoal in
+// server/handlers.go journal it as session.aborted / a clean stop, never
+// session.error). Emitting session.error for every cancellation would be
+// noisy and misleading to plugins reacting to it as a real fault.
 func (s *Session) emitSessionError(err error) {
-	if s.cfg.Hooks == nil || err == nil {
+	if s.cfg.Hooks == nil || err == nil || errors.Is(err, context.Canceled) {
 		return
 	}
 	props, _ := json.Marshal(plugin.SessionErrorProperties{Message: err.Error()})

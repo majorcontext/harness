@@ -38,11 +38,12 @@ func sessionErrorMessages(t *testing.T, hooks *fakeHooks) []string {
 // loop always offers built-in tools, while the goal evaluator's one-shot
 // request is deliberately tool-less. Each side is scripted independently.
 type goalProvider struct {
-	worker   [][]provider.Event
-	eval     [][]provider.Event
-	wi, ei   int
-	requests []*provider.Request
-	failCtx  bool // when true, honor ctx cancellation in Stream
+	worker     [][]provider.Event
+	eval       [][]provider.Event
+	wi, ei     int
+	requests   []*provider.Request
+	failCtx    bool  // when true, honor ctx cancellation in Stream
+	failWorker error // when set, the next worker call fails with this error
 }
 
 func (p *goalProvider) Name() string { return "test" }
@@ -52,6 +53,9 @@ func (p *goalProvider) Stream(ctx context.Context, req *provider.Request) (provi
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+	}
+	if p.failWorker != nil && len(req.Tools) != 0 {
+		return nil, p.failWorker
 	}
 	p.requests = append(p.requests, req)
 	if len(req.Tools) == 0 {
@@ -270,6 +274,25 @@ func TestPursueGoalUnparseableThenRecovers(t *testing.T) {
 	}
 }
 
+// TestPursueGoalWorkerFailureEmitsOnce covers a genuine (non-cancellation)
+// provider failure on the worker turn Prompt call inside the goal loop:
+// Prompt itself emits session.error for it, and PursueGoal must return the
+// error without emitting a second time for the same failure.
+func TestPursueGoalWorkerFailureEmitsOnce(t *testing.T) {
+	workerErr := errors.New("worker provider exploded")
+	prov := &goalProvider{failWorker: workerErr}
+	hooks := &fakeHooks{}
+	s := goalSession(t, prov, t.TempDir(), hooks)
+
+	_, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+	if !errors.Is(err, workerErr) {
+		t.Fatalf("err = %v, want %v", err, workerErr)
+	}
+	if msgs := sessionErrorMessages(t, hooks); len(msgs) != 1 || msgs[0] != err.Error() {
+		t.Errorf("session.error messages = %v, want exactly [%q]", msgs, err.Error())
+	}
+}
+
 func TestPursueGoalContextCancel(t *testing.T) {
 	prov := &goalProvider{
 		failCtx: true,
@@ -286,11 +309,14 @@ func TestPursueGoalContextCancel(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
-	// This error surfaces from within Prompt's own streamTurn, which already
-	// emits session.error itself — the goal loop must not double-emit for an
-	// error it merely propagated from Prompt.
-	if msgs := sessionErrorMessages(t, hooks); len(msgs) != 1 || msgs[0] != err.Error() {
-		t.Errorf("session.error messages = %v, want exactly [%q]", msgs, err.Error())
+	// context.Canceled is a deliberate stop (abort/drain/DELETE-goal), not a
+	// failure — it must emit no session.error at all, from either Prompt (which
+	// observes it first, inside streamTurn) or PursueGoal (which merely
+	// propagates it). Asserting zero here is also what rules out the failure
+	// mode where both layers treat the same cancellation as an error and each
+	// emits its own session.error for it.
+	if msgs := sessionErrorMessages(t, hooks); len(msgs) != 0 {
+		t.Errorf("session.error messages = %v, want none for a cancelled context", msgs)
 	}
 }
 
