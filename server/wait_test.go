@@ -301,6 +301,64 @@ func TestWaitUnblocksOnGoalCompletion(t *testing.T) {
 	}
 }
 
+// TestWaitUnblocksOnGoalCleared covers the other goal-done terminal: DELETE
+// /session/{id}/goal (cleared, not achieved) must also wake a registered
+// wait, with goal.achieved false distinguishing it from
+// TestWaitUnblocksOnGoalCompletion's achieved terminal.
+func TestWaitUnblocksOnGoalCleared(t *testing.T) {
+	prov := &goalProv{
+		name:        "test",
+		blockWorker: true,
+		started:     make(chan struct{}),
+		eval:        [][]provider.Event{asstTurn("MET: ok")},
+	}
+	h := newGoalHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond"})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
+	}
+	<-prov.started // goal active, worker blocked indefinitely
+
+	type result struct {
+		resp *http.Response
+		data []byte
+	}
+	waitDone := make(chan result, 1)
+	go func() {
+		resp, data := h.do("GET", "/session/"+id+"/wait?until=goal-done&timeout_s=30", nil)
+		waitDone <- result{resp, data}
+	}()
+	waitForWaiterCount(t, h.srv, 1)
+
+	resp, _ = h.do("DELETE", "/session/"+id+"/goal", nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE goal = %d, want 204", resp.StatusCode)
+	}
+
+	res := <-waitDone
+	if res.resp.StatusCode != 200 {
+		t.Fatalf("wait status %d: %s", res.resp.StatusCode, res.data)
+	}
+	var wr waitJSON
+	if err := json.Unmarshal(res.data, &wr); err != nil {
+		t.Fatal(err)
+	}
+	if wr.State == "goal-running" {
+		t.Errorf("wait response state = %q, want not goal-running (goal cleared)", wr.State)
+	}
+	if wr.Goal == nil {
+		t.Fatal("wait response missing goal")
+	}
+	if wr.Goal.Active {
+		t.Error("wait response goal.active = true, want false (cleared is terminal)")
+	}
+	if wr.Goal.Achieved {
+		t.Error("wait response goal.achieved = true, want false (this terminal was a clear, not an achievement)")
+	}
+}
+
 // TestWaitTimeoutReturnsCleanly is the red-first test for the timeout path:
 // a goal that never completes (worker permanently blocked, released only by
 // context cancellation) must make GET /wait return cleanly — 200, current
