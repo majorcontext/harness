@@ -562,3 +562,64 @@ func TestHTTPContextCancellation(t *testing.T) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 }
+
+// TestHTTPCloseSessionDeleteBounded exercises the best-effort session
+// termination DELETE that Close issues: a server that accepts the DELETE
+// but never responds must not be able to wedge Close forever.
+//
+// Like TestHTTPRequestTimeout above, this uses a real httptest.Server (real
+// sockets, ungoverned by testing/synctest's fake clock) and a genuine
+// bounded wait instead of a synctest bubble; the assertion is a deadline on
+// the *test's* observation of Close returning, not a sleep standing in for
+// one.
+func TestHTTPCloseSessionDeleteBounded(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startOnce sync.Once
+
+	fake := &fakeHTTPServer{sessionID: "sess-1"}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			startOnce.Do(func() { close(started) })
+			<-release
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		fake.serveHTTP(w, r)
+	})
+	httpSrv := httptest.NewServer(mux)
+	// Cleanup order is LIFO: release the wedged DELETE handler before
+	// httpSrv.Close() (which waits for outstanding requests) tries to shut
+	// the server down, or Close would deadlock waiting on it.
+	t.Cleanup(httpSrv.Close)
+	t.Cleanup(func() { close(release) })
+
+	tr := &HTTPTransport{Endpoint: httpSrv.URL}
+	// NewClient directly, not the newTestClient helper: that helper
+	// registers its own t.Cleanup(c.Close), which would race a second
+	// Close call against the one this test drives explicitly below.
+	c, err := NewClient(tr, Options{})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	mustInitialize(t, c)
+
+	done := make(chan error, 1)
+	go func() { done <- c.Close() }()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("server never received the session DELETE")
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close did not return within its bounded deadline; a server that never answers the session DELETE wedged it forever")
+	}
+}

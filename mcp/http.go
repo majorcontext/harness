@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // sessionIDHeader and protocolVersionHeader are the Streamable HTTP
@@ -240,17 +241,30 @@ func (t *httpTransport) notify(ctx context.Context, method string, params any) e
 	return nil
 }
 
+// closeSessionDeleteTimeout bounds the best-effort session termination
+// DELETE issued by close. It is deliberately independent of the caller's
+// context (close's signature takes none) and of t.client's Timeout (per
+// HTTPTransport.Client's doc, callers generally don't set one): without
+// its own deadline, a server that accepts the DELETE but never responds
+// would wedge close, and therefore Client.Close, forever.
+const closeSessionDeleteTimeout = 2 * time.Second
+
 func (t *httpTransport) close() error {
 	// The transport itself holds no persistent connection to release
 	// (each call is an independent HTTP request); per spec, session
-	// termination is a courtesy DELETE, not a requirement.
+	// termination is a courtesy DELETE, not a requirement. It is
+	// best-effort in both directions: the server may ignore or reject it
+	// (see the nilerr suppressions below), and this side bounds its own
+	// wait rather than trust the server to answer promptly.
 	t.mu.Lock()
 	sessionID := t.sessionID
 	t.mu.Unlock()
 	if sessionID == "" {
 		return nil
 	}
-	req, err := http.NewRequest(http.MethodDelete, t.endpoint, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), closeSessionDeleteTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, t.endpoint, nil)
 	if err != nil {
 		return nil //nolint:nilerr // best-effort
 	}
@@ -260,7 +274,7 @@ func (t *httpTransport) close() error {
 	}
 	resp, err := t.client.Do(req)
 	if err != nil {
-		return nil //nolint:nilerr // best-effort; server may not support DELETE
+		return nil //nolint:nilerr // best-effort; server may not support DELETE, or may never respond (bounded by closeSessionDeleteTimeout above)
 	}
 	defer resp.Body.Close()
 	return nil
