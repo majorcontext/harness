@@ -524,13 +524,18 @@ func TestPluginManifestCacheSaveAtomic(t *testing.T) {
 	}()
 
 	for i := 0; i < 300; i++ {
-		c := &pluginManifestCache{Entries: map[string]plugin.Manifest{}}
+		c := &pluginManifestCache{Entries: map[string]pluginCacheEntry{}}
 		for j := 0; j < 50; j++ {
 			name := fmt.Sprintf("plugin-%d-%d", i, j)
-			c.Entries[name+"@hash"] = plugin.Manifest{
-				Name:            name,
-				ProtocolVersion: 1,
-				Hooks:           []plugin.Hook{plugin.HookEvent, plugin.HookChatParams, plugin.HookSystemTransform, plugin.HookShellEnv},
+			c.Entries[name+"@hash"] = pluginCacheEntry{
+				BinaryHash: "hash",
+				Size:       1,
+				ModTimeNS:  1,
+				Manifest: plugin.Manifest{
+					Name:            name,
+					ProtocolVersion: 1,
+					Hooks:           []plugin.Hook{plugin.HookEvent, plugin.HookChatParams, plugin.HookSystemTransform, plugin.HookShellEnv},
+				},
 			}
 		}
 		if err := c.save(path); err != nil {
@@ -781,5 +786,111 @@ func TestBuildPluginHostDirChangeReprobes(t *testing.T) {
 	spawnsB := countLines(t, spawnLog)
 	if spawnsB == spawnsA {
 		t.Errorf("changing plugin Dir without rebuilding the binary did not trigger a re-probe: spawns %d -> %d, want spawnsB > spawnsA", spawnsA, spawnsB)
+	}
+}
+
+// TestBuildPluginSpecsUnchangedDoesNotRehash proves finding (2): given an
+// unchanged binary and an unchanged spec, a second buildPluginSpecs call
+// reading the same on-disk cache must not re-hash the plugin's executable
+// at all — the stat (size, mtime) fast path alone must be enough to trust
+// the cached manifest. pluginBinaryHashCalls is the test hook that makes
+// "did it hash the file" countable rather than inferred indirectly.
+func TestBuildPluginSpecsUnchangedDoesNotRehash(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "plug")
+	if err := os.WriteFile(p, []byte("v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plugins := []config.PluginSpec{{Name: "hashplug", Command: []string{p}}}
+
+	cache := &pluginManifestCache{Entries: map[string]pluginCacheEntry{}}
+	specDigest, err := pluginSpecDigest(nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, size, modTimeNS, err := pluginBinaryIdentity([]string{p}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := pluginBinaryHashAt(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache.Entries[pluginCacheKey("hashplug", specDigest)] = pluginCacheEntry{
+		BinaryHash: hash,
+		Size:       size,
+		ModTimeNS:  modTimeNS,
+		Manifest:   plugin.Manifest{Name: "hashplug"},
+	}
+
+	before := pluginBinaryHashCalls.Load()
+	specs, dirty, err := buildPluginSpecs(context.Background(), plugins, cache)
+	if err != nil {
+		t.Fatalf("buildPluginSpecs: %v", err)
+	}
+	if dirty {
+		t.Errorf("buildPluginSpecs with an unchanged binary and unchanged spec reported dirty=true, want false (no re-probe, no cache write needed)")
+	}
+	if len(specs) != 1 || specs[0].Manifest.Name != "hashplug" {
+		t.Fatalf("specs = %+v, want the cached manifest reused", specs)
+	}
+	after := pluginBinaryHashCalls.Load()
+	if after != before {
+		t.Errorf("pluginBinaryHashCalls went %d -> %d, want unchanged: an unchanged binary + unchanged spec must be trusted via stat alone, not re-hashed", before, after)
+	}
+}
+
+// TestBuildPluginSpecsTouchedBinaryFallsBackToHash proves the other half of
+// finding (2): when the executable's mtime changes (e.g. `touch`, or a
+// rebuild that reproduces byte-identical output), the stat fast path can't
+// rule out a change by itself, so buildPluginSpecs must fall back to
+// hashing the content — and, since the content here is unchanged, trust the
+// existing manifest (no re-probe) while refreshing the stored stat so the
+// next startup is fast again.
+func TestBuildPluginSpecsTouchedBinaryFallsBackToHash(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "plug")
+	if err := os.WriteFile(p, []byte("v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plugins := []config.PluginSpec{{Name: "touchplug", Command: []string{p}}}
+
+	cache := &pluginManifestCache{Entries: map[string]pluginCacheEntry{}}
+	specDigest, err := pluginSpecDigest(nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := pluginBinaryHashAt(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Deliberately stale (size, mtime) so the fast path can't match — as if
+	// the binary had been touched since this entry was cached.
+	cache.Entries[pluginCacheKey("touchplug", specDigest)] = pluginCacheEntry{
+		BinaryHash: hash,
+		Size:       999999,
+		ModTimeNS:  1,
+		Manifest:   plugin.Manifest{Name: "touchplug"},
+	}
+
+	before := pluginBinaryHashCalls.Load()
+	specs, dirty, err := buildPluginSpecs(context.Background(), plugins, cache)
+	if err != nil {
+		t.Fatalf("buildPluginSpecs: %v", err)
+	}
+	after := pluginBinaryHashCalls.Load()
+	if after == before {
+		t.Errorf("pluginBinaryHashCalls unchanged after a stat mismatch, want it to fall back to hashing the content")
+	}
+	if specs[0].Manifest.Name != "touchplug" {
+		t.Errorf("manifest = %+v, want the cached manifest reused (content hash matched despite stat mismatch)", specs[0].Manifest)
+	}
+	key := pluginCacheKey("touchplug", specDigest)
+	entry := cache.Entries[key]
+	if entry.Size != 2 { // len("v1")
+		t.Errorf("cache entry Size after refresh = %d, want the real file size (2)", entry.Size)
+	}
+	if !dirty {
+		t.Errorf("buildPluginSpecs did not report dirty=true after refreshing stat fields, want the caller to persist the refreshed entry")
 	}
 }
