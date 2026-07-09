@@ -121,7 +121,7 @@ func TestSessionPersistErrForwardedOnce(t *testing.T) {
 		o.OnError = coll.onError
 	})
 
-	sess, err := srv.opts.NewSession(message.ModelRef{Provider: "test", Model: "m1"})
+	sess, err := srv.opts.NewSession(message.ModelRef{Provider: "test", Model: "m1"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
