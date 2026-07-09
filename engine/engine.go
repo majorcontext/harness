@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -448,6 +449,19 @@ func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, er
 	for {
 		asst, stop, usage, err := s.streamTurn(ctx)
 		if err != nil {
+			var interrupted *interruptedTurnError
+			if errors.As(err, &interrupted) {
+				// The turn died after the model already emitted one or
+				// more tool_call blocks: append the model's intent and
+				// synthetic (never silently dropped) results for it
+				// before surfacing the failure, so history stays
+				// protocol-valid for every later request build — see
+				// interruptedTurnError's doc comment.
+				s.append(*interrupted.partial)
+				s.emit(Event{Type: EventMessage, Message: interrupted.partial})
+				toolMsg := interruptedToolResults(interrupted.partial)
+				s.append(toolMsg)
+			}
 			s.emitSessionError(err)
 			return nil, err
 		}
@@ -538,19 +552,157 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 	}
 	defer stream.Close()
 
+	// text and toolCalls accumulate this turn's content as it streams, so
+	// that if the stream dies (or otherwise errors) before EventDone, any
+	// tool_call already fully emitted is not simply lost — see the
+	// EventToolCall case below and interruptedTurnError's doc comment for
+	// why.
+	var text strings.Builder
+	var toolCalls []*message.ToolCall
 	for {
 		ev, err := stream.Next()
 		if err != nil {
-			return nil, "", provider.Usage{}, err
+			if len(toolCalls) == 0 {
+				// No tool call was ever recorded this turn: nothing can
+				// be orphaned, so this is an ordinary turn failure —
+				// identical to the pre-fix behavior.
+				return nil, "", provider.Usage{}, err
+			}
+			return nil, "", provider.Usage{}, &interruptedTurnError{
+				err:     err,
+				partial: s.assemblePartial(text.String(), toolCalls),
+			}
 		}
 		switch ev.Type {
 		case provider.EventTextDelta:
+			text.WriteString(ev.Text)
 			s.emit(Event{Type: EventTextDelta, Text: ev.Text})
 		case provider.EventReasoningDelta:
 			s.emit(Event{Type: EventReasoningDelta, Text: ev.Text})
+		case provider.EventToolCall:
+			// A complete tool_use/tool_call block: the provider has
+			// finished emitting its arguments (see
+			// provider/anthropic/anthropic.go's content_block_stop and
+			// provider/openaicompat/openaicompat.go's emitToolCalls), but
+			// the turn has not reached EventDone yet, so the engine has
+			// not (and must not, before the turn completes normally)
+			// executed it. Recorded here purely so a later stream death
+			// or error still has this call's identity to work with.
+			toolCalls = append(toolCalls, ev.ToolCall)
 		case provider.EventDone:
 			return ev.Message, ev.StopReason, ev.Usage, nil
 		}
+	}
+}
+
+// assemblePartial builds the assistant message streamTurn returns (wrapped
+// in an interruptedTurnError) when the stream errors after recording one or
+// more tool calls but before EventDone. It mirrors the shape a provider
+// adapter's own assemble (e.g. provider/anthropic/anthropic.go's
+// stream.assemble) would produce for the same partial content: any
+// accumulated text first, then the tool calls in emission order.
+func (s *Session) assemblePartial(text string, toolCalls []*message.ToolCall) *message.Message {
+	msg := &message.Message{
+		ID:        newID("msg"),
+		Role:      message.RoleAssistant,
+		Model:     s.Model(),
+		CreatedAt: time.Now().UTC(),
+	}
+	if text != "" {
+		msg.Parts = append(msg.Parts, &message.Text{Text: text})
+	}
+	for _, tc := range toolCalls {
+		msg.Parts = append(msg.Parts, tc)
+	}
+	return msg
+}
+
+// interruptedTurnErrorText is the Content text of the synthetic, is_error
+// tool-role result the engine appends for every tool call recorded in a
+// turn that ended abnormally before the engine could execute it (see
+// interruptedTurnError). Exported as a constant (not exported from the
+// package) so tests can assert on the exact string.
+const interruptedTurnErrorText = "interrupted: tool call was never executed because the turn ended abnormally"
+
+// interruptedTurnError is returned by streamTurn in place of the
+// underlying stream/provider error when that error arrived after the
+// stream had already emitted one or more complete tool_call blocks for the
+// in-flight assistant message (via provider.EventToolCall) but before
+// EventDone — i.e. before the engine could ever execute those calls.
+//
+// # Incident ses_01kx48z4rqfkpbwmzfdv1jzeg6
+//
+// A goal worker turn died with the Anthropic API 400 "tool_use ids were
+// found without tool_result blocks immediately after", and every
+// subsequent goal-loop retry then failed identically, killing the goal.
+// The mechanism: a provider stream died (or the turn otherwise errored)
+// after emitting one or more tool_call blocks but before the engine
+// executed them. Before this fix, Prompt's error path
+// (`if err != nil { return nil, err }`) simply discarded the assembled
+// partial message, which sounds safe — nothing entered history — except
+// that is exactly backwards from what actually poisons a session: the
+// danger here is not a partial message appended without its result (the
+// old truncated-Arguments incident's shape), it is that some OTHER call
+// path (a provider adapter's own retry, a resumed session replaying a
+// partially-journaled turn, a future change to this loop) could append
+// such a message without this same care. Recording the tool calls here
+// and synthesizing their results immediately — rather than leaving the
+// model's already-emitted intent to either vanish or, worse, reappear
+// unpaired from some other path later — is what keeps history
+// self-consistent at ingest, mirroring the primary fix for the sibling,
+// marshal-level incident (see message.Normalize's doc comment, "fix
+// (message,engine): truncated ToolCall.Arguments must never poison
+// history").
+//
+// Prompt handles this by appending partial (the assistant message,
+// exactly as if the turn had completed with these tool calls) followed
+// immediately by a synthetic tool-role message: one is_error ToolResult
+// per recorded call, Content interruptedTurnErrorText. This preserves the
+// model's visible intent (which tool it was calling, with what arguments)
+// while keeping the transcript replayable — every subsequent request
+// build sees a ToolCall immediately followed by its ToolResult, exactly
+// as every provider wire protocol requires, instead of replaying the
+// orphaned tool_use forever. The turn is still a failure: err (unwrapped
+// via Unwrap) is what Prompt ultimately returns to its caller, unchanged
+// from the caller's point of view — the goal loop's retry-count and
+// tool-executed-before-failing bookkeeping (see promptTurnWithRetry) sees
+// the same error it always would have, and toolExecCount is NOT
+// incremented (these calls never ran), so a retry is exactly as safe as
+// it always was for a turn that failed before executing anything.
+//
+// provider/anthropic/transcode.go and provider/openaicompat/transcode.go
+// carry the defense-in-depth counterpart (message.ResolveOrphanToolCalls)
+// for histories poisoned by any other producer; see that function's doc
+// comment.
+type interruptedTurnError struct {
+	err     error
+	partial *message.Message
+}
+
+func (e *interruptedTurnError) Error() string { return e.err.Error() }
+func (e *interruptedTurnError) Unwrap() error { return e.err }
+
+// interruptedToolResults builds the synthetic tool-role message Prompt
+// appends immediately after an interruptedTurnError's partial assistant
+// message: one is_error ToolResult per ToolCall part in partial, in order.
+func interruptedToolResults(partial *message.Message) message.Message {
+	var results message.Parts
+	for _, p := range partial.Parts {
+		tc, ok := p.(*message.ToolCall)
+		if !ok {
+			continue
+		}
+		results = append(results, &message.ToolResult{
+			CallID:  tc.CallID,
+			Content: message.Parts{&message.Text{Text: interruptedTurnErrorText}},
+			IsError: true,
+		})
+	}
+	return message.Message{
+		ID:        newID("msg"),
+		Role:      message.RoleTool,
+		Parts:     results,
+		CreatedAt: time.Now().UTC(),
 	}
 }
 
