@@ -159,6 +159,13 @@ type Server struct {
 	// updated as goal.* events flow through Publish.
 	goalState map[string]*goalTracker
 
+	// waiters holds every in-flight GET /session/{id}/wait long-poll,
+	// registered for the duration of the request. notifyWaitersLocked (see
+	// journal.go) wakes matching waiters after every durable event so a
+	// waiter re-checks its condition instead of the server polling for it.
+	// Caller of any read/write here must hold mu.
+	waiters map[*waiter]struct{}
+
 	// goalDeleteRace is a test-only seam: when non-nil, handleGoalDelete
 	// invokes it after clearing the goal but before its own call to cancel,
 	// passing the loop's cancel func so a test can trigger it early — the
@@ -225,6 +232,7 @@ func New(opts Options) (*Server, error) {
 		lastReqHash:    make(map[string]string),
 		lastPersistErr: make(map[string]string),
 		goalState:      make(map[string]*goalTracker),
+		waiters:        make(map[*waiter]struct{}),
 		closing:        make(chan struct{}),
 	}
 	if err := s.reconcile(); err != nil {
@@ -243,6 +251,7 @@ func (s *Server) routes() {
 	// mistaken for a session named "status".
 	mux.HandleFunc("GET /session/status", s.auth(s.handleStatus))
 	mux.HandleFunc("GET /session/{id}", s.auth(s.handleGet))
+	mux.HandleFunc("GET /session/{id}/wait", s.auth(s.handleWait))
 	mux.HandleFunc("GET /session/{id}/message", s.auth(s.handleMessages))
 	mux.HandleFunc("GET /session/{id}/request", s.auth(s.handleRequest))
 	mux.HandleFunc("POST /session/{id}/prompt_async", s.auth(s.handlePrompt))

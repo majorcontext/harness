@@ -274,6 +274,26 @@ func (s *Server) emitDurableLocked(ev *Event) {
 	s.writeJournalLocked(*ev)
 	s.journal = append(s.journal, *ev)
 	s.fanoutLocked(*ev)
+	s.notifyWaitersLocked(ev.SessionID)
+}
+
+// notifyWaitersLocked wakes every GET /session/{id}/wait long-poll registered
+// for sessionID (or, in principle, unfiltered) so it re-checks its condition
+// against current state — never by pushing the new state itself, since a
+// waiter always re-derives state fresh (see Server.waitSnapshot). That is
+// what makes the non-blocking, coalescing send below safe: a dropped or
+// coalesced wake can never strand a waiter, because the next one (or the one
+// already pending) causes the same fresh re-check. Caller holds s.mu.
+func (s *Server) notifyWaitersLocked(sessionID string) {
+	for wt := range s.waiters {
+		if wt.session != "" && wt.session != sessionID {
+			continue
+		}
+		select {
+		case wt.ch <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // publishLive fans a non-durable event out to clients without journaling it.

@@ -21,10 +21,35 @@ type sessionJSON struct {
 	CreatedAt time.Time        `json:"created_at"`
 	Model     message.ModelRef `json:"model"`
 	Status    string           `json:"status"`
-	Messages  int              `json:"messages"`
-	Seq       int64            `json:"seq,omitempty"`
-	Goal      *goalJSON        `json:"goal,omitempty"`
-	WorkDir   string           `json:"workdir"`
+	// State is the unambiguous composite: idle, busy, or goal-running. Kept
+	// alongside Status (never replacing it) for backward compat. Precedence:
+	// goal-running wins whenever a goal is active, REGARDLESS of the momentary
+	// worker status — including the goal loop's between-turn gap (worker
+	// finished a turn, evaluator hasn't answered yet) where Status alone would
+	// still read "busy" (the server's busy/idle transition brackets the WHOLE
+	// PursueGoal call, not each turn) but a naive orchestrator inferring
+	// progress from "status=idle plus goal.active" elsewhere is exactly the
+	// ambiguity this field exists to remove. See compositeState.
+	State    string    `json:"state"`
+	Messages int       `json:"messages"`
+	Seq      int64     `json:"seq,omitempty"`
+	Goal     *goalJSON `json:"goal,omitempty"`
+	WorkDir  string    `json:"workdir"`
+}
+
+// compositeState resolves the unambiguous Session.state field: goal-running
+// whenever a goal is active, regardless of the momentary running/busy flag
+// (see sessionJSON.State's doc comment for why momentary busy/idle is not
+// enough); otherwise busy or idle mirroring the plain status.
+func compositeState(running, goalActive bool) string {
+	switch {
+	case goalActive:
+		return "goal-running"
+	case running:
+		return "busy"
+	default:
+		return "idle"
+	}
 }
 
 // goalJSON is the Session.goal sub-object: present only when a goal has been
@@ -218,7 +243,8 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	type entry struct {
-		Type string `json:"type"`
+		Type  string `json:"type"`
+		State string `json:"state"`
 	}
 	result := map[string]entry{}
 
@@ -233,7 +259,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	}
 	s.mu.Unlock()
 	for _, m := range mem {
-		result[m.id] = entry{Type: statusStr(m.running)}
+		result[m.id] = entry{Type: statusStr(m.running), State: s.compositeStateFor(m.id, m.running)}
 	}
 	infos, err := engine.ListSessions(s.opts.SessionDir)
 	if err != nil {
@@ -242,10 +268,20 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	}
 	for _, info := range infos {
 		if _, ok := result[info.ID]; !ok {
-			result[info.ID] = entry{Type: "idle"}
+			result[info.ID] = entry{Type: "idle", State: s.compositeStateFor(info.ID, false)}
 		}
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// compositeStateFor resolves the composite state for a session ID using this
+// process's goal tracker (see compositeState) — the same source Session JSON
+// uses, so /session/status and GET /session/{id} agree.
+func (s *Server) compositeStateFor(id string, running bool) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g := s.goalState[id]
+	return compositeState(running, g != nil && g.active)
 }
 
 func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
@@ -702,6 +738,7 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 		CreatedAt: sess.CreatedAt(),
 		Model:     sess.Model(),
 		Status:    status,
+		State:     compositeState(status == "busy", goal != nil && goal.Active),
 		Messages:  len(sess.History()),
 		Seq:       seq,
 		Goal:      goal,
