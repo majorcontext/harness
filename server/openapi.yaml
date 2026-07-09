@@ -60,7 +60,7 @@ components:
 
     Session:
       type: object
-      required: [id, created_at, model, status, messages, workdir]
+      required: [id, created_at, model, status, state, messages, workdir]
       properties:
         id:
           type: string
@@ -72,6 +72,13 @@ components:
           $ref: "#/components/schemas/ModelRef"
         status:
           $ref: "#/components/schemas/SessionStatus"
+          description: >
+            Kept for backward compat: engine truth for the momentary
+            busy/idle transition around one prompt or goal-loop call. Prefer
+            `state` for anything progress-related — see its description for
+            why `status` alone is ambiguous during a goal loop.
+        state:
+          $ref: "#/components/schemas/SessionState"
         messages:
           type: integer
           description: Count of messages in the session log.
@@ -92,6 +99,24 @@ components:
             in the session log header). Defaults to the serve process's
             current working directory when POST /session omitted workdir.
           example: /workspace/task-42
+
+    SessionState:
+      type: string
+      enum: [idle, busy, goal-running]
+      description: >
+        The unambiguous composite state, surfacing both Session.status and
+        Session.goal.active as a single value so an orchestrator never has to
+        combine them itself. Precedence: `goal-running` whenever goal.active
+        is true, REGARDLESS of the momentary `status` value — the server's
+        busy/idle transition brackets the whole goal-loop call (one POST
+        /session/{id}/goal to its achieve/clear), not each worker turn, so
+        `status` alone cannot distinguish "between turns, still working" from
+        "actually idle, waiting for the next prompt". Without this field, a
+        client inferring progress from status=idle plus goal.active hits
+        exactly that ambiguity — and can false-fire a liveness/stall monitor
+        during a goal loop's between-turn gap (worker turn done, evaluator
+        hasn't answered yet). Otherwise `busy` or `idle` mirrors `status`
+        directly. Poll it, or long-poll it via GET /session/{id}/wait.
 
     GoalSummary:
       type: object
@@ -134,7 +159,10 @@ components:
       enum: [idle, busy]
       description: >
         Engine truth: busy while a prompt is being processed, idle
-        otherwise. Independent of client connections.
+        otherwise. Independent of client connections. See SessionState for
+        the composite field that additionally folds in goal.active — prefer
+        it over this field alone when inferring whether a session is
+        actually available for a new interaction.
 
     ModelRef:
       type: string
@@ -688,18 +716,76 @@ paths:
               schema:
                 type: object
                 description: >
-                  Values are deliberately wrapped as {"type": <status>} —
-                  byte-compatible with opencode's /session/status response
-                  shape, so existing orchestration handlers port without
-                  parsing changes. Session.status and Event.status use the
-                  bare SessionStatus string; only this endpoint wraps it,
+                  Values are deliberately wrapped as {"type": <status>,
+                  "state": <state>} — the "type" key is byte-compatible with
+                  opencode's /session/status response shape, so existing
+                  orchestration handlers port without parsing changes;
+                  "state" is additive. Session.status and Event.status use
+                  the bare SessionStatus string; only this endpoint wraps it,
                   and only for compatibility.
                 additionalProperties:
                   type: object
-                  required: [type]
+                  required: [type, state]
                   properties:
                     type: { $ref: "#/components/schemas/SessionStatus" }
+                    state: { $ref: "#/components/schemas/SessionState" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /session/{id}/wait:
+    get:
+      operationId: waitForSession
+      summary: Long-poll a session's composite state.
+      description: >
+        Returns immediately if the requested condition already holds;
+        otherwise blocks until it holds or `timeout_s` elapses, then responds
+        200 either way with the current {state, goal} — the caller
+        distinguishes "condition met" from "timed out" by checking the
+        returned state/goal against what it asked for (e.g. state still
+        goal-running after requesting until=goal-done means it timed out).
+        Built on the server's existing durable-event fanout: no server-side
+        polling. A disconnect (client goes away before the condition holds)
+        cleanly unregisters the wait with no resource leak.
+
+        `until=idle` waits for state to read idle (not busy, no active
+        goal). `until=goal-done` waits for the goal to become inactive —
+        achieved or cleared, distinguished via goal.achieved in the
+        response — or resolves immediately if the session never had a goal.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+        - name: until
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [idle, goal-done]
+        - name: timeout_s
+          in: query
+          schema:
+            type: integer
+            default: 30
+          description: >
+            Positive integer seconds; defaults to 30 when omitted, capped at
+            300 when larger. Zero or negative is a 400.
+      responses:
+        "200":
+          description: >
+            The condition held (immediately or after blocking), or timeout_s
+            elapsed — see the summary for how a caller tells the two apart.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [state]
+                properties:
+                  state: { $ref: "#/components/schemas/SessionState" }
+                  goal: { $ref: "#/components/schemas/GoalSummary" }
+        "400":
+          description: Invalid `until` or `timeout_s`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /event:
     get:
