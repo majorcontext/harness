@@ -307,29 +307,48 @@ const mcpCloseTimeout = 10 * time.Second
 // Close closes every connected client concurrently, bounded by
 // mcpCloseTimeout. Safe to call even if no server was ever connected.
 //
-// Close interlocks with ensureConnected via the same connectOnce before it
-// ever reads m.clients: connectMCPServer's clients only land in m.clients
-// at the very end of the one-time connect step (see ensureConnected), so a
-// Close racing a caller's still-in-flight first Tools()/CallTool() could
+// Close interlocks with ensureConnected via the very same connectOnce
+// before it ever reads m.clients — but it must never be what *initiates* a
+// first connect. connectMCPServer's clients only land in m.clients at the
+// very end of the one-time connect step (see ensureConnected), so a Close
+// racing a caller's still-in-flight first Tools()/CallTool() could
 // otherwise observe the zero-value nil map, close nothing, and return —
 // moments later the racing connect finishes and populates m.clients with a
 // client (or, for a stdio server, a spawned child process) nobody will
 // ever close again, since connectOnce never retries or revisits it: a
-// silent leak. Calling ensureConnected here first guarantees that by the
-// time Close reads m.clients, any connect already in flight elsewhere has
-// completed (sync.Once serializes concurrent Do calls: a second caller
-// blocks until the first's function returns) and its clients are visible.
-// If no connect was ever triggered before Close, this call performs it
-// itself — bounded as usual by each server's own ConnectTimeout — so it
-// can close what it creates rather than skip connecting only to leak
-// nothing (there is nothing to leak) but also strand the servers'
-// processes/sessions unclosed forever if something else revives the
-// manager's clients map by some out-of-band means; this is a bounded,
-// occasionally-wasted connect-then-close on an otherwise never-used
-// manager, not a materially different cost than the same connect
-// happening on the very next request instead.
+// silent leak (this was the original Close-vs-first-connect race).
+//
+// A first fix called ensureConnected(ctx) here unconditionally, which
+// correctly interlocks with an in-flight connect but has a second, subtler
+// cost: if no caller had ever triggered a connect before Close ran, Close
+// itself became that first caller, live-dialing every configured server
+// just to immediately close it — up to ConnectTimeout (default 15s) of
+// pure shutdown latency for a harness serve process that never actually
+// received a prompt, bounded by the wrong timeout entirely (each server's
+// own ConnectTimeout, not mcpCloseTimeout, since Close was the one paying
+// for the connect rather than merely waiting on one already underway).
+//
+// Close therefore always calls connectOnce.Do with a no-op, never with the
+// real connect closure: sync.Once serializes every Do call regardless of
+// which function is passed — only the function belonging to whichever
+// caller's Do call is first to run actually executes, and every other
+// concurrent (or later) Do call blocks until that one function returns,
+// then itself returns without running its own function.
+//
+//   - If a real connect from some Tools()/CallTool()/CallServerTool caller
+//     is already in flight (or has already finished) elsewhere, this call
+//     blocks until it completes (preserving the original leak-fix
+//     interlock exactly) and then falls through to see m.clients fully
+//     populated, closing every client it finds.
+//   - If nothing had ever triggered a connect, this call's own no-op wins
+//     the race instead: it runs (near-instantly, touching no network),
+//     m.clients stays nil, and Close returns immediately with nothing to
+//     close. Because connectOnce is now permanently consumed, no later
+//     Tools()/CallTool()/CallServerTool call — even one arriving after
+//     Close has already returned — can start a connect either: it is
+//     exactly as if the manager were configured with no servers at all.
 func (m *MCPManager) Close(ctx context.Context) error {
-	m.ensureConnected(ctx)
+	m.connectOnce.Do(func() {})
 
 	m.mu.RLock()
 	clients := make([]*mcp.Client, 0, len(m.clients))

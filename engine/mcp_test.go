@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -667,6 +668,69 @@ func TestMCPManagerCloseWaitsForInFlightConnect(t *testing.T) {
 	defer mu.Unlock()
 	if len(deleteSessions) != 1 || deleteSessions[0] != wantSession {
 		t.Fatalf("server saw DELETE sessions = %v, want exactly [%q]: Close must close the client the racing first connect created, not leak it", deleteSessions, wantSession)
+	}
+}
+
+// TestMCPManagerCloseOfNeverPromptedManagerNeverConnects is the regression
+// test for the follow-up finding on PR #51's Close-vs-first-connect race
+// fix: Close interlocked with an in-flight connect by calling
+// ensureConnected itself, unconditionally — so a harness serve process
+// configured with MCP servers that never received a single prompt before
+// shutdown would still CONNECT every configured server just to
+// immediately close it: up to ConnectTimeout of pure shutdown latency,
+// bounded by the wrong timeout entirely (ConnectTimeout, not
+// mcpCloseTimeout, since Close was the one *initiating* the connect
+// rather than waiting on one already in flight).
+//
+// Close must never be what initiates a first connect — only ever interlock
+// with one already started by a real caller. The server here gates every
+// request (including the very first one) on a channel the test never
+// releases during the assertions (closed only in Cleanup, per AGENTS.md's
+// hang-simulation pattern), with ConnectTimeout set small so a
+// wrongly-triggered connect attempt still resolves (as a failure) quickly
+// rather than hanging the test — but any request reaching the server at
+// all is the bug: fixed code must never even dial out.
+//
+// It also covers the ordering the fix must additionally guarantee: a
+// Tools() call arriving after such a Close must not get to start a late
+// connect either, since connectOnce is only ever consumed once.
+func TestMCPManagerCloseOfNeverPromptedManagerNeverConnects(t *testing.T) {
+	block := make(chan struct{})
+	var requests int32
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		<-block // held open for the whole test; only Cleanup releases it
+	})
+	hs := httptest.NewServer(handler)
+	t.Cleanup(hs.Close)
+	// Registered after t.Cleanup(hs.Close): cleanups run LIFO, so this
+	// closes the block channel (unblocking any stuck handler) before
+	// hs.Close blocks waiting for it to return.
+	t.Cleanup(func() { close(block) })
+
+	mgr := NewMCPManager(map[string]MCPServerConfig{
+		"svc": {URL: hs.URL, ConnectTimeout: 30 * time.Millisecond},
+	})
+
+	start := time.Now()
+	if err := mgr.Close(context.Background()); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Errorf("Close of a never-prompted manager took %s, want near-instant (no connect attempt)", elapsed)
+	}
+	if n := atomic.LoadInt32(&requests); n != 0 {
+		t.Fatalf("server saw %d request(s), want 0: Close of a never-prompted manager must never initiate a connect", n)
+	}
+
+	// A Tools() call arriving after such a Close must not start a late
+	// connect either — connectOnce was already consumed by Close.
+	defs := mgr.Tools(context.Background())
+	if len(defs) != 0 {
+		t.Errorf("Tools() after Close = %+v, want empty (no late connect)", defs)
+	}
+	if n := atomic.LoadInt32(&requests); n != 0 {
+		t.Fatalf("server saw %d request(s) after a post-Close Tools() call, want 0: Close must permanently prevent any later first connect", n)
 	}
 }
 
