@@ -91,17 +91,34 @@ type PluginSpec struct {
 // the only non-empty Provider.Type value Load accepts today.
 const TypeOpenAICompat = "openai-compat"
 
+// nativeProviderKeys are the only providers map keys allowed an empty Type:
+// the built-in adapters cmd/harness's registry wires directly by name
+// (provider/anthropic.Family and provider/openai.Family). Every other key —
+// including "openrouter", which cmd/harness/main.go's ensureDefaultOpenRouter
+// treats as suppressing its zero-config OpenRouter default the moment the
+// key is present at all — must say what it is via Type. Without this an
+// entry named "openrouter" with a missing or typo'd type would suppress the
+// default and, since only TypeOpenAICompat entries actually register a
+// client, register nothing: a silent no-provider state. Requiring a real
+// Type for any non-native key makes that state impossible to express.
+var nativeProviderKeys = map[string]bool{
+	"anthropic": true,
+	"openai":    true,
+}
+
 // Provider is per-family provider configuration.
 type Provider struct {
 	// Type selects the adapter to build for this entry. Empty (the
 	// default) means a built-in native adapter — anthropic or openai — is
-	// expected, wired directly by name in cmd/harness's registry; those
-	// entries need no Type. TypeOpenAICompat ("openai-compat") builds a
+	// expected, wired directly by name in cmd/harness's registry; only the
+	// "anthropic" and "openai" providers map keys may leave Type empty
+	// (see nativeProviderKeys). TypeOpenAICompat ("openai-compat") builds a
 	// generic provider/openaicompat client instead: the providers map key
 	// becomes the new provider family, routed by the first segment of a
 	// "provider/model" ref exactly like any built-in family. Any other
-	// value fails Load loudly — a typo'd type must not silently produce no
-	// adapter at startup.
+	// value, or an empty value on any other key, fails Load loudly — a
+	// typo'd or missing type must not silently produce no adapter at
+	// startup.
 	Type string `json:"type,omitempty"`
 	// APIKeyEnv names the environment variable to read the API key from.
 	APIKeyEnv string `json:"api_key_env,omitempty"`
@@ -158,7 +175,10 @@ func validateProviders(providers map[string]Provider) error {
 	for name, p := range providers {
 		switch p.Type {
 		case "":
-			// Legacy/native provider entry (anthropic, openai, ...); no
+			if !nativeProviderKeys[name] {
+				return fmt.Errorf("providers.%s: type is required (empty type is only valid for the built-in %q/%q entries); valid types: \"\" (native anthropic/openai override), %q", name, "anthropic", "openai", TypeOpenAICompat)
+			}
+			// Legacy/native provider entry (anthropic or openai); no
 			// further validation here.
 		case TypeOpenAICompat:
 			if p.BaseURL == "" {

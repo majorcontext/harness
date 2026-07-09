@@ -102,6 +102,52 @@ func TestLoadProviderUnknownTypeFails(t *testing.T) {
 	}
 }
 
+// TestLoadProviderEmptyTypeOnNonNativeKeyFails guards against the
+// suppress-but-register-nothing bug: an "openrouter" entry with a missing
+// or typo'd type used to silently disable ensureDefaultOpenRouter's
+// zero-config default (any entry present under that key suppresses it)
+// while never itself registering a client (only Type ==
+// config.TypeOpenAICompat entries register in
+// cmd/harness/main.go's registerOpenAICompatProviders). Load must now
+// reject this at config load, naming the key and the valid types.
+func TestLoadProviderEmptyTypeOnNonNativeKeyFails(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.json")
+	writeFile(t, p, `{"providers": {"openrouter": {"base_url": "http://x"}}}`)
+	_, err := Load(p)
+	if err == nil {
+		t.Fatal("Load did not fail on empty type for non-native providers.openrouter entry")
+	}
+	if !strings.Contains(err.Error(), "openrouter") {
+		t.Errorf("error %q does not name the offending key", err)
+	}
+	if !strings.Contains(err.Error(), TypeOpenAICompat) {
+		t.Errorf("error %q does not list %q as a valid type", err, TypeOpenAICompat)
+	}
+}
+
+// TestLoadProviderEmptyTypeOnNativeKeysOK proves the fix above does not
+// regress the legacy zero-Type override path for the two built-in native
+// adapters cmd/harness's registry wires directly by name.
+func TestLoadProviderEmptyTypeOnNativeKeysOK(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.json")
+	writeFile(t, p, `{"providers": {
+		"anthropic": {"api_key_env": "MY_ANTHROPIC_KEY"},
+		"openai": {"api_key_env": "MY_OPENAI_KEY"}
+	}}`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Providers["anthropic"].APIKeyEnv != "MY_ANTHROPIC_KEY" {
+		t.Errorf("anthropic APIKeyEnv = %q", c.Providers["anthropic"].APIKeyEnv)
+	}
+	if c.Providers["openai"].APIKeyEnv != "MY_OPENAI_KEY" {
+		t.Errorf("openai APIKeyEnv = %q", c.Providers["openai"].APIKeyEnv)
+	}
+}
+
 func TestLoadProviderOpenAICompatMissingBaseURLFails(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "config.json")

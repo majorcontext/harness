@@ -530,6 +530,22 @@ func TestRegistry(t *testing.T) {
 			t.Errorf("APIKey = %q, want sk-custom-or", c.APIKey)
 		}
 	})
+	t.Run("a valid non-openrouter key does not suppress the openrouter default", func(t *testing.T) {
+		t.Setenv("OPENROUTER_API_KEY", "sk-or-still-default")
+		reg := registry(&config.Config{Providers: map[string]config.Provider{
+			"mycompat": {Type: config.TypeOpenAICompat, BaseURL: "http://compat.example"},
+		}})
+		c, ok := reg["openrouter"].(*openaicompat.Client)
+		if !ok {
+			t.Fatalf("openrouter provider is %T, want *openaicompat.Client", reg["openrouter"])
+		}
+		if c.BaseURL != "https://openrouter.ai/api/v1" {
+			t.Errorf("BaseURL = %q, want the default OpenRouter base URL", c.BaseURL)
+		}
+		if c.APIKey != "sk-or-still-default" {
+			t.Errorf("APIKey = %q, want sk-or-still-default", c.APIKey)
+		}
+	})
 }
 
 // TestRegistryOpenAICompatHitsConfiguredBaseURL proves a config-declared
