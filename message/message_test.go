@@ -827,3 +827,27 @@ func TestResolveOrphanToolCallsPartialMerge(t *testing.T) {
 func toolCallPart(id, name, args string) *ToolCall {
 	return &ToolCall{CallID: id, Name: name, Arguments: json.RawMessage(args)}
 }
+
+// TestResolveOrphanToolCallsDistinctSyntheticIDs pins that two orphaned
+// turns whose calls happen to reuse the same CallID (nothing guarantees
+// provider call-ID uniqueness across turns) still get synthetic messages
+// with distinct message IDs — a UI keyed by message ID must never see two
+// messages collide.
+func TestResolveOrphanToolCallsDistinctSyntheticIDs(t *testing.T) {
+	in := []Message{
+		{Role: RoleAssistant, Parts: Parts{toolCallPart("tc_reused", "bash", `{}`)}},
+		{Role: RoleUser, Parts: Parts{&Text{Text: "still there?"}}},
+		{Role: RoleAssistant, Parts: Parts{toolCallPart("tc_reused", "bash", `{}`)}},
+	}
+	out := ResolveOrphanToolCalls(in)
+	if len(out) != 5 {
+		t.Fatalf("len(out) = %d, want 5 (two synthetic messages inserted)", len(out))
+	}
+	first, second := out[1], out[4]
+	if first.Role != RoleTool || second.Role != RoleTool {
+		t.Fatalf("synthetic roles = %s, %s, want tool, tool", first.Role, second.Role)
+	}
+	if first.ID == second.ID {
+		t.Errorf("synthetic message IDs collide: %q", first.ID)
+	}
+}

@@ -623,7 +623,13 @@ func ResolveOrphanToolCalls(messages []Message) []Message {
 		for _, ins := range insertions {
 			if ins.afterIndex == i {
 				out = append(out, Message{
-					ID:    "synthetic-orphan-tool-result-" + strings.Join(callIDsOf(ins.parts), "-"),
+					// The source index disambiguates two orphaned turns
+					// whose calls reuse a CallID — nothing guarantees
+					// provider call-ID uniqueness across turns, and a UI
+					// keyed by message ID must never see two collide. Still
+					// deterministic: the same history always yields the
+					// same IDs.
+					ID:    fmt.Sprintf("synthetic-orphan-tool-result-%d-%s", ins.afterIndex, strings.Join(callIDsOf(ins.parts), "-")),
 					Role:  RoleTool,
 					Parts: ins.parts,
 				})

@@ -685,6 +685,12 @@ func (e *interruptedTurnError) Unwrap() error { return e.err }
 // interruptedToolResults builds the synthetic tool-role message Prompt
 // appends immediately after an interruptedTurnError's partial assistant
 // message: one is_error ToolResult per ToolCall part in partial, in order.
+//
+// Like every tool-result append, this message is persisted without an
+// EventMessage emit — and since the interrupted calls never executed, no
+// EventToolEnd fired either. A pure event-stream consumer therefore sees
+// the partial assistant message with no following results for the
+// interrupted calls until it reloads history (GET /message, LoadSession).
 func interruptedToolResults(partial *message.Message) message.Message {
 	var results message.Parts
 	for _, p := range partial.Parts {
