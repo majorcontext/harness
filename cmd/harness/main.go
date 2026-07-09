@@ -29,7 +29,22 @@ import (
 	"github.com/majorcontext/harness/provider"
 	"github.com/majorcontext/harness/provider/anthropic"
 	"github.com/majorcontext/harness/provider/openai"
+	"github.com/majorcontext/harness/provider/openaicompat"
 	"github.com/majorcontext/harness/server"
+)
+
+// defaultOpenRouterName is the providers map key that gets a built-in
+// registration when config supplies none: the two-line openai-compat config
+// case becomes a zero-line case for OpenRouter specifically. Any config
+// entry named "openrouter" — of any Type — overrides this default entirely.
+const defaultOpenRouterName = "openrouter"
+
+// defaultOpenRouterBaseURL and defaultOpenRouterAPIKeyEnv are OpenRouter's
+// well-known chat-completions endpoint and the env var convention for its
+// key; see https://openrouter.ai/docs.
+const (
+	defaultOpenRouterBaseURL   = "https://openrouter.ai/api/v1"
+	defaultOpenRouterAPIKeyEnv = "OPENROUTER_API_KEY"
 )
 
 var version = "0.1.0-dev"
@@ -431,15 +446,91 @@ func loadConfig() (*config.Config, error) {
 }
 
 // registry wires up all known provider adapters. Keys are ModelRef.Provider
-// values. Auth is read here but validated only on first send. Adding another
-// provider family is a two-line change: resolve its config with providerAuth
-// and add one entry to the returned map.
+// values. Auth is read here but validated only on first send. Adding
+// another built-in provider family is a two-line change: resolve its config
+// with providerAuth and add one entry to the returned map. Any config
+// providers entry with type "openai-compat" needs no code at all — see
+// registerOpenAICompatProviders — and OpenRouter itself needs no config
+// entry either, see ensureDefaultOpenRouter.
+//
+// registry does not assume cfg came from config.LoadProject (the load path
+// that guarantees nativeDefaultProviders fields are filled in — see
+// config.EnsureProviderDefaults): it calls EnsureProviderDefaults itself
+// first, idempotently, so a hand-built *config.Config (as tests use, and
+// any future embedder that skips LoadProject might too) resolves a minimal
+// {"openrouter": {"api_key_env": "..."}} entry identically to one that went
+// through the full config-loading choke point, rather than silently
+// registering no adapter for it at all.
 func registry(cfg *config.Config) provider.Registry {
+	if cfg != nil {
+		config.EnsureProviderDefaults(cfg.Providers)
+	}
 	akey, abase := providerAuth(cfg, anthropic.Family, "ANTHROPIC_API_KEY")
 	okey, obase := providerAuth(cfg, openai.Family, "OPENAI_API_KEY")
-	return provider.Registry{
+	reg := provider.Registry{
 		anthropic.Family: &anthropic.Client{APIKey: akey, BaseURL: abase},
 		openai.Family:    &openai.Client{APIKey: okey, BaseURL: obase},
+	}
+	registerOpenAICompatProviders(reg, cfg)
+	ensureDefaultOpenRouter(reg, cfg)
+	return reg
+}
+
+// registerOpenAICompatProviders builds a provider/openaicompat client for
+// every config.Providers entry of config.TypeOpenAICompat, keyed by its
+// providers map name — that name is what routes "name/model" refs to it,
+// exactly like a built-in family. config.Load already rejects unknown
+// Type values, so nothing here needs to guard against typos.
+func registerOpenAICompatProviders(reg provider.Registry, cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	for name, p := range cfg.Providers {
+		if p.Type != config.TypeOpenAICompat {
+			continue
+		}
+		reg[name] = newOpenAICompatClient(name, p)
+	}
+}
+
+// ensureDefaultOpenRouter registers the "openrouter" family with
+// OpenRouter's well-known base URL and API key env var when config supplies
+// no "openrouter" entry at all (of any Type) — making the common case zero
+// lines of config. An explicit config entry, including one that overrides
+// only some fields, replaces this default entirely (registerOpenAICompatProviders
+// above already wrote it into reg by the time this runs).
+func ensureDefaultOpenRouter(reg provider.Registry, cfg *config.Config) {
+	if cfg != nil {
+		if _, ok := cfg.Providers[defaultOpenRouterName]; ok {
+			return
+		}
+	}
+	reg[defaultOpenRouterName] = &openaicompat.Client{
+		Family:  defaultOpenRouterName,
+		APIKey:  os.Getenv(defaultOpenRouterAPIKeyEnv),
+		BaseURL: defaultOpenRouterBaseURL,
+	}
+}
+
+// newOpenAICompatClient builds one openaicompat.Client from a config
+// entry. Family defaults to the providers map key (name) when the entry
+// does not override it; APIKeyEnv empty means no key env configured, which
+// leaves APIKey empty (the adapter reports that loudly on first Stream, not
+// here — auth is validated on first send, per the startup speed rule).
+func newOpenAICompatClient(name string, p config.Provider) *openaicompat.Client {
+	family := p.Family
+	if family == "" {
+		family = name
+	}
+	var apiKey string
+	if p.APIKeyEnv != "" {
+		apiKey = os.Getenv(p.APIKeyEnv)
+	}
+	return &openaicompat.Client{
+		Family:       family,
+		APIKey:       apiKey,
+		BaseURL:      p.BaseURL,
+		ExtraHeaders: p.ExtraHeaders,
 	}
 }
 
