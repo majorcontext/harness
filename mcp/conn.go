@@ -46,7 +46,13 @@ type handlerFunc func(ctx context.Context, method string, params json.RawMessage
 // outgoing call races its response against ctx.Done() and the connection
 // closing.
 type conn struct {
-	wmu sync.Mutex // serializes writes
+	// wmu is a 1-buffered channel semaphore serializing writes, in place
+	// of a sync.Mutex: acquiring it selects on ctx.Done() (see
+	// acquireWmu), so a write bounded by a deadline (e.g. the
+	// cancelled-notify cleanup goroutine below) can never be stuck behind
+	// another writer for longer than its own deadline. A plain
+	// sync.Mutex has no such escape hatch — Lock cannot be given up on.
+	wmu chan struct{}
 	rwc io.ReadWriteCloser
 	r   *bufio.Reader
 
@@ -68,6 +74,7 @@ func newConn(rwc io.ReadWriteCloser, handler handlerFunc) *conn {
 		}
 	}
 	return &conn{
+		wmu:     make(chan struct{}, 1),
 		rwc:     rwc,
 		r:       bufio.NewReader(rwc),
 		handler: handler,
@@ -134,8 +141,10 @@ func (c *conn) serveRequest(msg message) {
 		}
 	}
 	// A write failure means the stream is going down; the read loop will
-	// surface it.
-	_ = c.write(resp)
+	// surface it. Responses to served requests carry no deadline of their
+	// own (context.Background()): unlike the cancelled-notify cleanup
+	// below, there is no caller-side timeout to protect here.
+	_ = c.write(context.Background(), resp)
 }
 
 func (c *conn) call(ctx context.Context, method string, params, result any) error {
@@ -159,7 +168,14 @@ func (c *conn) call(ctx context.Context, method string, params, result any) erro
 	if err != nil {
 		return err
 	}
-	if err := c.write(message{ID: idJSON, Method: method, Params: raw}); err != nil {
+	if err := c.write(ctx, message{ID: idJSON, Method: method, Params: raw}); err != nil {
+		// A write aborted because ctx ran out (of the wmu acquisition or
+		// the write itself) is indistinguishable from any other write
+		// failure to the caller except that ctx.Err() is the more
+		// meaningful error to surface.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return err
 	}
 
@@ -172,9 +188,12 @@ func (c *conn) call(ctx context.Context, method string, params, result any) erro
 		//
 		// This must never make the already-cancelled/timed-out call wait
 		// any longer: it fires in its own goroutine, bounded by a short
-		// deadline, so a write stuck behind wmu (e.g. a peer that stopped
-		// reading) can't defeat the very timeout/cancellation that
-		// triggered it.
+		// deadline. That deadline is enforced where the blocking actually
+		// happens — write() acquires wmu (and, on transports that support
+		// it, sets a write deadline) via notifyCtx, so a peer that
+		// stopped reading can wedge this cleanup goroutine for at most
+		// cancelledNotifyTimeout, never longer, and it can never hold wmu
+		// past its own deadline to defeat a later call's timeout.
 		reason := ctx.Err().Error()
 		go func() {
 			notifyCtx, cancel := context.WithTimeout(context.Background(), cancelledNotifyTimeout)
@@ -198,25 +217,68 @@ func (c *conn) call(ctx context.Context, method string, params, result any) erro
 	}
 }
 
-func (c *conn) notify(_ context.Context, method string, params any) error {
+func (c *conn) notify(ctx context.Context, method string, params any) error {
 	raw, err := marshalParams(params)
 	if err != nil {
 		return err
 	}
-	return c.write(message{Method: method, Params: raw})
+	return c.write(ctx, message{Method: method, Params: raw})
 }
 
-func (c *conn) write(msg message) error {
+// writeDeadliner is implemented by transports (e.g. net.Conn) that can
+// enforce a write deadline directly; stdio pipes generally don't, so for
+// those the ctx-aware wmu acquisition in acquireWmu is what bounds the
+// wait.
+type writeDeadliner interface {
+	SetWriteDeadline(time.Time) error
+}
+
+// write serializes msg and sends it, bounded by ctx: acquiring wmu selects
+// on ctx.Done() (acquireWmu), and, when the underlying transport supports
+// it, a write deadline derived from ctx is set before the write so the
+// write syscall itself can't outlast ctx either. Either way, on ctx
+// expiry write returns without leaving wmu held for a stuck caller (e.g.
+// the best-effort cancelled-notify cleanup) to wedge every later write.
+func (c *conn) write(ctx context.Context, msg message) error {
 	msg.JSONRPC = "2.0"
 	raw, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
 	raw = append(raw, '\n')
-	c.wmu.Lock()
-	defer c.wmu.Unlock()
+
+	if err := c.acquireWmu(ctx); err != nil {
+		return err
+	}
+	defer c.releaseWmu()
+
+	if dl, ok := ctx.Deadline(); ok {
+		if wd, ok := c.rwc.(writeDeadliner); ok {
+			_ = wd.SetWriteDeadline(dl)
+			defer wd.SetWriteDeadline(time.Time{}) //nolint:errcheck // best-effort clear; write has already returned
+		}
+	}
 	_, err = c.rwc.Write(raw)
 	return err
+}
+
+// acquireWmu acquires the write semaphore, giving up if ctx is done or the
+// connection closes first. This is what makes writes bounded by a deadline
+// (like the cancelled-notify cleanup) unable to get stuck behind another
+// writer indefinitely.
+func (c *conn) acquireWmu(ctx context.Context) error {
+	select {
+	case c.wmu <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.closed:
+		return fmt.Errorf("mcp: connection closed: %w", c.closeErr)
+	}
+}
+
+func (c *conn) releaseWmu() {
+	<-c.wmu
 }
 
 func (c *conn) fail(err error) {
