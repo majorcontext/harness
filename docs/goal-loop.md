@@ -167,3 +167,17 @@ remain at risk of double execution whenever a worker-turn retry happens to
 follow a tool call within the same attempt; this document and the doc
 comment on `promptTurnWithRetry` are the explicit acknowledgment the review
 asked for, not a claim that the risk is eliminated.
+
+## Operational reliability
+
+Goal-supervised turns are retried by the loop above and fail visibly with a
+journaled reason (`goal.stalled`, then `goal.cleared` if every retry is
+exhausted). Plain `prompt_async` turns get none of that: they are not
+retried, and a provider stream that dies mid-turn silently ends them. The
+signature of that silent death is a final assistant message containing
+reasoning parts only — no text, no tool_call. Consequently, multi-step or
+long-running work dispatched over an unreliable link should be wrapped in a
+goal even when no evaluation condition is actually interesting, just for the
+retry/visibility behavior; and anything polling a plain prompt must treat an
+idle session whose last assistant message is reasoning-only as a failure to
+investigate, not as completion.
