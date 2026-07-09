@@ -164,6 +164,29 @@ components:
         it over this field alone when inferring whether a session is
         actually available for a new interaction.
 
+    WaitResponse:
+      type: object
+      description: >
+        The body GET /session/{id}/wait always responds with, 200, whether
+        the requested condition was met or timeout_s elapsed first — the
+        caller tells the two apart by checking state/goal against what it
+        asked for (e.g. state still goal-running after until=goal-done means
+        it timed out; goal.achieved distinguishes an achieved terminal from a
+        cleared one after until=goal-done resolved). Same shapes as Session's
+        state and goal fields, deliberately: a client that already renders
+        Session JSON needs no separate parsing path for this endpoint.
+      required: [state]
+      properties:
+        state:
+          $ref: "#/components/schemas/SessionState"
+        goal:
+          $ref: "#/components/schemas/GoalSummary"
+          description: >
+            Present under the same condition as Session.goal (a goal has been
+            set for this session in the current server process). Absent when
+            until=idle resolved with no goal ever set, or when until=goal-done
+            resolved trivially because no goal was ever set.
+
     ModelRef:
       type: string
       description: Compact "provider/model" form, or a config alias.
@@ -773,12 +796,7 @@ paths:
             elapsed — see the summary for how a caller tells the two apart.
           content:
             application/json:
-              schema:
-                type: object
-                required: [state]
-                properties:
-                  state: { $ref: "#/components/schemas/SessionState" }
-                  goal: { $ref: "#/components/schemas/GoalSummary" }
+              schema: { $ref: "#/components/schemas/WaitResponse" }
         "400":
           description: Invalid `until` or `timeout_s`.
           content:
