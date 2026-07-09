@@ -60,8 +60,16 @@ func (s *fakeStdioServer) handle(_ context.Context, method string, params json.R
 }
 
 func (s *fakeStdioServer) listTools(cursor string) (*ListToolsResult, error) {
-	if s.pageSize <= 0 {
-		return &ListToolsResult{Tools: s.tools}, nil
+	return pageTools(s.tools, s.pageSize, cursor)
+}
+
+// pageTools implements opaque cursor-based pagination
+// (https://modelcontextprotocol.io/specification/2025-11-25/server/utilities/pagination)
+// for the fake servers shared by the stdio and HTTP conformance tests.
+// pageSize <= 0 means unpaginated (return everything, no nextCursor).
+func pageTools(tools []Tool, pageSize int, cursor string) (*ListToolsResult, error) {
+	if pageSize <= 0 {
+		return &ListToolsResult{Tools: tools}, nil
 	}
 	start := 0
 	if cursor != "" {
@@ -71,12 +79,12 @@ func (s *fakeStdioServer) listTools(cursor string) (*ListToolsResult, error) {
 			return nil, &RPCError{Code: codeInvalidParams, Message: "invalid cursor"}
 		}
 	}
-	end := start + s.pageSize
-	if end > len(s.tools) {
-		end = len(s.tools)
+	end := start + pageSize
+	if end > len(tools) {
+		end = len(tools)
 	}
-	result := &ListToolsResult{Tools: s.tools[start:end]}
-	if end < len(s.tools) {
+	result := &ListToolsResult{Tools: tools[start:end]}
+	if end < len(tools) {
 		result.NextCursor = encodeCursor(end)
 	}
 	return result, nil
