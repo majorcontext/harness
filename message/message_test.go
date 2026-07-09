@@ -170,3 +170,84 @@ func TestModelRef(t *testing.T) {
 		t.Errorf("zero unmarshal = %+v", zero)
 	}
 }
+
+// TestToolCallEmptyArgumentsMarshal is the regression guard for the
+// json.RawMessage footgun that produced the goal-supervised session
+// incident (session ses_01kx3pvqttfwgbf2n5x1f1y8yh.jsonl): a worker turn's
+// json.Marshal failed with "json: error calling MarshalJSON for type
+// json.RawMessage: unexpected end of JSON input" because a ToolCall's
+// Arguments field was an empty-but-non-nil json.RawMessage.
+// json.RawMessage.MarshalJSON only special-cases nil (-> "null"); any other
+// zero-length value is handed to the encoder unvalidated, and zero bytes is
+// not valid JSON. `omitempty` does not help: it tests the Go zero value
+// (nil), not len == 0.
+//
+// Both an empty non-nil Arguments and a nil Arguments must marshal cleanly
+// — as a Parts element (marshalPart's tagged union) and as a bare ToolCall
+// value (any direct struct field elsewhere, e.g. an SSE event's ToolCall
+// pointer) — and must not lose the "type" discriminator when marshaled as
+// a Parts element.
+func TestToolCallEmptyArgumentsMarshal(t *testing.T) {
+	cases := []struct {
+		name string
+		args json.RawMessage
+	}{
+		{"nil", nil},
+		{"empty-non-nil", json.RawMessage{}},
+		{"empty-string-literal", json.RawMessage("")},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tc := &ToolCall{CallID: "tc_1", Name: "bash", Arguments: c.args}
+
+			// Bare ToolCall value, as any direct struct field would encode
+			// it (e.g. an event's ToolCall pointer) — this is exactly the
+			// json.Marshal(ToolCall{...}) call that failed in production.
+			if _, err := json.Marshal(*tc); err != nil {
+				t.Fatalf("marshal bare ToolCall: %v", err)
+			}
+
+			// As a Parts element: must round-trip through the tagged
+			// union without losing the "type" discriminator.
+			raw, err := json.Marshal(Parts{tc})
+			if err != nil {
+				t.Fatalf("marshal Parts: %v", err)
+			}
+			var out Parts
+			if err := json.Unmarshal(raw, &out); err != nil {
+				t.Fatalf("unmarshal Parts: %v (raw=%s)", err, raw)
+			}
+			if len(out) != 1 {
+				t.Fatalf("len(out) = %d, want 1 (raw=%s)", len(out), raw)
+			}
+			got, ok := out[0].(*ToolCall)
+			if !ok {
+				t.Fatalf("out[0] = %T, want *ToolCall (raw=%s)", out[0], raw)
+			}
+			if got.CallID != "tc_1" || got.Name != "bash" {
+				t.Errorf("got = %+v, want CallID=tc_1 Name=bash (raw=%s)", got, raw)
+			}
+		})
+	}
+}
+
+// TestMessageWithEmptyToolCallArgumentsMarshal proves the full incident
+// shape: an assistant Message carrying a ToolCall with an empty-non-nil
+// Arguments — the shape engine.Session.append persists to the session log
+// and the server journals and serves from GET /session/{id}/message —
+// marshals successfully end to end.
+func TestMessageWithEmptyToolCallArgumentsMarshal(t *testing.T) {
+	m := Message{
+		ID:   "msg_1",
+		Role: RoleAssistant,
+		Parts: Parts{
+			&ToolCall{CallID: "tc_1", Name: "bash", Arguments: json.RawMessage{}},
+		},
+	}
+	if _, err := json.Marshal(m); err != nil {
+		t.Fatalf("marshal message with empty-non-nil tool call arguments: %v", err)
+	}
+	if _, err := json.Marshal([]Message{m}); err != nil {
+		t.Fatalf("marshal []Message (the /message response shape): %v", err)
+	}
+}

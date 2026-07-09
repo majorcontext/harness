@@ -94,6 +94,40 @@ type ToolCall struct {
 
 func (*ToolCall) partType() PartType { return PartToolCall }
 
+// safeArguments normalizes Arguments for marshaling. This guards a genuine
+// encoding/json footgun: json.RawMessage.MarshalJSON does not validate its
+// bytes — a nil RawMessage is special-cased to marshal as "null", but any
+// other empty (zero-length, non-nil) RawMessage is handed to the encoder
+// as-is and fails with "json: error calling MarshalJSON for type
+// json.RawMessage: unexpected end of JSON input" (zero bytes is not valid
+// JSON). `omitempty` does not help either: it is defined in terms of the Go
+// zero value (nil), not "len == 0", so an empty-but-non-nil RawMessage is
+// never omitted. Every code path that marshals a ToolCall — directly (a
+// plain struct field, e.g. an event's ToolCall pointer) or as a Parts
+// element (marshalPart below) — must call this instead of encoding
+// Arguments directly.
+func (tc ToolCall) safeArguments() json.RawMessage {
+	if len(tc.Arguments) == 0 {
+		return json.RawMessage("null")
+	}
+	return tc.Arguments
+}
+
+// MarshalJSON implements json.Marshaler so any direct encoding of a ToolCall
+// (or *ToolCall) — e.g. an Event's ToolCall field elsewhere in this
+// module's consumers — goes through safeArguments automatically. It must
+// NOT be relied on from marshalPart's tagged-union wrapper below: embedding
+// *ToolCall anonymously in another struct promotes this method onto the
+// wrapper, which would marshal using ToolCall's fields alone and silently
+// drop the wrapper's own "type" discriminator. marshalPart therefore
+// reconstructs ToolCall's fields explicitly instead of embedding.
+func (tc ToolCall) MarshalJSON() ([]byte, error) {
+	type alias ToolCall
+	a := alias(tc)
+	a.Arguments = tc.safeArguments()
+	return json.Marshal(a)
+}
+
 // ToolResult is the outcome of a ToolCall. Content may hold Text and Blob
 // parts only.
 type ToolResult struct {
@@ -181,10 +215,20 @@ func marshalPart(p Part) ([]byte, error) {
 			*Blob
 		}{PartBlob, v})
 	case *ToolCall:
+		// Deliberately not embedding *ToolCall here (unlike the other
+		// cases below): ToolCall.MarshalJSON must be defined for direct
+		// encoding of a bare ToolCall elsewhere, but embedding a type that
+		// implements json.Marshaler promotes the method onto this wrapper,
+		// which would then marshal using only ToolCall's own fields and
+		// silently drop the "type" discriminator. Reconstructing the
+		// fields explicitly sidesteps that and applies the same
+		// empty-Arguments normalization inline.
 		return json.Marshal(struct {
-			Type PartType `json:"type"`
-			*ToolCall
-		}{PartToolCall, v})
+			Type      PartType        `json:"type"`
+			CallID    string          `json:"call_id"`
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
+		}{PartToolCall, v.CallID, v.Name, v.safeArguments()})
 	case *ToolResult:
 		return json.Marshal(struct {
 			Type PartType `json:"type"`
