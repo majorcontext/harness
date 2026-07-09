@@ -403,3 +403,122 @@ func TestLoadProject(t *testing.T) {
 		}
 	})
 }
+
+func TestLoadPlugins(t *testing.T) {
+	t.Run("array parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"plugins": [
+			{"name": "gh", "command": ["gh-plugin"], "env": ["A=1"], "dir": "/tmp"},
+			{"name": "slack", "command": ["slack-plugin", "--flag"], "config": {"channel": "eng"}}
+		]}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if len(c.Plugins) != 2 {
+			t.Fatalf("Plugins = %+v, want 2 entries", c.Plugins)
+		}
+		gh := c.Plugins[0]
+		if gh.Name != "gh" || len(gh.Command) != 1 || gh.Command[0] != "gh-plugin" {
+			t.Errorf("gh plugin = %+v", gh)
+		}
+		if len(gh.Env) != 1 || gh.Env[0] != "A=1" || gh.Dir != "/tmp" {
+			t.Errorf("gh plugin env/dir = %+v", gh)
+		}
+		slack := c.Plugins[1]
+		if slack.Name != "slack" || len(slack.Command) != 2 || slack.Command[1] != "--flag" {
+			t.Errorf("slack plugin = %+v", slack)
+		}
+		if !strings.Contains(string(slack.Config), `"channel"`) || !strings.Contains(string(slack.Config), `"eng"`) {
+			t.Errorf("slack plugin config = %s", slack.Config)
+		}
+	})
+	t.Run("unset leaves nil", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.Plugins != nil {
+			t.Errorf("Plugins = %v, want nil (unset)", c.Plugins)
+		}
+	})
+	t.Run("missing name fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"plugins": [{"command": ["gh-plugin"]}]}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for plugin missing name")
+		}
+		if !strings.Contains(err.Error(), p) {
+			t.Errorf("error %q does not name path %q", err, p)
+		}
+	})
+	t.Run("missing command fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"plugins": [{"name": "gh"}]}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for plugin missing command")
+		}
+	})
+	t.Run("duplicate name fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"plugins": [
+			{"name": "gh", "command": ["a"]},
+			{"name": "gh", "command": ["b"]}
+		]}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for duplicate plugin name")
+		}
+	})
+	t.Run("malformed plugin entry fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"plugins": [{"name": "gh", "command": "not-an-array"}]}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for malformed plugin command")
+		}
+	})
+}
+
+func TestLoadPluginHTTPHeaders(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.json")
+	writeFile(t, p, `{"plugin_http_headers": {"X-Workspace": "acme"}}`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.PluginHTTPHeaders["X-Workspace"] != "acme" {
+		t.Errorf("PluginHTTPHeaders = %v", c.PluginHTTPHeaders)
+	}
+}
+
+func TestMergePlugins(t *testing.T) {
+	t.Run("non-empty project overrides user entirely", func(t *testing.T) {
+		base := &Config{Plugins: []PluginSpec{{Name: "user-plug", Command: []string{"a"}}}}
+		over := &Config{Plugins: []PluginSpec{{Name: "proj-plug", Command: []string{"b"}}}}
+		merged := merge(base, over)
+		if len(merged.Plugins) != 1 || merged.Plugins[0].Name != "proj-plug" {
+			t.Errorf("merged Plugins = %+v, want [proj-plug]", merged.Plugins)
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{Plugins: []PluginSpec{{Name: "user-plug", Command: []string{"a"}}}}
+		merged := merge(base, &Config{})
+		if len(merged.Plugins) != 1 || merged.Plugins[0].Name != "user-plug" {
+			t.Errorf("merged Plugins = %+v, want inherited [user-plug]", merged.Plugins)
+		}
+	})
+}
+
+func TestMergePluginHTTPHeaders(t *testing.T) {
+	base := &Config{PluginHTTPHeaders: map[string]string{"X-A": "1", "X-B": "2"}}
+	over := &Config{PluginHTTPHeaders: map[string]string{"X-B": "override"}}
+	merged := merge(base, over)
+	if merged.PluginHTTPHeaders["X-A"] != "1" || merged.PluginHTTPHeaders["X-B"] != "override" {
+		t.Errorf("merged PluginHTTPHeaders = %v", merged.PluginHTTPHeaders)
+	}
+}

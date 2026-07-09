@@ -62,6 +62,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "harness:", err)
 			os.Exit(1)
 		}
+	case "plugin":
+		if err := pluginCmd(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "harness:", err)
+			os.Exit(1)
+		}
 	default:
 		usage()
 		os.Exit(2)
@@ -77,6 +82,8 @@ func usage() {
   harness serve [-addr host:port] [-cors-origin origin] [-no-instructions]
                 [-skills-dir dir ...]
                                     serve the HTTP+SSE session API
+  harness plugin probe              re-probe configured plugins and refresh
+                                    the manifest cache
   harness sessions [--json]         list persisted sessions
   harness version                   print version
 
@@ -303,6 +310,19 @@ func runCmd(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	host, err := buildPluginHost(ctx, cfg.Plugins, version, workDir, cfg.PluginHTTPHeaders)
+	if err != nil {
+		return err
+	}
+	// Deferred here so it runs after this whole command (including the
+	// Prompt/PursueGoal call below) completes — plugins stay warm for the
+	// run, exactly like a served session.
+	defer func() {
+		if host != nil {
+			host.Close()
+		}
+	}()
+
 	enc := json.NewEncoder(os.Stdout)
 	printedText := false
 	onEvent := func(ev engine.Event) {
@@ -333,6 +353,7 @@ func runCmd(args []string) error {
 		OnEvent:      onEvent,
 		Instructions: instructionsConfig(cfg, opts.noInstructions),
 		SkillsDirs:   skillsDirs(cfg, opts.skillsDirs, workDir),
+		Hooks:        pluginHooks(host),
 	}, opts.resume, opts.cont, modelSet)
 	if err != nil {
 		return err
@@ -489,6 +510,20 @@ func serveCmd(args []string) error {
 	}
 	reg := registry(cfg)
 
+	// Every session gets the same plugin host; it is built once here and
+	// closed on exit (deferred before srv's own defer below, so — since
+	// defers unwind LIFO — the host outlives the server's shutdown/drain and
+	// closes only after it, matching a served session's own lifetime).
+	pluginHost, err := buildPluginHost(context.Background(), cfg.Plugins, version, workDir, cfg.PluginHTTPHeaders)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if pluginHost != nil {
+			pluginHost.Close()
+		}
+	}()
+
 	// Structured logging: JSON to stderr, stdlib log/slog only (no new
 	// dependency). serve start and every OnError go through it; this is
 	// intentionally minimal — no request-level access logging, no metrics, no
@@ -508,6 +543,7 @@ func serveCmd(args []string) error {
 			OnEvent:      func(ev engine.Event) { srv.Publish(ev) },
 			Instructions: instructionsConfig(cfg, noInstructions),
 			SkillsDirs:   skillsDirs(cfg, skillDirs, workDir),
+			Hooks:        pluginHooks(pluginHost),
 		}
 	}
 	srv, err = server.New(server.Options{
