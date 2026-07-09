@@ -92,3 +92,31 @@ Two independent layers, both TDD red-first (see `engine/goal_test.go` and
   unchanged for the same reason.
 - `goal.stalled` is a pure trace record: it never flips `goalActive` by
   itself (see `LoadSession`'s `scanLog` switch in `store.go`).
+
+## Review follow-up: retries now wait — capped exponential backoff
+
+The initial fix above shipped retries with no delay between attempts, which
+does essentially nothing against the two transient causes the doc above and
+the code comments name: a rate limit and a momentary 5xx. Both usually need
+at least a little wall-clock time to clear. `promptTurnWithRetry` now waits
+between attempts via `waitGoalRetryBackoff`, on the schedule computed by
+`goalRetryDelay`:
+
+| after attempt | wait before next attempt |
+|---|---|
+| 1 | 1s |
+| 2 | 4s |
+| 3+ (hypothetical, `goalWorkerRetries` is 2 today) | ×4 each time, capped at 30s |
+
+The wait is context-cancellable (`select` on the timer and `ctx.Done()`), so
+a deliberate abort (DELETE /goal, shutdown drain) ends it immediately instead
+of sleeping out the rest of the schedule — same "leave the goal exactly as it
+is" semantics as a `context.Canceled` from `s.Prompt` itself.
+
+Tested in `engine/goal_test.go` inside `testing/synctest` bubbles
+(`TestPursueGoalRetriesTransientWorkerError` asserts the exact 1s+4s elapsed
+schedule; `TestPursueGoalRetryBackoffCancellable` asserts a cancellation
+arriving mid-wait cuts the schedule short) — per AGENTS.md, timer-dependent
+logic is bubble-tested, never a real wall-clock sleep in the test binary.
+`TestGoalRetryDelaySchedule` pins the schedule as a pure function,
+independent of the loop.

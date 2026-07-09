@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/plugin"
@@ -348,43 +350,55 @@ func TestPursueGoalWorkerFailureEmitsOnce(t *testing.T) {
 // not kill the loop outright. PursueGoal retries the same turn up to
 // goalWorkerRetries times, recording a goal.stalled event for every failed
 // attempt, and succeeds once the provider recovers.
+//
+// Run inside a synctest bubble: PursueGoal now waits a capped exponential
+// backoff (goalRetryDelay) between retries, and the test asserts the exact
+// elapsed schedule (1s + 4s) — on fake time that costs nothing, on the wall
+// clock it would cost 5 real seconds per run of the suite (see AGENTS.md).
 func TestPursueGoalRetriesTransientWorkerError(t *testing.T) {
-	prov := &goalProvider{
-		workerErrN: 2, // fails twice, succeeds on the 3rd (final) attempt
-		worker: [][]provider.Event{
-			asstTurn(provider.StopEndTurn, &message.Text{Text: "all done"}),
-		},
-		eval: [][]provider.Event{
-			evalTurn("MET: looks complete"),
-		},
-	}
-	var evs []Event
-	s := goalSession(t, prov, t.TempDir())
-	s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProvider{
+			workerErrN: 2, // fails twice, succeeds on the 3rd (final) attempt
+			worker: [][]provider.Event{
+				asstTurn(provider.StopEndTurn, &message.Text{Text: "all done"}),
+			},
+			eval: [][]provider.Event{
+				evalTurn("MET: looks complete"),
+			},
+		}
+		var evs []Event
+		s := goalSession(t, prov, t.TempDir())
+		s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
 
-	res, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
-	if err != nil {
-		t.Fatalf("PursueGoal error = %v, want nil (transient errors must be retried)", err)
-	}
-	if !res.Achieved || res.Turns != 1 {
-		t.Fatalf("result = %+v, want achieved in 1 turn after retrying past the transient errors", res)
-	}
+		start := time.Now()
+		res, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+		elapsed := time.Since(start)
+		if err != nil {
+			t.Fatalf("PursueGoal error = %v, want nil (transient errors must be retried)", err)
+		}
+		if !res.Achieved || res.Turns != 1 {
+			t.Fatalf("result = %+v, want achieved in 1 turn after retrying past the transient errors", res)
+		}
+		if want := time.Second + 4*time.Second; elapsed != want {
+			t.Errorf("elapsed = %v, want exactly %v (the 1s, 4s backoff schedule between the two failed attempts)", elapsed, want)
+		}
 
-	var stalled int
-	for _, ev := range evs {
-		if ev.Type == EventGoalStalled {
-			stalled++
-			if ev.GoalReason == "" {
-				t.Error("goal.stalled event missing GoalReason")
+		var stalled int
+		for _, ev := range evs {
+			if ev.Type == EventGoalStalled {
+				stalled++
+				if ev.GoalReason == "" {
+					t.Error("goal.stalled event missing GoalReason")
+				}
 			}
 		}
-	}
-	if stalled != 2 {
-		t.Errorf("goal.stalled events = %d, want 2 (one per failed attempt)", stalled)
-	}
-	if cond, ok := s.ActiveGoal(); ok {
-		t.Errorf("ActiveGoal = %q, active after achievement, want inactive", cond)
-	}
+		if stalled != 2 {
+			t.Errorf("goal.stalled events = %d, want 2 (one per failed attempt)", stalled)
+		}
+		if cond, ok := s.ActiveGoal(); ok {
+			t.Errorf("ActiveGoal = %q, active after achievement, want inactive", cond)
+		}
+	})
 }
 
 // TestPursueGoalWorkerFailsPermanentlyClearsGoal reproduces the "zombie goal"
@@ -396,15 +410,19 @@ func TestPursueGoalRetriesTransientWorkerError(t *testing.T) {
 // returning.
 func TestPursueGoalWorkerFailsPermanentlyClearsGoal(t *testing.T) {
 	dir := t.TempDir()
-	prov := &goalProvider{
-		workerErrN: 1000, // never recovers
-		workerErr:  errors.New("provider: connection reset by peer"),
-	}
+	var s *Session
 	var evs []Event
-	s := goalSession(t, prov, dir)
-	s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
+	var err error
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProvider{
+			workerErrN: 1000, // never recovers
+			workerErr:  errors.New("provider: connection reset by peer"),
+		}
+		s = goalSession(t, prov, dir)
+		s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
 
-	_, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+		_, err = s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+	})
 	if err == nil {
 		t.Fatal("PursueGoal with a permanently failing worker succeeded, want error")
 	}
@@ -815,4 +833,69 @@ func TestGoalEventsEmitWhileLockHeld(t *testing.T) {
 			<-done
 		})
 	}
+}
+
+// TestGoalRetryDelaySchedule pins the documented capped-exponential backoff
+// schedule (1s, 4s, ...) as a pure function of the attempt number, so the
+// schedule is asserted independent of PursueGoal's plumbing.
+func TestGoalRetryDelaySchedule(t *testing.T) {
+	cases := []struct {
+		attempt int
+		want    time.Duration
+	}{
+		{1, time.Second},
+		{2, 4 * time.Second},
+		{3, 16 * time.Second},
+		{4, goalRetryBackoffCap}, // 64s would exceed the cap
+		{5, goalRetryBackoffCap},
+	}
+	for _, c := range cases {
+		if got := goalRetryDelay(c.attempt); got != c.want {
+			t.Errorf("goalRetryDelay(%d) = %v, want %v", c.attempt, got, c.want)
+		}
+	}
+}
+
+// TestPursueGoalRetryBackoffCancellable proves the backoff wait itself is
+// context-cancellable: a cancellation arriving mid-wait ends PursueGoal
+// immediately rather than sleeping out the rest of the schedule, and — since
+// this is the same context.Canceled path documented for a worker-turn
+// failure — the goal is left exactly as it was (still active), not cleared,
+// matching the "deliberate abort" semantics the rest of the package
+// establishes for a cancelled context.
+//
+// Run inside a synctest bubble: the cancelling goroutine fires its own timer
+// at a fake-time offset chosen to land inside the second (4s) backoff wait,
+// so the assertion on elapsed time is exact and costs no wall-clock time.
+func TestPursueGoalRetryBackoffCancellable(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProvider{
+			workerErrN: 1000, // never recovers on its own
+			workerErr:  errors.New("fake transient provider error"),
+		}
+		s := goalSession(t, prov, t.TempDir())
+
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		go func() {
+			timer := time.NewTimer(1500 * time.Millisecond) // 0.5s into the 4s wait
+			defer timer.Stop()
+			<-timer.C
+			cancel()
+		}()
+
+		start := time.Now()
+		_, err := s.PursueGoal(ctx, "cond", GoalOptions{Evaluator: evalModel})
+		elapsed := time.Since(start)
+
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+		if want := 1500 * time.Millisecond; elapsed != want {
+			t.Errorf("elapsed = %v, want exactly %v (cancelled mid-backoff, not the full 1s+4s schedule)", elapsed, want)
+		}
+		if cond, ok := s.ActiveGoal(); !ok || cond != "cond" {
+			t.Errorf("ActiveGoal = %q, %v; want the goal left untouched (still active) after a cancelled backoff wait", cond, ok)
+		}
+	})
 }

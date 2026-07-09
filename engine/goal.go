@@ -37,9 +37,13 @@
 //	|         /              \
 //	|       yes               no
 //	|        |                 |
+//	|   (wait goalRetryDelay)  |
 //	+--------+                 v
 //	                      CLEARED (goal.cleared, carries the error reason)
 //	ClearGoal (caller/DELETE) ----------> CLEARED (goal.cleared, no reason)
+//
+// The retry branch waits a capped exponential backoff (goalRetryDelay; see
+// goalWorkerRetries) before the next attempt.
 //
 // The critical invariant this enforces — the one a real incident violated
 // (see the forensic note below) — is that ACTIVE has no third way out. Every
@@ -63,6 +67,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -119,7 +124,63 @@ var errEvaluatorUnparseable = errors.New("engine: goal evaluator returned unpars
 // retry — 2 extra attempts, 3 total — rather than deciding "transient" from
 // error text (fragile, provider-specific, and the false negative is a
 // zombie goal, whereas the false positive is at worst two wasted requests).
+//
+// Retries are spaced out on a capped exponential backoff (see goalRetryDelay:
+// 1s after the first failure, 4s after the second, capped thereafter) so a
+// rate limit or a momentary 5xx — the two named transient causes above — has
+// time to clear before the next attempt; back-to-back retries with no delay
+// are close to useless against exactly those causes. The wait is
+// context-cancellable: a cancelled ctx ends it immediately (see
+// waitGoalRetryBackoff), same as any other worker-turn cancellation.
 const goalWorkerRetries = 2
+
+// goalRetryBackoffBase and goalRetryBackoffMultiplier define the backoff
+// schedule: goalRetryDelay(1) == goalRetryBackoffBase (1s), and each
+// subsequent attempt multiplies the previous delay by
+// goalRetryBackoffMultiplier (4x: 1s, 4s, 16s, ...), capped at
+// goalRetryBackoffCap so a hypothetical future increase in goalWorkerRetries
+// can never make a single wait unboundedly long. With today's
+// goalWorkerRetries (2), only the first two terms of the schedule — 1s, 4s —
+// are ever used; the cap and the terms beyond it exist for that future case
+// and are covered by TestGoalRetryDelaySchedule.
+const (
+	goalRetryBackoffBase       = 1 * time.Second
+	goalRetryBackoffMultiplier = 4
+	goalRetryBackoffCap        = 30 * time.Second
+)
+
+// goalRetryDelay returns the backoff delay to wait after the given 1-indexed
+// attempt has failed, before the next attempt runs.
+func goalRetryDelay(attempt int) time.Duration {
+	d := goalRetryBackoffBase
+	for i := 1; i < attempt; i++ {
+		if d >= goalRetryBackoffCap {
+			return goalRetryBackoffCap
+		}
+		d *= goalRetryBackoffMultiplier
+	}
+	if d > goalRetryBackoffCap {
+		d = goalRetryBackoffCap
+	}
+	return d
+}
+
+// waitGoalRetryBackoff blocks for goalRetryDelay(attempt), or until ctx is
+// done, whichever comes first — the backoff is context-cancellable so a
+// deliberate abort (DELETE /goal, shutdown drain) ends the loop immediately
+// instead of waiting out the rest of the schedule. Uses time.NewTimer (not
+// time.After) with an explicit Stop so the timer is released promptly when
+// ctx fires first.
+func waitGoalRetryBackoff(ctx context.Context, attempt int) error {
+	t := time.NewTimer(goalRetryDelay(attempt))
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 // PursueGoal runs the goal loop: prompt the condition, then after every turn
 // ask the evaluator whether it is met, feeding the evaluator's reason back as
@@ -223,9 +284,13 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 }
 
 // promptTurnWithRetry runs one worker turn (s.Prompt), retrying on error up
-// to goalWorkerRetries additional times (goalWorkerRetries+1 attempts total).
+// to goalWorkerRetries additional times (goalWorkerRetries+1 attempts total),
+// waiting goalRetryDelay(attempt) between attempts (see the constants above)
+// so a rate limit or a momentary 5xx has time to clear.
+//
 // context.Canceled is never retried — it is a deliberate abort, not a
-// transient failure, and is returned immediately. Every failed attempt is
+// transient failure — and is returned immediately, whether it came from
+// Prompt itself or from a cancelled backoff wait. Every failed attempt is
 // recorded via recordGoalStalled; if that reports the goal was concurrently
 // cleared, retrying stops immediately (nothing left to retry for) and the
 // triggering error is returned as-is.
@@ -248,6 +313,11 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 		if !s.recordGoalStalled(err, turn, attempt) {
 			// Concurrently cleared: stop retrying, nothing left to retry for.
 			return err
+		}
+		if attempt <= goalWorkerRetries {
+			if werr := waitGoalRetryBackoff(ctx, attempt); werr != nil {
+				return werr
+			}
 		}
 	}
 	return err
