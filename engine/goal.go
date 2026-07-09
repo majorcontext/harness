@@ -64,6 +64,29 @@
 // after a "goal not met" guidance message was appended, mid-turn, with no
 // goal.eval and no error record — the log simply stopped, for hours, until a
 // human forced a goal.cleared. See docs/goal-loop.md for the write-up.
+//
+// # Round 3: the same escape path, the other half of the loop
+//
+// The diagram above has two error edges into ACTIVE's exits — "worker turn
+// errors" and "evaluator: MET" (the NOT MET edge loops back to ACTIVE) — but
+// a third case sat on neither edge: an evaluator call that fails outright
+// (a provider error, or two unparseable replies in a row, see
+// errEvaluatorUnparseable). The worker-turn edge got its clear-on-exhaustion
+// fix in round 2 (above); this one did not — PursueGoal's evaluateGoal error
+// branch returned the bare error and left goalActive true, the exact same
+// shape of zombie, just reached from the other model call. One production
+// session (ses_01kx3ts0pjfap950bmr9b2js0b.jsonl) hit exactly this: the
+// worker turn succeeded, the evaluator returned unparseable output twice in
+// a row, session.error was emitted, and the goal stayed active in the log
+// forever — turns=0, no goal.eval ever, nothing to explain the silence
+// beyond that one error record. (Its log tail also carries a single
+// anomalously large Anthropic thinking signature on the worker's last
+// message — see message.ProviderData and provider/anthropic/transcode.go's
+// replay-size cap — but that turn itself succeeded; it is a correlated
+// hazard, not this incident's cause.) Fixed the same way as round 2: a
+// failing evaluator call now clears the goal (unless the error is a
+// cancelled context) before returning, closing the last "third way out" of
+// ACTIVE. See TestPursueGoalUnparseableTwiceClearsGoal.
 package engine
 
 import (
@@ -209,9 +232,14 @@ func waitGoalRetryBackoff(ctx context.Context, attempt int) error {
 // error is returned. A cancelled context is never retried or treated as a
 // worker failure — it is a deliberate abort (DELETE /goal, shutdown drain)
 // and is returned immediately with the goal left exactly as it was, since a
-// drain must be resumable. Two unparseable evaluator replies in a row also
-// return an error without clearing the goal, since that failure is in the
-// evaluator, not the worker, and the existing goal state is still accurate.
+// drain must be resumable. A failing evaluator call — a provider error, or
+// two unparseable replies in a row — is not retried (it is the worker turn
+// that is expensive and worth protecting from a transient hiccup, not the
+// tool-less evaluator check), but it is held to the exact same no-zombie
+// guarantee as a permanently failing worker turn: the goal is cleared
+// (goal.cleared carrying the error as its reason) before the error is
+// returned, unless the error is itself a cancelled context, which leaves the
+// goal untouched for the same resume reason as above.
 //
 // Must not be called concurrently with itself or Prompt (it drives Prompt).
 func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOptions) (*GoalResult, error) {
@@ -270,10 +298,43 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 		}
 		met, reason, err := s.evaluateGoal(ctx, condition, opts.Evaluator)
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				// Deliberate abort (or a cancelled ctx surfacing through the
+				// evaluator's own stream): same rule as the worker-turn
+				// path above — leave the goal exactly as it is, since a
+				// drain must be resumable.
+				return nil, err
+			}
 			// Unlike the Prompt call above, evaluateGoal (the evaluator
-			// model call and its unparseable-twice error) never goes
-			// through Prompt, so this loop-terminating error needs its own
-			// session.error emission.
+			// model call, its provider errors, and its unparseable-twice
+			// error) never goes through Prompt, so this loop-terminating
+			// error needs its own session.error emission.
+			//
+			// It also needs its own clear. This was the round-3 zombie-goal
+			// escape path: a permanent worker-turn failure clears the goal
+			// (see promptTurnWithRetry's caller above), but a permanent
+			// evaluator failure returned bare, leaving goalActive true with
+			// nothing further ever recorded — a session (see the forensic
+			// note ses_01kx3ts0pjfap950bmr9b2js0b.jsonl) whose transcript
+			// just stops after the worker's last message, goal still active
+			// in the log forever. The state machine promises no third way
+			// out of ACTIVE (see the package doc); that promise cannot be
+			// conditional on which half of the loop failed. Clear it,
+			// carrying the error as the reason, exactly as the worker-turn
+			// path does, then return the error so the caller still
+			// journals the failure.
+			//
+			// But if a concurrent DELETE /goal already cleared the goal
+			// while this call was in flight, there is nothing left to
+			// clear and nothing to journal as a failure: the goal-loop
+			// state machine already reached a clean stop, symmetric with
+			// the same check on the worker-turn path above. A
+			// deliberately-cleared goal is not an error condition
+			// regardless of which half of the loop the clear raced with.
+			if !s.goalActiveWith(condition) {
+				return &GoalResult{Achieved: false, Turns: turn, Reason: "goal cleared"}, nil
+			}
+			s.clearGoal(fmt.Sprintf("goal evaluator failed: %v", err))
 			s.emitSessionError(err)
 			return nil, err
 		}

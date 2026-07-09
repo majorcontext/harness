@@ -203,6 +203,35 @@ func (*Reasoning) partType() PartType { return PartReasoning }
 // Transcoders replay the entry matching their own family verbatim and ignore
 // the rest.
 //
+// # Unbounded replay is a request-size/time bomb
+//
+// A thinking-block signature or a redacted_thinking payload (see
+// provider/anthropic/transcode.go's anthropicReasoningData) is opaque to
+// this package and, in the ordinary case, small — a few hundred bytes. It
+// is not, however, bounded by anything: a provider is free to hand back an
+// entry orders of magnitude larger (a production session,
+// ses_01kx3ts0pjfap950bmr9b2js0b.jsonl, carries one thinking signature of
+// ~30KB against seven siblings of 350-600 bytes in the same run), and every
+// entry that makes it into history is replayed VERBATIM on every
+// subsequent request for the rest of the session — history only grows, it
+// is never pruned. An oversized entry is therefore not a one-time cost:
+// it is carried on every request from the turn it appears in onward,
+// compounding with whatever the next turn adds. That is a request-size
+// (and, on some providers, request-time) bomb hiding in something this
+// package treats as a small opaque blob.
+//
+// maxProviderDataEntry bounds this the same way a zero-length entry is
+// already bounded (both are "Get, below, treats this as absent"): reasoning
+// replay is a context-quality optimization, not a correctness requirement
+// (see the package doc — a Reasoning part crossing to a different provider
+// family is already dropped the same way), so refusing to replay an
+// oversized entry costs a turn's worth of thinking continuity/cache
+// affinity and nothing else. The cap is generous — 256KiB, several hundred
+// times the ordinary entry size seen in production — specifically so it
+// never fires on a legitimate large redacted_thinking payload from a long
+// extended-thinking turn; it exists to catch the pathological case, not to
+// budget the common one.
+//
 // # The map-shaped twin of the ToolCall.Arguments footgun
 //
 // ToolCall.Arguments is a single json.RawMessage field, and safeArguments
@@ -236,6 +265,14 @@ func (*Reasoning) partType() PartType { return PartReasoning }
 // future — safe without that encoder having to know about this footgun.
 type ProviderData map[string]json.RawMessage
 
+// maxProviderDataEntry bounds a single ProviderData entry's replayed size —
+// see the package doc above ("Unbounded replay is a request-size/time
+// bomb"). 256KiB is chosen to sit far above any signature or
+// redacted_thinking payload observed in production while still being a
+// hard, structural bound: bytes, not tokens or entries, because the whole
+// point is bounding the wire size actually replayed.
+const maxProviderDataEntry = 256 * 1024
+
 // Get returns the ProviderData entry for family, treating a present-but
 // zero-length entry as absent — the same normalization ToolCall.safeArguments
 // applies to Arguments, but at the point of read rather than of marshal,
@@ -243,9 +280,15 @@ type ProviderData map[string]json.RawMessage
 // into a provider request's own RawMessage list, e.g.) outside of any
 // marshaling this map itself might guard. Every transcoder must call this
 // instead of indexing the map directly; see the package doc on ProviderData.
+//
+// An entry larger than maxProviderDataEntry is also treated as absent: see
+// "Unbounded replay is a request-size/time bomb" above. This is the single
+// choke point every transcoder already goes through for the zero-length
+// case, so it is also the single choke point that bounds size — no
+// transcoder needs its own cap, and none can accidentally bypass it.
 func (pd ProviderData) Get(family string) (json.RawMessage, bool) {
 	raw, ok := pd[family]
-	if !ok || len(raw) == 0 {
+	if !ok || len(raw) == 0 || len(raw) > maxProviderDataEntry {
 		return nil, false
 	}
 	return raw, true
