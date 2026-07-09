@@ -196,9 +196,14 @@ components:
         caller tells the two apart by checking state/goal against what it
         asked for (e.g. state still goal-running after until=goal-done means
         it timed out; goal.achieved distinguishes an achieved terminal from a
-        cleared one after until=goal-done resolved). Same shapes as Session's
-        state and goal fields, deliberately: a client that already renders
-        Session JSON needs no separate parsing path for this endpoint.
+        cleared one after until=goal-done resolved). A third case exists if
+        the server begins draining/shutdown while the wait is blocked: it
+        also returns 200 early with the current snapshot, which may not
+        satisfy the requested condition — callers distinguish this the same
+        way, by checking state/goal against what they asked for. Same shapes
+        as Session's state and goal fields, deliberately: a client that
+        already renders Session JSON needs no separate parsing path for this
+        endpoint.
       required: [state]
       properties:
         state:
@@ -801,8 +806,11 @@ paths:
       responses:
         "200":
           description: >
-            The condition held (immediately or after blocking), or timeout_s
-            elapsed — see the summary for how a caller tells the two apart.
+            The condition held (immediately or after blocking), timeout_s
+            elapsed, or the server began draining/shutdown while the wait
+            was blocked — see the summary for how a caller tells these
+            apart (the drain case, like the timeout case, may return a
+            snapshot that does not satisfy the requested condition).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/WaitResponse" }

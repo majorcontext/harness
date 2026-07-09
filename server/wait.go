@@ -32,7 +32,11 @@ type waitJSON struct {
 // if the requested condition already holds, otherwise it blocks — parked on a
 // channel woken by the existing durable-event fanout (see
 // notifyWaitersLocked), never by server-side polling — until the condition
-// holds or timeout_s elapses (default 30s, capped at 300s).
+// holds, timeout_s elapses (default 30s, capped at 300s), or the server
+// begins draining/shutdown (s.closing), whichever comes first; a drain-driven
+// return, like a timeout, carries the current best-effort snapshot and may
+// not satisfy the requested condition — the caller distinguishes it the same
+// way, by checking the returned state/goal.
 //
 // until=idle waits for the composite state to read idle (not busy, and no
 // active goal). until=goal-done waits for the goal to become inactive —
