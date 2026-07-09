@@ -50,14 +50,19 @@ type Event struct {
 	Usage      *provider.Usage     `json:"usage,omitempty"`
 	StopReason provider.StopReason `json:"stop_reason,omitempty"`
 
-	// Goal-loop fields (set on goal.* events; see goal.go). GoalCondition is
-	// carried by goal.set; GoalReason/GoalMet/GoalTurn by goal.eval;
-	// GoalReason/GoalTurns by goal.achieved; goal.cleared carries only the type.
+	// Goal-loop fields (set on goal.* events; see goal.go and the state
+	// machine documented atop goal.go). GoalCondition is carried by
+	// goal.set; GoalReason/GoalMet/GoalTurn by goal.eval; GoalReason/GoalTurn
+	// by goal.stalled (GoalAttempt is the 1-based retry attempt);
+	// GoalReason/GoalTurns by goal.achieved; goal.cleared carries GoalReason
+	// when it was triggered by a permanently-failing worker turn, empty for
+	// an ordinary caller-initiated clear.
 	GoalCondition string `json:"goal_condition,omitempty"`
 	GoalReason    string `json:"goal_reason,omitempty"`
 	GoalMet       bool   `json:"goal_met,omitempty"`
 	GoalTurn      int    `json:"goal_turn,omitempty"`
 	GoalTurns     int    `json:"goal_turns,omitempty"`
+	GoalAttempt   int    `json:"goal_attempt,omitempty"`
 }
 
 // Event types.
@@ -71,6 +76,7 @@ const (
 	// Goal-loop events (see goal.go).
 	EventGoalSet      = "goal.set"
 	EventGoalEval     = "goal.eval"
+	EventGoalStalled  = "goal.stalled"
 	EventGoalAchieved = "goal.achieved"
 	EventGoalCleared  = "goal.cleared"
 )
@@ -122,6 +128,14 @@ type Config struct {
 	// installed.
 	Tools       []Tool
 	BashTimeout time.Duration // defaults to 2m
+
+	// BashOutputCap bounds the bytes of combined stdout+stderr the bash tool
+	// keeps from one command, truncating (head + tail, marker in between)
+	// before the output ever reaches the message log. Zero/negative means
+	// the default (see defaultBashOutputCap in bash.go, 96KB) — a runaway
+	// command (an apt-get/npm install storm is the real-world trigger) can
+	// otherwise dump megabytes into a single message and poison the session.
+	BashOutputCap int
 }
 
 // Session is one conversation: an in-memory history plus the agent loop.
@@ -206,7 +220,7 @@ func newSession(cfg Config) *Session {
 		tools:     make(map[string]Tool),
 		createdAt: time.Now().UTC(),
 	}
-	for _, t := range []Tool{bashTool(cfg.BashTimeout), readFileTool(), writeFileTool(), editFileTool(), sessionInfoTool()} {
+	for _, t := range []Tool{bashTool(cfg.BashTimeout, cfg.BashOutputCap), readFileTool(), writeFileTool(), editFileTool(), sessionInfoTool()} {
 		s.tools[t.Def.Name] = t
 	}
 	for _, t := range cfg.Tools {
