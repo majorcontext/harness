@@ -65,6 +65,42 @@ func TestRunClientAPISessionMessagesUnknownSession(t *testing.T) {
 	}
 }
 
+// TestLazyRunClientAPIResolvesSessionAfterAssignment covers runCmd's actual
+// wiring shape: the ClientAPI is constructed (via newLazyRunClientAPI)
+// before the session it serves exists, and only resolves it lazily on each
+// call through the getter — mirroring how runCmd must build the Host ahead
+// of resolveSession returning the *engine.Session that fills its Options.
+func TestLazyRunClientAPIResolvesSessionAfterAssignment(t *testing.T) {
+	var sess *engine.Session
+	api := newLazyRunClientAPI(func() *engine.Session { return sess })
+
+	// Called before the session variable is assigned: a clean error, not a
+	// nil-pointer panic.
+	if _, err := api.SessionMessages(context.Background(), &plugin.SessionMessagesRequest{SessionID: "whatever"}); err == nil {
+		t.Fatal("want an error before the session is assigned, got nil")
+	}
+
+	sess = engine.NewSession(engine.Config{
+		Providers:    provider.Registry{"test": &scriptedProvider{name: "test"}},
+		Model:        message.ModelRef{Provider: "test", Model: "m1"},
+		WorkDir:      t.TempDir(),
+		Instructions: &engine.InstructionsConfig{Disabled: true},
+		SkillsDirs:   []string{},
+	})
+	if _, err := sess.Prompt(context.Background(), "hello"); err != nil {
+		t.Fatal(err)
+	}
+	want := sess.History()
+
+	resp, err := api.SessionMessages(context.Background(), &plugin.SessionMessagesRequest{SessionID: sess.ID})
+	if err != nil {
+		t.Fatalf("SessionMessages after assignment: %v", err)
+	}
+	if len(resp.Messages) != len(want) {
+		t.Fatalf("got %d messages, want %d", len(resp.Messages), len(want))
+	}
+}
+
 // TestRunClientAPIMCPCallNotImplemented verifies MCPCall returns a clear
 // not-implemented error rather than panicking or silently returning nil.
 func TestRunClientAPIMCPCallNotImplemented(t *testing.T) {

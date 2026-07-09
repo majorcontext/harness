@@ -15,23 +15,49 @@ import (
 // behind it. It is the direct engine-backed adapter counterpart to the
 // server package's ClientAPI (which is backed by a multi-session store) —
 // see server/clientapi.go.
+//
+// It resolves its session through a getter rather than holding a
+// *engine.Session field directly, so it can be constructed (via
+// newLazyRunClientAPI) before the session exists: runCmd must set
+// engine.Config.Hooks — which needs a plugin.Host, which needs this
+// ClientAPI — before resolveSession returns the *engine.Session it wraps.
+// newRunClientAPI (used directly by tests, where the session already
+// exists) is the trivial case of the same getter.
 type runClientAPI struct {
-	sess *engine.Session
+	getSess func() *engine.Session
 }
 
 // newRunClientAPI builds a plugin.ClientAPI scoped to a single, already
 // in-flight run-mode session.
 func newRunClientAPI(sess *engine.Session) plugin.ClientAPI {
-	return &runClientAPI{sess: sess}
+	return &runClientAPI{getSess: func() *engine.Session { return sess }}
+}
+
+// newLazyRunClientAPI builds a plugin.ClientAPI whose session is resolved
+// on every call via getSess rather than fixed at construction time. This is
+// what runCmd wires into plugin.NewHost: the Host (and its Client option)
+// must exist before resolveSession has produced the *engine.Session it
+// ultimately serves, so getSess reads a variable that runCmd assigns
+// immediately after resolveSession returns — strictly before the first
+// Prompt/PursueGoal call, which is the earliest point any hook (and so any
+// plugin client API call) can fire. A nil session (called out of that
+// order, which should never happen in practice) is reported as a clean
+// error rather than a nil-pointer panic.
+func newLazyRunClientAPI(getSess func() *engine.Session) plugin.ClientAPI {
+	return &runClientAPI{getSess: getSess}
 }
 
 // SessionMessages implements plugin.ClientAPI. Run mode holds exactly one
 // session, so anything but that session's own id is unknown.
 func (r *runClientAPI) SessionMessages(_ context.Context, req *plugin.SessionMessagesRequest) (*plugin.SessionMessagesResponse, error) {
-	if req.SessionID != r.sess.ID {
+	sess := r.getSess()
+	if sess == nil {
+		return nil, fmt.Errorf("client API: no active session yet")
+	}
+	if req.SessionID != sess.ID {
 		return nil, fmt.Errorf("client API: no such session %q", req.SessionID)
 	}
-	msgs := r.sess.History()
+	msgs := sess.History()
 	if msgs == nil {
 		msgs = []message.Message{}
 	}

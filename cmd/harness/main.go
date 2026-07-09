@@ -359,6 +359,13 @@ func runCmd(args []string) error {
 		}
 	}
 
+	// The plugin host's ClientAPI is the direct engine-backed adapter (see
+	// cmd/harness/clientapi.go), late-bound: sess is assigned immediately
+	// below once resolveSession returns, strictly before the first
+	// Prompt/PursueGoal call — the earliest point any hook can fire.
+	var sess *engine.Session
+	lateAPI.Bind(newLazyRunClientAPI(func() *engine.Session { return sess }))
+
 	s, err := resolveSession(engine.Config{
 		Providers:    registry(cfg),
 		Model:        model,
@@ -374,6 +381,7 @@ func runCmd(args []string) error {
 	if err != nil {
 		return err
 	}
+	sess = s
 
 	goalNotAchieved := false
 	if opts.goal != "" {
