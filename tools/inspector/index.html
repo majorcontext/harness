@@ -36,130 +36,203 @@
    10. Toggle OS light/dark theme -> both variants are legible.
 -->
 <style>
+  /* ---------------------------------------------------------------------
+     Palette: warm paper neutrals + one committed accent (burnt rust/clay).
+     Status colors are a single explicit mapping reused everywhere a status
+     appears (session badges, the goal chip, the connection dot) rather than
+     invented ad hoc per component. Light-surface direction by default; the
+     dark variant below is a fully-committed second pass, not a dimmed
+     afterthought, so the OS toggle stays legible either way.
+     --------------------------------------------------------------------- */
   :root {
-    color-scheme: dark;
-    --bg: #16181d; --panel: #1e2128; --panel-2: #24272f; --border: #333743;
-    --fg: #e6e8ec; --dim: #9aa0ac; --accent: #6ea8fe; --accent-fg: #0a0d12;
-    --user: #223047; --asst: #23262e; --tool: #2a2d36; --reason: #202329;
-    --err-bg: #3a1f22; --err-border: #7a3b40; --ok: #4ec97b; --warn: #e0b64a;
-    --off: #6b7280;
+    color-scheme: light;
+    --paper: #f4f0e8; --surface: #fffefb; --surface-2: #ece6d9; --line: #ddd4c2; --line-strong: #c9bda3;
+    --ink: #241f18; --ink-dim: #6b6153; --ink-faint: #948a79;
+    --accent: #b3401b; --accent-ink: #fff9f2; --accent-wash: #f4dccb;
+    --st-idle: #6b6153; --st-idle-bg: #eae4d6;
+    --st-busy: #a3690a; --st-busy-bg: #f3dfae;
+    --st-ok: #2f6d3f; --st-ok-bg: #dbe9dc;
+    --st-error: #a3271f; --st-error-bg: #f4dcd8;
+    --shadow-1: 0 1px 1px rgba(36,31,24,.05), 0 2px 4px rgba(36,31,24,.04);
+    --shadow-2: 0 1px 2px rgba(36,31,24,.06), 0 4px 8px rgba(36,31,24,.05), 0 12px 24px rgba(36,31,24,.05);
+    --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, "URW Palladio", Georgia, serif;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "DejaVu Sans Mono", Consolas, monospace;
   }
-  @media (prefers-color-scheme: light) {
+  @media (prefers-color-scheme: dark) {
     :root {
-      color-scheme: light;
-      --bg: #f4f5f7; --panel: #ffffff; --panel-2: #f0f1f4; --border: #d9dce2;
-      --fg: #1a1d23; --dim: #616875; --accent: #2563eb; --accent-fg: #ffffff;
-      --user: #dceafe; --asst: #ffffff; --tool: #eef0f4; --reason: #f0f1f4;
-      --err-bg: #fdecec; --err-border: #f0b4b4; --ok: #178a4c; --warn: #a9791a;
-      --off: #9aa0ac;
+      color-scheme: dark;
+      --paper: #1b1712; --surface: #241f18; --surface-2: #2c261d; --line: #3c3527; --line-strong: #4d4433;
+      --ink: #ede6d8; --ink-dim: #b3a892; --ink-faint: #8a8069;
+      --accent: #e2762f; --accent-ink: #1b1712; --accent-wash: #402515;
+      --st-idle: #b3a892; --st-idle-bg: #322c21;
+      --st-busy: #e2b04a; --st-busy-bg: #3c2f14;
+      --st-ok: #6fbb7f; --st-ok-bg: #223626;
+      --st-error: #e2726a; --st-error-bg: #3a211e;
+      --shadow-1: 0 1px 1px rgba(0,0,0,.28), 0 2px 4px rgba(0,0,0,.22);
+      --shadow-2: 0 1px 2px rgba(0,0,0,.3), 0 4px 8px rgba(0,0,0,.26), 0 12px 24px rgba(0,0,0,.24);
     }
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body {
-    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    background: var(--bg); color: var(--fg);
+    font: 400 14px/1.5 var(--font-sans);
+    background: var(--paper); color: var(--ink);
     display: flex; flex-direction: column; height: 100vh; overflow: hidden;
   }
+  .tabular { font-variant-numeric: tabular-nums; }
+  .mono { font-family: var(--font-mono); }
+  .label {
+    font: 600 11px/1 var(--font-sans); text-transform: uppercase; letter-spacing: .07em;
+    color: var(--ink-faint);
+  }
   header {
-    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-    padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--border);
+    display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+    padding: 12px 20px; background: var(--surface);
+    box-shadow: var(--shadow-1);
   }
+  .brand { display: flex; align-items: baseline; gap: 8px; margin-right: 8px; }
+  .brand-mark { font: 600 20px/1 var(--font-serif); color: var(--ink); }
+  .brand-sub { font: 600 11px/1 var(--font-sans); text-transform: uppercase; letter-spacing: .09em; color: var(--accent); }
+  .connect-group { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   header input {
-    background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
-    border-radius: 6px; padding: 6px 8px; font: inherit;
+    background: var(--paper); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 12px; font: 400 13px/1.2 var(--font-sans);
+    transition: border-color .15s ease-out;
   }
-  #base { width: 230px; } #token { width: 190px; }
+  header input:focus { outline: none; border-color: var(--accent); }
+  #base { width: 230px; } #token { width: 180px; }
   button {
-    background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
-    border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer;
+    background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 999px; padding: 8px 16px; font: 600 13px/1 var(--font-sans); cursor: pointer;
+    transition: border-color .15s ease-out, background-color .15s ease-out, transform .1s ease-out;
   }
-  button:hover:not(:disabled) { border-color: var(--accent); }
-  button:disabled { opacity: .5; cursor: not-allowed; }
-  button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
-  .status { display: flex; align-items: center; gap: 6px; margin-left: auto; color: var(--dim); }
-  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--off); }
-  .dot.on { background: var(--ok); } .dot.re { background: var(--warn); }
+  button:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface-2); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary {
+    background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
+  }
+  button.primary:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); opacity: .92; }
+  .status { display: flex; align-items: center; gap: 8px; margin-left: auto; color: var(--ink-dim); font-weight: 500; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--st-idle); }
+  .dot.on { background: var(--st-ok); } .dot.re { background: var(--st-busy); }
   main { display: flex; flex: 1; min-height: 0; }
-  #sessions {
-    width: 300px; border-right: 1px solid var(--border); overflow-y: auto;
-    background: var(--panel); flex-shrink: 0;
+
+  /* ---------------- session sidebar ---------------- */
+  .sidebar { width: 300px; border-right: 1px solid var(--line); display: flex; flex-direction: column; flex-shrink: 0; background: var(--paper); }
+  .sidebar-head { padding: 16px 20px 8px; }
+  #sessions { flex: 1; overflow-y: auto; }
+  .sess { padding: 12px 20px; border-bottom: 1px solid var(--line); border-left: 4px solid transparent; cursor: pointer; }
+  .sess:hover { background: var(--surface-2); }
+  .sess.sel { background: var(--surface); border-left-color: var(--accent); }
+  .sess .id { font: 600 13px/1.2 var(--font-mono); color: var(--ink); }
+  .sess .meta { color: var(--ink-dim); font-size: 12px; margin-top: 8px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  .empty { color: var(--ink-faint); text-align: center; margin-top: 40px; font: italic 400 15px/1.5 var(--font-serif); padding: 0 20px; }
+
+  /* explicit status→color mapping, reused by session badges and the goal chip */
+  .badge {
+    border-radius: 4px; padding: 4px 8px; font: 600 10px/1.6 var(--font-sans);
+    text-transform: uppercase; letter-spacing: .06em;
   }
-  .sess {
-    padding: 10px 12px; border-bottom: 1px solid var(--border); cursor: pointer;
-  }
-  .sess:hover { background: var(--panel-2); }
-  .sess.sel { background: var(--panel-2); border-left: 3px solid var(--accent); padding-left: 9px; }
-  .sess .id { font-weight: 600; font-family: ui-monospace, monospace; }
-  .sess .meta { color: var(--dim); font-size: 12px; margin-top: 2px; display: flex; gap: 8px; flex-wrap: wrap; }
-  .badge { border-radius: 10px; padding: 0 8px; font-size: 11px; font-weight: 600; }
-  .badge.busy { background: var(--warn); color: #000; }
-  .badge.idle { background: var(--panel-2); color: var(--dim); border: 1px solid var(--border); }
+  .badge.busy, .goalchip.active .goaltag { background: var(--st-busy-bg); color: var(--st-busy); }
+  .badge.idle { background: var(--st-idle-bg); color: var(--st-idle); }
+
   #right { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-  #timeline { flex: 1; overflow-y: auto; padding: 16px; }
+  #timeline { flex: 1; overflow-y: auto; padding: 24px 32px; }
+
   /* #goalstrip sits between the scrolling #timeline and the composer, outside
      the scroll region, so the goal chip stays visible while a busy streaming
      session scrolls the timeline. It collapses to nothing when empty. */
-  #goalstrip { flex-shrink: 0; padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
+  #goalstrip { flex-shrink: 0; padding: 0 32px; background: var(--paper); border-bottom: 1px solid transparent; }
   #goalstrip:empty { display: none; border-bottom: none; padding: 0; }
-  .empty { color: var(--dim); text-align: center; margin-top: 40px; }
-  .msg { margin: 0 0 12px; max-width: 860px; }
-  .role { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); margin-bottom: 4px; }
-  .bubble { border-radius: 10px; padding: 10px 12px; border: 1px solid var(--border); }
-  .bubble.user { background: var(--user); }
-  .bubble.assistant { background: var(--asst); }
+
+  .msg { margin: 0 0 20px; max-width: 720px; }
+  .role { font: 600 11px/1 var(--font-sans); text-transform: uppercase; letter-spacing: .07em; color: var(--ink-faint); margin-bottom: 8px; }
+  .bubble { border-radius: 10px; padding: 12px 16px; background: var(--surface); box-shadow: var(--shadow-1); }
+  .bubble.user { background: var(--accent-wash); }
+  .bubble.assistant { background: var(--surface); }
   .text { white-space: pre-wrap; word-break: break-word; }
-  details.tool, details.reason { border: 1px solid var(--border); border-radius: 8px; margin: 6px 0; background: var(--tool); }
-  details.reason { background: var(--reason); color: var(--dim); }
-  summary { cursor: pointer; padding: 8px 10px; font-family: ui-monospace, monospace; font-size: 13px; }
-  details .body { padding: 0 10px 10px; }
+
+  /* dense tool/reasoning data reads as a flat, bordered row (a semantic
+     left rule), not another shadowed card — keeps the timeline from turning
+     into a stack of identical boxes. */
+  details.tool, details.reason {
+    border-left: 4px solid var(--line-strong); margin: 8px 0; background: transparent;
+  }
+  details.reason { border-left-color: var(--ink-faint); color: var(--ink-dim); }
+  summary { cursor: pointer; padding: 8px 0 8px 12px; font: 500 13px/1.3 var(--font-mono); }
+  details .body { padding: 0 0 8px 16px; }
   pre.code {
     margin: 0; white-space: pre-wrap; word-break: break-word;
-    font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
-    background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px;
+    font: 12px/1.5 var(--font-mono);
+    background: var(--surface-2); border-radius: 8px; padding: 12px;
     overflow-x: auto;
   }
-  .toolres { border-radius: 8px; padding: 8px 10px; background: var(--tool); border: 1px solid var(--border); }
-  .toolres.err { background: var(--err-bg); border-color: var(--err-border); }
+  .toolres { border-left: 4px solid var(--st-ok); padding: 4px 0 4px 12px; margin: 8px 0; }
+  .toolres.err { border-left-color: var(--st-error); background: var(--st-error-bg); border-radius: 0 8px 8px 0; }
+  .toolres .role { color: var(--ink-faint); }
+  .toolres.err .role { color: var(--st-error); }
+
   .banner {
-    border-radius: 8px; padding: 8px 12px; margin: 6px 0; max-width: 860px;
-    background: var(--err-bg); border: 1px solid var(--err-border);
+    border-left: 4px solid var(--st-error); padding: 8px 0 8px 12px; margin: 12px 0; max-width: 720px;
+    color: var(--ink);
   }
-  .banner.abort { background: var(--reason); border-color: var(--border); color: var(--dim); }
+  .banner.abort { border-left-color: var(--ink-faint); color: var(--ink-dim); }
+
   .goalchip {
-    border-radius: 8px; padding: 8px 12px; margin: 10px 0; max-width: 860px;
-    background: var(--panel-2); border: 1px solid var(--border);
-    display: flex; flex-direction: column; gap: 4px;
+    border-radius: 10px; padding: 12px 16px; margin: 16px 0; max-width: 720px;
+    background: var(--surface); box-shadow: var(--shadow-1);
+    display: flex; flex-direction: column; gap: 8px; border-left: 4px solid var(--st-idle);
   }
-  .goalchip.active { border-left: 3px solid var(--warn); }
-  .goalchip.achieved { border-left: 3px solid var(--ok); }
-  .goalchip.cleared { border-left: 3px solid var(--off); color: var(--dim); }
-  .goaltag { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); }
-  .goalcond { font-weight: 600; }
-  .goalreason { color: var(--dim); font-size: 13px; }
-  .streaming { opacity: .85; }
-  .streaming .role::after { content: " · streaming…"; color: var(--accent); }
-  #composer { border-top: 1px solid var(--border); padding: 10px 12px; background: var(--panel); }
+  .goalchip.active { border-left-color: var(--st-busy); }
+  .goalchip.achieved { border-left-color: var(--st-ok); }
+  .goalchip.cleared { border-left-color: var(--st-idle); color: var(--ink-dim); }
+  .goaltag {
+    display: inline-block; width: fit-content;
+    font: 600 10px/1.6 var(--font-sans); text-transform: uppercase; letter-spacing: .06em;
+    color: var(--ink-faint); background: var(--st-idle-bg); border-radius: 4px; padding: 4px 8px;
+  }
+  .goalchip.achieved .goaltag { background: var(--st-ok-bg); color: var(--st-ok); }
+  .goalchip.cleared .goaltag { background: var(--st-idle-bg); color: var(--st-idle); }
+  .goalcond { font: 600 16px/1.35 var(--font-serif); color: var(--ink); }
+  .goalreason { color: var(--ink-dim); font-size: 13px; }
+
+  .streaming { opacity: .92; }
+  .streaming .role::after { content: " · streaming…"; color: var(--accent); text-transform: none; letter-spacing: 0; }
+
+  #composer { border-top: 1px solid var(--line); padding: 16px 32px; background: var(--surface); }
   #composer textarea {
-    width: 100%; resize: vertical; min-height: 60px; font: inherit;
-    background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
-    border-radius: 8px; padding: 8px;
+    width: 100%; resize: vertical; min-height: 60px; font: 400 14px/1.5 var(--font-sans);
+    background: var(--paper); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 8px; padding: 12px; transition: border-color .15s ease-out;
   }
+  #composer textarea:focus { outline: none; border-color: var(--accent); }
   #composer textarea:disabled { opacity: .5; }
-  .composer-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
-  .notice { color: var(--warn); font-size: 13px; min-height: 18px; }
+  .composer-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+  .notice { color: var(--st-error); font-size: 13px; font-weight: 500; min-height: 18px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; animation: none !important; }
+  }
 </style>
 </head>
 <body>
   <header>
-    <input id="base" placeholder="http://localhost:4096" autocomplete="off" spellcheck="false">
-    <input id="token" type="password" placeholder="run token" autocomplete="off"
-           title="stored in this browser's localStorage in plaintext — use a dev token on a private origin">
-    <button id="connect" class="primary">Connect</button>
+    <div class="brand"><span class="brand-mark">harness</span><span class="brand-sub">Inspector</span></div>
+    <div class="connect-group">
+      <input id="base" placeholder="http://localhost:4096" autocomplete="off" spellcheck="false">
+      <input id="token" type="password" placeholder="run token" autocomplete="off"
+             title="stored in this browser's localStorage in plaintext — use a dev token on a private origin">
+      <button id="connect" class="primary">Connect</button>
+    </div>
     <span class="status"><span id="dot" class="dot"></span><span id="statusText">disconnected</span></span>
   </header>
   <main>
-    <div id="sessions"><div class="empty">not connected</div></div>
+    <div class="sidebar">
+      <div class="sidebar-head"><span class="label">Sessions</span></div>
+      <div id="sessions"><div class="empty">not connected</div></div>
+    </div>
     <div id="right">
       <div id="timeline"><div class="empty">select a session</div></div>
       <div id="goalstrip"></div>
@@ -167,8 +240,8 @@
         <div class="notice" id="notice"></div>
         <textarea id="prompt" placeholder="Message… (Enter to send, Shift+Enter for newline)" disabled></textarea>
         <div class="composer-row">
-          <button id="send" disabled>Send</button>
-          <button id="newSession" disabled>+ new session</button>
+          <button id="send" class="primary" disabled>Send</button>
+          <button id="newSession" disabled>+ New session</button>
         </div>
       </div>
     </div>
@@ -368,12 +441,12 @@ function renderSessions() {
   if (!list.length) { box.append(el("div", { class: "empty", text: state.running ? "no sessions" : "not connected" })); return; }
   for (const s of list) {
     const node = el("div", { class: "sess" + (s.id === state.selected ? " sel" : ""), title: s.id },
-      el("div", { class: "id", text: shortId(s.id) }),
+      el("div", { class: "id mono tabular", text: shortId(s.id) }),
       el("div", { class: "meta" },
         el("span", { class: "badge " + (s.status === "busy" ? "busy" : "idle"), text: s.status || "idle" }),
         el("span", { text: s.model || "—" }),
-        el("span", { text: (s.messages || 0) + " msg" }),
-        el("span", { text: fmtTime(s.created_at) }),
+        el("span", { class: "tabular", text: (s.messages || 0) + " msg" }),
+        el("span", { class: "mono tabular", text: fmtTime(s.created_at) }),
       ),
     );
     node.onclick = () => selectSession(s.id);
@@ -429,7 +502,7 @@ function renderReasoning(text) {
 
 function renderToolCall(p) {
   return el("details", { class: "tool" },
-    el("summary", { text: "🔧 " + (p.name || "tool") + (p.running ? " · running…" : "") }),
+    el("summary", { text: "tool · " + (p.name || "tool") + (p.running ? " · running…" : "") }),
     el("div", { class: "body" }, el("pre", { class: "code", text: prettyJSON(p.arguments) })));
 }
 
@@ -445,7 +518,7 @@ function renderToolResult(content, isErr) {
 function renderGoalChip(g) {
   const state = g.achieved ? "achieved" : g.active ? "active" : "cleared";
   const chip = el("div", { class: "goalchip " + state },
-    el("span", { class: "goaltag", text: "🎯 goal · " + state }),
+    el("span", { class: "goaltag", text: "goal · " + state }),
     el("span", { class: "goalcond", text: g.condition }));
   if (g.reason) chip.append(el("div", { class: "goalreason", text: g.reason }));
   return chip;
