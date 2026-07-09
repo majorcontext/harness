@@ -154,13 +154,28 @@ func (c *Client) ListTools(ctx context.Context, cursor string) (*ListToolsResult
 	return &result, nil
 }
 
+// maxListAllToolsPages caps the number of tools/list pages ListAllTools
+// will fetch, as a backstop against a server that never terminates
+// pagination (e.g. always minting a fresh cursor).
+const maxListAllToolsPages = 1000
+
 // ListAllTools drains every page of tools/list into a single slice. It
 // exists for convenience; callers that want to react to a large tool list
 // incrementally should call ListTools directly.
+//
+// A server is expected to eventually return an empty NextCursor, but a
+// buggy or hostile one might not. ListAllTools guards against that two
+// ways: it errors immediately if a page's NextCursor repeats a cursor
+// already seen (the common "stuck" case), and it errors if pagination
+// still hasn't terminated after maxListAllToolsPages pages.
 func (c *Client) ListAllTools(ctx context.Context) ([]Tool, error) {
 	var all []Tool
 	cursor := ""
-	for {
+	seen := make(map[string]struct{})
+	for pages := 0; ; pages++ {
+		if pages >= maxListAllToolsPages {
+			return nil, fmt.Errorf("mcp: tools/list: exceeded %d pages without terminating", maxListAllToolsPages)
+		}
 		page, err := c.ListTools(ctx, cursor)
 		if err != nil {
 			return nil, err
@@ -169,6 +184,10 @@ func (c *Client) ListAllTools(ctx context.Context) ([]Tool, error) {
 		if page.NextCursor == "" {
 			return all, nil
 		}
+		if _, dup := seen[page.NextCursor]; dup {
+			return nil, fmt.Errorf("mcp: tools/list: server returned non-advancing cursor %q", page.NextCursor)
+		}
+		seen[page.NextCursor] = struct{}{}
 		cursor = page.NextCursor
 	}
 }

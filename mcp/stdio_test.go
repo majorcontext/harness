@@ -23,6 +23,7 @@ type fakeStdioServer struct {
 	callTool        func(name string, arguments json.RawMessage) (*CallToolResult, error)
 	malformedCall   bool // tools/call returns an invalid JSON-RPC line instead of a normal response
 	notify          func(c *conn)
+	stuckCursor     bool // tools/list always returns the same non-advancing NextCursor
 }
 
 func (s *fakeStdioServer) handle(_ context.Context, method string, params json.RawMessage) (any, error) {
@@ -60,6 +61,9 @@ func (s *fakeStdioServer) handle(_ context.Context, method string, params json.R
 }
 
 func (s *fakeStdioServer) listTools(cursor string) (*ListToolsResult, error) {
+	if s.stuckCursor {
+		return &ListToolsResult{Tools: s.tools, NextCursor: "stuck-cursor"}, nil
+	}
 	return pageTools(s.tools, s.pageSize, cursor)
 }
 
@@ -232,6 +236,34 @@ func TestStdioListAllTools(t *testing.T) {
 	}
 	if len(all) != 3 {
 		t.Fatalf("got %d tools, want 3", len(all))
+	}
+}
+
+// TestStdioListAllToolsNonAdvancingCursor guards against a server bug (or
+// malicious server) that keeps returning the same NextCursor forever:
+// ListAllTools must error instead of looping without bound.
+func TestStdioListAllToolsNonAdvancingCursor(t *testing.T) {
+	srv := &fakeStdioServer{
+		tools:       []Tool{{Name: "a"}},
+		pageSize:    1,
+		stuckCursor: true,
+	}
+	c := newTestClient(t, srv.dial(t), Options{})
+	mustInitialize(t, c)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.ListAllTools(context.Background())
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected an error for a non-advancing cursor, got nil")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ListAllTools did not terminate on a repeated cursor")
 	}
 }
 
