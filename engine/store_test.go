@@ -434,3 +434,59 @@ func TestFirstAppendFileLayout(t *testing.T) {
 		t.Errorf("line 3 = %+v, want first (user) message record", recs[2])
 	}
 }
+
+// TestLoadLegacySessionFixture is the RED test for legacy read-compat: a
+// session log written by the pre-TypeID engine (id "ses_" + 16 hex digits,
+// no TypeID in sight) must still LoadSession, appear in ListSessions, and
+// accept a new Prompt — the on-disk format of existing sessions never
+// changes shape just because newID now mints TypeIDs.
+func TestLoadLegacySessionFixture(t *testing.T) {
+	dir := t.TempDir()
+	const legacyID = "ses_0123456789abcdef"
+	fixture := `{"type":"session","id":"ses_0123456789abcdef","created_at":"2025-01-02T03:04:05Z"}
+{"type":"model","model":"test/m1"}
+{"type":"message","message":{"id":"msg_0000000000000001","role":"user","parts":[{"type":"text","text":"hello from the past"}]}}
+`
+	if err := os.WriteFile(filepath.Join(dir, legacyID+".jsonl"), []byte(fixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "reply"}),
+	}}
+	cfg := persistCfg(dir, prov)
+
+	loaded, err := LoadSession(cfg, legacyID)
+	if err != nil {
+		t.Fatalf("LoadSession(legacy) = %v", err)
+	}
+	if loaded.ID != legacyID {
+		t.Errorf("loaded.ID = %q, want %q", loaded.ID, legacyID)
+	}
+	if len(loaded.History()) != 1 {
+		t.Fatalf("loaded history = %d messages, want 1", len(loaded.History()))
+	}
+
+	infos, err := ListSessions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 1 || infos[0].ID != legacyID {
+		t.Fatalf("ListSessions = %+v, want just %q", infos, legacyID)
+	}
+	if infos[0].Messages != 1 {
+		t.Errorf("ListSessions Messages = %d, want 1", infos[0].Messages)
+	}
+
+	if !ValidSessionID(legacyID) {
+		t.Errorf("ValidSessionID(%q) = false, want true", legacyID)
+	}
+
+	// Promptable: appending to a legacy-id session must keep working.
+	if _, err := loaded.Prompt(context.Background(), "hi again"); err != nil {
+		t.Fatalf("Prompt on legacy session = %v", err)
+	}
+	if len(loaded.History()) != 3 {
+		t.Errorf("history after prompt = %d messages, want 3", len(loaded.History()))
+	}
+}
