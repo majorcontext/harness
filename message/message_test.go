@@ -672,3 +672,158 @@ func TestNormalizeDropsInvalidToolCallArguments(t *testing.T) {
 		t.Errorf("Normalize altered valid Arguments: %s, want unchanged {\"a\":1}", m3.Parts[0].(*ToolCall).Arguments)
 	}
 }
+
+// TestResolveOrphanToolCallsNoOrphans proves ResolveOrphanToolCalls is a
+// no-op — returning the identical input slice, not a copy — when every
+// ToolCall already has an immediately-following ToolResult, so a
+// well-formed history is never disturbed.
+func TestResolveOrphanToolCallsNoOrphans(t *testing.T) {
+	in := []Message{
+		{Role: RoleUser, Parts: Parts{&Text{Text: "go"}}},
+		{Role: RoleAssistant, Parts: Parts{toolCallPart("tc1", "bash", `{}`)}},
+		{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "tc1", Content: Parts{&Text{Text: "ok"}}}}},
+		{Role: RoleAssistant, Parts: Parts{&Text{Text: "done"}}},
+	}
+	out := ResolveOrphanToolCalls(in)
+	if len(out) != len(in) {
+		t.Fatalf("len(out) = %d, want %d (no orphans, no change)", len(out), len(in))
+	}
+	for i := range in {
+		if len(out[i].Parts) != len(in[i].Parts) {
+			t.Errorf("message %d parts changed: %+v", i, out[i])
+		}
+	}
+}
+
+// TestResolveOrphanToolCallsMidHistory reproduces the shape behind incident
+// ses_01kx48z4rqfkpbwmzfdv1jzeg6 with the orphan buried mid-transcript: an
+// assistant tool_use with no result at all (the very next message skips
+// straight to a fresh user turn), followed by ordinary, well-formed turns.
+// ResolveOrphanToolCalls must inject a synthetic RoleTool message
+// immediately after the orphaned assistant turn without disturbing
+// anything else in history.
+func TestResolveOrphanToolCallsMidHistory(t *testing.T) {
+	in := []Message{
+		{Role: RoleUser, Parts: Parts{&Text{Text: "first"}}},
+		{Role: RoleAssistant, Parts: Parts{toolCallPart("orphan1", "bash", `{"command":"echo hi"}`)}},
+		// No tool-role message follows: the turn died before execution.
+		{Role: RoleUser, Parts: Parts{&Text{Text: "second"}}},
+		{Role: RoleAssistant, Parts: Parts{&Text{Text: "done"}}},
+	}
+	out := ResolveOrphanToolCalls(in)
+	if len(out) != len(in)+1 {
+		t.Fatalf("len(out) = %d, want %d (one synthetic message inserted)", len(out), len(in)+1)
+	}
+	if out[0].Role != RoleUser || out[1].Role != RoleAssistant {
+		t.Fatalf("unexpected shape before the inserted message: %+v", out[:2])
+	}
+	synth := out[2]
+	if synth.Role != RoleTool {
+		t.Fatalf("out[2].Role = %s, want tool (the synthesized result)", synth.Role)
+	}
+	if len(synth.Parts) != 1 {
+		t.Fatalf("synthetic message parts = %d, want 1", len(synth.Parts))
+	}
+	tr, ok := synth.Parts[0].(*ToolResult)
+	if !ok {
+		t.Fatalf("synthetic part = %T, want *ToolResult", synth.Parts[0])
+	}
+	if tr.CallID != "orphan1" {
+		t.Errorf("synthetic ToolResult.CallID = %q, want %q", tr.CallID, "orphan1")
+	}
+	if !tr.IsError {
+		t.Error("synthetic ToolResult.IsError = false, want true")
+	}
+	if !strings.Contains(tr.Content.Text(), "synthesized") {
+		t.Errorf("synthetic ToolResult.Content = %q, want it to say \"synthesized\"", tr.Content.Text())
+	}
+	// The rest of history rides along unchanged.
+	if out[3].Role != RoleUser || out[3].Parts.Text() != "second" {
+		t.Errorf("out[3] = %+v, want the original second user turn", out[3])
+	}
+	if out[4].Role != RoleAssistant || out[4].Parts.Text() != "done" {
+		t.Errorf("out[4] = %+v, want the original closing assistant turn", out[4])
+	}
+}
+
+// TestResolveOrphanToolCallsFinalMessage covers the other shape incident
+// ses_01kx48z4rqfkpbwmzfdv1jzeg6's mechanism can leave behind: the orphaned
+// tool_use is the very last message in history (the turn died and nothing
+// else was ever appended after it) — there is no "next" message at all to
+// look at, let alone merge into.
+func TestResolveOrphanToolCallsFinalMessage(t *testing.T) {
+	in := []Message{
+		{Role: RoleUser, Parts: Parts{&Text{Text: "go"}}},
+		{Role: RoleAssistant, Parts: Parts{
+			toolCallPart("tc1", "bash", `{"command":"echo hi"}`),
+			toolCallPart("tc2", "read_file", `{"path":"x"}`),
+		}},
+	}
+	out := ResolveOrphanToolCalls(in)
+	if len(out) != 3 {
+		t.Fatalf("len(out) = %d, want 3 (one synthetic message appended)", len(out))
+	}
+	synth := out[2]
+	if synth.Role != RoleTool {
+		t.Fatalf("out[2].Role = %s, want tool", synth.Role)
+	}
+	if len(synth.Parts) != 2 {
+		t.Fatalf("synthetic message parts = %d, want 2 (one per orphaned call)", len(synth.Parts))
+	}
+	gotIDs := map[string]bool{}
+	for _, p := range synth.Parts {
+		tr, ok := p.(*ToolResult)
+		if !ok {
+			t.Fatalf("synthetic part = %T, want *ToolResult", p)
+		}
+		if !tr.IsError {
+			t.Errorf("synthetic ToolResult for %s: IsError = false, want true", tr.CallID)
+		}
+		gotIDs[tr.CallID] = true
+	}
+	if !gotIDs["tc1"] || !gotIDs["tc2"] {
+		t.Errorf("synthetic call IDs = %v, want both tc1 and tc2", gotIDs)
+	}
+}
+
+// TestResolveOrphanToolCallsPartialMerge covers a tool message that already
+// resolves SOME of an assistant turn's tool calls but not all of them —
+// e.g. the engine executed one call, appended its result, and the turn
+// died before the rest. Only the missing CallIDs get synthesized, merged
+// into the existing tool-role message rather than a new one.
+func TestResolveOrphanToolCallsPartialMerge(t *testing.T) {
+	in := []Message{
+		{Role: RoleUser, Parts: Parts{&Text{Text: "go"}}},
+		{Role: RoleAssistant, Parts: Parts{
+			toolCallPart("tc1", "bash", `{}`),
+			toolCallPart("tc2", "bash", `{}`),
+		}},
+		{Role: RoleTool, Parts: Parts{
+			&ToolResult{CallID: "tc1", Content: Parts{&Text{Text: "ok"}}},
+		}},
+	}
+	out := ResolveOrphanToolCalls(in)
+	if len(out) != len(in) {
+		t.Fatalf("len(out) = %d, want %d (merged into the existing tool message, no new one)", len(out), len(in))
+	}
+	tool := out[2]
+	if len(tool.Parts) != 2 {
+		t.Fatalf("tool message parts = %d, want 2 (original + synthesized)", len(tool.Parts))
+	}
+	tr0 := tool.Parts[0].(*ToolResult)
+	if tr0.CallID != "tc1" || tr0.IsError {
+		t.Errorf("original result disturbed: %+v", tr0)
+	}
+	tr1 := tool.Parts[1].(*ToolResult)
+	if tr1.CallID != "tc2" || !tr1.IsError {
+		t.Errorf("merged synthetic result = %+v, want tc2/IsError", tr1)
+	}
+	// Input must not have been mutated in place.
+	if len(in[2].Parts) != 1 {
+		t.Errorf("ResolveOrphanToolCalls mutated its input slice: in[2].Parts = %+v", in[2].Parts)
+	}
+}
+
+func toolCallPart(id, name, args string) *ToolCall {
+	return &ToolCall{CallID: id, Name: name, Arguments: json.RawMessage(args)}
+}
