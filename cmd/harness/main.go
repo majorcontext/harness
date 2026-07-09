@@ -509,24 +509,8 @@ func serveCmd(args []string) error {
 		Version:       version,
 		CORSOrigin:    corsOrigin,
 		GoalEvaluator: goalEval,
-		NewSession: func(model message.ModelRef) (*engine.Session, error) {
-			if model.IsZero() {
-				model = defModel
-			}
-			cfg := mkCfg(model)
-			var sess *engine.Session
-			cfg.OnRequest = func(turn int, req *provider.Request) { srv.OnRequest(sess.ID, turn, req) }
-			sess = engine.NewSession(cfg)
-			return sess, nil
-		},
-		LoadSession: func(id string) (*engine.Session, error) {
-			cfg := mkCfg(defModel)
-			var sess *engine.Session
-			cfg.OnRequest = func(turn int, req *provider.Request) { srv.OnRequest(sess.ID, turn, req) }
-			var err error
-			sess, err = engine.LoadSession(cfg, id)
-			return sess, err
-		},
+		NewSession:    newSessionFn(mkCfg, defModel, cfg, skillDirs, func(id string, turn int, req *provider.Request) { srv.OnRequest(id, turn, req) }),
+		LoadSession:   loadSessionFn(mkCfg, defModel, cfg, skillDirs, func(id string, turn int, req *provider.Request) { srv.OnRequest(id, turn, req) }),
 	})
 	if err != nil {
 		return err
@@ -555,6 +539,71 @@ func serveCmd(args []string) error {
 		// before the deferred srv.Close keeps the journal file open until the
 		// trailing assistant message and session.aborted/idle records land.
 		return server.Shutdown(shutCtx, httpSrv, srv)
+	}
+}
+
+// newSessionFn builds server.Options.NewSession. mkCfg's base cfg.System and
+// cfg.SkillsDirs name the process cwd (mkCfg is shared with loadSessionFn and
+// the non-serve run path, where that is correct); a served session with an
+// explicit workdir gets its own working directory instead, so both must be
+// rebuilt from sessionWorkDir — otherwise a session rooted elsewhere would
+// carry a "Working directory:" line naming the wrong directory, and a
+// relative skills_dirs entry (appCfg/flagDirs) would be resolved against the
+// wrong directory too, discovering the wrong skills (or none). onRequest is
+// wired to the server's request journal, keyed by the session's own ID
+// (assigned by engine.NewSession, so it cannot be captured until after
+// construction).
+func newSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.ModelRef, appCfg *config.Config, flagDirs []string, onRequest func(id string, turn int, req *provider.Request)) func(message.ModelRef, string) (*engine.Session, error) {
+	return func(model message.ModelRef, sessionWorkDir string) (*engine.Session, error) {
+		if model.IsZero() {
+			model = defModel
+		}
+		cfg := mkCfg(model)
+		// The server has already resolved and validated sessionWorkDir
+		// (defaulting to this process's cwd when the caller omitted one; see
+		// server.Options.WorkspaceRoots) — it wins over the process cwd for
+		// this session's tools, AGENTS.md discovery, Agent Skills default
+		// directory, and (below) the system prompt's working-directory line.
+		cfg.WorkDir = sessionWorkDir
+		cfg.System = systemPrompt(sessionWorkDir, "")
+		cfg.SkillsDirs = skillsDirs(appCfg, flagDirs, sessionWorkDir)
+		var sess *engine.Session
+		cfg.OnRequest = func(turn int, req *provider.Request) { onRequest(sess.ID, turn, req) }
+		sess = engine.NewSession(cfg)
+		return sess, nil
+	}
+}
+
+// loadSessionFn builds server.Options.LoadSession. engine.LoadSession
+// restores the session's durable WorkDir from its log header, which wins
+// over the cfg.WorkDir passed in (see engine/store.go) — but the cfg.System
+// and cfg.SkillsDirs built by mkCfg still name the process cwd. When the
+// restored directory differs, this rebuilds both from it and reloads, so a
+// resumed session's system prompt names its own working directory and a
+// relative skills_dirs entry (appCfg/flagDirs) resolves against it rather
+// than whichever directory this process happened to start in. The reload is
+// cheap (a second read of the same on-disk log) and side-effect-free, since
+// LoadSession is a pure rebuild from the journal.
+func loadSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.ModelRef, appCfg *config.Config, flagDirs []string, onRequest func(id string, turn int, req *provider.Request)) func(string) (*engine.Session, error) {
+	return func(id string) (*engine.Session, error) {
+		cfg := mkCfg(defModel)
+		wire := func(c engine.Config) (*engine.Session, error) {
+			var sess *engine.Session
+			c.OnRequest = func(turn int, req *provider.Request) { onRequest(sess.ID, turn, req) }
+			sess, err := engine.LoadSession(c, id)
+			return sess, err
+		}
+		sess, err := wire(cfg)
+		if err != nil {
+			return nil, err
+		}
+		if wd := sess.WorkDir(); wd != cfg.WorkDir {
+			cfg.WorkDir = wd
+			cfg.System = systemPrompt(wd, "")
+			cfg.SkillsDirs = skillsDirs(appCfg, flagDirs, wd)
+			sess, err = wire(cfg)
+		}
+		return sess, err
 	}
 }
 

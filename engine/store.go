@@ -37,12 +37,17 @@ const (
 
 // record is one line of a session log file.
 type record struct {
-	Type      string           `json:"type"`
-	ID        string           `json:"id,omitempty"`
-	CreatedAt time.Time        `json:"created_at,omitzero"`
-	Message   *message.Message `json:"message,omitempty"`
-	Model     message.ModelRef `json:"model,omitzero"`
-	Goal      *goalRecord      `json:"goal,omitempty"`
+	Type      string    `json:"type"`
+	ID        string    `json:"id,omitempty"`
+	CreatedAt time.Time `json:"created_at,omitzero"`
+	// WorkDir carries Config.WorkDir on the session header record only. It is
+	// omitted (and so absent from every record written before this field
+	// existed) when empty, which is also how LoadSession recognizes a legacy
+	// header with nothing to restore.
+	WorkDir string           `json:"workdir,omitempty"`
+	Message *message.Message `json:"message,omitempty"`
+	Model   message.ModelRef `json:"model,omitzero"`
+	Goal    *goalRecord      `json:"goal,omitempty"`
 }
 
 // goalRecord carries the durable payload of a goal.* record (see goal.go).
@@ -173,7 +178,7 @@ func (s *Session) ensureLog() error {
 		// LoadSession already tolerates.
 		var buf bytes.Buffer
 		for _, rec := range []record{
-			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt},
+			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir},
 			{Type: recModel, Model: s.model},
 		} {
 			b, err := json.Marshal(rec)
@@ -229,6 +234,14 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 		switch rec.Type {
 		case recSession:
 			s.createdAt = rec.CreatedAt
+			// A restored WorkDir wins over the loading Config.WorkDir: the
+			// header is the durable truth for a resumed session. A legacy
+			// header (written before this field existed) omits it, so an
+			// empty value here means "nothing to restore" — the loading
+			// Config.WorkDir is kept unchanged.
+			if rec.WorkDir != "" {
+				s.cfg.WorkDir = rec.WorkDir
+			}
 		case recMessage:
 			if rec.Message == nil {
 				if isLast {
