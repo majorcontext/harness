@@ -130,11 +130,15 @@ func parseWaitTimeout(raw string) (time.Duration, error) {
 	if err != nil || n <= 0 {
 		return 0, errInvalidTimeout
 	}
-	d := time.Duration(n) * time.Second
-	if d > maxWaitTimeout {
-		d = maxWaitTimeout
+	// Cap the integer seconds BEFORE converting to a Duration: n * time.Second
+	// overflows int64 for n >~ 9.2e9 (e.g. timeout_s=10000000000), wrapping to
+	// a negative Duration that would slip past a post-multiply "> maxWaitTimeout"
+	// check and make time.NewTimer fire immediately — the opposite of the
+	// documented bounded-wait contract for oversized requests.
+	if maxSecs := int(maxWaitTimeout / time.Second); n > maxSecs {
+		n = maxSecs
 	}
-	return d, nil
+	return time.Duration(n) * time.Second, nil
 }
 
 var errInvalidTimeout = waitTimeoutError{}

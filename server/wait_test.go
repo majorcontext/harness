@@ -236,6 +236,52 @@ func TestWaitRejectsBadParams(t *testing.T) {
 	}
 }
 
+// TestParseWaitTimeout is the red-first table test for the int64-overflow
+// bug: parseWaitTimeout used to cap the *Duration* (time.Duration(n) *
+// time.Second) rather than the integer seconds, so a large enough timeout_s
+// overflowed int64 into a negative Duration before the cap comparison ever
+// ran — silently defeating the documented "capped at 300s, never rejected
+// for being too large" contract with an effectively-zero wait instead.
+// 10000000000 (1e10) is exactly such a value: 1e10 * 1e9 = 1e19, which wraps
+// past math.MaxInt64 (~9.22e18) into a negative int64.
+func TestParseWaitTimeout(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want time.Duration
+		err  bool
+	}{
+		{"empty defaults", "", defaultWaitTimeout, false},
+		{"typical value", "5", 5 * time.Second, false},
+		{"exactly the cap", "300", maxWaitTimeout, false},
+		{"just over the cap", "301", maxWaitTimeout, false},
+		{"zero is invalid", "0", 0, true},
+		{"negative is invalid", "-1", 0, true},
+		{"non-integer is invalid", "soon", 0, true},
+		{"overflow value caps rather than going negative", "10000000000", maxWaitTimeout, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseWaitTimeout(tt.raw)
+			if tt.err {
+				if err == nil {
+					t.Fatalf("parseWaitTimeout(%q) = %v, nil, want an error", tt.raw, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseWaitTimeout(%q) unexpected error: %v", tt.raw, err)
+			}
+			if got != tt.want {
+				t.Errorf("parseWaitTimeout(%q) = %v, want %v", tt.raw, got, tt.want)
+			}
+			if got < 0 {
+				t.Errorf("parseWaitTimeout(%q) = %v, want non-negative", tt.raw, got)
+			}
+		})
+	}
+}
+
 // TestWaitColdSessionDoesNotLoad verifies the existence check /wait uses is
 // the same cheap resident-or-on-disk stat handleAbort and handleGoalDelete
 // use (see TestAbortColdSessionIsIdempotent), not the full-deserializing
