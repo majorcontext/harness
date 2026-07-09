@@ -35,6 +35,7 @@ type goalJSON struct {
 	Achieved   bool   `json:"achieved,omitempty"`
 	Turns      int    `json:"turns"`
 	LastReason string `json:"last_reason,omitempty"`
+	Attempt    int    `json:"attempt,omitempty"`
 }
 
 // sessionIDOrNotFound extracts {id} from the request path and validates it
@@ -693,7 +694,7 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 	seq := s.sessionSeqLocked(id)
 	var goal *goalJSON
 	if g := s.goalState[id]; g != nil {
-		goal = &goalJSON{Condition: g.condition, Active: g.active, Achieved: g.achieved, Turns: g.turns, LastReason: g.lastReason}
+		goal = &goalJSON{Condition: g.condition, Active: g.active, Achieved: g.achieved, Turns: g.turns, LastReason: g.lastReason, Attempt: g.attempt}
 	}
 	s.mu.Unlock()
 	return sessionJSON{

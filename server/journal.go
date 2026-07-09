@@ -53,6 +53,7 @@ type Event struct {
 	GoalMet       bool   `json:"goal_met,omitempty"`
 	GoalTurn      int    `json:"goal_turn,omitempty"`
 	GoalTurns     int    `json:"goal_turns,omitempty"`
+	GoalAttempt   int    `json:"goal_attempt,omitempty"`
 }
 
 // Durable and live event types (a superset of engine.Event types plus the
@@ -67,6 +68,7 @@ const (
 	evtRequestMeta    = "request.meta"
 	evtGoalSet        = "goal.set"
 	evtGoalEval       = "goal.eval"
+	evtGoalStalled    = "goal.stalled"
 	evtGoalAchieved   = "goal.achieved"
 	evtGoalCleared    = "goal.cleared"
 )
@@ -92,13 +94,19 @@ func (s *Server) Publish(ev engine.Event) {
 			Type: engine.EventToolEnd, SessionID: ev.SessionID,
 			ToolCall: ev.ToolCall, Output: ev.Output, IsError: ev.IsError,
 		})
-	case engine.EventGoalSet, engine.EventGoalEval, engine.EventGoalAchieved, engine.EventGoalCleared:
+	case engine.EventGoalSet, engine.EventGoalEval, engine.EventGoalStalled, engine.EventGoalAchieved, engine.EventGoalCleared:
 		s.publishGoal(ev)
 	}
 }
 
 // publishGoal journals a durable goal.* record and folds the event into the
 // per-session goal tracker that backs the Session JSON goal field.
+//
+// goal.stalled is non-terminal (see engine/goal.go's state machine: STALLED
+// is a transient sub-state a worker-turn retry passes through on its way
+// back to ACTIVE or on to CLEARED) — it updates lastReason and attempt only,
+// leaving active/achieved untouched, so a client watching Session.goal sees
+// the goal still active while the loop retries.
 func (s *Server) publishGoal(ev engine.Event) {
 	out := &Event{
 		Type:          ev.Type,
@@ -108,6 +116,7 @@ func (s *Server) publishGoal(ev engine.Event) {
 		GoalMet:       ev.GoalMet,
 		GoalTurn:      ev.GoalTurn,
 		GoalTurns:     ev.GoalTurns,
+		GoalAttempt:   ev.GoalAttempt,
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -123,14 +132,20 @@ func (s *Server) publishGoal(ev engine.Event) {
 		g.achieved = false
 		g.turns = 0
 		g.lastReason = ""
+		g.attempt = 0
 	case engine.EventGoalEval:
 		g.turns = ev.GoalTurn
 		g.lastReason = ev.GoalReason
+		g.attempt = 0
+	case engine.EventGoalStalled:
+		g.lastReason = ev.GoalReason
+		g.attempt = ev.GoalAttempt
 	case engine.EventGoalAchieved:
 		g.active = false
 		g.achieved = true
 		g.turns = ev.GoalTurns
 		g.lastReason = ev.GoalReason
+		g.attempt = 0
 	case engine.EventGoalCleared:
 		g.active = false
 	}
