@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/plugin"
 	"github.com/majorcontext/harness/provider"
 )
 
@@ -31,6 +32,68 @@ func writeTestFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// assertFileEdited fails the test unless events contains exactly one
+// file.edited event for wantPath.
+func assertFileEdited(t *testing.T, events []plugin.Event, wantPath string) {
+	t.Helper()
+	var found int
+	for _, ev := range events {
+		if ev.Type != plugin.EventFileEdited {
+			continue
+		}
+		found++
+		var props plugin.FileEditedProperties
+		if err := json.Unmarshal(ev.Properties, &props); err != nil {
+			t.Fatal(err)
+		}
+		if props.Path != wantPath {
+			t.Errorf("file.edited path = %q, want %q", props.Path, wantPath)
+		}
+	}
+	if found != 1 {
+		t.Fatalf("file.edited events = %d, want 1: %+v", found, events)
+	}
+}
+
+func TestWriteFileEmitsFileEdited(t *testing.T) {
+	dir := t.TempDir()
+	hooks := &fakeHooks{}
+	s := NewSession(Config{WorkDir: dir, Hooks: hooks})
+
+	if _, err := writeFileTool().Run(context.Background(), s, json.RawMessage(`{"path":"a.txt","content":"hi"}`)); err != nil {
+		t.Fatal(err)
+	}
+	assertFileEdited(t, hooks.events, filepath.Join(dir, "a.txt"))
+}
+
+func TestEditFileEmitsFileEdited(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "a.txt"), "alpha\n")
+	hooks := &fakeHooks{}
+	s := NewSession(Config{WorkDir: dir, Hooks: hooks})
+
+	if _, err := editFileTool().Run(context.Background(), s, json.RawMessage(`{"path":"a.txt","old_string":"alpha","new_string":"beta"}`)); err != nil {
+		t.Fatal(err)
+	}
+	assertFileEdited(t, hooks.events, filepath.Join(dir, "a.txt"))
+}
+
+func TestEditFileFailureEmitsNoFileEdited(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "a.txt"), "alpha\n")
+	hooks := &fakeHooks{}
+	s := NewSession(Config{WorkDir: dir, Hooks: hooks})
+
+	if _, err := editFileTool().Run(context.Background(), s, json.RawMessage(`{"path":"a.txt","old_string":"nope","new_string":"beta"}`)); err == nil {
+		t.Fatal("expected error")
+	}
+	for _, ev := range hooks.events {
+		if ev.Type == plugin.EventFileEdited {
+			t.Errorf("file.edited emitted on failed edit: %+v", ev)
+		}
 	}
 }
 
