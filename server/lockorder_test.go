@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/majorcontext/harness/message"
 )
@@ -85,13 +84,12 @@ func TestGoalEmitVsSyncMessagesNoDeadlock(t *testing.T) {
 		wg.Wait()
 	}()
 
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("deadlock: goal-emit (session.mu -> server.mu) raced " +
-			"syncMessages-with-persist-error (server.mu -> session.mu) and " +
-			"never completed")
-	}
+	// Block directly per AGENTS.md: a real lock inversion hangs here and the
+	// test-binary timeout catches it with a full goroutine dump (more useful
+	// than a guessed time.After deadline). synctest doesn't fit — the forced
+	// persist failure and goal-record writes do real filesystem I/O on the
+	// racing goroutines, which a synctest bubble disallows.
+	<-done
 
 	if coll.count() == 0 {
 		t.Error("OnError was never invoked despite a persistent persist error")
