@@ -15,6 +15,7 @@ import (
 
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/plugin"
 	"github.com/majorcontext/harness/provider"
 )
 
@@ -54,6 +55,12 @@ type Event struct {
 	GoalTurn      int    `json:"goal_turn,omitempty"`
 	GoalTurns     int    `json:"goal_turns,omitempty"`
 	GoalAttempt   int    `json:"goal_attempt,omitempty"`
+
+	// Outcome carries the turn.end record's result: "completed" or "error".
+	// Error (above) carries the sanitized failure detail when Outcome is
+	// "error", empty on a clean completion. See runPrompt/runGoal's
+	// recordTurnEnd.
+	Outcome string `json:"outcome,omitempty"`
 }
 
 // Durable and live event types (a superset of engine.Event types plus the
@@ -63,6 +70,7 @@ const (
 	evtSessionStatus  = "session.status"
 	evtSessionError   = "session.error"
 	evtSessionAborted = "session.aborted"
+	evtTurnEnd        = "turn.end"
 	evtMessage        = "message"
 	evtModel          = "model"
 	evtRequestMeta    = "request.meta"
@@ -150,6 +158,30 @@ func (s *Server) publishGoal(ev engine.Event) {
 		g.active = false
 	}
 	s.emitDurableLocked(out)
+}
+
+// recordTurnEnd journals a durable turn.end record for sessionID and updates
+// the in-memory lastTurn summary GET /session/{id} and /session/status read
+// (see Server.lastTurn). outcome is "completed" or "error"; turnErr is the
+// triggering error on failure (sanitized here via
+// plugin.SanitizeSessionError — never credentials or request bodies — before
+// it is journaled, streamed, or exposed), nil on a clean completion.
+//
+// This is the "idle because done" vs "idle because the turn died" wire
+// contract: today, three plain-prompt turns died mid-stream (final assistant
+// message reasoning-only, no text, no tool call) and every monitor had to
+// infer death from message part shapes. turn.end plus Session.last_turn make
+// that heuristic unnecessary — a poller reads the outcome directly instead
+// of reverse-engineering it from transcript content.
+func (s *Server) recordTurnEnd(sessionID, outcome string, turnErr error) {
+	errStr := ""
+	if turnErr != nil {
+		errStr = plugin.SanitizeSessionError(turnErr.Error())
+	}
+	s.mu.Lock()
+	s.lastTurn[sessionID] = &turnOutcome{outcome: outcome, error: errStr}
+	s.emitDurableLocked(&Event{Type: evtTurnEnd, SessionID: sessionID, Outcome: outcome, Error: errStr})
+	s.mu.Unlock()
 }
 
 // requestSnapshot is the latest fully-assembled model request for a session,

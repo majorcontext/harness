@@ -676,7 +676,7 @@ func TestReplayFromSeq(t *testing.T) {
 	s1.stop()
 
 	// Find the busy event seq; replay from there must return exactly the
-	// records after it (user, assistant, idle), in ascending order.
+	// records after it (user, assistant, turn.end, idle), in ascending order.
 	var busySeq int64
 	for _, ev := range evs {
 		if ev.Type == "session.status" && ev.Status == "busy" {
@@ -706,8 +706,8 @@ func TestReplayFromSeq(t *testing.T) {
 			idleSeen = true
 		}
 	}
-	if len(replaySeqs) != 3 {
-		t.Fatalf("replay count = %d, want 3 (user, assistant, idle): %v", len(replaySeqs), replaySeqs)
+	if len(replaySeqs) != 4 {
+		t.Fatalf("replay count = %d, want 4 (user, assistant, turn.end, idle): %v", len(replaySeqs), replaySeqs)
 	}
 
 	// Now a live event: prompt B must stream through the same connection.
@@ -1087,11 +1087,14 @@ func TestHeartbeat(t *testing.T) {
 	})
 }
 
-// errThenOKProvider fails its first Stream call and succeeds afterward.
+// errThenOKProvider fails its first Stream call and succeeds afterward. err,
+// when set, is returned instead of the default "provider exploded" — used by
+// turn.end sanitization tests to inject a credential-shaped error string.
 type errThenOKProvider struct {
 	name  string
 	mu    sync.Mutex
 	calls int
+	err   error
 }
 
 func (p *errThenOKProvider) Name() string { return p.name }
@@ -1101,6 +1104,9 @@ func (p *errThenOKProvider) Stream(_ context.Context, _ *provider.Request) (prov
 	defer p.mu.Unlock()
 	p.calls++
 	if p.calls == 1 {
+		if p.err != nil {
+			return nil, p.err
+		}
 		return nil, errors.New("provider exploded")
 	}
 	return &scriptedStream{events: asstTurn("recovered")}, nil

@@ -114,6 +114,32 @@ components:
             in the session log header). Defaults to the serve process's
             current working directory when POST /session omitted workdir.
           example: /workspace/task-42
+        last_turn:
+          $ref: "#/components/schemas/LastTurn"
+          description: >
+            The outcome of the most recent prompt or goal-worker turn to
+            finish in this process, so a poller can tell "idle because done"
+            from "idle because the turn died" without inferring it from
+            message part shapes. Present only once a turn has finished in
+            this process (like `goal`, absent on a freshly reloaded,
+            never-prompted-here session).
+
+    LastTurn:
+      type: object
+      description: >
+        The most recent turn.end record for a session, mirrored on Session
+        and on each GET /session/status entry.
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [completed, error]
+        error:
+          type: string
+          description: >
+            Sanitized failure detail (never credentials or request bodies —
+            see the turn.end Event field) when outcome is "error". Absent on
+            a clean completion.
 
     SessionState:
       type: string
@@ -192,6 +218,9 @@ components:
           $ref: "#/components/schemas/SessionStatus"
         state:
           $ref: "#/components/schemas/SessionState"
+        last_turn:
+          $ref: "#/components/schemas/LastTurn"
+          description: Same field, and same presence rule, as Session.last_turn.
 
     StatusResponse:
       type: object
@@ -364,6 +393,7 @@ components:
             - session.status
             - session.error
             - session.aborted
+            - turn.end
             - message
             - model
             - request.meta
@@ -384,6 +414,17 @@ components:
             error, transcode failure); session.aborted confirms an
             orchestrator-requested abort ended the in-flight prompt. Both
             are followed by a session.status idle transition.
+            turn.end is durable and carries `outcome` ("completed" or
+            "error") plus a sanitized `error` detail on failure: it is
+            emitted whenever a prompt (prompt_async) or a goal-worker loop
+            (POST /session/{id}/goal) finishes, mirrored onto
+            Session.last_turn and each /session/status entry's last_turn, so
+            a client can tell "idle because done" from "idle because the
+            turn died" without inferring it from message part shapes. A
+            deliberate abort (POST /session/{id}/abort, DELETE
+            /session/{id}/goal, shutdown drain) does not emit turn.end —
+            session.aborted (or, for a cleared goal, goal.cleared) already
+            covers that case.
             request.meta is a durable record of the model request the engine
             assembled for one turn: system_hash, system_len, segments (count),
             tools (names), messages (history count), and the model. The full
@@ -427,7 +468,14 @@ components:
         is_error: { type: boolean }
         error:
           type: string
-          description: Failure detail for session.error events.
+          description: >
+            Failure detail for session.error and turn.end (outcome "error")
+            events. Sanitized (never credentials or request bodies) for
+            turn.end; see LastTurn.error.
+        outcome:
+          type: string
+          enum: [completed, error]
+          description: Turn result for turn.end events.
         system_hash:
           type: string
           description: SHA-256 of the joined system segments (request.meta).

@@ -36,6 +36,19 @@ type sessionJSON struct {
 	Seq      int64     `json:"seq,omitempty"`
 	Goal     *goalJSON `json:"goal,omitempty"`
 	WorkDir  string    `json:"workdir"`
+	// LastTurn is the most recent prompt or goal-worker turn's outcome for
+	// this process — "completed" or "error", plus the sanitized error detail
+	// on failure — so a poller can distinguish "idle because done" from
+	// "idle because the turn died" without inferring it from message part
+	// shapes. Present only once a turn has finished in this process (like
+	// Goal, absent on a freshly reloaded, never-prompted-here session).
+	LastTurn *lastTurnJSON `json:"last_turn,omitempty"`
+}
+
+// lastTurnJSON is the openapi LastTurn shape.
+type lastTurnJSON struct {
+	Outcome string `json:"outcome"`
+	Error   string `json:"error,omitempty"`
 }
 
 // compositeState resolves the unambiguous Session.state field: goal-running
@@ -278,8 +291,9 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	type entry struct {
-		Type  string `json:"type"`
-		State string `json:"state"`
+		Type     string        `json:"type"`
+		State    string        `json:"state"`
+		LastTurn *lastTurnJSON `json:"last_turn,omitempty"`
 	}
 	result := map[string]entry{}
 
@@ -294,7 +308,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	}
 	s.mu.Unlock()
 	for _, m := range mem {
-		result[m.id] = entry{Type: statusStr(m.running), State: s.compositeStateFor(m.id, m.running)}
+		result[m.id] = entry{Type: statusStr(m.running), State: s.compositeStateFor(m.id, m.running), LastTurn: s.lastTurnFor(m.id)}
 	}
 	infos, err := engine.ListSessions(s.opts.SessionDir)
 	if err != nil {
@@ -303,10 +317,18 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	}
 	for _, info := range infos {
 		if _, ok := result[info.ID]; !ok {
-			result[info.ID] = entry{Type: "idle", State: s.compositeStateFor(info.ID, false)}
+			result[info.ID] = entry{Type: "idle", State: s.compositeStateFor(info.ID, false), LastTurn: s.lastTurnFor(info.ID)}
 		}
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// lastTurnFor is lastTurnJSONLocked with its own locking, for callers (like
+// handleStatus) that are not already holding s.mu.
+func (s *Server) lastTurnFor(id string) *lastTurnJSON {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastTurnJSONLocked(id)
 }
 
 // compositeStateFor resolves the composite state for a session ID using this
@@ -395,10 +417,12 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	s.syncMessages(id) // catch any message not yet journaled
 	switch {
 	case err == nil:
+		s.recordTurnEnd(id, "completed", nil)
 	case errors.Is(err, context.Canceled):
 		s.emitDurable(Event{Type: evtSessionAborted, SessionID: id})
 	default:
 		s.emitDurable(Event{Type: evtSessionError, SessionID: id, Error: err.Error()})
+		s.recordTurnEnd(id, "error", err)
 	}
 	s.mu.Lock()
 	st.running = false
@@ -495,10 +519,12 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 	s.syncMessages(id)
 	switch {
 	case err == nil:
+		s.recordTurnEnd(id, "completed", nil)
 	case errors.Is(err, context.Canceled):
 		// Cleared via DELETE (goal.cleared already journaled) or drained.
 	default:
 		s.emitDurable(Event{Type: evtSessionError, SessionID: id, Error: err.Error()})
+		s.recordTurnEnd(id, "error", err)
 	}
 	s.mu.Lock()
 	st.running = false
@@ -767,6 +793,7 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 	if g := s.goalState[id]; g != nil {
 		goal = &goalJSON{Condition: g.condition, Active: g.active, Achieved: g.achieved, Turns: g.turns, LastReason: g.lastReason, Attempt: g.attempt}
 	}
+	lastTurn := s.lastTurnJSONLocked(id)
 	s.mu.Unlock()
 	return sessionJSON{
 		ID:        id,
@@ -778,7 +805,19 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 		Seq:       seq,
 		Goal:      goal,
 		WorkDir:   sess.WorkDir(),
+		LastTurn:  lastTurn,
 	}
+}
+
+// lastTurnJSONLocked builds the Session.last_turn / StatusEntry.last_turn
+// shape from s.lastTurn, or nil if no turn has finished for id in this
+// process. Caller holds s.mu.
+func (s *Server) lastTurnJSONLocked(id string) *lastTurnJSON {
+	t := s.lastTurn[id]
+	if t == nil {
+		return nil
+	}
+	return &lastTurnJSON{Outcome: t.outcome, Error: t.error}
 }
 
 func statusStr(running bool) string {
