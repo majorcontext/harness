@@ -8,10 +8,16 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/majorcontext/harness/message"
 )
+
+// defaultEventQueueSize is the per-plugin-instance bound on queued
+// hook/event batches when Options.EventQueueSize is unset. See
+// Host.Emit and PROTOCOL.md for drop semantics.
+const defaultEventQueueSize = 256
 
 // ClientAPI is implemented by the engine to serve plugin → harness calls.
 type ClientAPI interface {
@@ -53,8 +59,14 @@ type Options struct {
 	// wedge a session. Defaults to 5s.
 	HookTimeout time.Duration
 	// OnError observes per-plugin dispatch failures. Sync hook chains fail
-	// open: the erroring plugin is skipped and the chain continues.
+	// open: the erroring plugin is skipped and the chain continues. It is
+	// also invoked (once, on the first occurrence) when a plugin's event
+	// queue is full and an event had to be dropped — see Host.Emit.
 	OnError func(plugin string, hook Hook, err error)
+	// EventQueueSize bounds the per-plugin-instance event queue drained by
+	// that instance's dedicated sender goroutine (see Host.Emit). Defaults
+	// to defaultEventQueueSize when <= 0.
+	EventQueueSize int
 }
 
 // Host manages plugin processes on the harness side and dispatches hooks.
@@ -69,6 +81,9 @@ type Host struct {
 func NewHost(opts Options, specs ...Spec) (*Host, error) {
 	if opts.HookTimeout <= 0 {
 		opts.HookTimeout = 5 * time.Second
+	}
+	if opts.EventQueueSize <= 0 {
+		opts.EventQueueSize = defaultEventQueueSize
 	}
 	h := &Host{opts: opts}
 	seen := make(map[string]bool)
@@ -106,26 +121,45 @@ func (h *Host) Close() {
 	}
 }
 
-// Emit fans an event batch out to subscribed plugins, fire-and-forget.
-// Plugins subscribed to events are started on first emit.
+// Emit fans an event batch out to subscribed plugins, fire-and-forget. It
+// never blocks the caller: each subscribed plugin instance has its own
+// bounded queue, and Emit enqueues onto it with a non-blocking send. When a
+// queue is full the event is dropped (counted; see Host.EventsDropped) and
+// the first drop for that instance is reported once via Options.OnError so
+// operators notice — see PROTOCOL.md for the documented drop semantics.
+//
+// Delivery to a single plugin instance is FIFO in the order Emit was called
+// for it: one dedicated sender goroutine per instance drains its queue, so
+// concurrent Emit callers can never race for the connection write and
+// reorder events (the original bug this replaces: a fresh goroutine per
+// plugin per event, racing for the write mutex). Callers that need
+// happens-before ordering between two events for the same plugin (e.g.
+// tool.execute.start before tool.execute.end for one call id) must call
+// Emit for them, in order, from the same goroutine — which is how the
+// engine already emits events.
+//
+// Plugins subscribed to events are started (lazily) by their sender
+// goroutine on its first dequeued event.
 func (h *Host) Emit(events []Event) {
 	batch := &EventBatch{Events: events}
 	for _, inst := range h.instances {
 		if !inst.subscribes(HookEvent) {
 			continue
 		}
-		go func(inst *instance) {
-			ctx, cancel := context.WithTimeout(context.Background(), h.opts.HookTimeout)
-			defer cancel()
-			if err := inst.start(ctx); err != nil {
-				h.onError(inst, HookEvent, err)
-				return
-			}
-			if err := inst.conn.notify(HookEvent.method(), batch); err != nil {
-				h.onError(inst, HookEvent, err)
-			}
-		}(inst)
+		inst.enqueueEvent(h, batch)
 	}
+}
+
+// EventsDropped returns the number of events dropped for pluginName because
+// its event queue was full when Emit tried to enqueue. Zero for plugins
+// that were never throttled, or that don't exist.
+func (h *Host) EventsDropped(pluginName string) uint64 {
+	for _, inst := range h.instances {
+		if inst.spec.Manifest.Name == pluginName {
+			return inst.eventDropped.Load()
+		}
+	}
+	return 0
 }
 
 // ChatParams runs the chat.params chain and returns the final params.
@@ -262,6 +296,18 @@ type instance struct {
 	err     error
 	conn    *conn
 	cmd     *exec.Cmd
+
+	// Event delivery: a bounded queue drained by one dedicated sender
+	// goroutine, created on the first Emit for this instance and exited
+	// when the instance is stopped. Guarded by its own eventMu — never mu
+	// — because the sender goroutine calls start(), which holds mu for
+	// the entire (possibly slow, possibly wedged) handshake; Emit must be
+	// able to enqueue without ever waiting on that.
+	eventMu      sync.Mutex
+	eventCh      chan *EventBatch
+	eventStop    chan struct{}
+	eventStopped bool
+	eventDropped atomic.Uint64
 }
 
 func (inst *instance) subscribes(hook Hook) bool {
@@ -271,6 +317,63 @@ func (inst *instance) subscribes(hook Hook) bool {
 		}
 	}
 	return false
+}
+
+// enqueueEvent enqueues batch for delivery to inst, lazily starting its
+// dedicated sender goroutine on first use. The send is always non-blocking:
+// on a full queue (or once the instance has been stopped) the event is
+// dropped and counted, and the first drop is reported via Host.OnError.
+func (inst *instance) enqueueEvent(h *Host, batch *EventBatch) {
+	inst.eventMu.Lock()
+	if inst.eventStopped {
+		// Host.Close was already called: never (re)spawn a sender.
+		inst.eventMu.Unlock()
+		inst.recordEventDrop(h)
+		return
+	}
+	if inst.eventCh == nil {
+		inst.eventCh = make(chan *EventBatch, h.opts.EventQueueSize)
+		inst.eventStop = make(chan struct{})
+		go inst.runEventSender(h, inst.eventCh, inst.eventStop)
+	}
+	ch := inst.eventCh
+	inst.eventMu.Unlock()
+
+	select {
+	case ch <- batch:
+	default:
+		inst.recordEventDrop(h)
+	}
+}
+
+func (inst *instance) recordEventDrop(h *Host) {
+	if inst.eventDropped.Add(1) == 1 {
+		h.onError(inst, HookEvent, fmt.Errorf(
+			"plugin: event queue full (capacity %d): dropping events, see Host.EventsDropped for a running count",
+			h.opts.EventQueueSize))
+	}
+}
+
+// runEventSender drains inst's event queue one batch at a time, in enqueue
+// order, so a single connection write mutex is never raced by concurrent
+// goroutines and FIFO delivery per plugin follows directly from FIFO
+// enqueue order. It exits once eventStop is closed (on Host.Close /
+// instance.stop).
+func (inst *instance) runEventSender(h *Host, ch chan *EventBatch, stop chan struct{}) {
+	for {
+		select {
+		case batch := <-ch:
+			ctx, cancel := context.WithTimeout(context.Background(), h.opts.HookTimeout)
+			if err := inst.start(ctx); err != nil {
+				h.onError(inst, HookEvent, err)
+			} else if err := inst.conn.notify(HookEvent.method(), batch); err != nil {
+				h.onError(inst, HookEvent, err)
+			}
+			cancel()
+		case <-stop:
+			return
+		}
+	}
 }
 
 // start spawns and initializes the plugin process on first use. A failed
@@ -343,6 +446,15 @@ func (inst *instance) dial() (io.ReadWriteCloser, error) {
 }
 
 func (inst *instance) stop() {
+	// Signal the event sender first, and via a lock independent of mu, so
+	// a stop can never be stuck behind a wedged handshake.
+	inst.eventMu.Lock()
+	inst.eventStopped = true
+	if inst.eventStop != nil {
+		close(inst.eventStop)
+	}
+	inst.eventMu.Unlock()
+
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
 	if inst.conn != nil {

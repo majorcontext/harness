@@ -65,7 +65,20 @@ plugin's mutations.
   tool call, returns the message to the model as an error result, and stops
   the chain.
 - `tool.execute.after`: non-nil `output` replaces.
-- `event`: async fan-out, batched, no ordering or delivery guarantees.
+- `event`: async fan-out, batched, fire-and-forget. Delivery to a single
+  plugin is FIFO in emit order: the harness gives each plugin instance a
+  bounded queue drained by one dedicated sender goroutine (created on first
+  emit, exits when the plugin is stopped), so events for the same plugin
+  can never be reordered or interleaved by racing writers — e.g. a
+  `tool.execute.start` always reaches a plugin before the matching
+  `tool.execute.end` for the same call id, provided the harness emitted them
+  in that order. There is no ordering guarantee *across* different plugins.
+  Emit never blocks the caller: if a plugin's queue is full (the harness's
+  default capacity is 256, configurable), the event is dropped and a
+  per-plugin counter increments; the first drop for a plugin is also
+  reported through the harness's error-observation hook so operators notice
+  a wedged or overwhelmed plugin, but delivery itself stays best-effort —
+  this is a fire-and-forget hook, not a durable log.
 
 An empty-object response (or the SDK returning `nil`) means "no changes".
 

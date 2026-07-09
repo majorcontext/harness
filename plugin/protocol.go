@@ -72,6 +72,11 @@ type rpcMessage struct {
 type handlerFunc func(ctx context.Context, method string, params json.RawMessage) (any, error)
 
 // conn is a bidirectional JSON-RPC 2.0 connection over a byte stream.
+// notifyQueueSize bounds the per-connection backlog of incoming
+// notifications (hook/event, shutdown) awaiting serial dispatch. Sized well
+// above any realistic burst; see conn.dispatch.
+const notifyQueueSize = 1024
+
 type conn struct {
 	wmu sync.Mutex // serializes writes
 	rwc io.ReadWriteCloser
@@ -83,24 +88,51 @@ type conn struct {
 	pmu     sync.Mutex
 	pending map[int64]chan rpcMessage
 
+	// notifyCh feeds the dedicated notification-dispatch goroutine (see
+	// runNotifications): notifications are handled one at a time, in
+	// receipt order, so that e.g. two hook/event batches can never be
+	// processed by racing handler goroutines and observed out of order by
+	// the peer. Requests still get their own goroutine each (via
+	// serveRequest) since a handler may need to make an outgoing call
+	// before replying, which must not stall this queue.
+	notifyCh chan rpcMessage
+
 	closeOnce sync.Once
 	closed    chan struct{}
 	closeErr  error
 }
 
 func newConn(rwc io.ReadWriteCloser, handler handlerFunc) *conn {
-	return &conn{
-		rwc:     rwc,
-		r:       bufio.NewReader(rwc),
-		handler: handler,
-		pending: make(map[int64]chan rpcMessage),
-		closed:  make(chan struct{}),
+	c := &conn{
+		rwc:      rwc,
+		r:        bufio.NewReader(rwc),
+		handler:  handler,
+		pending:  make(map[int64]chan rpcMessage),
+		notifyCh: make(chan rpcMessage, notifyQueueSize),
+		closed:   make(chan struct{}),
+	}
+	go c.runNotifications()
+	return c
+}
+
+// runNotifications drains notifyCh in order, one at a time, for the life of
+// the connection. It exits once the connection is closed.
+func (c *conn) runNotifications() {
+	for {
+		select {
+		case msg := <-c.notifyCh:
+			c.serveRequest(msg)
+		case <-c.closed:
+			return
+		}
 	}
 }
 
 // run reads and dispatches messages until the stream ends. Incoming requests
 // are served on their own goroutines so that a handler blocked on an outgoing
 // call (e.g. a hook making a client API request) never stalls the read loop.
+// Notifications are handed to the dedicated notification goroutine instead,
+// preserving their receipt order (see runNotifications).
 func (c *conn) run() error {
 	for {
 		line, err := c.r.ReadBytes('\n')
@@ -121,6 +153,17 @@ func (c *conn) run() error {
 
 func (c *conn) dispatch(msg rpcMessage) {
 	if msg.Method != "" {
+		if msg.ID == nil {
+			// Notification: queue for serial, in-order dispatch rather
+			// than racing a fresh goroutine per message. This send can
+			// only block if notifyCh is saturated (a pathological
+			// backlog) or the connection is already closing.
+			select {
+			case c.notifyCh <- msg:
+			case <-c.closed:
+			}
+			return
+		}
 		go c.serveRequest(msg)
 		return
 	}
