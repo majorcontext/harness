@@ -519,7 +519,7 @@ func TestNewSessionFnSystemUsesSessionWorkDir(t *testing.T) {
 	var gotReq *provider.Request
 	onRequest := func(_ string, _ int, req *provider.Request) { gotReq = req }
 
-	newSession := newSessionFn(mkCfg, model, onRequest)
+	newSession := newSessionFn(mkCfg, model, &config.Config{SkillsDirs: []string{}}, nil, onRequest)
 	sess, err := newSession(message.ModelRef{}, sessionWorkDir)
 	if err != nil {
 		t.Fatalf("newSession: %v", err)
@@ -537,6 +537,147 @@ func TestNewSessionFnSystemUsesSessionWorkDir(t *testing.T) {
 		if strings.Contains(seg, "Working directory: "+processCwd) {
 			t.Errorf("system = %v, must not name the process cwd %q", gotReq.System, processCwd)
 		}
+	}
+}
+
+// writeMainTestSkill creates a skill directory <root>/<name> with a minimal
+// valid SKILL.md, mirroring engine's writeSkill helper.
+func writeMainTestSkill(t *testing.T, root, name, description string) {
+	t.Helper()
+	dir := filepath.Join(root, name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "---\nname: " + name + "\ndescription: " + description + "\n---\n\nDo the thing.\n"
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestNewSessionFnSkillsUsesSessionWorkDir is the RED test for the review
+// finding: mkCfg computes cfg.SkillsDirs via skillsDirs(cfg, flagDirs,
+// processCwd) — exactly as serveCmd's real mkCfg does — so a relative
+// skills_dirs entry is baked against the process cwd. A served session
+// created with an explicit sessionWorkDir must still discover a skill placed
+// under sessionWorkDir (where the relative entry actually resolves for that
+// session), not silently miss it because newSessionFn never re-resolves
+// SkillsDirs the way it already re-resolves System.
+func TestNewSessionFnSkillsUsesSessionWorkDir(t *testing.T) {
+	prov := &scriptedProvider{name: "test"}
+	processCwd := t.TempDir()
+	sessionWorkDir := t.TempDir()
+	if processCwd == sessionWorkDir {
+		t.Fatal("test setup: dirs must differ")
+	}
+	// A relative skills_dirs entry, configured the same way for every
+	// session; it must resolve against each session's own workdir.
+	writeMainTestSkill(t, filepath.Join(sessionWorkDir, "skills"), "brewing", "Make coffee")
+
+	model := message.ModelRef{Provider: "test", Model: "m1"}
+	appCfg := &config.Config{SkillsDirs: []string{"skills"}}
+	mkCfg := func(m message.ModelRef) engine.Config {
+		return engine.Config{
+			Providers:    provider.Registry{"test": prov},
+			Model:        m,
+			System:       systemPrompt(processCwd, ""),
+			WorkDir:      processCwd,
+			SessionDir:   t.TempDir(),
+			Instructions: &engine.InstructionsConfig{Disabled: true},
+			SkillsDirs:   skillsDirs(appCfg, nil, processCwd),
+		}
+	}
+	var gotReq *provider.Request
+	onRequest := func(_ string, _ int, req *provider.Request) { gotReq = req }
+
+	newSession := newSessionFn(mkCfg, model, appCfg, nil, onRequest)
+	sess, err := newSession(message.ModelRef{}, sessionWorkDir)
+	if err != nil {
+		t.Fatalf("newSession: %v", err)
+	}
+	if _, err := sess.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if gotReq == nil {
+		t.Fatal("onRequest never fired")
+	}
+	found := false
+	for _, seg := range gotReq.System {
+		if strings.Contains(seg, "brewing") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("system = %v, want it to discover the skill under sessionWorkDir %q, not processCwd %q", gotReq.System, sessionWorkDir, processCwd)
+	}
+}
+
+// TestLoadSessionFnSkillsUsesRestoredWorkDir is the RED test for the same
+// finding on the resume path: the durable WorkDir restored from the session
+// log header must drive skills_dirs resolution, not the process cwd baked
+// into mkCfg's base cfg.SkillsDirs.
+func TestLoadSessionFnSkillsUsesRestoredWorkDir(t *testing.T) {
+	prov := &scriptedProvider{name: "test"}
+	processCwd := t.TempDir()
+	sessionWorkDir := t.TempDir()
+	if processCwd == sessionWorkDir {
+		t.Fatal("test setup: dirs must differ")
+	}
+	writeMainTestSkill(t, filepath.Join(sessionWorkDir, "skills"), "brewing", "Make coffee")
+
+	sesDir := t.TempDir()
+	model := message.ModelRef{Provider: "test", Model: "m1"}
+	appCfg := &config.Config{SkillsDirs: []string{"skills"}}
+
+	// Create and persist a session whose durable WorkDir is sessionWorkDir —
+	// mirroring a session originally created via newSessionFn above.
+	orig := engine.NewSession(engine.Config{
+		Providers:    provider.Registry{"test": prov},
+		Model:        model,
+		WorkDir:      sessionWorkDir,
+		SessionDir:   sesDir,
+		Instructions: &engine.InstructionsConfig{Disabled: true},
+		SkillsDirs:   skillsDirs(appCfg, nil, sessionWorkDir),
+	})
+	if err := orig.Persist(); err != nil {
+		t.Fatalf("Persist: %v", err)
+	}
+
+	mkCfg := func(m message.ModelRef) engine.Config {
+		return engine.Config{
+			Providers:    provider.Registry{"test": prov},
+			Model:        m,
+			System:       systemPrompt(processCwd, ""),
+			WorkDir:      processCwd,
+			SessionDir:   sesDir,
+			Instructions: &engine.InstructionsConfig{Disabled: true},
+			SkillsDirs:   skillsDirs(appCfg, nil, processCwd),
+		}
+	}
+	var gotReq *provider.Request
+	onRequest := func(_ string, _ int, req *provider.Request) { gotReq = req }
+
+	loadSession := loadSessionFn(mkCfg, model, appCfg, nil, onRequest)
+	sess, err := loadSession(orig.ID)
+	if err != nil {
+		t.Fatalf("loadSession: %v", err)
+	}
+	if got := sess.WorkDir(); got != sessionWorkDir {
+		t.Fatalf("test setup: sess.WorkDir() = %q, want %q", got, sessionWorkDir)
+	}
+	if _, err := sess.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if gotReq == nil {
+		t.Fatal("onRequest never fired")
+	}
+	found := false
+	for _, seg := range gotReq.System {
+		if strings.Contains(seg, "brewing") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("system = %v, want it to discover the skill under restored sessionWorkDir %q, not processCwd %q", gotReq.System, sessionWorkDir, processCwd)
 	}
 }
 
@@ -582,7 +723,7 @@ func TestLoadSessionFnSystemUsesRestoredWorkDir(t *testing.T) {
 	var gotReq *provider.Request
 	onRequest := func(_ string, _ int, req *provider.Request) { gotReq = req }
 
-	loadSession := loadSessionFn(mkCfg, model, onRequest)
+	loadSession := loadSessionFn(mkCfg, model, &config.Config{SkillsDirs: []string{}}, nil, onRequest)
 	sess, err := loadSession(orig.ID)
 	if err != nil {
 		t.Fatalf("loadSession: %v", err)
