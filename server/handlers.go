@@ -219,6 +219,31 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.buildSession(sess, status))
 }
 
+// messagePlaceholder substitutes for a resident message that fails to
+// marshal (see handleMessages): it carries just enough to identify which
+// message broke and why, without ever risking a second marshal failure
+// itself (every field here is a plain string).
+type messagePlaceholder struct {
+	ID           string `json:"id"`
+	Role         string `json:"role"`
+	MarshalError string `json:"marshal_error"`
+}
+
+// handleMessages returns the session's full canonical message history.
+//
+// It marshals per-message rather than the whole slice at once: a single
+// resident message that fails to marshal — e.g. a Reasoning part carrying a
+// non-zero-length but invalid ProviderData entry, which
+// message.Message.Normalize does not catch (see its doc comment) because it
+// only scrubs zero-length entries — used to take the entire endpoint down
+// with a 500 ("json: error calling MarshalJSON for type message.Parts"),
+// exactly when the transcript view was most needed to diagnose the death
+// (observed in production on ses_01kx453ewfedqrg7p3c64f8sca and
+// ses_01kx453ev9ejattygpf7rbzptw). Now a message that fails to marshal is
+// replaced with a messagePlaceholder carrying its ID, role, and the marshal
+// error, and every other message in the response is unaffected: the
+// endpoint always returns 200 with as much of the transcript as is actually
+// renderable.
 func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
@@ -230,10 +255,27 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	msgs := sess.History()
-	if msgs == nil {
-		msgs = []message.Message{}
+	out := make([]json.RawMessage, 0, len(msgs))
+	for i := range msgs {
+		m := &msgs[i]
+		raw, err := json.Marshal(m)
+		if err != nil {
+			ph, phErr := json.Marshal(messagePlaceholder{
+				ID:           m.ID,
+				Role:         string(m.Role),
+				MarshalError: err.Error(),
+			})
+			if phErr != nil {
+				// messagePlaceholder is a plain string struct; this cannot
+				// happen, but never let a placeholder failure reintroduce
+				// the wholesale-500 this handler exists to prevent.
+				ph = []byte(`{"id":"","role":"","marshal_error":"unmarshalable message and placeholder"}`)
+			}
+			raw = ph
+		}
+		out = append(out, raw)
 	}
-	writeJSON(w, http.StatusOK, msgs)
+	writeJSON(w, http.StatusOK, out)
 }
 
 // requestJSON is the openapi Request shape: the latest fully-assembled model

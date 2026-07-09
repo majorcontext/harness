@@ -285,6 +285,24 @@ components:
           type: string
           format: date-time
 
+    MessagePlaceholder:
+      type: object
+      description: >
+        Substituted by GET /session/{id}/message for any resident message
+        that fails to marshal, so one poisoned message cannot take down the
+        whole transcript endpoint. Carries only enough to identify which
+        message broke and why.
+      required: [id, role, marshal_error]
+      properties:
+        id:
+          type: string
+        role:
+          type: string
+          enum: [user, assistant, tool]
+        marshal_error:
+          type: string
+          description: The encoding/json error raised while marshaling this message.
+
     Part:
       type: object
       required: [type]
@@ -672,6 +690,14 @@ paths:
     get:
       operationId: getMessages
       summary: Full canonical message history (bootstrap for renderers).
+      description: >
+        Marshals each resident message independently: a single message that
+        fails to marshal (e.g. a Reasoning part carrying an invalid
+        provider-native attachment that ingest-time normalization does not
+        catch) is replaced in the response by a MessagePlaceholder rather
+        than failing the whole request — this endpoint always returns 200
+        with as much of the transcript as is actually renderable, never a
+        500 for one bad message.
       parameters:
         - $ref: "#/components/parameters/sessionID"
       responses:
@@ -681,7 +707,13 @@ paths:
             application/json:
               schema:
                 type: array
-                items: { $ref: "#/components/schemas/Message" }
+                items:
+                  description: >
+                    A Message, or a MessagePlaceholder in place of any
+                    message that failed to marshal.
+                  oneOf:
+                    - $ref: "#/components/schemas/Message"
+                    - $ref: "#/components/schemas/MessagePlaceholder"
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
