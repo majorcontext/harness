@@ -825,3 +825,114 @@ func TestMergePluginHTTPHeaders(t *testing.T) {
 		t.Errorf("merged PluginHTTPHeaders = %v", merged.PluginHTTPHeaders)
 	}
 }
+
+func TestLoadMCPServers(t *testing.T) {
+	t.Run("stdio and http parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {
+			"fs": {"command": ["mcp-fs", "--root", "/tmp"], "env": ["A=1"], "dir": "/tmp"},
+			"weather": {"url": "https://weather.example/mcp", "headers": {"Authorization": "Bearer tok"}}
+		}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if len(c.MCPServers) != 2 {
+			t.Fatalf("MCPServers = %+v, want 2 entries", c.MCPServers)
+		}
+		fs := c.MCPServers["fs"]
+		if len(fs.Command) != 3 || fs.Command[0] != "mcp-fs" {
+			t.Errorf("fs.Command = %+v", fs.Command)
+		}
+		if len(fs.Env) != 1 || fs.Env[0] != "A=1" || fs.Dir != "/tmp" {
+			t.Errorf("fs env/dir = %+v", fs)
+		}
+		weather := c.MCPServers["weather"]
+		if weather.URL != "https://weather.example/mcp" {
+			t.Errorf("weather.URL = %q", weather.URL)
+		}
+		if weather.Headers["Authorization"] != "Bearer tok" {
+			t.Errorf("weather.Headers = %v", weather.Headers)
+		}
+	})
+	t.Run("unset leaves nil", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.MCPServers != nil {
+			t.Errorf("MCPServers = %v, want nil (unset)", c.MCPServers)
+		}
+	})
+	t.Run("neither command nor url fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {"bad": {}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for mcp server with neither command nor url")
+		}
+		if !strings.Contains(err.Error(), "bad") {
+			t.Errorf("error %q does not name the offending key", err)
+		}
+	})
+	t.Run("both command and url fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {"bad": {"command": ["x"], "url": "https://x"}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for mcp server with both command and url")
+		}
+	})
+	t.Run("empty name key fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {"": {"command": ["x"]}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for empty mcp server name")
+		}
+	})
+	t.Run("malformed entry fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {"bad": {"command": "not-an-array"}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for malformed mcp server command")
+		}
+	})
+}
+
+func TestMergeMCPServers(t *testing.T) {
+	t.Run("keys merge, project entry replaces same-name user entry wholesale", func(t *testing.T) {
+		base := &Config{MCPServers: map[string]MCPServerSpec{
+			"fs": {Command: []string{"user-fs"}},
+			"gh": {URL: "https://user.example/mcp"},
+		}}
+		over := &Config{MCPServers: map[string]MCPServerSpec{
+			"fs": {Command: []string{"proj-fs", "--flag"}},
+		}}
+		merged := merge(base, over)
+		if len(merged.MCPServers) != 2 {
+			t.Fatalf("merged MCPServers = %+v, want 2 entries", merged.MCPServers)
+		}
+		if fs := merged.MCPServers["fs"]; len(fs.Command) != 2 || fs.Command[0] != "proj-fs" {
+			t.Errorf("merged fs = %+v, want project's entry", fs)
+		}
+		if gh := merged.MCPServers["gh"]; gh.URL != "https://user.example/mcp" {
+			t.Errorf("merged gh = %+v, want inherited user entry", gh)
+		}
+		// Mutating the merged map/slices must not alias the inputs.
+		merged.MCPServers["fs"].Command[0] = "mutated"
+		if base.MCPServers["fs"].Command[0] == "mutated" {
+			t.Error("merge aliased base's MCPServers slice")
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{MCPServers: map[string]MCPServerSpec{"fs": {Command: []string{"a"}}}}
+		merged := merge(base, &Config{})
+		if len(merged.MCPServers) != 1 {
+			t.Errorf("merged MCPServers = %+v, want inherited", merged.MCPServers)
+		}
+	})
+}
