@@ -306,7 +306,31 @@ const mcpCloseTimeout = 10 * time.Second
 
 // Close closes every connected client concurrently, bounded by
 // mcpCloseTimeout. Safe to call even if no server was ever connected.
+//
+// Close interlocks with ensureConnected via the same connectOnce before it
+// ever reads m.clients: connectMCPServer's clients only land in m.clients
+// at the very end of the one-time connect step (see ensureConnected), so a
+// Close racing a caller's still-in-flight first Tools()/CallTool() could
+// otherwise observe the zero-value nil map, close nothing, and return —
+// moments later the racing connect finishes and populates m.clients with a
+// client (or, for a stdio server, a spawned child process) nobody will
+// ever close again, since connectOnce never retries or revisits it: a
+// silent leak. Calling ensureConnected here first guarantees that by the
+// time Close reads m.clients, any connect already in flight elsewhere has
+// completed (sync.Once serializes concurrent Do calls: a second caller
+// blocks until the first's function returns) and its clients are visible.
+// If no connect was ever triggered before Close, this call performs it
+// itself — bounded as usual by each server's own ConnectTimeout — so it
+// can close what it creates rather than skip connecting only to leak
+// nothing (there is nothing to leak) but also strand the servers'
+// processes/sessions unclosed forever if something else revives the
+// manager's clients map by some out-of-band means; this is a bounded,
+// occasionally-wasted connect-then-close on an otherwise never-used
+// manager, not a materially different cost than the same connect
+// happening on the very next request instead.
 func (m *MCPManager) Close(ctx context.Context) error {
+	m.ensureConnected(ctx)
+
 	m.mu.RLock()
 	clients := make([]*mcp.Client, 0, len(m.clients))
 	for _, c := range m.clients {

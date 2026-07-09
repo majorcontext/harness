@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -569,6 +570,103 @@ func TestDecodeMCPBase64MalformedLogsWarning(t *testing.T) {
 	}
 	if strings.Contains(out, payload) {
 		t.Errorf("log output = %q, must never contain the raw payload bytes", out)
+	}
+}
+
+// TestMCPManagerCloseWaitsForInFlightConnect is the regression test for
+// finding 2 from PR #51's review: Close used to read m.clients directly,
+// without any interaction with connectOnce, so a Close racing a caller's
+// very first Tools()/CallTool() (still connecting) would see the
+// zero-value nil clients map — connectMCPServer populates m.clients only
+// at the very end of the one-time connect step — return immediately having
+// closed nothing, and then the connect would finish moments later and
+// populate m.clients with a client nobody will ever close: a leaked
+// connection (or, for a stdio server, a leaked child process), and silent,
+// since connectOnce never retries or revisits it.
+//
+// The server here gates its initialize response on a channel the test
+// controls, so the connect step is deterministically still in flight (past
+// dial, mid-handshake) when Close is invoked; the fake session header lets
+// the test observe, via the DELETE the client's Close then issues, whether
+// the client that connect is about to create actually got closed.
+func TestMCPManagerCloseWaitsForInFlightConnect(t *testing.T) {
+	const wantSession = "race-session-1"
+	gate := make(chan struct{})
+	entered := make(chan struct{})
+	var enteredOnce sync.Once
+
+	var mu sync.Mutex
+	var deleteSessions []string
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			mu.Lock()
+			deleteSessions = append(deleteSessions, r.Header.Get("Mcp-Session-Id"))
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		var in rpcMessage
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if in.Method == "initialize" {
+			enteredOnce.Do(func() { close(entered) })
+			<-gate // held open until the test has raced Close in
+		}
+		if in.Method != "" && len(in.ID) == 0 {
+			w.WriteHeader(http.StatusAccepted) // notification, e.g. notifications/initialized
+			return
+		}
+		var result any
+		switch in.Method {
+		case "initialize":
+			result = map[string]any{
+				"protocolVersion": "2025-11-25",
+				"capabilities":    map[string]any{"tools": map[string]any{}},
+				"serverInfo":      map[string]any{"name": "fake-mcp-http", "version": "0.0.1"},
+			}
+		case "tools/list":
+			result = map[string]any{"tools": []map[string]any{}}
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		raw, _ := json.Marshal(result)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Mcp-Session-Id", wantSession)
+		_ = json.NewEncoder(w).Encode(rpcMessage{JSONRPC: "2.0", ID: in.ID, Result: raw})
+	})
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	mgr := NewMCPManager(map[string]MCPServerConfig{"svc": {URL: srv.URL}})
+
+	toolsDone := make(chan struct{})
+	go func() {
+		mgr.Tools(context.Background())
+		close(toolsDone)
+	}()
+
+	<-entered // the first connect is in flight, blocked mid-initialize
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- mgr.Close(context.Background())
+	}()
+
+	close(gate) // let the racing connect (and Close's interlock) proceed
+
+	<-toolsDone
+	if err := <-closeDone; err != nil {
+		t.Errorf("Close: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(deleteSessions) != 1 || deleteSessions[0] != wantSession {
+		t.Fatalf("server saw DELETE sessions = %v, want exactly [%q]: Close must close the client the racing first connect created, not leak it", deleteSessions, wantSession)
 	}
 }
 
