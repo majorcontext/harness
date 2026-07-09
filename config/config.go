@@ -382,6 +382,17 @@ func merge(base, over *Config) *Config {
 	if n := len(base.Providers) + len(over.Providers); n > 0 {
 		m := make(map[string]Provider, n)
 		for k, v := range base.Providers {
+			// Deep-copy ExtraHeaders here too: a base-only key (never
+			// touched by the loop below, e.g. no matching over.Providers
+			// entry) would otherwise leave m[k] aliasing base's map, so
+			// mutating the merged config's headers would corrupt base's.
+			if len(v.ExtraHeaders) > 0 {
+				hm := make(map[string]string, len(v.ExtraHeaders))
+				for hk, hv := range v.ExtraHeaders {
+					hm[hk] = hv
+				}
+				v.ExtraHeaders = hm
+			}
 			m[k] = v
 		}
 		for k, v := range over.Providers {

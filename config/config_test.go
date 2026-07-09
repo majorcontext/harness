@@ -254,6 +254,25 @@ func TestMergeProviderExtraHeaders(t *testing.T) {
 	}
 }
 
+// TestMergeProviderExtraHeadersBaseOnlyKeyNotAliased covers the seed-loop
+// aliasing bug specifically: a providers key present only in base (over
+// has no entry for it at all, so the field-by-field merge loop never
+// touches it) must still get its own ExtraHeaders map in the merged
+// config, not a reference into base's.
+func TestMergeProviderExtraHeadersBaseOnlyKeyNotAliased(t *testing.T) {
+	base := &Config{Providers: map[string]Provider{
+		"anthropic": {ExtraHeaders: map[string]string{"A": "1"}},
+	}}
+	over := &Config{Providers: map[string]Provider{
+		"openai": {APIKeyEnv: "OTHER_KEY"}, // unrelated key; anthropic is untouched by over
+	}}
+	merged := merge(base, over)
+	merged.Providers["anthropic"].ExtraHeaders["A"] = "mutated"
+	if base.Providers["anthropic"].ExtraHeaders["A"] != "1" {
+		t.Error("merge seed loop aliased the base-only provider's ExtraHeaders map")
+	}
+}
+
 func TestLoadUnknownField(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.json")
 	writeFile(t, p, `{"modle": "typo"}`)
