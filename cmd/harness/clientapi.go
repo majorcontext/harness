@@ -64,9 +64,19 @@ func (r *runClientAPI) SessionMessages(_ context.Context, req *plugin.SessionMes
 	return &plugin.SessionMessagesResponse{Messages: msgs}, nil
 }
 
-// MCPCall implements plugin.ClientAPI. See plugin.ErrMCPNotImplemented.
-func (r *runClientAPI) MCPCall(_ context.Context, _ *plugin.MCPCallRequest) (*plugin.MCPCallResult, error) {
-	return nil, plugin.ErrMCPNotImplemented
+// MCPCall implements plugin.ClientAPI: it routes to the same connected MCP
+// clients the run-mode session's own namespaced (mcp__<server>__<tool>)
+// tool calls use (see engine.Session.MCPCall and engine/mcp.go).
+func (r *runClientAPI) MCPCall(ctx context.Context, req *plugin.MCPCallRequest) (*plugin.MCPCallResult, error) {
+	sess := r.getSess()
+	if sess == nil {
+		return nil, fmt.Errorf("client API: no active session yet")
+	}
+	content, isErr, err := sess.MCPCall(ctx, req.Server, req.Tool, req.Args)
+	if err != nil {
+		return nil, err
+	}
+	return &plugin.MCPCallResult{Content: content, IsError: isErr}, nil
 }
 
 // Generate implements plugin.ClientAPI. See plugin.ErrGenerateNotImplemented.
