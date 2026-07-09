@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"sync"
@@ -26,6 +27,19 @@ type ClientAPI interface {
 	MCPCall(ctx context.Context, req *MCPCallRequest) (*MCPCallResult, error)
 	Generate(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error)
 }
+
+// ErrMCPNotImplemented is the error a ClientAPI.MCPCall implementation
+// should return until MCP engine integration lands (tracked as a separate
+// PR): a clear, typed failure rather than a panic or a silently empty
+// result. Both bundled ClientAPI implementations (server-backed, and the
+// direct engine-backed adapter used by `harness run`) return it verbatim.
+var ErrMCPNotImplemented = errors.New("plugin: MCP call not implemented yet (MCP engine integration is a separate PR)")
+
+// ErrGenerateNotImplemented is the analogous sentinel for
+// ClientAPI.Generate: routing a plugin's LLM call through the harness
+// provider layer is not yet wired. Returned instead of panicking or
+// silently returning an empty message.
+var ErrGenerateNotImplemented = errors.New("plugin: generate not implemented yet (provider-layer integration is a separate PR)")
 
 // Spec configures one plugin for a Host.
 //
@@ -53,6 +67,13 @@ type Options struct {
 	// HTTPHeaders are stamped on all plugin outbound HTTP traffic via
 	// Client.HTTPClient (e.g. workspace attribution headers).
 	HTTPHeaders map[string]string
+	// ServeURL and RunToken are forwarded verbatim into every plugin's
+	// InitializeParams (see that type's doc comment for the trust model).
+	// Set both only when this Host belongs to a running `harness serve`
+	// instance; leave both empty in `harness run` mode, where there is no
+	// HTTP API for a plugin to reach.
+	ServeURL string
+	RunToken string
 	// Client serves plugin → harness API calls. May be nil, in which case
 	// those calls fail with method-not-found.
 	Client ClientAPI
@@ -457,6 +478,8 @@ func (inst *instance) startLocked(ctx context.Context) error {
 		WorkspaceDir:    inst.host.opts.WorkspaceDir,
 		HTTPHeaders:     inst.host.opts.HTTPHeaders,
 		Config:          inst.spec.Config,
+		ServeURL:        inst.host.opts.ServeURL,
+		RunToken:        inst.host.opts.RunToken,
 	}
 	if err := c.call(ctx, methodInitialize, init, &live); err != nil {
 		c.close()
@@ -585,6 +608,29 @@ func (p *procConn) Close() error {
 		<-done
 	}
 	return nil
+}
+
+// NewTestSpec builds a Spec that runs an in-process fake plugin — over a
+// net.Pipe, no subprocess — speaking the real protocol with the given
+// hooks. It exists so integration tests in other packages (e.g. server,
+// which cannot reach Spec's unexported dial field) can drive a real Host
+// dispatch end-to-end without spawning a binary, per the "no subprocess
+// fixtures unless the subprocess machinery itself is under test" testing
+// rule. serve() fills in the manifest's hooks/tools/protocol version exactly
+// as a real plugin process would.
+func NewTestSpec(name string, hooks *Hooks) Spec {
+	m := Manifest{Name: name, ProtocolVersion: ProtocolVersion, Hooks: hooks.hookList()}
+	for _, tool := range hooks.Tools {
+		m.Tools = append(m.Tools, tool.Def)
+	}
+	return Spec{
+		Manifest: m,
+		dial: func() (io.ReadWriteCloser, error) {
+			hostSide, pluginSide := net.Pipe()
+			go serve(pluginSide, Manifest{Name: name}, hooks) //nolint:errcheck
+			return hostSide, nil
+		},
+	}
 }
 
 // ProbeSpec spawns a plugin binary using the full spec — command, Env, Dir,

@@ -13,22 +13,12 @@ import (
 )
 
 // testPlugin runs a plugin in-process over a net.Pipe and returns a Spec for
-// the host side. serve() fills in the manifest's hooks and protocol version
-// exactly as a real plugin process would.
+// the host side. It is a thin, *testing.T-taking wrapper around the
+// exported NewTestSpec (which other packages use directly, since they can't
+// reach Spec's unexported dial field).
 func testPlugin(t *testing.T, name string, hooks *Hooks) Spec {
 	t.Helper()
-	m := Manifest{Name: name, ProtocolVersion: ProtocolVersion, Hooks: hooks.hookList()}
-	for _, tool := range hooks.Tools {
-		m.Tools = append(m.Tools, tool.Def)
-	}
-	return Spec{
-		Manifest: m,
-		dial: func() (io.ReadWriteCloser, error) {
-			hostSide, pluginSide := net.Pipe()
-			go serve(pluginSide, Manifest{Name: name}, hooks) //nolint:errcheck
-			return hostSide, nil
-		},
-	}
+	return NewTestSpec(name, hooks)
 }
 
 func newTestHost(t *testing.T, opts Options, specs ...Spec) *Host {

@@ -77,6 +77,15 @@ func (cl *Client) WorkspaceDir() string { return cl.init.WorkspaceDir }
 // Config is this plugin's raw config block from the harness config file.
 func (cl *Client) Config() json.RawMessage { return cl.init.Config }
 
+// ServeURL is the base URL of this process's `harness serve` HTTP API, or
+// "" in `harness run` mode (no HTTP API to reach). See InitializeParams and
+// PROTOCOL.md's trust model section.
+func (cl *Client) ServeURL() string { return cl.init.ServeURL }
+
+// RunToken authenticates requests to ServeURL — the same bearer token the
+// orchestrator holds for this run. Empty whenever ServeURL is empty.
+func (cl *Client) RunToken() string { return cl.init.RunToken }
+
 // SessionMessages returns the canonical message history for a session.
 func (cl *Client) SessionMessages(ctx context.Context, sessionID string) ([]message.Message, error) {
 	var resp SessionMessagesResponse
