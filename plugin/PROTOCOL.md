@@ -69,6 +69,30 @@ plugin's mutations.
 
 An empty-object response (or the SDK returning `nil`) means "no changes".
 
+## Events
+
+`hook/event` batches carry `Event{type, session_id, properties}`; `properties`
+is a JSON object whose shape depends on `type`. Event types, v1:
+
+| Type | Properties | Emitted when |
+|---|---|---|
+| `session.status` | `{status: "busy"\|"idle"}` | a prompt starts/finishes |
+| `question.asked` | (reserved, no emit site yet) | — |
+| `file.edited` | `{path}` (absolute) | a built-in file tool (`write_file`, `edit_file`) successfully writes a file |
+| `tool.execute.start` | `{tool, call_id}` | immediately before any tool call executes (built-in or plugin-provided) |
+| `tool.execute.end` | `{tool, call_id, ok}` | immediately after a tool call finishes; `ok` is `false` when the result is an error result |
+| `session.error` | `{message}` | a prompt/turn terminates with an error; `message` is the error string only — no stack traces, no request/response bodies, no secrets |
+
+`tool.execute.start`/`tool.execute.end` bracket the actual tool execution
+only — a call denied by `tool.execute.before` never runs and so never emits
+these.
+
+**Deferred**: message-delta events (`text.delta`, `reasoning.delta`
+equivalents for plugins). Streaming deltas are high-frequency; shipping them
+on the fire-and-forget `event` hook needs a throttling/coalescing design
+first so a slow plugin can't fall arbitrarily far behind or amplify RPC
+volume. Not in this vocabulary yet.
+
 ## Message content
 
 Tool outputs and generate results use the canonical `message.Parts` encoding:
