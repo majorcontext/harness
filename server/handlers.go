@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sort"
@@ -23,6 +24,7 @@ type sessionJSON struct {
 	Messages  int              `json:"messages"`
 	Seq       int64            `json:"seq,omitempty"`
 	Goal      *goalJSON        `json:"goal,omitempty"`
+	WorkDir   string           `json:"workdir"`
 }
 
 // goalJSON is the Session.goal sub-object: present only when a goal has been
@@ -40,13 +42,20 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Model message.ModelRef `json:"model"`
+		Model        message.ModelRef `json:"model"`
+		WorkDir      string           `json:"workdir"`
+		ShareWorkdir bool             `json:"share_workdir"`
 	}
 	if err := decodeBody(r, &body); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	sess, err := s.opts.NewSession(body.Model)
+	workDir, err := resolveWorkDir(s.opts.WorkspaceRoots, body.WorkDir)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	sess, err := s.opts.NewSession(body.Model, workDir)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "cannot create session")
 		return
@@ -59,7 +68,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	s.sessions[sess.ID] = &sessionState{sess: sess, lastUsed: time.Now()}
+	s.sessions[sess.ID] = &sessionState{sess: sess, lastUsed: time.Now(), shareWorkdir: body.ShareWorkdir}
 	s.evictResidentLocked()
 	s.mu.Unlock()
 
@@ -238,12 +247,14 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	// Resolve the session and atomically claim its prompt slot (also does the
 	// wg.Add under the admission gate). See claimForPrompt for the ordering that
 	// makes eviction races and drain admission impossible.
-	st, ctx, fromSeq, code := s.claimForPrompt(id)
+	st, ctx, fromSeq, code, holder := s.claimForPrompt(id)
 	if code != 0 {
-		switch code {
-		case http.StatusConflict:
+		switch {
+		case code == http.StatusConflict && holder != "":
+			writeErr(w, code, fmt.Sprintf("workdir busy: held by session %s", holder))
+		case code == http.StatusConflict:
 			writeErr(w, code, "session is busy with another prompt")
-		case http.StatusServiceUnavailable:
+		case code == http.StatusServiceUnavailable:
 			writeErr(w, code, "server shutting down")
 		default:
 			writeErr(w, http.StatusNotFound, "no such session")
@@ -318,12 +329,14 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	st, ctx, fromSeq, code := s.claimForPrompt(id)
+	st, ctx, fromSeq, code, holder := s.claimForPrompt(id)
 	if code != 0 {
-		switch code {
-		case http.StatusConflict:
+		switch {
+		case code == http.StatusConflict && holder != "":
+			writeErr(w, code, fmt.Sprintf("workdir busy: held by session %s", holder))
+		case code == http.StatusConflict:
 			writeErr(w, code, "session is busy")
-		case http.StatusServiceUnavailable:
+		case code == http.StatusServiceUnavailable:
 			writeErr(w, code, "server shutting down")
 		default:
 			writeErr(w, http.StatusNotFound, "no such session")
@@ -522,12 +535,14 @@ func (s *Server) lookup(id string) (*engine.Session, string, bool) {
 //
 // On failure it returns a non-zero HTTP status and leaves nothing claimed:
 // StatusServiceUnavailable (draining), StatusNotFound (unknown session), or
-// StatusConflict (already running). code == 0 means success.
-func (s *Server) claimForPrompt(id string) (st *sessionState, ctx context.Context, fromSeq int64, code int) {
+// StatusConflict (already running, or another running session holds the same
+// workdir — see workdirHolderLocked — in which case holder names it). code ==
+// 0 means success.
+func (s *Server) claimForPrompt(id string) (st *sessionState, ctx context.Context, fromSeq int64, code int, holder string) {
 	s.mu.Lock()
 	if s.draining {
 		s.mu.Unlock()
-		return nil, nil, 0, http.StatusServiceUnavailable
+		return nil, nil, 0, http.StatusServiceUnavailable, ""
 	}
 	st = s.sessions[id]
 	if st == nil {
@@ -535,7 +550,7 @@ func (s *Server) claimForPrompt(id string) (st *sessionState, ctx context.Contex
 		s.mu.Unlock()
 		sess, err := s.opts.LoadSession(id)
 		if err != nil {
-			return nil, nil, 0, http.StatusNotFound
+			return nil, nil, 0, http.StatusNotFound, ""
 		}
 		loaded := &sessionState{sess: sess, lastUsed: time.Now()}
 		s.mu.Lock()
@@ -543,7 +558,7 @@ func (s *Server) claimForPrompt(id string) (st *sessionState, ctx context.Contex
 		// insert or claim, so no wg.Add slips past the admission gate.
 		if s.draining {
 			s.mu.Unlock()
-			return nil, nil, 0, http.StatusServiceUnavailable
+			return nil, nil, 0, http.StatusServiceUnavailable, ""
 		}
 		if ex := s.sessions[id]; ex != nil {
 			st = ex // a resident appeared while we loaded; use the winner
@@ -554,7 +569,11 @@ func (s *Server) claimForPrompt(id string) (st *sessionState, ctx context.Contex
 	}
 	if st.running {
 		s.mu.Unlock()
-		return nil, nil, 0, http.StatusConflict
+		return nil, nil, 0, http.StatusConflict, ""
+	}
+	if h := s.workdirHolderLocked(id, st); h != "" {
+		s.mu.Unlock()
+		return nil, nil, 0, http.StatusConflict, h
 	}
 	fromSeq = s.seq
 	ctx, cancel := context.WithCancel(context.Background())
@@ -565,7 +584,27 @@ func (s *Server) claimForPrompt(id string) (st *sessionState, ctx context.Contex
 	// evictResidentLocked will not evict the session we just claimed.
 	s.evictResidentLocked()
 	s.mu.Unlock()
-	return st, ctx, fromSeq, 0
+	return st, ctx, fromSeq, 0, ""
+}
+
+// workdirHolderLocked returns the session ID of another RUNNING session that
+// holds the same workdir as st, unless st itself or that other session opted
+// into share_workdir — in which case it returns "" (no conflict). Caller
+// holds s.mu.
+func (s *Server) workdirHolderLocked(id string, st *sessionState) string {
+	if st.shareWorkdir {
+		return ""
+	}
+	wd := st.sess.WorkDir()
+	for otherID, other := range s.sessions {
+		if otherID == id || !other.running || other.shareWorkdir {
+			continue
+		}
+		if other.sess.WorkDir() == wd {
+			return otherID
+		}
+	}
+	return ""
 }
 
 // buildSession assembles the Session shape without holding s.mu across engine
@@ -587,6 +626,7 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 		Messages:  len(sess.History()),
 		Seq:       seq,
 		Goal:      goal,
+		WorkDir:   sess.WorkDir(),
 	}
 }
 

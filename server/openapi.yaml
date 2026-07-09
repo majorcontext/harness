@@ -60,7 +60,7 @@ components:
 
     Session:
       type: object
-      required: [id, created_at, model, status, messages]
+      required: [id, created_at, model, status, messages, workdir]
       properties:
         id:
           type: string
@@ -85,6 +85,13 @@ components:
             for this session in the current server process (in-memory, like the
             /request snapshot). Absent on a freshly reloaded session until a
             goal runs.
+        workdir:
+          type: string
+          description: >
+            The session's working directory, durable across resume (persisted
+            in the session log header). Defaults to the serve process's
+            current working directory when POST /session omitted workdir.
+          example: /workspace/task-42
 
     GoalSummary:
       type: object
@@ -435,6 +442,16 @@ paths:
     post:
       operationId: createSession
       summary: Create a session.
+      description: >
+        workdir is optional: when given it must clean-resolve (absolute,
+        cleaned — ".." cannot escape by string trickery) to a path equal to,
+        or nested under, one of the server's configured workspace roots;
+        otherwise the request is rejected with 400. Omitted, it defaults to
+        the serve process's own current working directory. workdir is durable
+        — it round-trips through the session log and survives resume.
+        share_workdir opts this session out of the workdir-busy exclusivity
+        rule (see prompt_async's 409): by default, two running sessions may
+        never share a workdir at the same time.
       requestBody:
         required: false
         content:
@@ -443,12 +460,28 @@ paths:
               type: object
               properties:
                 model: { $ref: "#/components/schemas/ModelRef" }
+                workdir:
+                  type: string
+                  description: >
+                    Optional explicit working directory; see the operation
+                    description for validation and defaulting rules.
+                share_workdir:
+                  type: boolean
+                  description: >
+                    Opt out of the workdir-busy exclusivity rule for this
+                    session (see prompt_async's 409 response).
       responses:
         "201":
           description: Created.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Session" }
+        "400":
+          description: >
+            workdir does not clean-resolve under an allowed workspace root.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /session/{id}:
@@ -534,7 +567,10 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
-          description: Session is busy with another prompt.
+          description: >
+            Session is busy with another prompt, OR another currently-running
+            session holds the same workdir and neither session set
+            share_workdir on creation (the error names the holder session).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -577,7 +613,11 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
-          description: Session is busy with another prompt or goal.
+          description: >
+            Session is busy with another prompt or goal, OR another
+            currently-running session holds the same workdir and neither
+            session set share_workdir on creation (the error names the
+            holder session).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

@@ -41,12 +41,23 @@ type Options struct {
 	// Version is reported by /health.
 	Version string
 	// NewSession creates a fresh engine session for the given model (zero
-	// model = caller's default). The wrapper is expected to wire
-	// engine.Config.OnEvent to Server.Publish.
-	NewSession func(model message.ModelRef) (*engine.Session, error)
+	// model = caller's default) and workdir (already resolved and validated
+	// by handleCreate against WorkspaceRoots — see resolveWorkDir). The
+	// wrapper is expected to wire engine.Config.OnEvent to Server.Publish and
+	// engine.Config.WorkDir to the workDir argument.
+	NewSession func(model message.ModelRef, workDir string) (*engine.Session, error)
 	// LoadSession resumes an on-disk session by ID, wiring OnEvent the same
-	// way. It returns an error when no log with that ID exists.
+	// way. It returns an error when no log with that ID exists. The
+	// session's workdir is restored from its log header (see
+	// engine.LoadSession), not passed in here.
 	LoadSession func(id string) (*engine.Session, error)
+	// WorkspaceRoots bounds the directories POST /session may accept as an
+	// explicit workdir: the request value must clean-resolve (absolute,
+	// cleaned) to one of these roots or a descendant of one. Empty means the
+	// server process's own working directory is the sole allowed root. A
+	// request that omits workdir always defaults to the process's current
+	// working directory, which is never itself checked against this list.
+	WorkspaceRoots []string
 	// HeartbeatInterval is the SSE keep-alive comment period; 0 defaults to
 	// 30s.
 	HeartbeatInterval time.Duration
@@ -132,6 +143,11 @@ type sessionState struct {
 	running  bool
 	cancel   context.CancelFunc
 	lastUsed time.Time
+	// shareWorkdir opts this session out of the workdir-busy exclusivity rule
+	// in claimForPrompt (see workdir.go): set from POST /session's
+	// share_workdir, in memory only (a reloaded/cold session defaults back to
+	// false, like running/cancel).
+	shareWorkdir bool
 }
 
 // New builds a Server and reconciles its journal against the on-disk session

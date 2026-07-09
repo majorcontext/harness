@@ -509,11 +509,17 @@ func serveCmd(args []string) error {
 		Version:       version,
 		CORSOrigin:    corsOrigin,
 		GoalEvaluator: goalEval,
-		NewSession: func(model message.ModelRef) (*engine.Session, error) {
+		NewSession: func(model message.ModelRef, sessionWorkDir string) (*engine.Session, error) {
 			if model.IsZero() {
 				model = defModel
 			}
 			cfg := mkCfg(model)
+			// The server has already resolved and validated sessionWorkDir
+			// (defaulting to this process's cwd when the caller omitted one;
+			// see server.Options.WorkspaceRoots) — it wins over the process
+			// cwd for this session's tools, AGENTS.md discovery, and Agent
+			// Skills default directory.
+			cfg.WorkDir = sessionWorkDir
 			var sess *engine.Session
 			cfg.OnRequest = func(turn int, req *provider.Request) { srv.OnRequest(sess.ID, turn, req) }
 			sess = engine.NewSession(cfg)
