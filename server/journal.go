@@ -119,7 +119,6 @@ func (s *Server) publishGoal(ev engine.Event) {
 	case engine.EventGoalSet:
 		g.condition = ev.GoalCondition
 		g.active = true
-		g.achieved = false
 		g.turns = 0
 		g.lastReason = ""
 	case engine.EventGoalEval:
@@ -127,7 +126,6 @@ func (s *Server) publishGoal(ev engine.Event) {
 		g.lastReason = ev.GoalReason
 	case engine.EventGoalAchieved:
 		g.active = false
-		g.achieved = true
 		g.turns = ev.GoalTurns
 		g.lastReason = ev.GoalReason
 	case engine.EventGoalCleared:
