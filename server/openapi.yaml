@@ -133,13 +133,23 @@ components:
       properties:
         outcome:
           type: string
-          enum: [completed, error]
+          enum: [completed, error, max_turns_exceeded]
+          description: >
+            "completed": the turn (or goal) finished successfully —for a
+            goal, the evaluator returned MET. "error": the turn failed
+            outright (provider error, transcode failure). "max_turns_exceeded":
+            goal-loop only — GoalOptions.MaxTurns was exhausted without the
+            evaluator ever returning MET; the goal gave up, it did not
+            complete, so it is deliberately never reported as "completed".
+            A goal cleared via DELETE /session/{id}/goal (or a ClearGoal that
+            wins a race against an in-flight worker retry or evaluator call)
+            emits no turn.end at all — see the turn.end Event description.
         error:
           type: string
           description: >
             Sanitized failure detail (never credentials or request bodies —
-            see the turn.end Event field) when outcome is "error". Absent on
-            a clean completion.
+            see the turn.end Event field) when outcome is "error". Absent
+            otherwise.
 
     SessionState:
       type: string
@@ -432,17 +442,22 @@ components:
             error, transcode failure); session.aborted confirms an
             orchestrator-requested abort ended the in-flight prompt. Both
             are followed by a session.status idle transition.
-            turn.end is durable and carries `outcome` ("completed" or
-            "error") plus a sanitized `error` detail on failure: it is
-            emitted whenever a prompt (prompt_async) or a goal-worker loop
-            (POST /session/{id}/goal) finishes, mirrored onto
-            Session.last_turn and each /session/status entry's last_turn, so
-            a client can tell "idle because done" from "idle because the
-            turn died" without inferring it from message part shapes. A
-            deliberate abort (POST /session/{id}/abort, DELETE
-            /session/{id}/goal, shutdown drain) does not emit turn.end —
-            session.aborted (or, for a cleared goal, goal.cleared) already
-            covers that case.
+            turn.end is durable and carries `outcome` ("completed", "error",
+            or "max_turns_exceeded") plus a sanitized `error` detail on
+            failure: it is emitted whenever a prompt (prompt_async) or a
+            goal-worker loop (POST /session/{id}/goal) finishes, mirrored
+            onto Session.last_turn and each /session/status entry's
+            last_turn, so a client can tell "idle because done" from "idle
+            because the turn died" without inferring it from message part
+            shapes. A goal loop that exhausts `max_turns` without the
+            evaluator ever returning MET records "max_turns_exceeded", never
+            "completed" — it gave up, it did not finish. A deliberate abort
+            or clear (POST /session/{id}/abort, DELETE /session/{id}/goal —
+            including a ClearGoal that wins a race against an in-flight
+            worker retry or evaluator call, even without the loop's context
+            being cancelled — or shutdown drain) does not emit turn.end at
+            all — session.aborted (or, for a cleared goal, goal.cleared)
+            already covers that case.
             request.meta is a durable record of the model request the engine
             assembled for one turn: system_hash, system_len, segments (count),
             tools (names), messages (history count), and the model. The full
@@ -492,8 +507,12 @@ components:
             turn.end; see LastTurn.error.
         outcome:
           type: string
-          enum: [completed, error]
-          description: Turn result for turn.end events.
+          enum: [completed, error, max_turns_exceeded]
+          description: >
+            Turn result for turn.end events — see LastTurn.outcome for the
+            full meaning of each value, including why a goal that exhausts
+            MaxTurns is "max_turns_exceeded" rather than "completed", and why
+            a cleared goal emits no turn.end at all.
         system_hash:
           type: string
           description: SHA-256 of the joined system segments (request.meta).

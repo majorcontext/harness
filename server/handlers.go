@@ -545,6 +545,23 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 // session.error. Message journaling piggybacks on the same syncMessages path
 // as runPrompt.
 //
+// turn.end outcome is decided from the RESULT, not merely from err == nil:
+// PursueGoal returns a nil error with Achieved:false in two cases that are
+// emphatically not "completed" —
+//
+//   - MaxTurns exhausted without the evaluator ever returning MET (Reason
+//     "max turns"): the goal gave up, it did not finish. That is recorded as
+//     its own outcomeMaxTurnsExceeded, never "completed" — see PR #55 review
+//     finding: keying turn.end on err == nil alone told a poller "idle
+//     because done" for a goal that was never met, exactly the ambiguity
+//     this primitive exists to remove.
+//   - ClearGoal won a race against an in-flight worker retry or evaluator
+//     call (Reason "goal cleared"), without the loop's own context ever
+//     being cancelled. This is a clear, same as the context.Canceled path
+//     below, just reached without cancellation — and the openapi contract
+//     is that DELETE /goal (or any clear) never emits turn.end. So this case
+//     suppresses the record entirely, matching the context.Canceled branch.
+//
 // The terminal session.status idle record emitted at the end of this
 // function is the same record an SSE collector waits for as the session's
 // "occupancy over" signal (collect-until-idle is the wire contract). DELETE
@@ -553,15 +570,23 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 // goal.cleared that is still in flight.
 func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condition string, maxTurns int) {
 	defer s.wg.Done()
-	_, err := st.sess.PursueGoal(ctx, condition, engine.GoalOptions{
+	res, err := st.sess.PursueGoal(ctx, condition, engine.GoalOptions{
 		Registered: true,
 		MaxTurns:   maxTurns,
 		Evaluator:  s.opts.GoalEvaluator,
 	})
 	s.syncMessages(id)
 	switch {
-	case err == nil:
+	case err == nil && res.Achieved:
 		s.recordTurnEnd(id, "completed", nil)
+	case err == nil && res.Reason == "goal cleared":
+		// Cleared in flight without the context being cancelled: goal.cleared
+		// is already journaled (ClearGoal/handleGoalDelete); no turn.end, same
+		// contract as the context.Canceled case below.
+	case err == nil:
+		// Any other nil-error, non-achieved result is MaxTurns exhaustion —
+		// PursueGoal's only remaining terminal case (see its doc comment).
+		s.recordTurnEnd(id, outcomeMaxTurnsExceeded, nil)
 	case errors.Is(err, context.Canceled):
 		// Cleared via DELETE (goal.cleared already journaled) or drained.
 	default:

@@ -83,6 +83,16 @@ const (
 
 const journalName = "events.jsonl"
 
+// outcomeMaxTurnsExceeded is the turn.end outcome recorded when a goal loop
+// exhausts GoalOptions.MaxTurns without the evaluator ever returning MET
+// (engine/goal.go's PursueGoal returns GoalResult{Achieved:false, Reason:
+// "max turns"}, a NIL error). It is deliberately distinct from "completed":
+// a goal that gave up after burning its turn budget is not "done", and
+// surfacing it as completed would recreate the exact "idle because done vs.
+// idle because it died/gave up" ambiguity this primitive exists to remove.
+// See runGoal.
+const outcomeMaxTurnsExceeded = "max_turns_exceeded"
+
 // Publish maps an engine event onto the journal/SSE stream. Message events
 // trigger a journal sync (which durably records every new canonical message,
 // including the user and tool messages the engine does not surface via
