@@ -30,7 +30,6 @@ type sessionJSON struct {
 type goalJSON struct {
 	Condition  string `json:"condition"`
 	Active     bool   `json:"active"`
-	Achieved   bool   `json:"achieved,omitempty"`
 	Turns      int    `json:"turns"`
 	LastReason string `json:"last_reason,omitempty"`
 }
@@ -577,7 +576,7 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 	seq := s.sessionSeqLocked(id)
 	var goal *goalJSON
 	if g := s.goalState[id]; g != nil {
-		goal = &goalJSON{Condition: g.condition, Active: g.active, Achieved: g.achieved, Turns: g.turns, LastReason: g.lastReason}
+		goal = &goalJSON{Condition: g.condition, Active: g.active, Turns: g.turns, LastReason: g.lastReason}
 	}
 	s.mu.Unlock()
 	return sessionJSON{

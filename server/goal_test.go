@@ -139,7 +139,6 @@ func TestGoalAchievedJournaled(t *testing.T) {
 		Goal *struct {
 			Condition  string `json:"condition"`
 			Active     bool   `json:"active"`
-			Achieved   bool   `json:"achieved"`
 			Turns      int    `json:"turns"`
 			LastReason string `json:"last_reason"`
 		} `json:"goal"`
@@ -152,11 +151,6 @@ func TestGoalAchievedJournaled(t *testing.T) {
 	}
 	if sess.Goal.Condition != "write a summary" || sess.Goal.Active || sess.Goal.Turns != 2 {
 		t.Errorf("goal = %+v, want condition set, inactive, turns 2", *sess.Goal)
-	}
-	// achieved must distinguish a completed goal from a cleared one so a
-	// client bootstrapping from this record renders the chip correctly.
-	if !sess.Goal.Achieved {
-		t.Errorf("goal.achieved = false, want true for a completed goal")
 	}
 }
 

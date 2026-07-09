@@ -98,13 +98,6 @@ components:
           type: boolean
           description: >
             True while the goal is set but neither achieved nor cleared.
-        achieved:
-          type: boolean
-          description: >
-            True when the goal completed by the evaluator confirming its
-            condition (as opposed to being cleared). Lets a client that
-            bootstraps goal state from this record distinguish an achieved
-            goal from a cleared one, since both leave active false.
         turns:
           type: integer
           description: Worker turns taken so far.
