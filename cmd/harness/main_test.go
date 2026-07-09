@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/provider"
 	"github.com/majorcontext/harness/provider/anthropic"
 	"github.com/majorcontext/harness/provider/openai"
 )
@@ -456,4 +459,149 @@ func TestRegistry(t *testing.T) {
 			t.Errorf("APIKey = %q, want sk-nil", c.APIKey)
 		}
 	})
+}
+
+// scriptedProvider returns one pre-built assistant turn per call and records
+// the request it was given, mirroring the request-inspection pattern used in
+// engine and server tests.
+type scriptedProvider struct {
+	name     string
+	requests []*provider.Request
+}
+
+func (p *scriptedProvider) Name() string { return p.name }
+
+func (p *scriptedProvider) Stream(_ context.Context, req *provider.Request) (provider.Stream, error) {
+	p.requests = append(p.requests, req)
+	return &scriptedStream{msg: &message.Message{
+		ID: "msg_a", Role: message.RoleAssistant,
+		Parts: message.Parts{&message.Text{Text: "done"}},
+	}}, nil
+}
+
+type scriptedStream struct {
+	msg  *message.Message
+	sent bool
+}
+
+func (s *scriptedStream) Next() (provider.Event, error) {
+	if s.sent {
+		return provider.Event{}, io.EOF
+	}
+	s.sent = true
+	return provider.Event{Type: provider.EventDone, Message: s.msg, StopReason: provider.StopEndTurn}, nil
+}
+
+func (s *scriptedStream) Close() error { return nil }
+
+// TestNewSessionFnSystemUsesSessionWorkDir verifies the review finding: a
+// served session created with an explicit workdir must get a system prompt
+// naming THAT workdir, not the process cwd baked into mkCfg's base cfg.
+func TestNewSessionFnSystemUsesSessionWorkDir(t *testing.T) {
+	prov := &scriptedProvider{name: "test"}
+	processCwd := t.TempDir()
+	sessionWorkDir := t.TempDir()
+	if processCwd == sessionWorkDir {
+		t.Fatal("test setup: dirs must differ")
+	}
+	model := message.ModelRef{Provider: "test", Model: "m1"}
+	mkCfg := func(m message.ModelRef) engine.Config {
+		return engine.Config{
+			Providers:    provider.Registry{"test": prov},
+			Model:        m,
+			System:       systemPrompt(processCwd, ""),
+			WorkDir:      processCwd,
+			SessionDir:   t.TempDir(),
+			Instructions: &engine.InstructionsConfig{Disabled: true},
+			SkillsDirs:   []string{},
+		}
+	}
+	var gotReq *provider.Request
+	onRequest := func(_ string, _ int, req *provider.Request) { gotReq = req }
+
+	newSession := newSessionFn(mkCfg, model, onRequest)
+	sess, err := newSession(message.ModelRef{}, sessionWorkDir)
+	if err != nil {
+		t.Fatalf("newSession: %v", err)
+	}
+	if _, err := sess.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if gotReq == nil {
+		t.Fatal("onRequest never fired")
+	}
+	if len(gotReq.System) == 0 || !strings.Contains(gotReq.System[0], "Working directory: "+sessionWorkDir) {
+		t.Errorf("system = %v, want it to name session workdir %q", gotReq.System, sessionWorkDir)
+	}
+	for _, seg := range gotReq.System {
+		if strings.Contains(seg, "Working directory: "+processCwd) {
+			t.Errorf("system = %v, must not name the process cwd %q", gotReq.System, processCwd)
+		}
+	}
+}
+
+// TestLoadSessionFnSystemUsesRestoredWorkDir verifies the same finding for a
+// resumed session: the durable WorkDir restored from the session log header
+// must drive the system prompt, not the process cwd baked into mkCfg's base
+// cfg (used because the workdir isn't known until after the log is read).
+func TestLoadSessionFnSystemUsesRestoredWorkDir(t *testing.T) {
+	prov := &scriptedProvider{name: "test"}
+	processCwd := t.TempDir()
+	sessionWorkDir := t.TempDir()
+	if processCwd == sessionWorkDir {
+		t.Fatal("test setup: dirs must differ")
+	}
+	sesDir := t.TempDir()
+	model := message.ModelRef{Provider: "test", Model: "m1"}
+
+	// Create and persist a session whose durable WorkDir is sessionWorkDir —
+	// mirroring a session originally created via newSessionFn above.
+	orig := engine.NewSession(engine.Config{
+		Providers:    provider.Registry{"test": prov},
+		Model:        model,
+		WorkDir:      sessionWorkDir,
+		SessionDir:   sesDir,
+		Instructions: &engine.InstructionsConfig{Disabled: true},
+		SkillsDirs:   []string{},
+	})
+	if err := orig.Persist(); err != nil {
+		t.Fatalf("Persist: %v", err)
+	}
+
+	mkCfg := func(m message.ModelRef) engine.Config {
+		return engine.Config{
+			Providers:    provider.Registry{"test": prov},
+			Model:        m,
+			System:       systemPrompt(processCwd, ""),
+			WorkDir:      processCwd,
+			SessionDir:   sesDir,
+			Instructions: &engine.InstructionsConfig{Disabled: true},
+			SkillsDirs:   []string{},
+		}
+	}
+	var gotReq *provider.Request
+	onRequest := func(_ string, _ int, req *provider.Request) { gotReq = req }
+
+	loadSession := loadSessionFn(mkCfg, model, onRequest)
+	sess, err := loadSession(orig.ID)
+	if err != nil {
+		t.Fatalf("loadSession: %v", err)
+	}
+	if got := sess.WorkDir(); got != sessionWorkDir {
+		t.Fatalf("test setup: sess.WorkDir() = %q, want %q", got, sessionWorkDir)
+	}
+	if _, err := sess.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if gotReq == nil {
+		t.Fatal("onRequest never fired")
+	}
+	if len(gotReq.System) == 0 || !strings.Contains(gotReq.System[0], "Working directory: "+sessionWorkDir) {
+		t.Errorf("system = %v, want it to name the restored session workdir %q", gotReq.System, sessionWorkDir)
+	}
+	for _, seg := range gotReq.System {
+		if strings.Contains(seg, "Working directory: "+processCwd) {
+			t.Errorf("system = %v, must not name the process cwd %q", gotReq.System, processCwd)
+		}
+	}
 }

@@ -106,6 +106,28 @@ func TestCreateSessionExplicitWorkdirTraversalRejected(t *testing.T) {
 	}
 }
 
+// TestCreateSessionRelativeWorkspaceRootAccepted verifies that a configured
+// workspace root given as a relative path (e.g. `-workspace-root ./work`) is
+// absolutized before the containment check, so a workdir nested under it is
+// accepted rather than rejected by every request (review finding: only the
+// candidate path was made absolute, never the configured roots).
+func TestCreateSessionRelativeWorkspaceRootAccepted(t *testing.T) {
+	base := t.TempDir()
+	t.Chdir(base)
+	sub := filepath.Join(base, "work", "proj")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := newWorkdirHarness(t, &scriptedProvider{name: "test"}, []string{"./work"})
+	resp, data := h.do("POST", "/session", map[string]any{"workdir": sub})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status %d, want 201: %s", resp.StatusCode, data)
+	}
+	if got := sessionWorkDir(t, data); got != sub {
+		t.Errorf("workdir = %q, want %q", got, sub)
+	}
+}
+
 // TestPromptSameWorkdirBusyRejected verifies the core claim rule: with
 // session A holding its workdir busy (a channel-blocked scripted provider
 // mid-stream), a prompt to session B — which defaults to the very same
