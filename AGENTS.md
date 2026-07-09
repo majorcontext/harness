@@ -230,6 +230,32 @@ Rules:
   pre-fix code — revert the fix, observe red, re-apply it — and show that
   evidence. A regression guard that never ran red is unverified.
 
+## Debugging invariants
+
+Rules learned from production incidents (2026-07-09), written so they apply
+without knowing the incidents:
+
+- **Cleansing marshals hide poison.** Persisted session logs are scrubbed by
+  the guarded marshal paths (`ToolCall.safeArguments` normalizes,
+  `ProviderData.MarshalJSON` drops empty entries), so on-disk state can be
+  provably clean while resident in-memory state is unmarshalable. When a
+  resident session misbehaves but its journal round-trips cleanly through
+  `engine.LoadSession` + `json.Marshal`, the defect lives in memory between
+  ingest and persist — do not conclude from a clean log that no defect
+  exists. (Incident: truncated `ToolCall.Arguments`, fixed in the commit
+  titled "fix(message,engine): truncated ToolCall.Arguments must never
+  poison history"; see also the tests in `engine/tool_call_poison_test.go`.)
+- **Error text names the rejection, not the cause.** Treat error strings as
+  the symptom surface — enumerate which layer actually produced the
+  credential/config/input being rejected before acting. (Incident: a git 403
+  citing SAML SSO was actually a system-level gitconfig credential helper
+  serving a rotated-stale token; the SSO re-auth it demanded was
+  irrelevant.)
+- **Verify binary identity before blaming staleness.** A deployed binary's
+  exact commit is embedded — `go version -m <binary>` shows
+  `vcs.revision`/`vcs.time` — check that before hypothesizing that a fix is
+  missing from a running process.
+
 ## Code Style
 
 - Standard Go conventions, `go fmt`, `go vet` clean.
