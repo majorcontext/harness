@@ -194,6 +194,16 @@ type Session struct {
 	// the session log. Guarded by mu.
 	goalActive    bool
 	goalCondition string
+
+	// toolExecCount counts tool-call executions across the session's
+	// lifetime: incremented once per call to runToolCall that actually
+	// invokes a tool (i.e. not one blocked by a tool.execute.before deny),
+	// whether the tool succeeds or returns an error result. The goal loop
+	// (see goal.go's promptTurnWithRetry) snapshots this before and after
+	// each worker-turn attempt to detect whether a failed attempt executed
+	// any tool before failing — a retry re-issues the whole directive, which
+	// is unsafe to do blindly once a tool has already run. Guarded by mu.
+	toolExecCount int
 }
 
 // NewSession creates a session. Nothing touches the network, spawns
@@ -280,6 +290,15 @@ func (s *Session) addUsage(u provider.Usage) {
 	s.usage.CacheReadTokens += u.CacheReadTokens
 	s.usage.CacheWriteTokens += u.CacheWriteTokens
 	s.mu.Unlock()
+}
+
+// toolExecutions returns the current tool-execution counter (see
+// toolExecCount). It only ever increases, and only when a tool actually
+// runs, never when one is blocked by tool.execute.before.
+func (s *Session) toolExecutions() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.toolExecCount
 }
 
 // History returns a copy of the session's message history.
@@ -574,6 +593,10 @@ func (s *Session) runToolCall(ctx context.Context, tc *message.ToolCall) (messag
 	}
 
 	s.emitToolExecuteStart(tc.Name, tc.CallID)
+	s.mu.Lock()
+	s.toolExecCount++
+	s.mu.Unlock()
+
 	out, isErr := s.executeTool(ctx, tc, args)
 	s.emitToolExecuteEnd(tc.Name, tc.CallID, !isErr)
 

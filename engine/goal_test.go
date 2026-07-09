@@ -56,6 +56,15 @@ type goalProvider struct {
 	workerErrN   int
 	workerErrHit int
 	workerErr    error
+
+	// workerCall counts every worker (tool-bearing) Stream call made so far
+	// (1-indexed once incremented). failWorkerCall, when > 0, makes exactly
+	// that call fail with workerErr instead of consuming a scripted turn or
+	// checking workerErrN — used to simulate a provider error on a LATER
+	// model call within the same Prompt invocation, i.e. after an earlier
+	// call in that attempt already executed a tool.
+	workerCall     int
+	failWorkerCall int
 }
 
 func (p *goalProvider) Name() string { return "test" }
@@ -78,6 +87,14 @@ func (p *goalProvider) Stream(ctx context.Context, req *provider.Request) (provi
 		ev := p.eval[p.ei]
 		p.ei++
 		return &scriptedStream{events: ev}, nil
+	}
+	p.workerCall++
+	if p.failWorkerCall > 0 && p.workerCall == p.failWorkerCall {
+		err := p.workerErr
+		if err == nil {
+			err = errors.New("fake transient provider error")
+		}
+		return nil, err
 	}
 	if p.workerErrHit < p.workerErrN {
 		p.workerErrHit++
@@ -306,14 +323,24 @@ func TestPursueGoalUnparseableThenRecovers(t *testing.T) {
 // and (b) never leave a zombie active goal. This test now exercises that
 // case with goalProvider's persistent failWorker (every worker call fails,
 // standing in for a fault that never clears — as opposed to workerErrN's
-// bounded, eventually-recovering failures used by the retry test below).
+// bounded, eventually-recovering failures used by the retry test below), and
+// asserts the resulting session.error count precisely rather than assuming
+// "once".
+//
+// Run inside a synctest bubble: a permanent failure runs the full
+// goalWorkerRetries+1 attempts, waiting the real backoff schedule between
+// them (see TestPursueGoalRetriesTransientWorkerError) — free on fake time,
+// costly on the wall clock (see AGENTS.md on time.Sleep-free tests).
 func TestPursueGoalWorkerFailureEmitsOnce(t *testing.T) {
 	workerErr := errors.New("worker provider exploded")
-	prov := &goalProvider{failWorker: workerErr}
 	hooks := &fakeHooks{}
-	s := goalSession(t, prov, t.TempDir(), hooks)
-
-	_, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+	var s *Session
+	var err error
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProvider{failWorker: workerErr}
+		s = goalSession(t, prov, t.TempDir(), hooks)
+		_, err = s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+	})
 	if !errors.Is(err, workerErr) {
 		t.Fatalf("err = %v, want it to wrap %v", err, workerErr)
 	}
@@ -324,12 +351,16 @@ func TestPursueGoalWorkerFailureEmitsOnce(t *testing.T) {
 	}
 
 	// promptTurnWithRetry makes goalWorkerRetries+1 attempts total (the
-	// initial try plus goalWorkerRetries retries) before giving up. Each
-	// attempt is a full s.Prompt call, and Prompt's own streamTurn-error path
-	// (engine.go) calls emitSessionError once per failing call — PursueGoal's
-	// retry/clear code does not additionally call emitSessionError itself
-	// (see the loop in PursueGoal and promptTurnWithRetry), so the total
-	// session.error count for a permanent failure is exactly one per attempt:
+	// initial try plus goalWorkerRetries retries) before giving up — nothing
+	// here executes a tool call (failWorker fails Stream itself, before any
+	// tool runs), so the non-idempotency early-stop never triggers and all
+	// goalWorkerRetries+1 attempts run. Each attempt is a full s.Prompt call,
+	// and Prompt's own streamTurn-error path (engine.go) calls
+	// emitSessionError once per failing call; PursueGoal's retry/clear code
+	// does not additionally call emitSessionError itself for this path (see
+	// the loop in PursueGoal and promptTurnWithRetry) — the clear only
+	// journals goal.cleared, a distinct event. So the total session.error
+	// count for a permanent failure is exactly one per attempt:
 	// goalWorkerRetries+1, all carrying the same underlying error text.
 	const wantEmits = goalWorkerRetries + 1
 	msgs := sessionErrorMessages(t, hooks)
@@ -898,4 +929,66 @@ func TestPursueGoalRetryBackoffCancellable(t *testing.T) {
 			t.Errorf("ActiveGoal = %q, %v; want the goal left untouched (still active) after a cancelled backoff wait", cond, ok)
 		}
 	})
+}
+
+// TestPursueGoalNoRetryAfterToolExecution is the red-first test for the
+// non-idempotency review finding: a retry re-issues the WHOLE directive
+// (Prompt has no sub-turn resume point), so once a worker-turn attempt has
+// already executed a tool call before failing on a later model call, retrying
+// risks re-running that tool. PursueGoal must detect this (via the
+// toolExecCount snapshot) and stop retrying immediately rather than reissue
+// the directive — the failed attempt still counts (one goal.stalled record),
+// but no second attempt, and no second tool execution, ever happens.
+func TestPursueGoalNoRetryAfterToolExecution(t *testing.T) {
+	var toolRuns int
+	testTool := Tool{
+		Def: provider.ToolDef{Name: "test_tool", Description: "test", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Run: func(ctx context.Context, s *Session, args json.RawMessage) (message.Parts, error) {
+			toolRuns++
+			return message.Parts{&message.Text{Text: "ok"}}, nil
+		},
+	}
+
+	prov := &goalProvider{
+		failWorkerCall: 2, // the SECOND worker call fails, after the first ran a tool
+		worker: [][]provider.Event{
+			asstTurn(provider.StopToolUse, toolCall("tc1", "test_tool", `{}`)),
+		},
+	}
+	var evs []Event
+	s := NewSession(Config{
+		Providers:    provider.Registry{prov.Name(): prov},
+		Model:        message.ModelRef{Provider: prov.Name(), Model: "m1"},
+		System:       []string{"base"},
+		SessionDir:   t.TempDir(),
+		Instructions: &InstructionsConfig{Disabled: true},
+		SkillsDirs:   []string{},
+		Tools:        []Tool{testTool},
+	})
+	s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
+
+	_, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+	if err == nil {
+		t.Fatal("PursueGoal succeeded, want error (the worker call after tool execution always fails)")
+	}
+
+	if toolRuns != 1 {
+		t.Errorf("tool executions = %d, want exactly 1 (a retry must not re-run it)", toolRuns)
+	}
+	if prov.workerCall != 2 {
+		t.Errorf("worker provider calls = %d, want exactly 2 (no third attempt after a post-tool-execution failure)", prov.workerCall)
+	}
+
+	var stalled int
+	for _, ev := range evs {
+		if ev.Type == EventGoalStalled {
+			stalled++
+		}
+	}
+	if stalled != 1 {
+		t.Errorf("goal.stalled events = %d, want 1 (retries stop after the first, post-tool-execution failure)", stalled)
+	}
+	if cond, ok := s.ActiveGoal(); ok {
+		t.Errorf("ActiveGoal = %q, still active; want cleared (retries exhausted, non-idempotency risk)", cond)
+	}
 }

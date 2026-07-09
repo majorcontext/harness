@@ -33,7 +33,8 @@
 //	|              v                  ACHIEVED (goal.achieved)
 //	|         STALLED (goal.stalled, carries the error)
 //	|              |
-//	|    retries < goalWorkerRetries?
+//	|    retries < goalWorkerRetries AND
+//	|    no tool executed this attempt?
 //	|         /              \
 //	|       yes               no
 //	|        |                 |
@@ -43,7 +44,11 @@
 //	ClearGoal (caller/DELETE) ----------> CLEARED (goal.cleared, no reason)
 //
 // The retry branch waits a capped exponential backoff (goalRetryDelay; see
-// goalWorkerRetries) before the next attempt.
+// goalWorkerRetries) before the next attempt, and is gated off the moment a
+// tool call has executed during the failing attempt — see
+// promptTurnWithRetry's doc comment for why a retry (which re-issues the
+// whole directive, not a resume) is unsafe to do blindly once a tool has
+// already run.
 //
 // The critical invariant this enforces — the one a real incident violated
 // (see the forensic note below) — is that ACTIVE has no third way out. Every
@@ -132,6 +137,11 @@ var errEvaluatorUnparseable = errors.New("engine: goal evaluator returned unpars
 // are close to useless against exactly those causes. The wait is
 // context-cancellable: a cancelled ctx ends it immediately (see
 // waitGoalRetryBackoff), same as any other worker-turn cancellation.
+//
+// # Non-idempotency: a retry can re-run tool calls
+//
+// A retry is not a resume — see promptTurnWithRetry's doc comment for the
+// full risk and the (partial, best-effort) mitigation this package applies.
 const goalWorkerRetries = 2
 
 // goalRetryBackoffBase and goalRetryBackoffMultiplier define the backoff
@@ -235,7 +245,7 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			// concurrent DELETE): clean stop, no turn runs.
 			return &GoalResult{Achieved: false, Turns: turn - 1, Reason: "goal cleared"}, nil
 		}
-		if err := s.promptTurnWithRetry(ctx, directive, turn); err != nil {
+		if attempts, err := s.promptTurnWithRetry(ctx, directive, turn); err != nil {
 			if errors.Is(err, context.Canceled) {
 				// Deliberate abort: leave the goal exactly as it is (a
 				// drain must be resumable), no goal.stalled, no clear.
@@ -246,12 +256,15 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 				// flight: clean stop, same as the checks above/below.
 				return &GoalResult{Achieved: false, Turns: turn - 1, Reason: "goal cleared"}, nil
 			}
-			// Every attempt failed: this is the fix for the zombie-goal
-			// incident (see the package doc's state machine) — the goal
-			// must never stay active with nothing further recorded. Clear
-			// it, carrying the error as the reason, then return the error
-			// so the caller (e.g. the server) still journals the failure.
-			reason := fmt.Sprintf("worker turn failed after %d attempts: %v", goalWorkerRetries+1, err)
+			// Every attempt failed — either the retry budget ran out, or
+			// retrying stopped early because a tool already executed this
+			// attempt (see promptTurnWithRetry's non-idempotency doc). This
+			// is the fix for the zombie-goal incident (see the package
+			// doc's state machine) — the goal must never stay active with
+			// nothing further recorded. Clear it, carrying the error as the
+			// reason, then return the error so the caller (e.g. the server)
+			// still journals the failure.
+			reason := fmt.Sprintf("worker turn failed after %d attempt(s): %v", attempts, err)
 			s.clearGoal(reason)
 			return nil, fmt.Errorf("engine: goal loop stalled: %w", err)
 		}
@@ -286,7 +299,9 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 // promptTurnWithRetry runs one worker turn (s.Prompt), retrying on error up
 // to goalWorkerRetries additional times (goalWorkerRetries+1 attempts total),
 // waiting goalRetryDelay(attempt) between attempts (see the constants above)
-// so a rate limit or a momentary 5xx has time to clear.
+// so a rate limit or a momentary 5xx has time to clear. It returns the number
+// of attempts actually made, so the caller's error message reflects reality
+// even when retrying stopped early (see below).
 //
 // context.Canceled is never retried — it is a deliberate abort, not a
 // transient failure — and is returned immediately, whether it came from
@@ -295,32 +310,67 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 // cleared, retrying stops immediately (nothing left to retry for) and the
 // triggering error is returned as-is.
 //
+// # Non-idempotency: a retry can re-run tool calls
+//
 // Each retry re-issues the same directive through Prompt, which re-appends it
 // as a fresh user message — Prompt has no partial-turn resume point to retry
 // from below itself, so this is the same "ask again" a human operator would
-// do by hand, just automatic and bounded.
-func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, turn int) error {
-	var err error
+// do by hand, just automatic and bounded. That is harmless when the failed
+// attempt never got as far as executing a tool call: nothing happened yet to
+// redo. It is NOT harmless when the failure happened on a LATER model call
+// within that same attempt — Prompt's loop is model call -> tool calls ->
+// model call -> ... until end-of-turn, so an attempt can execute one or more
+// tool calls, append their results, and only then hit a provider error on the
+// next model call. A retry in that case re-prompts a model that still has the
+// original directive to satisfy, and nothing stops it from re-issuing the
+// same tool call(s) — re-running a shell command, re-writing a file — a
+// second time. Whether that is actually safe is entirely tool-specific
+// (idempotent tools like read_file are fine; bash running `git push` or a
+// write_file generally are not), and this package has no way to know that.
+//
+// This IS detectable, though only partially preventable: Session tracks a
+// monotonic tool-execution counter (toolExecCount, see runToolCall in
+// engine.go). promptTurnWithRetry snapshots it before each attempt via
+// toolExecutions() and, when an attempt fails after the count moved, treats
+// that as non-retryable — it records the stall and returns the error
+// immediately, without waiting or trying again, rather than reissuing a
+// directive that could re-run whatever the attempt already executed. This
+// closes the case this package can see. It does NOT make retries idempotent
+// in general: a failure before an attempt's first tool call is still
+// retried, and if that retry attempt later executes a tool and then fails
+// again on a still-later call, the identical risk resurfaces one attempt
+// later — there is no bound on how many times this can recur short of
+// Prompt gaining a resumable, sub-turn checkpoint, which it does not have.
+func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, turn int) (attempts int, err error) {
 	for attempt := 1; attempt <= goalWorkerRetries+1; attempt++ {
+		attempts = attempt
+		toolsBefore := s.toolExecutions()
 		_, perr := s.Prompt(ctx, directive)
 		if perr == nil {
-			return nil
+			return attempts, nil
 		}
 		err = perr
 		if errors.Is(err, context.Canceled) {
-			return err
+			return attempts, err
 		}
 		if !s.recordGoalStalled(err, turn, attempt) {
 			// Concurrently cleared: stop retrying, nothing left to retry for.
-			return err
+			return attempts, err
+		}
+		if s.toolExecutions() > toolsBefore {
+			// This attempt executed a tool call before failing: see the
+			// non-idempotency doc above. Retrying would reissue the
+			// directive and risk re-running that tool, so stop now instead
+			// of waiting and trying again.
+			return attempts, err
 		}
 		if attempt <= goalWorkerRetries {
 			if werr := waitGoalRetryBackoff(ctx, attempt); werr != nil {
-				return werr
+				return attempts, werr
 			}
 		}
 	}
-	return err
+	return attempts, err
 }
 
 // recordGoalStalled records one failed worker-turn attempt for a turn. Like
