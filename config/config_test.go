@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -899,6 +900,46 @@ func TestLoadMCPServers(t *testing.T) {
 		_, err := Load(p)
 		if err == nil {
 			t.Fatal("expected error for malformed mcp server command")
+		}
+	})
+	// A namespaced tool name is mcp__<server>__<tool>. If a server name may
+	// itself contain "__" or start with "mcp__", the encoding is not
+	// uniquely decodable: server "a__b" tool "c" produces the exact same
+	// namespaced name, mcp__a__b__c, as server "a" tool "b__c" — two
+	// entirely different servers' tools would collide and be
+	// indistinguishable. Reject both shapes at load, loudly, rather than
+	// let two configs silently alias each other's tools.
+	for _, tc := range []struct {
+		name   string
+		server string
+	}{
+		{"double underscore in the middle", "a__b"},
+		{"double underscore at the end", "svc__"},
+		{"double underscore at the start", "__svc"},
+		{"starts with mcp__", "mcp__weather"},
+		{"exactly mcp__", "mcp__"},
+	} {
+		t.Run(tc.name+" fails loudly", func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "config.json")
+			writeFile(t, p, fmt.Sprintf(`{"mcp_servers": {%q: {"command": ["x"]}}}`, tc.server))
+			_, err := Load(p)
+			if err == nil {
+				t.Fatalf("expected error for mcp server name %q (undecodable namespaced tool name)", tc.server)
+			}
+			if !strings.Contains(err.Error(), tc.server) {
+				t.Errorf("error %q does not name the offending key %q", err, tc.server)
+			}
+		})
+	}
+	t.Run("single underscore is fine", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {"my_server": {"command": ["x"]}}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v, want a single underscore to be accepted", err)
+		}
+		if _, ok := c.MCPServers["my_server"]; !ok {
+			t.Errorf("MCPServers = %+v, want my_server present", c.MCPServers)
 		}
 	})
 }

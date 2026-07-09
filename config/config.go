@@ -337,10 +337,29 @@ func validatePlugins(plugins []PluginSpec) error {
 // plugin's Name, the identity a caller would use to refer to the server).
 // A silently-skipped malformed entry would run without the server its
 // author expected — same philosophy as validatePlugins.
+//
+// The server name also must not contain "__" or start with "mcp__": the
+// namespaced tool name engine/mcp.go builds is mcp__<server>__<tool>, and
+// that encoding is only uniquely decodable back into (server, tool) if
+// "__" cannot occur inside server. Without this check, server "a__b" tool
+// "c" and server "a" tool "b__c" both produce the identical namespaced
+// name mcp__a__b__c — two unrelated servers' tools silently colliding and
+// becoming indistinguishable at call time. Rejecting "mcp__" as a prefix
+// closes the same hole from the other end (server "mcp__weather" would
+// itself already contain "__" and be caught by that check, but a bare
+// "mcp" server with an empty-string-shaped remainder is worth naming
+// explicitly since "mcp__" is the literal namespace prefix a config
+// author could plausibly type by mistake).
 func validateMCPServers(servers map[string]MCPServerSpec) error {
 	for name, s := range servers {
 		if name == "" {
 			return fmt.Errorf("mcp_servers: server name is required (empty key)")
+		}
+		if strings.Contains(name, "__") {
+			return fmt.Errorf("mcp_servers.%s: server name must not contain \"__\" (the namespaced tool name mcp__<server>__<tool> would not be uniquely decodable)", name)
+		}
+		if strings.HasPrefix(name, "mcp__") {
+			return fmt.Errorf("mcp_servers.%s: server name must not start with \"mcp__\" (reserved for the tool-namespace prefix)", name)
 		}
 		hasCommand := len(s.Command) > 0
 		hasURL := s.URL != ""
