@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -200,6 +201,21 @@ func (s *Server) OnRequest(sessionID string, _ int, req *provider.Request) {
 // path for messages — used live (on each assistant turn) and at boot
 // (reconcile) — so the "journal mirrors the session log" invariant cannot
 // drift. It is idempotent: already-journaled message IDs are skipped.
+//
+// Lock-ordering invariant: server.mu is a LEAF with respect to a session's
+// own mutex — this function must never call a session method that acquires
+// it while holding server.mu. The engine emits goal.* (and other) events
+// while Session.mu is held (see engine/goal.go), and those events flow
+// straight into Server.Publish, which acquires server.mu: that is the
+// session.mu -> server.mu order. If server.mu ever called back into the
+// session's lock (server.mu -> session.mu) the two orders would form a cycle
+// and deadlock under concurrency (see TestGoalEmitVsSyncMessagesNoDeadlock).
+// So both st.sess.History() and st.sess.PersistErr() are read here in an
+// unlocked window, server.mu is re-acquired only for this server's own
+// bookkeeping (seen-message index, journal, last-seen persist error), and
+// Options.OnError is invoked outside server.mu too — an OnError handler that
+// happened to call back into the session could otherwise re-enter the same
+// cycle.
 func (s *Server) syncMessages(sessionID string) {
 	s.mu.Lock()
 	st := s.sessions[sessionID]
@@ -208,9 +224,9 @@ func (s *Server) syncMessages(sessionID string) {
 		return
 	}
 	history := st.sess.History()
+	persistErr := st.sess.PersistErr()
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for i := range history {
 		m := history[i]
 		if s.isSeenLocked(sessionID, m.ID) {
@@ -218,6 +234,12 @@ func (s *Server) syncMessages(sessionID string) {
 		}
 		s.markSeenLocked(sessionID, m.ID)
 		s.emitDurableLocked(&Event{Type: evtMessage, SessionID: sessionID, Message: &m})
+	}
+	reportErr := s.checkPersistErrLocked(sessionID, persistErr)
+	s.mu.Unlock()
+
+	if reportErr != nil {
+		s.reportError(reportErr)
 	}
 }
 
@@ -262,7 +284,8 @@ func (s *Server) fanoutLocked(ev Event) {
 }
 
 // writeJournalLocked appends one record to events.jsonl. Write failures are
-// recorded but never fatal. Caller holds s.mu.
+// recorded in s.lastErr and, when Options.OnError is set, forwarded (wrapped
+// with "journal write: %w") — never fatal either way. Caller holds s.mu.
 func (s *Server) writeJournalLocked(ev Event) {
 	if s.jf == nil {
 		return
@@ -270,11 +293,34 @@ func (s *Server) writeJournalLocked(ev Event) {
 	b, err := json.Marshal(ev)
 	if err != nil {
 		s.lastErr = err
+		s.reportError(fmt.Errorf("journal write: %w", err))
 		return
 	}
 	if _, err := s.jf.Write(append(b, '\n')); err != nil {
 		s.lastErr = err
+		s.reportError(fmt.Errorf("journal write: %w", err))
 	}
+}
+
+// checkPersistErrLocked folds an already-read sess.PersistErr() value (see
+// the lock-ordering comment on syncMessages — it must be read outside
+// server.mu, never here) into the per-session last-seen-error bookkeeping,
+// returning the error to forward to Options.OnError (wrapped with "session
+// %s persist: %w") the first time it appears for this session or changes
+// from the last-forwarded error, or nil if it has already been forwarded or
+// there is none — so a persistently-failing write is reported once rather
+// than on every syncMessages call. The caller invokes OnError itself, after
+// releasing server.mu. Caller holds s.mu.
+func (s *Server) checkPersistErrLocked(sessionID string, err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	if s.lastPersistErr[sessionID] == msg {
+		return nil
+	}
+	s.lastPersistErr[sessionID] = msg
+	return fmt.Errorf("session %s persist: %w", sessionID, err)
 }
 
 func (s *Server) markSeenLocked(sessionID, msgID string) {
