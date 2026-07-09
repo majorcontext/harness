@@ -70,6 +70,39 @@ type Message struct {
 // in place, so a Message's in-memory shape always matches what
 // LoadSession would hand back for it.
 //
+// # A salvaged tool call must never carry invalid Arguments
+//
+// Two production goal sessions, ses_01kx453ewfedqrg7p3c64f8sca and
+// ses_01kx453ev9ejattygpf7rbzptw, died at the start of a worker turn with
+// "json: error calling MarshalJSON for type json.RawMessage: unexpected end
+// of JSON input" — three identical attempts — and GET /session/{id}/message
+// on them then 500'd with the message.Parts wrapper of the same error,
+// while the on-disk log stayed clean (the poisoned message failed to
+// persist and was never journaled). The len(Arguments) == 0 guard
+// safeArguments already carries did not catch it: a provider stream that
+// dies mid tool_use block — a connection drop during input_json_delta
+// accumulation, or, as provider/anthropic/anthropic.go's protocol shows, a
+// max_tokens cutoff mid tool-call, which the API still closes out with a
+// normal content_block_stop/message_delta/message_stop sequence rather than
+// an error — can leave ToolCall.Arguments holding non-empty but
+// syntactically invalid (truncated) JSON. That value is neither absent nor
+// usable, and json.RawMessage.MarshalJSON does not validate its bytes, so
+// it sails through every len==0 check and only fails once embedded in a
+// larger document forces encoding/json to compact (and so validate) it.
+//
+// Normalize is the single place a salvaged, truncated tool call enters
+// history, so it is the single place this is fixed: an Arguments value that
+// is non-empty but not valid JSON is replaced with nil, the same "no usable
+// arguments" value Normalize already treats a zero-length ProviderData entry
+// as equivalent to. Only Arguments is cleared, never the whole ToolCall —
+// CallID and Name are plain provider-set strings, never json.RawMessage, so
+// they carry no marshal risk and are worth keeping: knowing which tool the
+// model was in the middle of calling remains useful even once its arguments
+// are unrecoverable. safeArguments (below) already coerces a nil/empty
+// Arguments to "{}" at marshal time, and every transcoder already does the
+// same on the wire, so nil here introduces no new shape for a downstream
+// consumer to learn.
+//
 // Session.append (engine/engine.go) calls this on every message before it
 // enters a session's history — user, assistant, and tool messages alike,
 // regardless of source (a shipped provider adapter, a plugin's generate
@@ -77,11 +110,16 @@ type Message struct {
 // point every message passes through.
 func (m *Message) Normalize() {
 	for _, p := range m.Parts {
-		if r, ok := p.(*Reasoning); ok {
-			for family, raw := range r.ProviderData {
+		switch v := p.(type) {
+		case *Reasoning:
+			for family, raw := range v.ProviderData {
 				if len(raw) == 0 {
-					delete(r.ProviderData, family)
+					delete(v.ProviderData, family)
 				}
+			}
+		case *ToolCall:
+			if len(v.Arguments) > 0 && !json.Valid(v.Arguments) {
+				v.Arguments = nil
 			}
 		}
 	}
@@ -155,8 +193,24 @@ func (*ToolCall) partType() PartType { return PartToolCall }
 // round-tripped through canonical JSON would carry Arguments: null, which is
 // not a valid tool-call arguments object and does not match what was
 // actually sent on the wire.
+//
+// A non-empty but syntactically invalid Arguments — the truncated-JSON
+// shape a stream that dies mid tool_use block can leave behind (see
+// Message.Normalize's doc comment for the full incident,
+// ses_01kx453ewfedqrg7p3c64f8sca / ses_01kx453ev9ejattygpf7rbzptw) — is
+// normalized the same way as empty: json.RawMessage.MarshalJSON does not
+// validate its bytes either, so an invalid value "succeeds" in isolation and
+// only fails once nested inside a larger document that encoding/json must
+// compact to validate, which is exactly the shape that error took in
+// production. Normalize is the primary fix (it sanitizes at the one ingest
+// choke point every message passes through, replacing invalid Arguments
+// with nil so this branch never even fires for a message that went through
+// it), but safeArguments checks json.Valid here too as defense in depth: a
+// producer that bypasses Normalize entirely — a plugin's chat.message hook
+// building a Message by hand, a hand-rolled provider adapter, a test's
+// scripted provider — must still never be able to make a marshal fail.
 func (tc ToolCall) safeArguments() json.RawMessage {
-	if len(tc.Arguments) == 0 {
+	if len(tc.Arguments) == 0 || !json.Valid(tc.Arguments) {
 		return json.RawMessage("{}")
 	}
 	return tc.Arguments
