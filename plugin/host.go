@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -239,11 +240,12 @@ func (h *Host) ExecuteTool(ctx context.Context, req *ToolExecuteRequest) (*ToolE
 	for _, inst := range h.instances {
 		for _, def := range inst.spec.Manifest.Tools {
 			if def.Name == req.Tool {
-				if err := inst.start(ctx); err != nil {
+				c, err := inst.start(ctx)
+				if err != nil {
 					return nil, err
 				}
 				var resp ToolExecuteResponse
-				if err := inst.conn.call(ctx, methodToolExecute, req, &resp); err != nil {
+				if err := c.call(ctx, methodToolExecute, req, &resp); err != nil {
 					return nil, err
 				}
 				return &resp, nil
@@ -264,10 +266,10 @@ func dispatchChain[Req, Resp any](ctx context.Context, h *Host, hook Hook, req *
 			continue
 		}
 		cctx, cancel := context.WithTimeout(ctx, h.opts.HookTimeout)
-		err := inst.start(cctx)
+		c, err := inst.start(cctx)
 		if err == nil {
 			var resp Resp
-			if err = inst.conn.call(cctx, hook.method(), req, &resp); err == nil {
+			if err = c.call(cctx, hook.method(), req, &resp); err == nil {
 				cancel()
 				if !apply(req, &resp) {
 					return
@@ -293,6 +295,7 @@ type instance struct {
 
 	mu      sync.Mutex
 	started bool
+	stopped bool
 	err     error
 	conn    *conn
 	cmd     *exec.Cmd
@@ -364,9 +367,10 @@ func (inst *instance) runEventSender(h *Host, ch chan *EventBatch, stop chan str
 		select {
 		case batch := <-ch:
 			ctx, cancel := context.WithTimeout(context.Background(), h.opts.HookTimeout)
-			if err := inst.start(ctx); err != nil {
+			c, err := inst.start(ctx)
+			if err != nil {
 				h.onError(inst, HookEvent, err)
-			} else if err := inst.conn.notify(HookEvent.method(), batch); err != nil {
+			} else if err := c.notify(HookEvent.method(), batch); err != nil {
 				h.onError(inst, HookEvent, err)
 			}
 			cancel()
@@ -376,18 +380,33 @@ func (inst *instance) runEventSender(h *Host, ch chan *EventBatch, stop chan str
 	}
 }
 
+// errInstanceStopped is returned by start once the instance has been (or is
+// being) stopped, so a start racing a stop gets a definitive error instead
+// of a stale success paired with a nil conn.
+var errInstanceStopped = errors.New("plugin: instance stopped")
+
 // start spawns and initializes the plugin process on first use. A failed
 // start is sticky: the plugin is skipped for the rest of the session rather
-// than respawned on every dispatch.
-func (inst *instance) start(ctx context.Context) error {
+// than respawned on every dispatch. Once stopped, an instance never
+// (re)spawns: start returns errInstanceStopped instead.
+//
+// It returns the conn established under inst.mu, alongside any error.
+// Callers must use that returned handle for the RPC that follows — never
+// re-read inst.conn afterwards, since inst.mu is released by the time start
+// returns and a concurrent stop() (or a future start()) can nil or replace
+// it out from under an unsynchronized read.
+func (inst *instance) start(ctx context.Context) (*conn, error) {
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
+	if inst.stopped {
+		return nil, errInstanceStopped
+	}
 	if inst.started {
-		return inst.err
+		return inst.conn, inst.err
 	}
 	inst.started = true
 	inst.err = inst.startLocked(ctx)
-	return inst.err
+	return inst.conn, inst.err
 }
 
 func (inst *instance) startLocked(ctx context.Context) error {
@@ -457,6 +476,7 @@ func (inst *instance) stop() {
 
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
+	inst.stopped = true
 	if inst.conn != nil {
 		_ = inst.conn.notify(methodShutdown, struct{}{})
 		_ = inst.conn.close()

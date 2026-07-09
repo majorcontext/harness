@@ -164,3 +164,39 @@ func TestEventOrderingConcurrentEmitters(t *testing.T) {
 		}
 	}
 }
+
+// TestEventSenderStopStartRace hammers Host.Close (which stops instances,
+// nil-ing their conn) concurrently with Host.Emit (which spawns a sender
+// goroutine that starts the instance and then notifies over its conn) across
+// many trials. It exists to catch a specific bug: runEventSender used to
+// call inst.start(ctx) and then read the instance's conn field a second
+// time, unsynchronized, to call notify — a window in which a concurrent
+// stop() could nil (or a future start could replace) that field out from
+// under it. Under -race this must never report a data race, and the
+// unsynchronized read must never nil-deref.
+func TestEventSenderStopStartRace(t *testing.T) {
+	const trials = 200
+	for trial := 0; trial < trials; trial++ {
+		recorder := testPlugin(t, "recorder", &Hooks{
+			Event: func(_ context.Context, _ *Client, _ []Event) {},
+		})
+		h, err := NewHost(Options{EventQueueSize: 4}, recorder)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 20; i++ {
+				h.Emit([]Event{{Type: EventToolExecuteStart, SessionID: "x"}})
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			h.Close()
+		}()
+		wg.Wait()
+	}
+}
