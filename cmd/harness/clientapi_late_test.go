@@ -139,16 +139,32 @@ func TestLateClientAPIConcurrentBindDelegatesCorrectly(t *testing.T) {
 
 	wg.Wait()
 
-	if delegated == 0 {
-		t.Error("no call ever observed the bound implementation — Bind never took effect")
-	}
 	if notReady+delegated != 3*callersPerMethod {
 		t.Errorf("accounted for %d calls, want %d", notReady+delegated, 3*callersPerMethod)
 	}
 
 	// After Wait, Bind has definitely landed: every call from here on must
-	// delegate.
-	if _, err := l.SessionMessages(context.Background(), &plugin.SessionMessagesRequest{SessionID: "s2"}); err != nil {
+	// delegate. This is the real guarantee the race exercise is here to
+	// protect — unlike delegated counts observed during the race itself
+	// (which, however unlikely, could theoretically all lose the race
+	// against Bind's Store), this is deterministic once wg.Wait has
+	// returned.
+	resp, err := l.SessionMessages(context.Background(), &plugin.SessionMessagesRequest{SessionID: "s2"})
+	if err != nil {
 		t.Errorf("SessionMessages after Bind settled: %v", err)
+	} else if resp == nil || len(resp.Messages) != 1 || resp.Messages[0].Parts.Text() != "fake:s2" {
+		t.Errorf("SessionMessages after Bind settled: unexpected payload %+v", resp)
+	}
+
+	if resp, err := l.MCPCall(context.Background(), &plugin.MCPCallRequest{Server: "gw", Tool: "noop"}); err != nil {
+		t.Errorf("MCPCall after Bind settled: %v", err)
+	} else if resp == nil || resp.Content.Text() != "fake:noop" {
+		t.Errorf("MCPCall after Bind settled: unexpected payload %+v", resp)
+	}
+
+	if resp, err := l.Generate(context.Background(), &plugin.GenerateRequest{Model: "fast"}); err != nil {
+		t.Errorf("Generate after Bind settled: %v", err)
+	} else if resp == nil || resp.Message.Parts.Text() != "fake:fast" {
+		t.Errorf("Generate after Bind settled: unexpected payload %+v", resp)
 	}
 }
