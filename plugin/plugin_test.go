@@ -293,6 +293,64 @@ func TestUnsubscribedPluginNeverSpawns(t *testing.T) {
 	}
 }
 
+// TestProbeSpecPassesConfig proves finding (2): probing must send the
+// spec's Config in the initialize handshake, exactly as a real spawn does
+// (instance.startLocked), rather than the empty InitializeParams Probe(ctx,
+// command) sends. A fake in-process plugin captures the InitializeParams it
+// actually receives.
+func TestProbeSpecPassesConfig(t *testing.T) {
+	gotConfig := make(chan json.RawMessage, 1)
+	hostSide, pluginSide := net.Pipe()
+	go func() {
+		c := newConn(pluginSide, func(_ context.Context, method string, params json.RawMessage) (any, error) {
+			switch method {
+			case methodInitialize:
+				var init InitializeParams
+				if err := json.Unmarshal(params, &init); err != nil {
+					return nil, err
+				}
+				gotConfig <- init.Config
+				return Manifest{Name: "cfgplug", ProtocolVersion: ProtocolVersion}, nil
+			case methodShutdown:
+				return nil, nil
+			default:
+				return nil, &rpcError{Code: codeMethodNotFound, Message: method}
+			}
+		})
+		c.run() //nolint:errcheck
+	}()
+
+	spec := Spec{
+		Command: []string{"unused"},
+		Config:  json.RawMessage(`{"token":"abc123"}`),
+		dial:    func() (io.ReadWriteCloser, error) { return hostSide, nil },
+	}
+	m, err := ProbeSpec(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Name != "cfgplug" {
+		t.Fatalf("manifest name = %q, want cfgplug", m.Name)
+	}
+	if cfg := <-gotConfig; string(cfg) != `{"token":"abc123"}` {
+		t.Errorf("plugin received Config = %s, want {\"token\":\"abc123\"}", cfg)
+	}
+}
+
+// TestProbeBackwardCompat proves Probe(ctx, command) — kept for backward
+// compatibility — is exactly ProbeSpec with a bare command and no
+// env/dir/config: both fail identically on an empty command.
+func TestProbeBackwardCompat(t *testing.T) {
+	_, err1 := Probe(context.Background(), nil)
+	_, err2 := ProbeSpec(context.Background(), Spec{})
+	if err1 == nil || err2 == nil {
+		t.Fatal("expected both Probe and ProbeSpec to error on an empty command")
+	}
+	if err1.Error() != err2.Error() {
+		t.Errorf("Probe error = %q, ProbeSpec error = %q, want identical", err1, err2)
+	}
+}
+
 type stubClientAPI struct {
 	mcp func(*MCPCallRequest) (*MCPCallResult, error)
 }
