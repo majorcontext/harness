@@ -52,11 +52,26 @@ components:
   schemas:
     Health:
       type: object
-      required: [version]
+      required: [version, vcs_revision, vcs_time]
       properties:
         version:
           type: string
           example: 0.1.0
+        vcs_revision:
+          type: string
+          description: >
+            The running binary's VCS revision (commit hash), from
+            runtime/debug.ReadBuildInfo's "vcs.revision" setting. Always
+            present, but "" when build info carries no VCS settings — e.g. a
+            `go test` binary, or a binary built outside a VCS checkout.
+          example: 1fdc1db1e2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7
+        vcs_time:
+          type: string
+          description: >
+            The commit timestamp corresponding to vcs_revision, from
+            ReadBuildInfo's "vcs.time" setting (RFC 3339). Always present,
+            "" under the same conditions as vcs_revision.
+          example: "2024-06-01T12:00:00Z"
 
     Session:
       type: object
@@ -99,6 +114,42 @@ components:
             in the session log header). Defaults to the serve process's
             current working directory when POST /session omitted workdir.
           example: /workspace/task-42
+        last_turn:
+          $ref: "#/components/schemas/LastTurn"
+          description: >
+            The outcome of the most recent prompt or goal-worker turn to
+            finish in this process, so a poller can tell "idle because done"
+            from "idle because the turn died" without inferring it from
+            message part shapes. Present only once a turn has finished in
+            this process (like `goal`, absent on a freshly reloaded,
+            never-prompted-here session).
+
+    LastTurn:
+      type: object
+      description: >
+        The most recent turn.end record for a session, mirrored on Session
+        and on each GET /session/status entry.
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [completed, error, max_turns_exceeded]
+          description: >
+            "completed": the turn (or goal) finished successfully —for a
+            goal, the evaluator returned MET. "error": the turn failed
+            outright (provider error, transcode failure). "max_turns_exceeded":
+            goal-loop only — GoalOptions.MaxTurns was exhausted without the
+            evaluator ever returning MET; the goal gave up, it did not
+            complete, so it is deliberately never reported as "completed".
+            A goal cleared via DELETE /session/{id}/goal (or a ClearGoal that
+            wins a race against an in-flight worker retry or evaluator call)
+            emits no turn.end at all — see the turn.end Event description.
+        error:
+          type: string
+          description: >
+            Sanitized failure detail (never credentials or request bodies —
+            see the turn.end Event field) when outcome is "error". Absent
+            otherwise.
 
     SessionState:
       type: string
@@ -177,6 +228,9 @@ components:
           $ref: "#/components/schemas/SessionStatus"
         state:
           $ref: "#/components/schemas/SessionState"
+        last_turn:
+          $ref: "#/components/schemas/LastTurn"
+          description: Same field, and same presence rule, as Session.last_turn.
 
     StatusResponse:
       type: object
@@ -240,6 +294,30 @@ components:
         created_at:
           type: string
           format: date-time
+
+    MessagePlaceholder:
+      type: object
+      description: >
+        Substituted by GET /session/{id}/message for any resident message
+        that fails to marshal, so one poisoned message cannot take down the
+        whole transcript endpoint. Carries only enough to identify which
+        message broke and why.
+      required: [id, role, marshal_error]
+      properties:
+        id:
+          type: string
+        role:
+          type: string
+          description: >
+            The message's role, verbatim (string(m.Role) in the handler) —
+            deliberately NOT constrained to the Message.role enum here: this
+            is a degraded-path fallback for a message the server could not
+            even marshal, so it must never itself risk rejecting a value the
+            handler actually produced (e.g. if Role ever gains a new variant
+            before this schema is updated to match).
+        marshal_error:
+          type: string
+          description: The encoding/json error raised while marshaling this message.
 
     Part:
       type: object
@@ -349,6 +427,7 @@ components:
             - session.status
             - session.error
             - session.aborted
+            - turn.end
             - message
             - model
             - request.meta
@@ -369,6 +448,22 @@ components:
             error, transcode failure); session.aborted confirms an
             orchestrator-requested abort ended the in-flight prompt. Both
             are followed by a session.status idle transition.
+            turn.end is durable and carries `outcome` ("completed", "error",
+            or "max_turns_exceeded") plus a sanitized `error` detail on
+            failure: it is emitted whenever a prompt (prompt_async) or a
+            goal-worker loop (POST /session/{id}/goal) finishes, mirrored
+            onto Session.last_turn and each /session/status entry's
+            last_turn, so a client can tell "idle because done" from "idle
+            because the turn died" without inferring it from message part
+            shapes. A goal loop that exhausts `max_turns` without the
+            evaluator ever returning MET records "max_turns_exceeded", never
+            "completed" — it gave up, it did not finish. A deliberate abort
+            or clear (POST /session/{id}/abort, DELETE /session/{id}/goal —
+            including a ClearGoal that wins a race against an in-flight
+            worker retry or evaluator call, even without the loop's context
+            being cancelled — or shutdown drain) does not emit turn.end at
+            all — session.aborted (or, for a cleared goal, goal.cleared)
+            already covers that case.
             request.meta is a durable record of the model request the engine
             assembled for one turn: system_hash, system_len, segments (count),
             tools (names), messages (history count), and the model. The full
@@ -412,7 +507,18 @@ components:
         is_error: { type: boolean }
         error:
           type: string
-          description: Failure detail for session.error events.
+          description: >
+            Failure detail for session.error and turn.end (outcome "error")
+            events. Sanitized (never credentials or request bodies) for
+            turn.end; see LastTurn.error.
+        outcome:
+          type: string
+          enum: [completed, error, max_turns_exceeded]
+          description: >
+            Turn result for turn.end events — see LastTurn.outcome for the
+            full meaning of each value, including why a goal that exhausts
+            MaxTurns is "max_turns_exceeded" rather than "completed", and why
+            a cleared goal emits no turn.end at all.
         system_hash:
           type: string
           description: SHA-256 of the joined system segments (request.meta).
@@ -609,6 +715,14 @@ paths:
     get:
       operationId: getMessages
       summary: Full canonical message history (bootstrap for renderers).
+      description: >
+        Marshals each resident message independently: a single message that
+        fails to marshal (e.g. a Reasoning part carrying an invalid
+        provider-native attachment that ingest-time normalization does not
+        catch) is replaced in the response by a MessagePlaceholder rather
+        than failing the whole request — this endpoint always returns 200
+        with as much of the transcript as is actually renderable, never a
+        500 for one bad message.
       parameters:
         - $ref: "#/components/parameters/sessionID"
       responses:
@@ -618,7 +732,13 @@ paths:
             application/json:
               schema:
                 type: array
-                items: { $ref: "#/components/schemas/Message" }
+                items:
+                  description: >
+                    A Message, or a MessagePlaceholder in place of any
+                    message that failed to marshal.
+                  oneOf:
+                    - $ref: "#/components/schemas/Message"
+                    - $ref: "#/components/schemas/MessagePlaceholder"
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 

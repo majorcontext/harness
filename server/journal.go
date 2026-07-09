@@ -15,6 +15,7 @@ import (
 
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/plugin"
 	"github.com/majorcontext/harness/provider"
 )
 
@@ -54,6 +55,12 @@ type Event struct {
 	GoalTurn      int    `json:"goal_turn,omitempty"`
 	GoalTurns     int    `json:"goal_turns,omitempty"`
 	GoalAttempt   int    `json:"goal_attempt,omitempty"`
+
+	// Outcome carries the turn.end record's result: "completed" or "error".
+	// Error (above) carries the sanitized failure detail when Outcome is
+	// "error", empty on a clean completion. See runPrompt/runGoal's
+	// recordTurnEnd.
+	Outcome string `json:"outcome,omitempty"`
 }
 
 // Durable and live event types (a superset of engine.Event types plus the
@@ -63,6 +70,7 @@ const (
 	evtSessionStatus  = "session.status"
 	evtSessionError   = "session.error"
 	evtSessionAborted = "session.aborted"
+	evtTurnEnd        = "turn.end"
 	evtMessage        = "message"
 	evtModel          = "model"
 	evtRequestMeta    = "request.meta"
@@ -74,6 +82,16 @@ const (
 )
 
 const journalName = "events.jsonl"
+
+// outcomeMaxTurnsExceeded is the turn.end outcome recorded when a goal loop
+// exhausts GoalOptions.MaxTurns without the evaluator ever returning MET
+// (engine/goal.go's PursueGoal returns GoalResult{Achieved:false, Reason:
+// "max turns"}, a NIL error). It is deliberately distinct from "completed":
+// a goal that gave up after burning its turn budget is not "done", and
+// surfacing it as completed would recreate the exact "idle because done vs.
+// idle because it died/gave up" ambiguity this primitive exists to remove.
+// See runGoal.
+const outcomeMaxTurnsExceeded = "max_turns_exceeded"
 
 // Publish maps an engine event onto the journal/SSE stream. Message events
 // trigger a journal sync (which durably records every new canonical message,
@@ -150,6 +168,30 @@ func (s *Server) publishGoal(ev engine.Event) {
 		g.active = false
 	}
 	s.emitDurableLocked(out)
+}
+
+// recordTurnEnd journals a durable turn.end record for sessionID and updates
+// the in-memory lastTurn summary GET /session/{id} and /session/status read
+// (see Server.lastTurn). outcome is "completed" or "error"; turnErr is the
+// triggering error on failure (sanitized here via
+// plugin.SanitizeSessionError — never credentials or request bodies — before
+// it is journaled, streamed, or exposed), nil on a clean completion.
+//
+// This is the "idle because done" vs "idle because the turn died" wire
+// contract: today, three plain-prompt turns died mid-stream (final assistant
+// message reasoning-only, no text, no tool call) and every monitor had to
+// infer death from message part shapes. turn.end plus Session.last_turn make
+// that heuristic unnecessary — a poller reads the outcome directly instead
+// of reverse-engineering it from transcript content.
+func (s *Server) recordTurnEnd(sessionID, outcome string, turnErr error) {
+	errStr := ""
+	if turnErr != nil {
+		errStr = plugin.SanitizeSessionError(turnErr.Error())
+	}
+	s.mu.Lock()
+	s.lastTurn[sessionID] = &turnOutcome{outcome: outcome, error: errStr}
+	s.emitDurableLocked(&Event{Type: evtTurnEnd, SessionID: sessionID, Outcome: outcome, Error: errStr})
+	s.mu.Unlock()
 }
 
 // requestSnapshot is the latest fully-assembled model request for a session,
@@ -430,8 +472,19 @@ func (s *Server) reconcile() error {
 }
 
 // loadJournal parses an existing events.jsonl into memory: replay buffer,
-// highest seq, and the seen-message index. A truncated final line (crash
+// highest seq, the seen-message index, and each session's last_turn (see
+// Server.lastTurn). Records are replayed in file order, so the last turn.end
+// seen for a session as the scan proceeds is — by construction — its most
+// recent one; a later record simply overwrites an earlier one in the map,
+// with no need to track sequence numbers here. A truncated final line (crash
 // mid-write) is tolerated.
+//
+// Rebuilding lastTurn here (rather than leaving it to be set only by a live
+// recordTurnEnd call) is what makes last_turn survive a process restart:
+// otherwise a durable, replayable record would still exist on disk while the
+// in-memory field it drives silently reset to absent — exactly the kind of
+// restart-loses-state gap this field exists to prevent an orchestrator from
+// hitting.
 func (s *Server) loadJournal(data []byte) {
 	lines := bytes.Split(data, []byte("\n"))
 	for i, raw := range lines {
@@ -452,6 +505,9 @@ func (s *Server) loadJournal(data []byte) {
 		}
 		if ev.Type == evtMessage && ev.Message != nil {
 			s.markSeenLocked(ev.SessionID, ev.Message.ID)
+		}
+		if ev.Type == evtTurnEnd {
+			s.lastTurn[ev.SessionID] = &turnOutcome{outcome: ev.Outcome, error: ev.Error}
 		}
 	}
 }

@@ -389,6 +389,44 @@ func TestHealthNoAuth(t *testing.T) {
 	}
 }
 
+// TestHealthReportsVCSInfo guards against the incident where an engineer
+// burned 30 minutes suspecting a stale box binary because /health only ever
+// echoed the config version (0.1.0-dev) with no way to tell which commit was
+// actually running. /health must additionally surface vcs_revision and
+// vcs_time from runtime/debug.ReadBuildInfo — present as empty strings
+// (never omitted) when build info carries no VCS settings, e.g. a go test
+// binary, which is exactly what this test runs as.
+func TestHealthReportsVCSInfo(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	req, _ := http.NewRequest("GET", h.ts.URL+"/health", nil)
+	resp, err := h.ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("health status %d", resp.StatusCode)
+	}
+	var body map[string]json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"vcs_revision", "vcs_time"} {
+		raw, ok := body[key]
+		if !ok {
+			t.Fatalf("health response missing %q key entirely: %v", key, body)
+		}
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			t.Fatalf("%s not a string: %v", key, err)
+		}
+		// A go test binary carries no VCS settings, so both are expected
+		// empty here — the point of this test is that the KEYS are always
+		// present, never omitted, so a client never has to special-case
+		// "field absent" vs "field empty".
+	}
+}
+
 func TestAuthRequired(t *testing.T) {
 	h := newHarness(t, &scriptedProvider{name: "test"})
 
@@ -638,7 +676,7 @@ func TestReplayFromSeq(t *testing.T) {
 	s1.stop()
 
 	// Find the busy event seq; replay from there must return exactly the
-	// records after it (user, assistant, idle), in ascending order.
+	// records after it (user, assistant, turn.end, idle), in ascending order.
 	var busySeq int64
 	for _, ev := range evs {
 		if ev.Type == "session.status" && ev.Status == "busy" {
@@ -668,8 +706,8 @@ func TestReplayFromSeq(t *testing.T) {
 			idleSeen = true
 		}
 	}
-	if len(replaySeqs) != 3 {
-		t.Fatalf("replay count = %d, want 3 (user, assistant, idle): %v", len(replaySeqs), replaySeqs)
+	if len(replaySeqs) != 4 {
+		t.Fatalf("replay count = %d, want 4 (user, assistant, turn.end, idle): %v", len(replaySeqs), replaySeqs)
 	}
 
 	// Now a live event: prompt B must stream through the same connection.
@@ -1049,11 +1087,14 @@ func TestHeartbeat(t *testing.T) {
 	})
 }
 
-// errThenOKProvider fails its first Stream call and succeeds afterward.
+// errThenOKProvider fails its first Stream call and succeeds afterward. err,
+// when set, is returned instead of the default "provider exploded" — used by
+// turn.end sanitization tests to inject a credential-shaped error string.
 type errThenOKProvider struct {
 	name  string
 	mu    sync.Mutex
 	calls int
+	err   error
 }
 
 func (p *errThenOKProvider) Name() string { return p.name }
@@ -1063,6 +1104,9 @@ func (p *errThenOKProvider) Stream(_ context.Context, _ *provider.Request) (prov
 	defer p.mu.Unlock()
 	p.calls++
 	if p.calls == 1 {
+		if p.err != nil {
+			return nil, p.err
+		}
 		return nil, errors.New("provider exploded")
 	}
 	return &scriptedStream{events: asstTurn("recovered")}, nil

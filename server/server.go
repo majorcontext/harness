@@ -168,6 +168,14 @@ type Server struct {
 	// updated as goal.* events flow through Publish.
 	goalState map[string]*goalTracker
 
+	// lastTurn tracks the most recent turn.end outcome per session, for this
+	// process only (in memory, like goalState): drives Session.last_turn and
+	// the /session/status last_turn field. Set by recordTurnEnd whenever a
+	// prompt (runPrompt) or a goal worker loop (runGoal) finishes — the
+	// durable turn.end record it also emits is the replayable wire form of
+	// the same information.
+	lastTurn map[string]*turnOutcome
+
 	// waiters holds every in-flight GET /session/{id}/wait long-poll,
 	// registered for the duration of the request. notifyWaitersLocked (see
 	// journal.go) wakes matching waiters after every durable event so a
@@ -198,6 +206,14 @@ type goalTracker struct {
 	turns      int
 	lastReason string
 	attempt    int
+}
+
+// turnOutcome is the per-session last-turn summary surfaced on Session JSON
+// (last_turn) and /session/status entries. outcome is "completed" or
+// "error"; error is the sanitized failure detail (empty on completion).
+type turnOutcome struct {
+	outcome string
+	error   string
 }
 
 // sessionState tracks an in-memory session and any in-flight prompt. lastUsed
@@ -241,6 +257,7 @@ func New(opts Options) (*Server, error) {
 		lastReqHash:    make(map[string]string),
 		lastPersistErr: make(map[string]string),
 		goalState:      make(map[string]*goalTracker),
+		lastTurn:       make(map[string]*turnOutcome),
 		waiters:        make(map[*waiter]struct{}),
 		closing:        make(chan struct{}),
 	}
