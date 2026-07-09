@@ -113,7 +113,9 @@ type ToolExecuteEndProperties struct {
 
 // SessionErrorProperties is the Event.Properties payload for session.error,
 // emitted when a prompt/turn terminates with an error. Message is the error
-// string only — no stack traces, no request/response bodies, no secrets.
+// string, capped at sessionErrorMaxLen characters and passed through
+// SanitizeSessionError — a best-effort redaction of obvious credential
+// shapes, not a guarantee. See SanitizeSessionError and PROTOCOL.md.
 type SessionErrorProperties struct {
 	Message string `json:"message"`
 }

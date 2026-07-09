@@ -345,8 +345,12 @@ func (s *Session) emitToolExecuteEnd(tool, callID string, ok bool) {
 }
 
 // emitSessionError notifies plugins that a prompt/turn terminated with an
-// error. Only the error string is carried — no stack traces, request/response
-// bodies, or secrets.
+// error. The error string is passed through plugin.SanitizeSessionError
+// first: it caps the length and best-effort redacts obvious credential
+// shapes (bearer tokens, Authorization header values, key=value secrets)
+// that provider adapters can embed in wrapped HTTP errors — see
+// SanitizeSessionError and PROTOCOL.md. This is best-effort, not a
+// guarantee against every possible leak.
 //
 // context.Canceled is deliberately excluded: a cancelled context is an
 // operator-initiated stop (POST /abort, DELETE /goal, server drain), not a
@@ -358,7 +362,7 @@ func (s *Session) emitSessionError(err error) {
 	if s.cfg.Hooks == nil || err == nil || errors.Is(err, context.Canceled) {
 		return
 	}
-	props, _ := json.Marshal(plugin.SessionErrorProperties{Message: err.Error()})
+	props, _ := json.Marshal(plugin.SessionErrorProperties{Message: plugin.SanitizeSessionError(err.Error())})
 	s.cfg.Hooks.Emit([]plugin.Event{{
 		Type:       plugin.EventSessionError,
 		SessionID:  s.ID,

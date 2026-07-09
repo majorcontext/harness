@@ -374,6 +374,61 @@ func TestSessionErrorEvent(t *testing.T) {
 	}
 }
 
+// erroringProvider always fails Stream with a fixed error, for testing what
+// the engine does with provider errors (e.g. session.error sanitization).
+type erroringProvider struct {
+	name string
+	err  error
+}
+
+func (p *erroringProvider) Name() string { return p.name }
+
+func (p *erroringProvider) Stream(_ context.Context, _ *provider.Request) (provider.Stream, error) {
+	return nil, p.err
+}
+
+// TestSessionErrorEventSanitized proves that a provider error embedding a
+// credential-shaped secret (here: a bearer token, as a real HTTP client
+// error might produce) never reaches a plugin verbatim: emitSessionError
+// runs it through plugin.SanitizeSessionError first.
+func TestSessionErrorEventSanitized(t *testing.T) {
+	secret := "sk-live-abcDEF1234567890"
+	prov := &erroringProvider{
+		name: "test",
+		err:  fmt.Errorf("request failed: Authorization: Bearer %s returned 401", secret),
+	}
+	hooks := &fakeHooks{}
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+		Hooks:     hooks,
+	})
+
+	if _, err := s.Prompt(context.Background(), "go"); err == nil {
+		t.Fatal("expected error")
+	}
+
+	var props plugin.SessionErrorProperties
+	found := false
+	for _, ev := range hooks.events {
+		if ev.Type == plugin.EventSessionError {
+			if err := json.Unmarshal(ev.Properties, &props); err != nil {
+				t.Fatal(err)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no session.error event emitted: %+v", hooks.events)
+	}
+	if strings.Contains(props.Message, secret) {
+		t.Errorf("session.error message leaked the bearer token: %q", props.Message)
+	}
+	if !strings.Contains(props.Message, "REDACTED") {
+		t.Errorf("session.error message = %q, want a redaction marker", props.Message)
+	}
+}
+
 func TestToolDeny(t *testing.T) {
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		asstTurn(provider.StopToolUse, toolCall("tc1", "bash", `{"command":"rm -rf /"}`)),

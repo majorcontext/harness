@@ -94,7 +94,7 @@ is a JSON object whose shape depends on `type`. Event types, v1:
 | `file.edited` | `{path}` (absolute) | a built-in file tool (`write_file`, `edit_file`) successfully writes a file |
 | `tool.execute.start` | `{tool, call_id}` | immediately before any tool call executes (built-in or plugin-provided) |
 | `tool.execute.end` | `{tool, call_id, ok}` | immediately after a tool call finishes; `ok` is `false` when the result is an error result |
-| `session.error` | `{message}` | a prompt/turn/goal-loop run terminates with an error; `message` is the error string only — no stack traces, no request/response bodies, no secrets. Excludes `context.Canceled`: a cancelled context is a deliberate stop (abort, goal clear, server drain), not a failure |
+| `session.error` | `{message}` | a prompt/turn/goal-loop run terminates with an error; `message` is the error string, capped at 256 characters, with a best-effort redaction pass for obvious credential shapes (bearer tokens, `Authorization` header values, `key=value` secrets such as `api_key=...`). This is best-effort sanitization, not a guarantee — a fixed pattern set cannot catch every credential shape a provider adapter might embed, so plugins should still treat `message` as a potentially-sensitive, untrusted string. No stack traces or request/response bodies are ever included. Excludes `context.Canceled`: a cancelled context is a deliberate stop (abort, goal clear, server drain), not a failure |
 
 `tool.execute.start`/`tool.execute.end` bracket the actual tool execution
 only — a call denied by `tool.execute.before` never runs and so never emits
