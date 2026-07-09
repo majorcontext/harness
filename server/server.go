@@ -158,6 +158,13 @@ type Server struct {
 	// and last evaluator reason. It drives the Session JSON goal field and is
 	// updated as goal.* events flow through Publish.
 	goalState map[string]*goalTracker
+
+	// goalDeleteRace is a test-only seam: when non-nil, handleGoalDelete
+	// invokes it between clearing the goal and cancelling the loop context,
+	// passing whether cancel has already run at that point, letting tests
+	// force worst-case goroutine interleavings deterministically (see
+	// TestGoalDeleteClearBeforeIdleRace). Always nil in production.
+	goalDeleteRace func(cancelledAlready bool)
 }
 
 // goalTracker is the per-session goal summary surfaced in Session JSON.

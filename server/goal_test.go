@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -246,6 +247,88 @@ func TestGoalDeleteClearsAndStops(t *testing.T) {
 	prov.mu.Unlock()
 	if ei != 0 {
 		t.Errorf("evaluator consulted %d times after DELETE, want 0", ei)
+	}
+}
+
+// TestGoalDeleteClearBeforeIdleRace reproduces the CI flake deterministically
+// instead of relying on luck: it forces the worst-case interleaving where the
+// goal-loop worker's context-cancellation unwind (which ends in the terminal
+// session.status idle record) gets unbounded time to race ahead of whatever
+// the DELETE handler does next, via a hook installed between the handler's
+// two operations (cancel and clear, in whichever order they run).
+//
+// If cancellation happens before the clear is journaled, the worker is free
+// to run all the way to "idle" while the handler is paused — reproducing
+// exactly the symptom this test guards against: an SSE collector that reads
+// until session.status idle would see goal.set but never goal.cleared,
+// because goal.cleared was journaled after the idle record it should have
+// preceded. The guarantee under test (see engine.Session.ClearGoal and
+// handleGoalDelete): goal.cleared is always journaled before the
+// session.status idle that ends that goal's occupancy.
+func TestGoalDeleteClearBeforeIdleRace(t *testing.T) {
+	prov := &goalProv{
+		name:        "test",
+		blockWorker: true,
+		started:     make(chan struct{}),
+		eval:        [][]provider.Event{asstTurn("MET: ok")},
+	}
+	h := newGoalHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	sse := h.openSSE("?from=0", "")
+	resp, _ := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond"})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST goal status %d", resp.StatusCode)
+	}
+	<-prov.started
+
+	// Installed at the seam between handleGoalDelete's cancel and clear
+	// operations (see the seam comment there). cancelledAlready reports,
+	// deterministically (the handler runs the two operations sequentially
+	// on one goroutine), whether cancel() has already been invoked at this
+	// point. When it has, the worker goroutine is now free to race forward
+	// to the terminal idle record — so this gives it unbounded time (poll,
+	// no sleep, no arbitrary timeout) to actually get there before letting
+	// the handler continue, forcing the CI flake's worst case every run
+	// instead of leaving it to luck. When cancel has not run yet (the fixed
+	// ordering: clear happens first), there is nothing to race against yet,
+	// so this returns immediately.
+	h.srv.goalDeleteRace = func(cancelledAlready bool) {
+		if !cancelledAlready {
+			return
+		}
+		for {
+			h.srv.mu.Lock()
+			idle := false
+			for _, ev := range h.srv.journal {
+				if ev.SessionID == id && ev.Type == evtSessionStatus && ev.Status == "idle" {
+					idle = true
+					break
+				}
+			}
+			h.srv.mu.Unlock()
+			if idle {
+				return
+			}
+			runtime.Gosched()
+		}
+	}
+
+	resp, _ = h.do("DELETE", "/session/"+id+"/goal", nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE goal = %d, want 204", resp.StatusCode)
+	}
+
+	evs := sse.collectUntilIdle(t)
+	got := goalEvents(evs)
+	var sawCleared bool
+	for _, ev := range got {
+		if ev.Type == "goal.cleared" {
+			sawCleared = true
+		}
+	}
+	if !sawCleared {
+		t.Fatalf("goal.cleared not observed before the terminal idle record (goal events = %v) — cleared must be journaled before idle, never after", got)
 	}
 }
 

@@ -365,11 +365,19 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 }
 
 // runGoal drives one PursueGoal to completion, then flips the session back to
-// idle. The loop's context is cancelled only by DELETE /goal (which also
-// journals goal.cleared) or by Drain at shutdown; a context.Canceled result is
-// therefore a deliberate stop, not a failure, and needs no session.error. Any
-// other error is journaled as session.error. Message journaling piggybacks on
-// the same syncMessages path as runPrompt.
+// idle. The loop's context is cancelled only by DELETE /goal (which journals
+// goal.cleared BEFORE cancelling, see handleGoalDelete) or by Drain at
+// shutdown; a context.Canceled result is therefore a deliberate stop, not a
+// failure, and needs no session.error. Any other error is journaled as
+// session.error. Message journaling piggybacks on the same syncMessages path
+// as runPrompt.
+//
+// The terminal session.status idle record emitted at the end of this
+// function is the same record an SSE collector waits for as the session's
+// "occupancy over" signal (collect-until-idle is the wire contract). DELETE
+// /goal's clear-before-cancel ordering guarantees goal.cleared always
+// precedes it in the journal — this function must never emit idle before a
+// goal.cleared that is still in flight.
 func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condition string, maxTurns int) {
 	defer s.wg.Done()
 	_, err := st.sess.PursueGoal(ctx, condition, engine.GoalOptions{
@@ -394,11 +402,20 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
 }
 
-// handleGoalDelete cancels an active goal loop: it cancels the loop context
-// (stopping further turns) and clears the goal (journaling goal.cleared and
-// resetting the engine's goal state). Unknown session (not resident, no log on
+// handleGoalDelete cancels an active goal loop: it clears the goal (journaling
+// goal.cleared and resetting the engine's goal state), THEN cancels the loop
+// context (stopping further turns). Unknown session (not resident, no log on
 // disk) is 404; a known session is 204 whether or not a goal was active
 // (idempotent — no goal.cleared is journaled when nothing was active).
+//
+// Ordering guarantee: goal.cleared is always journaled before the
+// session.status idle record that ends that goal's occupancy (see runGoal and
+// engine.Session.ClearGoal). This is why clear happens before cancel, not
+// after: cancelling first would let the goal-loop worker's context-
+// cancellation unwind — which ends in that terminal idle record — race the
+// handler to the journal, and an SSE collector that reads until idle (the
+// wire contract every client relies on) could see goal.set but never
+// goal.cleared.
 func (s *Server) handleGoalDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	s.mu.Lock()
@@ -412,13 +429,27 @@ func (s *Server) handleGoalDelete(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
 	}
-	if cancel != nil {
-		cancel() // stop the loop; runGoal treats context.Canceled as a clean stop
-	}
+	// Orderly shutdown: clear BEFORE cancel. ClearGoal journals goal.cleared
+	// and emits the event synchronously, under the session's own lock,
+	// before it returns (see engine.Session.ClearGoal) — so by the time
+	// cancel() below wakes the goal-loop worker, goal.cleared is already in
+	// the durable journal. Cancelling first would let the worker's unwind
+	// (which ends in the terminal session.status idle record, see runGoal)
+	// race the handler to the journal: on an unlucky scheduling the idle
+	// record could land before goal.cleared, and an SSE collector that reads
+	// until idle (the wire contract every client relies on) would never see
+	// the clear. See TestGoalDeleteClearBeforeIdleRace, which forces that
+	// worst case deterministically.
 	if st != nil {
 		// ClearGoal journals goal.cleared (via OnEvent -> publishGoal) and
 		// resets the engine goal state; a no-op when no goal is active.
 		st.sess.ClearGoal()
+	}
+	if s.goalDeleteRace != nil {
+		s.goalDeleteRace(false)
+	}
+	if cancel != nil {
+		cancel() // stop the loop; runGoal treats context.Canceled as a clean stop
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
