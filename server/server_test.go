@@ -389,6 +389,44 @@ func TestHealthNoAuth(t *testing.T) {
 	}
 }
 
+// TestHealthReportsVCSInfo guards against the incident where an engineer
+// burned 30 minutes suspecting a stale box binary because /health only ever
+// echoed the config version (0.1.0-dev) with no way to tell which commit was
+// actually running. /health must additionally surface vcs_revision and
+// vcs_time from runtime/debug.ReadBuildInfo — present as empty strings
+// (never omitted) when build info carries no VCS settings, e.g. a go test
+// binary, which is exactly what this test runs as.
+func TestHealthReportsVCSInfo(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	req, _ := http.NewRequest("GET", h.ts.URL+"/health", nil)
+	resp, err := h.ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("health status %d", resp.StatusCode)
+	}
+	var body map[string]json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"vcs_revision", "vcs_time"} {
+		raw, ok := body[key]
+		if !ok {
+			t.Fatalf("health response missing %q key entirely: %v", key, body)
+		}
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			t.Fatalf("%s not a string: %v", key, err)
+		}
+		// A go test binary carries no VCS settings, so both are expected
+		// empty here — the point of this test is that the KEYS are always
+		// present, never omitted, so a client never has to special-case
+		// "field absent" vs "field empty".
+	}
+}
+
 func TestAuthRequired(t *testing.T) {
 	h := newHarness(t, &scriptedProvider{name: "test"})
 

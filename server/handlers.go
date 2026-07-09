@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
@@ -81,8 +82,42 @@ func (s *Server) sessionIDOrNotFound(w http.ResponseWriter, r *http.Request) (st
 	return id, true
 }
 
+// healthJSON is the openapi Health shape. VCSRevision and VCSTime are always
+// present (never omitted, even empty) so a client never has to special-case
+// "field absent" vs "field empty" — see buildInfo.
+type healthJSON struct {
+	Version     string `json:"version"`
+	VCSRevision string `json:"vcs_revision"`
+	VCSTime     string `json:"vcs_time"`
+}
+
+// buildInfo reads the running binary's VCS revision and commit time from
+// runtime/debug.ReadBuildInfo, so GET /health can identify exactly which
+// commit is live — a stale box binary otherwise looks identical to a fresh
+// one behind a fixed config Version string (an engineer once burned 30
+// minutes suspecting exactly that). Both return "" when build info is
+// unavailable or carries no VCS settings, which is the ordinary case for a
+// `go test` binary — ReadBuildInfo still succeeds there, it simply has no
+// "vcs.revision"/"vcs.time" entries in Settings.
+func buildInfo() (revision, buildTime string) {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "", ""
+	}
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			revision = setting.Value
+		case "vcs.time":
+			buildTime = setting.Value
+		}
+	}
+	return revision, buildTime
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"version": s.opts.Version})
+	rev, t := buildInfo()
+	writeJSON(w, http.StatusOK, healthJSON{Version: s.opts.Version, VCSRevision: rev, VCSTime: t})
 }
 
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {

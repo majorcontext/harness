@@ -52,11 +52,26 @@ components:
   schemas:
     Health:
       type: object
-      required: [version]
+      required: [version, vcs_revision, vcs_time]
       properties:
         version:
           type: string
           example: 0.1.0
+        vcs_revision:
+          type: string
+          description: >
+            The running binary's VCS revision (commit hash), from
+            runtime/debug.ReadBuildInfo's "vcs.revision" setting. Always
+            present, but "" when build info carries no VCS settings — e.g. a
+            `go test` binary, or a binary built outside a VCS checkout.
+          example: 1fdc1db1e2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7
+        vcs_time:
+          type: string
+          description: >
+            The commit timestamp corresponding to vcs_revision, from
+            ReadBuildInfo's "vcs.time" setting (RFC 3339). Always present,
+            "" under the same conditions as vcs_revision.
+          example: "2024-06-01T12:00:00Z"
 
     Session:
       type: object
