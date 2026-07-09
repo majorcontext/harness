@@ -491,6 +491,166 @@ func unmarshalPart(raw json.RawMessage) (Part, error) {
 	return p, nil
 }
 
+// SyntheticOrphanResultText is the Content text of a tool_result
+// synthesized by ResolveOrphanToolCalls for a tool_use/tool_call that has
+// no matching result anywhere a provider's wire protocol requires one.
+// Callers (currently every transcoder) must never drop an orphaned
+// tool_use silently — the text always says "synthesized" so it is visibly
+// distinguishable, in a transcript or a debugging session, from a result
+// the model's tool actually produced.
+const SyntheticOrphanResultText = "synthesized: no tool_result was found in history for this tool_use; injected to keep the request protocol-valid"
+
+// ResolveOrphanToolCalls returns messages with a synthetic, is_error
+// tool_result injected for every ToolCall that has no matching ToolResult
+// immediately after it — every provider wire protocol this package
+// transcodes to (Anthropic's tool_use/tool_result, the OpenAI-compatible
+// chat-completions tool_calls/tool message) requires a tool call to be
+// followed immediately by its result, and rejects a request where one is
+// missing (Anthropic: HTTP 400 "tool_use ids were found without
+// tool_result blocks immediately after").
+//
+// # Incident ses_01kx48z4rqfkpbwmzfdv1jzeg6
+//
+// A goal worker turn died with exactly that 400 naming one tool_use id,
+// and every subsequent goal-loop retry failed identically, killing the
+// goal: once an assistant message carrying a ToolCall part enters a
+// session's history without a following tool-role result — the provider
+// stream died between emitting the tool_call and the engine executing it,
+// or errored mid-turn — every later request replays that same orphaned
+// tool_use and is rejected the same way. This is the sibling, at the wire
+// protocol level, of the marshal-level poisoning fixed in the commit
+// titled "fix(message,engine): truncated ToolCall.Arguments must never
+// poison history" (see message.Normalize and
+// engine/tool_call_poison_test.go): that fix keeps a poisoned ToolCall
+// marshalable; this one keeps a poisoned history transcodable.
+//
+// engine.Session's own turn loop is the primary fix (see engine/engine.go:
+// a turn that ends abnormally after recording one or more tool calls now
+// synthesizes their results immediately, before the poisoned history could
+// ever be replayed), which keeps ingest self-consistent for every message
+// that actually passes through Session.append. ResolveOrphanToolCalls is
+// the defense-in-depth counterpart every transcoder calls at request-build
+// time, exactly as ToolCall.safeArguments backstops message.Normalize: a
+// history built or mutated by any OTHER producer — a plugin's
+// chat.message hook, a hand-rolled provider adapter, a test's scripted
+// provider, a session log edited or replayed from an older, unpatched
+// binary — must still transcode to a protocol-valid request rather than
+// silently dropping the orphaned tool_use or shipping a request the
+// provider will reject.
+//
+// "Immediately after" mirrors the wire requirement: a ToolCall in
+// messages[i] is satisfied only by a ToolResult carrying its CallID in
+// messages[i+1] when that message has RoleTool — a ToolResult anywhere
+// else in history (an earlier or later, non-adjacent tool message) does
+// not count, because no transcoder looks for one there either. When
+// messages[i+1] is already a RoleTool message, missing results are merged
+// into it; otherwise (end of history, or the next message is not
+// RoleTool) a new RoleTool message carrying only the synthetic results is
+// inserted immediately after messages[i]. Every synthetic ToolResult is
+// IsError true with Content set to SyntheticOrphanResultText.
+//
+// messages is never mutated in place; the input slice and its Message
+// values are safe to reuse after this call. When no orphan exists the
+// input slice itself is returned unchanged (no allocation).
+func ResolveOrphanToolCalls(messages []Message) []Message {
+	type insertion struct {
+		afterIndex int
+		parts      Parts
+	}
+	pendingMerge := make(map[int]Parts)
+	var insertions []insertion
+
+	for i := range messages {
+		m := &messages[i]
+		if m.Role != RoleAssistant {
+			continue
+		}
+		var callIDs []string
+		for _, p := range m.Parts {
+			if tc, ok := p.(*ToolCall); ok {
+				callIDs = append(callIDs, tc.CallID)
+			}
+		}
+		if len(callIDs) == 0 {
+			continue
+		}
+		followingIsTool := i+1 < len(messages) && messages[i+1].Role == RoleTool
+		present := make(map[string]bool)
+		if followingIsTool {
+			for _, p := range messages[i+1].Parts {
+				if tr, ok := p.(*ToolResult); ok {
+					present[tr.CallID] = true
+				}
+			}
+		}
+		var missing []string
+		for _, id := range callIDs {
+			if !present[id] {
+				missing = append(missing, id)
+			}
+		}
+		if len(missing) == 0 {
+			continue
+		}
+		synth := make(Parts, 0, len(missing))
+		for _, id := range missing {
+			synth = append(synth, &ToolResult{
+				CallID:  id,
+				Content: Parts{&Text{Text: SyntheticOrphanResultText}},
+				IsError: true,
+			})
+		}
+		if followingIsTool {
+			pendingMerge[i+1] = append(pendingMerge[i+1], synth...)
+		} else {
+			insertions = append(insertions, insertion{afterIndex: i, parts: synth})
+		}
+	}
+
+	if len(pendingMerge) == 0 && len(insertions) == 0 {
+		return messages
+	}
+
+	out := make([]Message, 0, len(messages)+len(insertions))
+	for i := range messages {
+		m := messages[i]
+		if extra, ok := pendingMerge[i]; ok {
+			merged := m
+			merged.Parts = append(append(Parts(nil), m.Parts...), extra...)
+			m = merged
+		}
+		out = append(out, m)
+		for _, ins := range insertions {
+			if ins.afterIndex == i {
+				out = append(out, Message{
+					// The source index disambiguates two orphaned turns
+					// whose calls reuse a CallID — nothing guarantees
+					// provider call-ID uniqueness across turns, and a UI
+					// keyed by message ID must never see two collide. Still
+					// deterministic: the same history always yields the
+					// same IDs.
+					ID:    fmt.Sprintf("synthetic-orphan-tool-result-%d-%s", ins.afterIndex, strings.Join(callIDsOf(ins.parts), "-")),
+					Role:  RoleTool,
+					Parts: ins.parts,
+				})
+			}
+		}
+	}
+	return out
+}
+
+// callIDsOf extracts the CallID of every ToolResult in parts, used only to
+// build a stable, debuggable ID for a synthesized RoleTool message.
+func callIDsOf(parts Parts) []string {
+	ids := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if tr, ok := p.(*ToolResult); ok {
+			ids = append(ids, tr.CallID)
+		}
+	}
+	return ids
+}
+
 // ProviderCallID derives a deterministic, provider-safe tool-call ID from a
 // canonical CallID. The same input always yields the same output, so
 // retranscoding an unchanged history produces identical wire requests —

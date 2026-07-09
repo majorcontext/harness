@@ -123,8 +123,20 @@ func transcodeRequest(req *provider.Request, family string) (*apiRequest, error)
 		out.Messages = append(out.Messages, apiMessage{Role: "system", Content: raw})
 	}
 
-	for i := range req.Messages {
-		m := &req.Messages[i]
+	// Defense-in-depth against a poisoned history (incident
+	// ses_01kx48z4rqfkpbwmzfdv1jzeg6): a tool call with no matching result
+	// in the immediately-following message would otherwise transcode to a
+	// dangling tool_calls entry with no paired "tool"-role message, which
+	// this wire protocol also requires immediately after (mirrors
+	// provider/anthropic/transcode.go's identical guard).
+	// engine.Session's turn loop is the primary fix and keeps its own
+	// ingest self-consistent (see engine/engine.go), but this backstops
+	// any OTHER producer of history. See message.ResolveOrphanToolCalls's
+	// doc comment for the full incident.
+	messages := message.ResolveOrphanToolCalls(req.Messages)
+
+	for i := range messages {
+		m := &messages[i]
 		msgs, err := transcodeMessage(m, family)
 		if err != nil {
 			return nil, fmt.Errorf("openaicompat: message %s: %w", m.ID, err)

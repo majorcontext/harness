@@ -104,11 +104,14 @@ func TestPersistTruncatedToolCallArguments(t *testing.T) {
 
 	// The session log is loadable and agrees with in-memory history — the
 	// turn that used to fail persist ("never journaled") is now durable.
+	// LoadSession additionally repairs orphaned tool_calls at ingest (see
+	// TestLoadSessionRepairsOrphanedToolCalls), so the loaded history is
+	// the repaired view of the resident one.
 	loaded, err := LoadSession(cfg, s.ID)
 	if err != nil {
 		t.Fatalf("LoadSession: %v", err)
 	}
-	if got, want := historyJSON(t, loaded.History()), historyJSON(t, s.History()); got != want {
+	if got, want := historyJSON(t, loaded.History()), historyJSON(t, message.ResolveOrphanToolCalls(s.History())); got != want {
 		t.Errorf("loaded history = %s\nwant %s", got, want)
 	}
 

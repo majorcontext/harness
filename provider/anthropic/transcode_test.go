@@ -278,3 +278,110 @@ func TestTranscodeEmptyHistoryFails(t *testing.T) {
 		t.Fatal("expected error for empty request")
 	}
 }
+
+// TestTranscodeOrphanToolUseMidHistory reproduces the mechanism behind
+// production incident ses_01kx48z4rqfkpbwmzfdv1jzeg6 at the transcoder
+// level: an assistant tool_use with no result at all in history (the turn
+// died before the engine could execute it, or append one — see
+// engine/engine.go's own primary fix), buried mid-transcript, followed by
+// ordinary later turns. Before the transcoder called
+// message.ResolveOrphanToolCalls, this produced a wire request with a
+// dangling tool_use block and no tool_result anywhere adjacent — exactly
+// the shape the Anthropic API rejects with HTTP 400 "tool_use ids were
+// found without tool_result blocks immediately after". After the fix, a
+// synthetic error tool_result is injected immediately after the tool_use,
+// making the request protocol-valid.
+func TestTranscodeOrphanToolUseMidHistory(t *testing.T) {
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "first"}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolCall{CallID: "orphan1", Name: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`)},
+		}},
+		// No tool-role message follows: the turn died before execution.
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "second"}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "done"}}},
+	))
+
+	assertToolUseFollowedByResult(t, out, "orphan1")
+
+	// The rest of history must still be present and in order.
+	var texts []string
+	for _, m := range out.Messages {
+		for _, b := range m.Content {
+			if b.Type == "text" {
+				texts = append(texts, b.Text)
+			}
+		}
+	}
+	if !containsAll(texts, "first", "second", "done") {
+		t.Errorf("wire texts = %v, want first/second/done all present", texts)
+	}
+}
+
+// TestTranscodeOrphanToolUseFinalMessage covers the other shape the
+// incident's mechanism leaves behind: the orphaned tool_use is the very
+// last message in history — the turn died and nothing was ever appended
+// after it, so there is no "next" message to look at at all, let alone one
+// to merge a result into.
+func TestTranscodeOrphanToolUseFinalMessage(t *testing.T) {
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolCall{CallID: "tc1", Name: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`)},
+			&message.ToolCall{CallID: "tc2", Name: "read_file", Arguments: json.RawMessage(`{"path":"x"}`)},
+		}},
+	))
+
+	assertToolUseFollowedByResult(t, out, "tc1")
+	assertToolUseFollowedByResult(t, out, "tc2")
+}
+
+// assertToolUseFollowedByResult asserts the transcoded request pairs every
+// tool_use block with matching id with a tool_result carrying the same
+// tool_use_id in the immediately-following message — the invariant the
+// Anthropic API enforces (HTTP 400 otherwise) and the one
+// message.ResolveOrphanToolCalls (see provider/anthropic/transcode.go)
+// exists to guarantee even over a poisoned history.
+func assertToolUseFollowedByResult(t *testing.T, out *apiRequest, id string) {
+	t.Helper()
+	for i, m := range out.Messages {
+		for _, b := range m.Content {
+			if b.Type != "tool_use" || b.ID != id {
+				continue
+			}
+			if i+1 >= len(out.Messages) {
+				t.Fatalf("tool_use %q is in the final wire message, no tool_result can follow", id)
+			}
+			next := out.Messages[i+1]
+			for _, nb := range next.Content {
+				if nb.Type == "tool_result" && nb.ToolUseID == id {
+					if !nb.IsError {
+						t.Errorf("synthesized tool_result for orphaned %q must be IsError", id)
+					}
+					if !strings.Contains(nb.Content[0].Text, "synthesized") {
+						t.Errorf("synthesized tool_result for %q text = %q, want it to say synthesized", id, nb.Content[0].Text)
+					}
+					return
+				}
+			}
+			t.Fatalf("tool_use %q has no matching tool_result in the immediately-following wire message %+v", id, next)
+		}
+	}
+	t.Fatalf("tool_use %q not found in transcoded request at all", id)
+}
+
+func containsAll(ss []string, wants ...string) bool {
+	for _, w := range wants {
+		found := false
+		for _, s := range ss {
+			if s == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}

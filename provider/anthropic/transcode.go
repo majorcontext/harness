@@ -126,8 +126,21 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 		})
 	}
 
-	for i := range req.Messages {
-		m := &req.Messages[i]
+	// Defense-in-depth against a poisoned history (incident
+	// ses_01kx48z4rqfkpbwmzfdv1jzeg6): a ToolCall with no matching
+	// ToolResult in the immediately-following message would otherwise
+	// transcode to a dangling tool_use block, which the Anthropic API
+	// rejects wholesale with HTTP 400 "tool_use ids were found without
+	// tool_result blocks immediately after". engine.Session's turn loop is
+	// the primary fix and keeps its own ingest self-consistent (see
+	// engine/engine.go), but this backstops any OTHER producer of history
+	// — a plugin hook, a hand-rolled adapter, a replayed log from an
+	// older binary — so a request never ships an orphaned tool_use. See
+	// message.ResolveOrphanToolCalls's doc comment for the full incident.
+	messages := message.ResolveOrphanToolCalls(req.Messages)
+
+	for i := range messages {
+		m := &messages[i]
 		role := "user"
 		if m.Role == message.RoleAssistant {
 			role = "assistant"
