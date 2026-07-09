@@ -160,11 +160,14 @@ type Server struct {
 	goalState map[string]*goalTracker
 
 	// goalDeleteRace is a test-only seam: when non-nil, handleGoalDelete
-	// invokes it between clearing the goal and cancelling the loop context,
-	// passing whether cancel has already run at that point, letting tests
-	// force worst-case goroutine interleavings deterministically (see
+	// invokes it after clearing the goal but before its own call to cancel,
+	// passing the loop's cancel func so a test can trigger it early — the
+	// earliest structurally possible point — and ride out the worker's
+	// unwind to completion (an idempotent second call from the handler
+	// follows and is a no-op), forcing the worst-case interleaving
+	// deterministically on every run rather than conditionally (see
 	// TestGoalDeleteClearBeforeIdleRace). Always nil in production.
-	goalDeleteRace func(cancelledAlready bool)
+	goalDeleteRace func(cancel context.CancelFunc)
 }
 
 // goalTracker is the per-session goal summary surfaced in Session JSON.

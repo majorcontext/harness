@@ -446,10 +446,15 @@ func (s *Server) handleGoalDelete(w http.ResponseWriter, r *http.Request) {
 		st.sess.ClearGoal()
 	}
 	if s.goalDeleteRace != nil {
-		s.goalDeleteRace(false)
+		// Handed cancel (rather than a bare notification) so a test can force
+		// the worst case unconditionally: fire the worker's unblock as early
+		// as structurally possible — right here, before this function's own
+		// cancel() below — and ride out its unwind to completion before
+		// letting this handler proceed. See TestGoalDeleteClearBeforeIdleRace.
+		s.goalDeleteRace(cancel)
 	}
 	if cancel != nil {
-		cancel() // stop the loop; runGoal treats context.Canceled as a clean stop
+		cancel() // stop the loop; runGoal treats context.Canceled as a clean stop (no-op if the hook above already fired it)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

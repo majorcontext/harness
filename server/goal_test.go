@@ -251,20 +251,38 @@ func TestGoalDeleteClearsAndStops(t *testing.T) {
 }
 
 // TestGoalDeleteClearBeforeIdleRace reproduces the CI flake deterministically
-// instead of relying on luck: it forces the worst-case interleaving where the
-// goal-loop worker's context-cancellation unwind (which ends in the terminal
-// session.status idle record) gets unbounded time to race ahead of whatever
-// the DELETE handler does next, via a hook installed between the handler's
-// two operations (cancel and clear, in whichever order they run).
+// instead of relying on luck: it forces the worst-case interleaving, on every
+// run, unconditionally — not gated behind any observed ordering — via a hook
+// installed right after handleGoalDelete's own ClearGoal call and right
+// before its own cancel call (see the seam comment there).
 //
-// If cancellation happens before the clear is journaled, the worker is free
-// to run all the way to "idle" while the handler is paused — reproducing
-// exactly the symptom this test guards against: an SSE collector that reads
-// until session.status idle would see goal.set but never goal.cleared,
-// because goal.cleared was journaled after the idle record it should have
-// preceded. The guarantee under test (see engine.Session.ClearGoal and
-// handleGoalDelete): goal.cleared is always journaled before the
-// session.status idle that ends that goal's occupancy.
+// The hook is handed the loop's cancel func directly and does two things,
+// every time, no branching: (1) fires cancel itself immediately — the
+// earliest structurally possible point, before the handler's own (idempotent,
+// now redundant) call to it — which frees the goal-loop worker to unwind, and
+// (2) rides that unwind out to completion, polling (no sleep, no arbitrary
+// timeout) until the terminal session.status idle record actually lands in
+// the journal, before returning and letting the handler finish. That gives
+// the worker unbounded time to race all the way to "idle" while the clear
+// step is the *only* thing that has run so far — the exact worst case the
+// historical bug hit: if clearing happened after cancelling, the worker could
+// reach idle first, and an SSE collector that reads until idle (the wire
+// contract every client relies on) would see goal.set but never goal.cleared.
+//
+// Because the hook fires only after ClearGoal has already returned (program
+// order within handleGoalDelete, not a race), goal.cleared is always already
+// durable at the moment the hook forces the worker's unwind to completion —
+// that is the structural guarantee under test (see engine.Session.ClearGoal
+// and handleGoalDelete). The hook asserts it directly, immediately, with no
+// polling: this is the part that catches a regression to the old
+// cancel-then-clear order, where the equivalent seam would fire before
+// ClearGoal has run.
+//
+// Verified against the pre-fix ordering: temporarily swapping handleGoalDelete
+// back to cancel-then-clear (keeping this hook fixed in its source position,
+// between the two operations, exactly as the historical code's fix relocated
+// it) makes this test fail reliably — see the commit message for the red/green
+// transcript. Restoring clear-then-cancel makes it pass reliably.
 func TestGoalDeleteClearBeforeIdleRace(t *testing.T) {
 	prov := &goalProv{
 		name:        "test",
@@ -282,34 +300,46 @@ func TestGoalDeleteClearBeforeIdleRace(t *testing.T) {
 	}
 	<-prov.started
 
-	// Installed at the seam between handleGoalDelete's cancel and clear
-	// operations (see the seam comment there). cancelledAlready reports,
-	// deterministically (the handler runs the two operations sequentially
-	// on one goroutine), whether cancel() has already been invoked at this
-	// point. When it has, the worker goroutine is now free to race forward
-	// to the terminal idle record — so this gives it unbounded time (poll,
-	// no sleep, no arbitrary timeout) to actually get there before letting
-	// the handler continue, forcing the CI flake's worst case every run
-	// instead of leaving it to luck. When cancel has not run yet (the fixed
-	// ordering: clear happens first), there is nothing to race against yet,
-	// so this returns immediately.
-	h.srv.goalDeleteRace = func(cancelledAlready bool) {
-		if !cancelledAlready {
-			return
+	journalHasClearedLocked := func() bool {
+		for _, ev := range h.srv.journal {
+			if ev.SessionID == id && ev.Type == "goal.cleared" {
+				return true
+			}
 		}
-		for {
-			h.srv.mu.Lock()
-			idle := false
-			for _, ev := range h.srv.journal {
-				if ev.SessionID == id && ev.Type == evtSessionStatus && ev.Status == "idle" {
-					idle = true
-					break
-				}
+		return false
+	}
+	journalHasIdle := func() bool {
+		h.srv.mu.Lock()
+		defer h.srv.mu.Unlock()
+		for _, ev := range h.srv.journal {
+			if ev.SessionID == id && ev.Type == evtSessionStatus && ev.Status == "idle" {
+				return true
 			}
-			h.srv.mu.Unlock()
-			if idle {
-				return
-			}
+		}
+		return false
+	}
+
+	h.srv.goalDeleteRace = func(cancel context.CancelFunc) {
+		// The structural invariant, checked directly rather than inferred:
+		// by the time this seam fires (after handleGoalDelete's ClearGoal
+		// call, in program order), goal.cleared must already be durable.
+		// t.Errorf is goroutine-safe (unlike Fatalf/FailNow) — this hook runs
+		// on the HTTP handler's goroutine, not the test goroutine.
+		h.srv.mu.Lock()
+		cleared := journalHasClearedLocked()
+		h.srv.mu.Unlock()
+		if !cleared {
+			t.Errorf("goal.cleared not yet journaled when handleGoalDelete reaches its cancel step — clear must happen before cancel, never after")
+		}
+
+		// Now force the historical race's worst case unconditionally: fire
+		// the worker's unblock as early as possible and give it unbounded
+		// time (poll, no sleep) to race all the way to the terminal idle
+		// record before this handler is allowed to proceed any further.
+		if cancel != nil {
+			cancel()
+		}
+		for !journalHasIdle() {
 			runtime.Gosched()
 		}
 	}
