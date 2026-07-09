@@ -50,6 +50,39 @@ type Config struct {
 	// There is no default — goal use requires this field to be set. Resolve it
 	// with ResolveModel so aliases apply.
 	GoalEvaluatorModel string `json:"goal_evaluator_model,omitempty"`
+	// Plugins lists the plugin processes to wire into every session's
+	// engine.Config.Hooks (see package plugin). Order matters: sync hooks
+	// chain across plugins in this order, each seeing the previous plugin's
+	// mutations. A nil (omitted) value disables plugins entirely. In the
+	// project-config merge a non-empty project value replaces the user
+	// value entirely (arrays override, like SkillsDirs).
+	Plugins []PluginSpec `json:"plugins,omitempty"`
+	// PluginHTTPHeaders are stamped on every plugin's outbound HTTP traffic
+	// (plugin.Options.HTTPHeaders, e.g. workspace attribution). Maps merge
+	// key by key in the project-config merge, like Aliases and Providers.
+	PluginHTTPHeaders map[string]string `json:"plugin_http_headers,omitempty"`
+}
+
+// PluginSpec configures one plugin process, loaded verbatim into a
+// plugin.Spec (Command, Env, Dir, Config) once its manifest is available
+// (cached at install/probe time, keyed by binary hash — see `harness plugin
+// probe` and package plugin's Probe/Host). Name and Command are required: a
+// plugin with neither identifies nothing to spawn nor a manifest cache key,
+// so Load rejects it rather than silently skipping it at session time.
+type PluginSpec struct {
+	// Name must match the plugin's own manifest name; it is also the cache
+	// key and the config-order identity used for chaining.
+	Name string `json:"name"`
+	// Command is the argv used to spawn the plugin process (Command[0] is
+	// resolved via PATH like any exec, exactly as plugin.Spec.Command).
+	Command []string `json:"command"`
+	// Env is appended to the harness environment when the plugin is spawned.
+	Env []string `json:"env,omitempty"`
+	// Dir is the plugin process's working directory.
+	Dir string `json:"dir,omitempty"`
+	// Config is this plugin's own config block, passed verbatim in
+	// InitializeParams for the plugin to interpret however it likes.
+	Config json.RawMessage `json:"config,omitempty"`
 }
 
 // Provider is per-family provider configuration.
@@ -81,7 +114,32 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
 	}
 	c.SessionDir = expandHome(c.SessionDir)
+	if err := validatePlugins(c.Plugins); err != nil {
+		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
+	}
 	return &c, nil
+}
+
+// validatePlugins fails loudly on a plugin spec that cannot possibly be
+// wired: a plugin needs a name (the manifest identity, cache key, and chain
+// order) and a non-empty command (something to spawn). A silently-skipped
+// malformed entry would run without the plugin its author expected — same
+// philosophy as the AGENTS.md/skill loaders.
+func validatePlugins(plugins []PluginSpec) error {
+	seen := make(map[string]bool, len(plugins))
+	for i, p := range plugins {
+		if p.Name == "" {
+			return fmt.Errorf("plugins[%d]: name is required", i)
+		}
+		if len(p.Command) == 0 {
+			return fmt.Errorf("plugins[%d] (%s): command is required", i, p.Name)
+		}
+		if seen[p.Name] {
+			return fmt.Errorf("plugins[%d]: duplicate plugin name %q", i, p.Name)
+		}
+		seen[p.Name] = true
+	}
+	return nil
 }
 
 // Path resolves the effective user config path: $HARNESS_CONFIG if set,
@@ -188,6 +246,31 @@ func merge(base, over *Config) *Config {
 			}
 		}
 		out.Providers = m
+	}
+	// Plugins override wholesale, like SkillsDirs: a non-empty project list
+	// replaces the user list entirely (config order is significant — the
+	// sync-hook chain runs in this order — so merging entry-by-entry would
+	// silently reorder or interleave two unrelated plugin lists).
+	pSrc := out.Plugins
+	if len(over.Plugins) > 0 {
+		pSrc = over.Plugins
+	}
+	if len(pSrc) > 0 {
+		out.Plugins = append([]PluginSpec(nil), pSrc...)
+	} else {
+		out.Plugins = nil
+	}
+	if n := len(base.PluginHTTPHeaders) + len(over.PluginHTTPHeaders); n > 0 {
+		m := make(map[string]string, n)
+		for k, v := range base.PluginHTTPHeaders {
+			m[k] = v
+		}
+		for k, v := range over.PluginHTTPHeaders {
+			m[k] = v
+		}
+		out.PluginHTTPHeaders = m
+	} else {
+		out.PluginHTTPHeaders = nil
 	}
 	return &out
 }

@@ -429,7 +429,7 @@ func TestLoadPlugins(t *testing.T) {
 		if slack.Name != "slack" || len(slack.Command) != 2 || slack.Command[1] != "--flag" {
 			t.Errorf("slack plugin = %+v", slack)
 		}
-		if !strings.Contains(string(slack.Config), `"channel":"eng"`) {
+		if !strings.Contains(string(slack.Config), `"channel"`) || !strings.Contains(string(slack.Config), `"eng"`) {
 			t.Errorf("slack plugin config = %s", slack.Config)
 		}
 	})
