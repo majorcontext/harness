@@ -31,6 +31,7 @@ const (
 	recModel        = "model"
 	recGoalSet      = "goal.set"
 	recGoalEval     = "goal.eval"
+	recGoalStalled  = "goal.stalled"
 	recGoalAchieved = "goal.achieved"
 	recGoalCleared  = "goal.cleared"
 )
@@ -57,6 +58,9 @@ type goalRecord struct {
 	Met       bool   `json:"met,omitempty"`
 	Turn      int    `json:"turn,omitempty"`
 	Turns     int    `json:"turns,omitempty"`
+	// Attempt is the 1-based worker-turn retry attempt on a goal.stalled
+	// record (see promptTurnWithRetry in goal.go).
+	Attempt int `json:"attempt,omitempty"`
 }
 
 // SessionInfo summarizes one persisted session for listings.
@@ -275,8 +279,11 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 		case recGoalAchieved, recGoalCleared:
 			s.goalActive = false
 			s.goalCondition = ""
-		case recGoalEval:
-			// Per-turn evaluation trace; no resume state (counters reset).
+		case recGoalEval, recGoalStalled:
+			// Per-turn evaluation/stall trace; no resume state (counters
+			// reset). A goal.stalled record never changes goalActive by
+			// itself — either a later goal.stalled retries, or a later
+			// goal.cleared/goal.eval settles it, both handled above.
 		}
 		return nil
 	})

@@ -117,7 +117,17 @@ components:
           description: Worker turns taken so far.
         last_reason:
           type: string
-          description: The most recent evaluator reason (eval or achieved).
+          description: >
+            The most recent evaluator reason (eval or achieved), or the most
+            recent worker-turn failure (stalled).
+        attempt:
+          type: integer
+          description: >
+            The 1-based worker-turn retry attempt from the most recent
+            goal.stalled record. Reset to 0 by goal.set, goal.eval, and
+            goal.achieved — a stall is non-terminal (the goal stays active
+            while retrying), so it never changes active or achieved, only
+            last_reason and this field.
 
     SessionStatus:
       type: string
@@ -264,6 +274,7 @@ components:
             - request.meta
             - goal.set
             - goal.eval
+            - goal.stalled
             - goal.achieved
             - goal.cleared
             - text.delta
@@ -285,12 +296,17 @@ components:
             system_hash differs from the session's previous request — the
             hash-on-change trick keeps unchanged prompts cheap while still
             making the exact system recoverable from a from=0 replay.
-            goal.set, goal.eval, goal.achieved, and goal.cleared are the durable
-            records of a goal loop (POST /session/{id}/goal). goal.set carries
-            goal_condition; goal.eval carries goal_met, goal_reason, and
-            goal_turn for each per-turn evaluator verdict; goal.achieved carries
+            goal.set, goal.eval, goal.stalled, goal.achieved, and goal.cleared
+            are the durable records of a goal loop (POST /session/{id}/goal).
+            goal.set carries goal_condition; goal.eval carries goal_met,
+            goal_reason, and goal_turn for each per-turn evaluator verdict;
+            goal.stalled carries goal_reason, goal_turn, and goal_attempt (the
+            1-based retry attempt) for each failed worker-turn attempt that is
+            still within the retry budget — it is non-terminal, the goal
+            stays active while the loop retries; goal.achieved carries
             goal_reason and goal_turns; goal.cleared marks a goal cancelled via
-            DELETE /session/{id}/goal.
+            DELETE /session/{id}/goal (or a worker turn that failed past its
+            retry budget, carrying the failure as goal_reason).
         session_id: { type: string }
         seq:
           type: integer
@@ -354,6 +370,9 @@ components:
         goal_turns:
           type: integer
           description: Total turns taken when the goal was achieved (goal.achieved).
+        goal_attempt:
+          type: integer
+          description: 1-based worker-turn retry attempt number (goal.stalled).
 
     GoalRequest:
       type: object

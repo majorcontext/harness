@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -26,6 +27,13 @@ type goalProv struct {
 	blockWorker bool
 	started     chan struct{}
 	startedOnce sync.Once
+
+	// workerErrN, when > 0, makes the first workerErrN worker (tool-bearing)
+	// Stream calls fail with a fake transient error instead of consuming a
+	// scripted turn — exercises PursueGoal's retry path (see
+	// engine/goal.go's goalProvider, same idea) deterministically.
+	workerErrN   int
+	workerErrHit int
 }
 
 func (p *goalProv) Name() string { return p.name }
@@ -46,6 +54,10 @@ func (p *goalProv) Stream(ctx context.Context, req *provider.Request) (provider.
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.workerErrHit < p.workerErrN {
+		p.workerErrHit++
+		return nil, errors.New("fake transient provider error")
+	}
 	if p.wi >= len(p.worker) {
 		return &scriptedStream{}, nil
 	}
@@ -83,7 +95,7 @@ func goalEvents(evs []Event) []Event {
 	var out []Event
 	for _, ev := range evs {
 		switch ev.Type {
-		case "goal.set", "goal.eval", "goal.achieved", "goal.cleared":
+		case "goal.set", "goal.eval", "goal.stalled", "goal.achieved", "goal.cleared":
 			out = append(out, ev)
 		}
 	}
@@ -158,6 +170,99 @@ func TestGoalAchievedJournaled(t *testing.T) {
 	// client bootstrapping from this record renders the chip correctly.
 	if !sess.Goal.Achieved {
 		t.Errorf("goal.achieved = false, want true for a completed goal")
+	}
+}
+
+// TestGoalStalledJournaledAndActive scripts one transient worker-turn
+// failure (retried, then succeeding) and asserts the wire contract the
+// review finding says was missing: a durable goal.stalled record (non-zero
+// seq) carrying the retry attempt number reaches the SSE stream, and the
+// goal remains active throughout — goal.stalled is non-terminal, so Session
+// JSON must still report active:true (and achieved:false) right after it,
+// only flipping once the retried turn is actually evaluated MET.
+func TestGoalStalledJournaledAndActive(t *testing.T) {
+	prov := &goalProv{
+		name:       "test",
+		workerErrN: 1, // first attempt fails, second (retried) attempt succeeds
+		worker:     [][]provider.Event{asstTurn("done")},
+		eval:       [][]provider.Event{asstTurn("MET: looks complete")},
+	}
+	h := newGoalHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	sse := h.openSSE("?from=0", "")
+	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond"})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
+	}
+
+	stalled := sse.waitFor(t, "goal.stalled")
+	if stalled.Seq == 0 {
+		t.Error("goal.stalled event has no seq (must be durable)")
+	}
+	if stalled.GoalAttempt != 1 {
+		t.Errorf("goal.stalled GoalAttempt = %d, want 1", stalled.GoalAttempt)
+	}
+	if stalled.GoalReason == "" {
+		t.Error("goal.stalled event missing GoalReason")
+	}
+
+	// The journal must carry the same durable record (not just the live
+	// fanout) — read it right away, before the retried turn can complete.
+	h.srv.mu.Lock()
+	var journaled *Event
+	for i := range h.srv.journal {
+		ev := h.srv.journal[i]
+		if ev.SessionID == id && ev.Type == "goal.stalled" {
+			journaled = &ev
+			break
+		}
+	}
+	h.srv.mu.Unlock()
+	if journaled == nil {
+		t.Fatal("goal.stalled not found in the server journal")
+	}
+	if journaled.Seq == 0 {
+		t.Error("journaled goal.stalled has no seq")
+	}
+
+	// A stall is non-terminal: the goal must still be active (and not yet
+	// achieved) right after it, per the state machine in goal.go — read
+	// Session JSON now, before the retry's turn has a chance to finish.
+	resp, data = h.do("GET", "/session/"+id, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET session status %d", resp.StatusCode)
+	}
+	var sess struct {
+		Goal *struct {
+			Active   bool `json:"active"`
+			Achieved bool `json:"achieved"`
+			Attempt  int  `json:"attempt"`
+		} `json:"goal"`
+	}
+	if err := json.Unmarshal(data, &sess); err != nil {
+		t.Fatal(err)
+	}
+	if sess.Goal == nil {
+		t.Fatalf("session JSON missing goal: %s", data)
+	}
+	if !sess.Goal.Active || sess.Goal.Achieved {
+		t.Errorf("goal = %+v right after goal.stalled, want active:true achieved:false (a stall is non-terminal)", *sess.Goal)
+	}
+	if sess.Goal.Attempt != 1 {
+		t.Errorf("goal.attempt = %d right after goal.stalled, want 1", sess.Goal.Attempt)
+	}
+
+	// The retried turn goes on to be evaluated MET, achieving the goal.
+	evs := sse.collectUntilIdle(t)
+	var achieved bool
+	for _, ev := range goalEvents(evs) {
+		if ev.Type == "goal.achieved" {
+			achieved = true
+		}
+	}
+	if !achieved {
+		t.Fatalf("goal events after the stall = %v, want a goal.achieved", goalEvents(evs))
 	}
 }
 

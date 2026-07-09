@@ -13,6 +13,57 @@
 // Durable goal.* records land in the session log so a resumed session can tell
 // whether a goal is still active (see store.go, ActiveGoal). The loop also
 // emits goal.* engine events so a server can journal them.
+//
+// # State machine
+//
+// A goal is a single boolean, goalActive, plus its condition string, both
+// guarded by Session.mu (see the Session struct). There are exactly two
+// terminal transitions out of "active" — achieved and cleared — and one
+// transient sub-state, "stalled", that a worker-turn failure passes through
+// on its way to either a retry (back to "active", same turn) or a permanent
+// clear:
+//
+//	          RegisterGoal
+//	               |
+//	               v
+//	+-------- ACTIVE (goal.set) ----------+
+//	|              |                       |
+//	|   worker turn errors                 | evaluator: MET
+//	|              |                       v
+//	|              v                  ACHIEVED (goal.achieved)
+//	|         STALLED (goal.stalled, carries the error)
+//	|              |
+//	|    retries < goalWorkerRetries AND
+//	|    no tool executed this attempt?
+//	|         /              \
+//	|       yes               no
+//	|        |                 |
+//	|   (wait goalRetryDelay)  |
+//	+--------+                 v
+//	                      CLEARED (goal.cleared, carries the error reason)
+//	ClearGoal (caller/DELETE) ----------> CLEARED (goal.cleared, no reason)
+//
+// The retry branch waits a capped exponential backoff (goalRetryDelay; see
+// goalWorkerRetries) before the next attempt, and is gated off the moment a
+// tool call has executed during the failing attempt — see
+// promptTurnWithRetry's doc comment for why a retry (which re-issues the
+// whole directive, not a resume) is unsafe to do blindly once a tool has
+// already run.
+//
+// The critical invariant this enforces — the one a real incident violated
+// (see the forensic note below) — is that ACTIVE has no third way out. Every
+// path from ACTIVE terminates in ACHIEVED or CLEARED, both of which are
+// durable, journaled records; there is no path that leaves goalActive true
+// with nothing further ever happening. Before this fix, a worker-turn error
+// (s.Prompt returning non-nil) took a third, undocumented way out: PursueGoal
+// returned the bare error immediately, goalActive stayed true, and nothing
+// was ever recorded to explain why the loop had stopped — a zombie goal,
+// active in the log forever, that only a human noticing the silence could
+// clear. Two production sessions hit exactly this
+// (ses_41813d5a411c2ba5.jsonl, ses_55e4ae35d8344540.jsonl): each died right
+// after a "goal not met" guidance message was appended, mid-turn, with no
+// goal.eval and no error record — the log simply stopped, for hours, until a
+// human forced a goal.cleared. See docs/goal-loop.md for the write-up.
 package engine
 
 import (
@@ -21,6 +72,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -69,6 +121,77 @@ const goalPartCap = 4096
 // cannot be parsed — the loop errors rather than spinning.
 var errEvaluatorUnparseable = errors.New("engine: goal evaluator returned unparseable output twice in a row")
 
+// goalWorkerRetries is how many additional attempts PursueGoal makes on a
+// worker-turn error (s.Prompt failing) before giving up on that turn. A
+// transient provider failure (a rate limit, a momentary 5xx, a hiccup while
+// the model handles a large tool result) is indistinguishable from a
+// permanent one from here, so every worker-turn error gets the same bounded
+// retry — 2 extra attempts, 3 total — rather than deciding "transient" from
+// error text (fragile, provider-specific, and the false negative is a
+// zombie goal, whereas the false positive is at worst two wasted requests).
+//
+// Retries are spaced out on a capped exponential backoff (see goalRetryDelay:
+// 1s after the first failure, 4s after the second, capped thereafter) so a
+// rate limit or a momentary 5xx — the two named transient causes above — has
+// time to clear before the next attempt; back-to-back retries with no delay
+// are close to useless against exactly those causes. The wait is
+// context-cancellable: a cancelled ctx ends it immediately (see
+// waitGoalRetryBackoff), same as any other worker-turn cancellation.
+//
+// # Non-idempotency: a retry can re-run tool calls
+//
+// A retry is not a resume — see promptTurnWithRetry's doc comment for the
+// full risk and the (partial, best-effort) mitigation this package applies.
+const goalWorkerRetries = 2
+
+// goalRetryBackoffBase and goalRetryBackoffMultiplier define the backoff
+// schedule: goalRetryDelay(1) == goalRetryBackoffBase (1s), and each
+// subsequent attempt multiplies the previous delay by
+// goalRetryBackoffMultiplier (4x: 1s, 4s, 16s, ...), capped at
+// goalRetryBackoffCap so a hypothetical future increase in goalWorkerRetries
+// can never make a single wait unboundedly long. With today's
+// goalWorkerRetries (2), only the first two terms of the schedule — 1s, 4s —
+// are ever used; the cap and the terms beyond it exist for that future case
+// and are covered by TestGoalRetryDelaySchedule.
+const (
+	goalRetryBackoffBase       = 1 * time.Second
+	goalRetryBackoffMultiplier = 4
+	goalRetryBackoffCap        = 30 * time.Second
+)
+
+// goalRetryDelay returns the backoff delay to wait after the given 1-indexed
+// attempt has failed, before the next attempt runs.
+func goalRetryDelay(attempt int) time.Duration {
+	d := goalRetryBackoffBase
+	for i := 1; i < attempt; i++ {
+		if d >= goalRetryBackoffCap {
+			return goalRetryBackoffCap
+		}
+		d *= goalRetryBackoffMultiplier
+	}
+	if d > goalRetryBackoffCap {
+		d = goalRetryBackoffCap
+	}
+	return d
+}
+
+// waitGoalRetryBackoff blocks for goalRetryDelay(attempt), or until ctx is
+// done, whichever comes first — the backoff is context-cancellable so a
+// deliberate abort (DELETE /goal, shutdown drain) ends the loop immediately
+// instead of waiting out the rest of the schedule. Uses time.NewTimer (not
+// time.After) with an explicit Stop so the timer is released promptly when
+// ctx fires first.
+func waitGoalRetryBackoff(ctx context.Context, attempt int) error {
+	t := time.NewTimer(goalRetryDelay(attempt))
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // PursueGoal runs the goal loop: prompt the condition, then after every turn
 // ask the evaluator whether it is met, feeding the evaluator's reason back as
 // guidance until the condition is met or MaxTurns is exhausted.
@@ -76,8 +199,19 @@ var errEvaluatorUnparseable = errors.New("engine: goal evaluator returned unpars
 // Turn 1 prompts the raw condition as the directive. A NOT MET verdict makes
 // the next directive a fixed-template guidance message carrying the evaluator's
 // reason. Returns Achieved=true on the first MET verdict; Achieved=false with
-// reason "max turns" when the budget runs out. A cancelled context, a provider
-// error, or two unparseable evaluator replies in a row return an error.
+// reason "max turns" when the budget runs out.
+//
+// A worker-turn error (s.Prompt failing) is retried up to goalWorkerRetries
+// times — see promptTurnWithRetry — recording a goal.stalled record for every
+// failed attempt so the session log always explains a pause instead of going
+// silent. If every attempt fails, the goal is cleared (goal.cleared carrying
+// the error as its reason, so no zombie active-goal state survives) and the
+// error is returned. A cancelled context is never retried or treated as a
+// worker failure — it is a deliberate abort (DELETE /goal, shutdown drain)
+// and is returned immediately with the goal left exactly as it was, since a
+// drain must be resumable. Two unparseable evaluator replies in a row also
+// return an error without clearing the goal, since that failure is in the
+// evaluator, not the worker, and the existing goal state is still accurate.
 //
 // Must not be called concurrently with itself or Prompt (it drives Prompt).
 func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOptions) (*GoalResult, error) {
@@ -111,10 +245,28 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			// concurrent DELETE): clean stop, no turn runs.
 			return &GoalResult{Achieved: false, Turns: turn - 1, Reason: "goal cleared"}, nil
 		}
-		if _, err := s.Prompt(ctx, directive); err != nil {
-			// Prompt already emitted session.error for its own failure
-			// (instructions/skills load, or streamTurn) — do not double-emit.
-			return nil, err
+		if attempts, err := s.promptTurnWithRetry(ctx, directive, turn); err != nil {
+			if errors.Is(err, context.Canceled) {
+				// Deliberate abort: leave the goal exactly as it is (a
+				// drain must be resumable), no goal.stalled, no clear.
+				return nil, err
+			}
+			if !s.goalActiveWith(condition) {
+				// Cleared concurrently (DELETE /goal) while a retry was in
+				// flight: clean stop, same as the checks above/below.
+				return &GoalResult{Achieved: false, Turns: turn - 1, Reason: "goal cleared"}, nil
+			}
+			// Every attempt failed — either the retry budget ran out, or
+			// retrying stopped early because a tool already executed this
+			// attempt (see promptTurnWithRetry's non-idempotency doc). This
+			// is the fix for the zombie-goal incident (see the package
+			// doc's state machine) — the goal must never stay active with
+			// nothing further recorded. Clear it, carrying the error as the
+			// reason, then return the error so the caller (e.g. the server)
+			// still journals the failure.
+			reason := fmt.Sprintf("worker turn failed after %d attempt(s): %v", attempts, err)
+			s.clearGoal(reason)
+			return nil, fmt.Errorf("engine: goal loop stalled: %w", err)
 		}
 		met, reason, err := s.evaluateGoal(ctx, condition, opts.Evaluator)
 		if err != nil {
@@ -144,6 +296,104 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 	return &GoalResult{Achieved: false, Turns: opts.MaxTurns, Reason: "max turns"}, nil
 }
 
+// promptTurnWithRetry runs one worker turn (s.Prompt), retrying on error up
+// to goalWorkerRetries additional times (goalWorkerRetries+1 attempts total),
+// waiting goalRetryDelay(attempt) between attempts (see the constants above)
+// so a rate limit or a momentary 5xx has time to clear. It returns the number
+// of attempts actually made, so the caller's error message reflects reality
+// even when retrying stopped early (see below).
+//
+// context.Canceled is never retried — it is a deliberate abort, not a
+// transient failure — and is returned immediately, whether it came from
+// Prompt itself or from a cancelled backoff wait. Every failed attempt is
+// recorded via recordGoalStalled; if that reports the goal was concurrently
+// cleared, retrying stops immediately (nothing left to retry for) and the
+// triggering error is returned as-is.
+//
+// # Non-idempotency: a retry can re-run tool calls
+//
+// Each retry re-issues the same directive through Prompt, which re-appends it
+// as a fresh user message — Prompt has no partial-turn resume point to retry
+// from below itself, so this is the same "ask again" a human operator would
+// do by hand, just automatic and bounded. That is harmless when the failed
+// attempt never got as far as executing a tool call: nothing happened yet to
+// redo. It is NOT harmless when the failure happened on a LATER model call
+// within that same attempt — Prompt's loop is model call -> tool calls ->
+// model call -> ... until end-of-turn, so an attempt can execute one or more
+// tool calls, append their results, and only then hit a provider error on the
+// next model call. A retry in that case re-prompts a model that still has the
+// original directive to satisfy, and nothing stops it from re-issuing the
+// same tool call(s) — re-running a shell command, re-writing a file — a
+// second time. Whether that is actually safe is entirely tool-specific
+// (idempotent tools like read_file are fine; bash running `git push` or a
+// write_file generally are not), and this package has no way to know that.
+//
+// This IS detectable, though only partially preventable: Session tracks a
+// monotonic tool-execution counter (toolExecCount, see runToolCall in
+// engine.go). promptTurnWithRetry snapshots it before each attempt via
+// toolExecutions() and, when an attempt fails after the count moved, treats
+// that as non-retryable — it records the stall and returns the error
+// immediately, without waiting or trying again, rather than reissuing a
+// directive that could re-run whatever the attempt already executed. This
+// closes the case this package can see. It does NOT make retries idempotent
+// in general: a failure before an attempt's first tool call is still
+// retried, and if that retry attempt later executes a tool and then fails
+// again on a still-later call, the identical risk resurfaces one attempt
+// later — there is no bound on how many times this can recur short of
+// Prompt gaining a resumable, sub-turn checkpoint, which it does not have.
+func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, turn int) (attempts int, err error) {
+	for attempt := 1; attempt <= goalWorkerRetries+1; attempt++ {
+		attempts = attempt
+		toolsBefore := s.toolExecutions()
+		_, perr := s.Prompt(ctx, directive)
+		if perr == nil {
+			return attempts, nil
+		}
+		err = perr
+		if errors.Is(err, context.Canceled) {
+			return attempts, err
+		}
+		if !s.recordGoalStalled(err, turn, attempt) {
+			// Concurrently cleared: stop retrying, nothing left to retry for.
+			return attempts, err
+		}
+		if s.toolExecutions() > toolsBefore {
+			// This attempt executed a tool call before failing: see the
+			// non-idempotency doc above. Retrying would reissue the
+			// directive and risk re-running that tool, so stop now instead
+			// of waiting and trying again.
+			return attempts, err
+		}
+		if attempt <= goalWorkerRetries {
+			if werr := waitGoalRetryBackoff(ctx, attempt); werr != nil {
+				return attempts, werr
+			}
+		}
+	}
+	return attempts, err
+}
+
+// recordGoalStalled records one failed worker-turn attempt for a turn. Like
+// recordGoalEval, it is a no-op — no journal write, no event — when the goal
+// is no longer active (a concurrent ClearGoal), so a stalled record can never
+// land in the log after goal.cleared. Reports whether the record was
+// written, i.e. whether the goal is still active and retrying is worthwhile.
+func (s *Session) recordGoalStalled(err error, turn, attempt int) bool {
+	s.mu.Lock()
+	if !s.goalActive {
+		s.mu.Unlock()
+		return false
+	}
+	reason := err.Error()
+	s.persistGoalLocked(recGoalStalled, goalRecord{Reason: reason, Turn: turn, Attempt: attempt})
+	// Emit while still holding s.mu (see ClearGoal): keeps event order
+	// matching log order under a concurrent clear. OnEvent must not call
+	// back into this Session — that would deadlock on s.mu, held here.
+	s.emit(Event{Type: EventGoalStalled, GoalReason: reason, GoalTurn: turn, GoalAttempt: attempt})
+	s.mu.Unlock()
+	return true
+}
+
 // ActiveGoal reports the current goal's condition when one is set but not yet
 // achieved or cleared. On a resumed session it reflects the session log's
 // goal.* records (condition only; run counters reset per Claude Code semantics).
@@ -157,7 +407,9 @@ func (s *Session) ActiveGoal() (condition string, ok bool) {
 // ClearGoal cancels an active goal: it writes a durable goal.cleared record,
 // resets the in-memory goal state, and emits a goal.cleared event. It reports
 // whether a goal was active (false is a no-op, so a repeated clear is
-// idempotent).
+// idempotent). This is the caller-initiated clear (DELETE /goal, CLI abort);
+// it carries no reason. See clearGoal for the reason-carrying variant
+// PursueGoal uses when a worker turn fails permanently.
 //
 // Ordering guarantee: ClearGoal journals and emits goal.cleared synchronously,
 // under s.mu, before it returns. A caller that also needs to cancel the loop's
@@ -169,6 +421,16 @@ func (s *Session) ActiveGoal() (condition string, ok bool) {
 // structurally impossible: by the time cancellation can wake the worker,
 // goal.cleared is already durable.
 func (s *Session) ClearGoal() bool {
+	return s.clearGoal("")
+}
+
+// clearGoal is ClearGoal's implementation, parameterized on the reason
+// recorded with goal.cleared. An empty reason (ClearGoal's case) matches the
+// pre-existing on-disk shape exactly (goalRecord.Reason omitempty); a
+// non-empty reason (PursueGoal's permanent-failure case) is what lets a
+// resumed session's log — and a live event subscriber — tell "a caller
+// cancelled this" apart from "the worker kept failing and the loop gave up".
+func (s *Session) clearGoal(reason string) bool {
 	s.mu.Lock()
 	if !s.goalActive {
 		s.mu.Unlock()
@@ -176,13 +438,13 @@ func (s *Session) ClearGoal() bool {
 	}
 	s.goalActive = false
 	s.goalCondition = ""
-	s.persistGoalLocked(recGoalCleared, goalRecord{})
+	s.persistGoalLocked(recGoalCleared, goalRecord{Reason: reason})
 	// Emit while still holding s.mu: this keeps the event stream (-> server
 	// journal/SSE seqs) ordered the same as the log write above under a
 	// concurrent recordGoalEval/achieveGoal race (see those functions).
 	// OnEvent must not call back into this Session — doing so would
 	// deadlock on s.mu, which is still held here.
-	s.emit(Event{Type: EventGoalCleared})
+	s.emit(Event{Type: EventGoalCleared, GoalReason: reason})
 	s.mu.Unlock()
 	return true
 }
