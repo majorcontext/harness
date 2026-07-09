@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -204,7 +205,10 @@ func (f *fakeHooks) ToolExecuteAfter(_ context.Context, req *plugin.ToolExecuteA
 	return append(req.Output, &message.Text{Text: f.afterSuffix})
 }
 
-func (f *fakeHooks) ExecuteTool(_ context.Context, _ *plugin.ToolExecuteRequest) (*plugin.ToolExecuteResponse, error) {
+func (f *fakeHooks) ExecuteTool(_ context.Context, req *plugin.ToolExecuteRequest) (*plugin.ToolExecuteResponse, error) {
+	if f.pluginTool == nil {
+		return nil, fmt.Errorf("plugin: no plugin provides tool %q", req.Tool)
+	}
 	return f.pluginTool, nil
 }
 
@@ -251,9 +255,122 @@ func TestHooksIntegration(t *testing.T) {
 	if !strings.Contains(tr.Content.Text(), "[annotated]") {
 		t.Errorf("result = %q", tr.Content.Text())
 	}
-	// session.status events emitted (busy + idle).
-	if len(hooks.events) != 2 || hooks.events[0].Type != plugin.EventSessionStatus {
-		t.Errorf("events = %+v", hooks.events)
+	// session.status (busy), tool.execute.start/end bracketing the bash
+	// call, then session.status (idle) — in that order.
+	if len(hooks.events) != 4 {
+		t.Fatalf("events = %+v", hooks.events)
+	}
+	wantTypes := []string{
+		plugin.EventSessionStatus,
+		plugin.EventToolExecuteStart,
+		plugin.EventToolExecuteEnd,
+		plugin.EventSessionStatus,
+	}
+	for i, want := range wantTypes {
+		if hooks.events[i].Type != want {
+			t.Errorf("events[%d].Type = %q, want %q", i, hooks.events[i].Type, want)
+		}
+	}
+	var startProps plugin.ToolExecuteStartProperties
+	if err := json.Unmarshal(hooks.events[1].Properties, &startProps); err != nil {
+		t.Fatal(err)
+	}
+	if startProps.Tool != "bash" || startProps.CallID != "tc1" {
+		t.Errorf("tool.execute.start props = %+v", startProps)
+	}
+	var endProps plugin.ToolExecuteEndProperties
+	if err := json.Unmarshal(hooks.events[2].Properties, &endProps); err != nil {
+		t.Fatal(err)
+	}
+	if endProps.Tool != "bash" || endProps.CallID != "tc1" || !endProps.OK {
+		t.Errorf("tool.execute.end props = %+v", endProps)
+	}
+}
+
+func TestToolExecuteEventsSkipDeniedCalls(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn(provider.StopToolUse, toolCall("tc1", "bash", `{"command":"rm -rf /"}`)),
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "understood"}),
+	}}
+	hooks := &fakeHooks{deny: "blocked by policy"}
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+		Hooks:     hooks,
+	})
+	if _, err := s.Prompt(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range hooks.events {
+		if ev.Type == plugin.EventToolExecuteStart || ev.Type == plugin.EventToolExecuteEnd {
+			t.Errorf("tool.execute event emitted for denied call: %+v", ev)
+		}
+	}
+}
+
+func TestToolExecuteEndNotOKOnError(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn(provider.StopToolUse, toolCall("tc1", "nope", `{}`)),
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "ok"}),
+	}}
+	hooks := &fakeHooks{}
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+		Hooks:     hooks,
+	})
+	if _, err := s.Prompt(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, ev := range hooks.events {
+		if ev.Type != plugin.EventToolExecuteEnd {
+			continue
+		}
+		found = true
+		var props plugin.ToolExecuteEndProperties
+		if err := json.Unmarshal(ev.Properties, &props); err != nil {
+			t.Fatal(err)
+		}
+		if props.OK {
+			t.Errorf("tool.execute.end OK = true for unknown-tool error result")
+		}
+	}
+	if !found {
+		t.Fatal("no tool.execute.end event")
+	}
+}
+
+func TestSessionErrorEvent(t *testing.T) {
+	// No turns scripted: Stream returns an error on the first call.
+	prov := &scriptedProvider{name: "test"}
+	hooks := &fakeHooks{}
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+		Hooks:     hooks,
+	})
+
+	_, err := s.Prompt(context.Background(), "go")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	var errEvents []plugin.Event
+	for _, ev := range hooks.events {
+		if ev.Type == plugin.EventSessionError {
+			errEvents = append(errEvents, ev)
+		}
+	}
+	if len(errEvents) != 1 {
+		t.Fatalf("session.error events = %d, want 1: %+v", len(errEvents), hooks.events)
+	}
+	var props plugin.SessionErrorProperties
+	if unmarshalErr := json.Unmarshal(errEvents[0].Properties, &props); unmarshalErr != nil {
+		t.Fatal(unmarshalErr)
+	}
+	if props.Message != err.Error() {
+		t.Errorf("session.error message = %q, want %q", props.Message, err.Error())
 	}
 }
 
