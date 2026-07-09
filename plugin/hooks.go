@@ -64,6 +64,19 @@ type InitializeParams struct {
 	HTTPHeaders map[string]string `json:"http_headers,omitempty"`
 	// Config is this plugin's block from the harness config file, verbatim.
 	Config json.RawMessage `json:"config,omitempty"`
+	// ServeURL is the base URL of this process's `harness serve` HTTP API
+	// (e.g. "http://localhost:4096"), present only when the harness is
+	// running in serve mode. It lets an out-of-process plugin — in any
+	// language, not just the Go SDK — hit the HTTP API directly (e.g. GET
+	// /session/{id}/message) instead of only the stdio client API. Empty in
+	// `harness run` mode, where there is no HTTP API to reach.
+	ServeURL string `json:"serve_url,omitempty"`
+	// RunToken is the bearer token that authenticates requests to ServeURL.
+	// It is the SAME token the orchestrator holds for this run — plugins are
+	// trusted local processes (spawned by the harness itself, over stdio),
+	// not third parties, so no separate scoped credential is minted. Empty
+	// whenever ServeURL is empty. See PROTOCOL.md's "Trust model" section.
+	RunToken string `json:"run_token,omitempty"`
 }
 
 // Event is one entry in the engine's event stream.

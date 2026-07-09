@@ -15,6 +15,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -325,7 +326,8 @@ func runCmd(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	host, err := buildPluginHost(ctx, cfg.Plugins, version, workDir, cfg.PluginHTTPHeaders)
+	lateAPI := newLateClientAPI()
+	host, err := buildPluginHost(ctx, cfg.Plugins, version, workDir, cfg.PluginHTTPHeaders, lateAPI, "", "")
 	if err != nil {
 		return err
 	}
@@ -358,6 +360,13 @@ func runCmd(args []string) error {
 		}
 	}
 
+	// The plugin host's ClientAPI is the direct engine-backed adapter (see
+	// cmd/harness/clientapi.go), late-bound: sess is assigned immediately
+	// below once resolveSession returns, strictly before the first
+	// Prompt/PursueGoal call — the earliest point any hook can fire.
+	var sess *engine.Session
+	lateAPI.Bind(newLazyRunClientAPI(func() *engine.Session { return sess }))
+
 	s, err := resolveSession(engine.Config{
 		Providers:    registry(cfg),
 		Model:        model,
@@ -373,6 +382,7 @@ func runCmd(args []string) error {
 	if err != nil {
 		return err
 	}
+	sess = s
 
 	goalNotAchieved := false
 	if opts.goal != "" {
@@ -549,6 +559,28 @@ func providerAuth(cfg *config.Config, family, defaultKeyEnv string) (apiKey, bas
 	return os.Getenv(keyEnv), baseURL
 }
 
+// serveURLForAddr derives the URL plugins should use to reach this
+// process's `harness serve` HTTP API from the -addr flag's listen address.
+// A bind-all address isn't reliably dialable as-is from another process on
+// the same host, so an empty host or an unspecified IP (0.0.0.0 or ::,
+// meaning "listen on every interface") is rewritten to the loopback address
+// 127.0.0.1; any other, explicit host (e.g. localhost, 10.0.0.5) is kept
+// as-is.
+func serveURLForAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		// Not a valid host:port (shouldn't happen for a listen address); fall
+		// back to the previous verbatim behavior.
+		return "http://" + addr
+	}
+	if host == "" {
+		host = "127.0.0.1"
+	} else if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
+}
+
 // serveCmd starts the HTTP+SSE session API. The run token comes from
 // HARNESS_RUN_TOKEN (required); the listener opens at boot, but nothing here
 // touches network egress, spawns processes, or scans beyond the session dir —
@@ -605,7 +637,8 @@ func serveCmd(args []string) error {
 	// closed on exit (deferred before srv's own defer below, so — since
 	// defers unwind LIFO — the host outlives the server's shutdown/drain and
 	// closes only after it, matching a served session's own lifetime).
-	pluginHost, err := buildPluginHost(context.Background(), cfg.Plugins, version, workDir, cfg.PluginHTTPHeaders)
+	lateAPI := newLateClientAPI()
+	pluginHost, err := buildPluginHost(context.Background(), cfg.Plugins, version, workDir, cfg.PluginHTTPHeaders, lateAPI, serveURLForAddr(addr), token)
 	if err != nil {
 		return err
 	}
@@ -623,6 +656,10 @@ func serveCmd(args []string) error {
 
 	// The event journal owner needs each engine session to report events to
 	// it, so the session wrappers wire OnEvent to the server's Publish.
+	// host is built just below, once srv exists (its ClientAPI is
+	// server-backed — see server/clientapi.go); mkCfg closes over the srv
+	// variable, so it can reference it before it is assigned — same pattern
+	// as the OnEvent closure above it.
 	var srv *server.Server
 	mkCfg := func(model message.ModelRef) engine.Config {
 		return engine.Config{
@@ -653,6 +690,8 @@ func serveCmd(args []string) error {
 		return err
 	}
 	defer srv.Close()
+
+	lateAPI.Bind(srv.ClientAPI())
 
 	httpSrv := &http.Server{Addr: addr, Handler: srv}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

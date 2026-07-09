@@ -106,7 +106,7 @@ func helperPluginCommand(t *testing.T, name string) config.PluginSpec {
 }
 
 func TestBuildPluginHostNoPlugins(t *testing.T) {
-	host, err := buildPluginHost(context.Background(), nil, "v", t.TempDir(), nil)
+	host, err := buildPluginHost(context.Background(), nil, "v", t.TempDir(), nil, nil, "", "")
 	if err != nil {
 		t.Fatalf("buildPluginHost: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestPluginWiringEndToEnd(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	host, err := buildPluginHost(ctx, cfg.Plugins, "test-version", tmp, nil)
+	host, err := buildPluginHost(ctx, cfg.Plugins, "test-version", tmp, nil, nil, "", "")
 	if err != nil {
 		t.Fatalf("buildPluginHost: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestPluginHTTPHeadersWiring(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	host, err := buildPluginHost(ctx, cfg.Plugins, "test-version", tmp, cfg.PluginHTTPHeaders)
+	host, err := buildPluginHost(ctx, cfg.Plugins, "test-version", tmp, cfg.PluginHTTPHeaders, nil, "", "")
 	if err != nil {
 		t.Fatalf("buildPluginHost: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestBuildPluginHostCachesManifest(t *testing.T) {
 
 	plugins := []config.PluginSpec{helperPluginCommand(t, "cacheplug")}
 
-	host1, err := buildPluginHost(context.Background(), plugins, "v", tmp, nil)
+	host1, err := buildPluginHost(context.Background(), plugins, "v", tmp, nil, nil, "", "")
 	if err != nil {
 		t.Fatalf("buildPluginHost (1st): %v", err)
 	}
@@ -289,7 +289,7 @@ func TestBuildPluginHostCachesManifest(t *testing.T) {
 		t.Fatal("expected the plugin to be probed (spawned) at least once")
 	}
 
-	host2, err := buildPluginHost(context.Background(), plugins, "v", tmp, nil)
+	host2, err := buildPluginHost(context.Background(), plugins, "v", tmp, nil, nil, "", "")
 	if err != nil {
 		t.Fatalf("buildPluginHost (2nd): %v", err)
 	}
@@ -458,7 +458,7 @@ func TestBuildPluginHostCorruptCacheReprobes(t *testing.T) {
 	}
 
 	plugins := []config.PluginSpec{helperPluginCommand(t, "corruptplug")}
-	host, err := buildPluginHost(context.Background(), plugins, "v", tmp, nil)
+	host, err := buildPluginHost(context.Background(), plugins, "v", tmp, nil, nil, "", "")
 	if err != nil {
 		t.Fatalf("buildPluginHost with a corrupt cache file failed startup, want it to treat the file as a miss and re-probe: %v", err)
 	}
@@ -690,7 +690,7 @@ func TestBuildPluginHostConfigChangeReprobes(t *testing.T) {
 	plug := helperPluginCommand(t, "cfgplug")
 	plug.Config = json.RawMessage(`{"mode":"a"}`)
 
-	host1, err := buildPluginHost(context.Background(), []config.PluginSpec{plug}, "v", tmp, nil)
+	host1, err := buildPluginHost(context.Background(), []config.PluginSpec{plug}, "v", tmp, nil, nil, "", "")
 	if err != nil {
 		t.Fatalf("buildPluginHost (config a): %v", err)
 	}
@@ -701,7 +701,7 @@ func TestBuildPluginHostConfigChangeReprobes(t *testing.T) {
 	}
 
 	plug.Config = json.RawMessage(`{"mode":"b"}`)
-	host2, err := buildPluginHost(context.Background(), []config.PluginSpec{plug}, "v", tmp, nil)
+	host2, err := buildPluginHost(context.Background(), []config.PluginSpec{plug}, "v", tmp, nil, nil, "", "")
 	if err != nil {
 		t.Fatalf("buildPluginHost (config b): %v", err)
 	}
@@ -728,7 +728,7 @@ func TestBuildPluginHostEnvChangeReprobes(t *testing.T) {
 	plug := helperPluginCommand(t, "envchangeplug")
 	plug.Env = []string{"PLUGIN_MODE=a"}
 
-	host1, err := buildPluginHost(context.Background(), []config.PluginSpec{plug}, "v", tmp, nil)
+	host1, err := buildPluginHost(context.Background(), []config.PluginSpec{plug}, "v", tmp, nil, nil, "", "")
 	if err != nil {
 		t.Fatalf("buildPluginHost (env a): %v", err)
 	}
@@ -739,7 +739,7 @@ func TestBuildPluginHostEnvChangeReprobes(t *testing.T) {
 	}
 
 	plug.Env = []string{"PLUGIN_MODE=b"}
-	host2, err := buildPluginHost(context.Background(), []config.PluginSpec{plug}, "v", tmp, nil)
+	host2, err := buildPluginHost(context.Background(), []config.PluginSpec{plug}, "v", tmp, nil, nil, "", "")
 	if err != nil {
 		t.Fatalf("buildPluginHost (env b): %v", err)
 	}
@@ -767,7 +767,7 @@ func TestBuildPluginHostDirChangeReprobes(t *testing.T) {
 	plug := helperPluginCommand(t, "dirchangeplug")
 	plug.Dir = dirA
 
-	host1, err := buildPluginHost(context.Background(), []config.PluginSpec{plug}, "v", tmp, nil)
+	host1, err := buildPluginHost(context.Background(), []config.PluginSpec{plug}, "v", tmp, nil, nil, "", "")
 	if err != nil {
 		t.Fatalf("buildPluginHost (dir a): %v", err)
 	}
@@ -778,7 +778,7 @@ func TestBuildPluginHostDirChangeReprobes(t *testing.T) {
 	}
 
 	plug.Dir = dirB
-	host2, err := buildPluginHost(context.Background(), []config.PluginSpec{plug}, "v", tmp, nil)
+	host2, err := buildPluginHost(context.Background(), []config.PluginSpec{plug}, "v", tmp, nil, nil, "", "")
 	if err != nil {
 		t.Fatalf("buildPluginHost (dir b): %v", err)
 	}

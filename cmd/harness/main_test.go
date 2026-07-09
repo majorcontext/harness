@@ -23,6 +23,27 @@ import (
 	"github.com/majorcontext/harness/provider/openaicompat"
 )
 
+func TestServeURLForAddr(t *testing.T) {
+	cases := []struct {
+		addr string
+		want string
+	}{
+		{"localhost:4096", "http://localhost:4096"},
+		{":4096", "http://127.0.0.1:4096"},
+		{"0.0.0.0:4096", "http://127.0.0.1:4096"},
+		{"[::]:4096", "http://127.0.0.1:4096"},
+		{"10.0.0.5:4096", "http://10.0.0.5:4096"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.addr, func(t *testing.T) {
+			got := serveURLForAddr(tc.addr)
+			if got != tc.want {
+				t.Errorf("serveURLForAddr(%q) = %q, want %q", tc.addr, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSessionDir(t *testing.T) {
 	t.Run("no-save disables persistence", func(t *testing.T) {
 		t.Setenv("HARNESS_SESSION_DIR", "/somewhere")
