@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,7 +47,24 @@ func TestPluginHelperProcess(t *testing.T) {
 		}
 	}
 	err := plugin.Serve(plugin.Manifest{Name: name}, &plugin.Hooks{
-		SystemTransform: func(_ context.Context, _ *plugin.Client, _ *plugin.SystemTransformRequest) (*plugin.SystemTransformResponse, error) {
+		SystemTransform: func(ctx context.Context, c *plugin.Client, _ *plugin.SystemTransformRequest) (*plugin.SystemTransformResponse, error) {
+			// When PLUGIN_HTTP_PROBE_URL is set, prove
+			// InitializeParams.HTTPHeaders (populated by the harness from
+			// config plugin_http_headers) actually reaches this plugin: make
+			// a real outbound request through c.HTTPClient(), which stamps
+			// those headers automatically (see plugin/sdk.go), and let the
+			// test's httptest server observe them.
+			if probeURL := os.Getenv("PLUGIN_HTTP_PROBE_URL"); probeURL != "" {
+				req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+				if err != nil {
+					return nil, err
+				}
+				resp, err := c.HTTPClient().Do(req)
+				if err != nil {
+					return nil, err
+				}
+				resp.Body.Close()
+			}
 			return &plugin.SystemTransformResponse{Segments: []string{marker}}, nil
 		},
 	})
@@ -148,6 +167,78 @@ func TestPluginWiringEndToEnd(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("system segments = %v, want to contain plugin marker %q", prov.requests[0].System, marker)
+	}
+}
+
+// TestPluginHTTPHeadersWiring proves scope item (4): config's
+// plugin_http_headers reaches the plugin's InitializeParams.HTTPHeaders and
+// is actually stamped on the plugin's outbound HTTP traffic. It does not add
+// new stamping machinery — plugin.Client.HTTPClient() already does the
+// stamping (see plugin/sdk.go); this only proves buildPluginHost passes the
+// config value through plugin.Options.HTTPHeaders, which host.go already
+// forwards into InitializeParams.
+func TestPluginHTTPHeadersWiring(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a real plugin subprocess")
+	}
+	tmp := t.TempDir()
+	t.Setenv("HARNESS_PLUGIN_CACHE", filepath.Join(tmp, "plugin_cache.json"))
+	t.Setenv("GO_WANT_PLUGIN_HELPER", "1")
+	t.Setenv("PLUGIN_NAME", "httpplug")
+
+	gotHeaders := make(chan http.Header, 1)
+	probe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeaders <- r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(probe.Close)
+	t.Setenv("PLUGIN_HTTP_PROBE_URL", probe.URL)
+
+	cfg := &config.Config{
+		Plugins:           []config.PluginSpec{helperPluginCommand(t, "httpplug")},
+		PluginHTTPHeaders: map[string]string{"X-Workspace": "acme-corp"},
+	}
+
+	ctx := context.Background()
+	host, err := buildPluginHost(ctx, cfg.Plugins, "test-version", tmp, cfg.PluginHTTPHeaders)
+	if err != nil {
+		t.Fatalf("buildPluginHost: %v", err)
+	}
+	if host == nil {
+		t.Fatal("buildPluginHost returned nil host with plugins configured")
+	}
+	t.Cleanup(host.Close)
+
+	prov := &scriptedProvider{name: "test"}
+	model := message.ModelRef{Provider: "test", Model: "m1"}
+	mkCfg := func(m message.ModelRef) engine.Config {
+		return engine.Config{
+			Providers:    provider.Registry{"test": prov},
+			Model:        m,
+			System:       []string{"base system"},
+			WorkDir:      tmp,
+			Instructions: &engine.InstructionsConfig{Disabled: true},
+			SkillsDirs:   []string{},
+			Hooks:        pluginHooks(host),
+		}
+	}
+	newSession := newSessionFn(mkCfg, model, cfg, nil, func(string, int, *provider.Request) {})
+	sess, err := newSession(message.ModelRef{}, tmp)
+	if err != nil {
+		t.Fatalf("newSession: %v", err)
+	}
+	if _, err := sess.Prompt(ctx, "hello"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	// Block directly on the channel the probe handler fills: the plugin's
+	// system.transform hook (dispatched synchronously by Prompt above) makes
+	// its outbound request before returning, so the value is already there;
+	// if the wiring were broken the plugin never calls out and this blocks
+	// until the test binary's own timeout catches the hang.
+	h := <-gotHeaders
+	if got := h.Get("X-Workspace"); got != "acme-corp" {
+		t.Errorf("plugin outbound request X-Workspace header = %q, want %q (config plugin_http_headers -> InitializeParams.HTTPHeaders -> Client.HTTPClient())", got, "acme-corp")
 	}
 }
 
