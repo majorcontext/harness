@@ -243,6 +243,16 @@ func (s *Session) CreatedAt() time.Time {
 	return s.createdAt
 }
 
+// WorkDir returns the session's working directory: Config.WorkDir for a
+// fresh session, or the value restored from the session log header for a
+// loaded one (which wins over the Config.WorkDir the caller supplied to
+// LoadSession — see store.go). It never changes after construction, so no
+// lock is needed (consistent with direct s.cfg.WorkDir reads elsewhere, e.g.
+// bash.go and filetools.go).
+func (s *Session) WorkDir() string {
+	return s.cfg.WorkDir
+}
+
 // Usage returns cumulative token usage across all turns.
 func (s *Session) Usage() provider.Usage {
 	s.mu.Lock()

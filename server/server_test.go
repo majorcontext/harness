@@ -164,8 +164,10 @@ func newServer(t *testing.T, dir string, prov provider.Provider, maxResident int
 		Version:           "9.9.9",
 		HeartbeatInterval: 20 * time.Millisecond,
 		MaxResident:       maxResident,
-		NewSession: func(m message.ModelRef) (*engine.Session, error) {
-			return engine.NewSession(mkCfg(m)), nil
+		NewSession: func(m message.ModelRef, workDir string) (*engine.Session, error) {
+			cfg := mkCfg(m)
+			cfg.WorkDir = workDir
+			return engine.NewSession(cfg), nil
 		},
 		LoadSession: func(id string) (*engine.Session, error) {
 			return engine.LoadSession(mkCfg(message.ModelRef{}), id)
@@ -227,6 +229,13 @@ func (h *harness) createSession(model string) string {
 	if model != "" {
 		body = map[string]string{"model": model}
 	}
+	return h.createSessionBody(body)
+}
+
+// createSessionBody posts an arbitrary POST /session body (e.g. to exercise
+// workdir / share_workdir) and returns the new session's ID.
+func (h *harness) createSessionBody(body any) string {
+	h.t.Helper()
 	resp, data := h.do("POST", "/session", body)
 	if resp.StatusCode != 201 {
 		h.t.Fatalf("create session status %d: %s", resp.StatusCode, data)
@@ -703,8 +712,11 @@ func TestLastEventIDHeader(t *testing.T) {
 func TestSessionFilter(t *testing.T) {
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("a"), asstTurn("b")}}
 	h := newHarness(t, prov)
-	idA := h.createSession("test/m1")
-	idB := h.createSession("test/m1")
+	// Both sessions default to the same workdir (the server process cwd); this
+	// test is about SSE filtering, not workdir exclusivity, so opt both into
+	// share_workdir to keep the two prompts below independent of each other.
+	idA := h.createSessionBody(map[string]any{"model": "test/m1", "share_workdir": true})
+	idB := h.createSessionBody(map[string]any{"model": "test/m1", "share_workdir": true})
 
 	sse := h.openSSE("?from=0&session="+idA, "")
 
