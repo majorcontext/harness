@@ -278,6 +278,61 @@ func TestGoalAchievedNotActiveOnResume(t *testing.T) {
 	}
 }
 
+func TestClearBetweenRegisterAndLoop(t *testing.T) {
+	// The round-3 race: registration is synchronous in the caller (e.g. the
+	// HTTP handler), so a ClearGoal landing before the loop goroutine runs
+	// must win — the loop then starts, sees the goal gone, and exits without
+	// running a single turn or writing any post-cleared records.
+	dir := t.TempDir()
+	prov := &scriptedProvider{name: "test"} // any Prompt would fail: no turns scripted
+	s := NewSession(Config{
+		Providers:  provider.Registry{"test": prov},
+		Model:      message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir: dir,
+	})
+	if err := s.RegisterGoal("the condition"); err != nil {
+		t.Fatal(err)
+	}
+	if !s.ClearGoal() {
+		t.Fatal("ClearGoal should clear a registered goal")
+	}
+	res, err := s.PursueGoal(context.Background(), "the condition", GoalOptions{
+		Registered: true,
+		Evaluator:  message.ModelRef{Provider: "test", Model: "judge"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Achieved || res.Turns != 0 || res.Reason != "goal cleared" {
+		t.Fatalf("result = %+v, want cleared with zero turns", res)
+	}
+	if len(prov.requests) != 0 {
+		t.Fatalf("provider saw %d requests, want 0", len(prov.requests))
+	}
+	// Log ends set -> cleared with nothing after.
+	data, err := os.ReadFile(filepath.Join(dir, s.ID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	if !strings.Contains(log, "goal.set") || !strings.Contains(log, "goal.cleared") {
+		t.Fatalf("log missing set/cleared records: %s", log)
+	}
+	if strings.Contains(log, "goal.eval") || strings.Contains(log, "goal.achieved") {
+		t.Fatalf("log has post-clear goal records: %s", log)
+	}
+}
+
+func TestRegisterGoalRejectsSecondActive(t *testing.T) {
+	s := NewSession(Config{})
+	if err := s.RegisterGoal("one"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RegisterGoal("two"); err == nil {
+		t.Fatal("second RegisterGoal should error while a goal is active")
+	}
+}
+
 func TestClearGoalRecordsAndResets(t *testing.T) {
 	dir := t.TempDir()
 	prov := &goalProvider{
@@ -440,7 +495,9 @@ func TestGoalEventsEmitWhileLockHeld(t *testing.T) {
 			name: "recordGoalEval",
 			want: EventGoalEval,
 			run: func(s *Session) {
-				s.setGoal("cond")
+				if err := s.RegisterGoal("cond"); err != nil {
+					t.Fatal(err)
+				}
 				s.recordGoalEval(true, "reason", 1)
 			},
 		},
@@ -448,7 +505,9 @@ func TestGoalEventsEmitWhileLockHeld(t *testing.T) {
 			name: "achieveGoal",
 			want: EventGoalAchieved,
 			run: func(s *Session) {
-				s.setGoal("cond")
+				if err := s.RegisterGoal("cond"); err != nil {
+					t.Fatal(err)
+				}
 				s.achieveGoal("reason", 1)
 			},
 		},
@@ -456,7 +515,9 @@ func TestGoalEventsEmitWhileLockHeld(t *testing.T) {
 			name: "ClearGoal",
 			want: EventGoalCleared,
 			run: func(s *Session) {
-				s.setGoal("cond")
+				if err := s.RegisterGoal("cond"); err != nil {
+					t.Fatal(err)
+				}
 				s.ClearGoal()
 			},
 		},

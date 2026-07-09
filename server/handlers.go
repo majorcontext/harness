@@ -330,6 +330,20 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// Register the goal synchronously BEFORE the loop goroutine spawns and
+	// before the 202 returns: by the time the caller can DELETE, the goal is
+	// active and clearable — the accept-vs-clear race is structurally gone.
+	if err := st.sess.RegisterGoal(body.Condition); err != nil {
+		// Undo the claim taken above: mirror the tail of runPrompt/runGoal.
+		s.mu.Lock()
+		st.running = false
+		st.cancel = nil
+		st.lastUsed = time.Now()
+		s.mu.Unlock()
+		s.wg.Done()
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 
 	go s.runGoal(ctx, id, st, body.Condition, body.MaxTurns)
@@ -345,8 +359,9 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condition string, maxTurns int) {
 	defer s.wg.Done()
 	_, err := st.sess.PursueGoal(ctx, condition, engine.GoalOptions{
-		MaxTurns:  maxTurns,
-		Evaluator: s.opts.GoalEvaluator,
+		Registered: true,
+		MaxTurns:   maxTurns,
+		Evaluator:  s.opts.GoalEvaluator,
 	})
 	s.syncMessages(id)
 	switch {

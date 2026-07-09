@@ -28,6 +28,11 @@ import (
 
 // GoalOptions configures a PursueGoal run.
 type GoalOptions struct {
+	// Registered indicates the caller already called RegisterGoal
+	// synchronously; PursueGoal then treats an inactive goal at loop start
+	// as cleared-before-start rather than registering a fresh one.
+	Registered bool
+
 	// MaxTurns caps the number of worker turns; 0 means unlimited.
 	MaxTurns int
 	// Evaluator is the model ref used for the completion check. It is required
@@ -83,10 +88,24 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 		return nil, errors.New("engine: PursueGoal requires a non-empty condition")
 	}
 
-	s.setGoal(condition)
+	if opts.Registered {
+		// The accepting caller registered synchronously (the server handler
+		// does, closing the accept-vs-clear race). If the goal is no longer
+		// active, a clear won the race before the loop started: clean stop.
+		if !s.goalActiveWith(condition) {
+			return &GoalResult{Achieved: false, Turns: 0, Reason: "goal cleared"}, nil
+		}
+	} else if err := s.RegisterGoal(condition); err != nil {
+		return nil, err
+	}
 
 	directive := condition
 	for turn := 1; opts.MaxTurns == 0 || turn <= opts.MaxTurns; turn++ {
+		if !s.goalActiveWith(condition) {
+			// Cleared between registration and this turn (or mid-loop by a
+			// concurrent DELETE): clean stop, no turn runs.
+			return &GoalResult{Achieved: false, Turns: turn - 1, Reason: "goal cleared"}, nil
+		}
 		if _, err := s.Prompt(ctx, directive); err != nil {
 			return nil, err
 		}
@@ -146,14 +165,37 @@ func (s *Session) ClearGoal() bool {
 	return true
 }
 
-// setGoal records goal.set and marks the goal active.
-func (s *Session) setGoal(condition string) {
+// RegisterGoal records goal.set and marks the goal active. It is called
+// synchronously by whoever accepts the goal (the HTTP handler, the CLI)
+// BEFORE any loop goroutine spawns, so a ClearGoal arriving after acceptance
+// always observes an active goal — the round-3 registration race is
+// structurally impossible. Errors if a goal is already active.
+func (s *Session) RegisterGoal(condition string) error {
+	if strings.TrimSpace(condition) == "" {
+		return errors.New("engine: RegisterGoal requires a non-empty condition")
+	}
 	s.mu.Lock()
+	if s.goalActive {
+		cur := s.goalCondition
+		s.mu.Unlock()
+		return fmt.Errorf("engine: a goal is already active: %q", cur)
+	}
 	s.goalActive = true
 	s.goalCondition = condition
 	s.persistGoalLocked(recGoalSet, goalRecord{Condition: condition})
-	s.mu.Unlock()
+	// Emit while holding s.mu (see ClearGoal): event order matches log
+	// order. OnEvent must not call back into this Session.
 	s.emit(Event{Type: EventGoalSet, GoalCondition: condition})
+	s.mu.Unlock()
+	return nil
+}
+
+// goalActiveWith reports whether the given condition is the currently
+// active goal.
+func (s *Session) goalActiveWith(condition string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.goalActive && s.goalCondition == condition
 }
 
 // recordGoalEval records one evaluator verdict for a turn. It is a no-op —
