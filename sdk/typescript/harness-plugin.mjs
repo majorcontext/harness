@@ -405,28 +405,58 @@ class Plugin {
     const exitProcess = options.exitProcess !== false;
 
     const server = new PluginServer(this.definition);
+
+    // Track in-flight output.write() calls so shutdown can wait for them to
+    // actually complete (the callback/'drain' contract) instead of calling
+    // process.exit() the instant the line is handed to the stream. Node
+    // does not guarantee that data queued in an asynchronous stream (a
+    // pipe, on some platforms/kernels, in particular) is flushed before a
+    // synchronous process.exit() — see
+    // https://nodejs.org/api/process.html#process_process_exit_code —
+    // which can silently truncate the plugin's final response(s) to the
+    // host. Waiting for every write's completion callback before exiting
+    // removes that race.
+    let pendingWrites = 0;
+    let onDrained = null;
     const write = (line) => {
-      output.write(line + '\n');
+      pendingWrites++;
+      output.write(line + '\n', () => {
+        pendingWrites--;
+        if (pendingWrites === 0 && onDrained) {
+          const fn = onDrained;
+          onDrained = null;
+          fn();
+        }
+      });
     };
+    const flushed = () =>
+      pendingWrites === 0 ? Promise.resolve() : new Promise((resolve) => (onDrained = resolve));
+
     const conn = new Connection(write, (method, params, c) => server.handle(method, params, c));
 
     const rl = createInterface({ input, crlfDelay: Infinity });
+
+    const exit = async (code) => {
+      // Let every queued write actually reach the OS (its completion
+      // callback has fired) before terminating the process. exitCode is
+      // set first so that, even in an embedder that has itself stubbed or
+      // deferred process.exit, the intended status is still observed.
+      await flushed();
+      if (exitProcess) {
+        process.exitCode = code;
+        process.exit(code);
+      }
+    };
 
     return new Promise((resolve, reject) => {
       rl.on('line', (line) => conn.handleLine(line));
       rl.on('close', () => {
         conn.fail(new Error('stdin closed'));
-        if (exitProcess) {
-          process.exit(server.shuttingDown ? 0 : 1);
-        }
-        resolve();
+        exit(server.shuttingDown ? 0 : 1).then(resolve, reject);
       });
       input.on('error', (err) => {
         conn.fail(err);
-        if (exitProcess) {
-          process.exit(1);
-        }
-        reject(err);
+        exit(1).then(() => reject(err), reject);
       });
     });
   }

@@ -2,7 +2,7 @@
 // fake host (no real harness process involved). Run with `node --test`.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PassThrough } from 'node:stream';
+import { PassThrough, Writable } from 'node:stream';
 import { createPlugin, PROTOCOL_VERSION } from '../harness-plugin.mjs';
 
 /**
@@ -385,4 +385,60 @@ test('graceful shutdown: run() resolves once stdin closes after a shutdown notif
   host.closeStdin();
 
   await assert.doesNotReject(done);
+});
+
+test('graceful shutdown drains pending stdout writes before exiting the process', async () => {
+  // Regression test: process.exit() fired synchronously the instant a line
+  // was handed to output.write() could race an asynchronous stream (a pipe
+  // on some platforms does not complete writes on the same tick) and drop
+  // the plugin's final response(s) to the host. This stub output stream
+  // defers write completion to a later tick, exactly like that case.
+  let writesCompleted = 0;
+  const written = [];
+  const output = new Writable({
+    write(chunk, _enc, callback) {
+      setImmediate(() => {
+        written.push(chunk.toString('utf8'));
+        writesCompleted++;
+        callback();
+      });
+    },
+  });
+  const input = new PassThrough();
+
+  const plugin = createPlugin({ name: 'flusher' });
+
+  const origExit = process.exit;
+  let exitCode;
+  let writesCompletedAtExitTime;
+  process.exit = (code) => {
+    exitCode = code;
+    writesCompletedAtExitTime = writesCompleted;
+    // Do not actually terminate the test process.
+  };
+
+  let done;
+  try {
+    done = plugin.run({ input, output, exitProcess: true });
+
+    input.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocol_version: PROTOCOL_VERSION } }) + '\n');
+    // Let the (still in-flight, per the stub above) initialize response
+    // get queued on `output` before shutdown/close race it.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    input.write(JSON.stringify({ jsonrpc: '2.0', method: 'shutdown' }) + '\n');
+    input.end();
+
+    await done;
+  } finally {
+    process.exit = origExit;
+  }
+
+  assert.equal(exitCode, 0);
+  assert.equal(
+    writesCompletedAtExitTime,
+    writesCompleted,
+    'process.exit() must not fire until all queued stdout writes have completed',
+  );
+  assert.ok(written.join('').includes('"id":1'), 'the initialize response must have reached the output stream');
 });
