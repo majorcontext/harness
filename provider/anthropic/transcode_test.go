@@ -147,6 +147,60 @@ func TestTranscodeThinkingReplay(t *testing.T) {
 	}
 }
 
+// TestTranscodeOversizedReasoningProviderDataDropped is the round-3
+// forensic regression guard at the anthropic transcoder: a Reasoning
+// part's "anthropic" provider_data entry with no upper bound at all is
+// replayed verbatim on every subsequent request for the rest of the
+// session (see message.ProviderData's doc comment, "Unbounded replay is a
+// request-size/time bomb") — a production session
+// (ses_01kx3ts0pjfap950bmr9b2js0b.jsonl) carried a ~30KB signature where
+// its seven siblings in the same run were 350-600 bytes. This is a
+// synthetic fixture of that shape, not session-log content: an oversized
+// signature must be dropped exactly like a foreign-provider or
+// present-but-empty entry (both already covered above) — never unmarshaled,
+// never replayed — while an ordinary-sized sibling in the same request is
+// unaffected.
+func TestTranscodeOversizedReasoningProviderDataDropped(t *testing.T) {
+	huge := append(append(json.RawMessage(`{"signature":"`), []byte(strings.Repeat("A", 300*1024))...), []byte(`"}`)...)
+	req := baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.Reasoning{Text: "ordinary", ProviderData: message.ProviderData{
+				Family: json.RawMessage(`{"signature":"sig123"}`),
+			}},
+			&message.Reasoning{Text: "runaway", ProviderData: message.ProviderData{
+				Family: huge,
+			}},
+			&message.Text{Text: "answer"},
+		}},
+	)
+	out, err := transcodeRequest(req)
+	if err != nil {
+		t.Fatalf("transcodeRequest: %v", err)
+	}
+	raw, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal apiRequest: %v", err)
+	}
+	// The request-size-bomb assertion: the wire request must not carry the
+	// oversized entry at all, regardless of how the rest of the transcode
+	// behaves.
+	if len(raw) > 100*1024 {
+		t.Fatalf("marshaled request = %d bytes, want the oversized provider_data entry dropped (< 100KiB)", len(raw))
+	}
+
+	asst := out.Messages[1]
+	if len(asst.Content) != 2 {
+		t.Fatalf("assistant content = %+v, want the ordinary thinking block plus the trailing text (oversized one dropped)", asst.Content)
+	}
+	if asst.Content[0].Type != "thinking" || asst.Content[0].Signature != "sig123" {
+		t.Errorf("surviving thinking block = %+v, want the ordinary-sized sibling untouched", asst.Content[0])
+	}
+	if asst.Content[1].Text != "answer" {
+		t.Errorf("assistant content = %+v, want the runaway reasoning part dropped, not converted to plain text", asst.Content)
+	}
+}
+
 func TestTranscodeToolCallAndResult(t *testing.T) {
 	out := mustTranscode(t, baseRequest(
 		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "run it"}}},

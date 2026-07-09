@@ -350,6 +350,67 @@ func TestPursueGoalUnparseableTwice(t *testing.T) {
 	}
 }
 
+// TestPursueGoalUnparseableTwiceClearsGoal reproduces the round-3 forensic
+// finding directly (ses_01kx3ts0pjfap950bmr9b2js0b.jsonl): the worker turn
+// succeeds, but the evaluator returns unparseable output twice in a row.
+// Before the fix, PursueGoal returned that error bare and left the goal
+// active forever — turns=0, no goal.eval, nothing durable explaining the
+// silence beyond a single session.error. The evaluator-failure edge must
+// obey the exact same no-zombie guarantee as a permanently failing worker
+// turn: clear the goal, carrying the error as the reason, before returning.
+func TestPursueGoalUnparseableTwiceClearsGoal(t *testing.T) {
+	dir := t.TempDir()
+	prov := &goalProvider{
+		worker: [][]provider.Event{
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "work"}),
+		},
+		eval: [][]provider.Event{
+			evalTurn("I am not sure about this"),
+			evalTurn("still rambling with no verdict"),
+		},
+	}
+	var evs []Event
+	s := goalSession(t, prov, dir)
+	s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
+
+	_, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+	if err == nil {
+		t.Fatal("PursueGoal with two unparseable evaluations succeeded, want error")
+	}
+
+	// No zombie: the goal must no longer be active in memory.
+	if cond, ok := s.ActiveGoal(); ok {
+		t.Fatalf("ActiveGoal = %q, still active after permanent evaluator failure — zombie goal", cond)
+	}
+
+	var sawCleared bool
+	for _, ev := range evs {
+		if ev.Type == EventGoalCleared {
+			sawCleared = true
+			if !strings.Contains(ev.GoalReason, err.Error()) && !strings.Contains(ev.GoalReason, "unparseable") {
+				t.Errorf("goal.cleared GoalReason = %q, want it to carry the evaluator error", ev.GoalReason)
+			}
+		}
+		if ev.Type == EventGoalAchieved {
+			t.Error("goal.achieved emitted after an evaluator failure, want none")
+		}
+	}
+	if !sawCleared {
+		t.Fatal("no goal.cleared event emitted after permanent evaluator failure")
+	}
+
+	// Nor on disk: a resumed session must not see an active goal either —
+	// the exact check that would have caught ses_01kx3ts0pjfap950bmr9b2js0b
+	// staying active forever.
+	loaded, err := LoadSession(s.cfg, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cond, ok := loaded.ActiveGoal(); ok {
+		t.Errorf("resumed ActiveGoal = %q, active after permanent evaluator failure — zombie goal survives reload", cond)
+	}
+}
+
 func TestPursueGoalUnparseableThenRecovers(t *testing.T) {
 	prov := &goalProvider{
 		worker: [][]provider.Event{
@@ -739,6 +800,12 @@ type blockingEvalProvider struct {
 	release chan struct{}
 	evalOut string
 
+	// evalErr, when set, makes the evaluator call fail with this error once
+	// released instead of returning evalOut's scripted verdict — used to
+	// race a concurrent ClearGoal against an evaluator call that then fails
+	// with a genuine (non-cancellation) provider error.
+	evalErr error
+
 	once sync.Once
 }
 
@@ -751,6 +818,9 @@ func (p *blockingEvalProvider) Stream(ctx context.Context, req *provider.Request
 		case <-p.release:
 		case <-ctx.Done():
 			return nil, ctx.Err()
+		}
+		if p.evalErr != nil {
+			return nil, p.evalErr
 		}
 		return &scriptedStream{events: evalTurn(p.evalOut)}, nil
 	}
@@ -817,6 +887,82 @@ func TestClearGoalDuringPendingEvaluationIsCleanStop(t *testing.T) {
 	}
 	if strings.Contains(log, `"type":"goal.eval"`) {
 		t.Errorf("session log contains a goal.eval record for an evaluation that resolved after ClearGoal:\n%s", log)
+	}
+}
+
+// TestClearGoalDuringPendingEvaluatorFailureIsCleanStop reproduces the race
+// asymmetry finding: a ClearGoal (DELETE /goal) racing an in-flight
+// evaluator call that then fails with a genuine (non-cancellation) provider
+// error must be treated exactly like the same race on the worker-turn path
+// (see TestPursueGoalWorkerFailsPermanentlyClearsGoal's goalActiveWith guard)
+// — a clean stop, with no error returned and no session.error emitted. The
+// goal was already cleared by the time the evaluator failure is observed, so
+// there is nothing left to clear and nothing to journal as a failure: a
+// deliberately-cleared goal is not an error condition regardless of which
+// half of the loop the clear raced with.
+func TestClearGoalDuringPendingEvaluatorFailureIsCleanStop(t *testing.T) {
+	dir := t.TempDir()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+
+	evalErr := errors.New("evaluator provider exploded")
+	prov := &blockingEvalProvider{
+		worker:  [][]provider.Event{asstTurn(provider.StopEndTurn, &message.Text{Text: "working"})},
+		entered: entered,
+		release: release,
+		evalErr: evalErr,
+	}
+	hooks := &fakeHooks{}
+	s := goalSession(t, prov, dir, hooks)
+
+	type outcome struct {
+		res *GoalResult
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := s.PursueGoal(context.Background(), "goalx", GoalOptions{Evaluator: evalModel})
+		done <- outcome{res, err}
+	}()
+
+	<-entered // the evaluation is in flight, blocked on release
+
+	if !s.ClearGoal() {
+		t.Fatal("ClearGoal returned false for an active goal")
+	}
+
+	releaseOnce.Do(func() { close(release) }) // let the pending evaluator failure land
+
+	out := <-done
+	if out.err != nil {
+		t.Fatalf("PursueGoal error = %v, want nil (goal already cleared concurrently, same as the worker-turn path)", out.err)
+	}
+	if out.res == nil || out.res.Achieved {
+		t.Fatalf("result = %+v, want a clean stop (Achieved=false, no error)", out.res)
+	}
+	if out.res.Reason != "goal cleared" {
+		t.Errorf("result.Reason = %q, want %q", out.res.Reason, "goal cleared")
+	}
+
+	if msgs := sessionErrorMessages(t, hooks); len(msgs) != 0 {
+		t.Errorf("session.error emitted for an evaluator failure racing a concurrent ClearGoal: %v", msgs)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, s.ID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	if !strings.Contains(log, `"type":"goal.cleared"`) {
+		t.Fatalf("session log missing goal.cleared record:\n%s", log)
+	}
+	if strings.Count(log, `"type":"goal.cleared"`) != 1 {
+		t.Errorf("session log has more than one goal.cleared record (evaluator-failure path re-cleared an already-cleared goal):\n%s", log)
+	}
+	if strings.Contains(log, evalErr.Error()) {
+		t.Errorf("session log carries the evaluator error even though the goal was already cleared:\n%s", log)
 	}
 }
 
