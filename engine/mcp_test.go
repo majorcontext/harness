@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -389,6 +390,70 @@ func TestSessionRegistersMCPTools(t *testing.T) {
 	if tr.Content.Text() != "cloudy" {
 		t.Errorf("tool result content = %q", tr.Content.Text())
 	}
+}
+
+// TestSessionPromptSurvivesMCPServerFailure verifies the session-level
+// fail-open guarantee: one configured MCP server that cannot be reached at
+// all must not kill the session's Prompt — it simply runs with the other,
+// reachable server's tool available and the unreachable one absent.
+func TestSessionPromptSurvivesMCPServerFailure(t *testing.T) {
+	good := &fakeMCPHTTPServer{tools: []fakeMCPTool{
+		{name: "ok", content: []map[string]any{textContent("still works")}},
+	}}
+	goodURL := good.start(t)
+
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn(provider.StopToolUse,
+			&message.Text{Text: "trying"},
+			toolCall("tc1", "mcp__good__ok", `{}`)),
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "done"}),
+	}}
+
+	mgr := NewMCPManager(map[string]MCPServerConfig{
+		"good": {URL: goodURL},
+		"down": {URL: "http://127.0.0.1:1"}, // nothing listens: connection refused
+	})
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+		MCP:       mgr,
+	})
+
+	final, err := s.Prompt(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Prompt failed because of an unreachable MCP server: %v", err)
+	}
+	if final.Parts.Text() != "done" {
+		t.Errorf("final = %q", final.Parts.Text())
+	}
+
+	var names []string
+	for _, td := range prov.requests[0].Tools {
+		names = append(names, td.Name)
+	}
+	if !containsName(names, "mcp__good__ok") {
+		t.Errorf("tools = %v, want mcp__good__ok present", names)
+	}
+	if containsName(names, "mcp__down__") {
+		t.Errorf("tools = %v, want no tool from the unreachable server", names)
+	}
+
+	h := s.History()
+	tr, ok := h[2].Parts[0].(*message.ToolResult)
+	if !ok || tr.IsError {
+		t.Fatalf("tool result = %+v, want a successful call to the reachable server's tool", h[2].Parts[0])
+	}
+}
+
+func containsName(names []string, want string) bool {
+	for _, n := range names {
+		if strings.Contains(n, want) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestSessionMCPCallRoutesThroughSameClients exercises the plugin-facing
