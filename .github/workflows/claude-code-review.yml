@@ -61,3 +61,31 @@ jobs:
           claude_args: |
             --model claude-opus-4-8
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(go build:*),Bash(go vet:*),Bash(go test:*),Bash(gofmt:*),Bash(node --test:*)"
+
+      - name: Verify Claude review actually ran
+        if: always()
+        run: |
+          set -euo pipefail
+          FILE="/home/runner/work/_temp/claude-execution-output.json"
+
+          if [ ! -f "$FILE" ]; then
+            echo "::error::Claude execution output file not found at $FILE — cannot confirm the review ran, treating as failure."
+            exit 1
+          fi
+
+          # The file may be a single JSON object or an array of turn objects,
+          # depending on the action version. Check defensively for either shape.
+          IS_ERROR=$(jq -r '
+            if type == "array" then
+              (any(.[]; (.is_error // false) == true))
+            else
+              (.is_error // false) == true
+            end
+          ' "$FILE")
+
+          if [ "$IS_ERROR" = "true" ]; then
+            echo "::error::Claude Code Review execution log reports is_error=true — the underlying model call failed (e.g. API error or usage cap) even though the action step reported success. Failing the check instead of reporting a false green."
+            exit 1
+          fi
+
+          echo "Claude review execution output verified: no is_error evidence found."
