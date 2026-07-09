@@ -92,14 +92,37 @@ func TestGoalRegisterFailureRollsBackAndSessionStaysUsable(t *testing.T) {
 
 	// Drain must complete — bounded, so a reintroduced missing wg.Done on the
 	// rollback path fails this test instead of hanging the suite forever.
+	assertDrainCompletes(t, h.srv)
+}
+
+// assertDrainCompletes calls Drain on a tracked goroutine and requires it to
+// return within drainBound. Every prompt/goal in this test has already been
+// aborted and observed idle before this is called, so on correct code Drain
+// (which itself waits on wg.Wait(), unconditionally, once its own grace
+// context expires) returns almost immediately — drainBound is generous for
+// that real case but tight enough that a reintroduced missing wg.Done on the
+// RegisterGoal-failure rollback path (which leaves the WaitGroup counter
+// permanently off by one, so wg.Wait() never returns) manifests as a fast,
+// unambiguous test failure instead of hanging the suite until the package
+// test timeout.
+func assertDrainCompletes(t *testing.T, srv *Server) {
+	t.Helper()
+	const drainBound = 2 * time.Second
+
+	start := time.Now()
 	done := make(chan struct{})
 	go func() {
-		h.srv.Drain(context.Background())
+		srv.Drain(context.Background())
 		close(done)
 	}()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Drain did not return; a missing wg.Done on the RegisterGoal-failure rollback path would leave the WaitGroup counter stuck and Drain hung forever")
+		// Confirmed complete, not merely "hasn't failed yet": Drain returned
+		// and closed done within the bound.
+		if elapsed := time.Since(start); elapsed >= drainBound {
+			t.Fatalf("Drain returned but took %s, at/past the %s bound; treat as a hang", elapsed, drainBound)
+		}
+	case <-time.After(drainBound):
+		t.Fatalf("Drain did not return within %s; a missing wg.Done on the RegisterGoal-failure rollback path would leave the WaitGroup counter stuck and Drain hung forever", drainBound)
 	}
 }
