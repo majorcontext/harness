@@ -20,6 +20,27 @@ own requests independently.
 3. Hook dispatches, tool executions, and client API calls flow until:
 4. Harness → `shutdown` (notification), then closes stdin. Plugin exits.
 
+`InitializeParams` carries `serve_url` and `run_token` when (and only when)
+the harness is running in `harness serve` mode: a plugin process — in any
+language, not just the Go SDK — can then also hit the HTTP API directly
+(`GET /session/{id}/message`, etc.) instead of going through the stdio
+client API. Both are empty in `harness run` mode, where there is no HTTP
+API to reach. See "Trust model" below.
+
+### Trust model
+
+Plugins are **trusted local processes**, not third parties: the harness
+spawns them itself, over stdio, from a manifest cached at install time
+(binary-hash keyed). `run_token` is therefore the exact same bearer token
+the orchestrator holds for this run — not a separate, narrower-scoped
+credential minted per plugin. A plugin that can reach `serve_url` can do
+anything the orchestrator can do over the HTTP API for this process (create
+sessions, prompt, abort, read any session it owns). This mirrors the
+`shell.env` hook, which already hands plugins a seat at env-var injection
+for tool commands, and the "no auth hooks" decision in AGENTS.md (credential
+scoping happens at the network layer, not inside the harness). A plugin
+that should not have this reach simply should not be installed.
+
 A plugin that fails to start or errors on a dispatch is skipped — **hook
 chains fail open**; a plugin can never wedge a session. Every sync dispatch
 carries a deadline (default 5s).
@@ -51,6 +72,22 @@ Only hooks named in the plugin's manifest are dispatched to it.
 
 `client/generate` routes through the harness provider layer: plugins inherit
 model routing, credentials, and observability, and never carry API keys.
+
+`client/session.messages` is backed by the same session store the HTTP
+`GET /session/{id}/message` handler reads: it returns the canonical message
+list for any session the harness process owns (live or reloaded from disk
+in serve mode; the one in-flight session in run mode). An unknown session
+id is an RPC error, never an empty/silent success.
+
+`client/mcp.call` and `client/generate` are wired into the dispatch path and
+type-check end to end, but neither is implemented yet: both return a clear
+RPC error (not a panic, not a silently empty result) until MCP engine
+integration and provider-layer routing land, in separate PRs.
+
+Any language implementing this protocol (the Go SDK in this package, a
+future TypeScript SDK, etc.) gets `serve_url`/`run_token` for free once it
+decodes `InitializeParams` — no protocol-version bump was needed since they
+are additive, optional fields (see Versioning below).
 
 ## Chaining semantics
 
