@@ -326,6 +326,14 @@ func runCmd(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// mcpMgr's defer is declared before the plugin host's below, so (defers
+	// unwind LIFO) it closes MCP server connections only after the plugin
+	// host has closed — a plugin's client/mcp.call has nowhere left to route
+	// once the host is gone anyway, so shutting the host down first is the
+	// safer order.
+	mcpMgr := buildMCPManager(cfg.MCPServers)
+	defer closeMCPManager(mcpMgr)
+
 	lateAPI := newLateClientAPI()
 	host, err := buildPluginHost(ctx, cfg.Plugins, version, workDir, cfg.PluginHTTPHeaders, lateAPI, "", "")
 	if err != nil {
@@ -378,6 +386,7 @@ func runCmd(args []string) error {
 		Instructions: instructionsConfig(cfg, opts.noInstructions),
 		SkillsDirs:   skillsDirs(cfg, opts.skillsDirs, workDir),
 		Hooks:        pluginHooks(host),
+		MCP:          mcpRegistry(mcpMgr),
 	}, opts.resume, opts.cont, modelSet)
 	if err != nil {
 		return err
@@ -633,6 +642,13 @@ func serveCmd(args []string) error {
 	}
 	reg := registry(cfg)
 
+	// Every session shares the same MCP client connections; built once here
+	// and closed on exit. Its defer is declared before the plugin host's
+	// below, so (defers unwind LIFO) it closes after the host — see the
+	// matching comment in runCmd.
+	mcpMgr := buildMCPManager(cfg.MCPServers)
+	defer closeMCPManager(mcpMgr)
+
 	// Every session gets the same plugin host; it is built once here and
 	// closed on exit (deferred before srv's own defer below, so — since
 	// defers unwind LIFO — the host outlives the server's shutdown/drain and
@@ -672,6 +688,7 @@ func serveCmd(args []string) error {
 			Instructions: instructionsConfig(cfg, noInstructions),
 			SkillsDirs:   skillsDirs(cfg, skillDirs, workDir),
 			Hooks:        pluginHooks(pluginHost),
+			MCP:          mcpRegistry(mcpMgr),
 		}
 	}
 	srv, err = server.New(server.Options{
@@ -680,6 +697,7 @@ func serveCmd(args []string) error {
 		Version:       version,
 		CORSOrigin:    corsOrigin,
 		GoalEvaluator: goalEval,
+		MCP:           mcpRegistry(mcpMgr),
 		OnError: func(_ context.Context, err error) {
 			logger.Error("serve error", "error", err.Error())
 		},
