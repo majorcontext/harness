@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,10 +127,38 @@ func TestLoadSessionContinuesSameFile(t *testing.T) {
 	}
 }
 
+// TestLoadSessionRejectsPathTraversalID is the RED test for defense in
+// depth: LoadSession builds a filesystem path from id ("<SessionDir>/<id>
+// .jsonl"), and callers outside the HTTP boundary — notably the CLI's -r/-c
+// resume flags, which call engine.LoadSession directly — never pass through
+// server/handlers.go's ValidSessionID check. So LoadSession must validate id
+// itself, before sessionPath is ever built.
+//
+// SessionDir points at a directory that does not exist on disk, so if
+// LoadSession reached os.ReadFile before validating, it would fail with a
+// generic *fs.PathError ("no such file or directory") instead of the
+// validation-specific ErrInvalidSessionID — proving the id is rejected
+// without the filesystem ever being touched.
+func TestLoadSessionRejectsPathTraversalID(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "does-not-exist")
+
+	_, err := LoadSession(Config{SessionDir: dir}, "../../etc/passwd")
+	if err == nil {
+		t.Fatal("LoadSession succeeded, want error for path-traversal-shaped id")
+	}
+	if !errors.Is(err, ErrInvalidSessionID) {
+		t.Errorf("error = %v, want wrapping ErrInvalidSessionID", err)
+	}
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		t.Errorf("error = %v is a filesystem error — LoadSession touched disk before validating the id", err)
+	}
+}
+
 func TestLoadSessionTruncatedFinalLine(t *testing.T) {
 	dir := t.TempDir()
-	id := "ses_trunc"
-	data := `{"type":"session","id":"ses_trunc","created_at":"2025-01-02T03:04:05Z"}
+	id := "ses_5555555555555555"
+	data := `{"type":"session","id":"ses_5555555555555555","created_at":"2025-01-02T03:04:05Z"}
 {"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"hi"}]}}
 {"type":"message","message":{"id":"msg_2","ro`
 	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(data), 0o644); err != nil {
@@ -151,8 +181,8 @@ func TestLoadSessionTruncatedFinalLine(t *testing.T) {
 
 func TestLoadSessionCorruptMiddleLine(t *testing.T) {
 	dir := t.TempDir()
-	id := "ses_corrupt"
-	data := `{"type":"session","id":"ses_corrupt","created_at":"2025-01-02T03:04:05Z"}
+	id := "ses_6666666666666666"
+	data := `{"type":"session","id":"ses_6666666666666666","created_at":"2025-01-02T03:04:05Z"}
 {"type":"message","message":{"id":"msg_1","ro
 {"type":"message","message":{"id":"msg_2","role":"user","parts":[{"type":"text","text":"hi"}]}}
 `
@@ -432,5 +462,106 @@ func TestFirstAppendFileLayout(t *testing.T) {
 	}
 	if recs[2].Type != recMessage || recs[2].Message == nil || recs[2].Message.Role != message.RoleUser {
 		t.Errorf("line 3 = %+v, want first (user) message record", recs[2])
+	}
+}
+
+// TestListSessionsOrdersByCreatedAtNotID pins the existing ordering rule
+// (created_at, not lexicographic ID) through the switch to TypeID: a legacy
+// "ses_" + hex ID sorts alphabetically before any "ses_..." TypeID (both
+// share the "ses_" prefix, and hex digits sort before TypeID's base32
+// alphabet), so if ListSessions ever regressed to sorting by ID this legacy
+// fixture — despite being created LAST — would wrongly land first. Giving it
+// the latest created_at and asserting it lands last catches that.
+func TestListSessionsOrdersByCreatedAtNotID(t *testing.T) {
+	dir := t.TempDir()
+
+	const legacyID = "ses_0000000000000000" // sorts before any "ses_<base32>..." TypeID
+	legacy := `{"type":"session","id":"` + legacyID + `","created_at":"2030-01-01T00:00:00Z"}
+{"type":"model","model":"test/m1"}
+`
+	if err := os.WriteFile(filepath.Join(dir, legacyID+".jsonl"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "a"}),
+	}}
+	cfg := persistCfg(dir, prov)
+	s := NewSession(cfg)
+	if _, err := s.Prompt(context.Background(), "one"); err != nil {
+		t.Fatal(err)
+	}
+
+	infos, err := ListSessions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 2 {
+		t.Fatalf("ListSessions = %d entries, want 2", len(infos))
+	}
+	if legacyID > s.ID {
+		t.Fatalf("test fixture invalid: legacy ID %q must sort before TypeID %q for this test to be meaningful", legacyID, s.ID)
+	}
+	// created_at order: s (created first, in 2025-ish "now") before the
+	// legacy fixture (stamped 2030), which is the OPPOSITE of ID order.
+	if infos[0].ID != s.ID || infos[1].ID != legacyID {
+		t.Errorf("ListSessions order = [%s, %s], want [%s, %s] (created_at order, not ID order)",
+			infos[0].ID, infos[1].ID, s.ID, legacyID)
+	}
+}
+
+// TestLoadLegacySessionFixture is the RED test for legacy read-compat: a
+// session log written by the pre-TypeID engine (id "ses_" + 16 hex digits,
+// no TypeID in sight) must still LoadSession, appear in ListSessions, and
+// accept a new Prompt — the on-disk format of existing sessions never
+// changes shape just because newID now mints TypeIDs.
+func TestLoadLegacySessionFixture(t *testing.T) {
+	dir := t.TempDir()
+	const legacyID = "ses_0123456789abcdef"
+	fixture := `{"type":"session","id":"ses_0123456789abcdef","created_at":"2025-01-02T03:04:05Z"}
+{"type":"model","model":"test/m1"}
+{"type":"message","message":{"id":"msg_0000000000000001","role":"user","parts":[{"type":"text","text":"hello from the past"}]}}
+`
+	if err := os.WriteFile(filepath.Join(dir, legacyID+".jsonl"), []byte(fixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "reply"}),
+	}}
+	cfg := persistCfg(dir, prov)
+
+	loaded, err := LoadSession(cfg, legacyID)
+	if err != nil {
+		t.Fatalf("LoadSession(legacy) = %v", err)
+	}
+	if loaded.ID != legacyID {
+		t.Errorf("loaded.ID = %q, want %q", loaded.ID, legacyID)
+	}
+	if len(loaded.History()) != 1 {
+		t.Fatalf("loaded history = %d messages, want 1", len(loaded.History()))
+	}
+
+	infos, err := ListSessions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 1 || infos[0].ID != legacyID {
+		t.Fatalf("ListSessions = %+v, want just %q", infos, legacyID)
+	}
+	if infos[0].Messages != 1 {
+		t.Errorf("ListSessions Messages = %d, want 1", infos[0].Messages)
+	}
+
+	if !ValidSessionID(legacyID) {
+		t.Errorf("ValidSessionID(%q) = false, want true", legacyID)
+	}
+
+	// Promptable: appending to a legacy-id session must keep working.
+	if _, err := loaded.Prompt(context.Background(), "hi again"); err != nil {
+		t.Fatalf("Prompt on legacy session = %v", err)
+	}
+	if len(loaded.History()) != 3 {
+		t.Errorf("history after prompt = %d messages, want 3", len(loaded.History()))
 	}
 }

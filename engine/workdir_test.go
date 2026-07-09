@@ -71,8 +71,8 @@ func TestWorkDirRestoreWinsOverLoadingConfig(t *testing.T) {
 // to restore.
 func TestWorkDirLegacyHeaderCompat(t *testing.T) {
 	dir := t.TempDir()
-	id := "ses_legacy"
-	data := `{"type":"session","id":"ses_legacy","created_at":"2025-01-02T03:04:05Z"}
+	id := "ses_4444444444444444"
+	data := `{"type":"session","id":"ses_4444444444444444","created_at":"2025-01-02T03:04:05Z"}
 {"type":"model","model":"test/m1"}
 {"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"hi"}]}}
 `

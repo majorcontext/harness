@@ -6,8 +6,6 @@ package engine
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -529,12 +527,4 @@ func (s *Session) shellEnv(ctx context.Context, tool, command string) map[string
 	return s.cfg.Hooks.ShellEnv(ctx, &plugin.ShellEnvRequest{
 		SessionID: s.ID, Tool: tool, Command: command, Dir: s.cfg.WorkDir,
 	})
-}
-
-func newID(prefix string) string {
-	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic(err) // crypto/rand failure is unrecoverable
-	}
-	return prefix + "_" + hex.EncodeToString(b[:])
 }
