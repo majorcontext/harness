@@ -124,6 +124,16 @@ type Config struct {
 	// See skills.go.
 	SkillsDirs []string
 
+	// MCP is the MCP client integration this session's tools draw from: its
+	// Tools() are merged into the request's tool list (namespaced
+	// mcp__<server>__<tool>) and a call to one of them routes through
+	// CallTool. *MCPManager (see mcp.go) is the production implementation,
+	// built once per process and shared across every session — nil (the
+	// default) registers no MCP tools at all. See MCPRegistry's doc
+	// comment for why this is injected rather than built from raw server
+	// specs here.
+	MCP MCPRegistry
+
 	// Tools are additional built-in tools. The bash tool is always
 	// installed.
 	Tools       []Tool
@@ -503,7 +513,7 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 		Model:       params.Model,
 		System:      system,
 		Messages:    s.History(),
-		Tools:       s.toolDefs(),
+		Tools:       s.toolDefs(ctx),
 		Temperature: params.Temperature,
 		TopP:        params.TopP,
 		MaxTokens:   maxTokens,
@@ -544,11 +554,15 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 	}
 }
 
-// toolDefs merges built-in tools with plugin-provided ones.
-func (s *Session) toolDefs() []provider.ToolDef {
+// toolDefs merges built-in tools, MCP-provided tools, and plugin-provided
+// ones.
+func (s *Session) toolDefs(ctx context.Context) []provider.ToolDef {
 	var defs []provider.ToolDef
 	for _, t := range s.tools {
 		defs = append(defs, t.Def)
+	}
+	if s.cfg.MCP != nil {
+		defs = append(defs, s.cfg.MCP.Tools(ctx)...)
 	}
 	if s.cfg.Hooks != nil {
 		for _, d := range s.cfg.Hooks.Tools() {
@@ -624,6 +638,13 @@ func (s *Session) executeTool(ctx context.Context, tc *message.ToolCall, args js
 		}
 		return out, false
 	}
+	if s.cfg.MCP != nil && isMCPToolName(tc.Name) {
+		out, isErr, err := s.cfg.MCP.CallTool(ctx, tc.Name, args)
+		if err != nil {
+			return message.Parts{&message.Text{Text: err.Error()}}, true
+		}
+		return out, isErr
+	}
 	if s.cfg.Hooks != nil {
 		resp, err := s.cfg.Hooks.ExecuteTool(ctx, &plugin.ToolExecuteRequest{
 			SessionID: s.ID, CallID: tc.CallID, Tool: tc.Name, Args: args,
@@ -634,6 +655,19 @@ func (s *Session) executeTool(ctx context.Context, tc *message.ToolCall, args js
 		return resp.Output, resp.IsError
 	}
 	return message.Parts{&message.Text{Text: fmt.Sprintf("unknown tool %q", tc.Name)}}, true
+}
+
+// MCPCall routes a plugin-initiated client/mcp.call request (explicit
+// server + tool name, unnamespaced) through this session's configured MCP
+// registry — the exact same connected clients a namespaced mcp__<server>__
+// <tool> tool call would use (see executeTool). Returns an error when no
+// MCP registry is configured at all; a configured-but-unreachable server
+// surfaces as an ordinary error from the registry's CallServerTool.
+func (s *Session) MCPCall(ctx context.Context, server, tool string, args json.RawMessage) (message.Parts, bool, error) {
+	if s.cfg.MCP == nil {
+		return nil, false, fmt.Errorf("engine: no MCP servers configured")
+	}
+	return s.cfg.MCP.CallServerTool(ctx, server, tool, args)
 }
 
 // shellEnv collects env additions from the shell.env hook chain.
