@@ -664,3 +664,122 @@ func TestPluginBinaryHashRelativeToDir(t *testing.T) {
 		t.Errorf("pluginBinaryHash(%q, dir=%q) = %s, want hash of spec.Dir-relative file %s (hashed the cwd-relative decoy instead)", "sub/plug", specDir, got, want)
 	}
 }
+
+// TestBuildPluginHostConfigChangeReprobes proves finding (1): changing a
+// plugin's Config in config.json — with no rebuild of the plugin binary —
+// is a manifest-cache miss and triggers a re-probe, rather than silently
+// serving the manifest cached for the old config. Before the fix,
+// pluginCacheKey ignored Config/Env/Dir entirely, so this would reuse the
+// stale manifest and never spawn the plugin a second time.
+func TestBuildPluginHostConfigChangeReprobes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a real plugin subprocess")
+	}
+	tmp := t.TempDir()
+	t.Setenv("HARNESS_PLUGIN_CACHE", filepath.Join(tmp, "plugin_cache.json"))
+	t.Setenv("GO_WANT_PLUGIN_HELPER", "1")
+	t.Setenv("PLUGIN_NAME", "cfgplug")
+	spawnLog := filepath.Join(tmp, "spawns.log")
+	t.Setenv("PLUGIN_SPAWN_LOG", spawnLog)
+
+	plug := helperPluginCommand(t, "cfgplug")
+	plug.Config = json.RawMessage(`{"mode":"a"}`)
+
+	host1, err := buildPluginHost(context.Background(), []config.PluginSpec{plug}, "v", tmp, nil)
+	if err != nil {
+		t.Fatalf("buildPluginHost (config a): %v", err)
+	}
+	host1.Close()
+	spawnsA := countLines(t, spawnLog)
+	if spawnsA == 0 {
+		t.Fatal("expected the plugin to be probed (spawned) at least once")
+	}
+
+	plug.Config = json.RawMessage(`{"mode":"b"}`)
+	host2, err := buildPluginHost(context.Background(), []config.PluginSpec{plug}, "v", tmp, nil)
+	if err != nil {
+		t.Fatalf("buildPluginHost (config b): %v", err)
+	}
+	t.Cleanup(host2.Close)
+	spawnsB := countLines(t, spawnLog)
+	if spawnsB == spawnsA {
+		t.Errorf("changing plugin Config without rebuilding the binary did not trigger a re-probe: spawns %d -> %d, want spawnsB > spawnsA", spawnsA, spawnsB)
+	}
+}
+
+// TestBuildPluginHostEnvChangeReprobes is TestBuildPluginHostConfigChangeReprobes's
+// sibling for Env: an env-only change must also miss the cache and re-probe.
+func TestBuildPluginHostEnvChangeReprobes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a real plugin subprocess")
+	}
+	tmp := t.TempDir()
+	t.Setenv("HARNESS_PLUGIN_CACHE", filepath.Join(tmp, "plugin_cache.json"))
+	t.Setenv("GO_WANT_PLUGIN_HELPER", "1")
+	t.Setenv("PLUGIN_NAME", "envchangeplug")
+	spawnLog := filepath.Join(tmp, "spawns.log")
+	t.Setenv("PLUGIN_SPAWN_LOG", spawnLog)
+
+	plug := helperPluginCommand(t, "envchangeplug")
+	plug.Env = []string{"PLUGIN_MODE=a"}
+
+	host1, err := buildPluginHost(context.Background(), []config.PluginSpec{plug}, "v", tmp, nil)
+	if err != nil {
+		t.Fatalf("buildPluginHost (env a): %v", err)
+	}
+	host1.Close()
+	spawnsA := countLines(t, spawnLog)
+	if spawnsA == 0 {
+		t.Fatal("expected the plugin to be probed (spawned) at least once")
+	}
+
+	plug.Env = []string{"PLUGIN_MODE=b"}
+	host2, err := buildPluginHost(context.Background(), []config.PluginSpec{plug}, "v", tmp, nil)
+	if err != nil {
+		t.Fatalf("buildPluginHost (env b): %v", err)
+	}
+	t.Cleanup(host2.Close)
+	spawnsB := countLines(t, spawnLog)
+	if spawnsB == spawnsA {
+		t.Errorf("changing plugin Env without rebuilding the binary did not trigger a re-probe: spawns %d -> %d, want spawnsB > spawnsA", spawnsA, spawnsB)
+	}
+}
+
+// TestBuildPluginHostDirChangeReprobes is the same proof for Dir.
+func TestBuildPluginHostDirChangeReprobes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a real plugin subprocess")
+	}
+	tmp := t.TempDir()
+	t.Setenv("HARNESS_PLUGIN_CACHE", filepath.Join(tmp, "plugin_cache.json"))
+	t.Setenv("GO_WANT_PLUGIN_HELPER", "1")
+	t.Setenv("PLUGIN_NAME", "dirchangeplug")
+	spawnLog := filepath.Join(tmp, "spawns.log")
+	t.Setenv("PLUGIN_SPAWN_LOG", spawnLog)
+
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+	plug := helperPluginCommand(t, "dirchangeplug")
+	plug.Dir = dirA
+
+	host1, err := buildPluginHost(context.Background(), []config.PluginSpec{plug}, "v", tmp, nil)
+	if err != nil {
+		t.Fatalf("buildPluginHost (dir a): %v", err)
+	}
+	host1.Close()
+	spawnsA := countLines(t, spawnLog)
+	if spawnsA == 0 {
+		t.Fatal("expected the plugin to be probed (spawned) at least once")
+	}
+
+	plug.Dir = dirB
+	host2, err := buildPluginHost(context.Background(), []config.PluginSpec{plug}, "v", tmp, nil)
+	if err != nil {
+		t.Fatalf("buildPluginHost (dir b): %v", err)
+	}
+	t.Cleanup(host2.Close)
+	spawnsB := countLines(t, spawnLog)
+	if spawnsB == spawnsA {
+		t.Errorf("changing plugin Dir without rebuilding the binary did not trigger a re-probe: spawns %d -> %d, want spawnsB > spawnsA", spawnsA, spawnsB)
+	}
+}

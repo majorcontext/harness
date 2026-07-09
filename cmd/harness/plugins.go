@@ -44,10 +44,12 @@ func pluginCachePath() string {
 
 // pluginManifestCache is the on-disk manifest cache named in AGENTS.md:
 // "harness plugin install runs the binary once and caches its manifest ...
-// keyed by binary hash". Entries are keyed by plugin name *and* binary hash
-// (see pluginCacheKey) so a renamed config entry, or a plugin binary that
-// changed since it was last probed, both re-probe rather than silently
-// reusing an unrelated manifest.
+// keyed by binary hash". Entries are keyed by plugin name *and* a digest of
+// the plugin's Config/Env/Dir (see pluginCacheKey/pluginSpecDigest) — not
+// just the binary hash — so a renamed config entry, a plugin binary that
+// changed since it was last probed, *or* a plugin whose config/env/dir
+// changed without a binary rebuild, all re-probe rather than silently
+// reusing a stale manifest.
 type pluginManifestCache struct {
 	Entries map[string]plugin.Manifest `json:"entries"`
 }
@@ -128,9 +130,46 @@ func (c *pluginManifestCache) save(path string) error {
 }
 
 // pluginCacheKey identifies one cache entry: the config name (so chaining
-// order and identity are unambiguous) plus the binary hash (so a rebuilt
-// binary invalidates the entry).
-func pluginCacheKey(name, hash string) string { return name + "@" + hash }
+// order and identity are unambiguous) plus a digest folding together the
+// binary hash and the plugin's Config/Env/Dir (see pluginCacheEntryDigest),
+// so a rebuilt binary *or* a changed config/env/dir both invalidate the
+// entry.
+func pluginCacheKey(name, digest string) string { return name + "@" + digest }
+
+// pluginCacheEntryDigest folds a plugin's binary hash together with a
+// deterministic digest of its Config, Env, and Dir into the single value
+// pluginCacheKey uses to identify a cache entry. Without Config/Env/Dir
+// folded in here, a config.json edit that changes a plugin's config, env,
+// or working directory — without touching its binary — would silently
+// reuse the manifest probed under the old settings: the exact divergence
+// between "what was probed" and "what actually runs" that the ProbeSpec fix
+// (see buildPluginSpecs) closed for the probe call itself. This closes it
+// for the cache key too.
+//
+// cfg is decoded into an untyped value before being folded into the
+// digested struct so insignificant JSON differences in config.json (key
+// order, whitespace) don't cause spurious cache misses: json.Marshal of a
+// map[string]any sorts keys, so two byte-different-but-semantically-equal
+// RawMessages produce the same digest.
+func pluginCacheEntryDigest(hash string, cfg json.RawMessage, env []string, dir string) (string, error) {
+	var cfgVal any
+	if len(cfg) > 0 {
+		if err := json.Unmarshal(cfg, &cfgVal); err != nil {
+			return "", fmt.Errorf("plugin config: %w", err)
+		}
+	}
+	b, err := json.Marshal(struct {
+		BinaryHash string   `json:"binary_hash"`
+		Config     any      `json:"config"`
+		Env        []string `json:"env"`
+		Dir        string   `json:"dir"`
+	}{BinaryHash: hash, Config: cfgVal, Env: env, Dir: dir})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]), nil
+}
 
 // pluginBinaryHash hashes the plugin's executable so a changed binary
 // invalidates its cache entry, without spawning it. command[0] is resolved
@@ -166,7 +205,11 @@ func buildPluginSpecs(ctx context.Context, plugins []config.PluginSpec, cache *p
 		if herr != nil {
 			return nil, dirty, fmt.Errorf("plugin %s: %w", p.Name, herr)
 		}
-		key := pluginCacheKey(p.Name, hash)
+		digest, derr := pluginCacheEntryDigest(hash, p.Config, p.Env, p.Dir)
+		if derr != nil {
+			return nil, dirty, fmt.Errorf("plugin %s: %w", p.Name, derr)
+		}
+		key := pluginCacheKey(p.Name, digest)
 		manifest, ok := cache.Entries[key]
 		if !ok {
 			pctx, cancel := context.WithTimeout(ctx, pluginProbeTimeout)
@@ -293,6 +336,10 @@ func pluginProbeCmd(args []string) error {
 		if err != nil {
 			return fmt.Errorf("plugin %s: %w", p.Name, err)
 		}
+		digest, err := pluginCacheEntryDigest(hash, p.Config, p.Env, p.Dir)
+		if err != nil {
+			return fmt.Errorf("plugin %s: %w", p.Name, err)
+		}
 		pctx, pcancel := context.WithTimeout(ctx, pluginProbeTimeout)
 		m, err := plugin.ProbeSpec(pctx, plugin.Spec{
 			Command: p.Command,
@@ -307,7 +354,7 @@ func pluginProbeCmd(args []string) error {
 		if m.Name != p.Name {
 			return fmt.Errorf("plugin %s: manifest name %q does not match config", p.Name, m.Name)
 		}
-		cache.Entries[pluginCacheKey(p.Name, hash)] = m
+		cache.Entries[pluginCacheKey(p.Name, digest)] = m
 		hooks := make([]string, len(m.Hooks))
 		for i, h := range m.Hooks {
 			hooks[i] = string(h)
