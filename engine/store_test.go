@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,10 +127,38 @@ func TestLoadSessionContinuesSameFile(t *testing.T) {
 	}
 }
 
+// TestLoadSessionRejectsPathTraversalID is the RED test for defense in
+// depth: LoadSession builds a filesystem path from id ("<SessionDir>/<id>
+// .jsonl"), and callers outside the HTTP boundary — notably the CLI's -r/-c
+// resume flags, which call engine.LoadSession directly — never pass through
+// server/handlers.go's ValidSessionID check. So LoadSession must validate id
+// itself, before sessionPath is ever built.
+//
+// SessionDir points at a directory that does not exist on disk, so if
+// LoadSession reached os.ReadFile before validating, it would fail with a
+// generic *fs.PathError ("no such file or directory") instead of the
+// validation-specific ErrInvalidSessionID — proving the id is rejected
+// without the filesystem ever being touched.
+func TestLoadSessionRejectsPathTraversalID(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "does-not-exist")
+
+	_, err := LoadSession(Config{SessionDir: dir}, "../../etc/passwd")
+	if err == nil {
+		t.Fatal("LoadSession succeeded, want error for path-traversal-shaped id")
+	}
+	if !errors.Is(err, ErrInvalidSessionID) {
+		t.Errorf("error = %v, want wrapping ErrInvalidSessionID", err)
+	}
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		t.Errorf("error = %v is a filesystem error — LoadSession touched disk before validating the id", err)
+	}
+}
+
 func TestLoadSessionTruncatedFinalLine(t *testing.T) {
 	dir := t.TempDir()
-	id := "ses_trunc"
-	data := `{"type":"session","id":"ses_trunc","created_at":"2025-01-02T03:04:05Z"}
+	id := "ses_5555555555555555"
+	data := `{"type":"session","id":"ses_5555555555555555","created_at":"2025-01-02T03:04:05Z"}
 {"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"hi"}]}}
 {"type":"message","message":{"id":"msg_2","ro`
 	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(data), 0o644); err != nil {
@@ -151,8 +181,8 @@ func TestLoadSessionTruncatedFinalLine(t *testing.T) {
 
 func TestLoadSessionCorruptMiddleLine(t *testing.T) {
 	dir := t.TempDir()
-	id := "ses_corrupt"
-	data := `{"type":"session","id":"ses_corrupt","created_at":"2025-01-02T03:04:05Z"}
+	id := "ses_6666666666666666"
+	data := `{"type":"session","id":"ses_6666666666666666","created_at":"2025-01-02T03:04:05Z"}
 {"type":"message","message":{"id":"msg_1","ro
 {"type":"message","message":{"id":"msg_2","role":"user","parts":[{"type":"text","text":"hi"}]}}
 `
