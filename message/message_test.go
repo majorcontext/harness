@@ -1,6 +1,7 @@
 package message
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"strings"
@@ -481,5 +482,43 @@ func TestMessageWithEmptyReasoningProviderDataMarshal(t *testing.T) {
 	}
 	if _, err := json.Marshal([]Message{m}); err != nil {
 		t.Fatalf("marshal []Message (the /message response shape): %v", err)
+	}
+}
+
+// TestProviderDataGetOversizedEntryIsAbsent is the round-3 forensic
+// regression guard: ProviderData.Get treated only an empty entry as
+// "absent" (round 2's fix), leaving an oversized one — a thinking
+// signature or redacted_thinking payload with no upper bound at all — to
+// be replayed verbatim on every subsequent request for the rest of the
+// session (see the package doc, "Unbounded replay is a request-size/time
+// bomb"). This is a synthetic fixture shaped like the incident (a
+// production session carried one ~30KB signature against seven ~500-byte
+// siblings in the same run), not session-log content: a byte slice one
+// byte over maxProviderDataEntry, and one exactly at the boundary.
+func TestProviderDataGetOversizedEntryIsAbsent(t *testing.T) {
+	small := json.RawMessage(`{"signature":"c2hvcnQ="}`) // ~24 bytes, ordinary size
+	atCap := append(append(json.RawMessage(`"`), bytes.Repeat([]byte("a"), maxProviderDataEntry-2)...), '"')
+	overCap := append(append(json.RawMessage(`"`), bytes.Repeat([]byte("a"), maxProviderDataEntry-1)...), '"')
+
+	pd := ProviderData{
+		"small":  small,
+		"at-cap": atCap,
+		"over":   overCap,
+	}
+
+	if _, ok := pd.Get("small"); !ok {
+		t.Error(`Get("small") = absent, want present (ordinary-sized entry)`)
+	}
+	if got := len(atCap); got != maxProviderDataEntry {
+		t.Fatalf("fixture bug: len(atCap) = %d, want exactly %d", got, maxProviderDataEntry)
+	}
+	if _, ok := pd.Get("at-cap"); !ok {
+		t.Error(`Get("at-cap") = absent, want present (exactly at the cap)`)
+	}
+	if got := len(overCap); got <= maxProviderDataEntry {
+		t.Fatalf("fixture bug: len(overCap) = %d, want > %d", got, maxProviderDataEntry)
+	}
+	if _, ok := pd.Get("over"); ok {
+		t.Error(`Get("over") = present, want absent (one byte over the cap — the request-size-bomb entry)`)
 	}
 }
