@@ -106,9 +106,19 @@ func (*ToolCall) partType() PartType { return PartToolCall }
 // plain struct field, e.g. an event's ToolCall pointer) or as a Parts
 // element (marshalPart below) — must call this instead of encoding
 // Arguments directly.
+//
+// Empty Arguments normalize to "{}", not "null": every transcoder treats a
+// zero-length Arguments as "no arguments" and coerces it to an empty JSON
+// object on the wire (see provider/anthropic/transcode.go and
+// provider/openai/transcode.go, both of which substitute "{}" for a
+// zero-length Arguments before sending to the provider). Normalizing to
+// "null" here instead would diverge from that convention: a resumed session
+// round-tripped through canonical JSON would carry Arguments: null, which is
+// not a valid tool-call arguments object and does not match what was
+// actually sent on the wire.
 func (tc ToolCall) safeArguments() json.RawMessage {
 	if len(tc.Arguments) == 0 {
-		return json.RawMessage("null")
+		return json.RawMessage("{}")
 	}
 	return tc.Arguments
 }
