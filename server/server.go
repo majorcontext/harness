@@ -84,9 +84,12 @@ type Options struct {
 	// poll). Errors are wrapped with context (e.g. "journal write: %w",
 	// "session %s persist: %w"). Nil is safe — every call site nil-guards it.
 	//
-	// It is invoked synchronously, sometimes while s.mu is held, so it must
-	// never call back into the Server (that would deadlock); logging or
-	// forwarding to an external sink is the intended use.
+	// It is invoked synchronously. The journal-write-failure path calls it
+	// while s.mu is held (see writeJournalLocked); the session persist-error
+	// path deliberately calls it AFTER releasing s.mu (see the lock-ordering
+	// comment on syncMessages) so it must never call back into the Server
+	// (that would deadlock either way); logging or forwarding to an external
+	// sink is the intended use.
 	OnError func(context.Context, error)
 }
 
@@ -107,6 +110,17 @@ type Server struct {
 	closing   chan struct{}
 	closeOnce sync.Once
 
+	// mu guards everything below. Lock-ordering invariant: mu is a LEAF with
+	// respect to a session's own mutex — code holding mu must never call a
+	// *engine.Session method that acquires the session's mutex (History,
+	// PersistErr, Persist, RegisterGoal, ClearGoal, ...). The engine emits
+	// goal.* (and other) events while the session's mutex is held (see
+	// engine/goal.go), and those events flow into Publish, which acquires mu:
+	// that is the session.mu -> server.mu order. Acquiring mu -> session.mu
+	// anywhere would form the opposite order and deadlock the two together
+	// (see journal.go's syncMessages and TestGoalEmitVsSyncMessagesNoDeadlock
+	// in lockorder_test.go). Read session state in an unlocked window, then
+	// re-acquire mu only for this server's own bookkeeping.
 	mu       sync.Mutex
 	draining bool                     // set once by Drain; gates prompt admission
 	seq      int64                    // global monotonic durable sequence
