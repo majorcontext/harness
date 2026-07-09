@@ -74,11 +74,51 @@ type Event struct {
 }
 
 // Event types, v1. The vocabulary grows as needed.
+//
+// Deliberately deferred: message-delta events. Streaming text/reasoning
+// deltas are high-frequency and need a throttling design (batching or
+// coalescing) before they're added to the fire-and-forget event hook —
+// see PROTOCOL.md.
 const (
-	EventSessionStatus = "session.status"
-	EventQuestionAsked = "question.asked"
-	EventFileEdited    = "file.edited"
+	EventSessionStatus    = "session.status"
+	EventQuestionAsked    = "question.asked"
+	EventFileEdited       = "file.edited"
+	EventToolExecuteStart = "tool.execute.start"
+	EventToolExecuteEnd   = "tool.execute.end"
+	EventSessionError     = "session.error"
 )
+
+// FileEditedProperties is the Event.Properties payload for file.edited: a
+// file was created or modified by a built-in tool. Path is absolute.
+type FileEditedProperties struct {
+	Path string `json:"path"`
+}
+
+// ToolExecuteStartProperties is the Event.Properties payload for
+// tool.execute.start, emitted immediately before a tool (built-in or
+// plugin-provided) runs.
+type ToolExecuteStartProperties struct {
+	Tool   string `json:"tool"`
+	CallID string `json:"call_id"`
+}
+
+// ToolExecuteEndProperties is the Event.Properties payload for
+// tool.execute.end, emitted immediately after a tool finishes. OK is false
+// when the tool result is an error result.
+type ToolExecuteEndProperties struct {
+	Tool   string `json:"tool"`
+	CallID string `json:"call_id"`
+	OK     bool   `json:"ok"`
+}
+
+// SessionErrorProperties is the Event.Properties payload for session.error,
+// emitted when a prompt/turn terminates with an error. Message is the error
+// string, capped at sessionErrorMaxLen characters and passed through
+// SanitizeSessionError — a best-effort redaction of obvious credential
+// shapes, not a guarantee. See SanitizeSessionError and PROTOCOL.md.
+type SessionErrorProperties struct {
+	Message string `json:"message"`
+}
 
 // EventBatch is the params of an event hook notification.
 type EventBatch struct {

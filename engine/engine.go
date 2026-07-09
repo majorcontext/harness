@@ -7,6 +7,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -300,6 +301,73 @@ func (s *Session) emitStatus(status string) {
 	}})
 }
 
+// emitFileEdited notifies plugins that a built-in file tool successfully
+// wrote path (absolute).
+func (s *Session) emitFileEdited(path string) {
+	if s.cfg.Hooks == nil {
+		return
+	}
+	props, _ := json.Marshal(plugin.FileEditedProperties{Path: path})
+	s.cfg.Hooks.Emit([]plugin.Event{{
+		Type:       plugin.EventFileEdited,
+		SessionID:  s.ID,
+		Properties: props,
+	}})
+}
+
+// emitToolExecuteStart/emitToolExecuteEnd bracket the actual execution of a
+// tool call (built-in or plugin-provided). They do not fire for calls denied
+// by tool.execute.before, since those never execute.
+func (s *Session) emitToolExecuteStart(tool, callID string) {
+	if s.cfg.Hooks == nil {
+		return
+	}
+	props, _ := json.Marshal(plugin.ToolExecuteStartProperties{Tool: tool, CallID: callID})
+	s.cfg.Hooks.Emit([]plugin.Event{{
+		Type:       plugin.EventToolExecuteStart,
+		SessionID:  s.ID,
+		Properties: props,
+	}})
+}
+
+func (s *Session) emitToolExecuteEnd(tool, callID string, ok bool) {
+	if s.cfg.Hooks == nil {
+		return
+	}
+	props, _ := json.Marshal(plugin.ToolExecuteEndProperties{Tool: tool, CallID: callID, OK: ok})
+	s.cfg.Hooks.Emit([]plugin.Event{{
+		Type:       plugin.EventToolExecuteEnd,
+		SessionID:  s.ID,
+		Properties: props,
+	}})
+}
+
+// emitSessionError notifies plugins that a prompt/turn terminated with an
+// error. The error string is passed through plugin.SanitizeSessionError
+// first: it caps the length and best-effort redacts obvious credential
+// shapes (bearer tokens, Authorization header values, key=value secrets)
+// that provider adapters can embed in wrapped HTTP errors — see
+// SanitizeSessionError and PROTOCOL.md. This is best-effort, not a
+// guarantee against every possible leak.
+//
+// context.Canceled is deliberately excluded: a cancelled context is an
+// operator-initiated stop (POST /abort, DELETE /goal, server drain), not a
+// failure — the server layer draws the same line (runPrompt/runGoal in
+// server/handlers.go journal it as session.aborted / a clean stop, never
+// session.error). Emitting session.error for every cancellation would be
+// noisy and misleading to plugins reacting to it as a real fault.
+func (s *Session) emitSessionError(err error) {
+	if s.cfg.Hooks == nil || err == nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	props, _ := json.Marshal(plugin.SessionErrorProperties{Message: plugin.SanitizeSessionError(err.Error())})
+	s.cfg.Hooks.Emit([]plugin.Event{{
+		Type:       plugin.EventSessionError,
+		SessionID:  s.ID,
+		Properties: props,
+	}})
+}
+
 // Prompt appends a user message and runs the agent loop — stream a turn,
 // execute any tool calls, feed results back — until the model ends its turn.
 // It returns the final assistant message.
@@ -308,12 +376,14 @@ func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, er
 	// present-but-unusable AGENTS.md fails the prompt without recording a
 	// user message or calling the provider.
 	if err := s.ensureInstructions(); err != nil {
+		s.emitSessionError(err)
 		return nil, err
 	}
 	// Discover Agent Skills once, before mutating history: a malformed
 	// SKILL.md or a duplicate skill name fails the prompt without recording a
 	// user message or calling the provider (see skills.go).
 	if err := s.ensureSkills(); err != nil {
+		s.emitSessionError(err)
 		return nil, err
 	}
 	s.append(message.Message{
@@ -328,6 +398,7 @@ func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, er
 	for {
 		asst, stop, usage, err := s.streamTurn(ctx)
 		if err != nil {
+			s.emitSessionError(err)
 			return nil, err
 		}
 		s.addUsage(usage)
@@ -488,7 +559,9 @@ func (s *Session) runToolCall(ctx context.Context, tc *message.ToolCall) (messag
 		}
 	}
 
+	s.emitToolExecuteStart(tc.Name, tc.CallID)
 	out, isErr := s.executeTool(ctx, tc, args)
+	s.emitToolExecuteEnd(tc.Name, tc.CallID, !isErr)
 
 	if s.cfg.Hooks != nil {
 		out = s.cfg.Hooks.ToolExecuteAfter(ctx, &plugin.ToolExecuteAfterRequest{
