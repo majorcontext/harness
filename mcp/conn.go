@@ -48,10 +48,17 @@ type handlerFunc func(ctx context.Context, method string, params json.RawMessage
 type conn struct {
 	// wmu is a 1-buffered channel semaphore serializing writes, in place
 	// of a sync.Mutex: acquiring it selects on ctx.Done() (see
-	// acquireWmu), so a write bounded by a deadline (e.g. the
-	// cancelled-notify cleanup goroutine below) can never be stuck behind
-	// another writer for longer than its own deadline. A plain
-	// sync.Mutex has no such escape hatch — Lock cannot be given up on.
+	// acquireWmu), so a caller with a deadline (e.g. the cancelled-notify
+	// cleanup goroutine below) can never be stuck *waiting to acquire*
+	// wmu for longer than its own deadline. That only bounds the wait
+	// for the semaphore, not what happens after: on the stdio transport
+	// the pipe write made once wmu is held has no deadline of its own
+	// (see the writeDeadliner comment below) and can still block for as
+	// long as the peer doesn't drain it. That's acceptable because it's
+	// a transient condition, not a permanent one — the reader on the
+	// other end draining its buffer, or the process exiting, unblocks
+	// it — whereas a plain sync.Mutex held by a writer with no deadline
+	// at all has no escape hatch even for the wait to acquire it.
 	wmu chan struct{}
 	rwc io.ReadWriteCloser
 	r   *bufio.Reader
