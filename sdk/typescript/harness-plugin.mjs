@@ -24,6 +24,12 @@ const METHOD_SHUTDOWN = 'shutdown';
 const METHOD_TOOL_EXECUTE = 'tool/execute';
 const HOOK_METHOD_PREFIX = 'hook/';
 
+// Error codes seen when the host has gone away and closed its end of the
+// pipe/socket while we still had a response queued for it: writing to a
+// closed read end yields EPIPE (POSIX) or ECONNRESET (some platforms/socket
+// transports). These are a normal part of shutdown, not a plugin bug.
+const BROKEN_PIPE_CODES = new Set(['EPIPE', 'ECONNRESET']);
+
 const METHOD_SESSION_MESSAGES = 'client/session.messages';
 const METHOD_MCP_CALL = 'client/mcp.call';
 const METHOD_GENERATE = 'client/generate';
@@ -418,7 +424,12 @@ class Plugin {
     // removes that race.
     let pendingWrites = 0;
     let onDrained = null;
+    let outputBroken = false;
     const write = (line) => {
+      // Once the output pipe has broken (host went away — see the output
+      // 'error' handler below), further writes would just re-trigger the
+      // same error for no benefit; drop them silently.
+      if (outputBroken) return;
       pendingWrites++;
       output.write(line + '\n', () => {
         pendingWrites--;
@@ -455,6 +466,23 @@ class Plugin {
         exit(server.shuttingDown ? 0 : 1).then(resolve, reject);
       });
       input.on('error', (err) => {
+        conn.fail(err);
+        exit(1).then(() => reject(err), reject);
+      });
+      // Node's stream contract requires an 'error' listener on every stream
+      // that can emit one; without one here, the host closing its read end
+      // while a response write is still queued (EPIPE/ECONNRESET) would be
+      // an *unhandled* 'error' event and crash the process. Treat that
+      // specific class of error as a normal shutdown signal: stop writing
+      // and exit cleanly via the same graceful path stdin uses. Any other,
+      // unexpected output error is still treated as fatal.
+      output.on('error', (err) => {
+        if (BROKEN_PIPE_CODES.has(err && err.code)) {
+          outputBroken = true;
+          conn.fail(err);
+          exit(0).then(resolve, reject);
+          return;
+        }
         conn.fail(err);
         exit(1).then(() => reject(err), reject);
       });

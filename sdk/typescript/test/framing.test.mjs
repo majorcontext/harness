@@ -442,3 +442,34 @@ test('graceful shutdown drains pending stdout writes before exiting the process'
   );
   assert.ok(written.join('').includes('"id":1'), 'the initialize response must have reached the output stream');
 });
+
+test('an EPIPE/ECONNRESET on a destroyed output stream is a clean shutdown, not a crash', async () => {
+  // Regression test: output only had an implicit error handler (none at
+  // all, in fact — only `input` had one). If the host closes its read end
+  // while a response write is still queued, Node's stream contract fires an
+  // 'error' event on `output`; with no listener for it, that is an
+  // *unhandled* error event, which crashes the process instead of exiting
+  // cleanly. This stub stream fails every write with EPIPE, exactly like a
+  // destroyed/closed output pipe, to prove the plugin now treats that as a
+  // normal shutdown signal instead of raising.
+  const output = new Writable({
+    write(_chunk, _enc, callback) {
+      const err = new Error('write EPIPE');
+      err.code = 'EPIPE';
+      callback(err);
+    },
+  });
+  const input = new PassThrough();
+
+  const plugin = createPlugin({ name: 'broken-pipe' });
+  const done = plugin.run({ input, output, exitProcess: false });
+
+  input.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocol_version: PROTOCOL_VERSION } }) + '\n');
+
+  // Must resolve cleanly (not reject) even though the write behind the
+  // initialize response failed with EPIPE, and must not raise an unhandled
+  // 'error' event anywhere in the process.
+  await assert.doesNotReject(done);
+
+  input.end();
+});
