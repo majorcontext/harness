@@ -55,6 +55,11 @@ type Options struct {
 	// unloaded from memory; they remain listable and promptable via a
 	// transparent reload from disk. 0 defaults to 32.
 	MaxResident int
+	// GoalEvaluator is the model ref used to evaluate goal completion for the
+	// POST /session/{id}/goal endpoint. It is resolved by the caller from
+	// config (goal_evaluator_model). When zero, goal requests are rejected with
+	// 400 (there is no default evaluator).
+	GoalEvaluator message.ModelRef
 	// CORSOrigin, when non-empty, enables browser CORS support. Its literal
 	// value is echoed in the Access-Control-Allow-Origin header on every
 	// response (including 401s, so a browser can read the error), and "*" is
@@ -103,6 +108,20 @@ type Server struct {
 	// so request.meta includes the full system only when it changes.
 	lastRequest map[string]*requestSnapshot
 	lastReqHash map[string]string
+
+	// goalState tracks the latest goal summary per session for this process
+	// (in memory only, like lastRequest): condition, active flag, turn count,
+	// and last evaluator reason. It drives the Session JSON goal field and is
+	// updated as goal.* events flow through Publish.
+	goalState map[string]*goalTracker
+}
+
+// goalTracker is the per-session goal summary surfaced in Session JSON.
+type goalTracker struct {
+	condition  string
+	active     bool
+	turns      int
+	lastReason string
 }
 
 // sessionState tracks an in-memory session and any in-flight prompt. lastUsed
@@ -139,6 +158,7 @@ func New(opts Options) (*Server, error) {
 		sessions:    make(map[string]*sessionState),
 		lastRequest: make(map[string]*requestSnapshot),
 		lastReqHash: make(map[string]string),
+		goalState:   make(map[string]*goalTracker),
 		closing:     make(chan struct{}),
 	}
 	if err := s.reconcile(); err != nil {
@@ -160,6 +180,8 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /session/{id}/message", s.auth(s.handleMessages))
 	mux.HandleFunc("GET /session/{id}/request", s.auth(s.handleRequest))
 	mux.HandleFunc("POST /session/{id}/prompt_async", s.auth(s.handlePrompt))
+	mux.HandleFunc("POST /session/{id}/goal", s.auth(s.handleGoal))
+	mux.HandleFunc("DELETE /session/{id}/goal", s.auth(s.handleGoalDelete))
 	mux.HandleFunc("POST /session/{id}/abort", s.auth(s.handleAbort))
 	mux.HandleFunc("GET /event", s.auth(s.handleEvent))
 	s.mux = mux
@@ -178,7 +200,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.Set("Access-Control-Allow-Origin", s.opts.CORSOrigin)
 		h.Set("Vary", "Origin")
 		if r.Method == http.MethodOptions {
-			h.Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			h.Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Last-Event-ID")
 			h.Set("Access-Control-Max-Age", "600")
 			w.WriteHeader(http.StatusNoContent)

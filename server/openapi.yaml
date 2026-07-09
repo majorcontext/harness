@@ -78,6 +78,32 @@ components:
         seq:
           type: integer
           description: Sequence number of the latest durable record.
+        goal:
+          $ref: "#/components/schemas/GoalSummary"
+          description: >
+            The session's goal summary, present only when a goal has been set
+            for this session in the current server process (in-memory, like the
+            /request snapshot). Absent on a freshly reloaded session until a
+            goal runs.
+
+    GoalSummary:
+      type: object
+      description: Per-session goal state surfaced on Session.goal.
+      required: [condition, active, turns]
+      properties:
+        condition:
+          type: string
+          description: The goal's completion condition.
+        active:
+          type: boolean
+          description: >
+            True while the goal is set but neither achieved nor cleared.
+        turns:
+          type: integer
+          description: Worker turns taken so far.
+        last_reason:
+          type: string
+          description: The most recent evaluator reason (eval or achieved).
 
     SessionStatus:
       type: string
@@ -222,6 +248,10 @@ components:
             - message
             - model
             - request.meta
+            - goal.set
+            - goal.eval
+            - goal.achieved
+            - goal.cleared
             - text.delta
             - reasoning.delta
             - tool.start
@@ -241,6 +271,12 @@ components:
             system_hash differs from the session's previous request — the
             hash-on-change trick keeps unchanged prompts cheap while still
             making the exact system recoverable from a from=0 replay.
+            goal.set, goal.eval, goal.achieved, and goal.cleared are the durable
+            records of a goal loop (POST /session/{id}/goal). goal.set carries
+            goal_condition; goal.eval carries goal_met, goal_reason, and
+            goal_turn for each per-turn evaluator verdict; goal.achieved carries
+            goal_reason and goal_turns; goal.cleared marks a goal cancelled via
+            DELETE /session/{id}/goal.
         session_id: { type: string }
         seq:
           type: integer
@@ -289,6 +325,32 @@ components:
           description: >
             Full ordered system segments. Present on a request.meta record only
             when system_hash changed from the session's previous request.
+        goal_condition:
+          type: string
+          description: The goal condition (goal.set).
+        goal_reason:
+          type: string
+          description: Evaluator reason (goal.eval, goal.achieved).
+        goal_met:
+          type: boolean
+          description: Whether the turn met the goal (goal.eval).
+        goal_turn:
+          type: integer
+          description: 1-based turn number for a per-turn verdict (goal.eval).
+        goal_turns:
+          type: integer
+          description: Total turns taken when the goal was achieved (goal.achieved).
+
+    GoalRequest:
+      type: object
+      required: [condition]
+      properties:
+        condition:
+          type: string
+          description: The natural-language completion condition to pursue.
+        max_turns:
+          type: integer
+          description: Maximum worker turns; 0 or omitted means unlimited.
 
     Request:
       type: object
@@ -476,6 +538,62 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+
+  /session/{id}/goal:
+    post:
+      operationId: startGoal
+      summary: Start a goal loop on a session.
+      description: |
+        Prompts the condition, then after every turn asks an independent,
+        tool-less evaluator model (config goal_evaluator_model) whether it is
+        met, feeding the evaluator's reason back as guidance until met or the
+        turn budget runs out. Runs in the background like prompt_async; progress
+        and the durable goal.* records arrive on /event. The goal occupies the
+        session's single run slot, so a concurrent prompt_async or goal is 409.
+        400 when goal_evaluator_model is not configured, or the condition is
+        empty.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GoalRequest" }
+      responses:
+        "202":
+          description: Accepted. Body carries the seq to tail events from.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [seq]
+                properties:
+                  seq: { type: integer }
+        "400":
+          description: No evaluator configured, or empty condition.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Session is busy with another prompt or goal.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      operationId: clearGoal
+      summary: Cancel the active goal loop, if any.
+      description: >
+        Cancels the goal loop's context (stopping further turns) and journals a
+        durable goal.cleared. Idempotent: a known session with no active goal is
+        still 204 (and journals nothing).
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      responses:
+        "204": { description: Cleared (or nothing was active). }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /session/{id}/abort:
     post:

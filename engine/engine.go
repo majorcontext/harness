@@ -50,6 +50,15 @@ type Event struct {
 	IsError    bool                `json:"is_error,omitempty"`
 	Usage      *provider.Usage     `json:"usage,omitempty"`
 	StopReason provider.StopReason `json:"stop_reason,omitempty"`
+
+	// Goal-loop fields (set on goal.* events; see goal.go). GoalCondition is
+	// carried by goal.set; GoalReason/GoalMet/GoalTurn by goal.eval;
+	// GoalReason/GoalTurns by goal.achieved; goal.cleared carries only the type.
+	GoalCondition string `json:"goal_condition,omitempty"`
+	GoalReason    string `json:"goal_reason,omitempty"`
+	GoalMet       bool   `json:"goal_met,omitempty"`
+	GoalTurn      int    `json:"goal_turn,omitempty"`
+	GoalTurns     int    `json:"goal_turns,omitempty"`
 }
 
 // Event types.
@@ -59,6 +68,12 @@ const (
 	EventMessage        = "message"
 	EventToolStart      = "tool.start"
 	EventToolEnd        = "tool.end"
+
+	// Goal-loop events (see goal.go).
+	EventGoalSet      = "goal.set"
+	EventGoalEval     = "goal.eval"
+	EventGoalAchieved = "goal.achieved"
+	EventGoalCleared  = "goal.cleared"
 )
 
 // Config configures a Session.
@@ -73,8 +88,14 @@ type Config struct {
 	// session. Empty disables persistence entirely.
 	SessionDir string
 
-	Hooks   Hooks       // optional plugin host
-	OnEvent func(Event) // optional; called synchronously, keep it fast
+	Hooks Hooks // optional plugin host
+	// OnEvent is optional; called synchronously, keep it fast. The goal.*
+	// events (see goal.go) are emitted while Session.mu is held so the event
+	// stream can never invert relative to the journaled log order under a
+	// concurrent ClearGoal/evaluation race — so OnEvent must NEVER call back
+	// into the Session that raised the event (Prompt, ClearGoal, ActiveGoal,
+	// etc.), which would deadlock on that same mutex.
+	OnEvent func(Event)
 
 	// OnRequest, when non-nil, is invoked synchronously in streamTurn with the
 	// exact final request about to be sent to the provider — after params,
@@ -153,6 +174,13 @@ type Session struct {
 	skillsLoaded bool
 	skillsSeg    string
 	skillsErr    error
+
+	// Goal-loop state (see goal.go). goalActive is set while a goal is set but
+	// neither achieved nor cleared; goalCondition holds the current goal's
+	// completion condition. Restored on LoadSession from the goal.* records in
+	// the session log. Guarded by mu.
+	goalActive    bool
+	goalCondition string
 }
 
 // NewSession creates a session. Nothing touches the network, spawns
