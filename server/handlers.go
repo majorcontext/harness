@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
@@ -35,6 +36,19 @@ type sessionJSON struct {
 	Seq      int64     `json:"seq,omitempty"`
 	Goal     *goalJSON `json:"goal,omitempty"`
 	WorkDir  string    `json:"workdir"`
+	// LastTurn is the most recent prompt or goal-worker turn's outcome for
+	// this process — "completed" or "error", plus the sanitized error detail
+	// on failure — so a poller can distinguish "idle because done" from
+	// "idle because the turn died" without inferring it from message part
+	// shapes. Present only once a turn has finished in this process (like
+	// Goal, absent on a freshly reloaded, never-prompted-here session).
+	LastTurn *lastTurnJSON `json:"last_turn,omitempty"`
+}
+
+// lastTurnJSON is the openapi LastTurn shape.
+type lastTurnJSON struct {
+	Outcome string `json:"outcome"`
+	Error   string `json:"error,omitempty"`
 }
 
 // compositeState resolves the unambiguous Session.state field: goal-running
@@ -81,8 +95,42 @@ func (s *Server) sessionIDOrNotFound(w http.ResponseWriter, r *http.Request) (st
 	return id, true
 }
 
+// healthJSON is the openapi Health shape. VCSRevision and VCSTime are always
+// present (never omitted, even empty) so a client never has to special-case
+// "field absent" vs "field empty" — see buildInfo.
+type healthJSON struct {
+	Version     string `json:"version"`
+	VCSRevision string `json:"vcs_revision"`
+	VCSTime     string `json:"vcs_time"`
+}
+
+// buildInfo reads the running binary's VCS revision and commit time from
+// runtime/debug.ReadBuildInfo, so GET /health can identify exactly which
+// commit is live — a stale box binary otherwise looks identical to a fresh
+// one behind a fixed config Version string (an engineer once burned 30
+// minutes suspecting exactly that). Both return "" when build info is
+// unavailable or carries no VCS settings, which is the ordinary case for a
+// `go test` binary — ReadBuildInfo still succeeds there, it simply has no
+// "vcs.revision"/"vcs.time" entries in Settings.
+func buildInfo() (revision, buildTime string) {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "", ""
+	}
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			revision = setting.Value
+		case "vcs.time":
+			buildTime = setting.Value
+		}
+	}
+	return revision, buildTime
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"version": s.opts.Version})
+	rev, t := buildInfo()
+	writeJSON(w, http.StatusOK, healthJSON{Version: s.opts.Version, VCSRevision: rev, VCSTime: t})
 }
 
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -171,6 +219,31 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.buildSession(sess, status))
 }
 
+// messagePlaceholder substitutes for a resident message that fails to
+// marshal (see handleMessages): it carries just enough to identify which
+// message broke and why, without ever risking a second marshal failure
+// itself (every field here is a plain string).
+type messagePlaceholder struct {
+	ID           string `json:"id"`
+	Role         string `json:"role"`
+	MarshalError string `json:"marshal_error"`
+}
+
+// handleMessages returns the session's full canonical message history.
+//
+// It marshals per-message rather than the whole slice at once: a single
+// resident message that fails to marshal — e.g. a Reasoning part carrying a
+// non-zero-length but invalid ProviderData entry, which
+// message.Message.Normalize does not catch (see its doc comment) because it
+// only scrubs zero-length entries — used to take the entire endpoint down
+// with a 500 ("json: error calling MarshalJSON for type message.Parts"),
+// exactly when the transcript view was most needed to diagnose the death
+// (observed in production on ses_01kx453ewfedqrg7p3c64f8sca and
+// ses_01kx453ev9ejattygpf7rbzptw). Now a message that fails to marshal is
+// replaced with a messagePlaceholder carrying its ID, role, and the marshal
+// error, and every other message in the response is unaffected: the
+// endpoint always returns 200 with as much of the transcript as is actually
+// renderable.
 func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
@@ -182,10 +255,27 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	msgs := sess.History()
-	if msgs == nil {
-		msgs = []message.Message{}
+	out := make([]json.RawMessage, 0, len(msgs))
+	for i := range msgs {
+		m := &msgs[i]
+		raw, err := json.Marshal(m)
+		if err != nil {
+			ph, phErr := json.Marshal(messagePlaceholder{
+				ID:           m.ID,
+				Role:         string(m.Role),
+				MarshalError: err.Error(),
+			})
+			if phErr != nil {
+				// messagePlaceholder is a plain string struct; this cannot
+				// happen, but never let a placeholder failure reintroduce
+				// the wholesale-500 this handler exists to prevent.
+				ph = []byte(`{"id":"","role":"","marshal_error":"unmarshalable message and placeholder"}`)
+			}
+			raw = ph
+		}
+		out = append(out, raw)
 	}
-	writeJSON(w, http.StatusOK, msgs)
+	writeJSON(w, http.StatusOK, out)
 }
 
 // requestJSON is the openapi Request shape: the latest fully-assembled model
@@ -243,8 +333,9 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	type entry struct {
-		Type  string `json:"type"`
-		State string `json:"state"`
+		Type     string        `json:"type"`
+		State    string        `json:"state"`
+		LastTurn *lastTurnJSON `json:"last_turn,omitempty"`
 	}
 	result := map[string]entry{}
 
@@ -259,7 +350,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	}
 	s.mu.Unlock()
 	for _, m := range mem {
-		result[m.id] = entry{Type: statusStr(m.running), State: s.compositeStateFor(m.id, m.running)}
+		result[m.id] = entry{Type: statusStr(m.running), State: s.compositeStateFor(m.id, m.running), LastTurn: s.lastTurnFor(m.id)}
 	}
 	infos, err := engine.ListSessions(s.opts.SessionDir)
 	if err != nil {
@@ -268,10 +359,18 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	}
 	for _, info := range infos {
 		if _, ok := result[info.ID]; !ok {
-			result[info.ID] = entry{Type: "idle", State: s.compositeStateFor(info.ID, false)}
+			result[info.ID] = entry{Type: "idle", State: s.compositeStateFor(info.ID, false), LastTurn: s.lastTurnFor(info.ID)}
 		}
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// lastTurnFor is lastTurnJSONLocked with its own locking, for callers (like
+// handleStatus) that are not already holding s.mu.
+func (s *Server) lastTurnFor(id string) *lastTurnJSON {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastTurnJSONLocked(id)
 }
 
 // compositeStateFor resolves the composite state for a session ID using this
@@ -360,10 +459,12 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	s.syncMessages(id) // catch any message not yet journaled
 	switch {
 	case err == nil:
+		s.recordTurnEnd(id, "completed", nil)
 	case errors.Is(err, context.Canceled):
 		s.emitDurable(Event{Type: evtSessionAborted, SessionID: id})
 	default:
 		s.emitDurable(Event{Type: evtSessionError, SessionID: id, Error: err.Error()})
+		s.recordTurnEnd(id, "error", err)
 	}
 	s.mu.Lock()
 	st.running = false
@@ -444,6 +545,23 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 // session.error. Message journaling piggybacks on the same syncMessages path
 // as runPrompt.
 //
+// turn.end outcome is decided from the RESULT, not merely from err == nil:
+// PursueGoal returns a nil error with Achieved:false in two cases that are
+// emphatically not "completed" —
+//
+//   - MaxTurns exhausted without the evaluator ever returning MET (Reason
+//     "max turns"): the goal gave up, it did not finish. That is recorded as
+//     its own outcomeMaxTurnsExceeded, never "completed" — see PR #55 review
+//     finding: keying turn.end on err == nil alone told a poller "idle
+//     because done" for a goal that was never met, exactly the ambiguity
+//     this primitive exists to remove.
+//   - ClearGoal won a race against an in-flight worker retry or evaluator
+//     call (Reason "goal cleared"), without the loop's own context ever
+//     being cancelled. This is a clear, same as the context.Canceled path
+//     below, just reached without cancellation — and the openapi contract
+//     is that DELETE /goal (or any clear) never emits turn.end. So this case
+//     suppresses the record entirely, matching the context.Canceled branch.
+//
 // The terminal session.status idle record emitted at the end of this
 // function is the same record an SSE collector waits for as the session's
 // "occupancy over" signal (collect-until-idle is the wire contract). DELETE
@@ -452,18 +570,28 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 // goal.cleared that is still in flight.
 func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condition string, maxTurns int) {
 	defer s.wg.Done()
-	_, err := st.sess.PursueGoal(ctx, condition, engine.GoalOptions{
+	res, err := st.sess.PursueGoal(ctx, condition, engine.GoalOptions{
 		Registered: true,
 		MaxTurns:   maxTurns,
 		Evaluator:  s.opts.GoalEvaluator,
 	})
 	s.syncMessages(id)
 	switch {
+	case err == nil && res.Achieved:
+		s.recordTurnEnd(id, "completed", nil)
+	case err == nil && res.Reason == "goal cleared":
+		// Cleared in flight without the context being cancelled: goal.cleared
+		// is already journaled (ClearGoal/handleGoalDelete); no turn.end, same
+		// contract as the context.Canceled case below.
 	case err == nil:
+		// Any other nil-error, non-achieved result is MaxTurns exhaustion —
+		// PursueGoal's only remaining terminal case (see its doc comment).
+		s.recordTurnEnd(id, outcomeMaxTurnsExceeded, nil)
 	case errors.Is(err, context.Canceled):
 		// Cleared via DELETE (goal.cleared already journaled) or drained.
 	default:
 		s.emitDurable(Event{Type: evtSessionError, SessionID: id, Error: err.Error()})
+		s.recordTurnEnd(id, "error", err)
 	}
 	s.mu.Lock()
 	st.running = false
@@ -732,6 +860,7 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 	if g := s.goalState[id]; g != nil {
 		goal = &goalJSON{Condition: g.condition, Active: g.active, Achieved: g.achieved, Turns: g.turns, LastReason: g.lastReason, Attempt: g.attempt}
 	}
+	lastTurn := s.lastTurnJSONLocked(id)
 	s.mu.Unlock()
 	return sessionJSON{
 		ID:        id,
@@ -743,7 +872,19 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 		Seq:       seq,
 		Goal:      goal,
 		WorkDir:   sess.WorkDir(),
+		LastTurn:  lastTurn,
 	}
+}
+
+// lastTurnJSONLocked builds the Session.last_turn / StatusEntry.last_turn
+// shape from s.lastTurn, or nil if no turn has finished for id in this
+// process. Caller holds s.mu.
+func (s *Server) lastTurnJSONLocked(id string) *lastTurnJSON {
+	t := s.lastTurn[id]
+	if t == nil {
+		return nil
+	}
+	return &lastTurnJSON{Outcome: t.outcome, Error: t.error}
 }
 
 func statusStr(running bool) string {
