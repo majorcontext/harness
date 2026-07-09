@@ -65,9 +65,46 @@ plugin's mutations.
   tool call, returns the message to the model as an error result, and stops
   the chain.
 - `tool.execute.after`: non-nil `output` replaces.
-- `event`: async fan-out, batched, no ordering or delivery guarantees.
+- `event`: async fan-out, batched, fire-and-forget. Delivery to a single
+  plugin is FIFO in emit order: the harness gives each plugin instance a
+  bounded queue drained by one dedicated sender goroutine (created on first
+  emit, exits when the plugin is stopped), so events for the same plugin
+  can never be reordered or interleaved by racing writers — e.g. a
+  `tool.execute.start` always reaches a plugin before the matching
+  `tool.execute.end` for the same call id, provided the harness emitted them
+  in that order. There is no ordering guarantee *across* different plugins.
+  Emit never blocks the caller: if a plugin's queue is full (the harness's
+  default capacity is 256, configurable), the event is dropped and a
+  per-plugin counter increments; the first drop for a plugin is also
+  reported through the harness's error-observation hook so operators notice
+  a wedged or overwhelmed plugin, but delivery itself stays best-effort —
+  this is a fire-and-forget hook, not a durable log.
 
 An empty-object response (or the SDK returning `nil`) means "no changes".
+
+## Events
+
+`hook/event` batches carry `Event{type, session_id, properties}`; `properties`
+is a JSON object whose shape depends on `type`. Event types, v1:
+
+| Type | Properties | Emitted when |
+|---|---|---|
+| `session.status` | `{status: "busy"\|"idle"}` | a prompt starts/finishes |
+| `question.asked` | (reserved, no emit site yet) | — |
+| `file.edited` | `{path}` (absolute) | a built-in file tool (`write_file`, `edit_file`) successfully writes a file |
+| `tool.execute.start` | `{tool, call_id}` | immediately before any tool call executes (built-in or plugin-provided) |
+| `tool.execute.end` | `{tool, call_id, ok}` | immediately after a tool call finishes; `ok` is `false` when the result is an error result |
+| `session.error` | `{message}` | a prompt/turn/goal-loop run terminates with an error; `message` is the error string, capped at 256 characters, with a best-effort redaction pass for obvious credential shapes (bearer tokens, `Authorization` header values, `key=value` secrets such as `api_key=...`). This is best-effort sanitization, not a guarantee — a fixed pattern set cannot catch every credential shape a provider adapter might embed, so plugins should still treat `message` as a potentially-sensitive, untrusted string. The 256-character cap bounds how much of a stack trace or request/response body embedded in an error can leak through, but redaction is pattern-based, not structural, so it cannot promise their absence. Excludes `context.Canceled`: a cancelled context is a deliberate stop (abort, goal clear, server drain), not a failure |
+
+`tool.execute.start`/`tool.execute.end` bracket the actual tool execution
+only — a call denied by `tool.execute.before` never runs and so never emits
+these.
+
+**Deferred**: message-delta events (`text.delta`, `reasoning.delta`
+equivalents for plugins). Streaming deltas are high-frequency; shipping them
+on the fire-and-forget `event` hook needs a throttling/coalescing design
+first so a slow plugin can't fall arbitrarily far behind or amplify RPC
+volume. Not in this vocabulary yet.
 
 ## Message content
 

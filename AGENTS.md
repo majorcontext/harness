@@ -126,7 +126,10 @@ Plugins may also register **custom tools** (defs in manifest, execution via RPC)
 
 Plugins are API clients over the same channel: `Session.Messages`, `MCP.Call`, `Generate` (LLM calls through the harness provider layer — plugins never carry their own API keys), and `plugin.HTTPClient()` (outbound HTTP with harness-configured headers, e.g. workspace attribution).
 
-Events v1: `session.status`, `question.asked`, `file.edited`.
+Events v1: `session.status`, `question.asked`, `file.edited`,
+`tool.execute.start`, `tool.execute.end`, `session.error`. Message-delta
+events are deliberately deferred (see plugin/PROTOCOL.md) pending a
+throttling design.
 
 Capability parity bar: the protocol must be able to express the plugin
 patterns common in opencode setups — event-driven activity tracking, token

@@ -139,6 +139,7 @@ func writeFileTool() Tool {
 			if err := os.WriteFile(path, []byte(*in.Content), 0o644); err != nil {
 				return nil, fmt.Errorf("write_file: %w", err)
 			}
+			s.emitFileEdited(path)
 			return message.Parts{&message.Text{Text: fmt.Sprintf("wrote %d bytes to %s", len(*in.Content), path)}}, nil
 		},
 	}
@@ -196,6 +197,7 @@ func editFileTool() Tool {
 			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 				return nil, fmt.Errorf("edit_file: %w", err)
 			}
+			s.emitFileEdited(path)
 			return message.Parts{&message.Text{Text: fmt.Sprintf("replaced %d occurrence(s) in %s", replaced, path)}}, nil
 		},
 	}

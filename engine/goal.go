@@ -82,10 +82,14 @@ var errEvaluatorUnparseable = errors.New("engine: goal evaluator returned unpars
 // Must not be called concurrently with itself or Prompt (it drives Prompt).
 func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOptions) (*GoalResult, error) {
 	if opts.Evaluator.IsZero() {
-		return nil, errors.New("engine: PursueGoal requires GoalOptions.Evaluator")
+		err := errors.New("engine: PursueGoal requires GoalOptions.Evaluator")
+		s.emitSessionError(err)
+		return nil, err
 	}
 	if strings.TrimSpace(condition) == "" {
-		return nil, errors.New("engine: PursueGoal requires a non-empty condition")
+		err := errors.New("engine: PursueGoal requires a non-empty condition")
+		s.emitSessionError(err)
+		return nil, err
 	}
 
 	if opts.Registered {
@@ -96,6 +100,7 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			return &GoalResult{Achieved: false, Turns: 0, Reason: "goal cleared"}, nil
 		}
 	} else if err := s.RegisterGoal(condition); err != nil {
+		s.emitSessionError(err)
 		return nil, err
 	}
 
@@ -107,10 +112,17 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			return &GoalResult{Achieved: false, Turns: turn - 1, Reason: "goal cleared"}, nil
 		}
 		if _, err := s.Prompt(ctx, directive); err != nil {
+			// Prompt already emitted session.error for its own failure
+			// (instructions/skills load, or streamTurn) — do not double-emit.
 			return nil, err
 		}
 		met, reason, err := s.evaluateGoal(ctx, condition, opts.Evaluator)
 		if err != nil {
+			// Unlike the Prompt call above, evaluateGoal (the evaluator
+			// model call and its unparseable-twice error) never goes
+			// through Prompt, so this loop-terminating error needs its own
+			// session.error emission.
+			s.emitSessionError(err)
 			return nil, err
 		}
 		if !s.recordGoalEval(met, reason, turn) {
