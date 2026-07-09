@@ -191,8 +191,12 @@ types (`text`, `blob`, `tool_call`, `tool_result`, `reasoning`).
 ## Testing
 
 ```sh
-node --test sdk/typescript/
+node --test sdk/typescript/test/*.test.mjs
 ```
+
+(Node's `--test` flag treats a bare directory as a glob pattern on Node 21+,
+so it silently finds nothing there; passing the shell-expanded file glob
+keeps this portable across Node versions.)
 
 `sdk/typescript/test/framing.test.mjs` drives the SDK with a scripted fake
 host over in-memory streams (no real harness process): handshake, manifest
