@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -563,5 +564,129 @@ func TestLoadLegacySessionFixture(t *testing.T) {
 	}
 	if len(loaded.History()) != 3 {
 		t.Errorf("history after prompt = %d messages, want 3", len(loaded.History()))
+	}
+}
+
+// TestGoalStalledRecordRoundTrip is the forensic regression guard for the
+// goal-supervised session incident (ses_01kx3pvqttfwgbf2n5x1f1y8yh.jsonl): a
+// worker turn failed with "json: error calling MarshalJSON for type
+// json.RawMessage: unexpected end of JSON input" (see
+// TestToolCallEmptyArgumentsMarshal in the message package for the exact
+// reproduction), which promptTurnWithRetry records as a goal.stalled record
+// via recordGoalStalled -> persistGoalLocked. That record's payload
+// (goalRecord) carries the failure only as a plain string Reason field, so
+// the failure that produced it can never itself poison the record: every
+// goal.stalled line landed by a real transient failure must be complete,
+// valid JSON, and must round-trip through LoadSession without disturbing
+// the session's resumed goal state.
+func TestGoalStalledRecordRoundTrip(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		prov := &goalProvider{
+			workerErrN: 1, // one transient failure -> exactly one goal.stalled record
+			worker: [][]provider.Event{
+				asstTurn(provider.StopEndTurn, &message.Text{Text: "done"}),
+			},
+			eval: [][]provider.Event{evalTurn("MET: ok")},
+		}
+		s := goalSession(t, prov, dir)
+		cfg := s.cfg
+
+		res, err := s.PursueGoal(context.Background(), "the condition", GoalOptions{Evaluator: evalModel})
+		if err != nil {
+			t.Fatalf("PursueGoal = %v", err)
+		}
+		if !res.Achieved {
+			t.Fatalf("result = %+v, want achieved once the transient stall clears", res)
+		}
+		if err := s.PersistErr(); err != nil {
+			t.Fatalf("PersistErr = %v", err)
+		}
+
+		raw, err := os.ReadFile(sessionPath(dir, s.ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+		var sawStalled bool
+		for i, line := range lines {
+			// Every line, including the goal.stalled record, must be
+			// complete and independently valid JSON — the incident's log
+			// was not actually corrupt at this point (a truncated final
+			// line is a distinct, already-covered case; see
+			// TestLoadSessionTruncatedFinalLine), but this is the
+			// assertion that would catch it if persistGoalLocked ever
+			// wrote a partial line on a marshal failure.
+			var rec map[string]any
+			if err := json.Unmarshal([]byte(line), &rec); err != nil {
+				t.Fatalf("line %d is not valid, complete JSON: %v\nline: %s", i+1, err, line)
+			}
+			if rec["type"] == "goal.stalled" {
+				sawStalled = true
+				reason, _ := rec["goal"].(map[string]any)["reason"].(string)
+				if reason == "" {
+					t.Error("goal.stalled record missing goal.reason")
+				}
+			}
+		}
+		if !sawStalled {
+			t.Fatalf("session log has no goal.stalled record:\n%s", raw)
+		}
+
+		loaded, err := LoadSession(cfg, s.ID)
+		if err != nil {
+			t.Fatalf("LoadSession = %v", err)
+		}
+		if _, ok := loaded.ActiveGoal(); ok {
+			t.Error("resumed ActiveGoal active after achievement — a goal.stalled record must not itself change resume state")
+		}
+	})
+}
+
+// TestLoadSessionTruncatedGoalStalledFinalLine proves scanLog's corruption
+// discipline applies identically to a goal.stalled record: a truncated
+// final line (the shape a crash mid-append would leave, per the incident's
+// premise) is tolerated exactly like a truncated message record, and the
+// resumed goal state reflects only the last complete record — it never lets
+// a partial goal.stalled poison the session.
+func TestLoadSessionTruncatedGoalStalledFinalLine(t *testing.T) {
+	dir := t.TempDir()
+	id := "ses_7777777777777777"
+	data := `{"type":"session","id":"ses_7777777777777777","created_at":"2025-01-02T03:04:05Z"}
+{"type":"goal.set","goal":{"condition":"ship it"}}
+{"type":"goal.stalled","goal":{"reason":"json: error calling MarshalJSON f`
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := LoadSession(Config{SessionDir: dir}, id)
+	if err != nil {
+		t.Fatalf("LoadSession = %v, want the truncated final goal.stalled line tolerated", err)
+	}
+	cond, ok := s.ActiveGoal()
+	if !ok || cond != "ship it" {
+		t.Errorf("ActiveGoal = %q, %v; want active with the goal.set condition (the truncated goal.stalled contributes nothing)", cond, ok)
+	}
+}
+
+// TestLoadSessionCorruptMiddleGoalStalledLine proves the other half of the
+// same discipline: a corrupt goal.stalled record anywhere but the final line
+// is a loud, structural error — never silently skipped like a truncated
+// final line — because a record in the middle of the file can only be
+// corrupt from a real bug, not an in-flight crash.
+func TestLoadSessionCorruptMiddleGoalStalledLine(t *testing.T) {
+	dir := t.TempDir()
+	id := "ses_8888888888888888"
+	data := `{"type":"session","id":"ses_8888888888888888","created_at":"2025-01-02T03:04:05Z"}
+{"type":"goal.set","goal":{"condition":"ship it"}}
+{"type":"goal.stalled","goal":{"reason":"broke
+{"type":"goal.cleared","goal":{"reason":"worker turn failed"}}
+`
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadSession(Config{SessionDir: dir}, id); err == nil {
+		t.Fatal("LoadSession succeeded, want error for a corrupt goal.stalled line before the final line")
 	}
 }

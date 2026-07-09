@@ -398,10 +398,30 @@ func (s *Server) reportError(err error) {
 	s.opts.OnError(context.Background(), err)
 }
 
+// writeJSON marshals v to a buffer BEFORE writing anything to w: the status
+// line and the body must not be allowed to disagree. The previous version
+// wrote the header first and streamed the encoder straight to w, so a
+// mid-encode marshal failure (e.g. a poisoned json.RawMessage deep in a
+// session's history) left a 200 response truncated after however many bytes
+// the encoder had already flushed — indistinguishable, to a client, from a
+// network glitch, and impossible to retry into success. Marshaling first
+// means a failure here is caught before any bytes go out, so it can be
+// reported honestly as a 500 with a real error body instead.
 func writeJSON(w http.ResponseWriter, code int, v any) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		// The error body is a fixed, always-marshalable shape (a
+		// map[string]string), so this cannot recurse into the same
+		// failure — the resilience path must not itself fail.
+		eb, _ := json.Marshal(map[string]string{"error": "internal: " + err.Error()})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write(eb)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
+	_, _ = w.Write(b)
 }
 
 func writeErr(w http.ResponseWriter, code int, msg string) {
