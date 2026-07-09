@@ -100,6 +100,17 @@ below.
 
 These are settled decisions. Do not propose or implement them.
 
+## Dispatching goal-supervised sessions
+
+- **Completion conditions must demand world-state evidence, never transcript
+  claims.** Require branch-verified-on-origin (`git fetch && git status -sb`
+  output shown), pasted test output, etc. — not a model's assertion that it
+  did the work. Why: an evaluator once declared files created while the disk
+  was empty.
+- **Push is the durability mechanism.** Commit as soon as the first test file
+  exists; push after every green milestone. Why: lease death and loop death
+  have each destroyed unpushed work.
+
 ## Plugin System
 
 Plugins are separate processes (any language; Go SDK provided) speaking a versioned JSON-RPC protocol over stdio.
@@ -189,6 +200,10 @@ Rules:
   advancing once the test function returns — a goroutine parked in
   `time.Sleep` at bubble end is reported as a deadlock, which is the bubble's
   goroutine-leak detection working for you.
+- **For concurrency-sensitive code (locks, queues, backpressure), write the
+  invariants down in the brief/design before implementation** and test
+  against them. Deriving the design from review findings one round at a time
+  took four rounds on a recent PR.
 - **Exception — cross-process e2e** (`e2e/` only): tests driving a real
   subprocess may observe out-of-process state with deadline-bounded poll
   loops, because no in-process channel can cross an OS process boundary.
@@ -211,6 +226,9 @@ Rules:
   (struct field order makes marshaled output deterministic).
 - Production timers use `time.NewTimer` + `defer Stop()`, not `time.After`,
   when the surrounding function can return before the timer fires.
+- **Regression tests must be red-verified.** Prove the test fails against the
+  pre-fix code — revert the fix, observe red, re-apply it — and show that
+  evidence. A regression guard that never ran red is unverified.
 
 ## Code Style
 
@@ -224,6 +242,14 @@ full — including the summary comment**. Inline-thread count is not a merge
 gate: the reviewer files findings both as inline threads and as items in the
 top-level summary, and both must be addressed (or explicitly acknowledged as
 deferred) before merge. Iterate until a round produces zero findings.
+
+A green check is not a review. The reviewer has failed silently before: an
+instant API error produces a placeholder comment and zero findings, which
+reads as mergeable. Before merging, verify the review summary is substantive.
+
+Read and act on every review thread individually — never batch-resolve. One
+explicit resolve command per thread id. A batch operation once resolved
+unread findings.
 
 ## Git Commits
 
