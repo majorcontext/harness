@@ -149,11 +149,20 @@ export class PluginContext {
   /**
    * Fetch wrapper that stamps httpHeaders on every request, mirroring the Go
    * SDK's Client.HTTPClient(). Existing headers in `init` win on conflicts.
+   * `init.headers` may be a plain object, a Headers instance, or an array of
+   * [key, value] tuples (anything HeadersInit accepts) — all three forms are
+   * normalized through the Headers constructor so none of them are silently
+   * dropped.
    * @param {string|URL} url
    * @param {RequestInit} [init]
    */
   async fetch(url, init = {}) {
-    const headers = { ...this.httpHeaders, ...(init.headers || {}) };
+    const headers = new Headers(this.httpHeaders);
+    if (init.headers) {
+      for (const [key, value] of new Headers(init.headers)) {
+        headers.set(key, value);
+      }
+    }
     return fetch(url, { ...init, headers });
   }
 
