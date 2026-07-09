@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -219,6 +220,7 @@ func (s *Server) syncMessages(sessionID string) {
 		s.markSeenLocked(sessionID, m.ID)
 		s.emitDurableLocked(&Event{Type: evtMessage, SessionID: sessionID, Message: &m})
 	}
+	s.checkPersistErrLocked(sessionID, st.sess)
 }
 
 // emitDurable assigns the next sequence number, journals the event, and fans it
@@ -262,7 +264,8 @@ func (s *Server) fanoutLocked(ev Event) {
 }
 
 // writeJournalLocked appends one record to events.jsonl. Write failures are
-// recorded but never fatal. Caller holds s.mu.
+// recorded in s.lastErr and, when Options.OnError is set, forwarded (wrapped
+// with "journal write: %w") — never fatal either way. Caller holds s.mu.
 func (s *Server) writeJournalLocked(ev Event) {
 	if s.jf == nil {
 		return
@@ -270,11 +273,31 @@ func (s *Server) writeJournalLocked(ev Event) {
 	b, err := json.Marshal(ev)
 	if err != nil {
 		s.lastErr = err
+		s.reportError(fmt.Errorf("journal write: %w", err))
 		return
 	}
 	if _, err := s.jf.Write(append(b, '\n')); err != nil {
 		s.lastErr = err
+		s.reportError(fmt.Errorf("journal write: %w", err))
 	}
+}
+
+// checkPersistErrLocked polls sess.PersistErr() and forwards it to
+// Options.OnError (wrapped with "session %s persist: %w") the first time it
+// appears for this session or changes from the last-forwarded error, so a
+// persistently-failing write is reported once rather than on every
+// syncMessages call. Caller holds s.mu.
+func (s *Server) checkPersistErrLocked(sessionID string, sess *engine.Session) {
+	err := sess.PersistErr()
+	if err == nil {
+		return
+	}
+	msg := err.Error()
+	if s.lastPersistErr[sessionID] == msg {
+		return
+	}
+	s.lastPersistErr[sessionID] = msg
+	s.reportError(fmt.Errorf("session %s persist: %w", sessionID, err))
 }
 
 func (s *Server) markSeenLocked(sessionID, msgID string) {

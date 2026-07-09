@@ -78,6 +78,16 @@ type Options struct {
 	// without authentication (preflights carry no credentials by spec). Empty
 	// (the default) disables CORS entirely — no CORS headers are emitted.
 	CORSOrigin string
+	// OnError, when non-nil, is invoked for every error that the server would
+	// otherwise swallow: journal marshal/write failures and per-session engine
+	// persist failures (surfaced once per newly-changed error, not on every
+	// poll). Errors are wrapped with context (e.g. "journal write: %w",
+	// "session %s persist: %w"). Nil is safe — every call site nil-guards it.
+	//
+	// It is invoked synchronously, sometimes while s.mu is held, so it must
+	// never call back into the Server (that would deadlock); logging or
+	// forwarding to an external sink is the intended use.
+	OnError func(context.Context, error)
 }
 
 // Server implements http.Handler for the harness serve API.
@@ -119,6 +129,12 @@ type Server struct {
 	// so request.meta includes the full system only when it changes.
 	lastRequest map[string]*requestSnapshot
 	lastReqHash map[string]string
+
+	// lastPersistErr tracks, per session, the Error() string of the last
+	// engine persist failure forwarded to Options.OnError, so a repeatedly-
+	// failing persist is reported once rather than on every syncMessages
+	// poll. Never evicted (bounded by session count, mirrors seen).
+	lastPersistErr map[string]string
 
 	// goalState tracks the latest goal summary per session for this process
 	// (in memory only, like lastRequest): condition, active flag, turn count,
@@ -169,14 +185,15 @@ func New(opts Options) (*Server, error) {
 		opts.MaxResident = 32
 	}
 	s := &Server{
-		opts:        opts,
-		subs:        make(map[*subscriber]struct{}),
-		seen:        make(map[string]map[string]bool),
-		sessions:    make(map[string]*sessionState),
-		lastRequest: make(map[string]*requestSnapshot),
-		lastReqHash: make(map[string]string),
-		goalState:   make(map[string]*goalTracker),
-		closing:     make(chan struct{}),
+		opts:           opts,
+		subs:           make(map[*subscriber]struct{}),
+		seen:           make(map[string]map[string]bool),
+		sessions:       make(map[string]*sessionState),
+		lastRequest:    make(map[string]*requestSnapshot),
+		lastReqHash:    make(map[string]string),
+		lastPersistErr: make(map[string]string),
+		goalState:      make(map[string]*goalTracker),
+		closing:        make(chan struct{}),
 	}
 	if err := s.reconcile(); err != nil {
 		return nil, err
@@ -337,6 +354,16 @@ func (s *Server) authorized(r *http.Request) bool {
 	}
 	tok := h[len(prefix):]
 	return subtle.ConstantTimeCompare([]byte(tok), []byte(s.opts.RunToken)) == 1
+}
+
+// reportError forwards err to Options.OnError, nil-guarded. Safe to call
+// with s.mu held: the callback must not call back into the Server (see the
+// OnError doc comment).
+func (s *Server) reportError(err error) {
+	if s.opts.OnError == nil {
+		return
+	}
+	s.opts.OnError(context.Background(), err)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
