@@ -1,0 +1,269 @@
+// Plugin wiring for cmd/harness: reading config.Plugins, resolving cached
+// manifests (probing only when the cache misses), constructing the
+// *plugin.Host that both run and serve pass through as engine.Config.Hooks,
+// and the `harness plugin probe` subcommand. Package plugin itself (Host,
+// Probe, chain dispatch) is a complete, separately tested library — nothing
+// here reimplements its lazy-spawn or chaining semantics; this file only
+// resolves manifests and wires the result in.
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/engine"
+	"github.com/majorcontext/harness/plugin"
+)
+
+// pluginProbeTimeout bounds `harness plugin probe` and the as-needed probing
+// buildPluginHost performs when a configured plugin's binary hash is not yet
+// cached. It is not the per-hook dispatch deadline (that is
+// plugin.Options.HookTimeout, inside plugin.Host itself) — this only bounds
+// the one-time initialize handshake a fresh probe performs.
+const pluginProbeTimeout = 30 * time.Second
+
+// pluginCachePath resolves the on-disk manifest cache file: $HARNESS_PLUGIN_CACHE
+// if set, otherwise a file next to the user config (see config.Path), so a
+// machine with a custom $HARNESS_CONFIG also gets a private plugin cache.
+func pluginCachePath() string {
+	if p := os.Getenv("HARNESS_PLUGIN_CACHE"); p != "" {
+		return p
+	}
+	return filepath.Join(filepath.Dir(config.Path()), "plugin_cache.json")
+}
+
+// pluginManifestCache is the on-disk manifest cache named in AGENTS.md:
+// "harness plugin install runs the binary once and caches its manifest ...
+// keyed by binary hash". Entries are keyed by plugin name *and* binary hash
+// (see pluginCacheKey) so a renamed config entry, or a plugin binary that
+// changed since it was last probed, both re-probe rather than silently
+// reusing an unrelated manifest.
+type pluginManifestCache struct {
+	Entries map[string]plugin.Manifest `json:"entries"`
+}
+
+func loadPluginManifestCache(path string) (*pluginManifestCache, error) {
+	c := &pluginManifestCache{Entries: map[string]plugin.Manifest{}}
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return c, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+	if err := json.NewDecoder(f).Decode(c); err != nil {
+		return nil, fmt.Errorf("plugin cache: parsing %s: %w", path, err)
+	}
+	if c.Entries == nil {
+		c.Entries = map[string]plugin.Manifest{}
+	}
+	return c, nil
+}
+
+func (c *pluginManifestCache) save(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, b, 0o644)
+}
+
+// pluginCacheKey identifies one cache entry: the config name (so chaining
+// order and identity are unambiguous) plus the binary hash (so a rebuilt
+// binary invalidates the entry).
+func pluginCacheKey(name, hash string) string { return name + "@" + hash }
+
+// pluginBinaryHash hashes the plugin's executable so a changed binary
+// invalidates its cache entry, without spawning it. Command[0] is resolved
+// via PATH exactly as exec.Command resolves it, so the hash tracks the same
+// file that would actually run.
+func pluginBinaryHash(command []string) (string, error) {
+	if len(command) == 0 {
+		return "", fmt.Errorf("plugin: empty command")
+	}
+	path := command[0]
+	if _, err := os.Stat(path); err != nil {
+		resolved, lerr := exec.LookPath(path)
+		if lerr != nil {
+			return "", fmt.Errorf("resolving %q: %w", path, lerr)
+		}
+		path = resolved
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// buildPluginSpecs resolves a plugin.Spec (with its Manifest filled in) for
+// every configured plugin, in config order (chain order is significant —
+// see plugin/PROTOCOL.md). A plugin whose binary hash is not yet in cache is
+// probed (plugin.Probe: spawn, initialize, shutdown) to populate it; dirty
+// reports whether the cache changed, so the caller knows to persist it.
+func buildPluginSpecs(ctx context.Context, plugins []config.PluginSpec, cache *pluginManifestCache) (specs []plugin.Spec, dirty bool, err error) {
+	for _, p := range plugins {
+		hash, herr := pluginBinaryHash(p.Command)
+		if herr != nil {
+			return nil, dirty, fmt.Errorf("plugin %s: %w", p.Name, herr)
+		}
+		key := pluginCacheKey(p.Name, hash)
+		manifest, ok := cache.Entries[key]
+		if !ok {
+			pctx, cancel := context.WithTimeout(ctx, pluginProbeTimeout)
+			manifest, err = plugin.Probe(pctx, p.Command)
+			cancel()
+			if err != nil {
+				return nil, dirty, fmt.Errorf("plugin %s: probe: %w", p.Name, err)
+			}
+			if manifest.Name != p.Name {
+				return nil, dirty, fmt.Errorf("plugin %s: manifest name %q does not match config", p.Name, manifest.Name)
+			}
+			cache.Entries[key] = manifest
+			dirty = true
+		}
+		specs = append(specs, plugin.Spec{
+			Command:  p.Command,
+			Env:      p.Env,
+			Dir:      p.Dir,
+			Config:   p.Config,
+			Manifest: manifest,
+		})
+	}
+	return specs, dirty, nil
+}
+
+// buildPluginHost wires configured plugins into a *plugin.Host: it loads the
+// on-disk manifest cache, probes any plugin missing from it (the only case
+// where a plugin process is spawned before a session dispatches a hook to
+// it), persists a refreshed cache, and constructs the Host. httpHeaders
+// comes straight from config's plugin_http_headers and is passed through to
+// plugin.Options.HTTPHeaders, which host.go already stamps into every
+// plugin's InitializeParams.HTTPHeaders — no new stamping machinery here.
+//
+// It returns a nil Host (and nil error) when no plugins are configured.
+// Callers must route the result through pluginHooks rather than assigning it
+// to an engine.Hooks-typed field directly: a typed-nil *plugin.Host in an
+// interface is not a nil interface.
+func buildPluginHost(ctx context.Context, plugins []config.PluginSpec, harnessVersion, workDir string, httpHeaders map[string]string) (*plugin.Host, error) {
+	if len(plugins) == 0 {
+		return nil, nil
+	}
+	cachePath := pluginCachePath()
+	cache, err := loadPluginManifestCache(cachePath)
+	if err != nil {
+		return nil, err
+	}
+	specs, dirty, err := buildPluginSpecs(ctx, plugins, cache)
+	if err != nil {
+		return nil, err
+	}
+	if dirty {
+		if err := cache.save(cachePath); err != nil {
+			return nil, err
+		}
+	}
+	return plugin.NewHost(plugin.Options{
+		HarnessVersion: harnessVersion,
+		WorkspaceDir:   workDir,
+		HTTPHeaders:    httpHeaders,
+	}, specs...)
+}
+
+// pluginHooks adapts a possibly-nil *plugin.Host to engine.Hooks. Assigning a
+// typed-nil *plugin.Host directly to an engine.Hooks-typed struct field
+// produces a non-nil interface (the classic Go gotcha): every
+// `cfg.Hooks != nil` check in the engine would then be true, and the first
+// one to call a method on it would panic dereferencing a nil Host. Routing
+// through this function keeps "no plugins configured" behaving exactly like
+// today: a true nil interface, hooks disabled.
+func pluginHooks(host *plugin.Host) engine.Hooks {
+	if host == nil {
+		return nil
+	}
+	return host
+}
+
+// pluginCmd dispatches `harness plugin <subcommand>`.
+func pluginCmd(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: harness plugin probe")
+	}
+	switch args[0] {
+	case "probe":
+		return pluginProbeCmd(args[1:])
+	default:
+		return fmt.Errorf("unknown plugin subcommand %q (want: probe)", args[0])
+	}
+}
+
+// pluginProbeCmd re-probes every configured plugin — always, unlike
+// buildPluginHost's as-needed probing — and refreshes the on-disk manifest
+// cache, printing each plugin's name and subscribed hooks. This is the
+// explicit "refresh the cache" step: after rebuilding a plugin binary, or to
+// confirm a newly-added plugin is wired correctly before it is ever used in
+// a session.
+func pluginProbeCmd(args []string) error {
+	fs := flag.NewFlagSet("plugin probe", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	if len(cfg.Plugins) == 0 {
+		fmt.Println("no plugins configured")
+		return nil
+	}
+	cachePath := pluginCachePath()
+	cache, err := loadPluginManifestCache(cachePath)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), pluginProbeTimeout*time.Duration(len(cfg.Plugins)))
+	defer cancel()
+	for _, p := range cfg.Plugins {
+		hash, err := pluginBinaryHash(p.Command)
+		if err != nil {
+			return fmt.Errorf("plugin %s: %w", p.Name, err)
+		}
+		pctx, pcancel := context.WithTimeout(ctx, pluginProbeTimeout)
+		m, err := plugin.Probe(pctx, p.Command)
+		pcancel()
+		if err != nil {
+			return fmt.Errorf("plugin %s: probe: %w", p.Name, err)
+		}
+		if m.Name != p.Name {
+			return fmt.Errorf("plugin %s: manifest name %q does not match config", p.Name, m.Name)
+		}
+		cache.Entries[pluginCacheKey(p.Name, hash)] = m
+		hooks := make([]string, len(m.Hooks))
+		for i, h := range m.Hooks {
+			hooks[i] = string(h)
+		}
+		fmt.Printf("%s: %s\n", p.Name, strings.Join(hooks, ", "))
+	}
+	return cache.save(cachePath)
+}
