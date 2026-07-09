@@ -422,14 +422,29 @@ func (p *procConn) Close() error {
 	return nil
 }
 
-// Probe spawns a plugin binary, performs the initialize handshake, and
-// returns its manifest. This is the install-time step ("harness plugin
-// install") that populates the manifest cache; the cache should be keyed by
-// binary hash so a changed binary is re-probed.
-func Probe(ctx context.Context, command []string) (Manifest, error) {
+// ProbeSpec spawns a plugin binary using the full spec — command, Env, Dir,
+// and Config — performs the initialize handshake, and returns its manifest.
+// This is the install-time step ("harness plugin install") that populates
+// the manifest cache; the cache should be keyed by binary hash so a changed
+// binary is re-probed.
+//
+// Probing with the full spec (rather than the bare command — see Probe)
+// matters: a plugin can behave differently (even report a different
+// manifest) depending on Env, Dir, or Config, and the real spawn (Host's
+// instance.dial/startLocked) always supplies all three. Probing with less
+// than the real spawn does risks caching a manifest the live plugin
+// wouldn't actually advertise.
+func ProbeSpec(ctx context.Context, spec Spec) (Manifest, error) {
 	inst := &instance{
 		host: &Host{opts: Options{HookTimeout: 5 * time.Second}},
-		spec: Spec{Command: command, Manifest: Manifest{Name: "probe", ProtocolVersion: ProtocolVersion}},
+		spec: Spec{
+			Command:  spec.Command,
+			Env:      spec.Env,
+			Dir:      spec.Dir,
+			Config:   spec.Config,
+			Manifest: Manifest{Name: "probe", ProtocolVersion: ProtocolVersion},
+			dial:     spec.dial,
+		},
 	}
 	rwc, err := inst.dial()
 	if err != nil {
@@ -440,10 +455,19 @@ func Probe(ctx context.Context, command []string) (Manifest, error) {
 	defer c.close()
 
 	var m Manifest
-	init := &InitializeParams{ProtocolVersion: ProtocolVersion}
+	init := &InitializeParams{ProtocolVersion: ProtocolVersion, Config: spec.Config}
 	if err := c.call(ctx, methodInitialize, init, &m); err != nil {
 		return Manifest{}, fmt.Errorf("plugin probe: %w", err)
 	}
 	_ = c.notify(methodShutdown, struct{}{})
 	return m, nil
+}
+
+// Probe spawns a plugin binary given only its command — no Env, Dir, or
+// Config — performs the initialize handshake, and returns its manifest.
+// Kept for backward compatibility; prefer ProbeSpec, which probes with the
+// same Env/Dir/Config a real spawn uses so the cached manifest can't diverge
+// from what the live, fully-configured plugin actually advertises.
+func Probe(ctx context.Context, command []string) (Manifest, error) {
+	return ProbeSpec(ctx, Spec{Command: command})
 }

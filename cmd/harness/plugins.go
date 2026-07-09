@@ -125,7 +125,12 @@ func buildPluginSpecs(ctx context.Context, plugins []config.PluginSpec, cache *p
 		manifest, ok := cache.Entries[key]
 		if !ok {
 			pctx, cancel := context.WithTimeout(ctx, pluginProbeTimeout)
-			manifest, err = plugin.Probe(pctx, p.Command)
+			manifest, err = plugin.ProbeSpec(pctx, plugin.Spec{
+				Command: p.Command,
+				Env:     p.Env,
+				Dir:     p.Dir,
+				Config:  p.Config,
+			})
 			cancel()
 			if err != nil {
 				return nil, dirty, fmt.Errorf("plugin %s: probe: %w", p.Name, err)
@@ -244,7 +249,12 @@ func pluginProbeCmd(args []string) error {
 			return fmt.Errorf("plugin %s: %w", p.Name, err)
 		}
 		pctx, pcancel := context.WithTimeout(ctx, pluginProbeTimeout)
-		m, err := plugin.Probe(pctx, p.Command)
+		m, err := plugin.ProbeSpec(pctx, plugin.Spec{
+			Command: p.Command,
+			Env:     p.Env,
+			Dir:     p.Dir,
+			Config:  p.Config,
+		})
 		pcancel()
 		if err != nil {
 			return fmt.Errorf("plugin %s: probe: %w", p.Name, err)

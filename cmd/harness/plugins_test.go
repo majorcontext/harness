@@ -46,7 +46,20 @@ func TestPluginHelperProcess(t *testing.T) {
 			f.Close()
 		}
 	}
-	err := plugin.Serve(plugin.Manifest{Name: name}, &plugin.Hooks{
+	// When PLUGIN_ECHO_VAR names another env var, echo that var's value and
+	// this process's cwd into the manifest's (otherwise-unused) Version
+	// field, so a test proves plugin.ProbeSpec's spec.Env/spec.Dir actually
+	// reached the spawned process — the manifest returned by `initialize`
+	// is the only channel Probe/ProbeSpec observes back from the plugin.
+	version := ""
+	if echoVar := os.Getenv("PLUGIN_ECHO_VAR"); echoVar != "" {
+		wd, _ := os.Getwd()
+		if resolved, err := filepath.EvalSymlinks(wd); err == nil {
+			wd = resolved
+		}
+		version = fmt.Sprintf("echo=%s;cwd=%s", os.Getenv(echoVar), wd)
+	}
+	err := plugin.Serve(plugin.Manifest{Name: name, Version: version}, &plugin.Hooks{
 		SystemTransform: func(ctx context.Context, c *plugin.Client, _ *plugin.SystemTransformRequest) (*plugin.SystemTransformResponse, error) {
 			// When PLUGIN_HTTP_PROBE_URL is set, prove
 			// InitializeParams.HTTPHeaders (populated by the harness from
@@ -78,8 +91,11 @@ func TestPluginHelperProcess(t *testing.T) {
 // helperPluginCommand returns a config.PluginSpec whose Command re-execs
 // this test binary as a plugin process (see TestPluginHelperProcess). The
 // env vars that select its behavior are set on the *current* process via
-// t.Setenv, since plugin.Probe (unlike the Spec plumbed into plugin.NewHost)
-// spawns with only the harness's inherited environment — see plugin/host.go.
+// t.Setenv, which the helper inherits either way (dial always appends
+// spec.Env on top of os.Environ() — see plugin/host.go); tests that need to
+// prove spec.Env specifically reaches the spawned process (as opposed to
+// merely the harness's own inherited environment) build the plugin.Spec by
+// hand instead — see TestProbeSpecEnvAndDirReachProbedProcess.
 func helperPluginCommand(t *testing.T, name string) config.PluginSpec {
 	t.Helper()
 	return config.PluginSpec{
@@ -355,6 +371,49 @@ func captureStdout(t *testing.T, fn func()) string {
 	out := <-done
 	r.Close()
 	return out
+}
+
+// TestProbeSpecEnvAndDirReachProbedProcess proves finding (2): probing must
+// use the full plugin.Spec (Env, Dir, Config), not just the bare command, so
+// the cached manifest matches what the live, fully-configured plugin
+// actually advertises. PLUGIN_PROBE_MARKER is set only via spec.Env (never
+// via t.Setenv on this process), so it reaches the probed process if and
+// only if buildPluginSpecs/plugin.ProbeSpec actually plumb spec.Env through
+// — the old plugin.Probe(ctx, command), which spawned with only the
+// harness's inherited environment, could never see it. spec.Dir similarly
+// must reach the probed process's cwd.
+func TestProbeSpecEnvAndDirReachProbedProcess(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a real plugin subprocess")
+	}
+	t.Setenv("GO_WANT_PLUGIN_HELPER", "1")
+	t.Setenv("PLUGIN_NAME", "envplug")
+	t.Setenv("PLUGIN_ECHO_VAR", "PLUGIN_PROBE_MARKER")
+
+	dir := t.TempDir()
+	wantDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	spec := plugin.Spec{
+		Command: []string{os.Args[0], "-test.run=^TestPluginHelperProcess$"},
+		Env:     []string{"PLUGIN_PROBE_MARKER=probe-only-env-9f2c"},
+		Dir:     dir,
+	}
+	m, err := plugin.ProbeSpec(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("ProbeSpec: %v", err)
+	}
+	if m.Name != "envplug" {
+		t.Fatalf("manifest name = %q, want envplug", m.Name)
+	}
+	if want := "echo=probe-only-env-9f2c"; !strings.Contains(m.Version, want) {
+		t.Errorf("manifest.Version = %q, want it to contain %q (spec.Env did not reach the probed process)", m.Version, want)
+	}
+	if want := "cwd=" + wantDir; !strings.Contains(m.Version, want) {
+		t.Errorf("manifest.Version = %q, want it to contain %q (spec.Dir did not reach the probed process)", m.Version, want)
+	}
 }
 
 // TestPluginCacheKeyChangesWithBinary proves the cache is keyed by binary
