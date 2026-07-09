@@ -48,6 +48,45 @@ type Message struct {
 	CreatedAt time.Time `json:"created_at,omitzero"`
 }
 
+// Normalize scrubs known encoding/json footguns from m's parts in place. It
+// is the ingest-time counterpart to the marshal-time guards on ToolCall
+// (safeArguments/MarshalJSON) and ProviderData (Get/MarshalJSON): those
+// guards make every marshal of a poisoned value safe, but a
+// present-but-zero-length ProviderData entry left sitting in the Go value
+// itself still causes an in-memory Message to remarshal differently than
+// the same message reloaded from its own persisted JSON. That is because
+// Reasoning.ProviderData's field tag is "provider_data,omitempty":
+// encoding/json's omitempty decides purely from the map's own length,
+// before MarshalJSON ever runs, so a map holding one zero-length entry
+// (len == 1) is "non-empty" and the field is emitted (as "{}", after
+// MarshalJSON drops the useless entry) — while the same map reloaded from
+// that exact "{}" comes back as a zero-length map (len == 0) and
+// omitempty correctly drops the field entirely on the next marshal. Both
+// shapes are safe (neither panics, neither carries real data — see
+// ProviderData.Get) but they are not byte-identical, which breaks the
+// "retranscoding an unchanged history produces identical wire requests"
+// invariant ProviderCallID's doc comment promises elsewhere in this
+// package. Normalize closes that gap by deleting zero-length entries
+// in place, so a Message's in-memory shape always matches what
+// LoadSession would hand back for it.
+//
+// Session.append (engine/engine.go) calls this on every message before it
+// enters a session's history — user, assistant, and tool messages alike,
+// regardless of source (a shipped provider adapter, a plugin's generate
+// call, or a test's scripted provider) — which is the one ingest choke
+// point every message passes through.
+func (m *Message) Normalize() {
+	for _, p := range m.Parts {
+		if r, ok := p.(*Reasoning); ok {
+			for family, raw := range r.ProviderData {
+				if len(raw) == 0 {
+					delete(r.ProviderData, family)
+				}
+			}
+		}
+	}
+}
+
 // PartType discriminates the concrete type of a Part in JSON.
 type PartType string
 
@@ -163,7 +202,80 @@ func (*Reasoning) partType() PartType { return PartReasoning }
 // ProviderData carries opaque provider-native state keyed by provider family.
 // Transcoders replay the entry matching their own family verbatim and ignore
 // the rest.
+//
+// # The map-shaped twin of the ToolCall.Arguments footgun
+//
+// ToolCall.Arguments is a single json.RawMessage field, and safeArguments
+// (above) guards the one encoding/json footgun that matters for it: a
+// zero-length but non-nil json.RawMessage fails to marshal with "json:
+// error calling MarshalJSON for type json.RawMessage: unexpected end of
+// JSON input" (nil is special-cased by the encoder to marshal as "null";
+// zero-length-non-nil is not special-cased at all and is handed to the
+// encoder as-is). ProviderData is a map of the same underlying type, and it
+// has exactly the same failure mode PLUS an extra one: a caller that reads
+// an entry straight out of the map (v.ProviderData[Family]) and reuses those
+// bytes downstream — as every current transcoder does — bypasses any
+// guard defined on the map type itself, because indexing a map is not a
+// call to any method. #42 fixed the ToolCall case and, because it only
+// looked at ToolCall, missed this one entirely: Reasoning.ProviderData
+// carries the exact same json.RawMessage under the exact same footgun, one
+// layer of map indirection away, and #42's fix does not reach it — which is
+// why the error recurred on a binary that already had #42's fix.
+//
+// Get and MarshalJSON below are ProviderData's equivalent of
+// ToolCall.safeArguments/MarshalJSON: Get is the single choke point every
+// transcoder must use to read an entry (never map indexing directly), so a
+// zero-length entry is treated as "absent" at the one place all consumers
+// go through, instead of being trusted as real data and carried into a
+// provider request or an unmarshal call. MarshalJSON guards the direct-marshal
+// path (a Reasoning part marshaled as-is — the session log, the server
+// journal, a chat.message plugin hook payload) by dropping zero-length
+// entries from the encoded object entirely: they carry no information
+// (Get already treats them as absent), so omitting them is lossless and
+// keeps every marshal of a ProviderData value — via any encoder, present or
+// future — safe without that encoder having to know about this footgun.
 type ProviderData map[string]json.RawMessage
+
+// Get returns the ProviderData entry for family, treating a present-but
+// zero-length entry as absent — the same normalization ToolCall.safeArguments
+// applies to Arguments, but at the point of read rather than of marshal,
+// since a raw value extracted here commonly gets reused downstream (appended
+// into a provider request's own RawMessage list, e.g.) outside of any
+// marshaling this map itself might guard. Every transcoder must call this
+// instead of indexing the map directly; see the package doc on ProviderData.
+func (pd ProviderData) Get(family string) (json.RawMessage, bool) {
+	raw, ok := pd[family]
+	if !ok || len(raw) == 0 {
+		return nil, false
+	}
+	return raw, true
+}
+
+// MarshalJSON implements json.Marshaler so any direct encoding of a
+// ProviderData value — e.g. a Reasoning part marshaled as-is by
+// marshalPart's embedded-struct case below, in the session log, the server
+// journal, or a plugin hook payload — cannot trip over a zero-length (but
+// non-nil) entry's own MarshalJSON failure. Entries with zero-length data
+// carry no information (Get, above, already treats them as absent) so they
+// are dropped from the encoded object rather than encoded as "null":
+// omitting an entry and normalizing it to null are equally "absent" to
+// every reader in this codebase (both go through Get), and omitting keeps
+// the wire shape exactly what it would have been had the entry never been
+// set, rather than introducing a new null-valued shape for the format to
+// support.
+func (pd ProviderData) MarshalJSON() ([]byte, error) {
+	if pd == nil {
+		return []byte("null"), nil
+	}
+	out := make(map[string]json.RawMessage, len(pd))
+	for family, raw := range pd {
+		if len(raw) == 0 {
+			continue
+		}
+		out[family] = raw
+	}
+	return json.Marshal(out)
+}
 
 // Parts is a list of message parts with polymorphic JSON encoding: each part
 // is an object carrying a "type" discriminator alongside its fields.

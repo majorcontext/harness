@@ -203,10 +203,11 @@ func transcodeParts(parts message.Parts) ([]apiBlock, error) {
 			})
 
 		case *message.Reasoning:
-			raw, ok := v.ProviderData[Family]
+			raw, ok := v.ProviderData.Get(Family)
 			if !ok {
-				// Another provider's reasoning: dropped, per the canonical
-				// format's crossing rule.
+				// Another provider's reasoning, or a present-but-empty
+				// entry (see message.ProviderData.Get): dropped, per the
+				// canonical format's crossing rule.
 				continue
 			}
 			var data anthropicReasoningData

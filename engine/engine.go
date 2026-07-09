@@ -309,6 +309,13 @@ func (s *Session) History() []message.Message {
 }
 
 func (s *Session) append(m message.Message) {
+	// Normalize before this message enters history at all: see
+	// message.Message.Normalize's doc comment. This is the single ingest
+	// choke point every message passes through (user, assistant, and tool
+	// messages alike), so it is the right place to scrub a
+	// present-but-zero-length Reasoning.ProviderData entry before it can
+	// diverge an in-memory history from what LoadSession would reload.
+	m.Normalize()
 	s.mu.Lock()
 	s.history = append(s.history, m)
 	s.persistMessage(&m)

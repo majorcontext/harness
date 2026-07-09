@@ -205,9 +205,10 @@ func transcodeAssistantMessage(m *message.Message, family string) ([]apiMessage,
 				},
 			})
 		case *message.Reasoning:
-			if _, ok := v.ProviderData[family]; !ok {
-				// Foreign-provider reasoning: dropped per the canonical
-				// format's crossing rule.
+			if _, ok := v.ProviderData.Get(family); !ok {
+				// Foreign-provider reasoning, or a present-but-empty entry
+				// (see message.ProviderData.Get): dropped per the
+				// canonical format's crossing rule.
 				continue
 			}
 			// The generic chat-completions wire has no field to replay

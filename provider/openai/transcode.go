@@ -204,10 +204,14 @@ func transcodeMessage(m *message.Message) ([]json.RawMessage, error) {
 			if err := flush(); err != nil {
 				return nil, err
 			}
-			raw, ok := v.ProviderData[Family]
+			raw, ok := v.ProviderData.Get(Family)
 			if !ok {
-				// Another provider's reasoning: dropped, per the canonical
-				// format's crossing rule.
+				// Another provider's reasoning, or a present-but-empty
+				// entry (see message.ProviderData.Get — this is the
+				// exact shape that used to reach json.Marshal below as a
+				// zero-length, non-nil json.RawMessage and fail with
+				// "unexpected end of JSON input"): dropped, per the
+				// canonical format's crossing rule.
 				continue
 			}
 			// Replay the stored raw reasoning item verbatim.
