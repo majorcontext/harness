@@ -146,6 +146,16 @@ func (s *Session) ActiveGoal() (condition string, ok bool) {
 // resets the in-memory goal state, and emits a goal.cleared event. It reports
 // whether a goal was active (false is a no-op, so a repeated clear is
 // idempotent).
+//
+// Ordering guarantee: ClearGoal journals and emits goal.cleared synchronously,
+// under s.mu, before it returns. A caller that also needs to cancel the loop's
+// context (e.g. the server's DELETE /goal handler) MUST call ClearGoal first
+// and cancel second: cancelling first lets the goal-loop worker's
+// context-cancellation unwind — which ends in a terminal status-idle record —
+// race this call to the journal, so goal.cleared could be journaled after the
+// idle record it is supposed to precede. Clear-then-cancel makes that
+// structurally impossible: by the time cancellation can wake the worker,
+// goal.cleared is already durable.
 func (s *Session) ClearGoal() bool {
 	s.mu.Lock()
 	if !s.goalActive {
