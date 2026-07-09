@@ -171,12 +171,17 @@ type Server struct {
 }
 
 // goalTracker is the per-session goal summary surfaced in Session JSON.
+// attempt is the 1-based worker-turn retry attempt from the most recent
+// goal.stalled record; it is reset to 0 by goal.set/goal.eval/goal.achieved
+// (a stall is non-terminal — see publishGoal — so it never touches active or
+// achieved, only lastReason and attempt).
 type goalTracker struct {
 	condition  string
 	active     bool
 	achieved   bool
 	turns      int
 	lastReason string
+	attempt    int
 }
 
 // sessionState tracks an in-memory session and any in-flight prompt. lastUsed

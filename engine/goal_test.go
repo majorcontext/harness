@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/plugin"
@@ -43,7 +45,26 @@ type goalProvider struct {
 	wi, ei     int
 	requests   []*provider.Request
 	failCtx    bool  // when true, honor ctx cancellation in Stream
-	failWorker error // when set, the next worker call fails with this error
+	failWorker error // when set, every worker call fails with this error
+
+	// workerErrN, when > 0, makes the first workerErrN worker calls fail with
+	// workerErr instead of consuming a scripted turn — a fake transient
+	// provider failure (rate limit, momentary 5xx) so the retry path can be
+	// exercised deterministically. Each failing call still counts against
+	// wi's position: the scripted worker turns are consumed only once the
+	// failures are exhausted.
+	workerErrN   int
+	workerErrHit int
+	workerErr    error
+
+	// workerCall counts every worker (tool-bearing) Stream call made so far
+	// (1-indexed once incremented). failWorkerCall, when > 0, makes exactly
+	// that call fail with workerErr instead of consuming a scripted turn or
+	// checking workerErrN — used to simulate a provider error on a LATER
+	// model call within the same Prompt invocation, i.e. after an earlier
+	// call in that attempt already executed a tool.
+	workerCall     int
+	failWorkerCall int
 }
 
 func (p *goalProvider) Name() string { return "test" }
@@ -66,6 +87,22 @@ func (p *goalProvider) Stream(ctx context.Context, req *provider.Request) (provi
 		ev := p.eval[p.ei]
 		p.ei++
 		return &scriptedStream{events: ev}, nil
+	}
+	p.workerCall++
+	if p.failWorkerCall > 0 && p.workerCall == p.failWorkerCall {
+		err := p.workerErr
+		if err == nil {
+			err = errors.New("fake transient provider error")
+		}
+		return nil, err
+	}
+	if p.workerErrHit < p.workerErrN {
+		p.workerErrHit++
+		err := p.workerErr
+		if err == nil {
+			err = errors.New("fake transient provider error")
+		}
+		return nil, err
 	}
 	if p.wi >= len(p.worker) {
 		return &scriptedStream{}, nil
@@ -274,22 +311,188 @@ func TestPursueGoalUnparseableThenRecovers(t *testing.T) {
 	}
 }
 
-// TestPursueGoalWorkerFailureEmitsOnce covers a genuine (non-cancellation)
-// provider failure on the worker turn Prompt call inside the goal loop:
-// Prompt itself emits session.error for it, and PursueGoal must return the
-// error without emitting a second time for the same failure.
+// TestPursueGoalWorkerFailureEmitsOnce originally covered a single
+// (non-cancellation) provider failure on the worker turn Prompt call inside
+// the goal loop, asserting that Prompt's own session.error emission was the
+// only one and PursueGoal returned that same error immediately. That premise
+// no longer holds: PursueGoal now retries a failing worker turn up to
+// goalWorkerRetries additional times (promptTurnWithRetry) before giving up,
+// and a single failure is retried rather than returned. What the retry fix
+// preserves is the *permanent*-failure case — every attempt exhausted — which
+// must still (a) return an error that wraps the underlying provider error,
+// and (b) never leave a zombie active goal. This test now exercises that
+// case with goalProvider's persistent failWorker (every worker call fails,
+// standing in for a fault that never clears — as opposed to workerErrN's
+// bounded, eventually-recovering failures used by the retry test below), and
+// asserts the resulting session.error count precisely rather than assuming
+// "once".
+//
+// Run inside a synctest bubble: a permanent failure runs the full
+// goalWorkerRetries+1 attempts, waiting the real backoff schedule between
+// them (see TestPursueGoalRetriesTransientWorkerError) — free on fake time,
+// costly on the wall clock (see AGENTS.md on time.Sleep-free tests).
 func TestPursueGoalWorkerFailureEmitsOnce(t *testing.T) {
 	workerErr := errors.New("worker provider exploded")
-	prov := &goalProvider{failWorker: workerErr}
 	hooks := &fakeHooks{}
-	s := goalSession(t, prov, t.TempDir(), hooks)
-
-	_, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+	var s *Session
+	var err error
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProvider{failWorker: workerErr}
+		s = goalSession(t, prov, t.TempDir(), hooks)
+		_, err = s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+	})
 	if !errors.Is(err, workerErr) {
-		t.Fatalf("err = %v, want %v", err, workerErr)
+		t.Fatalf("err = %v, want it to wrap %v", err, workerErr)
 	}
-	if msgs := sessionErrorMessages(t, hooks); len(msgs) != 1 || msgs[0] != err.Error() {
-		t.Errorf("session.error messages = %v, want exactly [%q]", msgs, err.Error())
+
+	// No zombie: every attempt failed, so the goal must have been cleared.
+	if cond, ok := s.ActiveGoal(); ok {
+		t.Fatalf("ActiveGoal = %q, still active after permanent failure — zombie goal", cond)
+	}
+
+	// promptTurnWithRetry makes goalWorkerRetries+1 attempts total (the
+	// initial try plus goalWorkerRetries retries) before giving up — nothing
+	// here executes a tool call (failWorker fails Stream itself, before any
+	// tool runs), so the non-idempotency early-stop never triggers and all
+	// goalWorkerRetries+1 attempts run. Each attempt is a full s.Prompt call,
+	// and Prompt's own streamTurn-error path (engine.go) calls
+	// emitSessionError once per failing call; PursueGoal's retry/clear code
+	// does not additionally call emitSessionError itself for this path (see
+	// the loop in PursueGoal and promptTurnWithRetry) — the clear only
+	// journals goal.cleared, a distinct event. So the total session.error
+	// count for a permanent failure is exactly one per attempt:
+	// goalWorkerRetries+1, all carrying the same underlying error text.
+	const wantEmits = goalWorkerRetries + 1
+	msgs := sessionErrorMessages(t, hooks)
+	if len(msgs) != wantEmits {
+		t.Fatalf("session.error messages = %v (%d), want exactly %d (one per worker attempt)", msgs, len(msgs), wantEmits)
+	}
+	for _, m := range msgs {
+		if m != workerErr.Error() {
+			t.Errorf("session.error message = %q, want %q", m, workerErr.Error())
+		}
+	}
+}
+
+// TestPursueGoalRetriesTransientWorkerError reproduces the fix for the
+// zombie-goal forensic finding: a worker-turn error (the fake providerâs
+// first two calls fail, standing in for a transient provider hiccup such as
+// a rate limit or a momentary 5xx while handling a large tool result) must
+// not kill the loop outright. PursueGoal retries the same turn up to
+// goalWorkerRetries times, recording a goal.stalled event for every failed
+// attempt, and succeeds once the provider recovers.
+//
+// Run inside a synctest bubble: PursueGoal now waits a capped exponential
+// backoff (goalRetryDelay) between retries, and the test asserts the exact
+// elapsed schedule (1s + 4s) — on fake time that costs nothing, on the wall
+// clock it would cost 5 real seconds per run of the suite (see AGENTS.md).
+func TestPursueGoalRetriesTransientWorkerError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProvider{
+			workerErrN: 2, // fails twice, succeeds on the 3rd (final) attempt
+			worker: [][]provider.Event{
+				asstTurn(provider.StopEndTurn, &message.Text{Text: "all done"}),
+			},
+			eval: [][]provider.Event{
+				evalTurn("MET: looks complete"),
+			},
+		}
+		var evs []Event
+		s := goalSession(t, prov, t.TempDir())
+		s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
+
+		start := time.Now()
+		res, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+		elapsed := time.Since(start)
+		if err != nil {
+			t.Fatalf("PursueGoal error = %v, want nil (transient errors must be retried)", err)
+		}
+		if !res.Achieved || res.Turns != 1 {
+			t.Fatalf("result = %+v, want achieved in 1 turn after retrying past the transient errors", res)
+		}
+		if want := time.Second + 4*time.Second; elapsed != want {
+			t.Errorf("elapsed = %v, want exactly %v (the 1s, 4s backoff schedule between the two failed attempts)", elapsed, want)
+		}
+
+		var stalled int
+		for _, ev := range evs {
+			if ev.Type == EventGoalStalled {
+				stalled++
+				if ev.GoalReason == "" {
+					t.Error("goal.stalled event missing GoalReason")
+				}
+			}
+		}
+		if stalled != 2 {
+			t.Errorf("goal.stalled events = %d, want 2 (one per failed attempt)", stalled)
+		}
+		if cond, ok := s.ActiveGoal(); ok {
+			t.Errorf("ActiveGoal = %q, active after achievement, want inactive", cond)
+		}
+	})
+}
+
+// TestPursueGoalWorkerFailsPermanentlyClearsGoal reproduces the "zombie goal"
+// forensic finding directly: when a worker turn keeps failing past the
+// retry budget, PursueGoal must not just return an error and leave the goal
+// active forever (the bug that left ses_41813d5a411c2ba5's goal active for
+// nearly 7 hours until a human manually cleared it). It must clear the goal,
+// carrying the failure reason on the goal.cleared record/event, before
+// returning.
+func TestPursueGoalWorkerFailsPermanentlyClearsGoal(t *testing.T) {
+	dir := t.TempDir()
+	var s *Session
+	var evs []Event
+	var err error
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProvider{
+			workerErrN: 1000, // never recovers
+			workerErr:  errors.New("provider: connection reset by peer"),
+		}
+		s = goalSession(t, prov, dir)
+		s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
+
+		_, err = s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+	})
+	if err == nil {
+		t.Fatal("PursueGoal with a permanently failing worker succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "connection reset by peer") {
+		t.Errorf("error = %v, want it to carry the underlying provider error", err)
+	}
+
+	// No zombie: the goal must no longer be active in memory.
+	if cond, ok := s.ActiveGoal(); ok {
+		t.Fatalf("ActiveGoal = %q, still active after permanent failure — zombie goal", cond)
+	}
+
+	var sawCleared bool
+	var stalled int
+	for _, ev := range evs {
+		switch ev.Type {
+		case EventGoalStalled:
+			stalled++
+		case EventGoalCleared:
+			sawCleared = true
+			if !strings.Contains(ev.GoalReason, "connection reset by peer") {
+				t.Errorf("goal.cleared GoalReason = %q, want it to carry the error", ev.GoalReason)
+			}
+		}
+	}
+	if !sawCleared {
+		t.Fatal("no goal.cleared event emitted after permanent worker failure")
+	}
+	if stalled != goalWorkerRetries+1 {
+		t.Errorf("goal.stalled events = %d, want %d (one per attempt)", stalled, goalWorkerRetries+1)
+	}
+
+	// Nor on disk: a resumed session must not see an active goal either.
+	loaded, err := LoadSession(s.cfg, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cond, ok := loaded.ActiveGoal(); ok {
+		t.Errorf("resumed ActiveGoal = %q, active after permanent failure — zombie goal survives reload", cond)
 	}
 }
 
@@ -660,5 +863,132 @@ func TestGoalEventsEmitWhileLockHeld(t *testing.T) {
 			close(release) // let the emitter finish
 			<-done
 		})
+	}
+}
+
+// TestGoalRetryDelaySchedule pins the documented capped-exponential backoff
+// schedule (1s, 4s, ...) as a pure function of the attempt number, so the
+// schedule is asserted independent of PursueGoal's plumbing.
+func TestGoalRetryDelaySchedule(t *testing.T) {
+	cases := []struct {
+		attempt int
+		want    time.Duration
+	}{
+		{1, time.Second},
+		{2, 4 * time.Second},
+		{3, 16 * time.Second},
+		{4, goalRetryBackoffCap}, // 64s would exceed the cap
+		{5, goalRetryBackoffCap},
+	}
+	for _, c := range cases {
+		if got := goalRetryDelay(c.attempt); got != c.want {
+			t.Errorf("goalRetryDelay(%d) = %v, want %v", c.attempt, got, c.want)
+		}
+	}
+}
+
+// TestPursueGoalRetryBackoffCancellable proves the backoff wait itself is
+// context-cancellable: a cancellation arriving mid-wait ends PursueGoal
+// immediately rather than sleeping out the rest of the schedule, and — since
+// this is the same context.Canceled path documented for a worker-turn
+// failure — the goal is left exactly as it was (still active), not cleared,
+// matching the "deliberate abort" semantics the rest of the package
+// establishes for a cancelled context.
+//
+// Run inside a synctest bubble: the cancelling goroutine fires its own timer
+// at a fake-time offset chosen to land inside the second (4s) backoff wait,
+// so the assertion on elapsed time is exact and costs no wall-clock time.
+func TestPursueGoalRetryBackoffCancellable(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProvider{
+			workerErrN: 1000, // never recovers on its own
+			workerErr:  errors.New("fake transient provider error"),
+		}
+		s := goalSession(t, prov, t.TempDir())
+
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		go func() {
+			timer := time.NewTimer(1500 * time.Millisecond) // 0.5s into the 4s wait
+			defer timer.Stop()
+			<-timer.C
+			cancel()
+		}()
+
+		start := time.Now()
+		_, err := s.PursueGoal(ctx, "cond", GoalOptions{Evaluator: evalModel})
+		elapsed := time.Since(start)
+
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+		if want := 1500 * time.Millisecond; elapsed != want {
+			t.Errorf("elapsed = %v, want exactly %v (cancelled mid-backoff, not the full 1s+4s schedule)", elapsed, want)
+		}
+		if cond, ok := s.ActiveGoal(); !ok || cond != "cond" {
+			t.Errorf("ActiveGoal = %q, %v; want the goal left untouched (still active) after a cancelled backoff wait", cond, ok)
+		}
+	})
+}
+
+// TestPursueGoalNoRetryAfterToolExecution is the red-first test for the
+// non-idempotency review finding: a retry re-issues the WHOLE directive
+// (Prompt has no sub-turn resume point), so once a worker-turn attempt has
+// already executed a tool call before failing on a later model call, retrying
+// risks re-running that tool. PursueGoal must detect this (via the
+// toolExecCount snapshot) and stop retrying immediately rather than reissue
+// the directive — the failed attempt still counts (one goal.stalled record),
+// but no second attempt, and no second tool execution, ever happens.
+func TestPursueGoalNoRetryAfterToolExecution(t *testing.T) {
+	var toolRuns int
+	testTool := Tool{
+		Def: provider.ToolDef{Name: "test_tool", Description: "test", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Run: func(ctx context.Context, s *Session, args json.RawMessage) (message.Parts, error) {
+			toolRuns++
+			return message.Parts{&message.Text{Text: "ok"}}, nil
+		},
+	}
+
+	prov := &goalProvider{
+		failWorkerCall: 2, // the SECOND worker call fails, after the first ran a tool
+		worker: [][]provider.Event{
+			asstTurn(provider.StopToolUse, toolCall("tc1", "test_tool", `{}`)),
+		},
+	}
+	var evs []Event
+	s := NewSession(Config{
+		Providers:    provider.Registry{prov.Name(): prov},
+		Model:        message.ModelRef{Provider: prov.Name(), Model: "m1"},
+		System:       []string{"base"},
+		SessionDir:   t.TempDir(),
+		Instructions: &InstructionsConfig{Disabled: true},
+		SkillsDirs:   []string{},
+		Tools:        []Tool{testTool},
+	})
+	s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
+
+	_, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+	if err == nil {
+		t.Fatal("PursueGoal succeeded, want error (the worker call after tool execution always fails)")
+	}
+
+	if toolRuns != 1 {
+		t.Errorf("tool executions = %d, want exactly 1 (a retry must not re-run it)", toolRuns)
+	}
+	if prov.workerCall != 2 {
+		t.Errorf("worker provider calls = %d, want exactly 2 (no third attempt after a post-tool-execution failure)", prov.workerCall)
+	}
+
+	var stalled int
+	for _, ev := range evs {
+		if ev.Type == EventGoalStalled {
+			stalled++
+		}
+	}
+	if stalled != 1 {
+		t.Errorf("goal.stalled events = %d, want 1 (retries stop after the first, post-tool-execution failure)", stalled)
+	}
+	if cond, ok := s.ActiveGoal(); ok {
+		t.Errorf("ActiveGoal = %q, still active; want cleared (retries exhausted, non-idempotency risk)", cond)
 	}
 }
