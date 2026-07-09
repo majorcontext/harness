@@ -22,9 +22,16 @@ var credentialPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(Authorization"?\s*:?\s*"?(?:Bearer|Basic|Token|Digest)\s+)[^\s",}]+`),
 	// bearer <token> outside a recognized "Authorization:" prefix
 	regexp.MustCompile(`(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]+`),
-	// key=value secrets, e.g. ?api_key=..., token=..., secret=...,
-	// password=..., access_key=... in query strings or free text.
-	regexp.MustCompile(`(?i)(\b(?:api[_-]?key|access[_-]?key|tokens?|secrets?|passwords?|passwd)\s*=\s*)[^&\s"']+`),
+	// key=value secrets, e.g. ?api_key=..., access_token=..., secret=...,
+	// password=..., access_key=... in query strings or free text. The
+	// credential name may carry an arbitrary snake_case/kebab-case prefix
+	// (access_, refresh_, x-access-, API_, ...): `_` is a word character,
+	// so `\b` alone doesn't separate "access" from "_token" and the
+	// pattern would otherwise miss access_token=/refresh_token=/API_SECRET=
+	// while still matching the hyphenated equivalents. Matching an
+	// optional `[A-Za-z0-9_-]*` prefix before the credential word covers
+	// both cases without relying on a word boundary there.
+	regexp.MustCompile(`(?i)(\b[A-Za-z0-9_-]*(?:api[_-]?key|access[_-]?key|tokens?|secrets?|passwords?|passwd)\s*=\s*)[^&\s"']+`),
 }
 
 // SanitizeSessionError best-effort sanitizes an error message before it

@@ -55,3 +55,27 @@ func TestSanitizeSessionErrorLeavesOrdinaryMessagesAlone(t *testing.T) {
 		t.Errorf("SanitizeSessionError(%q) = %q, want unchanged", msg, got)
 	}
 }
+
+func TestSanitizeSessionErrorRedactsSnakeCaseCredentialNames(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  string
+		want string
+	}{
+		{"access_token", `refresh failed: access_token=abc123DEF456 rejected`, "abc123DEF456"},
+		{"refresh_token", `refresh failed: refresh_token=xyz789GHI012 rejected`, "xyz789GHI012"},
+		{"upper_snake_secret", `config error: API_SECRET=topsecretvalue123 invalid`, "topsecretvalue123"},
+		{"hyphenated_prefix", `token exchange: x-access-token=hyphensecretvalue failed`, "hyphensecretvalue"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := SanitizeSessionError(tc.msg)
+			if strings.Contains(got, tc.want) {
+				t.Fatalf("credential leaked: %q", got)
+			}
+			if !strings.Contains(got, "REDACTED") {
+				t.Fatalf("expected a redaction marker, got %q", got)
+			}
+		})
+	}
+}
