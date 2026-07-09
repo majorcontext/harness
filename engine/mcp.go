@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -294,7 +295,7 @@ func (m *MCPManager) callTool(ctx context.Context, server, tool string, args jso
 	if err != nil {
 		return nil, false, err
 	}
-	return mcpContentToParts(res.Content), res.IsError, nil
+	return mcpContentToParts(server, tool, res.Content), res.IsError, nil
 }
 
 // mcpCloseTimeout bounds the whole Close, on top of the bounded timeouts
@@ -344,14 +345,18 @@ func (m *MCPManager) Close(ctx context.Context) error {
 // embedded text) or Blob (its embedded base64 blob), and resource links
 // become a descriptive Text line. An empty result still yields one empty
 // Text part so a ToolResult is never left with zero content parts.
-func mcpContentToParts(content []mcp.Content) message.Parts {
+//
+// server and tool are used only to name the offending call in a warning
+// log if a Blob's base64 payload turns out to be malformed (see
+// decodeMCPBase64); they identify nothing about the payload itself.
+func mcpContentToParts(server, tool string, content []mcp.Content) message.Parts {
 	var parts message.Parts
 	for _, c := range content {
 		switch c.Type {
 		case mcp.ContentTypeText:
 			parts = append(parts, &message.Text{Text: c.Text})
 		case mcp.ContentTypeImage, mcp.ContentTypeAudio:
-			parts = append(parts, &message.Blob{MediaType: c.MimeType, Data: decodeMCPBase64(c.Data)})
+			parts = append(parts, &message.Blob{MediaType: c.MimeType, Data: decodeMCPBase64(server, tool, c.Data)})
 		case mcp.ContentTypeResource:
 			if c.Resource == nil {
 				continue
@@ -359,7 +364,7 @@ func mcpContentToParts(content []mcp.Content) message.Parts {
 			if c.Resource.Text != "" {
 				parts = append(parts, &message.Text{Text: c.Resource.Text})
 			} else if c.Resource.Blob != "" {
-				parts = append(parts, &message.Blob{MediaType: c.Resource.MimeType, Data: decodeMCPBase64(c.Resource.Blob)})
+				parts = append(parts, &message.Blob{MediaType: c.Resource.MimeType, Data: decodeMCPBase64(server, tool, c.Resource.Blob)})
 			}
 		case mcp.ContentTypeResourceLink:
 			parts = append(parts, &message.Text{Text: fmt.Sprintf("resource: %s (%s)", c.URI, c.Name)})
@@ -375,9 +380,16 @@ func mcpContentToParts(content []mcp.Content) message.Parts {
 	return parts
 }
 
-func decodeMCPBase64(s string) []byte {
+// decodeMCPBase64 decodes s, an MCP content block's base64 payload. On
+// malformed base64 it logs a slog warning naming the server and tool the
+// payload came from — never the payload bytes themselves, which may be
+// arbitrarily large and are not diagnostic here — and returns nil, the
+// same fail-open-with-empty-data behavior as before, just no longer
+// silent.
+func decodeMCPBase64(server, tool, s string) []byte {
 	data, err := base64.StdEncoding.DecodeString(s)
 	if err != nil {
+		slog.Warn("engine: mcp: malformed base64 content, dropping payload", "server", server, "tool", tool, "error", err)
 		return nil
 	}
 	return data

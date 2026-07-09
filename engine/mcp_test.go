@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -542,6 +543,35 @@ func TestSessionMCPCallNoManagerConfigured(t *testing.T) {
 // server would otherwise hang, since each underlying mcp.Client.Close
 // already self-bounds (see mcp.Client.Close's doc comment); Close on the
 // manager must not add its own unbounded wait on top.
+// TestDecodeMCPBase64MalformedLogsWarning covers finding 3 from PR #51's
+// review: malformed base64 in an MCP content block used to yield a nil
+// Blob.Data completely silently. It must now log a slog warning naming
+// the offending server and tool — but never the payload bytes themselves,
+// which could be arbitrarily large and are not diagnostic.
+func TestDecodeMCPBase64MalformedLogsWarning(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	const payload = "not valid base64!!!"
+	data := decodeMCPBase64("weather", "get_forecast", payload)
+	if data != nil {
+		t.Errorf("decodeMCPBase64() = %v, want nil for malformed input", data)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "weather") {
+		t.Errorf("log output = %q, want it to name the server %q", out, "weather")
+	}
+	if !strings.Contains(out, "get_forecast") {
+		t.Errorf("log output = %q, want it to name the tool %q", out, "get_forecast")
+	}
+	if strings.Contains(out, payload) {
+		t.Errorf("log output = %q, must never contain the raw payload bytes", out)
+	}
+}
+
 func TestMCPManagerCloseBounded(t *testing.T) {
 	srv := &fakeMCPHTTPServer{tools: []fakeMCPTool{{name: "ok", content: []map[string]any{textContent("fine")}}}}
 	url := srv.start(t)
