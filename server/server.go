@@ -84,12 +84,15 @@ type Options struct {
 	// poll). Errors are wrapped with context (e.g. "journal write: %w",
 	// "session %s persist: %w"). Nil is safe — every call site nil-guards it.
 	//
-	// It is invoked synchronously. The journal-write-failure path calls it
-	// while s.mu is held (see writeJournalLocked); the session persist-error
-	// path deliberately calls it AFTER releasing s.mu (see the lock-ordering
-	// comment on syncMessages) so it must never call back into the Server
-	// (that would deadlock either way); logging or forwarding to an external
-	// sink is the intended use.
+	// It is invoked synchronously and may run with locks held, so the handler
+	// must not call back into either the Server or the Session — doing so
+	// deadlocks. Specifically: the journal-write-failure path calls it while
+	// s.mu is held (see writeJournalLocked); and although the session
+	// persist-error path releases s.mu first (see the lock-ordering comment on
+	// syncMessages), a journal write reached via a goal.* event runs while the
+	// emitting Session's own mutex is held (RegisterGoal/recordGoalEval/
+	// achieveGoal/ClearGoal emit under Session.mu). Logging or forwarding to an
+	// external sink is the intended use.
 	OnError func(context.Context, error)
 }
 
