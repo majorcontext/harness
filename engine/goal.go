@@ -323,9 +323,18 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			// carrying the error as the reason, exactly as the worker-turn
 			// path does, then return the error so the caller still
 			// journals the failure.
-			if s.goalActiveWith(condition) {
-				s.clearGoal(fmt.Sprintf("goal evaluator failed: %v", err))
+			//
+			// But if a concurrent DELETE /goal already cleared the goal
+			// while this call was in flight, there is nothing left to
+			// clear and nothing to journal as a failure: the goal-loop
+			// state machine already reached a clean stop, symmetric with
+			// the same check on the worker-turn path above. A
+			// deliberately-cleared goal is not an error condition
+			// regardless of which half of the loop the clear raced with.
+			if !s.goalActiveWith(condition) {
+				return &GoalResult{Achieved: false, Turns: turn, Reason: "goal cleared"}, nil
 			}
+			s.clearGoal(fmt.Sprintf("goal evaluator failed: %v", err))
 			s.emitSessionError(err)
 			return nil, err
 		}
