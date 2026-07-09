@@ -33,8 +33,15 @@ const source = html.slice(afterBegin, ei);
 const sandbox = { Date, JSON };
 vm.createContext(sandbox);
 vm.runInContext(source, sandbox);
-const { shortId, prettyJSON, sortSessions, partsText, maxSeq, createSSEParser } =
-  sandbox;
+const {
+  shortId,
+  prettyJSON,
+  sortSessions,
+  partsText,
+  maxSeq,
+  createSSEParser,
+  reduceGoal,
+} = sandbox;
 
 // collect gathers every frame the parser dispatches for the given chunks.
 // Frames are rebuilt as plain objects in this realm: the parser creates them
@@ -91,6 +98,42 @@ test("maxSeq returns the largest numeric seq, else 0", () => {
   assert.equal(maxSeq([{ seq: 3 }, { seq: 9 }, { seq: 5 }]), 9);
   assert.equal(maxSeq([{ seq: 3 }, {}, { seq: "x" }]), 3);
   assert.equal(maxSeq([]), 0);
+});
+
+// plain rebuilds a cross-realm goal object into this realm's fields, so field
+// assertions are reference-safe (same reason the collect helper rebuilds frames).
+function plain(g) {
+  return { condition: g.condition, active: g.active, achieved: g.achieved, reason: g.reason };
+}
+
+test("reduceGoal folds a full goal lifecycle from journal events", () => {
+  let g = reduceGoal(null, { type: "goal.set", goal_condition: "ship it" });
+  assert.deepEqual(plain(g), { condition: "ship it", active: true, achieved: false, reason: "" });
+
+  g = reduceGoal(g, { type: "goal.eval", goal_met: false, goal_reason: "not yet" });
+  assert.deepEqual(plain(g), { condition: "ship it", active: true, achieved: false, reason: "not yet" });
+
+  g = reduceGoal(g, { type: "goal.achieved", goal_reason: "done now" });
+  assert.deepEqual(plain(g), { condition: "ship it", active: false, achieved: true, reason: "done now" });
+});
+
+test("reduceGoal marks a cleared goal inactive without achievement", () => {
+  let g = reduceGoal(null, { type: "goal.set", goal_condition: "x" });
+  g = reduceGoal(g, { type: "goal.cleared" });
+  assert.equal(g.active, false);
+  assert.equal(g.achieved, false);
+  assert.equal(g.condition, "x");
+});
+
+test("reduceGoal ignores non-goal events and does not mutate prior state", () => {
+  const prev = { condition: "x", active: true, achieved: false, reason: "" };
+  const out = reduceGoal(prev, { type: "message" });
+  assert.equal(out, prev); // returned unchanged (same reference)
+  // A goal event returns a fresh object, leaving the input untouched.
+  const next = reduceGoal(prev, { type: "goal.eval", goal_reason: "r" });
+  assert.notEqual(next, prev);
+  assert.equal(prev.reason, ""); // input not mutated
+  assert.equal(next.reason, "r");
 });
 
 test("SSE parser: single frame with data", () => {

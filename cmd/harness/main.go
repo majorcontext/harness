@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -42,6 +43,11 @@ func main() {
 		fmt.Println("harness " + version)
 	case "run":
 		if err := runCmd(os.Args[2:]); err != nil {
+			// A goal that ran to completion but was not achieved exits 3; its
+			// final status is already on stderr, so don't print again.
+			if errors.Is(err, errGoalNotAchieved) {
+				os.Exit(3)
+			}
 			fmt.Fprintln(os.Stderr, "harness:", err)
 			os.Exit(1)
 		}
@@ -64,6 +70,9 @@ func main() {
 func usage() {
 	fmt.Fprint(os.Stderr, `usage:
   harness run -p <prompt> [flags]   run a one-shot prompt
+  harness run -goal <condition> [flags]
+                                    pursue a goal until an evaluator judges it
+                                    met (exit 0 achieved, 3 not achieved)
   harness serve [-addr host:port] [-cors-origin origin] [-no-instructions]
                 [-skills-dir dir ...]
                                     serve the HTTP+SSE session API
@@ -77,6 +86,8 @@ run flags:
 
 type runOptions struct {
 	prompt         string
+	goal           string
+	goalMaxTurns   int
 	model          string
 	system         string
 	maxTokens      int
@@ -94,7 +105,9 @@ func runFlags(opts *runOptions) *flag.FlagSet {
 	}
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	fs.StringVar(&opts.prompt, "p", "", "the prompt (required)")
+	fs.StringVar(&opts.prompt, "p", "", "the prompt (required unless -goal is given)")
+	fs.StringVar(&opts.goal, "goal", "", "pursue a goal: prompt this condition, then re-prompt with evaluator feedback until an independent evaluator judges it met (requires config goal_evaluator_model)")
+	fs.IntVar(&opts.goalMaxTurns, "goal-max-turns", 0, "maximum turns for -goal (0 = unlimited)")
 	fs.StringVar(&opts.model, "model", "", "model ref (provider/model) or alias; overrides the persisted model when resuming; default from config, else "+config.DefaultModel)
 	fs.StringVar(&opts.system, "system", "", "extra system prompt segment")
 	fs.IntVar(&opts.maxTokens, "max-tokens", 0, "per-response output token cap")
@@ -261,8 +274,11 @@ func runCmd(args []string) error {
 			modelSet = true
 		}
 	})
-	if opts.prompt == "" {
-		return fmt.Errorf("-p <prompt> is required")
+	switch {
+	case opts.prompt == "" && opts.goal == "":
+		return fmt.Errorf("-p <prompt> or -goal <condition> is required")
+	case opts.prompt != "" && opts.goal != "":
+		return fmt.Errorf("-p and -goal are mutually exclusive")
 	}
 	cfg, err := loadConfig()
 	if err != nil {
@@ -321,8 +337,17 @@ func runCmd(args []string) error {
 		return err
 	}
 
-	if _, err := s.Prompt(ctx, opts.prompt); err != nil {
-		return err
+	goalNotAchieved := false
+	if opts.goal != "" {
+		res, err := runGoal(ctx, cfg, s, opts)
+		if err != nil {
+			return err
+		}
+		goalNotAchieved = !res.Achieved
+	} else {
+		if _, err := s.Prompt(ctx, opts.prompt); err != nil {
+			return err
+		}
 	}
 	if printedText {
 		fmt.Println()
@@ -334,7 +359,41 @@ func runCmd(args []string) error {
 			fmt.Fprintln(os.Stderr, "session:", s.ID)
 		}
 	}
+	if goalNotAchieved {
+		return errGoalNotAchieved
+	}
 	return nil
+}
+
+// errGoalNotAchieved is a sentinel: `harness run -goal` returns it when the
+// evaluator never judged the condition met. main maps it to exit code 3 (the
+// final status has already been printed to stderr), distinct from exit 1 for a
+// genuine failure.
+var errGoalNotAchieved = errors.New("goal not achieved")
+
+// runGoal resolves the configured evaluator model and drives PursueGoal to
+// completion, printing the final status to stderr.
+func runGoal(ctx context.Context, cfg *config.Config, s *engine.Session, opts runOptions) (*engine.GoalResult, error) {
+	if cfg.GoalEvaluatorModel == "" {
+		return nil, fmt.Errorf("goal_evaluator_model must be set in config to use -goal")
+	}
+	evaluator, err := cfg.ResolveModel(cfg.GoalEvaluatorModel)
+	if err != nil {
+		return nil, fmt.Errorf("goal_evaluator_model: %w", err)
+	}
+	res, err := s.PursueGoal(ctx, opts.goal, engine.GoalOptions{
+		MaxTurns:  opts.goalMaxTurns,
+		Evaluator: evaluator,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if res.Achieved {
+		fmt.Fprintf(os.Stderr, "goal achieved in %d turn(s): %s\n", res.Turns, res.Reason)
+	} else {
+		fmt.Fprintf(os.Stderr, "goal not achieved after %d turn(s): %s\n", res.Turns, res.Reason)
+	}
+	return res, nil
 }
 
 // loadConfig loads the effective configuration once: the user config file
@@ -410,6 +469,15 @@ func serveCmd(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Resolve the goal evaluator model up front (empty leaves it zero, so goal
+	// requests are rejected until goal_evaluator_model is configured).
+	var goalEval message.ModelRef
+	if cfg.GoalEvaluatorModel != "" {
+		goalEval, err = cfg.ResolveModel(cfg.GoalEvaluatorModel)
+		if err != nil {
+			return fmt.Errorf("goal_evaluator_model: %w", err)
+		}
+	}
 	workDir, err := os.Getwd()
 	if err != nil {
 		return err
@@ -436,10 +504,11 @@ func serveCmd(args []string) error {
 		}
 	}
 	srv, err = server.New(server.Options{
-		SessionDir: sesDir,
-		RunToken:   token,
-		Version:    version,
-		CORSOrigin: corsOrigin,
+		SessionDir:    sesDir,
+		RunToken:      token,
+		Version:       version,
+		CORSOrigin:    corsOrigin,
+		GoalEvaluator: goalEval,
 		NewSession: func(model message.ModelRef) (*engine.Session, error) {
 			if model.IsZero() {
 				model = defModel

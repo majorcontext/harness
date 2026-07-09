@@ -430,7 +430,7 @@ func TestCORSPreflightUnauthenticated(t *testing.T) {
 	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://inspector.example" {
 		t.Errorf("ACAO = %q, want origin echoed", got)
 	}
-	if got := resp.Header.Get("Access-Control-Allow-Methods"); got != "GET, POST, OPTIONS" {
+	if got := resp.Header.Get("Access-Control-Allow-Methods"); got != "GET, POST, DELETE, OPTIONS" {
 		t.Errorf("ACAM = %q", got)
 	}
 	if got := resp.Header.Get("Access-Control-Allow-Headers"); got != "Authorization, Content-Type, Last-Event-ID" {

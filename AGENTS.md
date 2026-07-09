@@ -69,10 +69,32 @@ never written to the session log — a resumed session rediscovers them. Config
 `skills_dirs` (array; a non-empty project value overrides the user value
 entirely) and the repeatable `-skills-dir` run/serve flag drive it.
 
+### Goal loop
+
+`Session.PursueGoal(ctx, condition, GoalOptions)` drives the ordinary `Prompt`
+loop toward a natural-language completion condition. Turn 1 prompts the raw
+condition; after **every** turn an independent, TOOL-LESS evaluator model
+(`GoalOptions.Evaluator`, resolved through the same `Config.Providers` registry,
+`MaxTokens` 256) is asked to answer `MET: <reason>` / `NOT MET: <reason>`
+(parsed leniently). A NOT MET verdict re-prompts with a fixed-template guidance
+message carrying the reason; MET returns `Achieved`. `MaxTurns` (0 = unlimited)
+bounds it; two unparseable evaluator replies in a row error rather than spin.
+Durable `goal.set` / `goal.eval` / `goal.achieved` / `goal.cleared` records land
+in the session log, so `LoadSession` restores an active goal (condition only;
+counters reset) via `Session.ActiveGoal()` — resume never auto-runs it, the
+caller decides. The loop also emits `goal.*` engine events so the server
+journals them. Config `goal_evaluator_model` supplies the evaluator for
+`harness run -goal` and `POST /session/{id}/goal`.
+
+The goal loop is a **plan-artifact-free, gate-free** control loop: it is
+`Prompt` plus a read-only evaluator call, with no plan document, no edit/plan
+mode, and no permission gate. It does not violate the no-plan-mode decision
+below.
+
 ### Deliberately absent — do not add
 
 - **No permission system.** Tool calls are never gated. There is no `permission.ask` hook, no approval UI, no pre-flight rule evaluation.
-- **No plan mode.** No edit-mode/plan-mode distinction anywhere in the engine.
+- **No plan mode.** No edit-mode/plan-mode distinction anywhere in the engine. (The goal loop above is not plan mode — it produces no plan artifact and gates nothing.)
 - **No JS runtime and no opencode plugin compatibility shim.** Plugins are native processes.
 - **No auth hooks.** Credential injection happens at the network layer (gatekeeper) in deployed environments.
 
