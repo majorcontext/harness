@@ -737,3 +737,54 @@ func TestLoadSessionCorruptMiddleGoalStalledLine(t *testing.T) {
 		t.Fatal("LoadSession succeeded, want error for a corrupt goal.stalled line before the final line")
 	}
 }
+
+func TestLoadSessionRepairsOrphanedToolCalls(t *testing.T) {
+	// A log written by an older binary (or any external writer) can contain
+	// an assistant message whose tool_call never got a tool_result — the
+	// turn died between emitting the call and executing it. LoadSession
+	// must repair the history at ingest so every downstream consumer (the
+	// next prompt's request, GET /message, goal replay) sees a
+	// protocol-valid history, durably — not just at transcode time.
+	// Incident: ses_01kx48z4rqfkpbwmzfdv1jzeg6 (goal killed by Anthropic
+	// 400 "tool_use ids were found without tool_result blocks").
+	dir := t.TempDir()
+	id := "ses_6666666666666666"
+	data := `{"type":"session","id":"ses_6666666666666666","created_at":"2025-01-02T03:04:05Z"}
+{"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"list files"}]}}
+{"type":"message","message":{"id":"msg_2","role":"assistant","parts":[{"type":"tool_call","call_id":"toolu_dead","name":"bash","arguments":{"command":"ls"}}]}}
+`
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := LoadSession(Config{SessionDir: dir, Model: message.ModelRef{Provider: "p", Model: "m"}}, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := s.History()
+	if len(h) != 3 {
+		t.Fatalf("history length = %d, want 3 (user, assistant, synthetic tool result)", len(h))
+	}
+	last := h[2]
+	if last.Role != message.RoleTool {
+		t.Fatalf("h[2].Role = %q, want %q", last.Role, message.RoleTool)
+	}
+	var tr *message.ToolResult
+	for _, p := range last.Parts {
+		if r, ok := p.(*message.ToolResult); ok {
+			tr = r
+		}
+	}
+	if tr == nil {
+		t.Fatalf("h[2] has no ToolResult part: %+v", last.Parts)
+	}
+	if tr.CallID != "toolu_dead" {
+		t.Errorf("synthetic result CallID = %q, want %q", tr.CallID, "toolu_dead")
+	}
+	if !tr.IsError {
+		t.Error("synthetic result IsError = false, want true")
+	}
+	if got := tr.Content.Text(); got != message.SyntheticOrphanResultText {
+		t.Errorf("synthetic result text = %q, want %q", got, message.SyntheticOrphanResultText)
+	}
+}

@@ -290,6 +290,14 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("engine: session %s: %w", id, err)
 	}
+	// A log from an older binary or an external writer can carry an
+	// assistant tool_call whose turn died before a result was recorded.
+	// Repair at ingest — the load-path counterpart of Session.append's
+	// Normalize — so every downstream consumer sees a protocol-valid
+	// history, not just the transcoders' wire-time backstop. The repair is
+	// re-derived deterministically on every load; the log itself stays
+	// append-only and unmodified.
+	s.history = message.ResolveOrphanToolCalls(s.history)
 	return s, nil
 }
 

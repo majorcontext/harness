@@ -196,8 +196,12 @@ func TestTranscodeAssistantTextAndToolCalls(t *testing.T) {
 			&message.ToolCall{CallID: "call_abc", Name: "bash", Arguments: json.RawMessage(`{"command":"ls"}`)},
 		}},
 	))
-	last := out.Messages[len(out.Messages)-1]
-	p := probeMessage(t, marshalRaw(t, &last))
+	// The assistant message itself, not necessarily the last wire message:
+	// its tool_call has no result anywhere in this request, so
+	// message.ResolveOrphanToolCalls (see transcodeRequest) appends a
+	// synthetic "tool" message after it — see
+	// TestTranscodeOrphanToolCallFinalMessage for that behavior.
+	p := findWireMessage(t, out, "assistant")
 	if p.Role != "assistant" {
 		t.Fatalf("role = %q", p.Role)
 	}
@@ -218,10 +222,44 @@ func TestTranscodeAssistantToolCallOnlyNoContent(t *testing.T) {
 			&message.ToolCall{CallID: "call_x", Name: "bash", Arguments: json.RawMessage(`{}`)},
 		}},
 	))
-	last := out.Messages[len(out.Messages)-1]
-	if len(last.Content) != 0 {
-		t.Errorf("content = %s, want empty", last.Content)
+	// Look at the assistant message specifically: this tool_call is
+	// orphaned (nothing else in this request resolves it), so
+	// transcodeRequest's message.ResolveOrphanToolCalls call appends a
+	// synthetic "tool" message right after it — that message's own content
+	// is deliberately non-empty (see TestTranscodeOrphanToolCallFinalMessage)
+	// and irrelevant to what this test actually checks.
+	assistant := findRawWireMessage(t, out, "assistant")
+	if len(assistant.Content) != 0 {
+		t.Errorf("content = %s, want empty", assistant.Content)
 	}
+}
+
+// findWireMessage returns the probed view of the first wire message with
+// the given role, failing the test if none exists.
+func findWireMessage(t *testing.T, out *apiRequest, role string) probe {
+	t.Helper()
+	for i := range out.Messages {
+		p := probeMessage(t, marshalRaw(t, &out.Messages[i]))
+		if p.Role == role {
+			return p
+		}
+	}
+	t.Fatalf("no wire message with role %q in %+v", role, out.Messages)
+	return probe{}
+}
+
+// findRawWireMessage returns the raw apiMessage (not the probed view) of
+// the first wire message with the given role, failing the test if none
+// exists.
+func findRawWireMessage(t *testing.T, out *apiRequest, role string) *apiMessage {
+	t.Helper()
+	for i := range out.Messages {
+		if out.Messages[i].Role == role {
+			return &out.Messages[i]
+		}
+	}
+	t.Fatalf("no wire message with role %q in %+v", role, out.Messages)
+	return nil
 }
 
 func TestTranscodeToolResultsOnePerResult(t *testing.T) {
@@ -375,4 +413,93 @@ func jsonEqual(t *testing.T, a, b json.RawMessage) bool {
 	ab, _ := json.Marshal(av)
 	bb, _ := json.Marshal(bv)
 	return string(ab) == string(bb)
+}
+
+// TestTranscodeOrphanToolCallMidHistory reproduces the mechanism behind
+// production incident ses_01kx48z4rqfkpbwmzfdv1jzeg6 at the transcoder
+// level: an assistant tool_call with no result at all in history (the turn
+// died before the engine could execute it, or append one — see
+// engine/engine.go's own primary fix), buried mid-transcript, followed by
+// ordinary later turns. Before the transcoder called
+// message.ResolveOrphanToolCalls, this produced a wire request with a
+// dangling tool_calls entry and no "tool"-role message anywhere adjacent —
+// a shape this wire protocol rejects the same way Anthropic's does. After
+// the fix, a synthetic error "tool" message is injected immediately after
+// the assistant message, keeping the request protocol-valid.
+func TestTranscodeOrphanToolCallMidHistory(t *testing.T) {
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "first"}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolCall{CallID: "orphan1", Name: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`)},
+		}},
+		// No tool-role message follows: the turn died before execution.
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "second"}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "done"}}},
+	))
+
+	assertToolCallFollowedByToolMessage(t, out, "orphan1")
+}
+
+// TestTranscodeOrphanToolCallFinalMessage covers the other shape the
+// incident's mechanism can leave behind: the orphaned tool_call is the
+// very last message in history — the turn died and nothing was ever
+// appended after it, so there is no "next" message to look at, let alone
+// merge a result into. Covers a turn with more than one tool call, all
+// orphaned.
+func TestTranscodeOrphanToolCallFinalMessage(t *testing.T) {
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolCall{CallID: "tc1", Name: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`)},
+			&message.ToolCall{CallID: "tc2", Name: "read_file", Arguments: json.RawMessage(`{"path":"x"}`)},
+		}},
+	))
+
+	assertToolCallFollowedByToolMessage(t, out, "tc1")
+	assertToolCallFollowedByToolMessage(t, out, "tc2")
+}
+
+// assertToolCallFollowedByToolMessage asserts the transcoded request pairs
+// a tool_calls entry with the given id to a "tool"-role wire message
+// carrying the matching tool_call_id somewhere after it (the id needed to
+// find the *right* one, since each ToolResult is its own wire message —
+// see transcodeToolMessages), and that the paired result is the synthetic
+// error message.ResolveOrphanToolCalls injects (see
+// message.SyntheticOrphanResultText).
+func assertToolCallFollowedByToolMessage(t *testing.T, out *apiRequest, id string) {
+	t.Helper()
+	assistantIdx := -1
+	for i, m := range out.Messages {
+		p := probeMessage(t, marshalRaw(t, &m))
+		if p.Role != "assistant" {
+			continue
+		}
+		for _, tc := range p.ToolCalls {
+			if tc.ID == id {
+				assistantIdx = i
+			}
+		}
+	}
+	if assistantIdx == -1 {
+		t.Fatalf("tool_call %q not found in any assistant wire message", id)
+	}
+	for i := assistantIdx + 1; i < len(out.Messages); i++ {
+		p := probeMessage(t, marshalRaw(t, &out.Messages[i]))
+		if p.Role == "assistant" {
+			// Ran into the next assistant turn without finding the result.
+			break
+		}
+		if p.Role == "tool" && p.ToolCallID == id {
+			raw, _ := json.Marshal(p.Content)
+			content := contentString(t, raw)
+			if !strings.Contains(content, "synthesized") {
+				t.Errorf("synthesized tool message for %q content = %q, want it to say synthesized", id, content)
+			}
+			if !strings.Contains(content, "[tool error]") {
+				t.Errorf("synthesized tool message for %q content = %q, want the is_error marker", id, content)
+			}
+			return
+		}
+	}
+	t.Fatalf("tool_call %q has no matching \"tool\" wire message after it", id)
 }
