@@ -472,8 +472,19 @@ func (s *Server) reconcile() error {
 }
 
 // loadJournal parses an existing events.jsonl into memory: replay buffer,
-// highest seq, and the seen-message index. A truncated final line (crash
+// highest seq, the seen-message index, and each session's last_turn (see
+// Server.lastTurn). Records are replayed in file order, so the last turn.end
+// seen for a session as the scan proceeds is — by construction — its most
+// recent one; a later record simply overwrites an earlier one in the map,
+// with no need to track sequence numbers here. A truncated final line (crash
 // mid-write) is tolerated.
+//
+// Rebuilding lastTurn here (rather than leaving it to be set only by a live
+// recordTurnEnd call) is what makes last_turn survive a process restart:
+// otherwise a durable, replayable record would still exist on disk while the
+// in-memory field it drives silently reset to absent — exactly the kind of
+// restart-loses-state gap this field exists to prevent an orchestrator from
+// hitting.
 func (s *Server) loadJournal(data []byte) {
 	lines := bytes.Split(data, []byte("\n"))
 	for i, raw := range lines {
@@ -494,6 +505,9 @@ func (s *Server) loadJournal(data []byte) {
 		}
 		if ev.Type == evtMessage && ev.Message != nil {
 			s.markSeenLocked(ev.SessionID, ev.Message.ID)
+		}
+		if ev.Type == evtTurnEnd {
+			s.lastTurn[ev.SessionID] = &turnOutcome{outcome: ev.Outcome, error: ev.Error}
 		}
 	}
 }
