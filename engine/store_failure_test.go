@@ -1,13 +1,9 @@
 package engine
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/majorcontext/harness/message"
-	"github.com/majorcontext/harness/provider"
 )
 
 // unwritableSessionDir returns a SessionDir path guaranteed to make
@@ -47,34 +43,14 @@ func unwritableSessionDir(t *testing.T) string {
 	return dir
 }
 
-// TestPromptSurvivesUnwritableSessionDir covers engine/store.go's promise
-// that a persistence write error never crashes the agent loop: Prompt must
-// complete normally (its return value governed only by the provider/tool
-// loop, never by disk state) and report the failure exclusively through
-// PersistErr.
-func TestPromptSurvivesUnwritableSessionDir(t *testing.T) {
-	dir := unwritableSessionDir(t)
-	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
-		asstTurn(provider.StopEndTurn, &message.Text{Text: "done"}),
-	}}
-	cfg := persistCfg(dir, prov)
-	s := NewSession(cfg)
-
-	if s.PersistErr() != nil {
-		t.Fatalf("PersistErr() before any write = %v, want nil", s.PersistErr())
-	}
-
-	msg, err := s.Prompt(context.Background(), "hi")
-	if err != nil {
-		t.Fatalf("Prompt returned an error from a disk-write failure — the package promises write errors never crash the loop: %v", err)
-	}
-	if msg == nil {
-		t.Fatal("Prompt returned a nil assistant message")
-	}
-	if perr := s.PersistErr(); perr == nil {
-		t.Fatal("PersistErr() = nil after Prompt against an unwritable SessionDir, want the write failure reported")
-	}
-}
+// The Prompt-path equivalent of this test (an unwritable SessionDir must
+// surface only through PersistErr, never through Prompt's return error) is
+// already covered by TestPersistErrSurfacesWriteFailure in store_test.go; a
+// second copy of it here would just be the same assertions on the same
+// path, so it was deleted rather than kept for line count. What's genuinely
+// additive is exercising the same disk-failure guarantee against
+// RegisterGoal's persistGoalLocked path instead, which no existing test
+// touches:
 
 // TestRegisterGoalSurvivesUnwritableSessionDir covers the same disk-failure
 // guarantee on RegisterGoal's persistGoalLocked path: a goal.set record that
