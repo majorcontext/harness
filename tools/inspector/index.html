@@ -468,17 +468,19 @@ async function selectSession(id) {
   renderTimeline();
   updateComposer();
   try {
-    const [msgResp, sessResp] = await Promise.all([
+    // allSettled, not all: a transient failure of either fetch must not
+    // discard the other's good response.
+    const [msgR, sessR] = await Promise.allSettled([
       api("GET", "/session/" + id + "/message"),
       api("GET", "/session/" + id),
     ]);
     if (state.selected !== id) return;
-    if (sessResp.ok) {
-      const g = goalFromSession(await sessResp.json());
+    if (sessR.status === "fulfilled" && sessR.value.ok) {
+      const g = goalFromSession(await sessR.value.json());
       if (g) state.goals.set(id, g);
     }
-    if (msgResp.ok) {
-      state.messages = await msgResp.json();
+    if (msgR.status === "fulfilled" && msgR.value.ok) {
+      state.messages = await msgR.value.json();
     }
     renderTimeline();
   } catch { /* transient; the stream will refill */ }
