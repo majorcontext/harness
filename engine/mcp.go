@@ -138,8 +138,22 @@ func NewMCPManager(servers map[string]MCPServerConfig) *MCPManager {
 // concurrently, each bounded by its own ConnectTimeout. A server that fails
 // is logged and simply contributes no client/tools; it never causes this
 // (or any other server's) connect to fail.
+//
+// The connect step is deliberately detached from ctx (the first caller to
+// trigger it, via context.WithoutCancel) rather than run under it: this is
+// a one-time, cached-forever (sync.Once) operation shared by every future
+// caller, not a request-scoped one, so it must not inherit a request-scoped
+// deadline or cancellation. In serve mode ctx is a per-request context —
+// without detaching, a request that happens to trigger the first connect
+// being aborted/disconnected mid-connect would cancel every server's
+// connect, which would be logged-and-skipped and (being cached by
+// connectOnce) never retried: one transient cancellation would then
+// permanently strip MCP tools from the whole process. Each server's own
+// ConnectTimeout still bounds how long this can take.
 func (m *MCPManager) ensureConnected(ctx context.Context) {
 	m.connectOnce.Do(func() {
+		connectCtx := context.WithoutCancel(ctx)
+
 		clients := make(map[string]*mcp.Client, len(m.servers))
 		tools := make(map[string]mcpToolBinding)
 
@@ -156,7 +170,7 @@ func (m *MCPManager) ensureConnected(ctx context.Context) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				client, toolList, err := connectMCPServer(ctx, name, spec)
+				client, toolList, err := connectMCPServer(connectCtx, name, spec)
 				if err != nil {
 					log.Printf("engine: mcp server %q: %v (continuing without its tools)", name, err)
 					return

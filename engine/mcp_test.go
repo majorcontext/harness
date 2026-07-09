@@ -329,6 +329,46 @@ func TestMCPManagerConnectsOnce(t *testing.T) {
 	}
 }
 
+// TestMCPManagerConnectSurvivesFirstCallerCancellation is the regression
+// test for the "first caller's ctx poisons the cached connect forever" bug:
+// ensureConnected runs exactly once (sync.Once) and, before the fix,
+// threaded the very first caller's ctx straight into connectMCPServer. In
+// serve mode that ctx is a per-request context — if the request that
+// happens to trigger the first connect is aborted/disconnected during the
+// connect window, every server's connect observes an already-canceled
+// context, fails immediately, is logged-and-skipped, and (because the
+// outcome is cached by sync.Once) is never retried: one transient
+// cancellation permanently strips MCP tools from the whole process.
+//
+// The connect step must be detached from whichever caller happens to
+// trigger it — only the per-server ConnectTimeout should bound it — so a
+// reachable server still connects successfully even when the first caller
+// arrives with an already-canceled context.
+func TestMCPManagerConnectSurvivesFirstCallerCancellation(t *testing.T) {
+	srv := &fakeMCPHTTPServer{tools: []fakeMCPTool{
+		{name: "get_forecast", content: []map[string]any{textContent("sunny")}},
+	}}
+	url := srv.start(t)
+
+	mgr := NewMCPManager(map[string]MCPServerConfig{"weather": {URL: url}})
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel() // already canceled before the first caller even arrives
+
+	defs := mgr.Tools(canceledCtx)
+	if len(defs) != 1 || defs[0].Name != "mcp__weather__get_forecast" {
+		t.Fatalf("Tools(canceled ctx) = %+v, want the weather server's tool still connected", defs)
+	}
+
+	// A later, healthy caller must see the same cached result — the
+	// connect must not have been permanently poisoned.
+	defs2 := mgr.Tools(context.Background())
+	if len(defs2) != 1 || defs2[0].Name != "mcp__weather__get_forecast" {
+		t.Fatalf("Tools(background ctx) after canceled-ctx first call = %+v", defs2)
+	}
+}
+
 func containsMethod(body []byte, method string) bool {
 	var msg rpcMessage
 	if json.Unmarshal(body, &msg) != nil {
