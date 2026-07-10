@@ -436,6 +436,8 @@ components:
             - goal.stalled
             - goal.achieved
             - goal.cleared
+            - workdir.worktree_kept
+            - workdir.worktree_removed
             - text.delta
             - reasoning.delta
             - tool.start
@@ -482,6 +484,14 @@ components:
             goal_reason and goal_turns; goal.cleared marks a goal cancelled via
             DELETE /session/{id}/goal (or a worker turn that failed past its
             retry budget, carrying the failure as goal_reason).
+            workdir.worktree_kept and workdir.worktree_removed are durable
+            records of a workdir_isolation="worktree" session's dedicated git
+            worktree being torn down (session end or the serve-start sweep,
+            see createSession/endSession), both carrying `worktree_path`.
+            worktree_kept means the worktree had uncommitted changes or
+            unpushed commits and was left in place — the durable signal an
+            orchestrator relies on to find and finish that work rather than
+            lose it; worktree_removed means it had neither and was deleted.
         session_id: { type: string }
         seq:
           type: integer
@@ -559,6 +569,11 @@ components:
         goal_attempt:
           type: integer
           description: 1-based worker-turn retry attempt number (goal.stalled).
+        worktree_path:
+          type: string
+          description: >
+            The worktree directory (workdir.worktree_kept /
+            workdir.worktree_removed).
 
     GoalRequest:
       type: object
@@ -664,6 +679,28 @@ paths:
         share_workdir opts this session out of the workdir-busy exclusivity
         rule (see prompt_async's 409): by default, two running sessions may
         never share a workdir at the same time.
+
+        workdir_isolation selects how this session's tools relate to workdir:
+        "shared" (the default, and the only mode before this field existed)
+        is today's behavior — the session's tools run directly in workdir,
+        subject to the workdir-busy claim above. "worktree" requires workdir
+        to be inside a git repository (otherwise this request is rejected
+        with 400, never silently downgraded to shared); the server creates a
+        dedicated, detached-HEAD git worktree for the session under its
+        session data directory (or a sibling temp directory when no session
+        directory is configured) and the session's tools run there instead —
+        so two "worktree" sessions on the same repo never contend for a
+        workdir and the busy-claim rule never applies to either of them. The
+        worktree is torn down when the session ends (DELETE /session/{id}):
+        removed if it has no uncommitted changes and no unpushed commits,
+        otherwise left in place with a workdir.worktree_kept event journaled
+        naming its path, so work already done there is never destroyed. A
+        sweep at server start reconciles any worktrees a crashed process left
+        behind the same way — but only for sessions that are actually gone:
+        a session whose log is still on disk is still resumable, and its
+        worktree (however clean it looks) is left completely untouched by
+        the sweep so a resumed session's next prompt keeps running in the
+        exact directory it left off in.
       requestBody:
         required: false
         content:
@@ -682,6 +719,13 @@ paths:
                   description: >
                     Opt out of the workdir-busy exclusivity rule for this
                     session (see prompt_async's 409 response).
+                workdir_isolation:
+                  type: string
+                  enum: ["shared", "worktree"]
+                  default: shared
+                  description: >
+                    "shared" (default) or "worktree" — see the operation
+                    description.
       responses:
         "201":
           description: Created.
@@ -690,7 +734,9 @@ paths:
               schema: { $ref: "#/components/schemas/Session" }
         "400":
           description: >
-            workdir does not clean-resolve under an allowed workspace root.
+            workdir does not clean-resolve under an allowed workspace root;
+            workdir_isolation names an unknown mode; or workdir_isolation is
+            "worktree" but workdir is not inside a git repository.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -710,6 +756,31 @@ paths:
               schema: { $ref: "#/components/schemas/Session" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: endSession
+      summary: End a session.
+      description: >
+        Removes the session from memory. For a workdir_isolation="worktree"
+        session (see createSession), this also tears down its dedicated git
+        worktree: removed when it has no uncommitted changes and no unpushed
+        commits, otherwise left in place and a workdir.worktree_kept event is
+        journaled naming its path — the work is never destroyed. A "shared"
+        session has nothing further to tear down; ending it is equivalent to
+        it simply falling out of the resident set. A busy session (an
+        in-flight prompt or goal) is 409 — abort it first, so a worktree is
+        never ripped out from under a running tool call.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      responses:
+        "204":
+          description: Ended (or already gone from memory; idempotent).
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The session has an in-flight prompt or goal; abort it first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /session/{id}/message:
     get:
@@ -796,7 +867,9 @@ paths:
           description: >
             Session is busy with another prompt, OR another currently-running
             session holds the same workdir and neither session set
-            share_workdir on creation (the error names the holder session).
+            share_workdir on creation, and neither session set
+            workdir_isolation="worktree" (the error names the holder
+            session).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -842,8 +915,9 @@ paths:
           description: >
             Session is busy with another prompt or goal, OR another
             currently-running session holds the same workdir and neither
-            session set share_workdir on creation (the error names the
-            holder session).
+            session set share_workdir on creation, and neither session set
+            workdir_isolation="worktree" (the error names the holder
+            session).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
