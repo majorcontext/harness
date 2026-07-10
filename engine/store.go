@@ -79,6 +79,21 @@ type goalRecord struct {
 	// Attempt is the 1-based worker-turn retry attempt on a goal.stalled
 	// record (see promptTurnWithRetry in goal.go).
 	Attempt int `json:"attempt,omitempty"`
+	// Retryable marks a goal.stalled record whose failure was classified as
+	// provider-retryable weather (see provider.RetryableError and GitHub
+	// issue #61) rather than a deterministic failure — set on every
+	// retryable-class stalled record, including the final one recorded when
+	// promptTurnWithRetry's retryable budget (goalRetryableMaxAttempts) is
+	// exhausted. RetryableClass names the provider's classification
+	// (overloaded/rate_limited/server_error, see provider.RetryableClass).
+	// Waiting is true for every retryable-class stall EXCEPT that final
+	// exhausted one, so a reader distinguishes "still waiting out provider
+	// weather" from "gave up waiting and is parking the turn" without
+	// decoding Reason text. Both are false/empty on an ordinary
+	// deterministic-path stall, unchanged from before this field existed.
+	Retryable      bool   `json:"retryable,omitempty"`
+	RetryableClass string `json:"retryable_class,omitempty"`
+	Waiting        bool   `json:"waiting,omitempty"`
 }
 
 // SessionInfo summarizes one persisted session for listings.

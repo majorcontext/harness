@@ -58,12 +58,27 @@ type Event struct {
 	// GoalReason/GoalTurns by goal.achieved; goal.cleared carries GoalReason
 	// when it was triggered by a permanently-failing worker turn, empty for
 	// an ordinary caller-initiated clear.
-	GoalCondition string `json:"goal_condition,omitempty"`
-	GoalReason    string `json:"goal_reason,omitempty"`
-	GoalMet       bool   `json:"goal_met,omitempty"`
-	GoalTurn      int    `json:"goal_turn,omitempty"`
-	GoalTurns     int    `json:"goal_turns,omitempty"`
-	GoalAttempt   int    `json:"goal_attempt,omitempty"`
+	//
+	// GoalRetryable/GoalRetryableClass/GoalWaiting are also carried by
+	// goal.stalled (see GitHub issue #61 and promptTurnWithRetry):
+	// GoalRetryable is true when the failure was classified provider-
+	// retryable weather (provider.RetryableError) rather than a
+	// deterministic failure; GoalRetryableClass names the classification
+	// (provider.RetryableClass — overloaded/rate_limited/server_error);
+	// GoalWaiting is true while still within the retryable budget (still
+	// "waiting out provider weather") and false on the final stalled record
+	// that reports the budget exhausted (the turn is about to park, not
+	// die — see PursueGoal's doc comment). All three are zero-valued on a
+	// deterministic-path stall, unchanged from before they existed.
+	GoalCondition      string `json:"goal_condition,omitempty"`
+	GoalReason         string `json:"goal_reason,omitempty"`
+	GoalMet            bool   `json:"goal_met,omitempty"`
+	GoalTurn           int    `json:"goal_turn,omitempty"`
+	GoalTurns          int    `json:"goal_turns,omitempty"`
+	GoalAttempt        int    `json:"goal_attempt,omitempty"`
+	GoalRetryable      bool   `json:"goal_retryable,omitempty"`
+	GoalRetryableClass string `json:"goal_retryable_class,omitempty"`
+	GoalWaiting        bool   `json:"goal_waiting,omitempty"`
 
 	// Question fields, carried by question.asked (see ask_user.go and
 	// docs/design/question-tool.md). QuestionCallID is the ask_user tool
