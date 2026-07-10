@@ -377,7 +377,13 @@ func (s *Session) LastActivityAt() time.Time {
 	if len(s.history) == 0 {
 		return s.createdAt
 	}
-	return s.history[len(s.history)-1].CreatedAt
+	// A log written before message records carried CreatedAt replays with
+	// zero timestamps — fall back to createdAt so a fleet monitor never
+	// reads "0001-01-01" as infinite staleness.
+	if t := s.history[len(s.history)-1].CreatedAt; !t.IsZero() {
+		return t
+	}
+	return s.createdAt
 }
 
 // toolExecutions returns the current tool-execution counter (see

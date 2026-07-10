@@ -175,7 +175,11 @@ components:
           description: Cumulative prompt-cache write tokens, when the provider reports them.
         messages:
           type: integer
-          description: Count of messages in the session log (same value as Session.messages).
+          description: |
+            Count of messages in the session log — the same value as
+            Session.messages when the session is idle. Under a running turn
+            the two are read at separate instants and can momentarily
+            diverge; this is a monitoring surface, not a transactional one.
         last_input_tokens:
           type: integer
           description: >
