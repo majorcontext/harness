@@ -20,12 +20,24 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
+)
+
+// Workdir isolation modes for POST /session's workdir_isolation field (see
+// handleCreate). isolationShared is the default: today's behavior, a session
+// runs its tools directly in the resolved workdir and is subject to the
+// workdir-busy claim in claimForPrompt. isolationWorktree gives the session
+// its own git worktree (see worktree.go) so two sessions never contend for
+// the same tree, structurally rather than by convention.
+const (
+	isolationShared   = "shared"
+	isolationWorktree = "worktree"
 )
 
 // Options configures a Server. RunToken, NewSession, and LoadSession are
@@ -192,6 +204,16 @@ type Server struct {
 	// deterministically on every run rather than conditionally (see
 	// TestGoalDeleteClearBeforeIdleRace). Always nil in production.
 	goalDeleteRace func(cancel context.CancelFunc)
+
+	// worktreeBase is the directory 'worktree'-isolation sessions create
+	// their per-session git worktrees under (see worktree.go): <SessionDir>/
+	// worktrees when SessionDir is durable, otherwise a process-lifetime
+	// temp directory created lazily on first use (a fresh, ephemeral
+	// SessionDir has nothing for a future sweep to recover anyway). Set once
+	// — either eagerly in New when SessionDir is set (so sweepWorktrees has
+	// a fixed, predictable path to scan at serve start) or lazily by
+	// worktreeBaseDir under mu.
+	worktreeBase string
 }
 
 // goalTracker is the per-session goal summary surfaced in Session JSON.
@@ -229,6 +251,17 @@ type sessionState struct {
 	// share_workdir, in memory only (a reloaded/cold session defaults back to
 	// false, like running/cancel).
 	shareWorkdir bool
+	// isolation is the POST /session workdir_isolation value ("" behaves as
+	// isolationShared), in memory only like shareWorkdir: a reloaded/cold
+	// session defaults back to shared, same limitation the doc comment above
+	// already accepts. isolationWorktree also bypasses the workdir-busy
+	// claim (see workdirHolderLocked) — though since each worktree session
+	// gets its own unique path, it would never collide anyway.
+	isolation string
+	// worktree is non-nil exactly when isolation == isolationWorktree and
+	// worktree creation succeeded; it is the handle handleEnd uses to tear
+	// the worktree down (or keep it and journal why).
+	worktree *worktreeInfo
 }
 
 // New builds a Server and reconciles its journal against the on-disk session
@@ -264,8 +297,41 @@ func New(opts Options) (*Server, error) {
 	if err := s.reconcile(); err != nil {
 		return nil, err
 	}
+	if opts.SessionDir != "" {
+		// Fixed, predictable path (rather than worktreeBaseDir's lazy
+		// temp-dir fallback) so a crashed predecessor's worktrees — created
+		// under this exact path — are always found here on restart. An
+		// ephemeral (SessionDir == "") server has nothing durable to sweep:
+		// its own worktreeBase is a fresh temp directory every run.
+		s.worktreeBase = filepath.Join(opts.SessionDir, "worktrees")
+		sweepWorktrees(s.worktreeBase, func(sessionID, path string) {
+			s.emitDurable(Event{Type: evtWorktreeKept, SessionID: sessionID, WorktreePath: path})
+		})
+	}
 	s.routes()
 	return s, nil
+}
+
+// worktreeBaseDir returns the directory 'worktree'-isolation sessions create
+// their per-session git worktrees under, creating it (and its meta
+// subdirectory) on first use. New already sets it eagerly when SessionDir is
+// configured; this lazily falls back to a process-lifetime temp directory
+// otherwise, computed once and reused for every worktree session this
+// process creates.
+func (s *Server) worktreeBaseDir() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.worktreeBase == "" {
+		tmp, err := os.MkdirTemp("", "harness-worktrees-")
+		if err != nil {
+			return "", err
+		}
+		s.worktreeBase = tmp
+	}
+	if err := os.MkdirAll(filepath.Join(s.worktreeBase, "meta"), 0o755); err != nil {
+		return "", err
+	}
+	return s.worktreeBase, nil
 }
 
 func (s *Server) routes() {
@@ -277,6 +343,7 @@ func (s *Server) routes() {
 	// mistaken for a session named "status".
 	mux.HandleFunc("GET /session/status", s.auth(s.handleStatus))
 	mux.HandleFunc("GET /session/{id}", s.auth(s.handleGet))
+	mux.HandleFunc("DELETE /session/{id}", s.auth(s.handleEnd))
 	mux.HandleFunc("GET /session/{id}/wait", s.auth(s.handleWait))
 	mux.HandleFunc("GET /session/{id}/message", s.auth(s.handleMessages))
 	mux.HandleFunc("GET /session/{id}/request", s.auth(s.handleRequest))

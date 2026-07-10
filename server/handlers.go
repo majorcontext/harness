@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -138,9 +140,20 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		Model        message.ModelRef `json:"model"`
 		WorkDir      string           `json:"workdir"`
 		ShareWorkdir bool             `json:"share_workdir"`
+		// WorkdirIsolation is "shared" (default, omitted/empty) or
+		// "worktree" — see createWorktreeForSession and workdirHolderLocked.
+		WorkdirIsolation string `json:"workdir_isolation"`
 	}
 	if err := decodeBody(r, &body); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	isolation := body.WorkdirIsolation
+	if isolation == "" {
+		isolation = isolationShared
+	}
+	if isolation != isolationShared && isolation != isolationWorktree {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("workdir_isolation: unknown value %q (want \"shared\" or \"worktree\")", body.WorkdirIsolation))
 		return
 	}
 	workDir, err := resolveWorkDir(s.opts.WorkspaceRoots, body.WorkDir)
@@ -148,8 +161,26 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	sess, err := s.opts.NewSession(body.Model, workDir)
+
+	// sessionWorkDir is what the session's tools actually run in: workDir
+	// itself for 'shared', or a dedicated git worktree checked out from it
+	// for 'worktree'. wt is nil for 'shared'.
+	sessionWorkDir := workDir
+	var wt *worktreeInfo
+	if isolation == isolationWorktree {
+		wt, err = s.createWorktreeForSession(workDir)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		sessionWorkDir = wt.path
+	}
+
+	sess, err := s.opts.NewSession(body.Model, sessionWorkDir)
 	if err != nil {
+		if wt != nil {
+			s.discardWorktree(wt)
+		}
 		writeErr(w, http.StatusInternalServerError, "cannot create session")
 		return
 	}
@@ -157,16 +188,82 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	// evicted before its first prompt; otherwise eviction below would drop a
 	// never-prompted session with no on-disk backing to reload from.
 	if err := sess.Persist(); err != nil {
+		if wt != nil {
+			s.discardWorktree(wt)
+		}
 		writeErr(w, http.StatusInternalServerError, "cannot create session")
 		return
 	}
+	if wt != nil {
+		// Now that the session has an ID, record it in the meta file so a
+		// crash sweep can attribute a kept worktree to it (see worktree.go).
+		if err := s.recordWorktreeOwner(wt, sess.ID); err != nil {
+			// Not fatal to session creation — the worktree still works, it
+			// just can't be attributed by a future sweep. Best effort.
+			_ = err
+		}
+	}
 	s.mu.Lock()
-	s.sessions[sess.ID] = &sessionState{sess: sess, lastUsed: time.Now(), shareWorkdir: body.ShareWorkdir}
+	s.sessions[sess.ID] = &sessionState{sess: sess, lastUsed: time.Now(), shareWorkdir: body.ShareWorkdir, isolation: isolation, worktree: wt}
 	s.evictResidentLocked()
 	s.mu.Unlock()
 
 	s.emitDurable(Event{Type: evtSessionCreated, SessionID: sess.ID, Model: sess.Model()})
 	writeJSON(w, http.StatusCreated, s.buildSession(sess, "idle"))
+}
+
+// createWorktreeForSession validates that workDir is inside a git repository
+// and creates a dedicated, detached-HEAD worktree for a new 'worktree'
+// isolation session (see addWorktree). Its error message is written directly
+// into the 400 response body, so it names the actual problem (not inside a
+// git repository vs. the underlying git failure) rather than a generic
+// "cannot create session".
+func (s *Server) createWorktreeForSession(workDir string) (*worktreeInfo, error) {
+	repoRoot, ok, err := gitRepoRoot(workDir)
+	if err != nil {
+		return nil, fmt.Errorf("workdir_isolation=worktree: %w", err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("workdir_isolation=worktree requires workdir %q to be inside a git repository", workDir)
+	}
+	base, err := s.worktreeBaseDir()
+	if err != nil {
+		return nil, fmt.Errorf("workdir_isolation=worktree: %w", err)
+	}
+	id := newWorktreeID()
+	path := filepath.Join(base, id)
+	baseCommit, err := addWorktree(repoRoot, path)
+	if err != nil {
+		return nil, fmt.Errorf("workdir_isolation=worktree: %w", err)
+	}
+	metaPath, err := writeWorktreeMeta(base, id, worktreeMeta{RepoRoot: repoRoot, Path: path, BaseCommit: baseCommit})
+	if err != nil {
+		_ = removeWorktree(repoRoot, path)
+		return nil, fmt.Errorf("workdir_isolation=worktree: %w", err)
+	}
+	return &worktreeInfo{id: id, base: base, path: path, repoRoot: repoRoot, baseCommit: baseCommit, metaPath: metaPath}, nil
+}
+
+// recordWorktreeOwner patches wt's meta file with the now-known session ID,
+// once NewSession has actually minted one.
+func (s *Server) recordWorktreeOwner(wt *worktreeInfo, sessionID string) error {
+	_, err := writeWorktreeMeta(wt.base, wt.id, worktreeMeta{
+		SessionID:  sessionID,
+		RepoRoot:   wt.repoRoot,
+		Path:       wt.path,
+		BaseCommit: wt.baseCommit,
+	})
+	return err
+}
+
+// discardWorktree removes a just-created worktree when session construction
+// fails after it: nothing has been journaled or made resident yet, so there
+// is no "kept" record to worry about — a bare best-effort removal (falling
+// back to leaving it, never forcing) is enough.
+func (s *Server) discardWorktree(wt *worktreeInfo) {
+	if err := removeWorktree(wt.repoRoot, wt.path); err == nil {
+		os.Remove(wt.metaPath)
+	}
 }
 
 func (s *Server) handleList(w http.ResponseWriter, _ *http.Request) {
@@ -832,15 +929,20 @@ func (s *Server) claimForPrompt(id string) (st *sessionState, ctx context.Contex
 
 // workdirHolderLocked returns the session ID of another RUNNING session that
 // holds the same workdir as st, unless st itself or that other session opted
-// into share_workdir — in which case it returns "" (no conflict). Caller
+// into share_workdir, or either is a 'worktree'-isolation session — in which
+// case it returns "" (no conflict). The claim exists to stop two sessions
+// interleaving writes in one shared tree; a 'worktree' session never shares
+// its tree with anything (each gets its own dedicated git worktree, so their
+// WorkDir()s can never even be equal), so the claim is moot for it by
+// construction — this check is belt-and-suspenders, not load-bearing. Caller
 // holds s.mu.
 func (s *Server) workdirHolderLocked(id string, st *sessionState) string {
-	if st.shareWorkdir {
+	if st.shareWorkdir || st.isolation == isolationWorktree {
 		return ""
 	}
 	wd := st.sess.WorkDir()
 	for otherID, other := range s.sessions {
-		if otherID == id || !other.running || other.shareWorkdir {
+		if otherID == id || !other.running || other.shareWorkdir || other.isolation == isolationWorktree {
 			continue
 		}
 		if other.sess.WorkDir() == wd {
@@ -848,6 +950,64 @@ func (s *Server) workdirHolderLocked(id string, st *sessionState) string {
 		}
 	}
 	return ""
+}
+
+// handleEnd ends a session: removes it from residency and, for a
+// 'worktree'-isolation session, tears its git worktree down — removed when
+// it has no uncommitted changes and no unpushed commits, otherwise kept in
+// place with its path journaled (workdir.worktree_kept) so work is never
+// destroyed (see teardownWorktree). A busy session is 409 (ripping the
+// worktree out from under an in-flight tool call would corrupt whatever it
+// is mid-writing — abort it first); unknown (not resident, no log on disk)
+// is 404; ending a 'shared' or already-ended session is a plain 204.
+func (s *Server) handleEnd(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.sessionIDOrNotFound(w, r)
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	st := s.sessions[id]
+	if st == nil {
+		s.mu.Unlock()
+		if !s.sessionOnDisk(id) {
+			writeErr(w, http.StatusNotFound, "no such session")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if st.running {
+		s.mu.Unlock()
+		writeErr(w, http.StatusConflict, "session is busy; abort it before ending it")
+		return
+	}
+	wt := st.worktree
+	delete(s.sessions, id)
+	delete(s.lastRequest, id)
+	s.mu.Unlock()
+	if wt != nil {
+		s.teardownWorktree(id, wt)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// teardownWorktree decides a 'worktree'-isolation session's fate at session
+// end: removed (and evtWorktreeRemoved journaled) when worktreeClean reports
+// no uncommitted changes and no unpushed commits; otherwise — including when
+// the clean check itself fails, or removal unexpectedly fails after a clean
+// read — left exactly where it is and evtWorktreeKept is journaled with its
+// path, so an orchestrator polling the event stream can find and finish the
+// work instead of losing it.
+func (s *Server) teardownWorktree(sessionID string, wt *worktreeInfo) {
+	clean, err := worktreeClean(wt.path, wt.baseCommit)
+	if err == nil && clean {
+		if rmErr := removeWorktree(wt.repoRoot, wt.path); rmErr == nil {
+			os.Remove(wt.metaPath)
+			s.emitDurable(Event{Type: evtWorktreeRemoved, SessionID: sessionID, WorktreePath: wt.path})
+			return
+		}
+	}
+	s.emitDurable(Event{Type: evtWorktreeKept, SessionID: sessionID, WorktreePath: wt.path})
 }
 
 // buildSession assembles the Session shape without holding s.mu across engine

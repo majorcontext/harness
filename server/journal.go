@@ -61,6 +61,12 @@ type Event struct {
 	// "error", empty on a clean completion. See runPrompt/runGoal's
 	// recordTurnEnd.
 	Outcome string `json:"outcome,omitempty"`
+
+	// WorktreePath carries the workdir.worktree_kept / workdir.worktree_removed
+	// records' worktree directory (see teardownWorktree and sweepWorktrees):
+	// the path a 'worktree'-isolation session's tools ran in. Present only on
+	// those two event types.
+	WorktreePath string `json:"worktree_path,omitempty"`
 }
 
 // Durable and live event types (a superset of engine.Event types plus the
@@ -79,6 +85,15 @@ const (
 	evtGoalStalled    = "goal.stalled"
 	evtGoalAchieved   = "goal.achieved"
 	evtGoalCleared    = "goal.cleared"
+
+	// evtWorktreeKept is journaled whenever a 'worktree'-isolation session's
+	// worktree is left in place at teardown (session end or the serve-start
+	// sweep) because it has uncommitted changes or unpushed commits — the
+	// durable record of WorktreePath so an orchestrator can find and finish
+	// the work rather than lose it silently. evtWorktreeRemoved is journaled
+	// on the ordinary clean-teardown path, purely for observability.
+	evtWorktreeKept    = "workdir.worktree_kept"
+	evtWorktreeRemoved = "workdir.worktree_removed"
 )
 
 const journalName = "events.jsonl"
