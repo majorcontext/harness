@@ -171,7 +171,7 @@ representation.
 ## Development hub
 
 `harness hub` is a local, single-operator control surface over a FLEET of
-`harness serve` boxes — a meeseeks-like dashboard for "what are my agents
+`harness serve` boxes — a fleet dashboard for "what are my agents
 doing right now" and for dispatching new goal-supervised sessions, not a
 deployed product. It serves one embedded, single-file page
 (`tools/hub/index.html`, `go:embed`, styled to match `tools/inspector/`) on
