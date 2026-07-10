@@ -110,7 +110,14 @@ summary becomes a fresh `RoleUser` message (new `ID`, `CreatedAt` = compaction
 time), its text prefixed with a synthesized-and-visibly-marked banner —
 same spirit as `message.SyntheticOrphanResultText` — so a transcript or
 `GET /session/{id}/message` reader can never mistake it for something the
-human actually typed.
+human actually typed. Note the spliced history then opens with two
+adjacent `RoleUser` messages (summary, then the first kept turn's user
+prompt) — a shape ordinary operation never produces. This is load-bearing
+on existing transcoder behavior, not luck: the Anthropic adapter merges
+adjacent same-role messages (transcode.go's alternation handling, already
+tested), and the OpenAI-compat wire accepts consecutive same-role items
+natively. An implementer changing the summary's role or the transcoders'
+same-role handling must re-check this pairing.
 
 **Usage accounting.** The summarization round-trip is real spend, so its
 tokens are added to the cumulative `Usage()` like any other provider call —
