@@ -101,10 +101,34 @@ func apiError(family string, resp *http.Response) error {
 			Code    string `json:"code"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(raw, &body); err == nil && body.Error.Message != "" {
-		return fmt.Errorf("openaicompat(%s): %s (%s, HTTP %d)", family, body.Error.Message, body.Error.Type, resp.StatusCode)
+	var err error
+	if json.Unmarshal(raw, &body) == nil && body.Error.Message != "" {
+		err = fmt.Errorf("openaicompat(%s): %s (%s, HTTP %d)", family, body.Error.Message, body.Error.Type, resp.StatusCode)
+	} else {
+		err = fmt.Errorf("openaicompat(%s): HTTP %d", family, resp.StatusCode)
 	}
-	return fmt.Errorf("openaicompat(%s): HTTP %d", family, resp.StatusCode)
+	if class, ok := classifyStatus(resp.StatusCode); ok {
+		return provider.MarkRetryable(err, class)
+	}
+	return err
+}
+
+// classifyStatus classifies an HTTP response status into a
+// provider.RetryableClass (see GitHub issue #61): 429 is a rate limit, any
+// other 5xx is a generic server error — both transient provider weather
+// worth the goal loop's long backoff (engine/goal.go). Every other status
+// (400s, auth) reports ok=false and stays a deterministic, fail-fast error
+// exactly as before. Unlike provider/anthropic, this generic wire has no
+// dedicated "overloaded" status distinct from a plain 5xx.
+func classifyStatus(status int) (provider.RetryableClass, bool) {
+	switch {
+	case status == http.StatusTooManyRequests:
+		return provider.RetryableRateLimited, true
+	case status >= 500 && status <= 599:
+		return provider.RetryableServerError, true
+	default:
+		return "", false
+	}
 }
 
 // assembledToolCall accumulates one tool_calls fragment stream, keyed by its
