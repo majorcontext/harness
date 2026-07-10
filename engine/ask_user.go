@@ -104,7 +104,21 @@ func (s *Session) runAskUser(callID string, args json.RawMessage) message.Parts 
 	s.awaitingQuestion = true
 	s.questionCallID = callID
 	s.persistQuestionLocked(recQuestionAsked, questionRecord{CallID: callID, Questions: in.Questions})
+	// Emit while still holding s.mu (see ClearGoal's doc comment on the same
+	// pattern in goal.go): keeps the event stream ordered the same as the
+	// log write above under a concurrent clear. OnEvent must not call back
+	// into this Session, which would deadlock on s.mu, held here.
+	s.emit(Event{Type: EventQuestionAsked, QuestionCallID: callID, QuestionItems: in.Questions})
 	s.mu.Unlock()
+
+	if s.cfg.Hooks != nil {
+		props, _ := json.Marshal(plugin.QuestionAskedProperties{CallID: callID, Questions: in.Questions})
+		s.cfg.Hooks.Emit([]plugin.Event{{
+			Type:       plugin.EventQuestionAsked,
+			SessionID:  s.ID,
+			Properties: props,
+		}})
+	}
 
 	text := fmt.Sprintf("%d question(s) recorded (call %s); waiting for the user's answer as the next prompt.", len(in.Questions), callID)
 	return message.Parts{&message.Text{Text: text}}

@@ -64,6 +64,12 @@ type Event struct {
 	GoalTurn      int    `json:"goal_turn,omitempty"`
 	GoalTurns     int    `json:"goal_turns,omitempty"`
 	GoalAttempt   int    `json:"goal_attempt,omitempty"`
+
+	// Question fields, carried by question.asked (see ask_user.go and
+	// docs/design/question-tool.md). QuestionCallID is the ask_user tool
+	// call's own CallID; QuestionItems is the batch it asked.
+	QuestionCallID string                `json:"question_call_id,omitempty"`
+	QuestionItems  []plugin.QuestionItem `json:"question_items,omitempty"`
 }
 
 // Event types.
@@ -80,6 +86,9 @@ const (
 	EventGoalStalled  = "goal.stalled"
 	EventGoalAchieved = "goal.achieved"
 	EventGoalCleared  = "goal.cleared"
+
+	// Question events (see ask_user.go and docs/design/question-tool.md).
+	EventQuestionAsked = "question.asked"
 )
 
 // Config configures a Session.

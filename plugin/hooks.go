@@ -116,6 +116,15 @@ type QuestionItem struct {
 	Multi    bool     `json:"multi,omitempty"`
 }
 
+// QuestionAskedProperties is the Event.Properties payload for
+// question.asked, emitted the instant the built-in ask_user tool runs (see
+// engine/ask_user.go). CallID is the ask_user tool call's own CallID — the
+// same value POST /session/{id}/answer's call_id must match.
+type QuestionAskedProperties struct {
+	CallID    string         `json:"call_id"`
+	Questions []QuestionItem `json:"questions"`
+}
+
 // ToolExecuteStartProperties is the Event.Properties payload for
 // tool.execute.start, emitted immediately before a tool (built-in or
 // plugin-provided) runs.
