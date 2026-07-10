@@ -26,7 +26,12 @@ disabling this entirely — the engine has no built-in per-model table) and
 `haveLastUsage && lastUsage.InputTokens >= threshold * ContextWindowTokens`
 (threshold from `Config.CompactionThreshold`, defaulting to 0.8 when zero,
 mirroring `newSession`'s existing zero-fills-a-default pattern for
-`BashTimeout`), compact before streaming the turn. `Usage()` (cumulative)
+`BashTimeout`), compact before streaming the turn. The check runs BEFORE
+the incoming user message is appended (i.e. between the ensure* calls and
+`s.append` in `Prompt`): boundaries then always fall on completed-turn
+edges, the summary never has to account for a prompt that hasn't been
+answered yet, and the just-arrived message can never be folded into its
+own summary. `Usage()` (cumulative)
 is deliberately NOT the signal — it sums every turn ever run, which is not
 "how large is the next request."
 
@@ -35,7 +40,10 @@ threshold — pre-emptive compaction ahead of a known-large tool result,
 operator-triggered cleanup, or a caller that disables the automatic path
 entirely and drives it manually. Optional JSON body `{"keep_turns": N,
 "model": {...}}` overrides `Config.CompactionKeepTurns`/
-`Config.CompactionModel` for this call only. Response: `{"turns_folded": N,
+`Config.CompactionModel` for this call only; `keep_turns` has a hard floor
+of 1 (a 400 on 0 or negative) — the most recent turn is never foldable,
+so `s.history` can never collapse to a lone summary the model would have
+to answer with zero real context. Response: `{"turns_folded": N,
 "first_id", "last_id", "summary": {...}}`; `turns_folded: 0` (200, not an
 error) when there is nothing worth folding — see §2's minimum-fold rule.
 
@@ -89,6 +97,14 @@ time), its text prefixed with a synthesized-and-visibly-marked banner —
 same spirit as `message.SyntheticOrphanResultText` — so a transcript or
 `GET /session/{id}/message` reader can never mistake it for something the
 human actually typed.
+
+**Usage accounting.** The summarization round-trip is real spend, so its
+tokens are added to the cumulative `Usage()` like any other provider call —
+but it must NOT overwrite `LastUsage()`: the automatic trigger reads
+`LastUsage()` as "how large is the next worker request," and a small
+summarization call would mask the very pressure that triggered compaction
+(and re-trigger logic would misread the session as small). `LastUsage()`
+updates only on worker-turn requests.
 
 **Failure handling.** If the summarization call errors (rate limit,
 transient 5xx, or the range itself is too large to summarize in one call —
@@ -177,6 +193,18 @@ holding `s.mu` — same pattern `streamTurn` already uses via `s.History()`),
 post-compaction state, never a half-spliced one. Because only the slot's
 single claimant can ever call `Compact`, there is no second writer to race
 against within that section either.
+
+### Live event surface
+
+Anything tailing the event stream (`GET /event`, SSE) must see the
+compaction, not just readers of durable state: a successful compaction
+emits a `history.compacted` engine event (journaled via the server's
+`emitDurable` path like `session.status`), carrying `{first_id, last_id,
+turns_folded, summary_id}`. A tailer that replays from a `from` cursor
+older than the compaction sees the original messages AND the compaction
+event, exactly mirroring what LoadSession replay reconstructs — the event
+is the reconciliation signal, not a replacement for replay. The
+`compaction.failed` event (above) is its fire-and-forget counterpart.
 
 ## 5. Non-goals
 
