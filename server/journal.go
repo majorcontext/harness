@@ -541,19 +541,30 @@ func (s *Server) reconcile() error {
 }
 
 // loadJournal parses an existing events.jsonl into memory: replay buffer,
-// highest seq, the seen-message index, and each session's last_turn (see
-// Server.lastTurn). Records are replayed in file order, so the last turn.end
+// highest seq, the seen-message index, each session's last_turn (see
+// Server.lastTurn), and each session's goalState/questionState trackers.
+// Records are replayed in file order, so the last record of a given kind
 // seen for a session as the scan proceeds is — by construction — its most
-// recent one; a later record simply overwrites an earlier one in the map,
-// with no need to track sequence numbers here. A truncated final line (crash
-// mid-write) is tolerated.
+// recent one; a later record simply overwrites (or, for the goal/question
+// state machines below, folds into) an earlier one in the map, with no need
+// to track sequence numbers here. A truncated final line (crash mid-write)
+// is tolerated.
 //
-// Rebuilding lastTurn here (rather than leaving it to be set only by a live
-// recordTurnEnd call) is what makes last_turn survive a process restart:
-// otherwise a durable, replayable record would still exist on disk while the
-// in-memory field it drives silently reset to absent — exactly the kind of
-// restart-loses-state gap this field exists to prevent an orchestrator from
-// hitting.
+// Rebuilding lastTurn/goalState/questionState here (rather than leaving them
+// to be set only by a live event flowing through publishGoal/publishQuestion/
+// recordTurnEnd) is what makes last_turn, an active goal, and a pending
+// ask_user question all survive a process restart: otherwise a durable,
+// replayable record would still exist on disk while the in-memory field it
+// drives silently reset to absent — exactly the kind of restart-loses-state
+// gap those fields exist to prevent an orchestrator from hitting. This is a
+// pure extension of the existing single replay pass — no new I/O, per the
+// startup-budget rule (see reconcile, which already reads events.jsonl once).
+//
+// The goal.*/question.* folding below mirrors publishGoal/publishQuestion
+// exactly (same field assignments, same state-machine transitions) but
+// without their locking or fan-out: loadJournal runs once at construction,
+// before the server is reachable by any client, so there is no concurrent
+// access to guard against and nothing to notify yet.
 func (s *Server) loadJournal(data []byte) {
 	lines := bytes.Split(data, []byte("\n"))
 	for i, raw := range lines {
@@ -578,5 +589,79 @@ func (s *Server) loadJournal(data []byte) {
 		if ev.Type == evtTurnEnd {
 			s.lastTurn[ev.SessionID] = &turnOutcome{outcome: ev.Outcome, error: ev.Error}
 		}
+		s.foldGoalRecordLocked(ev)
+		s.foldQuestionRecordLocked(ev)
+	}
+}
+
+// foldGoalRecordLocked applies one journal record to its session's
+// goalTracker, exactly mirroring publishGoal's switch (see that function's
+// doc comment for the per-case reasoning) so a replayed goal.* record
+// leaves goalState in the identical shape a live event would have. A no-op
+// for any non-goal record type. Despite the name it takes no lock itself —
+// "Locked" here follows the repo's convention for a helper that assumes it
+// is safe to mutate s's maps directly (loadJournal runs single-threaded, at
+// construction, before any client can reach the server).
+func (s *Server) foldGoalRecordLocked(ev Event) {
+	switch ev.Type {
+	case evtGoalSet, evtGoalEval, evtGoalStalled, evtGoalAchieved, evtGoalCleared:
+	default:
+		return
+	}
+	g := s.goalState[ev.SessionID]
+	if g == nil {
+		g = &goalTracker{}
+		s.goalState[ev.SessionID] = g
+	}
+	switch ev.Type {
+	case evtGoalSet:
+		g.condition = ev.GoalCondition
+		g.active = true
+		g.achieved = false
+		g.turns = 0
+		g.lastReason = ""
+		g.attempt = 0
+	case evtGoalEval:
+		g.turns = ev.GoalTurn
+		g.lastReason = ev.GoalReason
+		g.attempt = 0
+	case evtGoalStalled:
+		g.lastReason = ev.GoalReason
+		g.attempt = ev.GoalAttempt
+	case evtGoalAchieved:
+		g.active = false
+		g.achieved = true
+		g.turns = ev.GoalTurns
+		g.lastReason = ev.GoalReason
+		g.attempt = 0
+	case evtGoalCleared:
+		g.active = false
+	}
+}
+
+// foldQuestionRecordLocked applies one journal record to its session's
+// questionTracker, exactly mirroring publishQuestion's switch. A no-op for
+// any non-question record type. See foldGoalRecordLocked on the "Locked"
+// naming despite taking no lock here.
+func (s *Server) foldQuestionRecordLocked(ev Event) {
+	switch ev.Type {
+	case evtQuestionAsked, evtQuestionAnswered:
+	default:
+		return
+	}
+	q := s.questionState[ev.SessionID]
+	if q == nil {
+		q = &questionTracker{}
+		s.questionState[ev.SessionID] = q
+	}
+	switch ev.Type {
+	case evtQuestionAsked:
+		q.pending = true
+		q.callID = ev.QuestionCallID
+		q.questions = append([]plugin.QuestionItem(nil), ev.Questions...)
+	case evtQuestionAnswered:
+		q.pending = false
+		q.callID = ""
+		q.questions = nil
 	}
 }

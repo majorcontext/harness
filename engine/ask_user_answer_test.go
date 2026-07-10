@@ -216,3 +216,37 @@ func TestAnswerQuestionConcurrentExactlyOneWins(t *testing.T) {
 		t.Error("reloaded session still awaiting a question after the concurrent race resolved it")
 	}
 }
+
+// TestTakePendingResumeAnswerConsumes pins the consume-on-read contract: the
+// first Take returns the recovered answer; a second Take (a retried recovery
+// path) gets nothing. Without the consume, a live resume never clears the
+// flag — LoadSession's replay clear only fires on reload, and the resumed
+// worker's Prompt does not touch it — so every /answer retry would re-deliver
+// the same answer.
+func TestTakePendingResumeAnswerConsumes(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{
+		Providers:  provider.Registry{"test": &scriptedProvider{name: "test"}},
+		Model:      message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir: dir,
+	})
+	s.runAskUser("tc1", []byte(`{"questions":[{"question":"q"}]}`))
+	if ok, _ := s.AnswerQuestion("tc1", "staging, please"); !ok {
+		t.Fatal("AnswerQuestion should have won")
+	}
+	reloaded, err := LoadSession(Config{Providers: provider.Registry{"test": &scriptedProvider{name: "test"}}, SessionDir: dir}, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+
+	text, ok := reloaded.TakePendingResumeAnswer()
+	if !ok || text == "" {
+		t.Fatalf("first Take = (%q, %v), want the recorded answer", text, ok)
+	}
+	if _, ok := reloaded.TakePendingResumeAnswer(); ok {
+		t.Error("second Take returned ok=true, want consumed after the first")
+	}
+	if _, ok := reloaded.PendingResumeAnswer(); ok {
+		t.Error("PendingResumeAnswer still ok=true after Take, want cleared")
+	}
+}
