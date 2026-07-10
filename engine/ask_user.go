@@ -202,3 +202,22 @@ func (s *Session) PendingResumeAnswer() (text string, ok bool) {
 	defer s.mu.Unlock()
 	return s.pendingResumeAnswer, s.pendingResumeAnswerSet
 }
+
+// TakePendingResumeAnswer is PendingResumeAnswer with consume-on-read: the
+// pending answer is cleared the moment a caller commits to delivering it,
+// so a retried recovery (a second /answer for the already-recovered
+// question, or any later resume path) can never re-deliver the same answer
+// twice. Live delivery has no other clear site — the load-replay clear only
+// fires on LoadSession, and the resumed worker's own Prompt appends
+// messages without touching this flag — which makes consuming here the
+// single thing standing between "recovered once" and "recovered on every
+// retry". Callers that only need to know whether an answer is pending use
+// PendingResumeAnswer.
+func (s *Session) TakePendingResumeAnswer() (text string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	text, ok = s.pendingResumeAnswer, s.pendingResumeAnswerSet
+	s.pendingResumeAnswer = ""
+	s.pendingResumeAnswerSet = false
+	return text, ok
+}

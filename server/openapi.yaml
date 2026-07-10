@@ -1063,6 +1063,13 @@ paths:
         concurrently with a separate Prompt call): the answer becomes turn
         1's directive alongside the original condition. Either way, exactly
         one answer yields exactly one durable question.answered record.
+
+        A retried call for a question that was already durably answered but
+        never actually delivered — the crash window between the prior call's
+        question.answered record and the resumed goal worker's first turn —
+        is recovered rather than rejected: the recorded answer text is
+        replayed as turn 1's directive, without writing a second
+        question.answered.
       parameters:
         - $ref: "#/components/parameters/sessionID"
       requestBody:

@@ -718,6 +718,21 @@ func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request) {
 	}
 	pendingCallID, awaiting := sess.AwaitingQuestion()
 	if !awaiting {
+		// Nothing is currently pending. Ordinarily that is the plain 409
+		// below (no question was ever asked, or it was already fully
+		// delivered) — but it is also exactly the shape a crash leaves
+		// between a PRIOR /answer's atomic claim persisting
+		// question.answered and the resumed goal worker's first Prompt
+		// call ever appending a message (design doc §3, issue #64 item 2):
+		// the answer is durably recorded (PendingResumeAnswer) and the
+		// goal is still active, but nothing ever delivered it. A retried
+		// POST /answer for that same question — the natural client
+		// response to a request whose connection died before a response
+		// ever arrived — recovers it here instead of 409ing on an answer
+		// that, in fact, was never lost.
+		if s.tryResumeFromPendingAnswer(w, id, sess) {
+			return
+		}
 		writeErr(w, http.StatusConflict, "no question is pending for this session")
 		return
 	}
@@ -814,6 +829,64 @@ func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request) {
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 	go s.runGoal(ctx, id, st, condition, maxTurns, answerText)
 	writeJSON(w, http.StatusAccepted, map[string]int64{"seq": fromSeq})
+}
+
+// tryResumeFromPendingAnswer is handleAnswer's crash-window recovery path
+// (design doc §3, issue #64 item 2), attempted only when no question is
+// currently pending for sess. If sess carries a PendingResumeAnswer for a
+// still-ACTIVE goal — the exact shape a process death leaves between a
+// PRIOR /answer's atomic claim persisting question.answered and the resumed
+// worker's first Prompt call ever running (engine.Session.PendingResumeAnswer's
+// doc comment) — this claims the run slot and re-spawns PursueGoal with that
+// recovered text as ResumeAnswer, delivering the same turn-1 directive the
+// original resume would have. It does NOT call AnswerQuestion: that record
+// is already durably on disk from the answer that actually happened; calling
+// it again here would double it (see TestAnswerRecoversPendingResumeAfterCrash).
+//
+// sess is the handler's early lookup, used only to decide WHETHER recovery
+// is possible — every mutation goes through st.sess, the instance
+// claimForPrompt resolves, for the same non-resident-instance-identity
+// reason the goal-paused branch above always operates on the claimed
+// instance (see TestAnswerResumesGoalNonResident): for a non-resident
+// session, sess and st.sess are two distinct engine.Sessions loaded from
+// the same log.
+//
+// Returns handled=true once it has written the HTTP response itself
+// (a successful resume, or a claim failure); handled=false means the
+// conditions for recovery did not hold (no pending answer, no active goal,
+// or the race was lost between the check here and the claim) and the
+// caller falls back to its own 409.
+func (s *Server) tryResumeFromPendingAnswer(w http.ResponseWriter, id string, sess *engine.Session) (handled bool) {
+	if _, ok := sess.PendingResumeAnswer(); !ok {
+		return false
+	}
+	if _, goalActive := sess.ActiveGoal(); !goalActive {
+		return false
+	}
+	st, ctx, fromSeq, code, holder := s.claimForPrompt(id)
+	if code != 0 {
+		writeClaimError(w, code, holder)
+		return true
+	}
+	// Consume, not read: once this path commits to the resume, the pending
+	// answer must be gone so a retried /answer cannot re-deliver it (see
+	// TakePendingResumeAnswer).
+	resumeText, resumeOK := st.sess.TakePendingResumeAnswer()
+	condition, goalActive := st.sess.ActiveGoal()
+	if !resumeOK || !goalActive {
+		// Lost the race (someone else already resumed it, or the goal was
+		// cleared) between the check above and this claim: release and let
+		// the caller report the same status a fresh check would give.
+		s.undoClaim(st)
+		return false
+	}
+	s.mu.Lock()
+	maxTurns := s.goalMaxTurns[id]
+	s.mu.Unlock()
+	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
+	go s.runGoal(ctx, id, st, condition, maxTurns, resumeText)
+	writeJSON(w, http.StatusAccepted, map[string]int64{"seq": fromSeq})
+	return true
 }
 
 // handleGoal starts a goal loop on a session. Like prompt_async it claims the
