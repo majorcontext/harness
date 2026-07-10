@@ -727,21 +727,22 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 		// retrying entirely (the non-idempotency doc above) — journaling
 		// it as waiting=true, immediately followed by goal.cleared, would
 		// read as a park on any timeline keyed to the flag.
+		toolGateStops := s.toolExecutions() > toolsBefore
+		waiting := retryable && !exhausted && !toolGateStops
+		if !s.recordGoalStalled(err, turn, attempts, retryable, class, waiting) {
+			// Concurrently cleared: stop retrying, nothing left to retry for.
+			return attempts, err
+		}
 		if provider.IsContextOverflow(err) {
 			// Deterministic failure (issue #62): the request as built
 			// cannot fit the model's context window, and every later
 			// attempt reissues the exact same directive against the exact
 			// same (now-too-long) history — retrying is pure waste, not
-			// resilience, unlike an ordinary transient error below. Fail
-			// fast: no backoff wait, no stall record — PursueGoal's caller
-			// clears the goal with a distinct reason (see its doc comment),
-			// which is the durable explanation of the stop.
-			return attempts, err
-		}
-		toolGateStops := s.toolExecutions() > toolsBefore
-		waiting := retryable && !exhausted && !toolGateStops
-		if !s.recordGoalStalled(err, turn, attempts, retryable, class, waiting) {
-			// Concurrently cleared: stop retrying, nothing left to retry for.
+			// resilience. Fail fast after the single stall record above
+			// (overflow is never classified retryable, so its waiting flag
+			// is false): no backoff wait, no further attempt. PursueGoal's
+			// caller clears the goal with a distinct reason (see its doc
+			// comment).
 			return attempts, err
 		}
 		if toolGateStops {

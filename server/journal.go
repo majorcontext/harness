@@ -137,6 +137,31 @@ const outcomeMaxTurnsExceeded = "max_turns_exceeded"
 // docs/design/question-tool.md §2.
 const outcomeAwaitingInput = "awaiting_input"
 
+// outcomeContextExhausted is the turn.end outcome recorded when a prompt or
+// goal-worker turn fails on a classified provider.ErrKindContextOverflow
+// error (issue #62): the request as built cannot fit the model's context
+// window. Distinct from the generic "error" outcome so a poller can react
+// to it specifically (e.g. rotate the session before the next attempt
+// hits the identical cliff) without string-matching last_turn.error — the
+// same reasoning outcomeMaxTurnsExceeded and outcomeAwaitingInput above
+// already establish for their own non-generic terminal cases. It is
+// deterministic (retrying fails identically), unlike an ordinary "error",
+// which may or may not be — see engine/goal.go's promptTurnWithRetry, which
+// fails fast on this classification rather than retrying.
+const outcomeContextExhausted = "context_exhausted"
+
+// turnEndOutcome decides the turn.end outcome for a non-nil, non-cancelled
+// prompt/goal-worker error: outcomeContextExhausted when the engine
+// classified it via provider.IsContextOverflow, otherwise the generic
+// "error" every other failure has always recorded. Shared by runPrompt and
+// runGoal so the two turn-ending paths can never drift on this.
+func turnEndOutcome(err error) string {
+	if provider.IsContextOverflow(err) {
+		return outcomeContextExhausted
+	}
+	return "error"
+}
+
 // Publish maps an engine event onto the journal/SSE stream. Message events
 // trigger a journal sync (which durably records every new canonical message,
 // including the user and tool messages the engine does not surface via

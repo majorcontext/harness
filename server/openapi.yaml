@@ -138,11 +138,19 @@ components:
       properties:
         outcome:
           type: string
-          enum: [completed, error, max_turns_exceeded, awaiting_input]
+          enum: [completed, error, context_exhausted, max_turns_exceeded, awaiting_input]
           description: >
             "completed": the turn (or goal) finished successfully —for a
             goal, the evaluator returned MET. "error": the turn failed
-            outright (provider error, transcode failure). "max_turns_exceeded":
+            outright (provider error, transcode failure). "context_exhausted":
+            the turn failed on a classified, deterministic prompt/context-
+            window overflow (issue #62) — the assembled request no longer
+            fits the model's input limit, so retrying the identical request
+            would fail identically; distinct from generic "error" so a
+            poller can react to it specifically (e.g. rotate the session)
+            without string-matching `error`. A goal loop fails fast on this
+            (one worker attempt, no retries) rather than exhausting its
+            retry budget the way an ordinary "error" does. "max_turns_exceeded":
             goal-loop only — GoalOptions.MaxTurns was exhausted without the
             evaluator ever returning MET; the goal gave up, it did not
             complete, so it is deliberately never reported as "completed".
@@ -625,7 +633,7 @@ components:
             turn.end; see LastTurn.error.
         outcome:
           type: string
-          enum: [completed, error, max_turns_exceeded, awaiting_input]
+          enum: [completed, error, context_exhausted, max_turns_exceeded, awaiting_input]
           description: >
             Turn result for turn.end events — see LastTurn.outcome for the
             full meaning of each value, including why a goal that exhausts
