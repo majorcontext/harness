@@ -107,6 +107,24 @@ type FileEditedProperties struct {
 	Path string `json:"path"`
 }
 
+// QuestionItem is one question in an ask_user call's batch (see
+// engine/ask_user.go and docs/design/question-tool.md §1). Options omitted
+// means freeform text; Multi omitted/false means single-select.
+type QuestionItem struct {
+	Question string   `json:"question"`
+	Options  []string `json:"options,omitempty"`
+	Multi    bool     `json:"multi,omitempty"`
+}
+
+// QuestionAskedProperties is the Event.Properties payload for
+// question.asked, emitted the instant the built-in ask_user tool runs (see
+// engine/ask_user.go). CallID is the ask_user tool call's own CallID — the
+// same value POST /session/{id}/answer's call_id must match.
+type QuestionAskedProperties struct {
+	CallID    string         `json:"call_id"`
+	Questions []QuestionItem `json:"questions"`
+}
+
 // ToolExecuteStartProperties is the Event.Properties payload for
 // tool.execute.start, emitted immediately before a tool (built-in or
 // plugin-provided) runs.
