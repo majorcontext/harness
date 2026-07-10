@@ -278,6 +278,16 @@ Prompt"):
   resumed question rebuilds `ResumeAnswer` from the journal and the resume
   delivers the same directive it would have originally.
 
+  The goal-paused branch is itself an atomic claim, mirroring
+  `claimForPrompt`: check `awaitingQuestion && goalActive` → persist
+  `question.answered` → clear the pending state → claim the run slot →
+  spawn `PursueGoal`, all under one lock section. Without that, two
+  concurrent `POST /answer` (or one racing a prompt through the
+  `handlePrompt` 409 window) could both observe the pending question and
+  both re-spawn `PursueGoal` — violating the "not concurrently with
+  itself" contract this whole split exists to protect. Exactly one
+  `/answer` wins; the loser gets the same 409 a stale `call_id` gets.
+
 For interactive sessions, a client that skips `/answer` entirely still
 un-wedges the session correctly, since `Session.Prompt` clears
 `s.awaitingQuestion` (and persists `question.answered`) on any new user
