@@ -168,11 +168,21 @@ type Session struct {
 	cfg   Config
 	tools map[string]Tool
 
-	mu             sync.Mutex
-	model          message.ModelRef
-	history        []message.Message
-	usage          provider.Usage
-	createdAt      time.Time
+	mu        sync.Mutex
+	model     message.ModelRef
+	history   []message.Message
+	usage     provider.Usage // cumulative, across every turn (see appendWithUsage)
+	createdAt time.Time
+	// lastUsage/haveLastUsage carry the most recent model turn's own Usage
+	// (input/output/cache tokens for that one request), distinct from the
+	// cumulative usage field above — GET /session surfaces both (issue #62
+	// layer 2) so an orchestrator can see the size of the request that JUST
+	// went out, not only the running total. haveLastUsage is false until
+	// the session's first completed turn (fresh session, or one reloaded
+	// before any turn ever ran against it in any process).
+	lastUsage     provider.Usage
+	haveLastUsage bool
+
 	logFile        *os.File // session log; nil until first write (see store.go)
 	logStarted     bool     // the log file exists on disk
 	lastPersistErr error
@@ -318,13 +328,41 @@ func (s *Session) Usage() provider.Usage {
 	return s.usage
 }
 
-func (s *Session) addUsage(u provider.Usage) {
+// LastUsage returns the most recently completed model turn's own Usage
+// (that one request's input/output/cache tokens, not the running total —
+// see Usage), and whether any turn has completed yet (for this session,
+// live or reloaded from its log — see appendWithUsage and LoadSession's
+// recMessage case). ok is false for a session that has never completed a
+// turn in any process.
+func (s *Session) LastUsage() (usage provider.Usage, ok bool) {
 	s.mu.Lock()
-	s.usage.InputTokens += u.InputTokens
-	s.usage.OutputTokens += u.OutputTokens
-	s.usage.CacheReadTokens += u.CacheReadTokens
-	s.usage.CacheWriteTokens += u.CacheWriteTokens
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	return s.lastUsage, s.haveLastUsage
+}
+
+// LastActivityAt returns the timestamp of the most recently appended
+// message (user, assistant, or tool), or CreatedAt if no message has been
+// appended yet.
+//
+// This exists (issue #62 layer 3) because fleet monitors previously had no
+// direct way to answer "is this session still doing something" — they
+// sampled Session.Seq (server/journal.go) twice, a session apart, and
+// compared, to distinguish quiet progress from a session wedged mid-turn.
+// That double-sample is slow, racy against a session legitimately paused
+// between polls (e.g. awaiting_input), and only ever answers a RELATIVE
+// question ("did anything happen between my two samples"), never an
+// absolute one ("how long has this been quiet"). LastActivityAt answers the
+// absolute question directly from state the engine already holds: resident
+// in memory for a live session, and — because every message record carries
+// its own CreatedAt — equally available the moment a non-resident session
+// is reloaded from its log, with no extra bookkeeping.
+func (s *Session) LastActivityAt() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.history) == 0 {
+		return s.createdAt
+	}
+	return s.history[len(s.history)-1].CreatedAt
 }
 
 // toolExecutions returns the current tool-execution counter (see
@@ -344,6 +382,19 @@ func (s *Session) History() []message.Message {
 }
 
 func (s *Session) append(m message.Message) {
+	s.appendWithUsage(m, nil)
+}
+
+// appendWithUsage is append's usage-carrying variant, used for the one
+// assistant message that ends a model turn (see Prompt): usage is the
+// provider's per-turn Usage for that message, or nil for every other
+// message (user, tool, or an interrupted partial assistant message with no
+// completed turn to report). Recording it on the message record itself
+// (see store.go's record.Usage) is what makes Session.Usage()/LastUsage()
+// survive a process restart — LoadSession sums every record's Usage back
+// into cumulative usage and keeps the last one seen as lastUsage, since the
+// log has no separate cumulative-usage record to replay instead.
+func (s *Session) appendWithUsage(m message.Message, usage *provider.Usage) {
 	// Normalize before this message enters history at all: see
 	// message.Message.Normalize's doc comment. This is the single ingest
 	// choke point every message passes through (user, assistant, and tool
@@ -353,7 +404,15 @@ func (s *Session) append(m message.Message) {
 	m.Normalize()
 	s.mu.Lock()
 	s.history = append(s.history, m)
-	s.persistMessage(&m)
+	if usage != nil {
+		s.usage.InputTokens += usage.InputTokens
+		s.usage.OutputTokens += usage.OutputTokens
+		s.usage.CacheReadTokens += usage.CacheReadTokens
+		s.usage.CacheWriteTokens += usage.CacheWriteTokens
+		s.lastUsage = *usage
+		s.haveLastUsage = true
+	}
+	s.persistMessage(&m, usage)
 	s.mu.Unlock()
 }
 
@@ -499,8 +558,7 @@ func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, er
 			s.emitSessionError(err)
 			return nil, err
 		}
-		s.addUsage(usage)
-		s.append(*asst)
+		s.appendWithUsage(*asst, &usage)
 		s.emit(Event{Type: EventMessage, Message: asst, StopReason: stop, Usage: &usage})
 
 		if stop != provider.StopToolUse {
