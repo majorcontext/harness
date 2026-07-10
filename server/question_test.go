@@ -166,3 +166,293 @@ func TestWaitRejectsBadUntilMentionsAwaitingInput(t *testing.T) {
 		t.Errorf("error body = %s, want it to mention awaiting-input", data)
 	}
 }
+
+// TestPromptAsyncEndsAtAskUser proves the interactive (no-goal) path: a
+// prompt_async turn that calls ask_user ends the turn, journals
+// question.asked (durable, SSE-visible), and the session's composite state
+// and Question field reflect it — "awaiting-input" outranks plain "busy"/
+// "idle".
+func TestPromptAsyncEndsAtAskUser(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		askUserTurn("tc1", `{"questions":[{"question":"Which environment?","options":["staging","prod"]}]}`),
+	}}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	sse := h.openSSE("?from=0", "")
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "help me deploy"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt_async status %d: %s", resp.StatusCode, data)
+	}
+	evs := sse.collectUntilIdle(t)
+	var sawAsked bool
+	for _, ev := range evs {
+		if ev.Type == "question.asked" {
+			sawAsked = true
+		}
+	}
+	if !sawAsked {
+		t.Errorf("no question.asked event journaled: %v", evs)
+	}
+	sess := h.getSessionQuestion(id)
+	if sess.State != "awaiting-input" {
+		t.Errorf("state = %q, want awaiting-input", sess.State)
+	}
+	if sess.Question == nil || sess.Question.CallID != "tc1" {
+		t.Errorf("question = %+v, want CallID tc1", sess.Question)
+	}
+}
+
+// TestAnswerInteractiveDeliversPrompt proves the no-active-goal branch:
+// /answer formats the answers into one text block and delivers it through
+// the ordinary Session.Prompt path — Session.Prompt's own clear-and-persist
+// is the single owner of question.answered here, not the handler.
+func TestAnswerInteractiveDeliversPrompt(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		askUserTurn("tc1", `{"questions":[{"question":"Which environment?","options":["staging","prod"]}]}`),
+		asstTurn("noted, deploying to staging"),
+	}}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	sse := h.openSSE("?from=0", "")
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "help me deploy"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt_async status %d: %s", resp.StatusCode, data)
+	}
+	sse.collectUntilIdle(t)
+
+	resp, data = h.do("POST", "/session/"+id+"/answer", map[string]any{
+		"call_id": "tc1",
+		"answers": []map[string]any{{"question": "Which environment?", "selected": []string{"staging"}}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("answer status %d: %s", resp.StatusCode, data)
+	}
+	evs := sse.collectUntilIdle(t)
+	var sawAnswered int
+	for _, ev := range evs {
+		if ev.Type == "question.answered" {
+			sawAnswered++
+		}
+	}
+	if sawAnswered != 1 {
+		t.Errorf("question.answered records = %d, want exactly 1: %v", sawAnswered, evs)
+	}
+	sess := h.getSessionQuestion(id)
+	if sess.Question != nil {
+		t.Errorf("question = %+v, want nil after answering", sess.Question)
+	}
+	if sess.State != "idle" {
+		t.Errorf("state = %q, want idle", sess.State)
+	}
+
+	resp, data = h.do("GET", "/session/"+id+"/message", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET message status %d: %s", resp.StatusCode, data)
+	}
+	if !strings.Contains(string(data), "staging") {
+		t.Errorf("message history missing the delivered answer text: %s", data)
+	}
+}
+
+// TestAnswerUnknownSessionIs404 proves the 404 status code (design doc §3).
+func TestAnswerUnknownSessionIs404(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	resp, data := h.do("POST", "/session/ses_0000000000000000/answer", map[string]any{
+		"call_id": "tc1",
+		"answers": []map[string]any{{"question": "q", "text": "a"}},
+	})
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status %d: %s", resp.StatusCode, data)
+	}
+}
+
+// TestAnswerNothingPendingIs409 proves the 409 status code (design doc §3).
+func TestAnswerNothingPendingIs409(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	id := h.createSession("test/m1")
+	resp, data := h.do("POST", "/session/"+id+"/answer", map[string]any{
+		"call_id": "tc1",
+		"answers": []map[string]any{{"question": "q", "text": "a"}},
+	})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status %d: %s", resp.StatusCode, data)
+	}
+}
+
+// TestAnswerStaleCallIDIs400 proves the 400 status code (design doc §3): a
+// call_id that doesn't match the pending question is rejected, the pending
+// question is left untouched.
+func TestAnswerStaleCallIDIs400(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		askUserTurn("tc1", `{"questions":[{"question":"Which environment?"}]}`),
+	}}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+	sse := h.openSSE("?from=0", "")
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "help me deploy"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt_async status %d: %s", resp.StatusCode, data)
+	}
+	sse.collectUntilIdle(t)
+
+	resp, data = h.do("POST", "/session/"+id+"/answer", map[string]any{
+		"call_id": "tc-stale",
+		"answers": []map[string]any{{"question": "Which environment?", "text": "staging"}},
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %d: %s", resp.StatusCode, data)
+	}
+	sess := h.getSessionQuestion(id)
+	if sess.Question == nil || sess.Question.CallID != "tc1" {
+		t.Errorf("question = %+v after stale answer, want still pending with CallID tc1", sess.Question)
+	}
+}
+
+// TestAnswerResumesGoal proves the goal-paused branch end to end: POST
+// /answer persists question.answered, clears the pending question, and
+// re-spawns PursueGoal with the answer folded into turn 1's directive —
+// driving the goal on to completion without ever calling Prompt directly
+// from the handler (which would violate PursueGoal's "not concurrently with
+// itself or Prompt" contract).
+func TestAnswerResumesGoal(t *testing.T) {
+	prov := &goalProv{
+		name: "test",
+		worker: [][]provider.Event{
+			askUserTurn("tc1", `{"questions":[{"question":"Which environment?"}]}`),
+			asstTurn("deployed to staging"),
+		},
+		eval: [][]provider.Event{asstTurn("MET: deployment confirmed")},
+	}
+	h := newGoalHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	sse := h.openSSE("?from=0", "")
+	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "deploy the service", "max_turns": 5})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
+	}
+	sse.collectUntilIdle(t) // paused on ask_user
+
+	resp, data = h.do("POST", "/session/"+id+"/answer", map[string]any{
+		"call_id": "tc1",
+		"answers": []map[string]any{{"question": "Which environment?", "selected": []string{"staging"}}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("answer status %d: %s", resp.StatusCode, data)
+	}
+
+	evs := sse.collectUntilIdle(t)
+	var sawAnswered, sawAchieved bool
+	var end *Event
+	for i := range evs {
+		switch evs[i].Type {
+		case "question.answered":
+			sawAnswered = true
+		case "goal.achieved":
+			sawAchieved = true
+		case "turn.end":
+			end = &evs[i]
+		}
+	}
+	if !sawAnswered {
+		t.Errorf("no question.answered record after resuming: %v", evs)
+	}
+	if !sawAchieved {
+		t.Fatalf("goal never achieved after resuming: %v", evs)
+	}
+	if end == nil || end.Outcome != "completed" {
+		t.Errorf("resumed turn.end = %+v, want outcome completed", end)
+	}
+
+	sess := h.getSessionQuestion(id)
+	if sess.Question != nil {
+		t.Errorf("session question = %+v, want nil after resuming", sess.Question)
+	}
+	if sess.Goal == nil || sess.Goal.Active {
+		t.Errorf("goal = %+v, want inactive (achieved)", sess.Goal)
+	}
+
+	resp, data = h.do("GET", "/session/"+id+"/message", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET message status %d: %s", resp.StatusCode, data)
+	}
+	var msgs []struct {
+		Role  string `json:"role"`
+		Parts []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"parts"`
+	}
+	if err := json.Unmarshal(data, &msgs); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, m := range msgs {
+		if m.Role != "user" {
+			continue
+		}
+		for _, p := range m.Parts {
+			if strings.Contains(p.Text, "deploy the service") && strings.Contains(p.Text, "staging") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Error("no resumed directive message carrying both the condition and the answer")
+	}
+}
+
+// TestPromptRejectedWhileGoalPausedOnQuestion proves handlePrompt's guard:
+// while a goal is paused awaiting an answer, a bare prompt_async must 409
+// (naming /answer as the resume path) rather than silently consuming the
+// answer without ever resuming the goal — the "zombie pause" the design doc
+// warns about.
+func TestPromptRejectedWhileGoalPausedOnQuestion(t *testing.T) {
+	prov := &goalProv{
+		name:   "test",
+		worker: [][]provider.Event{askUserTurn("tc1", `{"questions":[{"question":"Which environment?"}]}`)},
+	}
+	h := newGoalHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	sse := h.openSSE("?from=0", "")
+	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "deploy the service"})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
+	}
+	sse.collectUntilIdle(t) // paused on ask_user; the run slot is free
+
+	resp, data = h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "staging"}},
+	})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("prompt_async while goal-paused status = %d, want 409: %s", resp.StatusCode, data)
+	}
+	if !strings.Contains(strings.ToLower(string(data)), "/answer") {
+		t.Errorf("409 body = %s, want it to name /answer as the resume path", data)
+	}
+
+	sess := h.getSessionQuestion(id)
+	if sess.Question == nil || sess.Question.CallID != "tc1" {
+		t.Errorf("question = %+v after rejected prompt, want still pending", sess.Question)
+	}
+	if sess.Goal == nil || !sess.Goal.Active {
+		t.Errorf("goal = %+v after rejected prompt, want still active", sess.Goal)
+	}
+
+	resp, data = h.do("POST", "/session/"+id+"/answer", map[string]any{
+		"call_id": "tc1",
+		"answers": []map[string]any{{"question": "Which environment?", "text": "staging"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Errorf("answer after rejected prompt status = %d, want 202: %s", resp.StatusCode, data)
+	}
+}
