@@ -34,6 +34,10 @@ type goalProv struct {
 	// engine/goal.go's goalProvider, same idea) deterministically.
 	workerErrN   int
 	workerErrHit int
+	// workerErr, when set, is returned instead of the default fake
+	// transient error — used to exercise a provider.RetryableError-marked
+	// failure (see TestGoalStalledRetryableFieldsSurfaced).
+	workerErr error
 }
 
 func (p *goalProv) Name() string { return p.name }
@@ -56,6 +60,9 @@ func (p *goalProv) Stream(ctx context.Context, req *provider.Request) (provider.
 	defer p.mu.Unlock()
 	if p.workerErrHit < p.workerErrN {
 		p.workerErrHit++
+		if p.workerErr != nil {
+			return nil, p.workerErr
+		}
 		return nil, errors.New("fake transient provider error")
 	}
 	if p.wi >= len(p.worker) {
@@ -263,6 +270,109 @@ func TestGoalStalledJournaledAndActive(t *testing.T) {
 	}
 	if !achieved {
 		t.Fatalf("goal events after the stall = %v, want a goal.achieved", goalEvents(evs))
+	}
+}
+
+// TestGoalStalledRetryableFieldsSurfaced is the end-to-end wire-contract
+// test for GitHub issue #61's durable-visibility deliverable: a worker-turn
+// error the provider adapter classified retryable (see
+// provider.RetryableError) must carry that classification all the way
+// through — the live SSE goal.stalled event, the durable journal record,
+// and Session JSON's goal summary — so observability can distinguish
+// "waiting out provider weather" from "genuinely stuck" without decoding
+// error text.
+//
+// Only one retryable failure is scripted (not the full
+// goalRetryableMaxAttempts budget engine/goal_test.go's synctest-bubble
+// tests exercise): this test drives real HTTP through a real
+// httptest.Server, so it pays real wall-clock time for the one backoff
+// wait it does incur (a few seconds — goalRetryableBackoff's jittered
+// first-attempt delay), which is the same tradeoff
+// TestGoalStalledJournaledAndActive above already makes for the
+// deterministic path.
+func TestGoalStalledRetryableFieldsSurfaced(t *testing.T) {
+	prov := &goalProv{
+		name:       "test",
+		workerErrN: 1, // first attempt fails retryably, second (retried) attempt succeeds
+		workerErr:  provider.MarkRetryable(errors.New("anthropic: Overloaded (overloaded_error, HTTP 529)"), provider.RetryableOverloaded),
+		worker:     [][]provider.Event{asstTurn("done")},
+		eval:       [][]provider.Event{asstTurn("MET: looks complete")},
+	}
+	h := newGoalHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	sse := h.openSSE("?from=0", "")
+	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond"})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
+	}
+
+	stalled := sse.waitFor(t, "goal.stalled")
+	if !stalled.GoalRetryable {
+		t.Error("goal.stalled event GoalRetryable = false, want true")
+	}
+	if stalled.GoalRetryableClass != string(provider.RetryableOverloaded) {
+		t.Errorf("goal.stalled event GoalRetryableClass = %q, want %q", stalled.GoalRetryableClass, provider.RetryableOverloaded)
+	}
+	if !stalled.GoalWaiting {
+		t.Error("goal.stalled event GoalWaiting = false, want true (budget not exhausted after one failure)")
+	}
+
+	// The journal carries the same classification, not just the live fanout.
+	h.srv.mu.Lock()
+	var journaled *Event
+	for i := range h.srv.journal {
+		ev := h.srv.journal[i]
+		if ev.SessionID == id && ev.Type == "goal.stalled" {
+			journaled = &ev
+			break
+		}
+	}
+	h.srv.mu.Unlock()
+	if journaled == nil {
+		t.Fatal("goal.stalled not found in the server journal")
+	}
+	if !journaled.GoalRetryable || journaled.GoalRetryableClass != string(provider.RetryableOverloaded) || !journaled.GoalWaiting {
+		t.Errorf("journaled goal.stalled = %+v, want retryable=true class=%q waiting=true", journaled, provider.RetryableOverloaded)
+	}
+
+	// Session JSON's goal summary also carries the classification.
+	resp, data = h.do("GET", "/session/"+id, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET session status %d", resp.StatusCode)
+	}
+	var sess struct {
+		Goal *struct {
+			Active         bool   `json:"active"`
+			Retryable      bool   `json:"retryable"`
+			RetryableClass string `json:"retryable_class"`
+			Waiting        bool   `json:"waiting"`
+		} `json:"goal"`
+	}
+	if err := json.Unmarshal(data, &sess); err != nil {
+		t.Fatal(err)
+	}
+	if sess.Goal == nil {
+		t.Fatalf("session JSON missing goal: %s", data)
+	}
+	if !sess.Goal.Active {
+		t.Error("goal.active = false right after a non-terminal stall, want true")
+	}
+	if !sess.Goal.Retryable || sess.Goal.RetryableClass != string(provider.RetryableOverloaded) || !sess.Goal.Waiting {
+		t.Errorf("session goal = %+v, want retryable=true class=%q waiting=true", *sess.Goal, provider.RetryableOverloaded)
+	}
+
+	// The retried turn goes on to be evaluated MET, achieving the goal —
+	// proof the retryable-class path rejoins the ordinary loop cleanly.
+	evs := sse.collectUntilIdle(t)
+	var achieved bool
+	for _, ev := range goalEvents(evs) {
+		if ev.Type == "goal.achieved" {
+			achieved = true
+		}
+	}
+	if !achieved {
+		t.Fatalf("goal events after the retryable stall = %v, want a goal.achieved", goalEvents(evs))
 	}
 }
 
