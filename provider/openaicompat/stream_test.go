@@ -395,3 +395,44 @@ func TestStreamMidStreamErrorClassifiedRetryable(t *testing.T) {
 		t.Errorf("original message lost: %v", streamErr)
 	}
 }
+
+// TestStreamMidStreamErrorStringCode pins the OTHER wire shape: OpenAI-family
+// providers send string codes ("rate_limit_exceeded") or null where
+// OpenRouter sends ints. A string code must not fail the chunk unmarshal
+// (which would surface a generic parse error, unclassified — the swallow
+// reborn one layer up); it must classify.
+func TestStreamMidStreamErrorStringCode(t *testing.T) {
+	c := testClient(t, "openai", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sseData(`{"error":{"message":"slow down","type":"requests","code":"rate_limit_exceeded"}}`)) //nolint:errcheck
+	})
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:    message.ModelRef{Provider: "openai", Model: "some/model"},
+		Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var streamErr error
+	for {
+		_, err := s.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			streamErr = err
+			break
+		}
+	}
+	if streamErr == nil {
+		t.Fatal("string-code error chunk swallowed")
+	}
+	if strings.Contains(streamErr.Error(), "bad chunk") {
+		t.Fatalf("string code failed the unmarshal instead of classifying: %v", streamErr)
+	}
+	class, ok := provider.AsRetryable(streamErr)
+	if !ok || class != provider.RetryableRateLimited {
+		t.Fatalf("class = (%q, %v), want rate_limited", class, ok)
+	}
+}

@@ -136,6 +136,33 @@ func classifyStatus(status int) (provider.RetryableClass, bool) {
 	}
 }
 
+// classifyWireCode classifies a mid-stream error "code", which is an int
+// HTTP status on some wires (OpenRouter) and a string constant on others
+// (OpenAI: "rate_limit_exceeded", "server_error"). Unknown or null codes
+// classify as nothing — the error still surfaces, just without a
+// retryable mark.
+func classifyWireCode(raw json.RawMessage) (provider.RetryableClass, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", false
+	}
+	var status int
+	if err := json.Unmarshal(raw, &status); err == nil {
+		return classifyStatus(status)
+	}
+	var code string
+	if err := json.Unmarshal(raw, &code); err == nil {
+		switch code {
+		case "rate_limit_exceeded", "rate_limited":
+			return provider.RetryableRateLimited, true
+		case "server_error", "internal_server_error":
+			return provider.RetryableServerError, true
+		case "overloaded", "overloaded_error":
+			return provider.RetryableOverloaded, true
+		}
+	}
+	return "", false
+}
+
 // assembledToolCall accumulates one tool_calls fragment stream, keyed by its
 // wire "index".
 type assembledToolCall struct {
@@ -269,7 +296,12 @@ type wireChunk struct {
 	Error *struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
-		Code    int    `json:"code"`
+		// Code is an int on some wires (OpenRouter proxies upstream HTTP
+		// statuses: 429, 529, 502...) and a string on others (OpenAI's
+		// "rate_limit_exceeded", "server_error"), or null — RawMessage so
+		// neither shape can fail the chunk unmarshal and resurrect the
+		// silent-swallow this field exists to close.
+		Code json.RawMessage `json:"code"`
 	} `json:"error"`
 	Choices []struct {
 		Delta struct {
@@ -307,9 +339,9 @@ func (s *stream) handle(data []byte) error {
 		// chunk fell through the no-choices return below and the turn
 		// ended silently, indistinguishable from success — so a mid-stream
 		// overload never engaged the goal loop's retryable backoff.
-		err := fmt.Errorf("openaicompat(%s): stream error: %s (type=%q code=%d)",
+		err := fmt.Errorf("openaicompat(%s): stream error: %s (type=%q code=%s)",
 			s.family, chunk.Error.Message, chunk.Error.Type, chunk.Error.Code)
-		if class, ok := classifyStatus(chunk.Error.Code); ok {
+		if class, ok := classifyWireCode(chunk.Error.Code); ok {
 			return provider.MarkRetryable(err, class)
 		}
 		return err
