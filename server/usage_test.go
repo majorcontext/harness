@@ -73,11 +73,15 @@ func TestSessionUsageSurfacedOnGet(t *testing.T) {
 	}
 
 	// A second turn advances both cumulative usage and last_input_tokens.
-	sse2 := h.openSSE("?from=0", "")
+	// Reuse the ORIGINAL stream: it has already consumed through turn 1's
+	// idle, so the next idle it sees is genuinely turn 2's. A fresh
+	// ?from=0 stream would REPLAY turn 1's journaled idle and release the
+	// wait before turn 2 commits its usage — the intermittent
+	// input_tokens=100-instead-of-250 failure seen under load.
 	h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
 		"parts": []map[string]string{{"type": "text", "text": "again"}},
 	})
-	sse2.collectUntilIdle(t)
+	sse.collectUntilIdle(t)
 
 	resp, data = h.do("GET", "/session/"+id, nil)
 	if resp.StatusCode != http.StatusOK {
