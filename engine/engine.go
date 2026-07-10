@@ -88,7 +88,8 @@ const (
 	EventGoalCleared  = "goal.cleared"
 
 	// Question events (see ask_user.go and docs/design/question-tool.md).
-	EventQuestionAsked = "question.asked"
+	EventQuestionAsked    = "question.asked"
+	EventQuestionAnswered = "question.answered"
 )
 
 // Config configures a Session.
@@ -222,6 +223,12 @@ type Session struct {
 	// pending call. Guarded by mu.
 	awaitingQuestion bool
 	questionCallID   string
+	// pendingResumeAnswer/pendingResumeAnswerSet retain the most recently
+	// persisted question.answered payload that has not yet been delivered
+	// as an ordinary message (see LoadSession's recMessage/recQuestionAnswered
+	// cases and PendingResumeAnswer). Guarded by mu.
+	pendingResumeAnswer    string
+	pendingResumeAnswerSet bool
 
 	// toolExecCount counts tool-call executions across the session's
 	// lifetime: incremented once per call to runToolCall that actually
@@ -454,6 +461,16 @@ func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, er
 		s.emitSessionError(err)
 		return nil, err
 	}
+	// Any new user message — whether a bare prompt_async or one routed
+	// through POST /session/{id}/answer's interactive branch — clears a
+	// pending ask_user question and persists question.answered, exactly
+	// once (design doc §3). This is the single, idempotent owner of that
+	// record for the interactive path; the goal-paused /answer branch is
+	// the deliberate exception (see AnswerQuestion), and by the time its
+	// resumed Prompt call reaches here awaitingQuestion is already false,
+	// so this is a no-op then.
+	s.clearAwaitingQuestionOnPrompt(text)
+
 	s.append(message.Message{
 		ID:        newID("msg"),
 		Role:      message.RoleUser,
