@@ -8,8 +8,8 @@ classified `provider.ErrKindContextOverflow` failure and a running
 neither one relieves the pressure — the only remedy today is to abandon the
 session. This proposes the primitive that acts on that signal: fold a
 contiguous prefix of old turns into one synthetic summary message, durably,
-in place, without disturbing the session's identity, goal state, or pending
-questions. Design only; no code in this branch.
+in place, without disturbing the session's identity or goal state. Design
+only; no code in this branch.
 
 ## 1. Trigger: automatic threshold, explicit endpoint as the escape hatch
 
@@ -66,11 +66,10 @@ folded turn's leading `RoleUser` message, `LastID` names the last message
 before the first *kept* turn's `RoleUser` message — makes "never orphan a
 tool_use across the boundary" and "never split an assistant message from
 its required results" structural guarantees, not something the compaction
-code has to reason about per call. `goal.*`/`question.*` records are
-untouched on principle: they live in `Session` fields
-(`goalActive`/`goalCondition`, `awaitingQuestion`/`questionCallID`), never
-in `s.history`, so a range that folds the messages explaining a goal or a
-question leaves the goal/question state itself exactly as it was.
+code has to reason about per call. `goal.*` records are untouched on
+principle: they live in `Session` fields (`goalActive`/`goalCondition`),
+never in `s.history`, so a range that folds the messages explaining a goal
+leaves the goal state itself exactly as it was.
 
 Recommend keeping the most recent `Config.CompactionKeepTurns` turns (2, if
 unset) verbatim always; if fewer than that many complete turns exist yet,
@@ -147,7 +146,7 @@ overflows. Compaction is a best-effort relief valve, not a load-bearing
 correctness mechanism; failing loud into an existing, already-handled
 failure mode is strictly better than blocking the caller's real turn on it.
 
-**Journal shape.** One new record type, alongside `goal.*`/`question.*`:
+**Journal shape.** One new record type, alongside `goal.*`:
 
 ```json
 {
@@ -257,8 +256,8 @@ fire-and-forget counterpart.
   the engine already takes toward token accounting.
 - **No selective/sparse folding.** Always a contiguous oldest-first prefix,
   never an importance-ranked or sparse subset of turns.
-- **No cross-session compaction**, no compaction of `goal.*`/`question.*`
-  records (they are never part of `s.history` and are never touched).
+- **No cross-session compaction**, no compaction of `goal.*` records (they
+  are never part of `s.history` and are never touched).
 - **No answer/content validation of the summary** against the original —
   matches the engine's existing non-stance on validating model output.
 - **Additive, matching the bar `PROTOCOL.md`'s Versioning section sets for
