@@ -23,6 +23,7 @@ import (
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/plugin"
+	"github.com/majorcontext/harness/provider"
 )
 
 // Record types, one JSON object per line.
@@ -54,6 +55,15 @@ type record struct {
 	Model    message.ModelRef `json:"model,omitzero"`
 	Goal     *goalRecord      `json:"goal,omitempty"`
 	Question *questionRecord  `json:"question,omitempty"`
+	// Usage carries the provider's per-turn Usage on the message record for
+	// the assistant message ending a model turn (nil for every other
+	// message: user, tool, or an interrupted partial assistant message —
+	// see Session.appendWithUsage). It is the only way Session.Usage() and
+	// Session.LastUsage() survive a process restart: LoadSession sums every
+	// record's Usage back into cumulative usage and keeps the last one seen
+	// (see issue #62 layer 2) — the log carries no separate cumulative-
+	// usage record to replay instead.
+	Usage *provider.Usage `json:"usage,omitempty"`
 }
 
 // questionRecord carries the durable payload of a question.* record (see
@@ -101,6 +111,16 @@ type SessionInfo struct {
 	ID        string
 	CreatedAt time.Time
 	Messages  int
+	// Usage is cumulative token usage summed from every message record's
+	// optional Usage (see record.Usage, persistMessage), computed by the
+	// same cheap header-only scan that counts Messages — no full
+	// LoadSession/message.Message replay required (issue #62 layer 2:
+	// GET /session/status needs this without paying for a full session
+	// load per entry).
+	Usage provider.Usage
+	// LastInputTokens is the input-token count of the most recent message
+	// record carrying Usage (0 if none do).
+	LastInputTokens int
 }
 
 func sessionPath(dir, id string) string {
@@ -135,9 +155,10 @@ func (s *Session) Persist() error {
 	return nil
 }
 
-// persistMessage appends a message record to the session log. Caller holds
-// s.mu.
-func (s *Session) persistMessage(m *message.Message) {
+// persistMessage appends a message record to the session log, carrying
+// usage (nil for every message except the assistant message ending a model
+// turn — see appendWithUsage). Caller holds s.mu.
+func (s *Session) persistMessage(m *message.Message, usage *provider.Usage) {
 	if s.cfg.SessionDir == "" {
 		return
 	}
@@ -145,7 +166,7 @@ func (s *Session) persistMessage(m *message.Message) {
 		s.lastPersistErr = err
 		return
 	}
-	if err := s.writeRecord(record{Type: recMessage, Message: m}); err != nil {
+	if err := s.writeRecord(record{Type: recMessage, Message: m, Usage: usage}); err != nil {
 		s.lastPersistErr = err
 	}
 }
@@ -321,6 +342,18 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// PendingResumeAnswer's doc comment.
 			s.pendingResumeAnswer = ""
 			s.pendingResumeAnswerSet = false
+			// Replay this record's per-turn Usage (if any — see
+			// persistMessage) into cumulative usage/lastUsage, exactly as
+			// appendWithUsage does live: this is what makes Session.Usage()
+			// and LastUsage() survive a process restart (issue #62 layer 2).
+			if rec.Usage != nil {
+				s.usage.InputTokens += rec.Usage.InputTokens
+				s.usage.OutputTokens += rec.Usage.OutputTokens
+				s.usage.CacheReadTokens += rec.Usage.CacheReadTokens
+				s.usage.CacheWriteTokens += rec.Usage.CacheWriteTokens
+				s.lastUsage = *rec.Usage
+				s.haveLastUsage = true
+			}
 		case recModel:
 			s.model = rec.Model
 		case recGoalSet:
@@ -443,11 +476,15 @@ func readSessionInfo(path string) (SessionInfo, error) {
 	}
 
 	// headRecord decodes only the fields listings need — never message
-	// bodies, which keeps ListSessions cheap on large sessions.
+	// bodies, which keeps ListSessions cheap on large sessions. Usage is a
+	// small flat sub-object (sibling to the message body, never nested
+	// inside it — see record.Usage), so decoding it here costs nothing
+	// like a full message.Message unmarshal would.
 	type headRecord struct {
-		Type      string    `json:"type"`
-		ID        string    `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
+		Type      string          `json:"type"`
+		ID        string          `json:"id"`
+		CreatedAt time.Time       `json:"created_at"`
+		Usage     *provider.Usage `json:"usage,omitempty"`
 	}
 
 	var info SessionInfo
@@ -462,6 +499,13 @@ func readSessionInfo(path string) (SessionInfo, error) {
 			first = false
 		} else if rec.Type == recMessage {
 			info.Messages++
+			if rec.Usage != nil {
+				info.Usage.InputTokens += rec.Usage.InputTokens
+				info.Usage.OutputTokens += rec.Usage.OutputTokens
+				info.Usage.CacheReadTokens += rec.Usage.CacheReadTokens
+				info.Usage.CacheWriteTokens += rec.Usage.CacheWriteTokens
+				info.LastInputTokens = rec.Usage.InputTokens
+			}
 		}
 		return nil
 	})
