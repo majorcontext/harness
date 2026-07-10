@@ -402,6 +402,14 @@ func (s *Session) appendWithUsage(m message.Message, usage *provider.Usage) {
 	// present-but-zero-length Reasoning.ProviderData entry before it can
 	// diverge an in-memory history from what LoadSession would reload.
 	m.Normalize()
+	if m.CreatedAt.IsZero() {
+		// Every production provider adapter (anthropic, openaicompat, ...)
+		// already stamps CreatedAt on the assistant message it assembles;
+		// this is a backstop for any caller (a bare Tool, a test fixture, a
+		// future adapter) that doesn't, so LastActivityAt (see engine.go)
+		// never silently reports zero for an otherwise-ordinary message.
+		m.CreatedAt = time.Now().UTC()
+	}
 	s.mu.Lock()
 	s.history = append(s.history, m)
 	if usage != nil {

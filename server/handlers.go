@@ -53,6 +53,73 @@ type sessionJSON struct {
 	// shapes. Present only once a turn has finished in this process (like
 	// Goal, absent on a freshly reloaded, never-prompted-here session).
 	LastTurn *lastTurnJSON `json:"last_turn,omitempty"`
+	// Usage is cumulative token usage plus message count and (when
+	// available) the most recent turn's input tokens (issue #62 layer 2) —
+	// so an orchestrator can rotate a session BEFORE it hits the provider's
+	// context-window cliff (see LastTurn.outcome "context_exhausted" for
+	// the case where it didn't rotate in time). Always present, since the
+	// engine tracks usage for every session, resident or reloaded from its
+	// log — a fresh, never-prompted session simply reports all zeros.
+	Usage usageJSON `json:"usage"`
+	// LastActivityAt is the timestamp of the most recent message appended
+	// to the session (user, assistant, or tool) — or CreatedAt if none has
+	// been appended yet. See engine.Session.LastActivityAt's doc comment
+	// for why this exists: operators previously had to double-sample Seq to
+	// distinguish a session quietly working from one wedged mid-turn; this
+	// answers that directly, as a single absolute timestamp, resident or
+	// not (a non-resident session gets it from LoadSession replay, same as
+	// a resident one gets it from memory — no separate reconcile step
+	// needed, unlike Goal/LastTurn above, which really are process-local).
+	LastActivityAt time.Time `json:"last_activity_at"`
+}
+
+// usageJSON is the Session/StatusEntry usage sub-object (issue #62 layer 2):
+// cumulative token usage the engine already tracks (engine.Session.Usage),
+// plus message count and, when the engine can derive it cheaply, the most
+// recent turn's input tokens (engine.Session.LastUsage /
+// engine.SessionInfo.LastInputTokens).
+type usageJSON struct {
+	InputTokens      int `json:"input_tokens"`
+	OutputTokens     int `json:"output_tokens"`
+	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+	Messages         int `json:"messages"`
+	// LastInputTokens is the input-token count of the most recent completed
+	// turn, omitted (zero) until at least one turn has completed.
+	LastInputTokens int `json:"last_input_tokens,omitempty"`
+}
+
+// usageJSONForSession builds usageJSON from a fully loaded/resident
+// engine.Session — used by buildSession (GET /session/{id}, GET /session)
+// and by handleStatus's resident branch.
+func usageJSONForSession(sess *engine.Session) usageJSON {
+	u := sess.Usage()
+	out := usageJSON{
+		InputTokens:      u.InputTokens,
+		OutputTokens:     u.OutputTokens,
+		CacheReadTokens:  u.CacheReadTokens,
+		CacheWriteTokens: u.CacheWriteTokens,
+		Messages:         len(sess.History()),
+	}
+	if last, ok := sess.LastUsage(); ok {
+		out.LastInputTokens = last.InputTokens
+	}
+	return out
+}
+
+// usageJSONForInfo builds usageJSON from a cheap engine.SessionInfo (no full
+// session load) — used by handleStatus's non-resident branch, where paying
+// for a full LoadSession per listed session would defeat the point of a
+// lightweight status endpoint.
+func usageJSONForInfo(info engine.SessionInfo) usageJSON {
+	return usageJSON{
+		InputTokens:      info.Usage.InputTokens,
+		OutputTokens:     info.Usage.OutputTokens,
+		CacheReadTokens:  info.Usage.CacheReadTokens,
+		CacheWriteTokens: info.Usage.CacheWriteTokens,
+		Messages:         info.Messages,
+		LastInputTokens:  info.LastInputTokens,
+	}
 }
 
 // questionJSON is the Session.question sub-object: the pending ask_user
@@ -476,21 +543,28 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		Type     string        `json:"type"`
 		State    string        `json:"state"`
 		LastTurn *lastTurnJSON `json:"last_turn,omitempty"`
+		Usage    usageJSON     `json:"usage"`
 	}
 	result := map[string]entry{}
 
 	type snap struct {
 		id      string
 		running bool
+		sess    *engine.Session
 	}
 	s.mu.Lock()
 	mem := make([]snap, 0, len(s.sessions))
 	for id, st := range s.sessions {
-		mem = append(mem, snap{id, st.running})
+		mem = append(mem, snap{id, st.running, st.sess})
 	}
 	s.mu.Unlock()
 	for _, m := range mem {
-		result[m.id] = entry{Type: statusStr(m.running), State: s.compositeStateFor(m.id, m.running), LastTurn: s.lastTurnFor(m.id)}
+		result[m.id] = entry{
+			Type:     statusStr(m.running),
+			State:    s.compositeStateFor(m.id, m.running),
+			LastTurn: s.lastTurnFor(m.id),
+			Usage:    usageJSONForSession(m.sess),
+		}
 	}
 	infos, err := engine.ListSessions(s.opts.SessionDir)
 	if err != nil {
@@ -499,7 +573,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	}
 	for _, info := range infos {
 		if _, ok := result[info.ID]; !ok {
-			result[info.ID] = entry{Type: "idle", State: s.compositeStateFor(info.ID, false), LastTurn: s.lastTurnFor(info.ID)}
+			result[info.ID] = entry{
+				Type:     "idle",
+				State:    s.compositeStateFor(info.ID, false),
+				LastTurn: s.lastTurnFor(info.ID),
+				Usage:    usageJSONForInfo(info),
+			}
 		}
 	}
 	writeJSON(w, http.StatusOK, result)
@@ -1352,17 +1431,19 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 	lastTurn := s.lastTurnJSONLocked(id)
 	s.mu.Unlock()
 	return sessionJSON{
-		ID:        id,
-		CreatedAt: sess.CreatedAt(),
-		Model:     sess.Model(),
-		Status:    status,
-		State:     compositeState(status == "busy", goal != nil && goal.Active, question != nil),
-		Messages:  len(sess.History()),
-		Seq:       seq,
-		Goal:      goal,
-		WorkDir:   sess.WorkDir(),
-		Question:  question,
-		LastTurn:  lastTurn,
+		ID:             id,
+		CreatedAt:      sess.CreatedAt(),
+		Model:          sess.Model(),
+		Status:         status,
+		State:          compositeState(status == "busy", goal != nil && goal.Active, question != nil),
+		Messages:       len(sess.History()),
+		Seq:            seq,
+		Goal:           goal,
+		WorkDir:        sess.WorkDir(),
+		Question:       question,
+		LastTurn:       lastTurn,
+		Usage:          usageJSONForSession(sess),
+		LastActivityAt: sess.LastActivityAt(),
 	}
 }
 
