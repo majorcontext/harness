@@ -206,6 +206,14 @@ type Session struct {
 	goalActive    bool
 	goalCondition string
 
+	// Question state (see ask_user.go and docs/design/question-tool.md).
+	// awaitingQuestion is set the instant an ask_user call runs and cleared
+	// the instant a new prompt arrives (whether a bare prompt_async or one
+	// routed through POST /session/{id}/answer); questionCallID names the
+	// pending call. Guarded by mu.
+	awaitingQuestion bool
+	questionCallID   string
+
 	// toolExecCount counts tool-call executions across the session's
 	// lifetime: incremented once per call to runToolCall that actually
 	// invokes a tool (i.e. not one blocked by a tool.execute.before deny),
@@ -241,7 +249,7 @@ func newSession(cfg Config) *Session {
 		tools:     make(map[string]Tool),
 		createdAt: time.Now().UTC(),
 	}
-	for _, t := range []Tool{bashTool(cfg.BashTimeout, cfg.BashOutputCap), readFileTool(), writeFileTool(), editFileTool(), sessionInfoTool()} {
+	for _, t := range []Tool{bashTool(cfg.BashTimeout, cfg.BashOutputCap), readFileTool(), writeFileTool(), editFileTool(), sessionInfoTool(), askUserTool()} {
 		s.tools[t.Def.Name] = t
 	}
 	for _, t := range cfg.Tools {
@@ -484,7 +492,27 @@ func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, er
 			Parts:     results,
 			CreatedAt: time.Now().UTC(),
 		})
+		if askUserExecuted(asst) {
+			// docs/design/question-tool.md §2: "if any tool call executed
+			// this round was ask_user, the turn ends here regardless of
+			// stop." Other tool calls batched into the same assistant
+			// message already ran and got real results above; only the
+			// loop-continuation is skipped. This is an ordinary end of
+			// turn, not an error — no session.error, no special stop
+			// reason.
+			return asst, nil
+		}
 	}
+}
+
+// askUserExecuted reports whether asst's tool calls include ask_user.
+func askUserExecuted(asst *message.Message) bool {
+	for _, p := range asst.Parts {
+		if tc, ok := p.(*message.ToolCall); ok && tc.Name == askUserToolName {
+			return true
+		}
+	}
+	return false
 }
 
 // streamTurn makes one model call and returns the assembled assistant
@@ -789,6 +817,12 @@ func (s *Session) runToolCall(ctx context.Context, tc *message.ToolCall) (messag
 }
 
 func (s *Session) executeTool(ctx context.Context, tc *message.ToolCall, args json.RawMessage) (message.Parts, bool) {
+	if tc.Name == askUserToolName {
+		// Special-cased ahead of the generic tools map: ask_user needs the
+		// call's own CallID (see runAskUser and docs/design/question-tool.md
+		// §2), which the generic Tool.Run signature does not carry.
+		return s.runAskUser(tc.CallID, args), false
+	}
 	if t, ok := s.tools[tc.Name]; ok {
 		out, err := t.Run(ctx, s, args)
 		if err != nil {
