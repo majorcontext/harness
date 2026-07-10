@@ -34,9 +34,12 @@ type goalProv struct {
 	// engine/goal.go's goalProvider, same idea) deterministically.
 	workerErrN   int
 	workerErrHit int
-	// workerErr, when set, is returned instead of the default fake
-	// transient error — used to exercise a provider.RetryableError-marked
-	// failure (see TestGoalStalledRetryableFieldsSurfaced).
+	// workerErr, when set, is the error returned by every gated worker
+	// failure instead of the default fake transient error — lets a test
+	// inject a specific classified error (a provider.RetryableError-marked
+	// failure, a context-overflow *provider.Error) rather than an opaque
+	// one. See TestGoalStalledRetryableFieldsSurfaced and the overflow
+	// outcome tests.
 	workerErr error
 }
 

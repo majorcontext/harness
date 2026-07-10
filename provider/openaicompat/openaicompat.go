@@ -13,9 +13,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/majorcontext/harness/message"
@@ -103,7 +106,19 @@ func apiError(family string, resp *http.Response) error {
 	}
 	var err error
 	if json.Unmarshal(raw, &body) == nil && body.Error.Message != "" {
-		err = fmt.Errorf("openaicompat(%s): %s (%s, HTTP %d)", family, body.Error.Message, body.Error.Type, resp.StatusCode)
+		msg := fmt.Sprintf("openaicompat(%s): %s (%s, HTTP %d)", family, body.Error.Message, body.Error.Type, resp.StatusCode)
+		// Context overflow is deterministic and disjoint from the retryable
+		// statuses below — classify it first so it never reaches the
+		// retryable mark.
+		if promptTokens, limit, ok := parseContextOverflow(resp.StatusCode, body.Error.Code, body.Error.Message); ok {
+			return &provider.Error{
+				Kind:         provider.ErrKindContextOverflow,
+				Raw:          msg,
+				PromptTokens: promptTokens,
+				TokenLimit:   limit,
+			}
+		}
+		err = errors.New(msg)
 	} else {
 		err = fmt.Errorf("openaicompat(%s): HTTP %d", family, resp.StatusCode)
 	}
@@ -161,6 +176,47 @@ func classifyWireCode(raw json.RawMessage) (provider.RetryableClass, bool) {
 		}
 	}
 	return "", false
+}
+
+// contextLimitPattern and contextResultPattern extract the model's input
+// limit and the request's actual size from OpenAI's context-overflow
+// message text, e.g. "This model's maximum context length is 8192 tokens.
+// However, your messages resulted in 10191 tokens." Used both to enrich the
+// structural (code-based) classification below with token counts, and as
+// the sole classifier for compat deployments (self-hosted vLLM/Ollama/etc.)
+// that emit this same wording but omit the "code" field OpenAI itself sets
+// — the message-matching fallback the adapter (never the engine) tolerates.
+var (
+	contextLimitPattern  = regexp.MustCompile(`maximum context length is (\d+) tokens`)
+	contextResultPattern = regexp.MustCompile(`resulted in (\d+) tokens`)
+)
+
+// parseContextOverflow classifies an OpenAI-compatible error as a context/
+// prompt overflow. It prefers the structural signal the OpenAI API
+// contract guarantees — code == "context_length_exceeded" on a 400 — over
+// any message inspection; when that structural signal is present but the
+// token counts can't be parsed from the message (a wording OpenAI hasn't
+// used yet), it still classifies, just without PromptTokens/TokenLimit
+// detail. Only when the structural signal is ABSENT does it fall back to
+// message-matching the same wording other compat deployments echo,
+// tolerated here inside the adapter per provider.Error's doc comment.
+func parseContextOverflow(status int, code, message string) (promptTokens, limit int, ok bool) {
+	if status != http.StatusBadRequest {
+		return 0, 0, false
+	}
+	structural := code == "context_length_exceeded"
+	limitMatch := contextLimitPattern.FindStringSubmatch(message)
+	resultMatch := contextResultPattern.FindStringSubmatch(message)
+	if !structural && (limitMatch == nil || resultMatch == nil) {
+		return 0, 0, false
+	}
+	if limitMatch != nil {
+		limit, _ = strconv.Atoi(limitMatch[1])
+	}
+	if resultMatch != nil {
+		promptTokens, _ = strconv.Atoi(resultMatch[1])
+	}
+	return promptTokens, limit, true
 }
 
 // assembledToolCall accumulates one tool_calls fragment stream, keyed by its
