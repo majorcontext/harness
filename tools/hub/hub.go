@@ -110,7 +110,7 @@ func resolveAddr(addr string) string {
 // spawnCommandFromEnv resolves -spawn-command's fallback: the
 // HARNESS_HUB_SPAWN environment variable, consulted only when the flag was
 // not passed at all (flagSet, not merely flagValue == "", so an explicit
-// -spawn-command '' can still disable spawning without env clobbering it).
+// -spawn-command ” can still disable spawning without env clobbering it).
 func spawnCommandFromEnv(flagValue string, flagSet bool, getenv func(string) string) string {
 	if flagSet {
 		return flagValue

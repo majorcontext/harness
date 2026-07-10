@@ -168,6 +168,39 @@ representation.
 - **A2A** — deliberately not implemented. Cross-org agent meshes are a
   different layer; revisit only if a concrete need appears.
 
+## Development hub
+
+`harness hub` is a local, single-operator control surface over a FLEET of
+`harness serve` boxes — a meeseeks-like dashboard for "what are my agents
+doing right now" and for dispatching new goal-supervised sessions, not a
+deployed product. It serves one embedded, single-file page
+(`tools/hub/index.html`, `go:embed`, styled to match `tools/inspector/`) on
+`localhost:7777` by default (`-addr` to change it).
+
+- **No server-side state.** The hub keeps no registry and reads no config
+  file: every box (name, base URL, run token) and the current selection
+  live only in that browser tab's URL fragment, base64-encoded JSON
+  (`#s=...`), kept in sync via `history.replaceState`. That makes a hub URL
+  bookmarkable and shareable between local tabs with zero persistence code
+  — and means **run tokens ride the URL by design**; treat a hub link like
+  a secret.
+- **The page talks to boxes directly** from the browser, over each box's
+  normal HTTP+SSE API (`server/openapi.yaml`) — never proxied through the
+  hub's own server. Every box must therefore be started with `-cors-origin`
+  set to the hub's origin (or `*` for local hacking), e.g. `harness serve
+  -cors-origin http://localhost:7777`; a box without it will look
+  permanently unreachable from the hub.
+- **The Go side is minimal on purpose**, exactly one API: `POST /spawn`.
+  It execs the command given by `-spawn-command` (or `$HARNESS_HUB_SPAWN`)
+  via `sh -c` and streams its combined stdout+stderr live to the page over
+  SSE. The **spawn-command contract** — the only coupling between this repo
+  and any deployment-specific provisioning tool — is two plain lines
+  anywhere in that output: `TUNNEL_URL=<url>` and `RUN_TOKEN=<token>`. Once
+  the command exits, the stream ends with a summary carrying those two
+  values (if found) and the exit code; the page adds the new box to its own
+  URL state itself. Nothing box-provisioning-specific lives in this repo.
+- The hub binds loopback-only by default (`resolveAddr` in `tools/hub/hub.go`).
+
 ## Startup Speed Rules
 
 - Nothing touches network, subprocesses, or disk beyond one config file before first paint. Provider auth validates on first message send, not at boot.
