@@ -1,3 +1,650 @@
 <!doctype html>
-<html><head><title>harness hub (placeholder)</title></head>
-<body>placeholder — replaced before this branch is done</body></html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>harness hub</title>
+<!--
+  harness hub — a single self-contained page giving one operator a
+  meeseeks-like control surface over a FLEET of headless harness boxes
+  (`harness serve` instances). No build step, no external resources: open it
+  straight from file:// or serve it with `harness hub` (which just embeds
+  this exact file and adds one API, POST /spawn — see below).
+
+  STATE MODEL — read this before poking at the code. There is no server-side
+  registry and no config file. Every box you add (name, base URL, run token)
+  and your current selection live ONLY in this tab's URL fragment, as
+  base64-encoded JSON: `#s=<base64>`, kept in sync via history.replaceState
+  (never pushState — back/forward doesn't spelunk through selection
+  history). That makes a hub URL bookmarkable, reload-safe, and shareable
+  between local tabs with zero server involvement; "Copy hub link" in the
+  header is the entire persistence story. THIS MEANS RUN TOKENS RIDE THE URL
+  BY DESIGN. That is an accepted tradeoff for a local, single-operator dev
+  tool — do not paste a hub link into a shared channel, do not point this at
+  anything you wouldn't put in shell history.
+
+  Each box is a `harness serve` instance; the page talks to boxes DIRECTLY
+  from your browser (never through this page's own server) using its
+  HTTP+SSE API (see server/openapi.yaml). That means every box must be
+  started with -cors-origin set to this hub's origin (or "*" for local
+  hacking), e.g.:
+      HARNESS_RUN_TOKEN=t harness serve -cors-origin http://localhost:7777
+  A box with no -cors-origin set will look permanently unreachable here —
+  check that first.
+
+  SPAWN CONTRACT — the one thing the Go side does. POST /spawn execs the
+  command given by `harness hub`'s -spawn-command flag (or
+  $HARNESS_HUB_SPAWN) via `sh -c`, and streams its combined stdout+stderr
+  live to this page as it runs (SSE, one "stdout" event per line). Once the
+  command exits, the stream ends with one "done" event carrying the exit
+  code and, if present anywhere in the output, the value of any lines
+  exactly matching `TUNNEL_URL=<url>` and `RUN_TOKEN=<token>` (surrounding
+  whitespace trimmed). That's the entire coupling — this repo carries zero
+  deployment-specific spawn logic. This page reads only `tunnel_url` and
+  `run_token` off the done event; it adds the box to its own URL state
+  itself (see spawnBox() below). Any spawn command that prints those two
+  lines works, whether it's a one-liner or a wrapper around a fleet
+  provisioning tool.
+
+  The pure helpers below (SSE parser, hub-state codec, formatters) are
+  unit-tested by hub_test.mjs (run: node --test tools/hub/*_test.mjs). The
+  steps here cover the DOM/network behavior that can only be checked by
+  hand:
+    1. Start a box:  HARNESS_RUN_TOKEN=t harness serve -cors-origin http://localhost:7777
+       Start the hub: harness hub
+    2. Open http://localhost:7777. Click "+ Add box", paste the base URL
+       (http://localhost:4096) + token + a name, Save.
+       -> a box card appears; its health dot turns green within a few
+          seconds, showing vcs_revision.
+    3. Click "+ Dispatch" on the box -> paste a multi-paragraph condition
+       (try >2000 characters), set max_turns, Dispatch.
+       -> a new session card appears in goal-running state; selecting it
+          opens the timeline showing a goal.set narrative entry with the
+          full condition.
+    4. Watch the goal run unattended: goal.eval verdicts, and — if you
+       force a provider error — a goal.stalled entry rendered as "waiting
+          out provider weather" while goal_waiting is true, distinct from a
+          plain stall once it flips false.
+    5. When it finishes, goal.achieved (or an error last_turn) appears; a
+       "Re-arm" button appears on the session card, pre-filling the
+       condition box for editing.
+    6. Toggle "🔔 Notify" on (grants OS notification permission on first
+       click); trigger a goal.achieved or a turn.end error on any box ->
+       an OS notification fires without this tab being focused.
+    7. Click a running session's card -> composer lets you send a prompt,
+       set/clear a goal, and abort; streaming deltas render live, tool_call/
+       reasoning blocks render collapsed, a tool_result with is_error is
+       red-tinted, and session.error/session.aborted show as banners.
+    8. Kill a box's `harness serve` -> its health dot goes red and its
+       sessions freeze; restart it -> the dot goes green and its SSE stream
+       resyncs with backoff, same as the inspector.
+    9. Click "🔗 Copy link", reload the page from that pasted URL in a new
+       tab -> every box and the current selection come back exactly.
+   10. Remove a box -> its card and connections disappear; garbage in the
+       URL fragment (hand-edit `#s=` to nonsense) loads as an empty,
+       unbroken hub rather than a blank page or a JS error.
+   11. Toggle OS light/dark theme -> both variants are legible.
+-->
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #16181d; --panel: #1e2128; --panel-2: #24272f; --border: #333743;
+    --fg: #e6e8ec; --dim: #9aa0ac; --accent: #6ea8fe; --accent-fg: #0a0d12;
+    --user: #223047; --asst: #23262e; --tool: #2a2d36; --reason: #202329;
+    --err-bg: #3a1f22; --err-border: #7a3b40; --ok: #4ec97b; --warn: #e0b64a;
+    --off: #6b7280;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      color-scheme: light;
+      --bg: #f4f5f7; --panel: #ffffff; --panel-2: #f0f1f4; --border: #d9dce2;
+      --fg: #1a1d23; --dim: #616875; --accent: #2563eb; --accent-fg: #ffffff;
+      --user: #dceafe; --asst: #ffffff; --tool: #eef0f4; --reason: #f0f1f4;
+      --err-bg: #fdecec; --err-border: #f0b4b4; --ok: #178a4c; --warn: #a9791a;
+      --off: #9aa0ac;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--fg);
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+  }
+  header {
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 15px; margin: 0 8px 0 0; white-space: nowrap; }
+  button {
+    background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  button.danger { border-color: var(--err-border); color: var(--warn); }
+  button.small { padding: 3px 7px; font-size: 12px; border-radius: 5px; }
+  input, textarea, select {
+    background: var(--panel-2); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 8px; font: inherit;
+  }
+  .spacer { flex: 1; }
+  .toggle.on { border-color: var(--ok); color: var(--ok); }
+  main { display: flex; flex: 1; min-height: 0; }
+  #fleet {
+    width: 380px; border-right: 1px solid var(--border); overflow-y: auto;
+    background: var(--panel); flex-shrink: 0; padding: 8px;
+  }
+  #drill { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  .empty { color: var(--dim); text-align: center; margin-top: 40px; padding: 0 20px; }
+  .box-card {
+    border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px;
+    background: var(--panel-2); overflow: hidden;
+  }
+  .box-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer; }
+  .box-head:hover { background: var(--tool); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--off); flex-shrink: 0; }
+  .dot.on { background: var(--ok); } .dot.re { background: var(--warn); } .dot.off { background: var(--off); }
+  .box-name { font-weight: 600; }
+  .box-base { color: var(--dim); font-size: 12px; font-family: ui-monospace, monospace; }
+  .box-meta { color: var(--dim); font-size: 11px; margin-left: auto; text-align: right; }
+  .box-counts { display: flex; gap: 6px; padding: 0 10px 8px; flex-wrap: wrap; }
+  .count-chip { border-radius: 10px; padding: 1px 8px; font-size: 11px; border: 1px solid var(--border); }
+  .count-chip.busy { border-color: var(--warn); color: var(--warn); }
+  .count-chip.goal-running { border-color: var(--accent); color: var(--accent); }
+  .box-actions { display: flex; gap: 6px; padding: 0 10px 8px; }
+  .sess-list { border-top: 1px solid var(--border); }
+  .sess {
+    padding: 8px 10px; border-bottom: 1px solid var(--border); cursor: pointer;
+  }
+  .sess:last-child { border-bottom: none; }
+  .sess:hover { background: var(--tool); }
+  .sess.sel { background: var(--tool); border-left: 3px solid var(--accent); padding-left: 7px; }
+  .sess .id { font-weight: 600; font-family: ui-monospace, monospace; font-size: 12px; }
+  .sess .meta { color: var(--dim); font-size: 11px; margin-top: 3px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .badge { border-radius: 10px; padding: 0 7px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+  .badge.busy { background: var(--warn); color: #000; }
+  .badge.goal-running { background: var(--accent); color: var(--accent-fg); }
+  .badge.idle { background: var(--panel); color: var(--dim); border: 1px solid var(--border); }
+  .goal-snippet { color: var(--dim); font-size: 11px; margin-top: 2px; font-style: italic; }
+  .last-turn { font-size: 11px; margin-top: 2px; }
+  .last-turn.error { color: var(--warn); }
+  .rearm { margin-top: 4px; }
+  #timeline { flex: 1; overflow-y: auto; padding: 16px; }
+  #goalpanel { flex-shrink: 0; border-top: 1px solid var(--border); background: var(--panel); padding: 10px 16px; }
+  #goalpanel:empty { display: none; }
+  .msg { margin: 0 0 12px; max-width: 860px; }
+  .role { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); margin-bottom: 4px; }
+  .bubble { border-radius: 10px; padding: 10px 12px; border: 1px solid var(--border); }
+  .bubble.user { background: var(--user); }
+  .bubble.assistant { background: var(--asst); }
+  .text { white-space: pre-wrap; word-break: break-word; }
+  details.tool, details.reason { border: 1px solid var(--border); border-radius: 8px; margin: 6px 0; background: var(--tool); }
+  details.reason { background: var(--reason); color: var(--dim); }
+  summary { cursor: pointer; padding: 8px 10px; font-family: ui-monospace, monospace; font-size: 13px; }
+  details .body { padding: 0 10px 10px; }
+  pre.code {
+    margin: 0; white-space: pre-wrap; word-break: break-word;
+    font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px;
+    overflow-x: auto;
+  }
+  .toolres { border-radius: 8px; padding: 8px 10px; background: var(--tool); border: 1px solid var(--border); }
+  .toolres.err { background: var(--err-bg); border-color: var(--err-border); }
+  .banner {
+    border-radius: 8px; padding: 8px 12px; margin: 6px 0; max-width: 860px;
+    background: var(--err-bg); border: 1px solid var(--err-border);
+  }
+  .banner.abort { background: var(--reason); border-color: var(--border); color: var(--dim); }
+  .goalnarr {
+    border-radius: 8px; padding: 8px 12px; margin: 6px 0; max-width: 860px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 4px; font-size: 13px;
+  }
+  .goalnarr.set { border-left: 3px solid var(--accent); }
+  .goalnarr.eval-met { border-left: 3px solid var(--ok); }
+  .goalnarr.eval-notmet { border-left: 3px solid var(--warn); }
+  .goalnarr.stalled { border-left: 3px solid var(--warn); }
+  .goalnarr.stalled.waiting { border-left: 3px solid var(--dim); }
+  .goalnarr.achieved { border-left: 3px solid var(--ok); }
+  .goalnarr.cleared { border-left: 3px solid var(--off); color: var(--dim); }
+  .goaltag { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); }
+  .goalcond { font-weight: 600; white-space: pre-wrap; word-break: break-word; }
+  .goalreason { color: var(--dim); }
+  .streaming { opacity: .85; }
+  .streaming .role::after { content: " · streaming…"; color: var(--accent); }
+  #composer { border-top: 1px solid var(--border); padding: 10px 16px; background: var(--panel); }
+  #composer textarea, #goalpanel textarea {
+    width: 100%; resize: vertical; min-height: 60px; font: inherit;
+  }
+  #composer textarea:disabled { opacity: .5; }
+  .row { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
+  .notice { color: var(--warn); font-size: 13px; min-height: 18px; }
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,.5);
+    display: flex; align-items: flex-start; justify-content: center; padding-top: 60px;
+    z-index: 10;
+  }
+  .modal {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; width: 560px; max-width: calc(100vw - 40px); max-height: 80vh; overflow-y: auto;
+  }
+  .modal h2 { margin: 0 0 12px; font-size: 15px; }
+  .field { margin-bottom: 10px; display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 12px; color: var(--dim); }
+  .field input, .field textarea, .field select { width: 100%; }
+  .field textarea.big { min-height: 220px; font-family: ui-monospace, monospace; font-size: 12px; }
+  .spawnlog {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px;
+    font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; word-break: break-word;
+    max-height: 240px; overflow-y: auto; margin-top: 8px;
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>🛰️ harness hub</h1>
+    <button id="addBoxBtn">+ Add box</button>
+    <button id="spawnBtn">⚡ Spawn box</button>
+    <button id="notifyBtn" class="toggle" title="OS notifications when a watched goal achieves or a turn errors">🔔 Notify</button>
+    <button id="copyLinkBtn">🔗 Copy hub link</button>
+    <span class="spacer"></span>
+    <span class="notice" id="headerNotice"></span>
+  </header>
+  <main>
+    <div id="fleet"></div>
+    <div id="drill">
+      <div id="timeline"><div class="empty">select a session from the fleet on the left</div></div>
+      <div id="goalpanel"></div>
+      <div id="composer" style="display:none">
+        <div class="notice" id="composerNotice"></div>
+        <textarea id="promptBox" placeholder="Message… (Enter to send, Shift+Enter for newline)"></textarea>
+        <div class="row">
+          <button id="sendBtn" class="primary">Send</button>
+          <button id="abortBtn" class="danger">Abort</button>
+          <span class="spacer"></span>
+          <button id="setGoalToggleBtn">🎯 Set goal</button>
+          <button id="clearGoalBtn">Clear goal</button>
+        </div>
+        <div id="goalForm" style="display:none">
+          <div class="field">
+            <label>Completion condition</label>
+            <textarea id="goalCondition" class="big" placeholder="Describe, in as much detail as needed, what MET looks like…"></textarea>
+          </div>
+          <div class="row">
+            <div class="field" style="flex:0 0 140px">
+              <label>Max turns (0 = unlimited)</label>
+              <input id="goalMaxTurns" type="number" min="0" value="0">
+            </div>
+            <button id="goalSubmitBtn" class="primary">Start goal</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div id="modalHost"></div>
+
+<script>
+"use strict";
+
+/* ---------- pure helpers (kept small and side-effect free) ---------- */
+/* TESTABLE-BEGIN — the region below is extracted verbatim by hub_test.mjs
+   and evaluated in a node:vm sandbox. Keep it pure (no DOM, no globals
+   beyond Date/JSON) so the single-file page stays build-free while its
+   logic is still unit-tested. */
+
+// shortId trims a "prefix_hexhex…" id to its prefix plus a few hex chars.
+function shortId(id) {
+  if (!id) return "";
+  const u = id.indexOf("_");
+  return u >= 0 ? id.slice(0, u + 7) : id.slice(0, 8);
+}
+
+// prettyJSON pretty-prints a value that may be a JSON string, an object, or
+// something unparseable (returned verbatim).
+function prettyJSON(v) {
+  if (v == null) return "";
+  let obj = v;
+  if (typeof v === "string") {
+    try { obj = JSON.parse(v); } catch { return v; }
+  }
+  try { return JSON.stringify(obj, null, 2); } catch { return String(v); }
+}
+
+// partsText concatenates the text of Text parts (used for tool_result content).
+function partsText(parts) {
+  if (!Array.isArray(parts)) return "";
+  return parts.filter(p => p && p.type === "text").map(p => p.text || "").join("\n");
+}
+
+// maxSeq returns the largest `seq` across a list of events/sessions (0 if none).
+function maxSeq(list) {
+  let m = 0;
+  for (const s of list) if (typeof s.seq === "number" && s.seq > m) m = s.seq;
+  return m;
+}
+
+// sortByLastActivity orders sessions newest-active first, without mutating
+// the input — the fleet view's "what's happening now" ordering.
+function sortByLastActivity(list) {
+  return list.slice().sort((a, b) => new Date(b.last_activity_at) - new Date(a.last_activity_at));
+}
+
+// fmtRelative renders an ISO timestamp relative to `nowMs` (defaults to
+// Date.now(), overridable for deterministic tests): "just now" under 10s,
+// then Ns/Nm/Nh/Nd ago, falling back to a locale date past a week. Future
+// timestamps (clock skew) clamp to "just now" rather than going negative.
+function fmtRelative(iso, nowMs) {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return "";
+  const now = typeof nowMs === "number" ? nowMs : Date.now();
+  let diff = Math.round((now - t) / 1000);
+  if (diff < 0) diff = 0;
+  if (diff < 10) return "just now";
+  if (diff < 60) return diff + "s ago";
+  const m = Math.floor(diff / 60);
+  if (m < 60) return m + "m ago";
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + "h ago";
+  const d = Math.floor(h / 24);
+  if (d < 7) return d + "d ago";
+  return new Date(iso).toLocaleDateString();
+}
+
+// sessionBadge derives the composite state badge from a raw session JSON,
+// mirroring the server's SessionState precedence (server/openapi.yaml):
+// an active goal always wins, regardless of the momentary busy/idle status.
+function sessionBadge(session) {
+  const goalActive = !!(session && session.goal && session.goal.active);
+  if (goalActive) return "goal-running";
+  const status = session && session.status;
+  return status === "busy" ? "busy" : "idle";
+}
+
+// countByState tallies a box's sessions by sessionBadge, for the fleet
+// card's at-a-glance counts. Always returns all three keys.
+function countByState(sessions) {
+  const counts = { idle: 0, busy: 0, "goal-running": 0 };
+  for (const s of (sessions || [])) {
+    const b = sessionBadge(s);
+    counts[b] = (counts[b] || 0) + 1;
+  }
+  return counts;
+}
+
+// goalSnippet truncates a goal condition to `max` characters (default 80)
+// for the compact session-card view; the full text still renders in the
+// timeline/goal panel.
+function goalSnippet(condition, max) {
+  max = max || 80;
+  if (!condition) return "";
+  const c = String(condition).trim();
+  if (c.length <= max) return c;
+  return c.slice(0, max - 1).trimEnd() + "\u2026";
+}
+
+// lastTurnSummary renders a Session.last_turn (or StatusEntry.last_turn)
+// as one line: "completed", "error: <text>", or the bare outcome name for
+// outcomes that carry no error text (context_exhausted, max_turns_exceeded).
+function lastTurnSummary(lastTurn) {
+  if (!lastTurn || !lastTurn.outcome) return "";
+  if (lastTurn.outcome === "completed") return "completed";
+  if (lastTurn.error) return lastTurn.outcome + ": " + lastTurn.error;
+  return lastTurn.outcome;
+}
+
+// fmtTokens compacts a token count: 999 -> "999", 1234 -> "1.2k",
+// 1500000 -> "1.5M". Trims a trailing ".0" so round numbers read cleanly.
+function fmtTokens(n) {
+  if (typeof n !== "number" || isNaN(n)) return "0";
+  const abs = Math.abs(n);
+  if (abs < 1000) return String(n);
+  if (abs < 1e6) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+  return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
+}
+
+// usageSummary renders a Usage object's cumulative input/output tokens.
+function usageSummary(usage) {
+  if (!usage) return "";
+  return fmtTokens(usage.input_tokens || 0) + " in / " + fmtTokens(usage.output_tokens || 0) + " out";
+}
+
+// reduceGoal folds one goal.* journal event into a goal-summary object,
+// extending the inspector's version with goal.stalled (retryable-weather
+// backoff vs. a real, budget-exhausting stall — see GoalSummary in
+// server/openapi.yaml). Non-goal events return prev unchanged (same
+// reference); goal events return a fresh object so the input is never
+// mutated.
+function reduceGoal(prev, ev) {
+  const isGoal = ev && typeof ev.type === "string" && ev.type.indexOf("goal.") === 0;
+  if (!isGoal) return prev;
+  const g = Object.assign({
+    condition: "", active: false, achieved: false, reason: "", turns: 0,
+    attempt: 0, retryable: false, retryableClass: "", waiting: false,
+  }, prev);
+  switch (ev.type) {
+    case "goal.set":
+      g.condition = ev.goal_condition || "";
+      g.active = true; g.achieved = false; g.reason = ""; g.turns = 0;
+      g.attempt = 0; g.retryable = false; g.retryableClass = ""; g.waiting = false;
+      break;
+    case "goal.eval":
+      if (ev.goal_reason) g.reason = ev.goal_reason;
+      if (typeof ev.goal_turn === "number") g.turns = ev.goal_turn;
+      g.attempt = 0; g.retryable = false; g.retryableClass = ""; g.waiting = false;
+      break;
+    case "goal.stalled":
+      if (ev.goal_reason) g.reason = ev.goal_reason;
+      g.attempt = ev.goal_attempt || 0;
+      g.retryable = !!ev.goal_retryable;
+      g.retryableClass = ev.goal_retryable_class || "";
+      g.waiting = !!ev.goal_waiting;
+      break;
+    case "goal.achieved":
+      g.active = false; g.achieved = true;
+      if (ev.goal_reason) g.reason = ev.goal_reason;
+      if (typeof ev.goal_turns === "number") g.turns = ev.goal_turns;
+      g.attempt = 0; g.retryable = false; g.retryableClass = ""; g.waiting = false;
+      break;
+    case "goal.cleared":
+      g.active = false;
+      g.attempt = 0; g.retryable = false; g.retryableClass = ""; g.waiting = false;
+      break;
+  }
+  return g;
+}
+
+// goalFromSession seeds a goal-summary object (same shape reduceGoal
+// produces) from a session JSON's `goal` field — closes the bootstrap gap
+// for a goal predating this tab's connection to the box.
+function goalFromSession(sess) {
+  const g = sess && sess.goal;
+  if (!g || !g.condition) return null;
+  return {
+    condition: g.condition,
+    active: !!g.active,
+    achieved: !g.active && !!g.achieved,
+    reason: g.last_reason || "",
+    turns: g.turns || 0,
+    attempt: g.attempt || 0,
+    retryable: !!g.retryable,
+    retryableClass: g.retryable_class || "",
+    waiting: !!g.waiting,
+  };
+}
+
+// notifyForEvent decides whether a durable event is notify-worthy under the
+// hub's "goal achieves or a turn errors" policy, returning {title, body} or
+// null. Pure — the caller (see notify() below) is what actually calls the
+// Notification API, gated on the opt-in toggle and OS permission.
+function notifyForEvent(ev) {
+  if (!ev || typeof ev.type !== "string") return null;
+  if (ev.type === "goal.achieved") {
+    return { title: "\ud83c\udfaf Goal achieved", body: ev.goal_reason || "" };
+  }
+  if (ev.type === "turn.end" && ev.outcome === "error") {
+    return { title: "\u26a0\ufe0f Turn failed", body: ev.error || "" };
+  }
+  return null;
+}
+
+/* ---------- hub state codec: URL-fragment persistence ----------
+   No server-side registry, no config file, no localStorage requirement —
+   see the header comment. The fragment carries `s=<base64 of UTF-8 JSON>`;
+   encode/decode use a hand-rolled base64 + UTF-8 codec (rather than
+   btoa/atob or Buffer) so this same source evaluates identically in a
+   browser and in the node:vm sandbox hub_test.mjs runs it in. */
+
+const B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+function utf8Encode(str) {
+  const bytes = [];
+  for (let i = 0; i < str.length; i++) {
+    let code = str.codePointAt(i);
+    if (code > 0xffff) i++; // consumed a surrogate pair
+    if (code < 0x80) {
+      bytes.push(code);
+    } else if (code < 0x800) {
+      bytes.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
+    } else if (code < 0x10000) {
+      bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+    } else {
+      bytes.push(
+        0xf0 | (code >> 18), 0x80 | ((code >> 12) & 0x3f),
+        0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f),
+      );
+    }
+  }
+  return bytes;
+}
+
+function utf8Decode(bytes) {
+  let str = "";
+  let i = 0;
+  while (i < bytes.length) {
+    const b0 = bytes[i];
+    if (b0 < 0x80) { str += String.fromCharCode(b0); i += 1; }
+    else if ((b0 & 0xe0) === 0xc0) { str += String.fromCharCode(((b0 & 0x1f) << 6) | (bytes[i + 1] & 0x3f)); i += 2; }
+    else if ((b0 & 0xf0) === 0xe0) { str += String.fromCharCode(((b0 & 0x0f) << 12) | ((bytes[i + 1] & 0x3f) << 6) | (bytes[i + 2] & 0x3f)); i += 3; }
+    else {
+      const cp = ((b0 & 0x07) << 18) | ((bytes[i + 1] & 0x3f) << 12) | ((bytes[i + 2] & 0x3f) << 6) | (bytes[i + 3] & 0x3f);
+      str += String.fromCodePoint(cp);
+      i += 4;
+    }
+  }
+  return str;
+}
+
+function b64Encode(bytes) {
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i], b1 = bytes[i + 1], b2 = bytes[i + 2];
+    const has1 = i + 1 < bytes.length, has2 = i + 2 < bytes.length;
+    out += B64_ALPHABET[b0 >> 2];
+    out += B64_ALPHABET[((b0 & 3) << 4) | (has1 ? (b1 >> 4) : 0)];
+    out += has1 ? B64_ALPHABET[((b1 & 15) << 2) | (has2 ? (b2 >> 6) : 0)] : "=";
+    out += has2 ? B64_ALPHABET[b2 & 63] : "=";
+  }
+  return out;
+}
+
+function b64Decode(str) {
+  const clean = String(str).replace(/[^A-Za-z0-9+/]/g, "");
+  const bytes = [];
+  for (let i = 0; i < clean.length; i += 4) {
+    const c0 = B64_ALPHABET.indexOf(clean[i]);
+    const c1 = clean[i + 1] !== undefined ? B64_ALPHABET.indexOf(clean[i + 1]) : -1;
+    const c2 = clean[i + 2] !== undefined ? B64_ALPHABET.indexOf(clean[i + 2]) : -1;
+    const c3 = clean[i + 3] !== undefined ? B64_ALPHABET.indexOf(clean[i + 3]) : -1;
+    if (c0 < 0 || c1 < 0) break;
+    bytes.push(((c0 << 2) | (c1 >> 4)) & 0xff);
+    if (c2 >= 0) bytes.push(((c1 << 4) | (c2 >> 2)) & 0xff);
+    if (c3 >= 0) bytes.push(((c2 << 6) | c3) & 0xff);
+  }
+  return bytes;
+}
+
+// encodeHubState serializes {boxes, view, notify} to the URL fragment value
+// (without the leading "#"): "s=<base64>".
+function encodeHubState(state) {
+  const json = JSON.stringify(state || {});
+  return "s=" + b64Encode(utf8Encode(json));
+}
+
+// hubStateEmpty is the tolerant default: no boxes, no selection, notify off.
+function hubStateEmpty() {
+  return { boxes: [], view: {}, notify: false };
+}
+
+// decodeHubState parses a URL hash (with or without the leading "#", and
+// tolerating any garbage — a hand-edited or truncated fragment, a stray
+// query string, non-base64 junk) back into {boxes, view, notify}. Any
+// failure at any stage yields hubStateEmpty() rather than throwing or
+// partially applying: a broken fragment must load as an unbroken, empty hub.
+function decodeHubState(hash) {
+  const empty = hubStateEmpty();
+  if (!hash) return empty;
+  let h = String(hash);
+  if (h[0] === "#") h = h.slice(1);
+  const m = /(?:^|&)s=([^&]*)/.exec(h);
+  if (!m) return empty;
+  try {
+    const json = utf8Decode(b64Decode(decodeURIComponent(m[1])));
+    const obj = JSON.parse(json);
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return empty;
+    const boxes = Array.isArray(obj.boxes)
+      ? obj.boxes
+          .filter(b => b && typeof b === "object" && typeof b.base === "string" && typeof b.token === "string")
+          .map(b => ({
+            id: typeof b.id === "string" && b.id ? b.id : b.base,
+            name: typeof b.name === "string" && b.name ? b.name : b.base,
+            base: b.base.replace(/\/+$/, ""),
+            token: b.token,
+          }))
+      : [];
+    const view = (obj.view && typeof obj.view === "object" && !Array.isArray(obj.view)) ? obj.view : {};
+    return { boxes, view, notify: !!obj.notify };
+  } catch {
+    return empty;
+  }
+}
+
+/* ---------- SSE frame parser (shared verbatim with tools/inspector) ----------
+   Feed it decoded stream text; it invokes onEvent({id, data}) once per complete
+   frame (terminated by a blank line). Handles multi-line data, id lines, and
+   comment lines beginning with ":". Stateful across chunk boundaries. */
+function createSSEParser(onEvent) {
+  let buf = "", data = [], id = null;
+  return function feed(chunk) {
+    buf += chunk;
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      let line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      if (line.endsWith("\r")) line = line.slice(0, -1);
+      if (line === "") {
+        if (data.length) onEvent({ id, data: data.join("\n") });
+        data = [];
+        continue;
+      }
+      if (line[0] === ":") continue;
+      const c = line.indexOf(":");
+      let field, value;
+      if (c === -1) { field = line; value = ""; }
+      else {
+        field = line.slice(0, c);
+        value = line.slice(c + 1);
+        if (value[0] === " ") value = value.slice(1);
+      }
+      if (field === "data") data.push(value);
+      else if (field === "id") id = value;
+    }
+  };
+}
+/* TESTABLE-END */
+</script>
+</body>
+</html>
