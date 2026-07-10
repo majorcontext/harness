@@ -133,7 +133,7 @@ is a JSON object whose shape depends on `type`. Event types, v1:
 | Type | Properties | Emitted when |
 |---|---|---|
 | `session.status` | `{status: "busy"\|"idle"}` | a prompt starts/finishes |
-| `question.asked` | (reserved, no emit site yet) | — |
+| `question.asked` | `{call_id, questions: [{question, options?, multi?}, ...]}` | the built-in `ask_user` tool runs; `call_id` is the tool call's own id (the same value `POST /session/{id}/answer` matches on), `questions` is the full batch it asked. `options` absent means freeform, `multi` absent means single-select. See `docs/design/question-tool.md`. |
 | `file.edited` | `{path}` (absolute) | a built-in file tool (`write_file`, `edit_file`) successfully writes a file |
 | `tool.execute.start` | `{tool, call_id}` | immediately before any tool call executes (built-in or plugin-provided) |
 | `tool.execute.end` | `{tool, call_id, ok}` | immediately after a tool call finishes; `ok` is `false` when the result is an error result |
