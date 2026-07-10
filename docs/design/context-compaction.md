@@ -75,7 +75,21 @@ question leaves the goal/question state itself exactly as it was.
 Recommend keeping the most recent `Config.CompactionKeepTurns` turns (2, if
 unset) verbatim always; if fewer than that many complete turns exist yet,
 compaction is a no-op this cycle (nothing gained, tried again as history
-grows). A summary message produced by an earlier compaction is an ordinary
+grows).
+
+**Churn guard (hysteresis).** When the pressure lives in the KEPT region —
+a single giant tool result in one of the last turns — folding the prefix
+cannot relieve it: the next check would still be over threshold, re-fold an
+ever-shrinking prefix, and burn one summarization round-trip per turn until
+layer 1's overflow classification finally fires. The automatic trigger
+therefore carries a one-flag hysteresis: after an automatic compaction, it
+does not fire again until `LastUsage().InputTokens` has dipped below the
+threshold at least once since (the flag lives beside the session's other
+in-memory trigger state; it deliberately does NOT persist — a reload
+re-evaluates from scratch, and the worst post-reload cost is one extra
+summarization attempt). The explicit `/compact` endpoint ignores the flag:
+an operator override is exactly the case where re-folding on demand is
+wanted. A summary message produced by an earlier compaction is an ordinary
 `RoleUser` message like any other — it can itself be folded into a *later*
 compaction's range with no special case; a "summary of a summary" is just
 another old turn.
