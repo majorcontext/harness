@@ -6,9 +6,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/majorcontext/harness/message"
@@ -84,9 +87,50 @@ func apiError(resp *http.Response) error {
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &body); err == nil && body.Error.Message != "" {
-		return fmt.Errorf("anthropic: %s (%s, HTTP %d)", body.Error.Message, body.Error.Type, resp.StatusCode)
+		msg := fmt.Sprintf("anthropic: %s (%s, HTTP %d)", body.Error.Message, body.Error.Type, resp.StatusCode)
+		if promptTokens, limit, ok := parseContextOverflow(body.Error.Type, resp.StatusCode, body.Error.Message); ok {
+			return &provider.Error{
+				Kind:         provider.ErrKindContextOverflow,
+				Raw:          msg,
+				PromptTokens: promptTokens,
+				TokenLimit:   limit,
+			}
+		}
+		return errors.New(msg)
 	}
 	return fmt.Errorf("anthropic: HTTP %d", resp.StatusCode)
+}
+
+// contextOverflowPattern matches Anthropic's context-overflow message shape,
+// e.g. "prompt is too long: 205102 tokens > 200000 maximum". Anthropic gives
+// no distinct error type or code for this — it is a plain invalid_request_
+// error like any other bad request — so this is the one place message
+// matching is tolerated (see provider.Error's doc comment): scoped to this
+// adapter, never the engine, and gated on the structural signal available
+// (HTTP 400 + invalid_request_error) before ever inspecting the message.
+var contextOverflowPattern = regexp.MustCompile(`prompt is too long: (\d+) tokens > (\d+) maximum`)
+
+// parseContextOverflow classifies an Anthropic error as a context/prompt
+// overflow: structurally, it must be a 400 invalid_request_error (the only
+// status/type combination Anthropic uses for this); within that, the
+// message is matched against contextOverflowPattern to extract the prompt
+// size and limit. ok is false whenever either check fails, including an
+// invalid_request_error whose message doesn't name a token limit (a
+// different bad-request cause entirely) — so this never over-classifies.
+func parseContextOverflow(errType string, status int, message string) (promptTokens, limit int, ok bool) {
+	if status != http.StatusBadRequest || errType != "invalid_request_error" {
+		return 0, 0, false
+	}
+	m := contextOverflowPattern.FindStringSubmatch(message)
+	if m == nil {
+		return 0, 0, false
+	}
+	promptTokens, err1 := strconv.Atoi(m[1])
+	limit, err2 := strconv.Atoi(m[2])
+	if err1 != nil || err2 != nil {
+		return 0, 0, false
+	}
+	return promptTokens, limit, true
 }
 
 // assembledBlock accumulates one content block across SSE deltas.
