@@ -537,3 +537,40 @@ func TestSweepPrunesProvisionalMetaCrashWindow(t *testing.T) {
 		t.Errorf("expected the provisional meta to be pruned, stat err=%v", err)
 	}
 }
+
+// TestSweepOwnerlessMetaWithLiveWorktreeAdjudicated pins the crash artifact
+// the createSession ordering (owner recorded BEFORE Persist) can leave
+// behind: a meta whose SessionID was never patched in, but whose worktree
+// directory fully materialized. With no owner there is nothing that could
+// ever resume it — sessionResumable("") must be false — so the sweep
+// adjudicates it like any abandoned worktree: clean → removed, meta
+// dropped. If sessionResumable ever treated an empty SessionID as
+// resumable, this artifact would leak forever (skipped on every sweep).
+func TestSweepOwnerlessMetaWithLiveWorktreeAdjudicated(t *testing.T) {
+	repo := newGitRepo(t)
+	sessDir := t.TempDir()
+	base := filepath.Join(sessDir, "worktrees")
+
+	path := filepath.Join(base, "wt_ownerless")
+	baseCommit, err := addWorktree(repo, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaPath, err := writeWorktreeMeta(base, "wt_ownerless", worktreeMeta{
+		RepoRoot: repo, Path: path, BaseCommit: baseCommit, // SessionID never recorded
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sweepWorktrees(base, sessDir, func(sessionID, path string) {
+		t.Errorf("unexpected kept event for an ownerless clean worktree: %s %s", sessionID, path)
+	})
+
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("expected the ownerless clean worktree to be removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(metaPath); !os.IsNotExist(err) {
+		t.Errorf("expected the ownerless meta to be dropped, stat err=%v", err)
+	}
+}

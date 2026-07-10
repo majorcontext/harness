@@ -184,6 +184,23 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "cannot create session")
 		return
 	}
+	if wt != nil {
+		// Record the owning session in the meta BEFORE the session log
+		// becomes durable, and fail creation if it cannot be recorded. The
+		// order is load-bearing: the startup sweep keys entirely on
+		// sessionResumable(meta.SessionID), so the moment Persist succeeds
+		// the meta must already name the owner — a crash between "log on
+		// disk" and "owner recorded" would leave a resumable session whose
+		// meta has no SessionID, and the sweep would reap its live worktree
+		// out from under it. With this order a crash instead leaves a meta
+		// whose session log does not exist yet: never resumable, safely
+		// adjudicated clean/dirty like any abandoned worktree.
+		if err := s.recordWorktreeOwner(wt, sess.ID); err != nil {
+			s.discardWorktree(wt)
+			writeErr(w, http.StatusInternalServerError, "cannot create session")
+			return
+		}
+	}
 	// Persist the log now so the session has durable state even if it is
 	// evicted before its first prompt; otherwise eviction below would drop a
 	// never-prompted session with no on-disk backing to reload from.
@@ -193,15 +210,6 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		writeErr(w, http.StatusInternalServerError, "cannot create session")
 		return
-	}
-	if wt != nil {
-		// Now that the session has an ID, record it in the meta file so a
-		// crash sweep can attribute a kept worktree to it (see worktree.go).
-		if err := s.recordWorktreeOwner(wt, sess.ID); err != nil {
-			// Not fatal to session creation — the worktree still works, it
-			// just can't be attributed by a future sweep. Best effort.
-			_ = err
-		}
 	}
 	s.mu.Lock()
 	s.sessions[sess.ID] = &sessionState{sess: sess, lastUsed: time.Now(), shareWorkdir: body.ShareWorkdir, isolation: isolation, worktree: wt}
