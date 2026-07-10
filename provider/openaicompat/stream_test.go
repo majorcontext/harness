@@ -346,3 +346,93 @@ func TestName(t *testing.T) {
 		t.Errorf("Name() = %q", c.Name())
 	}
 }
+
+// TestStreamMidStreamErrorClassifiedRetryable pins the mid-stream error
+// path: an OpenAI-compat `{"error":{...}}` chunk (how OpenRouter reports an
+// overload that begins after headers were already sent) must surface as an
+// error — classified retryable when the code says so — never as a silent
+// end-of-turn. Before the fix, stream.handle unmarshalled the chunk, found
+// no choices, and returned nil: the turn just ended, indistinguishable
+// from success, and the goal loop's backoff never engaged.
+func TestStreamMidStreamErrorClassifiedRetryable(t *testing.T) {
+	c := testClient(t, "openrouter", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, strings.Join([]string{ //nolint:errcheck
+			sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{"content":"partial"}}]}`),
+			sseData(`{"error":{"message":"upstream overloaded, please retry","code":529}}`),
+		}, ""))
+	})
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:    message.ModelRef{Provider: "openrouter", Model: "some/model"},
+		Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var streamErr error
+	for {
+		_, err := s.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			streamErr = err
+			break
+		}
+	}
+	if streamErr == nil {
+		t.Fatal("mid-stream error chunk was silently swallowed: stream ended with no error")
+	}
+	class, ok := provider.AsRetryable(streamErr)
+	if !ok {
+		t.Fatalf("mid-stream 529 not classified retryable: %v", streamErr)
+	}
+	if class != provider.RetryableOverloaded {
+		t.Errorf("class = %q, want %q", class, provider.RetryableOverloaded)
+	}
+	if !strings.Contains(streamErr.Error(), "upstream overloaded") {
+		t.Errorf("original message lost: %v", streamErr)
+	}
+}
+
+// TestStreamMidStreamErrorStringCode pins the OTHER wire shape: OpenAI-family
+// providers send string codes ("rate_limit_exceeded") or null where
+// OpenRouter sends ints. A string code must not fail the chunk unmarshal
+// (which would surface a generic parse error, unclassified — the swallow
+// reborn one layer up); it must classify.
+func TestStreamMidStreamErrorStringCode(t *testing.T) {
+	c := testClient(t, "openai", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sseData(`{"error":{"message":"slow down","type":"requests","code":"rate_limit_exceeded"}}`)) //nolint:errcheck
+	})
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:    message.ModelRef{Provider: "openai", Model: "some/model"},
+		Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var streamErr error
+	for {
+		_, err := s.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			streamErr = err
+			break
+		}
+	}
+	if streamErr == nil {
+		t.Fatal("string-code error chunk swallowed")
+	}
+	if strings.Contains(streamErr.Error(), "bad chunk") {
+		t.Fatalf("string code failed the unmarshal instead of classifying: %v", streamErr)
+	}
+	class, ok := provider.AsRetryable(streamErr)
+	if !ok || class != provider.RetryableRateLimited {
+		t.Fatalf("class = (%q, %v), want rate_limited", class, ok)
+	}
+}

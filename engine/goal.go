@@ -87,6 +87,77 @@
 // failing evaluator call now clears the goal (unless the error is a
 // cancelled context) before returning, closing the last "third way out" of
 // ACTIVE. See TestPursueGoalUnparseableTwiceClearsGoal.
+//
+// # Round 4: retryable provider weather must not exhaust the same budget as
+// a dead provider (GitHub issue #61)
+//
+// The STALLED->CLEARED edge above (goalWorkerRetries, ~5s of total backoff)
+// treats every worker-turn error identically, but that conflates two very
+// different failure shapes: a deterministic failure (bad request, auth)
+// that will fail the same way forever, and provider-side overload/rate-limit
+// weather that is self-healing but "routinely lasts several minutes" (see
+// the issue). Field data: four goal loops died to ONE shared Anthropic
+// overload wave across two days — every one resumed cleanly the instant a
+// human manually re-armed it once the wave passed, the strongest possible
+// evidence those stalls were premature, not genuine.
+//
+// The fix classifies each worker-turn error via provider.AsRetryable (a
+// typed wrapper the provider adapter attaches — see provider/retryable.go —
+// never string-matched) and gives the retryable class its OWN budget
+// (goalRetryableMaxAttempts, a much longer jittered backoff — see
+// promptTurnWithRetry) that never touches goalWorkerRetries. The updated
+// diagram:
+//
+//	          RegisterGoal
+//	               |
+//	               v
+//	+-------- ACTIVE (goal.set) ------------------------------+
+//	|              |                                           |
+//	|   worker turn errors                                     | evaluator: MET
+//	|              |                                           v
+//	|              v                                     ACHIEVED (goal.achieved)
+//	|         STALLED (goal.stalled, carries the error + retryable class)
+//	|              |
+//	|      classified retryable?
+//	|         /            \
+//	|       no              yes
+//	|        |               |
+//	|  deterministic    retryable budget (goalRetryableMaxAttempts)
+//	|  budget           exhausted (a truly long outage)?
+//	|  (goalWorkerRetries)   /          \
+//	|  exhausted AND       no            yes
+//	|  no tool executed?    |             |
+//	|   /        \     (wait, then    PARK: same turn's directive
+//	|  no        yes    retry, back    retried on the NEXT ordinary
+//	|  |          |     to ACTIVE)     turn (see below) — back to
+//	|  (wait,     |                    ACTIVE, no clear
+//	|   retry,    |
+//	|   back to   |
+//	|   ACTIVE)   v
+//	+-----------CLEARED (goal.cleared, carries the error reason)
+//	ClearGoal (caller/DELETE) --------------------------------> CLEARED (goal.cleared, no reason)
+//
+// Self-re-arm (deliverable 4 of issue #61): a retryable-class exhaustion
+// does NOT clear the goal — it "parks" by retrying the exact same directive
+// on the next ordinary turn (PursueGoal's for-loop `continue`s, so turn++
+// runs exactly as it would after any other turn). This is a deliberate
+// design choice over the alternative (a server-side cooldown timer that
+// automatically re-POSTs /goal): parking reuses the state machine's
+// EXISTING, already-durable, already-resumable "max turns exhausted"
+// terminal state (goal left ACTIVE, turn.end outcome
+// outcomeMaxTurnsExceeded — see server/journal.go) as the natural backstop
+// once MaxTurns is set, and reuses the existing "MaxTurns==0 means no
+// limit" contract as the backstop when it is not — both invariants the
+// state machine already had to honor for an ordinary long-running goal, so
+// this adds no new terminal state, no new server-side timer, and no new way
+// for a goal to go silent: every parked cycle is bounded by real wall-clock
+// time (goalRetryableBackoff's schedule can't hot-spin) and durably
+// explained by a goal.stalled record naming the retryable class (see
+// recordGoalStalled) the moment it happens, not after the fact.
+//
+// See TestPursueGoalRetryableErrorLongBackoffThenRecovers and
+// TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing, and
+// docs/goal-loop.md for the operator-facing write-up.
 package engine
 
 import (
@@ -94,6 +165,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"strings"
 	"time"
 
@@ -224,6 +296,116 @@ func waitGoalRetryBackoff(ctx context.Context, attempt int) error {
 	}
 }
 
+// # Retryable-class backoff (GitHub issue #61)
+//
+// A worker-turn error the provider adapter classified retryable (see
+// provider.AsRetryable — Anthropic 529/overloaded_error, 429, 5xx; see
+// provider/anthropic and provider/openaicompat) gets an entirely separate
+// budget and schedule from the deterministic goalWorkerRetries path above,
+// because the two failure modes have opposite shapes: a deterministic
+// failure (bad request, auth) will fail identically forever, so a short,
+// fast-fail budget is correct; provider-side overload/rate-limit weather is
+// self-healing but "routinely lasts several minutes" (see the issue's field
+// data — four goal loops died to ONE shared Anthropic overload wave across
+// two days, every one resuming cleanly the moment a human manually re-armed
+// it once the wave passed), so a short budget kills a loop the provider was
+// always going to let succeed. goalRetryableMaxAttempts is deliberately
+// generous (12 attempts) and the backoff (goalRetryableDelay) grows from 5s
+// to a 5-minute cap — worst case, about 30 minutes of waiting before this
+// budget is exhausted, versus the deterministic path's ~5 seconds total.
+//
+// These retryable-class attempts NEVER consume goalWorkerRetries: a
+// provider overload wave does not spend down the same fast-fail allowance a
+// bad request would (see promptTurnWithRetry).
+const (
+	goalRetryableBackoffBase       = 5 * time.Second
+	goalRetryableBackoffMultiplier = 2
+	goalRetryableBackoffCap        = 5 * time.Minute
+	// goalRetryableMaxAttempts bounds a single turn's retryable-class
+	// attempts before promptTurnWithRetry gives up and PursueGoal parks the
+	// turn (see goalRetryableExhaustedError) rather than clearing the goal.
+	goalRetryableMaxAttempts = 12
+)
+
+// goalRetryableDelay returns the base (pre-jitter) backoff for the given
+// 1-indexed retryable-class attempt that just failed, doubling each time up
+// to goalRetryableBackoffCap — the same shape as goalRetryDelay, just a
+// much longer schedule (see the doc comment above).
+func goalRetryableDelay(attempt int) time.Duration {
+	d := goalRetryableBackoffBase
+	for i := 1; i < attempt; i++ {
+		if d >= goalRetryableBackoffCap {
+			return goalRetryableBackoffCap
+		}
+		d *= goalRetryableBackoffMultiplier
+	}
+	if d > goalRetryableBackoffCap {
+		d = goalRetryableBackoffCap
+	}
+	return d
+}
+
+// goalJitterFunc returns a pseudo-random duration in [0, max) — the random
+// half of goalRetryableBackoff's "equal jitter" (half the base delay fixed,
+// half randomized). Jitter matters here specifically because a shared
+// provider overload wave hits every affected goal loop at once (see the
+// GitHub issue #61 field data: four losses to ONE wave); without it, every
+// surviving loop would retry in lockstep and re-hit the still-recovering
+// provider at the exact same instants. Real math/rand in production;
+// overridable by tests (see TestGoalRetryableDelaySchedule and
+// TestPursueGoalRetryableErrorLongBackoffThenRecovers) so the schedule
+// stays exactly assertable instead of merely bounded — the same test-seam
+// convention as server.goalDeleteRace.
+var goalJitterFunc = func(max time.Duration) time.Duration {
+	if max <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Int63n(int64(max)))
+}
+
+// goalRetryableBackoff applies equal jitter to goalRetryableDelay(attempt):
+// half the base delay is fixed, the other half is randomized within
+// [0, half) via goalJitterFunc, so the actual wait for attempt N falls in
+// [half, base).
+func goalRetryableBackoff(attempt int) time.Duration {
+	base := goalRetryableDelay(attempt)
+	half := base / 2
+	return half + goalJitterFunc(half)
+}
+
+// waitGoalRetryableBackoff is waitGoalRetryBackoff's counterpart for the
+// retryable-class schedule: it blocks for goalRetryableBackoff(attempt), or
+// until ctx is done, whichever comes first.
+func waitGoalRetryableBackoff(ctx context.Context, attempt int) error {
+	t := time.NewTimer(goalRetryableBackoff(attempt))
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// goalRetryableExhaustedError is returned by promptTurnWithRetry when a
+// worker turn's retryable-class backoff budget (goalRetryableMaxAttempts)
+// is exhausted while every failure was classified provider-retryable — a
+// truly long outage, not the "several minutes" the schedule is tuned for.
+//
+// PursueGoal recognizes this type (via errors.As) and treats it completely
+// differently from an ordinary exhausted-retries error: see PursueGoal's
+// "park, don't die" handling, the self-re-arm half of GitHub issue #61's
+// fix. It is never returned for a deterministic failure — those still
+// return the bare underlying error, exhausting goalWorkerRetries and
+// clearing the goal exactly as before this fix.
+type goalRetryableExhaustedError struct {
+	err   error
+	class provider.RetryableClass
+}
+
+func (e *goalRetryableExhaustedError) Error() string { return e.err.Error() }
+func (e *goalRetryableExhaustedError) Unwrap() error { return e.err }
+
 // PursueGoal runs the goal loop: prompt the condition, then after every turn
 // ask the evaluator whether it is met, feeding the evaluator's reason back as
 // guidance until the condition is met or MaxTurns is exhausted.
@@ -247,13 +429,20 @@ func waitGoalRetryBackoff(ctx context.Context, attempt int) error {
 // failed attempt so the session log always explains a pause instead of going
 // silent. If every attempt fails, the goal is cleared (goal.cleared carrying
 // the error as its reason, so no zombie active-goal state survives) and the
-// error is returned. A cancelled context is never retried or treated as a
-// worker failure — it is a deliberate abort (DELETE /goal, shutdown drain)
-// and is returned immediately with the goal left exactly as it was, since a
-// drain must be resumable. A failing evaluator call — a provider error, or
-// two unparseable replies in a row — is not retried (it is the worker turn
-// that is expensive and worth protecting from a transient hiccup, not the
-// tool-less evaluator check), but it is held to the exact same no-zombie
+// error is returned — UNLESS the error is classified provider-retryable
+// (see provider.AsRetryable and GitHub issue #61), in which case
+// promptTurnWithRetry instead runs a much longer, separately-budgeted
+// backoff (goalRetryableMaxAttempts), and exhausting THAT budget parks the
+// turn (retries the same directive on the next ordinary turn) rather than
+// clearing the goal — see the package doc's "Round 4" section for the full
+// rationale and the state diagram. A cancelled context is never retried or
+// treated as a worker failure — it is a deliberate abort (DELETE /goal,
+// shutdown drain) and is returned immediately with the goal left exactly as
+// it was, since a drain must be resumable. A failing evaluator call — a
+// provider error, or two unparseable replies in a row — is not retried (it
+// is the worker turn that is expensive and worth protecting from a
+// transient hiccup, not the tool-less evaluator check), but it is held to
+// the exact same no-zombie
 // guarantee as a permanently failing worker turn: the goal is cleared
 // (goal.cleared carrying the error as its reason) before the error is
 // returned, unless the error is itself a cancelled context, which leaves the
@@ -308,14 +497,43 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 				// flight: clean stop, same as the checks above/below.
 				return &GoalResult{Achieved: false, Turns: turn - 1, Reason: "goal cleared"}, nil
 			}
-			// Every attempt failed — either the retry budget ran out, or
-			// retrying stopped early because a tool already executed this
-			// attempt (see promptTurnWithRetry's non-idempotency doc). This
-			// is the fix for the zombie-goal incident (see the package
-			// doc's state machine) — the goal must never stay active with
-			// nothing further recorded. Clear it, carrying the error as the
-			// reason, then return the error so the caller (e.g. the server)
-			// still journals the failure.
+			var exhausted *goalRetryableExhaustedError
+			if errors.As(err, &exhausted) {
+				// Self-re-arm (GitHub issue #61, deliverable 4): the
+				// retryable-class backoff budget ran out for this turn — a
+				// truly long provider outage, not the "several minutes" the
+				// schedule is tuned for — but the goal must NOT become a
+				// permanently-dead stall requiring an operator re-POST.
+				// promptTurnWithRetry already journaled the exhaustion as a
+				// non-waiting goal.stalled record naming the retryable
+				// class (see recordGoalStalled), so the pause is durably
+				// explained; there is nothing left to clear.
+				//
+				// Instead of clearing, PARK: retry the exact same directive
+				// on the next loop iteration, which — because it consumes
+				// an ordinary turn (turn++ via the for-loop's post
+				// statement below) — is bounded exactly the way every
+				// other turn is. With MaxTurns set, repeated parking
+				// eventually reaches the ordinary, already-resumable "max
+				// turns" terminal state (goal left ACTIVE, see below)
+				// instead of "cleared". With MaxTurns unlimited (0), it
+				// parks indefinitely, each cycle bounded by real wall-clock
+				// time (goalRetryableBackoff's schedule) rather than
+				// hot-spinning — the same opt-in "no turn limit" contract
+				// MaxTurns==0 already carries for an ordinary long-running
+				// goal. No evaluator call runs for a turn that never had a
+				// successful worker attempt, exactly as the awaiting_input
+				// pause above skips it too.
+				continue
+			}
+			// Every attempt failed — either the deterministic retry budget
+			// ran out, or retrying stopped early because a tool already
+			// executed this attempt (see promptTurnWithRetry's
+			// non-idempotency doc). This is the fix for the zombie-goal
+			// incident (see the package doc's state machine) — the goal
+			// must never stay active with nothing further recorded. Clear
+			// it, carrying the error as the reason, then return the error
+			// so the caller (e.g. the server) still journals the failure.
 			reason := fmt.Sprintf("worker turn failed after %d attempt(s): %v", attempts, err)
 			s.clearGoal(reason)
 			return nil, fmt.Errorf("engine: goal loop stalled: %w", err)
@@ -438,9 +656,31 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 // again on a still-later call, the identical risk resurfaces one attempt
 // later — there is no bound on how many times this can recur short of
 // Prompt gaining a resumable, sub-turn checkpoint, which it does not have.
+//
+// # Two independent budgets, chosen by error classification
+//
+// Every failed attempt is first classified via provider.AsRetryable (never
+// by matching error text — see provider/retryable.go). A DETERMINISTIC
+// failure (not classified retryable) runs the fast path exactly as
+// described above: goalWorkerRetries additional attempts, goalRetryDelay's
+// short backoff. A RETRYABLE failure instead runs its own loop, up to
+// goalRetryableMaxAttempts attempts, spaced by goalRetryableBackoff's much
+// longer jittered schedule (see the doc comment on that function) — and
+// these attempts never increment the deterministic counter, so surviving a
+// long provider outage costs a turn nothing against goalWorkerRetries.
+//
+// If the retryable budget is exhausted, this function returns a
+// *goalRetryableExhaustedError wrapping the last error, which PursueGoal
+// recognizes and parks the turn instead of clearing the goal (see
+// PursueGoal's doc comment and goalRetryableExhaustedError's).
+//
+// The non-idempotency gate below (stop retrying once a tool has executed
+// this attempt) applies identically to BOTH budgets: retrying after a tool
+// call ran is unsafe regardless of why the subsequent call failed.
 func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, turn int) (attempts int, err error) {
-	for attempt := 1; attempt <= goalWorkerRetries+1; attempt++ {
-		attempts = attempt
+	var deterministicAttempt, retryableAttempt int
+	for {
+		attempts++
 		toolsBefore := s.toolExecutions()
 		_, perr := s.Prompt(ctx, directive)
 		if perr == nil {
@@ -450,24 +690,50 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 		if errors.Is(err, context.Canceled) {
 			return attempts, err
 		}
-		if !s.recordGoalStalled(err, turn, attempt) {
+		class, retryable := provider.AsRetryable(err)
+		// exhausted decides, for a retryable failure, whether THIS attempt
+		// is the one that exhausts goalRetryableMaxAttempts — computed
+		// before retryableAttempt is incremented below, so the comparison
+		// reads as "one more than the retries already spent, including this
+		// one, would meet or exceed the ceiling".
+		exhausted := retryable && retryableAttempt+1 >= goalRetryableMaxAttempts
+		// The tool-execution gate is evaluated BEFORE the stall is
+		// journaled so the record's waiting flag tells the truth: an
+		// attempt that ran a tool and then failed is about to stop
+		// retrying entirely (the non-idempotency doc above) — journaling
+		// it as waiting=true, immediately followed by goal.cleared, would
+		// read as a park on any timeline keyed to the flag.
+		toolGateStops := s.toolExecutions() > toolsBefore
+		waiting := retryable && !exhausted && !toolGateStops
+		if !s.recordGoalStalled(err, turn, attempts, retryable, class, waiting) {
 			// Concurrently cleared: stop retrying, nothing left to retry for.
 			return attempts, err
 		}
-		if s.toolExecutions() > toolsBefore {
+		if toolGateStops {
 			// This attempt executed a tool call before failing: see the
 			// non-idempotency doc above. Retrying would reissue the
 			// directive and risk re-running that tool, so stop now instead
-			// of waiting and trying again.
+			// of waiting and trying again — regardless of classification.
 			return attempts, err
 		}
-		if attempt <= goalWorkerRetries {
-			if werr := waitGoalRetryBackoff(ctx, attempt); werr != nil {
+		if !retryable {
+			deterministicAttempt++
+			if deterministicAttempt > goalWorkerRetries {
+				return attempts, err
+			}
+			if werr := waitGoalRetryBackoff(ctx, deterministicAttempt); werr != nil {
 				return attempts, werr
 			}
+			continue
+		}
+		retryableAttempt++
+		if exhausted {
+			return attempts, &goalRetryableExhaustedError{err: err, class: class}
+		}
+		if werr := waitGoalRetryableBackoff(ctx, retryableAttempt); werr != nil {
+			return attempts, werr
 		}
 	}
-	return attempts, err
 }
 
 // recordGoalStalled records one failed worker-turn attempt for a turn. Like
@@ -475,18 +741,35 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 // is no longer active (a concurrent ClearGoal), so a stalled record can never
 // land in the log after goal.cleared. Reports whether the record was
 // written, i.e. whether the goal is still active and retrying is worthwhile.
-func (s *Session) recordGoalStalled(err error, turn, attempt int) bool {
+//
+// retryable/class/waiting carry the retryable-class classification (see
+// promptTurnWithRetry and GitHub issue #61): retryable and class are zero
+// on a deterministic-path stall; waiting is true for a retryable stall
+// still within its budget ("waiting out provider weather") and false for
+// the final retryable stall that reports the budget exhausted (the turn is
+// about to park — see PursueGoal's doc comment).
+func (s *Session) recordGoalStalled(err error, turn, attempt int, retryable bool, class provider.RetryableClass, waiting bool) bool {
 	s.mu.Lock()
 	if !s.goalActive {
 		s.mu.Unlock()
 		return false
 	}
 	reason := err.Error()
-	s.persistGoalLocked(recGoalStalled, goalRecord{Reason: reason, Turn: turn, Attempt: attempt})
+	s.persistGoalLocked(recGoalStalled, goalRecord{
+		Reason:         reason,
+		Turn:           turn,
+		Attempt:        attempt,
+		Retryable:      retryable,
+		RetryableClass: string(class),
+		Waiting:        waiting,
+	})
 	// Emit while still holding s.mu (see ClearGoal): keeps event order
 	// matching log order under a concurrent clear. OnEvent must not call
 	// back into this Session — that would deadlock on s.mu, held here.
-	s.emit(Event{Type: EventGoalStalled, GoalReason: reason, GoalTurn: turn, GoalAttempt: attempt})
+	s.emit(Event{
+		Type: EventGoalStalled, GoalReason: reason, GoalTurn: turn, GoalAttempt: attempt,
+		GoalRetryable: retryable, GoalRetryableClass: string(class), GoalWaiting: waiting,
+	})
 	s.mu.Unlock()
 	return true
 }

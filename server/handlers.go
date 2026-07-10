@@ -89,13 +89,24 @@ func compositeState(running, goalActive, awaitingQuestion bool) string {
 
 // goalJSON is the Session.goal sub-object: present only when a goal has been
 // set for the session in this process.
+//
+// Retryable/RetryableClass/Waiting mirror the most recent goal.stalled
+// record's classification (see engine/goal.go and GitHub issue #61):
+// Retryable is true when that stall was classified provider-retryable
+// weather, RetryableClass names it, and Waiting is true while still inside
+// the retryable budget ("waiting out provider weather") and false once
+// that budget is exhausted (the loop is about to park a turn, not die).
+// All three are reset by goal.set/goal.eval/goal.achieved, same as Attempt.
 type goalJSON struct {
-	Condition  string `json:"condition"`
-	Active     bool   `json:"active"`
-	Achieved   bool   `json:"achieved,omitempty"`
-	Turns      int    `json:"turns"`
-	LastReason string `json:"last_reason,omitempty"`
-	Attempt    int    `json:"attempt,omitempty"`
+	Condition      string `json:"condition"`
+	Active         bool   `json:"active"`
+	Achieved       bool   `json:"achieved,omitempty"`
+	Turns          int    `json:"turns"`
+	LastReason     string `json:"last_reason,omitempty"`
+	Attempt        int    `json:"attempt,omitempty"`
+	Retryable      bool   `json:"retryable,omitempty"`
+	RetryableClass string `json:"retryable_class,omitempty"`
+	Waiting        bool   `json:"waiting,omitempty"`
 }
 
 // sessionIDOrNotFound extracts {id} from the request path and validates it
@@ -1343,7 +1354,7 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 	seq := s.sessionSeqLocked(id)
 	var goal *goalJSON
 	if g := s.goalState[id]; g != nil {
-		goal = &goalJSON{Condition: g.condition, Active: g.active, Achieved: g.achieved, Turns: g.turns, LastReason: g.lastReason, Attempt: g.attempt}
+		goal = &goalJSON{Condition: g.condition, Active: g.active, Achieved: g.achieved, Turns: g.turns, LastReason: g.lastReason, Attempt: g.attempt, Retryable: g.retryable, RetryableClass: g.retryableClass, Waiting: g.waiting}
 	}
 	var question *questionJSON
 	if q := s.questionState[id]; q != nil && q.pending {

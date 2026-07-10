@@ -83,10 +83,54 @@ func apiError(resp *http.Response) error {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(raw, &body); err == nil && body.Error.Message != "" {
-		return fmt.Errorf("anthropic: %s (%s, HTTP %d)", body.Error.Message, body.Error.Type, resp.StatusCode)
+	var err error
+	if json.Unmarshal(raw, &body) == nil && body.Error.Message != "" {
+		err = fmt.Errorf("anthropic: %s (%s, HTTP %d)", body.Error.Message, body.Error.Type, resp.StatusCode)
+	} else {
+		err = fmt.Errorf("anthropic: HTTP %d", resp.StatusCode)
 	}
-	return fmt.Errorf("anthropic: HTTP %d", resp.StatusCode)
+	if class, ok := classifyStatus(resp.StatusCode); ok {
+		return provider.MarkRetryable(err, class)
+	}
+	return err
+}
+
+// classifyStatus classifies an HTTP response status into a
+// provider.RetryableClass (see GitHub issue #61): 529 is Anthropic's
+// dedicated "overloaded" status, 429 is a rate limit, and any other 5xx is
+// a generic server error — all transient provider weather worth the goal
+// loop's long backoff (engine/goal.go). Every other status (400s, auth)
+// reports ok=false and stays a deterministic, fail-fast error exactly as
+// before.
+func classifyStatus(status int) (provider.RetryableClass, bool) {
+	switch {
+	case status == 529:
+		return provider.RetryableOverloaded, true
+	case status == http.StatusTooManyRequests:
+		return provider.RetryableRateLimited, true
+	case status >= 500 && status <= 599:
+		return provider.RetryableServerError, true
+	default:
+		return "", false
+	}
+}
+
+// classifyErrorType classifies the Anthropic wire error "type" carried by a
+// mid-stream "error" SSE event (see the "error" case in stream.handle
+// below) — the same three retryable categories as classifyStatus, keyed on
+// the wire vocabulary instead of an HTTP status because a stream error
+// carries no status code of its own.
+func classifyErrorType(errType string) (provider.RetryableClass, bool) {
+	switch errType {
+	case "overloaded_error":
+		return provider.RetryableOverloaded, true
+	case "rate_limit_error":
+		return provider.RetryableRateLimited, true
+	case "api_error":
+		return provider.RetryableServerError, true
+	default:
+		return "", false
+	}
 }
 
 // assembledBlock accumulates one content block across SSE deltas.
@@ -315,7 +359,11 @@ func (s *stream) handle(name string, data []byte) error {
 		if err := json.Unmarshal(data, &ev); err != nil {
 			return fmt.Errorf("anthropic: stream error: %s", data)
 		}
-		return fmt.Errorf("anthropic: %s (%s)", ev.Error.Message, ev.Error.Type)
+		err := fmt.Errorf("anthropic: %s (%s)", ev.Error.Message, ev.Error.Type)
+		if class, ok := classifyErrorType(ev.Error.Type); ok {
+			return provider.MarkRetryable(err, class)
+		}
+		return err
 
 	case "ping":
 		// Keep-alive; nothing to do.
