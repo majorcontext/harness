@@ -645,6 +645,937 @@ function createSSEParser(onEvent) {
   };
 }
 /* TESTABLE-END */
+
+/* ============================================================
+   Application logic below (DOM/network — not extracted by tests).
+   ============================================================ */
+
+const $ = id => document.getElementById(id);
+
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  if (attrs) for (const k in attrs) {
+    if (k === "class") n.className = attrs[k];
+    else if (k === "text") n.textContent = attrs[k];
+    else if (k === "html") n.innerHTML = attrs[k];
+    else if (k.startsWith("on") && typeof attrs[k] === "function") n.addEventListener(k.slice(2), attrs[k]);
+    else if (k in n) n[k] = attrs[k];
+    else n.setAttribute(k, attrs[k]);
+  }
+  for (const kid of kids) if (kid != null) n.append(kid);
+  return n;
+}
+
+/* ---------- hub state: persisted (URL fragment) + runtime (in memory) ----------
+   `hs` is the persisted slice — {boxes:[{id,name,base,token}], view:{box,session},
+   notify} — round-tripped through encodeHubState/decodeHubState. Everything else
+   (connections, live session data, draft/timeline buffers) is runtime-only and
+   rebuilt from each box's REST snapshot + SSE stream on load/reconnect. */
+let hs = hubStateEmpty();
+
+// boxRuntime: boxId -> { health: "unknown"|"ok"|"down", vcsRevision, vcsTime,
+//   sessions: Map<id, sessionJSON>, lastSeq, backoff, timer, abort, healthTimer,
+//   pollTimer, running }
+const boxRuntime = new Map();
+
+// drill: state for whichever (box,session) is currently drilled into — the
+// inspector's single-session state, scoped to one box at a time since only
+// one session is ever open in the timeline pane.
+const drill = {
+  boxId: null, sessionId: null,
+  messages: [], banners: [], narrative: [], // narrative: goal.* entries in seq order
+  draft: null,
+  conn: { abort: null, timer: null, backoff: 500 },
+  goal: null, // reduceGoal-shaped summary, seeded from the session record
+};
+
+function freshDraft() { return { text: "", reasoning: "", tools: [] }; }
+
+function box(id) { return hs.boxes.find(b => b.id === id) || null; }
+
+/* ---------- persistence: URL fragment only, no localStorage, no server ---------- */
+
+function persist() {
+  const frag = encodeHubState(hs);
+  history.replaceState(null, "", "#" + frag);
+}
+
+function loadFromLocation() {
+  hs = decodeHubState(location.hash);
+}
+
+/* ---------- per-box HTTP ---------- */
+
+async function boxAPI(b, method, path, body) {
+  const opts = { method, headers: { Authorization: "Bearer " + b.token } };
+  if (body !== undefined) {
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  return fetch(b.base + path, opts);
+}
+
+/* ---------- box connection lifecycle: health poll + session resync + SSE ---------- */
+
+function ensureRuntime(id) {
+  let rt = boxRuntime.get(id);
+  if (!rt) {
+    rt = {
+      health: "unknown", vcsRevision: "", vcsTime: "",
+      sessions: new Map(), lastSeq: 0, backoff: 500,
+      timer: null, abort: null, healthTimer: null, pollTimer: null, running: false,
+    };
+    boxRuntime.set(id, rt);
+  }
+  return rt;
+}
+
+// HUB_POLL_MS is how often each connected box's health + session snapshot is
+// re-fetched. The SSE stream (below) gives near-real-time reactivity for
+// status/message/goal changes; usage and last_activity_at aren't part of the
+// event payloads (see server/openapi.yaml's Event schema), so a light poll
+// keeps those numbers fresh without the operator ever hitting refresh.
+const HUB_POLL_MS = 5000;
+
+function connectBox(id) {
+  const b = box(id);
+  if (!b) return;
+  const rt = ensureRuntime(id);
+  if (rt.running) return;
+  rt.running = true;
+  pollBoxOnce(id);
+  rt.pollTimer = setInterval(() => pollBoxOnce(id), HUB_POLL_MS);
+  connectBoxStream(id);
+}
+
+function disconnectBox(id) {
+  const rt = boxRuntime.get(id);
+  if (!rt) return;
+  rt.running = false;
+  if (rt.pollTimer) clearInterval(rt.pollTimer);
+  if (rt.timer) clearTimeout(rt.timer);
+  if (rt.abort) rt.abort.abort();
+  boxRuntime.delete(id);
+}
+
+async function pollBoxOnce(id) {
+  const b = box(id);
+  const rt = boxRuntime.get(id);
+  if (!b || !rt) return;
+  try {
+    const h = await fetch(b.base + "/health");
+    if (h.ok) {
+      const j = await h.json();
+      rt.health = "ok";
+      rt.vcsRevision = j.vcs_revision || "";
+      rt.vcsTime = j.vcs_time || "";
+    } else {
+      rt.health = "down";
+    }
+  } catch {
+    rt.health = "down";
+  }
+  try {
+    const s = await boxAPI(b, "GET", "/session");
+    if (s.ok) {
+      const list = await s.json();
+      rt.sessions = new Map(list.map(x => [x.id, x]));
+      const hw = maxSeq(list);
+      if (hw > rt.lastSeq) rt.lastSeq = hw;
+    }
+  } catch { /* transient; the next poll or the SSE stream will refill */ }
+  renderFleet();
+  if (drill.boxId === id) renderDrillSessionMeta();
+}
+
+function connectBoxStream(id) {
+  const b = box(id);
+  const rt = boxRuntime.get(id);
+  if (!b || !rt || !rt.running) return;
+  const ac = new AbortController();
+  rt.abort = ac;
+  (async () => {
+    try {
+      const resp = await fetch(b.base + "/event?from=" + rt.lastSeq, {
+        headers: { Authorization: "Bearer " + b.token }, signal: ac.signal,
+      });
+      if (!resp.ok || !resp.body) throw new Error("event stream " + resp.status);
+      rt.backoff = 500;
+      rt.health = "ok";
+      renderFleet();
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      const parse = createSSEParser(frame => {
+        let ev; try { ev = JSON.parse(frame.data); } catch { return; }
+        handleBoxEvent(id, ev);
+      });
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        parse(dec.decode(value, { stream: true }));
+      }
+    } catch {
+      if (!rt.running) return;
+    }
+    if (rt.running) {
+      rt.health = "down";
+      renderFleet();
+      rt.timer = setTimeout(() => connectBoxStream(id), rt.backoff);
+      rt.backoff = Math.min(rt.backoff * 2, 10000);
+    }
+  })();
+}
+
+// handleBoxEvent updates the box-wide runtime (fleet card counts, session
+// summaries) for every event on that box's stream, and additionally feeds
+// notifyForEvent-worthy events into the notifier and (when this event's
+// session is the one currently drilled into) the timeline narrative.
+function handleBoxEvent(id, ev) {
+  const rt = boxRuntime.get(id);
+  if (!rt) return;
+  if (typeof ev.seq === "number" && ev.seq > rt.lastSeq) rt.lastSeq = ev.seq;
+  const sid = ev.session_id;
+  const sess = rt.sessions.get(sid);
+
+  switch (ev.type) {
+    case "session.created":
+      rt.sessions.set(sid, Object.assign({
+        id: sid, status: "idle", messages: 0,
+        created_at: new Date().toISOString(), last_activity_at: new Date().toISOString(),
+        model: ev.model,
+      }, rt.sessions.get(sid) || {}));
+      break;
+    case "session.status":
+      if (sess) { sess.status = ev.status; sess.last_activity_at = new Date().toISOString(); }
+      break;
+    case "model":
+      if (sess) sess.model = ev.model;
+      break;
+    case "message":
+      if (sess) { sess.messages = (sess.messages || 0) + 1; sess.last_activity_at = new Date().toISOString(); }
+      break;
+    case "turn.end":
+      if (sess) { sess.last_turn = { outcome: ev.outcome, error: ev.error }; sess.last_activity_at = new Date().toISOString(); }
+      break;
+    case "goal.set":
+    case "goal.eval":
+    case "goal.stalled":
+    case "goal.achieved":
+    case "goal.cleared":
+      if (sess) {
+        sess.goal = Object.assign({}, sess.goal, reduceGoalWire(sess.goal, ev));
+        sess.last_activity_at = new Date().toISOString();
+      }
+      break;
+  }
+
+  const notice = notifyForEvent(ev);
+  if (notice) notify(id, sid, notice);
+
+  if (drill.boxId === id && drill.sessionId === sid) handleDrillEvent(ev);
+
+  renderFleet();
+}
+
+// reduceGoalWire adapts reduceGoal's {retryableClass,...} shape to the wire
+// GoalSummary field names (retryable_class) so fleet-card rendering can read
+// a session's goal field uniformly whether it came from GET /session or was
+// derived here from the event stream.
+function reduceGoalWire(prevWire, ev) {
+  const prev = prevWire ? {
+    condition: prevWire.condition, active: prevWire.active, achieved: prevWire.achieved,
+    reason: prevWire.last_reason, turns: prevWire.turns, attempt: prevWire.attempt,
+    retryable: prevWire.retryable, retryableClass: prevWire.retryable_class, waiting: prevWire.waiting,
+  } : null;
+  const g = reduceGoal(prev, ev);
+  return {
+    condition: g.condition, active: g.active, achieved: g.achieved,
+    last_reason: g.reason, turns: g.turns, attempt: g.attempt,
+    retryable: g.retryable, retryable_class: g.retryableClass, waiting: g.waiting,
+  };
+}
+
+/* ---------- fleet rendering ---------- */
+
+function renderFleet() {
+  const root = $("fleet");
+  root.textContent = "";
+  if (!hs.boxes.length) {
+    root.append(el("div", { class: "empty", text: "no boxes yet — \u201c+ Add box\u201d or \u201c\u26a1 Spawn box\u201d to get started" }));
+    return;
+  }
+  for (const b of hs.boxes) root.append(renderBoxCard(b));
+}
+
+function renderBoxCard(b) {
+  const rt = ensureRuntime(b.id);
+  const sessions = sortByLastActivity([...rt.sessions.values()]);
+  const counts = countByState(sessions);
+  const dotClass = rt.health === "ok" ? "on" : rt.health === "down" ? "off" : "re";
+
+  const head = el("div", { class: "box-head", onclick: () => toggleExpanded(b.id) },
+    el("span", { class: "dot " + dotClass }),
+    el("div", {},
+      el("div", { class: "box-name", text: b.name }),
+      el("div", { class: "box-base", text: b.base })),
+    el("div", { class: "box-meta" },
+      el("div", { text: rt.vcsRevision ? rt.vcsRevision.slice(0, 10) : (rt.health === "down" ? "unreachable" : "\u2026") }),
+    ),
+  );
+
+  const counts_ = el("div", { class: "box-counts" },
+    el("span", { class: "count-chip", text: counts.idle + " idle" }),
+    el("span", { class: "count-chip busy", text: counts.busy + " busy" }),
+    el("span", { class: "count-chip goal-running", text: counts["goal-running"] + " goal" }),
+  );
+
+  const actions = el("div", { class: "box-actions" },
+    el("button", { class: "small", text: "+ Dispatch", onclick: () => openDispatchModal(b.id) }),
+    el("button", { class: "small", text: "+ New session", onclick: () => quickNewSession(b.id) }),
+    el("button", { class: "small danger", text: "Remove", onclick: () => removeBox(b.id) }),
+  );
+
+  const card = el("div", { class: "box-card" }, head, counts_, actions);
+
+  if (isExpanded(b.id)) {
+    const list = el("div", { class: "sess-list" });
+    if (!sessions.length) {
+      list.append(el("div", { class: "empty", text: "no sessions" }));
+    } else {
+      for (const s of sessions) list.append(renderSessionCard(b.id, s));
+    }
+    card.append(list);
+  }
+  return card;
+}
+
+const expandedBoxes = new Set();
+function isExpanded(id) { return expandedBoxes.has(id); }
+function toggleExpanded(id) {
+  if (expandedBoxes.has(id)) expandedBoxes.delete(id); else expandedBoxes.add(id);
+  renderFleet();
+}
+
+function renderSessionCard(boxId, s) {
+  const badge = sessionBadge(s);
+  const sel = drill.boxId === boxId && drill.sessionId === s.id;
+  const node = el("div", { class: "sess" + (sel ? " sel" : ""), title: s.id, onclick: () => selectSession(boxId, s.id) },
+    el("div", { class: "id", text: shortId(s.id) }),
+    el("div", { class: "meta" },
+      el("span", { class: "badge " + badge, text: badge }),
+      el("span", { text: s.model || "\u2014" }),
+      el("span", { text: usageSummary(s.usage) }),
+      el("span", { text: fmtRelative(s.last_activity_at) }),
+    ),
+  );
+  if (s.goal && s.goal.condition && s.goal.active) {
+    node.append(el("div", { class: "goal-snippet", text: "\ud83c\udfaf " + goalSnippet(s.goal.condition) }));
+  }
+  if (s.last_turn && s.last_turn.outcome) {
+    const isErr = s.last_turn.outcome !== "completed";
+    node.append(el("div", { class: "last-turn" + (isErr ? " error" : ""), text: lastTurnSummary(s.last_turn) }));
+  }
+  if (s.goal && s.goal.condition && !s.goal.active) {
+    const btn = el("button", { class: "small rearm", text: "\ud83d\udd01 Re-arm", onclick: (e) => { e.stopPropagation(); openRearmModal(boxId, s); } });
+    node.append(btn);
+  }
+  return node;
+}
+
+/* ---------- session drill-down ----------
+   Selecting a session opens a SEPARATE, session-scoped SSE connection —
+   `/event?from=0&session=<id>` — distinct from the box-wide stream used for
+   fleet cards above. That replays the session's ENTIRE durable history
+   (every message + every goal.* record, in order) before continuing live,
+   which is exactly the narrative the goal workflow wants (see AGENTS.md's
+   "Development hub" section) and lets the drill-down bootstrap itself from
+   one stream instead of juggling a separate REST fetch plus a filtered
+   live tail. */
+
+function selectSession(boxId, sessionId) {
+  closeDrillConn();
+  drill.boxId = boxId; drill.sessionId = sessionId;
+  drill.messages = []; drill.banners = []; drill.narrative = [];
+  drill.draft = null; drill.goal = null;
+  hs.view = { box: boxId, session: sessionId };
+  persist();
+  renderFleet();
+  renderDrill();
+  connectDrillStream();
+}
+
+function closeDrillConn() {
+  if (drill.conn.abort) drill.conn.abort.abort();
+  if (drill.conn.timer) clearTimeout(drill.conn.timer);
+  drill.conn.abort = null; drill.conn.timer = null; drill.conn.backoff = 500;
+}
+
+function connectDrillStream() {
+  const boxId = drill.boxId, sessionId = drill.sessionId;
+  const b = box(boxId);
+  if (!b || drill.sessionId !== sessionId) return;
+  const ac = new AbortController();
+  drill.conn.abort = ac;
+  (async () => {
+    try {
+      const url = b.base + "/event?from=0&session=" + encodeURIComponent(sessionId);
+      const resp = await fetch(url, { headers: { Authorization: "Bearer " + b.token }, signal: ac.signal });
+      if (!resp.ok || !resp.body) throw new Error("event stream " + resp.status);
+      drill.conn.backoff = 500;
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      const parse = createSSEParser(frame => {
+        let ev; try { ev = JSON.parse(frame.data); } catch { return; }
+        if (drill.boxId !== boxId || drill.sessionId !== sessionId) return; // selection moved on
+        handleDrillEvent(ev);
+      });
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        parse(dec.decode(value, { stream: true }));
+      }
+    } catch {
+      /* fall through to reconnect below unless the selection moved on */
+    }
+    if (drill.boxId === boxId && drill.sessionId === sessionId) {
+      drill.conn.timer = setTimeout(connectDrillStream, drill.conn.backoff);
+      drill.conn.backoff = Math.min(drill.conn.backoff * 2, 10000);
+    }
+  })();
+  // Seed the goal chip immediately from the session record (closes the same
+  // bootstrap gap the inspector's goalFromSession comment describes), ahead
+  // of the from=0 replay above actually arriving.
+  const rt = boxRuntime.get(boxId);
+  const sess = rt && rt.sessions.get(sessionId);
+  if (sess) drill.goal = goalFromSession(sess);
+  updateComposer();
+  renderDrill();
+}
+
+function handleDrillEvent(ev) {
+  if (ev.type === "message" && ev.message) {
+    if (!drill.messages.some(m => m.id === ev.message.id)) drill.messages.push(ev.message);
+    drill.draft = null;
+  } else if (ev.type === "session.error" || ev.type === "session.aborted") {
+    drill.banners.push({ type: ev.type, text: ev.error });
+  } else if (ev.type === "text.delta") {
+    (drill.draft || (drill.draft = freshDraft())).text += ev.text || "";
+  } else if (ev.type === "reasoning.delta") {
+    (drill.draft || (drill.draft = freshDraft())).reasoning += ev.text || "";
+  } else if (ev.type === "tool.start" && ev.tool_call) {
+    const d = drill.draft || (drill.draft = freshDraft());
+    d.tools.push({ call_id: ev.tool_call.call_id, name: ev.tool_call.name, arguments: ev.tool_call.arguments, running: true });
+  } else if (ev.type === "tool.end" && ev.tool_call) {
+    const d = drill.draft || (drill.draft = freshDraft());
+    const t = d.tools.find(x => x.call_id === ev.tool_call.call_id);
+    if (t) { t.running = false; t.output = ev.output; t.is_error = ev.is_error; }
+  } else if (ev.type && ev.type.indexOf("goal.") === 0) {
+    drill.goal = reduceGoal(drill.goal, ev);
+    drill.narrative.push({ seq: ev.seq, ev });
+  }
+  updateComposer();
+  renderDrill();
+}
+
+/* ---------- drill-down rendering (adapted from tools/inspector) ---------- */
+
+function renderDrill() {
+  renderTimeline();
+  renderGoalPanel();
+}
+
+function renderDrillSessionMeta() {
+  // Called after a poll refresh for the box currently drilled into: the
+  // goal/usage/last_turn fields on the session record may have moved even
+  // without a fresh event (e.g. this tab just reconnected) — reseed drill.goal
+  // if we don't have one yet, and repaint the goal panel/composer state.
+  if (!drill.boxId || !drill.sessionId) return;
+  const rt = boxRuntime.get(drill.boxId);
+  const sess = rt && rt.sessions.get(drill.sessionId);
+  if (sess && !drill.goal) drill.goal = goalFromSession(sess);
+  updateComposer();
+  renderGoalPanel();
+}
+
+function renderTimeline() {
+  const tl = $("timeline");
+  tl.textContent = "";
+  if (!drill.sessionId) { tl.append(el("div", { class: "empty", text: "select a session from the fleet on the left" })); return; }
+
+  // Merge messages (ordered by created_at) and goal narrative entries
+  // (ordered by seq) into one timeline: goal entries carry no created_at, so
+  // they're interleaved by seq relative to request.meta/message records is
+  // not tracked here — simplest correct-enough ordering for a narrative is
+  // messages first in their natural order, with goal entries rendered in
+  // their own arrival order interspersed at the point they were received
+  // relative to messages seen so far (both arrive in seq order over the
+  // wire, so appending each in the order handleDrillEvent saw it preserves
+  // the true narrative order without needing a merge key at all).
+  const items = [];
+  for (const m of drill.messages) items.push({ kind: "message", at: m.created_at || "", m });
+  for (const n of drill.narrative) items.push({ kind: "goal", at: n.seq, ev: n.ev });
+  // Both arrays are already in arrival order; a stable sort on nothing would
+  // reorder by insertion anyway, but do it explicitly for messages by
+  // created_at (matches the inspector) while keeping goal entries pinned to
+  // where they were inserted relative to each other.
+  const msgs = drill.messages.slice().sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+
+  if (!msgs.length && !drill.narrative.length && !drill.draft && !drill.banners.length) {
+    tl.append(el("div", { class: "empty", text: "no messages yet" }));
+  }
+  // Render goal narrative entries first (condition-setting context), then
+  // the message transcript, then banners/draft — goal.* records read best
+  // as a preface + a running log rather than perfectly interleaved with
+  // tool chatter, and this ordering is deterministic across reconnects.
+  for (const n of drill.narrative) tl.append(renderGoalNarrativeItem(n.ev));
+  for (const m of msgs) tl.append(renderMessage(m));
+  for (const b of drill.banners) tl.append(renderBanner(b));
+  if (drill.draft) tl.append(renderDraft(drill.draft));
+  tl.scrollTop = tl.scrollHeight;
+}
+
+function renderGoalNarrativeItem(ev) {
+  switch (ev.type) {
+    case "goal.set":
+      return el("div", { class: "goalnarr set" },
+        el("span", { class: "goaltag", text: "\ud83c\udfaf goal set" }),
+        el("div", { class: "goalcond", text: ev.goal_condition || "" }));
+    case "goal.eval": {
+      const met = !!ev.goal_met;
+      return el("div", { class: "goalnarr " + (met ? "eval-met" : "eval-notmet") },
+        el("span", { class: "goaltag", text: "turn " + (ev.goal_turn || "?") + " \u00b7 evaluator: " + (met ? "MET" : "NOT MET") }),
+        ev.goal_reason ? el("div", { class: "goalreason", text: ev.goal_reason }) : null);
+    }
+    case "goal.stalled": {
+      const waitingOut = !!ev.goal_waiting;
+      return el("div", { class: "goalnarr stalled" + (waitingOut ? " waiting" : "") },
+        el("span", { class: "goaltag", text: waitingOut
+          ? "\u23f3 waiting out provider weather (" + (ev.goal_retryable_class || "retryable") + ", attempt " + (ev.goal_attempt || 1) + ")"
+          : "\u26a0\ufe0f stalled (attempt " + (ev.goal_attempt || 1) + ")" }),
+        ev.goal_reason ? el("div", { class: "goalreason", text: ev.goal_reason }) : null);
+    }
+    case "goal.achieved":
+      return el("div", { class: "goalnarr achieved" },
+        el("span", { class: "goaltag", text: "\u2705 goal achieved \u00b7 " + (ev.goal_turns || 0) + " turn(s)" }),
+        ev.goal_reason ? el("div", { class: "goalreason", text: ev.goal_reason }) : null);
+    case "goal.cleared":
+      return el("div", { class: "goalnarr cleared" },
+        el("span", { class: "goaltag", text: "\u25a1 goal cleared" }));
+    default:
+      return el("div", {});
+  }
+}
+
+function renderMessage(m) {
+  const wrap = el("div", { class: "msg" }, el("div", { class: "role", text: m.role }));
+  const parts = Array.isArray(m.parts) ? m.parts : [];
+  const bubble = el("div", { class: "bubble " + m.role });
+  let bubbleUsed = false;
+  for (const p of parts) {
+    if (!p) continue;
+    if (p.type === "text") { bubble.append(el("div", { class: "text", text: p.text || "" })); bubbleUsed = true; }
+    else if (p.type === "reasoning") wrap.append(renderReasoning(p.text || ""));
+    else if (p.type === "tool_call") wrap.append(renderToolCall(p));
+    else if (p.type === "tool_result") wrap.append(renderToolResult(p.content, p.is_error));
+    else if (p.type === "blob") { bubble.append(el("div", { class: "text", text: "[blob " + (p.media_type || "") + "]" })); bubbleUsed = true; }
+  }
+  if (bubbleUsed) wrap.append(bubble);
+  return wrap;
+}
+
+function renderReasoning(text) {
+  return el("details", { class: "reason" },
+    el("summary", { text: "reasoning" }),
+    el("div", { class: "body" }, el("div", { class: "text", text })));
+}
+
+function renderToolCall(p) {
+  return el("details", { class: "tool" },
+    el("summary", { text: "\ud83d\udd27 " + (p.name || "tool") + (p.running ? " \u00b7 running\u2026" : "") }),
+    el("div", { class: "body" }, el("pre", { class: "code", text: prettyJSON(p.arguments) })));
+}
+
+function renderToolResult(content, isErr) {
+  return el("div", { class: "toolres" + (isErr ? " err" : "") },
+    el("div", { class: "role", text: isErr ? "tool result (error)" : "tool result" }),
+    el("div", { class: "text", text: partsText(content) }));
+}
+
+function renderBanner(b) {
+  const cls = b.type === "session.aborted" ? "banner abort" : "banner";
+  const label = b.type === "session.aborted" ? "aborted" : "error";
+  return el("div", { class: cls, text: b.text ? label + ": " + b.text : label });
+}
+
+function renderDraft(d) {
+  const wrap = el("div", { class: "msg streaming" }, el("div", { class: "role", text: "assistant" }));
+  if (d.reasoning) wrap.append(renderReasoning(d.reasoning));
+  for (const t of d.tools) {
+    if (t.output !== undefined || t.is_error) wrap.append(renderToolResult(t.output, t.is_error));
+    wrap.append(renderToolCall(t));
+  }
+  if (d.text) wrap.append(el("div", { class: "bubble assistant" }, el("div", { class: "text", text: d.text })));
+  return wrap;
+}
+
+/* ---------- composer + goal panel ---------- */
+
+function selectedSessionRecord() {
+  if (!drill.boxId || !drill.sessionId) return null;
+  const rt = boxRuntime.get(drill.boxId);
+  return (rt && rt.sessions.get(drill.sessionId)) || null;
+}
+
+function selectedBusy() {
+  const s = selectedSessionRecord();
+  const badge = sessionBadge(s || {});
+  return badge !== "idle";
+}
+
+function updateComposer() {
+  const has = !!(drill.boxId && drill.sessionId);
+  $("composer").style.display = has ? "" : "none";
+  const busy = selectedBusy();
+  $("promptBox").disabled = !has || busy;
+  $("sendBtn").disabled = !has || busy;
+  $("abortBtn").disabled = !has;
+  $("promptBox").placeholder = busy ? "session is busy\u2026" : "Message\u2026 (Enter to send, Shift+Enter for newline)";
+}
+
+function renderGoalPanel() {
+  const gp = $("goalpanel");
+  gp.textContent = "";
+  if (!drill.boxId || !drill.sessionId) return;
+  if (drill.goal && drill.goal.condition) {
+    const state = drill.goal.achieved ? "achieved" : drill.goal.active ? "active" : "cleared";
+    const chip = el("div", { class: "goalnarr " + (state === "active" ? "set" : state === "achieved" ? "achieved" : "cleared") },
+      el("span", { class: "goaltag", text: "current goal \u00b7 " + state }),
+      el("div", { class: "goalcond", text: drill.goal.condition }));
+    if (drill.goal.reason) chip.append(el("div", { class: "goalreason", text: drill.goal.reason }));
+    gp.append(chip);
+    if (!drill.goal.active) {
+      gp.append(el("button", { class: "small rearm", text: "\ud83d\udd01 Re-arm this goal", onclick: prefillRearm }));
+    }
+  }
+}
+
+function prefillRearm() {
+  if (!drill.goal) return;
+  $("goalForm").style.display = "";
+  $("goalCondition").value = drill.goal.condition || "";
+  $("goalMaxTurns").value = 0;
+  $("goalCondition").focus();
+}
+
+async function sendPrompt() {
+  const text = $("promptBox").value.trim();
+  if (!text || !drill.boxId || !drill.sessionId) return;
+  const b = box(drill.boxId);
+  $("composerNotice").textContent = "";
+  try {
+    const resp = await boxAPI(b, "POST", "/session/" + drill.sessionId + "/prompt_async", { parts: [{ type: "text", text }] });
+    if (resp.status === 202) { $("promptBox").value = ""; }
+    else if (resp.status === 409) { $("composerNotice").textContent = "session is busy \u2014 wait for it to finish"; }
+    else { $("composerNotice").textContent = "send failed (" + resp.status + ")"; }
+  } catch (e) { $("composerNotice").textContent = "send failed: " + e.message; }
+}
+
+async function submitGoal() {
+  const condition = $("goalCondition").value.trim();
+  const maxTurns = parseInt($("goalMaxTurns").value, 10) || 0;
+  if (!condition || !drill.boxId || !drill.sessionId) return;
+  const b = box(drill.boxId);
+  $("composerNotice").textContent = "";
+  try {
+    const resp = await boxAPI(b, "POST", "/session/" + drill.sessionId + "/goal", { condition, max_turns: maxTurns });
+    if (resp.status === 202) {
+      $("goalForm").style.display = "none";
+    } else {
+      const body = await resp.json().catch(() => ({}));
+      $("composerNotice").textContent = "goal failed (" + resp.status + "): " + (body.error || "");
+    }
+  } catch (e) { $("composerNotice").textContent = "goal failed: " + e.message; }
+}
+
+async function clearGoal() {
+  if (!drill.boxId || !drill.sessionId) return;
+  const b = box(drill.boxId);
+  try { await boxAPI(b, "DELETE", "/session/" + drill.sessionId + "/goal"); }
+  catch (e) { $("composerNotice").textContent = "clear goal failed: " + e.message; }
+}
+
+async function abortSession() {
+  if (!drill.boxId || !drill.sessionId) return;
+  const b = box(drill.boxId);
+  try { await boxAPI(b, "POST", "/session/" + drill.sessionId + "/abort"); }
+  catch (e) { $("composerNotice").textContent = "abort failed: " + e.message; }
+}
+
+async function quickNewSession(boxId) {
+  const b = box(boxId);
+  if (!b) return;
+  try {
+    const resp = await boxAPI(b, "POST", "/session", {});
+    if (resp.status === 201) {
+      const s = await resp.json();
+      const rt = ensureRuntime(boxId);
+      rt.sessions.set(s.id, s);
+      expandedBoxes.add(boxId);
+      selectSession(boxId, s.id);
+    } else {
+      $("headerNotice").textContent = "new session failed (" + resp.status + ")";
+    }
+  } catch (e) { $("headerNotice").textContent = "new session failed: " + e.message; }
+}
+
+function openRearmModal(boxId, s) {
+  selectSession(boxId, s.id);
+  prefillRearm();
+}
+
+/* ---------- box management: add / remove ---------- */
+
+function randomID() {
+  return "box_" + Math.random().toString(16).slice(2) + Date.now().toString(16);
+}
+
+function addBox({ name, base, token }) {
+  base = String(base || "").trim().replace(/\/+$/, "");
+  token = String(token || "").trim();
+  name = String(name || "").trim() || base;
+  if (!base || !token) return false;
+  const b = { id: randomID(), name, base, token };
+  hs.boxes.push(b);
+  persist();
+  expandedBoxes.add(b.id);
+  connectBox(b.id);
+  renderFleet();
+  return true;
+}
+
+function removeBox(id) {
+  disconnectBox(id);
+  hs.boxes = hs.boxes.filter(b => b.id !== id);
+  if (hs.view && hs.view.box === id) hs.view = {};
+  if (drill.boxId === id) { closeDrillConn(); drill.boxId = null; drill.sessionId = null; renderDrill(); }
+  expandedBoxes.delete(id);
+  boxRuntime.delete(id);
+  persist();
+  renderFleet();
+}
+
+/* ---------- modals ---------- */
+
+function closeModal() { $("modalHost").textContent = ""; }
+
+function openAddBoxModal() {
+  const nameIn = el("input", { id: "mAddName", placeholder: "e.g. staging-1" });
+  const baseIn = el("input", { id: "mAddBase", placeholder: "http://localhost:4096" });
+  const tokIn = el("input", { id: "mAddToken", type: "password", placeholder: "run token" });
+  const notice = el("div", { class: "notice" });
+  const modal = el("div", { class: "modal" },
+    el("h2", { text: "Add box" }),
+    el("div", { class: "field" }, el("label", { text: "Name" }), nameIn),
+    el("div", { class: "field" }, el("label", { text: "Base URL" }), baseIn),
+    el("div", { class: "field" }, el("label", { text: "Run token" }), tokIn),
+    notice,
+    el("div", { class: "row" },
+      el("button", { class: "primary", text: "Add", onclick: () => {
+        if (addBox({ name: nameIn.value, base: baseIn.value, token: tokIn.value })) closeModal();
+        else notice.textContent = "base URL and token are required";
+      } }),
+      el("button", { text: "Cancel", onclick: closeModal }),
+    ),
+  );
+  showModal(modal);
+  baseIn.focus();
+}
+
+function showModal(modal) {
+  const host = $("modalHost");
+  host.textContent = "";
+  const backdrop = el("div", { class: "modal-backdrop", onclick: (e) => { if (e.target === backdrop) closeModal(); } }, modal);
+  host.append(backdrop);
+}
+
+function openDispatchModal(boxId) {
+  const b = box(boxId);
+  if (!b) return;
+  const modelIn = el("input", { placeholder: "provider/model or alias (optional)" });
+  const condIn = el("textarea", { class: "big", placeholder: "Completion condition\u2026 multi-paragraph is fine \u2014 this is the whole point." });
+  const maxTurnsIn = el("input", { type: "number", min: "0", value: "0" });
+  const notice = el("div", { class: "notice" });
+  const modal = el("div", { class: "modal" },
+    el("h2", { text: "Dispatch on " + b.name }),
+    el("div", { class: "field" }, el("label", { text: "Model (optional)" }), modelIn),
+    el("div", { class: "field" }, el("label", { text: "Completion condition" }), condIn),
+    el("div", { class: "field" }, el("label", { text: "Max turns (0 = unlimited)" }), maxTurnsIn),
+    notice,
+    el("div", { class: "row" },
+      el("button", { class: "primary", text: "Dispatch", onclick: async () => {
+        const condition = condIn.value.trim();
+        if (!condition) { notice.textContent = "a completion condition is required"; return; }
+        notice.textContent = "creating session\u2026";
+        try {
+          const body = {};
+          if (modelIn.value.trim()) body.model = modelIn.value.trim();
+          const created = await boxAPI(b, "POST", "/session", body);
+          if (created.status !== 201) { notice.textContent = "create session failed (" + created.status + ")"; return; }
+          const sess = await created.json();
+          const rt = ensureRuntime(boxId);
+          rt.sessions.set(sess.id, sess);
+          notice.textContent = "starting goal\u2026";
+          const maxTurns = parseInt(maxTurnsIn.value, 10) || 0;
+          const goalResp = await boxAPI(b, "POST", "/session/" + sess.id + "/goal", { condition, max_turns: maxTurns });
+          if (goalResp.status !== 202) {
+            const eb = await goalResp.json().catch(() => ({}));
+            notice.textContent = "goal failed (" + goalResp.status + "): " + (eb.error || "");
+            return;
+          }
+          expandedBoxes.add(boxId);
+          closeModal();
+          selectSession(boxId, sess.id);
+        } catch (e) { notice.textContent = "dispatch failed: " + e.message; }
+      } }),
+      el("button", { text: "Cancel", onclick: closeModal }),
+    ),
+  );
+  showModal(modal);
+  condIn.focus();
+}
+
+/* ---------- spawn box: the hub's own (same-origin) SSE API ---------- */
+
+function openSpawnModal() {
+  const nameIn = el("input", { placeholder: "name for the new box (once it's up)" });
+  const log = el("div", { class: "spawnlog", text: "" });
+  const notice = el("div", { class: "notice" });
+  const startBtn = el("button", { class: "primary", text: "Spawn" });
+  const modal = el("div", { class: "modal" },
+    el("h2", { text: "Spawn a new box" }),
+    el("div", {}, "Runs this hub's configured -spawn-command / $HARNESS_HUB_SPAWN and streams its output below. See the contract in this page's header comment."),
+    el("div", { class: "field" }, el("label", { text: "Box name" }), nameIn),
+    notice, log,
+    el("div", { class: "row" }, startBtn, el("button", { text: "Close", onclick: closeModal })),
+  );
+  showModal(modal);
+  startBtn.onclick = () => runSpawn(nameIn.value, log, notice, startBtn);
+  nameIn.focus();
+}
+
+async function runSpawn(name, log, notice, startBtn) {
+  startBtn.disabled = true;
+  notice.textContent = "";
+  log.textContent = "";
+  try {
+    const resp = await fetch("/spawn", { method: "POST" });
+    if (!resp.body) throw new Error("no response body");
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let finished = false;
+    const parse = createSSEParser(frame => {
+      let ev; try { ev = JSON.parse(frame.data); } catch { return; }
+      if (ev.type === "stdout") {
+        log.textContent += (log.textContent ? "\n" : "") + ev.line;
+        log.scrollTop = log.scrollHeight;
+      } else if (ev.type === "done") {
+        finished = true;
+        if (ev.error) {
+          notice.textContent = "spawn failed: " + ev.error;
+        } else if (ev.tunnel_url && ev.run_token) {
+          addBox({ name: name || ev.tunnel_url, base: ev.tunnel_url, token: ev.run_token });
+          notice.textContent = "box added: " + ev.tunnel_url;
+        } else {
+          notice.textContent = "spawn finished (exit " + ev.exit_code + ") but no TUNNEL_URL=/RUN_TOKEN= lines were found \u2014 add the box by hand.";
+        }
+      }
+    });
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      parse(dec.decode(value, { stream: true }));
+    }
+    if (!finished) notice.textContent = "spawn stream ended unexpectedly";
+  } catch (e) {
+    notice.textContent = "spawn failed: " + e.message;
+  } finally {
+    startBtn.disabled = false;
+  }
+}
+
+/* ---------- notifications ---------- */
+
+function notify(boxId, sessionId, notice) {
+  if (!hs.notify) return;
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  const b = box(boxId);
+  const title = notice.title + " \u00b7 " + (b ? b.name : boxId) + " / " + shortId(sessionId);
+  try { new Notification(title, { body: notice.body }); } catch { /* best-effort */ }
+}
+
+function updateNotifyButton() {
+  const btn = $("notifyBtn");
+  btn.classList.toggle("on", !!hs.notify);
+  btn.textContent = hs.notify ? "\ud83d\udd14 Notify: on" : "\ud83d\udd14 Notify";
+}
+
+async function toggleNotify() {
+  if (!hs.notify) {
+    if (typeof Notification !== "undefined" && Notification.permission !== "granted") {
+      try { await Notification.requestPermission(); } catch { /* ignore */ }
+    }
+  }
+  hs.notify = !hs.notify;
+  persist();
+  updateNotifyButton();
+}
+
+/* ---------- copy hub link ---------- */
+
+async function copyHubLink() {
+  const url = location.href;
+  try {
+    await navigator.clipboard.writeText(url);
+    $("headerNotice").textContent = "hub link copied";
+  } catch {
+    $("headerNotice").textContent = url;
+  }
+  setTimeout(() => { $("headerNotice").textContent = ""; }, 4000);
+}
+
+/* ---------- wiring + bootstrap ---------- */
+
+$("addBoxBtn").onclick = openAddBoxModal;
+$("spawnBtn").onclick = openSpawnModal;
+$("notifyBtn").onclick = toggleNotify;
+$("copyLinkBtn").onclick = copyHubLink;
+$("sendBtn").onclick = sendPrompt;
+$("abortBtn").onclick = abortSession;
+$("clearGoalBtn").onclick = clearGoal;
+$("goalSubmitBtn").onclick = submitGoal;
+$("setGoalToggleBtn").onclick = () => {
+  const f = $("goalForm");
+  f.style.display = f.style.display === "none" ? "" : "none";
+};
+$("promptBox").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!$("sendBtn").disabled) sendPrompt(); }
+});
+
+function bootstrap() {
+  loadFromLocation();
+  updateNotifyButton();
+  for (const b of hs.boxes) { expandedBoxes.add(b.id); connectBox(b.id); }
+  renderFleet();
+  updateComposer();
+  const view = hs.view || {};
+  if (view.box && view.session && box(view.box)) {
+    selectSession(view.box, view.session);
+  } else {
+    renderDrill();
+  }
+}
+
+bootstrap();
 </script>
 </body>
 </html>
