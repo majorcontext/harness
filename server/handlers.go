@@ -772,7 +772,15 @@ func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request) {
 		writeClaimError(w, code, holder)
 		return
 	}
-	won, hadPending := sess.AnswerQuestion(body.CallID, answerText)
+	// From here on, every read and write goes through st.sess — the
+	// instance claimForPrompt resolved and made resident — NEVER the `sess`
+	// from the handler's early lookup. For a non-resident session those are
+	// two distinct engine.Sessions loaded from the same log: answering the
+	// throwaway would leave the claimed instance's awaitingQuestion set
+	// (its LoadSession ran before question.answered was persisted), and the
+	// resumed worker's own clear-on-prompt would then fire a SECOND
+	// question.answered — see TestAnswerResumesGoalNonResident.
+	won, hadPending := st.sess.AnswerQuestion(body.CallID, answerText)
 	if !won {
 		// Lost the race for the pending question itself (answered/gone, or
 		// a different call_id, between our checks above and here) — release
@@ -786,7 +794,7 @@ func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	condition, stillActive := sess.ActiveGoal()
+	condition, stillActive := st.sess.ActiveGoal()
 	if !stillActive {
 		// The goal was cleared concurrently (e.g. DELETE /goal) in the
 		// narrow window between our goalActive read above and

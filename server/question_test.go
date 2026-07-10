@@ -3,6 +3,9 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -537,5 +540,82 @@ func TestAnswerConcurrentRaceExactlyOneWins(t *testing.T) {
 	}
 	if achieved != 1 {
 		t.Errorf("goal.achieved records = %d, want exactly 1 (no double resume): %v", achieved, evs)
+	}
+}
+
+// TestAnswerResumesGoalNonResident pins the instance-identity half of the
+// "exactly one question.answered" invariant: for a session that is NOT
+// resident when /answer arrives, the handler's early lookup() loads a
+// throwaway engine.Session while claimForPrompt loads and stores the
+// canonical one. Answering the throwaway but resuming the canonical
+// instance double-writes question.answered — the canonical instance's
+// LoadSession ran before the answer was persisted, so its own
+// clear-on-prompt fires a second record. Every post-claim step must
+// operate on the claimed instance.
+func TestAnswerResumesGoalNonResident(t *testing.T) {
+	dir := t.TempDir()
+	prov := &goalProv{
+		name: "test",
+		worker: [][]provider.Event{
+			askUserTurn("tc1", `{"questions":[{"question":"Which environment?"}]}`),
+			asstTurn("deployed to staging"),
+		},
+		eval: [][]provider.Event{asstTurn("MET: deployment confirmed")},
+	}
+	srv1 := newServer(t, dir, prov, 0, func(o *Options) {
+		o.GoalEvaluator = message.ModelRef{Provider: prov.Name(), Model: "eval"}
+	})
+	ts1 := httptest.NewServer(srv1)
+	h1 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv1, ts: ts1}
+
+	id := h1.createSession("test/m1")
+	resp, data := h1.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "deploy the service", "max_turns": 5})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
+	}
+	resp, data = h1.do("GET", "/session/"+id+"/wait?until=awaiting-input&timeout_s=5", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("wait until=awaiting-input status %d: %s", resp.StatusCode, data)
+	}
+
+	if err := srv1.Close(); err != nil {
+		t.Fatalf("closing first server: %v", err)
+	}
+	ts1.Close()
+
+	// Second process over the same dir: the session is non-resident here.
+	srv2 := newServer(t, dir, prov, 0, func(o *Options) {
+		o.GoalEvaluator = message.ModelRef{Provider: prov.Name(), Model: "eval"}
+	})
+	ts2 := httptest.NewServer(srv2)
+	t.Cleanup(ts2.Close)
+	h2 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv2, ts: ts2}
+
+	resp, data = h2.do("POST", "/session/"+id+"/answer", map[string]any{
+		"call_id": "tc1",
+		"answers": []map[string]any{{"question": "Which environment?", "selected": []string{"staging"}}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("answer (non-resident) status %d: %s", resp.StatusCode, data)
+	}
+	resp, data = h2.do("GET", "/session/"+id+"/wait?until=goal-done&timeout_s=10", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("wait until=goal-done status %d: %s", resp.StatusCode, data)
+	}
+
+	// The invariant: exactly ONE question.answered record for one answer,
+	// resident or not.
+	logBytes, err := os.ReadFile(filepath.Join(dir, id+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	answered := 0
+	for _, line := range strings.Split(string(logBytes), "\n") {
+		if strings.Contains(line, `"type":"question.answered"`) {
+			answered++
+		}
+	}
+	if answered != 1 {
+		t.Errorf("question.answered records = %d, want exactly 1", answered)
 	}
 }
