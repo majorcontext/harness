@@ -37,12 +37,17 @@ import (
 // setBashWaitDelay overrides the package-level bashWaitDelay for the
 // duration of a test, restoring the original in t.Cleanup. Keeping it small
 // keeps these tests' wall-clock cost small without touching the value used
-// in production.
+// in production. It also tightens bashGroupKillWindow (the process-group
+// kill's own retry window, see killProcessGroup) for the same reason.
 func setBashWaitDelay(t *testing.T, d time.Duration) {
 	t.Helper()
 	orig := bashWaitDelay
 	bashWaitDelay = d
 	t.Cleanup(func() { bashWaitDelay = orig })
+
+	origWindow := bashGroupKillWindow
+	bashGroupKillWindow = d
+	t.Cleanup(func() { bashGroupKillWindow = origWindow })
 }
 
 // pgidAlive reports whether any process in the given process group still
