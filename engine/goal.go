@@ -114,6 +114,15 @@ type GoalOptions struct {
 	// — the engine hardcodes no default — and is resolved through the same
 	// provider registry as the worker model.
 	Evaluator message.ModelRef
+
+	// ResumeAnswer, when non-empty, is a formatted answer block (see
+	// Session.AnswerQuestion and docs/design/question-tool.md §3) folded
+	// into turn 1's directive alongside the condition — consumed exactly
+	// once (later turns use the ordinary condition/guidance directive
+	// unchanged). Set by the server's POST /answer goal-paused branch when
+	// resuming a goal that PursueGoal paused on ask_user (see the
+	// "awaiting_input" GoalResult below).
+	ResumeAnswer string
 }
 
 // GoalResult is the outcome of a PursueGoal run.
@@ -219,10 +228,19 @@ func waitGoalRetryBackoff(ctx context.Context, attempt int) error {
 // ask the evaluator whether it is met, feeding the evaluator's reason back as
 // guidance until the condition is met or MaxTurns is exhausted.
 //
-// Turn 1 prompts the raw condition as the directive. A NOT MET verdict makes
-// the next directive a fixed-template guidance message carrying the evaluator's
-// reason. Returns Achieved=true on the first MET verdict; Achieved=false with
-// reason "max turns" when the budget runs out.
+// Turn 1 prompts the raw condition as the directive (or the condition plus a
+// formatted answer block when GoalOptions.ResumeAnswer is set — see
+// goalResumeDirective). A NOT MET verdict makes the next directive a
+// fixed-template guidance message carrying the evaluator's reason. Returns
+// Achieved=true on the first MET verdict; Achieved=false with reason "max
+// turns" when the budget runs out.
+//
+// If a worker turn ends because the built-in ask_user tool ran (see
+// ask_user.go), PursueGoal returns immediately — before ever asking the
+// evaluator — with Achieved=false, Reason "awaiting_input": a new pause
+// state alongside ACTIVE/STALLED/ACHIEVED/CLEARED. Unlike CLEARED, the goal
+// is left active; unlike STALLED, no retry attempt is consumed. See
+// docs/design/question-tool.md §2 for the full rationale.
 //
 // A worker-turn error (s.Prompt failing) is retried up to goalWorkerRetries
 // times — see promptTurnWithRetry — recording a goal.stalled record for every
@@ -267,6 +285,12 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 	}
 
 	directive := condition
+	if opts.ResumeAnswer != "" {
+		// Consumed exactly once, as turn 1's directive: every later
+		// iteration below overwrites directive with goalGuidance's
+		// evaluator-fed template regardless, so this can never repeat.
+		directive = goalResumeDirective(condition, opts.ResumeAnswer)
+	}
 	for turn := 1; opts.MaxTurns == 0 || turn <= opts.MaxTurns; turn++ {
 		if !s.goalActiveWith(condition) {
 			// Cleared between registration and this turn (or mid-loop by a
@@ -295,6 +319,18 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			reason := fmt.Sprintf("worker turn failed after %d attempt(s): %v", attempts, err)
 			s.clearGoal(reason)
 			return nil, fmt.Errorf("engine: goal loop stalled: %w", err)
+		}
+		// Turn-ends-at-question pause (design doc §2): the worker turn
+		// above succeeded (Prompt returned nil), but it ended because
+		// ask_user ran, not because the model actually finished — asking
+		// the evaluator now would burn turns re-asking the same unanswered
+		// question. Return immediately, WITHOUT clearing the goal (unlike
+		// CLEARED) and without consuming a retry attempt (unlike STALLED):
+		// question.asked is itself the durable record explaining the
+		// pause, exactly as goal.stalled explains a retry. Resuming (POST
+		// /answer) re-enters with Registered:true and the same condition.
+		if _, awaiting := s.AwaitingQuestion(); awaiting {
+			return &GoalResult{Achieved: false, Turns: turn, Reason: "awaiting_input"}, nil
 		}
 		met, reason, err := s.evaluateGoal(ctx, condition, opts.Evaluator)
 		if err != nil {
@@ -677,6 +713,16 @@ func goalGuidance(condition, reason string) string {
 	return "The goal has not been met yet.\n\nGOAL: " + condition +
 		"\n\nEVALUATOR FEEDBACK: " + reason +
 		"\n\nKeep working until the goal is fully satisfied, then stop."
+}
+
+// goalResumeDirective is turn 1's directive when GoalOptions.ResumeAnswer is
+// set (see the design doc §3): the raw condition plus the formatted answer
+// block, framed the same way goalGuidance frames evaluator feedback, so the
+// resumed worker gets the original goal AND the answer to the question that
+// paused it in one message.
+func goalResumeDirective(condition, answer string) string {
+	return condition + "\n\nThe user answered your question(s):\n\n" + answer +
+		"\n\nContinue working toward the goal above."
 }
 
 // renderConversation renders history compactly for the evaluator: each message
