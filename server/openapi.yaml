@@ -75,7 +75,7 @@ components:
 
     Session:
       type: object
-      required: [id, created_at, model, status, state, messages, workdir]
+      required: [id, created_at, model, status, state, messages, workdir, usage, last_activity_at]
       properties:
         id:
           type: string
@@ -128,6 +128,64 @@ components:
           description: >
             The pending ask_user question, present exactly when `state` is
             "awaiting-input". Answer it with POST /session/{id}/answer.
+        usage:
+          $ref: "#/components/schemas/Usage"
+          description: >
+            Cumulative token usage plus message count and (once at least one
+            turn has completed) the most recent turn's input tokens — so an
+            orchestrator can rotate a session BEFORE it hits the provider's
+            context-window cliff, rather than learning about it from a
+            failed prompt (see LastTurn.outcome "context_exhausted" for that
+            failure mode). Always present, resident or not — the engine
+            tracks this for every session, including one reloaded from its
+            log after a restart.
+        last_activity_at:
+          type: string
+          format: date-time
+          description: >
+            The timestamp of the most recently appended message (user,
+            assistant, or tool), or `created_at` if none has been appended
+            yet. Exists so a fleet monitor can read a single absolute
+            liveness signal instead of sampling `seq` twice, a session
+            apart, and diffing to infer whether a session is quietly
+            working or wedged mid-turn — the double-sample approach is slow,
+            racy against a session legitimately paused between polls (e.g.
+            `state` "awaiting-input"), and only ever answers a relative
+            question ("did anything happen"), never an absolute one ("how
+            long has this been quiet"). Always present, resident or not.
+
+    Usage:
+      type: object
+      description: >
+        Token usage for a session, surfaced on Session.usage and each GET
+        /session/status entry's `usage`.
+      required: [input_tokens, output_tokens, messages]
+      properties:
+        input_tokens:
+          type: integer
+          description: Cumulative input tokens across every completed turn.
+        output_tokens:
+          type: integer
+          description: Cumulative output tokens across every completed turn.
+        cache_read_tokens:
+          type: integer
+          description: Cumulative prompt-cache read tokens, when the provider reports them.
+        cache_write_tokens:
+          type: integer
+          description: Cumulative prompt-cache write tokens, when the provider reports them.
+        messages:
+          type: integer
+          description: |
+            Count of messages in the session log — the same value as
+            Session.messages when the session is idle. Under a running turn
+            the two are read at separate instants and can momentarily
+            diverge; this is a monitoring surface, not a transactional one.
+        last_input_tokens:
+          type: integer
+          description: >
+            Input tokens of the most recent completed turn — the size of
+            the request that just went out, distinct from the cumulative
+            total above. Absent (0) until at least one turn has completed.
 
     LastTurn:
       type: object
@@ -138,11 +196,19 @@ components:
       properties:
         outcome:
           type: string
-          enum: [completed, error, max_turns_exceeded, awaiting_input]
+          enum: [completed, error, context_exhausted, max_turns_exceeded, awaiting_input]
           description: >
             "completed": the turn (or goal) finished successfully —for a
             goal, the evaluator returned MET. "error": the turn failed
-            outright (provider error, transcode failure). "max_turns_exceeded":
+            outright (provider error, transcode failure). "context_exhausted":
+            the turn failed on a classified, deterministic prompt/context-
+            window overflow (issue #62) — the assembled request no longer
+            fits the model's input limit, so retrying the identical request
+            would fail identically; distinct from generic "error" so a
+            poller can react to it specifically (e.g. rotate the session)
+            without string-matching `error`. A goal loop fails fast on this
+            (one worker attempt, no retries) rather than exhausting its
+            retry budget the way an ordinary "error" does. "max_turns_exceeded":
             goal-loop only — GoalOptions.MaxTurns was exhausted without the
             evaluator ever returning MET; the goal gave up, it did not
             complete, so it is deliberately never reported as "completed".
@@ -299,7 +365,7 @@ components:
         deliberately byte-compatible with opencode's /session/status response
         shape (existing orchestration handlers port without parsing changes);
         "state" is additive — see SessionState for its precedence rule.
-      required: [type, state]
+      required: [type, state, usage]
       properties:
         type:
           $ref: "#/components/schemas/SessionStatus"
@@ -308,6 +374,11 @@ components:
         last_turn:
           $ref: "#/components/schemas/LastTurn"
           description: Same field, and same presence rule, as Session.last_turn.
+        usage:
+          $ref: "#/components/schemas/Usage"
+          description: >
+            Same field as Session.usage — cheaply derived (no full session
+            load) for a non-resident session, same as `type`/`state` above.
 
     StatusResponse:
       type: object
@@ -625,7 +696,7 @@ components:
             turn.end; see LastTurn.error.
         outcome:
           type: string
-          enum: [completed, error, max_turns_exceeded, awaiting_input]
+          enum: [completed, error, context_exhausted, max_turns_exceeded, awaiting_input]
           description: >
             Turn result for turn.end events — see LastTurn.outcome for the
             full meaning of each value, including why a goal that exhausts
