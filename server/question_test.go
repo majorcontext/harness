@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/majorcontext/harness/message"
@@ -454,5 +455,87 @@ func TestPromptRejectedWhileGoalPausedOnQuestion(t *testing.T) {
 	})
 	if resp.StatusCode != http.StatusAccepted {
 		t.Errorf("answer after rejected prompt status = %d, want 202: %s", resp.StatusCode, data)
+	}
+}
+
+// TestAnswerConcurrentRaceExactlyOneWins is the red-first test for the
+// design doc §3 invariant the goal-paused branch exists to enforce: "Exactly
+// one /answer wins; the loser gets the same 409 a stale call_id gets." Two
+// concurrent POST /session/{id}/answer requests for the very same pending
+// question (same call_id) must never both resume PursueGoal — that would
+// violate its "must not be called concurrently with itself or Prompt"
+// contract — so exactly one must be accepted (202) and the other rejected
+// (409), and the goal must reach completion exactly once (one turn.end
+// outcome "completed", one goal.achieved), never twice.
+func TestAnswerConcurrentRaceExactlyOneWins(t *testing.T) {
+	prov := &goalProv{
+		name: "test",
+		worker: [][]provider.Event{
+			askUserTurn("tc1", `{"questions":[{"question":"Which environment?"}]}`),
+			asstTurn("deployed to staging"),
+		},
+		eval: [][]provider.Event{asstTurn("MET: deployment confirmed")},
+	}
+	h := newGoalHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	sse := h.openSSE("?from=0", "")
+	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "deploy the service", "max_turns": 5})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
+	}
+	sse.collectUntilIdle(t) // paused on ask_user; the run slot is free
+
+	// Fire two identical /answer requests as close to simultaneously as
+	// possible: a start barrier (closed once) releases both goroutines at
+	// the same instant rather than relying on any sleep/timing guess.
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	codes := make([]int, 2)
+	for i := range codes {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			resp, _ := h.do("POST", "/session/"+id+"/answer", map[string]any{
+				"call_id": "tc1",
+				"answers": []map[string]any{{"question": "Which environment?", "selected": []string{"staging"}}},
+			})
+			codes[i] = resp.StatusCode
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	var accepted, conflicted int
+	for _, c := range codes {
+		switch c {
+		case http.StatusAccepted:
+			accepted++
+		case http.StatusConflict:
+			conflicted++
+		default:
+			t.Errorf("unexpected /answer status %d, want 202 or 409", c)
+		}
+	}
+	if accepted != 1 || conflicted != 1 {
+		t.Fatalf("codes = %v, want exactly one 202 and one 409", codes)
+	}
+
+	evs := sse.collectUntilIdle(t)
+	var completedEnds, achieved int
+	for _, ev := range evs {
+		if ev.Type == "turn.end" && ev.Outcome == "completed" {
+			completedEnds++
+		}
+		if ev.Type == "goal.achieved" {
+			achieved++
+		}
+	}
+	if completedEnds != 1 {
+		t.Errorf("completed turn.end records = %d, want exactly 1 (no double resume): %v", completedEnds, evs)
+	}
+	if achieved != 1 {
+		t.Errorf("goal.achieved records = %d, want exactly 1 (no double resume): %v", achieved, evs)
 	}
 }

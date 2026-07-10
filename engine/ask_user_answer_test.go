@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/majorcontext/harness/message"
@@ -158,5 +159,60 @@ func TestPendingResumeAnswerClearedOnceDelivered(t *testing.T) {
 	}
 	if _, ok := reloaded.PendingResumeAnswer(); ok {
 		t.Error("PendingResumeAnswer should be false once the answer was actually delivered as a message")
+	}
+}
+
+// TestAnswerQuestionConcurrentExactlyOneWins is the red-first test for
+// AnswerQuestion's atomicity claim (docs/design/question-tool.md §3): "two
+// concurrent POST /answer ... could both observe the pending question and
+// both re-spawn PursueGoal ... Exactly one /answer wins; the loser gets the
+// same 409 a stale call_id gets." That guarantee is enforced entirely by
+// AnswerQuestion's single locked check-persist-clear (see ask_user.go) —
+// this exercises it directly, with real goroutines released by a shared
+// start barrier (never a sleep), so the race is genuine, not simulated.
+func TestAnswerQuestionConcurrentExactlyOneWins(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{
+		Providers:  provider.Registry{"test": &scriptedProvider{name: "test"}},
+		Model:      message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir: dir,
+	})
+	s.runAskUser("tc1", []byte(`{"questions":[{"question":"which env?"}]}`))
+
+	const n = 50
+	start := make(chan struct{})
+	results := make([]bool, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			ok, _ := s.AnswerQuestion("tc1", "staging")
+			results[i] = ok
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	wins := 0
+	for _, ok := range results {
+		if ok {
+			wins++
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("AnswerQuestion wins = %d across %d concurrent callers, want exactly 1", wins, n)
+	}
+	if _, awaiting := s.AwaitingQuestion(); awaiting {
+		t.Error("question still awaiting after a winning AnswerQuestion call")
+	}
+
+	reloaded, err := LoadSession(Config{Providers: provider.Registry{"test": &scriptedProvider{name: "test"}}, SessionDir: dir}, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if _, awaiting := reloaded.AwaitingQuestion(); awaiting {
+		t.Error("reloaded session still awaiting a question after the concurrent race resolved it")
 	}
 }
