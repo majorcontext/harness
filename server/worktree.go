@@ -193,6 +193,22 @@ func readWorktreeMeta(path string) (worktreeMeta, error) {
 	return m, nil
 }
 
+// sessionResumable reports whether sessionID's session log
+// (<sessionDir>/<sessionID>.jsonl) still exists — i.e. whether the session
+// survived a restart and may still be resumed via LoadSession, which
+// restores its WorkDir (the worktree path) verbatim and expects tools to
+// keep running there. A meta with no session ID yet (the provisional meta
+// written before a worktree's owning session exists — see
+// createWorktreeForSession) is never resumable: nothing could possibly
+// resume it.
+func sessionResumable(sessionDir, sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(sessionDir, sessionID+".jsonl"))
+	return err == nil
+}
+
 // sweepWorktrees adjudicates every worktree this process (or a predecessor
 // that crashed) ever recorded under base's meta directory: a missing
 // worktree directory just needs its git admin metadata and meta file
@@ -203,9 +219,19 @@ func readWorktreeMeta(path string) (worktreeMeta, error) {
 // journal the same "kept" record a graceful teardown would have written,
 // ensuring a crash never silently drops that signal.
 //
+// A meta whose owning session is still resumable (its session log —
+// <sessionDir>/<session_id>.jsonl — still exists) is left completely alone:
+// no removal, no clean/dirty judgment at all, no kept journal. A graceful
+// restart leaves a resumable session's worktree and log both intact; only a
+// genuinely terminal session (no log at all) is ever reaped or judged here.
+// Once a terminal session's dirty worktree has been journaled as kept, its
+// meta is dropped — the journal record is the durable trace of that
+// decision, not the meta file, so a later sweep of the same still-dirty
+// worktree (nothing else has touched it) doesn't re-journal it forever.
+//
 // A missing or empty meta directory is a no-op, so calling this
 // unconditionally at serve start is always safe and cheap.
-func sweepWorktrees(base string, onKept func(sessionID, path string)) {
+func sweepWorktrees(base, sessionDir string, onKept func(sessionID, path string)) {
 	metaDir := filepath.Join(base, "meta")
 	entries, err := os.ReadDir(metaDir)
 	if err != nil {
@@ -229,6 +255,11 @@ func sweepWorktrees(base string, onKept func(sessionID, path string)) {
 			// Unreadable meta: nothing safe to decide. Leave it for a human.
 			continue
 		}
+		if sessionResumable(sessionDir, m.SessionID) {
+			// The owning session may still be resumed; its next prompt
+			// expects this exact worktree to exist. Touch nothing.
+			continue
+		}
 		info, statErr := os.Stat(m.Path)
 		if statErr != nil || !info.IsDir() {
 			// The worktree directory is already gone (removed out from
@@ -249,5 +280,10 @@ func sweepWorktrees(base string, onKept func(sessionID, path string)) {
 		if onKept != nil {
 			onKept(m.SessionID, m.Path)
 		}
+		// The kept record above is now the durable trace of this decision;
+		// drop the meta so a later sweep of this same terminal, still-dirty
+		// worktree doesn't re-journal it on every future restart. The
+		// worktree itself stays exactly where it is.
+		os.Remove(metaPath)
 	}
 }

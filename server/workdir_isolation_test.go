@@ -3,9 +3,11 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -298,5 +300,240 @@ func TestServeStartSweepsStaleWorktrees(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected a workdir.worktree_kept record for the dirty leftover, got %+v", srv.journal)
+	}
+}
+
+// ============================================================================
+// All five tests below (FINDING 1's a/b/c, FINDING 2's two) are written
+// against this exact commit's UNMODIFIED code — sweepWorktrees's current
+// two-argument signature, createWorktreeForSession's current
+// addWorktree-then-writeWorktreeMeta ordering. They are run once, right
+// here, before any production code changes, to establish the true baseline
+// red/green state for every one of them. Only after that does the fix work
+// begin.
+// ============================================================================
+
+// --- FINDING 1 ---
+
+// TestSweepLeavesResumableSessionWorktreeAloneOnRestart is case (a): a
+// 'worktree' session was created and its log persisted (handleCreate always
+// calls sess.Persist() immediately), then the process "restarts" (a fresh
+// *Server is built over the same SessionDir) before the session ever ends.
+// Its worktree is clean and its log is still on disk — the session is
+// resumable — so the startup sweep must leave the worktree completely
+// alone.
+func TestSweepLeavesResumableSessionWorktreeAloneOnRestart(t *testing.T) {
+	repo := newGitRepo(t)
+	sessDir := t.TempDir()
+	prov := &scriptedProvider{name: "test"}
+
+	srv1 := newServer(t, sessDir, prov, 0, func(o *Options) {
+		o.WorkspaceRoots = []string{repo}
+	})
+	ts1 := httptest.NewServer(srv1)
+	t.Cleanup(ts1.Close)
+	h := &harness{t: t, dir: sessDir, token: "secret-run-token", srv: srv1, ts: ts1}
+
+	id := h.createSessionBody(map[string]any{
+		"model": "test/m1", "workdir": repo, "workdir_isolation": "worktree",
+	})
+	_, data := h.do("GET", "/session/"+id, nil)
+	wd := sessionWorkDir(t, data)
+	if _, err := os.Stat(wd); err != nil {
+		t.Fatalf("worktree missing right after create: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sessDir, id+".jsonl")); err != nil {
+		t.Fatalf("expected the session log to be persisted immediately on create: %v", err)
+	}
+
+	// Simulate the graceful restart: build a fresh *Server against the same
+	// SessionDir. New() runs the startup sweep at construction.
+	srv2 := newServer(t, sessDir, prov, 0, func(o *Options) {
+		o.WorkspaceRoots = []string{repo}
+	})
+	_ = srv2
+
+	if _, err := os.Stat(wd); err != nil {
+		t.Fatalf("expected the resumable session's worktree to survive the restart sweep, stat err=%v", err)
+	}
+}
+
+// TestSweepTerminalCleanWorktreeStillRemoved is case (b): a session with NO
+// log on disk (genuinely terminal) whose worktree is clean must still be
+// removed by the startup sweep, exactly as before this change.
+func TestSweepTerminalCleanWorktreeStillRemoved(t *testing.T) {
+	repo := newGitRepo(t)
+	sessDir := t.TempDir()
+	base := filepath.Join(sessDir, "worktrees")
+
+	cleanPath := filepath.Join(base, "wt_clean")
+	cleanBase, err := addWorktree(repo, cleanPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeWorktreeMeta(base, "wt_clean", worktreeMeta{
+		SessionID: "ses_fakeclean0000", RepoRoot: repo, Path: cleanPath, BaseCommit: cleanBase,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// No <SessionDir>/ses_fakeclean0000.jsonl exists: this session is
+	// terminal, not resumable.
+
+	sweepWorktrees(base, sessDir, func(sessionID, path string) {
+		t.Errorf("unexpected kept event for a clean terminal worktree: %s %s", sessionID, path)
+	})
+
+	if _, err := os.Stat(cleanPath); !os.IsNotExist(err) {
+		t.Errorf("expected the clean terminal worktree to be removed by the sweep, stat err=%v", err)
+	}
+}
+
+// TestSweepTerminalDirtyWorktreeKeptOnceThenSilent is case (c): a genuinely
+// terminal session (no log on disk) whose worktree is dirty is left on disk
+// and journaled via onKept — but only once. The reviewer's sub-issue is
+// that the meta was never dropped after the kept journal fired, so an
+// identical dirty leftover re-fires onKept on every subsequent sweep
+// forever.
+func TestSweepTerminalDirtyWorktreeKeptOnceThenSilent(t *testing.T) {
+	repo := newGitRepo(t)
+	sessDir := t.TempDir()
+	base := filepath.Join(sessDir, "worktrees")
+
+	dirtyPath := filepath.Join(base, "wt_dirty")
+	dirtyBase, err := addWorktree(repo, dirtyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dirtyPath, "uncommitted.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	metaPath, err := writeWorktreeMeta(base, "wt_dirty", worktreeMeta{
+		SessionID: "ses_fakedirty0000", RepoRoot: repo, Path: dirtyPath, BaseCommit: dirtyBase,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No <SessionDir>/ses_fakedirty0000.jsonl exists: this session is
+	// terminal, not resumable.
+
+	keptCount := 0
+	sweepWorktrees(base, sessDir, func(sessionID, path string) {
+		if sessionID == "ses_fakedirty0000" && path == dirtyPath {
+			keptCount++
+		}
+	})
+	if keptCount != 1 {
+		t.Fatalf("expected exactly one kept event on the first sweep, got %d", keptCount)
+	}
+	if _, err := os.Stat(dirtyPath); err != nil {
+		t.Fatalf("expected the dirty worktree to survive, stat err=%v", err)
+	}
+	if _, err := os.Stat(metaPath); !os.IsNotExist(err) {
+		t.Errorf("expected the meta file to be dropped once kept was journaled, stat err=%v", err)
+	}
+
+	// A second sweep over the same, untouched directory must be silent.
+	sweepWorktrees(base, sessDir, func(sessionID, path string) {
+		t.Errorf("unexpected second kept event for an already-dropped meta: %s %s", sessionID, path)
+	})
+	if _, err := os.Stat(dirtyPath); err != nil {
+		t.Errorf("expected the dirty worktree to still be on disk after the second, silent sweep: %v", err)
+	}
+}
+
+// --- FINDING 2 ---
+
+// newEmptyGitRepo creates a git repository with NO commits — 'git init'
+// only. gitRepoRoot still succeeds inside it (rev-parse --show-toplevel
+// doesn't need a commit), but 'git rev-parse HEAD' (the first thing
+// addWorktree does) fails deterministically: an ambiguous HEAD with no
+// commits to resolve. That gives createWorktreeForSession a reachable,
+// deterministic addWorktree failure with nothing exotic.
+func newEmptyGitRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	runTestGit(t, dir, "init", "-q")
+	return dir
+}
+
+// countMetaFiles returns the number of meta/*.json files under base.
+func countMetaFiles(t *testing.T, base string) int {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(base, "meta"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		t.Fatal(err)
+	}
+	n := 0
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+			n++
+		}
+	}
+	return n
+}
+
+// TestCreateWorktreeForSessionLeavesNoMetaWhenAddWorktreeErrors verifies
+// that when addWorktree fails, createWorktreeForSession leaves no meta file
+// behind: whatever bookkeeping it wrote in the process (provisional or
+// otherwise) must be cleaned up on that error path.
+func TestCreateWorktreeForSessionLeavesNoMetaWhenAddWorktreeErrors(t *testing.T) {
+	repo := newEmptyGitRepo(t)
+	srv := newServer(t, t.TempDir(), &scriptedProvider{name: "test"}, 0)
+
+	wt, err := srv.createWorktreeForSession(repo)
+	if err == nil {
+		t.Fatalf("expected createWorktreeForSession to fail against a commit-less repo, got wt=%+v", wt)
+	}
+	if wt != nil {
+		t.Errorf("expected a nil worktreeInfo on error, got %+v", wt)
+	}
+
+	base, baseErr := srv.worktreeBaseDir()
+	if baseErr != nil {
+		t.Fatal(baseErr)
+	}
+	if n := countMetaFiles(t, base); n != 0 {
+		t.Errorf("expected no leaked meta files after an addWorktree failure, found %d", n)
+	}
+}
+
+// TestSweepPrunesProvisionalMetaCrashWindow characterizes the recovery half
+// of the finding-2 fix: a meta file exists (as createWorktreeForSession's
+// reordered first step will leave it) but the worktree directory was never
+// created (addWorktree never ran, or the process died before it
+// completed). The sweep must treat this like any other meta whose worktree
+// directory is missing: prune it silently.
+//
+// Written against sweepWorktrees's CURRENT (two-argument, unfixed)
+// signature — this is deliberate: this test's job is to characterize the
+// recovery mechanism the finding-2 fix depends on, and that mechanism
+// (sweepWorktrees' missing-directory branch) already exists today, before
+// either fix. Once finding 1 adds the sessionDir parameter, this call site
+// is updated along with the others.
+func TestSweepPrunesProvisionalMetaCrashWindow(t *testing.T) {
+	repo := newGitRepo(t)
+	sessDir := t.TempDir()
+	base := filepath.Join(sessDir, "worktrees")
+
+	provisionalPath := filepath.Join(base, "wt_crash")
+	metaPath, err := writeWorktreeMeta(base, "wt_crash", worktreeMeta{
+		RepoRoot: repo, Path: provisionalPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(provisionalPath); !os.IsNotExist(err) {
+		t.Fatalf("test setup: expected no worktree directory yet, stat err=%v", err)
+	}
+
+	sweepWorktrees(base, sessDir, func(sessionID, path string) {
+		t.Errorf("unexpected kept event for a crash-window provisional meta: %s %s", sessionID, path)
+	})
+
+	if _, err := os.Stat(metaPath); !os.IsNotExist(err) {
+		t.Errorf("expected the provisional meta to be pruned, stat err=%v", err)
 	}
 }

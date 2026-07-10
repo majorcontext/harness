@@ -304,7 +304,7 @@ func New(opts Options) (*Server, error) {
 		// ephemeral (SessionDir == "") server has nothing durable to sweep:
 		// its own worktreeBase is a fresh temp directory every run.
 		s.worktreeBase = filepath.Join(opts.SessionDir, "worktrees")
-		sweepWorktrees(s.worktreeBase, func(sessionID, path string) {
+		sweepWorktrees(s.worktreeBase, opts.SessionDir, func(sessionID, path string) {
 			s.emitDurable(Event{Type: evtWorktreeKept, SessionID: sessionID, WorktreePath: path})
 		})
 	}
