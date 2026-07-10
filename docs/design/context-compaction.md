@@ -216,7 +216,7 @@ that the same way an ordinary prompt does: by claiming the run slot.
   never a concurrent operation, just an extra step folded into a turn that
   already owns the slot.
 - The explicit endpoint claims the slot itself, exactly like
-  `prompt_async`/`/answer`'s goal-paused branch: `409` if the session is
+  `prompt_async`'s claim path: `409` if the session is
   already running, same as any other write. No new slot type, no
   compaction-specific concurrency to reason about.
 
