@@ -239,13 +239,24 @@ type Server struct {
 // goal.stalled record; it is reset to 0 by goal.set/goal.eval/goal.achieved
 // (a stall is non-terminal — see publishGoal — so it never touches active or
 // achieved, only lastReason and attempt).
+//
+// retryable/retryableClass/waiting mirror the same-named goal.stalled
+// fields (see engine/goal.go and GitHub issue #61): retryable and
+// retryableClass are set whenever the most recent stall was classified
+// provider-retryable weather; waiting is true while still inside the
+// retryable budget ("waiting out provider weather") and false once that
+// budget is exhausted (the loop is about to park a turn rather than clear
+// the goal). All three reset the same way attempt does.
 type goalTracker struct {
-	condition  string
-	active     bool
-	achieved   bool
-	turns      int
-	lastReason string
-	attempt    int
+	condition      string
+	active         bool
+	achieved       bool
+	turns          int
+	lastReason     string
+	attempt        int
+	retryable      bool
+	retryableClass string
+	waiting        bool
 }
 
 // questionTracker is the per-session pending-question summary surfaced in

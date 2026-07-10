@@ -1197,3 +1197,259 @@ func TestPursueGoalNoRetryAfterToolExecution(t *testing.T) {
 		t.Errorf("ActiveGoal = %q, still active; want cleared (retries exhausted, non-idempotency risk)", cond)
 	}
 }
+
+// TestGoalRetryableDelaySchedule pins the retryable-class backoff schedule
+// (goalRetryableDelay) as a pure function, independent of the loop — the
+// same style as TestGoalRetryDelaySchedule for the deterministic path.
+func TestGoalRetryableDelaySchedule(t *testing.T) {
+	cases := []struct {
+		attempt int
+		want    time.Duration
+	}{
+		{1, 5 * time.Second},
+		{2, 10 * time.Second},
+		{3, 20 * time.Second},
+		{4, 40 * time.Second},
+		{5, 80 * time.Second},
+		{6, 160 * time.Second},
+		{7, goalRetryableBackoffCap}, // 320s would exceed the 5-minute cap
+		{8, goalRetryableBackoffCap},
+	}
+	for _, c := range cases {
+		if got := goalRetryableDelay(c.attempt); got != c.want {
+			t.Errorf("goalRetryableDelay(%d) = %v, want %v", c.attempt, got, c.want)
+		}
+	}
+}
+
+// TestGoalRetryableBackoffJitter proves goalRetryableBackoff applies "equal
+// jitter" (half the base delay fixed, half randomized in [0, half)) using
+// the goalJitterFunc test seam, so the schedule is exactly assertable at
+// both ends of the random range instead of merely bounded.
+func TestGoalRetryableBackoffJitter(t *testing.T) {
+	orig := goalJitterFunc
+	t.Cleanup(func() { goalJitterFunc = orig })
+
+	goalJitterFunc = func(max time.Duration) time.Duration { return 0 }
+	if got, want := goalRetryableBackoff(1), 2500*time.Millisecond; got != want {
+		t.Errorf("goalRetryableBackoff(1) with zero jitter = %v, want %v (half of the 5s base)", got, want)
+	}
+
+	goalJitterFunc = func(max time.Duration) time.Duration { return max - 1 }
+	if got, want := goalRetryableBackoff(1), 5*time.Second-1; got != want {
+		t.Errorf("goalRetryableBackoff(1) with max jitter = %v, want %v (just under the full 5s base)", got, want)
+	}
+}
+
+// retryableProviderErr builds a fake provider error marked retryable, as if
+// an adapter had classified an Anthropic 529/overloaded_error (see
+// provider/anthropic and GitHub issue #61).
+func retryableProviderErr(class provider.RetryableClass) error {
+	return provider.MarkRetryable(errors.New("anthropic: Overloaded (overloaded_error, HTTP 529)"), class)
+}
+
+// TestPursueGoalRetryableErrorLongBackoffThenRecovers is the red-first test
+// for the goal-loop half of GitHub issue #61: a worker-turn error the
+// provider adapter classified retryable (see provider.RetryableError) must
+// get its OWN long-backoff budget (goalRetryableMaxAttempts), separate from
+// — and not consuming — the ordinary deterministic goalWorkerRetries
+// budget. Here the fake provider fails 5 times (more than
+// goalWorkerRetries+1 == 3 would ever tolerate on the deterministic path)
+// before succeeding, and the goal must still achieve normally.
+func TestPursueGoalRetryableErrorLongBackoffThenRecovers(t *testing.T) {
+	orig := goalJitterFunc
+	t.Cleanup(func() { goalJitterFunc = orig })
+	goalJitterFunc = func(max time.Duration) time.Duration { return 0 } // deterministic: exactly half the base delay
+
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProvider{
+			workerErrN: 5,
+			workerErr:  retryableProviderErr(provider.RetryableOverloaded),
+			worker: [][]provider.Event{
+				asstTurn(provider.StopEndTurn, &message.Text{Text: "all done"}),
+			},
+			eval: [][]provider.Event{
+				evalTurn("MET: looks complete"),
+			},
+		}
+		var evs []Event
+		s := goalSession(t, prov, t.TempDir())
+		s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
+
+		start := time.Now()
+		res, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+		elapsed := time.Since(start)
+		if err != nil {
+			t.Fatalf("PursueGoal error = %v, want nil (retryable errors get a long budget)", err)
+		}
+		if !res.Achieved || res.Turns != 1 {
+			t.Fatalf("result = %+v, want achieved in 1 turn after retrying past 5 retryable errors", res)
+		}
+
+		var want time.Duration
+		for attempt := 1; attempt <= 5; attempt++ {
+			want += goalRetryableDelay(attempt) / 2 // zero jitter above halves each delay
+		}
+		if elapsed != want {
+			t.Errorf("elapsed = %v, want exactly %v (the retryable backoff schedule for 5 failed attempts)", elapsed, want)
+		}
+
+		var stalled int
+		for _, ev := range evs {
+			if ev.Type == EventGoalStalled {
+				stalled++
+				if !ev.GoalRetryable {
+					t.Errorf("goal.stalled event %d: GoalRetryable = false, want true", stalled)
+				}
+				if ev.GoalRetryableClass != string(provider.RetryableOverloaded) {
+					t.Errorf("goal.stalled event %d: GoalRetryableClass = %q, want %q", stalled, ev.GoalRetryableClass, provider.RetryableOverloaded)
+				}
+				if !ev.GoalWaiting {
+					t.Errorf("goal.stalled event %d: GoalWaiting = false, want true (budget not exhausted)", stalled)
+				}
+			}
+		}
+		if stalled != 5 {
+			t.Errorf("goal.stalled events = %d, want 5 (one per failed attempt)", stalled)
+		}
+		if cond, ok := s.ActiveGoal(); ok {
+			t.Errorf("ActiveGoal = %q, active after achievement, want inactive", cond)
+		}
+	})
+}
+
+// TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing is the
+// red-first test for GitHub issue #61's deliverable 4 (self-re-arm): once
+// the retryable-class budget (goalRetryableMaxAttempts) is exhausted for a
+// turn — a truly long outage — the goal must NOT be cleared into a
+// permanently-dead stall requiring an operator re-POST. Instead the turn
+// parks (the same directive is retried on the next loop iteration, which
+// consumes an ordinary turn — see PursueGoal's doc comment), so with
+// MaxTurns set the loop reaches the ordinary, already-resumable "max turns"
+// terminal state (goal left ACTIVE) rather than "cleared".
+func TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing(t *testing.T) {
+	orig := goalJitterFunc
+	t.Cleanup(func() { goalJitterFunc = orig })
+	goalJitterFunc = func(max time.Duration) time.Duration { return 0 }
+
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProvider{
+			workerErrN: 1000, // never recovers within the test
+			workerErr:  retryableProviderErr(provider.RetryableOverloaded),
+		}
+		var evs []Event
+		s := goalSession(t, prov, t.TempDir())
+		s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
+
+		res, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel, MaxTurns: 2})
+		if err != nil {
+			t.Fatalf("PursueGoal error = %v, want nil (parking, not a permanent error)", err)
+		}
+		if res.Achieved || res.Reason != "max turns" {
+			t.Fatalf("result = %+v, want not achieved, reason \"max turns\"", res)
+		}
+
+		// The critical assertion: no zombie AND no dead stall. The goal
+		// stays active — the exact same resumable terminal state an
+		// ordinary MaxTurns exhaustion leaves (see TestPursueGoalMaxTurns) —
+		// instead of being cleared the way a deterministic permanent
+		// failure is (see TestPursueGoalWorkerFailsPermanentlyClearsGoal).
+		if cond, ok := s.ActiveGoal(); !ok || cond != "cond" {
+			t.Errorf("ActiveGoal = %q, %v; want the goal left ACTIVE for resume, not cleared", cond, ok)
+		}
+
+		var sawCleared bool
+		var exhausted int
+		var waiting int
+		for _, ev := range evs {
+			switch ev.Type {
+			case EventGoalCleared:
+				sawCleared = true
+			case EventGoalStalled:
+				if !ev.GoalRetryable {
+					t.Errorf("goal.stalled event: GoalRetryable = false, want true")
+				}
+				if ev.GoalWaiting {
+					waiting++
+				} else {
+					exhausted++
+					if ev.GoalRetryableClass != string(provider.RetryableOverloaded) {
+						t.Errorf("exhausted goal.stalled: GoalRetryableClass = %q, want %q", ev.GoalRetryableClass, provider.RetryableOverloaded)
+					}
+				}
+			}
+		}
+		if sawCleared {
+			t.Error("goal.cleared emitted — a retryable-budget exhaustion must park, never clear")
+		}
+		// Two turns, each parking once its retryable budget exhausts.
+		if exhausted != 2 {
+			t.Errorf("exhausted (non-waiting) goal.stalled events = %d, want 2 (one per parked turn)", exhausted)
+		}
+		if waiting != 2*(goalRetryableMaxAttempts-1) {
+			t.Errorf("waiting goal.stalled events = %d, want %d", waiting, 2*(goalRetryableMaxAttempts-1))
+		}
+		if prov.workerCall != 2*goalRetryableMaxAttempts {
+			t.Errorf("worker provider calls = %d, want %d (goalRetryableMaxAttempts per parked turn)", prov.workerCall, 2*goalRetryableMaxAttempts)
+		}
+	})
+}
+
+// TestPursueGoalRetryableErrorAfterToolExecutionStillGated proves the
+// non-idempotency gate (see promptTurnWithRetry's doc comment) applies
+// regardless of error classification: a retryable-class error on a later
+// model call, after an earlier call in the same attempt already executed a
+// tool, must still stop retrying immediately rather than enter the long
+// backoff — retrying would risk re-running the tool no matter how
+// sympathetic the failure looks.
+func TestPursueGoalRetryableErrorAfterToolExecutionStillGated(t *testing.T) {
+	var toolRuns int
+	testTool := Tool{
+		Def: provider.ToolDef{Name: "test_tool", Description: "test", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Run: func(ctx context.Context, s *Session, args json.RawMessage) (message.Parts, error) {
+			toolRuns++
+			return message.Parts{&message.Text{Text: "ok"}}, nil
+		},
+	}
+	prov := &goalProvider{
+		failWorkerCall: 2,
+		workerErr:      retryableProviderErr(provider.RetryableOverloaded),
+		worker: [][]provider.Event{
+			asstTurn(provider.StopToolUse, toolCall("tc1", "test_tool", `{}`)),
+		},
+	}
+	var evs []Event
+	s := NewSession(Config{
+		Providers:    provider.Registry{prov.Name(): prov},
+		Model:        message.ModelRef{Provider: prov.Name(), Model: "m1"},
+		System:       []string{"base"},
+		SessionDir:   t.TempDir(),
+		Instructions: &InstructionsConfig{Disabled: true},
+		SkillsDirs:   []string{},
+		Tools:        []Tool{testTool},
+	})
+	s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
+
+	_, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+	if err == nil {
+		t.Fatal("PursueGoal succeeded, want error")
+	}
+	if toolRuns != 1 {
+		t.Errorf("tool executions = %d, want exactly 1", toolRuns)
+	}
+	if prov.workerCall != 2 {
+		t.Errorf("worker provider calls = %d, want exactly 2 (no retry after tool execution, even for a retryable error)", prov.workerCall)
+	}
+	var stalled int
+	for _, ev := range evs {
+		if ev.Type == EventGoalStalled {
+			stalled++
+		}
+	}
+	if stalled != 1 {
+		t.Errorf("goal.stalled events = %d, want 1", stalled)
+	}
+	if cond, ok := s.ActiveGoal(); ok {
+		t.Errorf("ActiveGoal = %q, still active; want cleared (non-idempotency gate always wins)", cond)
+	}
+}

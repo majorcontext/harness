@@ -168,11 +168,145 @@ follow a tool call within the same attempt; this document and the doc
 comment on `promptTurnWithRetry` are the explicit acknowledgment the review
 asked for, not a claim that the risk is eliminated.
 
+## Retryable-class backoff and self-re-arm (GitHub issue #61)
+
+### Incident
+
+Two production days, one shared Anthropic overload wave: four separate goal
+loops (`ses_01kx6423nef95t30vxgs36p80s`, `ses_01kx6423rne45s73xx1r816g1n`, and
+two more on other sessions, all on volume `harness-dev-sessions-v2`) died
+within minutes of each other with
+
+```
+engine: goal loop stalled: anthropic: Overloaded (overloaded_error)
+```
+
+The fix described above (`promptTurnWithRetry`) already treats every
+worker-turn error identically: `goalWorkerRetries` (2) extra attempts,
+~5 seconds of total backoff, then a permanent clear. That is exactly
+backwards for `overloaded_error` — Anthropic-side capacity weather that
+"routinely lasts several minutes," not the kind of failure five seconds of
+patience was ever going to fix. Every one of the four incident goals resumed
+cleanly the instant a human manually re-armed it once the wave passed — the
+strongest possible evidence that these particular stalls were premature, not
+genuine.
+
+### The fix: classify, then split the budget
+
+**1. Error classification lives at the provider layer, not the engine.**
+`provider.RetryableError` (`provider/retryable.go`) is a typed wrapper an
+adapter attaches to an error it recognizes as transient provider weather; the
+engine recovers it with `errors.As` (`provider.AsRetryable`) — there is no
+string-matching of error text anywhere in `engine/goal.go`. `RetryableError`
+unwraps to the original error (so `errors.Is` and any existing `%w`-wrapping
+still works, including through `engine`'s own `interruptedTurnError`) and its
+`Error()` prefixes the message with the class (e.g. `[retryable:overloaded]
+anthropic: Overloaded (...)`), so anything that only ever calls `.Error()` — a
+journaled `goal.stalled` reason, a `turn.end` error — names the class for
+free, with no extra plumbing.
+
+- `provider/anthropic` classifies HTTP 529 (`RetryableOverloaded`), HTTP 429
+  (`RetryableRateLimited`), and any other 5xx (`RetryableServerError`) — both
+  from the ordinary HTTP-status error path and from the mid-stream `"error"`
+  SSE event (keyed on the wire's own `type` field: `overloaded_error`,
+  `rate_limit_error`, `api_error`), which is the exact shape the incident
+  hit.
+- `provider/openaicompat` classifies HTTP 429 and any 5xx the same way (no
+  dedicated "overloaded" status on that generic wire).
+- Everything else — 400s, authentication failures — is left unmarked and
+  fails exactly as fast as before. A bad request will never succeed no
+  matter how long the loop waits; only transient provider weather earns the
+  long budget below.
+
+**2. `promptTurnWithRetry` runs two independent budgets, chosen per
+attempt.** A failure that is *not* classified retryable takes the original,
+completely unchanged fast path described above. A failure that *is*
+classified retryable instead runs its own loop:
+
+- `goalRetryableMaxAttempts` (12) attempts, versus `goalWorkerRetries`'s 2.
+- `goalRetryableBackoff`'s schedule: 5s, 10s, 20s, 40s, 80s, 160s, then
+  capped at 5 minutes — roughly 30 minutes of total waiting in the worst
+  case, versus ~5 seconds for the deterministic path. Each wait applies
+  "equal jitter" (half the scheduled delay fixed, half randomized) via the
+  `goalJitterFunc` seam, specifically so that many goal loops hitting the
+  *same* shared overload wave (as all four incident sessions did) don't all
+  retry in lockstep and re-hit the still-recovering provider at the same
+  instant.
+- These retryable-class attempts **never increment `goalWorkerRetries`'s
+  counter.** A provider overload wave does not spend down the same
+  fast-fail allowance a bad request would; a goal that survives a long
+  outage via this path still has its full deterministic budget intact for
+  whatever comes next.
+- The existing non-idempotency gate (stop retrying the instant a tool has
+  executed during the failing attempt — see the review-follow-up section
+  above) applies identically to both budgets. Retrying after a tool call ran
+  is unsafe regardless of why the next call failed.
+
+Every failed attempt — deterministic or retryable — still gets exactly one
+`goal.stalled` record, so the loop can never go silent (the original,
+`goal.go`-level invariant this whole document exists to protect). A
+retryable-class record additionally carries `retryable: true`,
+`retryable_class` (`overloaded` / `rate_limited` / `server_error`), and
+`waiting: true` — except the *final* one, if the retryable budget is
+actually exhausted, which flips `waiting` to `false` to mark that the loop is
+giving up on waiting and about to do something else (see below). This is
+what lets a session log or a live SSE subscriber tell "waiting out provider
+weather" apart from "genuinely stuck" without decoding `goal_reason` text —
+`Session.goal` (`GET /session/{id}`, `GET /session/{id}/wait`) surfaces the
+same three fields from the most recent `goal.stalled` record, reset by
+`goal.set`/`goal.eval`/`goal.achieved` exactly like `attempt` already is.
+
+### Self-re-arm: park, don't die
+
+This is deliverable 4 of the issue, and the one with a real design choice
+behind it. Two shapes were on the table:
+
+- **(chosen) Park the turn in-process, bounded by `MaxTurns`/wall-clock.**
+  When the retryable budget is exhausted, `promptTurnWithRetry` returns a
+  distinguished `*goalRetryableExhaustedError` (still wrapping the
+  underlying error and its class) instead of the bare error.
+  `PursueGoal` recognizes this type and, instead of clearing the goal the
+  way it clears a deterministic exhaustion, retries the *same directive* on
+  the next iteration of its own turn loop — which, because that consumes an
+  ordinary turn (the `for turn := 1; ...; turn++` loop's own increment),
+  reaches exactly the same already-durable, already-resumable "max turns
+  exhausted" terminal state (`goal` left **active**, `turn.end` outcome
+  `max_turns_exceeded`) that an ordinary long-running goal reaches today —
+  or, if `MaxTurns` is unlimited (0), keeps parking indefinitely, each cycle
+  bounded by real wall-clock backoff time rather than hot-spinning, which is
+  the same opt-in "no turn limit" contract `MaxTurns == 0` already carries.
+- **(rejected) Have the server re-arm the goal automatically after a
+  cooldown.** A `Server`-side timer that re-POSTs `/session/{id}/goal` once
+  some cooldown elapses after an exhaustion. Rejected because it adds an
+  entirely new piece of state to the state machine (a scheduled, in-memory-
+  only re-arm timer, alongside `goalState`/`goalMaxTurns`, that does not
+  survive a process restart and duplicates logic the loop already has) for a
+  case the chosen design already handles for free by reusing an existing,
+  already-durable terminal state. It would also require deciding a *second*
+  budget (how many cooldown-triggered re-arms before really giving up) on
+  top of the retryable-class budget this fix already introduces.
+
+The result: a retryable-class exhaustion is **never** a dead stall requiring
+an operator to notice silence and re-POST by hand (the exact zombie shape the
+original incident report for this document, above, describes) — it is
+either an ordinary "keep working, same directive" continuation, or, once
+`MaxTurns` is reached, the same resumable "max turns" pause every other
+long-running goal can hit. Every state along the way is durably explained by
+a `goal.stalled` record naming the retryable class, not inferred after the
+fact.
+
+See `engine/goal.go`'s package doc ("Round 4") for the full state diagram
+and `TestPursueGoalRetryableErrorLongBackoffThenRecovers` /
+`TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing` for the
+tests (both run inside a `testing/synctest` bubble — no real sleeps, per
+AGENTS.md).
+
 ## Operational reliability
 
 Goal-supervised turns are retried by the loop above and fail visibly with a
-journaled reason (`goal.stalled`, then `goal.cleared` if every retry is
-exhausted). Plain `prompt_async` turns get none of that: they are not
+journaled reason (`goal.stalled`, then `goal.cleared` if every DETERMINISTIC
+retry is exhausted — a retryable-class exhaustion parks instead, see above).
+Plain `prompt_async` turns get none of that: they are not
 retried, and a provider stream that dies mid-turn silently ends them. The
 signature of that silent death is a final assistant message containing
 reasoning parts only — no text, no tool_call. Consequently, multi-step or

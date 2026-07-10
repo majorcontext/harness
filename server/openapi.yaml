@@ -258,6 +258,29 @@ components:
             goal.achieved — a stall is non-terminal (the goal stays active
             while retrying), so it never changes active or achieved, only
             last_reason and this field.
+        retryable:
+          type: boolean
+          description: >
+            True when the most recent goal.stalled record's failure was
+            classified provider-retryable weather (an Anthropic 529/
+            overloaded_error, 429, or 5xx — see provider.RetryableError)
+            rather than a deterministic failure. Reset the same way attempt
+            is. See docs/goal-loop.md's "Retryable-class backoff" section.
+        retryable_class:
+          type: string
+          description: >
+            The retryable classification of the most recent goal.stalled
+            record (overloaded, rate_limited, or server_error), present only
+            when retryable is true.
+        waiting:
+          type: boolean
+          description: >
+            True while the goal loop is still within its retryable-class
+            backoff budget ("waiting out provider weather"); false on the
+            final retryable goal.stalled record, which reports that budget
+            exhausted — the loop is about to park the turn (retry the same
+            directive on the next ordinary turn) rather than clear the goal.
+            Meaningless (false) when retryable is false.
 
     SessionStatus:
       type: string
@@ -543,10 +566,20 @@ components:
             goal.stalled carries goal_reason, goal_turn, and goal_attempt (the
             1-based retry attempt) for each failed worker-turn attempt that is
             still within the retry budget — it is non-terminal, the goal
-            stays active while the loop retries; goal.achieved carries
-            goal_reason and goal_turns; goal.cleared marks a goal cancelled via
-            DELETE /session/{id}/goal (or a worker turn that failed past its
-            retry budget, carrying the failure as goal_reason).
+            stays active while the loop retries. It also carries
+            goal_retryable/goal_retryable_class/goal_waiting when the failure
+            was classified provider-retryable weather (see GitHub issue #61
+            and docs/goal-loop.md): goal_waiting is true while still inside
+            that separate, much longer retryable backoff budget, and false on
+            the final such record, which reports the budget exhausted — the
+            loop parks the turn (retries the same directive on the next
+            ordinary turn) rather than clearing the goal, so a retryable
+            exhaustion is never a dead stall requiring an operator re-POST.
+            goal.achieved carries goal_reason and goal_turns; goal.cleared
+            marks a goal cancelled via DELETE /session/{id}/goal (or a
+            worker turn that failed past its DETERMINISTIC retry budget,
+            carrying the failure as goal_reason — a retryable-budget
+            exhaustion never reaches this record, see above).
             question.asked and question.answered are the durable records of
             the built-in ask_user tool (question.asked's first emit site):
             question.asked carries question_call_id and questions (the full
@@ -639,6 +672,24 @@ components:
         goal_attempt:
           type: integer
           description: 1-based worker-turn retry attempt number (goal.stalled).
+        goal_retryable:
+          type: boolean
+          description: >
+            True when a goal.stalled record's failure was classified
+            provider-retryable weather (see GoalSummary.retryable and
+            docs/goal-loop.md).
+        goal_retryable_class:
+          type: string
+          description: >
+            The retryable classification (overloaded, rate_limited, or
+            server_error) of a goal.stalled record, present only when
+            goal_retryable is true.
+        goal_waiting:
+          type: boolean
+          description: >
+            True while a goal.stalled record is still within the retryable
+            backoff budget; false on the final such record, which reports
+            the budget exhausted (see GoalSummary.waiting).
         question_call_id:
           type: string
           description: >

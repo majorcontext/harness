@@ -173,7 +173,7 @@ func (s *Server) waitSnapshot(id string) (string, *goalJSON, *questionJSON) {
 	}
 	var goal *goalJSON
 	if g := s.goalState[id]; g != nil {
-		goal = &goalJSON{Condition: g.condition, Active: g.active, Achieved: g.achieved, Turns: g.turns, LastReason: g.lastReason, Attempt: g.attempt}
+		goal = &goalJSON{Condition: g.condition, Active: g.active, Achieved: g.achieved, Turns: g.turns, LastReason: g.lastReason, Attempt: g.attempt, Retryable: g.retryable, RetryableClass: g.retryableClass, Waiting: g.waiting}
 	}
 	var question *questionJSON
 	if q := s.questionState[id]; q != nil && q.pending {

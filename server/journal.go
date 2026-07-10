@@ -55,6 +55,16 @@ type Event struct {
 	GoalTurn      int    `json:"goal_turn,omitempty"`
 	GoalTurns     int    `json:"goal_turns,omitempty"`
 	GoalAttempt   int    `json:"goal_attempt,omitempty"`
+	// GoalRetryable/GoalRetryableClass/GoalWaiting are carried by
+	// goal.stalled (see engine/goal.go and GitHub issue #61): GoalRetryable
+	// is true when the failure was classified provider-retryable weather;
+	// GoalRetryableClass names the classification (overloaded/rate_limited/
+	// server_error); GoalWaiting is true while still within the retryable
+	// budget and false on the final stalled record that reports the budget
+	// exhausted (the goal loop is about to park a turn, not die).
+	GoalRetryable      bool   `json:"goal_retryable,omitempty"`
+	GoalRetryableClass string `json:"goal_retryable_class,omitempty"`
+	GoalWaiting        bool   `json:"goal_waiting,omitempty"`
 
 	// Question fields, carried by the question.* durable records (see
 	// engine/ask_user.go and docs/design/question-tool.md). QuestionCallID
@@ -163,14 +173,17 @@ func (s *Server) Publish(ev engine.Event) {
 // the goal still active while the loop retries.
 func (s *Server) publishGoal(ev engine.Event) {
 	out := &Event{
-		Type:          ev.Type,
-		SessionID:     ev.SessionID,
-		GoalCondition: ev.GoalCondition,
-		GoalReason:    ev.GoalReason,
-		GoalMet:       ev.GoalMet,
-		GoalTurn:      ev.GoalTurn,
-		GoalTurns:     ev.GoalTurns,
-		GoalAttempt:   ev.GoalAttempt,
+		Type:               ev.Type,
+		SessionID:          ev.SessionID,
+		GoalCondition:      ev.GoalCondition,
+		GoalReason:         ev.GoalReason,
+		GoalMet:            ev.GoalMet,
+		GoalTurn:           ev.GoalTurn,
+		GoalTurns:          ev.GoalTurns,
+		GoalAttempt:        ev.GoalAttempt,
+		GoalRetryable:      ev.GoalRetryable,
+		GoalRetryableClass: ev.GoalRetryableClass,
+		GoalWaiting:        ev.GoalWaiting,
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -187,19 +200,31 @@ func (s *Server) publishGoal(ev engine.Event) {
 		g.turns = 0
 		g.lastReason = ""
 		g.attempt = 0
+		g.retryable = false
+		g.retryableClass = ""
+		g.waiting = false
 	case engine.EventGoalEval:
 		g.turns = ev.GoalTurn
 		g.lastReason = ev.GoalReason
 		g.attempt = 0
+		g.retryable = false
+		g.retryableClass = ""
+		g.waiting = false
 	case engine.EventGoalStalled:
 		g.lastReason = ev.GoalReason
 		g.attempt = ev.GoalAttempt
+		g.retryable = ev.GoalRetryable
+		g.retryableClass = ev.GoalRetryableClass
+		g.waiting = ev.GoalWaiting
 	case engine.EventGoalAchieved:
 		g.active = false
 		g.achieved = true
 		g.turns = ev.GoalTurns
 		g.lastReason = ev.GoalReason
 		g.attempt = 0
+		g.retryable = false
+		g.retryableClass = ""
+		g.waiting = false
 	case engine.EventGoalCleared:
 		g.active = false
 	}
@@ -621,19 +646,31 @@ func (s *Server) foldGoalRecordLocked(ev Event) {
 		g.turns = 0
 		g.lastReason = ""
 		g.attempt = 0
+		g.retryable = false
+		g.retryableClass = ""
+		g.waiting = false
 	case evtGoalEval:
 		g.turns = ev.GoalTurn
 		g.lastReason = ev.GoalReason
 		g.attempt = 0
+		g.retryable = false
+		g.retryableClass = ""
+		g.waiting = false
 	case evtGoalStalled:
 		g.lastReason = ev.GoalReason
 		g.attempt = ev.GoalAttempt
+		g.retryable = ev.GoalRetryable
+		g.retryableClass = ev.GoalRetryableClass
+		g.waiting = ev.GoalWaiting
 	case evtGoalAchieved:
 		g.active = false
 		g.achieved = true
 		g.turns = ev.GoalTurns
 		g.lastReason = ev.GoalReason
 		g.attempt = 0
+		g.retryable = false
+		g.retryableClass = ""
+		g.waiting = false
 	case evtGoalCleared:
 		g.active = false
 	}

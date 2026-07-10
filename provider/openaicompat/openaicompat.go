@@ -101,10 +101,66 @@ func apiError(family string, resp *http.Response) error {
 			Code    string `json:"code"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(raw, &body); err == nil && body.Error.Message != "" {
-		return fmt.Errorf("openaicompat(%s): %s (%s, HTTP %d)", family, body.Error.Message, body.Error.Type, resp.StatusCode)
+	var err error
+	if json.Unmarshal(raw, &body) == nil && body.Error.Message != "" {
+		err = fmt.Errorf("openaicompat(%s): %s (%s, HTTP %d)", family, body.Error.Message, body.Error.Type, resp.StatusCode)
+	} else {
+		err = fmt.Errorf("openaicompat(%s): HTTP %d", family, resp.StatusCode)
 	}
-	return fmt.Errorf("openaicompat(%s): HTTP %d", family, resp.StatusCode)
+	if class, ok := classifyStatus(resp.StatusCode); ok {
+		return provider.MarkRetryable(err, class)
+	}
+	return err
+}
+
+// classifyStatus classifies an HTTP response status into a
+// provider.RetryableClass (see GitHub issue #61): 429 is a rate limit, any
+// other 5xx is a generic server error — both transient provider weather
+// worth the goal loop's long backoff (engine/goal.go). Every other status
+// (400s, auth) reports ok=false and stays a deterministic, fail-fast error
+// exactly as before. Unlike provider/anthropic, this generic wire has no
+// dedicated "overloaded" status distinct from a plain 5xx.
+func classifyStatus(status int) (provider.RetryableClass, bool) {
+	switch {
+	case status == http.StatusTooManyRequests:
+		return provider.RetryableRateLimited, true
+	case status == 529:
+		// Not a registered status, but OpenRouter proxies Anthropic's 529
+		// overload responses through verbatim — classify it the same way
+		// the anthropic adapter does rather than as a generic 5xx.
+		return provider.RetryableOverloaded, true
+	case status >= 500 && status <= 599:
+		return provider.RetryableServerError, true
+	default:
+		return "", false
+	}
+}
+
+// classifyWireCode classifies a mid-stream error "code", which is an int
+// HTTP status on some wires (OpenRouter) and a string constant on others
+// (OpenAI: "rate_limit_exceeded", "server_error"). Unknown or null codes
+// classify as nothing — the error still surfaces, just without a
+// retryable mark.
+func classifyWireCode(raw json.RawMessage) (provider.RetryableClass, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", false
+	}
+	var status int
+	if err := json.Unmarshal(raw, &status); err == nil {
+		return classifyStatus(status)
+	}
+	var code string
+	if err := json.Unmarshal(raw, &code); err == nil {
+		switch code {
+		case "rate_limit_exceeded", "rate_limited":
+			return provider.RetryableRateLimited, true
+		case "server_error", "internal_server_error":
+			return provider.RetryableServerError, true
+		case "overloaded", "overloaded_error":
+			return provider.RetryableOverloaded, true
+		}
+	}
+	return "", false
 }
 
 // assembledToolCall accumulates one tool_calls fragment stream, keyed by its
@@ -233,7 +289,20 @@ func trimSpaceLeft(s string) string {
 
 // wireChunk is one "data: {...}" SSE payload.
 type wireChunk struct {
-	ID      string `json:"id"`
+	ID string `json:"id"`
+	// Error is the OpenAI-compat mid-stream error shape ({"error":{...}}
+	// as an SSE data payload) — how OpenRouter and friends report a
+	// failure that begins after response headers were already sent.
+	Error *struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+		// Code is an int on some wires (OpenRouter proxies upstream HTTP
+		// statuses: 429, 529, 502...) and a string on others (OpenAI's
+		// "rate_limit_exceeded", "server_error"), or null — RawMessage so
+		// neither shape can fail the chunk unmarshal and resurrect the
+		// silent-swallow this field exists to close.
+		Code json.RawMessage `json:"code"`
+	} `json:"error"`
 	Choices []struct {
 		Delta struct {
 			Content          string `json:"content"`
@@ -264,6 +333,18 @@ func (s *stream) handle(data []byte) error {
 	var chunk wireChunk
 	if err := json.Unmarshal(data, &chunk); err != nil {
 		return fmt.Errorf("openaicompat(%s): bad chunk: %w", s.family, err)
+	}
+	if chunk.Error != nil {
+		// Never swallow a mid-stream error: before this branch existed the
+		// chunk fell through the no-choices return below and the turn
+		// ended silently, indistinguishable from success — so a mid-stream
+		// overload never engaged the goal loop's retryable backoff.
+		err := fmt.Errorf("openaicompat(%s): stream error: %s (type=%q code=%s)",
+			s.family, chunk.Error.Message, chunk.Error.Type, chunk.Error.Code)
+		if class, ok := classifyWireCode(chunk.Error.Code); ok {
+			return provider.MarkRetryable(err, class)
+		}
+		return err
 	}
 	if chunk.ID != "" {
 		s.id = chunk.ID
