@@ -186,12 +186,16 @@ tri-state value, not `idle` plus metadata. The question detail itself
 (`call_id`, `questions`) rides in a new `sessionJSON.Question`, present
 exactly when state is `awaiting-input` — same shape as `Goal`/`LastTurn`.
 
-**`GET /session/{id}/wait`** gains `until=answered` alongside `idle` and
-`goal-done` (`server/wait.go`'s `waitConditionMet`): resolves immediately
-if no question is pending, otherwise blocks until one is or times out —
-the natural park point for a headless orchestrator. No separate `GET
-.../question` is needed: `GET /session/{id}` and the wait response already
-carry the pending question the instant it's set.
+**`GET /session/{id}/wait`** gains `until=awaiting-input` alongside `idle`
+and `goal-done` (`server/wait.go`'s `waitConditionMet`): resolves
+immediately if a question is already pending, otherwise blocks until one
+appears or the wait times out. This is the park point the consumer loop in
+§3/§4 actually needs — it wakes when a question *appears*, so the waiter
+can go answer it. The inverse observer (waiting for paused work to
+un-pause) needs no new condition: a pending question keeps the composite
+state off `idle`, so `until=idle`/`until=goal-done` already cover it. No
+separate `GET .../question` is needed: `GET /session/{id}` and the wait
+response already carry the pending question the instant it's set.
 
 **`POST /session/{id}/answer`** is the write side:
 
@@ -212,15 +216,41 @@ answer, e.g. after an orchestrator retry), 404s on an unknown session,
 text block, and delivers it through the **same path as `prompt_async`** —
 a plain `Session.Prompt` user message. That is the "answer arrives as the
 next prompt" mechanism from §2, not a side-channel into the already-
-resolved tool_call. `/answer` is convenience and validation over
-`/prompt_async`, not a different code path: a client that skips it
-entirely still un-wedges the session correctly, since `Session.Prompt`
-clears `s.awaitingQuestion` (and persists `question.answered`) on any new
-user message, not only ones routed through `/answer`. If the paused
-session had an active goal, `/answer`'s handler re-spawns `PursueGoal`
-(`Registered: true`, same condition) exactly as `handleGoal` does today —
-a headless loop is just: wait for `awaiting-input` → `POST /answer` → the
-goal resumes itself.
+resolved tool_call.
+
+Delivery splits on whether a goal is paused, because `PursueGoal`'s
+contract forbids running it concurrently with `Prompt` (it drives Prompt
+itself — goal.go's "Must not be called concurrently with itself or
+Prompt"):
+
+- **No active goal** (interactive session): `/answer` formats the answers
+  and delivers them as a plain `Session.Prompt` user message — the
+  ordinary `prompt_async` path, exactly as above.
+- **Goal paused on the question**: `/answer` must NOT call `Prompt`
+  itself — pairing a direct `Prompt` with a re-spawned `PursueGoal` races
+  the invariant (two `Prompt` callers; `claimForPrompt` rejects one, but
+  *which* one is a race), and a bare re-spawn drops the answer entirely,
+  because `PursueGoal` hardcodes the raw condition as turn 1's directive.
+  Instead, `/answer` persists `question.answered`, clears
+  `s.awaitingQuestion`, and re-spawns `PursueGoal` with a new
+  `ResumeAnswer` field (alongside `Registered`): when set, turn 1's
+  directive is the condition plus a formatted "the user answered your
+  questions:" block, consumed once and never repeated on later turns. One
+  driver (the goal loop), one `Prompt` caller, answer delivered in-band.
+
+For interactive sessions, a client that skips `/answer` entirely still
+un-wedges the session correctly, since `Session.Prompt` clears
+`s.awaitingQuestion` (and persists `question.answered`) on any new user
+message, not only ones routed through `/answer`. A goal-paused session
+needs one more guard: while a goal is *running*, `claimForPrompt` already
+409s a bare `prompt_async`, but a *paused* goal has returned from
+`PursueGoal`, so the run slot is free — an unguarded prompt would consume
+the answer without resuming the goal, leaving `goalActive` set with
+nothing driving it (a zombie pause). `handlePrompt` therefore 409s when
+`s.awaitingQuestion && goalActive`, with an error naming `/answer` as the
+resume path — the goal owns the session; `/answer` is the one write that
+resumes it. A headless loop is just: `wait?until=awaiting-input` →
+`POST /answer` → the goal resumes itself.
 
 ## 4. Plugin consumption
 
