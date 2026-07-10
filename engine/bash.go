@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"syscall"
 	"time"
 
 	"github.com/majorcontext/harness/message"
@@ -30,43 +29,17 @@ const defaultBashOutputCap = 96 * 1024
 // and EOF never arrives if a backgrounded grandchild inherited the write
 // end and is still alive, whether because cmd.Cancel couldn't reach it or
 // because `sh` simply exited without waiting for it (see cmd.Cancel and the
-// exec.ErrWaitDelay handling below, and the issue this fixed). A handful of
-// seconds is generous for a killed process tree to actually exit and close
-// its fds, while still bounding the worst case to "a few seconds", never
-// "forever". Tests override this var to keep wall-clock cost small.
-var bashWaitDelay = 5 * time.Second
-
-// bashGroupKillWindow bounds killProcessGroup's retry loop (see there for
-// why a single kill(-pgid, SIGKILL) isn't always enough). Tests override
-// this var to keep wall-clock cost small.
-var bashGroupKillWindow = 200 * time.Millisecond
-
-// killProcessGroup SIGKILLs every process in pgid, retrying for a short,
-// bounded window until the group is confirmed empty (kill(-pgid, ...)
-// reports ESRCH) instead of sending one shot and hoping.
+// exec.ErrWaitDelay handling below, and the issue this fixed).
 //
-// One shot is not enough: kill(-pgid, sig) signals only the processes that
-// are members of the group at the instant of that syscall. If `sh` is, at
-// that exact instant, itself inside the fork() for a backgrounded command
-// (`sleep 60 &`, the grandchild this whole fix is about), the kernel may
-// finish that fork before delivering the pending SIGKILL to `sh` — and the
-// brand-new grandchild, not yet a group member when kill() ran, never gets
-// signaled at all. It's then a live orphan once `sh` dies, indistinguishable
-// from the very hang this fix closes. Retrying for a short window catches
-// that straggler on the next pass; it does not affect the common case
-// (group already gone → immediate ESRCH, one syscall).
-func killProcessGroup(pgid int) {
-	deadline := time.Now().Add(bashGroupKillWindow)
-	for {
-		if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil && errors.Is(err, syscall.ESRCH) {
-			return // no process in the group remains
-		}
-		if time.Now().After(deadline) {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
+// The value is a latency tax on one everyday path: when `sh` exits cleanly
+// but a deliberately backgrounded child (`npm run dev &`) keeps the pipe
+// open, the tool waits the FULL delay before returning ErrWaitDelay with
+// the captured output. Timeout/abort don't pay it (the group kill closes
+// the pipe and Wait returns immediately). 2s is enough for a killed
+// process tree to exit and close its fds, while keeping the per-command
+// tax on background-and-continue workflows small. Tests override this var
+// to keep wall-clock cost small.
+var bashWaitDelay = 2 * time.Second
 
 func bashTool(timeout time.Duration, outputCap int) Tool {
 	if outputCap <= 0 {
@@ -109,20 +82,10 @@ func bashTool(timeout time.Duration, outputCap int) Tool {
 			// CommandContext's default Cancel only reaches the direct sh
 			// child, orphaning any grandchild that inherited the output
 			// pipe's write end and permanently wedging Wait().
-			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-			// cmd.Cancel runs once cctx is done — BashTimeout elapsing, or
-			// the caller aborting the turn (context cancellation). SIGKILL
-			// the whole process group (negative pid), not just the direct
-			// child, so a backgrounded grandchild dies with it instead of
-			// being orphaned holding the pipe open.
-			cmd.Cancel = func() error {
-				if cmd.Process == nil {
-					return os.ErrProcessDone
-				}
-				killProcessGroup(cmd.Process.Pid)
-				return os.ErrProcessDone
-			}
+			// (On unix this also installs a whole-process-group Cancel; on
+			// windows only WaitDelay below bounds a pipe-holding child. See
+			// configureProcessGroup in bash_unix.go / bash_windows.go.)
+			configureProcessGroup(cmd)
 
 			// See bashWaitDelay: bounds Wait() to a few seconds past
 			// whichever comes first — cctx being done, or sh exiting on its
