@@ -3,9 +3,11 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"syscall"
 	"time"
 
 	"github.com/majorcontext/harness/message"
@@ -20,6 +22,19 @@ import (
 // message, bloating the session log and the next provider request built from
 // it (see AGENTS.md and docs/goal-loop.md for the incident this fixed).
 const defaultBashOutputCap = 96 * 1024
+
+// bashWaitDelay bounds how long cmd.Wait may block on the command's output
+// pipes once the underlying process is otherwise done with them. Without it,
+// os/exec's internal pipe-copy goroutine (unavoidable because cmd.Stdout
+// here is a cappedWriter, not an *os.File) only unblocks Wait on pipe EOF —
+// and EOF never arrives if a backgrounded grandchild inherited the write
+// end and is still alive, whether because cmd.Cancel couldn't reach it or
+// because `sh` simply exited without waiting for it (see cmd.Cancel and the
+// exec.ErrWaitDelay handling below, and the issue this fixed). A handful of
+// seconds is generous for a killed process tree to actually exit and close
+// its fds, while still bounding the worst case to "a few seconds", never
+// "forever". Tests override this var to keep wall-clock cost small.
+var bashWaitDelay = 5 * time.Second
 
 func bashTool(timeout time.Duration, outputCap int) Tool {
 	if outputCap <= 0 {
@@ -55,6 +70,36 @@ func bashTool(timeout time.Duration, outputCap int) Tool {
 				cmd.Env = append(cmd.Env, k+"="+v)
 			}
 
+			// Run sh in its own process group so a grandchild that
+			// backgrounds itself (`sleep 60 &`, or — the real production
+			// trigger — a dev server an agent legitimately starts to test
+			// against) can be killed as a unit below. Without this,
+			// CommandContext's default Cancel only reaches the direct sh
+			// child, orphaning any grandchild that inherited the output
+			// pipe's write end and permanently wedging Wait().
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+			// cmd.Cancel runs once cctx is done — BashTimeout elapsing, or
+			// the caller aborting the turn (context cancellation). SIGKILL
+			// the whole process group (negative pid), not just the direct
+			// child, so a backgrounded grandchild dies with it instead of
+			// being orphaned holding the pipe open.
+			cmd.Cancel = func() error {
+				if cmd.Process == nil {
+					return os.ErrProcessDone
+				}
+				if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+					return err
+				}
+				return os.ErrProcessDone
+			}
+
+			// See bashWaitDelay: bounds Wait() to a few seconds past
+			// whichever comes first — cctx being done, or sh exiting on its
+			// own — instead of blocking forever on a pipe a grandchild
+			// still holds open.
+			cmd.WaitDelay = bashWaitDelay
+
 			// cappedWriter bounds memory to O(outputCap) regardless of how
 			// much the command actually emits — the truncation happens
 			// during capture, not after buffering everything, so a runaway
@@ -67,10 +112,31 @@ func bashTool(timeout time.Duration, outputCap int) Tool {
 
 			text := string(cw.Bytes())
 
-			if cctx.Err() == context.DeadlineExceeded {
-				return message.Parts{&message.Text{Text: text + fmt.Sprintf("\n[command timed out after %s]", timeout)}}, fmt.Errorf("bash: timeout after %s", timeout)
-			}
-			if err != nil {
+			switch {
+			case cctx.Err() == context.DeadlineExceeded:
+				// BashTimeout fired; cmd.Cancel has (or is) killing the
+				// whole process group. Hand back whatever was captured
+				// rather than nothing.
+				return message.Parts{&message.Text{Text: text + fmt.Sprintf("\n[command timed out after %s and was killed; output above may be incomplete]", timeout)}}, fmt.Errorf("bash: timeout after %s", timeout)
+			case ctx.Err() != nil:
+				// The caller's own context was canceled (an aborted turn)
+				// ahead of our local timeout. Same shape as a timeout: a
+				// clear interruption note plus whatever was captured, not a
+				// bare protocol failure.
+				return message.Parts{&message.Text{Text: text + "\n[command aborted; output above may be incomplete]"}}, fmt.Errorf("bash: aborted: %w", ctx.Err())
+			case errors.Is(err, exec.ErrWaitDelay):
+				// sh itself already exited — successfully, since neither of
+				// the above fired and cmd.Cancel was therefore never
+				// invoked — but a backgrounded grandchild it spawned was
+				// still holding the output pipe open when WaitDelay forced
+				// it closed. This is the everyday "agent starts a dev
+				// server" case: treat it as a successful call (the
+				// command's own output was fully captured), not a timeout
+				// or an error, with a note that a background process may
+				// still be running and producing output we can no longer
+				// see.
+				return message.Parts{&message.Text{Text: text + "\n[note: a backgrounded process may still be running; its output after this point was not captured]"}}, nil
+			case err != nil:
 				if text == "" {
 					text = err.Error()
 				} else {
