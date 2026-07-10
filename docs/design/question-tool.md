@@ -136,13 +136,19 @@ explaining the pause, exactly as `goal.stalled` explains a retry. Resuming
 The server's outcome classification needs an explicit case to match:
 `runGoal` (`server/handlers.go`) currently treats any nil-error,
 non-achieved, non-cleared result as MaxTurns exhaustion and records
-`last_turn.outcome = "unachieved"` — an `awaiting_input` pause would fall
-into exactly that branch and read, to every observability consumer, like a
+`last_turn.outcome = outcomeMaxTurnsExceeded` (`"max_turns_exceeded"`,
+`server/journal.go`) — an `awaiting_input` pause would fall into exactly
+that branch and read, to every observability consumer, like a
 budget-exhausted failure. `runGoal` gains a case on
 `res.Reason == "awaiting_input"` recording a distinct
 `last_turn.outcome = "awaiting_input"` (truthful in `GET /session` and
-`/session/status`), and — like the achieved/cleared cases — it must not
-re-arm anything: the pause's continuation belongs to `/answer`.
+`/session/status`), inserted **before** the nil-error catch-all — after
+it, Go's switch ordering makes it unreachable — and the surrounding
+"only remaining terminal case" comments must be updated, since the
+catch-all is no longer the sole non-achieved nil-error path. Like the
+achieved/cleared cases it must not re-arm anything: the pause's
+continuation belongs to `/answer`. (`/wait`'s `until` validation and its
+"until must be idle or goal-done" error string gain the new value too.)
 
 **Interactive `prompt_async` sessions** need no special-casing: the turn
 ends, `runPrompt` records `"completed"` (a question is not an error), the
@@ -255,12 +261,22 @@ Prompt"):
   the invariant (two `Prompt` callers; `claimForPrompt` rejects one, but
   *which* one is a race), and a bare re-spawn drops the answer entirely,
   because `PursueGoal` hardcodes the raw condition as turn 1's directive.
-  Instead, `/answer` persists `question.answered`, clears
+  Instead, `/answer` persists `question.answered` — carrying the
+  **formatted answer block itself**, not just the fact of answering,
+  mirroring how `question.asked` persists its full payload — clears
   `s.awaitingQuestion`, and re-spawns `PursueGoal` with a new
   `ResumeAnswer` field (alongside `Registered`): when set, turn 1's
   directive is the condition plus a formatted "the user answered your
   questions:" block, consumed once and never repeated on later turns. One
   driver (the goal loop), one `Prompt` caller, answer delivered in-band.
+  Persisting the answer text closes a crash window: `ResumeAnswer` is
+  transient, and the answer only becomes a durable *message* when the
+  resumed worker's first `Prompt` appends it — a process death in between
+  would otherwise leave `question.answered` on disk with the goal restored
+  active but the answer lost, so the next re-spawn would replay the raw
+  condition. With the text in the record, reload of an answered-but-never-
+  resumed question rebuilds `ResumeAnswer` from the journal and the resume
+  delivers the same directive it would have originally.
 
 For interactive sessions, a client that skips `/answer` entirely still
 un-wedges the session correctly, since `Session.Prompt` clears
