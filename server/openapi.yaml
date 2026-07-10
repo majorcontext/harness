@@ -696,7 +696,11 @@ paths:
         otherwise left in place with a workdir.worktree_kept event journaled
         naming its path, so work already done there is never destroyed. A
         sweep at server start reconciles any worktrees a crashed process left
-        behind the same way.
+        behind the same way — but only for sessions that are actually gone:
+        a session whose log is still on disk is still resumable, and its
+        worktree (however clean it looks) is left completely untouched by
+        the sweep so a resumed session's next prompt keeps running in the
+        exact directory it left off in.
       requestBody:
         required: false
         content:

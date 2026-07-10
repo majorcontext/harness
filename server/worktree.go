@@ -161,10 +161,15 @@ func worktreeClean(path, baseCommit string) (bool, error) {
 }
 
 // writeWorktreeMeta persists m as <base>/meta/<id>.json, creating the meta
-// directory if needed. It is called immediately after a successful
-// addWorktree — before the session is usable — so a crash any time after
-// this call leaves enough on disk for sweepWorktrees to find and adjudicate
-// the worktree on the next serve start.
+// directory if needed. createWorktreeForSession calls it three times, each
+// patching in more of worktreeMeta's fields as they become known: first
+// (RepoRoot, Path only) before addWorktree ever runs, again with BaseCommit
+// once addWorktree succeeds, and finally with SessionID once the session is
+// minted (recordWorktreeOwner). Writing the provisional meta before
+// addWorktree means a crash at any point from then on leaves enough on disk
+// for sweepWorktrees to find and adjudicate the worktree on the next serve
+// start — including the pathological case where addWorktree itself never
+// got to run at all.
 func writeWorktreeMeta(base, id string, m worktreeMeta) (metaPath string, err error) {
 	dir := filepath.Join(base, "meta")
 	if err := os.MkdirAll(dir, 0o755); err != nil {

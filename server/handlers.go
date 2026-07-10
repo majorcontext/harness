@@ -232,13 +232,29 @@ func (s *Server) createWorktreeForSession(workDir string) (*worktreeInfo, error)
 	}
 	id := newWorktreeID()
 	path := filepath.Join(base, id)
-	baseCommit, err := addWorktree(repoRoot, path)
+	// Write a provisional meta BEFORE addWorktree runs: path and repoRoot
+	// are already known, and BaseCommit/SessionID are patched in once they
+	// exist (the writeWorktreeMeta call below, and recordWorktreeOwner
+	// after the session is minted). This closes the crash window that used
+	// to exist between addWorktree succeeding and the meta actually landing
+	// on disk — a real git worktree with zero bookkeeping, invisible to
+	// sweepWorktrees (which only ever reads meta/*.json) and leaked
+	// forever. A meta whose worktree directory doesn't exist yet is
+	// something sweepWorktrees already knows how to prune.
+	metaPath, err := writeWorktreeMeta(base, id, worktreeMeta{RepoRoot: repoRoot, Path: path})
 	if err != nil {
 		return nil, fmt.Errorf("workdir_isolation=worktree: %w", err)
 	}
-	metaPath, err := writeWorktreeMeta(base, id, worktreeMeta{RepoRoot: repoRoot, Path: path, BaseCommit: baseCommit})
+	baseCommit, err := addWorktree(repoRoot, path)
 	if err != nil {
+		os.Remove(metaPath) // best effort: no worktree was ever created, nothing for the sweep to adjudicate
+		return nil, fmt.Errorf("workdir_isolation=worktree: %w", err)
+	}
+	// metaPath is deterministic in base+id alone, so it's unchanged by this
+	// second write; only its content (BaseCommit) gets patched in.
+	if _, err := writeWorktreeMeta(base, id, worktreeMeta{RepoRoot: repoRoot, Path: path, BaseCommit: baseCommit}); err != nil {
 		_ = removeWorktree(repoRoot, path)
+		os.Remove(metaPath)
 		return nil, fmt.Errorf("workdir_isolation=worktree: %w", err)
 	}
 	return &worktreeInfo{id: id, base: base, path: path, repoRoot: repoRoot, baseCommit: baseCommit, metaPath: metaPath}, nil
