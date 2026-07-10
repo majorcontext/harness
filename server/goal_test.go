@@ -34,6 +34,11 @@ type goalProv struct {
 	// engine/goal.go's goalProvider, same idea) deterministically.
 	workerErrN   int
 	workerErrHit int
+	// workerErr, when set, is the error every workerErrN-gated failure
+	// returns instead of the generic "fake transient provider error" — lets
+	// a test inject a specific classified error (e.g. a context-overflow
+	// *provider.Error) rather than an opaque one.
+	workerErr error
 }
 
 func (p *goalProv) Name() string { return p.name }
@@ -56,6 +61,9 @@ func (p *goalProv) Stream(ctx context.Context, req *provider.Request) (provider.
 	defer p.mu.Unlock()
 	if p.workerErrHit < p.workerErrN {
 		p.workerErrHit++
+		if p.workerErr != nil {
+			return nil, p.workerErr
+		}
 		return nil, errors.New("fake transient provider error")
 	}
 	if p.wi >= len(p.worker) {
