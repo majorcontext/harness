@@ -241,9 +241,9 @@ response already carry the pending question the instant it's set.
 
 400s if `call_id` doesn't match the pending question (a stale/unknown
 answer, e.g. after an orchestrator retry), 404s on an unknown session,
-409s if nothing is pending. On success it persists `question.answered`
-(clearing `s.awaitingQuestion`), formats the answers into one deterministic
-text block, and delivers it through the **same path as `prompt_async`** —
+409s if nothing is pending. On success it formats the answers into one
+deterministic text block and delivers it through the **same path as
+`prompt_async`** —
 a plain `Session.Prompt` user message. That is the "answer arrives as the
 next prompt" mechanism from §2, not a side-channel into the already-
 resolved tool_call.
@@ -255,7 +255,15 @@ Prompt"):
 
 - **No active goal** (interactive session): `/answer` formats the answers
   and delivers them as a plain `Session.Prompt` user message — the
-  ordinary `prompt_async` path, exactly as above.
+  ordinary `prompt_async` path, exactly as above. It does NOT persist
+  `question.answered` itself: `Session.Prompt`'s clear-and-persist (below)
+  is the single, idempotent owner of that record on this branch — it
+  writes only when `awaitingQuestion` was still set, so one answer yields
+  exactly one `question.answered`, whether it arrived via `/answer` or a
+  bare `prompt_async`. The goal-paused branch below is the deliberate
+  exception: it must persist and clear *before* spawning the goal driver,
+  since the resumed worker's own `Prompt` runs with the flag already
+  cleared.
 - **Goal paused on the question**: `/answer` must NOT call `Prompt`
   itself — pairing a direct `Prompt` with a re-spawned `PursueGoal` races
   the invariant (two `Prompt` callers; `claimForPrompt` rejects one, but
