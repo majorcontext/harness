@@ -108,9 +108,12 @@ updates only on worker-turn requests. Durability: cumulative `Usage()`
 survives a restart only because `LoadSession` re-sums each `recMessage`'s
 `rec.Usage` — and the summary is deliberately NOT a `recMessage` — so the
 `compact` record carries its own `usage` field, and `LoadSession`'s replay
-adds it into the cumulative sum exactly as it does for message records.
-Without that field the summarization spend would silently vanish from
-`Usage()` on every reload.
+adds it into the cumulative sum ONLY — unlike `recMessage` replay, which
+also sets `s.lastUsage`/`s.haveLastUsage`, the compact record's usage must
+never touch those, or reload would violate the live rule above (a reloaded
+session would report the small summarization call as its "last request
+size" and defeat the re-trigger check). Without the field at all, the
+summarization spend would silently vanish from `Usage()` on every reload.
 
 **Failure handling.** If the summarization call errors (rate limit,
 transient 5xx, or the range itself is too large to summarize in one call —
@@ -129,14 +132,21 @@ failure mode is strictly better than blocking the caller's real turn on it.
 {
   "type": "compact",
   "created_at": "...",
+  "usage": { "input_tokens": 8214, "output_tokens": 512 },
   "compact": {
     "first_id": "msg_...",
     "last_id": "msg_...",
-    "turns": 12,
+    "turns_folded": 12,
     "summary": { "id": "msg_...", "role": "user", "parts": [...], "created_at": "..." }
   }
 }
 ```
+
+The top-level `usage` reuses the existing `record.Usage` field
+(`store.go`), exactly as `recMessage` carries it, and holds the
+summarization call's spend (see "Usage accounting" above). `turns_folded`
+is the one field name, used identically here, in the `/compact` response,
+and in the `history.compacted` event.
 
 `compactRecord.Summary` is the full `message.Message` to splice in, carried
 *inline* — not a lightweight marker record followed by an ordinary
