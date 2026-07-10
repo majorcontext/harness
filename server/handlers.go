@@ -868,7 +868,10 @@ func (s *Server) tryResumeFromPendingAnswer(w http.ResponseWriter, id string, se
 		writeClaimError(w, code, holder)
 		return true
 	}
-	resumeText, resumeOK := st.sess.PendingResumeAnswer()
+	// Consume, not read: once this path commits to the resume, the pending
+	// answer must be gone so a retried /answer cannot re-deliver it (see
+	// TakePendingResumeAnswer).
+	resumeText, resumeOK := st.sess.TakePendingResumeAnswer()
 	condition, goalActive := st.sess.ActiveGoal()
 	if !resumeOK || !goalActive {
 		// Lost the race (someone else already resumed it, or the goal was
