@@ -133,6 +133,17 @@ invariant holds because `question.asked` is itself the durable record
 explaining the pause, exactly as `goal.stalled` explains a retry. Resuming
 (§3) re-enters with `Registered: true`, same condition.
 
+The server's outcome classification needs an explicit case to match:
+`runGoal` (`server/handlers.go`) currently treats any nil-error,
+non-achieved, non-cleared result as MaxTurns exhaustion and records
+`last_turn.outcome = "unachieved"` — an `awaiting_input` pause would fall
+into exactly that branch and read, to every observability consumer, like a
+budget-exhausted failure. `runGoal` gains a case on
+`res.Reason == "awaiting_input"` recording a distinct
+`last_turn.outcome = "awaiting_input"` (truthful in `GET /session` and
+`/session/status`), and — like the achieved/cleared cases — it must not
+re-arm anything: the pause's continuation belongs to `/answer`.
+
 **Interactive `prompt_async` sessions** need no special-casing: the turn
 ends, `runPrompt` records `"completed"` (a question is not an error), the
 session goes idle-with-a-pending-question (§3), and the human's reply
@@ -185,6 +196,19 @@ question is not "idle" in the sense of nothing to do, so it becomes a
 tri-state value, not `idle` plus metadata. The question detail itself
 (`call_id`, `questions`) rides in a new `sessionJSON.Question`, present
 exactly when state is `awaiting-input` — same shape as `Goal`/`LastTurn`.
+
+Feeding it is a server-side concern, not an engine read: `compositeState`
+takes process-level bits, and `/wait`'s `waitSnapshot` derives state from
+`Server.goalState` (a journal-fed `map[string]*goalTracker`) plus the
+resident running flag — neither touches engine memory, which is what lets
+them answer for **non-resident** sessions. `awaiting-input` therefore gets
+the same treatment as goals: a `questionState` tracker parallel to
+`goalState`, fed by the `question.asked`/`question.answered` journal
+records through the same publish path that `publishGoal` uses today (live
+events while resident, journal replay on reload/reconcile). `s.awaitingQuestion`
+remains the engine-side truth the tool and goal loop consult;
+`questionState` is its durable, server-side projection — the same
+engine/server split `goalActive`/`goalState` already establishes.
 
 **`GET /session/{id}/wait`** gains `until=awaiting-input` alongside `idle`
 and `goal-done` (`server/wait.go`'s `waitConditionMet`): resolves
@@ -277,7 +301,7 @@ client-API reach — no new hook, no new client API method.
 `question.asked`'s existing fire-and-forget delivery contract (bounded
 per-plugin queue, best-effort, no reordering within one plugin) applies
 unchanged: a dropped event is not fatal, since the pending question is
-also durably queryable (`GET /session/{id}`, `wait?until=answered`) — the
+also durably queryable (`GET /session/{id}`, `wait?until=awaiting-input`) — the
 event is a low-latency nudge, session state is the source of truth.
 
 ## 5. Non-goals and migration
