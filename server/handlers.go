@@ -16,6 +16,7 @@ import (
 
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/plugin"
 )
 
 // sessionJSON is the openapi Session shape.
@@ -24,20 +25,27 @@ type sessionJSON struct {
 	CreatedAt time.Time        `json:"created_at"`
 	Model     message.ModelRef `json:"model"`
 	Status    string           `json:"status"`
-	// State is the unambiguous composite: idle, busy, or goal-running. Kept
-	// alongside Status (never replacing it) for backward compat. Precedence:
-	// goal-running wins whenever a goal is active, REGARDLESS of the momentary
-	// worker status — including the goal loop's between-turn gap (worker
-	// finished a turn, evaluator hasn't answered yet) where Status alone would
-	// still read "busy" (the server's busy/idle transition brackets the WHOLE
-	// PursueGoal call, not each turn) but a naive orchestrator inferring
-	// progress from "status=idle plus goal.active" elsewhere is exactly the
-	// ambiguity this field exists to remove. See compositeState.
+	// State is the unambiguous composite: idle, busy, goal-running, or
+	// awaiting-input. Kept alongside Status (never replacing it) for
+	// backward compat. Precedence: awaiting-input outranks everything else
+	// — a pending ask_user question is not "idle" in the sense of nothing
+	// to do, regardless of the goal/busy bits underneath it — then
+	// goal-running wins whenever a goal is active, REGARDLESS of the
+	// momentary worker status — including the goal loop's between-turn gap
+	// (worker finished a turn, evaluator hasn't answered yet) where Status
+	// alone would still read "busy" (the server's busy/idle transition
+	// brackets the WHOLE PursueGoal call, not each turn) but a naive
+	// orchestrator inferring progress from "status=idle plus goal.active"
+	// elsewhere is exactly the ambiguity this field exists to remove. See
+	// compositeState.
 	State    string    `json:"state"`
 	Messages int       `json:"messages"`
 	Seq      int64     `json:"seq,omitempty"`
 	Goal     *goalJSON `json:"goal,omitempty"`
 	WorkDir  string    `json:"workdir"`
+	// Question is the pending ask_user question, present exactly when State
+	// is "awaiting-input" (docs/design/question-tool.md §3).
+	Question *questionJSON `json:"question,omitempty"`
 	// LastTurn is the most recent prompt or goal-worker turn's outcome for
 	// this process — "completed" or "error", plus the sanitized error detail
 	// on failure — so a poller can distinguish "idle because done" from
@@ -47,18 +55,29 @@ type sessionJSON struct {
 	LastTurn *lastTurnJSON `json:"last_turn,omitempty"`
 }
 
+// questionJSON is the Session.question sub-object: the pending ask_user
+// question, present exactly when State is "awaiting-input" (design doc §3).
+type questionJSON struct {
+	CallID    string                `json:"call_id"`
+	Questions []plugin.QuestionItem `json:"questions"`
+}
+
 // lastTurnJSON is the openapi LastTurn shape.
 type lastTurnJSON struct {
 	Outcome string `json:"outcome"`
 	Error   string `json:"error,omitempty"`
 }
 
-// compositeState resolves the unambiguous Session.state field: goal-running
-// whenever a goal is active, regardless of the momentary running/busy flag
-// (see sessionJSON.State's doc comment for why momentary busy/idle is not
-// enough); otherwise busy or idle mirroring the plain status.
-func compositeState(running, goalActive bool) string {
+// compositeState resolves the unambiguous Session.state field: awaiting-input
+// ranks above everything else whenever a question is pending (design doc
+// §3), then goal-running whenever a goal is active, regardless of the
+// momentary running/busy flag (see sessionJSON.State's doc comment for why
+// momentary busy/idle is not enough); otherwise busy or idle mirroring the
+// plain status.
+func compositeState(running, goalActive, awaitingQuestion bool) string {
 	switch {
+	case awaitingQuestion:
+		return "awaiting-input"
 	case goalActive:
 		return "goal-running"
 	case running:
@@ -501,7 +520,8 @@ func (s *Server) compositeStateFor(id string, running bool) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	g := s.goalState[id]
-	return compositeState(running, g != nil && g.active)
+	q := s.questionState[id]
+	return compositeState(running, g != nil && g.active, q != nil && q.pending)
 }
 
 func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
@@ -667,7 +687,7 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 // as runPrompt.
 //
 // turn.end outcome is decided from the RESULT, not merely from err == nil:
-// PursueGoal returns a nil error with Achieved:false in two cases that are
+// PursueGoal returns a nil error with Achieved:false in three cases that are
 // emphatically not "completed" —
 //
 //   - MaxTurns exhausted without the evaluator ever returning MET (Reason
@@ -682,6 +702,14 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 //     below, just reached without cancellation — and the openapi contract
 //     is that DELETE /goal (or any clear) never emits turn.end. So this case
 //     suppresses the record entirely, matching the context.Canceled branch.
+//   - The worker turn ended on a pending ask_user question (Reason
+//     "awaiting_input", docs/design/question-tool.md §2): the goal is
+//     neither done nor exhausted, it is paused waiting on POST
+//     /session/{id}/answer. Recorded as its own outcomeAwaitingInput,
+//     inserted BEFORE the MaxTurns catch-all below (Go's switch stops at
+//     the first matching case, so it must precede that case or it would be
+//     unreachable). Like achieved/cleared, this must not re-arm anything —
+//     the pause's continuation belongs entirely to /answer.
 //
 // The terminal session.status idle record emitted at the end of this
 // function is the same record an SSE collector waits for as the session's
@@ -704,9 +732,19 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 		// Cleared in flight without the context being cancelled: goal.cleared
 		// is already journaled (ClearGoal/handleGoalDelete); no turn.end, same
 		// contract as the context.Canceled case below.
+	case err == nil && res.Reason == "awaiting_input":
+		// Paused on ask_user (see the doc comment above): recorded as its
+		// own outcome, inserted before the MaxTurns catch-all so it is
+		// never mistaken for it. Nothing here clears the goal or the
+		// pending question — question.asked (already journaled by the
+		// engine's own publish path, see publishQuestion) is the durable
+		// record explaining the pause, exactly as goal.stalled explains a
+		// retry.
+		s.recordTurnEnd(id, outcomeAwaitingInput, nil)
 	case err == nil:
-		// Any other nil-error, non-achieved result is MaxTurns exhaustion —
-		// PursueGoal's only remaining terminal case (see its doc comment).
+		// Any other nil-error, non-achieved, non-cleared, non-paused result
+		// is MaxTurns exhaustion — PursueGoal's only remaining terminal
+		// case reachable here (see its doc comment).
 		s.recordTurnEnd(id, outcomeMaxTurnsExceeded, nil)
 	case errors.Is(err, context.Canceled):
 		// Cleared via DELETE (goal.cleared already journaled) or drained.
@@ -1044,6 +1082,10 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 	if g := s.goalState[id]; g != nil {
 		goal = &goalJSON{Condition: g.condition, Active: g.active, Achieved: g.achieved, Turns: g.turns, LastReason: g.lastReason, Attempt: g.attempt}
 	}
+	var question *questionJSON
+	if q := s.questionState[id]; q != nil && q.pending {
+		question = &questionJSON{CallID: q.callID, Questions: append([]plugin.QuestionItem(nil), q.questions...)}
+	}
 	lastTurn := s.lastTurnJSONLocked(id)
 	s.mu.Unlock()
 	return sessionJSON{
@@ -1051,11 +1093,12 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 		CreatedAt: sess.CreatedAt(),
 		Model:     sess.Model(),
 		Status:    status,
-		State:     compositeState(status == "busy", goal != nil && goal.Active),
+		State:     compositeState(status == "busy", goal != nil && goal.Active, question != nil),
 		Messages:  len(sess.History()),
 		Seq:       seq,
 		Goal:      goal,
 		WorkDir:   sess.WorkDir(),
+		Question:  question,
 		LastTurn:  lastTurn,
 	}
 }

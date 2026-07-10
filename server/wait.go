@@ -164,7 +164,8 @@ func (s *Server) waitSnapshot(id string) (string, *goalJSON) {
 	if g := s.goalState[id]; g != nil {
 		goal = &goalJSON{Condition: g.condition, Active: g.active, Achieved: g.achieved, Turns: g.turns, LastReason: g.lastReason, Attempt: g.attempt}
 	}
-	return compositeState(running, goal != nil && goal.Active), goal
+	q := s.questionState[id]
+	return compositeState(running, goal != nil && goal.Active, q != nil && q.pending), goal
 }
 
 // waitConditionMet reports whether the requested `until` condition holds

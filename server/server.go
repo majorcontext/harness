@@ -27,6 +27,7 @@ import (
 
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/plugin"
 )
 
 // Workdir isolation modes for POST /session's workdir_isolation field (see
@@ -180,6 +181,23 @@ type Server struct {
 	// updated as goal.* events flow through Publish.
 	goalState map[string]*goalTracker
 
+	// goalMaxTurns remembers the MaxTurns a session's most recent POST
+	// /session/{id}/goal was created with, so POST /answer's goal-paused
+	// branch can re-spawn PursueGoal with the same turn budget when
+	// resuming a goal paused on ask_user (see handleAnswer). In memory
+	// only, like goalState — a goal paused when the process restarts
+	// resumes (if at all) through the same manual re-registration path any
+	// other restart-resumed goal does today.
+	goalMaxTurns map[string]int
+
+	// questionState tracks the latest pending-question summary per session
+	// for this process (in memory only, like goalState): whether a
+	// question is pending, its CallID, and the batch it asked. It drives
+	// the Session JSON question field and compositeState's
+	// "awaiting-input" rank, updated as question.* events flow through
+	// Publish — see publishQuestion and docs/design/question-tool.md §3.
+	questionState map[string]*questionTracker
+
 	// lastTurn tracks the most recent turn.end outcome per session, for this
 	// process only (in memory, like goalState): drives Session.last_turn and
 	// the /session/status last_turn field. Set by recordTurnEnd whenever a
@@ -228,6 +246,16 @@ type goalTracker struct {
 	turns      int
 	lastReason string
 	attempt    int
+}
+
+// questionTracker is the per-session pending-question summary surfaced in
+// Session JSON (see publishQuestion). pending mirrors the engine's
+// s.awaitingQuestion for this process; callID and questions are only
+// meaningful while pending.
+type questionTracker struct {
+	pending   bool
+	callID    string
+	questions []plugin.QuestionItem
 }
 
 // turnOutcome is the per-session last-turn summary surfaced on Session JSON
@@ -290,6 +318,8 @@ func New(opts Options) (*Server, error) {
 		lastReqHash:    make(map[string]string),
 		lastPersistErr: make(map[string]string),
 		goalState:      make(map[string]*goalTracker),
+		goalMaxTurns:   make(map[string]int),
+		questionState:  make(map[string]*questionTracker),
 		lastTurn:       make(map[string]*turnOutcome),
 		waiters:        make(map[*waiter]struct{}),
 		closing:        make(chan struct{}),
