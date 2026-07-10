@@ -279,7 +279,7 @@ behind it. Two shapes were on the table:
   cooldown.** A `Server`-side timer that re-POSTs `/session/{id}/goal` once
   some cooldown elapses after an exhaustion. Rejected because it adds an
   entirely new piece of state to the state machine (a scheduled, in-memory-
-  only re-arm timer, alongside `goalState`/`goalMaxTurns`, that does not
+  only re-arm timer, alongside `goalState`, that does not
   survive a process restart and duplicates logic the loop already has) for a
   case the chosen design already handles for free by reusing an existing,
   already-durable terminal state. It would also require deciding a *second*

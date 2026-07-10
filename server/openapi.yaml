@@ -123,11 +123,6 @@ components:
             message part shapes. Present only once a turn has finished in
             this process (like `goal`, absent on a freshly reloaded,
             never-prompted-here session).
-        question:
-          $ref: "#/components/schemas/QuestionSummary"
-          description: >
-            The pending ask_user question, present exactly when `state` is
-            "awaiting-input". Answer it with POST /session/{id}/answer.
         usage:
           $ref: "#/components/schemas/Usage"
           description: >
@@ -150,7 +145,8 @@ components:
             apart, and diffing to infer whether a session is quietly
             working or wedged mid-turn — the double-sample approach is slow,
             racy against a session legitimately paused between polls (e.g.
-            `state` "awaiting-input"), and only ever answers a relative
+            a goal loop's between-turn gap, worker turn done and the
+            evaluator hasn't answered yet), and only ever answers a relative
             question ("did anything happen"), never an absolute one ("how
             long has this been quiet"). Always present, resident or not.
 
@@ -196,7 +192,7 @@ components:
       properties:
         outcome:
           type: string
-          enum: [completed, error, context_exhausted, max_turns_exceeded, awaiting_input]
+          enum: [completed, error, context_exhausted, max_turns_exceeded]
           description: >
             "completed": the turn (or goal) finished successfully —for a
             goal, the evaluator returned MET. "error": the turn failed
@@ -212,12 +208,6 @@ components:
             goal-loop only — GoalOptions.MaxTurns was exhausted without the
             evaluator ever returning MET; the goal gave up, it did not
             complete, so it is deliberately never reported as "completed".
-            "awaiting_input": goal-loop only — the worker turn ended because
-            the built-in ask_user tool ran; the goal is neither done nor
-            exhausted, it is paused on POST /session/{id}/answer (see
-            QuestionSummary). Like the other non-"completed" outcomes above,
-            nothing here re-arms anything — the pause's continuation belongs
-            entirely to /answer.
             A goal cleared via DELETE /session/{id}/goal (or a ClearGoal that
             wins a race against an in-flight worker retry or evaluator call)
             emits no turn.end at all — see the turn.end Event description.
@@ -230,16 +220,12 @@ components:
 
     SessionState:
       type: string
-      enum: [idle, busy, goal-running, awaiting-input]
+      enum: [idle, busy, goal-running]
       description: >
-        The unambiguous composite state, surfacing Session.status,
-        Session.goal.active, and Session.question as a single value so an
-        orchestrator never has to combine them itself. Precedence:
-        `awaiting-input` ranks above everything else whenever a question
-        asked via the built-in ask_user tool is pending — it is not "idle"
-        in the sense of nothing to do, regardless of the goal/busy bits
-        underneath it. Otherwise `goal-running` whenever goal.active is
-        true, REGARDLESS of the momentary `status` value — the server's
+        The unambiguous composite state, surfacing both Session.status and
+        Session.goal.active as a single value so an orchestrator never has to
+        combine them itself. Precedence: `goal-running` whenever goal.active
+        is true, REGARDLESS of the momentary `status` value — the server's
         busy/idle transition brackets the whole goal-loop call (one POST
         /session/{id}/goal to its achieve/clear), not each worker turn, so
         `status` alone cannot distinguish "between turns, still working" from
@@ -249,45 +235,6 @@ components:
         during a goal loop's between-turn gap (worker turn done, evaluator
         hasn't answered yet). Otherwise `busy` or `idle` mirrors `status`
         directly. Poll it, or long-poll it via GET /session/{id}/wait.
-
-    QuestionSummary:
-      type: object
-      description: >
-        The pending ask_user question, surfaced on Session.question,
-        WaitResponse.question, and the question.asked Event. Answer it with
-        POST /session/{id}/answer.
-      required: [call_id, questions]
-      properties:
-        call_id:
-          type: string
-          description: >
-            The ask_user tool call's own id — the same value POST
-            /session/{id}/answer's call_id must match. A mismatch (a stale
-            answer, e.g. after an orchestrator retry) is a 400 there.
-        questions:
-          type: array
-          items:
-            $ref: "#/components/schemas/QuestionSpec"
-
-    QuestionSpec:
-      type: object
-      description: One question in an ask_user batch.
-      required: [question]
-      properties:
-        question:
-          type: string
-          description: The question text to show the user.
-        options:
-          type: array
-          items: { type: string }
-          description: >
-            Optional enumerated choices. Absent means freeform (a text
-            answer).
-        multi:
-          type: boolean
-          description: >
-            Only meaningful with options: whether more than one may be
-            selected. Absent (default) means single-select.
 
     GoalSummary:
       type: object
@@ -417,13 +364,6 @@ components:
             set for this session in the current server process). Absent when
             until=idle resolved with no goal ever set, or when until=goal-done
             resolved trivially because no goal was ever set.
-        question:
-          $ref: "#/components/schemas/QuestionSummary"
-          description: >
-            Present under the same condition as Session.question (state is
-            "awaiting-input"). Always present when until=awaiting-input
-            resolved by the condition actually holding (as opposed to a
-            timeout or a drain-triggered early return).
 
     ModelRef:
       type: string
@@ -591,8 +531,6 @@ components:
             - goal.stalled
             - goal.achieved
             - goal.cleared
-            - question.asked
-            - question.answered
             - workdir.worktree_kept
             - workdir.worktree_removed
             - text.delta
@@ -651,12 +589,6 @@ components:
             worker turn that failed past its DETERMINISTIC retry budget,
             carrying the failure as goal_reason — a retryable-budget
             exhaustion never reaches this record, see above).
-            question.asked and question.answered are the durable records of
-            the built-in ask_user tool (question.asked's first emit site):
-            question.asked carries question_call_id and questions (the full
-            batch asked); question.answered carries question_call_id only.
-            Both are also folded into Session.question / WaitResponse.question
-            (see QuestionSummary) and the "awaiting-input" SessionState.
             workdir.worktree_kept and workdir.worktree_removed are durable
             records of a workdir_isolation="worktree" session's dedicated git
             worktree being torn down (session end or the serve-start sweep,
@@ -696,13 +628,12 @@ components:
             turn.end; see LastTurn.error.
         outcome:
           type: string
-          enum: [completed, error, context_exhausted, max_turns_exceeded, awaiting_input]
+          enum: [completed, error, context_exhausted, max_turns_exceeded]
           description: >
             Turn result for turn.end events — see LastTurn.outcome for the
             full meaning of each value, including why a goal that exhausts
-            MaxTurns is "max_turns_exceeded" rather than "completed", why a
-            goal paused on ask_user is "awaiting_input" rather than either,
-            and why a cleared goal emits no turn.end at all.
+            MaxTurns is "max_turns_exceeded" rather than "completed", and why
+            a cleared goal emits no turn.end at all.
         system_hash:
           type: string
           description: SHA-256 of the joined system segments (request.meta).
@@ -761,15 +692,6 @@ components:
             True while a goal.stalled record is still within the retryable
             backoff budget; false on the final such record, which reports
             the budget exhausted (see GoalSummary.waiting).
-        question_call_id:
-          type: string
-          description: >
-            The pending ask_user call's id (question.asked, question.answered).
-        questions:
-          type: array
-          items:
-            $ref: "#/components/schemas/QuestionSpec"
-          description: The batch of questions asked (question.asked only).
         worktree_path:
           type: string
           description: >
@@ -786,41 +708,6 @@ components:
         max_turns:
           type: integer
           description: Maximum worker turns; 0 or omitted means unlimited.
-
-    AnswerRequest:
-      type: object
-      description: >
-        Answers a pending ask_user question (POST /session/{id}/answer). The
-        engine performs no validation of `selected` against the question's
-        `options`, nor that `multi: false` got exactly one selection — a
-        consumer/UI concern, matching the engine's stance on tool-argument
-        validation generally.
-      required: [call_id, answers]
-      properties:
-        call_id:
-          type: string
-          description: >
-            Must match the pending question's call_id exactly (400
-            otherwise — e.g. a stale answer after an orchestrator retry).
-        answers:
-          type: array
-          minItems: 1
-          items:
-            type: object
-            required: [question]
-            properties:
-              question:
-                type: string
-                description: >
-                  The question text being answered (echoed back into the
-                  formatted answer block delivered as the next prompt).
-              selected:
-                type: array
-                items: { type: string }
-                description: Selected option(s), for a question with options.
-              text:
-                type: string
-                description: Freeform answer, for a question without options.
 
     Request:
       type: object
@@ -1105,9 +992,7 @@ paths:
             session holds the same workdir and neither session set
             share_workdir on creation, and neither session set
             workdir_isolation="worktree" (the error names the holder
-            session), OR a goal is paused awaiting an answer to a pending
-            ask_user question (use POST /session/{id}/answer to resume it
-            instead).
+            session).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -1173,57 +1058,6 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
-  /session/{id}/answer:
-    post:
-      operationId: answerQuestion
-      summary: Answer a pending ask_user question.
-      description: |
-        Formats the answers into one deterministic text block and delivers
-        it through the same path as prompt_async — a plain user message —
-        except when a goal is paused on the question, where it instead
-        resumes the goal loop directly (PursueGoal must not run
-        concurrently with a separate Prompt call): the answer becomes turn
-        1's directive alongside the original condition. Either way, exactly
-        one answer yields exactly one durable question.answered record.
-
-        A retried call for a question that was already durably answered but
-        never actually delivered — the crash window between the prior call's
-        question.answered record and the resumed goal worker's first turn —
-        is recovered rather than rejected: the recorded answer text is
-        replayed as turn 1's directive, without writing a second
-        question.answered.
-      parameters:
-        - $ref: "#/components/parameters/sessionID"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/AnswerRequest" }
-      responses:
-        "202":
-          description: Accepted. Body carries the seq to tail events from.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [seq]
-                properties:
-                  seq: { type: integer }
-        "400":
-          description: >
-            call_id does not match the pending question (e.g. a stale
-            answer after an orchestrator retry).
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409":
-          description: No question is pending for this session.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-
   /session/{id}/abort:
     post:
       operationId: abortSession
@@ -1270,9 +1104,6 @@ paths:
         goal). `until=goal-done` waits for the goal to become inactive —
         achieved or cleared, distinguished via goal.achieved in the
         response — or resolves immediately if the session never had a goal.
-        `until=awaiting-input` resolves immediately if a question asked via
-        the built-in ask_user tool is already pending, otherwise blocks
-        until one appears or the wait times out.
       parameters:
         - $ref: "#/components/parameters/sessionID"
         - name: until
@@ -1280,7 +1111,7 @@ paths:
           required: true
           schema:
             type: string
-            enum: [idle, goal-done, awaiting-input]
+            enum: [idle, goal-done]
         - name: timeout_s
           in: query
           schema:
