@@ -234,6 +234,16 @@ var errEvaluatorUnparseable = errors.New("engine: goal evaluator returned unpars
 // error text (fragile, provider-specific, and the false negative is a
 // zombie goal, whereas the false positive is at worst two wasted requests).
 //
+// One exception: a provider error classified provider.ErrKindContextOverflow
+// (issue #62) IS distinguishable, structurally, from an ordinary opaque
+// failure — the classification is a typed field the adapter sets, not text
+// this package would have to parse — and it is deterministic: the same,
+// now-too-long request will fail identically on every retry. See
+// promptTurnWithRetry's context-overflow branch and PursueGoal's matching
+// branch, both of which fail fast (no backoff wait, no further attempt,
+// distinct goal.cleared reason) instead of taking the bounded-retry path
+// described here.
+//
 // Retries are spaced out on a capped exponential backoff (see goalRetryDelay:
 // 1s after the first failure, 4s after the second, capped thereafter) so a
 // rate limit or a momentary 5xx — the two named transient causes above — has
@@ -526,6 +536,20 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 				// pause above skips it too.
 				continue
 			}
+			if provider.IsContextOverflow(err) {
+				// Issue #62, layer 1: a deterministic context/prompt
+				// overflow gets its own distinct stall/clear reason
+				// instead of the generic "worker turn failed after N
+				// attempt(s)" wording, and the error is returned AS-IS
+				// (not wrapped in "engine: goal loop stalled") so
+				// last_turn.error (server/journal.go's recordTurnEnd)
+				// surfaces exactly err.Error()'s clear, deterministic
+				// message — see provider.Error.Error(). Checked after the
+				// exhausted-park branch above by construction: overflow is
+				// never classified retryable, so the two are disjoint.
+				s.clearGoal(err.Error())
+				return nil, err
+			}
 			// Every attempt failed — either the deterministic retry budget
 			// ran out, or retrying stopped early because a tool already
 			// executed this attempt (see promptTurnWithRetry's
@@ -703,6 +727,17 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 		// retrying entirely (the non-idempotency doc above) — journaling
 		// it as waiting=true, immediately followed by goal.cleared, would
 		// read as a park on any timeline keyed to the flag.
+		if provider.IsContextOverflow(err) {
+			// Deterministic failure (issue #62): the request as built
+			// cannot fit the model's context window, and every later
+			// attempt reissues the exact same directive against the exact
+			// same (now-too-long) history — retrying is pure waste, not
+			// resilience, unlike an ordinary transient error below. Fail
+			// fast: no backoff wait, no stall record — PursueGoal's caller
+			// clears the goal with a distinct reason (see its doc comment),
+			// which is the durable explanation of the stop.
+			return attempts, err
+		}
 		toolGateStops := s.toolExecutions() > toolsBefore
 		waiting := retryable && !exhausted && !toolGateStops
 		if !s.recordGoalStalled(err, turn, attempts, retryable, class, waiting) {
