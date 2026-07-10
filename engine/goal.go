@@ -697,12 +697,19 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 		// reads as "one more than the retries already spent, including this
 		// one, would meet or exceed the ceiling".
 		exhausted := retryable && retryableAttempt+1 >= goalRetryableMaxAttempts
-		waiting := retryable && !exhausted
+		// The tool-execution gate is evaluated BEFORE the stall is
+		// journaled so the record's waiting flag tells the truth: an
+		// attempt that ran a tool and then failed is about to stop
+		// retrying entirely (the non-idempotency doc above) — journaling
+		// it as waiting=true, immediately followed by goal.cleared, would
+		// read as a park on any timeline keyed to the flag.
+		toolGateStops := s.toolExecutions() > toolsBefore
+		waiting := retryable && !exhausted && !toolGateStops
 		if !s.recordGoalStalled(err, turn, attempts, retryable, class, waiting) {
 			// Concurrently cleared: stop retrying, nothing left to retry for.
 			return attempts, err
 		}
-		if s.toolExecutions() > toolsBefore {
+		if toolGateStops {
 			// This attempt executed a tool call before failing: see the
 			// non-idempotency doc above. Retrying would reissue the
 			// directive and risk re-running that tool, so stop now instead

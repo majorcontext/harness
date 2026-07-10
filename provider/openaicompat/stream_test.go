@@ -346,3 +346,52 @@ func TestName(t *testing.T) {
 		t.Errorf("Name() = %q", c.Name())
 	}
 }
+
+// TestStreamMidStreamErrorClassifiedRetryable pins the mid-stream error
+// path: an OpenAI-compat `{"error":{...}}` chunk (how OpenRouter reports an
+// overload that begins after headers were already sent) must surface as an
+// error — classified retryable when the code says so — never as a silent
+// end-of-turn. Before the fix, stream.handle unmarshalled the chunk, found
+// no choices, and returned nil: the turn just ended, indistinguishable
+// from success, and the goal loop's backoff never engaged.
+func TestStreamMidStreamErrorClassifiedRetryable(t *testing.T) {
+	c := testClient(t, "openrouter", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, strings.Join([]string{ //nolint:errcheck
+			sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{"content":"partial"}}]}`),
+			sseData(`{"error":{"message":"upstream overloaded, please retry","code":529}}`),
+		}, ""))
+	})
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:    message.ModelRef{Provider: "openrouter", Model: "some/model"},
+		Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var streamErr error
+	for {
+		_, err := s.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			streamErr = err
+			break
+		}
+	}
+	if streamErr == nil {
+		t.Fatal("mid-stream error chunk was silently swallowed: stream ended with no error")
+	}
+	class, ok := provider.AsRetryable(streamErr)
+	if !ok {
+		t.Fatalf("mid-stream 529 not classified retryable: %v", streamErr)
+	}
+	if class != provider.RetryableOverloaded {
+		t.Errorf("class = %q, want %q", class, provider.RetryableOverloaded)
+	}
+	if !strings.Contains(streamErr.Error(), "upstream overloaded") {
+		t.Errorf("original message lost: %v", streamErr)
+	}
+}

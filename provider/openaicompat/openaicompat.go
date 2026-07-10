@@ -124,6 +124,11 @@ func classifyStatus(status int) (provider.RetryableClass, bool) {
 	switch {
 	case status == http.StatusTooManyRequests:
 		return provider.RetryableRateLimited, true
+	case status == 529:
+		// Not a registered status, but OpenRouter proxies Anthropic's 529
+		// overload responses through verbatim — classify it the same way
+		// the anthropic adapter does rather than as a generic 5xx.
+		return provider.RetryableOverloaded, true
 	case status >= 500 && status <= 599:
 		return provider.RetryableServerError, true
 	default:
@@ -257,7 +262,15 @@ func trimSpaceLeft(s string) string {
 
 // wireChunk is one "data: {...}" SSE payload.
 type wireChunk struct {
-	ID      string `json:"id"`
+	ID string `json:"id"`
+	// Error is the OpenAI-compat mid-stream error shape ({"error":{...}}
+	// as an SSE data payload) — how OpenRouter and friends report a
+	// failure that begins after response headers were already sent.
+	Error *struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+		Code    int    `json:"code"`
+	} `json:"error"`
 	Choices []struct {
 		Delta struct {
 			Content          string `json:"content"`
@@ -288,6 +301,18 @@ func (s *stream) handle(data []byte) error {
 	var chunk wireChunk
 	if err := json.Unmarshal(data, &chunk); err != nil {
 		return fmt.Errorf("openaicompat(%s): bad chunk: %w", s.family, err)
+	}
+	if chunk.Error != nil {
+		// Never swallow a mid-stream error: before this branch existed the
+		// chunk fell through the no-choices return below and the turn
+		// ended silently, indistinguishable from success — so a mid-stream
+		// overload never engaged the goal loop's retryable backoff.
+		err := fmt.Errorf("openaicompat(%s): stream error: %s (type=%q code=%d)",
+			s.family, chunk.Error.Message, chunk.Error.Type, chunk.Error.Code)
+		if class, ok := classifyStatus(chunk.Error.Code); ok {
+			return provider.MarkRetryable(err, class)
+		}
+		return err
 	}
 	if chunk.ID != "" {
 		s.id = chunk.ID
