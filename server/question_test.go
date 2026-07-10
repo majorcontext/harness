@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/message"
@@ -110,5 +111,58 @@ func TestGoalPausesOnAskUserOutcome(t *testing.T) {
 	}
 	if sess.LastTurn == nil || sess.LastTurn.Outcome != "awaiting_input" {
 		t.Errorf("last_turn = %+v, want outcome awaiting_input", sess.LastTurn)
+	}
+}
+
+// TestWaitUntilAwaitingInputResolvesOnQuestion is the red-first test for
+// docs/design/question-tool.md §3's GET /session/{id}/wait addition:
+// until=awaiting-input resolves once a pending ask_user question appears
+// (the park point a consumer loop actually needs — wait -> POST /answer).
+func TestWaitUntilAwaitingInputResolvesOnQuestion(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		askUserTurn("tc1", `{"questions":[{"question":"Which environment?"}]}`),
+	}}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "help me deploy"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt_async status %d: %s", resp.StatusCode, data)
+	}
+
+	resp, data = h.do("GET", "/session/"+id+"/wait?until=awaiting-input&timeout_s=5", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("wait until=awaiting-input status %d: %s", resp.StatusCode, data)
+	}
+	var wait struct {
+		State    string `json:"state"`
+		Question *struct {
+			CallID string `json:"call_id"`
+		} `json:"question"`
+	}
+	if err := json.Unmarshal(data, &wait); err != nil {
+		t.Fatal(err)
+	}
+	if wait.State != "awaiting-input" {
+		t.Errorf("wait response state = %q, want awaiting-input: %s", wait.State, data)
+	}
+	if wait.Question == nil || wait.Question.CallID != "tc1" {
+		t.Errorf("wait response question = %+v, want CallID tc1: %s", wait.Question, data)
+	}
+}
+
+// TestWaitRejectsBadUntilMentionsAwaitingInput proves the until validation
+// error string was updated to name the new value.
+func TestWaitRejectsBadUntilMentionsAwaitingInput(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	id := h.createSession("test/m1")
+	resp, data := h.do("GET", "/session/"+id+"/wait?until=bogus", nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status %d: %s", resp.StatusCode, data)
+	}
+	if !strings.Contains(string(data), "awaiting-input") {
+		t.Errorf("error body = %s, want it to mention awaiting-input", data)
 	}
 }

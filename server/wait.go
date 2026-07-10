@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/majorcontext/harness/plugin"
 )
 
 // waiter is one in-flight GET /session/{id}/wait long-poll, registered in
@@ -21,11 +23,12 @@ const (
 	maxWaitTimeout     = 300 * time.Second
 )
 
-// waitJSON is the GET /session/{id}/wait response: the same composite state
-// and goal summary shapes as Session JSON.
+// waitJSON is the GET /session/{id}/wait response: the same composite state,
+// goal summary, and question shapes as Session JSON.
 type waitJSON struct {
-	State string    `json:"state"`
-	Goal  *goalJSON `json:"goal,omitempty"`
+	State    string        `json:"state"`
+	Goal     *goalJSON     `json:"goal,omitempty"`
+	Question *questionJSON `json:"question,omitempty"`
 }
 
 // handleWait long-polls a session's composite state: it returns immediately
@@ -43,6 +46,14 @@ type waitJSON struct {
 // achieved or cleared, distinguished in the response's goal.achieved field,
 // exactly as Session JSON does — or, if no goal was ever set for this
 // session, is trivially already true (there is nothing to wait for).
+// until=awaiting-input resolves immediately if a question asked via ask_user
+// is already pending, otherwise blocks until one appears or the wait times
+// out — the park point a consumer loop (wait?until=awaiting-input -> POST
+// /answer) actually needs, since it wakes the instant a question appears
+// rather than when work resumes (see docs/design/question-tool.md §3; the
+// inverse — waiting for a paused goal to resume — needs no new condition,
+// since a pending question keeps the composite state off idle, so
+// until=idle/until=goal-done already cover it).
 //
 // The waiter is registered BEFORE the immediate condition check (not after),
 // so an event racing the check can never be missed: it either lands before
@@ -56,8 +67,8 @@ func (s *Server) handleWait(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	until := r.URL.Query().Get("until")
-	if until != "idle" && until != "goal-done" {
-		writeErr(w, http.StatusBadRequest, "until must be idle or goal-done")
+	if until != "idle" && until != "goal-done" && until != "awaiting-input" {
+		writeErr(w, http.StatusBadRequest, "until must be idle, goal-done, or awaiting-input")
 		return
 	}
 	timeout, err := parseWaitTimeout(r.URL.Query().Get("timeout_s"))
@@ -83,8 +94,8 @@ func (s *Server) handleWait(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 	}()
 
-	if state, goal := s.waitSnapshot(id); waitConditionMet(until, state, goal) {
-		writeJSON(w, http.StatusOK, waitJSON{State: state, Goal: goal})
+	if state, goal, question := s.waitSnapshot(id); waitConditionMet(until, state, goal, question) {
+		writeJSON(w, http.StatusOK, waitJSON{State: state, Goal: goal, Question: question})
 		return
 	}
 
@@ -99,17 +110,17 @@ func (s *Server) handleWait(w http.ResponseWriter, r *http.Request) {
 		case <-s.closing:
 			// Drain has begun: respond with the current best-effort snapshot
 			// rather than hold the connection open past shutdown.
-			state, goal := s.waitSnapshot(id)
-			writeJSON(w, http.StatusOK, waitJSON{State: state, Goal: goal})
+			state, goal, question := s.waitSnapshot(id)
+			writeJSON(w, http.StatusOK, waitJSON{State: state, Goal: goal, Question: question})
 			return
 		case <-timer.C:
-			state, goal := s.waitSnapshot(id)
-			writeJSON(w, http.StatusOK, waitJSON{State: state, Goal: goal})
+			state, goal, question := s.waitSnapshot(id)
+			writeJSON(w, http.StatusOK, waitJSON{State: state, Goal: goal, Question: question})
 			return
 		case <-wt.ch:
-			state, goal := s.waitSnapshot(id)
-			if waitConditionMet(until, state, goal) {
-				writeJSON(w, http.StatusOK, waitJSON{State: state, Goal: goal})
+			state, goal, question := s.waitSnapshot(id)
+			if waitConditionMet(until, state, goal, question) {
+				writeJSON(w, http.StatusOK, waitJSON{State: state, Goal: goal, Question: question})
 				return
 			}
 			// Not yet: a durable event fired but didn't satisfy `until` (e.g. a
@@ -149,11 +160,11 @@ type waitTimeoutError struct{}
 
 func (waitTimeoutError) Error() string { return "timeout_s must be a positive integer" }
 
-// waitSnapshot resolves the current composite state and goal summary for a
-// session from the same source Session JSON uses (Server.goalState, this
-// process's live tracker), so /wait's response agrees with GET
-// /session/{id}.
-func (s *Server) waitSnapshot(id string) (string, *goalJSON) {
+// waitSnapshot resolves the current composite state, goal summary, and
+// pending question for a session from the same sources Session JSON uses
+// (Server.goalState/questionState, this process's live trackers), so
+// /wait's response agrees with GET /session/{id}.
+func (s *Server) waitSnapshot(id string) (string, *goalJSON, *questionJSON) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var running bool
@@ -164,18 +175,24 @@ func (s *Server) waitSnapshot(id string) (string, *goalJSON) {
 	if g := s.goalState[id]; g != nil {
 		goal = &goalJSON{Condition: g.condition, Active: g.active, Achieved: g.achieved, Turns: g.turns, LastReason: g.lastReason, Attempt: g.attempt}
 	}
-	q := s.questionState[id]
-	return compositeState(running, goal != nil && goal.Active, q != nil && q.pending), goal
+	var question *questionJSON
+	if q := s.questionState[id]; q != nil && q.pending {
+		question = &questionJSON{CallID: q.callID, Questions: append([]plugin.QuestionItem(nil), q.questions...)}
+	}
+	return compositeState(running, goal != nil && goal.Active, question != nil), goal, question
 }
 
 // waitConditionMet reports whether the requested `until` condition holds
-// given a freshly computed composite state and goal summary.
-func waitConditionMet(until, state string, goal *goalJSON) bool {
+// given a freshly computed composite state, goal summary, and pending
+// question.
+func waitConditionMet(until, state string, goal *goalJSON, question *questionJSON) bool {
 	switch until {
 	case "idle":
 		return state == "idle"
 	case "goal-done":
 		return goal == nil || !goal.Active
+	case "awaiting-input":
+		return question != nil
 	default:
 		return false
 	}
