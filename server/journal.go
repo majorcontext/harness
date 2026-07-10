@@ -66,13 +66,6 @@ type Event struct {
 	GoalRetryableClass string `json:"goal_retryable_class,omitempty"`
 	GoalWaiting        bool   `json:"goal_waiting,omitempty"`
 
-	// Question fields, carried by the question.* durable records (see
-	// engine/ask_user.go and docs/design/question-tool.md). QuestionCallID
-	// is present on both question.asked and question.answered; Questions
-	// (the asked batch) only on question.asked.
-	QuestionCallID string                `json:"question_call_id,omitempty"`
-	Questions      []plugin.QuestionItem `json:"questions,omitempty"`
-
 	// Outcome carries the turn.end record's result: "completed" or "error".
 	// Error (above) carries the sanitized failure detail when Outcome is
 	// "error", empty on a clean completion. See runPrompt/runGoal's
@@ -103,9 +96,6 @@ const (
 	evtGoalAchieved   = "goal.achieved"
 	evtGoalCleared    = "goal.cleared"
 
-	evtQuestionAsked    = "question.asked"
-	evtQuestionAnswered = "question.answered"
-
 	// evtWorktreeKept is journaled whenever a 'worktree'-isolation session's
 	// worktree is left in place at teardown (session end or the serve-start
 	// sweep) because it has uncommitted changes or unpushed commits — the
@@ -128,26 +118,17 @@ const journalName = "events.jsonl"
 // See runGoal.
 const outcomeMaxTurnsExceeded = "max_turns_exceeded"
 
-// outcomeAwaitingInput is the turn.end outcome recorded when a goal loop
-// pauses on a pending ask_user question (engine/goal.go's PursueGoal
-// returns GoalResult{Achieved:false, Reason:"awaiting_input"}, a NIL
-// error). Distinct from both "completed" and outcomeMaxTurnsExceeded: the
-// goal is neither done nor exhausted, it is waiting on POST
-// /session/{id}/answer to resume it. See runGoal and
-// docs/design/question-tool.md §2.
-const outcomeAwaitingInput = "awaiting_input"
-
 // outcomeContextExhausted is the turn.end outcome recorded when a prompt or
 // goal-worker turn fails on a classified provider.ErrKindContextOverflow
 // error (issue #62): the request as built cannot fit the model's context
 // window. Distinct from the generic "error" outcome so a poller can react
 // to it specifically (e.g. rotate the session before the next attempt
 // hits the identical cliff) without string-matching last_turn.error — the
-// same reasoning outcomeMaxTurnsExceeded and outcomeAwaitingInput above
-// already establish for their own non-generic terminal cases. It is
-// deterministic (retrying fails identically), unlike an ordinary "error",
-// which may or may not be — see engine/goal.go's promptTurnWithRetry, which
-// fails fast on this classification rather than retrying.
+// same reasoning outcomeMaxTurnsExceeded above already establishes for its
+// own non-generic terminal case. It is deterministic (retrying fails
+// identically), unlike an ordinary "error", which may or may not be — see
+// engine/goal.go's promptTurnWithRetry, which fails fast on this
+// classification rather than retrying.
 const outcomeContextExhausted = "context_exhausted"
 
 // turnEndOutcome decides the turn.end outcome for a non-nil, non-cancelled
@@ -183,8 +164,6 @@ func (s *Server) Publish(ev engine.Event) {
 		})
 	case engine.EventGoalSet, engine.EventGoalEval, engine.EventGoalStalled, engine.EventGoalAchieved, engine.EventGoalCleared:
 		s.publishGoal(ev)
-	case engine.EventQuestionAsked, engine.EventQuestionAnswered:
-		s.publishQuestion(ev)
 	}
 }
 
@@ -252,39 +231,6 @@ func (s *Server) publishGoal(ev engine.Event) {
 		g.waiting = false
 	case engine.EventGoalCleared:
 		g.active = false
-	}
-	s.emitDurableLocked(out)
-}
-
-// publishQuestion journals a durable question.* record and folds the event
-// into the per-session question tracker that backs the Session JSON
-// question field and compositeState's "awaiting-input" rank — the same
-// engine-event-driven projection publishGoal builds for goalState (design
-// doc §3: "fed by the question.asked/question.answered journal records
-// through the same publish path publishGoal uses today").
-func (s *Server) publishQuestion(ev engine.Event) {
-	out := &Event{
-		Type:           ev.Type,
-		SessionID:      ev.SessionID,
-		QuestionCallID: ev.QuestionCallID,
-		Questions:      ev.QuestionItems,
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	q := s.questionState[ev.SessionID]
-	if q == nil {
-		q = &questionTracker{}
-		s.questionState[ev.SessionID] = q
-	}
-	switch ev.Type {
-	case engine.EventQuestionAsked:
-		q.pending = true
-		q.callID = ev.QuestionCallID
-		q.questions = append([]plugin.QuestionItem(nil), ev.QuestionItems...)
-	case engine.EventQuestionAnswered:
-		q.pending = false
-		q.callID = ""
-		q.questions = nil
 	}
 	s.emitDurableLocked(out)
 }
@@ -592,29 +538,28 @@ func (s *Server) reconcile() error {
 
 // loadJournal parses an existing events.jsonl into memory: replay buffer,
 // highest seq, the seen-message index, each session's last_turn (see
-// Server.lastTurn), and each session's goalState/questionState trackers.
-// Records are replayed in file order, so the last record of a given kind
-// seen for a session as the scan proceeds is — by construction — its most
-// recent one; a later record simply overwrites (or, for the goal/question
-// state machines below, folds into) an earlier one in the map, with no need
-// to track sequence numbers here. A truncated final line (crash mid-write)
-// is tolerated.
+// Server.lastTurn), and each session's goalState tracker. Records are
+// replayed in file order, so the last record of a given kind seen for a
+// session as the scan proceeds is — by construction — its most recent one;
+// a later record simply overwrites (or, for the goal state machine below,
+// folds into) an earlier one in the map, with no need to track sequence
+// numbers here. A truncated final line (crash mid-write) is tolerated.
 //
-// Rebuilding lastTurn/goalState/questionState here (rather than leaving them
-// to be set only by a live event flowing through publishGoal/publishQuestion/
-// recordTurnEnd) is what makes last_turn, an active goal, and a pending
-// ask_user question all survive a process restart: otherwise a durable,
-// replayable record would still exist on disk while the in-memory field it
-// drives silently reset to absent — exactly the kind of restart-loses-state
-// gap those fields exist to prevent an orchestrator from hitting. This is a
-// pure extension of the existing single replay pass — no new I/O, per the
-// startup-budget rule (see reconcile, which already reads events.jsonl once).
+// Rebuilding lastTurn/goalState here (rather than leaving them to be set
+// only by a live event flowing through publishGoal/recordTurnEnd) is what
+// makes last_turn and an active goal survive a process restart: otherwise a
+// durable, replayable record would still exist on disk while the in-memory
+// field it drives silently reset to absent — exactly the kind of
+// restart-loses-state gap those fields exist to prevent an orchestrator
+// from hitting. This is a pure extension of the existing single replay pass
+// — no new I/O, per the startup-budget rule (see reconcile, which already
+// reads events.jsonl once).
 //
-// The goal.*/question.* folding below mirrors publishGoal/publishQuestion
-// exactly (same field assignments, same state-machine transitions) but
-// without their locking or fan-out: loadJournal runs once at construction,
-// before the server is reachable by any client, so there is no concurrent
-// access to guard against and nothing to notify yet.
+// The goal.* folding below mirrors publishGoal exactly (same field
+// assignments, same state-machine transitions) but without its locking or
+// fan-out: loadJournal runs once at construction, before the server is
+// reachable by any client, so there is no concurrent access to guard
+// against and nothing to notify yet.
 func (s *Server) loadJournal(data []byte) {
 	lines := bytes.Split(data, []byte("\n"))
 	for i, raw := range lines {
@@ -640,7 +585,6 @@ func (s *Server) loadJournal(data []byte) {
 			s.lastTurn[ev.SessionID] = &turnOutcome{outcome: ev.Outcome, error: ev.Error}
 		}
 		s.foldGoalRecordLocked(ev)
-		s.foldQuestionRecordLocked(ev)
 	}
 }
 
@@ -698,32 +642,5 @@ func (s *Server) foldGoalRecordLocked(ev Event) {
 		g.waiting = false
 	case evtGoalCleared:
 		g.active = false
-	}
-}
-
-// foldQuestionRecordLocked applies one journal record to its session's
-// questionTracker, exactly mirroring publishQuestion's switch. A no-op for
-// any non-question record type. See foldGoalRecordLocked on the "Locked"
-// naming despite taking no lock here.
-func (s *Server) foldQuestionRecordLocked(ev Event) {
-	switch ev.Type {
-	case evtQuestionAsked, evtQuestionAnswered:
-	default:
-		return
-	}
-	q := s.questionState[ev.SessionID]
-	if q == nil {
-		q = &questionTracker{}
-		s.questionState[ev.SessionID] = q
-	}
-	switch ev.Type {
-	case evtQuestionAsked:
-		q.pending = true
-		q.callID = ev.QuestionCallID
-		q.questions = append([]plugin.QuestionItem(nil), ev.Questions...)
-	case evtQuestionAnswered:
-		q.pending = false
-		q.callID = ""
-		q.questions = nil
 	}
 }
