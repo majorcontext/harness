@@ -16,6 +16,7 @@ import (
 
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/plugin"
 )
 
 // sessionJSON is the openapi Session shape.
@@ -24,20 +25,27 @@ type sessionJSON struct {
 	CreatedAt time.Time        `json:"created_at"`
 	Model     message.ModelRef `json:"model"`
 	Status    string           `json:"status"`
-	// State is the unambiguous composite: idle, busy, or goal-running. Kept
-	// alongside Status (never replacing it) for backward compat. Precedence:
-	// goal-running wins whenever a goal is active, REGARDLESS of the momentary
-	// worker status — including the goal loop's between-turn gap (worker
-	// finished a turn, evaluator hasn't answered yet) where Status alone would
-	// still read "busy" (the server's busy/idle transition brackets the WHOLE
-	// PursueGoal call, not each turn) but a naive orchestrator inferring
-	// progress from "status=idle plus goal.active" elsewhere is exactly the
-	// ambiguity this field exists to remove. See compositeState.
+	// State is the unambiguous composite: idle, busy, goal-running, or
+	// awaiting-input. Kept alongside Status (never replacing it) for
+	// backward compat. Precedence: awaiting-input outranks everything else
+	// — a pending ask_user question is not "idle" in the sense of nothing
+	// to do, regardless of the goal/busy bits underneath it — then
+	// goal-running wins whenever a goal is active, REGARDLESS of the
+	// momentary worker status — including the goal loop's between-turn gap
+	// (worker finished a turn, evaluator hasn't answered yet) where Status
+	// alone would still read "busy" (the server's busy/idle transition
+	// brackets the WHOLE PursueGoal call, not each turn) but a naive
+	// orchestrator inferring progress from "status=idle plus goal.active"
+	// elsewhere is exactly the ambiguity this field exists to remove. See
+	// compositeState.
 	State    string    `json:"state"`
 	Messages int       `json:"messages"`
 	Seq      int64     `json:"seq,omitempty"`
 	Goal     *goalJSON `json:"goal,omitempty"`
 	WorkDir  string    `json:"workdir"`
+	// Question is the pending ask_user question, present exactly when State
+	// is "awaiting-input" (docs/design/question-tool.md §3).
+	Question *questionJSON `json:"question,omitempty"`
 	// LastTurn is the most recent prompt or goal-worker turn's outcome for
 	// this process — "completed" or "error", plus the sanitized error detail
 	// on failure — so a poller can distinguish "idle because done" from
@@ -47,18 +55,29 @@ type sessionJSON struct {
 	LastTurn *lastTurnJSON `json:"last_turn,omitempty"`
 }
 
+// questionJSON is the Session.question sub-object: the pending ask_user
+// question, present exactly when State is "awaiting-input" (design doc §3).
+type questionJSON struct {
+	CallID    string                `json:"call_id"`
+	Questions []plugin.QuestionItem `json:"questions"`
+}
+
 // lastTurnJSON is the openapi LastTurn shape.
 type lastTurnJSON struct {
 	Outcome string `json:"outcome"`
 	Error   string `json:"error,omitempty"`
 }
 
-// compositeState resolves the unambiguous Session.state field: goal-running
-// whenever a goal is active, regardless of the momentary running/busy flag
-// (see sessionJSON.State's doc comment for why momentary busy/idle is not
-// enough); otherwise busy or idle mirroring the plain status.
-func compositeState(running, goalActive bool) string {
+// compositeState resolves the unambiguous Session.state field: awaiting-input
+// ranks above everything else whenever a question is pending (design doc
+// §3), then goal-running whenever a goal is active, regardless of the
+// momentary running/busy flag (see sessionJSON.State's doc comment for why
+// momentary busy/idle is not enough); otherwise busy or idle mirroring the
+// plain status.
+func compositeState(running, goalActive, awaitingQuestion bool) string {
 	switch {
+	case awaitingQuestion:
+		return "awaiting-input"
 	case goalActive:
 		return "goal-running"
 	case running:
@@ -501,7 +520,8 @@ func (s *Server) compositeStateFor(id string, running bool) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	g := s.goalState[id]
-	return compositeState(running, g != nil && g.active)
+	q := s.questionState[id]
+	return compositeState(running, g != nil && g.active, q != nil && q.pending)
 }
 
 func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
@@ -539,17 +559,24 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	// makes eviction races and drain admission impossible.
 	st, ctx, fromSeq, code, holder := s.claimForPrompt(id)
 	if code != 0 {
-		switch {
-		case code == http.StatusConflict && holder != "":
-			writeErr(w, code, fmt.Sprintf("workdir busy: held by session %s", holder))
-		case code == http.StatusConflict:
-			writeErr(w, code, "session is busy with another prompt")
-		case code == http.StatusServiceUnavailable:
-			writeErr(w, code, "server shutting down")
-		default:
-			writeErr(w, http.StatusNotFound, "no such session")
-		}
+		writeClaimError(w, code, holder)
 		return
+	}
+
+	// A goal paused on a pending ask_user question owns this session — see
+	// docs/design/question-tool.md §3. The run slot IS free (PursueGoal
+	// already returned when it paused), so claimForPrompt above succeeded;
+	// an unguarded prompt_async here would consume the answer as an
+	// ordinary user message without ever resuming the goal, leaving
+	// goalActive set with nothing driving it (a zombie pause). Undo the
+	// claim (mirrors claimForPrompt's own tail bookkeeping) and 409,
+	// naming POST /answer as the one write that resumes it.
+	if _, awaiting := st.sess.AwaitingQuestion(); awaiting {
+		if _, goalActive := st.sess.ActiveGoal(); goalActive {
+			s.undoClaim(st)
+			writeErr(w, http.StatusConflict, "a goal is paused awaiting an answer; use POST /session/{id}/answer to resume it, not prompt_async")
+			return
+		}
 	}
 
 	// Explicit model wins over the session's persisted model (CLI -model rule).
@@ -596,6 +623,199 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
 }
 
+// undoClaim releases a run-slot claim taken by claimForPrompt without ever
+// letting the claimed session run — mirrors claimForPrompt's own tail
+// bookkeeping (running/cancel/lastUsed, wg.Done). Used by handlers that
+// must peek at post-claim session state before deciding whether to
+// actually run anything: handlePrompt's awaiting-question/goal-active
+// guard above, and handleGoal's RegisterGoal-error unwind and
+// handleAnswer's goal-paused branch below.
+func (s *Server) undoClaim(st *sessionState) {
+	s.mu.Lock()
+	st.running = false
+	st.cancel = nil
+	st.lastUsed = time.Now()
+	s.mu.Unlock()
+	s.wg.Done()
+}
+
+// writeClaimError renders a claimForPrompt failure code the same way every
+// claiming endpoint (prompt_async, goal, answer) does, so they report
+// identical status/body shapes for the same underlying condition.
+func writeClaimError(w http.ResponseWriter, code int, holder string) {
+	switch {
+	case code == http.StatusConflict && holder != "":
+		writeErr(w, code, fmt.Sprintf("workdir busy: held by session %s", holder))
+	case code == http.StatusConflict:
+		writeErr(w, code, "session is busy with another prompt")
+	case code == http.StatusServiceUnavailable:
+		writeErr(w, code, "server shutting down")
+	default:
+		writeErr(w, http.StatusNotFound, "no such session")
+	}
+}
+
+// answerBody is the POST /session/{id}/answer request shape (design doc §3).
+type answerBody struct {
+	CallID  string `json:"call_id"`
+	Answers []struct {
+		Question string   `json:"question"`
+		Selected []string `json:"selected,omitempty"`
+		Text     string   `json:"text,omitempty"`
+	} `json:"answers"`
+}
+
+// formatAnswers renders a POST /answer request's answers into the one
+// deterministic text block delivered as the next prompt (design doc §3):
+// one "Q: .../A: ..." pair per answer, blank-line separated. A Selected
+// answer is joined with ", "; otherwise Text is used verbatim (the engine
+// enforces no validation that one or the other was actually supplied — see
+// the design doc §5, "No answer validation against the schema").
+func formatAnswers(answers []struct {
+	Question string   `json:"question"`
+	Selected []string `json:"selected,omitempty"`
+	Text     string   `json:"text,omitempty"`
+}) string {
+	blocks := make([]string, 0, len(answers))
+	for _, a := range answers {
+		answer := a.Text
+		if len(a.Selected) > 0 {
+			answer = strings.Join(a.Selected, ", ")
+		}
+		blocks = append(blocks, fmt.Sprintf("Q: %s\nA: %s", a.Question, answer))
+	}
+	return strings.Join(blocks, "\n\n")
+}
+
+// handleAnswer answers a pending ask_user question (design doc §3). 404s on
+// an unknown session, 409s when nothing is pending, 400s when call_id
+// doesn't match the pending question. On success it formats the answers
+// into one deterministic text block and delivers it through the same path
+// as prompt_async — a plain Session.Prompt user message — except when a
+// goal is paused on the question, where PursueGoal's own "not concurrently
+// with itself or Prompt" contract forbids calling Prompt directly: that
+// branch instead claims the run slot and re-spawns PursueGoal with
+// GoalOptions.ResumeAnswer set (see runGoal).
+func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.sessionIDOrNotFound(w, r)
+	if !ok {
+		return
+	}
+	var body answerBody
+	if err := decodeBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(body.CallID) == "" {
+		writeErr(w, http.StatusBadRequest, "call_id must be non-empty")
+		return
+	}
+
+	sess, _, ok := s.lookup(id)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "no such session")
+		return
+	}
+	pendingCallID, awaiting := sess.AwaitingQuestion()
+	if !awaiting {
+		writeErr(w, http.StatusConflict, "no question is pending for this session")
+		return
+	}
+	if pendingCallID != body.CallID {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("call_id %q does not match the pending question %q", body.CallID, pendingCallID))
+		return
+	}
+	answerText := formatAnswers(body.Answers)
+
+	if _, goalActive := sess.ActiveGoal(); !goalActive {
+		// Interactive branch: deliver the answer as an ordinary prompt_async
+		// user message. Session.Prompt's own clear-and-persist
+		// (engine's clearAwaitingQuestionOnPrompt) is the SINGLE, idempotent
+		// owner of question.answered here — this handler does not persist
+		// it itself (design doc §3).
+		st, ctx, fromSeq, code, holder := s.claimForPrompt(id)
+		if code != 0 {
+			writeClaimError(w, code, holder)
+			return
+		}
+		s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
+		go s.runPrompt(ctx, id, st, answerText)
+		writeJSON(w, http.StatusAccepted, map[string]int64{"seq": fromSeq})
+		return
+	}
+
+	// Goal-paused branch: the atomic claim (design doc §3), mirroring
+	// claimForPrompt. The run slot is claimed FIRST, not persist-then-claim
+	// as the design doc's prose lists the steps: claiming first closes a
+	// race the literal order would leave open — ask_user's Run sets
+	// s.awaitingQuestion synchronously mid-turn, which is well BEFORE
+	// PursueGoal itself returns and runGoal's tail flips st.running back to
+	// false, so a question can already read as pending (compositeState
+	// ranks awaiting-input above goal-running/busy) while the pausing
+	// runGoal goroutine is still finishing its own unwind. Persisting
+	// question.answered and clearing the pending state before confirming
+	// the run slot is actually free would let that race win — the session
+	// claim would then 409, but the answer would already be durably
+	// consumed with nothing left to resume it (a zombie pause). Claiming
+	// the slot first means a successful claim here happens-after (via
+	// server.mu) any prior runGoal's own tail, so the pause is fully
+	// settled before AnswerQuestion ever runs. Exactly one concurrent
+	// /answer can hold the claim; a loser is rejected by claimForPrompt
+	// itself (409/503), never reaching AnswerQuestion at all — the same
+	// "exactly one winner, losers 409" guarantee the design doc asks for,
+	// achieved without holding the engine and server mutexes nested
+	// (server.mu must never wrap a session-mutex-acquiring call — see
+	// server.go's lock-ordering invariant), which a literal single lock
+	// section spanning both would require.
+	st, ctx, fromSeq, code, holder := s.claimForPrompt(id)
+	if code != 0 {
+		writeClaimError(w, code, holder)
+		return
+	}
+	// From here on, every read and write goes through st.sess — the
+	// instance claimForPrompt resolved and made resident — NEVER the `sess`
+	// from the handler's early lookup. For a non-resident session those are
+	// two distinct engine.Sessions loaded from the same log: answering the
+	// throwaway would leave the claimed instance's awaitingQuestion set
+	// (its LoadSession ran before question.answered was persisted), and the
+	// resumed worker's own clear-on-prompt would then fire a SECOND
+	// question.answered — see TestAnswerResumesGoalNonResident.
+	won, hadPending := st.sess.AnswerQuestion(body.CallID, answerText)
+	if !won {
+		// Lost the race for the pending question itself (answered/gone, or
+		// a different call_id, between our checks above and here) — release
+		// the claim we just took and report the same status a fresh check
+		// would have.
+		s.undoClaim(st)
+		if hadPending {
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("call_id %q does not match the pending question", body.CallID))
+		} else {
+			writeErr(w, http.StatusConflict, "no question is pending for this session")
+		}
+		return
+	}
+	condition, stillActive := st.sess.ActiveGoal()
+	if !stillActive {
+		// The goal was cleared concurrently (e.g. DELETE /goal) in the
+		// narrow window between our goalActive read above and
+		// AnswerQuestion's claim: the answer is now durably recorded
+		// (question.answered, just persisted), but there is nothing left
+		// to resume. Release the claim without spawning anything — this is
+		// a success, not an error: the answer was recorded, exactly as it
+		// would be for any question answered on a session with no active
+		// goal.
+		s.undoClaim(st)
+		writeJSON(w, http.StatusAccepted, map[string]int64{"seq": fromSeq})
+		return
+	}
+	s.mu.Lock()
+	maxTurns := s.goalMaxTurns[id]
+	s.mu.Unlock()
+	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
+	go s.runGoal(ctx, id, st, condition, maxTurns, answerText)
+	writeJSON(w, http.StatusAccepted, map[string]int64{"seq": fromSeq})
+}
+
 // handleGoal starts a goal loop on a session. Like prompt_async it claims the
 // session's single run slot (busy sessions are 409, shutdown is 503) and runs
 // PursueGoal on a tracked goroutine under the same wg/drain/abort semantics —
@@ -626,16 +846,7 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 
 	st, ctx, fromSeq, code, holder := s.claimForPrompt(id)
 	if code != 0 {
-		switch {
-		case code == http.StatusConflict && holder != "":
-			writeErr(w, code, fmt.Sprintf("workdir busy: held by session %s", holder))
-		case code == http.StatusConflict:
-			writeErr(w, code, "session is busy")
-		case code == http.StatusServiceUnavailable:
-			writeErr(w, code, "server shutting down")
-		default:
-			writeErr(w, http.StatusNotFound, "no such session")
-		}
+		writeClaimError(w, code, holder)
 		return
 	}
 	// Register the goal synchronously BEFORE the loop goroutine spawns and
@@ -643,18 +854,16 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 	// active and clearable — the accept-vs-clear race is structurally gone.
 	if err := st.sess.RegisterGoal(body.Condition); err != nil {
 		// Undo the claim taken above: mirror the tail of runPrompt/runGoal.
-		s.mu.Lock()
-		st.running = false
-		st.cancel = nil
-		st.lastUsed = time.Now()
-		s.mu.Unlock()
-		s.wg.Done()
+		s.undoClaim(st)
 		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 
-	go s.runGoal(ctx, id, st, body.Condition, body.MaxTurns)
+	s.mu.Lock()
+	s.goalMaxTurns[id] = body.MaxTurns
+	s.mu.Unlock()
+	go s.runGoal(ctx, id, st, body.Condition, body.MaxTurns, "")
 	writeJSON(w, http.StatusAccepted, map[string]int64{"seq": fromSeq})
 }
 
@@ -667,7 +876,7 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 // as runPrompt.
 //
 // turn.end outcome is decided from the RESULT, not merely from err == nil:
-// PursueGoal returns a nil error with Achieved:false in two cases that are
+// PursueGoal returns a nil error with Achieved:false in three cases that are
 // emphatically not "completed" —
 //
 //   - MaxTurns exhausted without the evaluator ever returning MET (Reason
@@ -682,6 +891,14 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 //     below, just reached without cancellation — and the openapi contract
 //     is that DELETE /goal (or any clear) never emits turn.end. So this case
 //     suppresses the record entirely, matching the context.Canceled branch.
+//   - The worker turn ended on a pending ask_user question (Reason
+//     "awaiting_input", docs/design/question-tool.md §2): the goal is
+//     neither done nor exhausted, it is paused waiting on POST
+//     /session/{id}/answer. Recorded as its own outcomeAwaitingInput,
+//     inserted BEFORE the MaxTurns catch-all below (Go's switch stops at
+//     the first matching case, so it must precede that case or it would be
+//     unreachable). Like achieved/cleared, this must not re-arm anything —
+//     the pause's continuation belongs entirely to /answer.
 //
 // The terminal session.status idle record emitted at the end of this
 // function is the same record an SSE collector waits for as the session's
@@ -689,12 +906,13 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 // /goal's clear-before-cancel ordering guarantees goal.cleared always
 // precedes it in the journal — this function must never emit idle before a
 // goal.cleared that is still in flight.
-func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condition string, maxTurns int) {
+func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condition string, maxTurns int, resumeAnswer string) {
 	defer s.wg.Done()
 	res, err := st.sess.PursueGoal(ctx, condition, engine.GoalOptions{
-		Registered: true,
-		MaxTurns:   maxTurns,
-		Evaluator:  s.opts.GoalEvaluator,
+		Registered:   true,
+		MaxTurns:     maxTurns,
+		Evaluator:    s.opts.GoalEvaluator,
+		ResumeAnswer: resumeAnswer,
 	})
 	s.syncMessages(id)
 	switch {
@@ -704,9 +922,19 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 		// Cleared in flight without the context being cancelled: goal.cleared
 		// is already journaled (ClearGoal/handleGoalDelete); no turn.end, same
 		// contract as the context.Canceled case below.
+	case err == nil && res.Reason == "awaiting_input":
+		// Paused on ask_user (see the doc comment above): recorded as its
+		// own outcome, inserted before the MaxTurns catch-all so it is
+		// never mistaken for it. Nothing here clears the goal or the
+		// pending question — question.asked (already journaled by the
+		// engine's own publish path, see publishQuestion) is the durable
+		// record explaining the pause, exactly as goal.stalled explains a
+		// retry.
+		s.recordTurnEnd(id, outcomeAwaitingInput, nil)
 	case err == nil:
-		// Any other nil-error, non-achieved result is MaxTurns exhaustion —
-		// PursueGoal's only remaining terminal case (see its doc comment).
+		// Any other nil-error, non-achieved, non-cleared, non-paused result
+		// is MaxTurns exhaustion — PursueGoal's only remaining terminal
+		// case reachable here (see its doc comment).
 		s.recordTurnEnd(id, outcomeMaxTurnsExceeded, nil)
 	case errors.Is(err, context.Canceled):
 		// Cleared via DELETE (goal.cleared already journaled) or drained.
@@ -1044,6 +1272,10 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 	if g := s.goalState[id]; g != nil {
 		goal = &goalJSON{Condition: g.condition, Active: g.active, Achieved: g.achieved, Turns: g.turns, LastReason: g.lastReason, Attempt: g.attempt}
 	}
+	var question *questionJSON
+	if q := s.questionState[id]; q != nil && q.pending {
+		question = &questionJSON{CallID: q.callID, Questions: append([]plugin.QuestionItem(nil), q.questions...)}
+	}
 	lastTurn := s.lastTurnJSONLocked(id)
 	s.mu.Unlock()
 	return sessionJSON{
@@ -1051,11 +1283,12 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 		CreatedAt: sess.CreatedAt(),
 		Model:     sess.Model(),
 		Status:    status,
-		State:     compositeState(status == "busy", goal != nil && goal.Active),
+		State:     compositeState(status == "busy", goal != nil && goal.Active, question != nil),
 		Messages:  len(sess.History()),
 		Seq:       seq,
 		Goal:      goal,
 		WorkDir:   sess.WorkDir(),
+		Question:  question,
 		LastTurn:  lastTurn,
 	}
 }

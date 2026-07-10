@@ -56,6 +56,13 @@ type Event struct {
 	GoalTurns     int    `json:"goal_turns,omitempty"`
 	GoalAttempt   int    `json:"goal_attempt,omitempty"`
 
+	// Question fields, carried by the question.* durable records (see
+	// engine/ask_user.go and docs/design/question-tool.md). QuestionCallID
+	// is present on both question.asked and question.answered; Questions
+	// (the asked batch) only on question.asked.
+	QuestionCallID string                `json:"question_call_id,omitempty"`
+	Questions      []plugin.QuestionItem `json:"questions,omitempty"`
+
 	// Outcome carries the turn.end record's result: "completed" or "error".
 	// Error (above) carries the sanitized failure detail when Outcome is
 	// "error", empty on a clean completion. See runPrompt/runGoal's
@@ -86,6 +93,9 @@ const (
 	evtGoalAchieved   = "goal.achieved"
 	evtGoalCleared    = "goal.cleared"
 
+	evtQuestionAsked    = "question.asked"
+	evtQuestionAnswered = "question.answered"
+
 	// evtWorktreeKept is journaled whenever a 'worktree'-isolation session's
 	// worktree is left in place at teardown (session end or the serve-start
 	// sweep) because it has uncommitted changes or unpushed commits — the
@@ -108,6 +118,15 @@ const journalName = "events.jsonl"
 // See runGoal.
 const outcomeMaxTurnsExceeded = "max_turns_exceeded"
 
+// outcomeAwaitingInput is the turn.end outcome recorded when a goal loop
+// pauses on a pending ask_user question (engine/goal.go's PursueGoal
+// returns GoalResult{Achieved:false, Reason:"awaiting_input"}, a NIL
+// error). Distinct from both "completed" and outcomeMaxTurnsExceeded: the
+// goal is neither done nor exhausted, it is waiting on POST
+// /session/{id}/answer to resume it. See runGoal and
+// docs/design/question-tool.md §2.
+const outcomeAwaitingInput = "awaiting_input"
+
 // Publish maps an engine event onto the journal/SSE stream. Message events
 // trigger a journal sync (which durably records every new canonical message,
 // including the user and tool messages the engine does not surface via
@@ -129,6 +148,8 @@ func (s *Server) Publish(ev engine.Event) {
 		})
 	case engine.EventGoalSet, engine.EventGoalEval, engine.EventGoalStalled, engine.EventGoalAchieved, engine.EventGoalCleared:
 		s.publishGoal(ev)
+	case engine.EventQuestionAsked, engine.EventQuestionAnswered:
+		s.publishQuestion(ev)
 	}
 }
 
@@ -181,6 +202,39 @@ func (s *Server) publishGoal(ev engine.Event) {
 		g.attempt = 0
 	case engine.EventGoalCleared:
 		g.active = false
+	}
+	s.emitDurableLocked(out)
+}
+
+// publishQuestion journals a durable question.* record and folds the event
+// into the per-session question tracker that backs the Session JSON
+// question field and compositeState's "awaiting-input" rank — the same
+// engine-event-driven projection publishGoal builds for goalState (design
+// doc §3: "fed by the question.asked/question.answered journal records
+// through the same publish path publishGoal uses today").
+func (s *Server) publishQuestion(ev engine.Event) {
+	out := &Event{
+		Type:           ev.Type,
+		SessionID:      ev.SessionID,
+		QuestionCallID: ev.QuestionCallID,
+		Questions:      ev.QuestionItems,
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	q := s.questionState[ev.SessionID]
+	if q == nil {
+		q = &questionTracker{}
+		s.questionState[ev.SessionID] = q
+	}
+	switch ev.Type {
+	case engine.EventQuestionAsked:
+		q.pending = true
+		q.callID = ev.QuestionCallID
+		q.questions = append([]plugin.QuestionItem(nil), ev.QuestionItems...)
+	case engine.EventQuestionAnswered:
+		q.pending = false
+		q.callID = ""
+		q.questions = nil
 	}
 	s.emitDurableLocked(out)
 }

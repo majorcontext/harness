@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/plugin"
 )
 
 // Record types, one JSON object per line.
@@ -34,6 +35,9 @@ const (
 	recGoalStalled  = "goal.stalled"
 	recGoalAchieved = "goal.achieved"
 	recGoalCleared  = "goal.cleared"
+
+	recQuestionAsked    = "question.asked"
+	recQuestionAnswered = "question.answered"
 )
 
 // record is one line of a session log file.
@@ -45,10 +49,24 @@ type record struct {
 	// omitted (and so absent from every record written before this field
 	// existed) when empty, which is also how LoadSession recognizes a legacy
 	// header with nothing to restore.
-	WorkDir string           `json:"workdir,omitempty"`
-	Message *message.Message `json:"message,omitempty"`
-	Model   message.ModelRef `json:"model,omitzero"`
-	Goal    *goalRecord      `json:"goal,omitempty"`
+	WorkDir  string           `json:"workdir,omitempty"`
+	Message  *message.Message `json:"message,omitempty"`
+	Model    message.ModelRef `json:"model,omitzero"`
+	Goal     *goalRecord      `json:"goal,omitempty"`
+	Question *questionRecord  `json:"question,omitempty"`
+}
+
+// questionRecord carries the durable payload of a question.* record (see
+// ask_user.go). A question.asked record carries CallID and Questions (the
+// full ask_user batch); a question.answered record carries CallID and
+// AnswerText — the formatted answer block itself, not just the fact of
+// answering (design doc §3), so a reload of an answered-but-never-resumed
+// question can rebuild GoalOptions.ResumeAnswer (see
+// Session.PendingResumeAnswer).
+type questionRecord struct {
+	CallID     string                `json:"call_id,omitempty"`
+	Questions  []plugin.QuestionItem `json:"questions,omitempty"`
+	AnswerText string                `json:"answer_text,omitempty"`
 }
 
 // goalRecord carries the durable payload of a goal.* record (see goal.go).
@@ -145,6 +163,22 @@ func (s *Session) persistGoalLocked(recType string, g goalRecord) {
 		return
 	}
 	if err := s.writeRecord(record{Type: recType, Goal: &g}); err != nil {
+		s.lastPersistErr = err
+	}
+}
+
+// persistQuestionLocked appends a question.* record to the session log,
+// mirroring persistGoalLocked (a question.asked may be the first thing
+// written to a fresh session). Caller holds s.mu.
+func (s *Session) persistQuestionLocked(recType string, q questionRecord) {
+	if s.cfg.SessionDir == "" {
+		return
+	}
+	if err := s.ensureLog(); err != nil {
+		s.lastPersistErr = err
+		return
+	}
+	if err := s.writeRecord(record{Type: recType, Question: &q}); err != nil {
 		s.lastPersistErr = err
 	}
 }
@@ -266,6 +300,12 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				return fmt.Errorf("message record without message at line %d", line)
 			}
 			s.history = append(s.history, *rec.Message)
+			// A message replayed after a question.answered record proves the
+			// resume already happened (or, for an interactive session, that
+			// the answer was already delivered as this very message) — see
+			// PendingResumeAnswer's doc comment.
+			s.pendingResumeAnswer = ""
+			s.pendingResumeAnswerSet = false
 		case recModel:
 			s.model = rec.Model
 		case recGoalSet:
@@ -284,6 +324,30 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// reset). A goal.stalled record never changes goalActive by
 			// itself — either a later goal.stalled retries, or a later
 			// goal.cleared/goal.eval settles it, both handled above.
+		case recQuestionAsked:
+			// No history repair needed (unlike a mid-stream crash): the
+			// ask_user call already has a complete, ordinary tool_result in
+			// history the moment it was recorded (design doc §2).
+			s.awaitingQuestion = true
+			s.pendingResumeAnswer = ""
+			s.pendingResumeAnswerSet = false
+			if rec.Question != nil {
+				s.questionCallID = rec.Question.CallID
+			}
+		case recQuestionAnswered:
+			// Clears it on replay, same as recGoalCleared clears goalActive.
+			// If no message record follows this one (see recMessage above),
+			// the answer was never actually delivered — a crash mid-resume
+			// — so it is restored as a pending resume, letting the caller
+			// rebuild GoalOptions.ResumeAnswer (design doc §3).
+			s.awaitingQuestion = false
+			s.questionCallID = ""
+			s.pendingResumeAnswer = ""
+			s.pendingResumeAnswerSet = false
+			if rec.Question != nil {
+				s.pendingResumeAnswer = rec.Question.AnswerText
+				s.pendingResumeAnswerSet = true
+			}
 		}
 		return nil
 	})
