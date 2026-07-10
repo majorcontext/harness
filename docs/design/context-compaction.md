@@ -104,7 +104,13 @@ but it must NOT overwrite `LastUsage()`: the automatic trigger reads
 `LastUsage()` as "how large is the next worker request," and a small
 summarization call would mask the very pressure that triggered compaction
 (and re-trigger logic would misread the session as small). `LastUsage()`
-updates only on worker-turn requests.
+updates only on worker-turn requests. Durability: cumulative `Usage()`
+survives a restart only because `LoadSession` re-sums each `recMessage`'s
+`rec.Usage` — and the summary is deliberately NOT a `recMessage` — so the
+`compact` record carries its own `usage` field, and `LoadSession`'s replay
+adds it into the cumulative sum exactly as it does for message records.
+Without that field the summarization spend would silently vanish from
+`Usage()` on every reload.
 
 **Failure handling.** If the summarization call errors (rate limit,
 transient 5xx, or the range itself is too large to summarize in one call —
@@ -198,13 +204,20 @@ against within that section either.
 
 Anything tailing the event stream (`GET /event`, SSE) must see the
 compaction, not just readers of durable state: a successful compaction
-emits a `history.compacted` engine event (journaled via the server's
-`emitDurable` path like `session.status`), carrying `{first_id, last_id,
-turns_folded, summary_id}`. A tailer that replays from a `from` cursor
-older than the compaction sees the original messages AND the compaction
-event, exactly mirroring what LoadSession replay reconstructs — the event
-is the reconciliation signal, not a replacement for replay. The
-`compaction.failed` event (above) is its fire-and-forget counterpart.
+emits TWO things, in order. First the summary itself flows through the
+ordinary message-event path (`EventMessage` → server journal, the same
+route every other message takes), so an `events.jsonl` tailer receives the
+summary CONTENT — the durable `compact` record carries the summary inline
+rather than as a `recMessage`, so without this emission a tailer would
+hold a dangling id for a message it never received. Then a
+`history.compacted` engine event (journaled via the server's `emitDurable`
+path like `session.status`) carrying `{first_id, last_id, turns_folded,
+summary_id}`, where `summary_id` refers to the message the tailer just
+saw. A tailer replaying from a `from` cursor older than the compaction
+sees the original messages, the summary message, and the compaction event
+— the event is the reconciliation signal telling it which prefix the
+summary replaced. The `compaction.failed` event (above) is its
+fire-and-forget counterpart.
 
 ## 5. Non-goals
 
