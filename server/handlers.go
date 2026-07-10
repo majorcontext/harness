@@ -612,7 +612,7 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 		s.emitDurable(Event{Type: evtSessionAborted, SessionID: id})
 	default:
 		s.emitDurable(Event{Type: evtSessionError, SessionID: id, Error: err.Error()})
-		s.recordTurnEnd(id, "error", err)
+		s.recordTurnEnd(id, turnEndOutcome(err), err)
 	}
 	s.mu.Lock()
 	st.running = false
@@ -1013,7 +1013,7 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 		// Cleared via DELETE (goal.cleared already journaled) or drained.
 	default:
 		s.emitDurable(Event{Type: evtSessionError, SessionID: id, Error: err.Error()})
-		s.recordTurnEnd(id, "error", err)
+		s.recordTurnEnd(id, turnEndOutcome(err), err)
 	}
 	s.mu.Lock()
 	st.running = false
