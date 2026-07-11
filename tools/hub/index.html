@@ -776,9 +776,17 @@ function connectBox(id) {
   const rt = ensureRuntime(id);
   if (rt.running) return;
   rt.running = true;
-  pollBoxOnce(id);
+  // AWAIT the first poll before opening the event stream: the poll's
+  // GET /session snapshot sets rt.lastSeq to the box's current journal
+  // high-water mark, so connectBoxStream opens /event from the tip (live
+  // tail) instead of from=0 — which would replay the entire journal
+  // (every event of every historical session) into the UI on connect.
+  // The recurring poll re-syncs state, so the tiny snapshot→stream window
+  // loses at most a few deltas, reconciled on the next tick.
+  pollBoxOnce(id).then(() => {
+    if (rt.running) connectBoxStream(id);
+  });
   rt.pollTimer = setInterval(() => pollBoxOnce(id), HUB_POLL_MS);
-  connectBoxStream(id);
 }
 
 function disconnectBox(id) {
