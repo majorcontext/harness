@@ -79,6 +79,21 @@ type Config struct {
 	// configures no processes. Merge rules mirror MCPServers: keys merge,
 	// but a same-name project entry replaces the user entry wholesale.
 	Processes map[string]ProcessSpec `json:"processes,omitempty"`
+	// ContextWindowTokens sets engine.Config.ContextWindowTokens for every
+	// session this process creates: the model's context window size, in
+	// tokens. Zero (omitted, the default) disables automatic compaction
+	// entirely — see docs/design/context-compaction.md and issue #62 layer
+	// 3. Opt-in: the engine has no built-in per-model table.
+	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
+	// CompactionThreshold sets engine.Config.CompactionThreshold: the
+	// fraction of ContextWindowTokens at which automatic compaction
+	// triggers. Zero (omitted) defaults to 0.8 (see the engine).
+	CompactionThreshold float64 `json:"compaction_threshold,omitempty"`
+	// CompactionKeepTurns sets engine.Config.CompactionKeepTurns: how many
+	// of the most recent turns automatic compaction always keeps verbatim.
+	// Zero (omitted) defaults to 2 (see the engine); the effective value
+	// can never go below 1.
+	CompactionKeepTurns int `json:"compaction_keep_turns,omitempty"`
 }
 
 // ProcessSpec configures one managed process (package engine's
@@ -519,6 +534,15 @@ func merge(base, over *Config) *Config {
 	}
 	if over.GoalEvaluatorModel != "" {
 		out.GoalEvaluatorModel = over.GoalEvaluatorModel
+	}
+	if over.ContextWindowTokens != 0 {
+		out.ContextWindowTokens = over.ContextWindowTokens
+	}
+	if over.CompactionThreshold != 0 {
+		out.CompactionThreshold = over.CompactionThreshold
+	}
+	if over.CompactionKeepTurns != 0 {
+		out.CompactionKeepTurns = over.CompactionKeepTurns
 	}
 	// Arrays override wholesale: a non-empty project value replaces the user
 	// value entirely; otherwise inherit. Copy so the merged config never

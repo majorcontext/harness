@@ -382,18 +382,21 @@ func runCmd(args []string) error {
 	lateAPI.Bind(newLazyRunClientAPI(func() *engine.Session { return sess }))
 
 	s, err := resolveSession(engine.Config{
-		Providers:    registry(cfg),
-		Model:        model,
-		System:       systemPrompt(workDir, opts.system),
-		MaxTokens:    opts.maxTokens,
-		WorkDir:      workDir,
-		SessionDir:   sesDir,
-		OnEvent:      onEvent,
-		Instructions: instructionsConfig(cfg, opts.noInstructions),
-		SkillsDirs:   skillsDirs(cfg, opts.skillsDirs, workDir),
-		Hooks:        pluginHooks(host),
-		MCP:          mcpRegistry(mcpMgr),
-		Processes:    processRegistry(procMgr),
+		Providers:           registry(cfg),
+		Model:               model,
+		System:              systemPrompt(workDir, opts.system),
+		MaxTokens:           opts.maxTokens,
+		WorkDir:             workDir,
+		SessionDir:          sesDir,
+		OnEvent:             onEvent,
+		Instructions:        instructionsConfig(cfg, opts.noInstructions),
+		SkillsDirs:          skillsDirs(cfg, opts.skillsDirs, workDir),
+		Hooks:               pluginHooks(host),
+		MCP:                 mcpRegistry(mcpMgr),
+		Processes:           processRegistry(procMgr),
+		ContextWindowTokens: cfg.ContextWindowTokens,
+		CompactionThreshold: cfg.CompactionThreshold,
+		CompactionKeepTurns: cfg.CompactionKeepTurns,
 	}, opts.resume, opts.cont, modelSet)
 	if err != nil {
 		return err
@@ -693,17 +696,20 @@ func serveCmd(args []string) error {
 	var srv *server.Server
 	mkCfg := func(model message.ModelRef) engine.Config {
 		return engine.Config{
-			Providers:    reg,
-			Model:        model,
-			System:       systemPrompt(workDir, ""),
-			WorkDir:      workDir,
-			SessionDir:   sesDir,
-			OnEvent:      func(ev engine.Event) { srv.Publish(ev) },
-			Instructions: instructionsConfig(cfg, noInstructions),
-			SkillsDirs:   skillsDirs(cfg, skillDirs, workDir),
-			Hooks:        pluginHooks(pluginHost),
-			MCP:          mcpRegistry(mcpMgr),
-			Processes:    processRegistry(procMgr),
+			Providers:           reg,
+			Model:               model,
+			System:              systemPrompt(workDir, ""),
+			WorkDir:             workDir,
+			SessionDir:          sesDir,
+			OnEvent:             func(ev engine.Event) { srv.Publish(ev) },
+			Instructions:        instructionsConfig(cfg, noInstructions),
+			SkillsDirs:          skillsDirs(cfg, skillDirs, workDir),
+			Hooks:               pluginHooks(pluginHost),
+			MCP:                 mcpRegistry(mcpMgr),
+			Processes:           processRegistry(procMgr),
+			ContextWindowTokens: cfg.ContextWindowTokens,
+			CompactionThreshold: cfg.CompactionThreshold,
+			CompactionKeepTurns: cfg.CompactionKeepTurns,
 		}
 	}
 	srv, err = server.New(server.Options{
