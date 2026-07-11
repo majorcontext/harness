@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	_ "embed"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
@@ -66,6 +67,15 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// spawnRequest is POST /spawn's optional JSON body: {"name": "..."} passes
+// the box name the page generated (or is re-using for a Respawn/ADOPT) —
+// see AGENTS.md's spawn contract section and runSpawn's `name` parameter.
+// A missing or empty body is fine (no name passthrough), matching every
+// spawn command that predates this field.
+type spawnRequest struct {
+	Name string `json:"name"`
+}
+
 // handleSpawn streams runSpawn's events to the client as an SSE response.
 // The request context is what runSpawn's exec.CommandContext keys off of,
 // so a client disconnect kills the spawn process directly — see spawn.go.
@@ -81,13 +91,21 @@ func handleSpawn(opts Options) http.HandlerFunc {
 			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 			return
 		}
+		var req spawnRequest
+		if r.Body != nil {
+			// A body is entirely optional (an empty POST is the pre-existing,
+			// still-supported contract): only a non-EOF decode error is a real
+			// problem, and even then we don't fail the request over it — a
+			// malformed body just means no name passthrough, same as none.
+			_ = json.NewDecoder(r.Body).Decode(&req) //nolint:errcheck
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("X-Accel-Buffering", "no")
 		w.WriteHeader(http.StatusOK)
 
 		bw := bufio.NewWriter(w)
-		runSpawn(r.Context(), opts.SpawnCommand, func(ev spawnEvent) {
+		runSpawn(r.Context(), opts.SpawnCommand, req.Name, func(ev spawnEvent) {
 			bw.Write(ev.marshal()) //nolint:errcheck
 			bw.Flush()             //nolint:errcheck
 			flusher.Flush()

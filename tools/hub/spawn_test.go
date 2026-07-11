@@ -11,9 +11,16 @@ import (
 // in order.
 func collectSpawn(t *testing.T, ctx context.Context, command string) []spawnEvent {
 	t.Helper()
+	return collectSpawnNamed(t, ctx, command, "")
+}
+
+// collectSpawnNamed is collectSpawn plus the box-name passthrough (see
+// TestRunSpawnSetsBoxNameEnv below and AGENTS.md's spawn contract section).
+func collectSpawnNamed(t *testing.T, ctx context.Context, command, name string) []spawnEvent {
+	t.Helper()
 	var mu sync.Mutex
 	var got []spawnEvent
-	runSpawn(ctx, command, func(ev spawnEvent) {
+	runSpawn(ctx, command, name, func(ev spawnEvent) {
 		mu.Lock()
 		defer mu.Unlock()
 		got = append(got, ev)
@@ -133,7 +140,7 @@ func TestRunSpawnCancelKillsProcess(t *testing.T) {
 		var mu sync.Mutex
 		var events []spawnEvent
 		var readyOnce sync.Once
-		runSpawn(ctx, "echo ready; cat", func(ev spawnEvent) {
+		runSpawn(ctx, "echo ready; cat", "", func(ev spawnEvent) {
 			mu.Lock()
 			events = append(events, ev)
 			mu.Unlock()
@@ -155,5 +162,43 @@ func TestRunSpawnCancelKillsProcess(t *testing.T) {
 	last := events[len(events)-1]
 	if last.Type != "done" {
 		t.Fatalf("last event type = %q, want done", last.Type)
+	}
+}
+
+// TestRunSpawnSetsBoxNameEnv verifies the box-name passthrough documented in
+// AGENTS.md's spawn contract section and docs/design/fleet-model.md §8: a
+// non-empty name is set as HARNESS_HUB_BOX_NAME in the spawn command's own
+// environment (not just some sidecar field), visible to the child process
+// like any other env var — this is what lets deployment tooling invoked by
+// -spawn-command derive HARNESS_SESSION_DIR from it.
+func TestRunSpawnSetsBoxNameEnv(t *testing.T) {
+	events := collectSpawnNamed(t, context.Background(), `echo "NAME=$HARNESS_HUB_BOX_NAME"`, "amber-otter-07")
+	var lines []string
+	for _, ev := range events {
+		if ev.Type == "stdout" {
+			lines = append(lines, ev.Line)
+		}
+	}
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "NAME=amber-otter-07") {
+		t.Errorf("stdout = %q, want it to contain NAME=amber-otter-07", joined)
+	}
+}
+
+// TestRunSpawnEmptyNameLeavesEnvUnset confirms the empty-name case (a
+// caller that doesn't send one) doesn't inject an empty
+// HARNESS_HUB_BOX_NAME= line — the variable is simply absent, same as
+// never having set it.
+func TestRunSpawnEmptyNameLeavesEnvUnset(t *testing.T) {
+	events := collectSpawnNamed(t, context.Background(), `env | grep -c '^HARNESS_HUB_BOX_NAME=' || true`, "")
+	var lines []string
+	for _, ev := range events {
+		if ev.Type == "stdout" {
+			lines = append(lines, ev.Line)
+		}
+	}
+	joined := strings.Join(lines, "\n")
+	if strings.TrimSpace(joined) != "0" {
+		t.Errorf("HARNESS_HUB_BOX_NAME grep count = %q, want 0", joined)
 	}
 }
