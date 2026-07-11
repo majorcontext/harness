@@ -200,6 +200,12 @@ deployed product. It serves one embedded, single-file page
   values (if found) and the exit code; the page adds the new box to its own
   URL state itself. Nothing box-provisioning-specific lives in this repo.
 - The hub binds loopback-only by default (`resolveAddr` in `tools/hub/hub.go`).
+- **Pure hub logic is unit-tested** by `tools/hub/hub_test.mjs` (run:
+  `node --test tools/hub/*_test.mjs`). **End-to-end, against a real backend**
+  is `tools/hub/e2e` (see its README): a `go test -race ./...` subtree that
+  starts an actual `server.Server` + `hub.NewHandler` and drives the real,
+  served `index.html` with Node + jsdom and an unmocked `fetch` — no manual
+  setup step; it installs its own `npm` dependency on first run.
 
 ## Startup Speed Rules
 
