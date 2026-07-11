@@ -194,11 +194,25 @@ deployed product. It serves one embedded, single-file page
   It execs the command given by `-spawn-command` (or `$HARNESS_HUB_SPAWN`)
   via `sh -c` and streams its combined stdout+stderr live to the page over
   SSE. The **spawn-command contract** — the only coupling between this repo
-  and any deployment-specific provisioning tool — is two plain lines
-  anywhere in that output: `TUNNEL_URL=<url>` and `RUN_TOKEN=<token>`. Once
-  the command exits, the stream ends with a summary carrying those two
-  values (if found) and the exit code; the page adds the new box to its own
-  URL state itself. Nothing box-provisioning-specific lives in this repo.
+  and any deployment-specific provisioning tool — is plain lines anywhere
+  in that output: `TUNNEL_URL=<url>` and `RUN_TOKEN=<token>` (required to
+  add the box), and any number of `PORT_URL_<port>=<url>` lines (optional —
+  one per exposed port's own tunnel/preview URL, collected into a
+  `port_urls` map; see the process strip in `tools/hub/index.html`'s header
+  comment). Once the command exits, the stream ends with a summary carrying
+  those values (if found) and the exit code; the page adds the new box to
+  its own URL state itself. Nothing box-provisioning-specific lives in this
+  repo.
+  - **Box name passthrough.** `POST /spawn`'s JSON body optionally carries
+    `{"name": "..."}` — the page's generated (or, on a Respawn/ADOPT, reused)
+    box name. The Go handler sets it as `HARNESS_HUB_BOX_NAME` in the spawn
+    command's own environment (`tools/hub/spawn.go`'s `runSpawn`), exactly
+    the deployment-environment contract `docs/design/fleet-model.md` §8
+    specifies: deployment tooling invoked by `-spawn-command` reads this
+    variable to derive per-name storage (typically setting
+    `HARNESS_SESSION_DIR` from it before `harness serve` starts) — harness's
+    own code never reads `HARNESS_HUB_BOX_NAME` at all. A request with no
+    body, or no `name` field, spawns exactly as before (no env var set).
 - The hub binds loopback-only by default (`resolveAddr` in `tools/hub/hub.go`).
 - **Pure hub logic is unit-tested** by `tools/hub/hub_test.mjs` (run:
   `node --test tools/hub/*_test.mjs`). **End-to-end, against a real backend**
