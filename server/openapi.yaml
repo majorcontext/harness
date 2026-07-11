@@ -805,9 +805,65 @@ components:
       properties:
         error: { type: string }
 
+    ProcessStatus:
+      type: object
+      description: >
+        A managed process's point-in-time status (see
+        docs/design/managed-processes.md).
+      required: [name, ready, log]
+      properties:
+        name: { type: string }
+        state:
+          type: string
+          enum: [starting, ready, running, exited, stopped]
+          description: >
+            Empty/omitted for a declared process that has never been
+            started.
+        pid: { type: integer }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+        exit_code:
+          type: integer
+          description: Present once the process has been reaped (exited or stopped).
+        ready: { type: boolean }
+        log:
+          type: string
+          description: Absolute log file path — always populated, even pre-start.
+        note:
+          type: string
+          description: e.g. a ready-gate timeout explanation.
+
+    ProcessInfo:
+      type: object
+      description: A declared process's definition (env VALUES never included) plus its live status.
+      required: [name, origin, command, status]
+      properties:
+        name: { type: string }
+        origin:
+          type: string
+          enum: [config, runtime]
+        command:
+          type: array
+          items: { type: string }
+        dir: { type: string }
+        env_names:
+          type: array
+          items: { type: string }
+          description: The "K" half of each configured "K=V" entry — never values.
+        ready_regex: { type: string }
+        ready_timeout: { type: string }
+        status:
+          $ref: "#/components/schemas/ProcessStatus"
+
   parameters:
     sessionID:
       name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    processName:
+      name: name
       in: path
       required: true
       schema:
@@ -821,6 +877,11 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     NotFound:
       description: No session log with that ID.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ProcessNotFound:
+      description: No declared process with that name.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -1247,6 +1308,83 @@ paths:
             text/event-stream:
               schema: { $ref: "#/components/schemas/Event" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /process:
+    get:
+      operationId: listProcesses
+      summary: List every declared managed process with its live status.
+      description: >
+        See docs/design/managed-processes.md. Config- and runtime-declared
+        (via the session `process` tool's `declare` action) processes are
+        both included, distinguished by `origin`. An instance with no
+        processes configured at all still answers 200 with an empty array
+        (this endpoint never 404s).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ProcessInfo" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /process/{name}/start:
+    post:
+      operationId: startProcess
+      summary: Start a managed process (idempotent).
+      description: >
+        Already-active (starting/ready/running) returns the current status
+        unchanged rather than spawning a second process. Blocks until the
+        process's ready_regex matches a log line (state ready) or its
+        ready_timeout_s elapses (state running, with a timeout note — the
+        process is left running, never killed by the timeout); with no
+        ready_regex configured, returns ready immediately on spawn.
+      parameters:
+        - $ref: "#/components/parameters/processName"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProcessStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/ProcessNotFound" }
+
+  /process/{name}/stop:
+    post:
+      operationId: stopProcess
+      summary: Stop a managed process.
+      description: >
+        Unix: SIGKILLs the whole process group. Non-unix: a plain Kill.
+        Either way waits for the process to be reaped and records its
+        exit. A no-op (200, current/zero status) if the process is not
+        currently active.
+      parameters:
+        - $ref: "#/components/parameters/processName"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProcessStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/ProcessNotFound" }
+
+  /process/{name}/restart:
+    post:
+      operationId: restartProcess
+      summary: Stop (if active) and start a managed process fresh.
+      parameters:
+        - $ref: "#/components/parameters/processName"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProcessStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/ProcessNotFound" }
 
   # Candidate for v1.1, deliberately deferred: GET /session/{id}/diff
   # (working-tree diff for orchestrator PR-preview rendering). Needs a

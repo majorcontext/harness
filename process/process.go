@@ -64,6 +64,12 @@ const (
 	OriginRuntime Origin = "runtime"
 )
 
+// ErrUnknownProcess is wrapped into every error a Manager method returns
+// for a name that names no declared process, so a caller (e.g. server's
+// HTTP handlers) can distinguish "no such process" (404) from any other
+// failure with errors.Is, without parsing error text.
+var ErrUnknownProcess = errors.New("process: unknown process")
+
 // defaultReadyTimeout is Def.ReadyTimeout's fallback when unset (<= 0),
 // mirroring engine.MCPManager's ConnectTimeout default pattern.
 const defaultReadyTimeout = 60 * time.Second
@@ -221,7 +227,7 @@ func (m *Manager) Start(ctx context.Context, name string) (Status, error) {
 	def, ok := m.defs[name]
 	if !ok {
 		m.mu.Unlock()
-		return Status{}, fmt.Errorf("process: unknown process %q", name)
+		return Status{}, fmt.Errorf("%w %q", ErrUnknownProcess, name)
 	}
 	if p, ok := m.procs[name]; ok {
 		st := p.snapshot()
@@ -255,7 +261,7 @@ func (m *Manager) Stop(ctx context.Context, name string) (Status, error) {
 	m.mu.Lock()
 	if _, ok := m.defs[name]; !ok {
 		m.mu.Unlock()
-		return Status{}, fmt.Errorf("process: unknown process %q", name)
+		return Status{}, fmt.Errorf("%w %q", ErrUnknownProcess, name)
 	}
 	p, ok := m.procs[name]
 	m.mu.Unlock()
@@ -282,7 +288,7 @@ func (m *Manager) Status(name string) (Status, error) {
 	p := m.procs[name]
 	m.mu.Unlock()
 	if !ok {
-		return Status{}, fmt.Errorf("process: unknown process %q", name)
+		return Status{}, fmt.Errorf("%w %q", ErrUnknownProcess, name)
 	}
 	if p == nil {
 		return Status{Name: name, Log: m.logPath(name)}, nil
@@ -385,7 +391,7 @@ func (m *Manager) Undeclare(name string) error {
 	defer m.mu.Unlock()
 	def, ok := m.defs[name]
 	if !ok {
-		return fmt.Errorf("process: unknown process %q", name)
+		return fmt.Errorf("%w %q", ErrUnknownProcess, name)
 	}
 	if def.Origin == OriginConfig {
 		return fmt.Errorf("process: %q is config-declared and cannot be undeclared", name)
