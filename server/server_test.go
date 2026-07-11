@@ -164,9 +164,10 @@ func newServer(t *testing.T, dir string, prov provider.Provider, maxResident int
 		Version:           "9.9.9",
 		HeartbeatInterval: 20 * time.Millisecond,
 		MaxResident:       maxResident,
-		NewSession: func(m message.ModelRef, workDir string) (*engine.Session, error) {
+		NewSession: func(m message.ModelRef, workDir string, parentSession string) (*engine.Session, error) {
 			cfg := mkCfg(m)
 			cfg.WorkDir = workDir
+			cfg.ParentSession = parentSession
 			return engine.NewSession(cfg), nil
 		},
 		LoadSession: func(id string) (*engine.Session, error) {
@@ -211,6 +212,31 @@ func (h *harness) do(method, path string, body any) (*http.Response, []byte) {
 		h.t.Fatal(err)
 	}
 	req.Header.Set("Authorization", "Bearer "+h.token)
+	resp, err := h.ts.Client().Do(req)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return resp, data
+}
+
+// doRaw is do's counterpart for a caller that needs to send a literal JSON
+// body string — e.g. to distinguish an absent field from an explicit empty
+// string, which map[string]string cannot express (both marshal to "" or
+// omission depending on struct tags, but a plain map always includes the
+// key).
+func (h *harness) doRaw(method, path, rawBody string) (*http.Response, []byte) {
+	h.t.Helper()
+	req, err := http.NewRequest(method, h.ts.URL+path, strings.NewReader(rawBody))
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+h.token)
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := h.ts.Client().Do(req)
 	if err != nil {
 		h.t.Fatal(err)

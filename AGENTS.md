@@ -168,6 +168,33 @@ representation.
 - **A2A** — deliberately not implemented. Cross-org agent meshes are a
   different layer; revisit only if a concrete need appears.
 
+## Fleet model (the deploy story)
+
+The full build spec lives in `docs/design/fleet-model.md` — read it before
+touching anything box-identity, session-lineage, or goal-pause related. The
+short version this repo's code assumes: identity is an operator-chosen box
+**NAME**; storage is one volume/directory per name (`HARNESS_SESSION_DIR`
+points at it), never shared between concurrently-live servers; a box is
+ephemeral compute serving one name (cattle), the name and its volume are
+durable (pets). Respawning the same name over the same volume is **ADOPT**
+— history restores, and any goal that was armed when the box died surfaces
+as `paused`/`pause_reason: "restart"` (see the goal loop's paused
+presentation, `engine/goal.go` and `server/journal.go`'s `goal.paused`
+record) rather than a false "still running" reading. `parent_session`
+(`POST /session`, see `engine/store.go`) is the lineage thread connecting a
+re-dispatch to the task it continues from, so a fleet UI can group a box's
+history by task across boxes.
+
+**Hub spawn contract:** a hub (external orchestrator, not implemented in
+this repo) that spawns boxes passes the generated box NAME to the spawn
+command's environment as `HARNESS_HUB_BOX_NAME`, so deployment scripts can
+derive per-name storage (e.g. mount/create a volume named after it) without
+the hub and the box needing any other side channel to agree on identity.
+Harness itself never reads this variable — it is a contract between the hub
+and deployment tooling, documented in `docs/design/fleet-model.md` §8. Its
+implementation is out of scope here; do not add code that reads or sets it
+without checking whether that design has landed first.
+
 ## Startup Speed Rules
 
 - Nothing touches network, subprocesses, or disk beyond one config file before first paint. Provider auth validates on first message send, not at boot.

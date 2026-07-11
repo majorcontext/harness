@@ -109,6 +109,16 @@ type Config struct {
 	// session. Empty disables persistence entirely.
 	SessionDir string
 
+	// ParentSession is an opaque provenance pointer to the session this one
+	// continues from — a re-dispatch after a failed goal, a follow-up fix
+	// picked up on a fresh box. It is set once at creation (like WorkDir),
+	// persisted on the session header record, and restored by LoadSession
+	// (see store.go); it is NOT required to name a session that exists on
+	// this server or in this process at all — lineage may cross boxes, so
+	// the engine never validates or dereferences it. Empty means no
+	// lineage. See Session.ParentSession.
+	ParentSession string
+
 	Hooks Hooks // optional plugin host
 	// OnEvent is optional; called synchronously, keep it fast. The goal.*
 	// events (see goal.go) are emitted while Session.mu is held so the event
@@ -310,6 +320,13 @@ func (s *Session) CreatedAt() time.Time {
 // bash.go and filetools.go).
 func (s *Session) WorkDir() string {
 	return s.cfg.WorkDir
+}
+
+// ParentSession returns the session's lineage pointer (Config.ParentSession),
+// restored from the header record on a loaded session — empty when the
+// session has no recorded parent. See Config.ParentSession's doc comment.
+func (s *Session) ParentSession() string {
+	return s.cfg.ParentSession
 }
 
 // Usage returns cumulative token usage across all turns.
