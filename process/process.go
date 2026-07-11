@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -95,31 +96,102 @@ type Def struct {
 	// Env is appended to the harness environment when the process is
 	// spawned.
 	Env []string
+	// Ports lists the TCP ports this process is expected to listen on.
+	// Pure declarative metadata: harness never allocates, binds to, or
+	// enforces these — they exist so Status/GET /process, the process
+	// tool's list/status output, and the ambient status block can tell an
+	// agent (or an operator) where a running dev server answers, without
+	// it having to read the process's own source or config. Each entry
+	// must be in [1, 65535] (see ValidateDef).
+	Ports []int
 	// ReadyRegex, when non-empty, must be a valid RE2 pattern: a
 	// combined stdout+stderr log line matching it flips Start's block
-	// from starting to ready.
+	// from starting to ready. At most one of ReadyRegex/ReadyPort/
+	// ReadyHTTP may be set (see ValidateDef).
 	ReadyRegex string
-	// ReadyTimeout bounds Start's blocking wait for ReadyRegex; <= 0
-	// defaults to defaultReadyTimeout.
+	// ReadyPort, when non-zero, gates Start's block on a plain TCP dial
+	// to 127.0.0.1:<ReadyPort> succeeding, polled every readyPollInterval
+	// — unambiguous where a ready_regex can match the wrong task's output
+	// in a multiplexed log (see docs/design/managed-processes.md). At
+	// most one of ReadyRegex/ReadyPort/ReadyHTTP may be set.
+	ReadyPort int
+	// ReadyHTTP, when non-empty, is a URL: Start's block gates on a GET
+	// to it returning any non-5xx status, polled every
+	// readyPollInterval. At most one of ReadyRegex/ReadyPort/ReadyHTTP
+	// may be set.
+	ReadyHTTP string
+	// ReadyTimeout bounds Start's blocking wait for whichever ready gate
+	// is configured; <= 0 defaults to defaultReadyTimeout.
 	ReadyTimeout time.Duration
 	// Origin records whether this definition came from config or a
 	// runtime declare call. Set by the Manager, not the caller.
 	Origin Origin
 }
 
-// ValidateDef fails loudly on a definition that cannot possibly be spawned:
-// a non-empty Command, and — if set — a ReadyRegex that compiles. Used by
-// Manager.Declare so a runtime declaration is validated identically to a
-// config-file process entry (see config.ProcessSpec's validation, which
-// this mirrors error-text-for-error-text).
-func ValidateDef(command []string, readyRegex string) error {
-	if len(command) == 0 {
+// ValidateDef fails loudly on a definition that cannot possibly be
+// spawned: a non-empty Command; every Ports entry (and ReadyPort, if set)
+// in [1, 65535]; at most one of ReadyRegex/ReadyPort/ReadyHTTP set; a
+// ReadyRegex that compiles (RE2); a ReadyHTTP that parses as an absolute
+// URL. Used by Manager.Declare AND config.validateProcesses — the config
+// package calls this directly rather than reimplementing it, so a runtime
+// `declare` and a config-file process entry are rejected with byte-for-
+// byte identical error text, never two independently-drifting messages.
+func ValidateDef(def Def) error {
+	if len(def.Command) == 0 {
 		return errors.New("command is required (non-empty argv)")
 	}
-	if readyRegex != "" {
-		if _, err := regexp.Compile(readyRegex); err != nil {
+	for _, port := range def.Ports {
+		if err := validatePort(port); err != nil {
+			return fmt.Errorf("invalid ports entry: %w", err)
+		}
+	}
+	gates := 0
+	if def.ReadyRegex != "" {
+		gates++
+	}
+	if def.ReadyPort != 0 {
+		gates++
+	}
+	if def.ReadyHTTP != "" {
+		gates++
+	}
+	if gates > 1 {
+		return errors.New("at most one of ready_regex, ready_port, ready_http may be set")
+	}
+	if def.ReadyRegex != "" {
+		if _, err := regexp.Compile(def.ReadyRegex); err != nil {
 			return fmt.Errorf("invalid ready_regex: %w", err)
 		}
+	}
+	if def.ReadyPort != 0 {
+		if err := validatePort(def.ReadyPort); err != nil {
+			return fmt.Errorf("invalid ready_port: %w", err)
+		}
+	}
+	if def.ReadyHTTP != "" {
+		// ParseRequestURI alone accepts inputs http.Get can never satisfy
+		// (a forgotten scheme parses as scheme "localhost", ftp://, an
+		// empty host) — the gate would then spin silently to timeout,
+		// exactly the failure class ready_http exists to eliminate.
+		// Require an http(s) URL with a host.
+		u, err := url.ParseRequestURI(def.ReadyHTTP)
+		if err != nil {
+			return fmt.Errorf("invalid ready_http: %w", err)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return fmt.Errorf("invalid ready_http %q: scheme must be http or https (did you forget the http:// prefix?)", def.ReadyHTTP)
+		}
+		if u.Host == "" {
+			return fmt.Errorf("invalid ready_http %q: missing host", def.ReadyHTTP)
+		}
+	}
+	return nil
+}
+
+// validatePort reports whether port is a valid TCP port number.
+func validatePort(port int) error {
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("port %d out of range (1-65535)", port)
 	}
 	return nil
 }
@@ -142,6 +214,9 @@ type Status struct {
 	// Note carries a human-readable annotation, e.g. a ready-gate timeout
 	// message.
 	Note string `json:"note,omitempty"`
+	// Ports echoes the declared Def.Ports — declarative metadata, not a
+	// live network probe (see Def.Ports).
+	Ports []int `json:"ports,omitempty"`
 }
 
 // Info is a declared process's full definition (env VALUES never
@@ -153,7 +228,10 @@ type Info struct {
 	Command      []string `json:"command"`
 	Dir          string   `json:"dir,omitempty"`
 	EnvNames     []string `json:"env_names,omitempty"`
+	Ports        []int    `json:"ports,omitempty"`
 	ReadyRegex   string   `json:"ready_regex,omitempty"`
+	ReadyPort    int      `json:"ready_port,omitempty"`
+	ReadyHTTP    string   `json:"ready_http,omitempty"`
 	ReadyTimeout string   `json:"ready_timeout"`
 	Status       Status   `json:"status"`
 }
@@ -287,14 +365,14 @@ func (m *Manager) Restart(ctx context.Context, name string) (Status, error) {
 // already populated — the path a future Start will write to.
 func (m *Manager) Status(name string) (Status, error) {
 	m.mu.Lock()
-	_, ok := m.defs[name]
+	def, ok := m.defs[name]
 	p := m.procs[name]
 	m.mu.Unlock()
 	if !ok {
 		return Status{}, fmt.Errorf("%w %q", ErrUnknownProcess, name)
 	}
 	if p == nil {
-		return Status{Name: name, Log: m.logPath(name)}, nil
+		return Status{Name: name, Log: m.logPath(name), Ports: append([]int(nil), def.Ports...)}, nil
 	}
 	return p.snapshot(), nil
 }
@@ -343,7 +421,10 @@ func (m *Manager) List() []Info {
 			Command:      append([]string(nil), def.Command...),
 			Dir:          def.Dir,
 			EnvNames:     envNames(def.Env),
+			Ports:        append([]int(nil), def.Ports...),
 			ReadyRegex:   def.ReadyRegex,
+			ReadyPort:    def.ReadyPort,
+			ReadyHTTP:    def.ReadyHTTP,
 			ReadyTimeout: def.ReadyTimeout.String(),
 			Status:       st,
 		})
@@ -361,7 +442,7 @@ func (m *Manager) Declare(name string, def Def) error {
 	if name == "" {
 		return errors.New("process: name is required")
 	}
-	if err := ValidateDef(def.Command, def.ReadyRegex); err != nil {
+	if err := ValidateDef(def); err != nil {
 		return err
 	}
 	if def.ReadyTimeout <= 0 {
@@ -502,7 +583,8 @@ func (m *Manager) spawn(name string, def Def) (*managedProcess, error) {
 		state:      StateStarting,
 		readyRegex: compileReady(def.ReadyRegex),
 	}
-	if p.readyRegex == nil {
+	hasGate := p.readyRegex != nil || def.ReadyPort != 0 || def.ReadyHTTP != ""
+	if !hasGate {
 		// No ready gate configured: ready immediately on spawn.
 		p.ready = true
 		p.state = StateReady
@@ -525,6 +607,22 @@ func (m *Manager) spawn(name string, def Def) (*managedProcess, error) {
 	p.startedAt = time.Now().UTC()
 
 	go p.wait()
+
+	// ready_port/ready_http have nothing to subscribe to (unlike the
+	// ready_regex watcher, which matches inline as log bytes stream
+	// through cmd.Stdout above) — poll on an interval instead, stopping
+	// automatically once the process exits (p.doneCh) so this goroutine
+	// never outlives it. See docs/design/managed-processes.md for why an
+	// unambiguous port/HTTP probe is worth the poll, and pollReady's doc
+	// comment for the shared driver.
+	switch {
+	case def.ReadyPort != 0:
+		addr := fmt.Sprintf("127.0.0.1:%d", def.ReadyPort)
+		go pollReady(p.doneCh, readyPollInterval, func() bool { return checkPort(addr) }, p.markReady)
+	case def.ReadyHTTP != "":
+		target := def.ReadyHTTP
+		go pollReady(p.doneCh, readyPollInterval, func() bool { return checkHTTP(target) }, p.markReady)
+	}
 
 	return p, nil
 }

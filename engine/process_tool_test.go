@@ -134,6 +134,70 @@ func TestProcessToolStartStatusStopViaTool(t *testing.T) {
 	}
 }
 
+func TestProcessToolStatusAndListIncludePorts(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := newProcessSession(t, dir, map[string]process.Def{
+		"dev": {Command: []string{"sh", "-c", "true"}, Ports: []int{3000, 3001}},
+	})
+
+	status := runProcessAction(t, s, `{"action":"status","name":"dev"}`)
+	if len(status.Ports) != 2 || status.Ports[0] != 3000 || status.Ports[1] != 3001 {
+		t.Fatalf("status.Ports = %+v, want [3000 3001]", status.Ports)
+	}
+
+	tool := s.tools[processToolName]
+	parts, err := tool.Run(context.Background(), s, json.RawMessage(`{"action":"list"}`))
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var infos []process.Info
+	if err := json.Unmarshal([]byte(parts[0].(*message.Text).Text), &infos); err != nil {
+		t.Fatalf("list result not valid JSON array: %v", err)
+	}
+	if len(infos) != 1 || len(infos[0].Ports) != 2 || infos[0].Ports[0] != 3000 {
+		t.Fatalf("list = %+v, want dev with Ports [3000 3001]", infos)
+	}
+}
+
+func TestProcessToolDeclareWithPortsAndReadyGates(t *testing.T) {
+	dir := t.TempDir()
+	s, mgr := newProcessSession(t, dir, map[string]process.Def{
+		"dev": {Command: []string{"sh", "-c", "true"}},
+	})
+	tool := s.tools[processToolName]
+
+	if _, err := tool.Run(context.Background(), s, json.RawMessage(
+		`{"action":"declare","name":"web","command":["sh","-c","true"],"ports":[8080],"ready_port":8080}`,
+	)); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	var found *process.Info
+	for _, info := range mgr.List() {
+		if info.Name == "web" {
+			info := info
+			found = &info
+		}
+	}
+	if found == nil {
+		t.Fatal("declared process 'web' not in List()")
+	}
+	if len(found.Ports) != 1 || found.Ports[0] != 8080 {
+		t.Errorf("Ports = %+v, want [8080]", found.Ports)
+	}
+	if found.ReadyPort != 8080 {
+		t.Errorf("ReadyPort = %d, want 8080", found.ReadyPort)
+	}
+
+	// Declaring with both ready_regex and ready_http set must be rejected
+	// with the same mutual-exclusivity error process.ValidateDef raises
+	// for config parsing.
+	if _, err := tool.Run(context.Background(), s, json.RawMessage(
+		`{"action":"declare","name":"bad","command":["x"],"ready_regex":"ready","ready_http":"http://localhost:3000"}`,
+	)); err == nil || !strings.Contains(err.Error(), "at most one of ready_regex, ready_port, ready_http") {
+		t.Fatalf("declare with both ready_regex and ready_http: err = %v, want the mutual-exclusivity error", err)
+	}
+}
+
 func TestProcessToolListDeclareUndeclare(t *testing.T) {
 	dir := t.TempDir()
 	s, _ := newProcessSession(t, dir, map[string]process.Def{

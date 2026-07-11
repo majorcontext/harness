@@ -304,7 +304,12 @@ func runCmd(args []string) error {
 	case opts.prompt != "" && opts.goal != "":
 		return fmt.Errorf("-p and -goal are mutually exclusive")
 	}
-	cfg, err := loadConfig()
+	// Structured logging: JSON to stderr, stdlib log/slog only (no new
+	// dependency), exactly like serveCmd — built solely to carry the one
+	// config-load summary line (see loadConfigLogged); run mode has no
+	// other ongoing use for a logger.
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	cfg, err := loadConfigLogged(logger)
 	if err != nil {
 		return err
 	}
@@ -622,7 +627,14 @@ func serveCmd(args []string) error {
 	if token == "" {
 		return fmt.Errorf("HARNESS_RUN_TOKEN is required")
 	}
-	cfg, err := loadConfig()
+	// Structured logging: JSON to stderr, stdlib log/slog only (no new
+	// dependency). Built early so the config-load summary below (see
+	// loadConfigLogged) is the first thing this process logs; serve
+	// start and every OnError go through it too. Intentionally minimal —
+	// no request-level access logging, no metrics, no OTel (a separate
+	// future cmd-scoped task).
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	cfg, err := loadConfigLogged(logger)
 	if err != nil {
 		return err
 	}
@@ -677,12 +689,6 @@ func serveCmd(args []string) error {
 			pluginHost.Close()
 		}
 	}()
-
-	// Structured logging: JSON to stderr, stdlib log/slog only (no new
-	// dependency). serve start and every OnError go through it; this is
-	// intentionally minimal — no request-level access logging, no metrics, no
-	// OTel (a separate future cmd-scoped task).
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	// The event journal owner needs each engine session to report events to
 	// it, so the session wrappers wire OnEvent to the server's Publish.

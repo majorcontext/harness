@@ -101,6 +101,7 @@ func (p *managedProcess) snapshot() Status {
 		Ready:       p.ready,
 		Log:         p.logPath,
 		Note:        p.note,
+		Ports:       append([]int(nil), p.def.Ports...),
 	}
 }
 

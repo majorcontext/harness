@@ -36,7 +36,10 @@ func buildProcessManager(workDir string, processes map[string]config.ProcessSpec
 			Command:      spec.Command,
 			Dir:          spec.Dir,
 			Env:          spec.Env,
+			Ports:        spec.Ports,
 			ReadyRegex:   spec.ReadyRegex,
+			ReadyPort:    spec.ReadyPort,
+			ReadyHTTP:    spec.ReadyHTTP,
 			ReadyTimeout: time.Duration(spec.ReadyTimeoutS) * time.Second,
 		}
 	}

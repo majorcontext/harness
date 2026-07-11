@@ -708,6 +708,71 @@ func TestLoadProject(t *testing.T) {
 	})
 }
 
+// TestLoadProjectWithInfo covers the startup-config-observability
+// contract (see AGENTS.md / docs/design/managed-processes.md): the one
+// piece of information a served/run process needs to log at boot is
+// which config file (if any) it actually loaded, plus how much it
+// declares — this is what tells an operator whose config file was
+// misnamed (and so silently loaded as empty) apart from one who never
+// meant to supply a config at all.
+func TestLoadProjectWithInfo(t *testing.T) {
+	t.Run("project file present: reports its path and merged counts", func(t *testing.T) {
+		userPath := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, userPath, `{"mcp_servers": {"fs": {"command": ["mcp-fs"]}}}`)
+		t.Setenv("HARNESS_CONFIG", userPath)
+		projDir := t.TempDir()
+		projPath := filepath.Join(projDir, ".harness.json")
+		writeFile(t, projPath, `{
+			"processes": {"dev": {"command": ["pnpm", "dev"]}, "db": {"command": ["postgres"]}},
+			"plugins": [{"name": "gh", "command": ["gh-plugin"]}]
+		}`)
+		_, info, err := LoadProjectWithInfo(projDir)
+		if err != nil {
+			t.Fatalf("LoadProjectWithInfo: %v", err)
+		}
+		if info.Path != projPath {
+			t.Errorf("Path = %q, want the project file %q", info.Path, projPath)
+		}
+		if info.Processes != 2 {
+			t.Errorf("Processes = %d, want 2", info.Processes)
+		}
+		if info.MCPServers != 1 {
+			t.Errorf("MCPServers = %d, want 1 (inherited from user config)", info.MCPServers)
+		}
+		if info.Plugins != 1 {
+			t.Errorf("Plugins = %d, want 1", info.Plugins)
+		}
+	})
+	t.Run("no project file, user file present: reports the user path", func(t *testing.T) {
+		userPath := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, userPath, `{"model": "anthropic/claude-fable-5"}`)
+		t.Setenv("HARNESS_CONFIG", userPath)
+		_, info, err := LoadProjectWithInfo(t.TempDir())
+		if err != nil {
+			t.Fatalf("LoadProjectWithInfo: %v", err)
+		}
+		if info.Path != userPath {
+			t.Errorf("Path = %q, want the user config path %q", info.Path, userPath)
+		}
+		if info.Processes != 0 || info.MCPServers != 0 || info.Plugins != 0 {
+			t.Errorf("counts = %+v, want all zero", info)
+		}
+	})
+	t.Run("neither file present: reports no config found", func(t *testing.T) {
+		t.Setenv("HARNESS_CONFIG", filepath.Join(t.TempDir(), "does-not-exist.json"))
+		_, info, err := LoadProjectWithInfo(t.TempDir())
+		if err != nil {
+			t.Fatalf("LoadProjectWithInfo: %v", err)
+		}
+		if info.Path != "" {
+			t.Errorf("Path = %q, want empty (no config file found)", info.Path)
+		}
+		if info.Processes != 0 || info.MCPServers != 0 || info.Plugins != 0 {
+			t.Errorf("counts = %+v, want all zero", info)
+		}
+	})
+}
+
 func TestLoadPlugins(t *testing.T) {
 	t.Run("array parsed", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "config.json")
@@ -1065,6 +1130,73 @@ func TestLoadProcesses(t *testing.T) {
 			t.Fatal("expected error for malformed process command")
 		}
 	})
+	t.Run("ports parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": ["pnpm", "dev"], "ports": [3000, 3001]}}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		dev := c.Processes["dev"]
+		if len(dev.Ports) != 2 || dev.Ports[0] != 3000 || dev.Ports[1] != 3001 {
+			t.Errorf("dev.Ports = %+v, want [3000 3001]", dev.Ports)
+		}
+	})
+	t.Run("port out of range fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": ["pnpm", "dev"], "ports": [0]}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for out-of-range port")
+		}
+		if !strings.Contains(err.Error(), "dev") {
+			t.Errorf("error %q does not name the offending key", err)
+		}
+	})
+	t.Run("ready_port parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": ["pnpm", "dev"], "ready_port": 3000}}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.Processes["dev"].ReadyPort != 3000 {
+			t.Errorf("dev.ReadyPort = %d, want 3000", c.Processes["dev"].ReadyPort)
+		}
+	})
+	t.Run("ready_http parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": ["pnpm", "dev"], "ready_http": "http://localhost:3000/healthz"}}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.Processes["dev"].ReadyHTTP != "http://localhost:3000/healthz" {
+			t.Errorf("dev.ReadyHTTP = %q", c.Processes["dev"].ReadyHTTP)
+		}
+	})
+	t.Run("invalid ready_http fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": ["pnpm", "dev"], "ready_http": "::not a url::"}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for invalid ready_http")
+		}
+		if !strings.Contains(err.Error(), "dev") {
+			t.Errorf("error %q does not name the offending key", err)
+		}
+	})
+	t.Run("ready_regex and ready_port together fails loudly with shared error text", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": ["pnpm", "dev"], "ready_regex": "Ready", "ready_port": 3000}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for ready_regex+ready_port both set")
+		}
+		if !strings.Contains(err.Error(), "at most one of ready_regex, ready_port, ready_http") {
+			t.Errorf("error %q, want it to name the mutual-exclusivity rule", err)
+		}
+	})
 }
 
 func TestMergeProcesses(t *testing.T) {
@@ -1090,6 +1222,16 @@ func TestMergeProcesses(t *testing.T) {
 		merged.Processes["dev"].Command[0] = "mutated"
 		if base.Processes["dev"].Command[0] == "mutated" {
 			t.Error("merge aliased base's Processes slice")
+		}
+	})
+	t.Run("ports slice deep-copied", func(t *testing.T) {
+		base := &Config{Processes: map[string]ProcessSpec{
+			"dev": {Command: []string{"a"}, Ports: []int{3000}},
+		}}
+		merged := merge(base, &Config{})
+		merged.Processes["dev"].Ports[0] = 9999
+		if base.Processes["dev"].Ports[0] == 9999 {
+			t.Error("merge aliased base's Ports slice")
 		}
 	})
 	t.Run("unset project inherits user", func(t *testing.T) {
