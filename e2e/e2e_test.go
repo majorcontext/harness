@@ -154,12 +154,20 @@ func sse(name, data string) string {
 
 // completeTurn is a full end_turn SSE stream with a single text block.
 func completeTurn(msgID, text string) string {
+	return completeTurnWithUsage(msgID, text, 5, 3)
+}
+
+// completeTurnWithUsage is completeTurn with explicit input/output token
+// counts, so a test can script a precise Usage/LastUsage trajectory (e.g.
+// driving a session's LastUsage past a compaction threshold — see
+// compaction_test.go).
+func completeTurnWithUsage(msgID, text string, inputTokens, outputTokens int) string {
 	return strings.Join([]string{
-		sse("message_start", fmt.Sprintf(`{"type":"message_start","message":{"id":%q,"usage":{"input_tokens":5}}}`, msgID)),
+		sse("message_start", fmt.Sprintf(`{"type":"message_start","message":{"id":%q,"usage":{"input_tokens":%d}}}`, msgID, inputTokens)),
 		sse("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`),
 		sse("content_block_delta", fmt.Sprintf(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":%q}}`, text)),
 		sse("content_block_stop", `{"type":"content_block_stop","index":0}`),
-		sse("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`),
+		sse("message_delta", fmt.Sprintf(`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":%d}}`, outputTokens)),
 		sse("message_stop", `{"type":"message_stop"}`),
 	}, "")
 }
@@ -423,6 +431,12 @@ type apiEvent struct {
 	GoalReason    string `json:"goal_reason"`
 	GoalMet       bool   `json:"goal_met"`
 	GoalTurn      int    `json:"goal_turn"`
+	// Compaction fields (docs/design/context-compaction.md §4); see
+	// compaction_test.go.
+	CompactFirstID     string `json:"compact_first_id"`
+	CompactLastID      string `json:"compact_last_id"`
+	CompactTurnsFolded int    `json:"compact_turns_folded"`
+	CompactSummaryID   string `json:"compact_summary_id"`
 }
 
 // eventReplay connects to GET /event?from=0, reads the durable replay batch,
