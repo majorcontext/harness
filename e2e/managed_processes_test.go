@@ -45,6 +45,13 @@ func TestManagedProcessesEndToEnd(t *testing.T) {
 
 	sessDir := t.TempDir()
 	workDir := t.TempDir()
+	// macOS TempDir returns /var/folders/... which is a symlink to
+	// /private/var/...; the serve process reports log paths through its
+	// resolved cwd. Resolve here so the path comparison below is
+	// symlink-stable on darwin (no-op on Linux).
+	if resolved, err := filepath.EvalSymlinks(workDir); err == nil {
+		workDir = resolved
+	}
 	cfgPath := writeProcessConfig(t, fakeSrv.URL)
 
 	p := startServeIn(t, sessDir, cfgPath, workDir)
