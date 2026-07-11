@@ -1541,11 +1541,16 @@ function timelineSessionKey() {
 
 function resetTimelineDom(tl) {
   tl.textContent = "";
+  if (tlDom && tlDom.ro) tlDom.ro.disconnect();
   tlDom = {
     key: timelineSessionKey(),
     rendered: new Set(),
     narrativeEl: null, messagesEl: null, bannersEl: null,
     emptyEl: null, draftEl: null,
+    // A freshly-opened session starts stuck to the bottom: the operator
+    // wants the latest activity, with history above. Only a user scroll
+    // (listener in renderTimeline) changes stickiness after that.
+    stick: true,
   };
   if (!drill.sessionId) {
     tl.append(el("div", { class: "empty", text: "select a session from the fleet on the left" }));
@@ -1560,6 +1565,16 @@ function resetTimelineDom(tl) {
   tlDom.bannersEl = el("div", { class: "tl-banners" });
   tlDom.emptyEl = el("div", { class: "empty", text: "no messages yet" });
   tl.append(tlDom.emptyEl, tlDom.narrativeEl, tlDom.messagesEl, tlDom.bannersEl);
+  // Renders pin to the bottom while stuck, but content can keep growing
+  // AFTER the last render (font loads, wrapping reflow) — the replay used
+  // to end ~50px shy of the bottom. While stuck, any content resize
+  // re-pins; a released view is never touched.
+  tlDom.ro = new ResizeObserver(() => {
+    if (tlDom && tlDom.stick) { tlDom.lastAuto = performance.now(); tl.scrollTop = tl.scrollHeight; }
+  });
+  tlDom.ro.observe(tlDom.narrativeEl);
+  tlDom.ro.observe(tlDom.messagesEl);
+  tlDom.ro.observe(tlDom.bannersEl);
 }
 
 const TIMELINE_PIN_PX = 32;
@@ -1569,7 +1584,29 @@ function renderTimeline() {
   if (!tlDom || tlDom.key !== timelineSessionKey()) resetTimelineDom(tl);
   if (!drill.sessionId) return;
 
-  const wasPinned = isPinnedToBottom(tl.scrollTop, tl.scrollHeight, tl.clientHeight, TIMELINE_PIN_PX);
+  // Stickiness is INTENT (tlDom.stick), not geometry inferred per render.
+  // Inferring from scrollTop each render broke initial load: async layout
+  // growth (font metrics, wrapping) after the LAST replay render left the
+  // view ~90px shy of the bottom with no render left to re-pin, so the
+  // operator landed mid-transcript. Now: sessions open stuck (see
+  // resetTimelineDom), and only user scrolling flips it — the listener
+  // fires for programmatic scrolls too, but those always land at the
+  // bottom, where isPinnedToBottom re-affirms stick=true.
+  if (!tl.dataset.stickListener) {
+    tl.dataset.stickListener = "1";
+    // Scroll events from our own scrollTop assignments can be delivered
+    // AFTER the next burst's append has already grown scrollHeight — the
+    // handler then sees a huge gap and wrongly releases stick mid-replay.
+    // Guard: ignore scroll events within 120ms of a programmatic pin
+    // (tlDom.lastAuto). A wheel-up is unambiguous user intent and releases
+    // immediately, so the operator can still escape during a busy stream.
+    tl.addEventListener("scroll", () => {
+      if (!tlDom) return;
+      if (performance.now() - (tlDom.lastAuto || 0) < 120) return;
+      tlDom.stick = isPinnedToBottom(tl.scrollTop, tl.scrollHeight, tl.clientHeight, TIMELINE_PIN_PX);
+    });
+    tl.addEventListener("wheel", e => { if (tlDom && e.deltaY < 0) tlDom.stick = false; }, { passive: true });
+  }
 
   const msgs = drill.messages.slice().sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
@@ -1604,7 +1641,7 @@ function renderTimeline() {
     tlDom.bannersEl.childNodes.length || tlDom.draftEl);
   tlDom.emptyEl.style.display = hasContent ? "none" : "";
 
-  if (wasPinned) tl.scrollTop = tl.scrollHeight;
+  if (tlDom.stick) { tlDom.lastAuto = performance.now(); tl.scrollTop = tl.scrollHeight; }
 }
 
 function renderGoalNarrativeItem(ev) {
