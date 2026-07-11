@@ -79,6 +79,7 @@ const {
   portLinksFor,
   parsePortURLLines,
   mergePortURLs,
+  sanitizePortURLs,
 } = sandbox;
 
 /* ---------- fmtRelative ---------- */
@@ -240,9 +241,25 @@ test("encodeHubState/decodeHubState: round-trips boxes and view", () => {
   const frag = encodeHubState(s);
   assert.ok(frag.startsWith("s="));
   const decoded = plain(decodeHubState(frag));
-  assert.deepEqual(decoded.boxes, s.boxes);
+  assert.deepEqual(decoded.boxes, s.boxes.map(b => ({ ...b, port_urls: {} })));
   assert.deepEqual(decoded.view, s.view);
   assert.equal(decoded.notify, true);
+});
+
+test("encodeHubState/decodeHubState: round-trips a box's port_urls map", () => {
+  const s = {
+    boxes: [{ id: "b1", name: "n", base: "http://x", token: "t", port_urls: { "3000": "https://a.example" } }],
+    view: {}, notify: false,
+  };
+  const decoded = plain(decodeHubState(encodeHubState(s)));
+  assert.deepEqual(decoded.boxes[0].port_urls, { "3000": "https://a.example" });
+});
+
+test("decodeHubState: a garbage port_urls value (array, non-object, non-string values) sanitizes to {}", () => {
+  const raw = JSON.stringify({ boxes: [{ id: "b1", base: "http://x", token: "t", port_urls: ["oops"] }] });
+  const b64 = Buffer.from(raw, "utf8").toString("base64");
+  const decoded = plain(decodeHubState("s=" + b64));
+  assert.deepEqual(decoded.boxes[0].port_urls, {});
 });
 
 test("encodeHubState/decodeHubState: round-trips through a full #-prefixed hash", () => {
@@ -891,6 +908,16 @@ test("parsePortURLLines: parses port=url pairs, one per line", () => {
 test("parsePortURLLines: tolerates blank lines and garbage", () => {
   const got = plain(parsePortURLLines("\n  \nnotaport\n3000=https://a.example\n=missingport\n"));
   assert.deepEqual(got, { "3000": "https://a.example" });
+});
+
+test("sanitizePortURLs: a plain string map passes through unchanged", () => {
+  assert.deepEqual(plain(sanitizePortURLs({ "3000": "https://a.example" })), { "3000": "https://a.example" });
+});
+
+test("sanitizePortURLs: garbage (array, null, non-string values) sanitizes to {}", () => {
+  assert.deepEqual(plain(sanitizePortURLs(["oops"])), {});
+  assert.deepEqual(plain(sanitizePortURLs(null)), {});
+  assert.deepEqual(plain(sanitizePortURLs({ "3000": 42 })), {});
 });
 
 test("mergePortURLs: incoming wins on collision, tolerates null/undefined", () => {
