@@ -56,7 +56,9 @@ const {
   encodeHubState,
   decodeHubState,
   notifyForEvent,
-  sortByLastActivity,
+  sortSessions,
+  sessionTimeRank,
+  sessionPriorityRank,
   countByState,
   randomSlug,
   createCoalescer,
@@ -306,18 +308,90 @@ test("notifyForEvent: unrelated events are not notify-worthy", () => {
   assert.equal(notifyForEvent(null), null);
 });
 
-/* ---------- sortByLastActivity / countByState ---------- */
+/* ---------- sortSessions / sessionTimeRank / sessionPriorityRank ----------
+   Replaces the old sortByLastActivity, which degenerated to server/
+   insertion order whenever last_activity_at was null/absent (new
+   Date(null) - new Date(null) is NaN, and Array#sort's behavior on a
+   comparator that returns NaN is unspecified/effectively "leave it alone")
+   — an operator-reported bug where a box on an older harness binary
+   returns last_activity_at: null for every session, burying the one
+   actively running session at the bottom of the fleet list. */
 
-test("sortByLastActivity: newest last_activity_at first, without mutating input", () => {
+test("sortSessions: newest last_activity_at first within the same state, without mutating input", () => {
   const input = [
-    { id: "a", last_activity_at: "2024-01-01T00:00:00Z" },
-    { id: "b", last_activity_at: "2024-03-01T00:00:00Z" },
-    { id: "c", last_activity_at: "2024-02-01T00:00:00Z" },
+    { id: "a", status: "idle", last_activity_at: "2024-01-01T00:00:00Z" },
+    { id: "b", status: "idle", last_activity_at: "2024-03-01T00:00:00Z" },
+    { id: "c", status: "idle", last_activity_at: "2024-02-01T00:00:00Z" },
   ];
-  const out = sortByLastActivity(input);
-  assert.deepEqual(out.map(s => s.id), ["b", "c", "a"]);
-  assert.equal(input[0].id, "a");
+  const out = sortSessions(input);
+  assert.deepEqual(plain(out.map(s => s.id)), ["b", "c", "a"]);
+  assert.equal(input[0].id, "a", "input must not be mutated");
 });
+
+test("sortSessions: active states sort before idle regardless of timestamps", () => {
+  const input = [
+    { id: "idle-newer", status: "idle", last_activity_at: "2024-06-01T00:00:00Z" },
+    { id: "busy-older", status: "busy", last_activity_at: "2024-01-01T00:00:00Z" },
+    { id: "goal-oldest", status: "idle", last_activity_at: "2023-01-01T00:00:00Z", goal: { active: true } },
+  ];
+  const out = sortSessions(input);
+  assert.deepEqual(plain(out.map(s => s.id)), ["goal-oldest", "busy-older", "idle-newer"]);
+});
+
+test("sortSessions: all last_activity_at null falls back to created_at, never degenerating to input order", () => {
+  // The reported bug: an older harness binary omits last_activity_at for
+  // every session. The actively running (busy) session must still land at
+  // the top, not the bottom, purely from its state — with created_at as
+  // the within-state tiebreaker.
+  const input = [
+    { id: "idle-newer", status: "idle", last_activity_at: null, created_at: "2024-03-01T00:00:00Z" },
+    { id: "idle-older", status: "idle", last_activity_at: null, created_at: "2024-01-01T00:00:00Z" },
+    { id: "running", status: "busy", last_activity_at: null, created_at: "2024-02-01T00:00:00Z" },
+  ];
+  const out = sortSessions(input);
+  assert.deepEqual(plain(out.map(s => s.id)), ["running", "idle-newer", "idle-older"]);
+});
+
+test("sortSessions: mixed nulls — a session with neither timestamp sorts last within its state", () => {
+  const input = [
+    { id: "no-timestamps", status: "idle" },
+    { id: "has-last-activity", status: "idle", last_activity_at: "2024-01-01T00:00:00Z" },
+    { id: "has-created-only", status: "idle", created_at: "2023-01-01T00:00:00Z" },
+  ];
+  const out = sortSessions(input);
+  assert.deepEqual(plain(out.map(s => s.id)), ["has-last-activity", "has-created-only", "no-timestamps"]);
+});
+
+test("sortSessions: is a total order — never throws/NaNs on a fully-timestampless, mixed-state fixture", () => {
+  const fixture = [
+    { id: "a", status: "idle" },
+    { id: "b", status: "busy" },
+    { id: "c", status: "idle", goal: { active: true } },
+    { id: "d", status: "busy", last_activity_at: null, created_at: null },
+    { id: "e" },
+  ];
+  const out = sortSessions(fixture);
+  assert.equal(out.length, fixture.length);
+  // goal-running first, then busy (stable-ish among busy by whatever
+  // recency they have), then idle/unknown-status last.
+  assert.equal(out[0].id, "c");
+  assert.deepEqual(plain(out.slice(1, 3).map(s => s.id).sort()), ["b", "d"]);
+});
+
+test("sessionTimeRank: prefers last_activity_at, falls back to created_at, then -Infinity", () => {
+  assert.equal(sessionTimeRank({ last_activity_at: "2024-01-01T00:00:00Z" }), Date.parse("2024-01-01T00:00:00Z"));
+  assert.equal(sessionTimeRank({ created_at: "2023-01-01T00:00:00Z" }), Date.parse("2023-01-01T00:00:00Z"));
+  assert.equal(sessionTimeRank({}), -Infinity);
+  assert.equal(sessionTimeRank(null), -Infinity);
+  assert.equal(sessionTimeRank({ last_activity_at: "not a date" }), -Infinity);
+});
+
+test("sessionPriorityRank: goal-running < busy < idle", () => {
+  assert.ok(sessionPriorityRank({ status: "idle", goal: { active: true } }) < sessionPriorityRank({ status: "busy" }));
+  assert.ok(sessionPriorityRank({ status: "busy" }) < sessionPriorityRank({ status: "idle" }));
+});
+
+/* ---------- countByState ---------- */
 
 test("countByState: tallies sessions by derived badge", () => {
   const sessions = [

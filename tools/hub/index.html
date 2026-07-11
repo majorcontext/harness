@@ -84,6 +84,23 @@
        URL fragment (hand-edit `#s=` to nonsense) loads as an empty,
        unbroken hub rather than a blank page or a JS error.
    11. Toggle OS light/dark theme -> both variants are legible.
+   12. Reload with a URL fragment that already has boxes in it -> the box
+       card(s) appear on the very first paint, no "no boxes yet" flash;
+       each card's dot starts dimmed/neutral (not red, not amber) until its
+       first health poll resolves, and the session area doesn't jump when
+       it does.
+   13. Dispatch a long-running goal, expand a tool_call or reasoning block
+       mid-stream, and keep watching -> it stays expanded through every
+       subsequent delta/tool call/turn, including the moment the streaming
+       draft lands as a durable message.
+   14. While a session is actively streaming, scroll the timeline up to read
+       earlier history -> new messages/deltas keep arriving without
+       yanking your scroll position back to the bottom; scroll back to the
+       bottom yourself and confirm it resumes auto-following.
+   15. With a box that has several sessions, trigger a burst of activity
+       across them (e.g. prompt two sessions back to back) -> session rows
+       update in place (badges/usage/relative time) without the whole list
+       re-sorting/shuffling more than about once a second.
 -->
 <style>
   :root {
@@ -344,10 +361,46 @@ function maxSeq(list) {
   return m;
 }
 
-// sortByLastActivity orders sessions newest-active first, without mutating
-// the input — the fleet view's "what's happening now" ordering.
-function sortByLastActivity(list) {
-  return list.slice().sort((a, b) => new Date(b.last_activity_at) - new Date(a.last_activity_at));
+// sessionTimeRank returns a sortable recency number for a session:
+// last_activity_at if present, else created_at, else -Infinity (sorts as
+// "oldest", i.e. last in a most-recent-first order). Never returns NaN —
+// an unparseable timestamp also falls back to -Infinity — so sortSessions'
+// comparator stays total. This closes an operator-reported bug: a box
+// running an older harness binary returns last_activity_at: null for every
+// session, which used to degenerate `sortByLastActivity`'s sort (new
+// Date(null) - new Date(null) is NaN, so Array#sort leaves the input in
+// whatever order the server happened to send it) and could bury the one
+// actively running session at the bottom of the fleet list.
+function sessionTimeRank(session) {
+  const raw = (session && session.last_activity_at) || (session && session.created_at);
+  if (!raw) return -Infinity;
+  const t = new Date(raw).getTime();
+  return isNaN(t) ? -Infinity : t;
+}
+
+// sessionPriorityRank orders sessionBadge states so the fleet view leads
+// with what needs attention: an active goal first, then busy, then idle —
+// independent of activity recency.
+function sessionPriorityRank(session) {
+  const badge = sessionBadge(session);
+  if (badge === "goal-running") return 0;
+  if (badge === "busy") return 1;
+  return 2;
+}
+
+// sortSessions orders a session list by state (goal-running, then busy,
+// then idle) and, within a state, by recency — last_activity_at, falling
+// back to created_at, falling back to "oldest" for a session with
+// neither — most recent first. Does not mutate the input. Total order
+// (see sessionTimeRank): a fleet of sessions with no last_activity_at at
+// all still sorts sensibly by state instead of degenerating to server/
+// insertion order.
+function sortSessions(list) {
+  return (list || []).slice().sort((a, b) => {
+    const pr = sessionPriorityRank(a) - sessionPriorityRank(b);
+    if (pr !== 0) return pr;
+    return sessionTimeRank(b) - sessionTimeRank(a);
+  });
 }
 
 // fmtRelative renders an ISO timestamp relative to `nowMs` (defaults to
@@ -1175,7 +1228,7 @@ function toggleExpanded(id) {
 
 // updateSessList reconciles the session rows under one (expanded) box card.
 // Reordering is damped (shouldResort, at most once per FLEET_RESORT_MS): a
-// full re-sort recomputes entry.order from sortByLastActivity; in between,
+// full re-sort recomputes entry.order from sortSessions; in between,
 // existing rows keep their last-applied order and brand-new session ids are
 // simply prepended, so a burst of activity refreshes row CONTENT without
 // shuffling rows out from under the cursor.
@@ -1231,7 +1284,7 @@ function updateSessList(entry, boxId, sessions, expanded, loading) {
   const now = Date.now();
   let orderedIds;
   if (shouldResort(entry.lastSortAt, now, FLEET_RESORT_MS)) {
-    orderedIds = sortByLastActivity(sessions).map(s => s.id);
+    orderedIds = sortSessions(sessions).map(s => s.id);
     entry.lastSortAt = now;
   } else {
     const known = entry.order.filter(id => liveIds.has(id));
