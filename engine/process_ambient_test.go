@@ -112,6 +112,35 @@ func renderMsgText(m message.Message) string {
 	return b.String()
 }
 
+func TestAmbientProcessStatusIncludesPorts(t *testing.T) {
+	dir := t.TempDir()
+	mgr := process.NewManager(dir, map[string]process.Def{
+		"dev": {Command: []string{"sh", "-c", "echo started; sleep 100"}, Ports: []int{3000}},
+	})
+	ctx := context.Background()
+	if _, err := mgr.Start(ctx, "dev"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { mgr.Stop(ctx, "dev") })
+
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "done"}),
+	}}
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+		WorkDir:   dir,
+		Processes: mgr,
+	})
+	if _, err := s.Prompt(ctx, "hello"); err != nil {
+		t.Fatal(err)
+	}
+	last := lastUserText(t, prov.requests[0])
+	if !strings.Contains(last, "dev ready :3000") {
+		t.Errorf("ambient block = %q, want it to report dev's declared port", last)
+	}
+}
+
 func TestAmbientProcessStatusReflectsExitedState(t *testing.T) {
 	dir := t.TempDir()
 	mgr := process.NewManager(dir, map[string]process.Def{

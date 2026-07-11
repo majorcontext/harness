@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -69,8 +70,11 @@ func processTool(reg ProcessRegistry) Tool {
 					"command": {"type": "array", "items": {"type": "string"}, "description": "declare action: the process argv (required, non-empty)"},
 					"dir": {"type": "string", "description": "declare action: working directory, resolved against the session working directory"},
 					"env": {"type": "array", "items": {"type": "string"}, "description": "declare action: K=V environment entries"},
+					"ports": {"type": "array", "items": {"type": "integer"}, "description": "declare action: TCP ports this process listens on (1-65535) — declarative metadata only, never enforced or allocated"},
 					"ready_regex": {"type": "string", "description": "declare action: a regex; a matching combined stdout+stderr log line marks the process ready"},
-					"ready_timeout_s": {"type": "integer", "description": "declare action: seconds start blocks waiting for ready_regex before giving up (default 60)"}
+					"ready_port": {"type": "integer", "description": "declare action: a TCP port (1-65535); start blocks until a plain TCP dial to it succeeds. At most one of ready_regex/ready_port/ready_http may be set"},
+					"ready_http": {"type": "string", "description": "declare action: a URL; start blocks until a GET to it returns any non-5xx status. At most one of ready_regex/ready_port/ready_http may be set"},
+					"ready_timeout_s": {"type": "integer", "description": "declare action: seconds start blocks waiting for the ready gate before giving up (default 60)"}
 				},
 				"required": ["action"]
 			}`),
@@ -90,7 +94,7 @@ func processTool(reg ProcessRegistry) Tool {
 func processToolDescription(reg ProcessRegistry) string {
 	var b strings.Builder
 	b.WriteString("Manage long-lived dev/support processes (e.g. a `pnpm dev` server): start, stop, restart, check status, and read logs. ")
-	b.WriteString("Actions: start(name), stop(name), restart(name), status(name), logs(name, tail=50), list(), declare(name, command, dir?, env?, ready_regex?, ready_timeout_s?), undeclare(name). ")
+	b.WriteString("Actions: start(name), stop(name), restart(name), status(name), logs(name, tail=50), list(), declare(name, command, dir?, env?, ports?, ready_regex?, ready_port?, ready_http?, ready_timeout_s?), undeclare(name). ")
 	b.WriteString("start blocks until the process is ready (or the ready gate times out) so one call gives a definitive answer. ")
 	b.WriteString("declare registers a NEW process definition for THIS SERVER PROCESS ONLY — it is never written to any config file; edit .harness.json directly for a definition that should persist across restarts. ")
 	b.WriteString("Redeclaring a name defined in config, or undeclaring one, is rejected. ")
@@ -127,7 +131,10 @@ type processToolArgs struct {
 	Command       []string `json:"command"`
 	Dir           string   `json:"dir"`
 	Env           []string `json:"env"`
+	Ports         []int    `json:"ports"`
 	ReadyRegex    string   `json:"ready_regex"`
+	ReadyPort     int      `json:"ready_port"`
+	ReadyHTTP     string   `json:"ready_http"`
 	ReadyTimeoutS int      `json:"ready_timeout_s"`
 }
 
@@ -187,7 +194,10 @@ func runProcessTool(ctx context.Context, reg ProcessRegistry, raw json.RawMessag
 			Command:      in.Command,
 			Dir:          in.Dir,
 			Env:          in.Env,
+			Ports:        in.Ports,
 			ReadyRegex:   in.ReadyRegex,
+			ReadyPort:    in.ReadyPort,
+			ReadyHTTP:    in.ReadyHTTP,
 			ReadyTimeout: time.Duration(in.ReadyTimeoutS) * time.Second,
 		}
 		if err := reg.Declare(in.Name, def); err != nil {
@@ -215,6 +225,7 @@ type processResult struct {
 	ExitCode *int   `json:"exit_code,omitempty"`
 	Note     string `json:"note,omitempty"`
 	Logs     string `json:"logs,omitempty"`
+	Ports    []int  `json:"ports,omitempty"`
 }
 
 func statusResult(st process.Status) processResult {
@@ -225,6 +236,7 @@ func statusResult(st process.Status) processResult {
 		Ready: st.Ready,
 		Log:   st.Log,
 		Note:  st.Note,
+		Ports: st.Ports,
 	}
 	if st.HasExitCode {
 		code := st.ExitCode
@@ -317,14 +329,30 @@ func formatProcessStatus(info process.Info, workDir string) string {
 			logPath = rel
 		}
 	}
+	ports := formatPorts(info.Ports)
 	switch st.State {
 	case process.StateExited:
-		return fmt.Sprintf("%s exited(%d) %s ago log=%s", info.Name, st.ExitCode, roughDuration(time.Since(st.FinishedAt)), logPath)
+		return fmt.Sprintf("%s exited(%d)%s %s ago log=%s", info.Name, st.ExitCode, ports, roughDuration(time.Since(st.FinishedAt)), logPath)
 	case process.StateStopped:
-		return fmt.Sprintf("%s stopped %s ago log=%s", info.Name, roughDuration(time.Since(st.FinishedAt)), logPath)
+		return fmt.Sprintf("%s stopped%s %s ago log=%s", info.Name, ports, roughDuration(time.Since(st.FinishedAt)), logPath)
 	default:
-		return fmt.Sprintf("%s %s %s log=%s", info.Name, st.State, roughDuration(time.Since(st.StartedAt)), logPath)
+		return fmt.Sprintf("%s %s%s %s log=%s", info.Name, st.State, ports, roughDuration(time.Since(st.StartedAt)), logPath)
 	}
+}
+
+// formatPorts renders a declared process's Ports as a leading-space
+// ":port[,port...]" token (e.g. " :3000,3001"), or "" when no ports are
+// declared — pure declarative metadata carried into the ambient status
+// block, never a liveness signal (see Def.Ports).
+func formatPorts(ports []int) string {
+	if len(ports) == 0 {
+		return ""
+	}
+	strs := make([]string, len(ports))
+	for i, p := range ports {
+		strs[i] = strconv.Itoa(p)
+	}
+	return " :" + strings.Join(strs, ",")
 }
 
 // withProcessStatus returns messages with seg appended as a new Text part

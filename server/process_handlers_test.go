@@ -56,6 +56,23 @@ func TestHandleProcessList(t *testing.T) {
 	}
 }
 
+func TestHandleProcessListIncludesPorts(t *testing.T) {
+	h, _ := newProcessHarness(t, map[string]process.Def{
+		"dev": {Command: []string{"sh", "-c", "true"}, Ports: []int{3000, 3001}},
+	})
+	resp, body := h.do(http.MethodGet, "/process", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.StatusCode, body)
+	}
+	var infos []process.Info
+	if err := json.Unmarshal(body, &infos); err != nil {
+		t.Fatalf("unmarshal: %v (%s)", err, body)
+	}
+	if len(infos) != 1 || len(infos[0].Ports) != 2 || infos[0].Ports[0] != 3000 || infos[0].Ports[1] != 3001 {
+		t.Fatalf("infos = %+v, want dev with Ports [3000 3001]", infos)
+	}
+}
+
 func TestHandleProcessStartStopRestart(t *testing.T) {
 	h, _ := newProcessHarness(t, map[string]process.Def{
 		"dev": {

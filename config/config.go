@@ -11,10 +11,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/process"
 )
 
 // DefaultModel is the hard fallback when neither a flag nor config names one.
@@ -83,12 +83,12 @@ type Config struct {
 
 // ProcessSpec configures one managed process (package engine's
 // ProcessManager). Command is required (a non-empty argv); Dir, when set,
-// is resolved against the engine's working directory. ReadyRegex, when
-// set, must compile (see validateProcesses) — a log line matching it
-// flips the process from "starting" to "ready". ReadyTimeoutS bounds how
-// long Start blocks waiting for that match; <= 0 defaults to 60 seconds
-// (applied by the engine, not here — see engine.ProcessManager, mirroring
-// MCPServerSpec's ConnectTimeout default pattern).
+// is resolved against the engine's working directory. At most one of
+// ReadyRegex/ReadyPort/ReadyHTTP may be set (see validateProcesses); each
+// gates Start the same way — blocking until it matches — and
+// ReadyTimeoutS bounds how long that block waits; <= 0 defaults to 60
+// seconds (applied by the engine, not here — see engine.ProcessManager,
+// mirroring MCPServerSpec's ConnectTimeout default pattern).
 type ProcessSpec struct {
 	// Command is the argv of the process; Command[0] is resolved via PATH
 	// like any exec.
@@ -99,11 +99,26 @@ type ProcessSpec struct {
 	// Env is appended to the harness environment when the process is
 	// spawned.
 	Env []string `json:"env,omitempty"`
+	// Ports lists TCP ports this process is expected to listen on — pure
+	// declarative metadata (each entry must be in 1-65535; see
+	// validateProcesses) surfaced to Status/GET /process, the process
+	// tool's list/status output, and the ambient status block. Harness
+	// never allocates, binds to, or enforces these.
+	Ports []int `json:"ports,omitempty"`
 	// ReadyRegex, when non-empty, must be a valid RE2 pattern (regexp.Compile).
 	// A combined stdout+stderr log line matching it marks the process ready.
 	ReadyRegex string `json:"ready_regex,omitempty"`
-	// ReadyTimeoutS bounds Start's blocking wait for ReadyRegex, in
-	// seconds; <= 0 means the engine's default (60s).
+	// ReadyPort, when set, is a TCP port (1-65535): Start's ready gate
+	// blocks until a plain TCP dial to 127.0.0.1:<port> succeeds, instead
+	// of matching a log line. Unambiguous where ReadyRegex can match the
+	// wrong task's output in a multiplexed log — see
+	// docs/design/managed-processes.md.
+	ReadyPort int `json:"ready_port,omitempty"`
+	// ReadyHTTP, when set, is a URL: Start's ready gate blocks until a GET
+	// to it returns any non-5xx status.
+	ReadyHTTP string `json:"ready_http,omitempty"`
+	// ReadyTimeoutS bounds Start's blocking wait for whichever ready gate
+	// is configured, in seconds; <= 0 means the engine's default (60s).
 	ReadyTimeoutS int `json:"ready_timeout_s,omitempty"`
 }
 
@@ -413,22 +428,28 @@ func validateMCPServers(servers map[string]MCPServerSpec) error {
 // validateProcesses fails loudly on a process entry that cannot possibly be
 // wired: the map key naming it must be non-empty (it is the identity a
 // caller uses to start/stop/restart/status/logs it — same "cannot possibly
-// be wired" philosophy as validateMCPServers/validatePlugins), Command must
-// be non-empty, and a non-empty ReadyRegex must compile (regexp.Compile) —
-// an invalid pattern would otherwise only fail the first time a session
-// actually starts the process, far from the config that caused it.
+// be wired" philosophy as validateMCPServers/validatePlugins). Everything
+// else (Command, Ports, and the ready gates) is validated by
+// process.ValidateDef itself — called directly, not reimplemented, so a
+// config-file process entry and the process tool's runtime `declare`
+// action are rejected with byte-for-byte identical error text (see that
+// function's doc comment). An invalid entry would otherwise only fail the
+// first time a session actually starts the process, far from the config
+// that caused it.
 func validateProcesses(processes map[string]ProcessSpec) error {
 	for name, p := range processes {
 		if name == "" {
 			return fmt.Errorf("processes: process name is required (empty key)")
 		}
-		if len(p.Command) == 0 {
-			return fmt.Errorf("processes.%s: command is required (non-empty argv)", name)
+		def := process.Def{
+			Command:    p.Command,
+			Ports:      p.Ports,
+			ReadyRegex: p.ReadyRegex,
+			ReadyPort:  p.ReadyPort,
+			ReadyHTTP:  p.ReadyHTTP,
 		}
-		if p.ReadyRegex != "" {
-			if _, err := regexp.Compile(p.ReadyRegex); err != nil {
-				return fmt.Errorf("processes.%s: invalid ready_regex: %w", name, err)
-			}
+		if err := process.ValidateDef(def); err != nil {
+			return fmt.Errorf("processes.%s: %w", name, err)
 		}
 	}
 	return nil
@@ -472,15 +493,81 @@ func Path() string {
 // it becomes once merged with the user layer (or with a native default),
 // not rejected as incomplete on its own.
 func LoadProject(dir string) (*Config, error) {
-	user, err := Load(Path())
+	cfg, _, err := LoadProjectWithInfo(dir)
+	return cfg, err
+}
+
+// LoadInfo describes which config file LoadProjectWithInfo actually found
+// (if any) and summarizes the resulting merged config, for the one boot-
+// time observability log line `harness serve`/`harness run` emit (see
+// AGENTS.md's startup-config-observability rule). It carries no
+// behavior — Path is purely which file to report to an operator, never
+// re-parsed or re-read.
+type LoadInfo struct {
+	// Path is the effective config file path to report: the project
+	// override (<dir>/.harness.json) when it exists, otherwise the user
+	// config path (Path()) when it exists, otherwise empty — meaning no
+	// config file was found at all. This is deliberately a single path
+	// even though up to two files may have been merged: the project
+	// override is what a misnamed-file operator error almost always
+	// means (a typo'd .harness.json silently loading as empty), so it is
+	// the path worth naming when present.
+	Path string
+	// Processes, MCPServers, and Plugins are the merged config's declared
+	// counts — the "how much did this actually load" half of the log
+	// line, printed alongside Path so a config file that loaded but
+	// declares nothing (e.g. a typo inside a key, or an empty object) is
+	// still visibly distinguishable from a rich one.
+	Processes  int
+	MCPServers int
+	Plugins    int
+}
+
+// LoadProjectWithInfo is LoadProject plus the LoadInfo an operator-facing
+// boot log needs. It performs exactly the same file reads and merge/
+// validate pass as LoadProject (this is the only implementation; that
+// function is now a thin wrapper) — checking existence costs one extra
+// os.Stat per file, negligible against the startup budget's "at most two
+// file reads" (a Stat is not the read the budget is about).
+func LoadProjectWithInfo(dir string) (*Config, LoadInfo, error) {
+	userPath := Path()
+	userExists := fileExists(userPath)
+	user, err := Load(userPath)
 	if err != nil {
-		return nil, err
+		return nil, LoadInfo{}, err
 	}
-	proj, err := Load(filepath.Join(dir, ".harness.json"))
+	projPath := filepath.Join(dir, ".harness.json")
+	projExists := fileExists(projPath)
+	proj, err := Load(projPath)
 	if err != nil {
-		return nil, err
+		return nil, LoadInfo{}, err
 	}
-	return mergeAndValidate(user, proj)
+	cfg, err := mergeAndValidate(user, proj)
+	if err != nil {
+		return nil, LoadInfo{}, err
+	}
+	info := LoadInfo{
+		Processes:  len(cfg.Processes),
+		MCPServers: len(cfg.MCPServers),
+		Plugins:    len(cfg.Plugins),
+	}
+	switch {
+	case projExists:
+		info.Path = projPath
+	case userExists:
+		info.Path = userPath
+	}
+	return cfg, info, nil
+}
+
+// fileExists reports whether path names a file (or anything else) that
+// os.Stat can see — used only to distinguish "this config layer was
+// absent" from "this config layer parsed to a zero value" for LoadInfo;
+// Load already treats a missing file as an empty layer, so this never
+// changes what gets loaded, only what gets reported.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // mergeAndValidate merges over onto base (see merge), applies built-in
@@ -660,6 +747,9 @@ func copyProcessSpec(s ProcessSpec) ProcessSpec {
 	}
 	if len(s.Env) > 0 {
 		s.Env = append([]string(nil), s.Env...)
+	}
+	if len(s.Ports) > 0 {
+		s.Ports = append([]int(nil), s.Ports...)
 	}
 	return s
 }

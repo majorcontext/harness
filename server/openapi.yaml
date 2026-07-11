@@ -832,6 +832,13 @@ components:
         note:
           type: string
           description: e.g. a ready-gate timeout explanation.
+        ports:
+          type: array
+          items: { type: integer }
+          description: >
+            Declared TCP ports (see ProcessInfo.ports) — pure declarative
+            metadata echoed here for convenience, never a live network
+            probe or enforcement.
 
     ProcessInfo:
       type: object
@@ -850,7 +857,27 @@ components:
           type: array
           items: { type: string }
           description: The "K" half of each configured "K=V" entry — never values.
+        ports:
+          type: array
+          items: { type: integer }
+          description: >
+            TCP ports this process is expected to listen on (1-65535).
+            Pure declarative metadata: harness never allocates, binds to,
+            or enforces these — see docs/design/managed-processes.md.
         ready_regex: { type: string }
+        ready_port:
+          type: integer
+          description: >
+            When set, start's ready gate blocks until a plain TCP dial to
+            127.0.0.1:<ready_port> succeeds, instead of matching a log
+            line. At most one of ready_regex/ready_port/ready_http is
+            ever set.
+        ready_http:
+          type: string
+          description: >
+            When set, start's ready gate blocks until a GET to this URL
+            returns any non-5xx status. At most one of
+            ready_regex/ready_port/ready_http is ever set.
         ready_timeout: { type: string }
         status:
           $ref: "#/components/schemas/ProcessStatus"
@@ -1335,11 +1362,13 @@ paths:
       summary: Start a managed process (idempotent).
       description: >
         Already-active (starting/ready/running) returns the current status
-        unchanged rather than spawning a second process. Blocks until the
-        process's ready_regex matches a log line (state ready) or its
-        ready_timeout_s elapses (state running, with a timeout note — the
-        process is left running, never killed by the timeout); with no
-        ready_regex configured, returns ready immediately on spawn.
+        unchanged rather than spawning a second process. Blocks until
+        whichever ready gate is configured is satisfied — a ready_regex
+        log-line match, a successful ready_port TCP dial, or a non-5xx
+        ready_http GET (state ready) — or ready_timeout_s elapses (state
+        running, with a timeout note — the process is left running, never
+        killed by the timeout); with no ready gate configured, returns
+        ready immediately on spawn.
       parameters:
         - $ref: "#/components/parameters/processName"
       responses:

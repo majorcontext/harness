@@ -27,6 +27,7 @@ invariants, matched by the implementation landing in the same change.
       "command": ["pnpm", "dev"],
       "dir": "apps/app",
       "env": ["K=V"],
+      "ports": [3000],
       "ready_regex": "Ready in .*ms",
       "ready_timeout_s": 60
     }
@@ -37,12 +38,75 @@ invariants, matched by the implementation landing in the same change.
 `command` is required (a non-empty argv, resolved via PATH like any exec —
 never run through a shell). `dir`, when set, is resolved against the
 engine's working directory. `env` entries are appended to the harness
-environment. `ready_regex`, when set, must compile (RE2 — Go's `regexp`);
-an invalid pattern is a config-load error, not a first-start surprise.
+environment. `ports` (§1a) is optional, purely declarative metadata.
 `ready_timeout_s` defaults to 60 when omitted or `<= 0`. Merge rules mirror
 `mcp_servers`: keys merge across the user/project config layers, but a
 same-name project entry replaces the user entry wholesale (see
 `config.ProcessSpec` and `validateProcesses`).
+
+### 1a. Ports: declarative metadata, not enforcement
+
+`ports` is a list of TCP port numbers (each validated to `1-65535` at
+config-load time, same "fail loudly, not on first start" philosophy as
+`ready_regex`) this process is expected to listen on. Harness does
+**nothing** with this beyond carrying it through to every place a caller
+might want to know: `process.Status`/`process.Info` (hence `GET /process`
+and every lifecycle action's JSON result), the `process` tool's
+`list`/`status` output, and the ambient status block (§4) — rendered as a
+`:3000` (or `:3000,3001` for more than one) token right after the state,
+e.g. `dev ready :3000 14m log=...`. It is never allocated, bound, dialed
+(outside of `ready_port`, §1b, which is a separate opt-in field), or
+enforced in any way — a process can listen on a port it never declared,
+or declare one it never opens, and harness will not notice either way.
+The sole purpose is telling an agent (or an operator reading `GET
+/process`) where a dev server answers without it having to read the
+process's own source or config.
+
+### 1b. Ready check types: `ready_regex` / `ready_port` / `ready_http`
+
+`ready_regex` (unchanged from the original design: a RE2 pattern matched
+against a combined stdout+stderr log line) is one of three mutually
+exclusive ways to gate `Start`'s block — **at most one** may be set per
+definition; setting more than one is a config-load error (`at most one of
+ready_regex, ready_port, ready_http may be set`), and `Manager.Declare`
+raises the identical error text for a runtime `declare` (both call
+`process.ValidateDef` directly — see §2).
+
+- **`ready_port`** (int, `1-65535`): `Start` blocks until a plain TCP dial
+  to `127.0.0.1:<ready_port>` succeeds.
+- **`ready_http`** (string, a URL): `Start` blocks until a GET to it
+  returns any non-5xx status — deliberately looser than "returns 200": a
+  404 or a redirect still proves the process is up and serving something,
+  which is the only fact this gate cares about.
+
+**Why not just `ready_regex` for everything?** A log-regex gate reads
+whatever the process's own stdout+stderr happens to say, and in a
+multiplexed runner — Turborepo/pnpm workspace's `dev` script running a
+dozen tasks in parallel, each line prefixed with its own task name — nothing
+stops a *different* task's line from matching a `ready_regex` written to
+watch for one specific task's "compiled successfully" message. A port or
+HTTP probe has no such ambiguity: it asks the one question that actually
+matters ("can I connect to what I expect to be there"), independent of
+which of N processes happened to log something that looked similar.
+`ready_regex` remains the right (and only necessary) choice for a process
+whose "ready" signal is inherently a log line and nothing else (a CLI
+tool, a one-shot migration runner) — this is an additional option, not a
+deprecation.
+
+**Mechanics.** Unlike the `ready_regex` watcher, which matches inline as
+bytes stream through `cmd.Stdout` (nothing to poll — the process's own
+output arrives when it arrives), a TCP dial or HTTP GET has nothing to
+subscribe to, so `ready_port`/`ready_http` are driven by `pollReady`: check
+immediately, then every `readyPollInterval` (250ms — modest enough not to
+meaningfully delay a fast-starting process, without hammering the target)
+until the check succeeds or the process exits first (the poller goroutine
+is wired to the same `doneCh` the waiter goroutine closes, so it can never
+outlive the process it is polling). `ready_timeout_s` semantics are
+identical across all three gate types: elapsing it flips `starting` to
+`running` with a `Note` explaining the timeout, the process is **never
+killed by a timeout**, and the gate (regex watcher or poller alike) keeps
+running in the background — a late match/dial/GET success still flips
+`running` to `ready`.
 
 ## 2. Engine: `*process.Manager`
 
@@ -65,17 +129,19 @@ starting → ready → exited
    → (killed) ─────→ stopped
 ```
 
-- **starting** — spawned, a `ready_regex` is configured, and no log line
-  has matched it yet. Transient: a client only ever observes this via a
-  concurrent `Status()` call while some other caller's blocking `Start` is
-  still waiting (see below).
-- **ready** — a `ready_regex` matched a combined stdout+stderr log line,
-  *or* no `ready_regex` was configured at all (ready immediately on
-  spawn).
-- **running** — a `ready_regex` was configured but `ready_timeout_s`
-  elapsed before any line matched. The process is **never killed by a
-  timeout** — it is left running, and a `ready_regex` match observed later
-  (the watcher keeps scanning) still flips this to `ready`.
+- **starting** — spawned, a ready gate (`ready_regex`/`ready_port`/
+  `ready_http`, §1b) is configured, and it has not yet been satisfied.
+  Transient: a client only ever observes this via a concurrent `Status()`
+  call while some other caller's blocking `Start` is still waiting (see
+  below).
+- **ready** — the configured ready gate was satisfied (a `ready_regex`
+  match, a successful `ready_port` dial, or a non-5xx `ready_http` GET),
+  *or* no ready gate was configured at all (ready immediately on spawn).
+- **running** — a ready gate was configured but `ready_timeout_s` elapsed
+  before it was satisfied. The process is **never killed by a timeout** —
+  it is left running, and the gate being satisfied later (the regex
+  watcher keeps scanning; the port/HTTP poller keeps polling) still flips
+  this to `ready`.
 - **exited** — the process terminated on its own, detected asynchronously
   by a waiter goroutine (`cmd.Wait()`), independent of any client asking.
 - **stopped** — a client called `Stop`, which killed the process
@@ -92,10 +158,10 @@ both collapsed to one terminal state.
   `ready`, or `running`) process returns its current status unchanged, no
   second process spawned. Otherwise: spawn, stream combined stdout+stderr
   to the log file (see §3), and:
-  - no `ready_regex`: return `ready` immediately.
-  - a `ready_regex`: **block** until a log line matches (`ready`) or
-    `ready_timeout_s` elapses (`running`, with a `Note` explaining the
-    timeout).
+  - no ready gate configured: return `ready` immediately.
+  - a ready gate configured (`ready_regex`/`ready_port`/`ready_http`):
+    **block** until it is satisfied (`ready`) or `ready_timeout_s` elapses
+    (`running`, with a `Note` explaining the timeout).
 - **Stop(ctx, name)** — unix: SIGKILL the whole process group (mirroring
   `engine/bash_unix.go`'s `Setpgid`/kill-pgroup/retry-window pattern, so a
   backgrounded grandchild dies with it); non-unix: a plain `Kill`. Either
@@ -131,12 +197,16 @@ A definition's **origin** is `config` (loaded at startup) or `runtime`
 (registered via the `process` tool's `declare` action, §3). Runtime
 declarations are **server-lifetime only** — never written to
 `.harness.json`; the tool's static description says so explicitly.
-`Declare` validates identically to config parsing (same error text for an
-empty argv or an uncompilable `ready_regex`); redeclaring a `config`-origin
-name is always rejected; redeclaring a `runtime`-origin name that is not
-currently active replaces it; one that is active must be stopped first.
-`Undeclare` mirrors this: a `runtime`-origin, non-active definition can be
-removed; a `config`-origin one, or an active one, cannot.
+`Declare` validates identically to config parsing — literally the same
+function, `process.ValidateDef`, called from both `Manager.Declare` and
+`config.validateProcesses` (same error text for an empty argv, an
+out-of-range `ports`/`ready_port` entry, an uncompilable `ready_regex`, an
+unparseable `ready_http` URL, or more than one ready gate set);
+redeclaring a `config`-origin name is always rejected; redeclaring a
+`runtime`-origin name that is not currently active replaces it; one that
+is active must be stopped first. `Undeclare` mirrors this: a
+`runtime`-origin, non-active definition can be removed; a `config`-origin
+one, or an active one, cannot.
 
 ## 3. Session tool: `process`
 
@@ -155,13 +225,17 @@ process at runtime (a one-off script it wants supervised, not just a
 
 Actions: `start(name)`, `stop(name)`, `restart(name)`, `status(name)`,
 `logs(name, tail=50)`, `list()`, `declare(name, command, dir?, env?,
-ready_regex?, ready_timeout_s?)`, `undeclare(name)`. Results are structured
-JSON strings: `{name, state, pid, ready, log, elapsed, exit_code, note}`
-for the lifecycle actions (`logs` adds a `logs` field with the tail
-content; `list` returns the full roster with `origin`, `command`, `dir`,
-`env_names` — **never env values** — `ready_regex`, `ready_timeout`, and
-`status`). `start` blocks on the ready gate exactly like `Manager.Start`,
-so one tool call yields a definitive, not-still-pending answer.
+ports?, ready_regex?, ready_port?, ready_http?, ready_timeout_s?)`,
+`undeclare(name)`. Results are structured JSON strings: `{name, state,
+pid, ready, log, elapsed, exit_code, note, ports}` for the lifecycle
+actions (`logs` adds a `logs` field with the tail content; `list` returns
+the full roster with `origin`, `command`, `dir`, `env_names` — **never env
+values** — `ports`, `ready_regex`, `ready_port`, `ready_http`,
+`ready_timeout`, and `status`). `start` blocks on the ready gate exactly
+like `Manager.Start`, so one tool call yields a definitive, not-still-
+pending answer. `declare` validates identically to config parsing (§1b),
+so passing more than one of `ready_regex`/`ready_port`/`ready_http` is
+rejected with the same error a config file would get.
 
 **The tool's `Description` is computed once, at tool-build time, from the
 config-declared roster only** (name, command, dir) and never rewritten
@@ -179,15 +253,18 @@ lifetime**, every subsequent request-assembly appends an ephemeral status
 block to the *newest* user message:
 
 ```
-[processes: dev ready 14m log=.harness/proc/dev.log | db exited(1) 2m ago log=.harness/proc/db.log]
+[processes: dev ready :3000 14m log=.harness/proc/dev.log | db exited(1) 2m ago log=.harness/proc/db.log]
 ```
 
 One token per process that has *itself* ever been started (a declared but
 never-started process is omitted even once the block starts appearing for
 others). `ready`/`running`/`starting` report elapsed time since start;
 `exited`/`stopped` report elapsed time since finish, suffixed `ago`, and
-`exited` additionally carries the exit code. The log path is relativized
-against the session's working directory when possible.
+`exited` additionally carries the exit code. A process with declared
+`ports` (§1a) carries a `:3000` (or `:3000,3001`) token right after its
+state — `dev`'s in the example above — omitted entirely for a process
+with no declared ports (`db`'s). The log path is relativized against the
+session's working directory when possible.
 
 ### Where this rides, and why it is safe
 
@@ -271,3 +348,36 @@ running and where the logs are without being told in the prompt.
 - **No cross-box process migration.** Like everything else in the fleet
   model, a managed process is box-scoped; it does not survive the box
   dying, and nothing here tries to make it.
+
+## 8. Startup config observability
+
+A misnamed config file (a project's `.harness.json` typo'd, or
+`HARNESS_CONFIG` pointing somewhere stale) has no declared processes,
+mcp servers, or plugins — indistinguishable, from the merged
+`*config.Config`'s point of view, from an operator who never intended to
+configure anything. This is a real production failure mode (a `dev`
+process quietly never gets declared, `process` tool calls 404, and
+nothing in the logs says why), so `harness serve` and `harness run` both
+emit exactly one `slog` INFO line at boot naming which config file (if
+any) was loaded and how much it declares:
+
+```
+config: /root/web/.harness.json (2 processes, 1 mcp server, 0 plugins)
+```
+
+or, when neither the project override nor the user config file exists:
+
+```
+no config file found
+```
+
+This is `config.LoadProjectWithInfo` (a thin wrapper around
+`LoadProject`, returning the same `*Config` plus a `LoadInfo`): `Path` is
+the project override (`<dir>/.harness.json`) when present, else the user
+config path (`config.Path()`) when present, else empty; `Processes`/
+`MCPServers`/`Plugins` are the **merged** config's counts, so a project
+override that only adds one field to an otherwise-empty processes map
+still reports the right total. `cmd/harness`'s `loadConfigLogged` (used by
+`serveCmd`/`runCmd` only — `sessions`/`plugin probe` keep using the plain
+`loadConfig`, since this line belongs at the "engine is booting" moment,
+not every CLI invocation) turns that into the single log line above.

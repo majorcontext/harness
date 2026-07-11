@@ -1137,3 +1137,40 @@ func textOf(m apiMessage) string {
 	}
 	return b.String()
 }
+
+// TestServeLogsConfigSummary is the e2e proof of docs/design/managed-
+// processes.md §8: `harness serve` emits exactly one INFO line at boot
+// naming which config file it loaded (and how much it declares) or that
+// none was found — the fix for a misnamed config file silently loading
+// as empty, indistinguishable from no-config-intended.
+func TestServeLogsConfigSummary(t *testing.T) {
+	skipShort(t)
+
+	t.Run("loaded", func(t *testing.T) {
+		fake := newFakeAnthropic(0)
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		t.Cleanup(fake.close)
+		cfgPath := writeConfig(t, srv.URL)
+
+		p := startServe(t, t.TempDir(), cfgPath)
+		stderr := p.stderr.String()
+		if !strings.Contains(stderr, "config: "+cfgPath) {
+			t.Fatalf("stderr = %s, want a config summary line naming %s", stderr, cfgPath)
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		fake := newFakeAnthropic(0)
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		t.Cleanup(fake.close)
+		missing := filepath.Join(t.TempDir(), "does-not-exist.json")
+
+		p := startServe(t, t.TempDir(), missing)
+		stderr := p.stderr.String()
+		if !strings.Contains(stderr, "no config file found") {
+			t.Fatalf(`stderr = %s, want "no config file found"`, stderr)
+		}
+	})
+}
