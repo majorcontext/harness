@@ -16,7 +16,11 @@ deployment tooling share. It is a build spec in the same register as
 `docs/design/context-compaction.md` — states, wire fields, invariants, a
 test list — except most of what it specifies is **already implemented**
 (session lineage and goal pausing shipped alongside this document); only
-§8's hub-side half is deliberately deferred.
+§8's hub-side half is deliberately deferred. `docs/design/managed-
+processes.md` is a later doc in the same register: dev/support processes
+(`pnpm dev` and the like) are explicitly box-scoped state, exactly like
+everything else this document describes — a managed process does not
+survive its box's death, and nothing in that design tries to make it.
 
 Written generically: no deployment-provider specifics beyond neutral
 examples (a volume, a container platform, a sandbox). See

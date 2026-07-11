@@ -160,6 +160,18 @@ type Config struct {
 	// specs here.
 	MCP MCPRegistry
 
+	// Processes is the managed-process integration the `process` session
+	// tool and the ambient status injection (see streamTurn) draw from.
+	// *process.Manager (see engine/process.go and package process) is the
+	// production implementation, built once per harness process and
+	// shared across every session — nil (the default) installs no
+	// `process` tool at all and injects no ambient status. Unlike MCP,
+	// cmd/harness's serve wiring builds a non-nil Manager unconditionally
+	// (even with zero declared processes): see docs/design/
+	// managed-processes.md for why the process tool is exposed
+	// unconditionally in serve mode.
+	Processes ProcessRegistry
+
 	// Tools are additional built-in tools. The bash tool is always
 	// installed.
 	Tools       []Tool
@@ -278,6 +290,9 @@ func newSession(cfg Config) *Session {
 	}
 	for _, t := range []Tool{bashTool(cfg.BashTimeout, cfg.BashOutputCap), readFileTool(), writeFileTool(), editFileTool(), sessionInfoTool()} {
 		s.tools[t.Def.Name] = t
+	}
+	if cfg.Processes != nil {
+		s.tools[processToolName] = processTool(cfg.Processes)
 	}
 	for _, t := range cfg.Tools {
 		s.tools[t.Def.Name] = t
@@ -628,10 +643,23 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 	if params.MaxTokens != nil {
 		maxTokens = *params.MaxTokens
 	}
+	// Ambient process-status injection (see processStatusSegment):
+	// appended ONLY to this in-memory request copy — s.History() already
+	// returns a fresh slice (engine.go's append(nil, s.history...)), and
+	// withProcessStatus clones (never mutates in place) the one message it
+	// touches, so the durable s.history — and the message/journal log it
+	// is persisted from — never sees this text. It rides only the newest
+	// user message so every earlier message, and therefore the cached
+	// request prefix, is byte-identical to a request built with no
+	// process ever started.
+	messages := s.History()
+	if seg := processStatusSegment(s.cfg.Processes, s.cfg.WorkDir); seg != "" {
+		messages = withProcessStatus(messages, seg)
+	}
 	req := &provider.Request{
 		Model:       params.Model,
 		System:      system,
-		Messages:    s.History(),
+		Messages:    messages,
 		Tools:       s.toolDefs(ctx),
 		Temperature: params.Temperature,
 		TopP:        params.TopP,
