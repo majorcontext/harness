@@ -174,7 +174,7 @@ representation.
 `harness serve` boxes — a fleet dashboard for "what are my agents
 doing right now" and for dispatching new goal-supervised sessions, not a
 deployed product. It serves one embedded, single-file page
-(`tools/hub/index.html`, `go:embed`, styled to match `tools/inspector/`) on
+(`tools/hub/index.html`, `go:embed`) on
 `localhost:7777` by default (`-addr` to change it).
 
 - **No server-side state.** The hub keeps no registry and reads no config
@@ -220,6 +220,36 @@ deployed product. It serves one embedded, single-file page
   starts an actual `server.Server` + `hub.NewHandler` and drives the real,
   served `index.html` with Node + jsdom and an unmocked `fetch` — no manual
   setup step; it installs its own `npm` dependency on first run.
+
+### UI design language
+
+The hub is styled as **tactical telemetry** — a committed dark-only
+brutalist archetype (derived from the public
+[taste-skill](https://github.com/Leonxlnx/taste-skill) brutalist +
+anti-slop skills). Any new hub UI — and future passes on the inspector,
+which still wears the older soft theme — follows these rules:
+
+- **One substrate, no theme toggle**: `#0a0a0a` background, `#eaeaea`
+  phosphor foreground, `#2a2a2a` hairline borders. Never reintroduce a
+  light mode here; pick-one-and-commit is the point.
+- **Two semantic colors only.** Hazard red (`--accent`, `#ff2a2a`) means
+  trouble or destructive action, nothing else. Terminal green (`--ok`,
+  `#4af626`) is reserved for exactly one semantic: live or succeeded goal
+  execution. Everything else is monochrome.
+- **Monospace dominance**: body text is the `ui-monospace` stack;
+  headers are heavy uppercase system-ui. Micro-labels are uppercase with
+  `.06–.1em` tracking. No webfonts — the page is CSP-self-contained.
+- **Geometry**: `border-radius: 0` absolutely everywhere; square status
+  markers; 1px compartment borders; inverted-video hover
+  (foreground/background swap). No gradients, soft shadows, or
+  translucency. The scanline overlay is static — motion requires a
+  stated purpose.
+- **Copy discipline**: no emoji in UI strings, no em-dashes anywhere, and
+  every piece of "telemetry" displayed must be real data (vcs revisions,
+  seqs, PIDs, token counts) — never decorative or fabricated metadata.
+- **Selectors are load-bearing**: the renderers create elements by class
+  name (`.sess`, `.box-card`, `.dot`, `.goalnarr`, …). Restyle classes;
+  never rename them in a styling pass.
 
 ## Startup Speed Rules
 

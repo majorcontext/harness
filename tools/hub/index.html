@@ -65,17 +65,17 @@
   docs/design/fleet-model.md §6) collapse into one task entry per box card:
   the most recent session (the "tip") is the primary row, and any earlier
   attempts collapse behind an "N earlier attempts" toggle. A session with
-  no lineage renders exactly as before. "↗ Re-dispatch" on an ended/errored
+  no lineage renders exactly as before. ">> Re-dispatch" on an ended/errored
   session creates a NEW session (parent_session = the old one) and opens
   the goal form pre-filled with its prior condition — distinct from the
-  in-place "🔁 Re-arm" action, which reuses the SAME session.
+  in-place "Re-arm" action, which reuses the SAME session.
 
   PAUSED GOALS — GoalSummary.paused/pause_reason (server/openapi.yaml,
   docs/design/fleet-model.md §7): "provider-backoff" renders as a calm
   "waiting out provider weather" note (the loop is alive, just between
   retries — never treated as an error) and clears on its own; "restart"
   (an ADOPTed/rebooted box found the goal armed with no loop attached)
-  renders a prominent "🔁 Re-arm now" CTA, because that one never resumes
+  renders a prominent "Re-arm now" CTA, because that one never resumes
   itself. The boot-only `goal.paused` event renders in the timeline
   alongside `goal.stalled`/`goal.eval`/etc.
 
@@ -153,19 +153,19 @@
        update in place (badges/usage/relative time) without the whole list
        re-sorting/shuffling more than about once a second.
    16. Dispatch a goal, let it end (achieved/cleared/errored), then click
-       "↗ Re-dispatch" -> a NEW session appears with the goal form
+       ">> Re-dispatch" -> a NEW session appears with the goal form
        pre-filled with the old condition; submitting it creates a session
        distinct from the original (both visible), grouped under one task
        row with an "N earlier attempts" toggle revealing the older one.
        Sessions with no lineage at all still render exactly as one plain
        row, no toggle.
    17. Force a goal into provider-backoff (a retryable provider error) ->
-       the session/timeline show a calm "⏳ waiting out provider weather"
+       the session/timeline show a calm "waiting out provider weather"
        note, NOT red/error styling, and it clears on its own once the
        retry succeeds — no Re-arm button appears for it.
    18. Kill a box, restart `harness serve` pointed at the SAME session
        directory with an armed goal still active (ADOPT) -> that goal
-       surfaces paused ("restart"); a prominent "🔁 Re-arm now" button
+       surfaces paused ("restart"); a prominent "Re-arm now" button
        appears on its session row and in the goal panel; clicking it
        resumes the goal with its existing condition. The `goal.paused`
        entry appears in that session's timeline.
@@ -1808,7 +1808,7 @@ function updateProcessRow(row, b, p) {
   for (const link of links) {
     row._linkWrap.append(el("a", {
       class: "proc-link", href: link.url, target: "_blank", rel: "noopener noreferrer",
-      text: "\ud83d\udd17 :" + link.port,
+      text: ":" + link.port,
       onclick: (e) => e.stopPropagation(),
     }));
   }
@@ -2395,7 +2395,7 @@ function renderGoalNarrativeItem(ev) {
       const waitingOut = !!ev.goal_waiting;
       return el("div", { class: "goalnarr stalled" + (waitingOut ? " waiting" : "") },
         el("span", { class: "goaltag", text: waitingOut
-          ? "\u23f3 waiting out provider weather (" + (ev.goal_retryable_class || "retryable") + ", attempt " + (ev.goal_attempt || 1) + ")"
+          ? "waiting out provider weather (" + (ev.goal_retryable_class || "retryable") + ", attempt " + (ev.goal_attempt || 1) + ")"
           : "\u26a0\ufe0f stalled (attempt " + (ev.goal_attempt || 1) + ")" }),
         ev.goal_reason ? el("div", { class: "goalreason", text: ev.goal_reason }) : null);
     }
