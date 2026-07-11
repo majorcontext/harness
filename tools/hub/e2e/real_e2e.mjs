@@ -144,6 +144,13 @@ async function main() {
   Object.defineProperty(tl, "scrollHeight", { value: 2000, configurable: true });
   Object.defineProperty(tl, "clientHeight", { value: 100, configurable: true });
   tl.scrollTop = 0;
+  // jsdom does not synthesize a "scroll" event from a plain property write
+  // the way a real browser's layout engine does (there is no real layout
+  // here at all) — dispatch one explicitly so the page's own scroll
+  // listener (index.html's renderTimeline) sees the "user scrolled up"
+  // signal exactly as it would from a real user action, and flips
+  // tlDom.stick accordingly.
+  tl.dispatchEvent(new w.Event("scroll"));
   for (let i = 0; i < 60 && sendBtn.disabled; i++) await new Promise((r) => setTimeout(r, 100));
   promptBox.value = "third";
   sendBtn.click();
