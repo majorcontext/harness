@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"io"
 	"testing"
 
 	"github.com/majorcontext/harness/message"
@@ -553,5 +554,90 @@ func TestIncidentRecoverableByCompaction(t *testing.T) {
 	finalReq := prov.requests[len(prov.requests)-1]
 	if len(finalReq.Messages) >= 6 { // pre-compaction full history would have been >= 6 messages (3 turns)
 		t.Errorf("final request carried %d messages, want a trimmed history (compaction folded the old turns)", len(finalReq.Messages))
+	}
+}
+
+// goalCompactProvider serves the goal loop's worker turns, its independent
+// tool-less evaluator, AND compaction's own tool-less summarization call —
+// classifying by System content (the compaction system prompt is a unique
+// marker no evaluator request ever carries) and, failing that, by whether
+// Tools is empty (the evaluator's request, per goalProvider in
+// goal_test.go). This is what "no goal.go changes needed" (docs/design/
+// context-compaction.md §1) means in practice: PursueGoal drives everything
+// through Prompt, so the automatic trigger fires mid-goal-loop with no
+// special-casing at all — this test proves it end to end.
+type goalCompactProvider struct {
+	worker, eval, summary [][]provider.Event
+	wi, ei, si            int
+	requests              []*provider.Request
+}
+
+func (p *goalCompactProvider) Name() string { return "test" }
+
+func (p *goalCompactProvider) Stream(_ context.Context, req *provider.Request) (provider.Stream, error) {
+	p.requests = append(p.requests, req)
+	if len(req.System) == 1 && req.System[0] == compactionSystemPrompt {
+		if p.si >= len(p.summary) {
+			return nil, io.ErrUnexpectedEOF
+		}
+		ev := p.summary[p.si]
+		p.si++
+		return &scriptedStream{events: ev}, nil
+	}
+	if len(req.Tools) == 0 {
+		if p.ei >= len(p.eval) {
+			return &scriptedStream{}, nil
+		}
+		ev := p.eval[p.ei]
+		p.ei++
+		return &scriptedStream{events: ev}, nil
+	}
+	if p.wi >= len(p.worker) {
+		return &scriptedStream{}, nil
+	}
+	ev := p.worker[p.wi]
+	p.wi++
+	return &scriptedStream{events: ev}, nil
+}
+
+// TestPursueGoalAutoCompactsMidLoop is the red-first test for §1's "no
+// separate scheduler, no goal.go changes needed": a goal loop, driven
+// entirely through the ordinary Prompt path, auto-compacts mid-loop exactly
+// like a bare prompt_async session would, and still reaches its goal
+// afterward.
+func TestPursueGoalAutoCompactsMidLoop(t *testing.T) {
+	prov := &goalCompactProvider{
+		worker: [][]provider.Event{
+			compactTurn("working turn 1", provider.Usage{InputTokens: 100}),
+			compactTurn("working turn 2", provider.Usage{InputTokens: 900}), // over threshold
+			compactTurn("working turn 3", provider.Usage{InputTokens: 100}), // proceeds post-compaction
+		},
+		eval: [][]provider.Event{
+			evalTurn("NOT MET: keep going"),
+			evalTurn("NOT MET: still going"),
+			evalTurn("MET: done"),
+		},
+		summary: [][]provider.Event{
+			compactSummaryTurn("gist of turn 1", provider.Usage{InputTokens: 20}),
+		},
+	}
+	s := NewSession(Config{
+		Providers:           provider.Registry{"test": prov},
+		Model:               message.ModelRef{Provider: "test", Model: "m1"},
+		Instructions:        &InstructionsConfig{Disabled: true},
+		SkillsDirs:          []string{},
+		ContextWindowTokens: 1000,
+		CompactionKeepTurns: 1,
+	})
+
+	res, err := s.PursueGoal(context.Background(), "finish the thing", GoalOptions{Evaluator: evalModel})
+	if err != nil {
+		t.Fatalf("PursueGoal: %v", err)
+	}
+	if !res.Achieved {
+		t.Fatalf("PursueGoal result = %+v, want Achieved", res)
+	}
+	if got := s.CompactionCount(); got != 1 {
+		t.Fatalf("CompactionCount = %d, want exactly 1 (mid-loop automatic compaction)", got)
 	}
 }
