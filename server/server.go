@@ -128,6 +128,15 @@ type Options struct {
 	// clients without needing a session lookup. Nil disables MCP entirely
 	// for plugin calls, matching a nil engine.Config.MCP.
 	MCP engine.MCPRegistry
+	// Processes is the managed-process integration shared by every
+	// session this server hosts (see engine.ProcessRegistry): the same
+	// *process.Manager the NewSession/LoadSession wrapper wires into each
+	// session's engine.Config.Processes, injected here too so GET
+	// /process and POST /process/{name}/start|stop|restart can answer
+	// without a session lookup — process state is box-scoped, not
+	// per-session. Nil disables the /process endpoints entirely (they
+	// 404), matching a nil engine.Config.Processes.
+	Processes engine.ProcessRegistry
 }
 
 // Server implements http.Handler for the harness serve API.
@@ -408,6 +417,10 @@ func (s *Server) routes() {
 	mux.HandleFunc("DELETE /session/{id}/goal", s.auth(s.handleGoalDelete))
 	mux.HandleFunc("POST /session/{id}/abort", s.auth(s.handleAbort))
 	mux.HandleFunc("GET /event", s.auth(s.handleEvent))
+	mux.HandleFunc("GET /process", s.auth(s.handleProcessList))
+	mux.HandleFunc("POST /process/{name}/start", s.auth(s.handleProcessStart))
+	mux.HandleFunc("POST /process/{name}/stop", s.auth(s.handleProcessStop))
+	mux.HandleFunc("POST /process/{name}/restart", s.auth(s.handleProcessRestart))
 	s.mux = mux
 }
 

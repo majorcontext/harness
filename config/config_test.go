@@ -977,3 +977,126 @@ func TestMergeMCPServers(t *testing.T) {
 		}
 	})
 }
+
+func TestLoadProcesses(t *testing.T) {
+	t.Run("parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {
+			"dev": {"command": ["pnpm", "dev"], "dir": "apps/app", "env": ["K=V"], "ready_regex": "Ready in .*ms", "ready_timeout_s": 60}
+		}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if len(c.Processes) != 1 {
+			t.Fatalf("Processes = %+v, want 1 entry", c.Processes)
+		}
+		dev := c.Processes["dev"]
+		if len(dev.Command) != 2 || dev.Command[0] != "pnpm" || dev.Command[1] != "dev" {
+			t.Errorf("dev.Command = %+v", dev.Command)
+		}
+		if dev.Dir != "apps/app" {
+			t.Errorf("dev.Dir = %q", dev.Dir)
+		}
+		if len(dev.Env) != 1 || dev.Env[0] != "K=V" {
+			t.Errorf("dev.Env = %+v", dev.Env)
+		}
+		if dev.ReadyRegex != "Ready in .*ms" {
+			t.Errorf("dev.ReadyRegex = %q", dev.ReadyRegex)
+		}
+		if dev.ReadyTimeoutS != 60 {
+			t.Errorf("dev.ReadyTimeoutS = %d", dev.ReadyTimeoutS)
+		}
+	})
+	t.Run("unset leaves nil", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.Processes != nil {
+			t.Errorf("Processes = %v, want nil (unset)", c.Processes)
+		}
+	})
+	t.Run("empty name key fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"": {"command": ["x"]}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for empty process name")
+		}
+	})
+	t.Run("empty command fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": []}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for empty process command")
+		}
+		if !strings.Contains(err.Error(), "dev") {
+			t.Errorf("error %q does not name the offending key", err)
+		}
+	})
+	t.Run("missing command fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"dir": "apps/app"}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for missing process command")
+		}
+	})
+	t.Run("invalid ready_regex fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": ["pnpm", "dev"], "ready_regex": "("}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for invalid ready_regex")
+		}
+		if !strings.Contains(err.Error(), "dev") {
+			t.Errorf("error %q does not name the offending key", err)
+		}
+	})
+	t.Run("malformed entry fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": "not-an-array"}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for malformed process command")
+		}
+	})
+}
+
+func TestMergeProcesses(t *testing.T) {
+	t.Run("keys merge, project entry replaces same-name user entry wholesale", func(t *testing.T) {
+		base := &Config{Processes: map[string]ProcessSpec{
+			"dev": {Command: []string{"user-dev"}},
+			"db":  {Command: []string{"postgres"}},
+		}}
+		over := &Config{Processes: map[string]ProcessSpec{
+			"dev": {Command: []string{"proj-dev", "--flag"}},
+		}}
+		merged := merge(base, over)
+		if len(merged.Processes) != 2 {
+			t.Fatalf("merged Processes = %+v, want 2 entries", merged.Processes)
+		}
+		if dev := merged.Processes["dev"]; len(dev.Command) != 2 || dev.Command[0] != "proj-dev" {
+			t.Errorf("merged dev = %+v, want project's entry", dev)
+		}
+		if db := merged.Processes["db"]; len(db.Command) != 1 || db.Command[0] != "postgres" {
+			t.Errorf("merged db = %+v, want inherited user entry", db)
+		}
+		// Mutating the merged map/slices must not alias the inputs.
+		merged.Processes["dev"].Command[0] = "mutated"
+		if base.Processes["dev"].Command[0] == "mutated" {
+			t.Error("merge aliased base's Processes slice")
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{Processes: map[string]ProcessSpec{"dev": {Command: []string{"a"}}}}
+		merged := merge(base, &Config{})
+		if len(merged.Processes) != 1 {
+			t.Errorf("merged Processes = %+v, want inherited", merged.Processes)
+		}
+	})
+}

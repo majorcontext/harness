@@ -91,6 +91,36 @@ The goal loop is a **plan-artifact-free, gate-free** control loop: it is
 mode, and no permission gate. It does not violate the no-plan-mode decision
 below.
 
+### Managed processes
+
+`config.Config.Processes` (`processes` in JSON) declares named long-lived
+dev/support processes (`pnpm dev`, a local DB) that a `process` session
+tool can start/stop/restart/inspect without an agent reinventing PID
+tracking. `*process.Manager` (package `process`, not `engine`) is a
+box-scoped singleton — built once per harness process and shared across
+every session, exactly like `engine.MCPManager` — with a
+starting/ready/running/exited/stopped state machine, unix process-GROUP
+kill on stop (mirroring `engine/bash_unix.go`'s Setpgid/kill-pgroup/
+WaitDelay pattern), and asynchronous death detection (a waiter goroutine
+flips state to `exited` with no client asking). Logs land at
+`<workDir>/.harness/proc/<name>.log`.
+
+The tool can also `declare`/`undeclare` NEW process definitions at
+runtime (server-lifetime only, never written to `.harness.json`) — see
+`docs/design/managed-processes.md` for the full validation and origin
+(`config` vs `runtime`) rules. `harness serve` always builds a
+`*process.Manager`, even with zero configured processes, so the tool is
+present on every served box; `harness run` keeps the zero-cost-when-
+unconfigured rule.
+
+Once at least one declared process has EVER been started (this server
+process's lifetime), request assembly appends an ephemeral `[processes:
+...]` status block to the newest user message ONLY — never persisted into
+the durable session log, never touching any earlier message so a
+provider's prompt cache prefix stays intact. See
+`docs/design/managed-processes.md` §4 for the exact mechanism and why it
+is safe.
+
 ### Deliberately absent — do not add
 
 - **No permission system.** Tool calls are never gated. There is no `permission.ask` hook, no approval UI, no pre-flight rule evaluation.

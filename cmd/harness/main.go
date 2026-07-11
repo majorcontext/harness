@@ -334,6 +334,12 @@ func runCmd(args []string) error {
 	mcpMgr := buildMCPManager(cfg.MCPServers)
 	defer closeMCPManager(mcpMgr)
 
+	// run mode keeps the zero-cost-when-unconfigured rule: nil (no
+	// `process` tool at all) when the config declares no processes. See
+	// buildProcessManager's doc comment for why serve mode differs.
+	procMgr := buildProcessManager(workDir, cfg.Processes, false)
+	defer closeProcessManager(procMgr)
+
 	lateAPI := newLateClientAPI()
 	host, err := buildPluginHost(ctx, cfg.Plugins, version, workDir, cfg.PluginHTTPHeaders, lateAPI, "", "")
 	if err != nil {
@@ -387,6 +393,7 @@ func runCmd(args []string) error {
 		SkillsDirs:   skillsDirs(cfg, opts.skillsDirs, workDir),
 		Hooks:        pluginHooks(host),
 		MCP:          mcpRegistry(mcpMgr),
+		Processes:    processRegistry(procMgr),
 	}, opts.resume, opts.cont, modelSet)
 	if err != nil {
 		return err
@@ -649,6 +656,13 @@ func serveCmd(args []string) error {
 	mcpMgr := buildMCPManager(cfg.MCPServers)
 	defer closeMCPManager(mcpMgr)
 
+	// serve mode always builds a *process.Manager, even with zero
+	// declared processes (alwaysOn=true) — see buildProcessManager's doc
+	// comment: the `process` tool and /process endpoints are exposed on
+	// every served box, not just ones with a non-empty processes config.
+	procMgr := buildProcessManager(workDir, cfg.Processes, true)
+	defer closeProcessManager(procMgr)
+
 	// Every session gets the same plugin host; it is built once here and
 	// closed on exit (deferred before srv's own defer below, so — since
 	// defers unwind LIFO — the host outlives the server's shutdown/drain and
@@ -689,6 +703,7 @@ func serveCmd(args []string) error {
 			SkillsDirs:   skillsDirs(cfg, skillDirs, workDir),
 			Hooks:        pluginHooks(pluginHost),
 			MCP:          mcpRegistry(mcpMgr),
+			Processes:    processRegistry(procMgr),
 		}
 	}
 	srv, err = server.New(server.Options{
@@ -698,6 +713,7 @@ func serveCmd(args []string) error {
 		CORSOrigin:    corsOrigin,
 		GoalEvaluator: goalEval,
 		MCP:           mcpRegistry(mcpMgr),
+		Processes:     processRegistry(procMgr),
 		OnError: func(_ context.Context, err error) {
 			logger.Error("serve error", "error", err.Error())
 		},

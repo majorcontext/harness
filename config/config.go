@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/majorcontext/harness/message"
@@ -71,6 +72,39 @@ type Config struct {
 	// make field-by-field merging (as Provider gets) more confusing than
 	// useful here.
 	MCPServers map[string]MCPServerSpec `json:"mcp_servers,omitempty"`
+	// Processes declares named dev/support processes the engine can
+	// manage (start/stop/restart/status/logs) via the "process" session
+	// tool and the server's /process endpoints (see package engine's
+	// ProcessManager). Keyed by process name; a nil (omitted) value
+	// configures no processes. Merge rules mirror MCPServers: keys merge,
+	// but a same-name project entry replaces the user entry wholesale.
+	Processes map[string]ProcessSpec `json:"processes,omitempty"`
+}
+
+// ProcessSpec configures one managed process (package engine's
+// ProcessManager). Command is required (a non-empty argv); Dir, when set,
+// is resolved against the engine's working directory. ReadyRegex, when
+// set, must compile (see validateProcesses) — a log line matching it
+// flips the process from "starting" to "ready". ReadyTimeoutS bounds how
+// long Start blocks waiting for that match; <= 0 defaults to 60 seconds
+// (applied by the engine, not here — see engine.ProcessManager, mirroring
+// MCPServerSpec's ConnectTimeout default pattern).
+type ProcessSpec struct {
+	// Command is the argv of the process; Command[0] is resolved via PATH
+	// like any exec.
+	Command []string `json:"command,omitempty"`
+	// Dir is the process's working directory, resolved against the
+	// engine's WorkDir when relative.
+	Dir string `json:"dir,omitempty"`
+	// Env is appended to the harness environment when the process is
+	// spawned.
+	Env []string `json:"env,omitempty"`
+	// ReadyRegex, when non-empty, must be a valid RE2 pattern (regexp.Compile).
+	// A combined stdout+stderr log line matching it marks the process ready.
+	ReadyRegex string `json:"ready_regex,omitempty"`
+	// ReadyTimeoutS bounds Start's blocking wait for ReadyRegex, in
+	// seconds; <= 0 means the engine's default (60s).
+	ReadyTimeoutS int `json:"ready_timeout_s,omitempty"`
 }
 
 // MCPServerSpec configures one MCP server (package mcp's client, wired by
@@ -275,6 +309,9 @@ func Load(path string) (*Config, error) {
 	if err := validateMCPServers(c.MCPServers); err != nil {
 		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
 	}
+	if err := validateProcesses(c.Processes); err != nil {
+		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
+	}
 	return &c, nil
 }
 
@@ -368,6 +405,30 @@ func validateMCPServers(servers map[string]MCPServerSpec) error {
 			return fmt.Errorf("mcp_servers.%s: exactly one of command (stdio) or url (streamable HTTP) is required", name)
 		case hasCommand && hasURL:
 			return fmt.Errorf("mcp_servers.%s: command and url are mutually exclusive", name)
+		}
+	}
+	return nil
+}
+
+// validateProcesses fails loudly on a process entry that cannot possibly be
+// wired: the map key naming it must be non-empty (it is the identity a
+// caller uses to start/stop/restart/status/logs it — same "cannot possibly
+// be wired" philosophy as validateMCPServers/validatePlugins), Command must
+// be non-empty, and a non-empty ReadyRegex must compile (regexp.Compile) —
+// an invalid pattern would otherwise only fail the first time a session
+// actually starts the process, far from the config that caused it.
+func validateProcesses(processes map[string]ProcessSpec) error {
+	for name, p := range processes {
+		if name == "" {
+			return fmt.Errorf("processes: process name is required (empty key)")
+		}
+		if len(p.Command) == 0 {
+			return fmt.Errorf("processes.%s: command is required (non-empty argv)", name)
+		}
+		if p.ReadyRegex != "" {
+			if _, err := regexp.Compile(p.ReadyRegex); err != nil {
+				return fmt.Errorf("processes.%s: invalid ready_regex: %w", name, err)
+			}
 		}
 	}
 	return nil
@@ -573,7 +634,34 @@ func merge(base, over *Config) *Config {
 	} else {
 		out.MCPServers = nil
 	}
+	if n := len(base.Processes) + len(over.Processes); n > 0 {
+		m := make(map[string]ProcessSpec, n)
+		for k, v := range base.Processes {
+			m[k] = copyProcessSpec(v)
+		}
+		for k, v := range over.Processes {
+			// A same-name project entry replaces the user entry wholesale
+			// (see the Processes field doc), same as MCPServers.
+			m[k] = copyProcessSpec(v)
+		}
+		out.Processes = m
+	} else {
+		out.Processes = nil
+	}
 	return &out
+}
+
+// copyProcessSpec deep-copies s's slice fields so a merged config never
+// aliases either input layer's — mutating the merged result must not be
+// able to corrupt base or over.
+func copyProcessSpec(s ProcessSpec) ProcessSpec {
+	if len(s.Command) > 0 {
+		s.Command = append([]string(nil), s.Command...)
+	}
+	if len(s.Env) > 0 {
+		s.Env = append([]string(nil), s.Env...)
+	}
+	return s
 }
 
 // copyMCPServerSpec deep-copies s's slice/map fields so a merged config
