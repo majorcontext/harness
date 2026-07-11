@@ -1,0 +1,19 @@
+# VCS
+.git
+.gitignore
+
+# Built binary (see .gitignore: /harness)
+/harness
+
+# Test / coverage artifacts
+*.test
+*.out
+
+# Local scratch and OS cruft
+scratch/
+.DS_Store
+
+# Packaging/docs not needed in the build context
+Dockerfile
+.dockerignore
+docs/
