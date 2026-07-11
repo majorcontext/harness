@@ -129,11 +129,11 @@ func TestAutoCompactionAcrossRestart(t *testing.T) {
 	skipShort(t)
 
 	fake := &scriptedUsageAnthropic{turns: []scriptedUsageTurn{
-		{text: "reply one", inputTokens: 100, outputTokens: 10},          // turn 1: under threshold
-		{text: "reply two", inputTokens: 900, outputTokens: 10},          // turn 2: over threshold (800), triggers compaction before turn 3
+		{text: "reply one", inputTokens: 100, outputTokens: 10},                    // turn 1: under threshold
+		{text: "reply two", inputTokens: 900, outputTokens: 10},                    // turn 2: over threshold (800), triggers compaction before turn 3
 		{text: "the gist of turns one and two", inputTokens: 40, outputTokens: 15}, // compaction's own summarization call
-		{text: "reply three", inputTokens: 120, outputTokens: 10},        // turn 3: proceeds normally post-compaction
-		{text: "reply four", inputTokens: 130, outputTokens: 10},         // turn 4: after restart, still working
+		{text: "reply three", inputTokens: 120, outputTokens: 10},                  // turn 3: proceeds normally post-compaction
+		{text: "reply four", inputTokens: 130, outputTokens: 10},                   // turn 4: after restart, still working
 	}}
 	srv := httptest.NewServer(fake)
 	t.Cleanup(srv.Close)
@@ -268,4 +268,3 @@ func TestAutoCompactionAcrossRestart(t *testing.T) {
 		t.Fatalf("final message after restart+prompt = %+v, want assistant \"reply four\"", got)
 	}
 }
-

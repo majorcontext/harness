@@ -815,11 +815,10 @@ components:
             floor of 1 — the most recent turn is never foldable. 0 or
             negative is a 400, never silently clamped.
         model:
-          type: string
+          $ref: "#/components/schemas/ModelRef"
           description: >
-            Overrides the model used for the summarization call, as
-            "provider/model". Defaults to the session's own current model.
-          example: anthropic/claude-fable-5
+            Overrides the model used for the summarization call. Defaults
+            to the session's own current model.
 
     CompactResponse:
       type: object
