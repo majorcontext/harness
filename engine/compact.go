@@ -317,7 +317,15 @@ func (s *Session) maybeAutoCompact(ctx context.Context) {
 	if threshold <= 0 {
 		threshold = defaultCompactionThreshold
 	}
-	over := float64(lastUsage.InputTokens) >= threshold*float64(windowTokens)
+	// The prompt occupies the context window as the SUM of all three
+	// input components. Harness injects cache_control by default, so on a
+	// warm session the Anthropic adapter reports most of the prompt in
+	// CacheReadTokens (new prefix growth in CacheWriteTokens) while
+	// InputTokens is only the uncached tail — counting InputTokens alone
+	// meant auto-compaction never fired in exactly the long-cached-session
+	// shape it exists for.
+	promptTokens := lastUsage.InputTokens + lastUsage.CacheReadTokens + lastUsage.CacheWriteTokens
+	over := float64(promptTokens) >= threshold*float64(windowTokens)
 	if !over {
 		// Churn-guard reset: LastUsage has dipped below the threshold at
 		// least once since the last automatic compaction, so a future
