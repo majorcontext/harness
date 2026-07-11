@@ -330,3 +330,87 @@ func errFakeOverload() error { return fakeOverloadErr{} }
 type fakeOverloadErr struct{}
 
 func (fakeOverloadErr) Error() string { return "test: fake overloaded_error" }
+
+// TestGoalReArmAfterRetryableStallRestartNotBackoffPaused encodes the PR#70
+// review finding: a goal whose LAST journal record before the box died was
+// goal.stalled(retryable=true, waiting=true) restores those fold fields at
+// boot, with pausedRestart layered on top. Re-arm cleared only
+// pausedRestart, so pauseView's provider-backoff case fired and a client
+// polling right after the 202 saw paused=true/"provider-backoff" on a
+// freshly re-armed, genuinely-running goal. The re-arm path must reset the
+// stall fields exactly like the fresh-goal (evtGoalSet) fold does.
+func TestGoalReArmAfterRetryableStallRestartNotBackoffPaused(t *testing.T) {
+	dir := t.TempDir()
+	// Every worker attempt fails retryably: the loop parks (goal.stalled
+	// with waiting=true) and the server dies parked.
+	prov1 := &goalProv{
+		name:       "test",
+		workerErrN: 1000,
+		workerErr:  provider.MarkRetryable(errFakeOverload(), provider.RetryableOverloaded),
+		eval:       [][]provider.Event{},
+	}
+	mutate := func(o *Options) {
+		o.GoalEvaluator = message.ModelRef{Provider: prov1.Name(), Model: "eval"}
+	}
+	srv1 := newServer(t, dir, prov1, 0, mutate)
+	ts1 := httptest.NewServer(srv1)
+	h1 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv1, ts: ts1}
+
+	id := h1.createSession("test/m1")
+	sse := h1.openSSE("?from=0", "")
+	resp, data := h1.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond"})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
+	}
+	stalled := sse.waitFor(t, "goal.stalled")
+	if !stalled.GoalWaiting {
+		t.Fatalf("goal.stalled GoalWaiting = false, want true (must die parked)")
+	}
+	sse.stop()
+	if err := srv1.Close(); err != nil {
+		t.Fatalf("closing first server: %v", err)
+	}
+	ts1.Close()
+
+	// Restart: the journal tail is goal.stalled(retryable, waiting). The
+	// second provider BLOCKS the worker turn so nothing (no goal.eval) can
+	// reset the stale fold fields before we read the view.
+	prov2 := &goalProv{
+		name:        "test",
+		blockWorker: true,
+		started:     make(chan struct{}),
+	}
+	srv2 := newServer(t, dir, prov2, 0, func(o *Options) {
+		o.GoalEvaluator = message.ModelRef{Provider: prov2.Name(), Model: "eval"}
+	})
+	ts2 := httptest.NewServer(srv2)
+	t.Cleanup(ts2.Close)
+	h2 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv2, ts: ts2}
+
+	before := h2.getPausedGoalView(id)
+	if before.Goal == nil || !before.Goal.Paused || before.Goal.PauseReason != "restart" {
+		t.Fatalf("before re-arm, goal = %+v, want paused/restart (restart wins over stale backoff fields)", before.Goal)
+	}
+
+	resp, data = h2.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond"})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("re-arm POST goal status %d: %s", resp.StatusCode, data)
+	}
+	<-prov2.started // the re-armed loop is live, worker mid-"stream", no eval yet
+
+	after := h2.getPausedGoalView(id)
+	if after.Goal == nil {
+		t.Fatal("no goal on session after re-arm")
+	}
+	if after.Goal.Paused {
+		t.Errorf("immediately after re-arm 202: goal paused=true pause_reason=%q, want paused=false (stale stall fields must reset like the evtGoalSet fold)", after.Goal.PauseReason)
+	}
+
+	// Unblock the loop by clearing the goal; the blocked stream ends via
+	// prompt-context cancel.
+	resp, _ = h2.do("DELETE", "/session/"+id+"/goal", nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("clear goal status %d", resp.StatusCode)
+	}
+	_, _ = h2.do("POST", "/session/"+id+"/abort", nil)
+}

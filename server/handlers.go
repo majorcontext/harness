@@ -851,7 +851,16 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 		condition = existing
 		s.mu.Lock()
 		if g := s.goalState[id]; g != nil {
+			// Reset ALL pause-relevant fold state, mirroring the
+			// evtGoalSet fold: if the journal tail before a restart was
+			// goal.stalled(retryable, waiting), clearing only
+			// pausedRestart leaves pauseView's provider-backoff case
+			// firing on a freshly re-armed, genuinely-running goal until
+			// its first goal.eval resets waiting.
 			g.pausedRestart = false
+			g.retryable = false
+			g.retryableClass = ""
+			g.waiting = false
 		}
 		s.mu.Unlock()
 	} else if err := st.sess.RegisterGoal(body.Condition); err != nil {
