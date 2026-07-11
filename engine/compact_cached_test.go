@@ -22,8 +22,8 @@ func TestMaybeAutoCompactCountsCachedPromptTokens(t *testing.T) {
 	small := provider.Usage{InputTokens: 100}
 
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
-		compactTurn("t1", small),    // call 1: no lastUsage yet
-		compactTurn("t2", warmOver), // call 2: lastUsage(t1)=small, no trigger
+		compactTurn("t1", small),                                   // call 1: no lastUsage yet
+		compactTurn("t2", warmOver),                                // call 2: lastUsage(t1)=small, no trigger
 		compactSummaryTurn("gist", provider.Usage{InputTokens: 5}), // must be consumed by the trigger before call 3
 		compactTurn("t3", small),
 	}}
