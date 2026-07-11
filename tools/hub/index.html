@@ -32,19 +32,70 @@
   A box with no -cors-origin set will look permanently unreachable here —
   check that first.
 
-  SPAWN CONTRACT — the one thing the Go side does. POST /spawn execs the
-  command given by `harness hub`'s -spawn-command flag (or
-  $HARNESS_HUB_SPAWN) via `sh -c`, and streams its combined stdout+stderr
-  live to this page as it runs (SSE, one "stdout" event per line). Once the
-  command exits, the stream ends with one "done" event carrying the exit
-  code and, if present anywhere in the output, the value of any lines
-  exactly matching `TUNNEL_URL=<url>` and `RUN_TOKEN=<token>` (surrounding
-  whitespace trimmed). That's the entire coupling — this repo carries zero
-  deployment-specific spawn logic. This page reads only `tunnel_url` and
-  `run_token` off the done event; it adds the box to its own URL state
-  itself (see spawnBox() below). Any spawn command that prints those two
-  lines works, whether it's a one-liner or a wrapper around a fleet
-  provisioning tool.
+  SPAWN CONTRACT — the one thing the Go side does. POST /spawn (optionally
+  carrying a JSON body {"name": "..."} — this page always sends its
+  generated/reused box name) execs the command given by `harness hub`'s
+  -spawn-command flag (or $HARNESS_HUB_SPAWN) via `sh -c`, setting
+  HARNESS_HUB_BOX_NAME in that command's OWN environment when a name was
+  given (see tools/hub/spawn.go's runSpawn and docs/design/fleet-model.md
+  §8 — deployment tooling reads this to derive per-name storage), and
+  streams its combined stdout+stderr live to this page as it runs (SSE, one
+  "stdout" event per line). Once the command exits, the stream ends with
+  one "done" event carrying the exit code and, if present anywhere in the
+  output, the value of any lines exactly matching `TUNNEL_URL=<url>`,
+  `RUN_TOKEN=<token>`, and any number of `PORT_URL_<port>=<url>` lines
+  (surrounding whitespace trimmed; the port lines collect into a
+  `port_urls` map — see the PROCESS STRIP below). That's the entire
+  coupling — this repo carries zero deployment-specific spawn logic. This
+  page reads only `tunnel_url`/`run_token`/`port_urls` off the done event;
+  it adds (or, on a Respawn, updates in place) the box in its own URL state
+  itself (see runSpawn()/applyRespawn() below). Any spawn command that
+  prints those lines works, whether it's a one-liner or a wrapper around a
+  fleet provisioning tool.
+
+  RESPAWN/ADOPT — a box card offers "⟲ Respawn" once its health has been
+  observed down. It calls POST /spawn again with the SAME name (fleet-model
+  ADOPT, docs/design/fleet-model.md §4: same name -> same durable volume ->
+  every session's history restores, any armed goal surfaces
+  paused/"restart") and, on success, updates that SAME box entry's base URL
+  + run token in place — a fresh tunnel, not a new box card.
+
+  LINEAGE GROUPING — sessions that share a `parent_session` chain
+  (server/openapi.yaml's Session.parent_session, set via POST /session;
+  docs/design/fleet-model.md §6) collapse into one task entry per box card:
+  the most recent session (the "tip") is the primary row, and any earlier
+  attempts collapse behind an "N earlier attempts" toggle. A session with
+  no lineage renders exactly as before. "↗ Re-dispatch" on an ended/errored
+  session creates a NEW session (parent_session = the old one) and opens
+  the goal form pre-filled with its prior condition — distinct from the
+  in-place "🔁 Re-arm" action, which reuses the SAME session.
+
+  PAUSED GOALS — GoalSummary.paused/pause_reason (server/openapi.yaml,
+  docs/design/fleet-model.md §7): "provider-backoff" renders as a calm
+  "waiting out provider weather" note (the loop is alive, just between
+  retries — never treated as an error) and clears on its own; "restart"
+  (an ADOPTed/rebooted box found the goal armed with no loop attached)
+  renders a prominent "🔁 Re-arm now" CTA, because that one never resumes
+  itself. The boot-only `goal.paused` event renders in the timeline
+  alongside `goal.stalled`/`goal.eval`/etc.
+
+  PROCESS STRIP — each box card polls GET /process (server/openapi.yaml,
+  docs/design/managed-processes.md) and renders one compact row per managed
+  process: name, a state dot (ready green, starting/running amber, exited
+  red with its exit code), and — only when the process reports a `ports`
+  field (a parallel-branch addition; absent renders as no ports, never a
+  crash) AND this box's `port_urls` map (an optional part of the box's URL-
+  fragment state, editable in the add-box modal, or auto-populated from
+  PORT_URL_<port>= spawn output above) has a matching entry — a clickable
+  preview link. An absent/404 GET /process (an older box) means no strip at
+  all. Clicking a process opens a small panel with its state and log PATH
+  (GET /process exposes no log CONTENT over HTTP — see docs/design/managed-
+  processes.md §5 — so that's all there is to show, honestly).
+
+  ACTIVE-GOALS STRIP — a slim bar above the box list (only shown when
+  non-empty) listing every session, across every box, whose goal is
+  currently active (running OR paused) — "where is my work". Click any
+  entry to jump straight to that box+session.
 
   The pure helpers below (SSE parser, hub-state codec, formatters) are
   unit-tested by hub_test.mjs (run: node --test tools/hub/*_test.mjs). The
@@ -101,6 +152,41 @@
        across them (e.g. prompt two sessions back to back) -> session rows
        update in place (badges/usage/relative time) without the whole list
        re-sorting/shuffling more than about once a second.
+   16. Dispatch a goal, let it end (achieved/cleared/errored), then click
+       "↗ Re-dispatch" -> a NEW session appears with the goal form
+       pre-filled with the old condition; submitting it creates a session
+       distinct from the original (both visible), grouped under one task
+       row with an "N earlier attempts" toggle revealing the older one.
+       Sessions with no lineage at all still render exactly as one plain
+       row, no toggle.
+   17. Force a goal into provider-backoff (a retryable provider error) ->
+       the session/timeline show a calm "⏳ waiting out provider weather"
+       note, NOT red/error styling, and it clears on its own once the
+       retry succeeds — no Re-arm button appears for it.
+   18. Kill a box, restart `harness serve` pointed at the SAME session
+       directory with an armed goal still active (ADOPT) -> that goal
+       surfaces paused ("restart"); a prominent "🔁 Re-arm now" button
+       appears on its session row and in the goal panel; clicking it
+       resumes the goal with its existing condition. The `goal.paused`
+       entry appears in that session's timeline.
+   19. Configure a box with a `processes` section (see docs/design/managed-
+       processes.md) and start one from a session's `process` tool -> the
+       box card grows a process strip row: a state dot (amber while
+       starting, green once ready), and (once you populate that box's
+       port_urls, e.g. `3000=https://preview.example.dev`, in the add-box
+       modal or via a PORT_URL_3000= spawn line) a clickable preview link
+       once the process reports that port. Clicking the row (not the link)
+       opens a small panel showing its state and log path. A box running
+       an older harness binary (no /process at all) shows no strip.
+   20. Kill a box's `harness serve` so its dot goes red -> a "⟲ Respawn"
+       button appears on its card; use it (pointed at a spawn command that
+       reuses the same name) -> on success the SAME box card's base URL
+       and token update in place (no new card), and its sessions'
+       histories reappear once the box reconnects.
+   21. Dispatch goals on sessions across two or more boxes -> the
+       ACTIVE-GOALS STRIP above the box list lists every one of them;
+       clicking an entry jumps straight to that box+session in the
+       timeline. The strip disappears once no goal anywhere is active.
 -->
 <style>
   :root {
@@ -148,6 +234,21 @@
   }
   .spacer { flex: 1; }
   .toggle.on { border-color: var(--ok); color: var(--ok); }
+  #activeGoalsBar {
+    display: none; flex-wrap: wrap; gap: 6px; padding: 6px 12px;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  .active-goal-chip {
+    display: flex; align-items: center; gap: 6px; cursor: pointer;
+    border: 1px solid var(--accent); color: var(--accent);
+    border-radius: 20px; padding: 3px 10px; font-size: 12px; max-width: 360px;
+  }
+  .active-goal-chip:hover { background: var(--tool); }
+  .active-goal-chip.calm { border-color: var(--dim); color: var(--dim); }
+  .active-goal-chip.urgent { border-color: var(--warn); color: var(--warn); }
+  .agc-box { font-weight: 600; white-space: nowrap; }
+  .agc-cond { color: var(--fg); opacity: .8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agc-pause { font-size: 11px; white-space: nowrap; }
   main { display: flex; flex: 1; min-height: 0; }
   #fleet {
     width: 380px; border-right: 1px solid var(--border); overflow-y: auto;
@@ -175,7 +276,27 @@
   .count-chip { border-radius: 10px; padding: 1px 8px; font-size: 11px; border: 1px solid var(--border); }
   .count-chip.busy { border-color: var(--warn); color: var(--warn); }
   .count-chip.goal-running { border-color: var(--accent); color: var(--accent); }
-  .box-actions { display: flex; gap: 6px; padding: 0 10px 8px; }
+  .box-actions { display: flex; gap: 6px; padding: 0 10px 8px; flex-wrap: wrap; }
+  button.respawn { border-color: var(--warn); color: var(--warn); }
+  /* PROCESS STRIP: a compact row per managed process (see AGENTS.md/this
+     page's header comment). Hidden entirely (display:none, set in JS) when
+     a box reports no processes or doesn't serve GET /process at all. */
+  .proc-strip { display: none; flex-direction: column; gap: 2px; padding: 0 10px 8px; }
+  .proc-item {
+    display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer;
+    padding: 2px 6px; border-radius: 6px;
+  }
+  .proc-item:hover { background: var(--tool); }
+  .proc-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--off); flex-shrink: 0; }
+  .proc-dot.ready { background: var(--ok); }
+  .proc-dot.starting { background: var(--warn); }
+  .proc-dot.exited { background: #e05a4e; }
+  .proc-dot.stopped { background: var(--off); }
+  .proc-dot.unknown { background: var(--dim); }
+  .proc-name { color: var(--dim); font-family: ui-monospace, monospace; }
+  .proc-links { display: flex; gap: 6px; margin-left: auto; }
+  .proc-link { color: var(--accent); text-decoration: none; font-size: 11px; }
+  .proc-link:hover { text-decoration: underline; }
   .sess-list { border-top: 1px solid var(--border); }
   .sess {
     padding: 8px 10px; border-bottom: 1px solid var(--border); cursor: pointer;
@@ -193,6 +314,29 @@
   .last-turn { font-size: 11px; margin-top: 2px; }
   .last-turn.error { color: var(--warn); }
   .rearm { margin-top: 4px; }
+  /* PAUSED GOALS: provider-backoff is calm (not an error — the loop is
+     alive, just between retries); restart is NOT calm and pairs with a
+     prominent Re-arm CTA (see rearmNeeded/.rearm.prominent below). */
+  .pause-chip { font-size: 11px; margin-top: 2px; }
+  .pause-chip.calm { color: var(--dim); }
+  .pause-chip.urgent { color: var(--warn); font-weight: 600; }
+  .rearm.prominent {
+    background: var(--warn); color: #000; border-color: var(--warn); font-weight: 600;
+  }
+  .redispatch { margin-top: 4px; margin-left: 4px; }
+  /* LINEAGE GROUPING: a task's prior attempts collapse behind this toggle;
+     .lineage-earlier holds the (initially hidden) sub-rows. */
+  .lineage-toggle {
+    display: none; background: none; border: none; color: var(--accent); cursor: pointer;
+    font-size: 11px; padding: 2px 0 0; margin: 0; text-align: left;
+  }
+  .lineage-earlier { display: none; margin-top: 4px; padding-left: 8px; border-left: 2px solid var(--border); }
+  .earlier-row {
+    display: flex; align-items: center; gap: 6px; font-size: 11px; padding: 3px 0;
+    color: var(--dim); cursor: pointer;
+  }
+  .earlier-row:hover { color: var(--fg); }
+  .earlier-row .id { font-family: ui-monospace, monospace; }
   #timeline { flex: 1; overflow-y: auto; padding: 16px; }
   #goalpanel { flex-shrink: 0; border-top: 1px solid var(--border); background: var(--panel); padding: 10px 16px; }
   #goalpanel:empty { display: none; }
@@ -287,6 +431,7 @@
     <span class="spacer"></span>
     <span class="notice" id="headerNotice"></span>
   </header>
+  <div id="activeGoalsBar"></div>
   <main>
     <div id="fleet"></div>
     <div id="drill">
@@ -701,6 +846,11 @@ function decodeHubState(hash) {
             name: typeof b.name === "string" && b.name ? b.name : b.base,
             base: b.base.replace(/\/+$/, ""),
             token: b.token,
+            // port_urls: an optional {"<port>": "<url>"} map (see the
+            // process strip and PORT_URL_<port>= spawn contract line) —
+            // garbage/wrong-shaped input tolerates down to {}, same rule
+            // as every other field here.
+            port_urls: sanitizePortURLs(b.port_urls),
           }))
       : [];
     const view = (obj.view && typeof obj.view === "object" && !Array.isArray(obj.view)) ? obj.view : {};
@@ -1094,6 +1244,19 @@ function parsePortURLLines(text) {
 function mergePortURLs(existing, incoming) {
   return Object.assign({}, existing || {}, incoming || {});
 }
+
+// sanitizePortURLs is decodeHubState's tolerance rule for a box's
+// port_urls field: anything other than a plain object of string values
+// (garbage in a hand-edited fragment, an array, null) collapses to {}
+// rather than throwing or partially applying.
+function sanitizePortURLs(v) {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out = {};
+  for (const k of Object.keys(v)) {
+    if (typeof v[k] === "string" && v[k]) out[k] = v[k];
+  }
+  return out;
+}
 /* TESTABLE-END */
 
 /* ============================================================
@@ -1174,6 +1337,11 @@ function ensureRuntime(id) {
       health: "unknown", vcsRevision: "", vcsTime: "",
       sessions: new Map(), lastSeq: 0, backoff: 500,
       timer: null, abort: null, healthTimer: null, pollTimer: null, running: false,
+      // processes: normalizeProcesses(GET /process's body), refreshed on
+      // every poll tick (see pollBoxOnce). Starts empty — indistinguishable
+      // from "no processes configured" until the first poll resolves,
+      // exactly like every other rt field before its first poll.
+      processes: [],
     };
     boxRuntime.set(id, rt);
   }
@@ -1242,6 +1410,16 @@ async function pollBoxOnce(id) {
       if (hw > rt.lastSeq) rt.lastSeq = hw;
     }
   } catch { /* transient; the next poll or the SSE stream will refill */ }
+  // PROCESS STRIP: GET /process (docs/design/managed-processes.md §5).
+  // Absent entirely on an older box (404, or any other non-2xx — a CORS
+  // rejection surfaces as a network error, caught below) simply means no
+  // strip; normalizeProcesses already treats non-array input as [], and a
+  // thrown fetch just leaves rt.processes as whatever it was (transient,
+  // like the /session poll above) — never a crash either way.
+  try {
+    const p = await boxAPI(b, "GET", "/process");
+    rt.processes = p.ok ? normalizeProcesses(await p.json()) : [];
+  } catch { /* transient, or the endpoint doesn't exist on this box at all */ }
   renderFleet();
   if (drill.boxId === id) renderDrillSessionMeta();
 }
@@ -1320,6 +1498,7 @@ function handleBoxEvent(id, ev) {
     case "goal.stalled":
     case "goal.achieved":
     case "goal.cleared":
+    case "goal.paused":
       if (sess) {
         sess.goal = Object.assign({}, sess.goal, reduceGoalWire(sess.goal, ev));
         sess.last_activity_at = new Date().toISOString();
@@ -1335,21 +1514,24 @@ function handleBoxEvent(id, ev) {
   scheduleFleetRender();
 }
 
-// reduceGoalWire adapts reduceGoal's {retryableClass,...} shape to the wire
-// GoalSummary field names (retryable_class) so fleet-card rendering can read
-// a session's goal field uniformly whether it came from GET /session or was
-// derived here from the event stream.
+// reduceGoalWire adapts reduceGoal's {retryableClass,pauseReason,...} shape
+// to the wire GoalSummary field names (retryable_class, pause_reason) so
+// fleet-card rendering can read a session's goal field uniformly whether
+// it came from GET /session or was derived here from the event stream —
+// see docs/design/fleet-model.md §7 for paused/pause_reason.
 function reduceGoalWire(prevWire, ev) {
   const prev = prevWire ? {
     condition: prevWire.condition, active: prevWire.active, achieved: prevWire.achieved,
     reason: prevWire.last_reason, turns: prevWire.turns, attempt: prevWire.attempt,
     retryable: prevWire.retryable, retryableClass: prevWire.retryable_class, waiting: prevWire.waiting,
+    paused: prevWire.paused, pauseReason: prevWire.pause_reason,
   } : null;
   const g = reduceGoal(prev, ev);
   return {
     condition: g.condition, active: g.active, achieved: g.achieved,
     last_reason: g.reason, turns: g.turns, attempt: g.attempt,
     retryable: g.retryable, retryable_class: g.retryableClass, waiting: g.waiting,
+    paused: g.paused, pause_reason: g.pauseReason,
   };
 }
 
@@ -1374,7 +1556,48 @@ let fleetDom = { emptyShown: null, boxes: new Map() };
 
 const FLEET_RESORT_MS = 1000;
 
+// ACTIVE-GOALS STRIP: "where is my work" — every session across every box
+// whose goal is currently active (running or paused), rendered as one
+// slim, click-through fleet-wide bar above the box list. Pure core is
+// collectActiveGoals; this just adapts hs.boxes/boxRuntime into its
+// {id,name,sessions} input shape and reconciles the bar, damped by a cheap
+// content signature exactly like the box cards below.
+let activeGoalsSig = null;
+
+function collectActiveGoalsForHub() {
+  const boxes = hs.boxes.map(b => ({
+    id: b.id, name: b.name,
+    sessions: [...ensureRuntime(b.id).sessions.values()],
+  }));
+  return collectActiveGoals(boxes);
+}
+
+function renderActiveGoalsBar() {
+  const bar = $("activeGoalsBar");
+  const entries = collectActiveGoalsForHub();
+  const sig = JSON.stringify(entries.map(e => [e.boxId, e.sessionId, e.paused, e.pauseReason, e.condition]));
+  if (activeGoalsSig === sig) return;
+  activeGoalsSig = sig;
+  bar.textContent = "";
+  if (!entries.length) { bar.style.display = "none"; return; }
+  bar.style.display = "flex";
+  for (const e of entries) {
+    const pt = goalPauseTreatment(e.paused, e.pauseReason);
+    const chip = el("div", {
+      class: "active-goal-chip" + (pt ? (pt.calm ? " calm" : " urgent") : ""),
+      title: e.condition,
+      onclick: () => { expandedBoxes.add(e.boxId); selectSession(e.boxId, e.sessionId); },
+    },
+      el("span", { class: "agc-box", text: e.boxName }),
+      el("span", { class: "agc-cond", text: goalSnippet(e.condition, 60) }),
+    );
+    if (pt) chip.append(el("span", { class: "agc-pause", text: pt.label }));
+    bar.append(chip);
+  }
+}
+
 function renderFleet() {
+  renderActiveGoalsBar();
   const root = $("fleet");
   if (!hs.boxes.length) {
     if (fleetDom.emptyShown !== true) {
@@ -1431,14 +1654,25 @@ function createBoxCardEntry(boxId) {
   const busyChip = el("span", { class: "count-chip busy" });
   const goalChip = el("span", { class: "count-chip goal-running" });
   const counts = el("div", { class: "box-counts" }, idleChip, busyChip, goalChip);
+  // procStrip: the PROCESS STRIP (see AGENTS.md/this page's header comment)
+  // — one compact row per managed process this box reports via GET
+  // /process. Absent/removed entirely for a box that doesn't serve that
+  // endpoint at all (older boxes) — see updateProcessStrip.
+  const procStrip = el("div", { class: "proc-strip" });
+  const respawnBtn = el("button", {
+    class: "small respawn", text: "\u27f2 Respawn", style: "display:none",
+    onclick: () => openRespawnModal(boxId),
+  });
   const actions = el("div", { class: "box-actions" },
     el("button", { class: "small", text: "+ Dispatch", onclick: () => openDispatchModal(boxId) }),
     el("button", { class: "small", text: "+ New session", onclick: () => quickNewSession(boxId) }),
+    respawnBtn,
     el("button", { class: "small danger", text: "Remove", onclick: () => removeBox(boxId) }),
   );
-  const cardEl = el("div", { class: "box-card" }, head, counts, actions);
+  const cardEl = el("div", { class: "box-card" }, head, counts, procStrip, actions);
   return {
     boxId, cardEl, dot, nameDiv, baseDiv, metaDiv, idleChip, busyChip, goalChip,
+    procStrip, procRows: new Map(), procSig: null, respawnBtn,
     sig: null,
     sessSection: null, rows: new Map(), order: [], lastSortAt: 0,
     loadingEl: null, emptyEl: null,
@@ -1478,7 +1712,101 @@ function updateBoxCard(entry, b) {
     entry.busyChip.textContent = counts.busy + " busy";
     entry.goalChip.textContent = counts["goal-running"] + " goal";
   }
+  // Respawn/ADOPT (docs/design/fleet-model.md §4): offered once a box's
+  // health has been observed DOWN — never while still "unknown" (first
+  // poll in flight; see REQUIRED BEHAVIOR (c) above), which would offer it
+  // before the box has had a fair chance to answer at all.
+  entry.respawnBtn.style.display = (rt.health === "down") ? "" : "none";
+  updateProcessStrip(entry, b, rt);
   updateSessList(entry, b.id, sessions, expanded, loading);
+}
+
+// updateProcessStrip reconciles the PROCESS STRIP under one box card from
+// rt.processes (populated by pollBoxOnce's GET /process poll, normalized
+// via normalizeProcesses — absent/404/older-box all yield []). The whole
+// strip is skipped (and removed if present) when there's nothing to show,
+// so an older box that doesn't serve /process at all renders exactly as
+// before this feature existed. Per-process rows are keyed by name and
+// signature-gated like the session rows above, so a quiet fleet's poll
+// tick touches no DOM.
+function updateProcessStrip(entry, b, rt) {
+  const procs = rt.processes || [];
+  const sig = JSON.stringify(procs.map(p => [p.name, p.state, p.ready, p.exitCode, p.log, p.ports]));
+  if (entry.procSig === sig) return;
+  entry.procSig = sig;
+
+  if (!procs.length) {
+    entry.procStrip.textContent = "";
+    entry.procStrip.style.display = "none";
+    entry.procRows.clear();
+    return;
+  }
+  entry.procStrip.style.display = "";
+
+  const liveNames = new Set(procs.map(p => p.name));
+  for (const [name, row] of entry.procRows) {
+    if (!liveNames.has(name)) { row.remove(); entry.procRows.delete(name); }
+  }
+  for (const p of procs) {
+    let row = entry.procRows.get(p.name);
+    if (!row) {
+      row = createProcessRow(b.id);
+      entry.procRows.set(p.name, row);
+      entry.procStrip.append(row);
+    }
+    updateProcessRow(row, b, p);
+  }
+}
+
+// createProcessRow builds one process strip entry's static skeleton;
+// updateProcessRow (called every time updateProcessStrip's signature
+// changes) patches its text/classes/link in place.
+function createProcessRow(boxId) {
+  const dot = el("span", { class: "proc-dot" });
+  const nameSpan = el("span", { class: "proc-name" });
+  const linkWrap = el("span", { class: "proc-links" });
+  const row = el("div", { class: "proc-item", onclick: () => openProcessLogModal(boxId, row._proc) },
+    dot, nameSpan, linkWrap);
+  row._dot = dot;
+  row._nameSpan = nameSpan;
+  row._linkWrap = linkWrap;
+  row._proc = null;
+  return row;
+}
+
+function updateProcessRow(row, b, p) {
+  row._proc = p;
+  const badge = processStateBadge(p.state, p.exitCode);
+  row._dot.className = "proc-dot " + badge.cls;
+  row._nameSpan.textContent = p.name + " \u00b7 " + badge.label;
+  row._linkWrap.textContent = "";
+  const links = portLinksFor(p.ports, b.port_urls);
+  for (const link of links) {
+    row._linkWrap.append(el("a", {
+      class: "proc-link", href: link.url, target: "_blank", rel: "noopener noreferrer",
+      text: "\ud83d\udd17 :" + link.port,
+      onclick: (e) => e.stopPropagation(),
+    }));
+  }
+}
+
+// openProcessLogModal shows a process's state + log PATH. Nothing more:
+// GET /process (server/openapi.yaml's ProcessStatus) carries no log
+// CONTENT, only the log file's path — so this is honest about what's
+// actually available over the HTTP API rather than inventing an endpoint
+// (see docs/design/managed-processes.md §5's HTTP API list).
+function openProcessLogModal(boxId, p) {
+  if (!p) return;
+  const badge = processStateBadge(p.state, p.exitCode);
+  const modal = el("div", { class: "modal" },
+    el("h2", { text: p.name }),
+    el("div", { class: "field" }, el("label", { text: "State" }), el("div", { text: badge.label })),
+    el("div", { class: "field" }, el("label", { text: "Log path" }),
+      p.log ? el("code", { text: p.log }) : el("div", { class: "notice", text: "not started yet \u2014 no log file written" })),
+    el("div", {}, "Log CONTENT isn't exposed over the HTTP API today (see docs/design/managed-processes.md \u00a75) \u2014 tail this path directly on the box."),
+    el("div", { class: "row" }, el("button", { text: "Close", onclick: closeModal })),
+  );
+  showModal(modal);
 }
 
 const expandedBoxes = new Set();
@@ -1488,11 +1816,23 @@ function toggleExpanded(id) {
   renderFleet();
 }
 
+// expandedLineages tracks which task's "N earlier attempts" line is
+// currently expanded, keyed by the lineage's TIP session id (see
+// buildLineages) — ephemeral UI state, exactly like expandedBoxes above,
+// not persisted to the URL fragment.
+const expandedLineages = new Set();
+
 // updateSessList reconciles the session rows under one (expanded) box card.
-// Reordering is damped (shouldResort, at most once per FLEET_RESORT_MS): a
-// full re-sort recomputes entry.order from sortSessions; in between,
-// existing rows keep their last-applied order and brand-new session ids are
-// simply prepended, so a burst of activity refreshes row CONTENT without
+// LINEAGE GROUPING (see AGENTS.md/this page's header comment,
+// docs/design/fleet-model.md §6): sessions sharing a parent_session chain
+// collapse into one "task" row keyed by the lineage's TIP (most recent)
+// session — buildLineages does the pure grouping; a lone session (no
+// lineage at all) is simply a lineage of one and renders exactly as
+// before. Reordering is damped (shouldResort, at most once per
+// FLEET_RESORT_MS), now operating on each lineage's TIP: a full re-sort
+// recomputes entry.order from sortSessions(tips); in between, existing
+// rows keep their last-applied order and brand-new tips are simply
+// prepended, so a burst of activity refreshes row CONTENT without
 // shuffling rows out from under the cursor.
 function updateSessList(entry, boxId, sessions, expanded, loading) {
   if (!expanded) {
@@ -1538,7 +1878,11 @@ function updateSessList(entry, boxId, sessions, expanded, loading) {
   }
   entry.emptyEl = null;
 
-  const liveIds = new Set(sessions.map(s => s.id));
+  const lineages = buildLineages(sessions);
+  const byTipId = new Map(lineages.map(l => [l.id, l]));
+  const tips = lineages.map(l => l.tip);
+
+  const liveIds = new Set(lineages.map(l => l.id));
   for (const [id, row] of entry.rows) {
     if (!liveIds.has(id)) { row.el.remove(); entry.rows.delete(id); }
   }
@@ -1546,28 +1890,28 @@ function updateSessList(entry, boxId, sessions, expanded, loading) {
   const now = Date.now();
   let orderedIds;
   if (shouldResort(entry.lastSortAt, now, FLEET_RESORT_MS)) {
-    orderedIds = sortSessions(sessions).map(s => s.id);
+    orderedIds = sortSessions(tips).map(s => s.id);
     entry.lastSortAt = now;
   } else {
     const known = entry.order.filter(id => liveIds.has(id));
-    const newIds = sessions.map(s => s.id).filter(id => !known.includes(id));
+    const newIds = tips.map(s => s.id).filter(id => !known.includes(id));
     orderedIds = newIds.concat(known);
   }
   entry.order = orderedIds;
 
-  const byId = new Map(sessions.map(s => [s.id, s]));
   let prevEl = null;
   for (const id of orderedIds) {
-    const s = byId.get(id);
+    const lineage = byTipId.get(id);
+    const s = lineage.tip;
     let row = entry.rows.get(id);
     const selected = drill.boxId === boxId && drill.sessionId === id;
-    const sig = sessionRowSignature(s, selected);
+    const sig = sessionRowSignature(s, selected) + "|" + lineage.earlier.map(e => e.id).join(",");
     if (!row) {
       row = { el: createSessionRowEl(boxId, id), sig: null };
       entry.rows.set(id, row);
     }
     if (row.sig !== sig) {
-      updateSessionRowEl(row.el, boxId, s, selected);
+      updateSessionRowEl(row.el, boxId, s, selected, lineage.earlier);
       row.sig = sig;
     }
     if (prevEl) {
@@ -1580,9 +1924,9 @@ function updateSessList(entry, boxId, sessions, expanded, loading) {
 }
 
 // createSessionRowEl builds one session row's STATIC skeleton once;
-// updateSessionRowEl (called only when sessionRowSignature changed) patches
+// updateSessionRowEl (called only when its row signature changed) patches
 // its text/classes and adds/removes the optional goal-snippet/last-turn/
-// re-arm children in place.
+// pause-chip/re-arm/re-dispatch/lineage children in place.
 function createSessionRowEl(boxId, sessionId) {
   const idDiv = el("div", { class: "id" });
   const badgeSpan = el("span", { class: "badge" });
@@ -1601,12 +1945,64 @@ function createSessionRowEl(boxId, sessionId) {
   node._relSpan = relSpan;
   node._goalDiv = null;
   node._lastTurnDiv = null;
+  node._pauseDiv = null;
   node._rearmBtn = null;
+  node._redispatchBtn = null;
   node._sess = null;
+  // LINEAGE GROUPING: always present, hidden when this session has no
+  // earlier attempts — see applyLineageExpansion.
+  const earlierToggle = el("button", { class: "small lineage-toggle" });
+  const earlierList = el("div", { class: "lineage-earlier" });
+  earlierToggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const id = node._sessionId;
+    if (expandedLineages.has(id)) expandedLineages.delete(id); else expandedLineages.add(id);
+    applyLineageExpansion(node);
+  });
+  node.append(earlierToggle, earlierList);
+  node._earlierToggle = earlierToggle;
+  node._earlierList = earlierList;
+  node._earlier = [];
   return node;
 }
 
-function updateSessionRowEl(node, boxId, s, selected) {
+// applyLineageExpansion re-derives the "N earlier attempts" toggle's
+// visibility/label and the earlier-list's visibility from
+// expandedLineages, independent of any signature-gated re-render — a
+// toggle click needs to react immediately, without waiting for the
+// session data itself to change.
+function applyLineageExpansion(node) {
+  const n = node._earlier.length;
+  const expanded = expandedLineages.has(node._sessionId);
+  if (n > 0) {
+    node._earlierToggle.style.display = "";
+    node._earlierToggle.textContent = (expanded ? "\u25be " : "\u25b8 ") + n + " earlier attempt" + (n === 1 ? "" : "s");
+  } else {
+    node._earlierToggle.style.display = "none";
+  }
+  node._earlierList.style.display = (expanded && n > 0) ? "" : "none";
+}
+
+// createEarlierAttemptRow renders one collapsed-by-default prior attempt:
+// short id, badge, relative time, and (if applicable) its own Re-dispatch
+// action — clicking the row (outside that button) drills into it exactly
+// like a normal session row.
+function createEarlierAttemptRow(boxId, s) {
+  const row = el("div", { class: "earlier-row", onclick: () => selectSession(boxId, s.id) },
+    el("span", { class: "id", text: shortId(s.id) }),
+    el("span", { class: "badge " + sessionBadge(s), text: sessionBadge(s) }),
+    el("span", { text: fmtRelative(s.last_activity_at || s.created_at) }),
+  );
+  if (canRedispatch(s)) {
+    row.append(el("button", {
+      class: "small redispatch", text: "\u2197 Re-dispatch",
+      onclick: (e) => { e.stopPropagation(); openRedispatchModal(boxId, s); },
+    }));
+  }
+  return row;
+}
+
+function updateSessionRowEl(node, boxId, s, selected, earlier) {
   node._sess = s;
   node._sessionId = s.id;
   node.className = "sess" + (selected ? " sel" : "");
@@ -1628,6 +2024,19 @@ function updateSessionRowEl(node, boxId, s, selected) {
     node._goalDiv = null;
   }
 
+  // PAUSED GOALS: a calm note for provider-backoff, a non-calm one for
+  // restart (see goalPauseTreatment) — informational here; the CTA itself
+  // is the Re-arm button below.
+  const pt = s.goal ? goalPauseTreatment(!!s.goal.paused, s.goal.pause_reason) : null;
+  if (pt) {
+    if (!node._pauseDiv) { node._pauseDiv = el("div", { class: "pause-chip" }); node.append(node._pauseDiv); }
+    node._pauseDiv.className = "pause-chip" + (pt.calm ? " calm" : " urgent");
+    node._pauseDiv.textContent = pt.label;
+  } else if (node._pauseDiv) {
+    node._pauseDiv.remove();
+    node._pauseDiv = null;
+  }
+
   const hasLastTurn = !!(s.last_turn && s.last_turn.outcome);
   if (hasLastTurn) {
     const isErr = s.last_turn.outcome !== "completed";
@@ -1639,19 +2048,53 @@ function updateSessionRowEl(node, boxId, s, selected) {
     node._lastTurnDiv = null;
   }
 
-  const showRearm = !!(s.goal && s.goal.condition && !s.goal.active);
-  if (showRearm) {
+  // Re-arm: "normal" after an ended goal (unchanged from before), or
+  // "prominent" for an active-but-paused/restart goal — see rearmNeeded.
+  // provider-backoff's "none" is deliberate: that loop re-arms itself.
+  const g = s.goal;
+  const urgency = rearmNeeded(!!(g && g.active), g && g.condition, !!(g && g.paused), g && g.pause_reason);
+  if (urgency !== "none") {
     if (!node._rearmBtn) {
       node._rearmBtn = el("button", {
-        class: "small rearm", text: "\ud83d\udd01 Re-arm",
+        class: "small rearm",
         onclick: (e) => { e.stopPropagation(); openRearmModal(boxId, node._sess); },
       });
       node.append(node._rearmBtn);
     }
+    node._rearmBtn.className = "small rearm" + (urgency === "prominent" ? " prominent" : "");
+    node._rearmBtn.textContent = urgency === "prominent" ? "\ud83d\udd01 Re-arm now" : "\ud83d\udd01 Re-arm";
   } else if (node._rearmBtn) {
     node._rearmBtn.remove();
     node._rearmBtn = null;
   }
+
+  // Re-dispatch (distinct from the in-place Re-arm above): only on an
+  // ended/errored (idle-composite) session — see canRedispatch.
+  if (canRedispatch(s)) {
+    if (!node._redispatchBtn) {
+      node._redispatchBtn = el("button", {
+        class: "small redispatch", text: "\u2197 Re-dispatch",
+        onclick: (e) => { e.stopPropagation(); openRedispatchModal(boxId, node._sess); },
+      });
+      node.append(node._redispatchBtn);
+    }
+  } else if (node._redispatchBtn) {
+    node._redispatchBtn.remove();
+    node._redispatchBtn = null;
+  }
+
+  // LINEAGE GROUPING: the "N earlier attempts" toggle + its (collapsed by
+  // default) sub-list. Rebuilt wholesale here — this whole function only
+  // runs when the row's signature (which folds in earlier's session ids)
+  // actually changed, so this is not a per-frame cost.
+  node._earlier = earlier || [];
+  node._earlierList.textContent = "";
+  for (const e of node._earlier) node._earlierList.append(createEarlierAttemptRow(boxId, e));
+  applyLineageExpansion(node);
+  // Re-append (a no-op if already last, else moves to the tail) so the
+  // lineage toggle/list always render after whatever optional children
+  // above were just added/removed.
+  node.append(node._earlierToggle, node._earlierList);
 }
 
 /* ---------- session drill-down ----------
@@ -1933,6 +2376,17 @@ function renderGoalNarrativeItem(ev) {
     case "goal.cleared":
       return el("div", { class: "goalnarr cleared" },
         el("span", { class: "goaltag", text: "\u25a1 goal cleared" }));
+    case "goal.paused": {
+      // Boot-only record (server.pauseArmedGoalsAtBoot — always
+      // pause_reason "restart"): this box booted and found the goal armed
+      // with no loop attached in this process. See goalPauseTreatment and
+      // docs/design/fleet-model.md §7 — calm styling only for
+      // provider-backoff, which never emits this event type at all.
+      const pt = goalPauseTreatment(!!ev.goal_paused, ev.goal_pause_reason || "restart");
+      return el("div", { class: "goalnarr stalled" + (pt && pt.calm ? " waiting" : "") },
+        el("span", { class: "goaltag", text: (pt ? pt.label : "\u23f8 goal paused") + " (server restart)" }),
+        ev.goal_condition ? el("div", { class: "goalreason", text: ev.goal_condition }) : null);
+    }
     default:
       return el("div", {});
   }
@@ -2138,8 +2592,20 @@ function renderGoalPanel() {
     }
     if (drill.goal.reason) chip.append(el("div", { class: "goalreason", text: drill.goal.reason }));
     gp.append(chip);
-    if (!drill.goal.active) {
-      gp.append(el("button", { class: "small rearm", text: "\ud83d\udd01 Re-arm this goal", onclick: prefillRearm }));
+    // PAUSED GOALS: provider-backoff is calm ("waiting out provider
+    // weather", not an error — the loop is alive, between retries) and
+    // self-clears with no operator action; restart is neither calm nor
+    // self-clearing, so it pairs with the prominent Re-arm CTA below (see
+    // rearmNeeded/goalPauseTreatment).
+    const pt = goalPauseTreatment(!!drill.goal.paused, drill.goal.pauseReason);
+    if (pt) gp.append(el("div", { class: "pause-chip" + (pt.calm ? " calm" : " urgent"), text: pt.label }));
+    const urgency = rearmNeeded(!!drill.goal.active, drill.goal.condition, !!drill.goal.paused, drill.goal.pauseReason);
+    if (urgency !== "none") {
+      gp.append(el("button", {
+        class: "small rearm" + (urgency === "prominent" ? " prominent" : ""),
+        text: urgency === "prominent" ? "\ud83d\udd01 Re-arm now (needs an operator)" : "\ud83d\udd01 Re-arm this goal",
+        onclick: prefillRearm,
+      }));
     }
   }
 }
@@ -2224,12 +2690,12 @@ function randomID() {
   return "box_" + Math.random().toString(16).slice(2) + Date.now().toString(16);
 }
 
-function addBox({ name, base, token }) {
+function addBox({ name, base, token, port_urls }) {
   base = String(base || "").trim().replace(/\/+$/, "");
   token = String(token || "").trim();
   name = String(name || "").trim() || base;
   if (!base || !token) return false;
-  const b = { id: randomID(), name, base, token };
+  const b = { id: randomID(), name, base, token, port_urls: sanitizePortURLs(port_urls) };
   hs.boxes.push(b);
   persist();
   expandedBoxes.add(b.id);
@@ -2257,16 +2723,19 @@ function openAddBoxModal() {
   const nameIn = el("input", { id: "mAddName", placeholder: "e.g. staging-1" });
   const baseIn = el("input", { id: "mAddBase", placeholder: "http://localhost:4096" });
   const tokIn = el("input", { id: "mAddToken", type: "password", placeholder: "run token" });
+  const portsIn = el("textarea", { id: "mAddPorts", rows: 3, placeholder: "3000=https://preview-3000.example.dev\n5432=https://preview-5432.example.dev" });
   const notice = el("div", { class: "notice" });
   const modal = el("div", { class: "modal" },
     el("h2", { text: "Add box" }),
     el("div", { class: "field" }, el("label", { text: "Name" }), nameIn),
     el("div", { class: "field" }, el("label", { text: "Base URL" }), baseIn),
     el("div", { class: "field" }, el("label", { text: "Run token" }), tokIn),
+    el("div", { class: "field" }, el("label", { text: "Port URLs (optional, one \u201cport=url\u201d per line — see the process strip)" }), portsIn),
     notice,
     el("div", { class: "row" },
       el("button", { class: "primary", text: "Add", onclick: () => {
-        if (addBox({ name: nameIn.value, base: baseIn.value, token: tokIn.value })) closeModal();
+        const port_urls = parsePortURLLines(portsIn.value);
+        if (addBox({ name: nameIn.value, base: baseIn.value, token: tokIn.value, port_urls })) closeModal();
         else notice.textContent = "base URL and token are required";
       } }),
       el("button", { text: "Cancel", onclick: closeModal }),
@@ -2329,6 +2798,60 @@ function openDispatchModal(boxId) {
   condIn.focus();
 }
 
+// openRedispatchModal is LINEAGE GROUPING's "Re-dispatch" action —
+// distinct from the in-place Re-arm above: it creates a BRAND NEW session
+// (parent_session set to the old one, per server/openapi.yaml's POST
+// /session field and docs/design/fleet-model.md §6) and opens the goal
+// form pre-filled with the prior session's condition, editable before
+// submitting. The old session is left exactly as it was; the new one
+// becomes this task's fresh lineage tip once its goal is set.
+function openRedispatchModal(boxId, oldSession) {
+  const b = box(boxId);
+  if (!b || !oldSession) return;
+  const priorCondition = (oldSession.goal && oldSession.goal.condition) || "";
+  const condIn = el("textarea", { class: "big", placeholder: "Completion condition\u2026" });
+  condIn.value = priorCondition;
+  const maxTurnsIn = el("input", { type: "number", min: "0", value: "0" });
+  const notice = el("div", { class: "notice" });
+  const modal = el("div", { class: "modal" },
+    el("h2", { text: "Re-dispatch on " + b.name }),
+    el("div", {},
+      "Creates a NEW session with parent_session = " + shortId(oldSession.id) +
+      ", continuing this task's lineage (docs/design/fleet-model.md \u00a76) \u2014 the prior condition is pre-filled below, editable before dispatching."),
+    el("div", { class: "field" }, el("label", { text: "Completion condition" }), condIn),
+    el("div", { class: "field" }, el("label", { text: "Max turns (0 = unlimited)" }), maxTurnsIn),
+    notice,
+    el("div", { class: "row" },
+      el("button", { class: "primary", text: "Re-dispatch", onclick: async () => {
+        const condition = condIn.value.trim();
+        if (!condition) { notice.textContent = "a completion condition is required"; return; }
+        notice.textContent = "creating session\u2026";
+        try {
+          const created = await boxAPI(b, "POST", "/session", { parent_session: oldSession.id });
+          if (created.status !== 201) { notice.textContent = "create session failed (" + created.status + ")"; return; }
+          const sess = await created.json();
+          const rt = ensureRuntime(boxId);
+          rt.sessions.set(sess.id, sess);
+          notice.textContent = "starting goal\u2026";
+          const maxTurns = parseInt(maxTurnsIn.value, 10) || 0;
+          const goalResp = await boxAPI(b, "POST", "/session/" + sess.id + "/goal", { condition, max_turns: maxTurns });
+          if (goalResp.status !== 202) {
+            const eb = await goalResp.json().catch(() => ({}));
+            notice.textContent = "goal failed (" + goalResp.status + "): " + (eb.error || "");
+            return;
+          }
+          expandedBoxes.add(boxId);
+          closeModal();
+          selectSession(boxId, sess.id);
+        } catch (e) { notice.textContent = "re-dispatch failed: " + e.message; }
+      } }),
+      el("button", { text: "Cancel", onclick: closeModal }),
+    ),
+  );
+  showModal(modal);
+  condIn.focus();
+}
+
 /* ---------- spawn box: the hub's own (same-origin) SSE API ---------- */
 
 function openSpawnModal() {
@@ -2346,16 +2869,29 @@ function openSpawnModal() {
     el("div", { class: "row" }, startBtn, el("button", { text: "Close", onclick: closeModal })),
   );
   showModal(modal);
-  startBtn.onclick = () => runSpawn(name, log, notice, startBtn);
+  startBtn.onclick = () => runSpawn(name, log, notice, startBtn, ev => {
+    addBox({ name: name || ev.tunnel_url, base: ev.tunnel_url, token: ev.run_token, port_urls: ev.port_urls });
+    notice.textContent = "box added: " + ev.tunnel_url;
+  });
   startBtn.focus();
 }
 
-async function runSpawn(name, log, notice, startBtn) {
+// runSpawn drives one POST /spawn SSE call (used by both the "Spawn a new
+// box" modal above and the Respawn/ADOPT modal below — see
+// docs/design/fleet-model.md §4): streams stdout lines into `log`, and on
+// a successful "done" event (both TUNNEL_URL and RUN_TOKEN present) calls
+// onSuccess(ev) to let the caller decide what a fresh tunnel means (add a
+// new box, vs. update an existing one in place for a Respawn).
+async function runSpawn(name, log, notice, startBtn, onSuccess) {
   startBtn.disabled = true;
   notice.textContent = "";
   log.textContent = "";
   try {
-    const resp = await fetch("/spawn", { method: "POST" });
+    const resp = await fetch("/spawn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name || "" }),
+    });
     if (!resp.body) throw new Error("no response body");
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
@@ -2370,8 +2906,7 @@ async function runSpawn(name, log, notice, startBtn) {
         if (ev.error) {
           notice.textContent = "spawn failed: " + ev.error;
         } else if (ev.tunnel_url && ev.run_token) {
-          addBox({ name: name || ev.tunnel_url, base: ev.tunnel_url, token: ev.run_token });
-          notice.textContent = "box added: " + ev.tunnel_url;
+          onSuccess(ev);
         } else {
           notice.textContent = "spawn finished (exit " + ev.exit_code + ") but no TUNNEL_URL=/RUN_TOKEN= lines were found \u2014 add the box by hand.";
         }
@@ -2388,6 +2923,51 @@ async function runSpawn(name, log, notice, startBtn) {
   } finally {
     startBtn.disabled = false;
   }
+}
+
+/* ---------- respawn / ADOPT: same name, same volume, new tunnel ----------
+   docs/design/fleet-model.md §4: respawning the SAME name points the new
+   box process at the same durable volume — every session's history
+   restores, and any goal that was left armed surfaces paused/"restart"
+   (see PAUSED GOALS above), ready for a one-click Re-arm. This is why
+   Respawn calls POST /spawn with this box's EXISTING name rather than
+   generating a fresh one, and updates the SAME fragment entry (id, name)
+   in place rather than adding a new box card. */
+
+function openRespawnModal(boxId) {
+  const b = box(boxId);
+  if (!b) return;
+  const log = el("div", { class: "spawnlog", text: "" });
+  const notice = el("div", { class: "notice" });
+  const startBtn = el("button", { class: "primary", text: "Respawn" });
+  const modal = el("div", { class: "modal" },
+    el("h2", { text: "Respawn " + b.name }),
+    el("div", {}, "Re-spawns the SAME box name \u2014 fleet-model ADOPT (docs/design/fleet-model.md \u00a74): same name, same volume, session history restores. On success this box's base URL and run token update in place (new tunnel, same fragment entry); any goal left armed surfaces paused (\u201crestart\u201d), ready for a one-click Re-arm."),
+    el("div", { class: "field" }, el("label", { text: "Name (unchanged)" }), el("code", { text: b.name })),
+    notice, log,
+    el("div", { class: "row" }, startBtn, el("button", { text: "Close", onclick: closeModal })),
+  );
+  showModal(modal);
+  startBtn.onclick = () => runSpawn(b.name, log, notice, startBtn, ev => {
+    applyRespawn(boxId, ev);
+    notice.textContent = "box updated: " + ev.tunnel_url;
+  });
+  startBtn.focus();
+}
+
+// applyRespawn updates an EXISTING box entry's base/token/port_urls in
+// place (same id, same name — see the ADOPT contract above) after a
+// successful Respawn, then reconnects its runtime against the new tunnel.
+function applyRespawn(boxId, ev) {
+  const b = box(boxId);
+  if (!b) return;
+  b.base = String(ev.tunnel_url || "").trim().replace(/\/+$/, "");
+  b.token = String(ev.run_token || "").trim();
+  b.port_urls = mergePortURLs(b.port_urls, sanitizePortURLs(ev.port_urls));
+  persist();
+  disconnectBox(boxId);
+  connectBox(boxId);
+  renderFleet();
 }
 
 /* ---------- notifications ---------- */
