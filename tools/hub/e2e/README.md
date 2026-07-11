@@ -36,29 +36,30 @@ real engine turns. It confirms:
 
 ## Running it
 
-One-time setup:
+No manual setup step is required. Just run the same command already used to
+verify this repo:
 
 ```sh
-cd tools/hub/e2e
-npm install
+go test -race ./...          # or narrower: go test ./tools/hub/e2e/...
 ```
 
-Then either:
+`TestRealEndToEnd` installs its own dependency (`npm ci`, using the
+package-lock.json committed here) the first time it runs if jsdom isn't
+already present in this directory, then drives the real check. `node` (and
+therefore `npm`, which ships with it) is already a hard requirement of this
+repo's `node --test tools/hub/*_test.mjs` check, so this test only skips in
+the one case where that other required command would ALSO be unrunnable —
+no Node toolchain on `PATH` at all. It fails loudly (not a silent skip) if
+`node`/`npm` ARE present but the dependency install itself fails (e.g. no
+network access to npm's registry on first run) — an offline environment is
+a real verification gap, not something to paper over.
+
+To drive it by hand instead (e.g. to poke at the real backend from an
+actual browser):
 
 ```sh
-go test ./tools/hub/e2e/...          # part of the standard go test -race ./...
-```
-
-or drive it by hand:
-
-```sh
+cd tools/hub/e2e && npm ci    # only needed once, if not already run by the test above
 go run ./tools/hub/e2e/hubverify     # prints {"box_base":...,"hub_base":...,"token":...}, then blocks
 node tools/hub/e2e/real_e2e.mjs <box_base> <hub_base> <token>   # in another shell
 # or open hub_base in a real browser and "+ Add box" with box_base + token by hand
 ```
-
-`TestRealEndToEnd` skips (does not fail) when `node` isn't on `PATH` or
-`npm install` hasn't been run here yet, so the ordinary
-`go test -race ./...` recipe stays green without this opt-in step — but
-running it is the strongest available confirmation that the incremental
-rendering fix actually works end-to-end, against a real backend.
