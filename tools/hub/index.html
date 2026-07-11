@@ -2273,13 +2273,19 @@ function resetTimelineDom(tl) {
   // Renders pin to the bottom while stuck, but content can keep growing
   // AFTER the last render (font loads, wrapping reflow) — the replay used
   // to end ~50px shy of the bottom. While stuck, any content resize
-  // re-pins; a released view is never touched.
-  tlDom.ro = new ResizeObserver(() => {
-    if (tlDom && tlDom.stick) { tlDom.lastAuto = performance.now(); tl.scrollTop = tl.scrollHeight; }
-  });
-  tlDom.ro.observe(tlDom.narrativeEl);
-  tlDom.ro.observe(tlDom.messagesEl);
-  tlDom.ro.observe(tlDom.bannersEl);
+  // re-pins; a released view is never touched. Feature-detected: every
+  // real browser this page targets has ResizeObserver, but a host with no
+  // global at all (a headless DOM harness without it) degrades to relying
+  // solely on renderTimeline's own explicit re-pin below rather than
+  // throwing and aborting the whole render.
+  if (typeof ResizeObserver === "function") {
+    tlDom.ro = new ResizeObserver(() => {
+      if (tlDom && tlDom.stick) { tlDom.lastAuto = performance.now(); tl.scrollTop = tl.scrollHeight; }
+    });
+    tlDom.ro.observe(tlDom.narrativeEl);
+    tlDom.ro.observe(tlDom.messagesEl);
+    tlDom.ro.observe(tlDom.bannersEl);
+  }
 }
 
 const TIMELINE_PIN_PX = 32;
