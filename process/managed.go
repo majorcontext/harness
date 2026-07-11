@@ -122,16 +122,26 @@ func (p *managedProcess) awaitReady(ctx context.Context, timeout time.Duration) 
 	case <-p.doneCh:
 		// The process exited before ever becoming ready.
 	case <-timer.C:
-		p.mu.Lock()
-		if isActive(p.state) {
-			p.state = StateRunning
-			p.note = "ready gate timed out after " + timeout.String() + "; process left running"
-		}
-		p.mu.Unlock()
+		p.noteReadyTimeout(timeout)
 	case <-ctx.Done():
 		return p.snapshot(), ctx.Err()
 	}
 	return p.snapshot(), nil
+}
+
+// noteReadyTimeout records that the ready gate elapsed. Extracted (and
+// guarded on exactly StateStarting) because Go's select picks randomly
+// among simultaneously-ready cases: a process whose ready line landed at
+// the same instant the timer fired must keep its fresh StateReady rather
+// than being overwritten with a misleading "timed out" note. The only
+// transition this represents is starting -> running.
+func (p *managedProcess) noteReadyTimeout(timeout time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.state == StateStarting {
+		p.state = StateRunning
+		p.note = "ready gate timed out after " + timeout.String() + "; process left running"
+	}
 }
 
 // stop kills the process (see killProcess) and blocks until the waiter
