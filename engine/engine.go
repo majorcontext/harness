@@ -79,6 +79,18 @@ type Event struct {
 	GoalRetryable      bool   `json:"goal_retryable,omitempty"`
 	GoalRetryableClass string `json:"goal_retryable_class,omitempty"`
 	GoalWaiting        bool   `json:"goal_waiting,omitempty"`
+
+	// Compaction fields (see compact.go and docs/design/context-
+	// compaction.md §4 "Live event surface"). Carried on
+	// EventHistoryCompacted: CompactFirstID/CompactLastID name the folded
+	// range, CompactTurnsFolded is the fold count, and CompactSummaryID
+	// names the summary message (already delivered via a preceding
+	// EventMessage — see Session.Compact). EventCompactionFailed carries
+	// only Text (the error detail).
+	CompactFirstID     string `json:"compact_first_id,omitempty"`
+	CompactLastID      string `json:"compact_last_id,omitempty"`
+	CompactTurnsFolded int    `json:"compact_turns_folded,omitempty"`
+	CompactSummaryID   string `json:"compact_summary_id,omitempty"`
 }
 
 // Event types.
@@ -184,6 +196,28 @@ type Config struct {
 	// command (an apt-get/npm install storm is the real-world trigger) can
 	// otherwise dump megabytes into a single message and poison the session.
 	BashOutputCap int
+
+	// ContextWindowTokens is the model's context window size, in tokens.
+	// Zero (the default, a fresh Config's zero value) disables automatic
+	// compaction entirely: the engine has no built-in per-model table, so
+	// this is opt-in. When positive, Prompt checks LastUsage against
+	// ContextWindowTokens * CompactionThreshold at the top of every call
+	// and compacts first if over. See docs/design/context-compaction.md.
+	ContextWindowTokens int
+	// CompactionThreshold is the fraction of ContextWindowTokens at which
+	// automatic compaction triggers. Zero defaults to 0.8, mirroring
+	// newSession's existing zero-fills-a-default pattern for BashTimeout.
+	CompactionThreshold float64
+	// CompactionKeepTurns is how many of the most recent turns automatic
+	// (and, unless overridden per call, explicit) compaction always keeps
+	// verbatim. Zero defaults to 2. The effective value can never compact
+	// below 1 (see Session.Compact).
+	CompactionKeepTurns int
+	// CompactionModel overrides the model used for the compaction summary
+	// call. Zero (the default) uses the session's own current model at the
+	// time Compact runs — unlike GoalOptions.Evaluator, summarization needs
+	// competence, not independence.
+	CompactionModel message.ModelRef
 }
 
 // Session is one conversation: an in-memory history plus the agent loop.
@@ -262,6 +296,28 @@ type Session struct {
 	// any tool before failing — a retry re-issues the whole directive, which
 	// is unsafe to do blindly once a tool has already run. Guarded by mu.
 	toolExecCount int
+
+	// compactHysteresis is the churn-guard flag (see docs/design/
+	// context-compaction.md §2): set true the moment an AUTOMATIC
+	// compaction actually folds something, cleared the next time
+	// LastUsage().InputTokens is observed below the trigger threshold.
+	// While true, the automatic trigger does not fire again — folding an
+	// ever-shrinking prefix cannot relieve pressure that lives in the KEPT
+	// region (a single giant tool result), so re-firing every turn would
+	// just burn summarization round-trips. Deliberately NOT persisted: a
+	// reload re-evaluates from scratch (see LoadSession), and the worst
+	// post-reload cost is one extra summarization attempt. The explicit
+	// /compact path (Compact called directly, not via maybeAutoCompact)
+	// never reads or sets this — an operator override always runs.
+	// Guarded by mu.
+	compactHysteresis bool
+
+	// compactCount/lastCompactedAt track how many times this session has
+	// been compacted and when the most recent one landed — durable via the
+	// compact journal record (see store.go), so GET /session can show a UI
+	// that compaction happened even after a restart. Guarded by mu.
+	compactCount    int
+	lastCompactedAt time.Time
 }
 
 // NewSession creates a session. Nothing touches the network, spawns
@@ -393,6 +449,25 @@ func (s *Session) LastActivityAt() time.Time {
 		return t
 	}
 	return s.createdAt
+}
+
+// CompactionCount returns how many times this session has been compacted
+// (live or replayed from its log — see LoadSession's recCompact case), and
+// LastCompactedAt returns when the most recent one landed (the zero Time if
+// never). Together they are what GET /session surfaces so a UI can tell
+// compaction happened. See docs/design/context-compaction.md.
+func (s *Session) CompactionCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.compactCount
+}
+
+// LastCompactedAt returns the timestamp of the most recent compaction, or
+// the zero Time if this session has never been compacted.
+func (s *Session) LastCompactedAt() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastCompactedAt
 }
 
 // toolExecutions returns the current tool-execution counter (see
@@ -558,6 +633,15 @@ func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, er
 		s.emitSessionError(err)
 		return nil, err
 	}
+	// Automatic compaction check (docs/design/context-compaction.md §1):
+	// runs on every call, bare or goal-loop-driven alike, since PursueGoal
+	// drives everything through Prompt. Deliberately BEFORE the incoming
+	// user message is appended below: a turn boundary always falls on a
+	// completed-turn edge, the summary never has to account for a prompt
+	// that hasn't been answered yet, and the just-arrived message can never
+	// be folded into its own summary. Best-effort: a failed or skipped
+	// compaction never blocks the real turn (see maybeAutoCompact).
+	s.maybeAutoCompact(ctx)
 	s.append(message.Message{
 		ID:        newID("msg"),
 		Role:      message.RoleUser,
