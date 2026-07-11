@@ -677,6 +677,24 @@ function randomSlug(rand) {
   const num = String(Math.floor(r() * 100)).padStart(2, "0");
   return adj + "-" + noun + "-" + num;
 }
+
+// createCoalescer wraps fn so that any number of calls within one scheduler
+// tick produce exactly one invocation on that tick. Rendering after every
+// SSE event is O(events × DOM); a long session's from=0 replay delivers
+// thousands of events in a few network chunks and froze the tab rebuilding
+// the timeline per event. Coalescing to one render per animation frame
+// makes replay cost O(chunks × DOM) regardless of event count. schedule is
+// injectable (requestAnimationFrame in the page, a fake queue under test).
+// The pending flag clears BEFORE fn runs so a call made from inside fn
+// re-arms a fresh tick rather than being swallowed.
+function createCoalescer(schedule, fn) {
+  let pending = false;
+  return function () {
+    if (pending) return;
+    pending = true;
+    schedule(function () { pending = false; fn(); });
+  };
+}
 /* TESTABLE-END */
 
 /* ============================================================
@@ -915,7 +933,7 @@ function handleBoxEvent(id, ev) {
 
   if (drill.boxId === id && drill.sessionId === sid) handleDrillEvent(ev);
 
-  renderFleet();
+  scheduleFleetRender();
 }
 
 // reduceGoalWire adapts reduceGoal's {retryableClass,...} shape to the wire
@@ -1114,9 +1132,15 @@ function handleDrillEvent(ev) {
     drill.goal = reduceGoal(drill.goal, ev);
     drill.narrative.push({ seq: ev.seq, ev });
   }
-  updateComposer();
-  renderDrill();
+  scheduleDrillRender();
 }
+
+// Per-event rendering is what froze the tab on long sessions (see
+// createCoalescer): these two carry ALL event-driven repaints, one frame
+// at a time. Direct renderFleet()/renderDrill() calls remain only on the
+// low-frequency paths (selection changes, poll ticks, connect/disconnect).
+const scheduleFleetRender = createCoalescer(requestAnimationFrame, () => renderFleet());
+const scheduleDrillRender = createCoalescer(requestAnimationFrame, () => { updateComposer(); renderDrill(); });
 
 /* ---------- drill-down rendering (adapted from tools/inspector) ---------- */
 

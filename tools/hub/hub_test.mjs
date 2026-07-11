@@ -59,6 +59,7 @@ const {
   sortByLastActivity,
   countByState,
   randomSlug,
+  createCoalescer,
 } = sandbox;
 
 /* ---------- fmtRelative ---------- */
@@ -381,4 +382,38 @@ test("randomSlug: both word segments are lowercase across many draws", () => {
     assert.match(adj, /^[a-z]+$/);
     assert.match(noun, /^[a-z]+$/);
   }
+});
+
+/* ---------- createCoalescer ---------- */
+
+test("createCoalescer: many calls in one tick invoke fn once", () => {
+  const queued = [];
+  let runs = 0;
+  const kick = createCoalescer(cb => queued.push(cb), () => runs++);
+  for (let i = 0; i < 5000; i++) kick();
+  assert.equal(queued.length, 1, "one scheduled tick despite 5000 calls");
+  queued.shift()();
+  assert.equal(runs, 1);
+});
+
+test("createCoalescer: re-arms after the scheduled tick runs", () => {
+  const queued = [];
+  let runs = 0;
+  const kick = createCoalescer(cb => queued.push(cb), () => runs++);
+  kick(); queued.shift()();
+  kick(); kick(); queued.shift()();
+  assert.equal(runs, 2);
+  assert.equal(queued.length, 0);
+});
+
+test("createCoalescer: a call from inside fn schedules a fresh tick", () => {
+  const queued = [];
+  let runs = 0;
+  let kick;
+  kick = createCoalescer(cb => queued.push(cb), () => { runs++; if (runs === 1) kick(); });
+  kick();
+  queued.shift()();          // runs fn, which re-kicks
+  assert.equal(queued.length, 1, "inner kick scheduled a new tick");
+  queued.shift()();
+  assert.equal(runs, 2);
 });
