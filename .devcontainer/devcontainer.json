@@ -1,0 +1,28 @@
+{
+	// Dev environment for harness. The Dockerfile is intentionally
+	// feature-free so headless sandbox providers can build it directly;
+	// devcontainer-only conveniences live here. See the Dockerfile header.
+	"name": "harness-dev",
+	"build": {
+		"dockerfile": "Dockerfile",
+		"context": ".."
+	},
+
+	// Ports a harness dev environment serves. Headless boxes read this
+	// list at spawn time to decide which ports to tunnel (the spawn
+	// contract in AGENTS.md); editors use it for auto-forwarding.
+	"forwardPorts": [4096, 7777],
+	"portsAttributes": {
+		"4096": { "label": "harness serve (session API)" },
+		"7777": { "label": "harness hub" }
+	},
+
+	// Warm the module cache so the first build/test after attach is fast.
+	"postCreateCommand": "go mod download",
+
+	"customizations": {
+		"vscode": {
+			"extensions": ["golang.go"]
+		}
+	}
+}
