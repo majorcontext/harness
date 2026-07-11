@@ -483,6 +483,37 @@ func TestLoadSkillsDirs(t *testing.T) {
 	})
 }
 
+// TestMergeCompactionFields is the red-first test for docs/design/context-
+// compaction.md's config fields: project non-zero values override the user
+// layer, same scalar-override rule as GoalEvaluatorModel.
+func TestMergeCompactionFields(t *testing.T) {
+	base := &Config{ContextWindowTokens: 100000, CompactionThreshold: 0.9, CompactionKeepTurns: 3}
+	t.Run("zero project values inherit the user layer", func(t *testing.T) {
+		got := merge(base, &Config{})
+		if got.ContextWindowTokens != 100000 {
+			t.Errorf("ContextWindowTokens = %d, want inherited 100000", got.ContextWindowTokens)
+		}
+		if got.CompactionThreshold != 0.9 {
+			t.Errorf("CompactionThreshold = %v, want inherited 0.9", got.CompactionThreshold)
+		}
+		if got.CompactionKeepTurns != 3 {
+			t.Errorf("CompactionKeepTurns = %d, want inherited 3", got.CompactionKeepTurns)
+		}
+	})
+	t.Run("non-zero project values override", func(t *testing.T) {
+		got := merge(base, &Config{ContextWindowTokens: 50000, CompactionThreshold: 0.7, CompactionKeepTurns: 1})
+		if got.ContextWindowTokens != 50000 {
+			t.Errorf("ContextWindowTokens = %d, want project override 50000", got.ContextWindowTokens)
+		}
+		if got.CompactionThreshold != 0.7 {
+			t.Errorf("CompactionThreshold = %v, want project override 0.7", got.CompactionThreshold)
+		}
+		if got.CompactionKeepTurns != 1 {
+			t.Errorf("CompactionKeepTurns = %d, want project override 1", got.CompactionKeepTurns)
+		}
+	})
+}
+
 func TestMergeSkillsDirs(t *testing.T) {
 	t.Run("non-empty project overrides user entirely", func(t *testing.T) {
 		base := &Config{SkillsDirs: []string{"user/a", "user/b"}}

@@ -48,6 +48,15 @@ const (
 )
 
 // Usage is token accounting for one request.
+// Usage reports token accounting for one provider call.
+//
+// CONTRACT: the three input components are DISJOINT — InputTokens is the
+// uncached portion only, and the true prompt size is InputTokens +
+// CacheReadTokens + CacheWriteTokens. Adapters whose upstream reports a
+// cache-inclusive total (OpenAI Responses: input_tokens includes
+// input_tokens_details.cached_tokens) must subtract before populating.
+// Consumers (auto-compaction thresholds, cost accounting) rely on the sum
+// being the prompt size on every provider.
 type Usage struct {
 	InputTokens      int `json:"input_tokens"`
 	OutputTokens     int `json:"output_tokens"`

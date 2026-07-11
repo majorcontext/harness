@@ -370,6 +370,50 @@ func assertToolUseFollowedByResult(t *testing.T, out *apiRequest, id string) {
 	t.Fatalf("tool_use %q not found in transcoded request at all", id)
 }
 
+// TestTranscodeCompactionDoubleRoleUserMerges is the red-first test for the
+// compaction splice shape docs/design/context-compaction.md's §2 calls out
+// as load-bearing on existing transcoder behavior, not luck: a successful
+// compaction (engine/compact.go's Session.Compact) leaves history opening
+// with two adjacent RoleUser messages — the synthesized summary, then the
+// first kept turn's user prompt — and this adapter's alternation handling
+// must merge them into a single wire "user" message rather than producing
+// two consecutive user turns the API would reject. An implementer changing
+// the summary's role or this merge logic must re-check this pairing.
+func TestTranscodeCompactionDoubleRoleUserMerges(t *testing.T) {
+	summaryText := "[compacted summary of earlier conversation]\n\nthe gist of turns one and two"
+	out := mustTranscode(t, baseRequest(
+		// The synthesized compaction summary: an ordinary RoleUser message,
+		// exactly as Session.Compact produces it.
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: summaryText}}},
+		// The first kept turn's user prompt, immediately following — the
+		// shape ordinary operation never produces.
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "keep going"}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "ok"}}},
+	))
+
+	// Exactly two wire messages: the merged user turn, then the assistant
+	// reply — never three (which would violate strict alternation).
+	if len(out.Messages) != 2 {
+		t.Fatalf("wire messages = %d, want 2 (merged user turn + assistant reply)", len(out.Messages))
+	}
+	first := out.Messages[0]
+	if first.Role != "user" {
+		t.Fatalf("first wire message role = %q, want user", first.Role)
+	}
+	if len(first.Content) != 2 {
+		t.Fatalf("merged user message content blocks = %d, want 2 (summary text + kept prompt text)", len(first.Content))
+	}
+	if first.Content[0].Text != summaryText {
+		t.Errorf("first content block = %q, want the summary text", first.Content[0].Text)
+	}
+	if first.Content[1].Text != "keep going" {
+		t.Errorf("second content block = %q, want the kept turn's prompt", first.Content[1].Text)
+	}
+	if out.Messages[1].Role != "assistant" {
+		t.Errorf("second wire message role = %q, want assistant", out.Messages[1].Role)
+	}
+}
+
 func containsAll(ss []string, wants ...string) bool {
 	for _, w := range wants {
 		found := false
