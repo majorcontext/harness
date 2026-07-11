@@ -236,14 +236,17 @@ func (m *Manager) Start(ctx context.Context, name string) (Status, error) {
 			return st, nil
 		}
 	}
-	m.mu.Unlock()
-
+	// Hold the lock ACROSS spawn: releasing it between the active-check
+	// and the m.procs store let two concurrent Start calls (session tool
+	// racing HTTP POST) both spawn, the second overwriting the first — an
+	// untracked process group Stop could never reach. spawn is short and
+	// bounded (mkdir, open file, cmd.Start); the ready gate (awaitReady)
+	// stays outside the critical section.
 	p, err := m.spawn(name, def)
 	if err != nil {
+		m.mu.Unlock()
 		return Status{}, err
 	}
-
-	m.mu.Lock()
 	m.procs[name] = p
 	m.mu.Unlock()
 	m.everStarted.Store(true)

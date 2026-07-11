@@ -2,6 +2,7 @@ package process
 
 import (
 	"bytes"
+	"io"
 	"os"
 )
 
@@ -34,10 +35,21 @@ func tailFile(path string, n int) (string, error) {
 	if _, err := f.Seek(start, 0); err != nil {
 		return "", err
 	}
-	buf := make([]byte, size-start)
-	if _, err := f.Read(buf); err != nil && len(buf) == 0 {
+	return lastLines(f, size-start, n)
+}
+
+// lastLines reads want bytes from r (tolerating arbitrary read chunking —
+// a single Read may legally short-read, which previously left NUL bytes
+// in the emitted tail) and returns the last n newline-separated lines of
+// what was actually read. A reader that ends early (file truncated
+// between Stat and read) yields the bytes it produced, not an error.
+func lastLines(r io.Reader, want int64, n int) (string, error) {
+	buf := make([]byte, want)
+	read, err := io.ReadFull(r, buf)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 		return "", err
 	}
+	buf = buf[:read]
 
 	lines := bytes.Split(bytes.TrimRight(buf, "\n"), []byte("\n"))
 	if len(lines) > n {
