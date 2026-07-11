@@ -63,6 +63,13 @@ type sessionJSON struct {
 	// a resident one gets it from memory — no separate reconcile step
 	// needed, unlike Goal/LastTurn above, which really are process-local).
 	LastActivityAt time.Time `json:"last_activity_at"`
+	// ParentSession is the session's lineage pointer (see
+	// engine.Config.ParentSession's doc comment): an opaque provenance
+	// pointer to the session this one continues from, set at creation via
+	// POST /session's parent_session field, durable across resume/restart.
+	// Absent (omitempty) when the session has no recorded parent — the
+	// common case.
+	ParentSession string `json:"parent_session,omitempty"`
 }
 
 // usageJSON is the Session/StatusEntry usage sub-object (issue #62 layer 2):
@@ -213,6 +220,32 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, healthJSON{Version: s.opts.Version, VCSRevision: rev, VCSTime: t})
 }
 
+// maxParentSessionLen bounds POST /session's optional parent_session field:
+// an opaque provenance pointer, not a session ID this server necessarily
+// knows about (lineage may cross boxes — see engine.Config.ParentSession),
+// so the only sane validation is a length cap against an accidental
+// pasted-blob value, not a format check.
+const maxParentSessionLen = 128
+
+// validateParentSession validates POST /session's optional parent_session
+// field: nil (the key was omitted) is valid and returns "", no error. A
+// present value must be non-empty and at most maxParentSessionLen bytes;
+// either violation is a 400. It is deliberately NOT required to name a
+// session that exists on this server, or anywhere — see
+// engine.Config.ParentSession's doc comment.
+func validateParentSession(v *string) (string, error) {
+	if v == nil {
+		return "", nil
+	}
+	if *v == "" {
+		return "", errors.New("parent_session: must be non-empty when present")
+	}
+	if len(*v) > maxParentSessionLen {
+		return "", fmt.Errorf("parent_session: exceeds maximum length of %d bytes", maxParentSessionLen)
+	}
+	return *v, nil
+}
+
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Model        message.ModelRef `json:"model"`
@@ -221,8 +254,17 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		// WorkdirIsolation is "shared" (default, omitted/empty) or
 		// "worktree" — see createWorktreeForSession and workdirHolderLocked.
 		WorkdirIsolation string `json:"workdir_isolation"`
+		// ParentSession is an opaque provenance pointer to the session this
+		// one continues from (see engine.Config.ParentSession's doc
+		// comment). Optional; validated by validateParentSession below.
+		ParentSession *string `json:"parent_session"`
 	}
 	if err := decodeBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	parentSession, err := validateParentSession(body.ParentSession)
+	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -254,7 +296,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		sessionWorkDir = wt.path
 	}
 
-	sess, err := s.opts.NewSession(body.Model, sessionWorkDir)
+	sess, err := s.opts.NewSession(body.Model, sessionWorkDir, parentSession)
 	if err != nil {
 		if wt != nil {
 			s.discardWorktree(wt)
@@ -1149,6 +1191,7 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 		LastTurn:       lastTurn,
 		Usage:          usageJSONForSession(sess),
 		LastActivityAt: sess.LastActivityAt(),
+		ParentSession:  sess.ParentSession(),
 	}
 }
 

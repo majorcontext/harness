@@ -149,6 +149,19 @@ components:
             evaluator hasn't answered yet), and only ever answers a relative
             question ("did anything happen"), never an absolute one ("how
             long has this been quiet"). Always present, resident or not.
+        parent_session:
+          type: string
+          description: >
+            An opaque provenance pointer to the session this one continues
+            from — a re-dispatch after a failed goal, a follow-up fix picked
+            up on a fresh box. Set once at creation (POST /session's
+            parent_session field) and durable across resume/restart, same
+            as `workdir`. It is NOT required to name a session that exists
+            on this server, or anywhere — lineage may cross boxes (see
+            docs/design/fleet-model.md) — so the server never dereferences
+            or validates it beyond a length cap. Absent (omitempty) when the
+            session has no recorded parent, the common case.
+          example: ses_66aa9a7c6f323a7a
 
     Usage:
       type: object
@@ -824,6 +837,15 @@ paths:
         worktree (however clean it looks) is left completely untouched by
         the sweep so a resumed session's next prompt keeps running in the
         exact directory it left off in.
+
+        parent_session is optional: when present it must be a non-empty
+        string of at most 128 bytes (400 otherwise). It names no session on
+        this server in particular — the server never dereferences or
+        validates it beyond that length cap. It is an opaque lineage
+        pointer a client sets when re-dispatching after a failed goal or
+        picking up a follow-up fix, so a fleet UI can group a box's history
+        by task (see docs/design/fleet-model.md). Durable across
+        resume/restart, like workdir.
       requestBody:
         required: false
         content:
@@ -849,6 +871,11 @@ paths:
                   description: >
                     "shared" (default) or "worktree" — see the operation
                     description.
+                parent_session:
+                  type: string
+                  maxLength: 128
+                  description: >
+                    Optional lineage pointer; see the operation description.
       responses:
         "201":
           description: Created.
@@ -858,8 +885,9 @@ paths:
         "400":
           description: >
             workdir does not clean-resolve under an allowed workspace root;
-            workdir_isolation names an unknown mode; or workdir_isolation is
-            "worktree" but workdir is not inside a git repository.
+            workdir_isolation names an unknown mode; workdir_isolation is
+            "worktree" but workdir is not inside a git repository; or
+            parent_session is present but empty or exceeds 128 bytes.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

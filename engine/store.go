@@ -46,10 +46,16 @@ type record struct {
 	// omitted (and so absent from every record written before this field
 	// existed) when empty, which is also how LoadSession recognizes a legacy
 	// header with nothing to restore.
-	WorkDir string           `json:"workdir,omitempty"`
-	Message *message.Message `json:"message,omitempty"`
-	Model   message.ModelRef `json:"model,omitzero"`
-	Goal    *goalRecord      `json:"goal,omitempty"`
+	WorkDir string `json:"workdir,omitempty"`
+	// ParentSession carries Config.ParentSession on the session header
+	// record only, same rule as WorkDir: omitted when empty, and an empty
+	// value on load means "nothing to restore" (a legacy header, or a
+	// session created with no lineage) rather than "the caller's Config.
+	// ParentSession should be cleared".
+	ParentSession string           `json:"parent_session,omitempty"`
+	Message       *message.Message `json:"message,omitempty"`
+	Model         message.ModelRef `json:"model,omitzero"`
+	Goal          *goalRecord      `json:"goal,omitempty"`
 	// Usage carries the provider's per-turn Usage on the message record for
 	// the assistant message ending a model turn (nil for every other
 	// message: user, tool, or an interrupted partial assistant message —
@@ -218,7 +224,7 @@ func (s *Session) ensureLog() error {
 		// LoadSession already tolerates.
 		var buf bytes.Buffer
 		for _, rec := range []record{
-			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir},
+			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir, ParentSession: s.cfg.ParentSession},
 			{Type: recModel, Model: s.model},
 		} {
 			b, err := json.Marshal(rec)
@@ -293,6 +299,13 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// Config.WorkDir is kept unchanged.
 			if rec.WorkDir != "" {
 				s.cfg.WorkDir = rec.WorkDir
+			}
+			// Same restore rule as WorkDir above: the header is the durable
+			// truth for a resumed session, and an empty value here means
+			// nothing to restore (legacy header, or no lineage recorded),
+			// never "clear the loading Config's ParentSession".
+			if rec.ParentSession != "" {
+				s.cfg.ParentSession = rec.ParentSession
 			}
 		case recMessage:
 			if rec.Message == nil {

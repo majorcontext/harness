@@ -747,8 +747,8 @@ func serveCmd(args []string) error {
 // wired to the server's request journal, keyed by the session's own ID
 // (assigned by engine.NewSession, so it cannot be captured until after
 // construction).
-func newSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.ModelRef, appCfg *config.Config, flagDirs []string, onRequest func(id string, turn int, req *provider.Request)) func(message.ModelRef, string) (*engine.Session, error) {
-	return func(model message.ModelRef, sessionWorkDir string) (*engine.Session, error) {
+func newSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.ModelRef, appCfg *config.Config, flagDirs []string, onRequest func(id string, turn int, req *provider.Request)) func(message.ModelRef, string, string) (*engine.Session, error) {
+	return func(model message.ModelRef, sessionWorkDir string, parentSession string) (*engine.Session, error) {
 		if model.IsZero() {
 			model = defModel
 		}
@@ -761,6 +761,7 @@ func newSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.M
 		cfg.WorkDir = sessionWorkDir
 		cfg.System = systemPrompt(sessionWorkDir, "")
 		cfg.SkillsDirs = skillsDirs(appCfg, flagDirs, sessionWorkDir)
+		cfg.ParentSession = parentSession
 		var sess *engine.Session
 		cfg.OnRequest = func(turn int, req *provider.Request) { onRequest(sess.ID, turn, req) }
 		sess = engine.NewSession(cfg)

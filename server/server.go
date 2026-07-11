@@ -53,11 +53,14 @@ type Options struct {
 	// Version is reported by /health.
 	Version string
 	// NewSession creates a fresh engine session for the given model (zero
-	// model = caller's default) and workdir (already resolved and validated
-	// by handleCreate against WorkspaceRoots — see resolveWorkDir). The
-	// wrapper is expected to wire engine.Config.OnEvent to Server.Publish and
-	// engine.Config.WorkDir to the workDir argument.
-	NewSession func(model message.ModelRef, workDir string) (*engine.Session, error)
+	// model = caller's default), workdir (already resolved and validated
+	// by handleCreate against WorkspaceRoots — see resolveWorkDir), and
+	// parentSession (already validated by handleCreate — see
+	// validateParentSession; empty when POST /session omitted it). The
+	// wrapper is expected to wire engine.Config.OnEvent to Server.Publish,
+	// engine.Config.WorkDir to the workDir argument, and
+	// engine.Config.ParentSession to the parentSession argument.
+	NewSession func(model message.ModelRef, workDir string, parentSession string) (*engine.Session, error)
 	// LoadSession resumes an on-disk session by ID, wiring OnEvent the same
 	// way. It returns an error when no log with that ID exists. The
 	// session's workdir is restored from its log header (see
