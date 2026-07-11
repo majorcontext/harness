@@ -60,6 +60,11 @@ const {
   countByState,
   randomSlug,
   createCoalescer,
+  planAppend,
+  isPinnedToBottom,
+  shouldResort,
+  boxCardSignature,
+  sessionRowSignature,
 } = sandbox;
 
 /* ---------- fmtRelative ---------- */
@@ -416,4 +421,130 @@ test("createCoalescer: a call from inside fn schedules a fresh tick", () => {
   assert.equal(queued.length, 1, "inner kick scheduled a new tick");
   queued.shift()();
   assert.equal(runs, 2);
+});
+
+/* ---------- planAppend (keyed append-only diff planning) ---------- */
+
+test("planAppend: returns only items whose key is unseen, preserving order", () => {
+  const existing = new Set(["m:1", "m:2"]);
+  const items = [{ id: "1" }, { id: "2" }, { id: "3" }, { id: "4" }];
+  const got = planAppend(existing, items, x => "m:" + x.id);
+  assert.deepEqual(plain(got.map(x => x.id)), ["3", "4"]);
+});
+
+test("planAppend: accepts a plain array/iterable of existing keys, not just a Set", () => {
+  const got = planAppend(["m:1"], [{ id: "1" }, { id: "2" }], x => "m:" + x.id);
+  assert.deepEqual(plain(got.map(x => x.id)), ["2"]);
+});
+
+test("planAppend: skips items whose keyFn returns null/undefined", () => {
+  const got = planAppend([], [{ id: "1" }, { id: null }, { id: "2" }], x => x.id == null ? null : "m:" + x.id);
+  assert.deepEqual(plain(got.map(x => x.id)), ["1", "2"]);
+});
+
+test("planAppend: does not mutate the existingKeys Set passed in", () => {
+  const existing = new Set(["m:1"]);
+  planAppend(existing, [{ id: "2" }], x => "m:" + x.id);
+  assert.deepEqual([...existing], ["m:1"]);
+});
+
+test("planAppend: empty items yields empty output", () => {
+  assert.deepEqual(plain(planAppend(new Set(), [], x => x)), []);
+  assert.deepEqual(plain(planAppend(new Set(), null, x => x)), []);
+});
+
+/* ---------- isPinnedToBottom ---------- */
+
+test("isPinnedToBottom: exactly at bottom is pinned", () => {
+  assert.equal(isPinnedToBottom(100, 200, 100), true); // 200-100-100=0
+});
+
+test("isPinnedToBottom: within default threshold counts as pinned", () => {
+  assert.equal(isPinnedToBottom(90, 200, 100), true); // gap=10 <= 24
+});
+
+test("isPinnedToBottom: scrolled well above the threshold is not pinned", () => {
+  assert.equal(isPinnedToBottom(0, 500, 100), false); // gap=400
+});
+
+test("isPinnedToBottom: custom threshold is honored", () => {
+  assert.equal(isPinnedToBottom(50, 200, 100), false, "gap=50 > default 24");
+  assert.equal(isPinnedToBottom(50, 200, 100, 60), true, "gap=50 <= custom 60");
+});
+
+/* ---------- shouldResort ---------- */
+
+test("shouldResort: always true when there is no prior sort timestamp", () => {
+  assert.equal(shouldResort(null, 1000), true);
+  assert.equal(shouldResort(undefined, 1000), true);
+});
+
+test("shouldResort: false before the damping interval elapses", () => {
+  assert.equal(shouldResort(1000, 1500), false); // 500ms < 1000ms default
+  assert.equal(shouldResort(1000, 1999), false);
+});
+
+test("shouldResort: true once the damping interval has elapsed", () => {
+  assert.equal(shouldResort(1000, 2000), true);
+  assert.equal(shouldResort(1000, 5000), true);
+});
+
+test("shouldResort: honors a custom interval", () => {
+  assert.equal(shouldResort(1000, 1300, 200), true);
+  assert.equal(shouldResort(1000, 1100, 200), false);
+});
+
+/* ---------- boxCardSignature ---------- */
+
+test("boxCardSignature: identical inputs produce identical signatures", () => {
+  const a = { health: "ok", name: "n", base: "http://x", vcsRevision: "abc123", expanded: true, counts: { idle: 1, busy: 0, "goal-running": 0 } };
+  const b = { health: "ok", name: "n", base: "http://x", vcsRevision: "abc123", expanded: true, counts: { idle: 1, busy: 0, "goal-running": 0 } };
+  assert.equal(boxCardSignature(a), boxCardSignature(b));
+});
+
+test("boxCardSignature: differs when health changes", () => {
+  const base = { health: "ok", name: "n", base: "http://x", vcsRevision: "abc", expanded: false, counts: {} };
+  assert.notEqual(boxCardSignature(base), boxCardSignature({ ...base, health: "down" }));
+});
+
+test("boxCardSignature: differs when expanded toggles", () => {
+  const base = { health: "ok", name: "n", base: "http://x", vcsRevision: "abc", expanded: false, counts: {} };
+  assert.notEqual(boxCardSignature(base), boxCardSignature({ ...base, expanded: true }));
+});
+
+test("boxCardSignature: differs when counts change", () => {
+  const base = { health: "ok", name: "n", base: "http://x", vcsRevision: "abc", expanded: false, counts: { idle: 1 } };
+  assert.notEqual(boxCardSignature(base), boxCardSignature({ ...base, counts: { idle: 2 } }));
+});
+
+/* ---------- sessionRowSignature ---------- */
+
+test("sessionRowSignature: identical sessions produce identical signatures", () => {
+  const s = { id: "s1", status: "busy", model: "gpt", usage: { input_tokens: 1, output_tokens: 2 }, last_activity_at: "2024-01-01T00:00:00Z" };
+  assert.equal(sessionRowSignature(s, false), sessionRowSignature({ ...s }, false));
+});
+
+test("sessionRowSignature: differs when selected state changes", () => {
+  const s = { id: "s1", status: "idle" };
+  assert.notEqual(sessionRowSignature(s, false), sessionRowSignature(s, true));
+});
+
+test("sessionRowSignature: differs when badge-relevant fields change", () => {
+  const s = { id: "s1", status: "idle" };
+  assert.notEqual(sessionRowSignature(s, false), sessionRowSignature({ ...s, status: "busy" }, false));
+});
+
+test("sessionRowSignature: differs when last_activity_at changes", () => {
+  const s = { id: "s1", status: "idle", last_activity_at: "2024-01-01T00:00:00Z" };
+  assert.notEqual(sessionRowSignature(s, false), sessionRowSignature({ ...s, last_activity_at: "2024-01-01T00:00:05Z" }, false));
+});
+
+test("sessionRowSignature: differs when goal condition/active changes", () => {
+  const s = { id: "s1", status: "idle", goal: { condition: "ship it", active: true } };
+  assert.notEqual(sessionRowSignature(s, false), sessionRowSignature({ ...s, goal: { condition: "ship it", active: false } }, false));
+});
+
+test("sessionRowSignature: differs when last_turn changes", () => {
+  const s = { id: "s1", status: "idle", last_turn: { outcome: "completed" } };
+  assert.notEqual(sessionRowSignature(s, false), sessionRowSignature({ ...s, last_turn: { outcome: "error", error: "boom" } }, false));
 });
