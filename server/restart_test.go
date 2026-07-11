@@ -14,7 +14,9 @@ import (
 type restartGoalView struct {
 	State string `json:"state"`
 	Goal  *struct {
-		Active bool `json:"active"`
+		Active      bool   `json:"active"`
+		Paused      bool   `json:"paused"`
+		PauseReason string `json:"pause_reason"`
 	} `json:"goal"`
 }
 
@@ -39,6 +41,16 @@ func (h *harness) getSessionGoal(id string) restartGoalView {
 // durably on disk the whole time. Here the goal exhausts its turn budget
 // without being met, which leaves goalActive true in the journal
 // (engine/goal.go's terminal "max turns" case never clears the goal).
+//
+// The composite state assertion below intentionally differs from this
+// test's original version: it used to assert "goal-running" after restart,
+// which is exactly the operator trap deliverable 2 (see
+// docs/design/fleet-model.md and server/goal_paused_test.go) closes — an
+// active goal restored with no loop attached is not progressing, and
+// "goal-running" forever is indistinguishable from a live goal. It now
+// reads paused=true/pause_reason="restart" and idle, and prompt_async
+// remains usable (see TestGoalPausedRestartYieldsIdleAndUsable for the
+// dedicated coverage).
 func TestGoalActiveSurvivesRestart(t *testing.T) {
 	dir := t.TempDir()
 	prov := &goalProv{
@@ -81,8 +93,11 @@ func TestGoalActiveSurvivesRestart(t *testing.T) {
 	if after.Goal == nil || !after.Goal.Active {
 		t.Errorf("goal after restart = %+v, want active", after.Goal)
 	}
-	if after.State != "goal-running" {
-		t.Errorf("state after restart = %q, want goal-running", after.State)
+	if after.Goal == nil || !after.Goal.Paused || after.Goal.PauseReason != "restart" {
+		t.Errorf("goal after restart = %+v, want paused=true pause_reason=restart", after.Goal)
+	}
+	if after.State != "idle" {
+		t.Errorf("state after restart = %q, want idle (paused, not goal-running)", after.State)
 	}
 
 	// A tiny positive timeout (rather than the 30s default) keeps this fast

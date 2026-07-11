@@ -249,6 +249,15 @@ components:
         hasn't answered yet). Otherwise `busy` or `idle` mirrors `status`
         directly. Poll it, or long-poll it via GET /session/{id}/wait.
 
+        Exception: when GoalSummary.pause_reason is "restart" (see
+        GoalSummary.paused), this reads `idle` even though goal.active is
+        still true — a goal restored from the journal at boot with no loop
+        attached is not progressing, and reporting it "goal-running" forever
+        would be indistinguishable from a live goal (see
+        docs/design/fleet-model.md's ADOPT lifecycle). A "provider-backoff"
+        pause does NOT take this exception: that loop is genuinely running,
+        just waiting out provider weather, so it still reads `goal-running`.
+
     GoalSummary:
       type: object
       description: Per-session goal state surfaced on Session.goal.
@@ -307,6 +316,23 @@ components:
             exhausted — the loop is about to park the turn (retry the same
             directive on the next ordinary turn) rather than clear the goal.
             Meaningless (false) when retryable is false.
+        paused:
+          type: boolean
+          description: >
+            True when the goal is active but nothing is currently driving
+            it: either this server booted and found the goal armed with no
+            loop ever attached in this process (pause_reason "restart"), or
+            the retryable-backoff park machinery is waiting out provider
+            weather (pause_reason "provider-backoff" — mirrors retryable &&
+            waiting above; no behavior change, only this observability).
+            Both clear on re-arm (POST /session/{id}/goal); a
+            "provider-backoff" pause also clears on its own the moment the
+            loop's retry succeeds. See docs/design/fleet-model.md's ADOPT
+            lifecycle for the restart case's operator story.
+        pause_reason:
+          type: string
+          enum: [restart, provider-backoff]
+          description: Present only when paused is true.
 
     SessionStatus:
       type: string
@@ -544,6 +570,7 @@ components:
             - goal.stalled
             - goal.achieved
             - goal.cleared
+            - goal.paused
             - workdir.worktree_kept
             - workdir.worktree_removed
             - text.delta
@@ -602,6 +629,18 @@ components:
             worker turn that failed past its DETERMINISTIC retry budget,
             carrying the failure as goal_reason — a retryable-budget
             exhaustion never reaches this record, see above).
+            Both goal.stalled (while goal_retryable && goal_waiting) and the
+            boot-only goal.paused record carry goal_paused/
+            goal_pause_reason — the wire form of GoalSummary.paused/
+            pause_reason (see that schema and docs/design/fleet-model.md).
+            goal.paused is journaled once per server boot for every session
+            whose journal shows an active goal but which has no running
+            loop attached in this (freshly started) process — always
+            goal_pause_reason "restart" — so the history reads honestly
+            about why the goal never progressed, instead of a silent gap.
+            It carries goal_condition for convenience. It is NOT emitted for
+            the "provider-backoff" pause, which is a live goal.stalled
+            attribute, not a boot-time observation.
             workdir.worktree_kept and workdir.worktree_removed are durable
             records of a workdir_isolation="worktree" session's dedicated git
             worktree being torn down (session end or the serve-start sweep,
@@ -705,6 +744,16 @@ components:
             True while a goal.stalled record is still within the retryable
             backoff budget; false on the final such record, which reports
             the budget exhausted (see GoalSummary.waiting).
+        goal_paused:
+          type: boolean
+          description: >
+            The "paused" presentation (see GoalSummary.paused): true on a
+            goal.paused record (always), and on a goal.stalled record while
+            goal_retryable && goal_waiting.
+        goal_pause_reason:
+          type: string
+          enum: [restart, provider-backoff]
+          description: Present only when goal_paused is true.
         worktree_path:
           type: string
           description: >

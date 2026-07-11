@@ -65,6 +65,18 @@ type Event struct {
 	GoalRetryable      bool   `json:"goal_retryable,omitempty"`
 	GoalRetryableClass string `json:"goal_retryable_class,omitempty"`
 	GoalWaiting        bool   `json:"goal_waiting,omitempty"`
+	// GoalPaused/GoalPauseReason are the "paused" presentation (see
+	// GoalSummary.paused): GoalPaused is true when a goal is nominally
+	// active but nothing is currently driving it, and GoalPauseReason names
+	// why — "restart" (goal.paused: this server booted and found the goal
+	// armed with no loop attached, see pauseArmedGoalsAtBoot) or
+	// "provider-backoff" (goal.stalled: the retryable-backoff park machinery
+	// in engine/goal.go is waiting out provider weather, mirrored from
+	// GoalRetryable && GoalWaiting — no engine behavior changes, only this
+	// observability). Carried on goal.paused (always true) and goal.stalled
+	// (only while GoalRetryable && GoalWaiting) records/events.
+	GoalPaused      bool   `json:"goal_paused,omitempty"`
+	GoalPauseReason string `json:"goal_pause_reason,omitempty"`
 
 	// Outcome carries the turn.end record's result: "completed" or "error".
 	// Error (above) carries the sanitized failure detail when Outcome is
@@ -95,6 +107,13 @@ const (
 	evtGoalStalled    = "goal.stalled"
 	evtGoalAchieved   = "goal.achieved"
 	evtGoalCleared    = "goal.cleared"
+	// evtGoalPaused is journaled once per boot for every session whose
+	// journal shows an active goal but which has no running loop attached
+	// in this process (see pauseArmedGoalsAtBoot) — the durable, honest
+	// record that this server found the goal armed-but-unattended, distinct
+	// from goal.stalled (which is a live worker-turn retry event, not a
+	// boot-time observation). Always carries GoalPauseReason "restart".
+	evtGoalPaused = "goal.paused"
 
 	// evtWorktreeKept is journaled whenever a 'worktree'-isolation session's
 	// worktree is left in place at teardown (session end or the serve-start
@@ -189,6 +208,16 @@ func (s *Server) publishGoal(ev engine.Event) {
 		GoalRetryableClass: ev.GoalRetryableClass,
 		GoalWaiting:        ev.GoalWaiting,
 	}
+	// goal.stalled carries the provider-backoff pause presentation
+	// (deliverable 2(b)): a retryable-class stall still within its backoff
+	// budget IS the park machinery waiting out provider weather — pure
+	// observability over engine/goal.go's existing GoalRetryable/GoalWaiting
+	// fields, no behavior change. See goalTracker.pauseView, which derives
+	// the same thing for Session JSON from the folded state below.
+	if ev.Type == engine.EventGoalStalled && ev.GoalRetryable && ev.GoalWaiting {
+		out.GoalPaused = true
+		out.GoalPauseReason = pauseReasonProviderBackoff
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	g := s.goalState[ev.SessionID]
@@ -207,6 +236,7 @@ func (s *Server) publishGoal(ev engine.Event) {
 		g.retryable = false
 		g.retryableClass = ""
 		g.waiting = false
+		g.pausedRestart = false
 	case engine.EventGoalEval:
 		g.turns = ev.GoalTurn
 		g.lastReason = ev.GoalReason
@@ -229,8 +259,10 @@ func (s *Server) publishGoal(ev engine.Event) {
 		g.retryable = false
 		g.retryableClass = ""
 		g.waiting = false
+		g.pausedRestart = false
 	case engine.EventGoalCleared:
 		g.active = false
+		g.pausedRestart = false
 	}
 	s.emitDurableLocked(out)
 }
@@ -618,6 +650,7 @@ func (s *Server) foldGoalRecordLocked(ev Event) {
 		g.retryable = false
 		g.retryableClass = ""
 		g.waiting = false
+		g.pausedRestart = false
 	case evtGoalEval:
 		g.turns = ev.GoalTurn
 		g.lastReason = ev.GoalReason
@@ -640,7 +673,35 @@ func (s *Server) foldGoalRecordLocked(ev Event) {
 		g.retryable = false
 		g.retryableClass = ""
 		g.waiting = false
+		g.pausedRestart = false
 	case evtGoalCleared:
 		g.active = false
+		g.pausedRestart = false
+	}
+}
+
+// pauseArmedGoalsAtBoot is deliverable 2(a)'s boot-time fix for the
+// operator trap: after loadJournal has replayed events.jsonl (via
+// reconcile), any session whose goalTracker reads active is, by
+// construction, a goal this freshly-started process has never attached a
+// loop to (a live loop's own claim/spawn happens only inside handleGoal,
+// well after New returns) — so it is marked paused=true/pause_reason=
+// "restart" and a durable goal.paused record is appended, so the journal's
+// history reads honestly instead of silently omitting why the goal never
+// progressed. Runs once, single-threaded, before the server is reachable by
+// any client (same discipline as reconcile/loadJournal) — no locking needed.
+func (s *Server) pauseArmedGoalsAtBoot() {
+	for id, g := range s.goalState {
+		if !g.active || g.pausedRestart {
+			continue
+		}
+		g.pausedRestart = true
+		s.emitDurableLocked(&Event{
+			Type:            evtGoalPaused,
+			SessionID:       id,
+			GoalCondition:   g.condition,
+			GoalPaused:      true,
+			GoalPauseReason: pauseReasonRestart,
+		})
 	}
 }

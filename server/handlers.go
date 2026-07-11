@@ -131,8 +131,20 @@ type lastTurnJSON struct {
 // whenever a goal is active, regardless of the momentary running/busy flag
 // (see sessionJSON.State's doc comment for why momentary busy/idle is not
 // enough); otherwise busy or idle mirroring the plain status.
-func compositeState(running, goalActive bool) string {
+//
+// restartPaused (see goalTracker.pauseView) OVERRIDES all of that to idle:
+// a goal restored from the journal at boot with no loop attached is not
+// "goal-running" in any sense an operator or composer can act on — it will
+// never progress on its own, and "busy"/"goal-running" forever is exactly
+// the operator trap this field exists to close (see docs/design/
+// fleet-model.md's ADOPT lifecycle). A provider-backoff pause deliberately
+// does NOT take this path — its loop is genuinely alive and running, just
+// waiting out provider weather, so it keeps reading goal-running (see
+// TestGoalStalledProviderBackoffSurfacesPaused).
+func compositeState(running, goalActive, restartPaused bool) string {
 	switch {
+	case restartPaused:
+		return "idle"
 	case goalActive:
 		return "goal-running"
 	case running:
@@ -140,6 +152,13 @@ func compositeState(running, goalActive bool) string {
 	default:
 		return "idle"
 	}
+}
+
+// isRestartPaused reports whether goal represents a boot-time restart pause
+// (see goalTracker.pauseView) — the one pause reason that forces
+// compositeState to idle. nil-safe.
+func isRestartPaused(goal *goalJSON) bool {
+	return goal != nil && goal.Paused && goal.PauseReason == pauseReasonRestart
 }
 
 // goalJSON is the Session.goal sub-object: present only when a goal has been
@@ -162,6 +181,39 @@ type goalJSON struct {
 	Retryable      bool   `json:"retryable,omitempty"`
 	RetryableClass string `json:"retryable_class,omitempty"`
 	Waiting        bool   `json:"waiting,omitempty"`
+	// Paused/PauseReason present the "goal armed but nothing is driving it"
+	// state (see goalTracker.pauseView): true with pause_reason "restart"
+	// when this process booted and found the goal active with no loop ever
+	// attached (see pauseArmedGoalsAtBoot); true with "provider-backoff"
+	// while the retryable-backoff park machinery (engine/goal.go) waits out
+	// provider weather. Both clear on re-arm (POST /session/{id}/goal) or,
+	// for provider-backoff, the moment the loop's own retry succeeds.
+	Paused      bool   `json:"paused,omitempty"`
+	PauseReason string `json:"pause_reason,omitempty"`
+}
+
+// goalJSONFrom builds the goalJSON wire shape from a per-session goal
+// tracker, deriving the paused presentation via pauseView — the single
+// construction path shared by buildSession and waitSnapshot so the two can
+// never drift on this. Returns nil for a nil tracker (no goal ever set).
+func goalJSONFrom(g *goalTracker) *goalJSON {
+	if g == nil {
+		return nil
+	}
+	paused, reason := g.pauseView()
+	return &goalJSON{
+		Condition:      g.condition,
+		Active:         g.active,
+		Achieved:       g.achieved,
+		Turns:          g.turns,
+		LastReason:     g.lastReason,
+		Attempt:        g.attempt,
+		Retryable:      g.retryable,
+		RetryableClass: g.retryableClass,
+		Waiting:        g.waiting,
+		Paused:         paused,
+		PauseReason:    reason,
+	}
 }
 
 // sessionIDOrNotFound extracts {id} from the request path and validates it
@@ -632,8 +684,8 @@ func (s *Server) lastTurnFor(id string) *lastTurnJSON {
 func (s *Server) compositeStateFor(id string, running bool) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	g := s.goalState[id]
-	return compositeState(running, g != nil && g.active)
+	goal := goalJSONFrom(s.goalState[id])
+	return compositeState(running, goal != nil && goal.Active, isRestartPaused(goal))
 }
 
 func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
@@ -770,10 +822,44 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	// Register the goal synchronously BEFORE the loop goroutine spawns and
-	// before the 202 returns: by the time the caller can DELETE, the goal is
-	// active and clearable — the accept-vs-clear race is structurally gone.
-	if err := st.sess.RegisterGoal(body.Condition); err != nil {
+	// Deliverable 2(c): re-arming a paused/restart goal. claimForPrompt
+	// above only 409s on st.running — it knows nothing about goal state —
+	// so reaching here with the engine already reporting an active goal
+	// means exactly one thing: this session's goal is active with NO loop
+	// attached in this process. A genuinely running loop would already have
+	// 409'd via st.running above (handleGoal/runGoal hold the claim for the
+	// whole PursueGoal call), so this branch is unreachable for a live
+	// provider-backoff park — only the boot-time restart pause (see
+	// pauseArmedGoalsAtBoot) or an equivalent crash-before-spawn window
+	// reaches it. RegisterGoal would error "already active" here, so this
+	// resumes the EXISTING condition instead of registering a new one — a
+	// mismatched condition is rejected rather than silently resuming the
+	// wrong goal or (via PursueGoal's own registered-path check) spuriously
+	// reporting "goal cleared".
+	condition := body.Condition
+	if existing, active := st.sess.ActiveGoal(); active {
+		if existing != body.Condition {
+			s.mu.Lock()
+			st.running = false
+			st.cancel = nil
+			st.lastUsed = time.Now()
+			s.mu.Unlock()
+			s.wg.Done()
+			writeErr(w, http.StatusConflict, fmt.Sprintf("a different goal is already active: %q", existing))
+			return
+		}
+		condition = existing
+		s.mu.Lock()
+		if g := s.goalState[id]; g != nil {
+			g.pausedRestart = false
+		}
+		s.mu.Unlock()
+	} else if err := st.sess.RegisterGoal(body.Condition); err != nil {
+		// Register the goal synchronously BEFORE the loop goroutine spawns
+		// and before the 202 returns: by the time the caller can DELETE,
+		// the goal is active and clearable — the accept-vs-clear race is
+		// structurally gone.
+		//
 		// Undo the claim taken above: mirror the tail of runPrompt/runGoal.
 		s.mu.Lock()
 		st.running = false
@@ -786,7 +872,7 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 	}
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 
-	go s.runGoal(ctx, id, st, body.Condition, body.MaxTurns)
+	go s.runGoal(ctx, id, st, condition, body.MaxTurns)
 	writeJSON(w, http.StatusAccepted, map[string]int64{"seq": fromSeq})
 }
 
@@ -1172,10 +1258,7 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 	id := sess.ID
 	s.mu.Lock()
 	seq := s.sessionSeqLocked(id)
-	var goal *goalJSON
-	if g := s.goalState[id]; g != nil {
-		goal = &goalJSON{Condition: g.condition, Active: g.active, Achieved: g.achieved, Turns: g.turns, LastReason: g.lastReason, Attempt: g.attempt, Retryable: g.retryable, RetryableClass: g.retryableClass, Waiting: g.waiting}
-	}
+	goal := goalJSONFrom(s.goalState[id])
 	lastTurn := s.lastTurnJSONLocked(id)
 	s.mu.Unlock()
 	return sessionJSON{
@@ -1183,7 +1266,7 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 		CreatedAt:      sess.CreatedAt(),
 		Model:          sess.Model(),
 		Status:         status,
-		State:          compositeState(status == "busy", goal != nil && goal.Active),
+		State:          compositeState(status == "busy", goal != nil && goal.Active, isRestartPaused(goal)),
 		Messages:       len(sess.History()),
 		Seq:            seq,
 		Goal:           goal,
