@@ -16,6 +16,7 @@ import (
 
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/plugin"
 )
 
 // sessionJSON is the openapi Session shape.
@@ -70,6 +71,15 @@ type sessionJSON struct {
 	// Absent (omitempty) when the session has no recorded parent — the
 	// common case.
 	ParentSession string `json:"parent_session,omitempty"`
+	// CompactionCount/LastCompactedAt surface whether and when this session
+	// has been compacted (docs/design/context-compaction.md), auto-
+	// triggered or via POST /session/{id}/compact — so a UI can show that
+	// compaction happened. CompactionCount is 0 (omitted) until the first
+	// compaction; LastCompactedAt is the zero Time (omitted) likewise. Both
+	// survive a restart (engine.Session.CompactionCount/LastCompactedAt
+	// replay the compact journal record — see engine/store.go).
+	CompactionCount int       `json:"compaction_count,omitempty"`
+	LastCompactedAt time.Time `json:"last_compacted_at,omitzero"`
 }
 
 // usageJSON is the Session/StatusEntry usage sub-object (issue #62 layer 2):
@@ -1069,6 +1079,104 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// compactResponseJSON is the openapi POST /session/{id}/compact response
+// shape (docs/design/context-compaction.md §1): turns_folded is 0 (not an
+// error) when there was nothing worth folding — see engine.CompactResult.
+type compactResponseJSON struct {
+	TurnsFolded int              `json:"turns_folded"`
+	FirstID     string           `json:"first_id,omitempty"`
+	LastID      string           `json:"last_id,omitempty"`
+	Summary     *message.Message `json:"summary,omitempty"`
+}
+
+// handleCompact is POST /session/{id}/compact (docs/design/context-
+// compaction.md §1 "Explicit: POST /session/{id}/compact"): always
+// available regardless of the automatic threshold. It claims the session's
+// single run slot exactly like prompt_async/goal (409 if already running,
+// 503 if draining) — compaction never runs concurrently with a turn — then
+// runs synchronously (the response carries the full result, so there is no
+// async job to poll). Optional JSON body {"keep_turns": N, "model": "..."}
+// overrides Config.CompactionKeepTurns/CompactionModel for this call only;
+// keep_turns has a hard floor of 1 — 0 or negative is a 400, never silently
+// clamped, so a caller's mistake is visible rather than silently ignored.
+func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.sessionIDOrNotFound(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		KeepTurns *int   `json:"keep_turns"`
+		Model     string `json:"model"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if body.KeepTurns != nil && *body.KeepTurns <= 0 {
+		writeErr(w, http.StatusBadRequest, "keep_turns must be >= 1")
+		return
+	}
+	var model message.ModelRef
+	if body.Model != "" {
+		m, err := message.ParseModelRef(body.Model)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		model = m
+	}
+
+	st, ctx, _, code, holder := s.claimForPrompt(id)
+	if code != 0 {
+		switch {
+		case code == http.StatusConflict && holder != "":
+			writeErr(w, code, fmt.Sprintf("workdir busy: held by session %s", holder))
+		case code == http.StatusConflict:
+			writeErr(w, code, "session is busy with another prompt")
+		case code == http.StatusServiceUnavailable:
+			writeErr(w, code, "server shutting down")
+		default:
+			writeErr(w, http.StatusNotFound, "no such session")
+		}
+		return
+	}
+	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
+
+	opts := engine.CompactOptions{Model: model}
+	if body.KeepTurns != nil {
+		opts.KeepTurns = *body.KeepTurns
+	}
+	res, err := st.sess.Compact(ctx, opts)
+	// Session.Compact's own emits (EventMessage for the summary, then
+	// EventHistoryCompacted — see engine/compact.go) already flowed through
+	// Publish synchronously by the time Compact returns, journaling the
+	// summary message and the durable history.compacted record in that
+	// order (see publishHistoryCompacted). syncMessages here is a harmless,
+	// idempotent extra pass — the same belt-and-suspenders every other
+	// handler's tail already relies on.
+	s.syncMessages(id)
+
+	s.mu.Lock()
+	st.running = false
+	st.cancel = nil
+	st.lastUsed = time.Now()
+	s.evictResidentLocked()
+	s.mu.Unlock()
+	s.wg.Done()
+	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
+
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, plugin.SanitizeSessionError(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, compactResponseJSON{
+		TurnsFolded: res.TurnsFolded,
+		FirstID:     res.FirstID,
+		LastID:      res.LastID,
+		Summary:     res.Summary,
+	})
+}
+
 // sessionOnDisk reports whether a session log for id exists in the session
 // directory, without loading the session.
 func (s *Server) sessionOnDisk(id string) bool {
@@ -1282,8 +1390,10 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 		WorkDir:        sess.WorkDir(),
 		LastTurn:       lastTurn,
 		Usage:          usageJSONForSession(sess),
-		LastActivityAt: sess.LastActivityAt(),
-		ParentSession:  sess.ParentSession(),
+		LastActivityAt:  sess.LastActivityAt(),
+		ParentSession:   sess.ParentSession(),
+		CompactionCount: sess.CompactionCount(),
+		LastCompactedAt: sess.LastCompactedAt(),
 	}
 }
 

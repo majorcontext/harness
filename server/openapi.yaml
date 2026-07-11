@@ -162,6 +162,20 @@ components:
             or validates it beyond a length cap. Absent (omitempty) when the
             session has no recorded parent, the common case.
           example: ses_66aa9a7c6f323a7a
+        compaction_count:
+          type: integer
+          description: >
+            How many times this session has been compacted (auto-triggered
+            or via POST /session/{id}/compact) — see docs/design/context-
+            compaction.md. Absent (0) until the first compaction. Survives a
+            restart: the engine replays the compact journal record on load.
+        last_compacted_at:
+          type: string
+          format: date-time
+          description: >
+            When the most recent compaction landed. Absent until the first
+            compaction. Together with compaction_count this is what a UI
+            uses to show that compaction happened.
 
     Usage:
       type: object
@@ -573,6 +587,8 @@ components:
             - goal.paused
             - workdir.worktree_kept
             - workdir.worktree_removed
+            - history.compacted
+            - compaction.failed
             - text.delta
             - reasoning.delta
             - tool.start
@@ -649,6 +665,17 @@ components:
             unpushed commits and was left in place — the durable signal an
             orchestrator relies on to find and finish that work rather than
             lose it; worktree_removed means it had neither and was deleted.
+            history.compacted is the durable record of a successful
+            compaction (docs/design/context-compaction.md), auto-triggered
+            or via POST /session/{id}/compact: it carries
+            compact_first_id/compact_last_id (the folded range's boundary
+            message ids), compact_turns_folded, and compact_summary_id — the
+            summary message itself always arrives first, as an ordinary
+            `message` event, so this is the reconciliation signal telling a
+            replaying tailer which prefix that summary replaced.
+            compaction.failed is compaction's fire-and-forget failure
+            counterpart (never journaled — a failed compaction never mutates
+            durable state), carrying the failure detail in `error`.
         session_id: { type: string }
         seq:
           type: integer
@@ -759,6 +786,62 @@ components:
           description: >
             The worktree directory (workdir.worktree_kept /
             workdir.worktree_removed).
+        compact_first_id:
+          type: string
+          description: The folded range's first message id (history.compacted).
+        compact_last_id:
+          type: string
+          description: The folded range's last message id (history.compacted).
+        compact_turns_folded:
+          type: integer
+          description: Number of whole turns folded (history.compacted).
+        compact_summary_id:
+          type: string
+          description: >
+            The id of the summary message that replaced the folded range —
+            already delivered via a preceding `message` event
+            (history.compacted).
+
+    CompactRequest:
+      type: object
+      description: >
+        Optional body for POST /session/{id}/compact. An absent/empty body
+        uses Config.CompactionKeepTurns/CompactionModel.
+      properties:
+        keep_turns:
+          type: integer
+          description: >
+            Overrides Config.CompactionKeepTurns for this call only. Hard
+            floor of 1 — the most recent turn is never foldable. 0 or
+            negative is a 400, never silently clamped.
+        model:
+          type: string
+          description: >
+            Overrides the model used for the summarization call, as
+            "provider/model". Defaults to the session's own current model.
+          example: anthropic/claude-fable-5
+
+    CompactResponse:
+      type: object
+      required: [turns_folded]
+      properties:
+        turns_folded:
+          type: integer
+          description: >
+            Number of whole turns folded. 0 (not an error) when there was
+            nothing worth folding — fewer than the effective keep_turns'
+            worth of complete turns exist yet.
+        first_id:
+          type: string
+          description: The folded range's first message id. Absent when turns_folded is 0.
+        last_id:
+          type: string
+          description: The folded range's last message id. Absent when turns_folded is 0.
+        summary:
+          $ref: "#/components/schemas/Message"
+          description: >
+            The synthesized summary message that replaced the folded range.
+            Absent when turns_folded is 0.
 
     GoalRequest:
       type: object
@@ -1131,6 +1214,60 @@ paths:
             share_workdir on creation, and neither session set
             workdir_isolation="worktree" (the error names the holder
             session).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /session/{id}/compact:
+    post:
+      operationId: compactSession
+      summary: Fold the oldest turns of this session's history into one summary.
+      description: >
+        docs/design/context-compaction.md's explicit escape hatch: always
+        available regardless of the automatic threshold (Config.
+        ContextWindowTokens/CompactionThreshold) — pre-emptive compaction
+        ahead of a known-large tool result, operator-triggered cleanup, or a
+        caller that disables the automatic path entirely and drives it
+        manually. Claims the session's single run slot exactly like
+        prompt_async/goal (so a concurrent prompt_async or goal is 409), but
+        runs synchronously — the response carries the full result, there is
+        no async job to poll. A successful, non-empty compaction emits the
+        summary via an ordinary `message` event first, then a durable
+        `history.compacted` event/record (see the Event schema).
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CompactRequest" }
+      responses:
+        "200":
+          description: >
+            OK. turns_folded is 0 (not an error) when there was nothing
+            worth folding yet.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompactResponse" }
+        "400":
+          description: keep_turns is present and <= 0, or model is malformed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >
+            Session is busy with another prompt or goal, OR another
+            currently-running session holds the same workdir and neither
+            session set share_workdir on creation, and neither session set
+            workdir_isolation="worktree" (the error names the holder
+            session).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: The summarization call itself failed; compaction aborted cleanly (no mutation, no journal write).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
