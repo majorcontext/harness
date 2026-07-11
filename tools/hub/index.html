@@ -705,6 +705,75 @@ function createCoalescer(schedule, fn) {
     schedule(function () { pending = false; fn(); });
   };
 }
+
+// planAppend returns the subset of `items` (in their given order) whose key
+// (per keyFn) is not already present in `existingKeys` — the "what's new"
+// half of keyed, append-only rendering (timeline messages/narrative/banners,
+// see renderTimeline). existingKeys may be a Set or any iterable; it is
+// never mutated here — the caller records newly-rendered keys itself, after
+// actually creating DOM for them, so a render that throws partway through
+// doesn't silently mark items as rendered. Items whose key is null/undefined
+// are skipped (no stable identity to key on).
+function planAppend(existingKeys, items, keyFn) {
+  const seen = existingKeys instanceof Set ? existingKeys : new Set(existingKeys || []);
+  const out = [];
+  for (const item of (items || [])) {
+    const k = keyFn(item);
+    if (k == null || seen.has(k)) continue;
+    out.push(item);
+  }
+  return out;
+}
+
+// isPinnedToBottom implements the "pinned tail" autoscroll rule: renders
+// should stick to the bottom only while the viewer IS at the bottom (within
+// thresholdPx, default 24), and must never yank the viewport back down once
+// the operator has scrolled up to read earlier history.
+function isPinnedToBottom(scrollTop, scrollHeight, clientHeight, thresholdPx) {
+  thresholdPx = typeof thresholdPx === "number" ? thresholdPx : 24;
+  const gap = scrollHeight - scrollTop - clientHeight;
+  return gap <= thresholdPx;
+}
+
+// shouldResort damps fleet row re-sorting: returns whether enough time has
+// elapsed since the last reorder (default: 1000ms) to run another sort pass.
+// Between allowed sorts, rows still refresh in place — this only gates
+// REORDERING, so cards/rows don't shuffle out from under the cursor during
+// an event burst. lastSortAtMs of a non-number (e.g. null on first render)
+// always permits a sort.
+function shouldResort(lastSortAtMs, nowMs, minIntervalMs) {
+  minIntervalMs = typeof minIntervalMs === "number" ? minIntervalMs : 1000;
+  if (typeof lastSortAtMs !== "number") return true;
+  return (nowMs - lastSortAtMs) >= minIntervalMs;
+}
+
+// boxCardSignature computes a cheap content signature for everything a box
+// card shows OUTSIDE its session list — health dot, name/base, vcs revision,
+// per-state counts, and whether it's expanded (which decides whether a
+// session list section exists at all). renderFleet skips all DOM writes for
+// a card whose signature is unchanged since the last render.
+function boxCardSignature(s) {
+  s = s || {};
+  return JSON.stringify([
+    s.health || "", s.name || "", s.base || "", s.vcsRevision || "",
+    !!s.expanded, s.counts || {},
+  ]);
+}
+
+// sessionRowSignature computes a cheap content signature for one fleet
+// session row's rendered content, so per-session reconciliation can skip
+// DOM work for a row whose content hasn't actually changed (only its
+// position in a damped re-sort might have). `selected` is whether this row
+// is the currently drilled-into session (affects "sel" styling).
+function sessionRowSignature(session, selected) {
+  const s = session || {};
+  return JSON.stringify([
+    s.id || "", sessionBadge(s), s.model || "", usageSummary(s.usage),
+    s.last_activity_at || "", !!selected,
+    s.goal ? { c: s.goal.condition || "", a: !!s.goal.active } : null,
+    s.last_turn ? { o: s.last_turn.outcome || "", e: s.last_turn.error || "" } : null,
+  ]);
+}
 /* TESTABLE-END */
 
 /* ============================================================
