@@ -211,6 +211,16 @@
   .goalnarr.cleared { border-left: 3px solid var(--off); color: var(--dim); }
   .goaltag { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); }
   .goalcond { font-weight: 600; white-space: pre-wrap; word-break: break-word; }
+  /* Goal conditions run to thousands of characters; pinned at full height
+     they bury the timeline. Clamp to two lines until the operator expands. */
+  .goalcond.clamped {
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .goaltoggle {
+    background: none; border: none; color: var(--accent); cursor: pointer;
+    font-size: 12px; padding: 0; margin-top: 2px;
+  }
   .goalreason { color: var(--dim); }
   .streaming { opacity: .85; }
   .streaming .role::after { content: " · streaming…"; color: var(--accent); }
@@ -1055,7 +1065,7 @@ function selectSession(boxId, sessionId) {
   closeDrillConn();
   drill.boxId = boxId; drill.sessionId = sessionId;
   drill.messages = []; drill.banners = []; drill.narrative = [];
-  drill.draft = null; drill.goal = null;
+  drill.draft = null; drill.goal = null; drill.goalExpanded = false;
   hs.view = { box: boxId, session: sessionId };
   persist();
   renderFleet();
@@ -1313,9 +1323,20 @@ function renderGoalPanel() {
   if (!drill.boxId || !drill.sessionId) return;
   if (drill.goal && drill.goal.condition) {
     const state = drill.goal.achieved ? "achieved" : drill.goal.active ? "active" : "cleared";
+    // Collapsed by default (drill.goalExpanded persists across the frequent
+    // re-renders from polls/events and resets on session change): the panel
+    // is a status strip, not a document \u2014 the feed gets the space.
+    const cond = el("div", { class: "goalcond" + (drill.goalExpanded ? "" : " clamped"), text: drill.goal.condition });
     const chip = el("div", { class: "goalnarr " + (state === "active" ? "set" : state === "achieved" ? "achieved" : "cleared") },
       el("span", { class: "goaltag", text: "current goal \u00b7 " + state }),
-      el("div", { class: "goalcond", text: drill.goal.condition }));
+      cond);
+    if (drill.goal.condition.length > 160 || drill.goal.condition.indexOf("\n") !== -1) {
+      chip.append(el("button", {
+        class: "goaltoggle",
+        text: drill.goalExpanded ? "show less" : "show full goal",
+        onclick: () => { drill.goalExpanded = !drill.goalExpanded; renderGoalPanel(); },
+      }));
+    }
     if (drill.goal.reason) chip.append(el("div", { class: "goalreason", text: drill.goal.reason }));
     gp.append(chip);
     if (!drill.goal.active) {
