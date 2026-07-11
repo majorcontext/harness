@@ -101,6 +101,46 @@ func TestHandleSpawnStreamsSSEFrames(t *testing.T) {
 	}
 }
 
+// TestHandleSpawnPassesNameAsBoxNameEnv is the HTTP-level half of
+// TestRunSpawnSetsBoxNameEnv (spawn_test.go): POST /spawn's JSON body
+// {"name": "..."} must reach the spawn command's own environment as
+// HARNESS_HUB_BOX_NAME — see AGENTS.md's spawn contract section.
+func TestHandleSpawnPassesNameAsBoxNameEnv(t *testing.T) {
+	srv := httptest.NewServer(NewHandler(Options{SpawnCommand: `echo "NAME=$HARNESS_HUB_BOX_NAME"`}))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/spawn", "application/json", strings.NewReader(`{"name":"amber-otter-07"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := readAllLines(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(body, "\n")
+	if !strings.Contains(joined, "NAME=amber-otter-07") {
+		t.Errorf("body missing box name passthrough; got:\n%s", joined)
+	}
+}
+
+// TestHandleSpawnToleratesMissingBody confirms the pre-existing "no body at
+// all" call (every caller before this field existed) still works exactly
+// as before.
+func TestHandleSpawnToleratesMissingBody(t *testing.T) {
+	srv := httptest.NewServer(NewHandler(Options{SpawnCommand: "echo hi"}))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/spawn", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+}
+
 func TestHandleSpawnNoCommandConfiguredReportsErrorInStream(t *testing.T) {
 	srv := httptest.NewServer(NewHandler(Options{}))
 	defer srv.Close()
