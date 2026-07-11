@@ -5,7 +5,11 @@
 	"name": "harness-dev",
 	"build": {
 		"dockerfile": "Dockerfile",
-		"context": ".."
+		// Context is .devcontainer itself, NOT the repo root: this
+		// Dockerfile COPYs nothing, and the repo root is the build
+		// context of the deploy Dockerfile (docs/deploy-modal.md) whose
+		// COPYs must not be starved by a root .dockerignore.
+		"context": "."
 	},
 
 	// Ports a harness dev environment serves. Headless boxes read this

@@ -1,5 +1,0 @@
-# The devcontainer Dockerfile COPYs nothing from the build context — it
-# only assembles a toolchain image — so exclude everything. Trims the
-# context transfer (.git, artifacts) to near-zero for both editor builds
-# and headless Image.from_dockerfile dev-box builds.
-*
