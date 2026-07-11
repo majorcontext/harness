@@ -413,6 +413,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /session/{id}/message", s.auth(s.handleMessages))
 	mux.HandleFunc("GET /session/{id}/request", s.auth(s.handleRequest))
 	mux.HandleFunc("POST /session/{id}/prompt_async", s.auth(s.handlePrompt))
+	mux.HandleFunc("POST /session/{id}/compact", s.auth(s.handleCompact))
 	mux.HandleFunc("POST /session/{id}/goal", s.auth(s.handleGoal))
 	mux.HandleFunc("DELETE /session/{id}/goal", s.auth(s.handleGoalDelete))
 	mux.HandleFunc("POST /session/{id}/abort", s.auth(s.handleAbort))

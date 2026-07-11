@@ -286,9 +286,18 @@ func (s *stream) handle(name string, data []byte) error {
 		if err := json.Unmarshal(data, &ev); err != nil {
 			return fmt.Errorf("openai: bad %s: %w", name, err)
 		}
-		s.usage.InputTokens = ev.Response.Usage.InputTokens
+		// The Responses API reports input_tokens INCLUSIVE of the cached
+		// portion (input_tokens_details.cached_tokens is a subset). The
+		// provider.Usage contract wants disjoint components, so report the
+		// uncached remainder; the sum reconstructs the wire total.
+		cached := ev.Response.Usage.InputTokensDetails.CachedTokens
+		uncached := ev.Response.Usage.InputTokens - cached
+		if uncached < 0 {
+			uncached = 0
+		}
+		s.usage.InputTokens = uncached
 		s.usage.OutputTokens = ev.Response.Usage.OutputTokens
-		s.usage.CacheReadTokens = ev.Response.Usage.InputTokensDetails.CachedTokens
+		s.usage.CacheReadTokens = cached
 
 		var stop provider.StopReason
 		switch {

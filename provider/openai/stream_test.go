@@ -118,7 +118,10 @@ func TestStreamAssembly(t *testing.T) {
 	if done.StopReason != provider.StopToolUse {
 		t.Errorf("stop reason = %s", done.StopReason)
 	}
-	if done.Usage.InputTokens != 100 || done.Usage.OutputTokens != 42 || done.Usage.CacheReadTokens != 25 {
+	// Disjoint contract (see provider.Usage): input_tokens from the wire is
+	// cache-INCLUSIVE (100 total, 25 cached), so the adapter must report the
+	// uncached remainder: 75 + 25 sums back to the true prompt size.
+	if done.Usage.InputTokens != 75 || done.Usage.OutputTokens != 42 || done.Usage.CacheReadTokens != 25 {
 		t.Errorf("usage = %+v", done.Usage)
 	}
 
@@ -213,7 +216,7 @@ func TestStreamIncomplete(t *testing.T) {
 			if done.StopReason != tc.want {
 				t.Errorf("stop reason = %s, want %s", done.StopReason, tc.want)
 			}
-			if done.Usage.InputTokens != 7 || done.Usage.OutputTokens != 9 || done.Usage.CacheReadTokens != 2 {
+			if done.Usage.InputTokens != 5 || done.Usage.OutputTokens != 9 || done.Usage.CacheReadTokens != 2 { // disjoint: 7 wire total - 2 cached
 				t.Errorf("usage = %+v", done.Usage)
 			}
 			msg := done.Message

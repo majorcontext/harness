@@ -89,6 +89,18 @@ type Event struct {
 	// the path a 'worktree'-isolation session's tools ran in. Present only on
 	// those two event types.
 	WorktreePath string `json:"worktree_path,omitempty"`
+
+	// Compaction fields (see docs/design/context-compaction.md §4 "Live
+	// event surface"). Carried on the durable evtHistoryCompacted record:
+	// CompactFirstID/CompactLastID name the folded range's boundary
+	// messages, CompactTurnsFolded is the fold count, and
+	// CompactSummaryID names the summary message — already delivered via a
+	// preceding evtMessage record (see Publish/publishHistoryCompacted).
+	// evtCompactionFailed (live only, never journaled) carries only Error.
+	CompactFirstID     string `json:"compact_first_id,omitempty"`
+	CompactLastID      string `json:"compact_last_id,omitempty"`
+	CompactTurnsFolded int    `json:"compact_turns_folded,omitempty"`
+	CompactSummaryID   string `json:"compact_summary_id,omitempty"`
 }
 
 // Durable and live event types (a superset of engine.Event types plus the
@@ -123,6 +135,18 @@ const (
 	// on the ordinary clean-teardown path, purely for observability.
 	evtWorktreeKept    = "workdir.worktree_kept"
 	evtWorktreeRemoved = "workdir.worktree_removed"
+
+	// evtHistoryCompacted is the durable record of a successful compaction
+	// (see engine/compact.go's Session.Compact and docs/design/context-
+	// compaction.md §4): journaled after the summary message itself has
+	// already flowed through an evtMessage record, via Publish's routing of
+	// engine.EventHistoryCompacted — the "reconciliation signal" telling a
+	// replaying tailer which prefix the just-seen summary message replaced.
+	evtHistoryCompacted = "history.compacted"
+	// evtCompactionFailed is compaction's fire-and-forget failure
+	// counterpart — live only, never journaled (a failed compaction never
+	// mutates durable state, so there is nothing to reconcile on replay).
+	evtCompactionFailed = "compaction.failed"
 )
 
 const journalName = "events.jsonl"
@@ -183,7 +207,29 @@ func (s *Server) Publish(ev engine.Event) {
 		})
 	case engine.EventGoalSet, engine.EventGoalEval, engine.EventGoalStalled, engine.EventGoalAchieved, engine.EventGoalCleared:
 		s.publishGoal(ev)
+	case engine.EventHistoryCompacted:
+		s.publishHistoryCompacted(ev)
+	case engine.EventCompactionFailed:
+		s.publishLive(Event{Type: evtCompactionFailed, SessionID: ev.SessionID, Error: ev.Text})
 	}
+}
+
+// publishHistoryCompacted journals the durable history.compacted record for
+// a successful compaction (see engine/compact.go's Session.Compact). It is
+// called synchronously from within Session.Compact's own emit sequence —
+// AFTER the summary message's EventMessage has already been published (see
+// Publish's engine.EventMessage case, which journals via syncMessages) — so
+// the journal order is always summary message, then history.compacted,
+// exactly as docs/design/context-compaction.md §4 requires.
+func (s *Server) publishHistoryCompacted(ev engine.Event) {
+	s.emitDurable(Event{
+		Type:               evtHistoryCompacted,
+		SessionID:          ev.SessionID,
+		CompactFirstID:     ev.CompactFirstID,
+		CompactLastID:      ev.CompactLastID,
+		CompactTurnsFolded: ev.CompactTurnsFolded,
+		CompactSummaryID:   ev.CompactSummaryID,
+	})
 }
 
 // publishGoal journals a durable goal.* record and folds the event into the
