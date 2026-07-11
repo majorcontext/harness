@@ -288,7 +288,7 @@
   .dot.loading { background: var(--dim); }
   .box-name { font-weight: 700; text-transform: uppercase; letter-spacing: .04em; font-size: 12px; }
   .box-base { color: var(--dim); font-size: 10px; }
-  .box-meta { color: var(--dim); font-size: 10px; margin-left: auto; text-align: right; text-transform: uppercase; }
+  .box-meta { color: var(--dim); font-size: 10px; margin-left: auto; text-align: right; }
   .box-counts { display: flex; gap: 6px; padding: 0 10px 8px; flex-wrap: wrap; }
   .count-chip {
     border-radius: 0; padding: 1px 7px; font-size: 10px; border: 1px solid var(--border);
@@ -1764,7 +1764,10 @@ function updateBoxCard(entry, b) {
     entry.dot.className = "dot " + dotClass;
     entry.nameDiv.textContent = b.name;
     entry.baseDiv.textContent = b.base;
-    entry.metaDiv.textContent = rt.vcsRevision ? rt.vcsRevision.slice(0, 10)
+    // The third line of a box card: which binary this box runs (health's
+    // vcs_revision) — labeled, lowercase hex; the uppercase micro-label
+    // transform mangled it into unreadable line noise.
+    entry.metaDiv.textContent = rt.vcsRevision ? "rev " + rt.vcsRevision.slice(0, 8)
       : loading ? "\u2026" : (rt.health === "down" ? "unreachable" : "\u2026");
     // Zero-count chips are noise: show only states that exist right now.
     entry.idleChip.textContent = counts.idle + " idle";
