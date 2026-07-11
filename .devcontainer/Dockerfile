@@ -9,6 +9,12 @@
 # Because of (2), keep this a PLAIN Dockerfile: no devcontainer
 # "features", no lifecycle hooks baked in — anything a non-devcontainer
 # runtime could not reproduce belongs in devcontainer.json instead.
+# Floating patch tags (1.25-bookworm, setup_24.x) are DELIBERATE: under
+# the fleet model boxes are cattle, rebuilt often — drift-on-rebuild picks
+# up toolchain patches by design, and go.mod's toolchain directive governs
+# the Go version actually used to build regardless of the image's patch
+# level. Pin by digest here only if spawn-time determinism ever becomes a
+# requirement.
 FROM golang:1.25-bookworm
 
 # Node is required for the repo's build-free web tooling tests
