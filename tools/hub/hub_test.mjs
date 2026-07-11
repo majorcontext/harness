@@ -58,6 +58,7 @@ const {
   notifyForEvent,
   sortByLastActivity,
   countByState,
+  randomSlug,
 } = sandbox;
 
 /* ---------- fmtRelative ---------- */
@@ -346,4 +347,38 @@ test("createSSEParser: chunk boundary mid-frame", () => {
   feed("data: hel");
   feed("lo\n\n");
   assert.deepEqual(frames, [{ id: null, data: "hello" }]);
+});
+
+/* ---------- randomSlug ---------- */
+
+test("randomSlug: deterministic under a fixed rand, suffix 00 at rand 0", () => {
+  // rand always 0 → first adjective, first noun, num 0 → padded "-00".
+  const a = randomSlug(() => 0);
+  const b = randomSlug(() => 0);
+  assert.equal(a, b, "same rand yields same slug");
+  assert.match(a, /^[a-z]+-[a-z]+-00$/);
+});
+
+test("randomSlug: two-digit zero-padded suffix", () => {
+  // rand just under 1 → last adjective/noun, num 99.
+  const slug = randomSlug(() => 0.999);
+  assert.match(slug, /^[a-z]+-[a-z]+-99$/);
+});
+
+test("randomSlug: always matches the documented shape over many draws", () => {
+  let seed = 1;
+  const rand = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  for (let i = 0; i < 200; i++) {
+    assert.match(randomSlug(rand), /^[a-z]+-[a-z]+-\d{2}$/);
+  }
+});
+
+test("randomSlug: both word segments are lowercase across many draws", () => {
+  let seed = 7;
+  const rand = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  for (let i = 0; i < 200; i++) {
+    const [adj, noun] = randomSlug(rand).split("-");
+    assert.match(adj, /^[a-z]+$/);
+    assert.match(noun, /^[a-z]+$/);
+  }
 });

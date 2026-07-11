@@ -644,6 +644,36 @@ function createSSEParser(onEvent) {
     }
   };
 }
+
+// SLUG_ADJECTIVES / SLUG_NOUNS feed randomSlug — a friendly default box
+// name so an operator never has to invent one. Kept short, unambiguous,
+// and inoffensive; the pairing space (adjective × noun × 100) is large
+// enough that collisions in a personal fleet are rare, and the trailing
+// number makes an accidental repeat visibly distinct.
+const SLUG_ADJECTIVES = [
+  "amber", "brisk", "calm", "clever", "cobalt", "crimson", "dapper", "eager",
+  "fleet", "gentle", "hardy", "ivory", "jolly", "keen", "lucid", "mellow",
+  "nimble", "olive", "plucky", "quiet", "rapid", "sunny", "teal", "umber",
+  "vivid", "witty", "zesty", "azure", "bold", "swift",
+];
+const SLUG_NOUNS = [
+  "otter", "falcon", "maple", "harbor", "comet", "willow", "badger", "cedar",
+  "finch", "gulch", "heron", "island", "jasper", "kestrel", "lark", "meadow",
+  "nectar", "orchard", "pebble", "quartz", "raven", "spruce", "thistle",
+  "vale", "walrus", "yak", "zephyr", "beacon", "cove", "dune",
+];
+
+// randomSlug builds an "adjective-noun-NN" box name. rand is injectable
+// (defaults to Math.random) so the pairing is deterministic under test;
+// it must return a float in [0, 1). The two-digit suffix is derived from
+// the same source so one rand call sequence fully determines the name.
+function randomSlug(rand) {
+  const r = typeof rand === "function" ? rand : Math.random;
+  const adj = SLUG_ADJECTIVES[Math.floor(r() * SLUG_ADJECTIVES.length)];
+  const noun = SLUG_NOUNS[Math.floor(r() * SLUG_NOUNS.length)];
+  const num = String(Math.floor(r() * 100)).padStart(2, "0");
+  return adj + "-" + noun + "-" + num;
+}
 /* TESTABLE-END */
 
 /* ============================================================
@@ -1447,20 +1477,22 @@ function openDispatchModal(boxId) {
 /* ---------- spawn box: the hub's own (same-origin) SSE API ---------- */
 
 function openSpawnModal() {
-  const nameIn = el("input", { placeholder: "name for the new box (once it's up)" });
+  // The new box gets an auto-generated adjective-noun-NN name — no operator
+  // input required. It's editable afterward from the box card if desired.
+  const name = randomSlug();
   const log = el("div", { class: "spawnlog", text: "" });
   const notice = el("div", { class: "notice" });
   const startBtn = el("button", { class: "primary", text: "Spawn" });
   const modal = el("div", { class: "modal" },
     el("h2", { text: "Spawn a new box" }),
     el("div", {}, "Runs this hub's configured -spawn-command / $HARNESS_HUB_SPAWN and streams its output below. See the contract in this page's header comment."),
-    el("div", { class: "field" }, el("label", { text: "Box name" }), nameIn),
+    el("div", { class: "field" }, el("label", { text: "Name" }), el("code", { text: name })),
     notice, log,
     el("div", { class: "row" }, startBtn, el("button", { text: "Close", onclick: closeModal })),
   );
   showModal(modal);
-  startBtn.onclick = () => runSpawn(nameIn.value, log, notice, startBtn);
-  nameIn.focus();
+  startBtn.onclick = () => runSpawn(name, log, notice, startBtn);
+  startBtn.focus();
 }
 
 async function runSpawn(name, log, notice, startBtn) {
