@@ -236,7 +236,29 @@ configured" are the same observable fact).
 See `server/openapi.yaml` for the full schema (`ProcessStatus`,
 `ProcessInfo`).
 
-## 6. Non-goals
+## 6. End-to-end verification
+
+`e2e.TestManagedProcessesEndToEnd` drives the whole feature through a real
+`harness serve` subprocess, a real session, and a real (if short-lived)
+child process — not just unit-level calls into `process`/`engine` types.
+A fake Anthropic backend records every raw request body it receives and,
+on the first call, emits a `tool_use` block calling the `process` tool
+itself (`{"action":"start","name":"dev"}`) — the model discovers and
+drives the tool, the test never calls `Start` directly. It then asserts,
+against the literal wire JSON:
+
+1. The first request (before anything ran) carries no ambient block.
+2. The very next request in the same tool loop — same prompt text,
+   nothing new said — already carries `[processes: dev ready ...]`.
+3. A later, unrelated prompt ("what should I do next?") still carries it.
+4. `GET /process` reports the same live process, and the real log file on
+   disk contains the real ready line the real child process printed.
+
+This is the literal proof of the design's purpose statement: an agent
+starts a dev server without ceremony, and the model always knows what is
+running and where the logs are without being told in the prompt.
+
+## 7. Non-goals
 
 - **No process supervision policy** (restart-on-crash, backoff, health
   checks beyond the one-shot ready gate). `exited` is a terminal,
