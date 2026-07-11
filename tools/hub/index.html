@@ -146,6 +146,11 @@
   .box-head:hover { background: var(--tool); }
   .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--off); flex-shrink: 0; }
   .dot.on { background: var(--ok); } .dot.re { background: var(--warn); } .dot.off { background: var(--off); }
+  /* A box's first health/session poll is in flight until it resolves —
+     neutral/dimmed, distinct from the amber "reconnecting" dot, so a
+     healthy box's very first paint doesn't read as trouble (see
+     REQUIRED BEHAVIOR (c): no layout jump once data arrives). */
+  .dot.loading { background: var(--dim); }
   .box-name { font-weight: 600; }
   .box-base { color: var(--dim); font-size: 12px; font-family: ui-monospace, monospace; }
   .box-meta { color: var(--dim); font-size: 11px; margin-left: auto; text-align: right; }
@@ -1033,58 +1038,132 @@ function reduceGoalWire(prevWire, ev) {
   };
 }
 
-/* ---------- fleet rendering ---------- */
+/* ---------- fleet rendering: keyed per-card/per-row reconciliation ----------
+   The old renderFleet emptied #fleet and rebuilt every box card and every
+   session row on EVERY repaint (poll tick, any box's SSE event, coalesced or
+   not). Live events re-sorting rows by last_activity_at made cards/rows
+   visibly jump around under the cursor while streams were active. Now:
+     - box cards are keyed by box id; a card's DOM is only rewritten when
+       boxCardSignature(...) changes (health/name/base/revision/counts/
+       expanded), and its position is only touched when it's actually out of
+       place (boxes rarely reorder — hs.boxes is insertion order).
+     - session rows within an expanded card are keyed by session id, each
+       skipped unless sessionRowSignature(...) changed.
+     - row REORDERING (by last_activity_at) is damped via shouldResort to at
+       most once per second; between allowed sorts, rows already in the DOM
+       still refresh their content in place, and brand-new rows are spliced
+       in without disturbing the rest of the order.
+   fleetDom holds this bookkeeping, one entry per box id (plus emptyShown for
+   the whole-fleet "no boxes yet" placeholder). */
+let fleetDom = { emptyShown: null, boxes: new Map() };
+
+const FLEET_RESORT_MS = 1000;
 
 function renderFleet() {
   const root = $("fleet");
-  root.textContent = "";
   if (!hs.boxes.length) {
-    root.append(el("div", { class: "empty", text: "no boxes yet — \u201c+ Add box\u201d or \u201c\u26a1 Spawn box\u201d to get started" }));
+    if (fleetDom.emptyShown !== true) {
+      root.textContent = "";
+      root.append(el("div", { class: "empty", text: "no boxes yet — \u201c+ Add box\u201d or \u201c\u26a1 Spawn box\u201d to get started" }));
+      fleetDom.emptyShown = true;
+      fleetDom.boxes.clear();
+    }
     return;
   }
-  for (const b of hs.boxes) root.append(renderBoxCard(b));
+  if (fleetDom.emptyShown !== false) {
+    root.textContent = "";
+    fleetDom.emptyShown = false;
+    fleetDom.boxes.clear();
+  }
+
+  const liveIds = new Set(hs.boxes.map(b => b.id));
+  for (const [id, entry] of fleetDom.boxes) {
+    if (!liveIds.has(id)) { entry.cardEl.remove(); fleetDom.boxes.delete(id); }
+  }
+
+  let prevEl = null;
+  for (const b of hs.boxes) {
+    let entry = fleetDom.boxes.get(b.id);
+    if (!entry) {
+      entry = createBoxCardEntry(b.id);
+      fleetDom.boxes.set(b.id, entry);
+      root.append(entry.cardEl);
+    }
+    updateBoxCard(entry, b);
+    if (prevEl) {
+      if (prevEl.nextSibling !== entry.cardEl) root.insertBefore(entry.cardEl, prevEl.nextSibling);
+    } else if (root.firstChild !== entry.cardEl) {
+      root.insertBefore(entry.cardEl, root.firstChild);
+    }
+    prevEl = entry.cardEl;
+  }
 }
 
-function renderBoxCard(b) {
-  const rt = ensureRuntime(b.id);
-  const sessions = sortByLastActivity([...rt.sessions.values()]);
-  const counts = countByState(sessions);
-  const dotClass = rt.health === "ok" ? "on" : rt.health === "down" ? "off" : "re";
-
-  const head = el("div", { class: "box-head", onclick: () => toggleExpanded(b.id) },
-    el("span", { class: "dot " + dotClass }),
-    el("div", {},
-      el("div", { class: "box-name", text: b.name }),
-      el("div", { class: "box-base", text: b.base })),
-    el("div", { class: "box-meta" },
-      el("div", { text: rt.vcsRevision ? rt.vcsRevision.slice(0, 10) : (rt.health === "down" ? "unreachable" : "\u2026") }),
-    ),
+// createBoxCardEntry builds the STATIC skeleton of one box card once —
+// element references it needs are stashed directly on the entry so
+// updateBoxCard can patch text/classes in place instead of recreating them.
+function createBoxCardEntry(boxId) {
+  const dot = el("span", { class: "dot" });
+  const nameDiv = el("div", { class: "box-name" });
+  const baseDiv = el("div", { class: "box-base" });
+  const metaDiv = el("div", {});
+  const head = el("div", { class: "box-head", onclick: () => toggleExpanded(boxId) },
+    dot,
+    el("div", {}, nameDiv, baseDiv),
+    el("div", { class: "box-meta" }, metaDiv),
   );
-
-  const counts_ = el("div", { class: "box-counts" },
-    el("span", { class: "count-chip", text: counts.idle + " idle" }),
-    el("span", { class: "count-chip busy", text: counts.busy + " busy" }),
-    el("span", { class: "count-chip goal-running", text: counts["goal-running"] + " goal" }),
-  );
-
+  const idleChip = el("span", { class: "count-chip" });
+  const busyChip = el("span", { class: "count-chip busy" });
+  const goalChip = el("span", { class: "count-chip goal-running" });
+  const counts = el("div", { class: "box-counts" }, idleChip, busyChip, goalChip);
   const actions = el("div", { class: "box-actions" },
-    el("button", { class: "small", text: "+ Dispatch", onclick: () => openDispatchModal(b.id) }),
-    el("button", { class: "small", text: "+ New session", onclick: () => quickNewSession(b.id) }),
-    el("button", { class: "small danger", text: "Remove", onclick: () => removeBox(b.id) }),
+    el("button", { class: "small", text: "+ Dispatch", onclick: () => openDispatchModal(boxId) }),
+    el("button", { class: "small", text: "+ New session", onclick: () => quickNewSession(boxId) }),
+    el("button", { class: "small danger", text: "Remove", onclick: () => removeBox(boxId) }),
   );
+  const cardEl = el("div", { class: "box-card" }, head, counts, actions);
+  return {
+    boxId, cardEl, dot, nameDiv, baseDiv, metaDiv, idleChip, busyChip, goalChip,
+    sig: null,
+    sessSection: null, rows: new Map(), order: [], lastSortAt: 0,
+    loadingEl: null, emptyEl: null,
+  };
+}
 
-  const card = el("div", { class: "box-card" }, head, counts_, actions);
-
-  if (isExpanded(b.id)) {
-    const list = el("div", { class: "sess-list" });
-    if (!sessions.length) {
-      list.append(el("div", { class: "empty", text: "no sessions" }));
-    } else {
-      for (const s of sessions) list.append(renderSessionCard(b.id, s));
-    }
-    card.append(list);
+// updateBoxCard skips ALL DOM writes to the card's own header/counts when
+// boxCardSignature is unchanged; the session list underneath is always
+// reconciled separately (updateSessList applies its own, finer-grained
+// skip/damping logic).
+function updateBoxCard(entry, b) {
+  const rt = ensureRuntime(b.id);
+  // rt.health starts "unknown" and is set to "ok"/"down" the instant the
+  // first health/session poll resolves (see pollBoxOnce) — "unknown" IS
+  // "first poll in flight" (see REQUIRED BEHAVIOR (c)): a neutral, dimmed
+  // dot instead of the amber "reconnecting" look, so a healthy box's very
+  // first paint doesn't read as trouble.
+  const loading = rt.health === "unknown";
+  const sessions = [...rt.sessions.values()];
+  const counts = countByState(sessions);
+  const expanded = isExpanded(b.id);
+  const sig = boxCardSignature({
+    health: loading ? "loading" : rt.health,
+    name: b.name, base: b.base,
+    vcsRevision: rt.vcsRevision,
+    expanded, counts,
+  });
+  if (entry.sig !== sig) {
+    entry.sig = sig;
+    const dotClass = loading ? "loading" : rt.health === "ok" ? "on" : rt.health === "down" ? "off" : "re";
+    entry.dot.className = "dot " + dotClass;
+    entry.nameDiv.textContent = b.name;
+    entry.baseDiv.textContent = b.base;
+    entry.metaDiv.textContent = rt.vcsRevision ? rt.vcsRevision.slice(0, 10)
+      : loading ? "\u2026" : (rt.health === "down" ? "unreachable" : "\u2026");
+    entry.idleChip.textContent = counts.idle + " idle";
+    entry.busyChip.textContent = counts.busy + " busy";
+    entry.goalChip.textContent = counts["goal-running"] + " goal";
   }
-  return card;
+  updateSessList(entry, b.id, sessions, expanded, loading);
 }
 
 const expandedBoxes = new Set();
@@ -1094,30 +1173,170 @@ function toggleExpanded(id) {
   renderFleet();
 }
 
-function renderSessionCard(boxId, s) {
-  const badge = sessionBadge(s);
-  const sel = drill.boxId === boxId && drill.sessionId === s.id;
-  const node = el("div", { class: "sess" + (sel ? " sel" : ""), title: s.id, onclick: () => selectSession(boxId, s.id) },
-    el("div", { class: "id", text: shortId(s.id) }),
-    el("div", { class: "meta" },
-      el("span", { class: "badge " + badge, text: badge }),
-      el("span", { text: s.model || "\u2014" }),
-      el("span", { text: usageSummary(s.usage) }),
-      el("span", { text: fmtRelative(s.last_activity_at) }),
-    ),
+// updateSessList reconciles the session rows under one (expanded) box card.
+// Reordering is damped (shouldResort, at most once per FLEET_RESORT_MS): a
+// full re-sort recomputes entry.order from sortByLastActivity; in between,
+// existing rows keep their last-applied order and brand-new session ids are
+// simply prepended, so a burst of activity refreshes row CONTENT without
+// shuffling rows out from under the cursor.
+function updateSessList(entry, boxId, sessions, expanded, loading) {
+  if (!expanded) {
+    if (entry.sessSection) {
+      entry.sessSection.remove();
+      entry.sessSection = null;
+      entry.rows.clear();
+      entry.order = [];
+      entry.loadingEl = null;
+      entry.emptyEl = null;
+    }
+    return;
+  }
+  if (!entry.sessSection) {
+    entry.sessSection = el("div", { class: "sess-list" });
+    entry.cardEl.append(entry.sessSection);
+  }
+
+  if (loading) {
+    // First poll in flight: reserve the session area with a neutral
+    // placeholder instead of flashing "no sessions" and then jumping once
+    // data arrives (REQUIRED BEHAVIOR (c)).
+    if (!entry.loadingEl) entry.loadingEl = el("div", { class: "empty", text: "loading\u2026" });
+    if (entry.sessSection.childNodes.length !== 1 || entry.sessSection.firstChild !== entry.loadingEl) {
+      entry.sessSection.textContent = "";
+      entry.sessSection.append(entry.loadingEl);
+    }
+    entry.rows.clear();
+    entry.order = [];
+    return;
+  }
+  entry.loadingEl = null;
+
+  if (!sessions.length) {
+    if (!entry.emptyEl) entry.emptyEl = el("div", { class: "empty", text: "no sessions" });
+    if (entry.sessSection.childNodes.length !== 1 || entry.sessSection.firstChild !== entry.emptyEl) {
+      entry.sessSection.textContent = "";
+      entry.sessSection.append(entry.emptyEl);
+    }
+    entry.rows.clear();
+    entry.order = [];
+    return;
+  }
+  entry.emptyEl = null;
+
+  const liveIds = new Set(sessions.map(s => s.id));
+  for (const [id, row] of entry.rows) {
+    if (!liveIds.has(id)) { row.el.remove(); entry.rows.delete(id); }
+  }
+
+  const now = Date.now();
+  let orderedIds;
+  if (shouldResort(entry.lastSortAt, now, FLEET_RESORT_MS)) {
+    orderedIds = sortByLastActivity(sessions).map(s => s.id);
+    entry.lastSortAt = now;
+  } else {
+    const known = entry.order.filter(id => liveIds.has(id));
+    const newIds = sessions.map(s => s.id).filter(id => !known.includes(id));
+    orderedIds = newIds.concat(known);
+  }
+  entry.order = orderedIds;
+
+  const byId = new Map(sessions.map(s => [s.id, s]));
+  let prevEl = null;
+  for (const id of orderedIds) {
+    const s = byId.get(id);
+    let row = entry.rows.get(id);
+    const selected = drill.boxId === boxId && drill.sessionId === id;
+    const sig = sessionRowSignature(s, selected);
+    if (!row) {
+      row = { el: createSessionRowEl(boxId, id), sig: null };
+      entry.rows.set(id, row);
+    }
+    if (row.sig !== sig) {
+      updateSessionRowEl(row.el, boxId, s, selected);
+      row.sig = sig;
+    }
+    if (prevEl) {
+      if (prevEl.nextSibling !== row.el) entry.sessSection.insertBefore(row.el, prevEl.nextSibling);
+    } else if (entry.sessSection.firstChild !== row.el) {
+      entry.sessSection.insertBefore(row.el, entry.sessSection.firstChild);
+    }
+    prevEl = row.el;
+  }
+}
+
+// createSessionRowEl builds one session row's STATIC skeleton once;
+// updateSessionRowEl (called only when sessionRowSignature changed) patches
+// its text/classes and adds/removes the optional goal-snippet/last-turn/
+// re-arm children in place.
+function createSessionRowEl(boxId, sessionId) {
+  const idDiv = el("div", { class: "id" });
+  const badgeSpan = el("span", { class: "badge" });
+  const modelSpan = el("span", {});
+  const usageSpan = el("span", {});
+  const relSpan = el("span", {});
+  const node = el("div", { class: "sess", title: sessionId, onclick: () => selectSession(boxId, node._sessionId) },
+    idDiv,
+    el("div", { class: "meta" }, badgeSpan, modelSpan, usageSpan, relSpan),
   );
-  if (s.goal && s.goal.condition && s.goal.active) {
-    node.append(el("div", { class: "goal-snippet", text: "\ud83c\udfaf " + goalSnippet(s.goal.condition) }));
-  }
-  if (s.last_turn && s.last_turn.outcome) {
-    const isErr = s.last_turn.outcome !== "completed";
-    node.append(el("div", { class: "last-turn" + (isErr ? " error" : ""), text: lastTurnSummary(s.last_turn) }));
-  }
-  if (s.goal && s.goal.condition && !s.goal.active) {
-    const btn = el("button", { class: "small rearm", text: "\ud83d\udd01 Re-arm", onclick: (e) => { e.stopPropagation(); openRearmModal(boxId, s); } });
-    node.append(btn);
-  }
+  node._sessionId = sessionId;
+  node._idDiv = idDiv;
+  node._badgeSpan = badgeSpan;
+  node._modelSpan = modelSpan;
+  node._usageSpan = usageSpan;
+  node._relSpan = relSpan;
+  node._goalDiv = null;
+  node._lastTurnDiv = null;
+  node._rearmBtn = null;
+  node._sess = null;
   return node;
+}
+
+function updateSessionRowEl(node, boxId, s, selected) {
+  node._sess = s;
+  node._sessionId = s.id;
+  node.className = "sess" + (selected ? " sel" : "");
+  node.title = s.id;
+  node._idDiv.textContent = shortId(s.id);
+  const badge = sessionBadge(s);
+  node._badgeSpan.className = "badge " + badge;
+  node._badgeSpan.textContent = badge;
+  node._modelSpan.textContent = s.model || "\u2014";
+  node._usageSpan.textContent = usageSummary(s.usage);
+  node._relSpan.textContent = fmtRelative(s.last_activity_at);
+
+  const showGoalSnippet = !!(s.goal && s.goal.condition && s.goal.active);
+  if (showGoalSnippet) {
+    if (!node._goalDiv) { node._goalDiv = el("div", { class: "goal-snippet" }); node.append(node._goalDiv); }
+    node._goalDiv.textContent = "\ud83c\udfaf " + goalSnippet(s.goal.condition);
+  } else if (node._goalDiv) {
+    node._goalDiv.remove();
+    node._goalDiv = null;
+  }
+
+  const hasLastTurn = !!(s.last_turn && s.last_turn.outcome);
+  if (hasLastTurn) {
+    const isErr = s.last_turn.outcome !== "completed";
+    if (!node._lastTurnDiv) { node._lastTurnDiv = el("div", {}); node.append(node._lastTurnDiv); }
+    node._lastTurnDiv.className = "last-turn" + (isErr ? " error" : "");
+    node._lastTurnDiv.textContent = lastTurnSummary(s.last_turn);
+  } else if (node._lastTurnDiv) {
+    node._lastTurnDiv.remove();
+    node._lastTurnDiv = null;
+  }
+
+  const showRearm = !!(s.goal && s.goal.condition && !s.goal.active);
+  if (showRearm) {
+    if (!node._rearmBtn) {
+      node._rearmBtn = el("button", {
+        class: "small rearm", text: "\ud83d\udd01 Re-arm",
+        onclick: (e) => { e.stopPropagation(); openRearmModal(boxId, node._sess); },
+      });
+      node.append(node._rearmBtn);
+    }
+  } else if (node._rearmBtn) {
+    node._rearmBtn.remove();
+    node._rearmBtn = null;
+  }
 }
 
 /* ---------- session drill-down ----------
@@ -1241,41 +1460,98 @@ function renderDrillSessionMeta() {
   renderGoalPanel();
 }
 
+/* ---------- timeline DOM: keyed, append-only (see PROBLEM/REQUIRED BEHAVIOR
+   (a) in the header comment) ----------
+   A from=0 session replay can deliver dozens of coalesced render passes over
+   a couple of seconds. Emptying #timeline and rebuilding it from scratch on
+   every pass (the old approach) flickers, snaps every tool_call/reasoning
+   <details> back to collapsed, and forces the scroll position to the
+   bottom even if the operator scrolled up to read history. Instead:
+     - durable messages/goal-narrative entries/banners are each rendered
+       EXACTLY ONCE, keyed (message id / event seq / banner index), and a
+       render pass only APPENDS the ones not already in the DOM — existing
+       nodes (and their <details> open/closed state) are never touched.
+     - the streaming draft is a single persistent element whose children are
+       patched in place (see createDraftEl/updateDraftEl below) rather than
+       recreated every render, so expanding its tool_call block survives
+       subsequent deltas.
+     - autoscroll only sticks to the bottom if the viewport was ALREADY at
+       the bottom before this render's DOM changes (the "pinned tail"
+       pattern) — an operator who scrolled up keeps their place.
+   tlDom holds this DOM-side bookkeeping; it is reset wholesale exactly once,
+   when the selected (box, session) changes — see resetTimelineDom. */
+let tlDom = null;
+
+function timelineSessionKey() {
+  return (drill.boxId || "") + "\u0000" + (drill.sessionId || "");
+}
+
+function resetTimelineDom(tl) {
+  tl.textContent = "";
+  tlDom = {
+    key: timelineSessionKey(),
+    rendered: new Set(),
+    narrativeEl: null, messagesEl: null, bannersEl: null,
+    emptyEl: null, draftEl: null,
+  };
+  if (!drill.sessionId) {
+    tl.append(el("div", { class: "empty", text: "select a session from the fleet on the left" }));
+    return;
+  }
+  // Goal narrative first (condition-setting context), then the message
+  // transcript, then banners, then the draft (kept last, see renderTimeline)
+  // — goal.* records read best as a preface + running log, and this
+  // ordering is deterministic across reconnects.
+  tlDom.narrativeEl = el("div", { class: "tl-narrative" });
+  tlDom.messagesEl = el("div", { class: "tl-messages" });
+  tlDom.bannersEl = el("div", { class: "tl-banners" });
+  tlDom.emptyEl = el("div", { class: "empty", text: "no messages yet" });
+  tl.append(tlDom.emptyEl, tlDom.narrativeEl, tlDom.messagesEl, tlDom.bannersEl);
+}
+
+const TIMELINE_PIN_PX = 32;
+
 function renderTimeline() {
   const tl = $("timeline");
-  tl.textContent = "";
-  if (!drill.sessionId) { tl.append(el("div", { class: "empty", text: "select a session from the fleet on the left" })); return; }
+  if (!tlDom || tlDom.key !== timelineSessionKey()) resetTimelineDom(tl);
+  if (!drill.sessionId) return;
 
-  // Merge messages (ordered by created_at) and goal narrative entries
-  // (ordered by seq) into one timeline: goal entries carry no created_at, so
-  // they're interleaved by seq relative to request.meta/message records is
-  // not tracked here — simplest correct-enough ordering for a narrative is
-  // messages first in their natural order, with goal entries rendered in
-  // their own arrival order interspersed at the point they were received
-  // relative to messages seen so far (both arrive in seq order over the
-  // wire, so appending each in the order handleDrillEvent saw it preserves
-  // the true narrative order without needing a merge key at all).
-  const items = [];
-  for (const m of drill.messages) items.push({ kind: "message", at: m.created_at || "", m });
-  for (const n of drill.narrative) items.push({ kind: "goal", at: n.seq, ev: n.ev });
-  // Both arrays are already in arrival order; a stable sort on nothing would
-  // reorder by insertion anyway, but do it explicitly for messages by
-  // created_at (matches the inspector) while keeping goal entries pinned to
-  // where they were inserted relative to each other.
+  const wasPinned = isPinnedToBottom(tl.scrollTop, tl.scrollHeight, tl.clientHeight, TIMELINE_PIN_PX);
+
   const msgs = drill.messages.slice().sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 
-  if (!msgs.length && !drill.narrative.length && !drill.draft && !drill.banners.length) {
-    tl.append(el("div", { class: "empty", text: "no messages yet" }));
+  const newNarr = planAppend(tlDom.rendered, drill.narrative, n => (n && typeof n.seq === "number") ? "g:" + n.seq : null);
+  for (const n of newNarr) {
+    tlDom.rendered.add("g:" + n.seq);
+    tlDom.narrativeEl.append(renderGoalNarrativeItem(n.ev));
   }
-  // Render goal narrative entries first (condition-setting context), then
-  // the message transcript, then banners/draft — goal.* records read best
-  // as a preface + a running log rather than perfectly interleaved with
-  // tool chatter, and this ordering is deterministic across reconnects.
-  for (const n of drill.narrative) tl.append(renderGoalNarrativeItem(n.ev));
-  for (const m of msgs) tl.append(renderMessage(m));
-  for (const b of drill.banners) tl.append(renderBanner(b));
-  if (drill.draft) tl.append(renderDraft(drill.draft));
-  tl.scrollTop = tl.scrollHeight;
+
+  const newMsgs = planAppend(tlDom.rendered, msgs, m => (m && m.id) ? "m:" + m.id : null);
+  for (const m of newMsgs) {
+    tlDom.rendered.add("m:" + m.id);
+    tlDom.messagesEl.append(renderMessage(m));
+  }
+
+  const newBanners = planAppend(tlDom.rendered, drill.banners.map((b, i) => ({ b, i })), x => "b:" + x.i);
+  for (const x of newBanners) {
+    tlDom.rendered.add("b:" + x.i);
+    tlDom.bannersEl.append(renderBanner(x.b));
+  }
+
+  if (drill.draft) {
+    if (!tlDom.draftEl) tlDom.draftEl = createDraftEl();
+    updateDraftEl(tlDom.draftEl, drill.draft);
+    tl.append(tlDom.draftEl); // re-append: a no-op if already last, else moves it to the tail
+  } else if (tlDom.draftEl) {
+    tlDom.draftEl.remove();
+    tlDom.draftEl = null;
+  }
+
+  const hasContent = !!(tlDom.narrativeEl.childNodes.length || tlDom.messagesEl.childNodes.length ||
+    tlDom.bannersEl.childNodes.length || tlDom.draftEl);
+  tlDom.emptyEl.style.display = hasContent ? "none" : "";
+
+  if (wasPinned) tl.scrollTop = tl.scrollHeight;
 }
 
 function renderGoalNarrativeItem(ev) {
@@ -1327,16 +1603,45 @@ function renderMessage(m) {
   return wrap;
 }
 
-function renderReasoning(text) {
-  return el("details", { class: "reason" },
+// makeReasoningNode builds a <details class=reason> node and stashes a
+// reference to its text div (._text) so callers that need to update the
+// text in place (the streaming draft) can do so without recreating the
+// <details> element — which is what preserves its open/closed toggle state
+// across draft updates. renderReasoning (durable, one-shot messages) is
+// just this without ever touching ._text again.
+function makeReasoningNode(text) {
+  const textDiv = el("div", { class: "text", text });
+  const node = el("details", { class: "reason" },
     el("summary", { text: "reasoning" }),
-    el("div", { class: "body" }, el("div", { class: "text", text })));
+    el("div", { class: "body" }, textDiv));
+  node._text = textDiv;
+  return node;
+}
+
+function renderReasoning(text) {
+  return makeReasoningNode(text);
+}
+
+// toolSummaryText / makeToolCallNode: same split as makeReasoningNode above
+// — the <details class=tool> element is created once and its summary/body
+// text nodes are stashed (._summary/._pre) so a running tool call's
+// arguments/"running…" suffix can be refreshed without recreating (and
+// re-collapsing) the element.
+function toolSummaryText(t) {
+  return "\ud83d\udd27 " + (t.name || "tool") + (t.running ? " \u00b7 running\u2026" : "");
+}
+
+function makeToolCallNode(p) {
+  const summary = el("summary", { text: toolSummaryText(p) });
+  const pre = el("pre", { class: "code", text: prettyJSON(p.arguments) });
+  const node = el("details", { class: "tool" }, summary, el("div", { class: "body" }, pre));
+  node._summary = summary;
+  node._pre = pre;
+  return node;
 }
 
 function renderToolCall(p) {
-  return el("details", { class: "tool" },
-    el("summary", { text: "\ud83d\udd27 " + (p.name || "tool") + (p.running ? " \u00b7 running\u2026" : "") }),
-    el("div", { class: "body" }, el("pre", { class: "code", text: prettyJSON(p.arguments) })));
+  return makeToolCallNode(p);
 }
 
 function renderToolResult(content, isErr) {
@@ -1345,21 +1650,94 @@ function renderToolResult(content, isErr) {
     el("div", { class: "text", text: partsText(content) }));
 }
 
+// makeToolResultNode/updateToolResultNode: the draft's tool_result view
+// (t.output/t.is_error, as accumulated by handleDrillEvent's tool.end
+// handling), kept separate from renderToolResult (durable message parts,
+// content/isErr) since only the draft's copy is ever updated in place.
+function makeToolResultNode(t) {
+  const roleDiv = el("div", { class: "role" });
+  const textDiv = el("div", { class: "text" });
+  const node = el("div", { class: "toolres" }, roleDiv, textDiv);
+  node._role = roleDiv;
+  node._text = textDiv;
+  updateToolResultNode(node, t);
+  return node;
+}
+
+function updateToolResultNode(node, t) {
+  const isErr = !!t.is_error;
+  node.className = "toolres" + (isErr ? " err" : "");
+  node._role.textContent = isErr ? "tool result (error)" : "tool result";
+  node._text.textContent = partsText(t.output);
+}
+
 function renderBanner(b) {
   const cls = b.type === "session.aborted" ? "banner abort" : "banner";
   const label = b.type === "session.aborted" ? "aborted" : "error";
   return el("div", { class: cls, text: b.text ? label + ": " + b.text : label });
 }
 
-function renderDraft(d) {
-  const wrap = el("div", { class: "msg streaming" }, el("div", { class: "role", text: "assistant" }));
-  if (d.reasoning) wrap.append(renderReasoning(d.reasoning));
-  for (const t of d.tools) {
-    if (t.output !== undefined || t.is_error) wrap.append(renderToolResult(t.output, t.is_error));
-    wrap.append(renderToolCall(t));
-  }
-  if (d.text) wrap.append(el("div", { class: "bubble assistant" }, el("div", { class: "text", text: d.text })));
+/* ---------- streaming draft: a single persistent element, patched in place ----------
+   Recreating the draft bubble on every text.delta/tool.start/tool.end (the
+   old renderDraft) meant an expanded tool_call block snapped back to
+   collapsed on the very next token. createDraftEl builds the bubble once;
+   updateDraftEl mutates its existing children (text nodes, and per-tool
+   <details> looked up by call_id) instead of replacing them. */
+function createDraftEl() {
+  const roleDiv = el("div", { class: "role", text: "assistant" });
+  const wrap = el("div", { class: "msg streaming" }, roleDiv);
+  const toolsBox = el("div", { class: "tools" });
+  wrap.append(toolsBox);
+  const bubbleText = el("div", { class: "text" });
+  const bubble = el("div", { class: "bubble assistant" }, bubbleText);
+  wrap._toolsBox = toolsBox;
+  wrap._bubble = bubble;
+  wrap._bubbleText = bubbleText;
+  wrap._bubbleAppended = false;
+  wrap._reasoningEl = null;
+  wrap._toolNodes = new Map();
   return wrap;
+}
+
+function updateDraftTool(draftEl, t) {
+  let entry = draftEl._toolNodes.get(t.call_id);
+  if (!entry) {
+    const callNode = makeToolCallNode(t);
+    draftEl._toolsBox.append(callNode);
+    entry = { callNode, resultNode: null };
+    draftEl._toolNodes.set(t.call_id, entry);
+  }
+  entry.callNode._summary.textContent = toolSummaryText(t);
+  entry.callNode._pre.textContent = prettyJSON(t.arguments);
+  if (t.output !== undefined || t.is_error) {
+    if (!entry.resultNode) {
+      entry.resultNode = makeToolResultNode(t);
+      // Matches the historical ordering: the result renders just before its
+      // tool_call block.
+      draftEl._toolsBox.insertBefore(entry.resultNode, entry.callNode);
+    } else {
+      updateToolResultNode(entry.resultNode, t);
+    }
+  }
+}
+
+function updateDraftEl(draftEl, d) {
+  if (d.reasoning) {
+    if (!draftEl._reasoningEl) {
+      draftEl._reasoningEl = makeReasoningNode(d.reasoning);
+      draftEl.insertBefore(draftEl._reasoningEl, draftEl._toolsBox);
+    } else {
+      draftEl._reasoningEl._text.textContent = d.reasoning;
+    }
+  }
+  for (const t of d.tools) updateDraftTool(draftEl, t);
+  if (d.text) {
+    draftEl._bubbleText.textContent = d.text;
+    if (!draftEl._bubbleAppended) {
+      draftEl.append(draftEl._bubble);
+      draftEl._bubbleAppended = true;
+    }
+  }
 }
 
 /* ---------- composer + goal panel ---------- */
