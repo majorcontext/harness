@@ -40,6 +40,16 @@ const (
 	isolationWorktree = "worktree"
 )
 
+// Goal "paused" reasons (see goalTracker.pauseView and GoalSummary.
+// pause_reason): "restart" is a boot-time observation (pauseArmedGoalsAtBoot)
+// that a goal is armed with no loop attached; "provider-backoff" mirrors the
+// existing retryable-backoff park machinery in engine/goal.go (observability
+// only — see goalTracker.pauseView).
+const (
+	pauseReasonRestart         = "restart"
+	pauseReasonProviderBackoff = "provider-backoff"
+)
+
 // Options configures a Server. RunToken, NewSession, and LoadSession are
 // required.
 type Options struct {
@@ -53,11 +63,14 @@ type Options struct {
 	// Version is reported by /health.
 	Version string
 	// NewSession creates a fresh engine session for the given model (zero
-	// model = caller's default) and workdir (already resolved and validated
-	// by handleCreate against WorkspaceRoots — see resolveWorkDir). The
-	// wrapper is expected to wire engine.Config.OnEvent to Server.Publish and
-	// engine.Config.WorkDir to the workDir argument.
-	NewSession func(model message.ModelRef, workDir string) (*engine.Session, error)
+	// model = caller's default), workdir (already resolved and validated
+	// by handleCreate against WorkspaceRoots — see resolveWorkDir), and
+	// parentSession (already validated by handleCreate — see
+	// validateParentSession; empty when POST /session omitted it). The
+	// wrapper is expected to wire engine.Config.OnEvent to Server.Publish,
+	// engine.Config.WorkDir to the workDir argument, and
+	// engine.Config.ParentSession to the parentSession argument.
+	NewSession func(model message.ModelRef, workDir string, parentSession string) (*engine.Session, error)
 	// LoadSession resumes an on-disk session by ID, wiring OnEvent the same
 	// way. It returns an error when no log with that ID exists. The
 	// session's workdir is restored from its log header (see
@@ -239,6 +252,34 @@ type goalTracker struct {
 	retryable      bool
 	retryableClass string
 	waiting        bool
+	// pausedRestart is set by pauseArmedGoalsAtBoot when this process booted
+	// and found the goal armed (active) with no loop ever attached in this
+	// process — the restart half of the "paused" presentation (see
+	// pauseView). Cleared the moment POST /session/{id}/goal re-arms it
+	// (handleGoal). Never set any other way: it is NOT re-derived live from
+	// running/active (see compositeState's doc comment for why that would
+	// be wrong — an ordinary max-turns-exhausted goal in a live process is
+	// not "paused", only one observed unattended at boot is).
+	pausedRestart bool
+}
+
+// pauseView derives the goal's "paused" wire presentation (see
+// GoalSummary.paused/pause_reason): pausedRestart (set once at boot, cleared
+// on re-arm) takes priority; otherwise a still-active, still-waiting
+// retryable stall (see engine/goal.go's retryable-backoff park machinery)
+// reads as paused/provider-backoff — purely derived from the existing
+// retryable/waiting fields, so it clears itself the instant the loop's next
+// goal.eval or goal.stalled record resets waiting, exactly mirroring the
+// self-re-arm behavior that machinery already has (see publishGoal).
+func (g *goalTracker) pauseView() (paused bool, reason string) {
+	switch {
+	case g.pausedRestart:
+		return true, pauseReasonRestart
+	case g.active && g.retryable && g.waiting:
+		return true, pauseReasonProviderBackoff
+	default:
+		return false, ""
+	}
 }
 
 // turnOutcome is the per-session last-turn summary surfaced on Session JSON
@@ -308,6 +349,10 @@ func New(opts Options) (*Server, error) {
 	if err := s.reconcile(); err != nil {
 		return nil, err
 	}
+	// Deliverable 2(a): mark every goal restored active-but-unattended by
+	// reconcile's journal replay as paused/restart, and journal that
+	// observation, before the server is reachable by any client.
+	s.pauseArmedGoalsAtBoot()
 	if opts.SessionDir != "" {
 		// Fixed, predictable path (rather than worktreeBaseDir's lazy
 		// temp-dir fallback) so a crashed predecessor's worktrees — created

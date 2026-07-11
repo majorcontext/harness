@@ -166,7 +166,7 @@ func TestPluginWiringEndToEnd(t *testing.T) {
 		}
 	}
 	newSession := newSessionFn(mkCfg, model, cfg, nil, func(string, int, *provider.Request) {})
-	sess, err := newSession(message.ModelRef{}, tmp)
+	sess, err := newSession(message.ModelRef{}, tmp, "")
 	if err != nil {
 		t.Fatalf("newSession: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestPluginHTTPHeadersWiring(t *testing.T) {
 		}
 	}
 	newSession := newSessionFn(mkCfg, model, cfg, nil, func(string, int, *provider.Request) {})
-	sess, err := newSession(message.ModelRef{}, tmp)
+	sess, err := newSession(message.ModelRef{}, tmp, "")
 	if err != nil {
 		t.Fatalf("newSession: %v", err)
 	}

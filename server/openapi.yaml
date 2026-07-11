@@ -149,6 +149,19 @@ components:
             evaluator hasn't answered yet), and only ever answers a relative
             question ("did anything happen"), never an absolute one ("how
             long has this been quiet"). Always present, resident or not.
+        parent_session:
+          type: string
+          description: >
+            An opaque provenance pointer to the session this one continues
+            from — a re-dispatch after a failed goal, a follow-up fix picked
+            up on a fresh box. Set once at creation (POST /session's
+            parent_session field) and durable across resume/restart, same
+            as `workdir`. It is NOT required to name a session that exists
+            on this server, or anywhere — lineage may cross boxes (see
+            docs/design/fleet-model.md) — so the server never dereferences
+            or validates it beyond a length cap. Absent (omitempty) when the
+            session has no recorded parent, the common case.
+          example: ses_66aa9a7c6f323a7a
 
     Usage:
       type: object
@@ -236,6 +249,15 @@ components:
         hasn't answered yet). Otherwise `busy` or `idle` mirrors `status`
         directly. Poll it, or long-poll it via GET /session/{id}/wait.
 
+        Exception: when GoalSummary.pause_reason is "restart" (see
+        GoalSummary.paused), this reads `idle` even though goal.active is
+        still true — a goal restored from the journal at boot with no loop
+        attached is not progressing, and reporting it "goal-running" forever
+        would be indistinguishable from a live goal (see
+        docs/design/fleet-model.md's ADOPT lifecycle). A "provider-backoff"
+        pause does NOT take this exception: that loop is genuinely running,
+        just waiting out provider weather, so it still reads `goal-running`.
+
     GoalSummary:
       type: object
       description: Per-session goal state surfaced on Session.goal.
@@ -294,6 +316,23 @@ components:
             exhausted — the loop is about to park the turn (retry the same
             directive on the next ordinary turn) rather than clear the goal.
             Meaningless (false) when retryable is false.
+        paused:
+          type: boolean
+          description: >
+            True when the goal is active but nothing is currently driving
+            it: either this server booted and found the goal armed with no
+            loop ever attached in this process (pause_reason "restart"), or
+            the retryable-backoff park machinery is waiting out provider
+            weather (pause_reason "provider-backoff" — mirrors retryable &&
+            waiting above; no behavior change, only this observability).
+            Both clear on re-arm (POST /session/{id}/goal); a
+            "provider-backoff" pause also clears on its own the moment the
+            loop's retry succeeds. See docs/design/fleet-model.md's ADOPT
+            lifecycle for the restart case's operator story.
+        pause_reason:
+          type: string
+          enum: [restart, provider-backoff]
+          description: Present only when paused is true.
 
     SessionStatus:
       type: string
@@ -531,6 +570,7 @@ components:
             - goal.stalled
             - goal.achieved
             - goal.cleared
+            - goal.paused
             - workdir.worktree_kept
             - workdir.worktree_removed
             - text.delta
@@ -589,6 +629,18 @@ components:
             worker turn that failed past its DETERMINISTIC retry budget,
             carrying the failure as goal_reason — a retryable-budget
             exhaustion never reaches this record, see above).
+            Both goal.stalled (while goal_retryable && goal_waiting) and the
+            boot-only goal.paused record carry goal_paused/
+            goal_pause_reason — the wire form of GoalSummary.paused/
+            pause_reason (see that schema and docs/design/fleet-model.md).
+            goal.paused is journaled once per server boot for every session
+            whose journal shows an active goal but which has no running
+            loop attached in this (freshly started) process — always
+            goal_pause_reason "restart" — so the history reads honestly
+            about why the goal never progressed, instead of a silent gap.
+            It carries goal_condition for convenience. It is NOT emitted for
+            the "provider-backoff" pause, which is a live goal.stalled
+            attribute, not a boot-time observation.
             workdir.worktree_kept and workdir.worktree_removed are durable
             records of a workdir_isolation="worktree" session's dedicated git
             worktree being torn down (session end or the serve-start sweep,
@@ -692,6 +744,16 @@ components:
             True while a goal.stalled record is still within the retryable
             backoff budget; false on the final such record, which reports
             the budget exhausted (see GoalSummary.waiting).
+        goal_paused:
+          type: boolean
+          description: >
+            The "paused" presentation (see GoalSummary.paused): true on a
+            goal.paused record (always), and on a goal.stalled record while
+            goal_retryable && goal_waiting.
+        goal_pause_reason:
+          type: string
+          enum: [restart, provider-backoff]
+          description: Present only when goal_paused is true.
         worktree_path:
           type: string
           description: >
@@ -824,6 +886,15 @@ paths:
         worktree (however clean it looks) is left completely untouched by
         the sweep so a resumed session's next prompt keeps running in the
         exact directory it left off in.
+
+        parent_session is optional: when present it must be a non-empty
+        string of at most 128 bytes (400 otherwise). It names no session on
+        this server in particular — the server never dereferences or
+        validates it beyond that length cap. It is an opaque lineage
+        pointer a client sets when re-dispatching after a failed goal or
+        picking up a follow-up fix, so a fleet UI can group a box's history
+        by task (see docs/design/fleet-model.md). Durable across
+        resume/restart, like workdir.
       requestBody:
         required: false
         content:
@@ -849,6 +920,11 @@ paths:
                   description: >
                     "shared" (default) or "worktree" — see the operation
                     description.
+                parent_session:
+                  type: string
+                  maxLength: 128
+                  description: >
+                    Optional lineage pointer; see the operation description.
       responses:
         "201":
           description: Created.
@@ -858,8 +934,9 @@ paths:
         "400":
           description: >
             workdir does not clean-resolve under an allowed workspace root;
-            workdir_isolation names an unknown mode; or workdir_isolation is
-            "worktree" but workdir is not inside a git repository.
+            workdir_isolation names an unknown mode; workdir_isolation is
+            "worktree" but workdir is not inside a git repository; or
+            parent_session is present but empty or exceeds 128 bytes.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
