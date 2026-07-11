@@ -169,8 +169,20 @@ func ValidateDef(def Def) error {
 		}
 	}
 	if def.ReadyHTTP != "" {
-		if _, err := url.ParseRequestURI(def.ReadyHTTP); err != nil {
+		// ParseRequestURI alone accepts inputs http.Get can never satisfy
+		// (a forgotten scheme parses as scheme "localhost", ftp://, an
+		// empty host) — the gate would then spin silently to timeout,
+		// exactly the failure class ready_http exists to eliminate.
+		// Require an http(s) URL with a host.
+		u, err := url.ParseRequestURI(def.ReadyHTTP)
+		if err != nil {
 			return fmt.Errorf("invalid ready_http: %w", err)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return fmt.Errorf("invalid ready_http %q: scheme must be http or https (did you forget the http:// prefix?)", def.ReadyHTTP)
+		}
+		if u.Host == "" {
+			return fmt.Errorf("invalid ready_http %q: missing host", def.ReadyHTTP)
 		}
 	}
 	return nil
