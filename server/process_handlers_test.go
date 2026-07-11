@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,6 +109,33 @@ func TestHandleProcessUnknownName404(t *testing.T) {
 		if resp.StatusCode != http.StatusNotFound {
 			t.Errorf("%s: status = %d, body = %s, want 404", action, resp.StatusCode, body)
 		}
+	}
+}
+
+// TestHandleProcessListNeverLeaksEnvValues is the HTTP-layer counterpart
+// of process.TestDeclareAndUndeclare's "env names never expose values"
+// case: GET /process is the one endpoint an orchestrator (or a curious
+// model, via the same data the `process` tool's `list` action returns)
+// can use to read back a process's configuration, and a secret-bearing
+// env value (an API key, a DB password) must never round-trip through it
+// — only the "K" half of each "K=V" entry.
+func TestHandleProcessListNeverLeaksEnvValues(t *testing.T) {
+	h, _ := newProcessHarness(t, map[string]process.Def{
+		"dev": {Command: []string{"sh", "-c", "true"}, Env: []string{"API_KEY=super-secret-value"}},
+	})
+	resp, body := h.do(http.MethodGet, "/process", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.StatusCode, body)
+	}
+	if strings.Contains(string(body), "super-secret-value") {
+		t.Fatalf("GET /process response leaked an env VALUE: %s", body)
+	}
+	var infos []process.Info
+	if err := json.Unmarshal(body, &infos); err != nil {
+		t.Fatalf("unmarshal: %v (%s)", err, body)
+	}
+	if len(infos) != 1 || len(infos[0].EnvNames) != 1 || infos[0].EnvNames[0] != "API_KEY" {
+		t.Fatalf("infos = %+v, want EnvNames = [API_KEY] and nothing else", infos)
 	}
 }
 
