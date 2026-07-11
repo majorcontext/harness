@@ -119,7 +119,7 @@
     5. When it finishes, goal.achieved (or an error last_turn) appears; a
        "Re-arm" button appears on the session card, pre-filling the
        condition box for editing.
-    6. Toggle "Notify" on (grants OS notification permission on first
+    6. Toggle "Notify" on (in the header Menu) (grants OS notification permission on first
        click); trigger a goal.achieved or a turn.end error on any box ->
        an OS notification fires without this tab being focused.
     7. Click a running session's card -> composer lets you send a prompt,
@@ -129,7 +129,7 @@
     8. Kill a box's `harness serve` -> its health dot goes red and its
        sessions freeze; restart it -> the dot goes green and its SSE stream
        resyncs with backoff, same as the inspector.
-    9. Click "Copy link", reload the page from that pasted URL in a new
+    9. Click "Copy link" (in the header Menu), reload the page from that pasted URL in a new
        tab -> every box and the current selection come back exactly.
    10. Remove a box -> its card and connections disappear; garbage in the
        URL fragment (hand-edit `#s=` to nonsense) loads as an empty,
@@ -420,11 +420,32 @@
   #composer textarea:disabled { opacity: .5; }
   .row { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
   .notice { color: var(--accent); font-size: 12px; min-height: 18px; }
-  .modal-backdrop {
-    position: fixed; inset: 0; background: rgba(0,0,0,.8);
-    display: flex; align-items: flex-start; justify-content: center; padding-top: 60px;
-    z-index: 10;
+  /* Native overflow menus: <details class="menu"> — semantic, keyboard
+     -correct, zero JS. Summary renders as a button; the item panel drops
+     anchored to it. */
+  details.menu { position: relative; }
+  details.menu > summary {
+    list-style: none; cursor: pointer; display: inline-block;
+    border: 1px solid var(--border); padding: 6px 12px;
+    font: 600 11px/1.2 ui-monospace, monospace; text-transform: uppercase; letter-spacing: .08em;
   }
+  details.menu > summary::-webkit-details-marker { display: none; }
+  details.menu[open] > summary, details.menu > summary:hover { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  details.menu.small > summary { padding: 3px 8px; font-size: 10px; }
+  details.menu .menu-items {
+    position: absolute; right: 0; top: calc(100% + 2px); z-index: 20;
+    display: flex; flex-direction: column; min-width: 160px;
+    background: var(--panel-2); border: 1px solid var(--fg);
+  }
+  details.menu .menu-items button {
+    border: none; border-bottom: 1px solid var(--border); text-align: left; width: 100%;
+  }
+  details.menu .menu-items button:last-child { border-bottom: none; }
+  dialog#modalHost {
+    background: transparent; border: none; padding: 0; margin: 60px auto auto;
+    max-width: calc(100vw - 40px);
+  }
+  dialog#modalHost::backdrop { background: rgba(0,0,0,.8); }
   .modal {
     background: var(--panel); border: 1px solid var(--fg); border-radius: 0;
     padding: 16px; width: 560px; max-width: calc(100vw - 40px); max-height: 80vh; overflow-y: auto;
@@ -448,12 +469,17 @@
 <body>
   <header>
     <h1>harness hub</h1>
-    <button id="addBoxBtn">+ Add box</button>
     <button id="spawnBtn">Spawn box</button>
-    <button id="notifyBtn" class="toggle" title="OS notifications when a watched goal achieves or a turn errors">Notify</button>
-    <button id="copyLinkBtn">Copy link</button>
     <span class="spacer"></span>
     <span class="notice" id="headerNotice"></span>
+    <details class="menu" id="hubMenu">
+      <summary>Menu</summary>
+      <div class="menu-items">
+        <button id="addBoxBtn">+ Add box</button>
+        <button id="copyLinkBtn">Copy link</button>
+        <button id="notifyBtn" class="toggle" title="OS notifications when a watched goal achieves or a turn errors">Notify</button>
+      </div>
+    </details>
   </header>
   <div id="activeGoalsBar"></div>
   <main>
@@ -488,7 +514,7 @@
     </div>
   </main>
 
-  <div id="modalHost"></div>
+  <dialog id="modalHost"></dialog>
 
 <script>
 "use strict";
@@ -1687,11 +1713,19 @@ function createBoxCardEntry(boxId) {
     class: "small respawn", text: "\u27f2 Respawn", style: "display:none",
     onclick: () => openRespawnModal(boxId),
   });
+  // One primary action (Dispatch), one contextual promotion (Respawn,
+  // shown only when the box is down — the moment it IS the primary
+  // action), everything occasional behind a native <details> overflow.
+  const overflow = el("details", { class: "menu small" },
+    el("summary", { text: "\u22ef" }),
+    el("div", { class: "menu-items" },
+      el("button", { class: "small", text: "+ New session", onclick: () => quickNewSession(boxId) }),
+      el("button", { class: "small danger", text: "Remove", onclick: () => removeBox(boxId) }),
+    ));
   const actions = el("div", { class: "box-actions" },
     el("button", { class: "small", text: "+ Dispatch", onclick: () => openDispatchModal(boxId) }),
-    el("button", { class: "small", text: "+ New session", onclick: () => quickNewSession(boxId) }),
     respawnBtn,
-    el("button", { class: "small danger", text: "Remove", onclick: () => removeBox(boxId) }),
+    overflow,
   );
   const cardEl = el("div", { class: "box-card" }, head, counts, procStrip, actions);
   return {
@@ -1732,9 +1766,13 @@ function updateBoxCard(entry, b) {
     entry.baseDiv.textContent = b.base;
     entry.metaDiv.textContent = rt.vcsRevision ? rt.vcsRevision.slice(0, 10)
       : loading ? "\u2026" : (rt.health === "down" ? "unreachable" : "\u2026");
+    // Zero-count chips are noise: show only states that exist right now.
     entry.idleChip.textContent = counts.idle + " idle";
+    entry.idleChip.style.display = counts.idle ? "" : "none";
     entry.busyChip.textContent = counts.busy + " busy";
+    entry.busyChip.style.display = counts.busy ? "" : "none";
     entry.goalChip.textContent = counts["goal-running"] + " goal";
+    entry.goalChip.style.display = counts["goal-running"] ? "" : "none";
   }
   // Respawn/ADOPT (docs/design/fleet-model.md §4): offered once a box's
   // health has been observed DOWN — never while still "unknown" (first
@@ -2072,40 +2110,11 @@ function updateSessionRowEl(node, boxId, s, selected, earlier) {
     node._lastTurnDiv = null;
   }
 
-  // Re-arm: "normal" after an ended goal (unchanged from before), or
-  // "prominent" for an active-but-paused/restart goal — see rearmNeeded.
-  // provider-backoff's "none" is deliberate: that loop re-arms itself.
-  const g = s.goal;
-  const urgency = rearmNeeded(!!(g && g.active), g && g.condition, !!(g && g.paused), g && g.pause_reason);
-  if (urgency !== "none") {
-    if (!node._rearmBtn) {
-      node._rearmBtn = el("button", {
-        class: "small rearm",
-        onclick: (e) => { e.stopPropagation(); openRearmModal(boxId, node._sess); },
-      });
-      node.append(node._rearmBtn);
-    }
-    node._rearmBtn.className = "small rearm" + (urgency === "prominent" ? " prominent" : "");
-    node._rearmBtn.textContent = urgency === "prominent" ? "Re-arm now" : "Re-arm";
-  } else if (node._rearmBtn) {
-    node._rearmBtn.remove();
-    node._rearmBtn = null;
-  }
-
-  // Re-dispatch (distinct from the in-place Re-arm above): only on an
-  // ended/errored (idle-composite) session — see canRedispatch.
-  if (canRedispatch(s)) {
-    if (!node._redispatchBtn) {
-      node._redispatchBtn = el("button", {
-        class: "small redispatch", text: ">> Re-dispatch",
-        onclick: (e) => { e.stopPropagation(); openRedispatchModal(boxId, node._sess); },
-      });
-      node.append(node._redispatchBtn);
-    }
-  } else if (node._redispatchBtn) {
-    node._redispatchBtn.remove();
-    node._redispatchBtn = null;
-  }
+  // Session rows are pure state displays — no inline actions. Re-arm and
+  // Re-dispatch live in the goal panel of the OPENED session (and the
+  // paused/restart urgency is already surfaced twice: the row's PAUSED
+  // badge and the active-goals bar's urgent chip, both one click from the
+  // panel's prominent CTA).
 
   // LINEAGE GROUPING: the "N earlier attempts" toggle + its (collapsed by
   // default) sub-list. Rebuilt wholesale here — this whole function only
@@ -2596,7 +2605,12 @@ function updateComposer() {
   const busy = selectedBusy();
   $("promptBox").disabled = !has || busy;
   $("sendBtn").disabled = !has || busy;
+  // Contextual actions only: Abort is meaningless on an idle session and
+  // Clear goal without a goal — hide rather than disable (declutter; the
+  // page's job is state display, actions appear when they apply).
+  $("abortBtn").style.display = (has && busy) ? "" : "none";
   $("abortBtn").disabled = !has;
+  $("clearGoalBtn").style.display = (drill.goal && drill.goal.active) ? "" : "none";
   $("promptBox").placeholder = busy ? "session is busy\u2026" : "Message\u2026 (Enter to send, Shift+Enter for newline)";
 }
 
@@ -2636,6 +2650,17 @@ function renderGoalPanel() {
         text: urgency === "prominent" ? "Re-arm now (needs an operator)" : "Re-arm this goal",
         onclick: prefillRearm,
       }));
+      // Re-dispatch: same condition into a NEW session with parent_session
+      // lineage — the panel is where row-level actions moved (see the
+      // session-row comment in updateSessRow).
+      const rt0 = boxRuntime.get(drill.boxId);
+      const sess0 = rt0 && rt0.sessions.get(drill.sessionId);
+      if (sess0 && canRedispatch(sess0)) {
+        gp.append(el("button", {
+          class: "small redispatch", text: ">> Re-dispatch",
+          onclick: () => openRedispatchModal(drill.boxId, sess0),
+        }));
+      }
     }
   }
 }
@@ -2747,7 +2772,15 @@ function removeBox(id) {
 
 /* ---------- modals ---------- */
 
-function closeModal() { $("modalHost").textContent = ""; }
+// Overflow menus light-dismiss like native menus: clicking anywhere
+// outside an open <details class="menu"> (or choosing an item) closes it.
+document.addEventListener("click", (e) => {
+  for (const d of document.querySelectorAll("details.menu[open]")) {
+    if (!d.contains(e.target) || e.target.closest(".menu-items button")) d.removeAttribute("open");
+  }
+});
+
+function closeModal() { const h = $("modalHost"); if (h.open) h.close(); h.textContent = ""; }
 
 function openAddBoxModal() {
   const nameIn = el("input", { id: "mAddName", placeholder: "e.g. staging-1" });
@@ -2776,10 +2809,17 @@ function openAddBoxModal() {
 }
 
 function showModal(modal) {
+  // Native <dialog>: focus trapping, Escape, and ::backdrop for free.
+  // Clicking the backdrop (the dialog element itself, outside .modal)
+  // closes — the standard light-dismiss idiom.
   const host = $("modalHost");
   host.textContent = "";
-  const backdrop = el("div", { class: "modal-backdrop", onclick: (e) => { if (e.target === backdrop) closeModal(); } }, modal);
-  host.append(backdrop);
+  host.append(modal);
+  if (!host.dataset.dismissWired) {
+    host.dataset.dismissWired = "1";
+    host.addEventListener("click", (e) => { if (e.target === host) closeModal(); });
+  }
+  host.showModal();
 }
 
 function openDispatchModal(boxId) {
