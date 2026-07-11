@@ -486,26 +486,32 @@ function usageSummary(usage) {
 // reduceGoal folds one goal.* journal event into a goal-summary object,
 // extending the inspector's version with goal.stalled (retryable-weather
 // backoff vs. a real, budget-exhausting stall — see GoalSummary in
-// server/openapi.yaml). Non-goal events return prev unchanged (same
-// reference); goal events return a fresh object so the input is never
-// mutated.
+// server/openapi.yaml) and paused/pauseReason (docs/design/fleet-model.md
+// §7: goal.paused — boot-time, always "restart" — and goal.stalled while
+// goal_retryable && goal_waiting — "provider-backoff" — both carry
+// goal_paused/goal_pause_reason). Non-goal events return prev unchanged
+// (same reference); goal events return a fresh object so the input is
+// never mutated.
 function reduceGoal(prev, ev) {
   const isGoal = ev && typeof ev.type === "string" && ev.type.indexOf("goal.") === 0;
   if (!isGoal) return prev;
   const g = Object.assign({
     condition: "", active: false, achieved: false, reason: "", turns: 0,
     attempt: 0, retryable: false, retryableClass: "", waiting: false,
+    paused: false, pauseReason: "",
   }, prev);
   switch (ev.type) {
     case "goal.set":
       g.condition = ev.goal_condition || "";
       g.active = true; g.achieved = false; g.reason = ""; g.turns = 0;
       g.attempt = 0; g.retryable = false; g.retryableClass = ""; g.waiting = false;
+      g.paused = false; g.pauseReason = "";
       break;
     case "goal.eval":
       if (ev.goal_reason) g.reason = ev.goal_reason;
       if (typeof ev.goal_turn === "number") g.turns = ev.goal_turn;
       g.attempt = 0; g.retryable = false; g.retryableClass = ""; g.waiting = false;
+      g.paused = false; g.pauseReason = "";
       break;
     case "goal.stalled":
       if (ev.goal_reason) g.reason = ev.goal_reason;
@@ -513,16 +519,32 @@ function reduceGoal(prev, ev) {
       g.retryable = !!ev.goal_retryable;
       g.retryableClass = ev.goal_retryable_class || "";
       g.waiting = !!ev.goal_waiting;
+      g.paused = !!ev.goal_paused;
+      g.pauseReason = g.paused ? (ev.goal_pause_reason || "") : "";
       break;
     case "goal.achieved":
       g.active = false; g.achieved = true;
       if (ev.goal_reason) g.reason = ev.goal_reason;
       if (typeof ev.goal_turns === "number") g.turns = ev.goal_turns;
       g.attempt = 0; g.retryable = false; g.retryableClass = ""; g.waiting = false;
+      g.paused = false; g.pauseReason = "";
       break;
     case "goal.cleared":
       g.active = false;
       g.attempt = 0; g.retryable = false; g.retryableClass = ""; g.waiting = false;
+      g.paused = false; g.pauseReason = "";
+      break;
+    case "goal.paused":
+      // Boot-only record (server.pauseArmedGoalsAtBoot): the goal was
+      // already active in the journal, with no loop ever attached in this
+      // process — always pause_reason "restart". Set condition/active too
+      // in case this is the very first goal.* event this reducer has ever
+      // seen for the session (a from=tip fleet stream that missed the
+      // original goal.set).
+      if (ev.goal_condition) g.condition = ev.goal_condition;
+      g.active = true;
+      g.paused = !!ev.goal_paused;
+      g.pauseReason = g.paused ? (ev.goal_pause_reason || "restart") : "";
       break;
   }
   return g;
@@ -530,7 +552,10 @@ function reduceGoal(prev, ev) {
 
 // goalFromSession seeds a goal-summary object (same shape reduceGoal
 // produces) from a session JSON's `goal` field — closes the bootstrap gap
-// for a goal predating this tab's connection to the box.
+// for a goal predating this tab's connection to the box. paused/
+// pause_reason are absent-safe: an older box that predates
+// docs/design/fleet-model.md's pause vocabulary simply has no `paused`
+// field, which renders as not-paused here, never a crash.
 function goalFromSession(sess) {
   const g = sess && sess.goal;
   if (!g || !g.condition) return null;
@@ -544,6 +569,8 @@ function goalFromSession(sess) {
     retryable: !!g.retryable,
     retryableClass: g.retryable_class || "",
     waiting: !!g.waiting,
+    paused: !!g.paused,
+    pauseReason: g.paused ? (g.pause_reason || "") : "",
   };
 }
 
@@ -828,9 +855,244 @@ function sessionRowSignature(session, selected) {
   return JSON.stringify([
     s.id || "", sessionBadge(s), s.model || "", usageSummary(s.usage),
     s.last_activity_at || "", !!selected,
-    s.goal ? { c: s.goal.condition || "", a: !!s.goal.active } : null,
+    s.goal ? { c: s.goal.condition || "", a: !!s.goal.active, p: !!s.goal.paused, pr: s.goal.pause_reason || "" } : null,
     s.last_turn ? { o: s.last_turn.outcome || "", e: s.last_turn.error || "" } : null,
   ]);
+}
+
+// canRedispatch reports whether a session is a candidate for the
+// Re-dispatch action (distinct from in-place Re-arm, see AGENTS.md/this
+// page's header comment): it must be idle in the composite sense — not
+// currently busy or driving a goal — which covers both a plainly-ended
+// session and one whose last turn errored out.
+function canRedispatch(session) {
+  return sessionBadge(session) === "idle";
+}
+
+// buildLineages groups a flat session list into per-task lineage entries by
+// following `parent_session` chains (see Session.parent_session in
+// server/openapi.yaml and docs/design/fleet-model.md §6). Each returned
+// entry is { id, tip, earlier }: `tip` is the most recent session in the
+// group (by sessionTimeRank), `earlier` is every other member, most recent
+// first — the "N earlier attempts" collapsed line. A session whose
+// parent_session names an id NOT present in this list (the common
+// cross-box case — lineage crosses boxes routinely, and only sessions
+// resident on THIS box are ever in `sessions`) is treated as having no
+// resolvable lineage here and renders as its own singleton group, exactly
+// like a session with no parent_session at all ("sessions with no lineage
+// render as today"). A parent_session cycle (A parents B, B parents A, or
+// longer) is tolerated: union-find below only ever walks a bounded chain
+// with a visited-set guard, so it terminates and merges the cycle into one
+// group instead of hanging or throwing.
+function buildLineages(sessions) {
+  const list = Array.isArray(sessions) ? sessions.filter(s => s && s.id) : [];
+  const byId = new Map(list.map(s => [s.id, s]));
+  const parent = new Map(list.map(s => [s.id, s.id])); // union-find, self-rooted initially
+
+  function find(x) {
+    let root = x;
+    const seen = new Set();
+    while (parent.get(root) !== root) {
+      if (seen.has(root)) break; // cycle guard: stop rather than loop forever
+      seen.add(root);
+      root = parent.get(root);
+    }
+    return root;
+  }
+  function union(a, b) {
+    const ra = find(a), rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  }
+
+  for (const s of list) {
+    const p = s.parent_session;
+    if (p && p !== s.id && byId.has(p)) union(s.id, p);
+  }
+
+  const groups = new Map(); // root id -> member sessions
+  for (const s of list) {
+    const root = find(s.id);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(s);
+  }
+
+  const result = [];
+  for (const members of groups.values()) {
+    const sorted = members.slice().sort((a, b) => sessionTimeRank(b) - sessionTimeRank(a));
+    result.push({ id: sorted[0].id, tip: sorted[0], earlier: sorted.slice(1) });
+  }
+  return result;
+}
+
+// collectActiveGoals is the ACTIVE-GOALS STRIP's pure core: every session,
+// across every given box, whose goal is currently active (running OR
+// paused — GoalSummary.active stays true through a pause; see
+// docs/design/fleet-model.md §7) — "where is my work" answered in one
+// list. `boxes` is [{id, name, sessions:[sessionJSON,...]}, ...]; garbage
+// entries (null box, missing sessions) are skipped rather than thrown on.
+// Entries whose goal is paused for the "restart" reason (needs a one-click
+// re-arm — the most actionable case) sort first; order is otherwise
+// preserved (stable sort).
+function collectActiveGoals(boxes) {
+  const out = [];
+  for (const b of (boxes || [])) {
+    if (!b) continue;
+    for (const s of (b.sessions || [])) {
+      const g = s && s.goal;
+      if (!g || !g.active) continue;
+      out.push({
+        boxId: b.id, boxName: b.name || b.id, sessionId: s.id,
+        condition: g.condition || "",
+        paused: !!g.paused,
+        pauseReason: g.pause_reason || "",
+      });
+    }
+  }
+  out.sort((a, b) => {
+    const pa = (a.paused && a.pauseReason === "restart") ? 0 : 1;
+    const pb = (b.paused && b.pauseReason === "restart") ? 0 : 1;
+    return pa - pb;
+  });
+  return out;
+}
+
+// goalPauseTreatment renders the two paused/pause_reason vocabularies from
+// docs/design/fleet-model.md §7 as a display treatment: "provider-backoff"
+// is calm ("waiting out provider weather", not an error — the loop is
+// alive, just between retries), "restart" is not calm and wants a
+// prominent Re-arm CTA (see rearmNeeded below). An unrecognized future
+// pause_reason still renders (never throws) as a non-calm, generic pause —
+// forward-compatible without guessing at its meaning. Returns null when
+// not paused at all.
+function goalPauseTreatment(paused, pauseReason) {
+  if (!paused) return null;
+  if (pauseReason === "provider-backoff") {
+    return { reason: pauseReason, calm: true, label: "\u23f3 waiting out provider weather" };
+  }
+  if (pauseReason === "restart") {
+    return { reason: pauseReason, calm: false, label: "\u23f8 paused \u2014 needs re-arm" };
+  }
+  return { reason: pauseReason || "", calm: false, label: "\u23f8 paused" };
+}
+
+// rearmNeeded decides whether — and how urgently — a Re-arm CTA should
+// show for a goal, given its wire-shaped active/condition/paused/
+// pause_reason fields (works uniformly whether they came straight off
+// Session.goal or off the drill panel's reduced summary — callers pass the
+// primitives so this stays shape-agnostic): "none" (nothing to re-arm, or
+// a live loop that will re-arm itself — provider-backoff self-clears with
+// no operator action per fleet-model.md §7), "normal" (the existing
+// after-the-fact Re-arm on an ended goal), "prominent" (an active-but-
+// paused/restart goal: the loop will NEVER resume itself — see ADOPT's
+// restart-pause story — so this is the one case that both needs and
+// deserves a loud CTA).
+function rearmNeeded(active, condition, paused, pauseReason) {
+  if (!condition) return "none";
+  if (!active) return "normal";
+  if (paused && pauseReason === "restart") return "prominent";
+  return "none";
+}
+
+// normalizePorts tolerates every shape a managed process's not-yet-final
+// "ports" field (arriving on a parallel branch — see AGENTS.md/this page's
+// header comment) might take: absent entirely, an array of port numbers or
+// numeric strings, or an object keyed by port. Always returns an array of
+// port strings; never throws.
+function normalizePorts(ports) {
+  if (ports == null) return [];
+  if (Array.isArray(ports)) return ports.map(p => String(p));
+  if (typeof ports === "object") return Object.keys(ports);
+  return [];
+}
+
+// normalizeProcesses adapts GET /process's response (an array of
+// ProcessInfo, see server/openapi.yaml and docs/design/managed-
+// processes.md) into the process strip's compact per-process shape.
+// Anything that isn't the expected array (absent endpoint, 404 body,
+// network-error sentinel, an older box that doesn't serve /process at
+// all) yields [] — "no strip", never a crash. A entry's `ports` field is
+// read defensively off ProcessStatus (or, just in case, the ProcessInfo
+// itself) and normalized — absent renders as no ports, exactly the
+// "code against that contract defensively" requirement.
+function normalizeProcesses(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const p of list) {
+    if (!p || typeof p !== "object") continue;
+    const status = (p.status && typeof p.status === "object") ? p.status : {};
+    const name = p.name || status.name || "";
+    if (!name) continue;
+    out.push({
+      name,
+      state: status.state || "",
+      ready: !!status.ready,
+      exitCode: typeof status.exit_code === "number" ? status.exit_code : null,
+      log: status.log || "",
+      ports: normalizePorts(status.ports !== undefined ? status.ports : p.ports),
+    });
+  }
+  return out;
+}
+
+// processStateBadge maps a managed process's state (see docs/design/
+// managed-processes.md's state machine) to a dot class + label for the
+// process strip: ready green, starting (or its running/ready-timeout
+// cousin) amber, exited red carrying its exit code, stopped a neutral
+// off-dot, and anything else (empty/unrecognized — a declared-but-never-
+// started process, or a future state this page doesn't know about yet)
+// a neutral "unknown"/"not started" rather than guessing or throwing.
+function processStateBadge(state, exitCode) {
+  switch (state) {
+    case "ready": return { cls: "ready", label: "ready" };
+    case "starting": return { cls: "starting", label: "starting" };
+    case "running": return { cls: "starting", label: "running" };
+    case "exited": return { cls: "exited", label: typeof exitCode === "number" ? "exited(" + exitCode + ")" : "exited" };
+    case "stopped": return { cls: "stopped", label: "stopped" };
+    default: return { cls: "unknown", label: state || "not started" };
+  }
+}
+
+// portLinksFor pairs a process's reported ports (see normalizeProcesses)
+// against the box's port_urls map (see decodeHubState/addBox) and returns
+// only the ports that have a KNOWN url — "when the process reports ports
+// AND the box's state carries a matching port URL" from the process
+// strip's spec. Absent/malformed ports or portURLs both yield [], never a
+// crash.
+function portLinksFor(ports, portURLs) {
+  const map = (portURLs && typeof portURLs === "object") ? portURLs : {};
+  const out = [];
+  for (const p of (ports || [])) {
+    if (typeof map[p] === "string" && map[p]) out.push({ port: p, url: map[p] });
+  }
+  return out;
+}
+
+// parsePortURLLines parses the add-box modal's editable "port=url" textarea
+// (one pair per line) into a port_urls map — the hand-edited counterpart to
+// spawn.go's PORT_URL_<port>= line scanning. Blank lines and anything that
+// doesn't parse as "<digits>=<non-empty>" are silently skipped, not
+// thrown on — a stray typo shouldn't nuke the whole box-add flow.
+function parsePortURLLines(text) {
+  const out = {};
+  for (const raw of String(text || "").split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const i = line.indexOf("=");
+    if (i <= 0) continue;
+    const port = line.slice(0, i).trim();
+    const url = line.slice(i + 1).trim();
+    if (/^[0-9]+$/.test(port) && url) out[port] = url;
+  }
+  return out;
+}
+
+// mergePortURLs combines two port_urls maps — existing box state plus
+// freshly-parsed/spawned values (see PORT_URL_<port>= scanning in spawn.go
+// and parsePortURLLines above) — tolerating null/undefined on either side.
+// Incoming values win on a port collision: a Respawn's fresh tunnel
+// replaces the stale URL for the same port.
+function mergePortURLs(existing, incoming) {
+  return Object.assign({}, existing || {}, incoming || {});
 }
 /* TESTABLE-END */
 

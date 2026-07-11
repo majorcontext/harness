@@ -53,6 +53,7 @@ const {
   fmtTokens,
   usageSummary,
   reduceGoal,
+  goalFromSession,
   encodeHubState,
   decodeHubState,
   notifyForEvent,
@@ -67,6 +68,17 @@ const {
   shouldResort,
   boxCardSignature,
   sessionRowSignature,
+  buildLineages,
+  collectActiveGoals,
+  goalPauseTreatment,
+  rearmNeeded,
+  canRedispatch,
+  normalizeProcesses,
+  normalizePorts,
+  processStateBadge,
+  portLinksFor,
+  parsePortURLLines,
+  mergePortURLs,
 } = sandbox;
 
 /* ---------- fmtRelative ---------- */
@@ -621,4 +633,312 @@ test("sessionRowSignature: differs when goal condition/active changes", () => {
 test("sessionRowSignature: differs when last_turn changes", () => {
   const s = { id: "s1", status: "idle", last_turn: { outcome: "completed" } };
   assert.notEqual(sessionRowSignature(s, false), sessionRowSignature({ ...s, last_turn: { outcome: "error", error: "boom" } }, false));
+});
+
+/* ---------- buildLineages ---------- */
+
+test("buildLineages: a session with no parent_session renders as today (singleton)", () => {
+  const sessions = [{ id: "s1", created_at: "2024-01-01T00:00:00Z" }];
+  const groups = plain(buildLineages(sessions));
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].tip.id, "s1");
+  assert.deepEqual(groups[0].earlier, []);
+});
+
+test("buildLineages: a chain groups under its most recent tip", () => {
+  const sessions = [
+    { id: "a", created_at: "2024-01-01T00:00:00Z" },
+    { id: "b", parent_session: "a", created_at: "2024-01-02T00:00:00Z" },
+    { id: "c", parent_session: "b", created_at: "2024-01-03T00:00:00Z" },
+  ];
+  const groups = plain(buildLineages(sessions));
+  assert.equal(groups.length, 1);
+  const g = groups[0];
+  assert.equal(g.tip.id, "c");
+  assert.deepEqual(g.earlier.map(s => s.id), ["b", "a"]);
+});
+
+test("buildLineages: a parent_session pointing outside the given set (cross-box lineage) is an orphan — no grouping", () => {
+  const sessions = [
+    { id: "a", parent_session: "ses_on_another_box", created_at: "2024-01-01T00:00:00Z" },
+    { id: "b", created_at: "2024-01-02T00:00:00Z" },
+  ];
+  const groups = plain(buildLineages(sessions)).sort((x, y) => x.tip.id.localeCompare(y.tip.id));
+  assert.equal(groups.length, 2);
+  assert.deepEqual(groups[0].earlier, []);
+  assert.deepEqual(groups[1].earlier, []);
+});
+
+test("buildLineages: tolerates a cycle without hanging or throwing", () => {
+  const sessions = [
+    { id: "x", parent_session: "y", created_at: "2024-01-01T00:00:00Z" },
+    { id: "y", parent_session: "x", created_at: "2024-01-02T00:00:00Z" },
+  ];
+  const groups = plain(buildLineages(sessions));
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].tip.id, "y");
+  assert.deepEqual(groups[0].earlier.map(s => s.id), ["x"]);
+});
+
+test("buildLineages: a longer 3-cycle is still tolerated", () => {
+  const sessions = [
+    { id: "p", parent_session: "q", created_at: "2024-01-01T00:00:00Z" },
+    { id: "q", parent_session: "r", created_at: "2024-01-02T00:00:00Z" },
+    { id: "r", parent_session: "p", created_at: "2024-01-03T00:00:00Z" },
+  ];
+  const groups = plain(buildLineages(sessions));
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].sessions ? undefined : groups[0].tip.id, "r");
+});
+
+test("buildLineages: multiple independent lineages plus loners all present", () => {
+  const sessions = [
+    { id: "a1", created_at: "2024-01-01T00:00:00Z" },
+    { id: "a2", parent_session: "a1", created_at: "2024-01-02T00:00:00Z" },
+    { id: "loner", created_at: "2024-01-01T00:00:00Z" },
+  ];
+  const groups = plain(buildLineages(sessions));
+  assert.equal(groups.length, 2);
+  const withEarlier = groups.find(g => g.earlier.length > 0);
+  assert.ok(withEarlier);
+  assert.equal(withEarlier.tip.id, "a2");
+  const loner = groups.find(g => g.tip.id === "loner");
+  assert.ok(loner);
+  assert.deepEqual(loner.earlier, []);
+});
+
+test("buildLineages: empty/garbage input yields no groups, never throws", () => {
+  assert.deepEqual(plain(buildLineages([])), []);
+  assert.deepEqual(plain(buildLineages(null)), []);
+  assert.deepEqual(plain(buildLineages([null, { id: "" }, { notAnId: 1 }])), []);
+});
+
+/* ---------- collectActiveGoals ---------- */
+
+test("collectActiveGoals: only sessions with an active goal are collected, across boxes", () => {
+  const boxes = [
+    { id: "b1", name: "box-one", sessions: [
+      { id: "s1", goal: { active: true, condition: "ship it" } },
+      { id: "s2", goal: { active: false, condition: "done" } },
+      { id: "s3" },
+    ] },
+    { id: "b2", name: "box-two", sessions: [
+      { id: "s4", goal: { active: true, condition: "fix bug", paused: true, pause_reason: "provider-backoff" } },
+    ] },
+  ];
+  const got = plain(collectActiveGoals(boxes));
+  assert.deepEqual(got.map(g => g.sessionId).sort(), ["s1", "s4"]);
+  const s4 = got.find(g => g.sessionId === "s4");
+  assert.equal(s4.boxId, "b2");
+  assert.equal(s4.boxName, "box-two");
+  assert.equal(s4.paused, true);
+  assert.equal(s4.pauseReason, "provider-backoff");
+});
+
+test("collectActiveGoals: paused/restart entries sort first (most needs-attention)", () => {
+  const boxes = [
+    { id: "b1", name: "b1", sessions: [
+      { id: "running", goal: { active: true, condition: "a" } },
+      { id: "needs-rearm", goal: { active: true, condition: "b", paused: true, pause_reason: "restart" } },
+    ] },
+  ];
+  const got = plain(collectActiveGoals(boxes));
+  assert.equal(got[0].sessionId, "needs-rearm");
+});
+
+test("collectActiveGoals: empty/garbage input yields empty array", () => {
+  assert.deepEqual(plain(collectActiveGoals([])), []);
+  assert.deepEqual(plain(collectActiveGoals(null)), []);
+  assert.deepEqual(plain(collectActiveGoals([{ id: "b1" }, null])), []);
+});
+
+/* ---------- goalPauseTreatment ---------- */
+
+test("goalPauseTreatment: not paused yields null", () => {
+  assert.equal(goalPauseTreatment(false, ""), null);
+  assert.equal(goalPauseTreatment(false, "restart"), null);
+});
+
+test("goalPauseTreatment: provider-backoff is calm, not an error", () => {
+  const t = goalPauseTreatment(true, "provider-backoff");
+  assert.equal(t.calm, true);
+  assert.match(t.label, /waiting out provider weather/);
+});
+
+test("goalPauseTreatment: restart is not calm (needs a prominent CTA)", () => {
+  const t = goalPauseTreatment(true, "restart");
+  assert.equal(t.calm, false);
+  assert.match(t.label, /re-arm/i);
+});
+
+test("goalPauseTreatment: unrecognized reason still renders (never throws), not calm", () => {
+  const t = goalPauseTreatment(true, "some-future-reason");
+  assert.equal(t.calm, false);
+  assert.equal(t.reason, "some-future-reason");
+});
+
+/* ---------- rearmNeeded ---------- */
+
+test("rearmNeeded: no condition at all -> none", () => {
+  assert.equal(rearmNeeded(false, "", false, ""), "none");
+  assert.equal(rearmNeeded(true, "", false, ""), "none");
+});
+
+test("rearmNeeded: ended goal (not active) -> normal", () => {
+  assert.equal(rearmNeeded(false, "ship it", false, ""), "normal");
+});
+
+test("rearmNeeded: active, not paused -> none (still running)", () => {
+  assert.equal(rearmNeeded(true, "ship it", false, ""), "none");
+});
+
+test("rearmNeeded: active + paused/restart -> prominent", () => {
+  assert.equal(rearmNeeded(true, "ship it", true, "restart"), "prominent");
+});
+
+test("rearmNeeded: active + paused/provider-backoff -> none (self-clearing, no CTA)", () => {
+  assert.equal(rearmNeeded(true, "ship it", true, "provider-backoff"), "none");
+});
+
+/* ---------- canRedispatch ---------- */
+
+test("canRedispatch: idle session (ended/errored) can be re-dispatched", () => {
+  assert.equal(canRedispatch({ id: "s1", status: "idle" }), true);
+  assert.equal(canRedispatch({ id: "s1", status: "idle", last_turn: { outcome: "error", error: "boom" } }), true);
+});
+
+test("canRedispatch: busy or goal-running sessions cannot be re-dispatched", () => {
+  assert.equal(canRedispatch({ id: "s1", status: "busy" }), false);
+  assert.equal(canRedispatch({ id: "s1", status: "idle", goal: { active: true, condition: "x" } }), false);
+});
+
+/* ---------- normalizePorts / normalizeProcesses / processStateBadge / portLinksFor ---------- */
+
+test("normalizePorts: absent/null ports render as absent, never crash", () => {
+  assert.deepEqual(plain(normalizePorts(undefined)), []);
+  assert.deepEqual(plain(normalizePorts(null)), []);
+});
+
+test("normalizePorts: tolerates an array of numbers or strings", () => {
+  assert.deepEqual(plain(normalizePorts([3000, "5432"])), ["3000", "5432"]);
+});
+
+test("normalizePorts: tolerates an object-keyed shape", () => {
+  assert.deepEqual(plain(normalizePorts({ "3000": {} })), ["3000"]);
+});
+
+test("normalizeProcesses: absent/404 (non-array) body yields no strip", () => {
+  assert.deepEqual(plain(normalizeProcesses(undefined)), []);
+  assert.deepEqual(plain(normalizeProcesses(null)), []);
+  assert.deepEqual(plain(normalizeProcesses({ error: "not found" })), []);
+});
+
+test("normalizeProcesses: reads name/state/ready/exit_code/log off ProcessInfo.status, tolerating a missing ports field", () => {
+  const list = [
+    { name: "dev", origin: "config", command: ["pnpm", "dev"], status: { name: "dev", state: "ready", ready: true, log: "/x/.harness/proc/dev.log" } },
+  ];
+  const got = plain(normalizeProcesses(list));
+  assert.equal(got.length, 1);
+  assert.equal(got[0].name, "dev");
+  assert.equal(got[0].state, "ready");
+  assert.equal(got[0].ready, true);
+  assert.equal(got[0].log, "/x/.harness/proc/dev.log");
+  assert.deepEqual(got[0].ports, []);
+});
+
+test("normalizeProcesses: a ports field (parallel-branch addition), when present, is picked up", () => {
+  const list = [
+    { name: "dev", status: { state: "ready", ports: [3000] } },
+  ];
+  assert.deepEqual(plain(normalizeProcesses(list))[0].ports, ["3000"]);
+});
+
+test("normalizeProcesses: skips entries with no name at all rather than throwing", () => {
+  assert.deepEqual(plain(normalizeProcesses([{}, null, { status: {} }])), []);
+});
+
+test("processStateBadge: ready is green, starting is amber, exited is red with code", () => {
+  assert.equal(processStateBadge("ready").cls, "ready");
+  assert.equal(processStateBadge("starting").cls, "starting");
+  const exited = processStateBadge("exited", 1);
+  assert.equal(exited.cls, "exited");
+  assert.match(exited.label, /1/);
+});
+
+test("processStateBadge: unknown/empty state never throws", () => {
+  assert.equal(processStateBadge("").cls, "unknown");
+  assert.equal(processStateBadge(undefined).cls, "unknown");
+});
+
+test("portLinksFor: only ports with a known URL in the box's port_urls map are returned", () => {
+  const got = plain(portLinksFor(["3000", "5432"], { "3000": "https://x.example" }));
+  assert.deepEqual(got, [{ port: "3000", url: "https://x.example" }]);
+});
+
+test("portLinksFor: no ports reported, or no matching port_urls entry -> empty, never crash", () => {
+  assert.deepEqual(plain(portLinksFor([], { "3000": "https://x.example" })), []);
+  assert.deepEqual(plain(portLinksFor(["3000"], undefined)), []);
+  assert.deepEqual(plain(portLinksFor(undefined, undefined)), []);
+});
+
+/* ---------- parsePortURLLines / mergePortURLs ---------- */
+
+test("parsePortURLLines: parses port=url pairs, one per line", () => {
+  const got = plain(parsePortURLLines("3000=https://a.example\n5432=https://b.example\n"));
+  assert.deepEqual(got, { "3000": "https://a.example", "5432": "https://b.example" });
+});
+
+test("parsePortURLLines: tolerates blank lines and garbage", () => {
+  const got = plain(parsePortURLLines("\n  \nnotaport\n3000=https://a.example\n=missingport\n"));
+  assert.deepEqual(got, { "3000": "https://a.example" });
+});
+
+test("mergePortURLs: incoming wins on collision, tolerates null/undefined", () => {
+  assert.deepEqual(plain(mergePortURLs({ "3000": "old" }, { "3000": "new", "4000": "x" })), { "3000": "new", "4000": "x" });
+  assert.deepEqual(plain(mergePortURLs(null, { "3000": "x" })), { "3000": "x" });
+  assert.deepEqual(plain(mergePortURLs({ "3000": "x" }, null)), { "3000": "x" });
+  assert.deepEqual(plain(mergePortURLs(null, null)), {});
+});
+
+/* ---------- reduceGoal: goal.paused + paused/pauseReason fields ---------- */
+
+test("reduceGoal: goal.paused (restart, boot-time) sets paused/pauseReason and keeps the goal active", () => {
+  const g = reduceGoal(null, { type: "goal.paused", goal_condition: "ship it", goal_paused: true, goal_pause_reason: "restart" });
+  assert.equal(g.active, true);
+  assert.equal(g.paused, true);
+  assert.equal(g.pauseReason, "restart");
+  assert.equal(g.condition, "ship it");
+});
+
+test("reduceGoal: goal.stalled carrying goal_paused (provider-backoff) sets paused/pauseReason", () => {
+  const g = reduceGoal(null, { type: "goal.stalled", goal_paused: true, goal_pause_reason: "provider-backoff", goal_retryable: true, goal_waiting: true });
+  assert.equal(g.paused, true);
+  assert.equal(g.pauseReason, "provider-backoff");
+});
+
+test("reduceGoal: a non-paused goal.stalled clears any prior pause", () => {
+  const paused = reduceGoal(null, { type: "goal.stalled", goal_paused: true, goal_pause_reason: "provider-backoff" });
+  const cleared = reduceGoal(paused, { type: "goal.stalled", goal_paused: false });
+  assert.equal(cleared.paused, false);
+  assert.equal(cleared.pauseReason, "");
+});
+
+test("reduceGoal: goal.set/goal.eval/goal.achieved/goal.cleared reset paused", () => {
+  const paused = reduceGoal(null, { type: "goal.paused", goal_condition: "x", goal_paused: true, goal_pause_reason: "restart" });
+  assert.equal(reduceGoal(paused, { type: "goal.set", goal_condition: "y" }).paused, false);
+  assert.equal(reduceGoal(paused, { type: "goal.eval", goal_met: false }).paused, false);
+  assert.equal(reduceGoal(paused, { type: "goal.achieved" }).paused, false);
+  assert.equal(reduceGoal(paused, { type: "goal.cleared" }).paused, false);
+});
+
+test("goalFromSession: seeds paused/pauseReason from the session's goal", () => {
+  const g = goalFromSession({ goal: { condition: "x", active: true, paused: true, pause_reason: "restart" } });
+  assert.equal(g.paused, true);
+  assert.equal(g.pauseReason, "restart");
+});
+
+test("goalFromSession: absent paused/pause_reason render as absent, never crash", () => {
+  const g = goalFromSession({ goal: { condition: "x", active: true } });
+  assert.equal(g.paused, false);
+  assert.equal(g.pauseReason, "");
 });
