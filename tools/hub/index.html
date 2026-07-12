@@ -1771,7 +1771,12 @@ function updateBoxCard(entry, b) {
     // vcs_revision) — labeled, lowercase hex; the uppercase micro-label
     // transform mangled it into unreadable line noise.
     entry.metaDiv.textContent = rt.vcsRevision ? "rev " + rt.vcsRevision.slice(0, 8)
-      : loading ? "\u2026" : (rt.health === "down" ? "unreachable" : "\u2026");
+      // "inactive", not "unreachable": under the fleet model a box whose
+      // health check fails is most likely idle-reaped compute (volume
+      // intact, Respawn resumes it) — a normal lifecycle state, not a
+      // fault. (A genuine network fault looks identical and has the same
+      // remedy, so the calm label serves both.)
+      : loading ? "\u2026" : (rt.health === "down" ? "inactive" : "\u2026");
     // Zero-count chips are noise: show only states that exist right now.
     entry.idleChip.textContent = counts.idle + " idle";
     entry.idleChip.style.display = counts.idle ? "" : "none";
