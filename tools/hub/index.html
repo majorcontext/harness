@@ -129,7 +129,14 @@
     8. Kill a box's `harness serve` -> its health dot goes red and its
        sessions freeze; restart it -> the dot goes green and its SSE stream
        resyncs with backoff, same as the inspector.
-    9. Click "Copy link" (in the header Menu), reload the page from that pasted URL in a new
+    9. Click "Copy link" (in the header Menu), reload from that pasted URL in a
+       new tab -> boxes + selection restored.
+   10. Spawn/Respawn a box: while it streams the button reads "Spawning…"
+       and BOTH it and Close are disabled; Escape does not dismiss;
+       on done/error they re-enable.
+   11. A box whose /health fails reads "inactive" (not a URL), shows a
+       primary "Respawn" button; Respawn adopts the same name/volume and
+       swaps this card's address+token in place, reload the page from that pasted URL in a new
        tab -> every box and the current selection come back exactly.
    10. Remove a box -> its card and connections disappear; garbage in the
        URL fragment (hand-edit `#s=` to nonsense) loads as an empty,
@@ -2969,10 +2976,17 @@ function openSpawnModal() {
 // a successful "done" event (both TUNNEL_URL and RUN_TOKEN present) calls
 // onSuccess(ev) to let the caller decide what a fresh tunnel means (add a
 // new box, vs. update an existing one in place for a Respawn).
-async function runSpawn(name, log, notice, startBtn, onSuccess) {
+async function runSpawn(name, log, notice, startBtn, onSuccess, closeBtn) {
+  // Full in-flight treatment: the start button announces the state, and
+  // Close is disabled too — abandoning the dialog mid-spawn would orphan
+  // the server-side spawn with nobody watching its outcome.
+  const startLabel = startBtn.textContent;
   startBtn.disabled = true;
+  startBtn.textContent = "Spawning\u2026";
+  if (closeBtn) closeBtn.disabled = true;
   notice.textContent = "";
-  log.textContent = "";
+  delete log.dataset.placeholder;
+  log.textContent = "starting spawn command\u2026";
   try {
     const resp = await fetch("/spawn", {
       method: "POST",
@@ -2986,6 +3000,7 @@ async function runSpawn(name, log, notice, startBtn, onSuccess) {
     const parse = createSSEParser(frame => {
       let ev; try { ev = JSON.parse(frame.data); } catch { return; }
       if (ev.type === "stdout") {
+        if (log.dataset.placeholder !== "cleared") { log.dataset.placeholder = "cleared"; log.textContent = ""; }
         log.textContent += (log.textContent ? "\n" : "") + ev.line;
         log.scrollTop = log.scrollHeight;
       } else if (ev.type === "done") {
@@ -3009,6 +3024,8 @@ async function runSpawn(name, log, notice, startBtn, onSuccess) {
     notice.textContent = "spawn failed: " + e.message;
   } finally {
     startBtn.disabled = false;
+    startBtn.textContent = startLabel;
+    if (closeBtn) closeBtn.disabled = false;
   }
 }
 
