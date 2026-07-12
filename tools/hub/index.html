@@ -427,6 +427,7 @@
   #composer textarea:disabled { opacity: .5; }
   .row { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
   .notice { color: var(--accent); font-size: 12px; min-height: 18px; }
+  .notice.ok { color: var(--ok); }
   /* Native overflow menus: <details class="menu"> — semantic, keyboard
      -correct, zero JS. Summary renders as a button; the item panel drops
      anchored to it. */
@@ -2965,6 +2966,7 @@ function openSpawnModal() {
   showModal(modal);
   startBtn.onclick = () => runSpawn(name, log, notice, startBtn, ev => {
     addBox({ name: name || ev.tunnel_url, base: ev.tunnel_url, token: ev.run_token, port_urls: ev.port_urls });
+    notice.className = "notice ok";
     notice.textContent = "box added: " + ev.tunnel_url;
   }, closeBtn);
   startBtn.focus();
@@ -2985,6 +2987,7 @@ async function runSpawn(name, log, notice, startBtn, onSuccess, closeBtn) {
   startBtn.textContent = "Spawning\u2026";
   if (closeBtn) closeBtn.disabled = true;
   notice.textContent = "";
+  notice.className = "notice";
   delete log.dataset.placeholder;
   log.textContent = "starting spawn command\u2026";
   try {
@@ -3059,6 +3062,7 @@ function openRespawnModal(boxId) {
   showModal(modal);
   startBtn.onclick = () => runSpawn(b.name, log, notice, startBtn, ev => {
     applyRespawn(boxId, ev);
+    notice.className = "notice ok";
     notice.textContent = "box updated: " + ev.tunnel_url;
   }, closeBtn);
   startBtn.focus();
