@@ -1766,7 +1766,7 @@ function updateBoxCard(entry, b) {
     // A dead box's tunnel URL is doubly useless — unclickable now, and
     // replaced by a fresh one on respawn. Show it only while reachable.
     entry.baseDiv.textContent = b.base;
-    entry.baseDiv.style.display = (rt.health === "down") ? "none" : "";
+    entry.baseDiv.style.display = (rt.health === "ok") ? "" : "none";
     // The third line of a box card: which binary this box runs (health's
     // vcs_revision) — labeled, lowercase hex; the uppercase micro-label
     // transform mangled it into unreadable line noise.
