@@ -283,7 +283,7 @@
   }
   .box-card {
     border: 1px solid var(--border); border-radius: 0; margin-bottom: 10px;
-    background: var(--panel-2); overflow: hidden;
+    background: var(--panel-2);
   }
   .box-head { display: flex; align-items: center; gap: 8px; padding: 9px 10px; cursor: pointer; }
   .box-head:hover { background: var(--tool); }
@@ -304,6 +304,17 @@
   .count-chip.busy { border-color: var(--fg); color: var(--fg); }
   .count-chip.goal-running { border-color: var(--ok); color: var(--ok); }
   .box-actions { display: flex; gap: 6px; padding: 0 10px 8px; flex-wrap: wrap; }
+  .menu-trigger[aria-expanded] , .menu-wrap { display: inline-flex; }
+  .overflow-menu {
+    position: fixed; margin: 0; inset: auto; min-width: 160px;
+    background: var(--panel-2); border: 1px solid var(--fg); padding: 0;
+    flex-direction: column;
+    position-area: bottom span-left;
+    position-try-fallbacks: flip-block;
+  }
+  .overflow-menu:popover-open { display: flex; }
+  .overflow-menu button { border: none; border-bottom: 1px solid var(--border); text-align: left; width: 100%; }
+  .overflow-menu button:last-child { border-bottom: none; }
   button.respawn { border-color: var(--warn); color: var(--warn); }
   /* PROCESS STRIP: a compact row per managed process (see AGENTS.md/this
      page's header comment). Hidden entirely (display:none, set in JS) when
@@ -1731,11 +1742,15 @@ function createBoxCardEntry(boxId) {
   // One primary action (Dispatch), one contextual promotion (Respawn,
   // shown only when the box is down — the moment it IS the primary
   // action), everything occasional behind a native <details> overflow.
-  const overflow = el("details", { class: "menu small" },
-    el("summary", { text: "\u22ef" }),
-    el("div", { class: "menu-items" },
-      el("button", { class: "small", text: "+ New session", onclick: () => quickNewSession(boxId) }),
-      el("button", { class: "small danger", text: "Remove", onclick: () => removeBox(boxId) }),
+  // Popover API: the menu renders in the browser's TOP LAYER, escaping
+  // #fleet's scroll clipping and the card bounds; CSS anchor positioning
+  // pins it under the trigger and flips it above near the viewport bottom.
+  const menuId = "boxmenu-" + boxId.replace(/[^a-z0-9]/gi, "");
+  const overflow = el("span", { class: "menu-wrap" },
+    el("button", { class: "small menu-trigger", text: "\u22ef", popovertarget: menuId, style: "anchor-name:--" + menuId }),
+    el("div", { class: "overflow-menu", id: menuId, popover: "auto", style: "position-anchor:--" + menuId },
+      el("button", { class: "small", text: "+ New session", onclick: () => { document.getElementById(menuId).hidePopover(); quickNewSession(boxId); } }),
+      el("button", { class: "small danger", text: "Remove", onclick: () => { document.getElementById(menuId).hidePopover(); removeBox(boxId); } }),
     ));
   const actions = el("div", { class: "box-actions" },
     el("button", { class: "small", text: "+ Dispatch", onclick: () => openDispatchModal(boxId) }),
