@@ -3023,8 +3023,12 @@ function openRespawnModal(boxId) {
   const startBtn = el("button", { class: "primary", text: "Respawn" });
   const modal = el("div", { class: "modal" },
     el("h2", { text: "Respawn " + b.name }),
-    el("div", {}, "Re-spawns the SAME box name \u2014 fleet-model ADOPT (docs/design/fleet-model.md \u00a74): same name, same volume, session history restores. On success this box's base URL and run token update in place (new tunnel, same fragment entry); any goal left armed surfaces paused (\u201crestart\u201d), ready for a one-click Re-arm."),
-    el("div", { class: "field" }, el("label", { text: "Name (unchanged)" }), el("code", { text: b.name })),
+    // Operator copy, not design-doc copy: no internal references, no
+    // implementation nouns, and the honest caveat about what does NOT
+    // survive (working directories are container-local; sessions are on
+    // the volume).
+    el("div", {}, "Starts fresh compute under the same name and storage. Sessions and history come back; a goal left armed returns paused, ready to re-arm. This card's address and token update automatically."),
+    el("div", { class: "goalreason", text: "Checkouts and running processes from the old box do not carry over." }),
     notice, log,
     el("div", { class: "row" }, startBtn, el("button", { text: "Close", onclick: closeModal })),
   );
