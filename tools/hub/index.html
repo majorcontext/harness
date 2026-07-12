@@ -207,7 +207,7 @@
   :root {
     color-scheme: dark;
     --bg: #0a0a0a; --panel: #101010; --panel-2: #151515; --border: #2a2a2a;
-    --fg: #eaeaea; --dim: #7d7d7d; --accent: #ff2a2a; --accent-fg: #0a0a0a;
+    --fg: #eaeaea; --dim: #888888; --accent: #ff2a2a; --accent-fg: #0a0a0a;
     --user: #101418; --asst: #111111; --tool: #0e0e0e; --reason: #0c0c0c;
     --err-bg: #1a0808; --err-border: #7a1a1a; --ok: #4af626; --warn: #d8d8d8;
     --off: #3a3a3a;
@@ -470,6 +470,13 @@
     background: var(--bg); border: 1px solid var(--border); border-radius: 0; padding: 8px;
     font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; word-break: break-word;
     max-height: 240px; overflow-y: auto; margin-top: 8px;
+  }
+  /* Desktop-first operator tool, but never overflow on a narrow window:
+     below 820px the two panes stack, fleet on top with a capped height. */
+  @media (max-width: 820px) {
+    main { flex-direction: column; }
+    #fleet { width: 100%; max-height: 45vh; border-right: none; border-bottom: 1px solid var(--border); }
+    #drill { min-height: 40vh; }
   }
   .spawnlog:empty { display: none; }
 </style>
