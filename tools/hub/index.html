@@ -2829,6 +2829,11 @@ function showModal(modal) {
   if (!host.dataset.dismissWired) {
     host.dataset.dismissWired = "1";
     host.addEventListener("click", (e) => { if (e.target === host) closeModal(); });
+    // While a spawn is in flight the dialog's Close button is disabled;
+    // Escape must not sneak past it (same orphaned-spawn rationale).
+    host.addEventListener("cancel", (e) => {
+      if (host.querySelector("button.primary:disabled")) e.preventDefault();
+    });
   }
   host.showModal();
 }
@@ -2942,18 +2947,19 @@ function openSpawnModal() {
   const log = el("div", { class: "spawnlog", text: "" });
   const notice = el("div", { class: "notice" });
   const startBtn = el("button", { class: "primary", text: "Spawn" });
+  const closeBtn = el("button", { text: "Close", onclick: closeModal });
   const modal = el("div", { class: "modal" },
     el("h2", { text: "Spawn a new box" }),
     el("div", {}, "Runs this hub's configured -spawn-command / $HARNESS_HUB_SPAWN and streams its output below. See the contract in this page's header comment."),
     el("div", { class: "field" }, el("label", { text: "Name" }), el("code", { text: name })),
     notice, log,
-    el("div", { class: "row" }, startBtn, el("button", { text: "Close", onclick: closeModal })),
+    el("div", { class: "row" }, startBtn, closeBtn),
   );
   showModal(modal);
   startBtn.onclick = () => runSpawn(name, log, notice, startBtn, ev => {
     addBox({ name: name || ev.tunnel_url, base: ev.tunnel_url, token: ev.run_token, port_urls: ev.port_urls });
     notice.textContent = "box added: " + ev.tunnel_url;
-  });
+  }, closeBtn);
   startBtn.focus();
 }
 
@@ -3021,6 +3027,7 @@ function openRespawnModal(boxId) {
   const log = el("div", { class: "spawnlog", text: "" });
   const notice = el("div", { class: "notice" });
   const startBtn = el("button", { class: "primary", text: "Respawn" });
+  const closeBtn = el("button", { text: "Close", onclick: closeModal });
   const modal = el("div", { class: "modal" },
     el("h2", { text: "Respawn " + b.name }),
     // Operator copy, not design-doc copy: no internal references, no
@@ -3030,13 +3037,13 @@ function openRespawnModal(boxId) {
     el("div", {}, "Starts fresh compute under the same name and storage. Sessions and history come back; a goal left armed returns paused, ready to re-arm. This card's address and token update automatically."),
     el("div", { class: "goalreason", text: "Checkouts and running processes from the old box do not carry over." }),
     notice, log,
-    el("div", { class: "row" }, startBtn, el("button", { text: "Close", onclick: closeModal })),
+    el("div", { class: "row" }, startBtn, closeBtn),
   );
   showModal(modal);
   startBtn.onclick = () => runSpawn(b.name, log, notice, startBtn, ev => {
     applyRespawn(boxId, ev);
     notice.textContent = "box updated: " + ev.tunnel_url;
-  });
+  }, closeBtn);
   startBtn.focus();
 }
 
