@@ -244,6 +244,22 @@ deployed product. It serves one embedded, single-file page
     own code never reads `HARNESS_HUB_BOX_NAME` at all. A request with no
     body, or no `name` field, spawns exactly as before (no env var set).
 - The hub binds loopback-only by default (`resolveAddr` in `tools/hub/hub.go`).
+- **Browser-security hardening** (both in `tools/hub/hub.go`, tested in
+  `tools/hub/hub_test.go`). `POST /spawn` execs a real, costly provision
+  command, so `handleSpawn` rejects a browser cross-origin request before any
+  exec: if an `Origin` header is present it must match the request's `Host`
+  (OWASP verify-origin). Loopback binding alone does not stop this — any page
+  the operator visits can `fetch("http://localhost:7777/spawn",{method:
+  "POST"})` as a no-preflight CORS simple request — but the page's own
+  same-origin `fetch("/spawn")` (Origin == Host) and non-browser clients (no
+  Origin, so not a CSRF vector) pass unchanged. The served page also carries
+  a strict `Content-Security-Policy` (`default-src 'none'` + `'unsafe-inline'`
+  script/style — the page is a single no-build `go:embed`'d file with no
+  external resources and no per-response nonce hook — + `connect-src *`,
+  required because it fetches/streams from arbitrary operator-added box
+  origins the stateless hub cannot enumerate, + `frame-ancestors`/`base-uri`/
+  `form-action` pinned to `'none'`): defense-in-depth for a page holding run
+  tokens in its URL fragment.
 - **Pure hub logic is unit-tested** by `tools/hub/hub_test.mjs` (run:
   `node --test tools/hub/*_test.mjs`). **End-to-end, against a real backend**
   is `tools/hub/e2e` (see its README): a `go test -race ./...` subtree that

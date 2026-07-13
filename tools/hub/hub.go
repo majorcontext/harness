@@ -28,6 +28,18 @@ const defaultAddr = "localhost:7777"
 // so a wrapper script can configure the hub without a flag.
 const spawnCommandEnv = "HARNESS_HUB_SPAWN"
 
+// contentSecurityPolicy hardens the served page (defense-in-depth for a page
+// that carries run tokens in its URL fragment). The hub is a single inline
+// file that loads NO external resources, so default-src 'none' blocks every
+// external fetch/script/style/image/frame; the page's own inline script and
+// inline style attributes are permitted with 'unsafe-inline' (a per-response
+// nonce/hash is not viable on a byte-for-byte go:embed'd, no-build file);
+// connect-src * is required because the page fetches/streams from arbitrary,
+// operator-added box origins the hub cannot enumerate (it keeps no state).
+// frame-ancestors/base-uri/form-action are pinned to 'none' explicitly since
+// they do not inherit from default-src.
+const contentSecurityPolicy = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src *; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+
 // Options configures a hub server. The zero value is not directly useful;
 // Run below builds one from flags/env for the `harness hub` subcommand, but
 // tests construct Options directly to avoid touching flags or the process
@@ -62,6 +74,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
 	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodGet {
 		w.Write(indexHTML) //nolint:errcheck
