@@ -1,0 +1,3183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>harness hub</title>
+<!--
+  harness hub — a single self-contained page giving one operator a
+  control surface over a fleet of headless harness boxes
+  (`harness serve` instances). No build step, no external resources: open it
+  straight from file:// or serve it with `harness hub` (which just embeds
+  this exact file and adds one API, POST /spawn — see below).
+
+  STATE MODEL — read this before poking at the code. There is no server-side
+  registry and no config file. Every box you add (name, base URL, run token)
+  and your current selection live ONLY in this tab's URL fragment, as
+  base64-encoded JSON: `#s=<base64>`, kept in sync via history.replaceState
+  (never pushState — back/forward doesn't spelunk through selection
+  history). That makes a hub URL bookmarkable, reload-safe, and shareable
+  between local tabs with zero server involvement; "Copy hub link" in the
+  header is the entire persistence story. THIS MEANS RUN TOKENS RIDE THE URL
+  BY DESIGN. That is an accepted tradeoff for a local, single-operator dev
+  tool — do not paste a hub link into a shared channel, do not point this at
+  anything you wouldn't put in shell history.
+
+  Each box is a `harness serve` instance; the page talks to boxes DIRECTLY
+  from your browser (never through this page's own server) using its
+  HTTP+SSE API (see server/openapi.yaml). That means every box must be
+  started with -cors-origin set to this hub's origin (or "*" for local
+  hacking), e.g.:
+      HARNESS_RUN_TOKEN=t harness serve -cors-origin http://localhost:7777
+  A box with no -cors-origin set will look permanently unreachable here —
+  check that first.
+
+  SPAWN CONTRACT — the one thing the Go side does. POST /spawn (optionally
+  carrying a JSON body {"name": "..."} — this page always sends its
+  generated/reused box name) execs the command given by `harness hub`'s
+  -spawn-command flag (or $HARNESS_HUB_SPAWN) via `sh -c`, setting
+  HARNESS_HUB_BOX_NAME in that command's OWN environment when a name was
+  given (see tools/hub/spawn.go's runSpawn and docs/design/fleet-model.md
+  §8 — deployment tooling reads this to derive per-name storage), and
+  streams its combined stdout+stderr live to this page as it runs (SSE, one
+  "stdout" event per line). Once the command exits, the stream ends with
+  one "done" event carrying the exit code and, if present anywhere in the
+  output, the value of any lines exactly matching `TUNNEL_URL=<url>`,
+  `RUN_TOKEN=<token>`, and any number of `PORT_URL_<port>=<url>` lines
+  (surrounding whitespace trimmed; the port lines collect into a
+  `port_urls` map — see the PROCESS STRIP below). That's the entire
+  coupling — this repo carries zero deployment-specific spawn logic. This
+  page reads only `tunnel_url`/`run_token`/`port_urls` off the done event;
+  it adds (or, on a Respawn, updates in place) the box in its own URL state
+  itself (see runSpawn()/applyRespawn() below). Any spawn command that
+  prints those lines works, whether it's a one-liner or a wrapper around a
+  fleet provisioning tool.
+
+  RESPAWN/ADOPT — a box card offers "⟲ Respawn" once its health has been
+  observed down. It calls POST /spawn again with the SAME name (fleet-model
+  ADOPT, docs/design/fleet-model.md §4: same name -> same durable volume ->
+  every session's history restores, any armed goal surfaces
+  paused/"restart") and, on success, updates that SAME box entry's base URL
+  + run token in place — a fresh tunnel, not a new box card.
+
+  LINEAGE GROUPING — sessions that share a `parent_session` chain
+  (server/openapi.yaml's Session.parent_session, set via POST /session;
+  docs/design/fleet-model.md §6) collapse into one task entry per box card:
+  the most recent session (the "tip") is the primary row, and any earlier
+  attempts collapse behind an "N earlier attempts" toggle. A session with
+  no lineage renders exactly as before. ">> Re-dispatch" on an ended/errored
+  session creates a NEW session (parent_session = the old one) and opens
+  the goal form pre-filled with its prior condition — distinct from the
+  in-place "Re-arm" action, which reuses the SAME session.
+
+  PAUSED GOALS — GoalSummary.paused/pause_reason (server/openapi.yaml,
+  docs/design/fleet-model.md §7): "provider-backoff" renders as a calm
+  "waiting out provider weather" note (the loop is alive, just between
+  retries — never treated as an error) and clears on its own; "restart"
+  (an ADOPTed/rebooted box found the goal armed with no loop attached)
+  renders a prominent "Re-arm now" CTA, because that one never resumes
+  itself. The boot-only `goal.paused` event renders in the timeline
+  alongside `goal.stalled`/`goal.eval`/etc.
+
+  PROCESS STRIP — each box card polls GET /process (server/openapi.yaml,
+  docs/design/managed-processes.md) and renders one compact row per managed
+  process: name, a state dot (ready green, starting/running amber, exited
+  red with its exit code), and — only when the process reports a `ports`
+  field (a parallel-branch addition; absent renders as no ports, never a
+  crash) AND this box's `port_urls` map (an optional part of the box's URL-
+  fragment state, editable in the add-box modal, or auto-populated from
+  PORT_URL_<port>= spawn output above) has a matching entry — a clickable
+  preview link. An absent/404 GET /process (an older box) means no strip at
+  all. Clicking a process opens a small panel with its state and log PATH
+  (GET /process exposes no log CONTENT over HTTP — see docs/design/managed-
+  processes.md §5 — so that's all there is to show, honestly).
+
+  ACTIVE-GOALS STRIP — a slim bar above the box list (only shown when
+  non-empty) listing every session, across every box, whose goal is
+  currently active (running OR paused) — "where is my work". Click any
+  entry to jump straight to that box+session.
+
+  The pure helpers below (SSE parser, hub-state codec, formatters) are
+  unit-tested by hub_test.mjs (run: node --test tools/hub/*_test.mjs). The
+  steps here cover the DOM/network behavior that can only be checked by
+  hand:
+    1. Start a box:  HARNESS_RUN_TOKEN=t harness serve -cors-origin http://localhost:7777
+       Start the hub: harness hub
+    2. Open http://localhost:7777. Click "+ Add box", paste the base URL
+       (http://localhost:4096) + token + a name, Save.
+       -> a box card appears; its health dot turns green within a few
+          seconds, showing vcs_revision.
+    3. Click "+ Dispatch" on the box -> paste a multi-paragraph condition
+       (try >2000 characters), set max_turns, Dispatch.
+       -> a new session card appears in goal-running state; selecting it
+          opens the timeline showing a goal.set narrative entry with the
+          full condition.
+    4. Watch the goal run unattended: goal.eval verdicts, and — if you
+       force a provider error — a goal.stalled entry rendered as "waiting
+          out provider weather" while goal_waiting is true, distinct from a
+          plain stall once it flips false.
+    5. When it finishes, goal.achieved (or an error last_turn) appears; a
+       "Re-arm" button appears on the session card, pre-filling the
+       condition box for editing.
+    6. Toggle "Notify" on (in the header Menu) (grants OS notification permission on first
+       click); trigger a goal.achieved or a turn.end error on any box ->
+       an OS notification fires without this tab being focused.
+    7. Click a running session's card -> composer lets you send a prompt,
+       set/clear a goal, and abort; streaming deltas render live, tool_call/
+       reasoning blocks render collapsed, a tool_result with is_error is
+       red-tinted, and session.error/session.aborted show as banners.
+    8. Kill a box's `harness serve` -> its health dot goes red and its
+       sessions freeze; restart it -> the dot goes green and its SSE stream
+       resyncs with backoff, same as the inspector.
+    9. Click "Copy link" (in the header Menu), reload from that pasted URL in a
+       new tab -> boxes + selection restored.
+   10. Spawn/Respawn a box: while it streams the button reads "Spawning…"
+       and BOTH it and Close are disabled; Escape does not dismiss;
+       on done/error they re-enable.
+   11. A box whose /health fails reads "inactive" (not a URL), shows a
+       primary "Respawn" button; Respawn adopts the same name/volume and
+       swaps this card's address+token in place, reload the page from that pasted URL in a new
+       tab -> every box and the current selection come back exactly.
+   10. Remove a box -> its card and connections disappear; garbage in the
+       URL fragment (hand-edit `#s=` to nonsense) loads as an empty,
+       unbroken hub rather than a blank page or a JS error.
+   11. Toggle OS light/dark theme -> both variants are legible.
+   12. Reload with a URL fragment that already has boxes in it -> the box
+       card(s) appear on the very first paint, no "no boxes yet" flash;
+       each card's dot starts dimmed/neutral (not red, not amber) until its
+       first health poll resolves, and the session area doesn't jump when
+       it does.
+   13. Dispatch a long-running goal, expand a tool_call or reasoning block
+       mid-stream, and keep watching -> it stays expanded through every
+       subsequent delta/tool call/turn, including the moment the streaming
+       draft lands as a durable message.
+   14. While a session is actively streaming, scroll the timeline up to read
+       earlier history -> new messages/deltas keep arriving without
+       yanking your scroll position back to the bottom; scroll back to the
+       bottom yourself and confirm it resumes auto-following.
+   15. With a box that has several sessions, trigger a burst of activity
+       across them (e.g. prompt two sessions back to back) -> session rows
+       update in place (badges/usage/relative time) without the whole list
+       re-sorting/shuffling more than about once a second.
+   16. Dispatch a goal, let it end (achieved/cleared/errored), then click
+       ">> Re-dispatch" -> a NEW session appears with the goal form
+       pre-filled with the old condition; submitting it creates a session
+       distinct from the original (both visible), grouped under one task
+       row with an "N earlier attempts" toggle revealing the older one.
+       Sessions with no lineage at all still render exactly as one plain
+       row, no toggle.
+   17. Force a goal into provider-backoff (a retryable provider error) ->
+       the session/timeline show a calm "waiting out provider weather"
+       note, NOT red/error styling, and it clears on its own once the
+       retry succeeds — no Re-arm button appears for it.
+   18. Kill a box, restart `harness serve` pointed at the SAME session
+       directory with an armed goal still active (ADOPT) -> that goal
+       surfaces paused ("restart"); a prominent "Re-arm now" button
+       appears on its session row and in the goal panel; clicking it
+       resumes the goal with its existing condition. The `goal.paused`
+       entry appears in that session's timeline.
+   19. Configure a box with a `processes` section (see docs/design/managed-
+       processes.md) and start one from a session's `process` tool -> the
+       box card grows a process strip row: a state dot (amber while
+       starting, green once ready), and (once you populate that box's
+       port_urls, e.g. `3000=https://preview.example.dev`, in the add-box
+       modal or via a PORT_URL_3000= spawn line) a clickable preview link
+       once the process reports that port. Clicking the row (not the link)
+       opens a small panel showing its state and log path. A box running
+       an older harness binary (no /process at all) shows no strip.
+   20. Kill a box's `harness serve` so its dot goes red -> a "⟲ Respawn"
+       button appears on its card; use it (pointed at a spawn command that
+       reuses the same name) -> on success the SAME box card's base URL
+       and token update in place (no new card), and its sessions'
+       histories reappear once the box reconnects.
+   21. Dispatch goals on sessions across two or more boxes -> the
+       ACTIVE-GOALS STRIP above the box list lists every one of them;
+       clicking an entry jumps straight to that box+session in the
+       timeline. The strip disappears once no goal anywhere is active.
+-->
+<style>
+  /* TACTICAL TELEMETRY — committed dark-only archetype. One substrate
+     (#0a0a0a phosphor-on-black), one accent (hazard red), terminal green
+     reserved for exactly one semantic: live/succeeded goal execution.
+     Monospace dominance, uppercase micro-labels, hairline compartment
+     borders, zero border-radius, no gradients, no soft shadows, no
+     translucency, no motion without cause. Every piece of "telemetry"
+     shown is REAL data (vcs revisions, seqs, PIDs, token counts) — the
+     aesthetic fabricates nothing. */
+  :root {
+    color-scheme: dark;
+    --bg: #0a0a0a; --panel: #101010; --panel-2: #151515; --border: #2a2a2a;
+    --fg: #eaeaea; --dim: #888888; --accent: #ff2a2a; --accent-fg: #0a0a0a;
+    --user: #101418; --asst: #111111; --tool: #0e0e0e; --reason: #0c0c0c;
+    --err-bg: #1a0808; --err-border: #7a1a1a; --ok: #4af626; --warn: #d8d8d8;
+    --off: #3a3a3a;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--bg); color: var(--fg);
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+  }
+  /* Static phosphor scanlines: the archetype's signature texture. No
+     animation (motion needs a reason; texture is not one). */
+  body::after {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 99;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px,
+      rgba(0,0,0,.14) 2px, rgba(0,0,0,.14) 4px);
+  }
+  header {
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  header h1 {
+    font: 800 14px/1 system-ui, sans-serif; letter-spacing: -0.02em;
+    text-transform: uppercase; margin: 0 10px 0 0; white-space: nowrap;
+  }
+  header h1::before { content: "[ "; color: var(--dim); font-weight: 400; }
+  header h1::after { content: " ]"; color: var(--dim); font-weight: 400; }
+  button {
+    background: transparent; color: var(--fg); border: 1px solid var(--border);
+    border-radius: 0; padding: 6px 12px; font: 600 11px/1.2 ui-monospace, monospace;
+    text-transform: uppercase; letter-spacing: .08em; cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  button.primary:hover:not(:disabled) { background: var(--fg); border-color: var(--fg); color: var(--bg); }
+  button.danger { border-color: var(--err-border); color: var(--accent); }
+  button.danger:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+  button.small { padding: 3px 8px; font-size: 10px; }
+  input, textarea, select {
+    background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 0; padding: 6px 8px; font: inherit;
+  }
+  input:focus, textarea:focus, select:focus { outline: 1px solid var(--fg); outline-offset: -1px; }
+  .spacer { flex: 1; }
+  .toggle.on { border-color: var(--fg); background: var(--panel-2); }
+  #activeGoalsBar {
+    display: none; flex-wrap: wrap; gap: 6px; padding: 6px 12px;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  .active-goal-chip {
+    display: flex; align-items: center; gap: 6px; cursor: pointer;
+    border: 1px solid var(--ok); color: var(--ok);
+    border-radius: 0; padding: 3px 10px; font-size: 11px; max-width: 360px;
+  }
+  .active-goal-chip:hover { background: var(--tool); }
+  .active-goal-chip.calm { border-color: var(--dim); color: var(--dim); }
+  .active-goal-chip.urgent { border-color: var(--accent); color: var(--accent); }
+  .agc-box { font-weight: 700; white-space: nowrap; text-transform: uppercase; letter-spacing: .04em; }
+  .agc-cond { color: var(--fg); opacity: .8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agc-pause { font-size: 10px; white-space: nowrap; text-transform: uppercase; letter-spacing: .06em; }
+  main { display: flex; flex: 1; min-height: 0; }
+  #fleet {
+    width: 390px; border-right: 1px solid var(--border); overflow-y: auto;
+    background: var(--panel); flex-shrink: 0; padding: 10px;
+  }
+  #drill { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  .empty {
+    color: var(--dim); text-align: center; margin-top: 48px; padding: 0 20px;
+    text-transform: uppercase; letter-spacing: .08em; font-size: 11px;
+  }
+  .box-card {
+    border: 1px solid var(--border); border-radius: 0; margin-bottom: 10px;
+    background: var(--panel-2);
+  }
+  .box-head { display: flex; align-items: center; gap: 8px; padding: 9px 10px; cursor: pointer; }
+  .box-head:hover { background: var(--tool); }
+  /* Square status markers: 90-degree geometry, semantic color only.
+     Health is monochrome (lit vs unlit phosphor); RED is reserved for
+     trouble (reconnecting), GREEN strictly for live goal execution. */
+  .dot { width: 8px; height: 8px; border-radius: 0; background: var(--off); flex-shrink: 0; }
+  .dot.on { background: var(--fg); } .dot.re { background: var(--accent); } .dot.off { background: var(--off); }
+  .dot.loading { background: var(--dim); }
+  .box-name { font-weight: 700; text-transform: uppercase; letter-spacing: .04em; font-size: 12px; }
+  .box-base { color: var(--dim); font-size: 10px; }
+  .box-meta { color: var(--dim); font-size: 10px; margin-left: auto; text-align: right; }
+  .box-counts { display: flex; gap: 6px; padding: 0 10px 8px; flex-wrap: wrap; }
+  .count-chip {
+    border-radius: 0; padding: 1px 7px; font-size: 10px; border: 1px solid var(--border);
+    text-transform: uppercase; letter-spacing: .06em; color: var(--dim);
+  }
+  .count-chip.busy { border-color: var(--fg); color: var(--fg); }
+  .count-chip.goal-running { border-color: var(--ok); color: var(--ok); }
+  .box-actions { display: flex; gap: 6px; padding: 0 10px 8px; flex-wrap: wrap; }
+  .menu-trigger[aria-expanded] , .menu-wrap { display: inline-flex; }
+  .overflow-menu {
+    position: fixed; margin: 0; inset: auto; min-width: 160px;
+    background: var(--panel-2); border: 1px solid var(--fg); padding: 0;
+    flex-direction: column;
+    position-area: bottom span-left;
+    position-try-fallbacks: flip-block;
+  }
+  .overflow-menu:popover-open { display: flex; }
+  .overflow-menu button { border: none; border-bottom: 1px solid var(--border); text-align: left; width: 100%; }
+  .overflow-menu button:last-child { border-bottom: none; }
+  button.respawn { border-color: var(--warn); color: var(--warn); }
+  /* PROCESS STRIP: a compact row per managed process (see AGENTS.md/this
+     page's header comment). Hidden entirely (display:none, set in JS) when
+     a box reports no processes or doesn't serve GET /process at all.
+     Green stays reserved for goal execution: a ready process is lit
+     phosphor, a dead one is hazard red. */
+  .proc-strip { display: none; flex-direction: column; gap: 2px; padding: 0 10px 8px; }
+  .proc-item {
+    display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer;
+    padding: 2px 6px; border-radius: 0;
+  }
+  .proc-item:hover { background: var(--tool); }
+  .proc-dot { width: 8px; height: 8px; border-radius: 0; background: var(--off); flex-shrink: 0; }
+  .proc-dot.ready { background: var(--fg); }
+  .proc-dot.starting { background: var(--dim); }
+  .proc-dot.exited { background: var(--accent); }
+  .proc-dot.stopped { background: var(--off); }
+  .proc-dot.unknown { background: var(--dim); }
+  .proc-name { color: var(--dim); }
+  .proc-links { display: flex; gap: 6px; margin-left: auto; }
+  .proc-link { color: var(--fg); text-decoration: underline; font-size: 11px; }
+  .proc-link:hover { color: var(--ok); }
+  .sess-list { border-top: 1px solid var(--border); }
+  .sess { padding: 8px 10px; border-bottom: 1px solid var(--border); cursor: pointer; }
+  .sess:last-child { border-bottom: none; }
+  .sess:hover { background: var(--tool); }
+  .sess.sel { background: var(--tool); border-left: 2px solid var(--accent); padding-left: 8px; }
+  .sess .id { font-weight: 700; font-size: 11px; letter-spacing: .02em; }
+  .sess .meta { color: var(--dim); font-size: 10px; margin-top: 3px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; text-transform: uppercase; }
+  .badge {
+    border-radius: 0; padding: 0 6px; font-size: 9px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .08em; border: 1px solid transparent;
+  }
+  .badge.busy { background: var(--fg); color: var(--bg); }
+  .badge.goal-running { background: var(--ok); color: var(--bg); }
+  .badge.idle { background: transparent; color: var(--dim); border-color: var(--border); }
+  .goal-snippet { color: var(--dim); font-size: 11px; margin-top: 2px; }
+  .last-turn { font-size: 11px; margin-top: 2px; }
+  .last-turn.error { color: var(--accent); }
+  .rearm { margin-top: 4px; }
+  /* PAUSED GOALS: provider-backoff is calm (not an error — the loop is
+     alive, just between retries); restart is NOT calm and pairs with a
+     prominent Re-arm CTA (see rearmNeeded/.rearm.prominent below). */
+  .pause-chip { font-size: 11px; margin-top: 2px; }
+  .pause-chip.calm { color: var(--dim); }
+  .pause-chip.urgent { color: var(--warn); font-weight: 600; }
+  .rearm.prominent {
+    background: var(--warn); color: #000; border-color: var(--warn); font-weight: 600;
+  }
+  .redispatch { margin-top: 4px; margin-left: 4px; }
+  /* LINEAGE GROUPING: a task's prior attempts collapse behind this toggle;
+     .lineage-earlier holds the (initially hidden) sub-rows. */
+  .lineage-toggle {
+    display: none; background: none; border: none; color: var(--accent); cursor: pointer;
+    font-size: 11px; padding: 2px 0 0; margin: 0; text-align: left;
+  }
+  .lineage-earlier { display: none; margin-top: 4px; padding-left: 8px; border-left: 2px solid var(--border); }
+  .earlier-row {
+    display: flex; align-items: center; gap: 6px; font-size: 11px; padding: 3px 0;
+    color: var(--dim); cursor: pointer;
+  }
+  .earlier-row:hover { color: var(--fg); }
+  .earlier-row .id { font-family: ui-monospace, monospace; }
+  #timeline { flex: 1; overflow-y: auto; padding: 16px; }
+  #goalpanel { flex-shrink: 0; border-top: 1px solid var(--border); background: var(--panel); padding: 10px 16px; }
+  #goalpanel:empty { display: none; }
+  .msg { margin: 0 0 12px; max-width: 880px; }
+  .role { font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--dim); margin-bottom: 4px; }
+  .role::before { content: ">> "; color: var(--off); }
+  .bubble { border-radius: 0; padding: 10px 12px; border: 1px solid var(--border); }
+  .bubble.user { background: var(--user); border-left: 2px solid var(--fg); }
+  .bubble.assistant { background: var(--asst); }
+  .text { white-space: pre-wrap; word-break: break-word; }
+  details.tool, details.reason { border: 1px solid var(--border); border-radius: 0; margin: 6px 0; background: var(--tool); }
+  details.reason { background: var(--reason); color: var(--dim); }
+  summary { cursor: pointer; padding: 7px 10px; font-size: 12px; }
+  details .body { padding: 0 10px 10px; }
+  pre.code {
+    margin: 0; white-space: pre-wrap; word-break: break-word;
+    font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 0; padding: 8px;
+    overflow-x: auto;
+  }
+  .toolres { border-radius: 0; padding: 8px 10px; background: var(--tool); border: 1px solid var(--border); }
+  .toolres.err { background: var(--err-bg); border-color: var(--err-border); }
+  .banner {
+    border-radius: 0; padding: 8px 12px; margin: 6px 0; max-width: 880px;
+    background: var(--err-bg); border: 1px solid var(--err-border);
+  }
+  .banner.abort { background: var(--reason); border-color: var(--border); color: var(--dim); }
+  .goalnarr {
+    border-radius: 0; padding: 8px 12px; margin: 6px 0; max-width: 880px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 4px; font-size: 12px;
+  }
+  .goalnarr.set { border-left: 2px solid var(--fg); }
+  .goalnarr.eval-met { border-left: 2px solid var(--ok); }
+  .goalnarr.eval-notmet { border-left: 2px solid var(--warn); }
+  .goalnarr.stalled { border-left: 2px solid var(--accent); }
+  .goalnarr.stalled.waiting { border-left: 2px solid var(--dim); }
+  .goalnarr.achieved { border-left: 2px solid var(--ok); }
+  .goalnarr.cleared { border-left: 2px solid var(--off); color: var(--dim); }
+  .goaltag { font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--dim); }
+  .goalcond { font-weight: 600; white-space: pre-wrap; word-break: break-word; }
+  .goalcond.clamped {
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .goaltoggle {
+    background: none; border: none; color: var(--fg); text-decoration: underline;
+    cursor: pointer; font-size: 11px; padding: 0; margin-top: 2px;
+    text-transform: uppercase; letter-spacing: .06em;
+  }
+  .goalreason { color: var(--dim); }
+  .streaming { opacity: .85; }
+  .streaming .role::after { content: " // streaming"; color: var(--dim); }
+  #composer { border-top: 1px solid var(--border); padding: 10px 16px; background: var(--panel); }
+  #composer textarea, #goalpanel textarea {
+    width: 100%; resize: vertical; min-height: 60px; font: inherit;
+  }
+  #composer textarea:disabled { opacity: .5; }
+  .row { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
+  .notice { color: var(--accent); font-size: 12px; min-height: 18px; }
+  .notice.ok { color: var(--ok); }
+  /* Native overflow menus: <details class="menu"> — semantic, keyboard
+     -correct, zero JS. Summary renders as a button; the item panel drops
+     anchored to it. */
+  details.menu { position: relative; }
+  details.menu > summary {
+    list-style: none; cursor: pointer; display: inline-block;
+    border: 1px solid var(--border); padding: 6px 12px;
+    font: 600 11px/1.2 ui-monospace, monospace; text-transform: uppercase; letter-spacing: .08em;
+  }
+  details.menu > summary::-webkit-details-marker { display: none; }
+  details.menu[open] > summary, details.menu > summary:hover { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  details.menu.small > summary { padding: 3px 8px; font-size: 10px; }
+  details.menu .menu-items {
+    position: absolute; right: 0; top: calc(100% + 2px); z-index: 20;
+    display: flex; flex-direction: column; min-width: 160px;
+    background: var(--panel-2); border: 1px solid var(--fg);
+  }
+  details.menu .menu-items button {
+    border: none; border-bottom: 1px solid var(--border); text-align: left; width: 100%;
+  }
+  details.menu .menu-items button:last-child { border-bottom: none; }
+  dialog#modalHost {
+    background: transparent; border: none; padding: 0; margin: 60px auto auto;
+    max-width: calc(100vw - 40px);
+  }
+  dialog#modalHost::backdrop { background: rgba(0,0,0,.8); }
+  .modal {
+    background: var(--panel); border: 1px solid var(--fg); border-radius: 0;
+    padding: 16px; width: 560px; max-width: calc(100vw - 40px); max-height: 80vh; overflow-y: auto;
+  }
+  .modal h2 {
+    margin: 0 0 12px; font: 800 13px/1 system-ui, sans-serif;
+    text-transform: uppercase; letter-spacing: -0.01em;
+  }
+  .field { margin-bottom: 10px; display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; }
+  .field input, .field textarea, .field select { width: 100%; }
+  .field textarea.big { min-height: 220px; font-size: 12px; }
+  .spawnlog {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 0; padding: 8px;
+    font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; word-break: break-word;
+    max-height: 240px; overflow-y: auto; margin-top: 8px;
+  }
+  /* Desktop-first operator tool, but never overflow on a narrow window:
+     below 820px the two panes stack, fleet on top with a capped height. */
+  @media (max-width: 820px) {
+    main { flex-direction: column; }
+    #fleet { width: 100%; max-height: 45vh; border-right: none; border-bottom: 1px solid var(--border); }
+    #drill { min-height: 40vh; }
+  }
+  .spawnlog:empty { display: none; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>harness hub</h1>
+    <button id="spawnBtn">Spawn box</button>
+    <span class="spacer"></span>
+    <span class="notice" id="headerNotice"></span>
+    <details class="menu" id="hubMenu">
+      <summary>Menu</summary>
+      <div class="menu-items">
+        <button id="addBoxBtn">+ Add box</button>
+        <button id="copyLinkBtn">Copy link</button>
+        <button id="notifyBtn" class="toggle" title="OS notifications when a watched goal achieves or a turn errors">Notify</button>
+      </div>
+    </details>
+  </header>
+  <div id="activeGoalsBar"></div>
+  <main>
+    <div id="fleet"></div>
+    <div id="drill">
+      <div id="timeline"><div class="empty">select a session from the fleet on the left</div></div>
+      <div id="goalpanel"></div>
+      <div id="composer" style="display:none">
+        <div class="notice" id="composerNotice"></div>
+        <textarea id="promptBox" placeholder="Message… (Enter to send, Shift+Enter for newline)"></textarea>
+        <div class="row">
+          <button id="sendBtn" class="primary">Send</button>
+          <button id="abortBtn" class="danger">Abort</button>
+          <span class="spacer"></span>
+          <button id="setGoalToggleBtn">Set goal</button>
+          <button id="clearGoalBtn">Clear goal</button>
+        </div>
+        <div id="goalForm" style="display:none">
+          <div class="field">
+            <label>Completion condition</label>
+            <textarea id="goalCondition" class="big" placeholder="Describe, in as much detail as needed, what MET looks like…"></textarea>
+          </div>
+          <div class="row">
+            <div class="field" style="flex:0 0 140px">
+              <label>Max turns (0 = unlimited)</label>
+              <input id="goalMaxTurns" type="number" min="0" value="0">
+            </div>
+            <button id="goalSubmitBtn" class="primary">Start goal</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <dialog id="modalHost"></dialog>
+
+<script>
+"use strict";
+
+/* ---------- pure helpers (kept small and side-effect free) ---------- */
+/* TESTABLE-BEGIN — the region below is extracted verbatim by hub_test.mjs
+   and evaluated in a node:vm sandbox. Keep it pure (no DOM, no globals
+   beyond Date/JSON) so the single-file page stays build-free while its
+   logic is still unit-tested. */
+
+// shortId trims a "prefix_hexhex…" id to its prefix plus a few hex chars.
+function shortId(id) {
+  if (!id) return "";
+  const u = id.indexOf("_");
+  return u >= 0 ? id.slice(0, u + 7) : id.slice(0, 8);
+}
+
+// prettyJSON pretty-prints a value that may be a JSON string, an object, or
+// something unparseable (returned verbatim).
+function prettyJSON(v) {
+  if (v == null) return "";
+  let obj = v;
+  if (typeof v === "string") {
+    try { obj = JSON.parse(v); } catch { return v; }
+  }
+  try { return JSON.stringify(obj, null, 2); } catch { return String(v); }
+}
+
+// partsText concatenates the text of Text parts (used for tool_result content).
+function partsText(parts) {
+  if (!Array.isArray(parts)) return "";
+  return parts.filter(p => p && p.type === "text").map(p => p.text || "").join("\n");
+}
+
+// maxSeq returns the largest `seq` across a list of events/sessions (0 if none).
+function maxSeq(list) {
+  let m = 0;
+  for (const s of list) if (typeof s.seq === "number" && s.seq > m) m = s.seq;
+  return m;
+}
+
+// sessionTimeRank returns a sortable recency number for a session:
+// last_activity_at if present, else created_at, else -Infinity (sorts as
+// "oldest", i.e. last in a most-recent-first order). Never returns NaN —
+// an unparseable timestamp also falls back to -Infinity — so sortSessions'
+// comparator stays total. This closes an operator-reported bug: a box
+// running an older harness binary returns last_activity_at: null for every
+// session, which used to degenerate `sortByLastActivity`'s sort (new
+// Date(null) - new Date(null) is NaN, so Array#sort leaves the input in
+// whatever order the server happened to send it) and could bury the one
+// actively running session at the bottom of the fleet list.
+function sessionTimeRank(session) {
+  const raw = (session && session.last_activity_at) || (session && session.created_at);
+  if (!raw) return -Infinity;
+  const t = new Date(raw).getTime();
+  return isNaN(t) ? -Infinity : t;
+}
+
+// sessionPriorityRank orders sessionBadge states so the fleet view leads
+// with what needs attention: an active goal first, then busy, then idle —
+// independent of activity recency.
+function sessionPriorityRank(session) {
+  const badge = sessionBadge(session);
+  if (badge === "goal-running") return 0;
+  if (badge === "busy") return 1;
+  return 2;
+}
+
+// sortSessions orders a session list by state (goal-running, then busy,
+// then idle) and, within a state, by recency — last_activity_at, falling
+// back to created_at, falling back to "oldest" for a session with
+// neither — most recent first. Does not mutate the input. Total order
+// (see sessionTimeRank): a fleet of sessions with no last_activity_at at
+// all still sorts sensibly by state instead of degenerating to server/
+// insertion order.
+function sortSessions(list) {
+  return (list || []).slice().sort((a, b) => {
+    const pr = sessionPriorityRank(a) - sessionPriorityRank(b);
+    if (pr !== 0) return pr;
+    return sessionTimeRank(b) - sessionTimeRank(a);
+  });
+}
+
+// fmtRelative renders an ISO timestamp relative to `nowMs` (defaults to
+// Date.now(), overridable for deterministic tests): "just now" under 10s,
+// then Ns/Nm/Nh/Nd ago, falling back to a locale date past a week. Future
+// timestamps (clock skew) clamp to "just now" rather than going negative.
+function fmtRelative(iso, nowMs) {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return "";
+  const now = typeof nowMs === "number" ? nowMs : Date.now();
+  let diff = Math.round((now - t) / 1000);
+  if (diff < 0) diff = 0;
+  if (diff < 10) return "just now";
+  if (diff < 60) return diff + "s ago";
+  const m = Math.floor(diff / 60);
+  if (m < 60) return m + "m ago";
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + "h ago";
+  const d = Math.floor(h / 24);
+  if (d < 7) return d + "d ago";
+  return new Date(iso).toLocaleDateString();
+}
+
+// sessionBadge derives the composite state badge from a raw session JSON,
+// mirroring the server's SessionState precedence (server/openapi.yaml):
+// an active goal always wins, regardless of the momentary busy/idle status.
+function sessionBadge(session) {
+  const goalActive = !!(session && session.goal && session.goal.active);
+  if (goalActive) return "goal-running";
+  const status = session && session.status;
+  return status === "busy" ? "busy" : "idle";
+}
+
+// countByState tallies a box's sessions by sessionBadge, for the fleet
+// card's at-a-glance counts. Always returns all three keys.
+function countByState(sessions) {
+  const counts = { idle: 0, busy: 0, "goal-running": 0 };
+  for (const s of (sessions || [])) {
+    const b = sessionBadge(s);
+    counts[b] = (counts[b] || 0) + 1;
+  }
+  return counts;
+}
+
+// goalSnippet truncates a goal condition to `max` characters (default 80)
+// for the compact session-card view; the full text still renders in the
+// timeline/goal panel.
+function goalSnippet(condition, max) {
+  max = max || 80;
+  if (!condition) return "";
+  const c = String(condition).trim();
+  if (c.length <= max) return c;
+  return c.slice(0, max - 1).trimEnd() + "\u2026";
+}
+
+// lastTurnSummary renders a Session.last_turn (or StatusEntry.last_turn)
+// as one line: "completed", "error: <text>", or the bare outcome name for
+// outcomes that carry no error text (context_exhausted, max_turns_exceeded).
+function lastTurnSummary(lastTurn) {
+  if (!lastTurn || !lastTurn.outcome) return "";
+  if (lastTurn.outcome === "completed") return "completed";
+  if (lastTurn.error) return lastTurn.outcome + ": " + lastTurn.error;
+  return lastTurn.outcome;
+}
+
+// fmtTokens compacts a token count: 999 -> "999", 1234 -> "1.2k",
+// 1500000 -> "1.5M". Trims a trailing ".0" so round numbers read cleanly.
+function fmtTokens(n) {
+  if (typeof n !== "number" || isNaN(n)) return "0";
+  const abs = Math.abs(n);
+  if (abs < 1000) return String(n);
+  if (abs < 1e6) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+  return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
+}
+
+// usageSummary renders a Usage object's cumulative input/output tokens.
+function usageSummary(usage) {
+  if (!usage) return "";
+  return fmtTokens(usage.input_tokens || 0) + " in / " + fmtTokens(usage.output_tokens || 0) + " out";
+}
+
+// reduceGoal folds one goal.* journal event into a goal-summary object,
+// extending the inspector's version with goal.stalled (retryable-weather
+// backoff vs. a real, budget-exhausting stall — see GoalSummary in
+// server/openapi.yaml) and paused/pauseReason (docs/design/fleet-model.md
+// §7: goal.paused — boot-time, always "restart" — and goal.stalled while
+// goal_retryable && goal_waiting — "provider-backoff" — both carry
+// goal_paused/goal_pause_reason). Non-goal events return prev unchanged
+// (same reference); goal events return a fresh object so the input is
+// never mutated.
+function reduceGoal(prev, ev) {
+  const isGoal = ev && typeof ev.type === "string" && ev.type.indexOf("goal.") === 0;
+  if (!isGoal) return prev;
+  const g = Object.assign({
+    condition: "", active: false, achieved: false, reason: "", turns: 0,
+    attempt: 0, retryable: false, retryableClass: "", waiting: false,
+    paused: false, pauseReason: "",
+  }, prev);
+  switch (ev.type) {
+    case "goal.set":
+      g.condition = ev.goal_condition || "";
+      g.active = true; g.achieved = false; g.reason = ""; g.turns = 0;
+      g.attempt = 0; g.retryable = false; g.retryableClass = ""; g.waiting = false;
+      g.paused = false; g.pauseReason = "";
+      break;
+    case "goal.eval":
+      if (ev.goal_reason) g.reason = ev.goal_reason;
+      if (typeof ev.goal_turn === "number") g.turns = ev.goal_turn;
+      g.attempt = 0; g.retryable = false; g.retryableClass = ""; g.waiting = false;
+      g.paused = false; g.pauseReason = "";
+      break;
+    case "goal.stalled":
+      if (ev.goal_reason) g.reason = ev.goal_reason;
+      g.attempt = ev.goal_attempt || 0;
+      g.retryable = !!ev.goal_retryable;
+      g.retryableClass = ev.goal_retryable_class || "";
+      g.waiting = !!ev.goal_waiting;
+      g.paused = !!ev.goal_paused;
+      g.pauseReason = g.paused ? (ev.goal_pause_reason || "") : "";
+      break;
+    case "goal.achieved":
+      g.active = false; g.achieved = true;
+      if (ev.goal_reason) g.reason = ev.goal_reason;
+      if (typeof ev.goal_turns === "number") g.turns = ev.goal_turns;
+      g.attempt = 0; g.retryable = false; g.retryableClass = ""; g.waiting = false;
+      g.paused = false; g.pauseReason = "";
+      break;
+    case "goal.cleared":
+      g.active = false;
+      g.attempt = 0; g.retryable = false; g.retryableClass = ""; g.waiting = false;
+      g.paused = false; g.pauseReason = "";
+      break;
+    case "goal.paused":
+      // Boot-only record (server.pauseArmedGoalsAtBoot): the goal was
+      // already active in the journal, with no loop ever attached in this
+      // process — always pause_reason "restart". Set condition/active too
+      // in case this is the very first goal.* event this reducer has ever
+      // seen for the session (a from=tip fleet stream that missed the
+      // original goal.set).
+      if (ev.goal_condition) g.condition = ev.goal_condition;
+      g.active = true;
+      g.paused = !!ev.goal_paused;
+      g.pauseReason = g.paused ? (ev.goal_pause_reason || "restart") : "";
+      break;
+  }
+  return g;
+}
+
+// goalFromSession seeds a goal-summary object (same shape reduceGoal
+// produces) from a session JSON's `goal` field — closes the bootstrap gap
+// for a goal predating this tab's connection to the box. paused/
+// pause_reason are absent-safe: an older box that predates
+// docs/design/fleet-model.md's pause vocabulary simply has no `paused`
+// field, which renders as not-paused here, never a crash.
+function goalFromSession(sess) {
+  const g = sess && sess.goal;
+  if (!g || !g.condition) return null;
+  return {
+    condition: g.condition,
+    active: !!g.active,
+    achieved: !g.active && !!g.achieved,
+    reason: g.last_reason || "",
+    turns: g.turns || 0,
+    attempt: g.attempt || 0,
+    retryable: !!g.retryable,
+    retryableClass: g.retryable_class || "",
+    waiting: !!g.waiting,
+    paused: !!g.paused,
+    pauseReason: g.paused ? (g.pause_reason || "") : "",
+  };
+}
+
+// notifyForEvent decides whether a durable event is notify-worthy under the
+// hub's "goal achieves or a turn errors" policy, returning {title, body} or
+// null. Pure — the caller (see notify() below) is what actually calls the
+// Notification API, gated on the opt-in toggle and OS permission.
+function notifyForEvent(ev) {
+  if (!ev || typeof ev.type !== "string") return null;
+  if (ev.type === "goal.achieved") {
+    return { title: "Goal achieved", body: ev.goal_reason || "" };
+  }
+  if (ev.type === "turn.end" && ev.outcome === "error") {
+    return { title: "\u26a0\ufe0f Turn failed", body: ev.error || "" };
+  }
+  return null;
+}
+
+/* ---------- hub state codec: URL-fragment persistence ----------
+   No server-side registry, no config file, no localStorage requirement —
+   see the header comment. The fragment carries `s=<base64 of UTF-8 JSON>`;
+   encode/decode use a hand-rolled base64 + UTF-8 codec (rather than
+   btoa/atob or Buffer) so this same source evaluates identically in a
+   browser and in the node:vm sandbox hub_test.mjs runs it in. */
+
+const B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+function utf8Encode(str) {
+  const bytes = [];
+  for (let i = 0; i < str.length; i++) {
+    let code = str.codePointAt(i);
+    if (code > 0xffff) i++; // consumed a surrogate pair
+    if (code < 0x80) {
+      bytes.push(code);
+    } else if (code < 0x800) {
+      bytes.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
+    } else if (code < 0x10000) {
+      bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+    } else {
+      bytes.push(
+        0xf0 | (code >> 18), 0x80 | ((code >> 12) & 0x3f),
+        0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f),
+      );
+    }
+  }
+  return bytes;
+}
+
+function utf8Decode(bytes) {
+  let str = "";
+  let i = 0;
+  while (i < bytes.length) {
+    const b0 = bytes[i];
+    if (b0 < 0x80) { str += String.fromCharCode(b0); i += 1; }
+    else if ((b0 & 0xe0) === 0xc0) { str += String.fromCharCode(((b0 & 0x1f) << 6) | (bytes[i + 1] & 0x3f)); i += 2; }
+    else if ((b0 & 0xf0) === 0xe0) { str += String.fromCharCode(((b0 & 0x0f) << 12) | ((bytes[i + 1] & 0x3f) << 6) | (bytes[i + 2] & 0x3f)); i += 3; }
+    else {
+      const cp = ((b0 & 0x07) << 18) | ((bytes[i + 1] & 0x3f) << 12) | ((bytes[i + 2] & 0x3f) << 6) | (bytes[i + 3] & 0x3f);
+      str += String.fromCodePoint(cp);
+      i += 4;
+    }
+  }
+  return str;
+}
+
+function b64Encode(bytes) {
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i], b1 = bytes[i + 1], b2 = bytes[i + 2];
+    const has1 = i + 1 < bytes.length, has2 = i + 2 < bytes.length;
+    out += B64_ALPHABET[b0 >> 2];
+    out += B64_ALPHABET[((b0 & 3) << 4) | (has1 ? (b1 >> 4) : 0)];
+    out += has1 ? B64_ALPHABET[((b1 & 15) << 2) | (has2 ? (b2 >> 6) : 0)] : "=";
+    out += has2 ? B64_ALPHABET[b2 & 63] : "=";
+  }
+  return out;
+}
+
+function b64Decode(str) {
+  const clean = String(str).replace(/[^A-Za-z0-9+/]/g, "");
+  const bytes = [];
+  for (let i = 0; i < clean.length; i += 4) {
+    const c0 = B64_ALPHABET.indexOf(clean[i]);
+    const c1 = clean[i + 1] !== undefined ? B64_ALPHABET.indexOf(clean[i + 1]) : -1;
+    const c2 = clean[i + 2] !== undefined ? B64_ALPHABET.indexOf(clean[i + 2]) : -1;
+    const c3 = clean[i + 3] !== undefined ? B64_ALPHABET.indexOf(clean[i + 3]) : -1;
+    if (c0 < 0 || c1 < 0) break;
+    bytes.push(((c0 << 2) | (c1 >> 4)) & 0xff);
+    if (c2 >= 0) bytes.push(((c1 << 4) | (c2 >> 2)) & 0xff);
+    if (c3 >= 0) bytes.push(((c2 << 6) | c3) & 0xff);
+  }
+  return bytes;
+}
+
+// encodeHubState serializes {boxes, view, notify} to the URL fragment value
+// (without the leading "#"): "s=<base64>".
+function encodeHubState(state) {
+  const json = JSON.stringify(state || {});
+  return "s=" + b64Encode(utf8Encode(json));
+}
+
+// hubStateEmpty is the tolerant default: no boxes, no selection, notify off.
+function hubStateEmpty() {
+  return { boxes: [], view: {}, notify: false };
+}
+
+// decodeHubState parses a URL hash (with or without the leading "#", and
+// tolerating any garbage — a hand-edited or truncated fragment, a stray
+// query string, non-base64 junk) back into {boxes, view, notify}. Any
+// failure at any stage yields hubStateEmpty() rather than throwing or
+// partially applying: a broken fragment must load as an unbroken, empty hub.
+function decodeHubState(hash) {
+  const empty = hubStateEmpty();
+  if (!hash) return empty;
+  let h = String(hash);
+  if (h[0] === "#") h = h.slice(1);
+  const m = /(?:^|&)s=([^&]*)/.exec(h);
+  if (!m) return empty;
+  try {
+    const json = utf8Decode(b64Decode(decodeURIComponent(m[1])));
+    const obj = JSON.parse(json);
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return empty;
+    const boxes = Array.isArray(obj.boxes)
+      ? obj.boxes
+          .filter(b => b && typeof b === "object" && typeof b.base === "string" && typeof b.token === "string")
+          .map(b => ({
+            id: typeof b.id === "string" && b.id ? b.id : b.base,
+            name: typeof b.name === "string" && b.name ? b.name : b.base,
+            base: b.base.replace(/\/+$/, ""),
+            token: b.token,
+            // port_urls: an optional {"<port>": "<url>"} map (see the
+            // process strip and PORT_URL_<port>= spawn contract line) —
+            // garbage/wrong-shaped input tolerates down to {}, same rule
+            // as every other field here.
+            port_urls: sanitizePortURLs(b.port_urls),
+          }))
+      : [];
+    const view = (obj.view && typeof obj.view === "object" && !Array.isArray(obj.view)) ? obj.view : {};
+    return { boxes, view, notify: !!obj.notify };
+  } catch {
+    return empty;
+  }
+}
+
+/* ---------- SSE frame parser (shared verbatim with tools/inspector) ----------
+   Feed it decoded stream text; it invokes onEvent({id, data}) once per complete
+   frame (terminated by a blank line). Handles multi-line data, id lines, and
+   comment lines beginning with ":". Stateful across chunk boundaries. */
+function createSSEParser(onEvent) {
+  let buf = "", data = [], id = null;
+  return function feed(chunk) {
+    buf += chunk;
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      let line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      if (line.endsWith("\r")) line = line.slice(0, -1);
+      if (line === "") {
+        if (data.length) onEvent({ id, data: data.join("\n") });
+        data = [];
+        continue;
+      }
+      if (line[0] === ":") continue;
+      const c = line.indexOf(":");
+      let field, value;
+      if (c === -1) { field = line; value = ""; }
+      else {
+        field = line.slice(0, c);
+        value = line.slice(c + 1);
+        if (value[0] === " ") value = value.slice(1);
+      }
+      if (field === "data") data.push(value);
+      else if (field === "id") id = value;
+    }
+  };
+}
+
+// SLUG_ADJECTIVES / SLUG_NOUNS feed randomSlug — a friendly default box
+// name so an operator never has to invent one. Kept short, unambiguous,
+// and inoffensive; the pairing space (adjective × noun × 100) is large
+// enough that collisions in a personal fleet are rare, and the trailing
+// number makes an accidental repeat visibly distinct.
+const SLUG_ADJECTIVES = [
+  "amber", "brisk", "calm", "clever", "cobalt", "crimson", "dapper", "eager",
+  "fleet", "gentle", "hardy", "ivory", "jolly", "keen", "lucid", "mellow",
+  "nimble", "olive", "plucky", "quiet", "rapid", "sunny", "teal", "umber",
+  "vivid", "witty", "zesty", "azure", "bold", "swift",
+];
+const SLUG_NOUNS = [
+  "otter", "falcon", "maple", "harbor", "comet", "willow", "badger", "cedar",
+  "finch", "gulch", "heron", "island", "jasper", "kestrel", "lark", "meadow",
+  "nectar", "orchard", "pebble", "quartz", "raven", "spruce", "thistle",
+  "vale", "walrus", "yak", "zephyr", "beacon", "cove", "dune",
+];
+
+// randomSlug builds an "adjective-noun-NN" box name. rand is injectable
+// (defaults to Math.random) so the pairing is deterministic under test;
+// it must return a float in [0, 1). The two-digit suffix is derived from
+// the same source so one rand call sequence fully determines the name.
+function randomSlug(rand) {
+  const r = typeof rand === "function" ? rand : Math.random;
+  const adj = SLUG_ADJECTIVES[Math.floor(r() * SLUG_ADJECTIVES.length)];
+  const noun = SLUG_NOUNS[Math.floor(r() * SLUG_NOUNS.length)];
+  const num = String(Math.floor(r() * 100)).padStart(2, "0");
+  return adj + "-" + noun + "-" + num;
+}
+
+// createCoalescer wraps fn so that any number of calls within one scheduler
+// tick produce exactly one invocation on that tick. Rendering after every
+// SSE event is O(events × DOM); a long session's from=0 replay delivers
+// thousands of events in a few network chunks and froze the tab rebuilding
+// the timeline per event. Coalescing to one render per animation frame
+// makes replay cost O(chunks × DOM) regardless of event count. schedule is
+// injectable (requestAnimationFrame in the page, a fake queue under test).
+// The pending flag clears BEFORE fn runs so a call made from inside fn
+// re-arms a fresh tick rather than being swallowed.
+function createCoalescer(schedule, fn) {
+  let pending = false;
+  return function () {
+    if (pending) return;
+    pending = true;
+    schedule(function () { pending = false; fn(); });
+  };
+}
+
+// planAppend returns the subset of `items` (in their given order) whose key
+// (per keyFn) is not already present in `existingKeys` — the "what's new"
+// half of keyed, append-only rendering (timeline messages/narrative/banners,
+// see renderTimeline). existingKeys may be a Set or any iterable; it is
+// never mutated here — the caller records newly-rendered keys itself, after
+// actually creating DOM for them, so a render that throws partway through
+// doesn't silently mark items as rendered. Items whose key is null/undefined
+// are skipped (no stable identity to key on).
+function planAppend(existingKeys, items, keyFn) {
+  const seen = existingKeys instanceof Set ? existingKeys : new Set(existingKeys || []);
+  const out = [];
+  for (const item of (items || [])) {
+    const k = keyFn(item);
+    if (k == null || seen.has(k)) continue;
+    out.push(item);
+  }
+  return out;
+}
+
+// isPinnedToBottom implements the "pinned tail" autoscroll rule: renders
+// should stick to the bottom only while the viewer IS at the bottom (within
+// thresholdPx, default 24), and must never yank the viewport back down once
+// the operator has scrolled up to read earlier history.
+function isPinnedToBottom(scrollTop, scrollHeight, clientHeight, thresholdPx) {
+  thresholdPx = typeof thresholdPx === "number" ? thresholdPx : 24;
+  const gap = scrollHeight - scrollTop - clientHeight;
+  return gap <= thresholdPx;
+}
+
+// shouldResort damps fleet row re-sorting: returns whether enough time has
+// elapsed since the last reorder (default: 1000ms) to run another sort pass.
+// Between allowed sorts, rows still refresh in place — this only gates
+// REORDERING, so cards/rows don't shuffle out from under the cursor during
+// an event burst. lastSortAtMs of a non-number (e.g. null on first render)
+// always permits a sort.
+function shouldResort(lastSortAtMs, nowMs, minIntervalMs) {
+  minIntervalMs = typeof minIntervalMs === "number" ? minIntervalMs : 1000;
+  if (typeof lastSortAtMs !== "number") return true;
+  return (nowMs - lastSortAtMs) >= minIntervalMs;
+}
+
+// boxCardSignature computes a cheap content signature for everything a box
+// card shows OUTSIDE its session list — health dot, name/base, vcs revision,
+// per-state counts, and whether it's expanded (which decides whether a
+// session list section exists at all). renderFleet skips all DOM writes for
+// a card whose signature is unchanged since the last render.
+function boxCardSignature(s) {
+  s = s || {};
+  return JSON.stringify([
+    s.health || "", s.name || "", s.base || "", s.vcsRevision || "",
+    !!s.expanded, s.counts || {},
+  ]);
+}
+
+// sessionRowSignature computes a cheap content signature for one fleet
+// session row's rendered content, so per-session reconciliation can skip
+// DOM work for a row whose content hasn't actually changed (only its
+// position in a damped re-sort might have). `selected` is whether this row
+// is the currently drilled-into session (affects "sel" styling).
+function sessionRowSignature(session, selected) {
+  const s = session || {};
+  return JSON.stringify([
+    s.id || "", sessionBadge(s), s.model || "", usageSummary(s.usage),
+    s.last_activity_at || "", !!selected,
+    s.goal ? { c: s.goal.condition || "", a: !!s.goal.active, p: !!s.goal.paused, pr: s.goal.pause_reason || "" } : null,
+    s.last_turn ? { o: s.last_turn.outcome || "", e: s.last_turn.error || "" } : null,
+  ]);
+}
+
+// canRedispatch reports whether a session is a candidate for the
+// Re-dispatch action (distinct from in-place Re-arm, see AGENTS.md/this
+// page's header comment): it must be idle in the composite sense — not
+// currently busy or driving a goal — which covers both a plainly-ended
+// session and one whose last turn errored out.
+function canRedispatch(session) {
+  return sessionBadge(session) === "idle";
+}
+
+// buildLineages groups a flat session list into per-task lineage entries by
+// following `parent_session` chains (see Session.parent_session in
+// server/openapi.yaml and docs/design/fleet-model.md §6). Each returned
+// entry is { id, tip, earlier }: `tip` is the most recent session in the
+// group (by sessionTimeRank), `earlier` is every other member, most recent
+// first — the "N earlier attempts" collapsed line. A session whose
+// parent_session names an id NOT present in this list (the common
+// cross-box case — lineage crosses boxes routinely, and only sessions
+// resident on THIS box are ever in `sessions`) is treated as having no
+// resolvable lineage here and renders as its own singleton group, exactly
+// like a session with no parent_session at all ("sessions with no lineage
+// render as today"). A parent_session cycle (A parents B, B parents A, or
+// longer) is tolerated: union-find below only ever walks a bounded chain
+// with a visited-set guard, so it terminates and merges the cycle into one
+// group instead of hanging or throwing.
+function buildLineages(sessions) {
+  const list = Array.isArray(sessions) ? sessions.filter(s => s && s.id) : [];
+  const byId = new Map(list.map(s => [s.id, s]));
+  const parent = new Map(list.map(s => [s.id, s.id])); // union-find, self-rooted initially
+
+  function find(x) {
+    let root = x;
+    const seen = new Set();
+    while (parent.get(root) !== root) {
+      if (seen.has(root)) break; // cycle guard: stop rather than loop forever
+      seen.add(root);
+      root = parent.get(root);
+    }
+    return root;
+  }
+  function union(a, b) {
+    const ra = find(a), rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  }
+
+  for (const s of list) {
+    const p = s.parent_session;
+    if (p && p !== s.id && byId.has(p)) union(s.id, p);
+  }
+
+  const groups = new Map(); // root id -> member sessions
+  for (const s of list) {
+    const root = find(s.id);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(s);
+  }
+
+  const result = [];
+  for (const members of groups.values()) {
+    const sorted = members.slice().sort((a, b) => sessionTimeRank(b) - sessionTimeRank(a));
+    result.push({ id: sorted[0].id, tip: sorted[0], earlier: sorted.slice(1) });
+  }
+  return result;
+}
+
+// collectActiveGoals is the ACTIVE-GOALS STRIP's pure core: every session,
+// across every given box, whose goal is currently active (running OR
+// paused — GoalSummary.active stays true through a pause; see
+// docs/design/fleet-model.md §7) — "where is my work" answered in one
+// list. `boxes` is [{id, name, sessions:[sessionJSON,...]}, ...]; garbage
+// entries (null box, missing sessions) are skipped rather than thrown on.
+// Entries whose goal is paused for the "restart" reason (needs a one-click
+// re-arm — the most actionable case) sort first; order is otherwise
+// preserved (stable sort).
+function collectActiveGoals(boxes) {
+  const out = [];
+  for (const b of (boxes || [])) {
+    if (!b) continue;
+    for (const s of (b.sessions || [])) {
+      const g = s && s.goal;
+      if (!g || !g.active) continue;
+      out.push({
+        boxId: b.id, boxName: b.name || b.id, sessionId: s.id,
+        condition: g.condition || "",
+        paused: !!g.paused,
+        pauseReason: g.pause_reason || "",
+      });
+    }
+  }
+  out.sort((a, b) => {
+    const pa = (a.paused && a.pauseReason === "restart") ? 0 : 1;
+    const pb = (b.paused && b.pauseReason === "restart") ? 0 : 1;
+    return pa - pb;
+  });
+  return out;
+}
+
+// goalPauseTreatment renders the two paused/pause_reason vocabularies from
+// docs/design/fleet-model.md §7 as a display treatment: "provider-backoff"
+// is calm ("waiting out provider weather", not an error — the loop is
+// alive, just between retries), "restart" is not calm and wants a
+// prominent Re-arm CTA (see rearmNeeded below). An unrecognized future
+// pause_reason still renders (never throws) as a non-calm, generic pause —
+// forward-compatible without guessing at its meaning. Returns null when
+// not paused at all.
+function goalPauseTreatment(paused, pauseReason) {
+  if (!paused) return null;
+  if (pauseReason === "provider-backoff") {
+    return { reason: pauseReason, calm: true, label: "waiting out provider weather" };
+  }
+  if (pauseReason === "restart") {
+    return { reason: pauseReason, calm: false, label: "paused. needs re-arm" };
+  }
+  return { reason: pauseReason || "", calm: false, label: "paused" };
+}
+
+// rearmNeeded decides whether — and how urgently — a Re-arm CTA should
+// show for a goal, given its wire-shaped active/condition/paused/
+// pause_reason fields (works uniformly whether they came straight off
+// Session.goal or off the drill panel's reduced summary — callers pass the
+// primitives so this stays shape-agnostic): "none" (nothing to re-arm, or
+// a live loop that will re-arm itself — provider-backoff self-clears with
+// no operator action per fleet-model.md §7), "normal" (the existing
+// after-the-fact Re-arm on an ended goal), "prominent" (an active-but-
+// paused/restart goal: the loop will NEVER resume itself — see ADOPT's
+// restart-pause story — so this is the one case that both needs and
+// deserves a loud CTA).
+function rearmNeeded(active, condition, paused, pauseReason) {
+  if (!condition) return "none";
+  if (!active) return "normal";
+  if (paused && pauseReason === "restart") return "prominent";
+  return "none";
+}
+
+// normalizePorts tolerates every shape a managed process's not-yet-final
+// "ports" field (arriving on a parallel branch — see AGENTS.md/this page's
+// header comment) might take: absent entirely, an array of port numbers or
+// numeric strings, or an object keyed by port. Always returns an array of
+// port strings; never throws.
+function normalizePorts(ports) {
+  if (ports == null) return [];
+  if (Array.isArray(ports)) return ports.map(p => String(p));
+  if (typeof ports === "object") return Object.keys(ports);
+  return [];
+}
+
+// normalizeProcesses adapts GET /process's response (an array of
+// ProcessInfo, see server/openapi.yaml and docs/design/managed-
+// processes.md) into the process strip's compact per-process shape.
+// Anything that isn't the expected array (absent endpoint, 404 body,
+// network-error sentinel, an older box that doesn't serve /process at
+// all) yields [] — "no strip", never a crash. A entry's `ports` field is
+// read defensively off ProcessStatus (or, just in case, the ProcessInfo
+// itself) and normalized — absent renders as no ports, exactly the
+// "code against that contract defensively" requirement.
+function normalizeProcesses(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const p of list) {
+    if (!p || typeof p !== "object") continue;
+    const status = (p.status && typeof p.status === "object") ? p.status : {};
+    const name = p.name || status.name || "";
+    if (!name) continue;
+    out.push({
+      name,
+      state: status.state || "",
+      ready: !!status.ready,
+      exitCode: typeof status.exit_code === "number" ? status.exit_code : null,
+      log: status.log || "",
+      ports: normalizePorts(status.ports !== undefined ? status.ports : p.ports),
+    });
+  }
+  return out;
+}
+
+// processStateBadge maps a managed process's state (see docs/design/
+// managed-processes.md's state machine) to a dot class + label for the
+// process strip: ready green, starting (or its running/ready-timeout
+// cousin) amber, exited red carrying its exit code, stopped a neutral
+// off-dot, and anything else (empty/unrecognized — a declared-but-never-
+// started process, or a future state this page doesn't know about yet)
+// a neutral "unknown"/"not started" rather than guessing or throwing.
+function processStateBadge(state, exitCode) {
+  switch (state) {
+    case "ready": return { cls: "ready", label: "ready" };
+    case "starting": return { cls: "starting", label: "starting" };
+    case "running": return { cls: "starting", label: "running" };
+    case "exited": return { cls: "exited", label: typeof exitCode === "number" ? "exited(" + exitCode + ")" : "exited" };
+    case "stopped": return { cls: "stopped", label: "stopped" };
+    default: return { cls: "unknown", label: state || "not started" };
+  }
+}
+
+// portLinksFor pairs a process's reported ports (see normalizeProcesses)
+// against the box's port_urls map (see decodeHubState/addBox) and returns
+// only the ports that have a KNOWN url — "when the process reports ports
+// AND the box's state carries a matching port URL" from the process
+// strip's spec. Absent/malformed ports or portURLs both yield [], never a
+// crash.
+function portLinksFor(ports, portURLs) {
+  const map = (portURLs && typeof portURLs === "object") ? portURLs : {};
+  const out = [];
+  for (const p of (ports || [])) {
+    if (typeof map[p] === "string" && map[p]) out.push({ port: p, url: map[p] });
+  }
+  return out;
+}
+
+// parsePortURLLines parses the add-box modal's editable "port=url" textarea
+// (one pair per line) into a port_urls map — the hand-edited counterpart to
+// spawn.go's PORT_URL_<port>= line scanning. Blank lines and anything that
+// doesn't parse as "<digits>=<non-empty>" are silently skipped, not
+// thrown on — a stray typo shouldn't nuke the whole box-add flow.
+function parsePortURLLines(text) {
+  const out = {};
+  for (const raw of String(text || "").split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const i = line.indexOf("=");
+    if (i <= 0) continue;
+    const port = line.slice(0, i).trim();
+    const url = line.slice(i + 1).trim();
+    if (/^[0-9]+$/.test(port) && url) out[port] = url;
+  }
+  return out;
+}
+
+// mergePortURLs combines two port_urls maps — existing box state plus
+// freshly-parsed/spawned values (see PORT_URL_<port>= scanning in spawn.go
+// and parsePortURLLines above) — tolerating null/undefined on either side.
+// Incoming values win on a port collision: a Respawn's fresh tunnel
+// replaces the stale URL for the same port.
+function mergePortURLs(existing, incoming) {
+  return Object.assign({}, existing || {}, incoming || {});
+}
+
+// sanitizePortURLs is decodeHubState's tolerance rule for a box's
+// port_urls field: anything other than a plain object of string values
+// (garbage in a hand-edited fragment, an array, null) collapses to {}
+// rather than throwing or partially applying.
+function sanitizePortURLs(v) {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out = {};
+  for (const k of Object.keys(v)) {
+    if (typeof v[k] === "string" && v[k]) out[k] = v[k];
+  }
+  return out;
+}
+/* TESTABLE-END */
+
+/* ============================================================
+   Application logic below (DOM/network — not extracted by tests).
+   ============================================================ */
+
+const $ = id => document.getElementById(id);
+
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  if (attrs) for (const k in attrs) {
+    if (k === "class") n.className = attrs[k];
+    else if (k === "text") n.textContent = attrs[k];
+    else if (k === "html") n.innerHTML = attrs[k];
+    else if (k.startsWith("on") && typeof attrs[k] === "function") n.addEventListener(k.slice(2), attrs[k]);
+    else if (k in n) n[k] = attrs[k];
+    else n.setAttribute(k, attrs[k]);
+  }
+  for (const kid of kids) if (kid != null) n.append(kid);
+  return n;
+}
+
+/* ---------- hub state: persisted (URL fragment) + runtime (in memory) ----------
+   `hs` is the persisted slice — {boxes:[{id,name,base,token}], view:{box,session},
+   notify} — round-tripped through encodeHubState/decodeHubState. Everything else
+   (connections, live session data, draft/timeline buffers) is runtime-only and
+   rebuilt from each box's REST snapshot + SSE stream on load/reconnect. */
+let hs = hubStateEmpty();
+
+// boxRuntime: boxId -> { health: "unknown"|"ok"|"down", vcsRevision, vcsTime,
+//   sessions: Map<id, sessionJSON>, lastSeq, backoff, timer, abort, healthTimer,
+//   pollTimer, running }
+const boxRuntime = new Map();
+
+// drill: state for whichever (box,session) is currently drilled into — the
+// inspector's single-session state, scoped to one box at a time since only
+// one session is ever open in the timeline pane.
+const drill = {
+  boxId: null, sessionId: null,
+  messages: [], banners: [], narrative: [], // narrative: goal.* entries in seq order
+  draft: null,
+  conn: { abort: null, timer: null, backoff: 500 },
+  goal: null, // reduceGoal-shaped summary, seeded from the session record
+};
+
+function freshDraft() { return { text: "", reasoning: "", tools: [] }; }
+
+function box(id) { return hs.boxes.find(b => b.id === id) || null; }
+
+/* ---------- persistence: URL fragment only, no localStorage, no server ---------- */
+
+function persist() {
+  const frag = encodeHubState(hs);
+  history.replaceState(null, "", "#" + frag);
+}
+
+function loadFromLocation() {
+  hs = decodeHubState(location.hash);
+}
+
+/* ---------- per-box HTTP ---------- */
+
+async function boxAPI(b, method, path, body) {
+  const opts = { method, headers: { Authorization: "Bearer " + b.token } };
+  if (body !== undefined) {
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  return fetch(b.base + path, opts);
+}
+
+/* ---------- box connection lifecycle: health poll + session resync + SSE ---------- */
+
+function ensureRuntime(id) {
+  let rt = boxRuntime.get(id);
+  if (!rt) {
+    rt = {
+      health: "unknown", vcsRevision: "", vcsTime: "",
+      sessions: new Map(), lastSeq: 0, backoff: 500,
+      timer: null, abort: null, healthTimer: null, pollTimer: null, running: false,
+      // processes: normalizeProcesses(GET /process's body), refreshed on
+      // every poll tick (see pollBoxOnce). Starts empty — indistinguishable
+      // from "no processes configured" until the first poll resolves,
+      // exactly like every other rt field before its first poll.
+      processes: [],
+    };
+    boxRuntime.set(id, rt);
+  }
+  return rt;
+}
+
+// HUB_POLL_MS is how often each connected box's health + session snapshot is
+// re-fetched. The SSE stream (below) gives near-real-time reactivity for
+// status/message/goal changes; usage and last_activity_at aren't part of the
+// event payloads (see server/openapi.yaml's Event schema), so a light poll
+// keeps those numbers fresh without the operator ever hitting refresh.
+const HUB_POLL_MS = 5000;
+
+function connectBox(id) {
+  const b = box(id);
+  if (!b) return;
+  const rt = ensureRuntime(id);
+  if (rt.running) return;
+  rt.running = true;
+  // AWAIT the first poll before opening the event stream: the poll's
+  // GET /session snapshot sets rt.lastSeq to the box's current journal
+  // high-water mark, so connectBoxStream opens /event from the tip (live
+  // tail) instead of from=0 — which would replay the entire journal
+  // (every event of every historical session) into the UI on connect.
+  // The recurring poll re-syncs state, so the tiny snapshot→stream window
+  // loses at most a few deltas, reconciled on the next tick.
+  pollBoxOnce(id).then(() => {
+    if (rt.running) connectBoxStream(id);
+  });
+  rt.pollTimer = setInterval(() => pollBoxOnce(id), HUB_POLL_MS);
+}
+
+function disconnectBox(id) {
+  const rt = boxRuntime.get(id);
+  if (!rt) return;
+  rt.running = false;
+  if (rt.pollTimer) clearInterval(rt.pollTimer);
+  if (rt.timer) clearTimeout(rt.timer);
+  if (rt.abort) rt.abort.abort();
+  boxRuntime.delete(id);
+}
+
+async function pollBoxOnce(id) {
+  const b = box(id);
+  const rt = boxRuntime.get(id);
+  if (!b || !rt) return;
+  try {
+    const h = await fetch(b.base + "/health");
+    if (h.ok) {
+      const j = await h.json();
+      rt.health = "ok";
+      rt.vcsRevision = j.vcs_revision || "";
+      rt.vcsTime = j.vcs_time || "";
+    } else {
+      rt.health = "down";
+    }
+  } catch {
+    rt.health = "down";
+  }
+  try {
+    const s = await boxAPI(b, "GET", "/session");
+    if (s.ok) {
+      const list = await s.json();
+      rt.sessions = new Map(list.map(x => [x.id, x]));
+      const hw = maxSeq(list);
+      if (hw > rt.lastSeq) rt.lastSeq = hw;
+    }
+  } catch { /* transient; the next poll or the SSE stream will refill */ }
+  // PROCESS STRIP: GET /process (docs/design/managed-processes.md §5).
+  // Absent entirely on an older box (404, or any other non-2xx — a CORS
+  // rejection surfaces as a network error, caught below) simply means no
+  // strip; normalizeProcesses already treats non-array input as [], and a
+  // thrown fetch just leaves rt.processes as whatever it was (transient,
+  // like the /session poll above) — never a crash either way.
+  try {
+    const p = await boxAPI(b, "GET", "/process");
+    rt.processes = p.ok ? normalizeProcesses(await p.json()) : [];
+  } catch { /* transient, or the endpoint doesn't exist on this box at all */ }
+  renderFleet();
+  if (drill.boxId === id) renderDrillSessionMeta();
+}
+
+function connectBoxStream(id) {
+  const b = box(id);
+  const rt = boxRuntime.get(id);
+  if (!b || !rt || !rt.running) return;
+  const ac = new AbortController();
+  rt.abort = ac;
+  (async () => {
+    try {
+      const resp = await fetch(b.base + "/event?from=" + rt.lastSeq, {
+        headers: { Authorization: "Bearer " + b.token }, signal: ac.signal,
+      });
+      if (!resp.ok || !resp.body) throw new Error("event stream " + resp.status);
+      rt.backoff = 500;
+      rt.health = "ok";
+      renderFleet();
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      const parse = createSSEParser(frame => {
+        let ev; try { ev = JSON.parse(frame.data); } catch { return; }
+        handleBoxEvent(id, ev);
+      });
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        parse(dec.decode(value, { stream: true }));
+      }
+    } catch {
+      if (!rt.running) return;
+    }
+    if (rt.running) {
+      rt.health = "down";
+      renderFleet();
+      rt.timer = setTimeout(() => connectBoxStream(id), rt.backoff);
+      rt.backoff = Math.min(rt.backoff * 2, 10000);
+    }
+  })();
+}
+
+// handleBoxEvent updates the box-wide runtime (fleet card counts, session
+// summaries) for every event on that box's stream, and additionally feeds
+// notifyForEvent-worthy events into the notifier and (when this event's
+// session is the one currently drilled into) the timeline narrative.
+function handleBoxEvent(id, ev) {
+  const rt = boxRuntime.get(id);
+  if (!rt) return;
+  if (typeof ev.seq === "number" && ev.seq > rt.lastSeq) rt.lastSeq = ev.seq;
+  const sid = ev.session_id;
+  const sess = rt.sessions.get(sid);
+
+  switch (ev.type) {
+    case "session.created":
+      rt.sessions.set(sid, Object.assign({
+        id: sid, status: "idle", messages: 0,
+        created_at: new Date().toISOString(), last_activity_at: new Date().toISOString(),
+        model: ev.model,
+      }, rt.sessions.get(sid) || {}));
+      break;
+    case "session.status":
+      if (sess) { sess.status = ev.status; sess.last_activity_at = new Date().toISOString(); }
+      break;
+    case "model":
+      if (sess) sess.model = ev.model;
+      break;
+    case "message":
+      if (sess) { sess.messages = (sess.messages || 0) + 1; sess.last_activity_at = new Date().toISOString(); }
+      break;
+    case "turn.end":
+      if (sess) { sess.last_turn = { outcome: ev.outcome, error: ev.error }; sess.last_activity_at = new Date().toISOString(); }
+      break;
+    case "goal.set":
+    case "goal.eval":
+    case "goal.stalled":
+    case "goal.achieved":
+    case "goal.cleared":
+    case "goal.paused":
+      if (sess) {
+        sess.goal = Object.assign({}, sess.goal, reduceGoalWire(sess.goal, ev));
+        sess.last_activity_at = new Date().toISOString();
+      }
+      break;
+  }
+
+  const notice = notifyForEvent(ev);
+  if (notice) notify(id, sid, notice);
+
+  if (drill.boxId === id && drill.sessionId === sid) handleDrillEvent(ev);
+
+  scheduleFleetRender();
+}
+
+// reduceGoalWire adapts reduceGoal's {retryableClass,pauseReason,...} shape
+// to the wire GoalSummary field names (retryable_class, pause_reason) so
+// fleet-card rendering can read a session's goal field uniformly whether
+// it came from GET /session or was derived here from the event stream —
+// see docs/design/fleet-model.md §7 for paused/pause_reason.
+function reduceGoalWire(prevWire, ev) {
+  const prev = prevWire ? {
+    condition: prevWire.condition, active: prevWire.active, achieved: prevWire.achieved,
+    reason: prevWire.last_reason, turns: prevWire.turns, attempt: prevWire.attempt,
+    retryable: prevWire.retryable, retryableClass: prevWire.retryable_class, waiting: prevWire.waiting,
+    paused: prevWire.paused, pauseReason: prevWire.pause_reason,
+  } : null;
+  const g = reduceGoal(prev, ev);
+  return {
+    condition: g.condition, active: g.active, achieved: g.achieved,
+    last_reason: g.reason, turns: g.turns, attempt: g.attempt,
+    retryable: g.retryable, retryable_class: g.retryableClass, waiting: g.waiting,
+    paused: g.paused, pause_reason: g.pauseReason,
+  };
+}
+
+/* ---------- fleet rendering: keyed per-card/per-row reconciliation ----------
+   The old renderFleet emptied #fleet and rebuilt every box card and every
+   session row on EVERY repaint (poll tick, any box's SSE event, coalesced or
+   not). Live events re-sorting rows by last_activity_at made cards/rows
+   visibly jump around under the cursor while streams were active. Now:
+     - box cards are keyed by box id; a card's DOM is only rewritten when
+       boxCardSignature(...) changes (health/name/base/revision/counts/
+       expanded), and its position is only touched when it's actually out of
+       place (boxes rarely reorder — hs.boxes is insertion order).
+     - session rows within an expanded card are keyed by session id, each
+       skipped unless sessionRowSignature(...) changed.
+     - row REORDERING (by last_activity_at) is damped via shouldResort to at
+       most once per second; between allowed sorts, rows already in the DOM
+       still refresh their content in place, and brand-new rows are spliced
+       in without disturbing the rest of the order.
+   fleetDom holds this bookkeeping, one entry per box id (plus emptyShown for
+   the whole-fleet "no boxes yet" placeholder). */
+let fleetDom = { emptyShown: null, boxes: new Map() };
+
+const FLEET_RESORT_MS = 1000;
+
+// ACTIVE-GOALS STRIP: "where is my work" — every session across every box
+// whose goal is currently active (running or paused), rendered as one
+// slim, click-through fleet-wide bar above the box list. Pure core is
+// collectActiveGoals; this just adapts hs.boxes/boxRuntime into its
+// {id,name,sessions} input shape and reconciles the bar, damped by a cheap
+// content signature exactly like the box cards below.
+let activeGoalsSig = null;
+
+function collectActiveGoalsForHub() {
+  const boxes = hs.boxes.map(b => ({
+    id: b.id, name: b.name,
+    sessions: [...ensureRuntime(b.id).sessions.values()],
+  }));
+  return collectActiveGoals(boxes);
+}
+
+function renderActiveGoalsBar() {
+  const bar = $("activeGoalsBar");
+  const entries = collectActiveGoalsForHub();
+  const sig = JSON.stringify(entries.map(e => [e.boxId, e.sessionId, e.paused, e.pauseReason, e.condition]));
+  if (activeGoalsSig === sig) return;
+  activeGoalsSig = sig;
+  bar.textContent = "";
+  if (!entries.length) { bar.style.display = "none"; return; }
+  bar.style.display = "flex";
+  for (const e of entries) {
+    const pt = goalPauseTreatment(e.paused, e.pauseReason);
+    const chip = el("div", {
+      class: "active-goal-chip" + (pt ? (pt.calm ? " calm" : " urgent") : ""),
+      title: e.condition,
+      onclick: () => { expandedBoxes.add(e.boxId); selectSession(e.boxId, e.sessionId); },
+    },
+      el("span", { class: "agc-box", text: e.boxName }),
+      el("span", { class: "agc-cond", text: goalSnippet(e.condition, 60) }),
+    );
+    if (pt) chip.append(el("span", { class: "agc-pause", text: pt.label }));
+    bar.append(chip);
+  }
+}
+
+function renderFleet() {
+  renderActiveGoalsBar();
+  const root = $("fleet");
+  if (!hs.boxes.length) {
+    if (fleetDom.emptyShown !== true) {
+      root.textContent = "";
+      root.append(el("div", { class: "empty", text: "no boxes yet. add box or spawn box to begin" }));
+      fleetDom.emptyShown = true;
+      fleetDom.boxes.clear();
+    }
+    return;
+  }
+  if (fleetDom.emptyShown !== false) {
+    root.textContent = "";
+    fleetDom.emptyShown = false;
+    fleetDom.boxes.clear();
+  }
+
+  const liveIds = new Set(hs.boxes.map(b => b.id));
+  for (const [id, entry] of fleetDom.boxes) {
+    if (!liveIds.has(id)) { entry.cardEl.remove(); fleetDom.boxes.delete(id); }
+  }
+
+  let prevEl = null;
+  for (const b of hs.boxes) {
+    let entry = fleetDom.boxes.get(b.id);
+    if (!entry) {
+      entry = createBoxCardEntry(b.id);
+      fleetDom.boxes.set(b.id, entry);
+      root.append(entry.cardEl);
+    }
+    updateBoxCard(entry, b);
+    if (prevEl) {
+      if (prevEl.nextSibling !== entry.cardEl) root.insertBefore(entry.cardEl, prevEl.nextSibling);
+    } else if (root.firstChild !== entry.cardEl) {
+      root.insertBefore(entry.cardEl, root.firstChild);
+    }
+    prevEl = entry.cardEl;
+  }
+}
+
+// createBoxCardEntry builds the STATIC skeleton of one box card once —
+// element references it needs are stashed directly on the entry so
+// updateBoxCard can patch text/classes in place instead of recreating them.
+function createBoxCardEntry(boxId) {
+  const dot = el("span", { class: "dot" });
+  const nameDiv = el("div", { class: "box-name" });
+  const baseDiv = el("div", { class: "box-base" });
+  const metaDiv = el("div", {});
+  const head = el("div", { class: "box-head", onclick: () => toggleExpanded(boxId) },
+    dot,
+    el("div", {}, nameDiv, baseDiv),
+    el("div", { class: "box-meta" }, metaDiv),
+  );
+  const idleChip = el("span", { class: "count-chip" });
+  const busyChip = el("span", { class: "count-chip busy" });
+  const goalChip = el("span", { class: "count-chip goal-running" });
+  const counts = el("div", { class: "box-counts" }, idleChip, busyChip, goalChip);
+  // procStrip: the PROCESS STRIP (see AGENTS.md/this page's header comment)
+  // — one compact row per managed process this box reports via GET
+  // /process. Absent/removed entirely for a box that doesn't serve that
+  // endpoint at all (older boxes) — see updateProcessStrip.
+  const procStrip = el("div", { class: "proc-strip" });
+  const respawnBtn = el("button", {
+    class: "small respawn", text: "\u27f2 Respawn", style: "display:none",
+    onclick: () => openRespawnModal(boxId),
+  });
+  // One primary action (Dispatch), one contextual promotion (Respawn,
+  // shown only when the box is down — the moment it IS the primary
+  // action), everything occasional behind a native <details> overflow.
+  // Popover API: the menu renders in the browser's TOP LAYER, escaping
+  // #fleet's scroll clipping and the card bounds; CSS anchor positioning
+  // pins it under the trigger and flips it above near the viewport bottom.
+  const menuId = "boxmenu-" + boxId.replace(/[^a-z0-9]/gi, "");
+  const overflow = el("span", { class: "menu-wrap" },
+    el("button", { class: "small menu-trigger", text: "\u22ef", popovertarget: menuId, style: "anchor-name:--" + menuId }),
+    el("div", { class: "overflow-menu", id: menuId, popover: "auto", style: "position-anchor:--" + menuId },
+      el("button", { class: "small", text: "+ New session", onclick: () => { document.getElementById(menuId).hidePopover(); quickNewSession(boxId); } }),
+      el("button", { class: "small danger", text: "Remove", onclick: () => { document.getElementById(menuId).hidePopover(); removeBox(boxId); } }),
+    ));
+  const actions = el("div", { class: "box-actions" },
+    el("button", { class: "small", text: "+ Dispatch", onclick: () => openDispatchModal(boxId) }),
+    respawnBtn,
+    overflow,
+  );
+  const cardEl = el("div", { class: "box-card" }, head, counts, procStrip, actions);
+  return {
+    boxId, cardEl, dot, nameDiv, baseDiv, metaDiv, idleChip, busyChip, goalChip,
+    procStrip, procRows: new Map(), procSig: null, respawnBtn,
+    sig: null,
+    sessSection: null, rows: new Map(), order: [], lastSortAt: 0,
+    loadingEl: null, emptyEl: null,
+  };
+}
+
+// updateBoxCard skips ALL DOM writes to the card's own header/counts when
+// boxCardSignature is unchanged; the session list underneath is always
+// reconciled separately (updateSessList applies its own, finer-grained
+// skip/damping logic).
+function updateBoxCard(entry, b) {
+  const rt = ensureRuntime(b.id);
+  // rt.health starts "unknown" and is set to "ok"/"down" the instant the
+  // first health/session poll resolves (see pollBoxOnce) — "unknown" IS
+  // "first poll in flight" (see REQUIRED BEHAVIOR (c)): a neutral, dimmed
+  // dot instead of the amber "reconnecting" look, so a healthy box's very
+  // first paint doesn't read as trouble.
+  const loading = rt.health === "unknown";
+  const sessions = [...rt.sessions.values()];
+  const counts = countByState(sessions);
+  const expanded = isExpanded(b.id);
+  const sig = boxCardSignature({
+    health: loading ? "loading" : rt.health,
+    name: b.name, base: b.base,
+    vcsRevision: rt.vcsRevision,
+    expanded, counts,
+  });
+  if (entry.sig !== sig) {
+    entry.sig = sig;
+    const dotClass = loading ? "loading" : rt.health === "ok" ? "on" : rt.health === "down" ? "off" : "re";
+    entry.dot.className = "dot " + dotClass;
+    entry.nameDiv.textContent = b.name;
+    // A dead box's tunnel URL is doubly useless — unclickable now, and
+    // replaced by a fresh one on respawn. Show it only while reachable.
+    entry.baseDiv.textContent = b.base;
+    entry.baseDiv.style.display = (rt.health === "ok") ? "" : "none";
+    // The third line of a box card: which binary this box runs (health's
+    // vcs_revision) — labeled, lowercase hex; the uppercase micro-label
+    // transform mangled it into unreadable line noise.
+    entry.metaDiv.textContent = rt.vcsRevision ? "rev " + rt.vcsRevision.slice(0, 8)
+      // "inactive", not "unreachable": under the fleet model a box whose
+      // health check fails is most likely idle-reaped compute (volume
+      // intact, Respawn resumes it) — a normal lifecycle state, not a
+      // fault. (A genuine network fault looks identical and has the same
+      // remedy, so the calm label serves both.)
+      : loading ? "\u2026" : (rt.health === "down" ? "inactive" : "\u2026");
+    // Zero-count chips are noise: show only states that exist right now.
+    entry.idleChip.textContent = counts.idle + " idle";
+    entry.idleChip.style.display = counts.idle ? "" : "none";
+    entry.busyChip.textContent = counts.busy + " busy";
+    entry.busyChip.style.display = counts.busy ? "" : "none";
+    entry.goalChip.textContent = counts["goal-running"] + " goal";
+    entry.goalChip.style.display = counts["goal-running"] ? "" : "none";
+  }
+  // Respawn/ADOPT (docs/design/fleet-model.md §4): offered once a box's
+  // health has been observed DOWN — never while still "unknown" (first
+  // poll in flight; see REQUIRED BEHAVIOR (c) above), which would offer it
+  // before the box has had a fair chance to answer at all.
+  entry.respawnBtn.style.display = (rt.health === "down") ? "" : "none";
+  updateProcessStrip(entry, b, rt);
+  updateSessList(entry, b.id, sessions, expanded, loading);
+}
+
+// updateProcessStrip reconciles the PROCESS STRIP under one box card from
+// rt.processes (populated by pollBoxOnce's GET /process poll, normalized
+// via normalizeProcesses — absent/404/older-box all yield []). The whole
+// strip is skipped (and removed if present) when there's nothing to show,
+// so an older box that doesn't serve /process at all renders exactly as
+// before this feature existed. Per-process rows are keyed by name and
+// signature-gated like the session rows above, so a quiet fleet's poll
+// tick touches no DOM.
+function updateProcessStrip(entry, b, rt) {
+  const procs = rt.processes || [];
+  const sig = JSON.stringify(procs.map(p => [p.name, p.state, p.ready, p.exitCode, p.log, p.ports]));
+  if (entry.procSig === sig) return;
+  entry.procSig = sig;
+
+  if (!procs.length) {
+    entry.procStrip.textContent = "";
+    entry.procStrip.style.display = "none";
+    entry.procRows.clear();
+    return;
+  }
+  entry.procStrip.style.display = "";
+
+  const liveNames = new Set(procs.map(p => p.name));
+  for (const [name, row] of entry.procRows) {
+    if (!liveNames.has(name)) { row.remove(); entry.procRows.delete(name); }
+  }
+  for (const p of procs) {
+    let row = entry.procRows.get(p.name);
+    if (!row) {
+      row = createProcessRow(b.id);
+      entry.procRows.set(p.name, row);
+      entry.procStrip.append(row);
+    }
+    updateProcessRow(row, b, p);
+  }
+}
+
+// createProcessRow builds one process strip entry's static skeleton;
+// updateProcessRow (called every time updateProcessStrip's signature
+// changes) patches its text/classes/link in place.
+function createProcessRow(boxId) {
+  const dot = el("span", { class: "proc-dot" });
+  const nameSpan = el("span", { class: "proc-name" });
+  const linkWrap = el("span", { class: "proc-links" });
+  const row = el("div", { class: "proc-item", onclick: () => openProcessLogModal(boxId, row._proc) },
+    dot, nameSpan, linkWrap);
+  row._dot = dot;
+  row._nameSpan = nameSpan;
+  row._linkWrap = linkWrap;
+  row._proc = null;
+  return row;
+}
+
+function updateProcessRow(row, b, p) {
+  row._proc = p;
+  const badge = processStateBadge(p.state, p.exitCode);
+  row._dot.className = "proc-dot " + badge.cls;
+  row._nameSpan.textContent = p.name + " \u00b7 " + badge.label;
+  row._linkWrap.textContent = "";
+  const links = portLinksFor(p.ports, b.port_urls);
+  for (const link of links) {
+    row._linkWrap.append(el("a", {
+      class: "proc-link", href: link.url, target: "_blank", rel: "noopener noreferrer",
+      text: ":" + link.port,
+      onclick: (e) => e.stopPropagation(),
+    }));
+  }
+}
+
+// openProcessLogModal shows a process's state + log PATH. Nothing more:
+// GET /process (server/openapi.yaml's ProcessStatus) carries no log
+// CONTENT, only the log file's path — so this is honest about what's
+// actually available over the HTTP API rather than inventing an endpoint
+// (see docs/design/managed-processes.md §5's HTTP API list).
+function openProcessLogModal(boxId, p) {
+  if (!p) return;
+  const badge = processStateBadge(p.state, p.exitCode);
+  const modal = el("div", { class: "modal" },
+    el("h2", { text: p.name }),
+    el("div", { class: "field" }, el("label", { text: "State" }), el("div", { text: badge.label })),
+    el("div", { class: "field" }, el("label", { text: "Log path" }),
+      p.log ? el("code", { text: p.log }) : el("div", { class: "notice", text: "not started yet \u2014 no log file written" })),
+    el("div", {}, "Log CONTENT isn't exposed over the HTTP API today (see docs/design/managed-processes.md \u00a75) \u2014 tail this path directly on the box."),
+    el("div", { class: "row" }, el("button", { text: "Close", onclick: closeModal })),
+  );
+  showModal(modal);
+}
+
+const expandedBoxes = new Set();
+function isExpanded(id) { return expandedBoxes.has(id); }
+function toggleExpanded(id) {
+  if (expandedBoxes.has(id)) expandedBoxes.delete(id); else expandedBoxes.add(id);
+  renderFleet();
+}
+
+// expandedLineages tracks which task's "N earlier attempts" line is
+// currently expanded, keyed by the lineage's TIP session id (see
+// buildLineages) — ephemeral UI state, exactly like expandedBoxes above,
+// not persisted to the URL fragment.
+const expandedLineages = new Set();
+
+// updateSessList reconciles the session rows under one (expanded) box card.
+// LINEAGE GROUPING (see AGENTS.md/this page's header comment,
+// docs/design/fleet-model.md §6): sessions sharing a parent_session chain
+// collapse into one "task" row keyed by the lineage's TIP (most recent)
+// session — buildLineages does the pure grouping; a lone session (no
+// lineage at all) is simply a lineage of one and renders exactly as
+// before. Reordering is damped (shouldResort, at most once per
+// FLEET_RESORT_MS), now operating on each lineage's TIP: a full re-sort
+// recomputes entry.order from sortSessions(tips); in between, existing
+// rows keep their last-applied order and brand-new tips are simply
+// prepended, so a burst of activity refreshes row CONTENT without
+// shuffling rows out from under the cursor.
+function updateSessList(entry, boxId, sessions, expanded, loading) {
+  if (!expanded) {
+    if (entry.sessSection) {
+      entry.sessSection.remove();
+      entry.sessSection = null;
+      entry.rows.clear();
+      entry.order = [];
+      entry.loadingEl = null;
+      entry.emptyEl = null;
+    }
+    return;
+  }
+  if (!entry.sessSection) {
+    entry.sessSection = el("div", { class: "sess-list" });
+    entry.cardEl.append(entry.sessSection);
+  }
+
+  if (loading) {
+    // First poll in flight: reserve the session area with a neutral
+    // placeholder instead of flashing "no sessions" and then jumping once
+    // data arrives (REQUIRED BEHAVIOR (c)).
+    if (!entry.loadingEl) entry.loadingEl = el("div", { class: "empty", text: "loading\u2026" });
+    if (entry.sessSection.childNodes.length !== 1 || entry.sessSection.firstChild !== entry.loadingEl) {
+      entry.sessSection.textContent = "";
+      entry.sessSection.append(entry.loadingEl);
+    }
+    entry.rows.clear();
+    entry.order = [];
+    return;
+  }
+  entry.loadingEl = null;
+
+  if (!sessions.length) {
+    if (!entry.emptyEl) entry.emptyEl = el("div", { class: "empty", text: "no sessions" });
+    if (entry.sessSection.childNodes.length !== 1 || entry.sessSection.firstChild !== entry.emptyEl) {
+      entry.sessSection.textContent = "";
+      entry.sessSection.append(entry.emptyEl);
+    }
+    entry.rows.clear();
+    entry.order = [];
+    return;
+  }
+  entry.emptyEl = null;
+
+  const lineages = buildLineages(sessions);
+  const byTipId = new Map(lineages.map(l => [l.id, l]));
+  const tips = lineages.map(l => l.tip);
+
+  const liveIds = new Set(lineages.map(l => l.id));
+  for (const [id, row] of entry.rows) {
+    if (!liveIds.has(id)) { row.el.remove(); entry.rows.delete(id); }
+  }
+
+  const now = Date.now();
+  let orderedIds;
+  if (shouldResort(entry.lastSortAt, now, FLEET_RESORT_MS)) {
+    orderedIds = sortSessions(tips).map(s => s.id);
+    entry.lastSortAt = now;
+  } else {
+    const known = entry.order.filter(id => liveIds.has(id));
+    const newIds = tips.map(s => s.id).filter(id => !known.includes(id));
+    orderedIds = newIds.concat(known);
+  }
+  entry.order = orderedIds;
+
+  let prevEl = null;
+  for (const id of orderedIds) {
+    const lineage = byTipId.get(id);
+    const s = lineage.tip;
+    let row = entry.rows.get(id);
+    const selected = drill.boxId === boxId && drill.sessionId === id;
+    const sig = sessionRowSignature(s, selected) + "|" + lineage.earlier.map(e => e.id).join(",");
+    if (!row) {
+      row = { el: createSessionRowEl(boxId, id), sig: null };
+      entry.rows.set(id, row);
+    }
+    if (row.sig !== sig) {
+      updateSessionRowEl(row.el, boxId, s, selected, lineage.earlier);
+      row.sig = sig;
+    }
+    if (prevEl) {
+      if (prevEl.nextSibling !== row.el) entry.sessSection.insertBefore(row.el, prevEl.nextSibling);
+    } else if (entry.sessSection.firstChild !== row.el) {
+      entry.sessSection.insertBefore(row.el, entry.sessSection.firstChild);
+    }
+    prevEl = row.el;
+  }
+}
+
+// createSessionRowEl builds one session row's STATIC skeleton once;
+// updateSessionRowEl (called only when its row signature changed) patches
+// its text/classes and adds/removes the optional goal-snippet/last-turn/
+// pause-chip/re-arm/re-dispatch/lineage children in place.
+function createSessionRowEl(boxId, sessionId) {
+  const idDiv = el("div", { class: "id" });
+  const badgeSpan = el("span", { class: "badge" });
+  const modelSpan = el("span", {});
+  const usageSpan = el("span", {});
+  const relSpan = el("span", {});
+  const node = el("div", { class: "sess", title: sessionId, onclick: () => selectSession(boxId, node._sessionId) },
+    idDiv,
+    el("div", { class: "meta" }, badgeSpan, modelSpan, usageSpan, relSpan),
+  );
+  node._sessionId = sessionId;
+  node._idDiv = idDiv;
+  node._badgeSpan = badgeSpan;
+  node._modelSpan = modelSpan;
+  node._usageSpan = usageSpan;
+  node._relSpan = relSpan;
+  node._goalDiv = null;
+  node._lastTurnDiv = null;
+  node._pauseDiv = null;
+  node._rearmBtn = null;
+  node._redispatchBtn = null;
+  node._sess = null;
+  // LINEAGE GROUPING: always present, hidden when this session has no
+  // earlier attempts — see applyLineageExpansion.
+  const earlierToggle = el("button", { class: "small lineage-toggle" });
+  const earlierList = el("div", { class: "lineage-earlier" });
+  earlierToggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const id = node._sessionId;
+    if (expandedLineages.has(id)) expandedLineages.delete(id); else expandedLineages.add(id);
+    applyLineageExpansion(node);
+  });
+  node.append(earlierToggle, earlierList);
+  node._earlierToggle = earlierToggle;
+  node._earlierList = earlierList;
+  node._earlier = [];
+  return node;
+}
+
+// applyLineageExpansion re-derives the "N earlier attempts" toggle's
+// visibility/label and the earlier-list's visibility from
+// expandedLineages, independent of any signature-gated re-render — a
+// toggle click needs to react immediately, without waiting for the
+// session data itself to change.
+function applyLineageExpansion(node) {
+  const n = node._earlier.length;
+  const expanded = expandedLineages.has(node._sessionId);
+  if (n > 0) {
+    node._earlierToggle.style.display = "";
+    node._earlierToggle.textContent = (expanded ? "\u25be " : "\u25b8 ") + n + " earlier attempt" + (n === 1 ? "" : "s");
+  } else {
+    node._earlierToggle.style.display = "none";
+  }
+  node._earlierList.style.display = (expanded && n > 0) ? "" : "none";
+}
+
+// createEarlierAttemptRow renders one collapsed-by-default prior attempt:
+// short id, badge, relative time, and (if applicable) its own Re-dispatch
+// action — clicking the row (outside that button) drills into it exactly
+// like a normal session row.
+function createEarlierAttemptRow(boxId, s) {
+  const row = el("div", { class: "earlier-row", onclick: () => selectSession(boxId, s.id) },
+    el("span", { class: "id", text: shortId(s.id) }),
+    el("span", { class: "badge " + sessionBadge(s), text: sessionBadge(s) }),
+    el("span", { text: fmtRelative(s.last_activity_at || s.created_at) }),
+  );
+  if (canRedispatch(s)) {
+    row.append(el("button", {
+      class: "small redispatch", text: ">> Re-dispatch",
+      onclick: (e) => { e.stopPropagation(); openRedispatchModal(boxId, s); },
+    }));
+  }
+  return row;
+}
+
+function updateSessionRowEl(node, boxId, s, selected, earlier) {
+  node._sess = s;
+  node._sessionId = s.id;
+  node.className = "sess" + (selected ? " sel" : "");
+  node.title = s.id;
+  node._idDiv.textContent = shortId(s.id);
+  const badge = sessionBadge(s);
+  node._badgeSpan.className = "badge " + badge;
+  node._badgeSpan.textContent = badge;
+  node._modelSpan.textContent = s.model || "\u2014";
+  node._usageSpan.textContent = usageSummary(s.usage);
+  node._relSpan.textContent = fmtRelative(s.last_activity_at);
+
+  const showGoalSnippet = !!(s.goal && s.goal.condition && s.goal.active);
+  if (showGoalSnippet) {
+    if (!node._goalDiv) { node._goalDiv = el("div", { class: "goal-snippet" }); node.append(node._goalDiv); }
+    node._goalDiv.textContent = "GOAL: " + goalSnippet(s.goal.condition);
+  } else if (node._goalDiv) {
+    node._goalDiv.remove();
+    node._goalDiv = null;
+  }
+
+  // PAUSED GOALS: a calm note for provider-backoff, a non-calm one for
+  // restart (see goalPauseTreatment) — informational here; the CTA itself
+  // is the Re-arm button below.
+  const pt = s.goal ? goalPauseTreatment(!!s.goal.paused, s.goal.pause_reason) : null;
+  if (pt) {
+    if (!node._pauseDiv) { node._pauseDiv = el("div", { class: "pause-chip" }); node.append(node._pauseDiv); }
+    node._pauseDiv.className = "pause-chip" + (pt.calm ? " calm" : " urgent");
+    node._pauseDiv.textContent = pt.label;
+  } else if (node._pauseDiv) {
+    node._pauseDiv.remove();
+    node._pauseDiv = null;
+  }
+
+  const hasLastTurn = !!(s.last_turn && s.last_turn.outcome);
+  if (hasLastTurn) {
+    const isErr = s.last_turn.outcome !== "completed";
+    if (!node._lastTurnDiv) { node._lastTurnDiv = el("div", {}); node.append(node._lastTurnDiv); }
+    node._lastTurnDiv.className = "last-turn" + (isErr ? " error" : "");
+    node._lastTurnDiv.textContent = lastTurnSummary(s.last_turn);
+  } else if (node._lastTurnDiv) {
+    node._lastTurnDiv.remove();
+    node._lastTurnDiv = null;
+  }
+
+  // Session rows are pure state displays — no inline actions. Re-arm and
+  // Re-dispatch live in the goal panel of the OPENED session (and the
+  // paused/restart urgency is already surfaced twice: the row's PAUSED
+  // badge and the active-goals bar's urgent chip, both one click from the
+  // panel's prominent CTA).
+
+  // LINEAGE GROUPING: the "N earlier attempts" toggle + its (collapsed by
+  // default) sub-list. Rebuilt wholesale here — this whole function only
+  // runs when the row's signature (which folds in earlier's session ids)
+  // actually changed, so this is not a per-frame cost.
+  node._earlier = earlier || [];
+  node._earlierList.textContent = "";
+  for (const e of node._earlier) node._earlierList.append(createEarlierAttemptRow(boxId, e));
+  applyLineageExpansion(node);
+  // Re-append (a no-op if already last, else moves to the tail) so the
+  // lineage toggle/list always render after whatever optional children
+  // above were just added/removed.
+  node.append(node._earlierToggle, node._earlierList);
+}
+
+/* ---------- session drill-down ----------
+   Selecting a session opens a SEPARATE, session-scoped SSE connection —
+   `/event?from=0&session=<id>` — distinct from the box-wide stream used for
+   fleet cards above. That replays the session's ENTIRE durable history
+   (every message + every goal.* record, in order) before continuing live,
+   which is exactly the narrative the goal workflow wants (see AGENTS.md's
+   "Development hub" section) and lets the drill-down bootstrap itself from
+   one stream instead of juggling a separate REST fetch plus a filtered
+   live tail. */
+
+function selectSession(boxId, sessionId) {
+  closeDrillConn();
+  drill.boxId = boxId; drill.sessionId = sessionId;
+  drill.messages = []; drill.banners = []; drill.narrative = [];
+  drill.draft = null; drill.goal = null; drill.goalExpanded = false;
+  hs.view = { box: boxId, session: sessionId };
+  persist();
+  renderFleet();
+  renderDrill();
+  connectDrillStream();
+}
+
+function closeDrillConn() {
+  if (drill.conn.abort) drill.conn.abort.abort();
+  if (drill.conn.timer) clearTimeout(drill.conn.timer);
+  drill.conn.abort = null; drill.conn.timer = null; drill.conn.backoff = 500;
+}
+
+function connectDrillStream() {
+  const boxId = drill.boxId, sessionId = drill.sessionId;
+  const b = box(boxId);
+  if (!b || drill.sessionId !== sessionId) return;
+  const ac = new AbortController();
+  drill.conn.abort = ac;
+  (async () => {
+    try {
+      const url = b.base + "/event?from=0&session=" + encodeURIComponent(sessionId);
+      const resp = await fetch(url, { headers: { Authorization: "Bearer " + b.token }, signal: ac.signal });
+      if (!resp.ok || !resp.body) throw new Error("event stream " + resp.status);
+      drill.conn.backoff = 500;
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      const parse = createSSEParser(frame => {
+        let ev; try { ev = JSON.parse(frame.data); } catch { return; }
+        if (drill.boxId !== boxId || drill.sessionId !== sessionId) return; // selection moved on
+        handleDrillEvent(ev);
+      });
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        parse(dec.decode(value, { stream: true }));
+      }
+    } catch {
+      /* fall through to reconnect below unless the selection moved on */
+    }
+    if (drill.boxId === boxId && drill.sessionId === sessionId) {
+      drill.conn.timer = setTimeout(connectDrillStream, drill.conn.backoff);
+      drill.conn.backoff = Math.min(drill.conn.backoff * 2, 10000);
+    }
+  })();
+  // Seed the goal chip immediately from the session record (closes the same
+  // bootstrap gap the inspector's goalFromSession comment describes), ahead
+  // of the from=0 replay above actually arriving.
+  const rt = boxRuntime.get(boxId);
+  const sess = rt && rt.sessions.get(sessionId);
+  if (sess) drill.goal = goalFromSession(sess);
+  updateComposer();
+  renderDrill();
+}
+
+function handleDrillEvent(ev) {
+  if (ev.type === "message" && ev.message) {
+    if (!drill.messages.some(m => m.id === ev.message.id)) drill.messages.push(ev.message);
+    drill.draft = null;
+  } else if (ev.type === "session.error" || ev.type === "session.aborted") {
+    drill.banners.push({ type: ev.type, text: ev.error });
+  } else if (ev.type === "text.delta") {
+    (drill.draft || (drill.draft = freshDraft())).text += ev.text || "";
+  } else if (ev.type === "reasoning.delta") {
+    (drill.draft || (drill.draft = freshDraft())).reasoning += ev.text || "";
+  } else if (ev.type === "tool.start" && ev.tool_call) {
+    const d = drill.draft || (drill.draft = freshDraft());
+    d.tools.push({ call_id: ev.tool_call.call_id, name: ev.tool_call.name, arguments: ev.tool_call.arguments, running: true });
+  } else if (ev.type === "tool.end" && ev.tool_call) {
+    const d = drill.draft || (drill.draft = freshDraft());
+    const t = d.tools.find(x => x.call_id === ev.tool_call.call_id);
+    if (t) { t.running = false; t.output = ev.output; t.is_error = ev.is_error; }
+  } else if (ev.type && ev.type.indexOf("goal.") === 0) {
+    drill.goal = reduceGoal(drill.goal, ev);
+    drill.narrative.push({ seq: ev.seq, ev });
+  }
+  scheduleDrillRender();
+}
+
+// Per-event rendering is what froze the tab on long sessions (see
+// createCoalescer): these two carry ALL event-driven repaints, one frame
+// at a time. Direct renderFleet()/renderDrill() calls remain only on the
+// low-frequency paths (selection changes, poll ticks, connect/disconnect).
+const scheduleFleetRender = createCoalescer(requestAnimationFrame, () => renderFleet());
+const scheduleDrillRender = createCoalescer(requestAnimationFrame, () => { updateComposer(); renderDrill(); });
+
+/* ---------- drill-down rendering (adapted from tools/inspector) ---------- */
+
+function renderDrill() {
+  renderTimeline();
+  renderGoalPanel();
+}
+
+function renderDrillSessionMeta() {
+  // Called after a poll refresh for the box currently drilled into: the
+  // goal/usage/last_turn fields on the session record may have moved even
+  // without a fresh event (e.g. this tab just reconnected) — reseed drill.goal
+  // if we don't have one yet, and repaint the goal panel/composer state.
+  if (!drill.boxId || !drill.sessionId) return;
+  const rt = boxRuntime.get(drill.boxId);
+  const sess = rt && rt.sessions.get(drill.sessionId);
+  if (sess && !drill.goal) drill.goal = goalFromSession(sess);
+  updateComposer();
+  renderGoalPanel();
+}
+
+/* ---------- timeline DOM: keyed, append-only (see PROBLEM/REQUIRED BEHAVIOR
+   (a) in the header comment) ----------
+   A from=0 session replay can deliver dozens of coalesced render passes over
+   a couple of seconds. Emptying #timeline and rebuilding it from scratch on
+   every pass (the old approach) flickers, snaps every tool_call/reasoning
+   <details> back to collapsed, and forces the scroll position to the
+   bottom even if the operator scrolled up to read history. Instead:
+     - durable messages/goal-narrative entries/banners are each rendered
+       EXACTLY ONCE, keyed (message id / event seq / banner index), and a
+       render pass only APPENDS the ones not already in the DOM — existing
+       nodes (and their <details> open/closed state) are never touched.
+     - the streaming draft is a single persistent element whose children are
+       patched in place (see createDraftEl/updateDraftEl below) rather than
+       recreated every render, so expanding its tool_call block survives
+       subsequent deltas.
+     - autoscroll only sticks to the bottom if the viewport was ALREADY at
+       the bottom before this render's DOM changes (the "pinned tail"
+       pattern) — an operator who scrolled up keeps their place.
+   tlDom holds this DOM-side bookkeeping; it is reset wholesale exactly once,
+   when the selected (box, session) changes — see resetTimelineDom. */
+let tlDom = null;
+
+function timelineSessionKey() {
+  return (drill.boxId || "") + "\u0000" + (drill.sessionId || "");
+}
+
+function resetTimelineDom(tl) {
+  tl.textContent = "";
+  if (tlDom && tlDom.ro) tlDom.ro.disconnect();
+  tlDom = {
+    key: timelineSessionKey(),
+    rendered: new Set(),
+    narrativeEl: null, messagesEl: null, bannersEl: null,
+    emptyEl: null, draftEl: null,
+    // A freshly-opened session starts stuck to the bottom: the operator
+    // wants the latest activity, with history above. Only a user scroll
+    // (listener in renderTimeline) changes stickiness after that.
+    stick: true,
+  };
+  if (!drill.sessionId) {
+    tl.append(el("div", { class: "empty", text: "select a session from the fleet on the left" }));
+    return;
+  }
+  // Goal narrative first (condition-setting context), then the message
+  // transcript, then banners, then the draft (kept last, see renderTimeline)
+  // — goal.* records read best as a preface + running log, and this
+  // ordering is deterministic across reconnects.
+  tlDom.narrativeEl = el("div", { class: "tl-narrative" });
+  tlDom.messagesEl = el("div", { class: "tl-messages" });
+  tlDom.bannersEl = el("div", { class: "tl-banners" });
+  tlDom.emptyEl = el("div", { class: "empty", text: "no messages yet" });
+  tl.append(tlDom.emptyEl, tlDom.narrativeEl, tlDom.messagesEl, tlDom.bannersEl);
+  // Renders pin to the bottom while stuck, but content can keep growing
+  // AFTER the last render (font loads, wrapping reflow) — the replay used
+  // to end ~50px shy of the bottom. While stuck, any content resize
+  // re-pins; a released view is never touched. Feature-detected: every
+  // real browser this page targets has ResizeObserver, but a host with no
+  // global at all (a headless DOM harness without it) degrades to relying
+  // solely on renderTimeline's own explicit re-pin below rather than
+  // throwing and aborting the whole render.
+  if (typeof ResizeObserver === "function") {
+    tlDom.ro = new ResizeObserver(() => {
+      if (tlDom && tlDom.stick) { tlDom.lastAuto = performance.now(); tl.scrollTop = tl.scrollHeight; }
+    });
+    tlDom.ro.observe(tlDom.narrativeEl);
+    tlDom.ro.observe(tlDom.messagesEl);
+    tlDom.ro.observe(tlDom.bannersEl);
+  }
+}
+
+const TIMELINE_PIN_PX = 32;
+
+function renderTimeline() {
+  const tl = $("timeline");
+  if (!tlDom || tlDom.key !== timelineSessionKey()) resetTimelineDom(tl);
+  if (!drill.sessionId) return;
+
+  // Stickiness is INTENT (tlDom.stick), not geometry inferred per render.
+  // Inferring from scrollTop each render broke initial load: async layout
+  // growth (font metrics, wrapping) after the LAST replay render left the
+  // view ~90px shy of the bottom with no render left to re-pin, so the
+  // operator landed mid-transcript. Now: sessions open stuck (see
+  // resetTimelineDom), and only user scrolling flips it — the listener
+  // fires for programmatic scrolls too, but those always land at the
+  // bottom, where isPinnedToBottom re-affirms stick=true.
+  if (!tl.dataset.stickListener) {
+    tl.dataset.stickListener = "1";
+    // Scroll events from our own scrollTop assignments can be delivered
+    // AFTER the next burst's append has already grown scrollHeight — the
+    // handler then sees a huge gap and wrongly releases stick mid-replay.
+    // Guard: ignore scroll events within 120ms of a programmatic pin
+    // (tlDom.lastAuto). A wheel-up is unambiguous user intent and releases
+    // immediately, so the operator can still escape during a busy stream.
+    tl.addEventListener("scroll", () => {
+      if (!tlDom) return;
+      if (performance.now() - (tlDom.lastAuto || 0) < 120) return;
+      tlDom.stick = isPinnedToBottom(tl.scrollTop, tl.scrollHeight, tl.clientHeight, TIMELINE_PIN_PX);
+    });
+    tl.addEventListener("wheel", e => { if (tlDom && e.deltaY < 0) tlDom.stick = false; }, { passive: true });
+  }
+
+  const msgs = drill.messages.slice().sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+
+  const newNarr = planAppend(tlDom.rendered, drill.narrative, n => (n && typeof n.seq === "number") ? "g:" + n.seq : null);
+  for (const n of newNarr) {
+    tlDom.rendered.add("g:" + n.seq);
+    tlDom.narrativeEl.append(renderGoalNarrativeItem(n.ev));
+  }
+
+  const newMsgs = planAppend(tlDom.rendered, msgs, m => (m && m.id) ? "m:" + m.id : null);
+  for (const m of newMsgs) {
+    tlDom.rendered.add("m:" + m.id);
+    tlDom.messagesEl.append(renderMessage(m));
+  }
+
+  const newBanners = planAppend(tlDom.rendered, drill.banners.map((b, i) => ({ b, i })), x => "b:" + x.i);
+  for (const x of newBanners) {
+    tlDom.rendered.add("b:" + x.i);
+    tlDom.bannersEl.append(renderBanner(x.b));
+  }
+
+  if (drill.draft) {
+    if (!tlDom.draftEl) tlDom.draftEl = createDraftEl();
+    updateDraftEl(tlDom.draftEl, drill.draft);
+    tl.append(tlDom.draftEl); // re-append: a no-op if already last, else moves it to the tail
+  } else if (tlDom.draftEl) {
+    tlDom.draftEl.remove();
+    tlDom.draftEl = null;
+  }
+
+  const hasContent = !!(tlDom.narrativeEl.childNodes.length || tlDom.messagesEl.childNodes.length ||
+    tlDom.bannersEl.childNodes.length || tlDom.draftEl);
+  tlDom.emptyEl.style.display = hasContent ? "none" : "";
+
+  if (tlDom.stick) { tlDom.lastAuto = performance.now(); tl.scrollTop = tl.scrollHeight; }
+}
+
+function renderGoalNarrativeItem(ev) {
+  switch (ev.type) {
+    case "goal.set":
+      return el("div", { class: "goalnarr set" },
+        el("span", { class: "goaltag", text: "goal set" }),
+        el("div", { class: "goalcond", text: ev.goal_condition || "" }));
+    case "goal.eval": {
+      const met = !!ev.goal_met;
+      return el("div", { class: "goalnarr " + (met ? "eval-met" : "eval-notmet") },
+        el("span", { class: "goaltag", text: "turn " + (ev.goal_turn || "?") + " \u00b7 evaluator: " + (met ? "MET" : "NOT MET") }),
+        ev.goal_reason ? el("div", { class: "goalreason", text: ev.goal_reason }) : null);
+    }
+    case "goal.stalled": {
+      const waitingOut = !!ev.goal_waiting;
+      return el("div", { class: "goalnarr stalled" + (waitingOut ? " waiting" : "") },
+        el("span", { class: "goaltag", text: waitingOut
+          ? "waiting out provider weather (" + (ev.goal_retryable_class || "retryable") + ", attempt " + (ev.goal_attempt || 1) + ")"
+          : "\u26a0\ufe0f stalled (attempt " + (ev.goal_attempt || 1) + ")" }),
+        ev.goal_reason ? el("div", { class: "goalreason", text: ev.goal_reason }) : null);
+    }
+    case "goal.achieved":
+      return el("div", { class: "goalnarr achieved" },
+        el("span", { class: "goaltag", text: "goal achieved \u00b7 " + (ev.goal_turns || 0) + " turn(s)" }),
+        ev.goal_reason ? el("div", { class: "goalreason", text: ev.goal_reason }) : null);
+    case "goal.cleared":
+      return el("div", { class: "goalnarr cleared" },
+        el("span", { class: "goaltag", text: "goal cleared" }));
+    case "goal.paused": {
+      // Boot-only record (server.pauseArmedGoalsAtBoot — always
+      // pause_reason "restart"): this box booted and found the goal armed
+      // with no loop attached in this process. See goalPauseTreatment and
+      // docs/design/fleet-model.md §7 — calm styling only for
+      // provider-backoff, which never emits this event type at all.
+      const pt = goalPauseTreatment(!!ev.goal_paused, ev.goal_pause_reason || "restart");
+      return el("div", { class: "goalnarr stalled" + (pt && pt.calm ? " waiting" : "") },
+        el("span", { class: "goaltag", text: (pt ? pt.label : "goal paused") + " (server restart)" }),
+        ev.goal_condition ? el("div", { class: "goalreason", text: ev.goal_condition }) : null);
+    }
+    default:
+      return el("div", {});
+  }
+}
+
+function renderMessage(m) {
+  const wrap = el("div", { class: "msg" }, el("div", { class: "role", text: m.role }));
+  const parts = Array.isArray(m.parts) ? m.parts : [];
+  const bubble = el("div", { class: "bubble " + m.role });
+  let bubbleUsed = false;
+  for (const p of parts) {
+    if (!p) continue;
+    if (p.type === "text") { bubble.append(el("div", { class: "text", text: p.text || "" })); bubbleUsed = true; }
+    else if (p.type === "reasoning") wrap.append(renderReasoning(p.text || ""));
+    else if (p.type === "tool_call") wrap.append(renderToolCall(p));
+    else if (p.type === "tool_result") wrap.append(renderToolResult(p.content, p.is_error));
+    else if (p.type === "blob") { bubble.append(el("div", { class: "text", text: "[blob " + (p.media_type || "") + "]" })); bubbleUsed = true; }
+  }
+  if (bubbleUsed) wrap.append(bubble);
+  return wrap;
+}
+
+// makeReasoningNode builds a <details class=reason> node and stashes a
+// reference to its text div (._text) so callers that need to update the
+// text in place (the streaming draft) can do so without recreating the
+// <details> element — which is what preserves its open/closed toggle state
+// across draft updates. renderReasoning (durable, one-shot messages) is
+// just this without ever touching ._text again.
+function makeReasoningNode(text) {
+  const textDiv = el("div", { class: "text", text });
+  const node = el("details", { class: "reason" },
+    el("summary", { text: "reasoning" }),
+    el("div", { class: "body" }, textDiv));
+  node._text = textDiv;
+  return node;
+}
+
+function renderReasoning(text) {
+  return makeReasoningNode(text);
+}
+
+// toolSummaryText / makeToolCallNode: same split as makeReasoningNode above
+// — the <details class=tool> element is created once and its summary/body
+// text nodes are stashed (._summary/._pre) so a running tool call's
+// arguments/"running…" suffix can be refreshed without recreating (and
+// re-collapsing) the element.
+function toolSummaryText(t) {
+  return "[tool] " + (t.name || "tool") + (t.running ? " \u00b7 running\u2026" : "");
+}
+
+function makeToolCallNode(p) {
+  const summary = el("summary", { text: toolSummaryText(p) });
+  const pre = el("pre", { class: "code", text: prettyJSON(p.arguments) });
+  const node = el("details", { class: "tool" }, summary, el("div", { class: "body" }, pre));
+  node._summary = summary;
+  node._pre = pre;
+  return node;
+}
+
+function renderToolCall(p) {
+  return makeToolCallNode(p);
+}
+
+function renderToolResult(content, isErr) {
+  return el("div", { class: "toolres" + (isErr ? " err" : "") },
+    el("div", { class: "role", text: isErr ? "tool result (error)" : "tool result" }),
+    el("div", { class: "text", text: partsText(content) }));
+}
+
+// makeToolResultNode/updateToolResultNode: the draft's tool_result view
+// (t.output/t.is_error, as accumulated by handleDrillEvent's tool.end
+// handling), kept separate from renderToolResult (durable message parts,
+// content/isErr) since only the draft's copy is ever updated in place.
+function makeToolResultNode(t) {
+  const roleDiv = el("div", { class: "role" });
+  const textDiv = el("div", { class: "text" });
+  const node = el("div", { class: "toolres" }, roleDiv, textDiv);
+  node._role = roleDiv;
+  node._text = textDiv;
+  updateToolResultNode(node, t);
+  return node;
+}
+
+function updateToolResultNode(node, t) {
+  const isErr = !!t.is_error;
+  node.className = "toolres" + (isErr ? " err" : "");
+  node._role.textContent = isErr ? "tool result (error)" : "tool result";
+  node._text.textContent = partsText(t.output);
+}
+
+function renderBanner(b) {
+  const cls = b.type === "session.aborted" ? "banner abort" : "banner";
+  const label = b.type === "session.aborted" ? "aborted" : "error";
+  return el("div", { class: cls, text: b.text ? label + ": " + b.text : label });
+}
+
+/* ---------- streaming draft: a single persistent element, patched in place ----------
+   Recreating the draft bubble on every text.delta/tool.start/tool.end (the
+   old renderDraft) meant an expanded tool_call block snapped back to
+   collapsed on the very next token. createDraftEl builds the bubble once;
+   updateDraftEl mutates its existing children (text nodes, and per-tool
+   <details> looked up by call_id) instead of replacing them. */
+function createDraftEl() {
+  const roleDiv = el("div", { class: "role", text: "assistant" });
+  const wrap = el("div", { class: "msg streaming" }, roleDiv);
+  const toolsBox = el("div", { class: "tools" });
+  wrap.append(toolsBox);
+  const bubbleText = el("div", { class: "text" });
+  const bubble = el("div", { class: "bubble assistant" }, bubbleText);
+  wrap._toolsBox = toolsBox;
+  wrap._bubble = bubble;
+  wrap._bubbleText = bubbleText;
+  wrap._bubbleAppended = false;
+  wrap._reasoningEl = null;
+  wrap._toolNodes = new Map();
+  return wrap;
+}
+
+function updateDraftTool(draftEl, t) {
+  let entry = draftEl._toolNodes.get(t.call_id);
+  if (!entry) {
+    const callNode = makeToolCallNode(t);
+    draftEl._toolsBox.append(callNode);
+    entry = { callNode, resultNode: null };
+    draftEl._toolNodes.set(t.call_id, entry);
+  }
+  entry.callNode._summary.textContent = toolSummaryText(t);
+  entry.callNode._pre.textContent = prettyJSON(t.arguments);
+  if (t.output !== undefined || t.is_error) {
+    if (!entry.resultNode) {
+      entry.resultNode = makeToolResultNode(t);
+      // Matches the historical ordering: the result renders just before its
+      // tool_call block.
+      draftEl._toolsBox.insertBefore(entry.resultNode, entry.callNode);
+    } else {
+      updateToolResultNode(entry.resultNode, t);
+    }
+  }
+}
+
+function updateDraftEl(draftEl, d) {
+  if (d.reasoning) {
+    if (!draftEl._reasoningEl) {
+      draftEl._reasoningEl = makeReasoningNode(d.reasoning);
+      draftEl.insertBefore(draftEl._reasoningEl, draftEl._toolsBox);
+    } else {
+      draftEl._reasoningEl._text.textContent = d.reasoning;
+    }
+  }
+  for (const t of d.tools) updateDraftTool(draftEl, t);
+  if (d.text) {
+    draftEl._bubbleText.textContent = d.text;
+    if (!draftEl._bubbleAppended) {
+      draftEl.append(draftEl._bubble);
+      draftEl._bubbleAppended = true;
+    }
+  }
+}
+
+/* ---------- composer + goal panel ---------- */
+
+function selectedSessionRecord() {
+  if (!drill.boxId || !drill.sessionId) return null;
+  const rt = boxRuntime.get(drill.boxId);
+  return (rt && rt.sessions.get(drill.sessionId)) || null;
+}
+
+function selectedBusy() {
+  const s = selectedSessionRecord();
+  const badge = sessionBadge(s || {});
+  return badge !== "idle";
+}
+
+function updateComposer() {
+  const has = !!(drill.boxId && drill.sessionId);
+  $("composer").style.display = has ? "" : "none";
+  const busy = selectedBusy();
+  $("promptBox").disabled = !has || busy;
+  $("sendBtn").disabled = !has || busy;
+  // Contextual actions only: Abort is meaningless on an idle session and
+  // Clear goal without a goal — hide rather than disable (declutter; the
+  // page's job is state display, actions appear when they apply).
+  $("abortBtn").style.display = (has && busy) ? "" : "none";
+  $("abortBtn").disabled = !has;
+  $("clearGoalBtn").style.display = (drill.goal && drill.goal.active) ? "" : "none";
+  $("promptBox").placeholder = busy ? "session is busy\u2026" : "Message\u2026 (Enter to send, Shift+Enter for newline)";
+}
+
+function renderGoalPanel() {
+  const gp = $("goalpanel");
+  gp.textContent = "";
+  if (!drill.boxId || !drill.sessionId) return;
+  if (drill.goal && drill.goal.condition) {
+    const state = drill.goal.achieved ? "achieved" : drill.goal.active ? "active" : "cleared";
+    // Collapsed by default (drill.goalExpanded persists across the frequent
+    // re-renders from polls/events and resets on session change): the panel
+    // is a status strip, not a document \u2014 the feed gets the space.
+    const cond = el("div", { class: "goalcond" + (drill.goalExpanded ? "" : " clamped"), text: drill.goal.condition });
+    const chip = el("div", { class: "goalnarr " + (state === "active" ? "set" : state === "achieved" ? "achieved" : "cleared") },
+      el("span", { class: "goaltag", text: "current goal \u00b7 " + state }),
+      cond);
+    if (drill.goal.condition.length > 160 || drill.goal.condition.indexOf("\n") !== -1) {
+      chip.append(el("button", {
+        class: "goaltoggle",
+        text: drill.goalExpanded ? "show less" : "show full goal",
+        onclick: () => { drill.goalExpanded = !drill.goalExpanded; renderGoalPanel(); },
+      }));
+    }
+    if (drill.goal.reason) chip.append(el("div", { class: "goalreason", text: drill.goal.reason }));
+    gp.append(chip);
+    // PAUSED GOALS: provider-backoff is calm ("waiting out provider
+    // weather", not an error — the loop is alive, between retries) and
+    // self-clears with no operator action; restart is neither calm nor
+    // self-clearing, so it pairs with the prominent Re-arm CTA below (see
+    // rearmNeeded/goalPauseTreatment).
+    const pt = goalPauseTreatment(!!drill.goal.paused, drill.goal.pauseReason);
+    if (pt) gp.append(el("div", { class: "pause-chip" + (pt.calm ? " calm" : " urgent"), text: pt.label }));
+    const urgency = rearmNeeded(!!drill.goal.active, drill.goal.condition, !!drill.goal.paused, drill.goal.pauseReason);
+    if (urgency !== "none") {
+      gp.append(el("button", {
+        class: "small rearm" + (urgency === "prominent" ? " prominent" : ""),
+        text: urgency === "prominent" ? "Re-arm now (needs an operator)" : "Re-arm this goal",
+        onclick: prefillRearm,
+      }));
+      // Re-dispatch: same condition into a NEW session with parent_session
+      // lineage — the panel is where row-level actions moved (see the
+      // session-row comment in updateSessRow).
+      const rt0 = boxRuntime.get(drill.boxId);
+      const sess0 = rt0 && rt0.sessions.get(drill.sessionId);
+      if (sess0 && canRedispatch(sess0)) {
+        gp.append(el("button", {
+          class: "small redispatch", text: ">> Re-dispatch",
+          onclick: () => openRedispatchModal(drill.boxId, sess0),
+        }));
+      }
+    }
+  }
+}
+
+function prefillRearm() {
+  if (!drill.goal) return;
+  $("goalForm").style.display = "";
+  $("goalCondition").value = drill.goal.condition || "";
+  $("goalMaxTurns").value = 0;
+  $("goalCondition").focus();
+}
+
+async function sendPrompt() {
+  const text = $("promptBox").value.trim();
+  if (!text || !drill.boxId || !drill.sessionId) return;
+  const b = box(drill.boxId);
+  $("composerNotice").textContent = "";
+  try {
+    const resp = await boxAPI(b, "POST", "/session/" + drill.sessionId + "/prompt_async", { parts: [{ type: "text", text }] });
+    if (resp.status === 202) { $("promptBox").value = ""; }
+    else if (resp.status === 409) { $("composerNotice").textContent = "session is busy \u2014 wait for it to finish"; }
+    else { $("composerNotice").textContent = "send failed (" + resp.status + ")"; }
+  } catch (e) { $("composerNotice").textContent = "send failed: " + e.message; }
+}
+
+async function submitGoal() {
+  const condition = $("goalCondition").value.trim();
+  const maxTurns = parseInt($("goalMaxTurns").value, 10) || 0;
+  if (!condition || !drill.boxId || !drill.sessionId) return;
+  const b = box(drill.boxId);
+  $("composerNotice").textContent = "";
+  try {
+    const resp = await boxAPI(b, "POST", "/session/" + drill.sessionId + "/goal", { condition, max_turns: maxTurns });
+    if (resp.status === 202) {
+      $("goalForm").style.display = "none";
+    } else {
+      const body = await resp.json().catch(() => ({}));
+      $("composerNotice").textContent = "goal failed (" + resp.status + "): " + (body.error || "");
+    }
+  } catch (e) { $("composerNotice").textContent = "goal failed: " + e.message; }
+}
+
+async function clearGoal() {
+  if (!drill.boxId || !drill.sessionId) return;
+  const b = box(drill.boxId);
+  try { await boxAPI(b, "DELETE", "/session/" + drill.sessionId + "/goal"); }
+  catch (e) { $("composerNotice").textContent = "clear goal failed: " + e.message; }
+}
+
+async function abortSession() {
+  if (!drill.boxId || !drill.sessionId) return;
+  const b = box(drill.boxId);
+  try { await boxAPI(b, "POST", "/session/" + drill.sessionId + "/abort"); }
+  catch (e) { $("composerNotice").textContent = "abort failed: " + e.message; }
+}
+
+async function quickNewSession(boxId) {
+  const b = box(boxId);
+  if (!b) return;
+  try {
+    const resp = await boxAPI(b, "POST", "/session", {});
+    if (resp.status === 201) {
+      const s = await resp.json();
+      const rt = ensureRuntime(boxId);
+      rt.sessions.set(s.id, s);
+      expandedBoxes.add(boxId);
+      selectSession(boxId, s.id);
+    } else {
+      $("headerNotice").textContent = "new session failed (" + resp.status + ")";
+    }
+  } catch (e) { $("headerNotice").textContent = "new session failed: " + e.message; }
+}
+
+function openRearmModal(boxId, s) {
+  selectSession(boxId, s.id);
+  prefillRearm();
+}
+
+/* ---------- box management: add / remove ---------- */
+
+function randomID() {
+  return "box_" + Math.random().toString(16).slice(2) + Date.now().toString(16);
+}
+
+function addBox({ name, base, token, port_urls }) {
+  base = String(base || "").trim().replace(/\/+$/, "");
+  token = String(token || "").trim();
+  name = String(name || "").trim() || base;
+  if (!base || !token) return false;
+  const b = { id: randomID(), name, base, token, port_urls: sanitizePortURLs(port_urls) };
+  hs.boxes.push(b);
+  persist();
+  expandedBoxes.add(b.id);
+  connectBox(b.id);
+  renderFleet();
+  return true;
+}
+
+function removeBox(id) {
+  disconnectBox(id);
+  hs.boxes = hs.boxes.filter(b => b.id !== id);
+  if (hs.view && hs.view.box === id) hs.view = {};
+  if (drill.boxId === id) { closeDrillConn(); drill.boxId = null; drill.sessionId = null; renderDrill(); }
+  expandedBoxes.delete(id);
+  boxRuntime.delete(id);
+  persist();
+  renderFleet();
+}
+
+/* ---------- modals ---------- */
+
+// Overflow menus light-dismiss like native menus: clicking anywhere
+// outside an open <details class="menu"> (or choosing an item) closes it.
+document.addEventListener("click", (e) => {
+  for (const d of document.querySelectorAll("details.menu[open]")) {
+    if (!d.contains(e.target) || e.target.closest(".menu-items button")) d.removeAttribute("open");
+  }
+});
+
+function closeModal() { const h = $("modalHost"); if (h.open) h.close(); h.textContent = ""; }
+
+function openAddBoxModal() {
+  const nameIn = el("input", { id: "mAddName", placeholder: "e.g. staging-1" });
+  const baseIn = el("input", { id: "mAddBase", placeholder: "http://localhost:4096" });
+  const tokIn = el("input", { id: "mAddToken", type: "password", placeholder: "run token" });
+  const portsIn = el("textarea", { id: "mAddPorts", rows: 3, placeholder: "3000=https://preview-3000.example.dev\n5432=https://preview-5432.example.dev" });
+  const notice = el("div", { class: "notice" });
+  const modal = el("div", { class: "modal" },
+    el("h2", { text: "Add box" }),
+    el("div", { class: "field" }, el("label", { text: "Name" }), nameIn),
+    el("div", { class: "field" }, el("label", { text: "Base URL" }), baseIn),
+    el("div", { class: "field" }, el("label", { text: "Run token" }), tokIn),
+    el("div", { class: "field" }, el("label", { text: "Port URLs (optional, one \u201cport=url\u201d per line — see the process strip)" }), portsIn),
+    notice,
+    el("div", { class: "row" },
+      el("button", { class: "primary", text: "Add", onclick: () => {
+        const port_urls = parsePortURLLines(portsIn.value);
+        if (addBox({ name: nameIn.value, base: baseIn.value, token: tokIn.value, port_urls })) closeModal();
+        else notice.textContent = "base URL and token are required";
+      } }),
+      el("button", { text: "Cancel", onclick: closeModal }),
+    ),
+  );
+  showModal(modal);
+  baseIn.focus();
+}
+
+function showModal(modal) {
+  // Native <dialog>: focus trapping, Escape, and ::backdrop for free.
+  // Clicking the backdrop (the dialog element itself, outside .modal)
+  // closes — the standard light-dismiss idiom.
+  const host = $("modalHost");
+  host.textContent = "";
+  host.append(modal);
+  if (!host.dataset.dismissWired) {
+    host.dataset.dismissWired = "1";
+    host.addEventListener("click", (e) => { if (e.target === host) closeModal(); });
+    // While a spawn is in flight the dialog's Close button is disabled;
+    // Escape must not sneak past it (same orphaned-spawn rationale).
+    host.addEventListener("cancel", (e) => {
+      if (host.querySelector("button.primary:disabled")) e.preventDefault();
+    });
+  }
+  host.showModal();
+}
+
+function openDispatchModal(boxId) {
+  const b = box(boxId);
+  if (!b) return;
+  const modelIn = el("input", { placeholder: "provider/model or alias (optional)" });
+  const condIn = el("textarea", { class: "big", placeholder: "Completion condition\u2026 multi-paragraph is fine \u2014 this is the whole point." });
+  const maxTurnsIn = el("input", { type: "number", min: "0", value: "0" });
+  const notice = el("div", { class: "notice" });
+  const modal = el("div", { class: "modal" },
+    el("h2", { text: "Dispatch on " + b.name }),
+    el("div", { class: "field" }, el("label", { text: "Model (optional)" }), modelIn),
+    el("div", { class: "field" }, el("label", { text: "Completion condition" }), condIn),
+    el("div", { class: "field" }, el("label", { text: "Max turns (0 = unlimited)" }), maxTurnsIn),
+    notice,
+    el("div", { class: "row" },
+      el("button", { class: "primary", text: "Dispatch", onclick: async () => {
+        const condition = condIn.value.trim();
+        if (!condition) { notice.textContent = "a completion condition is required"; return; }
+        notice.textContent = "creating session\u2026";
+        try {
+          const body = {};
+          if (modelIn.value.trim()) body.model = modelIn.value.trim();
+          const created = await boxAPI(b, "POST", "/session", body);
+          if (created.status !== 201) { notice.textContent = "create session failed (" + created.status + ")"; return; }
+          const sess = await created.json();
+          const rt = ensureRuntime(boxId);
+          rt.sessions.set(sess.id, sess);
+          notice.textContent = "starting goal\u2026";
+          const maxTurns = parseInt(maxTurnsIn.value, 10) || 0;
+          const goalResp = await boxAPI(b, "POST", "/session/" + sess.id + "/goal", { condition, max_turns: maxTurns });
+          if (goalResp.status !== 202) {
+            const eb = await goalResp.json().catch(() => ({}));
+            notice.textContent = "goal failed (" + goalResp.status + "): " + (eb.error || "");
+            return;
+          }
+          expandedBoxes.add(boxId);
+          closeModal();
+          selectSession(boxId, sess.id);
+        } catch (e) { notice.textContent = "dispatch failed: " + e.message; }
+      } }),
+      el("button", { text: "Cancel", onclick: closeModal }),
+    ),
+  );
+  showModal(modal);
+  condIn.focus();
+}
+
+// openRedispatchModal is LINEAGE GROUPING's "Re-dispatch" action —
+// distinct from the in-place Re-arm above: it creates a BRAND NEW session
+// (parent_session set to the old one, per server/openapi.yaml's POST
+// /session field and docs/design/fleet-model.md §6) and opens the goal
+// form pre-filled with the prior session's condition, editable before
+// submitting. The old session is left exactly as it was; the new one
+// becomes this task's fresh lineage tip once its goal is set.
+function openRedispatchModal(boxId, oldSession) {
+  const b = box(boxId);
+  if (!b || !oldSession) return;
+  const priorCondition = (oldSession.goal && oldSession.goal.condition) || "";
+  const condIn = el("textarea", { class: "big", placeholder: "Completion condition\u2026" });
+  condIn.value = priorCondition;
+  const maxTurnsIn = el("input", { type: "number", min: "0", value: "0" });
+  const notice = el("div", { class: "notice" });
+  const modal = el("div", { class: "modal" },
+    el("h2", { text: "Re-dispatch on " + b.name }),
+    el("div", {},
+      "Creates a NEW session with parent_session = " + shortId(oldSession.id) +
+      ", continuing this task's lineage (docs/design/fleet-model.md \u00a76) \u2014 the prior condition is pre-filled below, editable before dispatching."),
+    el("div", { class: "field" }, el("label", { text: "Completion condition" }), condIn),
+    el("div", { class: "field" }, el("label", { text: "Max turns (0 = unlimited)" }), maxTurnsIn),
+    notice,
+    el("div", { class: "row" },
+      el("button", { class: "primary", text: "Re-dispatch", onclick: async () => {
+        const condition = condIn.value.trim();
+        if (!condition) { notice.textContent = "a completion condition is required"; return; }
+        notice.textContent = "creating session\u2026";
+        try {
+          const created = await boxAPI(b, "POST", "/session", { parent_session: oldSession.id });
+          if (created.status !== 201) { notice.textContent = "create session failed (" + created.status + ")"; return; }
+          const sess = await created.json();
+          const rt = ensureRuntime(boxId);
+          rt.sessions.set(sess.id, sess);
+          notice.textContent = "starting goal\u2026";
+          const maxTurns = parseInt(maxTurnsIn.value, 10) || 0;
+          const goalResp = await boxAPI(b, "POST", "/session/" + sess.id + "/goal", { condition, max_turns: maxTurns });
+          if (goalResp.status !== 202) {
+            const eb = await goalResp.json().catch(() => ({}));
+            notice.textContent = "goal failed (" + goalResp.status + "): " + (eb.error || "");
+            return;
+          }
+          expandedBoxes.add(boxId);
+          closeModal();
+          selectSession(boxId, sess.id);
+        } catch (e) { notice.textContent = "re-dispatch failed: " + e.message; }
+      } }),
+      el("button", { text: "Cancel", onclick: closeModal }),
+    ),
+  );
+  showModal(modal);
+  condIn.focus();
+}
+
+/* ---------- spawn box: the hub's own (same-origin) SSE API ---------- */
+
+function openSpawnModal() {
+  // The new box gets an auto-generated adjective-noun-NN name — no operator
+  // input required. It's editable afterward from the box card if desired.
+  const name = randomSlug();
+  const log = el("div", { class: "spawnlog", text: "" });
+  const notice = el("div", { class: "notice" });
+  const startBtn = el("button", { class: "primary", text: "Spawn" });
+  const closeBtn = el("button", { text: "Close", onclick: closeModal });
+  const modal = el("div", { class: "modal" },
+    el("h2", { text: "Spawn a new box" }),
+    el("div", {}, "Runs this hub's configured -spawn-command / $HARNESS_HUB_SPAWN and streams its output below. See the contract in this page's header comment."),
+    el("div", { class: "field" }, el("label", { text: "Name" }), el("code", { text: name })),
+    notice, log,
+    el("div", { class: "row" }, startBtn, closeBtn),
+  );
+  showModal(modal);
+  startBtn.onclick = () => runSpawn(name, log, notice, startBtn, ev => {
+    addBox({ name: name || ev.tunnel_url, base: ev.tunnel_url, token: ev.run_token, port_urls: ev.port_urls });
+    notice.className = "notice ok";
+    notice.textContent = "box added: " + ev.tunnel_url;
+  }, closeBtn);
+  startBtn.focus();
+}
+
+// runSpawn drives one POST /spawn SSE call (used by both the "Spawn a new
+// box" modal above and the Respawn/ADOPT modal below — see
+// docs/design/fleet-model.md §4): streams stdout lines into `log`, and on
+// a successful "done" event (both TUNNEL_URL and RUN_TOKEN present) calls
+// onSuccess(ev) to let the caller decide what a fresh tunnel means (add a
+// new box, vs. update an existing one in place for a Respawn).
+async function runSpawn(name, log, notice, startBtn, onSuccess, closeBtn) {
+  // Full in-flight treatment: the start button announces the state, and
+  // Close is disabled too — abandoning the dialog mid-spawn would orphan
+  // the server-side spawn with nobody watching its outcome.
+  const startLabel = startBtn.textContent;
+  startBtn.disabled = true;
+  startBtn.textContent = "Spawning\u2026";
+  if (closeBtn) closeBtn.disabled = true;
+  notice.textContent = "";
+  notice.className = "notice";
+  delete log.dataset.placeholder;
+  log.textContent = "starting spawn command\u2026";
+  try {
+    const resp = await fetch("/spawn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name || "" }),
+    });
+    if (!resp.body) throw new Error("no response body");
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let finished = false;
+    const parse = createSSEParser(frame => {
+      let ev; try { ev = JSON.parse(frame.data); } catch { return; }
+      if (ev.type === "stdout") {
+        if (log.dataset.placeholder !== "cleared") { log.dataset.placeholder = "cleared"; log.textContent = ""; }
+        log.textContent += (log.textContent ? "\n" : "") + ev.line;
+        log.scrollTop = log.scrollHeight;
+      } else if (ev.type === "done") {
+        finished = true;
+        if (ev.error) {
+          notice.textContent = "spawn failed: " + ev.error;
+        } else if (ev.tunnel_url && ev.run_token) {
+          onSuccess(ev);
+        } else {
+          notice.textContent = "spawn finished (exit " + ev.exit_code + ") but no TUNNEL_URL=/RUN_TOKEN= lines were found \u2014 add the box by hand.";
+        }
+      }
+    });
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      parse(dec.decode(value, { stream: true }));
+    }
+    if (!finished) notice.textContent = "spawn stream ended unexpectedly";
+  } catch (e) {
+    notice.textContent = "spawn failed: " + e.message;
+  } finally {
+    startBtn.disabled = false;
+    startBtn.textContent = startLabel;
+    if (closeBtn) closeBtn.disabled = false;
+  }
+}
+
+/* ---------- respawn / ADOPT: same name, same volume, new tunnel ----------
+   docs/design/fleet-model.md §4: respawning the SAME name points the new
+   box process at the same durable volume — every session's history
+   restores, and any goal that was left armed surfaces paused/"restart"
+   (see PAUSED GOALS above), ready for a one-click Re-arm. This is why
+   Respawn calls POST /spawn with this box's EXISTING name rather than
+   generating a fresh one, and updates the SAME fragment entry (id, name)
+   in place rather than adding a new box card. */
+
+function openRespawnModal(boxId) {
+  const b = box(boxId);
+  if (!b) return;
+  const log = el("div", { class: "spawnlog", text: "" });
+  const notice = el("div", { class: "notice" });
+  const startBtn = el("button", { class: "primary", text: "Respawn" });
+  const closeBtn = el("button", { text: "Close", onclick: closeModal });
+  const modal = el("div", { class: "modal" },
+    el("h2", { text: "Respawn " + b.name }),
+    // Operator copy, not design-doc copy: no internal references, no
+    // implementation nouns, and the honest caveat about what does NOT
+    // survive (working directories are container-local; sessions are on
+    // the volume).
+    el("div", {}, "Starts fresh compute under the same name and storage. Sessions and history come back; a goal left armed returns paused, ready to re-arm. This card's address and token update automatically."),
+    el("div", { class: "goalreason", text: "Checkouts and running processes from the old box do not carry over." }),
+    notice, log,
+    el("div", { class: "row" }, startBtn, closeBtn),
+  );
+  showModal(modal);
+  startBtn.onclick = () => runSpawn(b.name, log, notice, startBtn, ev => {
+    applyRespawn(boxId, ev);
+    notice.className = "notice ok";
+    notice.textContent = "box updated: " + ev.tunnel_url;
+  }, closeBtn);
+  startBtn.focus();
+}
+
+// applyRespawn updates an EXISTING box entry's base/token/port_urls in
+// place (same id, same name — see the ADOPT contract above) after a
+// successful Respawn, then reconnects its runtime against the new tunnel.
+function applyRespawn(boxId, ev) {
+  const b = box(boxId);
+  if (!b) return;
+  b.base = String(ev.tunnel_url || "").trim().replace(/\/+$/, "");
+  b.token = String(ev.run_token || "").trim();
+  b.port_urls = mergePortURLs(b.port_urls, sanitizePortURLs(ev.port_urls));
+  persist();
+  disconnectBox(boxId);
+  connectBox(boxId);
+  renderFleet();
+}
+
+/* ---------- notifications ---------- */
+
+function notify(boxId, sessionId, notice) {
+  if (!hs.notify) return;
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  const b = box(boxId);
+  const title = notice.title + " \u00b7 " + (b ? b.name : boxId) + " / " + shortId(sessionId);
+  try { new Notification(title, { body: notice.body }); } catch { /* best-effort */ }
+}
+
+function updateNotifyButton() {
+  const btn = $("notifyBtn");
+  btn.classList.toggle("on", !!hs.notify);
+  btn.textContent = hs.notify ? "Notify: on" : "Notify";
+}
+
+async function toggleNotify() {
+  if (!hs.notify) {
+    if (typeof Notification !== "undefined" && Notification.permission !== "granted") {
+      try { await Notification.requestPermission(); } catch { /* ignore */ }
+    }
+  }
+  hs.notify = !hs.notify;
+  persist();
+  updateNotifyButton();
+}
+
+/* ---------- copy hub link ---------- */
+
+async function copyHubLink() {
+  const url = location.href;
+  try {
+    await navigator.clipboard.writeText(url);
+    $("headerNotice").textContent = "hub link copied";
+  } catch {
+    $("headerNotice").textContent = url;
+  }
+  setTimeout(() => { $("headerNotice").textContent = ""; }, 4000);
+}
+
+/* ---------- wiring + bootstrap ---------- */
+
+$("addBoxBtn").onclick = openAddBoxModal;
+$("spawnBtn").onclick = openSpawnModal;
+$("notifyBtn").onclick = toggleNotify;
+$("copyLinkBtn").onclick = copyHubLink;
+$("sendBtn").onclick = sendPrompt;
+$("abortBtn").onclick = abortSession;
+$("clearGoalBtn").onclick = clearGoal;
+$("goalSubmitBtn").onclick = submitGoal;
+$("setGoalToggleBtn").onclick = () => {
+  const f = $("goalForm");
+  f.style.display = f.style.display === "none" ? "" : "none";
+};
+$("promptBox").addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!$("sendBtn").disabled) sendPrompt(); }
+});
+
+function bootstrap() {
+  loadFromLocation();
+  updateNotifyButton();
+  for (const b of hs.boxes) { expandedBoxes.add(b.id); connectBox(b.id); }
+  renderFleet();
+  updateComposer();
+  const view = hs.view || {};
+  if (view.box && view.session && box(view.box)) {
+    selectSession(view.box, view.session);
+  } else {
+    renderDrill();
+  }
+}
+
+bootstrap();
+</script>
+</body>
+</html>
