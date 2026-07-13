@@ -418,12 +418,6 @@ func (s *Server) routes() {
 	mux.HandleFunc("DELETE /session/{id}/goal", s.auth(s.handleGoalDelete))
 	mux.HandleFunc("POST /session/{id}/abort", s.auth(s.handleAbort))
 	mux.HandleFunc("GET /event", s.auth(s.handleEvent))
-	// /term is NOT wrapped in s.auth: it has its own auth check (see
-	// handleTerm) because a browser WebSocket client cannot set an
-	// Authorization header and must instead be authenticated via the
-	// Sec-WebSocket-Protocol subprotocol — s.auth only understands the
-	// header form.
-	mux.HandleFunc("GET /term", s.handleTerm)
 	mux.HandleFunc("GET /process", s.auth(s.handleProcessList))
 	mux.HandleFunc("POST /process/{name}/start", s.auth(s.handleProcessStart))
 	mux.HandleFunc("POST /process/{name}/stop", s.auth(s.handleProcessStop))
