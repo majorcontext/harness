@@ -313,7 +313,12 @@ func runCmd(args []string) error {
 	case opts.prompt != "" && opts.goal != "":
 		return fmt.Errorf("-p and -goal are mutually exclusive")
 	}
-	cfg, err := loadConfig()
+	// Structured logging: JSON to stderr, stdlib log/slog only (no new
+	// dependency), exactly like serveCmd — built solely to carry the one
+	// config-load summary line (see loadConfigLogged); run mode has no
+	// other ongoing use for a logger.
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	cfg, err := loadConfigLogged(logger)
 	if err != nil {
 		return err
 	}
@@ -342,6 +347,12 @@ func runCmd(args []string) error {
 	// safer order.
 	mcpMgr := buildMCPManager(cfg.MCPServers)
 	defer closeMCPManager(mcpMgr)
+
+	// run mode keeps the zero-cost-when-unconfigured rule: nil (no
+	// `process` tool at all) when the config declares no processes. See
+	// buildProcessManager's doc comment for why serve mode differs.
+	procMgr := buildProcessManager(workDir, cfg.Processes, false)
+	defer closeProcessManager(procMgr)
 
 	lateAPI := newLateClientAPI()
 	host, err := buildPluginHost(ctx, cfg.Plugins, version, workDir, cfg.PluginHTTPHeaders, lateAPI, "", "")
@@ -385,17 +396,21 @@ func runCmd(args []string) error {
 	lateAPI.Bind(newLazyRunClientAPI(func() *engine.Session { return sess }))
 
 	s, err := resolveSession(engine.Config{
-		Providers:    registry(cfg),
-		Model:        model,
-		System:       systemPrompt(workDir, opts.system),
-		MaxTokens:    opts.maxTokens,
-		WorkDir:      workDir,
-		SessionDir:   sesDir,
-		OnEvent:      onEvent,
-		Instructions: instructionsConfig(cfg, opts.noInstructions),
-		SkillsDirs:   skillsDirs(cfg, opts.skillsDirs, workDir),
-		Hooks:        pluginHooks(host),
-		MCP:          mcpRegistry(mcpMgr),
+		Providers:           registry(cfg),
+		Model:               model,
+		System:              systemPrompt(workDir, opts.system),
+		MaxTokens:           opts.maxTokens,
+		WorkDir:             workDir,
+		SessionDir:          sesDir,
+		OnEvent:             onEvent,
+		Instructions:        instructionsConfig(cfg, opts.noInstructions),
+		SkillsDirs:          skillsDirs(cfg, opts.skillsDirs, workDir),
+		Hooks:               pluginHooks(host),
+		MCP:                 mcpRegistry(mcpMgr),
+		Processes:           processRegistry(procMgr),
+		ContextWindowTokens: cfg.ContextWindowTokens,
+		CompactionThreshold: cfg.CompactionThreshold,
+		CompactionKeepTurns: cfg.CompactionKeepTurns,
 	}, opts.resume, opts.cont, modelSet)
 	if err != nil {
 		return err
@@ -624,7 +639,14 @@ func serveCmd(args []string) error {
 	if token == "" {
 		return fmt.Errorf("HARNESS_RUN_TOKEN is required")
 	}
-	cfg, err := loadConfig()
+	// Structured logging: JSON to stderr, stdlib log/slog only (no new
+	// dependency). Built early so the config-load summary below (see
+	// loadConfigLogged) is the first thing this process logs; serve
+	// start and every OnError go through it too. Intentionally minimal —
+	// no request-level access logging, no metrics, no OTel (a separate
+	// future cmd-scoped task).
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	cfg, err := loadConfigLogged(logger)
 	if err != nil {
 		return err
 	}
@@ -658,6 +680,13 @@ func serveCmd(args []string) error {
 	mcpMgr := buildMCPManager(cfg.MCPServers)
 	defer closeMCPManager(mcpMgr)
 
+	// serve mode always builds a *process.Manager, even with zero
+	// declared processes (alwaysOn=true) — see buildProcessManager's doc
+	// comment: the `process` tool and /process endpoints are exposed on
+	// every served box, not just ones with a non-empty processes config.
+	procMgr := buildProcessManager(workDir, cfg.Processes, true)
+	defer closeProcessManager(procMgr)
+
 	// Every session gets the same plugin host; it is built once here and
 	// closed on exit (deferred before srv's own defer below, so — since
 	// defers unwind LIFO — the host outlives the server's shutdown/drain and
@@ -673,12 +702,6 @@ func serveCmd(args []string) error {
 		}
 	}()
 
-	// Structured logging: JSON to stderr, stdlib log/slog only (no new
-	// dependency). serve start and every OnError go through it; this is
-	// intentionally minimal — no request-level access logging, no metrics, no
-	// OTel (a separate future cmd-scoped task).
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-
 	// The event journal owner needs each engine session to report events to
 	// it, so the session wrappers wire OnEvent to the server's Publish.
 	// host is built just below, once srv exists (its ClientAPI is
@@ -688,16 +711,20 @@ func serveCmd(args []string) error {
 	var srv *server.Server
 	mkCfg := func(model message.ModelRef) engine.Config {
 		return engine.Config{
-			Providers:    reg,
-			Model:        model,
-			System:       systemPrompt(workDir, ""),
-			WorkDir:      workDir,
-			SessionDir:   sesDir,
-			OnEvent:      func(ev engine.Event) { srv.Publish(ev) },
-			Instructions: instructionsConfig(cfg, noInstructions),
-			SkillsDirs:   skillsDirs(cfg, skillDirs, workDir),
-			Hooks:        pluginHooks(pluginHost),
-			MCP:          mcpRegistry(mcpMgr),
+			Providers:           reg,
+			Model:               model,
+			System:              systemPrompt(workDir, ""),
+			WorkDir:             workDir,
+			SessionDir:          sesDir,
+			OnEvent:             func(ev engine.Event) { srv.Publish(ev) },
+			Instructions:        instructionsConfig(cfg, noInstructions),
+			SkillsDirs:          skillsDirs(cfg, skillDirs, workDir),
+			Hooks:               pluginHooks(pluginHost),
+			MCP:                 mcpRegistry(mcpMgr),
+			Processes:           processRegistry(procMgr),
+			ContextWindowTokens: cfg.ContextWindowTokens,
+			CompactionThreshold: cfg.CompactionThreshold,
+			CompactionKeepTurns: cfg.CompactionKeepTurns,
 		}
 	}
 	srv, err = server.New(server.Options{
@@ -707,6 +734,7 @@ func serveCmd(args []string) error {
 		CORSOrigin:    corsOrigin,
 		GoalEvaluator: goalEval,
 		MCP:           mcpRegistry(mcpMgr),
+		Processes:     processRegistry(procMgr),
 		OnError: func(_ context.Context, err error) {
 			logger.Error("serve error", "error", err.Error())
 		},
@@ -756,8 +784,8 @@ func serveCmd(args []string) error {
 // wired to the server's request journal, keyed by the session's own ID
 // (assigned by engine.NewSession, so it cannot be captured until after
 // construction).
-func newSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.ModelRef, appCfg *config.Config, flagDirs []string, onRequest func(id string, turn int, req *provider.Request)) func(message.ModelRef, string) (*engine.Session, error) {
-	return func(model message.ModelRef, sessionWorkDir string) (*engine.Session, error) {
+func newSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.ModelRef, appCfg *config.Config, flagDirs []string, onRequest func(id string, turn int, req *provider.Request)) func(message.ModelRef, string, string) (*engine.Session, error) {
+	return func(model message.ModelRef, sessionWorkDir string, parentSession string) (*engine.Session, error) {
 		if model.IsZero() {
 			model = defModel
 		}
@@ -770,6 +798,7 @@ func newSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.M
 		cfg.WorkDir = sessionWorkDir
 		cfg.System = systemPrompt(sessionWorkDir, "")
 		cfg.SkillsDirs = skillsDirs(appCfg, flagDirs, sessionWorkDir)
+		cfg.ParentSession = parentSession
 		var sess *engine.Session
 		cfg.OnRequest = func(turn int, req *provider.Request) { onRequest(sess.ID, turn, req) }
 		sess = engine.NewSession(cfg)

@@ -733,7 +733,7 @@ func TestNewSessionFnSystemUsesSessionWorkDir(t *testing.T) {
 	onRequest := func(_ string, _ int, req *provider.Request) { gotReq = req }
 
 	newSession := newSessionFn(mkCfg, model, &config.Config{SkillsDirs: []string{}}, nil, onRequest)
-	sess, err := newSession(message.ModelRef{}, sessionWorkDir)
+	sess, err := newSession(message.ModelRef{}, sessionWorkDir, "")
 	if err != nil {
 		t.Fatalf("newSession: %v", err)
 	}
@@ -803,7 +803,7 @@ func TestNewSessionFnSkillsUsesSessionWorkDir(t *testing.T) {
 	onRequest := func(_ string, _ int, req *provider.Request) { gotReq = req }
 
 	newSession := newSessionFn(mkCfg, model, appCfg, nil, onRequest)
-	sess, err := newSession(message.ModelRef{}, sessionWorkDir)
+	sess, err := newSession(message.ModelRef{}, sessionWorkDir, "")
 	if err != nil {
 		t.Fatalf("newSession: %v", err)
 	}

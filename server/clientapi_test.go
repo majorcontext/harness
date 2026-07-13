@@ -48,7 +48,7 @@ func TestClientAPISessionMessagesEndToEnd(t *testing.T) {
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("hi there")}}
 	srv := newServer(t, dir, prov, 0)
 
-	sess, err := srv.opts.NewSession(message.ModelRef{Provider: "test", Model: "m1"}, "")
+	sess, err := srv.opts.NewSession(message.ModelRef{Provider: "test", Model: "m1"}, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

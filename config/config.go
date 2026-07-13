@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/process"
 )
 
 // DefaultModel is the hard fallback when neither a flag nor config names one.
@@ -71,6 +72,69 @@ type Config struct {
 	// make field-by-field merging (as Provider gets) more confusing than
 	// useful here.
 	MCPServers map[string]MCPServerSpec `json:"mcp_servers,omitempty"`
+	// Processes declares named dev/support processes the engine can
+	// manage (start/stop/restart/status/logs) via the "process" session
+	// tool and the server's /process endpoints (see package engine's
+	// ProcessManager). Keyed by process name; a nil (omitted) value
+	// configures no processes. Merge rules mirror MCPServers: keys merge,
+	// but a same-name project entry replaces the user entry wholesale.
+	Processes map[string]ProcessSpec `json:"processes,omitempty"`
+	// ContextWindowTokens sets engine.Config.ContextWindowTokens for every
+	// session this process creates: the model's context window size, in
+	// tokens. Zero (omitted, the default) disables automatic compaction
+	// entirely — see docs/design/context-compaction.md and issue #62 layer
+	// 3. Opt-in: the engine has no built-in per-model table.
+	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
+	// CompactionThreshold sets engine.Config.CompactionThreshold: the
+	// fraction of ContextWindowTokens at which automatic compaction
+	// triggers. Zero (omitted) defaults to 0.8 (see the engine).
+	CompactionThreshold float64 `json:"compaction_threshold,omitempty"`
+	// CompactionKeepTurns sets engine.Config.CompactionKeepTurns: how many
+	// of the most recent turns automatic compaction always keeps verbatim.
+	// Zero (omitted) defaults to 2 (see the engine); the effective value
+	// can never go below 1.
+	CompactionKeepTurns int `json:"compaction_keep_turns,omitempty"`
+}
+
+// ProcessSpec configures one managed process (package engine's
+// ProcessManager). Command is required (a non-empty argv); Dir, when set,
+// is resolved against the engine's working directory. At most one of
+// ReadyRegex/ReadyPort/ReadyHTTP may be set (see validateProcesses); each
+// gates Start the same way — blocking until it matches — and
+// ReadyTimeoutS bounds how long that block waits; <= 0 defaults to 60
+// seconds (applied by the engine, not here — see engine.ProcessManager,
+// mirroring MCPServerSpec's ConnectTimeout default pattern).
+type ProcessSpec struct {
+	// Command is the argv of the process; Command[0] is resolved via PATH
+	// like any exec.
+	Command []string `json:"command,omitempty"`
+	// Dir is the process's working directory, resolved against the
+	// engine's WorkDir when relative.
+	Dir string `json:"dir,omitempty"`
+	// Env is appended to the harness environment when the process is
+	// spawned.
+	Env []string `json:"env,omitempty"`
+	// Ports lists TCP ports this process is expected to listen on — pure
+	// declarative metadata (each entry must be in 1-65535; see
+	// validateProcesses) surfaced to Status/GET /process, the process
+	// tool's list/status output, and the ambient status block. Harness
+	// never allocates, binds to, or enforces these.
+	Ports []int `json:"ports,omitempty"`
+	// ReadyRegex, when non-empty, must be a valid RE2 pattern (regexp.Compile).
+	// A combined stdout+stderr log line matching it marks the process ready.
+	ReadyRegex string `json:"ready_regex,omitempty"`
+	// ReadyPort, when set, is a TCP port (1-65535): Start's ready gate
+	// blocks until a plain TCP dial to 127.0.0.1:<port> succeeds, instead
+	// of matching a log line. Unambiguous where ReadyRegex can match the
+	// wrong task's output in a multiplexed log — see
+	// docs/design/managed-processes.md.
+	ReadyPort int `json:"ready_port,omitempty"`
+	// ReadyHTTP, when set, is a URL: Start's ready gate blocks until a GET
+	// to it returns any non-5xx status.
+	ReadyHTTP string `json:"ready_http,omitempty"`
+	// ReadyTimeoutS bounds Start's blocking wait for whichever ready gate
+	// is configured, in seconds; <= 0 means the engine's default (60s).
+	ReadyTimeoutS int `json:"ready_timeout_s,omitempty"`
 }
 
 // MCPServerSpec configures one MCP server (package mcp's client, wired by
@@ -275,6 +339,9 @@ func Load(path string) (*Config, error) {
 	if err := validateMCPServers(c.MCPServers); err != nil {
 		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
 	}
+	if err := validateProcesses(c.Processes); err != nil {
+		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
+	}
 	return &c, nil
 }
 
@@ -373,6 +440,36 @@ func validateMCPServers(servers map[string]MCPServerSpec) error {
 	return nil
 }
 
+// validateProcesses fails loudly on a process entry that cannot possibly be
+// wired: the map key naming it must be non-empty (it is the identity a
+// caller uses to start/stop/restart/status/logs it — same "cannot possibly
+// be wired" philosophy as validateMCPServers/validatePlugins). Everything
+// else (Command, Ports, and the ready gates) is validated by
+// process.ValidateDef itself — called directly, not reimplemented, so a
+// config-file process entry and the process tool's runtime `declare`
+// action are rejected with byte-for-byte identical error text (see that
+// function's doc comment). An invalid entry would otherwise only fail the
+// first time a session actually starts the process, far from the config
+// that caused it.
+func validateProcesses(processes map[string]ProcessSpec) error {
+	for name, p := range processes {
+		if name == "" {
+			return fmt.Errorf("processes: process name is required (empty key)")
+		}
+		def := process.Def{
+			Command:    p.Command,
+			Ports:      p.Ports,
+			ReadyRegex: p.ReadyRegex,
+			ReadyPort:  p.ReadyPort,
+			ReadyHTTP:  p.ReadyHTTP,
+		}
+		if err := process.ValidateDef(def); err != nil {
+			return fmt.Errorf("processes.%s: %w", name, err)
+		}
+	}
+	return nil
+}
+
 // Path resolves the effective user config path: $HARNESS_CONFIG if set,
 // otherwise ~/.harness/config.json.
 func Path() string {
@@ -411,15 +508,81 @@ func Path() string {
 // it becomes once merged with the user layer (or with a native default),
 // not rejected as incomplete on its own.
 func LoadProject(dir string) (*Config, error) {
-	user, err := Load(Path())
+	cfg, _, err := LoadProjectWithInfo(dir)
+	return cfg, err
+}
+
+// LoadInfo describes which config file LoadProjectWithInfo actually found
+// (if any) and summarizes the resulting merged config, for the one boot-
+// time observability log line `harness serve`/`harness run` emit (see
+// AGENTS.md's startup-config-observability rule). It carries no
+// behavior — Path is purely which file to report to an operator, never
+// re-parsed or re-read.
+type LoadInfo struct {
+	// Path is the effective config file path to report: the project
+	// override (<dir>/.harness.json) when it exists, otherwise the user
+	// config path (Path()) when it exists, otherwise empty — meaning no
+	// config file was found at all. This is deliberately a single path
+	// even though up to two files may have been merged: the project
+	// override is what a misnamed-file operator error almost always
+	// means (a typo'd .harness.json silently loading as empty), so it is
+	// the path worth naming when present.
+	Path string
+	// Processes, MCPServers, and Plugins are the merged config's declared
+	// counts — the "how much did this actually load" half of the log
+	// line, printed alongside Path so a config file that loaded but
+	// declares nothing (e.g. a typo inside a key, or an empty object) is
+	// still visibly distinguishable from a rich one.
+	Processes  int
+	MCPServers int
+	Plugins    int
+}
+
+// LoadProjectWithInfo is LoadProject plus the LoadInfo an operator-facing
+// boot log needs. It performs exactly the same file reads and merge/
+// validate pass as LoadProject (this is the only implementation; that
+// function is now a thin wrapper) — checking existence costs one extra
+// os.Stat per file, negligible against the startup budget's "at most two
+// file reads" (a Stat is not the read the budget is about).
+func LoadProjectWithInfo(dir string) (*Config, LoadInfo, error) {
+	userPath := Path()
+	userExists := fileExists(userPath)
+	user, err := Load(userPath)
 	if err != nil {
-		return nil, err
+		return nil, LoadInfo{}, err
 	}
-	proj, err := Load(filepath.Join(dir, ".harness.json"))
+	projPath := filepath.Join(dir, ".harness.json")
+	projExists := fileExists(projPath)
+	proj, err := Load(projPath)
 	if err != nil {
-		return nil, err
+		return nil, LoadInfo{}, err
 	}
-	return mergeAndValidate(user, proj)
+	cfg, err := mergeAndValidate(user, proj)
+	if err != nil {
+		return nil, LoadInfo{}, err
+	}
+	info := LoadInfo{
+		Processes:  len(cfg.Processes),
+		MCPServers: len(cfg.MCPServers),
+		Plugins:    len(cfg.Plugins),
+	}
+	switch {
+	case projExists:
+		info.Path = projPath
+	case userExists:
+		info.Path = userPath
+	}
+	return cfg, info, nil
+}
+
+// fileExists reports whether path names a file (or anything else) that
+// os.Stat can see — used only to distinguish "this config layer was
+// absent" from "this config layer parsed to a zero value" for LoadInfo;
+// Load already treats a missing file as an empty layer, so this never
+// changes what gets loaded, only what gets reported.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // mergeAndValidate merges over onto base (see merge), applies built-in
@@ -458,6 +621,15 @@ func merge(base, over *Config) *Config {
 	}
 	if over.GoalEvaluatorModel != "" {
 		out.GoalEvaluatorModel = over.GoalEvaluatorModel
+	}
+	if over.ContextWindowTokens != 0 {
+		out.ContextWindowTokens = over.ContextWindowTokens
+	}
+	if over.CompactionThreshold != 0 {
+		out.CompactionThreshold = over.CompactionThreshold
+	}
+	if over.CompactionKeepTurns != 0 {
+		out.CompactionKeepTurns = over.CompactionKeepTurns
 	}
 	// Arrays override wholesale: a non-empty project value replaces the user
 	// value entirely; otherwise inherit. Copy so the merged config never
@@ -573,7 +745,37 @@ func merge(base, over *Config) *Config {
 	} else {
 		out.MCPServers = nil
 	}
+	if n := len(base.Processes) + len(over.Processes); n > 0 {
+		m := make(map[string]ProcessSpec, n)
+		for k, v := range base.Processes {
+			m[k] = copyProcessSpec(v)
+		}
+		for k, v := range over.Processes {
+			// A same-name project entry replaces the user entry wholesale
+			// (see the Processes field doc), same as MCPServers.
+			m[k] = copyProcessSpec(v)
+		}
+		out.Processes = m
+	} else {
+		out.Processes = nil
+	}
 	return &out
+}
+
+// copyProcessSpec deep-copies s's slice fields so a merged config never
+// aliases either input layer's — mutating the merged result must not be
+// able to corrupt base or over.
+func copyProcessSpec(s ProcessSpec) ProcessSpec {
+	if len(s.Command) > 0 {
+		s.Command = append([]string(nil), s.Command...)
+	}
+	if len(s.Env) > 0 {
+		s.Env = append([]string(nil), s.Env...)
+	}
+	if len(s.Ports) > 0 {
+		s.Ports = append([]int(nil), s.Ports...)
+	}
+	return s
 }
 
 // copyMCPServerSpec deep-copies s's slice/map fields so a merged config

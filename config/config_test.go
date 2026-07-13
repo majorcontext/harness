@@ -483,6 +483,37 @@ func TestLoadSkillsDirs(t *testing.T) {
 	})
 }
 
+// TestMergeCompactionFields is the red-first test for docs/design/context-
+// compaction.md's config fields: project non-zero values override the user
+// layer, same scalar-override rule as GoalEvaluatorModel.
+func TestMergeCompactionFields(t *testing.T) {
+	base := &Config{ContextWindowTokens: 100000, CompactionThreshold: 0.9, CompactionKeepTurns: 3}
+	t.Run("zero project values inherit the user layer", func(t *testing.T) {
+		got := merge(base, &Config{})
+		if got.ContextWindowTokens != 100000 {
+			t.Errorf("ContextWindowTokens = %d, want inherited 100000", got.ContextWindowTokens)
+		}
+		if got.CompactionThreshold != 0.9 {
+			t.Errorf("CompactionThreshold = %v, want inherited 0.9", got.CompactionThreshold)
+		}
+		if got.CompactionKeepTurns != 3 {
+			t.Errorf("CompactionKeepTurns = %d, want inherited 3", got.CompactionKeepTurns)
+		}
+	})
+	t.Run("non-zero project values override", func(t *testing.T) {
+		got := merge(base, &Config{ContextWindowTokens: 50000, CompactionThreshold: 0.7, CompactionKeepTurns: 1})
+		if got.ContextWindowTokens != 50000 {
+			t.Errorf("ContextWindowTokens = %d, want project override 50000", got.ContextWindowTokens)
+		}
+		if got.CompactionThreshold != 0.7 {
+			t.Errorf("CompactionThreshold = %v, want project override 0.7", got.CompactionThreshold)
+		}
+		if got.CompactionKeepTurns != 1 {
+			t.Errorf("CompactionKeepTurns = %d, want project override 1", got.CompactionKeepTurns)
+		}
+	})
+}
+
 func TestMergeSkillsDirs(t *testing.T) {
 	t.Run("non-empty project overrides user entirely", func(t *testing.T) {
 		base := &Config{SkillsDirs: []string{"user/a", "user/b"}}
@@ -704,6 +735,71 @@ func TestLoadProject(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "mycompat") {
 			t.Errorf("error %q does not name the offending key", err)
+		}
+	})
+}
+
+// TestLoadProjectWithInfo covers the startup-config-observability
+// contract (see AGENTS.md / docs/design/managed-processes.md): the one
+// piece of information a served/run process needs to log at boot is
+// which config file (if any) it actually loaded, plus how much it
+// declares — this is what tells an operator whose config file was
+// misnamed (and so silently loaded as empty) apart from one who never
+// meant to supply a config at all.
+func TestLoadProjectWithInfo(t *testing.T) {
+	t.Run("project file present: reports its path and merged counts", func(t *testing.T) {
+		userPath := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, userPath, `{"mcp_servers": {"fs": {"command": ["mcp-fs"]}}}`)
+		t.Setenv("HARNESS_CONFIG", userPath)
+		projDir := t.TempDir()
+		projPath := filepath.Join(projDir, ".harness.json")
+		writeFile(t, projPath, `{
+			"processes": {"dev": {"command": ["pnpm", "dev"]}, "db": {"command": ["postgres"]}},
+			"plugins": [{"name": "gh", "command": ["gh-plugin"]}]
+		}`)
+		_, info, err := LoadProjectWithInfo(projDir)
+		if err != nil {
+			t.Fatalf("LoadProjectWithInfo: %v", err)
+		}
+		if info.Path != projPath {
+			t.Errorf("Path = %q, want the project file %q", info.Path, projPath)
+		}
+		if info.Processes != 2 {
+			t.Errorf("Processes = %d, want 2", info.Processes)
+		}
+		if info.MCPServers != 1 {
+			t.Errorf("MCPServers = %d, want 1 (inherited from user config)", info.MCPServers)
+		}
+		if info.Plugins != 1 {
+			t.Errorf("Plugins = %d, want 1", info.Plugins)
+		}
+	})
+	t.Run("no project file, user file present: reports the user path", func(t *testing.T) {
+		userPath := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, userPath, `{"model": "anthropic/claude-fable-5"}`)
+		t.Setenv("HARNESS_CONFIG", userPath)
+		_, info, err := LoadProjectWithInfo(t.TempDir())
+		if err != nil {
+			t.Fatalf("LoadProjectWithInfo: %v", err)
+		}
+		if info.Path != userPath {
+			t.Errorf("Path = %q, want the user config path %q", info.Path, userPath)
+		}
+		if info.Processes != 0 || info.MCPServers != 0 || info.Plugins != 0 {
+			t.Errorf("counts = %+v, want all zero", info)
+		}
+	})
+	t.Run("neither file present: reports no config found", func(t *testing.T) {
+		t.Setenv("HARNESS_CONFIG", filepath.Join(t.TempDir(), "does-not-exist.json"))
+		_, info, err := LoadProjectWithInfo(t.TempDir())
+		if err != nil {
+			t.Fatalf("LoadProjectWithInfo: %v", err)
+		}
+		if info.Path != "" {
+			t.Errorf("Path = %q, want empty (no config file found)", info.Path)
+		}
+		if info.Processes != 0 || info.MCPServers != 0 || info.Plugins != 0 {
+			t.Errorf("counts = %+v, want all zero", info)
 		}
 	})
 }
@@ -974,6 +1070,206 @@ func TestMergeMCPServers(t *testing.T) {
 		merged := merge(base, &Config{})
 		if len(merged.MCPServers) != 1 {
 			t.Errorf("merged MCPServers = %+v, want inherited", merged.MCPServers)
+		}
+	})
+}
+
+func TestLoadProcesses(t *testing.T) {
+	t.Run("parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {
+			"dev": {"command": ["pnpm", "dev"], "dir": "apps/app", "env": ["K=V"], "ready_regex": "Ready in .*ms", "ready_timeout_s": 60}
+		}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if len(c.Processes) != 1 {
+			t.Fatalf("Processes = %+v, want 1 entry", c.Processes)
+		}
+		dev := c.Processes["dev"]
+		if len(dev.Command) != 2 || dev.Command[0] != "pnpm" || dev.Command[1] != "dev" {
+			t.Errorf("dev.Command = %+v", dev.Command)
+		}
+		if dev.Dir != "apps/app" {
+			t.Errorf("dev.Dir = %q", dev.Dir)
+		}
+		if len(dev.Env) != 1 || dev.Env[0] != "K=V" {
+			t.Errorf("dev.Env = %+v", dev.Env)
+		}
+		if dev.ReadyRegex != "Ready in .*ms" {
+			t.Errorf("dev.ReadyRegex = %q", dev.ReadyRegex)
+		}
+		if dev.ReadyTimeoutS != 60 {
+			t.Errorf("dev.ReadyTimeoutS = %d", dev.ReadyTimeoutS)
+		}
+	})
+	t.Run("unset leaves nil", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.Processes != nil {
+			t.Errorf("Processes = %v, want nil (unset)", c.Processes)
+		}
+	})
+	t.Run("empty name key fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"": {"command": ["x"]}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for empty process name")
+		}
+	})
+	t.Run("empty command fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": []}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for empty process command")
+		}
+		if !strings.Contains(err.Error(), "dev") {
+			t.Errorf("error %q does not name the offending key", err)
+		}
+	})
+	t.Run("missing command fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"dir": "apps/app"}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for missing process command")
+		}
+	})
+	t.Run("invalid ready_regex fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": ["pnpm", "dev"], "ready_regex": "("}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for invalid ready_regex")
+		}
+		if !strings.Contains(err.Error(), "dev") {
+			t.Errorf("error %q does not name the offending key", err)
+		}
+	})
+	t.Run("malformed entry fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": "not-an-array"}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for malformed process command")
+		}
+	})
+	t.Run("ports parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": ["pnpm", "dev"], "ports": [3000, 3001]}}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		dev := c.Processes["dev"]
+		if len(dev.Ports) != 2 || dev.Ports[0] != 3000 || dev.Ports[1] != 3001 {
+			t.Errorf("dev.Ports = %+v, want [3000 3001]", dev.Ports)
+		}
+	})
+	t.Run("port out of range fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": ["pnpm", "dev"], "ports": [0]}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for out-of-range port")
+		}
+		if !strings.Contains(err.Error(), "dev") {
+			t.Errorf("error %q does not name the offending key", err)
+		}
+	})
+	t.Run("ready_port parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": ["pnpm", "dev"], "ready_port": 3000}}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.Processes["dev"].ReadyPort != 3000 {
+			t.Errorf("dev.ReadyPort = %d, want 3000", c.Processes["dev"].ReadyPort)
+		}
+	})
+	t.Run("ready_http parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": ["pnpm", "dev"], "ready_http": "http://localhost:3000/healthz"}}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.Processes["dev"].ReadyHTTP != "http://localhost:3000/healthz" {
+			t.Errorf("dev.ReadyHTTP = %q", c.Processes["dev"].ReadyHTTP)
+		}
+	})
+	t.Run("invalid ready_http fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": ["pnpm", "dev"], "ready_http": "::not a url::"}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for invalid ready_http")
+		}
+		if !strings.Contains(err.Error(), "dev") {
+			t.Errorf("error %q does not name the offending key", err)
+		}
+	})
+	t.Run("ready_regex and ready_port together fails loudly with shared error text", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": ["pnpm", "dev"], "ready_regex": "Ready", "ready_port": 3000}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for ready_regex+ready_port both set")
+		}
+		if !strings.Contains(err.Error(), "at most one of ready_regex, ready_port, ready_http") {
+			t.Errorf("error %q, want it to name the mutual-exclusivity rule", err)
+		}
+	})
+}
+
+func TestMergeProcesses(t *testing.T) {
+	t.Run("keys merge, project entry replaces same-name user entry wholesale", func(t *testing.T) {
+		base := &Config{Processes: map[string]ProcessSpec{
+			"dev": {Command: []string{"user-dev"}},
+			"db":  {Command: []string{"postgres"}},
+		}}
+		over := &Config{Processes: map[string]ProcessSpec{
+			"dev": {Command: []string{"proj-dev", "--flag"}},
+		}}
+		merged := merge(base, over)
+		if len(merged.Processes) != 2 {
+			t.Fatalf("merged Processes = %+v, want 2 entries", merged.Processes)
+		}
+		if dev := merged.Processes["dev"]; len(dev.Command) != 2 || dev.Command[0] != "proj-dev" {
+			t.Errorf("merged dev = %+v, want project's entry", dev)
+		}
+		if db := merged.Processes["db"]; len(db.Command) != 1 || db.Command[0] != "postgres" {
+			t.Errorf("merged db = %+v, want inherited user entry", db)
+		}
+		// Mutating the merged map/slices must not alias the inputs.
+		merged.Processes["dev"].Command[0] = "mutated"
+		if base.Processes["dev"].Command[0] == "mutated" {
+			t.Error("merge aliased base's Processes slice")
+		}
+	})
+	t.Run("ports slice deep-copied", func(t *testing.T) {
+		base := &Config{Processes: map[string]ProcessSpec{
+			"dev": {Command: []string{"a"}, Ports: []int{3000}},
+		}}
+		merged := merge(base, &Config{})
+		merged.Processes["dev"].Ports[0] = 9999
+		if base.Processes["dev"].Ports[0] == 9999 {
+			t.Error("merge aliased base's Ports slice")
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{Processes: map[string]ProcessSpec{"dev": {Command: []string{"a"}}}}
+		merged := merge(base, &Config{})
+		if len(merged.Processes) != 1 {
+			t.Errorf("merged Processes = %+v, want inherited", merged.Processes)
 		}
 	})
 }
