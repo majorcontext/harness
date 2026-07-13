@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -76,6 +77,29 @@ type spawnRequest struct {
 	Name string `json:"name"`
 }
 
+// isCrossOrigin reports whether r is a browser cross-origin request: an
+// Origin header is present and names a host other than the one the request
+// was addressed to (r.Host). This is the CSRF guard for the state-changing
+// POST /spawn, which execs the deployment provision command. A browser
+// attaches Origin to every cross-origin POST, so an attacker page's
+// fetch("http://localhost:7777/spawn") is rejected (its Origin is the
+// attacker's, not the hub's). The hub page's own same-origin fetch sends
+// Origin == Host and passes; a request with no Origin at all (curl, scripts,
+// server-side callers — no ambient browser credentials, so not a CSRF
+// vector) also passes. An Origin we cannot parse, or the opaque "null"
+// origin a sandboxed context sends, is treated as cross-origin.
+func isCrossOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return true
+	}
+	return u.Host != r.Host
+}
+
 // handleSpawn streams runSpawn's events to the client as an SSE response.
 // The request context is what runSpawn's exec.CommandContext keys off of,
 // so a client disconnect kills the spawn process directly — see spawn.go.
@@ -84,6 +108,11 @@ func handleSpawn(opts Options) http.HandlerFunc {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", "POST")
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		// CSRF guard: reject a browser cross-origin POST before any exec.
+		if isCrossOrigin(r) {
+			http.Error(w, "cross-origin request rejected", http.StatusForbidden)
 			return
 		}
 		flusher, ok := w.(http.Flusher)
