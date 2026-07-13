@@ -65,6 +65,18 @@ type Event struct {
 	GoalRetryable      bool   `json:"goal_retryable,omitempty"`
 	GoalRetryableClass string `json:"goal_retryable_class,omitempty"`
 	GoalWaiting        bool   `json:"goal_waiting,omitempty"`
+	// GoalPaused/GoalPauseReason are the "paused" presentation (see
+	// GoalSummary.paused): GoalPaused is true when a goal is nominally
+	// active but nothing is currently driving it, and GoalPauseReason names
+	// why — "restart" (goal.paused: this server booted and found the goal
+	// armed with no loop attached, see pauseArmedGoalsAtBoot) or
+	// "provider-backoff" (goal.stalled: the retryable-backoff park machinery
+	// in engine/goal.go is waiting out provider weather, mirrored from
+	// GoalRetryable && GoalWaiting — no engine behavior changes, only this
+	// observability). Carried on goal.paused (always true) and goal.stalled
+	// (only while GoalRetryable && GoalWaiting) records/events.
+	GoalPaused      bool   `json:"goal_paused,omitempty"`
+	GoalPauseReason string `json:"goal_pause_reason,omitempty"`
 
 	// Outcome carries the turn.end record's result: "completed" or "error".
 	// Error (above) carries the sanitized failure detail when Outcome is
@@ -77,6 +89,18 @@ type Event struct {
 	// the path a 'worktree'-isolation session's tools ran in. Present only on
 	// those two event types.
 	WorktreePath string `json:"worktree_path,omitempty"`
+
+	// Compaction fields (see docs/design/context-compaction.md §4 "Live
+	// event surface"). Carried on the durable evtHistoryCompacted record:
+	// CompactFirstID/CompactLastID name the folded range's boundary
+	// messages, CompactTurnsFolded is the fold count, and
+	// CompactSummaryID names the summary message — already delivered via a
+	// preceding evtMessage record (see Publish/publishHistoryCompacted).
+	// evtCompactionFailed (live only, never journaled) carries only Error.
+	CompactFirstID     string `json:"compact_first_id,omitempty"`
+	CompactLastID      string `json:"compact_last_id,omitempty"`
+	CompactTurnsFolded int    `json:"compact_turns_folded,omitempty"`
+	CompactSummaryID   string `json:"compact_summary_id,omitempty"`
 }
 
 // Durable and live event types (a superset of engine.Event types plus the
@@ -95,6 +119,13 @@ const (
 	evtGoalStalled    = "goal.stalled"
 	evtGoalAchieved   = "goal.achieved"
 	evtGoalCleared    = "goal.cleared"
+	// evtGoalPaused is journaled once per boot for every session whose
+	// journal shows an active goal but which has no running loop attached
+	// in this process (see pauseArmedGoalsAtBoot) — the durable, honest
+	// record that this server found the goal armed-but-unattended, distinct
+	// from goal.stalled (which is a live worker-turn retry event, not a
+	// boot-time observation). Always carries GoalPauseReason "restart".
+	evtGoalPaused = "goal.paused"
 
 	// evtWorktreeKept is journaled whenever a 'worktree'-isolation session's
 	// worktree is left in place at teardown (session end or the serve-start
@@ -104,6 +135,18 @@ const (
 	// on the ordinary clean-teardown path, purely for observability.
 	evtWorktreeKept    = "workdir.worktree_kept"
 	evtWorktreeRemoved = "workdir.worktree_removed"
+
+	// evtHistoryCompacted is the durable record of a successful compaction
+	// (see engine/compact.go's Session.Compact and docs/design/context-
+	// compaction.md §4): journaled after the summary message itself has
+	// already flowed through an evtMessage record, via Publish's routing of
+	// engine.EventHistoryCompacted — the "reconciliation signal" telling a
+	// replaying tailer which prefix the just-seen summary message replaced.
+	evtHistoryCompacted = "history.compacted"
+	// evtCompactionFailed is compaction's fire-and-forget failure
+	// counterpart — live only, never journaled (a failed compaction never
+	// mutates durable state, so there is nothing to reconcile on replay).
+	evtCompactionFailed = "compaction.failed"
 )
 
 const journalName = "events.jsonl"
@@ -164,7 +207,29 @@ func (s *Server) Publish(ev engine.Event) {
 		})
 	case engine.EventGoalSet, engine.EventGoalEval, engine.EventGoalStalled, engine.EventGoalAchieved, engine.EventGoalCleared:
 		s.publishGoal(ev)
+	case engine.EventHistoryCompacted:
+		s.publishHistoryCompacted(ev)
+	case engine.EventCompactionFailed:
+		s.publishLive(Event{Type: evtCompactionFailed, SessionID: ev.SessionID, Error: ev.Text})
 	}
+}
+
+// publishHistoryCompacted journals the durable history.compacted record for
+// a successful compaction (see engine/compact.go's Session.Compact). It is
+// called synchronously from within Session.Compact's own emit sequence —
+// AFTER the summary message's EventMessage has already been published (see
+// Publish's engine.EventMessage case, which journals via syncMessages) — so
+// the journal order is always summary message, then history.compacted,
+// exactly as docs/design/context-compaction.md §4 requires.
+func (s *Server) publishHistoryCompacted(ev engine.Event) {
+	s.emitDurable(Event{
+		Type:               evtHistoryCompacted,
+		SessionID:          ev.SessionID,
+		CompactFirstID:     ev.CompactFirstID,
+		CompactLastID:      ev.CompactLastID,
+		CompactTurnsFolded: ev.CompactTurnsFolded,
+		CompactSummaryID:   ev.CompactSummaryID,
+	})
 }
 
 // publishGoal journals a durable goal.* record and folds the event into the
@@ -189,6 +254,16 @@ func (s *Server) publishGoal(ev engine.Event) {
 		GoalRetryableClass: ev.GoalRetryableClass,
 		GoalWaiting:        ev.GoalWaiting,
 	}
+	// goal.stalled carries the provider-backoff pause presentation
+	// (deliverable 2(b)): a retryable-class stall still within its backoff
+	// budget IS the park machinery waiting out provider weather — pure
+	// observability over engine/goal.go's existing GoalRetryable/GoalWaiting
+	// fields, no behavior change. See goalTracker.pauseView, which derives
+	// the same thing for Session JSON from the folded state below.
+	if ev.Type == engine.EventGoalStalled && ev.GoalRetryable && ev.GoalWaiting {
+		out.GoalPaused = true
+		out.GoalPauseReason = pauseReasonProviderBackoff
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	g := s.goalState[ev.SessionID]
@@ -207,6 +282,7 @@ func (s *Server) publishGoal(ev engine.Event) {
 		g.retryable = false
 		g.retryableClass = ""
 		g.waiting = false
+		g.pausedRestart = false
 	case engine.EventGoalEval:
 		g.turns = ev.GoalTurn
 		g.lastReason = ev.GoalReason
@@ -229,8 +305,10 @@ func (s *Server) publishGoal(ev engine.Event) {
 		g.retryable = false
 		g.retryableClass = ""
 		g.waiting = false
+		g.pausedRestart = false
 	case engine.EventGoalCleared:
 		g.active = false
+		g.pausedRestart = false
 	}
 	s.emitDurableLocked(out)
 }
@@ -618,6 +696,7 @@ func (s *Server) foldGoalRecordLocked(ev Event) {
 		g.retryable = false
 		g.retryableClass = ""
 		g.waiting = false
+		g.pausedRestart = false
 	case evtGoalEval:
 		g.turns = ev.GoalTurn
 		g.lastReason = ev.GoalReason
@@ -640,7 +719,35 @@ func (s *Server) foldGoalRecordLocked(ev Event) {
 		g.retryable = false
 		g.retryableClass = ""
 		g.waiting = false
+		g.pausedRestart = false
 	case evtGoalCleared:
 		g.active = false
+		g.pausedRestart = false
+	}
+}
+
+// pauseArmedGoalsAtBoot is deliverable 2(a)'s boot-time fix for the
+// operator trap: after loadJournal has replayed events.jsonl (via
+// reconcile), any session whose goalTracker reads active is, by
+// construction, a goal this freshly-started process has never attached a
+// loop to (a live loop's own claim/spawn happens only inside handleGoal,
+// well after New returns) — so it is marked paused=true/pause_reason=
+// "restart" and a durable goal.paused record is appended, so the journal's
+// history reads honestly instead of silently omitting why the goal never
+// progressed. Runs once, single-threaded, before the server is reachable by
+// any client (same discipline as reconcile/loadJournal) — no locking needed.
+func (s *Server) pauseArmedGoalsAtBoot() {
+	for id, g := range s.goalState {
+		if !g.active || g.pausedRestart {
+			continue
+		}
+		g.pausedRestart = true
+		s.emitDurableLocked(&Event{
+			Type:            evtGoalPaused,
+			SessionID:       id,
+			GoalCondition:   g.condition,
+			GoalPaused:      true,
+			GoalPauseReason: pauseReasonRestart,
+		})
 	}
 }

@@ -55,9 +55,10 @@ func newRequestHarness(t *testing.T, prov provider.Provider, mutate ...func(*eng
 		RunToken:          token,
 		Version:           "9.9.9",
 		HeartbeatInterval: 20 * time.Millisecond,
-		NewSession: func(m message.ModelRef, workDir string) (*engine.Session, error) {
+		NewSession: func(m message.ModelRef, workDir string, parentSession string) (*engine.Session, error) {
 			cfg := mkCfg(m)
 			cfg.WorkDir = workDir
+			cfg.ParentSession = parentSession
 			return wire(cfg, func(c engine.Config) (*engine.Session, error) { return engine.NewSession(c), nil })
 		},
 		LoadSession: func(id string) (*engine.Session, error) {

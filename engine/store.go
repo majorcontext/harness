@@ -35,6 +35,11 @@ const (
 	recGoalStalled  = "goal.stalled"
 	recGoalAchieved = "goal.achieved"
 	recGoalCleared  = "goal.cleared"
+	// recCompact is the compaction record (see compact.go and docs/design/
+	// context-compaction.md §2 "Journal shape"): one per successful
+	// Session.Compact call, carrying the full summary message inline (not
+	// a separate recMessage) and the summarization call's own Usage.
+	recCompact = "compact"
 )
 
 // record is one line of a session log file.
@@ -46,10 +51,16 @@ type record struct {
 	// omitted (and so absent from every record written before this field
 	// existed) when empty, which is also how LoadSession recognizes a legacy
 	// header with nothing to restore.
-	WorkDir string           `json:"workdir,omitempty"`
-	Message *message.Message `json:"message,omitempty"`
-	Model   message.ModelRef `json:"model,omitzero"`
-	Goal    *goalRecord      `json:"goal,omitempty"`
+	WorkDir string `json:"workdir,omitempty"`
+	// ParentSession carries Config.ParentSession on the session header
+	// record only, same rule as WorkDir: omitted when empty, and an empty
+	// value on load means "nothing to restore" (a legacy header, or a
+	// session created with no lineage) rather than "the caller's Config.
+	// ParentSession should be cleared".
+	ParentSession string           `json:"parent_session,omitempty"`
+	Message       *message.Message `json:"message,omitempty"`
+	Model         message.ModelRef `json:"model,omitzero"`
+	Goal          *goalRecord      `json:"goal,omitempty"`
 	// Usage carries the provider's per-turn Usage on the message record for
 	// the assistant message ending a model turn (nil for every other
 	// message: user, tool, or an interrupted partial assistant message —
@@ -58,7 +69,32 @@ type record struct {
 	// record's Usage back into cumulative usage and keeps the last one seen
 	// (see issue #62 layer 2) — the log carries no separate cumulative-
 	// usage record to replay instead.
+	//
+	// On a recCompact record, Usage instead carries the SUMMARIZATION
+	// call's own spend (see compact.go's Session.Compact and docs/design/
+	// context-compaction.md's "Usage accounting"): LoadSession's replay
+	// adds it into cumulative usage ONLY, never into lastUsage/
+	// haveLastUsage — unlike recMessage replay, which sets both. A
+	// reloaded session must not report the small summarization call as its
+	// "last request size", or the automatic trigger's re-fire check would
+	// misread the session as small right after a reload.
 	Usage *provider.Usage `json:"usage,omitempty"`
+	// Compact carries a recCompact record's payload (see compactRecord).
+	// nil on every other record type.
+	Compact *compactRecord `json:"compact,omitempty"`
+}
+
+// compactRecord carries the durable payload of a "compact" record (see
+// compact.go's Session.Compact and docs/design/context-compaction.md §2
+// "Journal shape"). Summary is the full message.Message to splice in,
+// carried inline — not a lightweight marker followed by a separate
+// recMessage — so a crash between two records can never leave a dangling
+// reference (see §3 "Crash discipline").
+type compactRecord struct {
+	FirstID     string          `json:"first_id"`
+	LastID      string          `json:"last_id"`
+	TurnsFolded int             `json:"turns_folded"`
+	Summary     message.Message `json:"summary"`
 }
 
 // goalRecord carries the durable payload of a goal.* record (see goal.go).
@@ -185,6 +221,35 @@ func (s *Session) persistGoalLocked(recType string, g goalRecord) {
 	}
 }
 
+// persistCompactLocked appends a compact record to the session log: one
+// json.Marshal, one Write call, exactly like every other record (see
+// docs/design/context-compaction.md §3 "Crash discipline" — a torn write
+// degrades to "compaction never happened", never a partially-spliced or
+// ambiguous history). Caller holds s.mu and has already spliced s.history.
+func (s *Session) persistCompactLocked(firstID, lastID string, turnsFolded int, summary message.Message, usage provider.Usage) {
+	if s.cfg.SessionDir == "" {
+		return
+	}
+	if err := s.ensureLog(); err != nil {
+		s.lastPersistErr = err
+		return
+	}
+	rec := record{
+		Type:      recCompact,
+		CreatedAt: summary.CreatedAt,
+		Usage:     &usage,
+		Compact: &compactRecord{
+			FirstID:     firstID,
+			LastID:      lastID,
+			TurnsFolded: turnsFolded,
+			Summary:     summary,
+		},
+	}
+	if err := s.writeRecord(rec); err != nil {
+		s.lastPersistErr = err
+	}
+}
+
 // ensureLog opens the session log, creating the directory and file — and
 // writing the header — on first use. Caller holds s.mu.
 func (s *Session) ensureLog() error {
@@ -218,7 +283,7 @@ func (s *Session) ensureLog() error {
 		// LoadSession already tolerates.
 		var buf bytes.Buffer
 		for _, rec := range []record{
-			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir},
+			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir, ParentSession: s.cfg.ParentSession},
 			{Type: recModel, Model: s.model},
 		} {
 			b, err := json.Marshal(rec)
@@ -294,6 +359,13 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			if rec.WorkDir != "" {
 				s.cfg.WorkDir = rec.WorkDir
 			}
+			// Same restore rule as WorkDir above: the header is the durable
+			// truth for a resumed session, and an empty value here means
+			// nothing to restore (legacy header, or no lineage recorded),
+			// never "clear the loading Config's ParentSession".
+			if rec.ParentSession != "" {
+				s.cfg.ParentSession = rec.ParentSession
+			}
 		case recMessage:
 			if rec.Message == nil {
 				if isLast {
@@ -332,6 +404,37 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// reset). A goal.stalled record never changes goalActive by
 			// itself — either a later goal.stalled retries, or a later
 			// goal.cleared/goal.eval settles it, both handled above.
+		case recCompact:
+			// See docs/design/context-compaction.md §2 "LoadSession
+			// replay": find FirstID/LastID within s.history accumulated so
+			// far (guaranteed present, in order, since a compact record can
+			// only be written chronologically after those messages were
+			// themselves durably appended) and splice — the identical
+			// function the live path uses (spliceCompact, compact.go), so
+			// the two can never drift apart. Not found is corruption, an
+			// explicit error, never a silent best-effort guess.
+			if rec.Compact == nil {
+				return fmt.Errorf("compact record without payload at line %d", line)
+			}
+			spliced, err := spliceCompact(s.history, rec.Compact.FirstID, rec.Compact.LastID, rec.Compact.Summary)
+			if err != nil {
+				return fmt.Errorf("%w at line %d", err, line)
+			}
+			s.history = spliced
+			s.compactCount++
+			s.lastCompactedAt = rec.CreatedAt
+			// Cumulative usage ONLY (see record.Usage's doc comment above
+			// and the "Usage accounting" section of the design doc):
+			// lastUsage/haveLastUsage must never be touched by a compact
+			// record's usage, or a reload would report the small
+			// summarization call as the session's "last request size" and
+			// defeat the automatic trigger's re-fire check.
+			if rec.Usage != nil {
+				s.usage.InputTokens += rec.Usage.InputTokens
+				s.usage.OutputTokens += rec.Usage.OutputTokens
+				s.usage.CacheReadTokens += rec.Usage.CacheReadTokens
+				s.usage.CacheWriteTokens += rec.Usage.CacheWriteTokens
+			}
 		}
 		return nil
 	})

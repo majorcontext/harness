@@ -16,6 +16,7 @@ import (
 
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/plugin"
 )
 
 // sessionJSON is the openapi Session shape.
@@ -63,6 +64,22 @@ type sessionJSON struct {
 	// a resident one gets it from memory — no separate reconcile step
 	// needed, unlike Goal/LastTurn above, which really are process-local).
 	LastActivityAt time.Time `json:"last_activity_at"`
+	// ParentSession is the session's lineage pointer (see
+	// engine.Config.ParentSession's doc comment): an opaque provenance
+	// pointer to the session this one continues from, set at creation via
+	// POST /session's parent_session field, durable across resume/restart.
+	// Absent (omitempty) when the session has no recorded parent — the
+	// common case.
+	ParentSession string `json:"parent_session,omitempty"`
+	// CompactionCount/LastCompactedAt surface whether and when this session
+	// has been compacted (docs/design/context-compaction.md), auto-
+	// triggered or via POST /session/{id}/compact — so a UI can show that
+	// compaction happened. CompactionCount is 0 (omitted) until the first
+	// compaction; LastCompactedAt is the zero Time (omitted) likewise. Both
+	// survive a restart (engine.Session.CompactionCount/LastCompactedAt
+	// replay the compact journal record — see engine/store.go).
+	CompactionCount int       `json:"compaction_count,omitempty"`
+	LastCompactedAt time.Time `json:"last_compacted_at,omitzero"`
 }
 
 // usageJSON is the Session/StatusEntry usage sub-object (issue #62 layer 2):
@@ -124,8 +141,20 @@ type lastTurnJSON struct {
 // whenever a goal is active, regardless of the momentary running/busy flag
 // (see sessionJSON.State's doc comment for why momentary busy/idle is not
 // enough); otherwise busy or idle mirroring the plain status.
-func compositeState(running, goalActive bool) string {
+//
+// restartPaused (see goalTracker.pauseView) OVERRIDES all of that to idle:
+// a goal restored from the journal at boot with no loop attached is not
+// "goal-running" in any sense an operator or composer can act on — it will
+// never progress on its own, and "busy"/"goal-running" forever is exactly
+// the operator trap this field exists to close (see docs/design/
+// fleet-model.md's ADOPT lifecycle). A provider-backoff pause deliberately
+// does NOT take this path — its loop is genuinely alive and running, just
+// waiting out provider weather, so it keeps reading goal-running (see
+// TestGoalStalledProviderBackoffSurfacesPaused).
+func compositeState(running, goalActive, restartPaused bool) string {
 	switch {
+	case restartPaused:
+		return "idle"
 	case goalActive:
 		return "goal-running"
 	case running:
@@ -133,6 +162,13 @@ func compositeState(running, goalActive bool) string {
 	default:
 		return "idle"
 	}
+}
+
+// isRestartPaused reports whether goal represents a boot-time restart pause
+// (see goalTracker.pauseView) — the one pause reason that forces
+// compositeState to idle. nil-safe.
+func isRestartPaused(goal *goalJSON) bool {
+	return goal != nil && goal.Paused && goal.PauseReason == pauseReasonRestart
 }
 
 // goalJSON is the Session.goal sub-object: present only when a goal has been
@@ -155,6 +191,39 @@ type goalJSON struct {
 	Retryable      bool   `json:"retryable,omitempty"`
 	RetryableClass string `json:"retryable_class,omitempty"`
 	Waiting        bool   `json:"waiting,omitempty"`
+	// Paused/PauseReason present the "goal armed but nothing is driving it"
+	// state (see goalTracker.pauseView): true with pause_reason "restart"
+	// when this process booted and found the goal active with no loop ever
+	// attached (see pauseArmedGoalsAtBoot); true with "provider-backoff"
+	// while the retryable-backoff park machinery (engine/goal.go) waits out
+	// provider weather. Both clear on re-arm (POST /session/{id}/goal) or,
+	// for provider-backoff, the moment the loop's own retry succeeds.
+	Paused      bool   `json:"paused,omitempty"`
+	PauseReason string `json:"pause_reason,omitempty"`
+}
+
+// goalJSONFrom builds the goalJSON wire shape from a per-session goal
+// tracker, deriving the paused presentation via pauseView — the single
+// construction path shared by buildSession and waitSnapshot so the two can
+// never drift on this. Returns nil for a nil tracker (no goal ever set).
+func goalJSONFrom(g *goalTracker) *goalJSON {
+	if g == nil {
+		return nil
+	}
+	paused, reason := g.pauseView()
+	return &goalJSON{
+		Condition:      g.condition,
+		Active:         g.active,
+		Achieved:       g.achieved,
+		Turns:          g.turns,
+		LastReason:     g.lastReason,
+		Attempt:        g.attempt,
+		Retryable:      g.retryable,
+		RetryableClass: g.retryableClass,
+		Waiting:        g.waiting,
+		Paused:         paused,
+		PauseReason:    reason,
+	}
 }
 
 // sessionIDOrNotFound extracts {id} from the request path and validates it
@@ -213,6 +282,32 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, healthJSON{Version: s.opts.Version, VCSRevision: rev, VCSTime: t})
 }
 
+// maxParentSessionLen bounds POST /session's optional parent_session field:
+// an opaque provenance pointer, not a session ID this server necessarily
+// knows about (lineage may cross boxes — see engine.Config.ParentSession),
+// so the only sane validation is a length cap against an accidental
+// pasted-blob value, not a format check.
+const maxParentSessionLen = 128
+
+// validateParentSession validates POST /session's optional parent_session
+// field: nil (the key was omitted) is valid and returns "", no error. A
+// present value must be non-empty and at most maxParentSessionLen bytes;
+// either violation is a 400. It is deliberately NOT required to name a
+// session that exists on this server, or anywhere — see
+// engine.Config.ParentSession's doc comment.
+func validateParentSession(v *string) (string, error) {
+	if v == nil {
+		return "", nil
+	}
+	if *v == "" {
+		return "", errors.New("parent_session: must be non-empty when present")
+	}
+	if len(*v) > maxParentSessionLen {
+		return "", fmt.Errorf("parent_session: exceeds maximum length of %d bytes", maxParentSessionLen)
+	}
+	return *v, nil
+}
+
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Model        message.ModelRef `json:"model"`
@@ -221,8 +316,17 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		// WorkdirIsolation is "shared" (default, omitted/empty) or
 		// "worktree" — see createWorktreeForSession and workdirHolderLocked.
 		WorkdirIsolation string `json:"workdir_isolation"`
+		// ParentSession is an opaque provenance pointer to the session this
+		// one continues from (see engine.Config.ParentSession's doc
+		// comment). Optional; validated by validateParentSession below.
+		ParentSession *string `json:"parent_session"`
 	}
 	if err := decodeBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	parentSession, err := validateParentSession(body.ParentSession)
+	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -254,7 +358,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		sessionWorkDir = wt.path
 	}
 
-	sess, err := s.opts.NewSession(body.Model, sessionWorkDir)
+	sess, err := s.opts.NewSession(body.Model, sessionWorkDir, parentSession)
 	if err != nil {
 		if wt != nil {
 			s.discardWorktree(wt)
@@ -590,8 +694,8 @@ func (s *Server) lastTurnFor(id string) *lastTurnJSON {
 func (s *Server) compositeStateFor(id string, running bool) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	g := s.goalState[id]
-	return compositeState(running, g != nil && g.active)
+	goal := goalJSONFrom(s.goalState[id])
+	return compositeState(running, goal != nil && goal.Active, isRestartPaused(goal))
 }
 
 func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
@@ -728,10 +832,53 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	// Register the goal synchronously BEFORE the loop goroutine spawns and
-	// before the 202 returns: by the time the caller can DELETE, the goal is
-	// active and clearable — the accept-vs-clear race is structurally gone.
-	if err := st.sess.RegisterGoal(body.Condition); err != nil {
+	// Deliverable 2(c): re-arming a paused/restart goal. claimForPrompt
+	// above only 409s on st.running — it knows nothing about goal state —
+	// so reaching here with the engine already reporting an active goal
+	// means exactly one thing: this session's goal is active with NO loop
+	// attached in this process. A genuinely running loop would already have
+	// 409'd via st.running above (handleGoal/runGoal hold the claim for the
+	// whole PursueGoal call), so this branch is unreachable for a live
+	// provider-backoff park — only the boot-time restart pause (see
+	// pauseArmedGoalsAtBoot) or an equivalent crash-before-spawn window
+	// reaches it. RegisterGoal would error "already active" here, so this
+	// resumes the EXISTING condition instead of registering a new one — a
+	// mismatched condition is rejected rather than silently resuming the
+	// wrong goal or (via PursueGoal's own registered-path check) spuriously
+	// reporting "goal cleared".
+	condition := body.Condition
+	if existing, active := st.sess.ActiveGoal(); active {
+		if existing != body.Condition {
+			s.mu.Lock()
+			st.running = false
+			st.cancel = nil
+			st.lastUsed = time.Now()
+			s.mu.Unlock()
+			s.wg.Done()
+			writeErr(w, http.StatusConflict, fmt.Sprintf("a different goal is already active: %q", existing))
+			return
+		}
+		condition = existing
+		s.mu.Lock()
+		if g := s.goalState[id]; g != nil {
+			// Reset ALL pause-relevant fold state, mirroring the
+			// evtGoalSet fold: if the journal tail before a restart was
+			// goal.stalled(retryable, waiting), clearing only
+			// pausedRestart leaves pauseView's provider-backoff case
+			// firing on a freshly re-armed, genuinely-running goal until
+			// its first goal.eval resets waiting.
+			g.pausedRestart = false
+			g.retryable = false
+			g.retryableClass = ""
+			g.waiting = false
+		}
+		s.mu.Unlock()
+	} else if err := st.sess.RegisterGoal(body.Condition); err != nil {
+		// Register the goal synchronously BEFORE the loop goroutine spawns
+		// and before the 202 returns: by the time the caller can DELETE,
+		// the goal is active and clearable — the accept-vs-clear race is
+		// structurally gone.
+		//
 		// Undo the claim taken above: mirror the tail of runPrompt/runGoal.
 		s.mu.Lock()
 		st.running = false
@@ -744,7 +891,7 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 	}
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 
-	go s.runGoal(ctx, id, st, body.Condition, body.MaxTurns)
+	go s.runGoal(ctx, id, st, condition, body.MaxTurns)
 	writeJSON(w, http.StatusAccepted, map[string]int64{"seq": fromSeq})
 }
 
@@ -930,6 +1077,104 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 		cancel()
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// compactResponseJSON is the openapi POST /session/{id}/compact response
+// shape (docs/design/context-compaction.md §1): turns_folded is 0 (not an
+// error) when there was nothing worth folding — see engine.CompactResult.
+type compactResponseJSON struct {
+	TurnsFolded int              `json:"turns_folded"`
+	FirstID     string           `json:"first_id,omitempty"`
+	LastID      string           `json:"last_id,omitempty"`
+	Summary     *message.Message `json:"summary,omitempty"`
+}
+
+// handleCompact is POST /session/{id}/compact (docs/design/context-
+// compaction.md §1 "Explicit: POST /session/{id}/compact"): always
+// available regardless of the automatic threshold. It claims the session's
+// single run slot exactly like prompt_async/goal (409 if already running,
+// 503 if draining) — compaction never runs concurrently with a turn — then
+// runs synchronously (the response carries the full result, so there is no
+// async job to poll). Optional JSON body {"keep_turns": N, "model": "..."}
+// overrides Config.CompactionKeepTurns/CompactionModel for this call only;
+// keep_turns has a hard floor of 1 — 0 or negative is a 400, never silently
+// clamped, so a caller's mistake is visible rather than silently ignored.
+func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.sessionIDOrNotFound(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		KeepTurns *int   `json:"keep_turns"`
+		Model     string `json:"model"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if body.KeepTurns != nil && *body.KeepTurns <= 0 {
+		writeErr(w, http.StatusBadRequest, "keep_turns must be >= 1")
+		return
+	}
+	var model message.ModelRef
+	if body.Model != "" {
+		m, err := message.ParseModelRef(body.Model)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		model = m
+	}
+
+	st, ctx, _, code, holder := s.claimForPrompt(id)
+	if code != 0 {
+		switch {
+		case code == http.StatusConflict && holder != "":
+			writeErr(w, code, fmt.Sprintf("workdir busy: held by session %s", holder))
+		case code == http.StatusConflict:
+			writeErr(w, code, "session is busy with another prompt")
+		case code == http.StatusServiceUnavailable:
+			writeErr(w, code, "server shutting down")
+		default:
+			writeErr(w, http.StatusNotFound, "no such session")
+		}
+		return
+	}
+	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
+
+	opts := engine.CompactOptions{Model: model}
+	if body.KeepTurns != nil {
+		opts.KeepTurns = *body.KeepTurns
+	}
+	res, err := st.sess.Compact(ctx, opts)
+	// Session.Compact's own emits (EventMessage for the summary, then
+	// EventHistoryCompacted — see engine/compact.go) already flowed through
+	// Publish synchronously by the time Compact returns, journaling the
+	// summary message and the durable history.compacted record in that
+	// order (see publishHistoryCompacted). syncMessages here is a harmless,
+	// idempotent extra pass — the same belt-and-suspenders every other
+	// handler's tail already relies on.
+	s.syncMessages(id)
+
+	s.mu.Lock()
+	st.running = false
+	st.cancel = nil
+	st.lastUsed = time.Now()
+	s.evictResidentLocked()
+	s.mu.Unlock()
+	s.wg.Done()
+	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
+
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, plugin.SanitizeSessionError(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, compactResponseJSON{
+		TurnsFolded: res.TurnsFolded,
+		FirstID:     res.FirstID,
+		LastID:      res.LastID,
+		Summary:     res.Summary,
+	})
 }
 
 // sessionOnDisk reports whether a session log for id exists in the session
@@ -1130,25 +1375,25 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 	id := sess.ID
 	s.mu.Lock()
 	seq := s.sessionSeqLocked(id)
-	var goal *goalJSON
-	if g := s.goalState[id]; g != nil {
-		goal = &goalJSON{Condition: g.condition, Active: g.active, Achieved: g.achieved, Turns: g.turns, LastReason: g.lastReason, Attempt: g.attempt, Retryable: g.retryable, RetryableClass: g.retryableClass, Waiting: g.waiting}
-	}
+	goal := goalJSONFrom(s.goalState[id])
 	lastTurn := s.lastTurnJSONLocked(id)
 	s.mu.Unlock()
 	return sessionJSON{
-		ID:             id,
-		CreatedAt:      sess.CreatedAt(),
-		Model:          sess.Model(),
-		Status:         status,
-		State:          compositeState(status == "busy", goal != nil && goal.Active),
-		Messages:       len(sess.History()),
-		Seq:            seq,
-		Goal:           goal,
-		WorkDir:        sess.WorkDir(),
-		LastTurn:       lastTurn,
-		Usage:          usageJSONForSession(sess),
-		LastActivityAt: sess.LastActivityAt(),
+		ID:              id,
+		CreatedAt:       sess.CreatedAt(),
+		Model:           sess.Model(),
+		Status:          status,
+		State:           compositeState(status == "busy", goal != nil && goal.Active, isRestartPaused(goal)),
+		Messages:        len(sess.History()),
+		Seq:             seq,
+		Goal:            goal,
+		WorkDir:         sess.WorkDir(),
+		LastTurn:        lastTurn,
+		Usage:           usageJSONForSession(sess),
+		LastActivityAt:  sess.LastActivityAt(),
+		ParentSession:   sess.ParentSession(),
+		CompactionCount: sess.CompactionCount(),
+		LastCompactedAt: sess.LastCompactedAt(),
 	}
 }
 

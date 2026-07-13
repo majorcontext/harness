@@ -128,12 +128,13 @@ func Start() (*Stub, error) {
 		RunToken:   RunToken,
 		Version:    "hub-e2e",
 		CORSOrigin: "*",
-		NewSession: func(m message.ModelRef, workDir string) (*engine.Session, error) {
+		NewSession: func(m message.ModelRef, workDir string, parentSession string) (*engine.Session, error) {
 			if m.Provider == "" {
 				m = model
 			}
 			cfg := mkCfg(m)
 			cfg.WorkDir = workDir
+			cfg.ParentSession = parentSession
 			return engine.NewSession(cfg), nil
 		},
 		LoadSession: func(id string) (*engine.Session, error) {

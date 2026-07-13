@@ -154,12 +154,20 @@ func sse(name, data string) string {
 
 // completeTurn is a full end_turn SSE stream with a single text block.
 func completeTurn(msgID, text string) string {
+	return completeTurnWithUsage(msgID, text, 5, 3)
+}
+
+// completeTurnWithUsage is completeTurn with explicit input/output token
+// counts, so a test can script a precise Usage/LastUsage trajectory (e.g.
+// driving a session's LastUsage past a compaction threshold — see
+// compaction_test.go).
+func completeTurnWithUsage(msgID, text string, inputTokens, outputTokens int) string {
 	return strings.Join([]string{
-		sse("message_start", fmt.Sprintf(`{"type":"message_start","message":{"id":%q,"usage":{"input_tokens":5}}}`, msgID)),
+		sse("message_start", fmt.Sprintf(`{"type":"message_start","message":{"id":%q,"usage":{"input_tokens":%d}}}`, msgID, inputTokens)),
 		sse("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`),
 		sse("content_block_delta", fmt.Sprintf(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":%q}}`, text)),
 		sse("content_block_stop", `{"type":"content_block_stop","index":0}`),
-		sse("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`),
+		sse("message_delta", fmt.Sprintf(`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":%d}}`, outputTokens)),
 		sse("message_stop", `{"type":"message_stop"}`),
 	}, "")
 }
@@ -423,6 +431,12 @@ type apiEvent struct {
 	GoalReason    string `json:"goal_reason"`
 	GoalMet       bool   `json:"goal_met"`
 	GoalTurn      int    `json:"goal_turn"`
+	// Compaction fields (docs/design/context-compaction.md §4); see
+	// compaction_test.go.
+	CompactFirstID     string `json:"compact_first_id"`
+	CompactLastID      string `json:"compact_last_id"`
+	CompactTurnsFolded int    `json:"compact_turns_folded"`
+	CompactSummaryID   string `json:"compact_summary_id"`
 }
 
 // eventReplay connects to GET /event?from=0, reads the durable replay batch,
@@ -1136,4 +1150,41 @@ func textOf(m apiMessage) string {
 		}
 	}
 	return b.String()
+}
+
+// TestServeLogsConfigSummary is the e2e proof of docs/design/managed-
+// processes.md §8: `harness serve` emits exactly one INFO line at boot
+// naming which config file it loaded (and how much it declares) or that
+// none was found — the fix for a misnamed config file silently loading
+// as empty, indistinguishable from no-config-intended.
+func TestServeLogsConfigSummary(t *testing.T) {
+	skipShort(t)
+
+	t.Run("loaded", func(t *testing.T) {
+		fake := newFakeAnthropic(0)
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		t.Cleanup(fake.close)
+		cfgPath := writeConfig(t, srv.URL)
+
+		p := startServe(t, t.TempDir(), cfgPath)
+		stderr := p.stderr.String()
+		if !strings.Contains(stderr, "config: "+cfgPath) {
+			t.Fatalf("stderr = %s, want a config summary line naming %s", stderr, cfgPath)
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		fake := newFakeAnthropic(0)
+		srv := httptest.NewServer(fake)
+		t.Cleanup(srv.Close)
+		t.Cleanup(fake.close)
+		missing := filepath.Join(t.TempDir(), "does-not-exist.json")
+
+		p := startServe(t, t.TempDir(), missing)
+		stderr := p.stderr.String()
+		if !strings.Contains(stderr, "no config file found") {
+			t.Fatalf(`stderr = %s, want "no config file found"`, stderr)
+		}
+	})
 }

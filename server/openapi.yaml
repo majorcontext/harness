@@ -149,6 +149,33 @@ components:
             evaluator hasn't answered yet), and only ever answers a relative
             question ("did anything happen"), never an absolute one ("how
             long has this been quiet"). Always present, resident or not.
+        parent_session:
+          type: string
+          description: >
+            An opaque provenance pointer to the session this one continues
+            from — a re-dispatch after a failed goal, a follow-up fix picked
+            up on a fresh box. Set once at creation (POST /session's
+            parent_session field) and durable across resume/restart, same
+            as `workdir`. It is NOT required to name a session that exists
+            on this server, or anywhere — lineage may cross boxes (see
+            docs/design/fleet-model.md) — so the server never dereferences
+            or validates it beyond a length cap. Absent (omitempty) when the
+            session has no recorded parent, the common case.
+          example: ses_66aa9a7c6f323a7a
+        compaction_count:
+          type: integer
+          description: >
+            How many times this session has been compacted (auto-triggered
+            or via POST /session/{id}/compact) — see docs/design/context-
+            compaction.md. Absent (0) until the first compaction. Survives a
+            restart: the engine replays the compact journal record on load.
+        last_compacted_at:
+          type: string
+          format: date-time
+          description: >
+            When the most recent compaction landed. Absent until the first
+            compaction. Together with compaction_count this is what a UI
+            uses to show that compaction happened.
 
     Usage:
       type: object
@@ -236,6 +263,15 @@ components:
         hasn't answered yet). Otherwise `busy` or `idle` mirrors `status`
         directly. Poll it, or long-poll it via GET /session/{id}/wait.
 
+        Exception: when GoalSummary.pause_reason is "restart" (see
+        GoalSummary.paused), this reads `idle` even though goal.active is
+        still true — a goal restored from the journal at boot with no loop
+        attached is not progressing, and reporting it "goal-running" forever
+        would be indistinguishable from a live goal (see
+        docs/design/fleet-model.md's ADOPT lifecycle). A "provider-backoff"
+        pause does NOT take this exception: that loop is genuinely running,
+        just waiting out provider weather, so it still reads `goal-running`.
+
     GoalSummary:
       type: object
       description: Per-session goal state surfaced on Session.goal.
@@ -294,6 +330,23 @@ components:
             exhausted — the loop is about to park the turn (retry the same
             directive on the next ordinary turn) rather than clear the goal.
             Meaningless (false) when retryable is false.
+        paused:
+          type: boolean
+          description: >
+            True when the goal is active but nothing is currently driving
+            it: either this server booted and found the goal armed with no
+            loop ever attached in this process (pause_reason "restart"), or
+            the retryable-backoff park machinery is waiting out provider
+            weather (pause_reason "provider-backoff" — mirrors retryable &&
+            waiting above; no behavior change, only this observability).
+            Both clear on re-arm (POST /session/{id}/goal); a
+            "provider-backoff" pause also clears on its own the moment the
+            loop's retry succeeds. See docs/design/fleet-model.md's ADOPT
+            lifecycle for the restart case's operator story.
+        pause_reason:
+          type: string
+          enum: [restart, provider-backoff]
+          description: Present only when paused is true.
 
     SessionStatus:
       type: string
@@ -531,8 +584,11 @@ components:
             - goal.stalled
             - goal.achieved
             - goal.cleared
+            - goal.paused
             - workdir.worktree_kept
             - workdir.worktree_removed
+            - history.compacted
+            - compaction.failed
             - text.delta
             - reasoning.delta
             - tool.start
@@ -589,6 +645,18 @@ components:
             worker turn that failed past its DETERMINISTIC retry budget,
             carrying the failure as goal_reason — a retryable-budget
             exhaustion never reaches this record, see above).
+            Both goal.stalled (while goal_retryable && goal_waiting) and the
+            boot-only goal.paused record carry goal_paused/
+            goal_pause_reason — the wire form of GoalSummary.paused/
+            pause_reason (see that schema and docs/design/fleet-model.md).
+            goal.paused is journaled once per server boot for every session
+            whose journal shows an active goal but which has no running
+            loop attached in this (freshly started) process — always
+            goal_pause_reason "restart" — so the history reads honestly
+            about why the goal never progressed, instead of a silent gap.
+            It carries goal_condition for convenience. It is NOT emitted for
+            the "provider-backoff" pause, which is a live goal.stalled
+            attribute, not a boot-time observation.
             workdir.worktree_kept and workdir.worktree_removed are durable
             records of a workdir_isolation="worktree" session's dedicated git
             worktree being torn down (session end or the serve-start sweep,
@@ -597,6 +665,17 @@ components:
             unpushed commits and was left in place — the durable signal an
             orchestrator relies on to find and finish that work rather than
             lose it; worktree_removed means it had neither and was deleted.
+            history.compacted is the durable record of a successful
+            compaction (docs/design/context-compaction.md), auto-triggered
+            or via POST /session/{id}/compact: it carries
+            compact_first_id/compact_last_id (the folded range's boundary
+            message ids), compact_turns_folded, and compact_summary_id — the
+            summary message itself always arrives first, as an ordinary
+            `message` event, so this is the reconciliation signal telling a
+            replaying tailer which prefix that summary replaced.
+            compaction.failed is compaction's fire-and-forget failure
+            counterpart (never journaled — a failed compaction never mutates
+            durable state), carrying the failure detail in `error`.
         session_id: { type: string }
         seq:
           type: integer
@@ -692,11 +771,76 @@ components:
             True while a goal.stalled record is still within the retryable
             backoff budget; false on the final such record, which reports
             the budget exhausted (see GoalSummary.waiting).
+        goal_paused:
+          type: boolean
+          description: >
+            The "paused" presentation (see GoalSummary.paused): true on a
+            goal.paused record (always), and on a goal.stalled record while
+            goal_retryable && goal_waiting.
+        goal_pause_reason:
+          type: string
+          enum: [restart, provider-backoff]
+          description: Present only when goal_paused is true.
         worktree_path:
           type: string
           description: >
             The worktree directory (workdir.worktree_kept /
             workdir.worktree_removed).
+        compact_first_id:
+          type: string
+          description: The folded range's first message id (history.compacted).
+        compact_last_id:
+          type: string
+          description: The folded range's last message id (history.compacted).
+        compact_turns_folded:
+          type: integer
+          description: Number of whole turns folded (history.compacted).
+        compact_summary_id:
+          type: string
+          description: >
+            The id of the summary message that replaced the folded range —
+            already delivered via a preceding `message` event
+            (history.compacted).
+
+    CompactRequest:
+      type: object
+      description: >
+        Optional body for POST /session/{id}/compact. An absent/empty body
+        uses Config.CompactionKeepTurns/CompactionModel.
+      properties:
+        keep_turns:
+          type: integer
+          description: >
+            Overrides Config.CompactionKeepTurns for this call only. Hard
+            floor of 1 — the most recent turn is never foldable. 0 or
+            negative is a 400, never silently clamped.
+        model:
+          $ref: "#/components/schemas/ModelRef"
+          description: >
+            Overrides the model used for the summarization call. Defaults
+            to the session's own current model.
+
+    CompactResponse:
+      type: object
+      required: [turns_folded]
+      properties:
+        turns_folded:
+          type: integer
+          description: >
+            Number of whole turns folded. 0 (not an error) when there was
+            nothing worth folding — fewer than the effective keep_turns'
+            worth of complete turns exist yet.
+        first_id:
+          type: string
+          description: The folded range's first message id. Absent when turns_folded is 0.
+        last_id:
+          type: string
+          description: The folded range's last message id. Absent when turns_folded is 0.
+        summary:
+          $ref: "#/components/schemas/Message"
+          description: >
+            The synthesized summary message that replaced the folded range.
+            Absent when turns_folded is 0.
 
     GoalRequest:
       type: object
@@ -743,9 +887,92 @@ components:
       properties:
         error: { type: string }
 
+    ProcessStatus:
+      type: object
+      description: >
+        A managed process's point-in-time status (see
+        docs/design/managed-processes.md).
+      required: [name, ready, log]
+      properties:
+        name: { type: string }
+        state:
+          type: string
+          enum: [starting, ready, running, exited, stopped]
+          description: >
+            Empty/omitted for a declared process that has never been
+            started.
+        pid: { type: integer }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+        exit_code:
+          type: integer
+          description: Present once the process has been reaped (exited or stopped).
+        ready: { type: boolean }
+        log:
+          type: string
+          description: Absolute log file path — always populated, even pre-start.
+        note:
+          type: string
+          description: e.g. a ready-gate timeout explanation.
+        ports:
+          type: array
+          items: { type: integer }
+          description: >
+            Declared TCP ports (see ProcessInfo.ports) — pure declarative
+            metadata echoed here for convenience, never a live network
+            probe or enforcement.
+
+    ProcessInfo:
+      type: object
+      description: A declared process's definition (env VALUES never included) plus its live status.
+      required: [name, origin, command, status]
+      properties:
+        name: { type: string }
+        origin:
+          type: string
+          enum: [config, runtime]
+        command:
+          type: array
+          items: { type: string }
+        dir: { type: string }
+        env_names:
+          type: array
+          items: { type: string }
+          description: The "K" half of each configured "K=V" entry — never values.
+        ports:
+          type: array
+          items: { type: integer }
+          description: >
+            TCP ports this process is expected to listen on (1-65535).
+            Pure declarative metadata: harness never allocates, binds to,
+            or enforces these — see docs/design/managed-processes.md.
+        ready_regex: { type: string }
+        ready_port:
+          type: integer
+          description: >
+            When set, start's ready gate blocks until a plain TCP dial to
+            127.0.0.1:<ready_port> succeeds, instead of matching a log
+            line. At most one of ready_regex/ready_port/ready_http is
+            ever set.
+        ready_http:
+          type: string
+          description: >
+            When set, start's ready gate blocks until a GET to this URL
+            returns any non-5xx status. At most one of
+            ready_regex/ready_port/ready_http is ever set.
+        ready_timeout: { type: string }
+        status:
+          $ref: "#/components/schemas/ProcessStatus"
+
   parameters:
     sessionID:
       name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    processName:
+      name: name
       in: path
       required: true
       schema:
@@ -759,6 +986,11 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     NotFound:
       description: No session log with that ID.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ProcessNotFound:
+      description: No declared process with that name.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -824,6 +1056,15 @@ paths:
         worktree (however clean it looks) is left completely untouched by
         the sweep so a resumed session's next prompt keeps running in the
         exact directory it left off in.
+
+        parent_session is optional: when present it must be a non-empty
+        string of at most 128 bytes (400 otherwise). It names no session on
+        this server in particular — the server never dereferences or
+        validates it beyond that length cap. It is an opaque lineage
+        pointer a client sets when re-dispatching after a failed goal or
+        picking up a follow-up fix, so a fleet UI can group a box's history
+        by task (see docs/design/fleet-model.md). Durable across
+        resume/restart, like workdir.
       requestBody:
         required: false
         content:
@@ -849,6 +1090,11 @@ paths:
                   description: >
                     "shared" (default) or "worktree" — see the operation
                     description.
+                parent_session:
+                  type: string
+                  maxLength: 128
+                  description: >
+                    Optional lineage pointer; see the operation description.
       responses:
         "201":
           description: Created.
@@ -858,8 +1104,9 @@ paths:
         "400":
           description: >
             workdir does not clean-resolve under an allowed workspace root;
-            workdir_isolation names an unknown mode; or workdir_isolation is
-            "worktree" but workdir is not inside a git repository.
+            workdir_isolation names an unknown mode; workdir_isolation is
+            "worktree" but workdir is not inside a git repository; or
+            parent_session is present but empty or exceeds 128 bytes.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -993,6 +1240,60 @@ paths:
             share_workdir on creation, and neither session set
             workdir_isolation="worktree" (the error names the holder
             session).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /session/{id}/compact:
+    post:
+      operationId: compactSession
+      summary: Fold the oldest turns of this session's history into one summary.
+      description: >
+        docs/design/context-compaction.md's explicit escape hatch: always
+        available regardless of the automatic threshold (Config.
+        ContextWindowTokens/CompactionThreshold) — pre-emptive compaction
+        ahead of a known-large tool result, operator-triggered cleanup, or a
+        caller that disables the automatic path entirely and drives it
+        manually. Claims the session's single run slot exactly like
+        prompt_async/goal (so a concurrent prompt_async or goal is 409), but
+        runs synchronously — the response carries the full result, there is
+        no async job to poll. A successful, non-empty compaction emits the
+        summary via an ordinary `message` event first, then a durable
+        `history.compacted` event/record (see the Event schema).
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CompactRequest" }
+      responses:
+        "200":
+          description: >
+            OK. turns_folded is 0 (not an error) when there was nothing
+            worth folding yet.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompactResponse" }
+        "400":
+          description: keep_turns is present and <= 0, or model is malformed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >
+            Session is busy with another prompt or goal, OR another
+            currently-running session holds the same workdir and neither
+            session set share_workdir on creation, and neither session set
+            workdir_isolation="worktree" (the error names the holder
+            session).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: The summarization call itself failed; compaction aborted cleanly (no mutation, no journal write).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -1170,6 +1471,85 @@ paths:
             text/event-stream:
               schema: { $ref: "#/components/schemas/Event" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /process:
+    get:
+      operationId: listProcesses
+      summary: List every declared managed process with its live status.
+      description: >
+        See docs/design/managed-processes.md. Config- and runtime-declared
+        (via the session `process` tool's `declare` action) processes are
+        both included, distinguished by `origin`. An instance with no
+        processes configured at all still answers 200 with an empty array
+        (this endpoint never 404s).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ProcessInfo" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /process/{name}/start:
+    post:
+      operationId: startProcess
+      summary: Start a managed process (idempotent).
+      description: >
+        Already-active (starting/ready/running) returns the current status
+        unchanged rather than spawning a second process. Blocks until
+        whichever ready gate is configured is satisfied — a ready_regex
+        log-line match, a successful ready_port TCP dial, or a non-5xx
+        ready_http GET (state ready) — or ready_timeout_s elapses (state
+        running, with a timeout note — the process is left running, never
+        killed by the timeout); with no ready gate configured, returns
+        ready immediately on spawn.
+      parameters:
+        - $ref: "#/components/parameters/processName"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProcessStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/ProcessNotFound" }
+
+  /process/{name}/stop:
+    post:
+      operationId: stopProcess
+      summary: Stop a managed process.
+      description: >
+        Unix: SIGKILLs the whole process group. Non-unix: a plain Kill.
+        Either way waits for the process to be reaped and records its
+        exit. A no-op (200, current/zero status) if the process is not
+        currently active.
+      parameters:
+        - $ref: "#/components/parameters/processName"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProcessStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/ProcessNotFound" }
+
+  /process/{name}/restart:
+    post:
+      operationId: restartProcess
+      summary: Stop (if active) and start a managed process fresh.
+      parameters:
+        - $ref: "#/components/parameters/processName"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProcessStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/ProcessNotFound" }
 
   # Candidate for v1.1, deliberately deferred: GET /session/{id}/diff
   # (working-tree diff for orchestrator PR-preview rendering). Needs a
