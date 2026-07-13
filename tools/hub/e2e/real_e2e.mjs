@@ -33,6 +33,27 @@ console.error("box:", boxBase, "hub:", hubBase);
 const here = dirname(fileURLToPath(import.meta.url));
 const committedIndexHTML = readFileSync(join(here, "..", "index.html"), "utf8");
 
+// jsdom does not implement the HTML Popover API (showPopover/hidePopover/
+// togglePopover and :popover-open). The hub's card overflow menu calls
+// hidePopover() at the TOP of its item handlers (index.html's card menu),
+// so without these methods the real page throws mid-handler and the item's
+// real work (e.g. quickNewSession) never runs. Install minimal stubs that
+// track open state via the popover-open attribute, exactly as a real browser
+// would toggle it, so the served page runs unmodified. Same category of fix
+// as the fetch/requestAnimationFrame/AbortController patches below: supply a
+// browser capability jsdom lacks, never alter the product code to suit it.
+function installPopoverPolyfill(w) {
+  const proto = w.HTMLElement.prototype;
+  if (typeof proto.showPopover === "function") return;
+  proto.showPopover = function () { this.setAttribute("popover-open", ""); };
+  proto.hidePopover = function () { this.removeAttribute("popover-open"); };
+  proto.togglePopover = function (force) {
+    const next = force === undefined ? !this.hasAttribute("popover-open") : !!force;
+    if (next) this.showPopover(); else this.hidePopover();
+    return next;
+  };
+}
+
 async function main() {
   // ---- 0. The hub server must be serving the EXACT committed file (proves
   // this isn't drifted/stale wiring — the production `harness hub` binary
@@ -63,6 +84,7 @@ async function main() {
       w.fetch = fetch;
       w.requestAnimationFrame = (cb) => setTimeout(cb, 0);
       w.AbortController = AbortController; // real Node AbortController, compatible with real fetch
+      installPopoverPolyfill(w);
     },
   });
   const w = dom.window;
