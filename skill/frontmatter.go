@@ -108,7 +108,9 @@ func parseFrontmatter(fm string) (fields map[string]string, meta map[string]stri
 
 // blockScalarIndicator reports whether a frontmatter value is a YAML block
 // scalar header — '|' (literal) or '>' (folded), with an optional '+'/'-'
-// chomping indicator — and returns the style byte. The YAML explicit
+// chomping indicator — and returns the style byte. The chomping indicator is
+// accepted so a valid header parses, but parseBlockScalar always clips
+// trailing blank lines, so '+' (keep) is normalized to clip. The YAML explicit
 // indentation-indicator form (e.g. "|2") is intentionally not part of this
 // subset; skills use the plain forms.
 func blockScalarIndicator(value string) (style byte, ok bool) {
