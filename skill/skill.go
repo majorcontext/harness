@@ -22,15 +22,20 @@
 //     the outer quote pair.
 //   - A single one-level-deep "metadata:" mapping block whose entries are
 //     indented "key: value" scalar pairs.
+//   - Literal (|) and folded (>) block scalars for a multi-line scalar value,
+//     with an optional -/+ chomping indicator. The following more-indented
+//     lines are dedented and joined (newlines for |, spaces for >), ending at
+//     the next non-indented key. Explicit indentation indicators (e.g. |2) are
+//     out of scope, and + (keep) is accepted for validity but normalized to
+//     clip (trailing blank lines are always dropped).
 //   - Unknown top-level keys are rejected with an error (spec-first
 //     strictness: only fields named by the specification are permitted).
 //
 // Deliberately unsupported YAML constructs (any use is an error or is treated
-// as a plain string, never interpreted): block scalars (| and >), flow
-// collections ([a, b] / {k: v}), multi-line values, anchors/aliases, tags,
-// nested mappings deeper than metadata's one level, and sequence (- item)
-// syntax. allowed-tools is a single space-separated scalar string per the
-// spec, not a YAML sequence.
+// as a plain string, never interpreted): flow collections ([a, b] / {k: v}),
+// anchors/aliases, tags, nested mappings deeper than metadata's one level, and
+// sequence (- item) syntax. allowed-tools is a single space-separated scalar
+// string per the spec, not a YAML sequence.
 package skill
 
 import (
