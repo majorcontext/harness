@@ -27,6 +27,39 @@ func TestHandleIndexServesEmbeddedPage(t *testing.T) {
 	}
 }
 
+// TestHandleIndexSetsCSP asserts the served page carries a restrictive
+// Content-Security-Policy: defense-in-depth for a page that holds run tokens
+// in its URL fragment. The policy must still permit the page's own inline
+// script/style and its fetch/SSE to arbitrary box origins (connect-src *),
+// while blocking framing and every external resource load.
+func TestHandleIndexSetsCSP(t *testing.T) {
+	srv := httptest.NewServer(NewHandler(Options{}))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	csp := resp.Header.Get("Content-Security-Policy")
+	if csp == "" {
+		t.Fatal("no Content-Security-Policy header on the served page")
+	}
+	for _, want := range []string{
+		"default-src 'none'",
+		"script-src 'unsafe-inline'",
+		"style-src 'unsafe-inline'",
+		"connect-src *",
+		"frame-ancestors 'none'",
+		"base-uri 'none'",
+		"form-action 'none'",
+	} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("CSP %q missing directive %q", csp, want)
+		}
+	}
+}
+
 func TestHandleIndexRejectsUnknownPaths(t *testing.T) {
 	srv := httptest.NewServer(NewHandler(Options{}))
 	defer srv.Close()
