@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -142,6 +143,14 @@ func TestGoalPausedRestartYieldsIdleAndUsable(t *testing.T) {
 	if resp.StatusCode != 202 {
 		t.Fatalf("prompt_async on a paused/idle session status = %d, want 202: %s", resp.StatusCode, data)
 	}
+
+	// The prompt above is admitted asynchronously (202): srv2 spawns a
+	// runPrompt goroutine, tracked by srv2.wg, that keeps writing the session
+	// journal into dir (== t.TempDir()). Drain blocks on wg.Wait until that
+	// goroutine finishes, so no writer survives into t.TempDir()'s RemoveAll
+	// cleanup — otherwise a journal write races the directory removal and the
+	// cleanup fails with "directory not empty" under load.
+	srv2.Drain(context.Background())
 }
 
 // TestGoalStalledProviderBackoffSurfacesPaused is deliverable 2(b)'s wire
