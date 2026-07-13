@@ -84,12 +84,90 @@ func parseFrontmatter(fm string) (fields map[string]string, meta map[string]stri
 			continue
 		}
 
+		// A YAML block scalar (description: |, or : >) carries its value on the
+		// following more-indented lines rather than inline. Common for long,
+		// multi-line descriptions and valid YAML — collect the block instead of
+		// tripping the indented-line guard above.
+		if style, isBlock := blockScalarIndicator(value); isBlock {
+			blockVal, next := parseBlockScalar(lines, i+1, style)
+			if _, dup := fields[key]; dup {
+				return nil, nil, fmt.Errorf("duplicate frontmatter key: %q", key)
+			}
+			fields[key] = blockVal
+			i = next - 1
+			continue
+		}
+
 		if _, dup := fields[key]; dup {
 			return nil, nil, fmt.Errorf("duplicate frontmatter key: %q", key)
 		}
 		fields[key] = unquote(value)
 	}
 	return fields, meta, nil
+}
+
+// blockScalarIndicator reports whether a frontmatter value is a YAML block
+// scalar header — '|' (literal) or '>' (folded), with an optional '+'/'-'
+// chomping indicator — and returns the style byte. The YAML explicit
+// indentation-indicator form (e.g. "|2") is intentionally not part of this
+// subset; skills use the plain forms.
+func blockScalarIndicator(value string) (style byte, ok bool) {
+	if value == "" || (value[0] != '|' && value[0] != '>') {
+		return 0, false
+	}
+	switch value[1:] {
+	case "", "-", "+":
+		return value[0], true
+	}
+	return 0, false
+}
+
+// parseBlockScalar collects the indented lines of a YAML block scalar starting
+// at line index start. style '|' joins the dedented lines with newlines
+// (literal); '>' joins them with spaces, blank lines becoming newlines
+// (folded). The block ends at the first non-indented, non-blank line (the next
+// key) or end of input; trailing blank lines are dropped. It returns the value
+// and the index of the first line after the block. This covers the scalar
+// string values skills carry; full YAML chomping/indentation semantics are not
+// reproduced.
+func parseBlockScalar(lines []string, start int, style byte) (value string, next int) {
+	indent := -1
+	var content []string
+	i := start
+	for ; i < len(lines); i++ {
+		line := lines[i]
+		if strings.TrimSpace(line) == "" {
+			content = append(content, "") // preserve blank lines within the block
+			continue
+		}
+		leading := len(line) - len(strings.TrimLeft(line, " \t"))
+		if leading == 0 {
+			break // a non-indented line ends the block
+		}
+		if indent < 0 {
+			indent = leading
+		}
+		content = append(content, line[min(indent, leading):])
+	}
+	for len(content) > 0 && content[len(content)-1] == "" {
+		content = content[:len(content)-1] // strip trailing blank lines
+	}
+	if style == '>' {
+		var b strings.Builder
+		for idx, c := range content {
+			switch {
+			case c == "":
+				b.WriteByte('\n')
+			case idx > 0 && content[idx-1] != "":
+				b.WriteByte(' ')
+				b.WriteString(c)
+			default:
+				b.WriteString(c)
+			}
+		}
+		return b.String(), i
+	}
+	return strings.Join(content, "\n"), i
 }
 
 // parseMetadataBlock reads the indented "key: value" entries following a
