@@ -69,6 +69,53 @@ func TestHandleSpawnRejectsGet(t *testing.T) {
 	}
 }
 
+// TestHandleSpawnRejectsCrossOrigin is the CSRF guard: POST /spawn execs the
+// deployment provision command (real side effects and cost), so a browser
+// cross-origin request — one whose Origin names a host other than the hub's
+// own — must be rejected before any exec. Without this, any page the operator
+// visits could fetch("http://localhost:7777/spawn",{method:"POST"}) as a
+// no-preflight CORS simple request and trigger a real box spawn.
+func TestHandleSpawnRejectsCrossOrigin(t *testing.T) {
+	srv := httptest.NewServer(NewHandler(Options{SpawnCommand: "echo should-not-run"}))
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/spawn", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Origin", "http://evil.example")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-origin POST status = %d, want 403", resp.StatusCode)
+	}
+}
+
+// TestHandleSpawnAllowsSameOrigin confirms the CSRF guard is transparent to
+// the real page: a same-origin POST (Origin host == request Host, which is
+// exactly what the hub page's own fetch sends) runs normally.
+func TestHandleSpawnAllowsSameOrigin(t *testing.T) {
+	srv := httptest.NewServer(NewHandler(Options{SpawnCommand: "echo TUNNEL_URL=https://x.example; echo RUN_TOKEN=tok"}))
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/spawn", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Origin", srv.URL) // the served page's origin == the hub's own
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("same-origin POST status = %d, want 200", resp.StatusCode)
+	}
+}
+
 func TestHandleSpawnStreamsSSEFrames(t *testing.T) {
 	srv := httptest.NewServer(NewHandler(Options{SpawnCommand: "echo TUNNEL_URL=https://x.example; echo RUN_TOKEN=tok123"}))
 	defer srv.Close()
@@ -160,6 +207,34 @@ func TestHandleSpawnNoCommandConfiguredReportsErrorInStream(t *testing.T) {
 	joined := strings.Join(body, "\n")
 	if !strings.Contains(joined, "no spawn command configured") {
 		t.Errorf("body missing configuration error; got:\n%s", joined)
+	}
+}
+
+func TestIsCrossOrigin(t *testing.T) {
+	cases := []struct {
+		name   string
+		origin string // "" means no Origin header at all
+		host   string
+		want   bool
+	}{
+		{"no origin (non-browser client)", "", "localhost:7777", false},
+		{"same origin", "http://localhost:7777", "localhost:7777", false},
+		{"different host", "http://evil.example", "localhost:7777", true},
+		{"same host different port", "http://localhost:8888", "localhost:7777", true},
+		{"opaque null origin", "null", "localhost:7777", true},
+		{"unparseable origin", "http://[::1", "localhost:7777", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/spawn", nil)
+			r.Host = c.host
+			if c.origin != "" {
+				r.Header.Set("Origin", c.origin)
+			}
+			if got := isCrossOrigin(r); got != c.want {
+				t.Errorf("isCrossOrigin(origin=%q, host=%q) = %v, want %v", c.origin, c.host, got, c.want)
+			}
+		})
 	}
 }
 
