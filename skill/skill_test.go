@@ -106,6 +106,53 @@ Everything.
 	}
 }
 
+// TestLoadBlockScalarDescription covers YAML block scalars for multi-line
+// scalar values (description: |, description: >). These are valid YAML and
+// commonly used for long descriptions; the parser must accept them rather
+// than erroring on the indented continuation lines. Fixtures are synthetic.
+func TestLoadBlockScalarDescription(t *testing.T) {
+	cases := []struct {
+		name string
+		fm   string // frontmatter lines after "name: my-skill\n"
+		want string
+	}{
+		{
+			name: "literal block joins with newlines",
+			fm:   "description: |\n  First line.\n  Second line.\n",
+			want: "First line.\nSecond line.",
+		},
+		{
+			name: "folded block joins with spaces",
+			fm:   "description: >\n  First part\n  second part.\n",
+			want: "First part second part.",
+		},
+		{
+			name: "literal with strip chomping",
+			fm:   "description: |-\n  Only line.\n",
+			want: "Only line.",
+		},
+		{
+			name: "block value before another key",
+			fm:   "description: |\n  Line one.\n  Line two.\nlicense: MIT\n",
+			want: "Line one.\nLine two.",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			body := "---\nname: my-skill\n" + tc.fm + "---\nbody\n"
+			d := writeSkill(t, root, "my-skill", body)
+			s, err := Load(d)
+			if err != nil {
+				t.Fatalf("block-scalar description should parse, got: %v", err)
+			}
+			if s.Description != tc.want {
+				t.Fatalf("Description = %q, want %q", s.Description, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadNameRules(t *testing.T) {
 	cases := []struct {
 		name string // dir name (and, unless mismatch, frontmatter name)
