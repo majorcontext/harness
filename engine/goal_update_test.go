@@ -91,6 +91,39 @@ func TestUpdateGoalSameConditionNoop(t *testing.T) {
 	}
 }
 
+func TestUpdateGoalWhitespaceVariantNoop(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{SessionDir: dir})
+	if err := s.RegisterGoal("same condition"); err != nil {
+		t.Fatal(err)
+	}
+	genBefore := s.goalGen
+	var evs []Event
+	s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
+
+	// A whitespace-only variant of the already-stored (trimmed) condition
+	// must compare equal after trimming and be a silent no-op: nil error, no
+	// generation bump, no goal.updated record, no event.
+	if err := s.UpdateGoal("  same condition\n"); err != nil {
+		t.Fatalf("UpdateGoal = %v, want nil for a whitespace-only variant of the same condition", err)
+	}
+	if s.goalGen != genBefore {
+		t.Errorf("goalGen = %d, want unchanged %d for a whitespace-variant no-op update", s.goalGen, genBefore)
+	}
+	for _, ev := range evs {
+		if ev.Type == EventGoalUpdated {
+			t.Error("EventGoalUpdated emitted for a whitespace-only variant update")
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(dir, s.ID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "goal.updated") {
+		t.Fatalf("log has a goal.updated record for a whitespace-only variant update: %s", string(data))
+	}
+}
+
 func TestLoadSessionFoldsGoalUpdated(t *testing.T) {
 	dir := t.TempDir()
 	s := NewSession(Config{SessionDir: dir})

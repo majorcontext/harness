@@ -101,25 +101,40 @@ condition, never a false-positive completion against text the model never
 saw. `ClearGoal` is unaffected — it keys on `goalActive`, not condition
 equality, so it still stops the loop at every point it does today.
 
-A built-in `goal` session tool (gated on `Config.GoalTool`, on whenever an
-evaluator is configured — `harness run -goal` and `harness serve` alike)
-lets the model inspect or drive its own goal in-process: no HTTP round-trip,
-no run-slot claim. `status` reports `{active, condition}`; `set` arms a new
-goal via `RegisterGoal` (it does not start evaluating this turn — see
-auto-arm below — and errors telling the model to use `adjust` if a goal is
-already active); `adjust` rewrites an active goal's condition via
-`UpdateGoal`. There is deliberately **no `clear` action** — see below.
+A built-in `goal` session tool (gated on `Config.GoalTool`) lets the model
+inspect or drive its own goal in-process: no HTTP round-trip, no run-slot
+claim. `status` reports `{active, condition}`; `set` arms a new goal via
+`RegisterGoal` (errors telling the model to use `adjust` if a goal is already
+active); `adjust` rewrites an active goal's condition via `UpdateGoal`. There
+is deliberately **no `clear` action** — see below.
+
+`Config.GoalTool` is on whenever `goal_evaluator_model` is configured, in
+`harness run` and `harness serve` alike, entirely independent of the `-goal`
+flag — a plain `harness run -p ...` with that config set still registers the
+tool. But what happens after `set`/`adjust` differs by host: `harness serve`
+auto-arms (see `maybeAutoArmGoal` below) — the loop actually starts running
+once the current turn ends. Plain `harness run` (no `-goal`) has no such
+auto-arm step: a tool-driven `set` call registers and journals the goal
+(`goal.active` becomes true) but nothing ever calls `PursueGoal` for it, so
+it never actually starts evaluating — the process runs its one `Prompt` call
+and exits with the goal armed but inert. Only `harness run -goal <condition>`
+itself drives `PursueGoal` to completion.
 
 `POST /session/{id}/goal` on a busy session no longer flatly 409s. A running
 goal loop updates its condition in place (`status: "updated"`, 200 — no
 second loop, no run-slot claim; the loop picks it up at its next turn
 boundary). A plain prompt holding the slot with no goal yet active registers
-the goal and reports `status: "armed"` (202); once that prompt's `runPrompt`
-tail finishes, an auto-arm check (`maybeAutoArmGoal`) claims the freed run
-slot itself and spawns the loop — no further client action needed. This is
-also how the `goal` tool's own `set` action takes effect: arming a goal
-mid-turn, the same auto-arm path starts the loop the instant the current
-turn ends. A workdir held by a genuinely different session still 409s,
+the goal (`RegisterGoal` needs no run slot) and then retries the claim once,
+closing the race against that same prompt's own `runPrompt` tail: if the
+retry wins the now-freed slot, the loop spawns immediately and the response
+reports `status: "started"` (202); otherwise the prompt's tail is still
+ahead of us, its own auto-arm check (`maybeAutoArmGoal`) will claim the slot
+and spawn the loop itself once that tail finishes, and the response reports
+`status: "armed"` (202) — either way the loop starts exactly once, never
+zero times, never twice, no further client action needed. This is also how
+the `goal` tool's own `set` action takes effect: arming a goal mid-turn, the
+same auto-arm path starts the loop the instant the current turn ends. A
+workdir held by a genuinely different session still 409s,
 unchanged.
 
 No self-clear is deliberate: a goal-supervised agent must never be able to

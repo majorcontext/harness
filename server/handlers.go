@@ -996,8 +996,14 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGoalBusy(w http.ResponseWriter, id string, condition string, maxTurns int) {
 	sess := s.residentSession(id)
 	if sess == nil {
-		// Structurally unreachable: claimForPrompt only 409s (empty holder)
-		// for a session it just found resident and running.
+		// Reachable, in a narrow window: claimForPrompt found the session
+		// resident and running (hence the 409 that routed us here), but
+		// s.mu is released between that check and this residentSession
+		// call. If the busy prompt/goal finishes in that gap, the session
+		// goes idle and an eviction sweep (evictResidentLocked, run from
+		// several other request paths) can unload it before we look. The
+		// 409 below is benign — nothing was mutated — and a client retry
+		// resolves it against a freshly (re)loaded, now-idle session.
 		writeErr(w, http.StatusConflict, "session is busy")
 		return
 	}

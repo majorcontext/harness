@@ -910,13 +910,16 @@ func (s *Session) clearGoal(reason string) bool {
 // synchronously by whoever accepts the goal (the HTTP handler, the CLI)
 // BEFORE any loop goroutine spawns, so a ClearGoal arriving after acceptance
 // always observes an active goal — the round-3 registration race is
-// structurally impossible. Errors if a goal is already active.
+// structurally impossible. Errors if a goal is already active. The condition
+// is stored trimmed (matching UpdateGoal, so its same-condition no-op check
+// compares like with like).
 //
 // Bumps goalGen so a PursueGoal loop that snapshotted the PREVIOUS goal (now
 // cleared or achieved) never mistakes this freshly-registered one for a
 // continuation of it — see goalSnapshot.
 func (s *Session) RegisterGoal(condition string) error {
-	if strings.TrimSpace(condition) == "" {
+	trimmed := strings.TrimSpace(condition)
+	if trimmed == "" {
 		return errors.New("engine: RegisterGoal requires a non-empty condition")
 	}
 	s.mu.Lock()
@@ -926,12 +929,12 @@ func (s *Session) RegisterGoal(condition string) error {
 		return fmt.Errorf("engine: a goal is already active: %q", cur)
 	}
 	s.goalActive = true
-	s.goalCondition = condition
+	s.goalCondition = trimmed
 	s.goalGen++
-	s.persistGoalLocked(recGoalSet, goalRecord{Condition: condition})
+	s.persistGoalLocked(recGoalSet, goalRecord{Condition: trimmed})
 	// Emit while holding s.mu (see ClearGoal): event order matches log
 	// order. OnEvent must not call back into this Session.
-	s.emit(Event{Type: EventGoalSet, GoalCondition: condition})
+	s.emit(Event{Type: EventGoalSet, GoalCondition: trimmed})
 	s.mu.Unlock()
 	return nil
 }
@@ -950,7 +953,8 @@ func (s *Session) RegisterGoal(condition string) error {
 // is discarded rather than journaled — see PursueGoal's doc comment and
 // goalStatus.
 func (s *Session) UpdateGoal(condition string) error {
-	if strings.TrimSpace(condition) == "" {
+	trimmed := strings.TrimSpace(condition)
+	if trimmed == "" {
 		return errors.New("engine: UpdateGoal requires a non-empty condition")
 	}
 	s.mu.Lock()
@@ -958,16 +962,16 @@ func (s *Session) UpdateGoal(condition string) error {
 		s.mu.Unlock()
 		return errors.New("engine: no active goal to update")
 	}
-	if s.goalCondition == condition {
+	if s.goalCondition == trimmed {
 		s.mu.Unlock()
 		return nil
 	}
-	s.goalCondition = condition
+	s.goalCondition = trimmed
 	s.goalGen++
-	s.persistGoalLocked(recGoalUpdated, goalRecord{Condition: condition})
+	s.persistGoalLocked(recGoalUpdated, goalRecord{Condition: trimmed})
 	// Emit while holding s.mu (see ClearGoal): event order matches log
 	// order. OnEvent must not call back into this Session.
-	s.emit(Event{Type: EventGoalUpdated, GoalCondition: condition})
+	s.emit(Event{Type: EventGoalUpdated, GoalCondition: trimmed})
 	s.mu.Unlock()
 	return nil
 }
