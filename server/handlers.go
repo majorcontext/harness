@@ -1643,6 +1643,12 @@ type compactResponseJSON struct {
 // overrides Config.CompactionKeepTurns/CompactionModel for this call only;
 // keep_turns has a hard floor of 1 — 0 or negative is a 400, never silently
 // clamped, so a caller's mistake is visible rather than silently ignored.
+//
+// Its tail calls maybeDispatchQueued then maybeAutoArmGoal, the same
+// order/precedence runPrompt's tail uses (queue beats goal auto-arm): a
+// prompt queued or a goal armed while compact ran must drain/start the
+// instant this call releases the run slot, not wait for some later
+// runPrompt/runGoal tail to happen to fire first.
 func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
@@ -1707,8 +1713,21 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	st.lastUsed = time.Now()
 	s.evictResidentLocked()
 	s.mu.Unlock()
-	s.wg.Done()
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
+
+	// Same drain-then-auto-arm precedence as runPrompt's tail (invariant 5):
+	// a prompt queued (or a goal armed) while this compact call ran must not
+	// sit stranded just because the run slot happened to be released by
+	// compact instead of an ordinary prompt or goal turn — see
+	// maybeDispatchQueued/maybeAutoArmGoal's own doc comments for the full
+	// race analysis, identical here. wg.Done for THIS claim is deferred
+	// until after both checks so the WaitGroup never transiently reads zero
+	// between this claim's release and a dispatched/auto-armed one's own
+	// wg.Add (mirrors runPrompt's defer-at-function-exit shape).
+	if !s.maybeDispatchQueued(id, st) {
+		s.maybeAutoArmGoal(id, st)
+	}
+	s.wg.Done()
 
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, plugin.SanitizeSessionError(err.Error()))

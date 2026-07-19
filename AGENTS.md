@@ -156,25 +156,33 @@ record and assigning a session-monotonic ID) synchronously, before any
 response is written — the same enqueue-durable-before-202 shape `RegisterGoal`
 already uses for goals, closing the accept-vs-lose race structurally. The
 response is 202 either way: `status: "started"` when a turn is now running for
-this request's own prompt (idle claim, or a freed-slot retry that happens to
-win and dispatch this same prompt), or `status: "queued"` (carrying the current
-depth) when it is durably waiting. The workdir-held-by-another-session 409 is
-unchanged — only same-session busy gets queue semantics.
+this request's own prompt (an idle claim against an EMPTY queue, or a
+freed-slot retry that happens to win and dispatch this same prompt), or
+`status: "queued"` (carrying the current depth) when it is durably waiting —
+including the idle-claim case where the queue is already non-empty (a
+restart refold, or any other drain gap that ever left a prompt stranded):
+`handlePrompt` enqueues the incoming text behind whatever is already waiting,
+then dispatches the queue's HEAD — not necessarily this request's own text —
+into the run slot it just claimed, so a fresh arrival can never cut the
+line ahead of prompts already queued. The workdir-held-by-another-session 409
+is unchanged — only same-session busy gets queue semantics.
 
-The queue drains FIFO, by queue ID, at run-slot release: both `runPrompt`'s
-and `runGoal`'s tails call `maybeDispatchQueued`, which claims the freed slot,
-dequeues the head (`reason: "delivered"`), and spawns it as a normal prompt
-turn — whose own tail repeats the check, so the whole queue drains one turn at
-a time before anything else gets a look. (`handleCompact`'s tail does not call
-it — a prompt queued while a compact call runs is not auto-dispatched the
-instant compact ends, only at the next `runPrompt`/`runGoal` tail or an
-explicit poke; this is a gap in the current wiring, not a documented
-limit — see the plan's recon, which only lists `runPrompt`/`runGoal` as drain
-sites.) This is also where
-**queue beats goal auto-arm**: `runPrompt`'s tail calls `maybeDispatchQueued`
-*before* `maybeAutoArmGoal` (see above), so a prompt sitting in the queue when
-a turn ends is dispatched first — direct user input outranks the background
-objective — and the goal only auto-arms once the queue is empty.
+The queue drains FIFO, by queue ID, at every run-slot release, with no
+exceptions: `runPrompt`'s, `runGoal`'s, and `handleCompact`'s tails all call
+`maybeDispatchQueued`, which claims the freed slot, dequeues the head
+(`reason: "delivered"`), and spawns it as a normal prompt turn — whose own
+tail repeats the check, so the whole queue drains one turn at a time before
+anything else gets a look. `handlePrompt`'s own claim-success path (previous
+paragraph) is the one non-tail drain site: an admission-time head-dispatch
+for the idle-with-non-empty-queue case, closing the gap a tail-only drain
+would otherwise leave open between "session goes idle with a queue still
+non-empty" and "the next prompt/goal/compact activity happens to touch it."
+This is also where
+**queue beats goal auto-arm**: `runPrompt`'s and `handleCompact`'s tails call
+`maybeDispatchQueued` *before* `maybeAutoArmGoal` (see above), so a prompt
+sitting in the queue when a turn or a compact call ends is dispatched first —
+direct user input outranks the background objective — and the goal only
+auto-arms once the queue is empty.
 
 While a goal loop is running, queued prompts are not dispatched as ordinary
 turns at all: `PursueGoal` drains the *entire* queue, FIFO, at the top of every

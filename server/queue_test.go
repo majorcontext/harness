@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -744,5 +745,266 @@ func TestIdlePromptWithQueueGoesFIFO(t *testing.T) {
 	finalSess := h2.getSessionJSON(id)
 	if finalSess.Queued != 0 {
 		t.Errorf("queued after full drain = %d, want 0", finalSess.Queued)
+	}
+}
+
+// compactProv splits behavior by tool presence: an ordinary (tool-bearing)
+// prompt turn is served immediately from worker, scripted; the tool-less
+// compaction summarization call (see engine/compact.go's
+// runCompactionSummary, which sends no Tools) blocks until release is
+// closed, giving a test a deterministic window in which a compact call is
+// genuinely in flight.
+type compactProv struct {
+	name string
+	mu   sync.Mutex
+
+	worker [][]provider.Event
+	wi     int
+
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (p *compactProv) Name() string { return p.name }
+
+func (p *compactProv) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
+	if len(req.Tools) == 0 {
+		return &compactBlockingStream{p: p, ctx: ctx}, nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.wi >= len(p.worker) {
+		return &scriptedStream{}, nil
+	}
+	ev := p.worker[p.wi]
+	p.wi++
+	return &scriptedStream{events: ev}, nil
+}
+
+// compactBlockingStream backs the compaction summarization call.
+// runCompactionSummary's own Next loop (unlike an ordinary turn's streamTurn,
+// which returns immediately on EventDone) keeps calling Next until it sees
+// io.EOF, so this must report EventDone exactly once, then EOF forever after
+// — otherwise a closed release channel keeps winning the select on every
+// subsequent call and the summarization loop never terminates.
+type compactBlockingStream struct {
+	p    *compactProv
+	ctx  context.Context
+	sent bool
+}
+
+func (s *compactBlockingStream) Next() (provider.Event, error) {
+	if s.sent {
+		return provider.Event{}, io.EOF
+	}
+	s.p.once.Do(func() { close(s.p.started) })
+	select {
+	case <-s.ctx.Done():
+		return provider.Event{}, s.ctx.Err()
+	case <-s.p.release:
+		s.sent = true
+		msg := &message.Message{ID: "msg_summary", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "SUMMARY"}}}
+		return provider.Event{Type: provider.EventDone, Message: msg, StopReason: provider.StopEndTurn}, nil
+	}
+}
+
+func (s *compactBlockingStream) Close() error { return nil }
+
+// TestCompactTailDispatchesQueue is the fix for Gap 2: a prompt queued while
+// a compact call is genuinely in flight must be dispatched the instant
+// compact's own tail releases the run slot — handleCompact's tail must call
+// maybeDispatchQueued, exactly like runPrompt's and runGoal's tails already
+// do.
+func TestCompactTailDispatchesQueue(t *testing.T) {
+	prov := &compactProv{
+		name:    "test",
+		worker:  [][]provider.Event{asstTurn("go1-done"), asstTurn("go2-done")},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	h.promptAndWaitIdle(id, "go1")
+	h.promptAndWaitIdle(id, "go2")
+
+	sse := h.openSSE("?from=0", "")
+
+	compactDone := make(chan struct{})
+	var compactResp *http.Response
+	var compactData []byte
+	go func() {
+		compactResp, compactData = h.do("POST", "/session/"+id+"/compact", map[string]any{"keep_turns": 1})
+		close(compactDone)
+	}()
+	<-prov.started // the compaction summarization call is genuinely in flight
+
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "queued"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("queued prompt status %d: %s", resp.StatusCode, data)
+	}
+	var qr promptAsyncResponse
+	if err := json.Unmarshal(data, &qr); err != nil {
+		t.Fatal(err)
+	}
+	if qr.Status != "queued" || qr.Queued != 1 {
+		t.Fatalf("queued prompt response = %+v, want status=queued queued=1", qr)
+	}
+
+	prov.mu.Lock()
+	prov.worker = append(prov.worker, asstTurn("queued-done"))
+	prov.mu.Unlock()
+	close(prov.release)
+
+	<-compactDone
+	if compactResp.StatusCode != http.StatusOK {
+		t.Fatalf("compact status %d: %s", compactResp.StatusCode, compactData)
+	}
+
+	var gotText bool
+	for !gotText {
+		ev := sse.waitFor(t, "message")
+		if ev.Message != nil && ev.Message.Role == message.RoleAssistant && ev.Message.Parts.Text() == "queued-done" {
+			gotText = true
+		}
+	}
+
+	sess := h.getSessionJSON(id)
+	if sess.Queued != 0 {
+		t.Errorf("queued after dispatch = %d, want 0", sess.Queued)
+	}
+}
+
+// compactGoalProv extends compactProv's tool-presence split with a third
+// case: a tool-less call whose MaxTokens is the goal evaluator's constant
+// (256, engine/goal.go) is the evaluator, distinguished from the tool-less
+// compaction summarization call (MaxTokens 1024, engine/compact.go's
+// compactionMaxTokens) by that value.
+type compactGoalProv struct {
+	name string
+	mu   sync.Mutex
+
+	worker [][]provider.Event
+	wi     int
+	eval   [][]provider.Event
+	ei     int
+
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (p *compactGoalProv) Name() string { return p.name }
+
+func (p *compactGoalProv) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
+	if len(req.Tools) > 0 {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if p.wi >= len(p.worker) {
+			return &scriptedStream{}, nil
+		}
+		ev := p.worker[p.wi]
+		p.wi++
+		return &scriptedStream{events: ev}, nil
+	}
+	if req.MaxTokens == 256 { // goal evaluator, see engine/goal.go
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if p.ei >= len(p.eval) {
+			return &scriptedStream{}, nil
+		}
+		ev := p.eval[p.ei]
+		p.ei++
+		return &scriptedStream{events: ev}, nil
+	}
+	// Compaction summarization call: block until release.
+	return &compactGoalBlockingStream{p: p, ctx: ctx}, nil
+}
+
+// compactGoalBlockingStream has the same one-EventDone-then-EOF shape as
+// compactBlockingStream (see its doc comment) — required for the same
+// reason: runCompactionSummary's Next loop only stops on io.EOF.
+type compactGoalBlockingStream struct {
+	p    *compactGoalProv
+	ctx  context.Context
+	sent bool
+}
+
+func (s *compactGoalBlockingStream) Next() (provider.Event, error) {
+	if s.sent {
+		return provider.Event{}, io.EOF
+	}
+	s.p.once.Do(func() { close(s.p.started) })
+	select {
+	case <-s.ctx.Done():
+		return provider.Event{}, s.ctx.Err()
+	case <-s.p.release:
+		s.sent = true
+		msg := &message.Message{ID: "msg_summary", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "SUMMARY"}}}
+		return provider.Event{Type: provider.EventDone, Message: msg, StopReason: provider.StopEndTurn}, nil
+	}
+}
+
+func (s *compactGoalBlockingStream) Close() error { return nil }
+
+// TestCompactTailAutoArmsGoal is Gap 2's other half: a goal armed while a
+// compact call is genuinely in flight (POST /goal's "armed" 202, same as an
+// ordinary busy prompt) must auto-arm the instant compact's tail releases the
+// run slot — handleCompact's tail must call maybeAutoArmGoal, same
+// precedence as runPrompt's tail (queue first, then goal auto-arm).
+func TestCompactTailAutoArmsGoal(t *testing.T) {
+	prov := &compactGoalProv{
+		name:    "test",
+		worker:  [][]provider.Event{asstTurn("go1-done"), asstTurn("go2-done"), asstTurn("goal-turn")},
+		eval:    [][]provider.Event{asstTurn("MET: done")},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	h := newGoalHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	h.promptAndWaitIdle(id, "go1")
+	h.promptAndWaitIdle(id, "go2")
+
+	sse := h.openSSE("?from=0", "")
+
+	compactDone := make(chan struct{})
+	var compactResp *http.Response
+	var compactData []byte
+	go func() {
+		compactResp, compactData = h.do("POST", "/session/"+id+"/compact", map[string]any{"keep_turns": 1})
+		close(compactDone)
+	}()
+	<-prov.started // the compaction summarization call is genuinely in flight
+
+	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond"})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST goal while compact busy status %d: %s", resp.StatusCode, data)
+	}
+	var gr struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(data, &gr); err != nil {
+		t.Fatal(err)
+	}
+	if gr.Status != "armed" {
+		t.Fatalf("POST goal while compact busy response status = %q, want armed", gr.Status)
+	}
+
+	close(prov.release)
+
+	<-compactDone
+	if compactResp.StatusCode != http.StatusOK {
+		t.Fatalf("compact status %d: %s", compactResp.StatusCode, compactData)
+	}
+
+	sse.waitFor(t, "goal.achieved")
+
+	sess := h.getSessionJSON(id)
+	if sess.Queued != 0 {
+		t.Errorf("queued = %d, want 0", sess.Queued)
 	}
 }
