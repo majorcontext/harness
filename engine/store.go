@@ -397,6 +397,12 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			if rec.Goal != nil {
 				s.goalCondition = rec.Goal.Condition
 			}
+		case recGoalUpdated:
+			// Only meaningful while active (see UpdateGoal): rewrites the
+			// restored condition in place, same as the live path.
+			if s.goalActive && rec.Goal != nil {
+				s.goalCondition = rec.Goal.Condition
+			}
 		case recGoalAchieved, recGoalCleared:
 			s.goalActive = false
 			s.goalCondition = ""

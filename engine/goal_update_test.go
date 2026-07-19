@@ -85,6 +85,32 @@ func TestUpdateGoalSameConditionNoop(t *testing.T) {
 	}
 }
 
+func TestLoadSessionFoldsGoalUpdated(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{SessionDir: dir})
+	if err := s.RegisterGoal("original condition"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateGoal("updated condition"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateGoal("final condition"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PersistErr(); err != nil {
+		t.Fatalf("PersistErr = %v", err)
+	}
+
+	loaded, err := LoadSession(Config{SessionDir: dir}, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cond, ok := loaded.ActiveGoal()
+	if !ok || cond != "final condition" {
+		t.Errorf("resumed ActiveGoal = %q, %v; want active with the last updated condition", cond, ok)
+	}
+}
+
 func TestUpdateGoalEmptyConditionRejected(t *testing.T) {
 	s := NewSession(Config{})
 	if err := s.RegisterGoal("original condition"); err != nil {
