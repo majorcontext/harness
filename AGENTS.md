@@ -86,6 +86,47 @@ caller decides. The loop also emits `goal.*` engine events so the server
 journals them. Config `goal_evaluator_model` supplies the evaluator for
 `harness run -goal` and `POST /session/{id}/goal`.
 
+The condition itself is adjustable mid-loop. `Session.UpdateGoal` rewrites an
+active goal's condition, journals a durable `goal.updated` record, and emits
+`EventGoalUpdated` — same lock-and-emit-under-`s.mu` shape as `RegisterGoal`;
+a same-condition update is a silent no-op, updating an inactive goal errors.
+`PursueGoal` takes a per-turn snapshot (condition, a runtime-only generation
+counter, active) instead of closing over the original parameter, so a live
+loop picks up new text at its very next turn boundary — both the worker
+directive and the evaluator call. The generation counter guards stale
+verdicts: if `UpdateGoal` lands while an evaluator call for generation N is
+in flight, a MET (or stalled) verdict for N is discarded on return — no
+`goal.achieved`, no `goal.eval`, the loop just continues against the new
+condition, never a false-positive completion against text the model never
+saw. `ClearGoal` is unaffected — it keys on `goalActive`, not condition
+equality, so it still stops the loop at every point it does today.
+
+A built-in `goal` session tool (gated on `Config.GoalTool`, on whenever an
+evaluator is configured — `harness run -goal` and `harness serve` alike)
+lets the model inspect or drive its own goal in-process: no HTTP round-trip,
+no run-slot claim. `status` reports `{active, condition}`; `set` arms a new
+goal via `RegisterGoal` (it does not start evaluating this turn — see
+auto-arm below — and errors telling the model to use `adjust` if a goal is
+already active); `adjust` rewrites an active goal's condition via
+`UpdateGoal`. There is deliberately **no `clear` action** — see below.
+
+`POST /session/{id}/goal` on a busy session no longer flatly 409s. A running
+goal loop updates its condition in place (`status: "updated"`, 200 — no
+second loop, no run-slot claim; the loop picks it up at its next turn
+boundary). A plain prompt holding the slot with no goal yet active registers
+the goal and reports `status: "armed"` (202); once that prompt's `runPrompt`
+tail finishes, an auto-arm check (`maybeAutoArmGoal`) claims the freed run
+slot itself and spawns the loop — no further client action needed. This is
+also how the `goal` tool's own `set` action takes effect: arming a goal
+mid-turn, the same auto-arm path starts the loop the instant the current
+turn ends. A workdir held by a genuinely different session still 409s,
+unchanged.
+
+No self-clear is deliberate: a goal-supervised agent must never be able to
+cancel its own supervision from inside a running turn, so the `goal` tool
+has no `clear` action — `DELETE /session/{id}/goal` remains the only clear
+path, and it is operator-only.
+
 The goal loop is a **plan-artifact-free, gate-free** control loop: it is
 `Prompt` plus a read-only evaluator call, with no plan document, no edit/plan
 mode, and no permission gate. It does not violate the no-plan-mode decision

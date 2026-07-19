@@ -580,6 +580,7 @@ components:
             - model
             - request.meta
             - goal.set
+            - goal.updated
             - goal.eval
             - goal.stalled
             - goal.achieved
@@ -624,10 +625,17 @@ components:
             system_hash differs from the session's previous request — the
             hash-on-change trick keeps unchanged prompts cheap while still
             making the exact system recoverable from a from=0 replay.
-            goal.set, goal.eval, goal.stalled, goal.achieved, and goal.cleared
-            are the durable records of a goal loop (POST /session/{id}/goal).
-            goal.set carries goal_condition; goal.eval carries goal_met,
-            goal_reason, and goal_turn for each per-turn evaluator verdict;
+            goal.set, goal.updated, goal.eval, goal.stalled, goal.achieved,
+            and goal.cleared are the durable records of a goal loop (POST
+            /session/{id}/goal). goal.set carries goal_condition; goal.updated
+            is journaled whenever the condition is rewritten in place — by a
+            re-POST to /goal on an already-running loop, or by the `goal`
+            session tool's `adjust` action — and carries only goal_condition
+            (the new text); a running loop picks it up at its next turn
+            boundary, and a stale evaluator verdict computed against the
+            condition it replaced is discarded rather than journaled (never a
+            goal.eval or goal.achieved for superseded text). goal.eval carries
+            goal_met, goal_reason, and goal_turn for each per-turn evaluator verdict;
             goal.stalled carries goal_reason, goal_turn, and goal_attempt (the
             1-based retry attempt) for each failed worker-turn attempt that is
             still within the retry budget — it is non-terminal, the goal
@@ -737,7 +745,7 @@ components:
             when system_hash changed from the session's previous request.
         goal_condition:
           type: string
-          description: The goal condition (goal.set).
+          description: The goal condition (goal.set, goal.updated, goal.paused).
         goal_reason:
           type: string
           description: Evaluator reason (goal.eval, goal.achieved).
