@@ -147,6 +147,73 @@ The goal loop is a **plan-artifact-free, gate-free** control loop: it is
 mode, and no permission gate. It does not violate the no-plan-mode decision
 below.
 
+### Prompt queue
+
+`POST /session/{id}/prompt_async` against a session already busy (another
+prompt, or a running goal loop) no longer 409s — it queues. The prompt is
+enqueued durably (`engine.Session.EnqueuePrompt`, persisting a `prompt.queued`
+record and assigning a session-monotonic ID) synchronously, before any
+response is written — the same enqueue-durable-before-202 shape `RegisterGoal`
+already uses for goals, closing the accept-vs-lose race structurally. The
+response is 202 either way: `status: "started"` when a turn is now running for
+this request's own prompt (idle claim, or a freed-slot retry that happens to
+win and dispatch this same prompt), or `status: "queued"` (carrying the current
+depth) when it is durably waiting. The workdir-held-by-another-session 409 is
+unchanged — only same-session busy gets queue semantics.
+
+The queue drains FIFO, by queue ID, at run-slot release: both `runPrompt`'s
+and `runGoal`'s tails call `maybeDispatchQueued`, which claims the freed slot,
+dequeues the head (`reason: "delivered"`), and spawns it as a normal prompt
+turn — whose own tail repeats the check, so the whole queue drains one turn at
+a time before anything else gets a look. (`handleCompact`'s tail does not call
+it — a prompt queued while a compact call runs is not auto-dispatched the
+instant compact ends, only at the next `runPrompt`/`runGoal` tail or an
+explicit poke; this is a gap in the current wiring, not a documented
+limit — see the plan's recon, which only lists `runPrompt`/`runGoal` as drain
+sites.) This is also where
+**queue beats goal auto-arm**: `runPrompt`'s tail calls `maybeDispatchQueued`
+*before* `maybeAutoArmGoal` (see above), so a prompt sitting in the queue when
+a turn ends is dispatched first — direct user input outranks the background
+objective — and the goal only auto-arms once the queue is empty.
+
+While a goal loop is running, queued prompts are not dispatched as ordinary
+turns at all: `PursueGoal` drains the *entire* queue, FIFO, at the top of every
+turn (the same `snapshotGoal` boundary #77's condition-update snapshot uses),
+and prepends them to that turn's directive as a labeled "OPERATOR MESSAGES"
+block, ahead of — never replacing — the ordinary condition/guidance text. The
+evaluator call is built from the condition alone and never sees this block:
+goal injection judges only the goal. Every drained prompt journals its own
+`prompt.dequeued(injected)` record before the turn's directive is even built,
+so it counts as delivered at that point even if the turn's outcome later turns
+out stale and gets discarded — an injected prompt is never re-queued.
+
+Every enqueue/dequeue is a durable record — `prompt.queued` and
+`prompt.dequeued`, the latter carrying a `reason` of `"delivered"` (idle
+drain), `"injected"` (goal-turn-boundary injection), or `"cleared"` (see
+below) — journaled and emitted (`EventPromptQueued`/`EventPromptDequeued`)
+under `s.mu` in the same critical section, mirroring `RegisterGoal`/`ClearGoal`
+exactly. Dequeue always journals *before* the text enters any turn, so a crash
+between that journal write and the dispatched turn's completion cannot
+double-deliver — the prompt is simply gone from the queue on replay, the same
+exposure any in-flight prompt already has today. **Boot never auto-dispatches
+a resumed queue**: `LoadSession` folds `prompt.queued`/`prompt.dequeued`
+records back into the exact undelivered set, `GET /session`'s `queued` count
+reflects it immediately, and it sits there until the next natural drain
+trigger (an idle prompt, or a goal loop's next turn boundary) — the same
+settled boot rule goals follow. `DELETE /session/{id}/queue` is the one
+explicit clear surface: it journals `prompt.dequeued(cleared)` for every
+pending item then 204, idempotent on an empty queue, and never touches a
+currently running turn — `POST /abort` is unrelated and does not touch the
+queue either way (it only cancels the in-flight turn's context).
+
+Two v1 limits are deliberate, not gaps: **text-only** (queued prompts carry a
+plain string — `QueuedPrompt{ID, Text}` — no attachment machinery, matching
+the plain-prompt contract's `parts` being text-only already), and **a
+per-request `model` override is silently dropped when the prompt is queued**
+— there is no slot in `QueuedPrompt` to carry it through to a future drain, so
+a caller that needs a model swap to take effect must re-issue the request once
+it is confirmed `started`.
+
 ### Managed processes
 
 `config.Config.Processes` (`processes` in JSON) declares named long-lived

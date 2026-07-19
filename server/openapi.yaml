@@ -591,7 +591,14 @@ components:
           description: >
             Optional explicit model for this and subsequent turns. Explicit
             values always win over the session's persisted model (same rule
-            as the CLI -model flag).
+            as the CLI -model flag) — but ONLY when this prompt starts
+            running immediately. When the session is busy and this request's
+            prompt is durably queued instead (see prompt_async's 202
+            `status: queued`), the override is silently dropped: `QueuedPrompt`
+            carries text only (docs/plans/2026-07-19-prompt-queue.md's
+            text-only v1 limit), so there is no slot to carry a per-prompt
+            override through to a future drain. Re-issue the request once it
+            is confirmed `started` if the override must take effect.
 
     Event:
       type: object
@@ -1319,6 +1326,8 @@ paths:
         a labeled operator interjection. `DELETE /session/{id}/queue` clears
         anything still waiting. The workdir-held-by-another-session 409
         below is unchanged — only same-session busy gets queue semantics.
+        A `model` override on a request whose prompt ends up queued is
+        silently dropped — see `model` in PromptRequest below.
       parameters:
         - $ref: "#/components/parameters/sessionID"
       requestBody:
@@ -1381,10 +1390,16 @@ paths:
         ahead of a known-large tool result, operator-triggered cleanup, or a
         caller that disables the automatic path entirely and drives it
         manually. Claims the session's single run slot exactly like
-        prompt_async/goal (so a concurrent prompt_async or goal is 409), but
-        runs synchronously — the response carries the full result, there is
-        no async job to poll. A successful, non-empty compaction emits the
-        summary via an ordinary `message` event first, then a durable
+        prompt_async/goal — calling compact itself against an already-busy
+        session is 409 (see below) — then runs synchronously: the response
+        carries the full result, there is no async job to poll. The reverse
+        is asymmetric: claimForPrompt does not distinguish what currently
+        holds the slot, so a prompt_async or goal request that arrives while
+        THIS compact call is running does not 409 either — it durably
+        queues (prompt_async, docs/plans/2026-07-19-prompt-queue.md) or
+        registers/updates-in-place (goal), exactly as it would against a
+        busy prompt or goal loop. A successful, non-empty compaction emits
+        the summary via an ordinary `message` event first, then a durable
         `history.compacted` event/record (see the Event schema).
       parameters:
         - $ref: "#/components/parameters/sessionID"
@@ -1496,9 +1511,12 @@ paths:
             session set workdir_isolation="worktree" (the error names the
             holder session) — or a genuinely unclaimable session state (e.g.
             a concurrent registration lost an internal race). A plain
-            prompt_async while a goal loop runs still 409s the same way (the
-            goal occupies the run slot); a second goal POST while a goal
-            loop runs does NOT — see the 200 case above.
+            prompt_async while a goal loop runs no longer reaches this
+            response either (docs/plans/2026-07-19-prompt-queue.md): it is
+            durably queued instead (`status: queued` on prompt_async's 202)
+            and dispatched as a labeled operator interjection at the loop's
+            next turn boundary; a second goal POST while a goal loop runs
+            also does NOT 409 — see the 200 case above.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
