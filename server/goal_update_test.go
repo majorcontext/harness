@@ -542,6 +542,55 @@ func TestDeleteGoalDuringArmedPromptLeavesPromptRunning(t *testing.T) {
 	}
 }
 
+// TestClaimForPromptResetsStaleGoalLoop is a white-box, direct test of
+// claimForPrompt's own defense-in-depth reset (server/handlers.go, PR review
+// finding): every OTHER path that flips goalLoop back to false already runs
+// at some occupant's tail (runPrompt's, runGoal's, handleCompact's,
+// handleGoal's two rollback branches -- see the goalLoop field's doc comment
+// in server.go), so the flag's correctness has always depended on every one
+// of those tails running. This test proves the independent, cheaper
+// invariant claimForPrompt itself now provides: even if EVERY tail were
+// skipped (simulated here by forcing goalLoop = true directly on an idle,
+// resident sessionState with no tail ever having reset it), the next
+// successful claim resets it to false unconditionally -- so a stale true can
+// never survive into a new occupancy no matter what came before.
+func TestClaimForPromptResetsStaleGoalLoop(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	id := h.createSession("test/m1")
+
+	h.srv.mu.Lock()
+	st := h.srv.sessions[id]
+	if st == nil {
+		h.srv.mu.Unlock()
+		t.Fatal("session not resident after createSession")
+	}
+	// Force the stale state directly, bypassing every tail that would
+	// ordinarily reset it: idle (not running), but goalLoop left true, as if
+	// some prior occupant's tail-reset never ran.
+	st.running = false
+	st.cancel = nil
+	st.goalLoop = true
+	h.srv.mu.Unlock()
+
+	claimed, ctx, _, code, _ := h.srv.claimForPrompt(id)
+	if code != 0 {
+		t.Fatalf("claimForPrompt code = %d, want 0 (success)", code)
+	}
+	if claimed.goalLoop {
+		t.Error("goalLoop = true after claimForPrompt, want false: the claim site must reset it independent of any tail")
+	}
+
+	// Release the claim so the harness's cleanup (Drain) doesn't hang on a
+	// permanently-running session.
+	h.srv.mu.Lock()
+	claimed.running = false
+	claimed.cancel = nil
+	h.srv.mu.Unlock()
+	if ctx.Err() != nil {
+		t.Fatalf("claimed ctx already done: %v", ctx.Err())
+	}
+}
+
 // TestGoalToolSetAutoArmsAfterPrompt is the headline user story from
 // docs/plans/2026-07-19-goal-self-adjust.md: a prompt whose scripted tool
 // call invokes the `goal` session tool's `set` action (registering a goal

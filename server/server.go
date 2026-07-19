@@ -335,7 +335,10 @@ type sessionState struct {
 	// a goal loop (a runGoal call), false when it is a plain prompt (or
 	// nothing, its zero value). Set at every site that spawns runGoal while
 	// holding the claim (handleGoal's fresh-start and re-arm paths,
-	// handleGoalBusy's retry-win path, maybeAutoArmGoal) and reset to false
+	// handleGoalBusy's retry-win path, maybeAutoArmGoal) -- always AFTER
+	// claimForPrompt itself has returned, never before -- and reset to false
+	// both at claimForPrompt's own claim site (so the flag is self-contained
+	// and never depends on a previous occupant's tail having run) and
 	// everywhere running/cancel themselves are reset (runPrompt's and
 	// runGoal's tails, handleCompact's tail, and handleGoal's two rollback
 	// branches) -- so it always names the true occupant, never stale from a

@@ -1480,6 +1480,13 @@ func (s *Server) currentSeq() int64 {
 // StatusConflict (already running, or another running session holds the same
 // workdir — see workdirHolderLocked — in which case holder names it). code ==
 // 0 means success.
+//
+// A successful claim also resets st.goalLoop to false (see the field's doc
+// comment in server.go): the claim site is the natural place for this
+// because every occupant that wants goalLoop true sets it only after this
+// function returns, so the reset here can never race a legitimate true. This
+// makes the flag self-contained rather than relying solely on every prior
+// occupant's tail having reset it.
 func (s *Server) claimForPrompt(id string) (st *sessionState, ctx context.Context, fromSeq int64, code int, holder string) {
 	s.mu.Lock()
 	if s.draining {
@@ -1521,6 +1528,12 @@ func (s *Server) claimForPrompt(id string) (st *sessionState, ctx context.Contex
 	ctx, cancel := context.WithCancel(context.Background())
 	st.running = true
 	st.cancel = cancel
+	// Reset here too, not just at every prior occupant's tail: this makes the
+	// claim self-contained rather than trusting every past and future tail to
+	// reset it, and it is always correct because every runGoal-spawning call
+	// site below sets it back to true only AFTER claimForPrompt returns (never
+	// before), so this can never stomp a legitimate true.
+	st.goalLoop = false
 	s.wg.Add(1)
 	// A cold load grew the resident set; cap it now. st is running, so
 	// evictResidentLocked will not evict the session we just claimed.
