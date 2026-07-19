@@ -1734,6 +1734,17 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// Deferred (not called bare at the tail) so it runs even if Compact or
+	// either of the tail's own maybeDispatchQueued/maybeAutoArmGoal calls
+	// panics -- a bare call would never execute past a panic, leaking this
+	// claim's wg.Add and hanging Drain forever. A defer here still runs
+	// strictly after those tail calls (defers fire after the function body's
+	// remaining statements, on any return path — panic or normal), so the
+	// wg.Add-before-wg.Done ordering those calls rely on (see the comment at
+	// the call site below) is unchanged; this only adds panic-safety, same
+	// shape as runPrompt's/runGoal's own `defer s.wg.Done()`. See
+	// TestCompactPanicReleasesClaim.
+	defer s.wg.Done()
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 
 	opts := engine.CompactOptions{Model: model}
@@ -1764,14 +1775,16 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	// sit stranded just because the run slot happened to be released by
 	// compact instead of an ordinary prompt or goal turn — see
 	// maybeDispatchQueued/maybeAutoArmGoal's own doc comments for the full
-	// race analysis, identical here. wg.Done for THIS claim is deferred
-	// until after both checks so the WaitGroup never transiently reads zero
-	// between this claim's release and a dispatched/auto-armed one's own
-	// wg.Add (mirrors runPrompt's defer-at-function-exit shape).
+	// race analysis, identical here. wg.Done for THIS claim is the deferred
+	// call above, which fires after both checks below (defers run after the
+	// function body's remaining statements), so the WaitGroup never
+	// transiently reads zero between this claim's release and a
+	// dispatched/auto-armed one's own wg.Add (mirrors runPrompt's
+	// defer-at-function-exit shape) — and, unlike a bare call here, still
+	// fires even if one of these two calls (or Compact above) panics.
 	if !s.maybeDispatchQueued(id, st) {
 		s.maybeAutoArmGoal(id, st)
 	}
-	s.wg.Done()
 
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, plugin.SanitizeSessionError(err.Error()))
