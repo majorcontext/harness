@@ -36,6 +36,14 @@ const (
 	recGoalStalled  = "goal.stalled"
 	recGoalAchieved = "goal.achieved"
 	recGoalCleared  = "goal.cleared"
+	// recPromptQueued/recPromptDequeued are the prompt-queue records (see
+	// queue.go and docs/plans/2026-07-19-prompt-queue.md): one prompt.queued
+	// per EnqueuePrompt call, one prompt.dequeued per pop (whatever the
+	// reason — delivered/injected/cleared). Queued text never becomes a
+	// recMessage until delivered, so these are the only durable trace of a
+	// pending prompt.
+	recPromptQueued   = "prompt.queued"
+	recPromptDequeued = "prompt.dequeued"
 	// recCompact is the compaction record (see compact.go and docs/design/
 	// context-compaction.md §2 "Journal shape"): one per successful
 	// Session.Compact call, carrying the full summary message inline (not
@@ -62,6 +70,9 @@ type record struct {
 	Message       *message.Message `json:"message,omitempty"`
 	Model         message.ModelRef `json:"model,omitzero"`
 	Goal          *goalRecord      `json:"goal,omitempty"`
+	// Prompt carries a prompt.queued/prompt.dequeued record's payload (see
+	// promptRecord and queue.go). nil on every other record type.
+	Prompt *promptRecord `json:"prompt,omitempty"`
 	// Usage carries the provider's per-turn Usage on the message record for
 	// the assistant message ending a model turn (nil for every other
 	// message: user, tool, or an interrupted partial assistant message —
@@ -123,6 +134,21 @@ type goalRecord struct {
 	Retryable      bool   `json:"retryable,omitempty"`
 	RetryableClass string `json:"retryable_class,omitempty"`
 	Waiting        bool   `json:"waiting,omitempty"`
+}
+
+// promptRecord carries the durable payload of a prompt.queued/
+// prompt.dequeued record (see queue.go). String-only, mirroring goalRecord —
+// v1's prompt contract is text parts only (see AGENTS.md), so no attachment
+// machinery is needed here. ID is the queue-assigned, session-monotonic
+// prompt ID. Text is the queued prompt, carried on BOTH record types (not
+// just prompt.queued) so a prompt.dequeued record is self-describing without
+// cross-referencing the matching prompt.queued one earlier in the log.
+// Reason is empty on prompt.queued and one of "delivered"/"injected"/
+// "cleared" on prompt.dequeued (see DequeuePrompt/dequeueAllLocked).
+type promptRecord struct {
+	ID     int64  `json:"id,omitempty"`
+	Text   string `json:"text,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // SessionInfo summarizes one persisted session for listings.
@@ -218,6 +244,23 @@ func (s *Session) persistGoalLocked(recType string, g goalRecord) {
 		return
 	}
 	if err := s.writeRecord(record{Type: recType, Goal: &g}); err != nil {
+		s.lastPersistErr = err
+	}
+}
+
+// persistPromptQueueLocked appends a prompt.queued or prompt.dequeued record
+// to the session log (see queue.go's EnqueuePrompt/DequeuePrompt). It forces
+// the log to exist — a prompt.queued may be the first thing ever written to
+// a fresh session — mirroring persistGoalLocked exactly. Caller holds s.mu.
+func (s *Session) persistPromptQueueLocked(recType string, p promptRecord) {
+	if s.cfg.SessionDir == "" {
+		return
+	}
+	if err := s.ensureLog(); err != nil {
+		s.lastPersistErr = err
+		return
+	}
+	if err := s.writeRecord(record{Type: recType, Prompt: &p}); err != nil {
 		s.lastPersistErr = err
 	}
 }
@@ -411,6 +454,32 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// reset). A goal.stalled record never changes goalActive by
 			// itself — either a later goal.stalled retries, or a later
 			// goal.cleared/goal.eval settles it, both handled above.
+		case recPromptQueued:
+			// Append to the folded queue and advance the next-ID counter past
+			// whatever this record used, so a resumed session's next
+			// EnqueuePrompt continues the same monotonic sequence instead of
+			// colliding with (or repeating) an ID already on disk — even if a
+			// prior process crashed right after writing this record without
+			// ever incrementing its own in-memory counter further.
+			if rec.Prompt != nil {
+				s.promptQueue = append(s.promptQueue, QueuedPrompt{ID: rec.Prompt.ID, Text: rec.Prompt.Text})
+				if rec.Prompt.ID >= s.promptQueueNextID {
+					s.promptQueueNextID = rec.Prompt.ID + 1
+				}
+			}
+		case recPromptDequeued:
+			// Remove the matching queued entry (by ID, not position — see
+			// promptRecord's doc comment) so the folded queue ends up exactly
+			// the undelivered set, in ID order, regardless of how queued and
+			// dequeued records interleave in the log.
+			if rec.Prompt != nil {
+				for i, p := range s.promptQueue {
+					if p.ID == rec.Prompt.ID {
+						s.promptQueue = append(s.promptQueue[:i], s.promptQueue[i+1:]...)
+						break
+					}
+				}
+			}
 		case recCompact:
 			// See docs/design/context-compaction.md §2 "LoadSession
 			// replay": find FirstID/LastID within s.history accumulated so
