@@ -717,6 +717,17 @@ func (s *Server) compositeStateFor(id string, running bool) string {
 // drain. Queued carries the current queue depth (including this request's
 // own prompt) only when status is "queued" — omitted (0) on "started",
 // where it would be meaningless.
+//
+// One narrow exception: Queued reads 0 (and so is omitted, same JSON shape
+// as "started") on a "queued" response when a concurrent DELETE
+// /session/{id}/queue cleared the entire queue — including this request's
+// own just-enqueued prompt — in the gap between this call's own enqueue and
+// its dispatch-the-head attempt (see the two dispatchQueueHead call sites'
+// doc comments). This is the most honest shape the existing vocabulary
+// offers for "accepted, then cleared before it ran": the request was not an
+// error (its prompt WAS durably enqueued and journaled), it simply never
+// got the chance to run. See TestQueueClearRaceDuringIdleDispatchIsNotAnError
+// and TestQueueClearRaceDuringDispatchIsNotAnError.
 type promptAsyncResponse struct {
 	Seq    int64  `json:"seq"`
 	Status string `json:"status"`
@@ -812,14 +823,34 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		if s.queueDispatchRace != nil {
+			// Test-only seam (see enqueueOrDispatch's identical use): let a
+			// test force a concurrent DELETE /session/{id}/queue to land
+			// deterministically in the gap between the EnqueuePrompt above
+			// and the DequeuePrompt inside dispatchQueueHead below. Nil in
+			// production.
+			s.queueDispatchRace()
+		}
 		head, ok := s.dispatchQueueHead(id, st, ctx)
 		if !ok {
-			// Structurally unreachable: EnqueuePrompt above just added at
-			// least one item under sess's own mutex, and the run slot is
-			// ours — nothing else can drain concurrently. Fail closed
-			// rather than leave the claim stuck running with nothing
-			// driving it (dispatchQueueHead already released it).
-			writeErr(w, http.StatusInternalServerError, "prompt queue emptied unexpectedly")
+			// Benign race, not a bug: a concurrent DELETE /session/{id}/queue
+			// (safe to call regardless of run-slot state — see its own doc
+			// comment) cleared the ENTIRE queue, including the prompt
+			// EnqueuePrompt just added above, in the gap between that
+			// enqueue and this dispatch attempt — dispatchQueueHead already
+			// released the run-slot claim taken above, exactly like
+			// runPrompt's own tail would. This request's own prompt WAS
+			// accepted (durably enqueued and journaled) but never ran:
+			// report the most honest shape the existing status vocabulary
+			// offers — "queued" with the current (now necessarily zero)
+			// depth — rather than a 500, which would misrepresent a benign,
+			// documented race as a server bug. See
+			// TestQueueClearRaceDuringIdleDispatchIsNotAnError and
+			// promptAsyncResponse's queued field doc for why depth 0 is
+			// possible here.
+			writeJSON(w, http.StatusAccepted, promptAsyncResponse{
+				Seq: fromSeq, Status: "queued", Queued: len(st.sess.QueuedPrompts()),
+			})
 			return
 		}
 		status := "queued"
@@ -931,13 +962,22 @@ func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string
 	}
 	head, ok := s.dispatchQueueHead(id, st, ctx)
 	if !ok {
-		// Structurally unreachable: EnqueuePrompt above just added at least
-		// one item under sess's own mutex, and nothing else drains the queue
-		// except a delivery or a clear — neither of which this handler
-		// triggered. Fail closed rather than leave the claim stuck running
-		// with nothing to dispatch (dispatchQueueHead already released it,
-		// exactly like runPrompt's own tail would).
-		writeErr(w, http.StatusInternalServerError, "prompt queue emptied unexpectedly")
+		// Benign race, not a bug: a concurrent DELETE /session/{id}/queue
+		// cleared the ENTIRE queue — including the prompt this call's own
+		// EnqueuePrompt just added above — somewhere in the gap between
+		// that enqueue and this dispatch attempt (the seam above is one
+		// deterministic way a test can land squarely in that gap;
+		// dispatchQueueHead has already released the run-slot claim taken
+		// by claimForPrompt just above, exactly like runPrompt's own tail
+		// would). This request's own prompt WAS accepted (durably enqueued
+		// and journaled) but never ran: report the same honest shape
+		// handlePrompt's idle-with-queue branch uses for this identical
+		// race — "queued" with the current (now necessarily zero) depth —
+		// rather than a 500, which would misrepresent a benign, documented
+		// race as a server bug. See TestQueueClearRaceDuringDispatchIsNotAnError.
+		writeJSON(w, http.StatusAccepted, promptAsyncResponse{
+			Seq: s.currentSeq(), Status: "queued", Queued: len(sess.QueuedPrompts()),
+		})
 		return
 	}
 

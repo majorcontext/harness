@@ -236,13 +236,19 @@ type Server struct {
 	autoArmRace func()
 
 	// queueDispatchRace is a test-only seam mirroring autoArmRace: when
-	// non-nil, both enqueueOrDispatch (handlePrompt's same-session-busy
-	// branch) and maybeDispatchQueued invoke it right before their own
-	// claimForPrompt call, letting a test force a real concurrent claim
-	// attempt (another prompt_async, a goal auto-arm, or another
-	// maybeDispatchQueued call) to land deterministically instead of
-	// relying on an unobserved goroutine-scheduling coin flip (see
-	// TestPromptQueueRaceWithFreedSlot). Always nil in production.
+	// non-nil, enqueueOrDispatch (handlePrompt's same-session-busy branch)
+	// and maybeDispatchQueued invoke it right before their own claimForPrompt
+	// call, letting a test force a real concurrent claim attempt (another
+	// prompt_async, a goal auto-arm, or another maybeDispatchQueued call) to
+	// land deterministically instead of relying on an unobserved
+	// goroutine-scheduling coin flip (see TestPromptQueueRaceWithFreedSlot).
+	// handlePrompt's own idle-with-queue branch invokes it too, right before
+	// its dispatchQueueHead call, so a test can also force a concurrent
+	// DELETE /session/{id}/queue into the narrow gap between that branch's
+	// EnqueuePrompt and its dispatch attempt (see
+	// TestQueueClearRaceDuringIdleDispatchIsNotAnError and
+	// TestQueueClearRaceDuringDispatchIsNotAnError). Always nil in
+	// production.
 	queueDispatchRace func()
 
 	// queueDeleteRace is a test-only seam: when non-nil, handleQueueDelete's

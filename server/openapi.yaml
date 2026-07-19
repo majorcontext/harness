@@ -574,7 +574,13 @@ components:
           type: integer
           description: >
             Current queue depth, including this request's own prompt.
-            Present (and non-zero) only when status is `queued`.
+            Present (and non-zero) only when status is `queued` — with one
+            narrow exception: it reads (and so, absent) 0 on a `queued`
+            response when a concurrent DELETE /session/{id}/queue cleared
+            the entire queue, including this request's own just-enqueued
+            prompt, before it could be dispatched. That is not an error —
+            the prompt was durably accepted and journaled, it simply never
+            ran — so this case is still a 202, never a 500.
 
     PromptRequest:
       type: object
