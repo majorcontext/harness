@@ -31,6 +31,7 @@ const (
 	recMessage      = "message"
 	recModel        = "model"
 	recGoalSet      = "goal.set"
+	recGoalUpdated  = "goal.updated"
 	recGoalEval     = "goal.eval"
 	recGoalStalled  = "goal.stalled"
 	recGoalAchieved = "goal.achieved"

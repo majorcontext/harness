@@ -853,6 +853,34 @@ func (s *Session) RegisterGoal(condition string) error {
 	return nil
 }
 
+// UpdateGoal rewrites the condition of an already-active goal: it journals a
+// goal.updated record and emits EventGoalUpdated, following RegisterGoal's
+// persist-and-emit-while-holding-s.mu shape exactly. It errors if no goal is
+// currently active — use RegisterGoal to start one. Updating to the exact
+// same condition (after trimming) is a silent no-op: nil error, no record, no
+// event, since nothing actually changed.
+func (s *Session) UpdateGoal(condition string) error {
+	if strings.TrimSpace(condition) == "" {
+		return errors.New("engine: UpdateGoal requires a non-empty condition")
+	}
+	s.mu.Lock()
+	if !s.goalActive {
+		s.mu.Unlock()
+		return errors.New("engine: no active goal to update")
+	}
+	if s.goalCondition == condition {
+		s.mu.Unlock()
+		return nil
+	}
+	s.goalCondition = condition
+	s.persistGoalLocked(recGoalUpdated, goalRecord{Condition: condition})
+	// Emit while holding s.mu (see ClearGoal): event order matches log
+	// order. OnEvent must not call back into this Session.
+	s.emit(Event{Type: EventGoalUpdated, GoalCondition: condition})
+	s.mu.Unlock()
+	return nil
+}
+
 // goalActiveWith reports whether the given condition is the currently
 // active goal.
 func (s *Session) goalActiveWith(condition string) bool {

@@ -53,7 +53,7 @@ type Event struct {
 
 	// Goal-loop fields (set on goal.* events; see goal.go and the state
 	// machine documented atop goal.go). GoalCondition is carried by
-	// goal.set; GoalReason/GoalMet/GoalTurn by goal.eval; GoalReason/GoalTurn
+	// goal.set and goal.updated (the new condition); GoalReason/GoalMet/GoalTurn by goal.eval; GoalReason/GoalTurn
 	// by goal.stalled (GoalAttempt is the 1-based retry attempt);
 	// GoalReason/GoalTurns by goal.achieved; goal.cleared carries GoalReason
 	// when it was triggered by a permanently-failing worker turn, empty for
@@ -103,6 +103,7 @@ const (
 
 	// Goal-loop events (see goal.go).
 	EventGoalSet      = "goal.set"
+	EventGoalUpdated  = "goal.updated"
 	EventGoalEval     = "goal.eval"
 	EventGoalStalled  = "goal.stalled"
 	EventGoalAchieved = "goal.achieved"
