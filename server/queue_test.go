@@ -748,6 +748,96 @@ func TestIdlePromptWithQueueGoesFIFO(t *testing.T) {
 	}
 }
 
+// TestQueuedArrivalDoesNotRetargetSessionModel is the regression test for
+// the SetModel leak: handlePrompt's claim-success path used to call SetModel
+// on a per-request model override BEFORE checking whether the queue was
+// non-empty, so an idle-with-queue arrival retargeted the SESSION's model
+// even though a DIFFERENT, already-queued head is what actually gets
+// dispatched into the run slot -- contradicting the documented "a per-request
+// model override is silently dropped when the prompt is queued" rule (see
+// AGENTS.md's Prompt queue section and enqueueOrDispatch's identical rule for
+// the same-session-busy branch).
+//
+// The override here names a provider that is NOT registered
+// ("bogus/doesnotexist"): if the leak were still present, the dispatched
+// head's own turn would run under the retargeted (bogus) model and fail to
+// resolve a provider, surfacing as a turn error -- a strong, deterministic
+// signal that the override bled into the wrong turn, not just a same-value
+// coincidence.
+func TestQueuedArrivalDoesNotRetargetSessionModel(t *testing.T) {
+	dir := t.TempDir()
+	prov := &orderCaptureProv{name: "test", replies: []string{"r1", "r2"}}
+	srv1 := newServer(t, dir, prov, 0)
+	ts1 := httptest.NewServer(srv1)
+	h1 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv1, ts: ts1}
+
+	id := h1.createSession("test/m1")
+
+	srv1.mu.Lock()
+	st := srv1.sessions[id]
+	srv1.mu.Unlock()
+	if st == nil {
+		t.Fatal("session not resident right after creation")
+	}
+	if _, err := st.sess.EnqueuePrompt("q1"); err != nil {
+		t.Fatalf("EnqueuePrompt q1: %v", err)
+	}
+
+	if err := srv1.Close(); err != nil {
+		t.Fatalf("closing first server: %v", err)
+	}
+	ts1.Close()
+
+	// Restart: idle, one prompt already queued -- the same idle-with-queue
+	// shape TestIdlePromptWithQueueGoesFIFO exercises.
+	srv2 := newServer(t, dir, prov, 0)
+	ts2 := httptest.NewServer(srv2)
+	t.Cleanup(ts2.Close)
+	h2 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv2, ts: ts2}
+
+	before := h2.getSessionJSON(id)
+	if before.Queued != 1 || before.Model.String() != "test/m1" {
+		t.Fatalf("before override: queued=%d model=%q, want queued=1 model=test/m1", before.Queued, before.Model.String())
+	}
+
+	resp, data := h2.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "third"}},
+		"model": "bogus/doesnotexist",
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt status %d: %s", resp.StatusCode, data)
+	}
+	var qr promptAsyncResponse
+	if err := json.Unmarshal(data, &qr); err != nil {
+		t.Fatal(err)
+	}
+	if qr.Status != "queued" || qr.Queued != 1 {
+		t.Fatalf("response = %+v, want status=queued queued=1 (q1 is the dispatched head, not this arrival)", qr)
+	}
+
+	// The money assertion: the session's own model must be untouched by an
+	// override on a request whose prompt got queued, not dispatched.
+	afterResp := h2.getSessionJSON(id)
+	if afterResp.Model.String() != "test/m1" {
+		t.Fatalf("session model after queued-path override = %q, want unchanged test/m1", afterResp.Model.String())
+	}
+
+	// Let the dispatched head (q1) run to completion: it must succeed under
+	// the ORIGINAL model, never the dropped override.
+	resp, data = h2.do("GET", "/session/"+id+"/wait?until=idle&timeout_s=5", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("wait for idle status %d: %s", resp.StatusCode, data)
+	}
+
+	final := h2.getSessionJSON(id)
+	if final.Model.String() != "test/m1" {
+		t.Fatalf("final session model = %q, want unchanged test/m1", final.Model.String())
+	}
+	if final.LastTurn == nil || final.LastTurn.Outcome != "completed" {
+		t.Fatalf("dispatched head's turn outcome = %+v, want completed (a bled-in bogus model would fail to resolve a provider)", final.LastTurn)
+	}
+}
+
 // compactProv splits behavior by tool presence: an ordinary (tool-bearing)
 // prompt turn is served immediately from worker, scripted; the tool-less
 // compaction summarization call (see engine/compact.go's

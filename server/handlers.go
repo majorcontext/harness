@@ -783,15 +783,6 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Explicit model wins over the session's persisted model (CLI -model rule).
-	if !body.Model.IsZero() {
-		before := st.sess.Model()
-		st.sess.SetModel(body.Model)
-		if st.sess.Model() != before {
-			s.emitDurable(Event{Type: evtModel, SessionID: id, Model: body.Model})
-		}
-	}
-
 	if len(st.sess.QueuedPrompts()) > 0 {
 		// Global FIFO on an idle-with-queue session: the queue can be
 		// non-empty even though claimForPrompt just succeeded (the session
@@ -841,6 +832,24 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusAccepted, resp)
 		return
+	}
+
+	// Explicit model wins over the session's persisted model (CLI -model
+	// rule) -- applied only here, on the empty-queue fast path, because this
+	// is the one branch where THIS request's own prompt is actually the one
+	// about to run next. Applying it earlier (before the queue check above)
+	// retargeted the session's model even when a DIFFERENT, already-queued
+	// head was what actually got dispatched — contradicting the documented
+	// "a per-request model override is silently dropped when the prompt is
+	// queued" rule (see AGENTS.md's Prompt queue section and
+	// enqueueOrDispatch's identical rule for the same-session-busy branch).
+	// See TestQueuedArrivalDoesNotRetargetSessionModel.
+	if !body.Model.IsZero() {
+		before := st.sess.Model()
+		st.sess.SetModel(body.Model)
+		if st.sess.Model() != before {
+			s.emitDurable(Event{Type: evtModel, SessionID: id, Model: body.Model})
+		}
 	}
 
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
