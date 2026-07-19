@@ -784,18 +784,111 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	s.mu.Lock()
 	st.running = false
 	st.cancel = nil
+	st.goalLoop = false
 	st.lastUsed = time.Now()
 	s.evictResidentLocked()
 	s.mu.Unlock()
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
+
+	// Auto-arm (Task 5): a goal set (or self-adjust-set) mid-turn via the
+	// `goal` session tool, or armed by a POST /goal that arrived while this
+	// prompt was busy (handleGoalBusy's "armed" response), begins running
+	// now instead of sitting active-but-idle until an operator happens to
+	// re-poll. This runs AFTER the idle emit above so an SSE collector
+	// always observes the prompt's idle before the goal's own busy (see
+	// maybeAutoArmGoal's doc comment for the full race analysis).
+	s.maybeAutoArmGoal(id, st)
 }
 
-// handleGoal starts a goal loop on a session. Like prompt_async it claims the
-// session's single run slot (busy sessions are 409, shutdown is 503) and runs
-// PursueGoal on a tracked goroutine under the same wg/drain/abort semantics —
-// the goal occupies the session, so a concurrent prompt_async is 409. The
-// evaluator model comes from Options.GoalEvaluator (config goal_evaluator_model);
-// when unset, goals are rejected with 400.
+// maybeAutoArmGoal is called once, at the very tail of runPrompt — never
+// from runGoal's tail (see below) — after the prompt's own idle transition
+// has already been emitted. If this server has a configured goal evaluator
+// and the session's engine-level goal is active with no loop currently
+// attached (armed by a POST /goal that arrived while this prompt was busy —
+// see handleGoalBusy's "armed" 202 — or by the `goal` session tool's own
+// `set` action invoked mid-turn, per docs/plans/2026-07-19-goal-self-
+// adjust.md's headline user story), the goal loop starts running right now
+// instead of waiting for the next external poke.
+//
+// It reclaims the run slot itself via claimForPrompt, exactly like a fresh
+// POST /goal would. A losing race — the slot got claimed by an incoming
+// prompt_async or by handleGoalBusy's own single retry (see its doc
+// comment) between runPrompt's unclaim and this call — simply returns
+// without starting a second loop: whichever request won the claim is now
+// responsible for the session's next occupancy, and if that occupant is
+// itself a plain prompt, ITS OWN runPrompt tail will call maybeAutoArmGoal
+// again once it finishes, so the still-active goal is never stranded armed
+// forever — it just waits one more prompt's length of time. See
+// TestAutoArmRaceWithIncomingPrompt.
+//
+// Deliberately NOT called from runGoal's tail: every terminal outcome of
+// PursueGoal (achieved, cleared, max-turns-exhausted, or a permanent error)
+// either deactivates the goal or leaves it in the same "active, ordinarily
+// re-armable via POST /goal" state a goal has always been left in — none of
+// those is the "armed, waiting for a busy run slot to free up" state
+// auto-arm exists to bridge. Wiring auto-arm into runGoal's own tail as well
+// would add nothing this design needs while risking a self-sustaining spin
+// if a future change ever left a loop exiting with the goal still "active
+// and freshly re-armable" in the auto-arm sense.
+func (s *Server) maybeAutoArmGoal(id string, st *sessionState) {
+	if s.opts.GoalEvaluator.IsZero() {
+		return
+	}
+	condition, active := st.sess.ActiveGoal()
+	if !active {
+		return
+	}
+	if s.autoArmRace != nil {
+		s.autoArmRace()
+	}
+	claimedSt, ctx, _, code, _ := s.claimForPrompt(id)
+	if code != 0 {
+		return // lost the race; see the doc comment above
+	}
+	s.mu.Lock()
+	claimedSt.goalLoop = true
+	s.mu.Unlock()
+	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
+	go s.runGoal(ctx, id, claimedSt, condition, 0)
+}
+
+// goalPostResponse is POST /session/{id}/goal's success-response body: seq to
+// tail events from, plus status naming which of the three outcomes happened:
+//   - "started": a fresh loop is now running (the session was idle, or the
+//     retry in handleGoalBusy's "not active" branch won the freed slot).
+//   - "armed": the goal is registered, but the run slot is still held by a
+//     plain prompt; maybeAutoArmGoal starts the loop once that prompt ends.
+//   - "updated": an already-running loop's condition was rewritten in place;
+//     no new loop, no run-slot claim.
+type goalPostResponse struct {
+	Seq    int64  `json:"seq"`
+	Status string `json:"status"`
+}
+
+// handleGoal starts, updates, or arms a goal loop on a session — see
+// docs/plans/2026-07-19-goal-self-adjust.md's Task 5 for the full design.
+// Like prompt_async it claims the session's single run slot when the
+// session is idle; the evaluator model comes from Options.GoalEvaluator
+// (config goal_evaluator_model), and goals are rejected with 400 when it is
+// unset.
+//
+// When claimForPrompt succeeds (the session was idle), three outcomes:
+//   - no goal active: RegisterGoal, spawn runGoal, "started".
+//   - a goal is active (a paused/restart goal, or one left active-but-idle
+//     by an abort — see PursueGoal's context.Canceled branch) with the SAME
+//     condition: just resume it, "started".
+//   - active with a DIFFERENT condition: UpdateGoal rewrites it in place,
+//     then resume with the new condition, "started". This is the one
+//     behavior change from the pre-Task-5 contract, which 409'd here
+//     instead (see TestGoalReArmDifferentConditionUpdatesAndResumes) —
+//     claimForPrompt's success proves no loop is currently running to race
+//     UpdateGoal with, so updating in place is always safe here.
+//
+// When claimForPrompt 409s because THIS session's own run slot is already
+// held (empty holder — the non-empty-holder, workdir-held-by-ANOTHER-
+// session case is handled inline below, unchanged), handleGoalBusy takes
+// over: update-in-place (invariant 7) if a goal loop holds the slot, or
+// register-and-arm (invariants 8/9) if a plain prompt does.
 func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
@@ -824,7 +917,7 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 		case code == http.StatusConflict && holder != "":
 			writeErr(w, code, fmt.Sprintf("workdir busy: held by session %s", holder))
 		case code == http.StatusConflict:
-			writeErr(w, code, "session is busy")
+			s.handleGoalBusy(w, id, body.Condition, body.MaxTurns)
 		case code == http.StatusServiceUnavailable:
 			writeErr(w, code, "server shutting down")
 		default:
@@ -832,33 +925,38 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	// Deliverable 2(c): re-arming a paused/restart goal. claimForPrompt
-	// above only 409s on st.running — it knows nothing about goal state —
-	// so reaching here with the engine already reporting an active goal
-	// means exactly one thing: this session's goal is active with NO loop
+	// Re-arming a paused/restart (or post-abort) goal. claimForPrompt above
+	// only 409s on st.running — it knows nothing about goal state — so
+	// reaching here with the engine already reporting an active goal means
+	// exactly one thing: this session's goal is active with NO loop
 	// attached in this process. A genuinely running loop would already have
 	// 409'd via st.running above (handleGoal/runGoal hold the claim for the
 	// whole PursueGoal call), so this branch is unreachable for a live
 	// provider-backoff park — only the boot-time restart pause (see
-	// pauseArmedGoalsAtBoot) or an equivalent crash-before-spawn window
-	// reaches it. RegisterGoal would error "already active" here, so this
-	// resumes the EXISTING condition instead of registering a new one — a
-	// mismatched condition is rejected rather than silently resuming the
-	// wrong goal or (via PursueGoal's own registered-path check) spuriously
-	// reporting "goal cleared".
+	// pauseArmedGoalsAtBoot), an abort that deliberately left the goal
+	// active (see PursueGoal's context.Canceled branch), or an equivalent
+	// crash-before-spawn window reaches it.
 	condition := body.Condition
 	if existing, active := st.sess.ActiveGoal(); active {
 		if existing != body.Condition {
-			s.mu.Lock()
-			st.running = false
-			st.cancel = nil
-			st.lastUsed = time.Now()
-			s.mu.Unlock()
-			s.wg.Done()
-			writeErr(w, http.StatusConflict, fmt.Sprintf("a different goal is already active: %q", existing))
-			return
+			// See this function's doc comment: a different condition here
+			// now updates and resumes instead of rejecting. UpdateGoal can
+			// only fail on "no active goal", which ActiveGoal() just ruled
+			// out — structurally unreachable, but fail closed rather than
+			// silently resuming the wrong condition if that ever changes.
+			if err := st.sess.UpdateGoal(body.Condition); err != nil {
+				s.mu.Lock()
+				st.running = false
+				st.cancel = nil
+				st.goalLoop = false
+				st.lastUsed = time.Now()
+				s.mu.Unlock()
+				s.wg.Done()
+				writeErr(w, http.StatusConflict, err.Error())
+				return
+			}
 		}
-		condition = existing
+		condition = body.Condition
 		s.mu.Lock()
 		if g := s.goalState[id]; g != nil {
 			// Reset ALL pause-relevant fold state, mirroring the
@@ -883,16 +981,83 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		st.running = false
 		st.cancel = nil
+		st.goalLoop = false
 		st.lastUsed = time.Now()
 		s.mu.Unlock()
 		s.wg.Done()
 		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
+	s.mu.Lock()
+	st.goalLoop = true
+	s.mu.Unlock()
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 
 	go s.runGoal(ctx, id, st, condition, body.MaxTurns)
-	writeJSON(w, http.StatusAccepted, map[string]int64{"seq": fromSeq})
+	writeJSON(w, http.StatusAccepted, goalPostResponse{Seq: fromSeq, Status: "started"})
+}
+
+// handleGoalBusy implements handleGoal's same-session-busy branch:
+// claimForPrompt 409'd with an empty holder, meaning something in THIS
+// session already holds the run slot — either a running goal loop or a
+// plain prompt (the workdir-held-by-ANOTHER-session case is handled inline
+// in handleGoal and never reaches here).
+func (s *Server) handleGoalBusy(w http.ResponseWriter, id string, condition string, maxTurns int) {
+	sess := s.residentSession(id)
+	if sess == nil {
+		// Reachable, in a narrow window: claimForPrompt found the session
+		// resident and running (hence the 409 that routed us here), but
+		// s.mu is released between that check and this residentSession
+		// call. If the busy prompt/goal finishes in that gap, the session
+		// goes idle and an eviction sweep (evictResidentLocked, run from
+		// several other request paths) can unload it before we look. The
+		// 409 below is benign — nothing was mutated — and a client retry
+		// resolves it against a freshly (re)loaded, now-idle session.
+		writeErr(w, http.StatusConflict, "session is busy")
+		return
+	}
+	if existing, active := sess.ActiveGoal(); active {
+		// A goal loop is running RIGHT NOW: claimForPrompt's 409 plus an
+		// active goal can only mean the loop itself holds the slot for the
+		// whole PursueGoal call (see runGoal) — a plain prompt never leaves
+		// ActiveGoal() true. Update in place: no second loop, no run-slot
+		// claim (invariant 7).
+		if existing != condition {
+			if err := sess.UpdateGoal(condition); err != nil {
+				writeErr(w, http.StatusConflict, err.Error())
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, goalPostResponse{Seq: s.currentSeq(), Status: "updated"})
+		return
+	}
+
+	// No goal active: a plain prompt occupies the slot. Register the goal
+	// now — RegisterGoal needs no run slot — so it exists the instant this
+	// call returns, then retry the claim ONCE. This closes the race where
+	// the prompt's own runPrompt tail (and its maybeAutoArmGoal auto-arm
+	// check) runs between our failed claim above and this RegisterGoal: if
+	// that happened, RegisterGoal is exactly what maybeAutoArmGoal was
+	// waiting to see, and this retry either wins the now-free slot itself
+	// (spawning the loop here) or loses it to that same auto-arm call
+	// (which will already have spawned it) — either way the goal starts
+	// exactly once, never zero times, never twice. See maybeAutoArmGoal's
+	// doc comment for the other half of this argument.
+	if err := sess.RegisterGoal(condition); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	st, ctx, fromSeq, code, _ := s.claimForPrompt(id)
+	if code == 0 {
+		s.mu.Lock()
+		st.goalLoop = true
+		s.mu.Unlock()
+		s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
+		go s.runGoal(ctx, id, st, condition, maxTurns)
+		writeJSON(w, http.StatusAccepted, goalPostResponse{Seq: fromSeq, Status: "started"})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, goalPostResponse{Seq: s.currentSeq(), Status: "armed"})
 }
 
 // runGoal drives one PursueGoal to completion, then flips the session back to
@@ -954,6 +1119,7 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 	s.mu.Lock()
 	st.running = false
 	st.cancel = nil
+	st.goalLoop = false
 	st.lastUsed = time.Now()
 	s.evictResidentLocked()
 	s.mu.Unlock()
@@ -962,9 +1128,18 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 
 // handleGoalDelete cancels an active goal loop: it clears the goal (journaling
 // goal.cleared and resetting the engine's goal state), THEN cancels the loop
-// context (stopping further turns). Unknown session (not resident, no log on
-// disk) is 404; a known session is 204 whether or not a goal was active
-// (idempotent — no goal.cleared is journaled when nothing was active).
+// context (stopping further turns) -- but ONLY when the run slot's current
+// occupant IS a goal loop (st.goalLoop). A goal can be active while a PLAIN
+// PROMPT holds the slot (the 202 "armed" path -- see handleGoalBusy's
+// register-and-arm branch and maybeAutoArmGoal): in that window st.cancel
+// belongs to the prompt, not to any loop, and cancelling it would abort that
+// prompt's turn (typically the very turn that armed the goal via the `goal`
+// session tool). See TestDeleteGoalDuringArmedPromptLeavesPromptRunning.
+// Clearing the goal is enough in that case: maybeAutoArmGoal's own tail check
+// (run when the prompt finishes) reads ActiveGoal() as false and no-ops, so
+// no loop ever starts. Unknown session (not resident, no log on disk) is
+// 404; a known session is 204 whether or not a goal was active (idempotent
+// -- no goal.cleared is journaled when nothing was active).
 //
 // Ordering guarantee: goal.cleared is always journaled before the
 // session.status idle record that ends that goal's occupancy (see runGoal and
@@ -974,6 +1149,17 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 // handler to the journal, and an SSE collector that reads until idle (the
 // wire contract every client relies on) could see goal.set but never
 // goal.cleared.
+//
+// Non-resident-but-on-disk case (issue #78): a session with no in-memory
+// sessionState at all is not necessarily gone -- it may be exactly the
+// boot-time restart-paused goal (pauseArmedGoalsAtBoot): active in the
+// journal, paused/restart in goalState, with no loop ever attached in this
+// process. That is precisely the case an operator needs DELETE /goal to be
+// able to clear. The old code's `st != nil` guard skipped ClearGoal for it
+// entirely -- still returning 204 (nothing to reject), but journaling
+// nothing, never flipping engine.Session.goalActive, and leaving
+// goalState[id].active true so the goal re-paused at the next boot. See
+// TestDeleteGoalNonResidentClearsAndJournals for the red/green case.
 func (s *Server) handleGoalDelete(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
@@ -981,15 +1167,47 @@ func (s *Server) handleGoalDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	st := s.sessions[id]
+	s.mu.Unlock()
+	if st == nil {
+		// Not resident: load it from disk exactly like claimForPrompt's cold
+		// path -- LoadSession OUTSIDE s.mu (it may hit disk), then re-acquire
+		// the lock and re-check for a resident that appeared in the
+		// meantime (a concurrent POST /goal or /prompt_async racing us),
+		// using that winner instead so two *engine.Session instances for the
+		// same log are never both mutated. See claimForPrompt's doc comment
+		// for the full race argument this mirrors.
+		//
+		// The freshly loaded session is made resident here (lastUsed set,
+		// evictResidentLocked invoked) -- deliberately, rather than used
+		// transiently and discarded. That keeps exactly one "load a cold
+		// session into residency" shape in this server (claimForPrompt's),
+		// instead of a second copy of its race handling that would need to
+		// be kept in sync by hand. It costs nothing beyond one ordinary
+		// MaxResident slot: the loaded session is idle (running/goalLoop are
+		// both the zero value false), so it is immediately eviction-eligible
+		// like any other idle resident on the next evictResidentLocked
+		// sweep.
+		sess, err := s.opts.LoadSession(id)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, "no such session")
+			return
+		}
+		s.mu.Lock()
+		if ex := s.sessions[id]; ex != nil {
+			st = ex // a resident appeared while we loaded; use the winner
+		} else {
+			st = &sessionState{sess: sess, lastUsed: time.Now()}
+			s.sessions[id] = st
+			s.evictResidentLocked()
+		}
+		s.mu.Unlock()
+	}
+	s.mu.Lock()
 	var cancel context.CancelFunc
-	if st != nil {
+	if st.goalLoop {
 		cancel = st.cancel
 	}
 	s.mu.Unlock()
-	if st == nil && !s.sessionOnDisk(id) {
-		writeErr(w, http.StatusNotFound, "no such session")
-		return
-	}
 	// Orderly shutdown: clear BEFORE cancel. ClearGoal journals goal.cleared
 	// and emits the event synchronously, under the session's own lock,
 	// before it returns (see engine.Session.ClearGoal) — so by the time
@@ -1001,11 +1219,12 @@ func (s *Server) handleGoalDelete(w http.ResponseWriter, r *http.Request) {
 	// until idle (the wire contract every client relies on) would never see
 	// the clear. See TestGoalDeleteClearBeforeIdleRace, which forces that
 	// worst case deterministically.
-	if st != nil {
-		// ClearGoal journals goal.cleared (via OnEvent -> publishGoal) and
-		// resets the engine goal state; a no-op when no goal is active.
-		st.sess.ClearGoal()
-	}
+	//
+	// ClearGoal journals goal.cleared (via OnEvent -> publishGoal, wired the
+	// same way whether st.sess came from claimForPrompt's residency, this
+	// handler's own cold-load branch above, or was already resident) and
+	// resets the engine goal state; a no-op when no goal is active.
+	st.sess.ClearGoal()
 	if s.goalDeleteRace != nil {
 		// Handed cancel (rather than a bare notification) so a test can force
 		// the worst case unconditionally: fire the worker's unblock as early
@@ -1159,6 +1378,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	st.running = false
 	st.cancel = nil
+	st.goalLoop = false
 	st.lastUsed = time.Now()
 	s.evictResidentLocked()
 	s.mu.Unlock()
@@ -1215,6 +1435,29 @@ func (s *Server) lookup(id string) (*engine.Session, string, bool) {
 	return sess, "idle", true
 }
 
+// residentSession returns the resident *engine.Session for id, or nil if the
+// session is not currently resident. Unlike claimForPrompt, this never loads
+// from disk and never claims the run slot — it is only used by
+// handleGoalBusy, whose caller (handleGoal) reaches it exclusively when
+// claimForPrompt just reported id as resident and running.
+func (s *Server) residentSession(id string) *engine.Session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if st := s.sessions[id]; st != nil {
+		return st.sess
+	}
+	return nil
+}
+
+// currentSeq reads the durable journal's current sequence counter, for a
+// response that (unlike claimForPrompt's fromSeq) does not correspond to a
+// run-slot claim.
+func (s *Server) currentSeq() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.seq
+}
+
 // claimForPrompt atomically resolves the session for id and claims its single
 // prompt slot. It replaces the old getOrLoad-then-claim two-step on the write
 // path, which left a gap between resolving the resident session and setting
@@ -1237,6 +1480,13 @@ func (s *Server) lookup(id string) (*engine.Session, string, bool) {
 // StatusConflict (already running, or another running session holds the same
 // workdir — see workdirHolderLocked — in which case holder names it). code ==
 // 0 means success.
+//
+// A successful claim also resets st.goalLoop to false (see the field's doc
+// comment in server.go): the claim site is the natural place for this
+// because every occupant that wants goalLoop true sets it only after this
+// function returns, so the reset here can never race a legitimate true. This
+// makes the flag self-contained rather than relying solely on every prior
+// occupant's tail having reset it.
 func (s *Server) claimForPrompt(id string) (st *sessionState, ctx context.Context, fromSeq int64, code int, holder string) {
 	s.mu.Lock()
 	if s.draining {
@@ -1278,6 +1528,12 @@ func (s *Server) claimForPrompt(id string) (st *sessionState, ctx context.Contex
 	ctx, cancel := context.WithCancel(context.Background())
 	st.running = true
 	st.cancel = cancel
+	// Reset here too, not just at every prior occupant's tail: this makes the
+	// claim self-contained rather than trusting every past and future tail to
+	// reset it, and it is always correct because every runGoal-spawning call
+	// site below sets it back to true only AFTER claimForPrompt returns (never
+	// before), so this can never stomp a legitimate true.
+	st.goalLoop = false
 	s.wg.Add(1)
 	// A cold load grew the resident set; cap it now. st is running, so
 	// evictResidentLocked will not evict the session we just claimed.

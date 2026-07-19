@@ -79,10 +79,53 @@ func apiError(resp *http.Response) error {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(raw, &body); err == nil && body.Error.Message != "" {
-		return fmt.Errorf("openai: %s (%s, HTTP %d)", body.Error.Message, body.Error.Type, resp.StatusCode)
+	var err error
+	if json.Unmarshal(raw, &body) == nil && body.Error.Message != "" {
+		err = fmt.Errorf("openai: %s (%s, HTTP %d)", body.Error.Message, body.Error.Type, resp.StatusCode)
+	} else {
+		err = fmt.Errorf("openai: HTTP %d", resp.StatusCode)
 	}
-	return fmt.Errorf("openai: HTTP %d", resp.StatusCode)
+	if class, ok := classifyStatus(resp.StatusCode); ok {
+		return provider.MarkRetryable(err, class)
+	}
+	return err
+}
+
+// classifyStatus classifies an HTTP response status into a
+// provider.RetryableClass (see GitHub issue #79, mirroring provider/
+// anthropic's classifyStatus for issue #61): 429 is a rate limit, any other
+// 5xx is a generic server error — both transient provider weather worth the
+// goal loop's long backoff (engine/goal.go). Every other status (400s,
+// auth) reports ok=false and stays a deterministic, fail-fast error exactly
+// as before. Unlike Anthropic, the Responses API has no dedicated
+// "overloaded" status distinct from a plain 5xx, so there is no analog of
+// RetryableOverloaded here.
+func classifyStatus(status int) (provider.RetryableClass, bool) {
+	switch {
+	case status == http.StatusTooManyRequests:
+		return provider.RetryableRateLimited, true
+	case status >= 500 && status <= 599:
+		return provider.RetryableServerError, true
+	default:
+		return "", false
+	}
+}
+
+// classifyErrorCode classifies the Responses API's mid-stream "response.
+// failed"/"error" event error "code" (see the corresponding case in
+// stream.handle below) — the same two retryable categories as
+// classifyStatus, keyed on the wire code vocabulary instead of an HTTP
+// status because a stream error carries no status code of its own. Mirrors
+// provider/anthropic's classifyErrorType.
+func classifyErrorCode(code string) (provider.RetryableClass, bool) {
+	switch code {
+	case "rate_limit_exceeded":
+		return provider.RetryableRateLimited, true
+	case "server_error":
+		return provider.RetryableServerError, true
+	default:
+		return "", false
+	}
 }
 
 // assembledItem accumulates one output item across SSE events, keyed by the
@@ -335,9 +378,17 @@ func (s *stream) handle(name string, data []byte) error {
 		}
 		switch {
 		case ev.Response.Error.Message != "":
-			return fmt.Errorf("openai: %s (%s)", ev.Response.Error.Message, ev.Response.Error.Code)
+			err := fmt.Errorf("openai: %s (%s)", ev.Response.Error.Message, ev.Response.Error.Code)
+			if class, ok := classifyErrorCode(ev.Response.Error.Code); ok {
+				return provider.MarkRetryable(err, class)
+			}
+			return err
 		case ev.Error.Message != "":
-			return fmt.Errorf("openai: %s (%s)", ev.Error.Message, ev.Error.Code)
+			err := fmt.Errorf("openai: %s (%s)", ev.Error.Message, ev.Error.Code)
+			if class, ok := classifyErrorCode(ev.Error.Code); ok {
+				return provider.MarkRetryable(err, class)
+			}
+			return err
 		case ev.Message != "":
 			return fmt.Errorf("openai: %s", ev.Message)
 		default:

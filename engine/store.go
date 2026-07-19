@@ -31,6 +31,7 @@ const (
 	recMessage      = "message"
 	recModel        = "model"
 	recGoalSet      = "goal.set"
+	recGoalUpdated  = "goal.updated"
 	recGoalEval     = "goal.eval"
 	recGoalStalled  = "goal.stalled"
 	recGoalAchieved = "goal.achieved"
@@ -394,6 +395,12 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// reset, so nothing else carries over.
 			s.goalActive = true
 			if rec.Goal != nil {
+				s.goalCondition = rec.Goal.Condition
+			}
+		case recGoalUpdated:
+			// Only meaningful while active (see UpdateGoal): rewrites the
+			// restored condition in place, same as the live path.
+			if s.goalActive && rec.Goal != nil {
 				s.goalCondition = rec.Goal.Condition
 			}
 		case recGoalAchieved, recGoalCleared:

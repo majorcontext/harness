@@ -86,6 +86,62 @@ caller decides. The loop also emits `goal.*` engine events so the server
 journals them. Config `goal_evaluator_model` supplies the evaluator for
 `harness run -goal` and `POST /session/{id}/goal`.
 
+The condition itself is adjustable mid-loop. `Session.UpdateGoal` rewrites an
+active goal's condition, journals a durable `goal.updated` record, and emits
+`EventGoalUpdated` — same lock-and-emit-under-`s.mu` shape as `RegisterGoal`;
+a same-condition update is a silent no-op, updating an inactive goal errors.
+`PursueGoal` takes a per-turn snapshot (condition, a runtime-only generation
+counter, active) instead of closing over the original parameter, so a live
+loop picks up new text at its very next turn boundary — both the worker
+directive and the evaluator call. The generation counter guards stale
+verdicts: if `UpdateGoal` lands while an evaluator call for generation N is
+in flight, a MET (or stalled) verdict for N is discarded on return — no
+`goal.achieved`, no `goal.eval`, the loop just continues against the new
+condition, never a false-positive completion against text the model never
+saw. `ClearGoal` is unaffected — it keys on `goalActive`, not condition
+equality, so it still stops the loop at every point it does today.
+
+A built-in `goal` session tool (gated on `Config.GoalTool`) lets the model
+inspect or drive its own goal in-process: no HTTP round-trip, no run-slot
+claim. `status` reports `{active, condition}`; `set` arms a new goal via
+`RegisterGoal` (errors telling the model to use `adjust` if a goal is already
+active); `adjust` rewrites an active goal's condition via `UpdateGoal`. There
+is deliberately **no `clear` action** — see below.
+
+`Config.GoalTool` is on whenever `goal_evaluator_model` is configured, in
+`harness run` and `harness serve` alike, entirely independent of the `-goal`
+flag — a plain `harness run -p ...` with that config set still registers the
+tool. But what happens after `set`/`adjust` differs by host: `harness serve`
+auto-arms (see `maybeAutoArmGoal` below) — the loop actually starts running
+once the current turn ends. Plain `harness run` (no `-goal`) has no such
+auto-arm step: a tool-driven `set` call registers and journals the goal
+(`goal.active` becomes true) but nothing ever calls `PursueGoal` for it, so
+it never actually starts evaluating — the process runs its one `Prompt` call
+and exits with the goal armed but inert. Only `harness run -goal <condition>`
+itself drives `PursueGoal` to completion.
+
+`POST /session/{id}/goal` on a busy session no longer flatly 409s. A running
+goal loop updates its condition in place (`status: "updated"`, 200 — no
+second loop, no run-slot claim; the loop picks it up at its next turn
+boundary). A plain prompt holding the slot with no goal yet active registers
+the goal (`RegisterGoal` needs no run slot) and then retries the claim once,
+closing the race against that same prompt's own `runPrompt` tail: if the
+retry wins the now-freed slot, the loop spawns immediately and the response
+reports `status: "started"` (202); otherwise the prompt's tail is still
+ahead of us, its own auto-arm check (`maybeAutoArmGoal`) will claim the slot
+and spawn the loop itself once that tail finishes, and the response reports
+`status: "armed"` (202) — either way the loop starts exactly once, never
+zero times, never twice, no further client action needed. This is also how
+the `goal` tool's own `set` action takes effect: arming a goal mid-turn, the
+same auto-arm path starts the loop the instant the current turn ends. A
+workdir held by a genuinely different session still 409s,
+unchanged.
+
+No self-clear is deliberate: a goal-supervised agent must never be able to
+cancel its own supervision from inside a running turn, so the `goal` tool
+has no `clear` action — `DELETE /session/{id}/goal` remains the only clear
+path, and it is operator-only.
+
 The goal loop is a **plan-artifact-free, gate-free** control loop: it is
 `Prompt` plus a read-only evaluator call, with no plan document, no edit/plan
 mode, and no permission gate. It does not violate the no-plan-mode decision

@@ -411,6 +411,12 @@ func runCmd(args []string) error {
 		ContextWindowTokens: cfg.ContextWindowTokens,
 		CompactionThreshold: cfg.CompactionThreshold,
 		CompactionKeepTurns: cfg.CompactionKeepTurns,
+		// GoalTool mirrors serveCmd's mkCfg below: the `goal` session tool is
+		// only useful once an evaluator is actually configured to drive a
+		// goal loop against (-goal itself resolves and validates its own
+		// evaluator separately, in runGoal below; this just needs to know
+		// whether one is configured at all).
+		GoalTool: cfg.GoalEvaluatorModel != "",
 	}, opts.resume, opts.cont, modelSet)
 	if err != nil {
 		return err
@@ -725,6 +731,12 @@ func serveCmd(args []string) error {
 			ContextWindowTokens: cfg.ContextWindowTokens,
 			CompactionThreshold: cfg.CompactionThreshold,
 			CompactionKeepTurns: cfg.CompactionKeepTurns,
+			// GoalTool enables the `goal` session tool (status/set/adjust)
+			// whenever an evaluator is configured to drive a goal loop
+			// against — the same condition server.Options.GoalEvaluator
+			// itself gates on below, so the tool is never advertised on a
+			// box where POST /goal would just 400.
+			GoalTool: !goalEval.IsZero(),
 		}
 	}
 	srv, err = server.New(server.Options{

@@ -802,9 +802,24 @@ type blockingEvalProvider struct {
 
 	// evalErr, when set, makes the evaluator call fail with this error once
 	// released instead of returning evalOut's scripted verdict — used to
-	// race a concurrent ClearGoal against an evaluator call that then fails
-	// with a genuine (non-cancellation) provider error.
+	// race a concurrent ClearGoal (or UpdateGoal, see
+	// TestStaleEvaluatorFailureDiscarded) against an evaluator call that then
+	// fails with a genuine (non-cancellation) provider error.
 	evalErr error
+
+	// evalAfter, when set, scripts every evaluator call AFTER the first one —
+	// the first call is always the one that blocks on entered/release and
+	// then returns evalErr/evalOut as above; a test that needs the loop to
+	// continue into a later turn (e.g. a stale-discard test, where the first
+	// evaluator call's failure must be discarded and a second, later turn
+	// must run for real) supplies the later turns' verdicts here instead of
+	// hitting the same blocked/scripted behavior again. Existing callers that
+	// never see a second evaluator call (they stop the loop from within the
+	// first call, e.g. via a concurrent ClearGoal) are unaffected.
+	evalAfter [][]provider.Event
+	evalCall  int
+
+	requests []*provider.Request
 
 	once sync.Once
 }
@@ -812,7 +827,13 @@ type blockingEvalProvider struct {
 func (p *blockingEvalProvider) Name() string { return "test" }
 
 func (p *blockingEvalProvider) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
+	p.requests = append(p.requests, req)
 	if len(req.Tools) == 0 {
+		p.evalCall++
+		if p.evalCall > 1 && p.evalAfter != nil {
+			ev := p.evalAfter[p.evalCall-2]
+			return &scriptedStream{events: ev}, nil
+		}
 		p.once.Do(func() { close(p.entered) })
 		select {
 		case <-p.release:
@@ -999,7 +1020,7 @@ func TestGoalEventsEmitWhileLockHeld(t *testing.T) {
 				if err := s.RegisterGoal("cond"); err != nil {
 					t.Fatal(err)
 				}
-				s.recordGoalEval(true, "reason", 1)
+				s.recordGoalEval(true, "reason", 1, s.snapshotGoal().gen)
 			},
 		},
 		{
@@ -1009,7 +1030,7 @@ func TestGoalEventsEmitWhileLockHeld(t *testing.T) {
 				if err := s.RegisterGoal("cond"); err != nil {
 					t.Fatal(err)
 				}
-				s.achieveGoal("reason", 1)
+				s.achieveGoal("reason", 1, s.snapshotGoal().gen)
 			},
 		},
 		{

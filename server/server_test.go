@@ -147,6 +147,13 @@ func newServer(t *testing.T, dir string, prov provider.Provider, maxResident int
 	const token = "secret-run-token"
 	model := message.ModelRef{Provider: prov.Name(), Model: "m1"}
 	var srv *Server
+	// opts is declared here (zero value) rather than at its usual call site
+	// below so mkCfg can close over it by reference: GoalTool mirrors
+	// production's newSessionFn (cmd/harness/main.go) — enabled whenever an
+	// evaluator is configured — and mutate (below) may set opts.GoalEvaluator
+	// AFTER this closure is defined but BEFORE any session is actually
+	// constructed, so reading it here (not a snapshot) sees the final value.
+	var opts Options
 	mkCfg := func(m message.ModelRef) engine.Config {
 		if m.IsZero() {
 			m = model
@@ -156,9 +163,10 @@ func newServer(t *testing.T, dir string, prov provider.Provider, maxResident int
 			Model:      m,
 			SessionDir: dir,
 			OnEvent:    func(ev engine.Event) { srv.Publish(ev) },
+			GoalTool:   !opts.GoalEvaluator.IsZero(),
 		}
 	}
-	opts := Options{
+	opts = Options{
 		SessionDir:        dir,
 		RunToken:          token,
 		Version:           "9.9.9",

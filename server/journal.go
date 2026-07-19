@@ -115,6 +115,7 @@ const (
 	evtModel          = "model"
 	evtRequestMeta    = "request.meta"
 	evtGoalSet        = "goal.set"
+	evtGoalUpdated    = "goal.updated"
 	evtGoalEval       = "goal.eval"
 	evtGoalStalled    = "goal.stalled"
 	evtGoalAchieved   = "goal.achieved"
@@ -205,7 +206,7 @@ func (s *Server) Publish(ev engine.Event) {
 			Type: engine.EventToolEnd, SessionID: ev.SessionID,
 			ToolCall: ev.ToolCall, Output: ev.Output, IsError: ev.IsError,
 		})
-	case engine.EventGoalSet, engine.EventGoalEval, engine.EventGoalStalled, engine.EventGoalAchieved, engine.EventGoalCleared:
+	case engine.EventGoalSet, engine.EventGoalUpdated, engine.EventGoalEval, engine.EventGoalStalled, engine.EventGoalAchieved, engine.EventGoalCleared:
 		s.publishGoal(ev)
 	case engine.EventHistoryCompacted:
 		s.publishHistoryCompacted(ev)
@@ -283,6 +284,11 @@ func (s *Server) publishGoal(ev engine.Event) {
 		g.retryableClass = ""
 		g.waiting = false
 		g.pausedRestart = false
+	case engine.EventGoalUpdated:
+		// A condition change mid-loop, nothing else: no pause/retry/waiting
+		// reset — this must not fake a state transition (see
+		// engine/goal.go's UpdateGoal and the plan's Task 4).
+		g.condition = ev.GoalCondition
 	case engine.EventGoalEval:
 		g.turns = ev.GoalTurn
 		g.lastReason = ev.GoalReason
@@ -676,7 +682,7 @@ func (s *Server) loadJournal(data []byte) {
 // construction, before any client can reach the server).
 func (s *Server) foldGoalRecordLocked(ev Event) {
 	switch ev.Type {
-	case evtGoalSet, evtGoalEval, evtGoalStalled, evtGoalAchieved, evtGoalCleared:
+	case evtGoalSet, evtGoalUpdated, evtGoalEval, evtGoalStalled, evtGoalAchieved, evtGoalCleared:
 	default:
 		return
 	}
@@ -697,6 +703,9 @@ func (s *Server) foldGoalRecordLocked(ev Event) {
 		g.retryableClass = ""
 		g.waiting = false
 		g.pausedRestart = false
+	case evtGoalUpdated:
+		// Mirrors publishGoal's evtGoalUpdated case exactly: condition only.
+		g.condition = ev.GoalCondition
 	case evtGoalEval:
 		g.turns = ev.GoalTurn
 		g.lastReason = ev.GoalReason

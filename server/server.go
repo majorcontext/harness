@@ -227,6 +227,14 @@ type Server struct {
 	// TestGoalDeleteClearBeforeIdleRace). Always nil in production.
 	goalDeleteRace func(cancel context.CancelFunc)
 
+	// autoArmRace is a test-only seam: when non-nil, maybeAutoArmGoal invokes
+	// it right before its own claimForPrompt call, letting a test force a
+	// real concurrent prompt_async (or another POST /goal) to race the
+	// auto-arm claim deterministically instead of relying on an unobserved
+	// goroutine-scheduling coin flip (see TestAutoArmRaceWithIncomingPrompt).
+	// Always nil in production.
+	autoArmRace func()
+
 	// worktreeBase is the directory 'worktree'-isolation sessions create
 	// their per-session git worktrees under (see worktree.go): <SessionDir>/
 	// worktrees when SessionDir is durable, otherwise a process-lifetime
@@ -323,6 +331,26 @@ type sessionState struct {
 	// worktree creation succeeded; it is the handle handleEnd uses to tear
 	// the worktree down (or keep it and journal why).
 	worktree *worktreeInfo
+	// goalLoop is true exactly when the CURRENT occupant of running/cancel is
+	// a goal loop (a runGoal call), false when it is a plain prompt (or
+	// nothing, its zero value). Set at every site that spawns runGoal while
+	// holding the claim (handleGoal's fresh-start and re-arm paths,
+	// handleGoalBusy's retry-win path, maybeAutoArmGoal) -- always AFTER
+	// claimForPrompt itself has returned, never before -- and reset to false
+	// both at claimForPrompt's own claim site (so the flag is self-contained
+	// and never depends on a previous occupant's tail having run) and
+	// everywhere running/cancel themselves are reset (runPrompt's and
+	// runGoal's tails, handleCompact's tail, and handleGoal's two rollback
+	// branches) -- so it always names the true occupant, never stale from a
+	// previous claim.
+	//
+	// handleGoalDelete reads it to decide whether to cancel: a plain prompt
+	// occupying the run slot while a goal sits merely "armed" (see
+	// handleGoalBusy's 202 "armed" response and maybeAutoArmGoal) must be
+	// left running -- DELETE only clears the goal in that case, exactly like
+	// the boot-time-paused/no-loop-attached case already handled below. See
+	// TestDeleteGoalDuringArmedPromptLeavesPromptRunning.
+	goalLoop bool
 }
 
 // New builds a Server and reconciles its journal against the on-disk session
