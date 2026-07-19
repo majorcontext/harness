@@ -596,7 +596,7 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			// which includes this turn's directive — and therefore this
 			// block — once the worker turn that received it has run. Only
 			// the condition string itself stays clean.
-			directive = operatorMessagesBlock(queued) + directive
+			directive = operatorMessagesBlock(queued, operatorContextGoal) + directive
 		}
 		if attempts, err := s.promptTurnWithRetry(ctx, directive, turn, snap.gen); err != nil {
 			if errors.Is(err, context.Canceled) {

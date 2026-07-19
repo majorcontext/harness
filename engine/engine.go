@@ -777,8 +777,11 @@ func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, er
 		// append can never double-deliver: the prompt is simply gone from
 		// the queue on replay. The rendered content is the same labeled
 		// "OPERATOR MESSAGES" block goal-turn-boundary injection uses
-		// (operatorMessagesBlock, queue.go) so a plain Prompt turn and a
-		// goal worker turn render an injected batch identically.
+		// (operatorMessagesBlock, queue.go), differing only in the
+		// trailing clause: this call site passes operatorContextTask, not
+		// operatorContextGoal, since this loop has no goal directive to
+		// hand back to — even when it happens to be driving a goal loop's
+		// worker turn (see operatorMessagesBlock's doc comment).
 		//
 		// This appends a REAL, durable user message straight into history
 		// (never an ephemeral segment like the managed-processes status
@@ -790,7 +793,7 @@ func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, er
 			s.append(message.Message{
 				ID:        newID("msg"),
 				Role:      message.RoleUser,
-				Parts:     message.Parts{&message.Text{Text: strings.TrimSuffix(operatorMessagesBlock(queued), "\n")}},
+				Parts:     message.Parts{&message.Text{Text: strings.TrimSuffix(operatorMessagesBlock(queued, operatorContextTask), "\n")}},
 				CreatedAt: time.Now().UTC(),
 			})
 		}

@@ -86,6 +86,17 @@ func TestGoalWorkerTurnInheritsMidTurnInjection(t *testing.T) {
 	if !strings.Contains(text, "OPERATOR MESSAGES") || !strings.Contains(text, "operator mid worker tool") {
 		t.Fatalf("worker call 2's trailing message = %q, want the labeled operator block with the queued text", text)
 	}
+	// This injection came from engine.go's tool-call-boundary drain (this
+	// test's whole point is that a goal's worker turn inherits it
+	// automatically), not goal.go's own turn-boundary drain — so it must
+	// use the plain-turn "task" wording, never "goal", even though the
+	// enclosing loop is PursueGoal (see operatorMessagesBlock, queue.go).
+	if !strings.Contains(text, "continue the task") {
+		t.Errorf("worker call 2's trailing message = %q, want plain-turn wording (continue the task)", text)
+	}
+	if strings.Contains(text, "continue the goal") {
+		t.Errorf("worker call 2's trailing message = %q, must not reference a goal (this is engine.go's call site)", text)
+	}
 
 	// The evaluator's own request must never see the raw queue mechanics —
 	// only the condition, same as any other goal-boundary injection.

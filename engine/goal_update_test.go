@@ -847,6 +847,12 @@ func TestGoalInjectsQueuedPromptsAtBoundary(t *testing.T) {
 	if !strings.Contains(directive, "OPERATOR MESSAGES") {
 		t.Errorf("turn 2 directive = %q, want a labeled operator-interjection block", directive)
 	}
+	// This is goal.go's own turn-boundary drain, prepended to an actual
+	// goal directive, so the header must say "goal" (see
+	// operatorMessagesBlock, queue.go).
+	if !strings.Contains(directive, "continue the goal") {
+		t.Errorf("turn 2 directive = %q, want goal wording (continue the goal)", directive)
+	}
 	firstIdx := strings.Index(directive, "first operator message")
 	secondIdx := strings.Index(directive, "second operator message")
 	if firstIdx == -1 || secondIdx == -1 {

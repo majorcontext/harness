@@ -192,7 +192,11 @@ drains the ENTIRE queue, FIFO, in one locked op (`DequeueAllPrompts
 ("injected")`) and appends the drained batch as a single, durable user
 message: the same labeled "OPERATOR MESSAGES" block template
 (`operatorMessagesBlock`, `engine/queue.go`, shared by every drain site so a
-batch renders identically no matter which one delivered it). This only ever
+batch renders identically apart from one parameterized word — this
+call site passes `operatorContextTask`, so its header says "continue the
+task", never "continue the goal", even when this drain happens to fire
+inside a goal loop's worker turn; only goal.go's own turn-boundary drain
+below passes `operatorContextGoal`). This only ever
 APPENDS — never rewrites an earlier message — so a provider's prompt-cache
 prefix stays intact, the same principle the managed-processes ephemeral
 status block below relies on, except this message is a REAL, durable
@@ -214,7 +218,8 @@ drain above has any chance to run) it drains the *entire* queue, FIFO —
 catching anything still queued from a turn that made no tool calls at all, or
 that arrived in the gap between one turn ending and the next one's snapshot —
 and prepends it to that turn's directive as the same labeled "OPERATOR
-MESSAGES" block (`operatorMessagesBlock`), ahead of — never replacing — the
+MESSAGES" block (`operatorMessagesBlock`, `operatorContextGoal` — so its
+header says "continue the goal"), ahead of — never replacing — the
 ordinary condition/guidance text. The evaluator's condition string is
 unchanged by this — it is built from the condition alone, never from the
 block or the turn's rendered directive — so goal injection judges only the

@@ -108,6 +108,15 @@ func TestMidTurnInjectionAtToolBoundary(t *testing.T) {
 	if !strings.Contains(text, "OPERATOR MESSAGES") {
 		t.Errorf("second request's trailing message = %q, want a labeled operator block", text)
 	}
+	// This is engine.go's tool-call-boundary drain, not a goal loop, so the
+	// header's trailing clause must say "task", never "goal" (see
+	// operatorMessagesBlock, queue.go).
+	if !strings.Contains(text, "continue the task") {
+		t.Errorf("second request's trailing message = %q, want plain-turn wording (continue the task)", text)
+	}
+	if strings.Contains(text, "continue the goal") {
+		t.Errorf("second request's trailing message = %q, must not reference a goal in a plain turn", text)
+	}
 	if !strings.Contains(text, "operator says hi mid-turn") {
 		t.Errorf("second request's trailing message = %q, want the queued text", text)
 	}

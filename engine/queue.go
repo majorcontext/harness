@@ -137,6 +137,24 @@ func (s *Session) DequeueAllPrompts(reason string) []QueuedPrompt {
 	return s.dequeueAllLocked(reason)
 }
 
+// operatorContext selects operatorMessagesBlock's trailing clause so the
+// header never tells a plain turn to "continue the goal" when there isn't
+// one.
+type operatorContext string
+
+const (
+	// operatorContextTask is engine.go's Prompt loop's mid-turn tool-call-
+	// boundary drain: a plain turn (or a goal loop's worker turn, which
+	// runs through this exact same loop — see PursueGoal/
+	// promptTurnWithRetry) has no goal-shaped directive to hand back to,
+	// only "the task" it was already doing.
+	operatorContextTask operatorContext = "task"
+	// operatorContextGoal is goal.go's PursueGoal turn-boundary drain,
+	// where the block is prepended to an actual goal condition/guidance
+	// directive.
+	operatorContextGoal operatorContext = "goal"
+)
+
 // operatorMessagesBlock renders a batch of prompts drained by
 // DequeueAllPrompts as a labeled, numbered block meant to be prepended
 // ahead of — never substituted for — whatever text the drain site is about
@@ -147,15 +165,22 @@ func (s *Session) DequeueAllPrompts(reason string) []QueuedPrompt {
 // DequeueAllPrompts/dequeueAllLocked, so numbering here just mirrors that
 // order rather than establishing it.
 //
-// Two call sites share this exact template so a drained batch renders
-// identically no matter which boundary delivered it: goal.go's PursueGoal
-// prepends it to a turn's directive/guidance at the goal's own turn
-// boundary; engine.go's Prompt loop appends it as a standalone user message
-// at a mid-turn tool-call boundary (see the "Design amendment: tool-call-
-// boundary injection" note in docs/plans/2026-07-19-prompt-queue.md).
-func operatorMessagesBlock(prompts []QueuedPrompt) string {
+// Two call sites share this exact template, parameterized only by ctx's
+// trailing clause, so a drained batch renders identically apart from that
+// one word no matter which boundary delivered it: goal.go's PursueGoal
+// prepends it (operatorContextGoal) to a turn's directive/guidance at the
+// goal's own turn boundary; engine.go's Prompt loop appends it
+// (operatorContextTask) as a standalone user message at a mid-turn
+// tool-call boundary (see the "Design amendment: tool-call-boundary
+// injection" note in docs/plans/2026-07-19-prompt-queue.md). The task
+// wording applies even when that mid-turn drain happens to fire inside a
+// goal loop's worker turn — the drain has no way to know (and does not
+// need to) that its enclosing Prompt call is being driven by PursueGoal;
+// only goal.go's OWN turn-boundary drain, which is actually building a
+// goal directive, uses the goal wording.
+func operatorMessagesBlock(prompts []QueuedPrompt, ctx operatorContext) string {
 	var b strings.Builder
-	b.WriteString("OPERATOR MESSAGES (address these, then continue the goal):\n")
+	fmt.Fprintf(&b, "OPERATOR MESSAGES (address these, then continue the %s):\n", ctx)
 	for i, p := range prompts {
 		fmt.Fprintf(&b, "%d. %s\n", i+1, p.Text)
 	}
