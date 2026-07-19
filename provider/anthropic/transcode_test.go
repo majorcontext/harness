@@ -414,6 +414,71 @@ func TestTranscodeCompactionDoubleRoleUserMerges(t *testing.T) {
 	}
 }
 
+// TestTranscodeMergesToolResultsWithInjectedUserText pins the coupling
+// mid-turn prompt-queue injection depends on (engine/engine.go's tool-call-
+// boundary queue drain, ~line 792, "Design amendment: tool-call-boundary
+// injection" in docs/plans/2026-07-19-prompt-queue.md): after tool results
+// land, the engine appends a REAL RoleUser message straight into history —
+// immediately after the RoleTool results message, with no assistant turn in
+// between. Both RoleTool and RoleUser transcode to wire role "user" here, so
+// without the adjacent-same-role merge below (~line 159), this shape would
+// produce two consecutive wire "user" messages, which the Anthropic API
+// rejects (role alternation is enforced, not advisory). If that merge is
+// ever narrowed to only the compaction shape (see
+// TestTranscodeCompactionDoubleRoleUserMerges) or removed, this test must
+// fail first.
+func TestTranscodeMergesToolResultsWithInjectedUserText(t *testing.T) {
+	injected := "OPERATOR MESSAGES\n- do the other thing too"
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "run it"}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolCall{CallID: "toolu_abc", Name: "bash", Arguments: json.RawMessage(`{"command":"ls"}`)},
+		}},
+		// The tool-results message the engine appends after executing the
+		// call.
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "toolu_abc", Content: message.Parts{
+				&message.Text{Text: "file.go"},
+			}},
+		}},
+		// The mid-turn-injected prompt-queue message: a REAL RoleUser
+		// message appended immediately after, in the SAME turn, before any
+		// assistant reply.
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: injected}}},
+	))
+
+	// Exactly 3 wire messages, strictly alternating user/assistant/user —
+	// never 4, which would put two consecutive "user" turns on the wire and
+	// violate role alternation.
+	if len(out.Messages) != 3 {
+		t.Fatalf("wire messages = %d, want 3 (tool results + injected text merged into one user turn)", len(out.Messages))
+	}
+	if out.Messages[0].Role != "user" || out.Messages[1].Role != "assistant" {
+		t.Fatalf("wire roles = [%s %s ...], want [user assistant ...]", out.Messages[0].Role, out.Messages[1].Role)
+	}
+	merged := out.Messages[2]
+	if merged.Role != "user" {
+		t.Fatalf("merged message role = %q, want user", merged.Role)
+	}
+	if len(merged.Content) != 2 {
+		t.Fatalf("merged message content blocks = %d, want 2 (tool_result + injected text)", len(merged.Content))
+	}
+	if merged.Content[0].Type != "tool_result" || merged.Content[0].ToolUseID != "toolu_abc" {
+		t.Errorf("first merged block = %+v, want the tool_result", merged.Content[0])
+	}
+	if merged.Content[1].Type != "text" || merged.Content[1].Text != injected {
+		t.Errorf("second merged block = %+v, want the injected text %q", merged.Content[1], injected)
+	}
+
+	// Role alternation must actually hold across the whole request, not
+	// just at the merge point checked above.
+	for i := 1; i < len(out.Messages); i++ {
+		if out.Messages[i].Role == out.Messages[i-1].Role {
+			t.Fatalf("wire messages %d and %d both role %q: alternation violated", i-1, i, out.Messages[i].Role)
+		}
+	}
+}
+
 func containsAll(ss []string, wants ...string) bool {
 	for _, w := range wants {
 		found := false
