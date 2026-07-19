@@ -784,6 +784,7 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	s.mu.Lock()
 	st.running = false
 	st.cancel = nil
+	st.goalLoop = false
 	st.lastUsed = time.Now()
 	s.evictResidentLocked()
 	s.mu.Unlock()
@@ -844,6 +845,9 @@ func (s *Server) maybeAutoArmGoal(id string, st *sessionState) {
 	if code != 0 {
 		return // lost the race; see the doc comment above
 	}
+	s.mu.Lock()
+	claimedSt.goalLoop = true
+	s.mu.Unlock()
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 	go s.runGoal(ctx, id, claimedSt, condition, 0)
 }
@@ -944,6 +948,7 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 				s.mu.Lock()
 				st.running = false
 				st.cancel = nil
+				st.goalLoop = false
 				st.lastUsed = time.Now()
 				s.mu.Unlock()
 				s.wg.Done()
@@ -976,12 +981,16 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		st.running = false
 		st.cancel = nil
+		st.goalLoop = false
 		st.lastUsed = time.Now()
 		s.mu.Unlock()
 		s.wg.Done()
 		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
+	s.mu.Lock()
+	st.goalLoop = true
+	s.mu.Unlock()
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 
 	go s.runGoal(ctx, id, st, condition, body.MaxTurns)
@@ -1040,6 +1049,9 @@ func (s *Server) handleGoalBusy(w http.ResponseWriter, id string, condition stri
 	}
 	st, ctx, fromSeq, code, _ := s.claimForPrompt(id)
 	if code == 0 {
+		s.mu.Lock()
+		st.goalLoop = true
+		s.mu.Unlock()
 		s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 		go s.runGoal(ctx, id, st, condition, maxTurns)
 		writeJSON(w, http.StatusAccepted, goalPostResponse{Seq: fromSeq, Status: "started"})
@@ -1107,6 +1119,7 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 	s.mu.Lock()
 	st.running = false
 	st.cancel = nil
+	st.goalLoop = false
 	st.lastUsed = time.Now()
 	s.evictResidentLocked()
 	s.mu.Unlock()
@@ -1115,9 +1128,18 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 
 // handleGoalDelete cancels an active goal loop: it clears the goal (journaling
 // goal.cleared and resetting the engine's goal state), THEN cancels the loop
-// context (stopping further turns). Unknown session (not resident, no log on
-// disk) is 404; a known session is 204 whether or not a goal was active
-// (idempotent — no goal.cleared is journaled when nothing was active).
+// context (stopping further turns) -- but ONLY when the run slot's current
+// occupant IS a goal loop (st.goalLoop). A goal can be active while a PLAIN
+// PROMPT holds the slot (the 202 "armed" path -- see handleGoalBusy's
+// register-and-arm branch and maybeAutoArmGoal): in that window st.cancel
+// belongs to the prompt, not to any loop, and cancelling it would abort that
+// prompt's turn (typically the very turn that armed the goal via the `goal`
+// session tool). See TestDeleteGoalDuringArmedPromptLeavesPromptRunning.
+// Clearing the goal is enough in that case: maybeAutoArmGoal's own tail check
+// (run when the prompt finishes) reads ActiveGoal() as false and no-ops, so
+// no loop ever starts. Unknown session (not resident, no log on disk) is
+// 404; a known session is 204 whether or not a goal was active (idempotent
+// -- no goal.cleared is journaled when nothing was active).
 //
 // Ordering guarantee: goal.cleared is always journaled before the
 // session.status idle record that ends that goal's occupancy (see runGoal and
@@ -1135,7 +1157,7 @@ func (s *Server) handleGoalDelete(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	st := s.sessions[id]
 	var cancel context.CancelFunc
-	if st != nil {
+	if st != nil && st.goalLoop {
 		cancel = st.cancel
 	}
 	s.mu.Unlock()
@@ -1312,6 +1334,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	st.running = false
 	st.cancel = nil
+	st.goalLoop = false
 	st.lastUsed = time.Now()
 	s.evictResidentLocked()
 	s.mu.Unlock()

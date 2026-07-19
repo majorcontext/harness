@@ -331,6 +331,23 @@ type sessionState struct {
 	// worktree creation succeeded; it is the handle handleEnd uses to tear
 	// the worktree down (or keep it and journal why).
 	worktree *worktreeInfo
+	// goalLoop is true exactly when the CURRENT occupant of running/cancel is
+	// a goal loop (a runGoal call), false when it is a plain prompt (or
+	// nothing, its zero value). Set at every site that spawns runGoal while
+	// holding the claim (handleGoal's fresh-start and re-arm paths,
+	// handleGoalBusy's retry-win path, maybeAutoArmGoal) and reset to false
+	// everywhere running/cancel themselves are reset (runPrompt's and
+	// runGoal's tails, handleCompact's tail, and handleGoal's two rollback
+	// branches) -- so it always names the true occupant, never stale from a
+	// previous claim.
+	//
+	// handleGoalDelete reads it to decide whether to cancel: a plain prompt
+	// occupying the run slot while a goal sits merely "armed" (see
+	// handleGoalBusy's 202 "armed" response and maybeAutoArmGoal) must be
+	// left running -- DELETE only clears the goal in that case, exactly like
+	// the boot-time-paused/no-loop-attached case already handled below. See
+	// TestDeleteGoalDuringArmedPromptLeavesPromptRunning.
+	goalLoop bool
 }
 
 // New builds a Server and reconciles its journal against the on-disk session

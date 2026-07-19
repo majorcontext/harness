@@ -448,6 +448,100 @@ func TestGoalPostWhilePromptBusyArmsThenAutoStarts(t *testing.T) {
 	}
 }
 
+// TestDeleteGoalDuringArmedPromptLeavesPromptRunning is the PR #77 review's
+// Finding 1: the 202 "armed" path (handleGoalBusy's register-and-arm branch)
+// creates an active goal while a PLAIN PROMPT still holds the run slot -- in
+// that window sessionState.cancel belongs to the prompt (claimForPrompt set
+// it for the prompt's own claim; no goal loop has started yet). DELETE /goal
+// must clear the goal without cancelling that prompt's context -- cancelling
+// here would abort the very turn that (typically) armed the goal via the
+// `goal` session tool.
+//
+// This drives a prompt to blocked, arms a goal via POST /goal (202 "armed"),
+// deletes it (204, goal.cleared journaled), then releases the prompt and
+// asserts it runs to a NORMAL completion -- no session.error, no abort -- and
+// that no goal loop ever starts (maybeAutoArmGoal's tail check must see
+// ClearGoal already ran and no-op).
+func TestDeleteGoalDuringArmedPromptLeavesPromptRunning(t *testing.T) {
+	prov := &autoArmProv{
+		name:    "test",
+		blocked: true,
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	h := newGoalHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	sse := h.openSSE("?from=0", "")
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "hi"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt_async status %d: %s", resp.StatusCode, data)
+	}
+	<-prov.started // the plain prompt's worker turn is now in flight, occupying the run slot
+
+	resp, data = h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond"})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST goal while prompt busy status %d, want 202: %s", resp.StatusCode, data)
+	}
+	var posted struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(data, &posted); err != nil {
+		t.Fatal(err)
+	}
+	if posted.Status != "armed" {
+		t.Fatalf("POST goal while prompt busy response status = %q, want %q", posted.Status, "armed")
+	}
+
+	resp, data = h.do("DELETE", "/session/"+id+"/goal", nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE armed goal status %d, want 204: %s", resp.StatusCode, data)
+	}
+
+	// Drain the SSE stream through the goal.cleared record before releasing
+	// the prompt below, so the post-release assertions only look at events
+	// that arrive AFTER the clear (a "goal.set" from the arming step above is
+	// expected in this earlier batch and must not be confused with a second
+	// loop starting after release).
+	clearedEv := sse.waitFor(t, "goal.cleared")
+	if clearedEv.Seq == 0 {
+		t.Error("goal.cleared event has no seq (must be durable)")
+	}
+
+	after := h.getGoalSummary(id)
+	if after.Goal != nil && after.Goal.Active {
+		t.Fatalf("goal after DELETE = %+v, want inactive", after.Goal)
+	}
+
+	// Now release the prompt's blocked worker turn: it must run to a normal
+	// completion. If DELETE had cancelled the prompt's context (the bug this
+	// test guards against), releasing here would race the cancellation and
+	// the prompt would observe ctx.Err() instead of completing.
+	close(prov.release)
+
+	promptEvs := sse.collectUntilIdle(t)
+	var sawIdle bool
+	for _, ev := range promptEvs {
+		if ev.Type == evtSessionError {
+			t.Fatalf("prompt turn errored after DELETE /goal (want it to complete undisturbed): %+v", ev)
+		}
+		if ev.Type == evtSessionAborted {
+			t.Fatalf("prompt turn aborted after DELETE /goal (want it to complete undisturbed): %+v", ev)
+		}
+		if ev.Type == evtSessionStatus && ev.Status == "idle" {
+			sawIdle = true
+		}
+		if ev.Type == "goal.set" || ev.Type == "goal.achieved" || (ev.Type == evtSessionStatus && ev.Status == "busy") {
+			t.Errorf("events after DELETE+release = %v, want no goal loop activity (goal was cleared before the prompt finished)", promptEvs)
+		}
+	}
+	if !sawIdle {
+		t.Fatalf("events after releasing the prompt = %v, want a session.status idle (normal completion)", promptEvs)
+	}
+}
+
 // TestGoalToolSetAutoArmsAfterPrompt is the headline user story from
 // docs/plans/2026-07-19-goal-self-adjust.md: a prompt whose scripted tool
 // call invokes the `goal` session tool's `set` action (registering a goal
