@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -377,5 +378,249 @@ func TestClearGoalStillStopsUpdatedLoop(t *testing.T) {
 	}
 	if !strings.Contains(log, `"type":"goal.cleared"`) {
 		t.Errorf("log missing goal.cleared record: %s", log)
+	}
+}
+
+// blockingWorkerProvider parks the worker's (tool-bearing) Stream call on a
+// channel released by the test, exactly like blockingEvalProvider does for
+// the evaluator side — but gated on the WORKER call instead, so a test can
+// race an UpdateGoal against an in-flight worker turn that then fails with a
+// genuine (non-cancellation) provider error. entered is closed the moment the
+// first worker request arrives, letting the test know it is safe to call
+// UpdateGoal; releasing then makes that first call fail with workerErr. Every
+// worker call after the first is served from the worker script instead
+// (turn 2 and on, once the loop has moved past the stale attempt).
+type blockingWorkerProvider struct {
+	workerErr  error
+	worker     [][]provider.Event // scripted turns for the SECOND and later worker calls
+	eval       [][]provider.Event
+	wi, ei     int
+	workerCall int
+
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+
+	requests []*provider.Request
+}
+
+func (p *blockingWorkerProvider) Name() string { return "test" }
+
+func (p *blockingWorkerProvider) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
+	p.requests = append(p.requests, req)
+	if len(req.Tools) == 0 {
+		ev := p.eval[p.ei]
+		p.ei++
+		return &scriptedStream{events: ev}, nil
+	}
+	p.workerCall++
+	if p.workerCall == 1 {
+		p.once.Do(func() { close(p.entered) })
+		select {
+		case <-p.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return nil, p.workerErr
+	}
+	ev := p.worker[p.wi]
+	p.wi++
+	return &scriptedStream{events: ev}, nil
+}
+
+// TestPursueGoalStaleWorkerFailureDiscarded covers PursueGoal's worker-turn
+// stale-discard branch (engine/goal.go, the `if stale { continue }` right
+// after promptTurnWithRetry returns an error): a worker turn that fails while
+// an UpdateGoal has concurrently moved the goal to a new generation must not
+// be attributed to the (no-longer-current) condition it ran against — no
+// goal.stalled record (recordGoalStalled itself already discards a
+// stale-generation attempt, so this exercises that path too), no
+// goal.cleared record, and the loop must continue rather than exit, with the
+// very next turn's directive carrying the NEW condition.
+//
+// The worker call is genuinely in flight (parked on blockingWorkerProvider's
+// release channel) when the test calls UpdateGoal, so the generation bump is
+// deterministically ordered before the call resolves with workerErr —
+// happens-before via the channel, not a sleep or a retry-count guess.
+func TestPursueGoalStaleWorkerFailureDiscarded(t *testing.T) {
+	dir := t.TempDir()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+
+	workerErr := errors.New("worker provider exploded")
+	prov := &blockingWorkerProvider{
+		workerErr: workerErr,
+		worker: [][]provider.Event{
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "turn 2 done"}),
+		},
+		eval: [][]provider.Event{
+			evalTurn("MET: looks done"),
+		},
+		entered: entered,
+		release: release,
+	}
+	s := goalSession(t, prov, dir)
+
+	type outcome struct {
+		res *GoalResult
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := s.PursueGoal(context.Background(), "original condition", GoalOptions{Evaluator: evalModel, MaxTurns: 2})
+		done <- outcome{res, err}
+	}()
+
+	<-entered // turn 1's worker call is in flight, blocked on release
+
+	if err := s.UpdateGoal("new condition"); err != nil {
+		t.Fatalf("UpdateGoal = %v", err)
+	}
+
+	releaseOnce.Do(func() { close(release) }) // let the now-stale worker failure land
+
+	out := <-done
+	if out.err != nil {
+		t.Fatalf("PursueGoal error = %v, want nil (turn 2 should achieve against the updated condition)", out.err)
+	}
+	if !out.res.Achieved || out.res.Turns != 2 {
+		t.Fatalf("result = %+v, want achieved on turn 2 against the updated condition", out.res)
+	}
+
+	if len(prov.requests) != 3 {
+		t.Fatalf("provider saw %d requests, want 3 (turn 1's failed worker call, turn 2's worker+eval calls)", len(prov.requests))
+	}
+	// call 2 (index 1) is turn 2's worker call: its directive must carry the
+	// updated condition, not the stale original.
+	turn2Worker := prov.requests[1]
+	directive := turn2Worker.Messages[len(turn2Worker.Messages)-1].Parts.Text()
+	if !strings.Contains(directive, "new condition") {
+		t.Errorf("turn 2 worker directive = %q, want it to contain the updated condition", directive)
+	}
+	if strings.Contains(directive, "original condition") {
+		t.Errorf("turn 2 worker directive still carries the stale condition: %q", directive)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, s.ID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	if !strings.Contains(log, `"type":"goal.updated"`) {
+		t.Errorf("log missing goal.updated record: %s", log)
+	}
+	if strings.Contains(log, `"type":"goal.cleared"`) {
+		t.Errorf("log contains goal.cleared, want none (the stale worker failure must be discarded, not clear the goal): %s", log)
+	}
+	if strings.Contains(log, `"type":"goal.stalled"`) {
+		t.Errorf("log contains goal.stalled, want none (a stale-generation attempt must never be journaled): %s", log)
+	}
+	if strings.Contains(log, workerErr.Error()) {
+		t.Errorf("log carries the stale worker error text, want it fully discarded: %s", log)
+	}
+	if n := strings.Count(log, `"type":"goal.achieved"`); n != 1 {
+		t.Errorf("log has %d goal.achieved record(s), want exactly 1: %s", n, log)
+	}
+}
+
+// TestPursueGoalStaleEvaluatorFailureDiscarded covers PursueGoal's evaluator
+// stale-discard branch (engine/goal.go, the `if stale { continue }` right
+// after evaluateGoal returns an error): an evaluator call that fails with a
+// genuine provider error while an UpdateGoal has concurrently moved the goal
+// to a new generation must be discarded silently — no goal.cleared record,
+// no session.error emission — with the loop continuing into the next turn
+// against the new condition instead of stopping.
+//
+// Reuses blockingEvalProvider (see TestClearGoalDuringPendingEvaluatorFailureIsCleanStop
+// for the same shape racing ClearGoal instead), extended with evalAfter so
+// turn 2's evaluator call — which must actually succeed for the loop to
+// finish — isn't served the same blocked/evalErr behavior as turn 1's.
+func TestPursueGoalStaleEvaluatorFailureDiscarded(t *testing.T) {
+	dir := t.TempDir()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+
+	evalErr := errors.New("evaluator provider exploded")
+	prov := &blockingEvalProvider{
+		worker: [][]provider.Event{
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "turn 1 done"}),
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "turn 2 done"}),
+		},
+		entered:   entered,
+		release:   release,
+		evalErr:   evalErr,
+		evalAfter: [][]provider.Event{evalTurn("MET: looks done")},
+	}
+	hooks := &fakeHooks{}
+	s := goalSession(t, prov, dir, hooks)
+
+	type outcome struct {
+		res *GoalResult
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := s.PursueGoal(context.Background(), "original condition", GoalOptions{Evaluator: evalModel, MaxTurns: 2})
+		done <- outcome{res, err}
+	}()
+
+	<-entered // turn 1's evaluator call is in flight, blocked on release
+
+	if err := s.UpdateGoal("new condition"); err != nil {
+		t.Fatalf("UpdateGoal = %v", err)
+	}
+
+	releaseOnce.Do(func() { close(release) }) // let the now-stale evaluator failure land
+
+	out := <-done
+	if out.err != nil {
+		t.Fatalf("PursueGoal error = %v, want nil (turn 2 should achieve against the updated condition)", out.err)
+	}
+	if !out.res.Achieved || out.res.Turns != 2 {
+		t.Fatalf("result = %+v, want achieved on turn 2 against the updated condition", out.res)
+	}
+
+	if msgs := sessionErrorMessages(t, hooks); len(msgs) != 0 {
+		t.Errorf("session.error emitted for a stale evaluator failure: %v", msgs)
+	}
+
+	// call 3 (index 2) is turn 2's worker call: its directive must carry the
+	// updated condition, not the stale original (turn 1 never reached a NOT
+	// MET verdict, so this is the first guidance message the loop builds).
+	turn2Worker := prov.requests[2]
+	directive := turn2Worker.Messages[len(turn2Worker.Messages)-1].Parts.Text()
+	if !strings.Contains(directive, "new condition") {
+		t.Errorf("turn 2 worker directive = %q, want it to contain the updated condition", directive)
+	}
+	if strings.Contains(directive, "original condition") {
+		t.Errorf("turn 2 worker directive still carries the stale condition: %q", directive)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, s.ID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	if !strings.Contains(log, `"type":"goal.updated"`) {
+		t.Errorf("log missing goal.updated record: %s", log)
+	}
+	if strings.Contains(log, `"type":"goal.cleared"`) {
+		t.Errorf("log contains goal.cleared, want none (the stale evaluator failure must be discarded, not clear the goal): %s", log)
+	}
+	if strings.Contains(log, `"type":"goal.stalled"`) {
+		t.Errorf("log contains goal.stalled, want none (an evaluator failure never produces a goal.stalled record): %s", log)
+	}
+	if strings.Contains(log, evalErr.Error()) {
+		t.Errorf("log carries the stale evaluator error text, want it fully discarded: %s", log)
+	}
+	if n := strings.Count(log, `"type":"goal.eval"`); n != 1 {
+		t.Errorf("log has %d goal.eval record(s), want exactly 1 (turn 1's failed evaluator call never produced one): %s", n, log)
+	}
+	if n := strings.Count(log, `"type":"goal.achieved"`); n != 1 {
+		t.Errorf("log has %d goal.achieved record(s), want exactly 1: %s", n, log)
 	}
 }
