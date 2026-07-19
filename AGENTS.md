@@ -189,11 +189,22 @@ turns at all: `PursueGoal` drains the *entire* queue, FIFO, at the top of every
 turn (the same `snapshotGoal` boundary #77's condition-update snapshot uses),
 and prepends them to that turn's directive as a labeled "OPERATOR MESSAGES"
 block, ahead of — never replacing — the ordinary condition/guidance text. The
-evaluator call is built from the condition alone and never sees this block:
-goal injection judges only the goal. Every drained prompt journals its own
+evaluator's condition string is unchanged by this — it is built from the
+condition alone, never from the block or the turn's rendered directive —
+so goal injection judges only the goal there; the evaluator's separate
+transcript field does render the full history, so it does see the block
+once the worker turn that received it has run. Every drained prompt journals its own
 `prompt.dequeued(injected)` record before the turn's directive is even built,
 so it counts as delivered at that point even if the turn's outcome later turns
-out stale and gets discarded — an injected prompt is never re-queued.
+out stale and gets discarded — an injected prompt is never re-queued. This
+means an abort (`POST /abort`) or a goal clear (`DELETE /session/{id}/goal`)
+racing a goal turn boundary consumes an entire just-injected batch at once:
+every prompt the boundary drained is already journaled `dequeued(injected)`
+before the worker turn even starts, so a turn that gets cancelled or whose
+outcome is later discarded as stale still loses all of them together —
+several operator messages, not just one — the same exposure class an
+ordinary in-flight prompt already has, just multiplied across the whole
+drained batch.
 
 Every enqueue/dequeue is a durable record — `prompt.queued` and
 `prompt.dequeued`, the latter carrying a `reason` of `"delivered"` (idle

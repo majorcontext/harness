@@ -586,10 +586,16 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			// Prepend, never replace: the goal directive/guidance below is
 			// still exactly what it would have been with no queue activity
 			// at all — this only adds a clearly labeled block ahead of it.
-			// The evaluator call below is built from snap.condition alone
-			// (see evaluateGoal/runEvaluator) and never sees this block or
-			// `directive` at all, so "goal injection judges only the goal"
-			// holds structurally, not by convention.
+			// The evaluator's CONDITION field is built from snap.condition
+			// alone (see evaluateGoal/runEvaluator) and never includes this
+			// block or `directive` itself, so "goal injection judges only
+			// the goal" holds for that field structurally, not by
+			// convention. This block is NOT hidden from the evaluator
+			// overall, though: runEvaluator's CONVERSATION TRANSCRIPT field
+			// renders the full history (renderConversation(s.History())),
+			// which includes this turn's directive — and therefore this
+			// block — once the worker turn that received it has run. Only
+			// the condition string itself stays clean.
 			directive = goalInjectionBlock(queued) + directive
 		}
 		if attempts, err := s.promptTurnWithRetry(ctx, directive, turn, snap.gen); err != nil {
