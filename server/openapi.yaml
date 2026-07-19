@@ -868,8 +868,12 @@ components:
         queue_len:
           type: integer
           description: >
-            Queue depth remaining immediately after this event
-            (prompt.queued, prompt.dequeued).
+            Queue depth remaining immediately after this event (prompt.queued,
+            prompt.dequeued). Always present on those two event types, even
+            when the queue is now empty (queue_len: 0) — an emptying
+            prompt.dequeued is explicit on the wire, not indistinguishable
+            from an event type that never carries a queue depth at all.
+            Absent on every other event type.
         worktree_path:
           type: string
           description: >

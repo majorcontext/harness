@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -208,6 +209,72 @@ func TestQueueDrainsFIFOAcrossMultiplePrompts(t *testing.T) {
 	sess := h.getSessionJSON(id)
 	if sess.Queued != 0 {
 		t.Errorf("queued after full drain = %d, want 0", sess.Queued)
+	}
+}
+
+// TestQueueLenExplicitOnEmptyingDequeue is the regression test for the
+// queue_len omitempty ambiguity: a prompt.dequeued record that empties the
+// queue (QueueLen 0) must still serialize an explicit "queue_len":0 on the
+// wire — an omitempty int tag would drop the key entirely, indistinguishable
+// from a dequeue record that never carried a queue_len at all. See
+// server/journal.go's Event.QueueLen doc comment.
+func TestQueueLenExplicitOnEmptyingDequeue(t *testing.T) {
+	prov := &queueProv{
+		name:    "test",
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		turns:   [][]provider.Event{asstTurn("second done")},
+	}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "first"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("first prompt status %d: %s", resp.StatusCode, data)
+	}
+	<-prov.started
+
+	resp, data = h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "second"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("second prompt status %d: %s", resp.StatusCode, data)
+	}
+	var qr promptAsyncResponse
+	if err := json.Unmarshal(data, &qr); err != nil {
+		t.Fatal(err)
+	}
+	if qr.Status != "queued" || qr.Queued != 1 {
+		t.Fatalf("second prompt response = %+v, want status=queued queued=1", qr)
+	}
+
+	close(prov.release) // let the first turn finish; the drain dequeues "second", emptying the queue
+
+	resp, data = h.do("GET", "/session/"+id+"/wait?until=idle&timeout_s=5", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("wait for idle status %d: %s", resp.StatusCode, data)
+	}
+
+	h.srv.mu.Lock()
+	var found *Event
+	for i, ev := range h.srv.journal {
+		if ev.SessionID == id && ev.Type == evtPromptDequeued && ev.QueueReason == "delivered" {
+			found = &h.srv.journal[i]
+		}
+	}
+	h.srv.mu.Unlock()
+	if found == nil {
+		t.Fatal("no prompt.dequeued(delivered) record found in the server's journal")
+	}
+
+	b, err := json.Marshal(*found)
+	if err != nil {
+		t.Fatalf("marshal dequeue event: %v", err)
+	}
+	if !strings.Contains(string(b), `"queue_len":0`) {
+		t.Fatalf("dequeue event JSON = %s, want an explicit \"queue_len\":0 (queue emptied by this dequeue)", b)
 	}
 }
 
