@@ -414,6 +414,79 @@ func TestClearGoalStillStopsUpdatedLoop(t *testing.T) {
 	}
 }
 
+// TestStaleDiscardReplacesReasonWithAdjustmentNotice is the regression test
+// for a live end-to-end repro: turn 1 completes with a genuine NOT MET
+// reason (R1); during turn 2, an UpdateGoal lands (self-adjust or an
+// operator's POST /goal on a running loop) that moves the goal to a new
+// generation before turn 2's evaluator verdict is recorded, so that verdict
+// is discarded as stale. Turn 3's directive must NOT repeat R1 verbatim (it
+// describes state that may no longer be true — the live incident this
+// guards had the evaluator saying "the file does not exist" one turn after
+// the file had in fact been created) and must instead carry an explicit
+// adjustment notice plus the CURRENT (turn 3's) condition.
+//
+// Uses different condition text for the update (rather than an identical
+// string) to also pin the pairing rule: `reason` is only ever valid paired
+// with the generation it was produced for, so ANY generation change since —
+// discard or not — invalidates a carried-over reason, never just an
+// exact-string-mismatch check.
+//
+// Call sequence on scriptedGoalUpdateProvider: 1=turn1 worker, 2=turn1 eval
+// (NOT MET: R1, gen unchanged, recorded normally), 3=turn2 worker (afterCall
+// fires UpdateGoal here — turn 2's snapshot already happened, so this lands
+// strictly between turn 2's worker call and its evaluator call), 4=turn2
+// eval (verdict computed against the pre-update condition, discarded as
+// stale once recordGoalEval sees the bumped generation), 5=turn3 worker
+// (the directive under test), 6=turn3 eval (MET, ends the loop).
+func TestStaleDiscardReplacesReasonWithAdjustmentNotice(t *testing.T) {
+	dir := t.TempDir()
+	const r1Marker = "R1-the-file-does-not-exist-marker"
+	prov := &scriptedGoalUpdateProvider{
+		worker: [][]provider.Event{
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "turn 1 done"}),
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "turn 2 done"}),
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "turn 3 done"}),
+		},
+		eval: [][]provider.Event{
+			evalTurn("NOT MET: " + r1Marker),
+			evalTurn("NOT MET: turn 2's now-stale verdict, must never surface"),
+			evalTurn("MET: turn 3 really is done"),
+		},
+	}
+	s := goalSession(t, prov, dir)
+	prov.afterCall = func(n int) {
+		if n == 3 { // right after turn 2's worker call completes, before turn 2's eval call
+			if err := s.UpdateGoal("the ADJUSTED condition"); err != nil {
+				t.Fatalf("UpdateGoal = %v", err)
+			}
+		}
+	}
+
+	res, err := s.PursueGoal(context.Background(), "the original condition", GoalOptions{Evaluator: evalModel, MaxTurns: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Achieved || res.Turns != 3 {
+		t.Fatalf("result = %+v, want achieved in 3 turns", res)
+	}
+	if len(prov.requests) != 6 {
+		t.Fatalf("provider saw %d requests, want 6 (3 turns x worker+eval)", len(prov.requests))
+	}
+
+	// call 5 (index 4) is turn 3's worker call: the directive under test.
+	turn3Worker := prov.requests[4]
+	directive := turn3Worker.Messages[len(turn3Worker.Messages)-1].Parts.Text()
+	if strings.Contains(directive, r1Marker) {
+		t.Errorf("turn 3 directive leaks turn 1's stale reason: %q", directive)
+	}
+	if !strings.Contains(directive, "the ADJUSTED condition") {
+		t.Errorf("turn 3 directive = %q, want it to carry the current condition", directive)
+	}
+	if !strings.Contains(directive, goalAdjustedNotice) {
+		t.Errorf("turn 3 directive = %q, want it to carry the adjustment notice %q", directive, goalAdjustedNotice)
+	}
+}
+
 // blockingWorkerProvider parks the worker's (tool-bearing) Stream call on a
 // channel released by the test, exactly like blockingEvalProvider does for
 // the evaluator side — but gated on the WORKER call instead, so a test can

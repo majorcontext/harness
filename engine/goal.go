@@ -467,6 +467,40 @@ func (e *goalRetryableExhaustedError) Unwrap() error { return e.err }
 // TestPursueGoalPicksUpUpdatedConditionNextTurn /
 // TestStaleMetVerdictDiscarded / TestClearGoalStillStopsUpdatedLoop.
 //
+// # Round 5: a discarded turn must not leak its stale reason into the next directive
+//
+// Silently discarding a stale outcome (the section above) closes the
+// journaling half of the problem, but a live end-to-end run surfaced a
+// second half it didn't: `reason` — the last NOT MET evaluator feedback,
+// carried into goalGuidance for the next turn's directive — was declared
+// once outside the loop and only ever reassigned on the ordinary, non-stale
+// NOT MET path. Every stale-discard `continue` (worker-turn failure,
+// evaluator failure, or a discarded evaluator verdict) skipped that
+// reassignment, so the turn AFTER a discard built its directive from
+// whatever `reason` happened to hold from the last turn that completed
+// normally — which can be describing state that is no longer true. The
+// repro: turn 1's evaluator said "the file PROOF_A.txt does not exist";
+// turn 2 created the file and self-adjusted the goal (via the goal tool),
+// making turn 2's own evaluator verdict stale and discarded; turn 3's
+// directive nonetheless repeated turn 1's now-false "does not exist"
+// feedback verbatim, costing an extra turn re-litigating something already
+// done.
+//
+// The fix: `reason` is only ever valid paired with the generation it was
+// produced for. A second variable, reasonGen, is set alongside `reason`
+// every time (only) the ordinary NOT MET path assigns it, to that turn's
+// snap.gen. Building the next turn's directive compares reasonGen against
+// that turn's OWN fresh snapshot: a match reuses `reason` as before: a
+// mismatch — which covers every stale-discard site by construction (each
+// leaves reasonGen unchanged while the discard that caused it bumped
+// goalGen) AND the narrower case of a generation change that happens
+// between two turns with no discard at all (e.g. an UpdateGoal landing in
+// the gap after turn N ends and before turn N+1 snapshots) — substitutes
+// goalAdjustedNotice, an explicit "the goal changed, prior feedback no
+// longer applies" directive, instead of ever reusing a reason paired with a
+// different generation. See goalAdjustedNotice and
+// TestStaleDiscardReplacesReasonWithAdjustmentNotice.
+//
 // Must not be called concurrently with itself or Prompt (it drives Prompt).
 func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOptions) (*GoalResult, error) {
 	if opts.Evaluator.IsZero() {
@@ -492,7 +526,10 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 		return nil, err
 	}
 
-	var reason string // last NOT MET reason, carried into the next turn's guidance
+	var (
+		reason    string // last NOT MET reason, carried into the next turn's guidance
+		reasonGen uint64 // generation `reason` was produced at; see the pairing rule below
+	)
 	for turn := 1; opts.MaxTurns == 0 || turn <= opts.MaxTurns; turn++ {
 		// Per-turn-boundary snapshot (see goalSnapshot's doc comment): this
 		// is the single source of truth for the rest of this iteration,
@@ -504,9 +541,28 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			// concurrent DELETE): clean stop, no turn runs.
 			return &GoalResult{Achieved: false, Turns: turn - 1, Reason: "goal cleared"}, nil
 		}
+		// `reason` is only ever valid paired with the generation it was
+		// produced for (reasonGen, set alongside it below). Every one of
+		// this loop's stale-discard `continue` sites — a worker-turn
+		// failure, an evaluator failure, or a discarded evaluator verdict —
+		// leaves `reason` untouched, so without this check the NEXT turn's
+		// directive would silently repeat a reason that describes a
+		// condition or transcript state that is no longer current (the live
+		// incident this guards: turn 3 repeated turn 1's "the file does not
+		// exist" feedback verbatim, one turn after turn 2 had created the
+		// file and self-adjusted the goal). The same rule also covers a
+		// generation change that happens WITHOUT any discard — e.g. an
+		// UpdateGoal landing in the gap between turn N ending and turn N+1's
+		// snapshot — since the check is purely "does this turn's generation
+		// match the one `reason` was produced for", not "was there a
+		// discard". See TestStaleDiscardReplacesReasonWithAdjustmentNotice.
 		directive := snap.condition
 		if turn > 1 {
-			directive = goalGuidance(snap.condition, reason)
+			if reasonGen == snap.gen {
+				directive = goalGuidance(snap.condition, reason)
+			} else {
+				directive = goalGuidance(snap.condition, goalAdjustedNotice)
+			}
 		}
 		if attempts, err := s.promptTurnWithRetry(ctx, directive, turn, snap.gen); err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -663,6 +719,7 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			return &GoalResult{Achieved: true, Turns: turn, Reason: evalReason}, nil
 		}
 		reason = evalReason
+		reasonGen = snap.gen
 	}
 	return &GoalResult{Achieved: false, Turns: opts.MaxTurns, Reason: "max turns"}, nil
 }
@@ -1161,6 +1218,17 @@ func trimReason(s string) string {
 	s = strings.TrimPrefix(s, ":")
 	return strings.TrimSpace(s)
 }
+
+// goalAdjustedNotice replaces a carried-over evaluator reason in
+// goalGuidance whenever the goal's generation changed since that reason was
+// produced (see PursueGoal's reasonGen bookkeeping). A stale reason
+// describes state as of an earlier, possibly now-obsolete condition — the
+// live incident this guards had turn 3's directive repeat turn 1's "the file
+// does not exist" feedback verbatim after turn 2 had already created the
+// file and self-adjusted the goal, costing an extra turn re-litigating
+// something already true. Reusing goalGuidance's own fixed-template tone
+// rather than inventing a new shape.
+const goalAdjustedNotice = "the goal condition changed since the last evaluation; disregard the previous evaluator feedback and re-assess against the current goal below"
 
 // goalGuidance is the fixed-template directive sent after a NOT MET verdict.
 func goalGuidance(condition, reason string) string {
