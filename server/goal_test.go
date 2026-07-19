@@ -379,6 +379,13 @@ func TestGoalStalledRetryableFieldsSurfaced(t *testing.T) {
 	}
 }
 
+// TestGoalBusyRejectsPromptAndGoal is narrowed by Task 5: a plain prompt
+// during a running goal loop still 409s (the workdir/run-slot exclusivity
+// rule is unchanged for prompt_async), but a SECOND goal POST while a goal
+// loop is already running no longer 409s — it updates the running loop's
+// condition in place and reports 200 (see
+// TestGoalPostWhileGoalRunningUpdatesInPlace for the dedicated invariant-7
+// coverage; this test only needs the prompt-vs-goal distinction).
 func TestGoalBusyRejectsPromptAndGoal(t *testing.T) {
 	prov := &goalProv{
 		name:        "test",
@@ -401,9 +408,19 @@ func TestGoalBusyRejectsPromptAndGoal(t *testing.T) {
 	if resp.StatusCode != http.StatusConflict {
 		t.Errorf("prompt_async during goal = %d, want 409", resp.StatusCode)
 	}
-	resp, _ = h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "again"})
-	if resp.StatusCode != http.StatusConflict {
-		t.Errorf("second goal during goal = %d, want 409", resp.StatusCode)
+
+	resp, data = h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "again"})
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("second goal during goal = %d, want 200: %s", resp.StatusCode, data)
+	}
+	var posted struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(data, &posted); err != nil {
+		t.Fatal(err)
+	}
+	if posted.Status != "updated" {
+		t.Errorf("second goal during goal response status = %q, want %q", posted.Status, "updated")
 	}
 
 	// Release the goal loop so the goroutine unwinds before the test ends.

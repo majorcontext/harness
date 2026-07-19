@@ -290,10 +290,15 @@ func TestGoalReArmClearsRestartPause(t *testing.T) {
 	}
 }
 
-// TestGoalReArmMismatchedConditionRejected proves a re-arm attempt naming a
-// DIFFERENT condition than the one currently active (paused or not) is
-// rejected rather than silently resuming the wrong goal.
-func TestGoalReArmMismatchedConditionRejected(t *testing.T) {
+// TestGoalReArmDifferentConditionUpdatesAndResumes replaces
+// TestGoalReArmMismatchedConditionRejected: Task 5 changes handleGoal's
+// paused-re-arm branch so a DIFFERENT condition than the one currently
+// active (paused or not) updates the goal in place and resumes the loop
+// with it, instead of rejecting with 409 — see handleGoal's doc comment.
+// This proves the NEW condition (not the original persisted goal.set one)
+// drives the resumed loop through to achievement, that a goal.updated
+// record lands, and that the response reports status "started".
+func TestGoalReArmDifferentConditionUpdatesAndResumes(t *testing.T) {
 	dir := t.TempDir()
 	prov := &goalProv{
 		name:   "test",
@@ -320,14 +325,69 @@ func TestGoalReArmMismatchedConditionRejected(t *testing.T) {
 	}
 	ts1.Close()
 
-	srv2 := newServer(t, dir, prov, 0, mutate)
+	prov2 := &goalProv{
+		name:   "test",
+		worker: [][]provider.Event{asstTurn("try 2")},
+		eval:   [][]provider.Event{asstTurn("MET: now it is")},
+	}
+	srv2 := newServer(t, dir, prov2, 0, func(o *Options) {
+		o.GoalEvaluator = message.ModelRef{Provider: prov2.Name(), Model: "eval"}
+	})
 	ts2 := httptest.NewServer(srv2)
 	t.Cleanup(ts2.Close)
 	h2 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv2, ts: ts2}
 
+	// Replay only events from here on (see TestGoalReArmClearsRestartPause's
+	// comment for why: from=0 would replay the first, pre-restart turn's
+	// history and collectUntilIdle would stop at its idle).
+	resp, data = h2.do("GET", "/session/"+id, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("get seq status %d: %s", resp.StatusCode, data)
+	}
+	var seqView struct {
+		Seq int64 `json:"seq"`
+	}
+	mustUnmarshal(t, data, &seqView)
+	sse2 := h2.openSSE(fmt.Sprintf("?from=%d", seqView.Seq), "")
+
 	resp, data = h2.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "a different goal entirely"})
-	if resp.StatusCode != http.StatusConflict {
-		t.Fatalf("mismatched re-arm status = %d, want 409: %s", resp.StatusCode, data)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("re-arm with a different condition status = %d, want 202: %s", resp.StatusCode, data)
+	}
+	var posted struct {
+		Status string `json:"status"`
+	}
+	mustUnmarshal(t, data, &posted)
+	if posted.Status != "started" {
+		t.Errorf("re-arm response status = %q, want %q", posted.Status, "started")
+	}
+
+	evs := sse2.collectUntilIdle(t)
+	var sawUpdated, sawAchieved bool
+	for _, ev := range evs {
+		switch ev.Type {
+		case "goal.updated":
+			sawUpdated = true
+			if ev.GoalCondition != "a different goal entirely" {
+				t.Errorf("goal.updated condition = %q, want %q", ev.GoalCondition, "a different goal entirely")
+			}
+		case "goal.achieved":
+			sawAchieved = true
+		}
+	}
+	if !sawUpdated {
+		t.Errorf("goal events after re-arm = %v, want a goal.updated", evs)
+	}
+	if !sawAchieved {
+		t.Fatal("expected the re-armed goal (with the new condition) to achieve")
+	}
+
+	after := h2.getPausedGoalView(id)
+	if after.Goal == nil || after.Goal.Active {
+		t.Fatalf("after re-arm and achievement, goal = %+v, want inactive (achieved)", after.Goal)
+	}
+	if after.Goal.Condition != "a different goal entirely" {
+		t.Errorf("final goal condition = %q, want %q", after.Goal.Condition, "a different goal entirely")
 	}
 }
 

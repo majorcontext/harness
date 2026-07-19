@@ -2,33 +2,33 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/majorcontext/harness/provider"
 )
 
-// TestGoalRegisterFailureRollsBackAndSessionStaysUsable exercises the 0-hit
-// RegisterGoal-failure branch in handleGoal: a goal is registered and its
-// worker turn parks (blockWorker), then POST /abort cancels the loop's
-// context WITHOUT clearing the goal (see engine.Session.PursueGoal: a
-// context.Canceled worker turn "leaves the goal exactly as it is" so a drain
-// is resumable) — the engine session is left with goalActive still true even
-// though the server has flipped the session back to idle/not-running. A
-// second POST /goal on the same session then reaches RegisterGoal, which
-// rejects it because a goal is already active, taking the rollback path in
-// handleGoal (undo the claim, s.wg.Done(), 409).
+// TestGoalReArmAfterAbortWithDifferentConditionResumes replaces
+// TestGoalRegisterFailureRollsBackAndSessionStaysUsable: Task 5 changes
+// handleGoal's claim-succeeded branch so a goal left active-but-idle by an
+// abort (see engine.Session.PursueGoal: a context.Canceled worker turn
+// "leaves the goal exactly as it is" so a drain is resumable) is treated
+// exactly like a paused/restart goal — a second POST /goal naming a
+// DIFFERENT condition now updates and resumes it (202, "started") instead of
+// reaching RegisterGoal's "already active" rejection, which is what the
+// original version of this test exercised (see
+// TestGoalReArmDifferentConditionUpdatesAndResumes for the dedicated
+// coverage of that behavior in the restart case).
 //
-// The assertions: (1) the failed registration must not strand the session as
-// "running" — a subsequent prompt_async must be accepted (202), never 409;
-// (2) Drain must still complete. A missing wg.Done on the rollback path would
-// leave the WaitGroup counter permanently off by one, so Drain (which calls
-// wg.Wait() unconditionally once its grace context expires) would hang
-// forever — the test bounds that wait so a regression fails instead of
-// hanging the whole suite.
-func TestGoalRegisterFailureRollsBackAndSessionStaysUsable(t *testing.T) {
+// The original test's other concerns still matter and are preserved here:
+// (1) the session must never be left stranded busy in some OTHER way —
+// prompt_async correctly still 409s while the re-armed loop runs; (2) Drain
+// must still complete cleanly (bounded, so a reintroduced wg.Done leak on
+// either the RegisterGoal path or this new update-and-resume path fails fast
+// instead of hanging the suite).
+func TestGoalReArmAfterAbortWithDifferentConditionResumes(t *testing.T) {
 	prov := &goalProv{
 		name:        "test",
 		blockWorker: true,
@@ -60,38 +60,43 @@ func TestGoalRegisterFailureRollsBackAndSessionStaysUsable(t *testing.T) {
 	// (running=false), without clearing the still-active goal.
 	sse.collectUntilIdle(t)
 
-	// Second goal on the same session: claimForPrompt succeeds (not
-	// running), but st.sess.RegisterGoal fails because "first" is still
-	// active. This is the 0-hit rollback branch.
+	// Second goal on the same session, naming a DIFFERENT condition:
+	// claimForPrompt succeeds (not running), ActiveGoal() reports "first"
+	// still active, and the new condition differs — handleGoal now updates
+	// in place and resumes, rather than reaching RegisterGoal's rejection.
 	resp, data = h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "second"})
-	if resp.StatusCode != http.StatusConflict {
-		t.Fatalf("second POST goal status %d, want 409: %s", resp.StatusCode, data)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("re-arm with a different condition after abort = %d, want 202: %s", resp.StatusCode, data)
 	}
-	if !strings.Contains(string(data), "already active") {
-		t.Fatalf("second POST goal body = %s, want it to name the RegisterGoal failure (already active), not a busy conflict", data)
+	var posted struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(data, &posted); err != nil {
+		t.Fatal(err)
+	}
+	if posted.Status != "started" {
+		t.Errorf("re-arm response status = %q, want %q", posted.Status, "started")
 	}
 
-	// Not stranded busy: a plain prompt is accepted immediately (claiming the
-	// run slot fresh proves handleGoal's rollback correctly reset
-	// running/cancel on the failed second registration).
+	// Not stranded busy in some OTHER way: the goal is running again
+	// (against the new condition), so prompt_async correctly still 409s.
 	resp, data = h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
 		"parts": []map[string]string{{"type": "text", "text": "hi"}},
 	})
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("prompt_async after failed goal registration = %d, want 202 (session stranded busy): %s", resp.StatusCode, data)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("prompt_async while the re-armed goal runs = %d, want 409: %s", resp.StatusCode, data)
 	}
 
-	// Unblock the parked prompt's worker turn (blockWorker still applies —
-	// it never consumed the "started" close, sync.Once already fired, so
-	// just abort it) and let the session settle before draining.
+	// Unblock the parked worker turn and let the session settle before
+	// draining.
 	resp, data = h.do("POST", "/session/"+id+"/abort", nil)
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("second abort status %d: %s", resp.StatusCode, data)
 	}
 	sse.collectUntilIdle(t)
 
-	// Drain must complete — bounded, so a reintroduced missing wg.Done on the
-	// rollback path fails this test instead of hanging the suite forever.
+	// Drain must complete — bounded, so a reintroduced missing wg.Done on
+	// either code path fails this test instead of hanging the suite forever.
 	assertDrainCompletes(t, h.srv)
 }
 

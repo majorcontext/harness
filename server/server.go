@@ -227,6 +227,14 @@ type Server struct {
 	// TestGoalDeleteClearBeforeIdleRace). Always nil in production.
 	goalDeleteRace func(cancel context.CancelFunc)
 
+	// autoArmRace is a test-only seam: when non-nil, maybeAutoArmGoal invokes
+	// it right before its own claimForPrompt call, letting a test force a
+	// real concurrent prompt_async (or another POST /goal) to race the
+	// auto-arm claim deterministically instead of relying on an unobserved
+	// goroutine-scheduling coin flip (see TestAutoArmRaceWithIncomingPrompt).
+	// Always nil in production.
+	autoArmRace func()
+
 	// worktreeBase is the directory 'worktree'-isolation sessions create
 	// their per-session git worktrees under (see worktree.go): <SessionDir>/
 	// worktrees when SessionDir is durable, otherwise a process-lifetime
