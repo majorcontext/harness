@@ -999,7 +999,7 @@ func TestGoalEventsEmitWhileLockHeld(t *testing.T) {
 				if err := s.RegisterGoal("cond"); err != nil {
 					t.Fatal(err)
 				}
-				s.recordGoalEval(true, "reason", 1)
+				s.recordGoalEval(true, "reason", 1, s.snapshotGoal().gen)
 			},
 		},
 		{
@@ -1009,7 +1009,7 @@ func TestGoalEventsEmitWhileLockHeld(t *testing.T) {
 				if err := s.RegisterGoal("cond"); err != nil {
 					t.Fatal(err)
 				}
-				s.achieveGoal("reason", 1)
+				s.achieveGoal("reason", 1, s.snapshotGoal().gen)
 			},
 		},
 		{

@@ -440,6 +440,33 @@ func (e *goalRetryableExhaustedError) Unwrap() error { return e.err }
 // returned, unless the error is itself a cancelled context, which leaves the
 // goal untouched for the same resume reason as above.
 //
+// # Self-adjust: the condition is re-read every turn boundary
+//
+// PursueGoal does not trust its own condition parameter once the loop is
+// running — it is only the value used to (maybe) register the goal at the
+// very start. Every turn boundary instead takes a fresh goalSnapshot
+// (condition, goalGen, active) under s.mu, and that snapshot's condition —
+// not the parameter — drives that turn's directive, the guidance template,
+// and the evaluator call. A concurrent UpdateGoal (self-adjust: the goal
+// tool's "adjust" action, or an operator's POST /goal on a running loop)
+// therefore redirects the very next turn instead of being invisible to it
+// or, worse, being conflated with a clear.
+//
+// This also closes a narrow race the old condition-equality check could not:
+// an evaluator call or worker turn started against generation N can finish
+// AFTER an UpdateGoal has already moved the goal to generation N+1. Its
+// verdict is stale — computed against a condition that is no longer current
+// — and must never be journaled or acted on, but the goal is still very much
+// active, so treating this as "goal cleared" would be wrong too. goalStatus
+// reports this third case explicitly (active-but-stale), and every point
+// that used to check "was this cleared while I was working" now also checks
+// "is this stale": a stale outcome is silently discarded (no goal.eval, no
+// goal.stalled, no achieve, no clear) and the loop simply continues to the
+// next turn, which re-snapshots and picks up the new condition. See
+// goalSnapshot and goalStatus's doc comments, and
+// TestPursueGoalPicksUpUpdatedConditionNextTurn /
+// TestStaleMetVerdictDiscarded / TestClearGoalStillStopsUpdatedLoop.
+//
 // Must not be called concurrently with itself or Prompt (it drives Prompt).
 func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOptions) (*GoalResult, error) {
 	if opts.Evaluator.IsZero() {
@@ -457,7 +484,7 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 		// The accepting caller registered synchronously (the server handler
 		// does, closing the accept-vs-clear race). If the goal is no longer
 		// active, a clear won the race before the loop started: clean stop.
-		if !s.goalActiveWith(condition) {
+		if !s.goalActiveNow() {
 			return &GoalResult{Achieved: false, Turns: 0, Reason: "goal cleared"}, nil
 		}
 	} else if err := s.RegisterGoal(condition); err != nil {
@@ -465,23 +492,42 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 		return nil, err
 	}
 
-	directive := condition
+	var reason string // last NOT MET reason, carried into the next turn's guidance
 	for turn := 1; opts.MaxTurns == 0 || turn <= opts.MaxTurns; turn++ {
-		if !s.goalActiveWith(condition) {
+		// Per-turn-boundary snapshot (see goalSnapshot's doc comment): this
+		// is the single source of truth for the rest of this iteration,
+		// deliberately NOT the condition parameter or a value carried over
+		// from a previous iteration.
+		snap := s.snapshotGoal()
+		if !snap.active {
 			// Cleared between registration and this turn (or mid-loop by a
 			// concurrent DELETE): clean stop, no turn runs.
 			return &GoalResult{Achieved: false, Turns: turn - 1, Reason: "goal cleared"}, nil
 		}
-		if attempts, err := s.promptTurnWithRetry(ctx, directive, turn); err != nil {
+		directive := snap.condition
+		if turn > 1 {
+			directive = goalGuidance(snap.condition, reason)
+		}
+		if attempts, err := s.promptTurnWithRetry(ctx, directive, turn, snap.gen); err != nil {
 			if errors.Is(err, context.Canceled) {
 				// Deliberate abort: leave the goal exactly as it is (a
 				// drain must be resumable), no goal.stalled, no clear.
 				return nil, err
 			}
-			if !s.goalActiveWith(condition) {
+			active, stale := s.goalStatus(snap.gen)
+			if !active {
 				// Cleared concurrently (DELETE /goal) while a retry was in
 				// flight: clean stop, same as the checks above/below.
 				return &GoalResult{Achieved: false, Turns: turn - 1, Reason: "goal cleared"}, nil
+			}
+			if stale {
+				// UpdateGoal moved the goal to a new generation while this
+				// turn's retries were in flight: this turn's failure was
+				// attributed to a condition that is no longer current, so it
+				// must not clear the (still active, just redirected) goal —
+				// discard silently and let the next iteration's fresh
+				// snapshot pick up the new condition.
+				continue
 			}
 			var exhausted *goalRetryableExhaustedError
 			if errors.As(err, &exhausted) {
@@ -533,11 +579,11 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			// must never stay active with nothing further recorded. Clear
 			// it, carrying the error as the reason, then return the error
 			// so the caller (e.g. the server) still journals the failure.
-			reason := fmt.Sprintf("worker turn failed after %d attempt(s): %v", attempts, err)
-			s.clearGoal(reason)
+			failReason := fmt.Sprintf("worker turn failed after %d attempt(s): %v", attempts, err)
+			s.clearGoal(failReason)
 			return nil, fmt.Errorf("engine: goal loop stalled: %w", err)
 		}
-		met, reason, err := s.evaluateGoal(ctx, condition, opts.Evaluator)
+		met, evalReason, err := s.evaluateGoal(ctx, snap.condition, opts.Evaluator)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				// Deliberate abort (or a cancelled ctx surfacing through the
@@ -572,28 +618,51 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			// the same check on the worker-turn path above. A
 			// deliberately-cleared goal is not an error condition
 			// regardless of which half of the loop the clear raced with.
-			if !s.goalActiveWith(condition) {
+			//
+			// And if instead an UpdateGoal moved the goal to a new
+			// generation while this evaluator call was in flight, the
+			// failure was against a condition that is no longer current:
+			// discard it silently (no clear, no session.error) and let the
+			// next iteration pick up the new condition — same reasoning as
+			// the worker-turn stale case above.
+			active, stale := s.goalStatus(snap.gen)
+			if !active {
 				return &GoalResult{Achieved: false, Turns: turn, Reason: "goal cleared"}, nil
+			}
+			if stale {
+				continue
 			}
 			s.clearGoal(fmt.Sprintf("goal evaluator failed: %v", err))
 			s.emitSessionError(err)
 			return nil, err
 		}
-		if !s.recordGoalEval(met, reason, turn) {
-			// ClearGoal fired while this evaluation was in flight: the goal is
-			// no longer active, so its verdict must not land in the journal.
-			// Treat this as a clean stop, never an achievement.
+		if !s.recordGoalEval(met, evalReason, turn, snap.gen) {
+			// Either ClearGoal fired while this evaluation was in flight (the
+			// goal is no longer active, so its verdict must not land in the
+			// journal — clean stop, never an achievement), or an UpdateGoal
+			// moved the goal to a new generation while it was in flight (the
+			// verdict is stale — computed against a condition that is no
+			// longer current — so it is discarded silently and the loop
+			// continues against the new condition instead of stopping).
+			if _, stale := s.goalStatus(snap.gen); stale {
+				continue
+			}
 			return &GoalResult{Achieved: false, Turns: turn, Reason: "goal cleared"}, nil
 		}
 		if met {
-			if !s.achieveGoal(reason, turn) {
-				// Cleared in the narrow window between recordGoalEval and
-				// achieveGoal — still a clean stop, not an achievement.
+			if !s.achieveGoal(evalReason, turn, snap.gen) {
+				// Same two possibilities as recordGoalEval above, in the
+				// narrow window between it and this call: a concurrent clear
+				// (clean stop, not an achievement) or a concurrent update
+				// (stale MET verdict, discarded, loop continues).
+				if _, stale := s.goalStatus(snap.gen); stale {
+					continue
+				}
 				return &GoalResult{Achieved: false, Turns: turn, Reason: "goal cleared"}, nil
 			}
-			return &GoalResult{Achieved: true, Turns: turn, Reason: reason}, nil
+			return &GoalResult{Achieved: true, Turns: turn, Reason: evalReason}, nil
 		}
-		directive = goalGuidance(condition, reason)
+		reason = evalReason
 	}
 	return &GoalResult{Achieved: false, Turns: opts.MaxTurns, Reason: "max turns"}, nil
 }
@@ -664,7 +733,12 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 // The non-idempotency gate below (stop retrying once a tool has executed
 // this attempt) applies identically to BOTH budgets: retrying after a tool
 // call ran is unsafe regardless of why the subsequent call failed.
-func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, turn int) (attempts int, err error) {
+//
+// gen is the calling turn's goalSnapshot generation, threaded straight
+// through to recordGoalStalled so a stall record for an attempt is never
+// journaled once an UpdateGoal has moved the goal past this turn's
+// generation — see recordGoalStalled and PursueGoal's stale-discard handling.
+func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, turn int, gen uint64) (attempts int, err error) {
 	var deterministicAttempt, retryableAttempt int
 	for {
 		attempts++
@@ -692,7 +766,7 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 		// read as a park on any timeline keyed to the flag.
 		toolGateStops := s.toolExecutions() > toolsBefore
 		waiting := retryable && !exhausted && !toolGateStops
-		if !s.recordGoalStalled(err, turn, attempts, retryable, class, waiting) {
+		if !s.recordGoalStalled(err, turn, attempts, retryable, class, waiting, gen) {
 			// Concurrently cleared: stop retrying, nothing left to retry for.
 			return attempts, err
 		}
@@ -737,9 +811,13 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 
 // recordGoalStalled records one failed worker-turn attempt for a turn. Like
 // recordGoalEval, it is a no-op — no journal write, no event — when the goal
-// is no longer active (a concurrent ClearGoal), so a stalled record can never
-// land in the log after goal.cleared. Reports whether the record was
-// written, i.e. whether the goal is still active and retrying is worthwhile.
+// is no longer active (a concurrent ClearGoal) OR when it is active but at a
+// different generation than gen (a concurrent UpdateGoal moved past this
+// turn's snapshot — see goalSnapshot/goalStatus), so a stalled record can
+// never land in the log after goal.cleared, and a stale attempt's failure is
+// never attributed to a condition that is no longer current. Reports whether
+// the record was written, i.e. whether the goal is still active, at the same
+// generation, and retrying is worthwhile.
 //
 // retryable/class/waiting carry the retryable-class classification (see
 // promptTurnWithRetry and GitHub issue #61): retryable and class are zero
@@ -747,9 +825,9 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 // still within its budget ("waiting out provider weather") and false for
 // the final retryable stall that reports the budget exhausted (the turn is
 // about to park — see PursueGoal's doc comment).
-func (s *Session) recordGoalStalled(err error, turn, attempt int, retryable bool, class provider.RetryableClass, waiting bool) bool {
+func (s *Session) recordGoalStalled(err error, turn, attempt int, retryable bool, class provider.RetryableClass, waiting bool, gen uint64) bool {
 	s.mu.Lock()
-	if !s.goalActive {
+	if !s.goalActive || s.goalGen != gen {
 		s.mu.Unlock()
 		return false
 	}
@@ -833,6 +911,10 @@ func (s *Session) clearGoal(reason string) bool {
 // BEFORE any loop goroutine spawns, so a ClearGoal arriving after acceptance
 // always observes an active goal — the round-3 registration race is
 // structurally impossible. Errors if a goal is already active.
+//
+// Bumps goalGen so a PursueGoal loop that snapshotted the PREVIOUS goal (now
+// cleared or achieved) never mistakes this freshly-registered one for a
+// continuation of it — see goalSnapshot.
 func (s *Session) RegisterGoal(condition string) error {
 	if strings.TrimSpace(condition) == "" {
 		return errors.New("engine: RegisterGoal requires a non-empty condition")
@@ -845,6 +927,7 @@ func (s *Session) RegisterGoal(condition string) error {
 	}
 	s.goalActive = true
 	s.goalCondition = condition
+	s.goalGen++
 	s.persistGoalLocked(recGoalSet, goalRecord{Condition: condition})
 	// Emit while holding s.mu (see ClearGoal): event order matches log
 	// order. OnEvent must not call back into this Session.
@@ -859,6 +942,13 @@ func (s *Session) RegisterGoal(condition string) error {
 // currently active — use RegisterGoal to start one. Updating to the exact
 // same condition (after trimming) is a silent no-op: nil error, no record, no
 // event, since nothing actually changed.
+//
+// Bumps goalGen (skipped on the same-condition no-op, since nothing to
+// re-snapshot against changed). A running PursueGoal loop picks up the new
+// condition at its next turn boundary (see goalSnapshot), and any evaluator
+// verdict or worker-turn outcome still in flight against the OLD generation
+// is discarded rather than journaled — see PursueGoal's doc comment and
+// goalStatus.
 func (s *Session) UpdateGoal(condition string) error {
 	if strings.TrimSpace(condition) == "" {
 		return errors.New("engine: UpdateGoal requires a non-empty condition")
@@ -873,6 +963,7 @@ func (s *Session) UpdateGoal(condition string) error {
 		return nil
 	}
 	s.goalCondition = condition
+	s.goalGen++
 	s.persistGoalLocked(recGoalUpdated, goalRecord{Condition: condition})
 	// Emit while holding s.mu (see ClearGoal): event order matches log
 	// order. OnEvent must not call back into this Session.
@@ -881,22 +972,68 @@ func (s *Session) UpdateGoal(condition string) error {
 	return nil
 }
 
-// goalActiveWith reports whether the given condition is the currently
-// active goal.
-func (s *Session) goalActiveWith(condition string) bool {
+// goalSnapshot is PursueGoal's per-turn-boundary read of goal state — the
+// condition, the generation that condition was established at (see goalGen's
+// field comment), and whether the goal is still active — taken together
+// under a single s.mu critical section (see snapshotGoal) so a turn's
+// directive, evaluator call, and post-evaluation bookkeeping all agree on
+// exactly one version of the goal, never a torn mix of an old condition with
+// a new gen or vice versa. A concurrent UpdateGoal or ClearGoal is always
+// observed at the NEXT snapshot (the top of the next turn), never mid-turn.
+type goalSnapshot struct {
+	condition string
+	gen       uint64
+	active    bool
+}
+
+// snapshotGoal takes a goalSnapshot under s.mu.
+func (s *Session) snapshotGoal() goalSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.goalActive && s.goalCondition == condition
+	return goalSnapshot{condition: s.goalCondition, gen: s.goalGen, active: s.goalActive}
+}
+
+// goalActiveNow reports whether a goal is currently active, with no
+// generation check — used only where no snapshot/generation is yet in play
+// (the pre-loop registered-vs-cleared race check in PursueGoal). Everywhere
+// a turn is already underway, goalStatus is the right call instead: it also
+// reports staleness against that turn's snapshot.
+func (s *Session) goalActiveNow() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.goalActive
+}
+
+// goalStatus reports whether the goal is currently active, and — only
+// meaningful when active is true — whether it is "stale" relative to gen:
+// active but at a DIFFERENT generation, meaning a concurrent UpdateGoal
+// rewrote the condition after gen was snapshotted. PursueGoal uses this to
+// tell apart the three ways an in-flight worker-turn or evaluator outcome
+// can no longer be trusted:
+//
+//   - !active: the goal was cleared — clean stop (existing "goal cleared"
+//     exit).
+//   - active && stale: the goal was updated, not cleared — the in-flight
+//     outcome is discarded silently (no journal write) and the loop
+//     continues, picking up the new condition at its next snapshot.
+//   - active && !stale: nothing changed — proceed normally.
+func (s *Session) goalStatus(gen uint64) (active, stale bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.goalActive, s.goalActive && s.goalGen != gen
 }
 
 // recordGoalEval records one evaluator verdict for a turn. It is a no-op —
-// no journal write, no event — when the goal is no longer active: a
+// no journal write, no event — when the goal is no longer active (a
 // concurrent ClearGoal may have raced this evaluation to completion, and its
-// verdict must never land in the log after goal.cleared. Reports whether the
-// record was written.
-func (s *Session) recordGoalEval(met bool, reason string, turn int) bool {
+// verdict must never land in the log after goal.cleared) OR when it is active
+// but at a different generation than gen (a concurrent UpdateGoal moved the
+// goal past this turn's snapshot — see goalSnapshot/goalStatus — so the
+// verdict is stale and must be discarded, not journaled, even though the
+// goal is still active). Reports whether the record was written.
+func (s *Session) recordGoalEval(met bool, reason string, turn int, gen uint64) bool {
 	s.mu.Lock()
-	if !s.goalActive {
+	if !s.goalActive || s.goalGen != gen {
 		s.mu.Unlock()
 		return false
 	}
@@ -910,12 +1047,15 @@ func (s *Session) recordGoalEval(met bool, reason string, turn int) bool {
 }
 
 // achieveGoal records goal.achieved and clears the active goal. It is a
-// no-op when the goal is no longer active (already cleared concurrently),
-// so a cleared-then-achieved sequence can never reach the log. Reports
+// no-op when the goal is no longer active (already cleared concurrently, so
+// a cleared-then-achieved sequence can never reach the log) OR when it is
+// active but at a different generation than gen (a concurrent UpdateGoal
+// moved the goal past this turn's snapshot — the MET verdict is stale and
+// must never achieve a goal the caller has since redirected). Reports
 // whether the goal was achieved.
-func (s *Session) achieveGoal(reason string, turns int) bool {
+func (s *Session) achieveGoal(reason string, turns int, gen uint64) bool {
 	s.mu.Lock()
-	if !s.goalActive {
+	if !s.goalActive || s.goalGen != gen {
 		s.mu.Unlock()
 		return false
 	}

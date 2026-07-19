@@ -288,6 +288,22 @@ type Session struct {
 	goalActive    bool
 	goalCondition string
 
+	// goalGen counts every RegisterGoal/UpdateGoal that establishes a new
+	// condition text (a same-condition UpdateGoal is a no-op and does NOT
+	// bump it — see UpdateGoal). PursueGoal snapshots (condition, goalGen,
+	// goalActive) together at each turn boundary (see goalSnapshot) so an
+	// evaluator verdict or worker-turn outcome computed against an earlier
+	// snapshot can be told apart from the current goal even when the
+	// condition text itself happens to collide, and discarded rather than
+	// journaled — see goalSnapshot's doc comment. Deliberately runtime-only:
+	// never persisted, never appears in a goal.* record, never restored on
+	// LoadSession (a resumed session starts a fresh loop, which registers or
+	// resumes against whatever condition the log folds to and gets a new
+	// gen from that point forward — replay correctness comes from the
+	// goal.updated fold, not from reproducing this counter's exact value).
+	// Guarded by mu.
+	goalGen uint64
+
 	// toolExecCount counts tool-call executions across the session's
 	// lifetime: incremented once per call to runToolCall that actually
 	// invokes a tool (i.e. not one blocked by a tool.execute.before deny),
