@@ -1603,23 +1603,58 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 // goal loop's later turn-boundary drains simply see an empty queue, exactly
 // as if the clear had raced ahead of them.
 //
-// s.lookup resolves the session (resident or a transient disk load) without
-// claiming the run slot — DequeueAllPrompts takes only the engine session's
-// own mutex and persists synchronously to its log (see
-// persistPromptQueueLocked), so this works correctly whether the session is
-// idle, busy with a prompt, or mid goal-loop, with no run-slot involvement at
-// all. Unknown session (not resident, no log on disk) is 404.
+// The session is resolved exactly like handleGoalDelete's cold path, NOT via
+// a bare s.lookup: a not-resident session is loaded from disk OUTSIDE s.mu,
+// then s.mu is re-acquired to re-check for a resident that appeared in the
+// meantime (a concurrent POST /prompt_async or /goal racing us), using that
+// winner instead — registering the freshly loaded instance into residency
+// otherwise — so DequeueAllPrompts below always mutates the exact
+// *engine.Session instance every future drain (maybeDispatchQueued) actually
+// reads. A bare transient load (the old behavior) would let a concurrent
+// cold-load-and-register elsewhere win residency with its OWN, divergent
+// instance: the clear would land on a copy nothing else ever touches again
+// — 204 and even a durable prompt.dequeued(cleared) record, journaled via
+// the shared OnEvent wiring, while the session that matters keeps
+// dispatching the "cleared" prompts. See
+// TestDeleteQueueColdSessionSurvivesResidencyRace and claimForPrompt's doc
+// comment for the same race argument.
+//
+// DequeueAllPrompts takes only the engine session's own mutex and persists
+// synchronously to its log, so this works correctly whether the resolved
+// session is idle, busy with a prompt, or mid goal-loop, with no run-slot
+// claim involved at all. Unknown session (not resident, no log on disk) is
+// 404.
 func (s *Server) handleQueueDelete(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
 		return
 	}
-	sess, _, ok := s.lookup(id)
-	if !ok {
-		writeErr(w, http.StatusNotFound, "no such session")
-		return
+	s.mu.Lock()
+	st := s.sessions[id]
+	s.mu.Unlock()
+	if st == nil {
+		sess, err := s.opts.LoadSession(id)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, "no such session")
+			return
+		}
+		if s.queueDeleteRace != nil {
+			// Test-only seam: let a test force a real concurrent claim (a
+			// prompt_async cold-loading and registering its own instance) to
+			// land here deterministically. Nil in production.
+			s.queueDeleteRace()
+		}
+		s.mu.Lock()
+		if ex := s.sessions[id]; ex != nil {
+			st = ex // a resident appeared while we loaded; use the winner
+		} else {
+			st = &sessionState{sess: sess, lastUsed: time.Now()}
+			s.sessions[id] = st
+			s.evictResidentLocked()
+		}
+		s.mu.Unlock()
 	}
-	sess.DequeueAllPrompts("cleared")
+	st.sess.DequeueAllPrompts("cleared")
 	w.WriteHeader(http.StatusNoContent)
 }
 

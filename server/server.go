@@ -245,6 +245,17 @@ type Server struct {
 	// TestPromptQueueRaceWithFreedSlot). Always nil in production.
 	queueDispatchRace func()
 
+	// queueDeleteRace is a test-only seam: when non-nil, handleQueueDelete's
+	// cold path (session not resident) invokes it right after its own
+	// LoadSession call returns but before re-acquiring s.mu to register (or
+	// yield to) a resident — letting a test force a real concurrent claim
+	// (e.g. a prompt_async cold-loading and registering its OWN instance for
+	// the same session) to land deterministically in that exact window,
+	// instead of relying on an unobserved goroutine-scheduling coin flip. See
+	// TestDeleteQueueColdSessionSurvivesResidencyRace. Always nil in
+	// production.
+	queueDeleteRace func()
+
 	// worktreeBase is the directory 'worktree'-isolation sessions create
 	// their per-session git worktrees under (see worktree.go): <SessionDir>/
 	// worktrees when SessionDir is durable, otherwise a process-lifetime
