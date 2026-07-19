@@ -1149,6 +1149,17 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 // handler to the journal, and an SSE collector that reads until idle (the
 // wire contract every client relies on) could see goal.set but never
 // goal.cleared.
+//
+// Non-resident-but-on-disk case (issue #78): a session with no in-memory
+// sessionState at all is not necessarily gone -- it may be exactly the
+// boot-time restart-paused goal (pauseArmedGoalsAtBoot): active in the
+// journal, paused/restart in goalState, with no loop ever attached in this
+// process. That is precisely the case an operator needs DELETE /goal to be
+// able to clear. The old code's `st != nil` guard skipped ClearGoal for it
+// entirely -- still returning 204 (nothing to reject), but journaling
+// nothing, never flipping engine.Session.goalActive, and leaving
+// goalState[id].active true so the goal re-paused at the next boot. See
+// TestDeleteGoalNonResidentClearsAndJournals for the red/green case.
 func (s *Server) handleGoalDelete(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
@@ -1156,15 +1167,47 @@ func (s *Server) handleGoalDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	st := s.sessions[id]
+	s.mu.Unlock()
+	if st == nil {
+		// Not resident: load it from disk exactly like claimForPrompt's cold
+		// path -- LoadSession OUTSIDE s.mu (it may hit disk), then re-acquire
+		// the lock and re-check for a resident that appeared in the
+		// meantime (a concurrent POST /goal or /prompt_async racing us),
+		// using that winner instead so two *engine.Session instances for the
+		// same log are never both mutated. See claimForPrompt's doc comment
+		// for the full race argument this mirrors.
+		//
+		// The freshly loaded session is made resident here (lastUsed set,
+		// evictResidentLocked invoked) -- deliberately, rather than used
+		// transiently and discarded. That keeps exactly one "load a cold
+		// session into residency" shape in this server (claimForPrompt's),
+		// instead of a second copy of its race handling that would need to
+		// be kept in sync by hand. It costs nothing beyond one ordinary
+		// MaxResident slot: the loaded session is idle (running/goalLoop are
+		// both the zero value false), so it is immediately eviction-eligible
+		// like any other idle resident on the next evictResidentLocked
+		// sweep.
+		sess, err := s.opts.LoadSession(id)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, "no such session")
+			return
+		}
+		s.mu.Lock()
+		if ex := s.sessions[id]; ex != nil {
+			st = ex // a resident appeared while we loaded; use the winner
+		} else {
+			st = &sessionState{sess: sess, lastUsed: time.Now()}
+			s.sessions[id] = st
+			s.evictResidentLocked()
+		}
+		s.mu.Unlock()
+	}
+	s.mu.Lock()
 	var cancel context.CancelFunc
-	if st != nil && st.goalLoop {
+	if st.goalLoop {
 		cancel = st.cancel
 	}
 	s.mu.Unlock()
-	if st == nil && !s.sessionOnDisk(id) {
-		writeErr(w, http.StatusNotFound, "no such session")
-		return
-	}
 	// Orderly shutdown: clear BEFORE cancel. ClearGoal journals goal.cleared
 	// and emits the event synchronously, under the session's own lock,
 	// before it returns (see engine.Session.ClearGoal) — so by the time
@@ -1176,11 +1219,12 @@ func (s *Server) handleGoalDelete(w http.ResponseWriter, r *http.Request) {
 	// until idle (the wire contract every client relies on) would never see
 	// the clear. See TestGoalDeleteClearBeforeIdleRace, which forces that
 	// worst case deterministically.
-	if st != nil {
-		// ClearGoal journals goal.cleared (via OnEvent -> publishGoal) and
-		// resets the engine goal state; a no-op when no goal is active.
-		st.sess.ClearGoal()
-	}
+	//
+	// ClearGoal journals goal.cleared (via OnEvent -> publishGoal, wired the
+	// same way whether st.sess came from claimForPrompt's residency, this
+	// handler's own cold-load branch above, or was already resident) and
+	// resets the engine goal state; a no-op when no goal is active.
+	st.sess.ClearGoal()
 	if s.goalDeleteRace != nil {
 		// Handed cancel (rather than a bare notification) so a test can force
 		// the worst case unconditionally: fire the worker's unblock as early
