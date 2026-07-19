@@ -1,10 +1,14 @@
 package server
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -187,6 +191,87 @@ func TestCompactEndpointBusySessionIs409(t *testing.T) {
 
 	prov.releaseAll()
 	h.do("GET", "/session/"+id+"/wait?until=idle&timeout_s=5", nil)
+}
+
+// panicAtCallProv serves scripted turns normally, then panics on the call at
+// index panicAt — used to force a genuine panic mid-Compact (the tool-less
+// compaction summarization call is always the call right after the ordinary
+// prompt turns that built up foldable history).
+type panicAtCallProv struct {
+	name    string
+	mu      sync.Mutex
+	turns   [][]provider.Event
+	call    int
+	panicAt int
+}
+
+func (p *panicAtCallProv) Name() string { return p.name }
+
+func (p *panicAtCallProv) Stream(_ context.Context, _ *provider.Request) (provider.Stream, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.call == p.panicAt {
+		panic("forced panic for TestCompactPanicReleasesClaim")
+	}
+	ev := p.turns[p.call]
+	p.call++
+	return &scriptedStream{events: ev}, nil
+}
+
+// TestCompactPanicReleasesClaim is the regression test for handleCompact's
+// panic-unsafe wg.Done: a plain `s.wg.Done()` at the handler's tail is never
+// reached if Compact (or either of the tail's own maybeDispatchQueued/
+// maybeAutoArmGoal calls) panics, leaking the earlier wg.Add and hanging
+// Drain forever. A `defer s.wg.Done()` registered right after the claim
+// succeeds runs during the panic's unwind — same ordering as the normal
+// path (defers still run after the body's tail calls), but panic-safe.
+//
+// net/http recovers a panicking handler per-connection (closing that
+// connection, logging "http: panic serving ..."), so the client observes a
+// broken connection rather than a stack trace — this test only cares that
+// the server's own claim bookkeeping survives: Drain must complete promptly
+// afterward, proving s.wg returned to zero rather than staying stuck above
+// zero forever.
+func TestCompactPanicReleasesClaim(t *testing.T) {
+	prov := &panicAtCallProv{
+		name: "test",
+		turns: [][]provider.Event{
+			compactAsstTurn("one", provider.Usage{InputTokens: 10}),
+			compactAsstTurn("two", provider.Usage{InputTokens: 10}),
+			compactAsstTurn("three", provider.Usage{InputTokens: 10}),
+		},
+		panicAt: 3, // the compaction summarization call, right after the 3 prompt turns above
+	}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+	h.promptAndWaitIdle(id, "go1")
+	h.promptAndWaitIdle(id, "go2")
+	h.promptAndWaitIdle(id, "go3")
+
+	req, err := http.NewRequest("POST", h.ts.URL+"/session/"+id+"/compact",
+		bytes.NewReader([]byte(`{"keep_turns":1}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+h.token)
+	req.Header.Set("Content-Type", "application/json")
+	// Deliberately not h.do: the forced panic aborts net/http's connection
+	// mid-response, so the client call errors -- that is the expected shape
+	// here, not a test failure.
+	if resp, err := h.ts.Client().Do(req); err == nil {
+		resp.Body.Close()
+	}
+
+	drainDone := make(chan struct{})
+	go func() {
+		h.srv.Drain(context.Background())
+		close(drainDone)
+	}()
+	select {
+	case <-drainDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Drain did not complete after the forced compact panic -- the run-slot claim leaked")
+	}
 }
 
 // TestCompactEndpointUnknownSessionIs404 mirrors prompt_async/goal's

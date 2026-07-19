@@ -2721,9 +2721,34 @@ async function sendPrompt() {
   $("composerNotice").textContent = "";
   try {
     const resp = await boxAPI(b, "POST", "/session/" + drill.sessionId + "/prompt_async", { parts: [{ type: "text", text }] });
-    if (resp.status === 202) { $("promptBox").value = ""; }
-    else if (resp.status === 409) { $("composerNotice").textContent = "session is busy \u2014 wait for it to finish"; }
-    else { $("composerNotice").textContent = "send failed (" + resp.status + ")"; }
+    if (resp.status === 202) {
+      // A busy session no longer 409s (docs/plans/2026-07-19-prompt-queue.md):
+      // the prompt is durably queued instead and status/queued on the body
+      // say which. The prompt is accepted either way, so the box always
+      // clears; "queued" additionally surfaces the wait so the operator
+      // isn't left wondering why nothing streamed in yet.
+      const body = await resp.json().catch(() => ({}));
+      $("promptBox").value = "";
+      if (body && body.status === "queued") {
+        // promptAsyncResponse.Queued is `json:"queued,omitempty"` server-side
+        // (server/handlers.go): on the documented DELETE-/queue-during-
+        // dispatch race the depth is genuinely 0, and Go's omitempty drops a
+        // zero int, so on the wire that race and "field absent" are the same
+        // JSON shape (body.queued undefined). `|| 1` treated both as "1
+        // waiting" -- dishonest for a prompt that was accepted then cleared
+        // before it ever ran. Show a real count only when one exists.
+        const n = typeof body.queued === "number" ? body.queued : 0;
+        $("composerNotice").textContent = n >= 1
+          ? "queued (" + n + " waiting)"
+          : "accepted but cleared before running (queue emptied)";
+      }
+    } else if (resp.status === 409) {
+      // Same-session busy no longer reaches this branch; only a workdir held
+      // by a different session still 409s.
+      $("composerNotice").textContent = "workdir busy: held by another session";
+    } else {
+      $("composerNotice").textContent = "send failed (" + resp.status + ")";
+    }
   } catch (e) { $("composerNotice").textContent = "send failed: " + e.message; }
 }
 

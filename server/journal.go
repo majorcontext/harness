@@ -101,6 +101,38 @@ type Event struct {
 	CompactLastID      string `json:"compact_last_id,omitempty"`
 	CompactTurnsFolded int    `json:"compact_turns_folded,omitempty"`
 	CompactSummaryID   string `json:"compact_summary_id,omitempty"`
+
+	// Prompt-queue fields, carried by the prompt.queued/prompt.dequeued
+	// durable records (see engine/queue.go and docs/plans/2026-07-19-prompt-
+	// queue.md). QueueID is the queue-assigned, session-monotonic prompt ID.
+	// QueueText is the queued prompt text, carried on both events. QueueReason
+	// is empty on prompt.queued and one of "delivered" (idle drain),
+	// "injected" (goal-turn-boundary injection), or "cleared" (DELETE
+	// /session/{id}/queue) on prompt.dequeued. QueueLen is the queue depth
+	// remaining immediately after this event.
+	//
+	// QueueLen is a *int, not a plain int, unlike this struct's other
+	// event-scoped optional numeric fields (SystemLen, GoalTurn, etc., which
+	// use a bare int with omitempty): those fields never carry a genuinely
+	// meaningful zero — e.g. GoalTurn is 1-based and never legitimately 0 on
+	// the events that set it — so an absent key and a present zero can never
+	// be confused. QueueLen is different: a prompt.dequeued that drains the
+	// queue's last entry legitimately reports 0, and a consumer must be able
+	// to tell "the queue is now empty" (explicit 0) apart from "this event
+	// type never carries a queue depth" (key absent, every other event type).
+	// A bare int with omitempty cannot express that distinction — Go's
+	// encoding/json omits a zero int under omitempty regardless of intent —
+	// so publishQueue (the only writer of this field) always populates a
+	// non-nil pointer, giving prompt.queued/prompt.dequeued an unambiguous
+	// wire value while every other event type still omits the key entirely
+	// (nil pointer + omitempty). This mirrors the same nil-vs-zero idiom
+	// provider.Request already uses for Temperature/TopP (provider/
+	// provider.go), the codebase's precedent for "zero is a meaningful,
+	// distinct-from-absent value."
+	QueueID     int64  `json:"queue_id,omitempty"`
+	QueueText   string `json:"queue_text,omitempty"`
+	QueueReason string `json:"queue_reason,omitempty"`
+	QueueLen    *int   `json:"queue_len,omitempty"`
 }
 
 // Durable and live event types (a superset of engine.Event types plus the
@@ -127,6 +159,14 @@ const (
 	// from goal.stalled (which is a live worker-turn retry event, not a
 	// boot-time observation). Always carries GoalPauseReason "restart".
 	evtGoalPaused = "goal.paused"
+
+	// evtPromptQueued/evtPromptDequeued mirror engine.EventPromptQueued/
+	// EventPromptDequeued (see engine/queue.go): a prompt submitted to a busy
+	// session was durably enqueued, or a queued prompt was popped off the
+	// head for delivery (idle drain, goal-turn injection, or a durable
+	// clear). See publishQueue.
+	evtPromptQueued   = "prompt.queued"
+	evtPromptDequeued = "prompt.dequeued"
 
 	// evtWorktreeKept is journaled whenever a 'worktree'-isolation session's
 	// worktree is left in place at teardown (session end or the serve-start
@@ -208,6 +248,8 @@ func (s *Server) Publish(ev engine.Event) {
 		})
 	case engine.EventGoalSet, engine.EventGoalUpdated, engine.EventGoalEval, engine.EventGoalStalled, engine.EventGoalAchieved, engine.EventGoalCleared:
 		s.publishGoal(ev)
+	case engine.EventPromptQueued, engine.EventPromptDequeued:
+		s.publishQueue(ev)
 	case engine.EventHistoryCompacted:
 		s.publishHistoryCompacted(ev)
 	case engine.EventCompactionFailed:
@@ -317,6 +359,32 @@ func (s *Server) publishGoal(ev engine.Event) {
 		g.pausedRestart = false
 	}
 	s.emitDurableLocked(out)
+}
+
+// publishQueue journals a durable prompt.queued/prompt.dequeued record (see
+// engine/queue.go). Unlike publishGoal, there is deliberately no per-session
+// in-memory tracker folded here: GET /session's queued count reads
+// engine.Session.QueuedPrompts() directly (see buildSession), which is
+// authoritative for both a live resident session (its own promptQueue slice,
+// mutex-guarded) and a freshly LoadSession-replayed one (folded from the same
+// prompt.queued/dequeued records in the session's own log — see store.go).
+// Deriving the count from the engine session itself rather than duplicating
+// it into a server-side fold makes "live fold and boot replay agree" true by
+// construction — there is only one source of truth to ever drift from,
+// unlike goalState (which exists because Session JSON needs server-derived
+// presentation, e.g. the paused view, that the engine does not itself track).
+// This function's only job is to make the events visible on the durable
+// journal/SSE stream for observability and replay.
+func (s *Server) publishQueue(ev engine.Event) {
+	queueLen := ev.QueueLen
+	s.emitDurable(Event{
+		Type:        ev.Type,
+		SessionID:   ev.SessionID,
+		QueueID:     ev.QueueID,
+		QueueText:   ev.QueueText,
+		QueueReason: ev.QueueReason,
+		QueueLen:    &queueLen,
+	})
 }
 
 // recordTurnEnd journals a durable turn.end record for sessionID and updates

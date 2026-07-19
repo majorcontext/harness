@@ -80,6 +80,16 @@ type sessionJSON struct {
 	// replay the compact journal record — see engine/store.go).
 	CompactionCount int       `json:"compaction_count,omitempty"`
 	LastCompactedAt time.Time `json:"last_compacted_at,omitzero"`
+	// Queued is the session's current durable prompt-queue depth (see
+	// docs/plans/2026-07-19-prompt-queue.md): prompts submitted via
+	// prompt_async while the session was busy, waiting for the next natural
+	// drain trigger (idle dispatch or a goal loop's turn-boundary
+	// injection). Always present (0 when nothing is waiting, never
+	// omitted) — unlike Goal/LastTurn, this needs no "never happened here"
+	// distinction, so there is no reason to hide the zero value. Read
+	// directly from engine.Session.QueuedPrompts(), so it is correct for a
+	// resident session and a freshly reloaded one alike (see buildSession).
+	Queued int `json:"queued"`
 }
 
 // usageJSON is the Session/StatusEntry usage sub-object (issue #62 layer 2):
@@ -698,6 +708,43 @@ func (s *Server) compositeStateFor(id string, running bool) string {
 	return compositeState(running, goal != nil && goal.Active, isRestartPaused(goal))
 }
 
+// promptAsyncResponse is POST /session/{id}/prompt_async's success-response
+// body (see handlePrompt/enqueueOrDispatch): status is "started" when a
+// prompt turn is now running (this call's own claim, or the freed-slot retry
+// dispatching THIS request's own just-enqueued prompt — see
+// enqueueOrDispatch's doc comment for the exact rule), or "queued" when this
+// request's prompt is sitting in the durable FIFO waiting for a future
+// drain. Queued carries the current queue depth (including this request's
+// own prompt) only when status is "queued" — omitted (0) on "started",
+// where it would be meaningless.
+//
+// One narrow exception: Queued reads 0 (and so is omitted, same JSON shape
+// as "started") on a "queued" response when a concurrent DELETE
+// /session/{id}/queue cleared the entire queue — including this request's
+// own just-enqueued prompt — in the gap between this call's own enqueue and
+// its dispatch-the-head attempt (see the two dispatchQueueHead call sites'
+// doc comments). This is the most honest shape the existing vocabulary
+// offers for "accepted, then cleared before it ran": the request was not an
+// error (its prompt WAS durably enqueued and journaled), it simply never
+// got the chance to run. See TestQueueClearRaceDuringIdleDispatchIsNotAnError
+// and TestQueueClearRaceDuringDispatchIsNotAnError.
+type promptAsyncResponse struct {
+	Seq    int64  `json:"seq"`
+	Status string `json:"status"`
+	Queued int    `json:"queued,omitempty"`
+}
+
+// handlePrompt is POST /session/{id}/prompt_async (see docs/plans/2026-07-19-
+// prompt-queue.md). An idle session claims its run slot exactly as before and
+// starts running immediately ("started"). A session already busy with
+// ANOTHER prompt or goal loop no longer 409s: the prompt is enqueued
+// durably (engine.Session.EnqueuePrompt, synchronously, before any response
+// is written — the accept-vs-lose race this closes is the same one
+// RegisterGoal/handleGoalBusy already close for goals), then ONE claim retry
+// is made to close the freed-slot race where the busy occupant finishes in
+// the gap between the failed claim above and the enqueue (see
+// enqueueOrDispatch). The workdir-held-by-ANOTHER-session 409 and the
+// draining 503 are unchanged — only same-session busy gets queue semantics.
 func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
@@ -737,7 +784,8 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		case code == http.StatusConflict && holder != "":
 			writeErr(w, code, fmt.Sprintf("workdir busy: held by session %s", holder))
 		case code == http.StatusConflict:
-			writeErr(w, code, "session is busy with another prompt")
+			// Same-session busy: queue-on-busy (invariant 9), not a 409.
+			s.enqueueOrDispatch(w, id, text)
 		case code == http.StatusServiceUnavailable:
 			writeErr(w, code, "server shutting down")
 		default:
@@ -746,7 +794,87 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Explicit model wins over the session's persisted model (CLI -model rule).
+	if len(st.sess.QueuedPrompts()) > 0 {
+		// Global FIFO on an idle-with-queue session: the queue can be
+		// non-empty even though claimForPrompt just succeeded (the session
+		// itself was idle) — a restart refold (TestQueueRestartRefoldNoAuto
+		// Dispatch's queue survives a restart with the session left idle),
+		// or a prompt stranded by a gap in some OTHER tail's drain wiring.
+		// Either way, this request's own prompt must never jump the line:
+		// enqueue it durably behind whatever is already waiting, then
+		// dispatch the queue's HEAD (not necessarily this request's own
+		// text) into the run slot just claimed above. See
+		// dispatchQueueHead and enqueueOrDispatch's identical shape for the
+		// same-session-BUSY counterpart of this same rule.
+		ourID, err := st.sess.EnqueuePrompt(text)
+		if err != nil {
+			// handlePrompt already rejects an empty parts list and joins
+			// non-empty text above, so this is not reachable in practice;
+			// fail closed rather than silently drop the request, releasing
+			// the claim just taken.
+			s.mu.Lock()
+			st.running = false
+			st.cancel = nil
+			st.goalLoop = false
+			st.lastUsed = time.Now()
+			s.evictResidentLocked()
+			s.mu.Unlock()
+			s.wg.Done()
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if s.queueDispatchRace != nil {
+			// Test-only seam (see enqueueOrDispatch's identical use): let a
+			// test force a concurrent DELETE /session/{id}/queue to land
+			// deterministically in the gap between the EnqueuePrompt above
+			// and the DequeuePrompt inside dispatchQueueHead below. Nil in
+			// production.
+			s.queueDispatchRace()
+		}
+		head, ok := s.dispatchQueueHead(id, st, ctx)
+		if !ok {
+			// Benign race, not a bug: a concurrent DELETE /session/{id}/queue
+			// (safe to call regardless of run-slot state — see its own doc
+			// comment) cleared the ENTIRE queue, including the prompt
+			// EnqueuePrompt just added above, in the gap between that
+			// enqueue and this dispatch attempt — dispatchQueueHead already
+			// released the run-slot claim taken above, exactly like
+			// runPrompt's own tail would. This request's own prompt WAS
+			// accepted (durably enqueued and journaled) but never ran:
+			// report the most honest shape the existing status vocabulary
+			// offers — "queued" with the current (now necessarily zero)
+			// depth — rather than a 500, which would misrepresent a benign,
+			// documented race as a server bug. See
+			// TestQueueClearRaceDuringIdleDispatchIsNotAnError and
+			// promptAsyncResponse's queued field doc for why depth 0 is
+			// possible here.
+			writeJSON(w, http.StatusAccepted, promptAsyncResponse{
+				Seq: fromSeq, Status: "queued", Queued: len(st.sess.QueuedPrompts()),
+			})
+			return
+		}
+		status := "queued"
+		if head.ID == ourID {
+			status = "started"
+		}
+		resp := promptAsyncResponse{Seq: fromSeq, Status: status}
+		if status == "queued" {
+			resp.Queued = len(st.sess.QueuedPrompts())
+		}
+		writeJSON(w, http.StatusAccepted, resp)
+		return
+	}
+
+	// Explicit model wins over the session's persisted model (CLI -model
+	// rule) -- applied only here, on the empty-queue fast path, because this
+	// is the one branch where THIS request's own prompt is actually the one
+	// about to run next. Applying it earlier (before the queue check above)
+	// retargeted the session's model even when a DIFFERENT, already-queued
+	// head was what actually got dispatched — contradicting the documented
+	// "a per-request model override is silently dropped when the prompt is
+	// queued" rule (see AGENTS.md's Prompt queue section and
+	// enqueueOrDispatch's identical rule for the same-session-busy branch).
+	// See TestQueuedArrivalDoesNotRetargetSessionModel.
 	if !body.Model.IsZero() {
 		before := st.sess.Model()
 		st.sess.SetModel(body.Model)
@@ -754,10 +882,145 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 			s.emitDurable(Event{Type: evtModel, SessionID: id, Model: body.Model})
 		}
 	}
+
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 
 	go s.runPrompt(ctx, id, st, text)
-	writeJSON(w, http.StatusAccepted, map[string]int64{"seq": fromSeq})
+	writeJSON(w, http.StatusAccepted, promptAsyncResponse{Seq: fromSeq, Status: "started"})
+}
+
+// enqueueOrDispatch implements handlePrompt's same-session-busy branch:
+// claimForPrompt 409'd with an empty holder, meaning something in THIS
+// session (a running prompt or goal loop) already holds the run slot (the
+// workdir-held-by-ANOTHER-session case is handled inline in handlePrompt and
+// never reaches here — mirrors handleGoalBusy's same split).
+//
+// text is enqueued durably (EnqueuePrompt persists prompt.queued and emits
+// its event before returning — see engine/queue.go) BEFORE any response is
+// written, then ONE claim retry is made: this closes the race where the busy
+// occupant's own tail (runPrompt/runGoal, which now calls
+// maybeDispatchQueued — see its doc comment) runs between the failed claim
+// in handlePrompt and this function's EnqueuePrompt call. If that happened,
+// EnqueuePrompt is exactly what maybeDispatchQueued needed to see (it would
+// have found the queue empty a moment earlier), so the retry here either
+// wins the now-free slot itself or loses it to that same tail's own retry
+// (via maybeDispatchQueued, whose own claim attempt may instead win) —
+// either way this prompt starts exactly once, never zero times, never
+// twice. This is the queue's counterpart to handleGoalBusy's register-then-
+// retry pattern.
+//
+// On a WON retry, the head of the queue is dispatched — not necessarily this
+// request's own prompt, since other prompts may already have been queued
+// ahead of it (FIFO order is by queue ID, not by which HTTP request happens
+// to observe the free slot first). The response's status reflects what
+// happened to THIS request's own prompt specifically: "started" only if the
+// dispatched head IS the prompt this call just enqueued; otherwise "queued"
+// (this call's prompt is still waiting, now one place closer to the front).
+// This is the simplest rule that stays correct regardless of how many other
+// prompts were already queued: it never requires the caller to reason about
+// queue position, only "is my own prompt running or not, right now".
+//
+// A model override on a request whose prompt gets queued (either branch) is
+// silently NOT applied: QueuedPrompt carries only ID and Text (see the plan's
+// "text-only" locked decision — no attachment machinery), so there is no
+// slot to carry a per-prompt model override through to a future drain. A
+// caller that needs a model swap to take effect should re-issue it once its
+// prompt is confirmed "started".
+func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string) {
+	sess := s.residentSession(id)
+	if sess == nil {
+		// Benign race window, identical to handleGoalBusy's (see its doc
+		// comment): claimForPrompt found the session resident and running
+		// (hence the 409 that routed us here), but s.mu is released between
+		// that check and this residentSession call, and the busy occupant
+		// finished and was evicted in the gap. A client retry resolves it
+		// against a freshly (re)loaded, now-idle session.
+		writeErr(w, http.StatusConflict, "session is busy with another prompt")
+		return
+	}
+	ourID, err := sess.EnqueuePrompt(text)
+	if err != nil {
+		// handlePrompt already rejects an empty parts list and joins
+		// non-empty text, so this is not reachable in practice; fail closed
+		// rather than silently drop the request.
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if s.queueDispatchRace != nil {
+		// Test-only seam (mirrors autoArmRace): let a test force a real
+		// concurrent claim to land here deterministically. Nil in production.
+		s.queueDispatchRace()
+	}
+	st, ctx, _, code, _ := s.claimForPrompt(id)
+	if code != 0 {
+		// Lost the retry: still queued, whatever already occupies the slot
+		// keeps running undisturbed.
+		writeJSON(w, http.StatusAccepted, promptAsyncResponse{
+			Seq: s.currentSeq(), Status: "queued", Queued: len(sess.QueuedPrompts()),
+		})
+		return
+	}
+	head, ok := s.dispatchQueueHead(id, st, ctx)
+	if !ok {
+		// Benign race, not a bug: a concurrent DELETE /session/{id}/queue
+		// cleared the ENTIRE queue — including the prompt this call's own
+		// EnqueuePrompt just added above — somewhere in the gap between
+		// that enqueue and this dispatch attempt (the seam above is one
+		// deterministic way a test can land squarely in that gap;
+		// dispatchQueueHead has already released the run-slot claim taken
+		// by claimForPrompt just above, exactly like runPrompt's own tail
+		// would). This request's own prompt WAS accepted (durably enqueued
+		// and journaled) but never ran: report the same honest shape
+		// handlePrompt's idle-with-queue branch uses for this identical
+		// race — "queued" with the current (now necessarily zero) depth —
+		// rather than a 500, which would misrepresent a benign, documented
+		// race as a server bug. See TestQueueClearRaceDuringDispatchIsNotAnError.
+		writeJSON(w, http.StatusAccepted, promptAsyncResponse{
+			Seq: s.currentSeq(), Status: "queued", Queued: len(sess.QueuedPrompts()),
+		})
+		return
+	}
+
+	status := "queued"
+	if head.ID == ourID {
+		status = "started"
+	}
+	resp := promptAsyncResponse{Seq: s.currentSeq(), Status: status}
+	if status == "queued" {
+		resp.Queued = len(sess.QueuedPrompts())
+	}
+	writeJSON(w, http.StatusAccepted, resp)
+}
+
+// dispatchQueueHead dequeues the session's queue head (reason "delivered")
+// into the run slot st/ctx already holds — emitting its busy transition and
+// spawning its runPrompt turn — shared by every call site that has JUST
+// claimed (or already holds) the run slot and knows the queue is (or was
+// just made) non-empty: handlePrompt's idle-with-queue branch,
+// enqueueOrDispatch's won-retry branch, and maybeDispatchQueued.
+//
+// ok is false only when the queue turns out to be empty despite the
+// caller's own check — reachable solely via a benign concurrent DELETE
+// /session/{id}/queue race between that check and this call. In that case
+// the claim just taken is released here (mirrors runPrompt's own tail reset)
+// so the run slot never gets stuck "running" with nothing driving it; the
+// caller only needs to respond, not clean up.
+func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Context) (head engine.QueuedPrompt, ok bool) {
+	head, ok = st.sess.DequeuePrompt("delivered")
+	if !ok {
+		s.mu.Lock()
+		st.running = false
+		st.cancel = nil
+		st.goalLoop = false
+		st.lastUsed = time.Now()
+		s.evictResidentLocked()
+		s.mu.Unlock()
+		s.wg.Done()
+		return head, false
+	}
+	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
+	go s.runPrompt(ctx, id, st, head.Text)
+	return head, true
 }
 
 // runPrompt drives one Prompt to completion, then records the trailing
@@ -790,6 +1053,19 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	s.mu.Unlock()
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
 
+	// Queue beats goal auto-arm (invariant 5): a prompt queued while this
+	// turn ran outranks a goal merely waiting to auto-arm — direct user
+	// input outranks the background objective. maybeDispatchQueued claims
+	// the freed slot and runs the queue head if the queue is non-empty; only
+	// when it reports nothing to dispatch (queue empty, or it lost the
+	// race) do we fall through to maybeAutoArmGoal. Each dispatched queued
+	// prompt's own runPrompt tail repeats this same check, so the queue
+	// fully drains, one turn at a time, before the goal ever gets a look —
+	// see maybeDispatchQueued's doc comment.
+	if s.maybeDispatchQueued(id, st) {
+		return
+	}
+
 	// Auto-arm (Task 5): a goal set (or self-adjust-set) mid-turn via the
 	// `goal` session tool, or armed by a POST /goal that arrived while this
 	// prompt was busy (handleGoalBusy's "armed" response), begins running
@@ -798,6 +1074,62 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	// always observes the prompt's idle before the goal's own busy (see
 	// maybeAutoArmGoal's doc comment for the full race analysis).
 	s.maybeAutoArmGoal(id, st)
+}
+
+// maybeDispatchQueued is called at the tail of both runPrompt (BEFORE
+// maybeAutoArmGoal — see its call site above, invariant 5) and runGoal
+// (below — goal termination frees the run slot too, and the engine's own
+// turn-boundary drain, engine/goal.go's PursueGoal, only runs BETWEEN turns;
+// a prompt queued after the loop's last turn boundary but before it actually
+// terminates needs this hook to ever be dispatched). It runs after the
+// just-finished turn's own idle transition has already been emitted.
+//
+// If the session's durable prompt queue is non-empty, it claims the run slot
+// exactly like maybeAutoArmGoal, dequeues the head (reason "delivered"), and
+// spawns a normal runPrompt turn for it. Returns true when it dispatched a
+// turn, false when there was nothing queued or it lost the race.
+//
+// A losing race — the slot was claimed by an incoming prompt_async's own
+// retry (enqueueOrDispatch), a POST /goal's auto-arm retry (handleGoalBusy),
+// or another goroutine's own maybeDispatchQueued call — simply returns
+// false: whichever request won the claim is now responsible for the
+// session's next occupancy, and if that occupant is itself a plain prompt,
+// its OWN runPrompt tail calls maybeDispatchQueued again once it finishes —
+// so a queued prompt is never stranded, only delayed. See
+// TestPromptQueueRaceWithFreedSlot.
+//
+// No-double-delivery equivalence (invariant 7, documentation only — nothing
+// new to enforce beyond what already exists): DequeuePrompt("delivered")
+// journals BEFORE the dispatched runPrompt call is even made, mirroring
+// EnqueuePrompt's own persist-before-emit shape. A crash between that
+// journal write and the dispatched turn's completion leaves the prompt gone
+// from the queue on replay — it is not re-delivered, and its text is not
+// recoverable from the queue a second time. This is not a new failure mode:
+// it is the SAME exposure an ordinary in-flight prompt already has today (a
+// crash mid-turn loses that turn's provider call and any partial response;
+// replay simply resumes from the last durably appended message). A queued
+// prompt becomes, for crash-recovery purposes, indistinguishable from a
+// prompt that arrived directly via prompt_async and was already mid-flight
+// when the process died, the instant it is dequeued and handed to
+// runPrompt. See engine/goal.go's DequeueAllPrompts callsite for the
+// engine-side half of this same equivalence (goal-turn injection).
+func (s *Server) maybeDispatchQueued(id string, st *sessionState) bool {
+	if len(st.sess.QueuedPrompts()) == 0 {
+		return false
+	}
+	if s.queueDispatchRace != nil {
+		s.queueDispatchRace()
+	}
+	claimedSt, ctx, _, code, _ := s.claimForPrompt(id)
+	if code != 0 {
+		return false // lost the race; see the doc comment above
+	}
+	// The queue was drained by a concurrent DELETE /session/{id}/queue
+	// between the len check above and winning this claim: dispatchQueueHead
+	// already released the claim we just took (mirrors runPrompt's own tail
+	// reset) — nothing left to dispatch.
+	_, ok := s.dispatchQueueHead(id, claimedSt, ctx)
+	return ok
 }
 
 // maybeAutoArmGoal is called once, at the very tail of runPrompt — never
@@ -1124,6 +1456,18 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 	s.evictResidentLocked()
 	s.mu.Unlock()
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
+
+	// A prompt queued after the loop's last turn-boundary drain (engine/
+	// goal.go's PursueGoal only drains BETWEEN turns) but before the loop
+	// actually terminated would otherwise sit queued indefinitely once the
+	// loop is gone — this is that gap's dispatch hook. Unlike runPrompt's
+	// tail, this is never followed by maybeAutoArmGoal: every terminal
+	// PursueGoal outcome either deactivates the goal or leaves it in the
+	// ordinary "active, re-armable via POST /goal" state it has always been
+	// left in, never the "auto-arm is watching for this" state (see
+	// maybeAutoArmGoal's own doc comment for why it is deliberately not
+	// wired in here either).
+	s.maybeDispatchQueued(id, st)
 }
 
 // handleGoalDelete cancels an active goal loop: it clears the goal (journaling
@@ -1298,6 +1642,71 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleQueueDelete is DELETE /session/{id}/queue (invariant 10): drains the
+// session's durable prompt queue, journaling a prompt.dequeued(reason=
+// "cleared") record for every pending item (see
+// engine.Session.DequeueAllPrompts), then 204. Idempotent on an already-empty
+// queue (still 204, nothing journaled). A running turn is left completely
+// untouched — this clears only prompts waiting for a FUTURE turn, never
+// cancels the current one (see POST /session/{id}/abort for that); a running
+// goal loop's later turn-boundary drains simply see an empty queue, exactly
+// as if the clear had raced ahead of them.
+//
+// The session is resolved exactly like handleGoalDelete's cold path, NOT via
+// a bare s.lookup: a not-resident session is loaded from disk OUTSIDE s.mu,
+// then s.mu is re-acquired to re-check for a resident that appeared in the
+// meantime (a concurrent POST /prompt_async or /goal racing us), using that
+// winner instead — registering the freshly loaded instance into residency
+// otherwise — so DequeueAllPrompts below always mutates the exact
+// *engine.Session instance every future drain (maybeDispatchQueued) actually
+// reads. A bare transient load (the old behavior) would let a concurrent
+// cold-load-and-register elsewhere win residency with its OWN, divergent
+// instance: the clear would land on a copy nothing else ever touches again
+// — 204 and even a durable prompt.dequeued(cleared) record, journaled via
+// the shared OnEvent wiring, while the session that matters keeps
+// dispatching the "cleared" prompts. See
+// TestDeleteQueueColdSessionSurvivesResidencyRace and claimForPrompt's doc
+// comment for the same race argument.
+//
+// DequeueAllPrompts takes only the engine session's own mutex and persists
+// synchronously to its log, so this works correctly whether the resolved
+// session is idle, busy with a prompt, or mid goal-loop, with no run-slot
+// claim involved at all. Unknown session (not resident, no log on disk) is
+// 404.
+func (s *Server) handleQueueDelete(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.sessionIDOrNotFound(w, r)
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	st := s.sessions[id]
+	s.mu.Unlock()
+	if st == nil {
+		sess, err := s.opts.LoadSession(id)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, "no such session")
+			return
+		}
+		if s.queueDeleteRace != nil {
+			// Test-only seam: let a test force a real concurrent claim (a
+			// prompt_async cold-loading and registering its own instance) to
+			// land here deterministically. Nil in production.
+			s.queueDeleteRace()
+		}
+		s.mu.Lock()
+		if ex := s.sessions[id]; ex != nil {
+			st = ex // a resident appeared while we loaded; use the winner
+		} else {
+			st = &sessionState{sess: sess, lastUsed: time.Now()}
+			s.sessions[id] = st
+			s.evictResidentLocked()
+		}
+		s.mu.Unlock()
+	}
+	st.sess.DequeueAllPrompts("cleared")
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // compactResponseJSON is the openapi POST /session/{id}/compact response
 // shape (docs/design/context-compaction.md §1): turns_folded is 0 (not an
 // error) when there was nothing worth folding — see engine.CompactResult.
@@ -1318,6 +1727,12 @@ type compactResponseJSON struct {
 // overrides Config.CompactionKeepTurns/CompactionModel for this call only;
 // keep_turns has a hard floor of 1 — 0 or negative is a 400, never silently
 // clamped, so a caller's mistake is visible rather than silently ignored.
+//
+// Its tail calls maybeDispatchQueued then maybeAutoArmGoal, the same
+// order/precedence runPrompt's tail uses (queue beats goal auto-arm): a
+// prompt queued or a goal armed while compact ran must drain/start the
+// instant this call releases the run slot, not wait for some later
+// runPrompt/runGoal tail to happen to fire first.
 func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
@@ -1359,6 +1774,17 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// Deferred (not called bare at the tail) so it runs even if Compact or
+	// either of the tail's own maybeDispatchQueued/maybeAutoArmGoal calls
+	// panics -- a bare call would never execute past a panic, leaking this
+	// claim's wg.Add and hanging Drain forever. A defer here still runs
+	// strictly after those tail calls (defers fire after the function body's
+	// remaining statements, on any return path — panic or normal), so the
+	// wg.Add-before-wg.Done ordering those calls rely on (see the comment at
+	// the call site below) is unchanged; this only adds panic-safety, same
+	// shape as runPrompt's/runGoal's own `defer s.wg.Done()`. See
+	// TestCompactPanicReleasesClaim.
+	defer s.wg.Done()
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 
 	opts := engine.CompactOptions{Model: model}
@@ -1382,8 +1808,23 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	st.lastUsed = time.Now()
 	s.evictResidentLocked()
 	s.mu.Unlock()
-	s.wg.Done()
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
+
+	// Same drain-then-auto-arm precedence as runPrompt's tail (invariant 5):
+	// a prompt queued (or a goal armed) while this compact call ran must not
+	// sit stranded just because the run slot happened to be released by
+	// compact instead of an ordinary prompt or goal turn — see
+	// maybeDispatchQueued/maybeAutoArmGoal's own doc comments for the full
+	// race analysis, identical here. wg.Done for THIS claim is the deferred
+	// call above, which fires after both checks below (defers run after the
+	// function body's remaining statements), so the WaitGroup never
+	// transiently reads zero between this claim's release and a
+	// dispatched/auto-armed one's own wg.Add (mirrors runPrompt's
+	// defer-at-function-exit shape) — and, unlike a bare call here, still
+	// fires even if one of these two calls (or Compact above) panics.
+	if !s.maybeDispatchQueued(id, st) {
+		s.maybeAutoArmGoal(id, st)
+	}
 
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, plugin.SanitizeSessionError(err.Error()))
@@ -1650,6 +2091,7 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 		ParentSession:   sess.ParentSession(),
 		CompactionCount: sess.CompactionCount(),
 		LastCompactedAt: sess.LastCompactedAt(),
+		Queued:          len(sess.QueuedPrompts()),
 	}
 }
 
