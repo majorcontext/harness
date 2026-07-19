@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -505,14 +506,25 @@ func TestDeleteQueueClearsDurably(t *testing.T) {
 // the just-freed run slot is claimed by a concurrent incoming prompt_async
 // before maybeDispatchQueued's own claim lands, maybeDispatchQueued must
 // return cleanly rather than double-dispatch — and the queued prompt is
-// never stranded: the racer's OWN runPrompt tail retries maybeDispatchQueued,
-// uncontested, and the queued prompt finally runs.
+// never stranded.
+//
+// The racer's OWN claim wins the race (proving maybeDispatchQueued's later
+// claim attempt loses and returns cleanly), but per the global-FIFO fix
+// (Gap 1: handlePrompt's claim-success path enqueues-then-dispatches-head
+// whenever the queue is non-empty) the racer does NOT get to run its own
+// text just because it won the claim: the prompt already queued ahead of it
+// must go first. So the racer's own request enqueues "racer" behind the
+// existing "queued" entry, then dispatches the queue's HEAD (the original
+// "queued" prompt, not its own text) into the slot it just claimed — its own
+// response is "queued", not "started". The queued prompt's own tail then
+// drains "racer" next, uncontested. End state: both run, strictly FIFO
+// (queued, then racer), queue ends empty.
 func TestPromptQueueRaceWithFreedSlot(t *testing.T) {
 	prov := &queueProv{
 		name:    "test",
 		started: make(chan struct{}),
 		release: make(chan struct{}),
-		turns:   [][]provider.Event{asstTurn("racer done"), asstTurn("queued done")},
+		turns:   [][]provider.Event{asstTurn("queued done"), asstTurn("racer done")},
 	}
 	h := newHarness(t, prov)
 	id := h.createSession("test/m1")
@@ -556,8 +568,8 @@ func TestPromptQueueRaceWithFreedSlot(t *testing.T) {
 		if err := json.Unmarshal(data, &rr); err != nil {
 			t.Fatal(err)
 		}
-		if rr.Status != "started" {
-			t.Fatalf("racer prompt response status = %q, want started (it must win the freed slot ahead of maybeDispatchQueued)", rr.Status)
+		if rr.Status != "queued" || rr.Queued != 1 {
+			t.Fatalf("racer prompt response = %+v, want status=queued queued=1 (it wins the freed slot, but the already-queued prompt still goes first — global FIFO)", rr)
 		}
 	}
 
@@ -566,22 +578,11 @@ func TestPromptQueueRaceWithFreedSlot(t *testing.T) {
 	firstEvs := sse.collectUntilIdle(t)
 	_ = firstEvs // just drains through the first turn's own idle
 
-	// The RACER's own turn ran, not the queued prompt — proving
-	// maybeDispatchQueued's claim lost the race and returned cleanly rather
-	// than double-dispatching.
-	racerEvs := sse.collectUntilIdle(t)
-	var sawRacerText bool
-	for _, ev := range racerEvs {
-		if ev.Type == "message" && ev.Message != nil && ev.Message.Role == message.RoleAssistant && ev.Message.Parts.Text() == "racer done" {
-			sawRacerText = true
-		}
-	}
-	if !sawRacerText {
-		t.Fatalf("racer turn events = %v, want %q", racerEvs, "racer done")
-	}
-
-	// Never stranded: the racer's own tail retries maybeDispatchQueued,
-	// uncontested this time, and the queued prompt finally runs.
+	// The already-QUEUED prompt's own turn ran first — dispatched into the
+	// slot the racer's request claimed — proving global FIFO held even
+	// though the racer won the claim race and maybeDispatchQueued's own
+	// later claim attempt lost and returned cleanly rather than
+	// double-dispatching.
 	queuedEvs := sse.collectUntilIdle(t)
 	var sawQueuedText bool
 	for _, ev := range queuedEvs {
@@ -593,8 +594,155 @@ func TestPromptQueueRaceWithFreedSlot(t *testing.T) {
 		t.Fatalf("queued prompt events = %v, want %q", queuedEvs, "queued done")
 	}
 
+	// Never stranded: the queued prompt's own tail drains "racer" next,
+	// uncontested.
+	racerEvs := sse.collectUntilIdle(t)
+	var sawRacerText bool
+	for _, ev := range racerEvs {
+		if ev.Type == "message" && ev.Message != nil && ev.Message.Role == message.RoleAssistant && ev.Message.Parts.Text() == "racer done" {
+			sawRacerText = true
+		}
+	}
+	if !sawRacerText {
+		t.Fatalf("racer turn events = %v, want %q", racerEvs, "racer done")
+	}
+
 	sess := h.getSessionJSON(id)
 	if sess.Queued != 0 {
 		t.Errorf("queued after both turns dispatched = %d, want 0", sess.Queued)
+	}
+}
+
+// orderCaptureProv records the last user-message text of every Stream call
+// (the prompt actually delivered to a turn) in call order, and replies with
+// a scripted, uniquely-identifiable text per call — so a test can verify
+// dispatch order two independent ways: what the provider actually received,
+// and what the SSE stream's assistant messages report back.
+type orderCaptureProv struct {
+	name string
+	mu   sync.Mutex
+
+	order   []string
+	replies []string
+	call    int
+}
+
+func (p *orderCaptureProv) Name() string { return p.name }
+
+func (p *orderCaptureProv) Stream(_ context.Context, req *provider.Request) (provider.Stream, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var text string
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == message.RoleUser {
+			text = req.Messages[i].Parts.Text()
+			break
+		}
+	}
+	p.order = append(p.order, text)
+	reply := fmt.Sprintf("done-%d", p.call)
+	if p.call < len(p.replies) {
+		reply = p.replies[p.call]
+	}
+	p.call++
+	return &scriptedStream{events: asstTurn(reply)}, nil
+}
+
+// TestIdlePromptWithQueueGoesFIFO is the fix for Gap 1: a prompt arriving at
+// an IDLE session whose durable queue is already non-empty (here, refolded
+// from a restart) must not jump the FIFO line. handlePrompt's claim-success
+// path must enqueue the incoming prompt behind the existing two, then
+// dispatch the queue's HEAD into the slot it just claimed — never the
+// incoming prompt itself, unless it happens to also be the head (the
+// queue-was-actually-empty degenerate case, exercised elsewhere).
+func TestIdlePromptWithQueueGoesFIFO(t *testing.T) {
+	dir := t.TempDir()
+	prov := &orderCaptureProv{name: "test", replies: []string{"r1", "r2", "r3"}}
+	srv1 := newServer(t, dir, prov, 0)
+	ts1 := httptest.NewServer(srv1)
+	h1 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv1, ts: ts1}
+
+	id := h1.createSession("test/m1")
+
+	srv1.mu.Lock()
+	st := srv1.sessions[id]
+	srv1.mu.Unlock()
+	if st == nil {
+		t.Fatal("session not resident right after creation")
+	}
+	if _, err := st.sess.EnqueuePrompt("q1"); err != nil {
+		t.Fatalf("EnqueuePrompt q1: %v", err)
+	}
+	if _, err := st.sess.EnqueuePrompt("q2"); err != nil {
+		t.Fatalf("EnqueuePrompt q2: %v", err)
+	}
+
+	if err := srv1.Close(); err != nil {
+		t.Fatalf("closing first server: %v", err)
+	}
+	ts1.Close()
+
+	srv2 := newServer(t, dir, prov, 0)
+	ts2 := httptest.NewServer(srv2)
+	t.Cleanup(ts2.Close)
+	h2 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv2, ts: ts2}
+
+	sess := h2.getSessionJSON(id)
+	if sess.Queued != 2 {
+		t.Fatalf("queued after restart = %d, want 2", sess.Queued)
+	}
+	if sess.State != "idle" {
+		t.Fatalf("state after restart = %q, want idle", sess.State)
+	}
+
+	sse := h2.openSSE("?from=0", "")
+
+	resp, data := h2.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "third"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt status %d: %s", resp.StatusCode, data)
+	}
+	var qr promptAsyncResponse
+	if err := json.Unmarshal(data, &qr); err != nil {
+		t.Fatal(err)
+	}
+	if qr.Status != "queued" || qr.Queued != 2 {
+		t.Fatalf("response = %+v, want status=queued queued=2 (FIFO: the two restart-refolded prompts still ahead of this one)", qr)
+	}
+
+	// All three turns must run, in FIFO order (q1, q2, third), draining one
+	// at a time.
+	var gotOrder []string
+	want := []string{"r1", "r2", "r3"}
+	for len(gotOrder) < 3 {
+		ev := sse.waitFor(t, "message")
+		if ev.Message == nil || ev.Message.Role != message.RoleAssistant {
+			continue
+		}
+		gotOrder = append(gotOrder, ev.Message.Parts.Text())
+	}
+	for i := range want {
+		if gotOrder[i] != want[i] {
+			t.Errorf("dispatch order[%d] = %q, want %q (full order: %v)", i, gotOrder[i], want[i], gotOrder)
+		}
+	}
+
+	prov.mu.Lock()
+	gotPrompts := append([]string(nil), prov.order...)
+	prov.mu.Unlock()
+	wantPrompts := []string{"q1", "q2", "third"}
+	if len(gotPrompts) != len(wantPrompts) {
+		t.Fatalf("provider-observed prompt order = %v, want %v", gotPrompts, wantPrompts)
+	}
+	for i := range wantPrompts {
+		if gotPrompts[i] != wantPrompts[i] {
+			t.Errorf("provider-observed prompt order[%d] = %q, want %q (full order: %v)", i, gotPrompts[i], wantPrompts[i], gotPrompts)
+		}
+	}
+
+	finalSess := h2.getSessionJSON(id)
+	if finalSess.Queued != 0 {
+		t.Errorf("queued after full drain = %d, want 0", finalSess.Queued)
 	}
 }

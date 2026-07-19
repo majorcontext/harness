@@ -791,6 +791,58 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 			s.emitDurable(Event{Type: evtModel, SessionID: id, Model: body.Model})
 		}
 	}
+
+	if len(st.sess.QueuedPrompts()) > 0 {
+		// Global FIFO on an idle-with-queue session: the queue can be
+		// non-empty even though claimForPrompt just succeeded (the session
+		// itself was idle) — a restart refold (TestQueueRestartRefoldNoAuto
+		// Dispatch's queue survives a restart with the session left idle),
+		// or a prompt stranded by a gap in some OTHER tail's drain wiring.
+		// Either way, this request's own prompt must never jump the line:
+		// enqueue it durably behind whatever is already waiting, then
+		// dispatch the queue's HEAD (not necessarily this request's own
+		// text) into the run slot just claimed above. See
+		// dispatchQueueHead and enqueueOrDispatch's identical shape for the
+		// same-session-BUSY counterpart of this same rule.
+		ourID, err := st.sess.EnqueuePrompt(text)
+		if err != nil {
+			// handlePrompt already rejects an empty parts list and joins
+			// non-empty text above, so this is not reachable in practice;
+			// fail closed rather than silently drop the request, releasing
+			// the claim just taken.
+			s.mu.Lock()
+			st.running = false
+			st.cancel = nil
+			st.goalLoop = false
+			st.lastUsed = time.Now()
+			s.evictResidentLocked()
+			s.mu.Unlock()
+			s.wg.Done()
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		head, ok := s.dispatchQueueHead(id, st, ctx)
+		if !ok {
+			// Structurally unreachable: EnqueuePrompt above just added at
+			// least one item under sess's own mutex, and the run slot is
+			// ours — nothing else can drain concurrently. Fail closed
+			// rather than leave the claim stuck running with nothing
+			// driving it (dispatchQueueHead already released it).
+			writeErr(w, http.StatusInternalServerError, "prompt queue emptied unexpectedly")
+			return
+		}
+		status := "queued"
+		if head.ID == ourID {
+			status = "started"
+		}
+		resp := promptAsyncResponse{Seq: fromSeq, Status: status}
+		if status == "queued" {
+			resp.Queued = len(st.sess.QueuedPrompts())
+		}
+		writeJSON(w, http.StatusAccepted, resp)
+		return
+	}
+
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 
 	go s.runPrompt(ctx, id, st, text)
@@ -868,26 +920,17 @@ func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string
 		})
 		return
 	}
-	head, ok := sess.DequeuePrompt("delivered")
+	head, ok := s.dispatchQueueHead(id, st, ctx)
 	if !ok {
 		// Structurally unreachable: EnqueuePrompt above just added at least
 		// one item under sess's own mutex, and nothing else drains the queue
 		// except a delivery or a clear — neither of which this handler
 		// triggered. Fail closed rather than leave the claim stuck running
-		// with nothing to dispatch: release it exactly like runPrompt's tail.
-		s.mu.Lock()
-		st.running = false
-		st.cancel = nil
-		st.goalLoop = false
-		st.lastUsed = time.Now()
-		s.evictResidentLocked()
-		s.mu.Unlock()
-		s.wg.Done()
+		// with nothing to dispatch (dispatchQueueHead already released it,
+		// exactly like runPrompt's own tail would).
 		writeErr(w, http.StatusInternalServerError, "prompt queue emptied unexpectedly")
 		return
 	}
-	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
-	go s.runPrompt(ctx, id, st, head.Text)
 
 	status := "queued"
 	if head.ID == ourID {
@@ -898,6 +941,37 @@ func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string
 		resp.Queued = len(sess.QueuedPrompts())
 	}
 	writeJSON(w, http.StatusAccepted, resp)
+}
+
+// dispatchQueueHead dequeues the session's queue head (reason "delivered")
+// into the run slot st/ctx already holds — emitting its busy transition and
+// spawning its runPrompt turn — shared by every call site that has JUST
+// claimed (or already holds) the run slot and knows the queue is (or was
+// just made) non-empty: handlePrompt's idle-with-queue branch,
+// enqueueOrDispatch's won-retry branch, and maybeDispatchQueued.
+//
+// ok is false only when the queue turns out to be empty despite the
+// caller's own check — reachable solely via a benign concurrent DELETE
+// /session/{id}/queue race between that check and this call. In that case
+// the claim just taken is released here (mirrors runPrompt's own tail reset)
+// so the run slot never gets stuck "running" with nothing driving it; the
+// caller only needs to respond, not clean up.
+func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Context) (head engine.QueuedPrompt, ok bool) {
+	head, ok = st.sess.DequeuePrompt("delivered")
+	if !ok {
+		s.mu.Lock()
+		st.running = false
+		st.cancel = nil
+		st.goalLoop = false
+		st.lastUsed = time.Now()
+		s.evictResidentLocked()
+		s.mu.Unlock()
+		s.wg.Done()
+		return head, false
+	}
+	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
+	go s.runPrompt(ctx, id, st, head.Text)
+	return head, true
 }
 
 // runPrompt drives one Prompt to completion, then records the trailing
@@ -1001,26 +1075,12 @@ func (s *Server) maybeDispatchQueued(id string, st *sessionState) bool {
 	if code != 0 {
 		return false // lost the race; see the doc comment above
 	}
-	head, ok := claimedSt.sess.DequeuePrompt("delivered")
-	if !ok {
-		// The queue was drained by a concurrent DELETE /session/{id}/queue
-		// between the len check above and winning this claim: nothing left
-		// to dispatch. Release the claim we just took rather than leave the
-		// slot stuck "running" with nothing driving it (mirrors runPrompt's
-		// own tail reset).
-		s.mu.Lock()
-		claimedSt.running = false
-		claimedSt.cancel = nil
-		claimedSt.goalLoop = false
-		claimedSt.lastUsed = time.Now()
-		s.evictResidentLocked()
-		s.mu.Unlock()
-		s.wg.Done()
-		return false
-	}
-	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
-	go s.runPrompt(ctx, id, claimedSt, head.Text)
-	return true
+	// The queue was drained by a concurrent DELETE /session/{id}/queue
+	// between the len check above and winning this claim: dispatchQueueHead
+	// already released the claim we just took (mirrors runPrompt's own tail
+	// reset) — nothing left to dispatch.
+	_, ok := s.dispatchQueueHead(id, claimedSt, ctx)
+	return ok
 }
 
 // maybeAutoArmGoal is called once, at the very tail of runPrompt — never
