@@ -730,3 +730,297 @@ func TestPursueGoalStaleEvaluatorFailureDiscarded(t *testing.T) {
 		t.Errorf("log has %d goal.achieved record(s), want exactly 1: %s", n, log)
 	}
 }
+
+// blockingFirstWorkerProvider parks only the very FIRST worker (tool-bearing)
+// Stream call on a channel released by the test — the same entered/release
+// shape as blockingWorkerProvider/blockingEvalProvider above, but this one
+// then serves that same call's scripted turn once released instead of
+// failing it, so a test can enqueue prompts genuinely while a worker turn is
+// in flight and then observe the goal loop complete normally. Every worker
+// call after the first (and every evaluator call) is served directly from
+// the corresponding script with no gating.
+type blockingFirstWorkerProvider struct {
+	worker   [][]provider.Event
+	eval     [][]provider.Event
+	wi, ei   int
+	requests []*provider.Request
+
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+	gated   bool
+}
+
+func (p *blockingFirstWorkerProvider) Name() string { return "test" }
+
+func (p *blockingFirstWorkerProvider) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
+	p.requests = append(p.requests, req)
+	if len(req.Tools) == 0 {
+		ev := p.eval[p.ei]
+		p.ei++
+		return &scriptedStream{events: ev}, nil
+	}
+	if !p.gated {
+		p.gated = true
+		p.once.Do(func() { close(p.entered) })
+		select {
+		case <-p.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	ev := p.worker[p.wi]
+	p.wi++
+	return &scriptedStream{events: ev}, nil
+}
+
+// TestGoalInjectsQueuedPromptsAtBoundary is Task 2's headline test (plan
+// invariant 6): prompts enqueued while a goal-loop worker turn is genuinely
+// in flight must ALL drain at the very next turn boundary, in FIFO order,
+// prepended to that turn's directive as a labeled operator-interjection
+// block — while the evaluator's own GOAL CONDITION section (it judges only
+// the goal, never the operator messages) stays exactly the condition,
+// untouched.
+//
+// Turn 1's worker call is parked on blockingFirstWorkerProvider's
+// entered/release gate; the test enqueues two prompts while it is blocked,
+// then releases. Turn 1 completes NOT MET, so turn 2's directive is the
+// guidance message — which must carry both queued prompts, in order, ahead
+// of the guidance text.
+func TestGoalInjectsQueuedPromptsAtBoundary(t *testing.T) {
+	dir := t.TempDir()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+
+	prov := &blockingFirstWorkerProvider{
+		worker: [][]provider.Event{
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "turn 1 done"}),
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "turn 2 done"}),
+		},
+		eval: [][]provider.Event{
+			evalTurn("NOT MET: keep going"),
+			evalTurn("MET: looks done"),
+		},
+		entered: entered,
+		release: release,
+	}
+	s := goalSession(t, prov, dir)
+
+	type outcome struct {
+		res *GoalResult
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := s.PursueGoal(context.Background(), "the condition", GoalOptions{Evaluator: evalModel, MaxTurns: 2})
+		done <- outcome{res, err}
+	}()
+
+	<-entered // turn 1's worker call is genuinely in flight
+
+	if _, err := s.EnqueuePrompt("first operator message"); err != nil {
+		t.Fatalf("EnqueuePrompt = %v", err)
+	}
+	if _, err := s.EnqueuePrompt("second operator message"); err != nil {
+		t.Fatalf("EnqueuePrompt = %v", err)
+	}
+
+	releaseOnce.Do(func() { close(release) }) // let turn 1 complete
+
+	out := <-done
+	if out.err != nil {
+		t.Fatal(out.err)
+	}
+	if !out.res.Achieved || out.res.Turns != 2 {
+		t.Fatalf("result = %+v, want achieved in 2 turns", out.res)
+	}
+
+	if len(prov.requests) != 4 {
+		t.Fatalf("provider saw %d requests, want 4 (turn1 worker+eval, turn2 worker+eval)", len(prov.requests))
+	}
+	// call 3 (index 2) is turn 2's worker call: the interjection-bearing
+	// directive under test.
+	turn2Worker := prov.requests[2]
+	directive := turn2Worker.Messages[len(turn2Worker.Messages)-1].Parts.Text()
+	if !strings.Contains(directive, "OPERATOR MESSAGES") {
+		t.Errorf("turn 2 directive = %q, want a labeled operator-interjection block", directive)
+	}
+	firstIdx := strings.Index(directive, "first operator message")
+	secondIdx := strings.Index(directive, "second operator message")
+	if firstIdx == -1 || secondIdx == -1 {
+		t.Fatalf("turn 2 directive = %q, want both queued prompts present", directive)
+	}
+	if firstIdx > secondIdx {
+		t.Errorf("turn 2 directive = %q, want FIFO order (first operator message before second)", directive)
+	}
+
+	// The evaluator judges only the goal: its GOAL CONDITION section must be
+	// exactly the condition, never contaminated by the operator interjection
+	// (which naturally does appear later, in the rendered transcript, since
+	// it was really sent to the worker as part of the directive).
+	turn2Eval := prov.requests[3]
+	evalContent := turn2Eval.Messages[0].Parts.Text()
+	if !strings.HasPrefix(evalContent, "GOAL CONDITION:\nthe condition\n\n") {
+		t.Errorf("turn 2 evaluator request's GOAL CONDITION section = %q, want the unchanged condition only", evalContent)
+	}
+
+	if pending := s.QueuedPrompts(); len(pending) != 0 {
+		t.Fatalf("QueuedPrompts after injection = %+v, want empty (drained)", pending)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, s.ID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	if !strings.Contains(log, `"type":"prompt.dequeued","prompt":{"id":1,"text":"first operator message","reason":"injected"}`) {
+		t.Fatalf("log missing first injected dequeue record: %s", log)
+	}
+	if !strings.Contains(log, `"type":"prompt.dequeued","prompt":{"id":2,"text":"second operator message","reason":"injected"}`) {
+		t.Fatalf("log missing second injected dequeue record: %s", log)
+	}
+}
+
+// TestGoalInjectionSurvivesConditionUpdate covers the composition the plan
+// calls out explicitly: an UpdateGoal and a queued prompt landing in the same
+// turn-boundary window must BOTH take effect on the very next turn — the new
+// condition AND the operator interjection, together, not one crowding out
+// the other.
+func TestGoalInjectionSurvivesConditionUpdate(t *testing.T) {
+	dir := t.TempDir()
+	prov := &scriptedGoalUpdateProvider{
+		worker: [][]provider.Event{
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "turn 1 done"}),
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "turn 2 done"}),
+		},
+		eval: [][]provider.Event{
+			evalTurn("NOT MET: keep going"),
+			evalTurn("MET: looks done"),
+		},
+	}
+	s := goalSession(t, prov, dir)
+	prov.afterCall = func(n int) {
+		if n == 2 { // right after turn 1's evaluator call completes
+			if err := s.UpdateGoal("the NEW condition"); err != nil {
+				t.Fatalf("UpdateGoal = %v", err)
+			}
+			if _, err := s.EnqueuePrompt("operator says hi"); err != nil {
+				t.Fatalf("EnqueuePrompt = %v", err)
+			}
+		}
+	}
+
+	res, err := s.PursueGoal(context.Background(), "the original condition", GoalOptions{Evaluator: evalModel})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Achieved || res.Turns != 2 {
+		t.Fatalf("result = %+v, want achieved in 2 turns", res)
+	}
+
+	turn2Worker := prov.requests[2]
+	directive := turn2Worker.Messages[len(turn2Worker.Messages)-1].Parts.Text()
+	if !strings.Contains(directive, "the NEW condition") {
+		t.Errorf("turn 2 directive = %q, want the updated condition", directive)
+	}
+	if !strings.Contains(directive, "operator says hi") {
+		t.Errorf("turn 2 directive = %q, want the injected operator message", directive)
+	}
+	if strings.Contains(directive, "the original condition") {
+		t.Errorf("turn 2 directive still carries the stale condition: %q", directive)
+	}
+}
+
+// TestInjectedPromptsNotRedeliveredAfterStaleDiscard covers the plan's
+// documented equivalence: a queued prompt drained and injected into a turn's
+// directive is delivered the instant that directive is sent to the worker —
+// even if the turn's OUTCOME is later discarded as stale (a concurrent
+// UpdateGoal moved the generation while the worker call was in flight). The
+// prompt must never be restored to the queue and must never reappear in a
+// later turn's directive.
+//
+// Uses blockingWorkerProvider (goal_update_test.go): turn 1's worker call is
+// parked in flight (already carrying the injected text, since the drain runs
+// before the call is made), then fails once released; the concurrent
+// UpdateGoal makes that failure stale, so PursueGoal discards it silently and
+// runs turn 2 against the new condition.
+func TestInjectedPromptsNotRedeliveredAfterStaleDiscard(t *testing.T) {
+	dir := t.TempDir()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+
+	workerErr := errors.New("worker provider exploded")
+	prov := &blockingWorkerProvider{
+		workerErr: workerErr,
+		worker: [][]provider.Event{
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "turn 2 done"}),
+		},
+		eval: [][]provider.Event{
+			evalTurn("MET: looks done"),
+		},
+		entered: entered,
+		release: release,
+	}
+	s := goalSession(t, prov, dir)
+	if err := s.RegisterGoal("original condition"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EnqueuePrompt("do not lose me"); err != nil {
+		t.Fatal(err)
+	}
+
+	type outcome struct {
+		res *GoalResult
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := s.PursueGoal(context.Background(), "original condition", GoalOptions{Registered: true, Evaluator: evalModel, MaxTurns: 2})
+		done <- outcome{res, err}
+	}()
+
+	<-entered // turn 1's worker call is in flight; its directive already carries the injected text
+
+	if err := s.UpdateGoal("new condition"); err != nil {
+		t.Fatalf("UpdateGoal = %v", err)
+	}
+
+	releaseOnce.Do(func() { close(release) }) // let the now-stale worker failure land
+
+	out := <-done
+	if out.err != nil {
+		t.Fatalf("PursueGoal error = %v, want nil (turn 2 should achieve against the updated condition)", out.err)
+	}
+	if !out.res.Achieved || out.res.Turns != 2 {
+		t.Fatalf("result = %+v, want achieved on turn 2", out.res)
+	}
+
+	if len(prov.requests) != 3 {
+		t.Fatalf("provider saw %d requests, want 3 (turn 1's failed worker call, turn 2's worker+eval calls)", len(prov.requests))
+	}
+	turn1Directive := prov.requests[0].Messages[len(prov.requests[0].Messages)-1].Parts.Text()
+	if !strings.Contains(turn1Directive, "do not lose me") {
+		t.Fatalf("turn 1 directive = %q, want the injected operator message (it really was delivered)", turn1Directive)
+	}
+	turn2Directive := prov.requests[1].Messages[len(prov.requests[1].Messages)-1].Parts.Text()
+	if strings.Contains(turn2Directive, "do not lose me") {
+		t.Errorf("turn 2 directive repeats the already-delivered operator message: %q", turn2Directive)
+	}
+
+	if pending := s.QueuedPrompts(); len(pending) != 0 {
+		t.Fatalf("QueuedPrompts after stale discard = %+v, want empty (never restored)", pending)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, s.ID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	if n := strings.Count(log, `"type":"prompt.dequeued"`); n != 1 {
+		t.Fatalf("prompt.dequeued record count = %d, want exactly 1 (delivered once, never re-dequeued)", n)
+	}
+}

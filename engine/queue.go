@@ -123,3 +123,15 @@ func (s *Session) QueuedPrompts() []QueuedPrompt {
 	defer s.mu.Unlock()
 	return append([]QueuedPrompt(nil), s.promptQueue...)
 }
+
+// DequeueAllPrompts is dequeueAllLocked's exported, self-locking wrapper —
+// the whole-queue counterpart to DequeuePrompt, for callers that need to
+// drain everything atomically in one critical section rather than one item
+// at a time. Used by goal-turn-boundary injection (Task 2, goal.go's
+// PursueGoal, reason "injected") and the DELETE /session/{id}/queue clear
+// surface (Task 3, reason "cleared").
+func (s *Session) DequeueAllPrompts(reason string) []QueuedPrompt {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dequeueAllLocked(reason)
+}

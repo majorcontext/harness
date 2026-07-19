@@ -541,6 +541,24 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			// concurrent DELETE): clean stop, no turn runs.
 			return &GoalResult{Achieved: false, Turns: turn - 1, Reason: "goal cleared"}, nil
 		}
+		// Drain the ENTIRE prompt queue, FIFO, in one locked operation
+		// (dequeueAllLocked via DequeueAllPrompts) — right here, at the turn
+		// boundary, and only now that a turn is actually about to run (a
+		// drain above the !snap.active return would dequeue-and-discard a
+		// prompt for a turn that never happens; better to leave it queued
+		// for the next natural drain trigger, e.g. Task 3's idle dispatch).
+		// Every drained prompt journals its own prompt.dequeued(injected)
+		// record before this turn's directive is built, let alone sent — see
+		// the plan's locked decision "Dequeue journals BEFORE the text
+		// enters any turn": replay can never double-deliver, and a prompt
+		// injected here is considered DELIVERED the moment it is folded into
+		// directive below, even if this turn's outcome later turns out to be
+		// stale and gets discarded (the worker-turn/evaluator stale-discard
+		// `continue` sites below). A discarded turn's directive was still
+		// really sent to (and seen by) the worker model — injected prompts
+		// are never restored to the queue on a stale discard, only ever
+		// delivered once. See TestInjectedPromptsNotRedeliveredAfterStaleDiscard.
+		queued := s.DequeueAllPrompts("injected")
 		// `reason` is only ever valid paired with the generation it was
 		// produced for (reasonGen, set alongside it below). Every one of
 		// this loop's stale-discard `continue` sites — a worker-turn
@@ -563,6 +581,16 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			} else {
 				directive = goalGuidance(snap.condition, goalAdjustedNotice)
 			}
+		}
+		if len(queued) > 0 {
+			// Prepend, never replace: the goal directive/guidance below is
+			// still exactly what it would have been with no queue activity
+			// at all — this only adds a clearly labeled block ahead of it.
+			// The evaluator call below is built from snap.condition alone
+			// (see evaluateGoal/runEvaluator) and never sees this block or
+			// `directive` at all, so "goal injection judges only the goal"
+			// holds structurally, not by convention.
+			directive = goalInjectionBlock(queued) + directive
 		}
 		if attempts, err := s.promptTurnWithRetry(ctx, directive, turn, snap.gen); err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -1235,6 +1263,25 @@ func goalGuidance(condition, reason string) string {
 	return "The goal has not been met yet.\n\nGOAL: " + condition +
 		"\n\nEVALUATOR FEEDBACK: " + reason +
 		"\n\nKeep working until the goal is fully satisfied, then stop."
+}
+
+// goalInjectionBlock renders queued prompts drained at a turn boundary (see
+// PursueGoal's DequeueAllPrompts call) as a labeled, numbered block meant to
+// be prepended ahead of that turn's ordinary directive/guidance — never
+// substituted for it. The label makes the operator origin explicit to the
+// worker model (these are direct human/API input mid-goal-loop, distinct
+// from the goal condition or evaluator feedback), and the loop is fully
+// independent of ordering: prompts is already FIFO-ordered by
+// DequeueAllPrompts/dequeueAllLocked, so numbering here just mirrors that
+// order rather than establishing it.
+func goalInjectionBlock(prompts []QueuedPrompt) string {
+	var b strings.Builder
+	b.WriteString("OPERATOR MESSAGES (address these, then continue the goal):\n")
+	for i, p := range prompts {
+		fmt.Fprintf(&b, "%d. %s\n", i+1, p.Text)
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 // renderConversation renders history compactly for the evaluator: each message
