@@ -282,6 +282,14 @@ These are settled decisions. Do not propose or implement them.
 - **Push is the durability mechanism.** Commit as soon as the first test file
   exists; push after every green milestone. Why: lease death and loop death
   have each destroyed unpushed work.
+- **Write conditions as timeless end-state predicates, never turn-relative
+  phrasing.** The condition string is re-sent verbatim in every guidance
+  message (`goalGuidance` embeds it in full on each NOT MET re-prompt, not
+  just turn 1), so wording like "on the first turn..." or "don't do X yet"
+  keeps re-asserting a stale instruction turn after turn instead of describing
+  the state the evaluator should actually check for. Why: live-run evidence
+  — such phrasing looped 32 turns chasing an instruction that only ever made
+  sense once.
 
 ## Plugin System
 
