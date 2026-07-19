@@ -147,6 +147,128 @@ The goal loop is a **plan-artifact-free, gate-free** control loop: it is
 mode, and no permission gate. It does not violate the no-plan-mode decision
 below.
 
+### Prompt queue
+
+`POST /session/{id}/prompt_async` against a session already busy (another
+prompt, or a running goal loop) no longer 409s — it queues. The prompt is
+enqueued durably (`engine.Session.EnqueuePrompt`, persisting a `prompt.queued`
+record and assigning a session-monotonic ID) synchronously, before any
+response is written — the same enqueue-durable-before-202 shape `RegisterGoal`
+already uses for goals, closing the accept-vs-lose race structurally. The
+response is 202 either way: `status: "started"` when a turn is now running for
+this request's own prompt (an idle claim against an EMPTY queue, or a
+freed-slot retry that happens to win and dispatch this same prompt), or
+`status: "queued"` (carrying the current depth) when it is durably waiting —
+including the idle-claim case where the queue is already non-empty (a
+restart refold, or any other drain gap that ever left a prompt stranded):
+`handlePrompt` enqueues the incoming text behind whatever is already waiting,
+then dispatches the queue's HEAD — not necessarily this request's own text —
+into the run slot it just claimed, so a fresh arrival can never cut the
+line ahead of prompts already queued. The workdir-held-by-another-session 409
+is unchanged — only same-session busy gets queue semantics.
+
+The queue drains FIFO, by queue ID, at every run-slot release, with no
+exceptions: `runPrompt`'s, `runGoal`'s, and `handleCompact`'s tails all call
+`maybeDispatchQueued`, which claims the freed slot, dequeues the head
+(`reason: "delivered"`), and spawns it as a normal prompt turn — whose own
+tail repeats the check, so the whole queue drains one turn at a time before
+anything else gets a look. `handlePrompt`'s own claim-success path (previous
+paragraph) is the one non-tail drain site: an admission-time head-dispatch
+for the idle-with-non-empty-queue case, closing the gap a tail-only drain
+would otherwise leave open between "session goes idle with a queue still
+non-empty" and "the next prompt/goal/compact activity happens to touch it."
+This is also where
+**queue beats goal auto-arm**: `runPrompt`'s and `handleCompact`'s tails call
+`maybeDispatchQueued` *before* `maybeAutoArmGoal` (see above), so a prompt
+sitting in the queue when a turn or a compact call ends is dispatched first —
+direct user input outranks the background objective — and the goal only
+auto-arms once the queue is empty.
+
+**Delivery granularity is per tool-call boundary, not per turn.** Inside
+`Session.Prompt`'s agentic loop (`engine/engine.go`), the instant a
+tool-result message is appended — after the model made one or more tool
+calls and before the next provider request in that SAME turn — the loop
+drains the ENTIRE queue, FIFO, in one locked op (`DequeueAllPrompts
+("injected")`) and appends the drained batch as a single, durable user
+message: the same labeled "OPERATOR MESSAGES" block template
+(`operatorMessagesBlock`, `engine/queue.go`, shared by every drain site so a
+batch renders identically apart from one parameterized word — this
+call site passes `operatorContextTask`, so its header says "continue the
+task", never "continue the goal", even when this drain happens to fire
+inside a goal loop's worker turn; only goal.go's own turn-boundary drain
+below passes `operatorContextGoal`). This only ever
+APPENDS — never rewrites an earlier message — so a provider's prompt-cache
+prefix stays intact, the same principle the managed-processes ephemeral
+status block below relies on, except this message is a REAL, durable
+delivery, not a disposable status line. A turn that ends WITHOUT any tool
+call never reaches this drain point at all (the model's own end-of-turn
+return precedes it), so that path — and anything still queued when it
+happens — is left entirely to the mechanisms below. Because `PursueGoal`'s
+worker turns run through this exact same `Prompt` loop
+(`promptTurnWithRetry`), goal loops inherit tool-call-boundary injection
+automatically, with no separate wiring: a prompt queued while a goal's
+worker turn is mid-tool-call is delivered inside that SAME worker turn —
+matching Claude Code's mid-turn steering granularity — rather than waiting
+for the goal's own turn boundary described next.
+
+`PursueGoal` keeps a second, complementary drain at its own turn boundary:
+at the top of every turn (the same `snapshotGoal` boundary #77's
+condition-update snapshot uses, and before that turn's own tool-call-boundary
+drain above has any chance to run) it drains the *entire* queue, FIFO —
+catching anything still queued from a turn that made no tool calls at all, or
+that arrived in the gap between one turn ending and the next one's snapshot —
+and prepends it to that turn's directive as the same labeled "OPERATOR
+MESSAGES" block (`operatorMessagesBlock`, `operatorContextGoal` — so its
+header says "continue the goal"), ahead of — never replacing — the
+ordinary condition/guidance text. The evaluator's condition string is
+unchanged by this — it is built from the condition alone, never from the
+block or the turn's rendered directive — so goal injection judges only the
+goal there; the evaluator's separate transcript field does render the full
+history, so it does see the block once the worker turn that received it has
+run. Every drained prompt journals its own `prompt.dequeued(injected)` record
+before the turn's directive is even built, so it counts as delivered at that
+point even if the turn's outcome later turns out stale and gets discarded —
+an injected prompt is never re-queued, at either drain site. This means an
+abort (`POST /abort`) or a goal clear (`DELETE /session/{id}/goal`) racing a
+goal turn boundary consumes an entire just-injected batch at once: every
+prompt the boundary drained is already journaled `dequeued(injected)` before
+the worker turn even starts, so a turn that gets cancelled or whose outcome is
+later discarded as stale still loses all of them together — several operator
+messages, not just one — the same exposure class an ordinary in-flight prompt
+already has, just multiplied across the whole drained batch. The two drain
+sites can never double-deliver the same prompt: `DequeueAllPrompts` is one
+atomic, locked pop of the whole queue, so whichever site runs first against a
+given prompt is the only one that ever sees it.
+
+Every enqueue/dequeue is a durable record — `prompt.queued` and
+`prompt.dequeued`, the latter carrying a `reason` of `"delivered"` (idle
+drain), `"injected"` (tool-call-boundary or goal-turn-boundary injection —
+both drain sites share the reason, see above), or `"cleared"` (see below) —
+journaled and emitted (`EventPromptQueued`/`EventPromptDequeued`) under
+`s.mu` in the same critical section, mirroring `RegisterGoal`/`ClearGoal`
+exactly. Dequeue always journals *before* the text enters any turn, so a crash
+between that journal write and the dispatched turn's completion cannot
+double-deliver — the prompt is simply gone from the queue on replay, the same
+exposure any in-flight prompt already has today. **Boot never auto-dispatches
+a resumed queue**: `LoadSession` folds `prompt.queued`/`prompt.dequeued`
+records back into the exact undelivered set, `GET /session`'s `queued` count
+reflects it immediately, and it sits there until the next natural drain
+trigger (an idle prompt, the next tool-call boundary inside a running turn, or
+a goal loop's next turn boundary) — the same settled boot rule goals follow.
+`DELETE /session/{id}/queue` is the one explicit clear surface: it journals
+`prompt.dequeued(cleared)` for every pending item then 204, idempotent on an
+empty queue, and never touches a currently running turn — `POST /abort` is
+unrelated and does not touch the queue either way (it only cancels the
+in-flight turn's context).
+
+Two v1 limits are deliberate, not gaps: **text-only** (queued prompts carry a
+plain string — `QueuedPrompt{ID, Text}` — no attachment machinery, matching
+the plain-prompt contract's `parts` being text-only already), and **a
+per-request `model` override is silently dropped when the prompt is queued**
+— there is no slot in `QueuedPrompt` to carry it through to a future drain, so
+a caller that needs a model swap to take effect must re-issue the request once
+it is confirmed `started`.
+
 ### Managed processes
 
 `config.Config.Processes` (`processes` in JSON) declares named long-lived
@@ -196,6 +318,14 @@ These are settled decisions. Do not propose or implement them.
 - **Push is the durability mechanism.** Commit as soon as the first test file
   exists; push after every green milestone. Why: lease death and loop death
   have each destroyed unpushed work.
+- **Write conditions as timeless end-state predicates, never turn-relative
+  phrasing.** The condition string is re-sent verbatim in every guidance
+  message (`goalGuidance` embeds it in full on each NOT MET re-prompt, not
+  just turn 1), so wording like "on the first turn..." or "don't do X yet"
+  keeps re-asserting a stale instruction turn after turn instead of describing
+  the state the evaluator should actually check for. Why: live-run evidence
+  — such phrasing looped 32 turns chasing an instruction that only ever made
+  sense once.
 
 ## Plugin System
 

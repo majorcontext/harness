@@ -91,6 +91,20 @@ type Event struct {
 	CompactLastID      string `json:"compact_last_id,omitempty"`
 	CompactTurnsFolded int    `json:"compact_turns_folded,omitempty"`
 	CompactSummaryID   string `json:"compact_summary_id,omitempty"`
+
+	// Prompt-queue fields (set on EventPromptQueued/EventPromptDequeued; see
+	// queue.go). QueueID is the queue-assigned, session-monotonic prompt ID.
+	// QueueText is the queued prompt text, carried on BOTH events (not just
+	// queued) so a dequeued event is self-describing without cross-
+	// referencing the matching queued one. QueueReason is empty on
+	// EventPromptQueued and one of "delivered" (idle drain, Task 3),
+	// "injected" (goal-turn-boundary interjection, Task 2), or "cleared"
+	// (DELETE /session/{id}/queue, Task 3) on EventPromptDequeued. QueueLen
+	// is the queue's length immediately AFTER this event.
+	QueueID     int64  `json:"queue_id,omitempty"`
+	QueueText   string `json:"queue_text,omitempty"`
+	QueueReason string `json:"queue_reason,omitempty"`
+	QueueLen    int    `json:"queue_len,omitempty"`
 }
 
 // Event types.
@@ -108,6 +122,13 @@ const (
 	EventGoalStalled  = "goal.stalled"
 	EventGoalAchieved = "goal.achieved"
 	EventGoalCleared  = "goal.cleared"
+
+	// Prompt-queue events (see queue.go and docs/plans/2026-07-19-prompt-
+	// queue.md). EventPromptQueued fires on every EnqueuePrompt call;
+	// EventPromptDequeued fires on every DequeuePrompt/dequeueAllLocked pop,
+	// whatever the reason (delivered/injected/cleared).
+	EventPromptQueued   = "prompt.queued"
+	EventPromptDequeued = "prompt.dequeued"
 )
 
 // Config configures a Session.
@@ -345,6 +366,23 @@ type Session struct {
 	// that compaction happened even after a restart. Guarded by mu.
 	compactCount    int
 	lastCompactedAt time.Time
+
+	// promptQueue is the session's durable FIFO of prompts enqueued while
+	// busy (see queue.go and docs/plans/2026-07-19-prompt-queue.md). Each
+	// entry is delivered later either via a normal Prompt call (idle drain,
+	// Task 3) or as a goal-turn-boundary interjection (Task 2) — a queued
+	// prompt never enters s.history nor any provider request before then
+	// (the plan's "Locked design decisions": queued prompts live in this
+	// field and their own record types, never s.history). Restored on
+	// LoadSession by folding the prompt.queued/prompt.dequeued records in ID
+	// order (see store.go). Guarded by mu.
+	promptQueue []QueuedPrompt
+
+	// promptQueueNextID mints EnqueuePrompt's session-monotonic queue ID,
+	// starting at 1 for a fresh session (set in newSession) and overridden by
+	// LoadSession's fold to one past the highest prompt.queued ID it replays
+	// — see LoadSession's recPromptQueued case. Guarded by mu.
+	promptQueueNextID int64
 }
 
 // NewSession creates a session. Nothing touches the network, spawns
@@ -366,10 +404,11 @@ func newSession(cfg Config) *Session {
 		cfg.BashTimeout = 2 * time.Minute
 	}
 	s := &Session{
-		cfg:       cfg,
-		model:     cfg.Model,
-		tools:     make(map[string]Tool),
-		createdAt: time.Now().UTC(),
+		cfg:               cfg,
+		model:             cfg.Model,
+		tools:             make(map[string]Tool),
+		createdAt:         time.Now().UTC(),
+		promptQueueNextID: 1,
 	}
 	for _, t := range []Tool{bashTool(cfg.BashTimeout, cfg.BashOutputCap), readFileTool(), writeFileTool(), editFileTool(), sessionInfoTool()} {
 		s.tools[t.Def.Name] = t
@@ -718,6 +757,46 @@ func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, er
 			Parts:     results,
 			CreatedAt: time.Now().UTC(),
 		})
+		// Tool-call-boundary queue drain (docs/plans/2026-07-19-prompt-queue.md's
+		// "Design amendment: tool-call-boundary injection"): the model is
+		// about to make ANOTHER provider request in THIS SAME turn (tool
+		// results just landed, stop reason was StopToolUse and at least one
+		// tool actually ran) — this is the earliest point a prompt that
+		// arrived mid-tool-execution can be delivered without waiting for
+		// the whole turn (or, in a goal loop, the whole worker turn) to
+		// finish, matching Claude Code's mid-turn steering granularity. A
+		// turn that ends with no tool calls never reaches this point at
+		// all (see the two early returns above) — that path is unchanged
+		// and left entirely to the server's tail drain / the goal loop's
+		// own turn-boundary drain.
+		//
+		// DequeueAllPrompts drains the ENTIRE queue, FIFO, in one locked
+		// operation and journals every prompt.dequeued(injected) record
+		// BEFORE this method returns — so, exactly like the goal-boundary
+		// drain in goal.go, a crash between that journal write and this
+		// append can never double-deliver: the prompt is simply gone from
+		// the queue on replay. The rendered content is the same labeled
+		// "OPERATOR MESSAGES" block goal-turn-boundary injection uses
+		// (operatorMessagesBlock, queue.go), differing only in the
+		// trailing clause: this call site passes operatorContextTask, not
+		// operatorContextGoal, since this loop has no goal directive to
+		// hand back to — even when it happens to be driving a goal loop's
+		// worker turn (see operatorMessagesBlock's doc comment).
+		//
+		// This appends a REAL, durable user message straight into history
+		// (never an ephemeral segment like the managed-processes status
+		// block near streamTurn below) — appending only, never touching an
+		// earlier message, so any provider's prompt-cache prefix stays
+		// intact exactly per the managed-processes precedent, except this
+		// one really is delivered mail, not a disposable status line.
+		if queued := s.DequeueAllPrompts("injected"); len(queued) > 0 {
+			s.append(message.Message{
+				ID:        newID("msg"),
+				Role:      message.RoleUser,
+				Parts:     message.Parts{&message.Text{Text: strings.TrimSuffix(operatorMessagesBlock(queued, operatorContextTask), "\n")}},
+				CreatedAt: time.Now().UTC(),
+			})
+		}
 	}
 }
 

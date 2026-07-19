@@ -235,6 +235,33 @@ type Server struct {
 	// Always nil in production.
 	autoArmRace func()
 
+	// queueDispatchRace is a test-only seam mirroring autoArmRace: when
+	// non-nil, enqueueOrDispatch (handlePrompt's same-session-busy branch)
+	// and maybeDispatchQueued invoke it right before their own claimForPrompt
+	// call, letting a test force a real concurrent claim attempt (another
+	// prompt_async, a goal auto-arm, or another maybeDispatchQueued call) to
+	// land deterministically instead of relying on an unobserved
+	// goroutine-scheduling coin flip (see TestPromptQueueRaceWithFreedSlot).
+	// handlePrompt's own idle-with-queue branch invokes it too, right before
+	// its dispatchQueueHead call, so a test can also force a concurrent
+	// DELETE /session/{id}/queue into the narrow gap between that branch's
+	// EnqueuePrompt and its dispatch attempt (see
+	// TestQueueClearRaceDuringIdleDispatchIsNotAnError and
+	// TestQueueClearRaceDuringDispatchIsNotAnError). Always nil in
+	// production.
+	queueDispatchRace func()
+
+	// queueDeleteRace is a test-only seam: when non-nil, handleQueueDelete's
+	// cold path (session not resident) invokes it right after its own
+	// LoadSession call returns but before re-acquiring s.mu to register (or
+	// yield to) a resident — letting a test force a real concurrent claim
+	// (e.g. a prompt_async cold-loading and registering its OWN instance for
+	// the same session) to land deterministically in that exact window,
+	// instead of relying on an unobserved goroutine-scheduling coin flip. See
+	// TestDeleteQueueColdSessionSurvivesResidencyRace. Always nil in
+	// production.
+	queueDeleteRace func()
+
 	// worktreeBase is the directory 'worktree'-isolation sessions create
 	// their per-session git worktrees under (see worktree.go): <SessionDir>/
 	// worktrees when SessionDir is durable, otherwise a process-lifetime
@@ -441,6 +468,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /session/{id}/message", s.auth(s.handleMessages))
 	mux.HandleFunc("GET /session/{id}/request", s.auth(s.handleRequest))
 	mux.HandleFunc("POST /session/{id}/prompt_async", s.auth(s.handlePrompt))
+	mux.HandleFunc("DELETE /session/{id}/queue", s.auth(s.handleQueueDelete))
 	mux.HandleFunc("POST /session/{id}/compact", s.auth(s.handleCompact))
 	mux.HandleFunc("POST /session/{id}/goal", s.auth(s.handleGoal))
 	mux.HandleFunc("DELETE /session/{id}/goal", s.auth(s.handleGoalDelete))
