@@ -84,6 +84,25 @@ func TestGoalToolSetArms(t *testing.T) {
 	}
 }
 
+// TestGoalToolSetEchoesTrimmedCondition is the PR #77 review's Finding 2: set
+// must echo back the goal's STORED (trimmed) condition, not the raw argument
+// verbatim — RegisterGoal itself trims via strings.TrimSpace (see
+// engine/goal.go), so a padded argument and Session.ActiveGoal()'s read-back
+// must agree.
+func TestGoalToolSetEchoesTrimmedCondition(t *testing.T) {
+	s := newGoalToolSession(t)
+
+	res := runGoalToolAction(t, s, `{"action":"set","condition":"  tests pass  "}`)
+	if !res.Active || res.Condition != "tests pass" {
+		t.Fatalf("set result = %+v, want active/%q (trimmed, matching the stored condition)", res, "tests pass")
+	}
+
+	cond, ok := s.ActiveGoal()
+	if !ok || cond != "tests pass" {
+		t.Fatalf("ActiveGoal = %q, %v; want active with %q", cond, ok, "tests pass")
+	}
+}
+
 func TestGoalToolSetWhileActiveSaysAdjust(t *testing.T) {
 	s := newGoalToolSession(t)
 	if err := s.RegisterGoal("original goal"); err != nil {

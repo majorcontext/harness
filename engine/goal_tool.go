@@ -105,7 +105,12 @@ func runGoalTool(s *Session, raw json.RawMessage) (message.Parts, error) {
 			// empty-condition case still names its own error.
 			return nil, fmt.Errorf("goal: %w (if a goal is already active, use action %q to change its condition instead)", err, "adjust")
 		}
-		return jsonResult(goalToolResult{Active: true, Condition: in.Condition})
+		// Read back the STORED condition rather than echoing in.Condition
+		// verbatim: RegisterGoal trims it (strings.TrimSpace), so an
+		// untrimmed argument must not be reported as if it were the
+		// condition now governing the goal loop.
+		condition, active := s.ActiveGoal()
+		return jsonResult(goalToolResult{Active: active, Condition: condition})
 
 	case "adjust":
 		if err := s.UpdateGoal(in.Condition); err != nil {
