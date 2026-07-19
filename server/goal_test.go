@@ -105,7 +105,7 @@ func goalEvents(evs []Event) []Event {
 	var out []Event
 	for _, ev := range evs {
 		switch ev.Type {
-		case "goal.set", "goal.eval", "goal.stalled", "goal.achieved", "goal.cleared":
+		case "goal.set", "goal.updated", "goal.eval", "goal.stalled", "goal.achieved", "goal.cleared":
 			out = append(out, ev)
 		}
 	}
