@@ -580,6 +580,7 @@ components:
             - model
             - request.meta
             - goal.set
+            - goal.updated
             - goal.eval
             - goal.stalled
             - goal.achieved
@@ -624,10 +625,17 @@ components:
             system_hash differs from the session's previous request — the
             hash-on-change trick keeps unchanged prompts cheap while still
             making the exact system recoverable from a from=0 replay.
-            goal.set, goal.eval, goal.stalled, goal.achieved, and goal.cleared
-            are the durable records of a goal loop (POST /session/{id}/goal).
-            goal.set carries goal_condition; goal.eval carries goal_met,
-            goal_reason, and goal_turn for each per-turn evaluator verdict;
+            goal.set, goal.updated, goal.eval, goal.stalled, goal.achieved,
+            and goal.cleared are the durable records of a goal loop (POST
+            /session/{id}/goal). goal.set carries goal_condition; goal.updated
+            is journaled whenever the condition is rewritten in place — by a
+            re-POST to /goal on an already-running loop, or by the `goal`
+            session tool's `adjust` action — and carries only goal_condition
+            (the new text); a running loop picks it up at its next turn
+            boundary, and a stale evaluator verdict computed against the
+            condition it replaced is discarded rather than journaled (never a
+            goal.eval or goal.achieved for superseded text). goal.eval carries
+            goal_met, goal_reason, and goal_turn for each per-turn evaluator verdict;
             goal.stalled carries goal_reason, goal_turn, and goal_attempt (the
             1-based retry attempt) for each failed worker-turn attempt that is
             still within the retry budget — it is non-terminal, the goal
@@ -737,7 +745,7 @@ components:
             when system_hash changed from the session's previous request.
         goal_condition:
           type: string
-          description: The goal condition (goal.set).
+          description: The goal condition (goal.set, goal.updated, goal.paused).
         goal_reason:
           type: string
           description: Evaluator reason (goal.eval, goal.achieved).
@@ -851,7 +859,27 @@ components:
           description: The natural-language completion condition to pursue.
         max_turns:
           type: integer
-          description: Maximum worker turns; 0 or omitted means unlimited.
+          description: >
+            Maximum worker turns; 0 or omitted means unlimited. Only applies
+            when this call actually starts a loop (response status
+            `started`); ignored entirely for `updated` (an already-running
+            loop keeps whatever budget it started with) and for the loop
+            eventually spawned by auto-arm after an `armed` response (that
+            loop always runs unlimited — see startGoal's description).
+
+    GoalPostResponse:
+      type: object
+      required: [seq, status]
+      properties:
+        seq:
+          type: integer
+          description: Seq to tail /event from.
+        status:
+          type: string
+          enum: [started, armed, updated]
+          description: >
+            Which of the three POST /goal outcomes this response represents
+            — see startGoal's description for the full contract.
 
     Request:
       type: object
@@ -1301,16 +1329,37 @@ paths:
   /session/{id}/goal:
     post:
       operationId: startGoal
-      summary: Start a goal loop on a session.
+      summary: Start, update, or arm a goal loop on a session.
       description: |
         Prompts the condition, then after every turn asks an independent,
         tool-less evaluator model (config goal_evaluator_model) whether it is
         met, feeding the evaluator's reason back as guidance until met or the
-        turn budget runs out. Runs in the background like prompt_async; progress
-        and the durable goal.* records arrive on /event. The goal occupies the
-        session's single run slot, so a concurrent prompt_async or goal is 409.
-        400 when goal_evaluator_model is not configured, or the condition is
-        empty.
+        turn budget runs out. Progress and the durable goal.* records arrive
+        on /event. 400 when goal_evaluator_model is not configured, or the
+        condition is empty.
+
+        The response's `status` field names which of three things happened,
+        and its HTTP status code varies accordingly:
+
+        - `started` (202): a fresh loop is now running. This covers the
+          ordinary case (the session was idle, no goal was active), resuming
+          a goal left active-but-idle by a boot-time restart pause or by an
+          abort (see DELETE's "cleared" vs an abort, which deliberately
+          leaves the goal active) — with the SAME or a DIFFERENT condition
+          (a different condition updates it in place before resuming) — and
+          the case where a goal POSTed while a plain prompt was busy wins the
+          run slot the instant that prompt finishes.
+        - `updated` (200): a goal loop is ALREADY running on this session;
+          the condition is rewritten in place (a same-condition POST is a
+          silent no-op, still reported as `updated`) and NO new loop starts —
+          the existing loop picks up the new condition at its next turn
+          boundary. No run-slot claim happens for this outcome.
+        - `armed` (202): the run slot is currently held by a plain prompt (not
+          a goal); the goal is registered now, but the loop itself starts
+          automatically once that prompt finishes (auto-arm) — no further
+          client action is needed. The same self-arming path is how the
+          `goal` session tool's `set` action (called by the model itself,
+          mid-turn) begins running: it takes effect after the current turn.
       parameters:
         - $ref: "#/components/parameters/sessionID"
       requestBody:
@@ -1319,15 +1368,22 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/GoalRequest" }
       responses:
-        "202":
-          description: Accepted. Body carries the seq to tail events from.
+        "200":
+          description: >
+            Updated in place: a goal loop was already running on this
+            session; its condition was rewritten (or, if unchanged, left
+            as-is) and no second loop was started.
           content:
             application/json:
-              schema:
-                type: object
-                required: [seq]
-                properties:
-                  seq: { type: integer }
+              schema: { $ref: "#/components/schemas/GoalPostResponse" }
+        "202":
+          description: >
+            Accepted: either a fresh (or resumed) loop is now running
+            (`status: started`), or the goal is registered and will start
+            automatically once the run slot frees up (`status: armed`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GoalPostResponse" }
         "400":
           description: No evaluator configured, or empty condition.
           content:
@@ -1337,11 +1393,14 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
           description: >
-            Session is busy with another prompt or goal, OR another
-            currently-running session holds the same workdir and neither
-            session set share_workdir on creation, and neither session set
-            workdir_isolation="worktree" (the error names the holder
-            session).
+            Either another currently-running session holds the same workdir
+            and neither session set share_workdir on creation, and neither
+            session set workdir_isolation="worktree" (the error names the
+            holder session) — or a genuinely unclaimable session state (e.g.
+            a concurrent registration lost an internal race). A plain
+            prompt_async while a goal loop runs still 409s the same way (the
+            goal occupies the run slot); a second goal POST while a goal
+            loop runs does NOT — see the 200 case above.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

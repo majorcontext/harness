@@ -53,7 +53,7 @@ type Event struct {
 
 	// Goal-loop fields (set on goal.* events; see goal.go and the state
 	// machine documented atop goal.go). GoalCondition is carried by
-	// goal.set; GoalReason/GoalMet/GoalTurn by goal.eval; GoalReason/GoalTurn
+	// goal.set and goal.updated (the new condition); GoalReason/GoalMet/GoalTurn by goal.eval; GoalReason/GoalTurn
 	// by goal.stalled (GoalAttempt is the 1-based retry attempt);
 	// GoalReason/GoalTurns by goal.achieved; goal.cleared carries GoalReason
 	// when it was triggered by a permanently-failing worker turn, empty for
@@ -103,6 +103,7 @@ const (
 
 	// Goal-loop events (see goal.go).
 	EventGoalSet      = "goal.set"
+	EventGoalUpdated  = "goal.updated"
 	EventGoalEval     = "goal.eval"
 	EventGoalStalled  = "goal.stalled"
 	EventGoalAchieved = "goal.achieved"
@@ -183,6 +184,16 @@ type Config struct {
 	// managed-processes.md for why the process tool is exposed
 	// unconditionally in serve mode.
 	Processes ProcessRegistry
+
+	// GoalTool enables the built-in `goal` session tool (status/set/adjust —
+	// see goal_tool.go), which lets the model itself inspect, arm, or adjust
+	// this session's completion goal in-process, no HTTP round-trip. False
+	// (the default) installs no `goal` tool at all, exactly like a nil
+	// Config.Processes installs no `process` tool. The server/CLI wiring
+	// that sets this true when a goal evaluator is configured is a later
+	// task (see docs/design/2026-07-19-goal-self-adjust.md) — this field
+	// only gates registration.
+	GoalTool bool
 
 	// Tools are additional built-in tools. The bash tool is always
 	// installed.
@@ -287,6 +298,22 @@ type Session struct {
 	goalActive    bool
 	goalCondition string
 
+	// goalGen counts every RegisterGoal/UpdateGoal that establishes a new
+	// condition text (a same-condition UpdateGoal is a no-op and does NOT
+	// bump it — see UpdateGoal). PursueGoal snapshots (condition, goalGen,
+	// goalActive) together at each turn boundary (see goalSnapshot) so an
+	// evaluator verdict or worker-turn outcome computed against an earlier
+	// snapshot can be told apart from the current goal even when the
+	// condition text itself happens to collide, and discarded rather than
+	// journaled — see goalSnapshot's doc comment. Deliberately runtime-only:
+	// never persisted, never appears in a goal.* record, never restored on
+	// LoadSession (a resumed session starts a fresh loop, which registers or
+	// resumes against whatever condition the log folds to and gets a new
+	// gen from that point forward — replay correctness comes from the
+	// goal.updated fold, not from reproducing this counter's exact value).
+	// Guarded by mu.
+	goalGen uint64
+
 	// toolExecCount counts tool-call executions across the session's
 	// lifetime: incremented once per call to runToolCall that actually
 	// invokes a tool (i.e. not one blocked by a tool.execute.before deny),
@@ -349,6 +376,9 @@ func newSession(cfg Config) *Session {
 	}
 	if cfg.Processes != nil {
 		s.tools[processToolName] = processTool(cfg.Processes)
+	}
+	if cfg.GoalTool {
+		s.tools[goalToolName] = goalTool()
 	}
 	for _, t := range cfg.Tools {
 		s.tools[t.Def.Name] = t
