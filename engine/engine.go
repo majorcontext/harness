@@ -185,6 +185,16 @@ type Config struct {
 	// unconditionally in serve mode.
 	Processes ProcessRegistry
 
+	// GoalTool enables the built-in `goal` session tool (status/set/adjust —
+	// see goal_tool.go), which lets the model itself inspect, arm, or adjust
+	// this session's completion goal in-process, no HTTP round-trip. False
+	// (the default) installs no `goal` tool at all, exactly like a nil
+	// Config.Processes installs no `process` tool. The server/CLI wiring
+	// that sets this true when a goal evaluator is configured is a later
+	// task (see docs/design/2026-07-19-goal-self-adjust.md) — this field
+	// only gates registration.
+	GoalTool bool
+
 	// Tools are additional built-in tools. The bash tool is always
 	// installed.
 	Tools       []Tool
@@ -366,6 +376,9 @@ func newSession(cfg Config) *Session {
 	}
 	if cfg.Processes != nil {
 		s.tools[processToolName] = processTool(cfg.Processes)
+	}
+	if cfg.GoalTool {
+		s.tools[goalToolName] = goalTool()
 	}
 	for _, t := range cfg.Tools {
 		s.tools[t.Def.Name] = t
