@@ -19,6 +19,7 @@ package engine
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -134,4 +135,30 @@ func (s *Session) DequeueAllPrompts(reason string) []QueuedPrompt {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.dequeueAllLocked(reason)
+}
+
+// operatorMessagesBlock renders a batch of prompts drained by
+// DequeueAllPrompts as a labeled, numbered block meant to be prepended
+// ahead of — never substituted for — whatever text the drain site is about
+// to deliver. The label makes the operator origin explicit to the worker
+// model (these are direct human/API input arriving mid-loop, distinct from
+// a goal condition, evaluator feedback, or the model's own turn), and the
+// loop is fully independent of ordering: prompts is already FIFO-ordered by
+// DequeueAllPrompts/dequeueAllLocked, so numbering here just mirrors that
+// order rather than establishing it.
+//
+// Two call sites share this exact template so a drained batch renders
+// identically no matter which boundary delivered it: goal.go's PursueGoal
+// prepends it to a turn's directive/guidance at the goal's own turn
+// boundary; engine.go's Prompt loop appends it as a standalone user message
+// at a mid-turn tool-call boundary (see the "Design amendment: tool-call-
+// boundary injection" note in docs/plans/2026-07-19-prompt-queue.md).
+func operatorMessagesBlock(prompts []QueuedPrompt) string {
+	var b strings.Builder
+	b.WriteString("OPERATOR MESSAGES (address these, then continue the goal):\n")
+	for i, p := range prompts {
+		fmt.Fprintf(&b, "%d. %s\n", i+1, p.Text)
+	}
+	b.WriteString("\n")
+	return b.String()
 }

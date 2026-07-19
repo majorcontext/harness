@@ -181,13 +181,16 @@ components:
           description: >
             Current durable prompt-queue depth (docs/plans/2026-07-19-
             prompt-queue.md): prompts submitted via prompt_async while the
-            session was busy, waiting for the next natural drain trigger
-            (idle dispatch, or a running goal loop's turn-boundary
-            injection). Always present — 0 means nothing is waiting, not
-            "never checked". Survives a restart (folded from the session's
-            own prompt.queued/prompt.dequeued log records), but never
-            dispatches on its own — the same "boot never auto-runs" rule
-            goals follow.
+            session was busy, waiting for the next natural drain trigger —
+            most often a tool-call boundary inside the CURRENTLY RUNNING
+            turn (plain or goal-worker alike), so this can drop to 0 well
+            before that turn ends; otherwise idle dispatch, or a goal loop's
+            own turn-boundary injection (its fallback for a turn with no
+            tool calls at all). Always present — 0 means nothing is waiting,
+            not "never checked". Survives a restart (folded from the
+            session's own prompt.queued/prompt.dequeued log records), but
+            never dispatches on its own — the same "boot never auto-runs"
+            rule goals follow.
 
     Usage:
       type: object
@@ -721,11 +724,16 @@ components:
             and the resulting queue_len. prompt.dequeued fires whenever the
             head is popped for delivery, carrying the same queue_id/
             queue_text plus queue_reason — "delivered" (idle-drain
-            dispatch), "injected" (prepended to a running goal loop's next
-            turn as a labeled operator interjection — the evaluator prompt
-            itself is unaffected), or "cleared" (DELETE
-            /session/{id}/queue) — and queue_len, the depth remaining
-            immediately after. Session.queued mirrors the same count.
+            dispatch), "injected" (delivered mid-turn as a labeled operator
+            interjection: at a tool-call boundary inside ANY running turn,
+            plain or goal-worker alike — the primary delivery path, matching
+            Claude Code's mid-turn steering granularity — or, as a fallback
+            for a turn that made no tool calls at all, at a goal loop's own
+            next turn boundary; the evaluator prompt itself is unaffected
+            either way), or "cleared" (DELETE /session/{id}/queue) — and
+            queue_len, the depth remaining immediately after. Session.queued
+            mirrors the same count and can drop mid-turn, before the turn
+            itself ends.
             workdir.worktree_kept and workdir.worktree_removed are durable
             records of a workdir_isolation="worktree" session's dedicated git
             worktree being torn down (session end or the serve-start sweep,
@@ -863,8 +871,10 @@ components:
           enum: [delivered, injected, cleared]
           description: >
             Why the prompt was dequeued (prompt.dequeued only): "delivered"
-            (idle-drain dispatch), "injected" (prepended to a running goal
-            loop's next turn), or "cleared" (DELETE /session/{id}/queue).
+            (idle-drain dispatch), "injected" (delivered mid-turn at a
+            tool-call boundary — plain or goal-worker turn alike — or, for a
+            turn with no tool calls, at a goal loop's own next turn
+            boundary), or "cleared" (DELETE /session/{id}/queue).
         queue_len:
           type: integer
           description: >
@@ -1330,14 +1340,19 @@ paths:
 
         A session already busy with another prompt or a running goal loop no
         longer 409s (see docs/plans/2026-07-19-prompt-queue.md): the prompt
-        is durably enqueued instead (`status: queued`) and dispatched FIFO
-        the instant the run slot frees up — either as the next idle turn, or
-        (while a goal loop is running) prepended to that loop's next turn as
-        a labeled operator interjection. `DELETE /session/{id}/queue` clears
-        anything still waiting. The workdir-held-by-another-session 409
-        below is unchanged — only same-session busy gets queue semantics.
-        A `model` override on a request whose prompt ends up queued is
-        silently dropped — see `model` in PromptRequest below.
+        is durably enqueued instead (`status: queued`) and delivered as soon
+        as possible, at whichever boundary comes first — a tool-call
+        boundary inside the CURRENTLY RUNNING turn (plain or goal-worker
+        alike: the queue drains there mid-turn, as a labeled operator
+        interjection appended straight into history, matching Claude Code's
+        mid-turn steering granularity), a goal loop's own next turn boundary
+        (the fallback for a turn that made no tool calls at all), or, once
+        no turn is running at all, dispatch as the next idle turn.
+        `DELETE /session/{id}/queue` clears anything still waiting. The
+        workdir-held-by-another-session 409 below is unchanged — only
+        same-session busy gets queue semantics. A `model` override on a
+        request whose prompt ends up queued is silently dropped — see
+        `model` in PromptRequest below.
       parameters:
         - $ref: "#/components/parameters/sessionID"
       requestBody:

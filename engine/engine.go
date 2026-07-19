@@ -757,6 +757,43 @@ func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, er
 			Parts:     results,
 			CreatedAt: time.Now().UTC(),
 		})
+		// Tool-call-boundary queue drain (docs/plans/2026-07-19-prompt-queue.md's
+		// "Design amendment: tool-call-boundary injection"): the model is
+		// about to make ANOTHER provider request in THIS SAME turn (tool
+		// results just landed, stop reason was StopToolUse and at least one
+		// tool actually ran) — this is the earliest point a prompt that
+		// arrived mid-tool-execution can be delivered without waiting for
+		// the whole turn (or, in a goal loop, the whole worker turn) to
+		// finish, matching Claude Code's mid-turn steering granularity. A
+		// turn that ends with no tool calls never reaches this point at
+		// all (see the two early returns above) — that path is unchanged
+		// and left entirely to the server's tail drain / the goal loop's
+		// own turn-boundary drain.
+		//
+		// DequeueAllPrompts drains the ENTIRE queue, FIFO, in one locked
+		// operation and journals every prompt.dequeued(injected) record
+		// BEFORE this method returns — so, exactly like the goal-boundary
+		// drain in goal.go, a crash between that journal write and this
+		// append can never double-deliver: the prompt is simply gone from
+		// the queue on replay. The rendered content is the same labeled
+		// "OPERATOR MESSAGES" block goal-turn-boundary injection uses
+		// (operatorMessagesBlock, queue.go) so a plain Prompt turn and a
+		// goal worker turn render an injected batch identically.
+		//
+		// This appends a REAL, durable user message straight into history
+		// (never an ephemeral segment like the managed-processes status
+		// block near streamTurn below) — appending only, never touching an
+		// earlier message, so any provider's prompt-cache prefix stays
+		// intact exactly per the managed-processes precedent, except this
+		// one really is delivered mail, not a disposable status line.
+		if queued := s.DequeueAllPrompts("injected"); len(queued) > 0 {
+			s.append(message.Message{
+				ID:        newID("msg"),
+				Role:      message.RoleUser,
+				Parts:     message.Parts{&message.Text{Text: strings.TrimSuffix(operatorMessagesBlock(queued), "\n")}},
+				CreatedAt: time.Now().UTC(),
+			})
+		}
 	}
 }
 

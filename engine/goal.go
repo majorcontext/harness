@@ -596,7 +596,7 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			// which includes this turn's directive — and therefore this
 			// block — once the worker turn that received it has run. Only
 			// the condition string itself stays clean.
-			directive = goalInjectionBlock(queued) + directive
+			directive = operatorMessagesBlock(queued) + directive
 		}
 		if attempts, err := s.promptTurnWithRetry(ctx, directive, turn, snap.gen); err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -1269,25 +1269,6 @@ func goalGuidance(condition, reason string) string {
 	return "The goal has not been met yet.\n\nGOAL: " + condition +
 		"\n\nEVALUATOR FEEDBACK: " + reason +
 		"\n\nKeep working until the goal is fully satisfied, then stop."
-}
-
-// goalInjectionBlock renders queued prompts drained at a turn boundary (see
-// PursueGoal's DequeueAllPrompts call) as a labeled, numbered block meant to
-// be prepended ahead of that turn's ordinary directive/guidance — never
-// substituted for it. The label makes the operator origin explicit to the
-// worker model (these are direct human/API input mid-goal-loop, distinct
-// from the goal condition or evaluator feedback), and the loop is fully
-// independent of ordering: prompts is already FIFO-ordered by
-// DequeueAllPrompts/dequeueAllLocked, so numbering here just mirrors that
-// order rather than establishing it.
-func goalInjectionBlock(prompts []QueuedPrompt) string {
-	var b strings.Builder
-	b.WriteString("OPERATOR MESSAGES (address these, then continue the goal):\n")
-	for i, p := range prompts {
-		fmt.Fprintf(&b, "%d. %s\n", i+1, p.Text)
-	}
-	b.WriteString("\n")
-	return b.String()
 }
 
 // renderConversation renders history compactly for the evaluator: each message

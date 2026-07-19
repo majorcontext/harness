@@ -89,3 +89,47 @@ TDD (each red first): rewrite `TestConcurrentPromptConflict` → queued semantic
 - No time.Sleep for sync; channel-gate everything; reuse `autoArmRace`-style seams for deterministic races.
 - Emit-under-mutex discipline for every new record; lock-order tests must stay green.
 - Conventional Commits; no AI co-author lines.
+
+---
+
+## Design amendment: tool-call-boundary injection (2026-07-19)
+
+Delivery granularity moved from per-turn to per-tool-call-boundary. Originally
+(Tasks 1-4 above), a queued prompt's earliest delivery point inside a running
+turn was the server's own tail drain (`runPrompt`/`runGoal`/`handleCompact`'s
+end) or, for a goal loop, `PursueGoal`'s next turn-boundary snapshot — both
+meaning a prompt queued mid-turn waited for that ENTIRE turn (every tool call
+in it) to finish before it could be delivered.
+
+The amendment: `Session.Prompt`'s agentic loop (`engine/engine.go`) now
+drains the ENTIRE queue, FIFO, immediately after a tool-result message is
+appended and before the next provider request in that SAME turn —
+`DequeueAllPrompts("injected")`, journaling every dequeue BEFORE the
+delivery message is appended, same ordering rule as before. The delivered
+content reuses the exact same labeled "OPERATOR MESSAGES" block goal-turn-
+boundary injection already used (factored out of `goal.go` into
+`operatorMessagesBlock`, `engine/queue.go`, so both call sites render a
+drained batch identically), appended as one durable user message straight
+into history — append-only, so a provider's prompt-cache prefix stays
+intact. A turn that ends with no tool call at all never reaches this drain
+point (unchanged: left for the server's tail drain). Because goal worker
+turns run through this same `Prompt` loop (`promptTurnWithRetry`), goal
+loops inherit tool-call-boundary injection with no separate wiring — a
+prompt queued mid-worker-tool is delivered inside that same worker turn.
+`PursueGoal`'s own turn-boundary drain (Task 2, `goal.go`) is KEPT as a
+complementary fallback: it still catches a prompt queued during a turn that
+made no tool calls, or in the gap between one turn ending and the next
+one's snapshot. The two drain sites can never double-deliver the same
+prompt — `DequeueAllPrompts` is one atomic, locked pop of the whole queue.
+
+New tests: `TestMidTurnInjectionAtToolBoundary` and
+`TestNoToolCallTurnLeavesQueueForTail` (`engine/queue_toolcall_boundary_test.go`),
+`TestGoalWorkerTurnInheritsMidTurnInjection`
+(`engine/goal_toolcall_boundary_test.go`), and
+`TestQueueDropsMidTurnAtToolCallBoundary`
+(`server/queue_toolcall_boundary_test.go`), which channel-gates a real tool
+execution to prove the queue count drops (and the SSE `prompt.dequeued`
+event fires) before the occupying turn ends. `AGENTS.md`'s Prompt queue
+section and `server/openapi.yaml` were both updated to describe the new
+primary delivery granularity, with the goal-turn-boundary drain demoted to
+"complementary fallback" language.
