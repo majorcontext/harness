@@ -75,7 +75,7 @@ components:
 
     Session:
       type: object
-      required: [id, created_at, model, status, state, messages, workdir, usage, last_activity_at]
+      required: [id, created_at, model, status, state, messages, workdir, usage, last_activity_at, queued]
       properties:
         id:
           type: string
@@ -176,6 +176,18 @@ components:
             When the most recent compaction landed. Absent until the first
             compaction. Together with compaction_count this is what a UI
             uses to show that compaction happened.
+        queued:
+          type: integer
+          description: >
+            Current durable prompt-queue depth (docs/plans/2026-07-19-
+            prompt-queue.md): prompts submitted via prompt_async while the
+            session was busy, waiting for the next natural drain trigger
+            (idle dispatch, or a running goal loop's turn-boundary
+            injection). Always present — 0 means nothing is waiting, not
+            "never checked". Survives a restart (folded from the session's
+            own prompt.queued/prompt.dequeued log records), but never
+            dispatches on its own — the same "boot never auto-runs" rule
+            goals follow.
 
     Usage:
       type: object
@@ -542,6 +554,28 @@ components:
           type: object
           additionalProperties: true
 
+    PromptAsyncResponse:
+      type: object
+      required: [seq, status]
+      properties:
+        seq:
+          type: integer
+          description: Seq to tail /event from.
+        status:
+          type: string
+          enum: [started, queued]
+          description: >
+            `started`: a turn is now running for THIS request's own prompt.
+            `queued`: this prompt is durably waiting in the FIFO — see
+            `queued` below for the depth. A prompt that was queued and later
+            dispatched does not get a second response; its progress and
+            completion arrive on /event exactly like any other turn.
+        queued:
+          type: integer
+          description: >
+            Current queue depth, including this request's own prompt.
+            Present (and non-zero) only when status is `queued`.
+
     PromptRequest:
       type: object
       required: [parts]
@@ -586,6 +620,8 @@ components:
             - goal.achieved
             - goal.cleared
             - goal.paused
+            - prompt.queued
+            - prompt.dequeued
             - workdir.worktree_kept
             - workdir.worktree_removed
             - history.compacted
@@ -665,6 +701,18 @@ components:
             It carries goal_condition for convenience. It is NOT emitted for
             the "provider-backoff" pause, which is a live goal.stalled
             attribute, not a boot-time observation.
+            prompt.queued and prompt.dequeued are the durable records of the
+            prompt queue (docs/plans/2026-07-19-prompt-queue.md):
+            prompt.queued fires whenever prompt_async durably enqueues a
+            prompt against a busy session, carrying queue_id, queue_text,
+            and the resulting queue_len. prompt.dequeued fires whenever the
+            head is popped for delivery, carrying the same queue_id/
+            queue_text plus queue_reason — "delivered" (idle-drain
+            dispatch), "injected" (prepended to a running goal loop's next
+            turn as a labeled operator interjection — the evaluator prompt
+            itself is unaffected), or "cleared" (DELETE
+            /session/{id}/queue) — and queue_len, the depth remaining
+            immediately after. Session.queued mirrors the same count.
             workdir.worktree_kept and workdir.worktree_removed are durable
             records of a workdir_isolation="worktree" session's dedicated git
             worktree being torn down (session end or the serve-start sweep,
@@ -789,6 +837,26 @@ components:
           type: string
           enum: [restart, provider-backoff]
           description: Present only when goal_paused is true.
+        queue_id:
+          type: integer
+          description: >
+            Session-monotonic queue ID assigned at enqueue time
+            (prompt.queued, prompt.dequeued).
+        queue_text:
+          type: string
+          description: The queued prompt's text (prompt.queued, prompt.dequeued).
+        queue_reason:
+          type: string
+          enum: [delivered, injected, cleared]
+          description: >
+            Why the prompt was dequeued (prompt.dequeued only): "delivered"
+            (idle-drain dispatch), "injected" (prepended to a running goal
+            loop's next turn), or "cleared" (DELETE /session/{id}/queue).
+        queue_len:
+          type: integer
+          description: >
+            Queue depth remaining immediately after this event
+            (prompt.queued, prompt.dequeued).
         worktree_path:
           type: string
           description: >
@@ -1242,6 +1310,15 @@ paths:
         Works on any session with a log, regardless of in-memory state — a
         session not currently loaded is resumed from disk first. Progress
         and results arrive on /event.
+
+        A session already busy with another prompt or a running goal loop no
+        longer 409s (see docs/plans/2026-07-19-prompt-queue.md): the prompt
+        is durably enqueued instead (`status: queued`) and dispatched FIFO
+        the instant the run slot frees up — either as the next idle turn, or
+        (while a goal loop is running) prepended to that loop's next turn as
+        a labeled operator interjection. `DELETE /session/{id}/queue` clears
+        anything still waiting. The workdir-held-by-another-session 409
+        below is unchanged — only same-session busy gets queue semantics.
       parameters:
         - $ref: "#/components/parameters/sessionID"
       requestBody:
@@ -1251,26 +1328,47 @@ paths:
             schema: { $ref: "#/components/schemas/PromptRequest" }
       responses:
         "202":
-          description: Accepted. Body carries the seq to tail events from.
+          description: >
+            Accepted. `status` is `started` when a turn is now running for
+            THIS request's prompt (an idle session's own claim, or the
+            freed-slot retry dispatching this same prompt), or `queued` when
+            it is durably waiting in the FIFO for a future drain — `queued`
+            then carries the current depth (including this prompt). Either
+            way, `seq` is the seq to tail /event from.
           content:
             application/json:
-              schema:
-                type: object
-                required: [seq]
-                properties:
-                  seq: { type: integer }
+              schema: { $ref: "#/components/schemas/PromptAsyncResponse" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
           description: >
-            Session is busy with another prompt, OR another currently-running
-            session holds the same workdir and neither session set
-            share_workdir on creation, and neither session set
-            workdir_isolation="worktree" (the error names the holder
-            session).
+            Another currently-running session holds the same workdir and
+            neither session set share_workdir on creation, and neither
+            session set workdir_isolation="worktree" (the error names the
+            holder session). Same-session busy (another prompt or a running
+            goal loop) no longer reaches this response — see the 202 case.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+
+  /session/{id}/queue:
+    delete:
+      operationId: clearPromptQueue
+      summary: Drain a session's durable prompt queue.
+      description: >
+        Journals a prompt.dequeued(reason="cleared") record for every prompt
+        currently waiting (docs/plans/2026-07-19-prompt-queue.md), then 204.
+        Idempotent: an already-empty queue is still 204, nothing journaled.
+        A currently RUNNING turn is left completely untouched — this clears
+        only prompts waiting for a future turn; use POST
+        /session/{id}/abort to interrupt the in-flight one. Safe to call
+        whether the session is idle, busy with a prompt, or mid goal-loop.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      responses:
+        "204": { description: Cleared (or the queue was already empty). }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /session/{id}/compact:
     post:

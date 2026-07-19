@@ -808,6 +808,11 @@ func TestSessionFilter(t *testing.T) {
 	}
 }
 
+// TestConcurrentPromptConflict pins the queue-on-busy contract that replaced
+// the old 409 (docs/plans/2026-07-19-prompt-queue.md, invariant 9): a
+// prompt_async against a session already busy with another prompt is
+// durably ENQUEUED and 202'd, not rejected. The response names it "queued"
+// with the current depth, and GET /session mirrors that depth.
 func TestConcurrentPromptConflict(t *testing.T) {
 	prov := newBlockingProvider("test")
 	h := newHarness(t, prov)
@@ -820,18 +825,39 @@ func TestConcurrentPromptConflict(t *testing.T) {
 	if resp.StatusCode != 202 {
 		t.Fatalf("first prompt status %d: %s", resp.StatusCode, data)
 	}
+	var first promptAsyncResponse
+	if err := json.Unmarshal(data, &first); err != nil {
+		t.Fatal(err)
+	}
+	if first.Status != "started" {
+		t.Fatalf("first prompt status field = %q, want started: %s", first.Status, data)
+	}
+	<-prov.started // the first prompt is genuinely occupying the run slot
 
 	resp, data = h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
 		"parts": []map[string]string{{"type": "text", "text": "second"}},
 	})
-	if resp.StatusCode != 409 {
-		t.Fatalf("second prompt status %d, want 409: %s", resp.StatusCode, data)
+	if resp.StatusCode != 202 {
+		t.Fatalf("second prompt status %d, want 202 (queued): %s", resp.StatusCode, data)
 	}
-	var e struct {
-		Error string `json:"error"`
+	var second promptAsyncResponse
+	if err := json.Unmarshal(data, &second); err != nil {
+		t.Fatal(err)
 	}
-	if json.Unmarshal(data, &e); e.Error == "" {
-		t.Errorf("409 body missing error: %s", data)
+	if second.Status != "queued" {
+		t.Fatalf("second prompt status field = %q, want queued: %s", second.Status, data)
+	}
+	if second.Queued != 1 {
+		t.Errorf("second prompt queued count = %d, want 1", second.Queued)
+	}
+
+	_, data = h.do("GET", "/session/"+id, nil)
+	var sess sessionJSON
+	if err := json.Unmarshal(data, &sess); err != nil {
+		t.Fatal(err)
+	}
+	if sess.Queued != 1 {
+		t.Errorf("GET /session queued = %d, want 1: %s", sess.Queued, data)
 	}
 }
 
@@ -1976,13 +2002,21 @@ func TestClaimForPromptSurvivesEvictionRace(t *testing.T) {
 		t.Fatal("session A engine identity changed while running (divergent duplicate created)")
 	}
 
-	// A concurrent prompt on the running A must be a clean 409, not a second
-	// claim that could diverge state.
+	// A concurrent prompt on the running A must be a clean durable enqueue,
+	// not a second claim that could diverge state (docs/plans/2026-07-19-
+	// prompt-queue.md replaced the old 409 here with queue-on-busy).
 	resp, data = h.do("POST", "/session/"+idA+"/prompt_async", map[string]any{
 		"parts": []map[string]string{{"type": "text", "text": "again"}},
 	})
-	if resp.StatusCode != 409 {
-		t.Fatalf("concurrent prompt on running A = %d, want 409: %s", resp.StatusCode, data)
+	if resp.StatusCode != 202 {
+		t.Fatalf("concurrent prompt on running A = %d, want 202 (queued): %s", resp.StatusCode, data)
+	}
+	var queuedResp promptAsyncResponse
+	if err := json.Unmarshal(data, &queuedResp); err != nil {
+		t.Fatal(err)
+	}
+	if queuedResp.Status != "queued" {
+		t.Fatalf("concurrent prompt on running A response status = %q, want queued", queuedResp.Status)
 	}
 	_ = idB
 

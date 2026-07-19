@@ -79,12 +79,31 @@ func TestGoalReArmAfterAbortWithDifferentConditionResumes(t *testing.T) {
 	}
 
 	// Not stranded busy in some OTHER way: the goal is running again
-	// (against the new condition), so prompt_async correctly still 409s.
+	// (against the new condition), so prompt_async correctly still cannot
+	// run immediately — it is durably queued instead of 409ing (docs/plans/
+	// 2026-07-19-prompt-queue.md).
 	resp, data = h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
 		"parts": []map[string]string{{"type": "text", "text": "hi"}},
 	})
-	if resp.StatusCode != http.StatusConflict {
-		t.Fatalf("prompt_async while the re-armed goal runs = %d, want 409: %s", resp.StatusCode, data)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt_async while the re-armed goal runs = %d, want 202 (queued): %s", resp.StatusCode, data)
+	}
+	var queuedResp promptAsyncResponse
+	if err := json.Unmarshal(data, &queuedResp); err != nil {
+		t.Fatal(err)
+	}
+	if queuedResp.Status != "queued" {
+		t.Fatalf("prompt_async while the re-armed goal runs response status = %q, want queued", queuedResp.Status)
+	}
+
+	// Clear the queued prompt before the drain below: this test is about
+	// the abort+rearm rollback path, not queue-drain dispatch (covered by
+	// server/queue_test.go) — left queued, runGoal's tail would dispatch it
+	// into a FRESH blockWorker turn with its own uncancelled context after
+	// the abort below, which would never unblock and hang assertDrainCompletes.
+	resp, data = h.do("DELETE", "/session/"+id+"/queue", nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE queue status %d: %s", resp.StatusCode, data)
 	}
 
 	// Unblock the parked worker turn and let the session settle before

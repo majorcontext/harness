@@ -235,6 +235,16 @@ type Server struct {
 	// Always nil in production.
 	autoArmRace func()
 
+	// queueDispatchRace is a test-only seam mirroring autoArmRace: when
+	// non-nil, both enqueueOrDispatch (handlePrompt's same-session-busy
+	// branch) and maybeDispatchQueued invoke it right before their own
+	// claimForPrompt call, letting a test force a real concurrent claim
+	// attempt (another prompt_async, a goal auto-arm, or another
+	// maybeDispatchQueued call) to land deterministically instead of
+	// relying on an unobserved goroutine-scheduling coin flip (see
+	// TestPromptQueueRaceWithFreedSlot). Always nil in production.
+	queueDispatchRace func()
+
 	// worktreeBase is the directory 'worktree'-isolation sessions create
 	// their per-session git worktrees under (see worktree.go): <SessionDir>/
 	// worktrees when SessionDir is durable, otherwise a process-lifetime
@@ -441,6 +451,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /session/{id}/message", s.auth(s.handleMessages))
 	mux.HandleFunc("GET /session/{id}/request", s.auth(s.handleRequest))
 	mux.HandleFunc("POST /session/{id}/prompt_async", s.auth(s.handlePrompt))
+	mux.HandleFunc("DELETE /session/{id}/queue", s.auth(s.handleQueueDelete))
 	mux.HandleFunc("POST /session/{id}/compact", s.auth(s.handleCompact))
 	mux.HandleFunc("POST /session/{id}/goal", s.auth(s.handleGoal))
 	mux.HandleFunc("DELETE /session/{id}/goal", s.auth(s.handleGoalDelete))
