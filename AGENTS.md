@@ -394,6 +394,27 @@ representation.
   Agent *Client* Protocol, not IBM's dead Agent Communication Protocol.
 - **MCP** — client (consume tool servers) and server (expose sessions/tools)
   modes. ACP forwards editor MCP config to us, so the two compose.
+
+  A server's first connect (Initialize+ListAllTools) stays lazy —
+  triggered by a session's first `Tools()`/`CallTool()`, bounded by a
+  per-server `connect_timeout_s` config field (`MCPServerSpec`, integer
+  seconds, <= 0/absent defaults to the engine's own 15s). A server whose
+  first attempt fails is never dropped for the process's life: it gets a
+  detached, indefinite background retry on a capped exponential backoff
+  (~1s doubling to a 5min cap, jittered) — a HEALTHY server, by contrast,
+  connects exactly once and is never re-probed. `Tools()` always reads
+  live state, so a server that recovers mid-session contributes tools on
+  the very next turn automatically, no new session or explicit trigger.
+  `CallTool`/`CallServerTool` split the old combined error into two: a
+  server name absent from config errors "not configured" (never
+  recoverable); a configured-but-still-retrying server errors naming that
+  state explicitly (recoverable — the next call after a successful retry
+  succeeds). While at least one server is degraded, request assembly
+  appends an ambient `[mcp: unavailable — <name> (<reason>; retrying),
+  ...]` block to the newest user message only — computed fresh every
+  turn, never persisted, self-correcting as retries succeed — sharing its
+  append-only-to-the-newest-message mechanism (`withAmbientStatus`) with
+  the managed-processes status block above.
 - **OpenTelemetry GenAI semantic conventions** — for span/metric naming when
   observability lands. Configuration via standard `OTEL_*` env vars only.
 - **A2A** — deliberately not implemented. Cross-org agent meshes are a
