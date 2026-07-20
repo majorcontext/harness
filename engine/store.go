@@ -36,6 +36,14 @@ const (
 	recGoalStalled  = "goal.stalled"
 	recGoalAchieved = "goal.achieved"
 	recGoalCleared  = "goal.cleared"
+	// recGoalEvalFailed is one failed evaluator boundary (see goal.go's
+	// "Round 6" doc section): a provider error the in-boundary retryable
+	// retry couldn't ride out, or two consecutive unparseable replies. Like
+	// recGoalStalled it is a pure trace record — it never by itself changes
+	// goalActive (see LoadSession's fold below); only a later goal.cleared
+	// (the terminal horizon) or goal.eval/goal.achieved (a recovered
+	// boundary) does that.
+	recGoalEvalFailed = "goal.eval_failed"
 	// recPromptQueued/recPromptDequeued are the prompt-queue records (see
 	// queue.go and docs/plans/2026-07-19-prompt-queue.md): one prompt.queued
 	// per EnqueuePrompt call, one prompt.dequeued per pop (whatever the
@@ -134,6 +142,13 @@ type goalRecord struct {
 	Retryable      bool   `json:"retryable,omitempty"`
 	RetryableClass string `json:"retryable_class,omitempty"`
 	Waiting        bool   `json:"waiting,omitempty"`
+	// EvalFailures carries a goal.eval_failed record's consecutive-failure
+	// count (see goal.go's recordGoalEvalFailed and "Round 6" doc section):
+	// the number of CONSECUTIVE failed evaluator boundaries as of this one,
+	// inclusive, reset to zero the moment a later boundary parses a verdict.
+	// It also names the count on the terminal goal.cleared record that
+	// fires once this reaches goalEvalFailureLimit.
+	EvalFailures int `json:"eval_failures,omitempty"`
 }
 
 // promptRecord carries the durable payload of a prompt.queued/
@@ -449,11 +464,12 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 		case recGoalAchieved, recGoalCleared:
 			s.goalActive = false
 			s.goalCondition = ""
-		case recGoalEval, recGoalStalled:
-			// Per-turn evaluation/stall trace; no resume state (counters
-			// reset). A goal.stalled record never changes goalActive by
-			// itself — either a later goal.stalled retries, or a later
-			// goal.cleared/goal.eval settles it, both handled above.
+		case recGoalEval, recGoalStalled, recGoalEvalFailed:
+			// Per-turn evaluation/stall/eval-failure trace; no resume state
+			// (counters reset). None of these ever change goalActive by
+			// itself — either a later record of the same kind follows, or a
+			// later goal.cleared/goal.eval/goal.achieved settles it, all
+			// handled above.
 		case recPromptQueued:
 			// Append to the folded queue and advance the next-ID counter past
 			// whatever this record used, so a resumed session's next

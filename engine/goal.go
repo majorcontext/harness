@@ -158,6 +158,68 @@
 // See TestPursueGoalRetryableErrorLongBackoffThenRecovers and
 // TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing, and
 // docs/goal-loop.md for the operator-facing write-up.
+//
+// # Round 6: an evaluator failure must be advisory, not instantly fatal (NEP-4792)
+//
+// Round 3 (above) closed the "evaluator failure leaves a zombie goal" hole by
+// clearing the goal on ANY evaluateGoal error — a provider error, or two
+// unparseable replies in a row. That fix traded one incident for another:
+// production data showed two fleet boxes die mid-HEALTHY-work because the
+// tool-less evaluator call hit a transient provider hiccup (or, once, a
+// stretch of oddly-worded replies neither attempt could parse) while the
+// worker model itself was making fine progress. Unlike a worker-turn error —
+// which is expensive to retry blindly (see promptTurnWithRetry's
+// non-idempotency doc) — a failing evaluator call risks nothing by being
+// retried or, failing that, simply skipped for one turn: the worker keeps
+// working either way, and the ONLY thing a bad verdict can do wrong is delay
+// noticing completion, not corrupt anything.
+//
+// So evaluateGoal itself first tries to ride out the failure in-boundary,
+// mirroring promptTurnWithRetry's error classification exactly (see
+// runEvaluatorWithRetry): a provider error classified provider.AsRetryable
+// gets the SAME retryable schedule and budget the worker turn uses
+// (goalRetryableBackoff, goalRetryableMaxAttempts) — the two paths share
+// provider weather, so they share a budget's shape, just each keeping its
+// own counter. A non-retryable provider error is not retried at all (the
+// call is cheap; a permanently broken provider needs the boundary-failure
+// path below, not a wasted second attempt). Separately, an unparseable reply
+// still gets its original one extra attempt, but that attempt now uses a
+// STRICTER system prompt (goalEvaluatorStrictSystem) instead of repeating the
+// same instructions verbatim — repeating unchanged instructions to a model
+// that already failed to follow them once is exactly why the doubled attempt
+// used to buy so little.
+//
+// If evaluateGoal still returns an error after all that — the retryable
+// budget exhausted, a non-retryable error, or two unparseable replies even
+// with the stricter re-ask — the boundary "fails", but failing a boundary no
+// longer clears the goal. PursueGoal journals a durable goal.eval_failed
+// record (carrying the error and the CONSECUTIVE failure count — see
+// recordGoalEvalFailed), substitutes a fixed evaluation-unavailable notice
+// for the next turn's guidance (never the raw error text, and never a stale
+// NOT-MET reason from turns ago — see goalEvalUnavailableNotice), waits a
+// short backoff (goalRetryDelay, keyed on the consecutive count, the same
+// short schedule the deterministic worker-retry path uses), and `continue`s
+// — the worker gets another ordinary turn. A later boundary that DOES parse a
+// verdict (MET or NOT MET) resets the consecutive count to zero: the horizon
+// below is about a STREAK, not a lifetime total, so one good evaluation
+// undoes any number of prior bad ones.
+//
+// The horizon has to exist somewhere, though — infinite advisory failures
+// would just be Round 3's zombie-goal risk wearing a disguise (a goal that
+// LOOKS active but whose evaluator has been dead for hours, silently). After
+// goalEvalFailureLimit consecutive failed boundaries, PursueGoal clears the
+// goal with a dedicated reason ("goal evaluator failed at N consecutive turn
+// boundaries") and returns a distinct sentinel error type
+// (*goalEvaluatorExhaustedError) instead of a bare error — a server or other
+// caller can tell this terminal apart from an ordinary worker-turn
+// exhaustion via errors.As, never by string-matching GoalReason — and,
+// unlike every advisory boundary below the horizon, this terminal DOES emit
+// session.error: it must be LOUD, since past this point nothing else will
+// ever explain the goal's silence.
+//
+// See TestPursueGoalEvaluatorUnparseableTwiceIsAdvisory,
+// TestPursueGoalEvaluatorRetryableErrorRecoversWithinBoundary, and
+// TestPursueGoalEvaluatorTerminalAfterConsecutiveFailureLimit.
 package engine
 
 import (
@@ -208,13 +270,46 @@ NOT MET: <one short sentence saying what is still missing>
 
 Do not add any other text, headings, markdown, or code fences.`
 
+// goalEvaluatorStrictSystem replaces goalEvaluatorSystem for the second
+// evaluator attempt within a boundary (see evaluateGoal and goal.go's "Round
+// 6" doc section): repeating the exact same instructions to a model that
+// already failed to follow them once buys little, so this attempt instead
+// calls out the failure explicitly and narrows the instructions to nothing
+// but the two-line contract.
+const goalEvaluatorStrictSystem = `Your previous reply could not be parsed as a verdict.
+Reply with EXACTLY ONE line, in EXACTLY one of these two forms, and nothing else — no other text, no headings, no markdown, no code fences:
+MET: <one short sentence saying why>
+NOT MET: <one short sentence saying what is still missing>`
+
 // goalPartCap bounds each rendered transcript part so a long tool result cannot
 // blow up the evaluator request.
 const goalPartCap = 4096
 
 // errEvaluatorUnparseable is returned when two consecutive evaluator replies
-// cannot be parsed — the loop errors rather than spinning.
+// (the second using goalEvaluatorStrictSystem) cannot be parsed. Unlike
+// before Round 6, this no longer terminates the loop by itself — see
+// evaluateGoal's callers — it just counts as one failed evaluator boundary.
 var errEvaluatorUnparseable = errors.New("engine: goal evaluator returned unparseable output twice in a row")
+
+// goalEvalFailureLimit is the number of CONSECUTIVE failed evaluator
+// boundaries (see goal.go's "Round 6" doc section) PursueGoal tolerates
+// before treating the evaluator as durably broken and clearing the goal. It
+// is deliberately much smaller than goalRetryableMaxAttempts: that budget
+// already rides out one boundary's worth of provider weather in-boundary,
+// so by the time a boundary counts as "failed" at all, something more
+// unusual than an ordinary transient hiccup is going on — five separate
+// TURNS of it (each potentially minutes apart, each after its own full
+// worker turn) is a much stronger signal of a truly broken evaluator than
+// exhausting a single boundary's in-boundary retry budget ever is.
+const goalEvalFailureLimit = 5
+
+// goalEvalUnavailableNotice replaces the evaluator's feedback in the next
+// turn's guidance directive after a failed boundary (see PursueGoal and
+// recordGoalEvalFailed): the worker must never see the raw error text (an
+// implementation detail, possibly carrying provider internals) nor a stale
+// NOT-MET reason left over from a much earlier successful evaluation — both
+// would be misleading about what actually happened.
+const goalEvalUnavailableNotice = "the evaluator could not render a verdict for the last turn; continue working toward the goal and finish it"
 
 // goalWorkerRetries is how many additional attempts PursueGoal makes on a
 // worker-turn error (s.Prompt failing) before giving up on that turn. A
@@ -407,6 +502,24 @@ type goalRetryableExhaustedError struct {
 func (e *goalRetryableExhaustedError) Error() string { return e.err.Error() }
 func (e *goalRetryableExhaustedError) Unwrap() error { return e.err }
 
+// goalEvaluatorExhaustedError is returned by PursueGoal when the evaluator has
+// failed at goalEvalFailureLimit consecutive turn boundaries (see goal.go's
+// "Round 6" doc section) — a durable, probably-permanent evaluator outage,
+// distinct from every failed boundary below that horizon (which is advisory
+// only: no error returned, no clear, the loop just continues). A caller (the
+// server, in particular) recognizes this type via errors.As and maps it to a
+// dedicated turn.end outcome instead of string-matching GoalReason — see
+// server/journal.go's outcomeEvaluatorExhausted (Task 2).
+type goalEvaluatorExhaustedError struct {
+	err      error
+	failures int
+}
+
+func (e *goalEvaluatorExhaustedError) Error() string {
+	return fmt.Sprintf("engine: goal evaluator failed at %d consecutive turn boundaries: %v", e.failures, e.err)
+}
+func (e *goalEvaluatorExhaustedError) Unwrap() error { return e.err }
+
 // PursueGoal runs the goal loop: prompt the condition, then after every turn
 // ask the evaluator whether it is met, feeding the evaluator's reason back as
 // guidance until the condition is met or MaxTurns is exhausted.
@@ -430,15 +543,28 @@ func (e *goalRetryableExhaustedError) Unwrap() error { return e.err }
 // rationale and the state diagram. A cancelled context is never retried or
 // treated as a worker failure — it is a deliberate abort (DELETE /goal,
 // shutdown drain) and is returned immediately with the goal left exactly as
-// it was, since a drain must be resumable. A failing evaluator call — a
-// provider error, or two unparseable replies in a row — is not retried (it
-// is the worker turn that is expensive and worth protecting from a
-// transient hiccup, not the tool-less evaluator check), but it is held to
-// the exact same no-zombie
-// guarantee as a permanently failing worker turn: the goal is cleared
-// (goal.cleared carrying the error as its reason) before the error is
-// returned, unless the error is itself a cancelled context, which leaves the
-// goal untouched for the same resume reason as above.
+// it was, since a drain must be resumable.
+//
+// A failing evaluator call (a provider error, or two unparseable replies in a
+// row even after the stricter re-ask) is advisory, not fatal — see the
+// package doc's "Round 6" section. evaluateGoal already rides out a
+// retryable-class provider error on its own in-boundary backoff
+// (runEvaluatorWithRetry); if it still returns an error, PursueGoal journals
+// a goal.eval_failed record carrying the CONSECUTIVE failure count, replaces
+// the next turn's guidance reason with a fixed evaluation-unavailable notice
+// (goalEvalUnavailableNotice — never the raw error text, never a stale
+// NOT-MET reason), waits a short backoff, and continues: the goal stays
+// active and the worker gets another ordinary turn. Only once
+// goalEvalFailureLimit consecutive boundaries have failed does PursueGoal
+// clear the goal (a dedicated reason distinct from a worker-turn failure's)
+// and return a *goalEvaluatorExhaustedError instead of a bare error — that
+// terminal, and only that terminal, also emits session.error. A cancelled
+// context is never retried or counted as a failed boundary, same rule as the
+// worker-turn path above. A concurrent ClearGoal or UpdateGoal racing an
+// in-flight evaluator call is handled exactly like the same race on the
+// worker-turn and ordinary-verdict paths (see goalStatus): a clean stop or a
+// silently discarded stale outcome, respectively — never a failed-boundary
+// record for a generation that is no longer current.
 //
 // # Self-adjust: the condition is re-read every turn boundary
 //
@@ -529,6 +655,15 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 	var (
 		reason    string // last NOT MET reason, carried into the next turn's guidance
 		reasonGen uint64 // generation `reason` was produced at; see the pairing rule below
+		// evalFailures counts CONSECUTIVE failed evaluator boundaries (see
+		// the package doc's "Round 6" section and recordGoalEvalFailed):
+		// reset to zero the moment a later boundary parses a verdict (MET or
+		// NOT MET), and left untouched across a stale-discard (the failure
+		// was against a generation that is no longer current, so it never
+		// happened for THIS streak's purposes — see the evaluator-failure
+		// branch below). Reaching goalEvalFailureLimit is the terminal
+		// horizon.
+		evalFailures int
 	)
 	for turn := 1; opts.MaxTurns == 0 || turn <= opts.MaxTurns; turn++ {
 		// Per-turn-boundary snapshot (see goalSnapshot's doc comment): this
@@ -682,50 +817,63 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 				// drain must be resumable.
 				return nil, err
 			}
-			// Unlike the Prompt call above, evaluateGoal (the evaluator
-			// model call, its provider errors, and its unparseable-twice
-			// error) never goes through Prompt, so this loop-terminating
-			// error needs its own session.error emission.
+			// Round 6 (NEP-4792): a failing evaluator call is advisory, not
+			// fatal — see the package doc. evaluateGoal already spent its own
+			// in-boundary retry budget before returning here (a
+			// retryable-class provider error rode out
+			// runEvaluatorWithRetry's backoff; an unparseable reply got its
+			// one stricter re-ask), so reaching this point means this
+			// BOUNDARY has failed — not that the goal has.
 			//
-			// It also needs its own clear. This was the round-3 zombie-goal
-			// escape path: a permanent worker-turn failure clears the goal
-			// (see promptTurnWithRetry's caller above), but a permanent
-			// evaluator failure returned bare, leaving goalActive true with
-			// nothing further ever recorded — a session (see the forensic
-			// note ses_01kx3ts0pjfap950bmr9b2js0b.jsonl) whose transcript
-			// just stops after the worker's last message, goal still active
-			// in the log forever. The state machine promises no third way
-			// out of ACTIVE (see the package doc); that promise cannot be
-			// conditional on which half of the loop failed. Clear it,
-			// carrying the error as the reason, exactly as the worker-turn
-			// path does, then return the error so the caller still
-			// journals the failure.
-			//
-			// But if a concurrent DELETE /goal already cleared the goal
-			// while this call was in flight, there is nothing left to
-			// clear and nothing to journal as a failure: the goal-loop
-			// state machine already reached a clean stop, symmetric with
-			// the same check on the worker-turn path above. A
-			// deliberately-cleared goal is not an error condition
-			// regardless of which half of the loop the clear raced with.
-			//
-			// And if instead an UpdateGoal moved the goal to a new
-			// generation while this evaluator call was in flight, the
-			// failure was against a condition that is no longer current:
-			// discard it silently (no clear, no session.error) and let the
-			// next iteration pick up the new condition — same reasoning as
-			// the worker-turn stale case above.
-			active, stale := s.goalStatus(snap.gen)
-			if !active {
+			// recordGoalEvalFailed follows recordGoalEval's own convention
+			// exactly (see below): attempt the write with the CANDIDATE
+			// count first, and only consult goalStatus if the write is
+			// refused, to tell a concurrent ClearGoal (clean stop) apart
+			// from a concurrent UpdateGoal (the failure was against a
+			// generation that is no longer current — discard silently,
+			// evalFailures left untouched, exactly like every other
+			// stale-discard site in this loop).
+			candidateFailures := evalFailures + 1
+			if !s.recordGoalEvalFailed(err, turn, candidateFailures, snap.gen) {
+				if _, stale := s.goalStatus(snap.gen); stale {
+					continue
+				}
 				return &GoalResult{Achieved: false, Turns: turn, Reason: "goal cleared"}, nil
 			}
-			if stale {
-				continue
+			evalFailures = candidateFailures
+			if evalFailures >= goalEvalFailureLimit {
+				// The terminal horizon: a durable, probably-permanent
+				// evaluator outage, not the ordinary provider weather
+				// evaluateGoal's own in-boundary retry already absorbs.
+				// Unlike every advisory boundary below this, the terminal
+				// DOES clear the goal (a reason distinct from a worker-turn
+				// failure's, so a reader never has to guess which half of
+				// the loop gave up) and DOES emit session.error — it must be
+				// LOUD, since past this point nothing else will ever explain
+				// the goal's silence, the exact failure mode Round 3 closed
+				// for a single failure and this horizon exists to close
+				// again at N consecutive ones.
+				clearReason := fmt.Sprintf("goal evaluator failed at %d consecutive turn boundaries", evalFailures)
+				s.clearGoal(clearReason)
+				exhaustedErr := &goalEvaluatorExhaustedError{err: err, failures: evalFailures}
+				s.emitSessionError(exhaustedErr)
+				return nil, exhaustedErr
 			}
-			s.clearGoal(fmt.Sprintf("goal evaluator failed: %v", err))
-			s.emitSessionError(err)
-			return nil, err
+			// Below the horizon: wait the same short backoff the
+			// deterministic worker-retry path uses (goalRetryDelay), keyed
+			// on the consecutive-failure count, then continue — the goal
+			// stays active and the worker gets another ordinary turn.
+			if werr := waitGoalRetryBackoff(ctx, evalFailures); werr != nil {
+				return nil, werr
+			}
+			// Never leak the raw error into the worker's directive, and
+			// never repeat a reason paired with an earlier generation (see
+			// the reasonGen pairing rule above) — substitute the fixed
+			// evaluation-unavailable notice instead.
+			reason, reasonGen = goalEvalUnavailableNotice, snap.gen
+			continue
 		}
+		evalFailures = 0
 		if !s.recordGoalEval(met, evalReason, turn, snap.gen) {
 			// Either ClearGoal fired while this evaluation was in flight (the
 			// goal is no longer active, so its verdict must not land in the
@@ -1141,6 +1289,40 @@ func (s *Session) recordGoalEval(met bool, reason string, turn int, gen uint64) 
 	return true
 }
 
+// recordGoalEvalFailed records one failed evaluator boundary (see goal.go's
+// "Round 6" doc section and evaluateGoal/runEvaluatorWithRetry): a provider
+// error the in-boundary retryable retry couldn't ride out, or two
+// consecutive unparseable replies even with the stricter re-ask.
+// consecutiveFailures is the CANDIDATE count for this boundary (the caller's
+// running count plus one) — passed in rather than read from Session state
+// because the count is PursueGoal's own loop-local bookkeeping, not
+// something this method could reconstruct on its own.
+//
+// Like recordGoalEval and recordGoalStalled, it is a no-op — no journal
+// write, no event — when the goal is no longer active (a concurrent
+// ClearGoal) OR when it is active but at a different generation than gen (a
+// concurrent UpdateGoal moved the goal past this turn's snapshot — see
+// goalSnapshot/goalStatus), so a failed boundary is never attributed to a
+// condition that is no longer current and never lands in the log after
+// goal.cleared. Reports whether the record was written — PursueGoal only
+// commits consecutiveFailures to its own running counter when this reports
+// true (see its caller), leaving the counter untouched on a stale discard.
+func (s *Session) recordGoalEvalFailed(err error, turn, consecutiveFailures int, gen uint64) bool {
+	s.mu.Lock()
+	if !s.goalActive || s.goalGen != gen {
+		s.mu.Unlock()
+		return false
+	}
+	reason := err.Error()
+	s.persistGoalLocked(recGoalEvalFailed, goalRecord{Reason: reason, Turn: turn, EvalFailures: consecutiveFailures})
+	// Emit while still holding s.mu (see ClearGoal): keeps event order
+	// matching log order under a concurrent clear. OnEvent must not call
+	// back into this Session — that would deadlock on s.mu, held here.
+	s.emit(Event{Type: EventGoalEvalFailed, GoalReason: reason, GoalTurn: turn, GoalEvalFailures: consecutiveFailures})
+	s.mu.Unlock()
+	return true
+}
+
 // achieveGoal records goal.achieved and clears the active goal. It is a
 // no-op when the goal is no longer active (already cleared concurrently, so
 // a cleared-then-achieved sequence can never reach the log) OR when it is
@@ -1165,13 +1347,24 @@ func (s *Session) achieveGoal(reason string, turns int, gen uint64) bool {
 	return true
 }
 
-// evaluateGoal runs a single tool-less evaluator request and parses its
-// verdict, retrying once on an unparseable reply — two unparseable replies in a
-// row are an error (never silently spin). A provider or context error surfaces
-// immediately.
+// evaluateGoal runs a single boundary's evaluator check and parses its
+// verdict, retrying once on an unparseable reply — the second attempt uses
+// goalEvaluatorStrictSystem instead of repeating goalEvaluatorSystem verbatim
+// (see the package doc's "Round 6" section: a model that already failed to
+// follow the instructions once is unlikely to follow them again unchanged).
+// Two unparseable replies in a row return errEvaluatorUnparseable. Each
+// attempt is itself run through runEvaluatorWithRetry, which rides out a
+// provider error classified provider.AsRetryable on its own in-boundary
+// backoff before this loop ever sees it; what surfaces here (a non-retryable
+// provider error, a retryable one whose budget is exhausted, or
+// errEvaluatorUnparseable) is, by construction, this BOUNDARY's failure —
+// see PursueGoal's caller for what that means (advisory, not fatal, below
+// goalEvalFailureLimit consecutive occurrences). A context.Canceled error is
+// never retried at any layer and surfaces immediately.
 func (s *Session) evaluateGoal(ctx context.Context, condition string, evaluator message.ModelRef) (met bool, reason string, err error) {
+	systemPrompts := [2]string{goalEvaluatorSystem, goalEvaluatorStrictSystem}
 	for attempt := 0; attempt < 2; attempt++ {
-		out, err := s.runEvaluator(ctx, condition, evaluator)
+		out, err := s.runEvaluatorWithRetry(ctx, condition, evaluator, systemPrompts[attempt])
 		if err != nil {
 			return false, "", err
 		}
@@ -1182,9 +1375,48 @@ func (s *Session) evaluateGoal(ctx context.Context, condition string, evaluator 
 	return false, "", errEvaluatorUnparseable
 }
 
+// runEvaluatorWithRetry issues one evaluator request, retrying a provider
+// error classified provider.AsRetryable on the exact same budget and backoff
+// schedule promptTurnWithRetry uses for the worker turn
+// (goalRetryableMaxAttempts, goalRetryableBackoff/waitGoalRetryableBackoff —
+// see GitHub issue #61 and the package doc's "Round 4" section) — the two
+// paths ride out the same shared provider weather, so they share a budget's
+// shape, each keeping its own counter. A non-retryable provider error is
+// returned immediately, unretried: unlike a worker turn, the evaluator call
+// is cheap and tool-less, so this budget exists purely to survive transient
+// weather, not to paper over a provider that is permanently broken — see
+// evaluateGoal's caller, PursueGoal, for what happens when this ultimately
+// returns an error (the boundary counts as failed; it is never immediately
+// fatal on its own). context.Canceled is never retried, matching every other
+// backoff wait in this package.
+func (s *Session) runEvaluatorWithRetry(ctx context.Context, condition string, evaluator message.ModelRef, systemPrompt string) (string, error) {
+	var retryableAttempt int
+	for {
+		out, err := s.runEvaluator(ctx, condition, evaluator, systemPrompt)
+		if err == nil {
+			return out, nil
+		}
+		if errors.Is(err, context.Canceled) {
+			return "", err
+		}
+		if _, retryable := provider.AsRetryable(err); !retryable {
+			return "", err
+		}
+		retryableAttempt++
+		if retryableAttempt >= goalRetryableMaxAttempts {
+			return "", err
+		}
+		if werr := waitGoalRetryableBackoff(ctx, retryableAttempt); werr != nil {
+			return "", werr
+		}
+	}
+}
+
 // runEvaluator issues one tool-less completion check on the evaluator model and
-// returns its raw text.
-func (s *Session) runEvaluator(ctx context.Context, condition string, evaluator message.ModelRef) (string, error) {
+// returns its raw text. systemPrompt is goalEvaluatorSystem on the first
+// attempt within a boundary and goalEvaluatorStrictSystem on the second (see
+// evaluateGoal).
+func (s *Session) runEvaluator(ctx context.Context, condition string, evaluator message.ModelRef, systemPrompt string) (string, error) {
 	prov, err := s.cfg.Providers.For(evaluator)
 	if err != nil {
 		return "", err
@@ -1192,7 +1424,7 @@ func (s *Session) runEvaluator(ctx context.Context, condition string, evaluator 
 	content := "GOAL CONDITION:\n" + condition + "\n\nCONVERSATION TRANSCRIPT:\n" + renderConversation(s.History())
 	req := &provider.Request{
 		Model:  evaluator,
-		System: []string{goalEvaluatorSystem},
+		System: []string{systemPrompt},
 		Messages: []message.Message{{
 			ID:    newID("msg"),
 			Role:  message.RoleUser,
