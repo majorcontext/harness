@@ -134,6 +134,11 @@ func TestSanitizeMCPCallError(t *testing.T) {
 	}
 	rpcErr := &mcp.RPCError{Code: -32602, Message: "invalid arguments: missing \"city\""}
 	genericErr := errors.New("boom")
+	secretDeadlineErr := &url.Error{
+		Op:  "Post",
+		URL: "http://127.0.0.1:1/mcp?token=LEAKME",
+		Err: context.DeadlineExceeded,
+	}
 
 	tests := []struct {
 		name       string
@@ -172,6 +177,19 @@ func TestSanitizeMCPCallError(t *testing.T) {
 			name:     "bare context.DeadlineExceeded passes through unchanged",
 			err:      context.DeadlineExceeded,
 			wantSame: true,
+		},
+		{
+			// Pins the "call timed out" branch (errors.Is(err,
+			// context.DeadlineExceeded) inside the transport-shaped gate):
+			// unlike the bare context.DeadlineExceeded case above, this one
+			// IS wrapped in a *url.Error (as a hung server long past
+			// ConnectTimeout/RequestTimeout could plausibly produce, or a
+			// defensive future transport change), so it must still be
+			// classified rather than passed through raw with the URL.
+			name:       "url.Error wrapping context.DeadlineExceeded",
+			err:        secretDeadlineErr,
+			wantExact:  `engine: mcp: server "weather": call timed out`,
+			wantNoText: []string{"LEAKME", "127.0.0.1:1"},
 		},
 	}
 
