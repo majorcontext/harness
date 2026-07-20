@@ -212,6 +212,118 @@ func TestMCPManagerCallToolIsError(t *testing.T) {
 	}
 }
 
+// TestMCPManagerCallToolTransportErrorNeverLeaksURL is the runtime-call
+// sibling of TestMCPManagerCallServerToolRetryingErrorNeverLeaksURL: a
+// server that connected FINE and then drops before answering a tools/call
+// request yields a real *url.Error (net/http's shape for a failed dial),
+// which stringifies as `Post "<full-endpoint-URL>": <cause>` — the same
+// secret-in-URL class classifyMCPConnectError guards against on the
+// connect surface, but here on client.CallTool's error path in callTool
+// (engine/mcp.go). The endpoint URL below carries a fake secret in its
+// query string, mirroring a real MCP server auth pattern.
+func TestMCPManagerCallToolTransportErrorNeverLeaksURL(t *testing.T) {
+	const secret = "SUPERSECRET789"
+	srv := &fakeMCPHTTPServer{tools: []fakeMCPTool{
+		{name: "echo", content: []map[string]any{textContent("hi")}},
+	}}
+	hs := httptest.NewServer(http.HandlerFunc(srv.serveHTTP))
+	endpoint := hs.URL + "/mcp?token=" + secret
+
+	mgr := NewMCPManager(map[string]MCPServerConfig{"svc": {URL: endpoint}})
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+	// Connect succeeds first — the server is healthy at this point.
+	mgr.Tools(context.Background())
+
+	// The server now drops: nothing is listening on this port anymore, so
+	// the NEXT call's dial fails with a real connection-refused error
+	// wrapping the full (secret-bearing) endpoint URL.
+	hs.Close()
+
+	_, _, err := mgr.CallServerTool(context.Background(), "svc", "echo", nil)
+	if err == nil {
+		t.Fatal("want an error once the server has gone away mid-call")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("CallServerTool error = %q, leaked the fake secret", err)
+	}
+	if strings.Contains(err.Error(), "token=") || strings.Contains(err.Error(), endpoint) {
+		t.Fatalf("CallServerTool error = %q, leaked the endpoint URL", err)
+	}
+	if !strings.Contains(err.Error(), "connection refused") && !strings.Contains(err.Error(), "connection failed") {
+		t.Errorf("CallServerTool error = %q, want a classified connection-failure reason", err)
+	}
+}
+
+// TestMCPManagerCallToolContextCancellationPassesThroughCleanly pins the
+// ctx-cancellation decision documented on sanitizeMCPCallError: both HTTP
+// and stdio transports return ctx.Err() bare (never wrapped in a
+// *url.Error) on cancellation, so there is nothing to sanitize and the
+// call error should be exactly context.Canceled — not rewritten into a
+// misleading "call failed". This is also inert for turn-abort semantics:
+// runToolCall (engine.go) always turns a tool error into an ordinary
+// ToolResult regardless of its text, so sanitization here cannot itself
+// change abort behavior — the enclosing turn's own abort happens
+// separately, the next time Session.Prompt's loop makes a provider request
+// on the same cancelled ctx.
+//
+// The fake handler answers initialize/tools-list immediately (so the
+// server connects normally) and blocks only the tools/call request, so the
+// call is cancelled genuinely mid-flight rather than never reaching the
+// server at all.
+func TestMCPManagerCallToolContextCancellationPassesThroughCleanly(t *testing.T) {
+	callStarted := make(chan struct{})
+	block := make(chan struct{})
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), `"tools/call"`) {
+			close(callStarted)
+			<-block
+		}
+		(&fakeMCPHTTPServer{tools: []fakeMCPTool{
+			{name: "echo", content: []map[string]any{textContent("hi")}},
+		}}).serveHTTP(w, httptest.NewRequest(r.Method, r.URL.String(), bytes.NewReader(body)))
+	})
+	hs := httptest.NewServer(handler)
+	t.Cleanup(hs.Close)
+	// Registered AFTER hs's own t.Cleanup(hs.Close): cleanups run LIFO, so
+	// this closes the block channel (releasing the handler goroutine
+	// blocked on it) before hs.Close blocks waiting for that goroutine to
+	// finish — same ordering rule TestMCPManagerConnectTimeoutFailsOpen
+	// documents.
+	t.Cleanup(func() { close(block) })
+
+	mgr := NewMCPManager(map[string]MCPServerConfig{"svc": {URL: hs.URL}})
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+	mgr.Tools(context.Background()) // connect first, unblocked
+
+	connCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := mgr.CallServerTool(connCtx, "svc", "echo", nil)
+		done <- err
+	}()
+	<-callStarted
+	cancel()
+
+	err := <-done
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("CallServerTool error = %v, want context.Canceled somewhere in its chain (unwrapped by sanitizeMCPCallError, not rewritten)", err)
+	}
+	// The client wraps ctx.Err() with "mcp: tools/call <name>: %w" (see
+	// mcp/client.go's CallTool) before it ever reaches sanitizeMCPCallError
+	// — that wrapping is the mcp package's, not a rewrite this fix
+	// performs, and it contains no endpoint URL either way. Pin the exact
+	// unsanitized text so a future change accidentally rewriting it into a
+	// generic "call failed" would be caught here.
+	const want = `mcp: tools/call echo: context canceled`
+	if err.Error() != want {
+		t.Errorf("CallServerTool error text = %q, want %q (no sanitization applied)", err.Error(), want)
+	}
+}
+
 func TestMCPManagerCallServerTool(t *testing.T) {
 	srv := &fakeMCPHTTPServer{tools: []fakeMCPTool{
 		{name: "echo", content: []map[string]any{textContent("hi")}},

@@ -44,6 +44,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"net"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -639,9 +640,62 @@ func (m *MCPManager) callTool(ctx context.Context, server, tool string, args jso
 	}
 	res, err := client.CallTool(ctx, tool, argVal)
 	if err != nil {
-		return nil, false, err
+		// sanitizeMCPCallError, never err directly: a server that connected
+		// FINE and then drops mid-call yields the same *url.Error shape
+		// classifyMCPConnectError guards against on the connect surface
+		// (see its doc comment) — net/http still embeds the full,
+		// possibly-secret-bearing endpoint URL in that error's text. This
+		// error also becomes a tool result the model reads.
+		return nil, false, sanitizeMCPCallError(server, err)
 	}
 	return mcpContentToParts(server, tool, res.Content), res.IsError, nil
+}
+
+// sanitizeMCPCallError is callTool's sibling to classifyMCPConnectError,
+// guarding the SAME secret-in-URL class but on the RUNTIME tools/call error
+// path instead of connect/initialize: a server that connected successfully
+// and then drops before answering a later call still goes through
+// net/http, which returns a *url.Error stringifying as
+// `Post "<full-endpoint-URL>": <cause>` on a failed dial — exactly the
+// shape classifyMCPConnectError's doc comment describes, just reached from
+// a different call site.
+//
+// Only transport-shaped errors are sanitized: an error chain containing a
+// *url.Error or a *net.OpError (the same detection classifyMCPConnectError
+// uses). Everything else passes through UNCHANGED:
+//   - *mcp.RPCError, a JSON-RPC error object the SERVER itself sent back
+//     (e.g. invalid tool arguments, a tool's own internal failure) — this
+//     is the server's own message, carries no endpoint URL, and the model
+//     needs it verbatim to self-correct.
+//   - context.Canceled / context.DeadlineExceeded from the caller's ctx:
+//     both mcp/http.go's call() and mcp/conn.go's call() special-case ctx
+//     cancellation/timeout and return ctx.Err() bare, never wrapped in a
+//     *url.Error, so there is nothing to sanitize — rewriting it into a
+//     "call failed" would be actively misleading. This choice is also
+//     inert for turn-abort semantics: runToolCall (engine.go) always turns
+//     a tool error into an ordinary ToolResult, never a special abort path
+//     — the enclosing turn's own abort happens separately, the next time
+//     Session.Prompt's loop makes a provider request on the same cancelled
+//     ctx (which Session.emitSessionError already excludes from
+//     session.error; see its doc comment).
+//   - any other generic error: not transport-shaped, so it carries no
+//     endpoint URL either.
+func sanitizeMCPCallError(server string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var urlErr *url.Error
+	var opErr *net.OpError
+	if !errors.As(err, &urlErr) && !errors.As(err, &opErr) {
+		return err
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("engine: mcp: server %q: call timed out", server)
+	}
+	if errors.As(err, &opErr) && errors.Is(opErr.Err, syscall.ECONNREFUSED) {
+		return fmt.Errorf("engine: mcp: server %q: call failed: connection refused", server)
+	}
+	return fmt.Errorf("engine: mcp: server %q: call failed: connection failed", server)
 }
 
 // MCPServerStatus is one server's live connection-state snapshot, as
