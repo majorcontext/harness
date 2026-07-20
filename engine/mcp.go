@@ -38,13 +38,16 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
 	"math/rand"
+	"net"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/majorcontext/harness/mcp"
@@ -512,6 +515,59 @@ func connectMCPServer(ctx context.Context, name string, spec MCPServerConfig) (*
 	return client, tools, nil
 }
 
+// classifyMCPConnectError maps a raw connect/initialize error into a SHORT,
+// URL-free reason for the two MODEL-visible surfaces that ever echo an MCP
+// connect failure: the ambient degraded-server status block
+// (mcp_status.go's formatMCPServerStatus) and CallTool's
+// failed-and-retrying error below. Go's *url.Error (the shape net/http
+// returns on a failed dial or a context deadline) stringifies as
+// `Post "<full-URL>": <cause>`, and real MCP endpoints sometimes carry
+// secrets in the URL path or query string — so those two surfaces must
+// never call err.Error() directly. The raw error is untouched everywhere
+// else: it still reaches the serve-log lines in ensureConnected/
+// retryServer (operator-only) and Status()'s LastErr (programmatic
+// consumers), both of which are not model context.
+//
+// Classes, most specific first:
+//   - nil -> "initializing" (no attempt has failed yet; matches
+//     formatMCPServerStatus's pre-existing default for a nil LastErr)
+//   - context.DeadlineExceeded anywhere in the chain -> "initialize timed
+//     out" (the ConnectTimeout bound in connectMCPServer expired; both the
+//     HTTP and stdio transports return ctx.Err() verbatim on a deadline,
+//     see mcp/http.go's call() and mcp/conn.go's call())
+//   - a *net.OpError anywhere in the chain (a failed dial, the shape both
+//     net/http's *url.Error and this package's stdio dialer produce) ->
+//     "connection refused" when the underlying cause is ECONNREFUSED,
+//     "connection failed" for any other dial failure (host unreachable,
+//     no route, etc.)
+//   - anything else -> "initialize failed"
+//
+// HTTP non-2xx responses (auth failures included) are deliberately folded
+// into the "initialize failed" fallback: mcp/http.go's httpStatusError
+// returns either *mcp.RPCError (a JSON-RPC error body, whose Code is a
+// JSON-RPC error code, not an HTTP status) or a plain fmt.Errorf embedding
+// the HTTP status as a %d in an unstructured string — neither shape
+// carries the status code in a form errors.As can extract, so a 401/403
+// cannot be distinguished from any other non-2xx here without adding a new
+// exported error type to the mcp package, which is out of scope for this
+// fix.
+func classifyMCPConnectError(err error) string {
+	if err == nil {
+		return "initializing"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "initialize timed out"
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		if errors.Is(opErr.Err, syscall.ECONNREFUSED) {
+			return "connection refused"
+		}
+		return "connection failed"
+	}
+	return "initialize failed"
+}
+
 // Tools implements MCPRegistry.
 func (m *MCPManager) Tools(ctx context.Context) []provider.ToolDef {
 	m.ensureConnected(ctx)
@@ -567,7 +623,12 @@ func (m *MCPManager) callTool(ctx context.Context, server, tool string, args jso
 		return nil, false, fmt.Errorf("engine: mcp: server %q is not configured", server)
 	}
 	if !connected {
-		return nil, false, fmt.Errorf("engine: mcp: server %q failed to initialize and is retrying in the background: %v", server, lastErr)
+		// classifyMCPConnectError, never lastErr.Error() directly: this
+		// error becomes a tool result the model reads, and a raw connect
+		// error can embed the server's endpoint URL (and any secret it
+		// carries) — see classifyMCPConnectError's doc comment. The raw
+		// lastErr is still available to programmatic callers via Status().
+		return nil, false, fmt.Errorf("engine: mcp: server %q failed to initialize and is retrying in the background: %s", server, classifyMCPConnectError(lastErr))
 	}
 
 	var argVal any

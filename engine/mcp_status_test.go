@@ -3,10 +3,14 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -43,6 +47,15 @@ func TestAmbientMCPStatusPresentWhenDegraded(t *testing.T) {
 	}
 	if !strings.Contains(last, "linear") {
 		t.Errorf("ambient block = %q, want it to name the degraded server", last)
+	}
+	// Pin the classified form and, since a real endpoint URL was dialed
+	// here, assert it never appears verbatim in model-visible context (see
+	// classifyMCPConnectError's doc comment).
+	if !strings.Contains(last, "connection refused") {
+		t.Errorf("ambient block = %q, want the classified reason %q", last, "connection refused")
+	}
+	if strings.Contains(last, "127.0.0.1") {
+		t.Errorf("ambient block = %q, leaked the raw endpoint URL", last)
 	}
 }
 
@@ -155,6 +168,55 @@ func TestAmbientMCPStatusAbsentWhenHealthy(t *testing.T) {
 	}
 	if last := lastUserText(t, prov.requests[0]); strings.Contains(last, "[mcp:") {
 		t.Fatalf("last user message = %q, want no ambient MCP status block", last)
+	}
+}
+
+// fakeMCPStatusReader is a minimal mcpStatusReader (plus the rest of
+// MCPRegistry, unused by these tests) that returns a fixed Status() slice
+// under caller control — used to pin formatMCPServerStatus's reason text
+// against a specific LastErr without driving a real connect attempt.
+type fakeMCPStatusReader struct {
+	bareMCPRegistry
+	status []MCPServerStatus
+}
+
+func (f fakeMCPStatusReader) Status() []MCPServerStatus { return f.status }
+
+// TestMCPStatusSegmentClassifiesReasonNeverLeaksURL is the should-fix
+// finding's headline test, red-verified against pre-classifier code (see
+// formatMCPServerStatus's old `reason = st.LastErr.Error()`): a raw
+// *url.Error (the shape net/http returns on a failed dial, and the shape
+// LastErr takes for an HTTP MCP server) stringifies as
+// `Post "<full-URL>": <cause>`, so a real endpoint URL carrying a secret in
+// its path or query would land verbatim in model-visible context. The
+// ambient status block must carry only the classified, URL-free reason.
+func TestMCPStatusSegmentClassifiesReasonNeverLeaksURL(t *testing.T) {
+	const secret = "SUPERSECRET123"
+	leaky := &url.Error{
+		Op:  "Post",
+		URL: "https://mcp.example.com/v1?token=" + secret,
+		Err: &net.OpError{
+			Op:  "dial",
+			Net: "tcp",
+			Err: &os.SyscallError{Syscall: "connect", Err: syscall.ECONNREFUSED},
+		},
+	}
+	reg := fakeMCPStatusReader{status: []MCPServerStatus{
+		{Name: "linear", Connected: false, LastErr: leaky},
+	}}
+
+	got := mcpStatusSegment(reg)
+	if strings.Contains(got, secret) {
+		t.Fatalf("mcpStatusSegment = %q, leaked the fake secret from LastErr's URL", got)
+	}
+	if strings.Contains(got, "mcp.example.com") {
+		t.Fatalf("mcpStatusSegment = %q, leaked the endpoint host from LastErr's URL", got)
+	}
+	if !strings.Contains(got, "connection refused") {
+		t.Errorf("mcpStatusSegment = %q, want the classified reason %q", got, "connection refused")
+	}
+	if !strings.Contains(got, "linear") {
+		t.Errorf("mcpStatusSegment = %q, want it to still name the server", got)
 	}
 }
 

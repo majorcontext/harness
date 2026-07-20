@@ -7,11 +7,15 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -1178,6 +1182,50 @@ func TestMCPManagerCallServerToolUnconfiguredMessageDistinctFromRetrying(t *test
 	}
 	if strings.Contains(err.Error(), "retrying") {
 		t.Errorf("unconfigured-server error = %v, must not mention retrying", err)
+	}
+}
+
+// TestMCPManagerCallServerToolRetryingErrorNeverLeaksURL is the should-fix
+// finding's headline test for the second model-visible surface (the first
+// is mcp_status_test.go's TestMCPStatusSegmentClassifiesReasonNeverLeaksURL):
+// CallServerTool's failed-and-retrying error must carry only
+// classifyMCPConnectError's classified reason, never the raw connect
+// error's text — a *url.Error (the shape net/http returns on a failed
+// dial) stringifies as `Post "<full-URL>": <cause>`, and a real HTTP MCP
+// server's URL can carry a secret in its path or query.
+func TestMCPManagerCallServerToolRetryingErrorNeverLeaksURL(t *testing.T) {
+	const secret = "SUPERSECRET123"
+	leaky := &url.Error{
+		Op:  "Post",
+		URL: "https://mcp.example.com/v1?token=" + secret,
+		Err: &net.OpError{
+			Op:  "dial",
+			Net: "tcp",
+			Err: &os.SyscallError{Syscall: "connect", Err: syscall.ECONNREFUSED},
+		},
+	}
+	withMCPConnectFunc(t, func(ctx context.Context, name string, spec MCPServerConfig) (*mcp.Client, []mcp.Tool, error) {
+		return nil, nil, leaky
+	})
+
+	mgr := NewMCPManager(map[string]MCPServerConfig{"svc": {URL: "http://unused"}})
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+	_, _, err := mgr.CallServerTool(context.Background(), "svc", "echo", nil)
+	if err == nil {
+		t.Fatal("want an error while the server is still retrying")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("CallServerTool error = %q, leaked the fake secret", err)
+	}
+	if strings.Contains(err.Error(), "mcp.example.com") {
+		t.Fatalf("CallServerTool error = %q, leaked the endpoint host", err)
+	}
+	if !strings.Contains(err.Error(), "connection refused") {
+		t.Errorf("CallServerTool error = %q, want the classified reason %q", err, "connection refused")
+	}
+	if !strings.Contains(err.Error(), "retrying") {
+		t.Errorf("CallServerTool error = %q, want it to still mention retrying", err)
 	}
 }
 
