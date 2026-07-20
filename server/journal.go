@@ -179,12 +179,13 @@ const (
 	// boot-time observation). Always carries GoalPauseReason "restart".
 	evtGoalPaused = "goal.paused"
 
-	// evtPromptQueued/evtPromptDequeued mirror engine.EventPromptQueued/
-	// EventPromptDequeued (see engine/queue.go): a prompt submitted to a busy
-	// session was durably enqueued, or a queued prompt was popped off the
-	// head for delivery (idle drain, goal-turn injection, or a durable
-	// clear). See publishQueue.
-	evtPromptQueued   = "prompt.queued"
+	// evtPromptDequeued mirrors engine.EventPromptDequeued (see
+	// engine/queue.go): a queued prompt was popped off the head for
+	// delivery (idle drain, goal-turn injection, or a durable clear). See
+	// publishQueue, which journals the enqueue side too but does so by
+	// forwarding ev.Type (engine.EventPromptQueued) directly — there is no
+	// server-local mirror constant for it, since nothing in this package
+	// ever needs to name that string apart from the engine's own constant.
 	evtPromptDequeued = "prompt.dequeued"
 
 	// evtWorktreeKept is journaled whenever a 'worktree'-isolation session's
