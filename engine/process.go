@@ -302,7 +302,7 @@ func jsonResult(v any) (message.Parts, error) {
 //
 // This is computed fresh on every call (cheap: an in-memory map read plus
 // string formatting) so it always reflects LIVE state; nothing here is
-// ever persisted (see streamTurn/withProcessStatus for the durability
+// ever persisted (see streamTurn/withAmbientStatus for the durability
 // boundary).
 func processStatusSegment(reg ProcessRegistry, workDir string) string {
 	if reg == nil || !reg.EverStarted() {
@@ -355,13 +355,19 @@ func formatPorts(ports []int) string {
 	return " :" + strings.Join(strs, ",")
 }
 
-// withProcessStatus returns messages with seg appended as a new Text part
+// withAmbientStatus returns messages with seg appended as a new Text part
 // on a CLONE of the newest RoleUser message — never mutating the shared
 // backing Parts slice of the original (which may alias the session's own
 // durable history), and never touching any message but the last user one,
 // so the cached prefix (every earlier message) is untouched. A no-op if
 // messages holds no user message at all.
-func withProcessStatus(messages []message.Message, seg string) []message.Message {
+//
+// Shared by every ambient status segment streamTurn injects (process
+// status here, MCP status in mcp_status.go) — each caller applies it
+// independently, so calling it twice on the same messages slice for two
+// different segments stacks two separate Text parts onto that same newest
+// user message, one per segment.
+func withAmbientStatus(messages []message.Message, seg string) []message.Message {
 	if seg == "" {
 		return messages
 	}

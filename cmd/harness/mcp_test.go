@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/config"
 )
@@ -35,4 +36,22 @@ func TestBuildMCPManagerConvertsSpecs(t *testing.T) {
 	// happens lazily on first use — see engine.MCPManager); Close before any
 	// use must still be clean.
 	closeMCPManager(mgr)
+}
+
+// TestMCPServerConfigConnectTimeout is invariant 1's round-trip test:
+// connect_timeout_s threads through to engine.MCPServerConfig.ConnectTimeout,
+// and an absent (zero) value stays zero rather than picking some non-zero
+// default here — the engine itself, not this conversion, owns the
+// zero-means-default-15s policy (see engine.defaultMCPConnectTimeout,
+// already covered by TestMCPManagerConnectTimeoutFailsOpen).
+func TestMCPServerConfigConnectTimeout(t *testing.T) {
+	got := mcpServerConfig(config.MCPServerSpec{URL: "https://x", ConnectTimeoutS: 5})
+	if got.ConnectTimeout != 5*time.Second {
+		t.Errorf("ConnectTimeout = %v, want 5s", got.ConnectTimeout)
+	}
+
+	got = mcpServerConfig(config.MCPServerSpec{URL: "https://x"})
+	if got.ConnectTimeout != 0 {
+		t.Errorf("ConnectTimeout = %v, want 0 (absent, engine applies its own default)", got.ConnectTimeout)
+	}
 }

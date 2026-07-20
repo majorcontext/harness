@@ -31,15 +31,26 @@ func buildMCPManager(servers map[string]config.MCPServerSpec) *engine.MCPManager
 	}
 	out := make(map[string]engine.MCPServerConfig, len(servers))
 	for name, spec := range servers {
-		out[name] = engine.MCPServerConfig{
-			Command: spec.Command,
-			Env:     spec.Env,
-			Dir:     spec.Dir,
-			URL:     spec.URL,
-			Headers: spec.Headers,
-		}
+		out[name] = mcpServerConfig(spec)
 	}
 	return engine.NewMCPManager(out)
+}
+
+// mcpServerConfig converts one config.MCPServerSpec into the
+// engine.MCPServerConfig buildMCPManager wires it into — factored out (and
+// so directly unit-testable, see mcp_test.go) from buildMCPManager's loop
+// since MCPManager itself keeps its per-server config unexported. spec's
+// ConnectTimeoutS (integer seconds; <= 0/absent means "use the engine
+// default") threads straight into ConnectTimeout as a time.Duration.
+func mcpServerConfig(spec config.MCPServerSpec) engine.MCPServerConfig {
+	return engine.MCPServerConfig{
+		Command:        spec.Command,
+		Env:            spec.Env,
+		Dir:            spec.Dir,
+		URL:            spec.URL,
+		Headers:        spec.Headers,
+		ConnectTimeout: time.Duration(spec.ConnectTimeoutS) * time.Second,
+	}
 }
 
 // mcpRegistry adapts a possibly-nil *engine.MCPManager to engine.MCPRegistry,
