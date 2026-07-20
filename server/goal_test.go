@@ -41,6 +41,19 @@ type goalProv struct {
 	// one. See TestGoalStalledRetryableFieldsSurfaced and the overflow
 	// outcome tests.
 	workerErr error
+
+	// evalErrN/evalErr mirror workerErrN/workerErr for the evaluator side:
+	// when evalErrN > 0, the first evalErrN evaluator Stream calls fail with
+	// evalErr (a plain, non-retryable error by default so evaluateGoal
+	// returns immediately on attempt 1 — see engine/goal.go's evaluateGoal
+	// — rather than spending a second, strict-reask attempt or an
+	// in-boundary retryable-backoff wait) instead of consuming a scripted
+	// eval turn. Deterministically drives a failed evaluator boundary
+	// (goal.eval_failed) for the resilience tests in
+	// server/goal_eval_resilience_test.go, one Stream call per boundary.
+	evalErrN   int
+	evalErrHit int
+	evalErr    error
 }
 
 func (p *goalProv) Name() string { return p.name }
@@ -49,6 +62,10 @@ func (p *goalProv) Stream(ctx context.Context, req *provider.Request) (provider.
 	if len(req.Tools) == 0 { // evaluator (tool-less)
 		p.mu.Lock()
 		defer p.mu.Unlock()
+		if p.evalErrHit < p.evalErrN {
+			p.evalErrHit++
+			return nil, p.evalErr
+		}
 		if p.ei >= len(p.eval) {
 			return &scriptedStream{}, nil
 		}

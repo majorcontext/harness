@@ -70,6 +70,18 @@ type Event struct {
 	// that reports the budget exhausted (the turn is about to park, not
 	// die — see PursueGoal's doc comment). All three are zero-valued on a
 	// deterministic-path stall, unchanged from before they existed.
+	//
+	// GoalEvalFailures is carried by goal.eval_failed only (see goal.go's
+	// "Round 6" doc section and evaluateGoal/recordGoalEvalFailed): the
+	// number of CONSECUTIVE failed evaluator boundaries as of this one,
+	// inclusive — reset to zero the moment a later boundary parses a
+	// verdict (MET or NOT MET) or the generation changes (an UpdateGoal),
+	// so it measures a streak against one condition, never a cumulative
+	// total. goal.cleared itself never carries a count — even the terminal
+	// clear that fires once this reaches goalEvalFailureLimit — its
+	// dedicated GoalReason text names the limit instead (see
+	// server/journal.go's GoalEvalFailures doc comment for the mirrored
+	// server-side fold).
 	GoalCondition      string `json:"goal_condition,omitempty"`
 	GoalReason         string `json:"goal_reason,omitempty"`
 	GoalMet            bool   `json:"goal_met,omitempty"`
@@ -79,6 +91,7 @@ type Event struct {
 	GoalRetryable      bool   `json:"goal_retryable,omitempty"`
 	GoalRetryableClass string `json:"goal_retryable_class,omitempty"`
 	GoalWaiting        bool   `json:"goal_waiting,omitempty"`
+	GoalEvalFailures   int    `json:"goal_eval_failures,omitempty"`
 
 	// Compaction fields (see compact.go and docs/design/context-
 	// compaction.md §4 "Live event surface"). Carried on
@@ -122,6 +135,13 @@ const (
 	EventGoalStalled  = "goal.stalled"
 	EventGoalAchieved = "goal.achieved"
 	EventGoalCleared  = "goal.cleared"
+	// EventGoalEvalFailed fires once per failed evaluator boundary — a
+	// provider error the retryable-class in-boundary retry couldn't ride out,
+	// or two consecutive unparseable replies — see goal.go's "Round 6" doc
+	// section. Below goalEvalFailureLimit consecutive failures this is
+	// advisory only: the goal stays active and the loop keeps working; at
+	// the limit a goal.cleared with a dedicated reason follows instead.
+	EventGoalEvalFailed = "goal.eval_failed"
 
 	// Prompt-queue events (see queue.go and docs/plans/2026-07-19-prompt-
 	// queue.md). EventPromptQueued fires on every EnqueuePrompt call;
