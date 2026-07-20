@@ -156,6 +156,15 @@ type MCPServerSpec struct {
 	// Headers are static headers sent on every request to a Streamable
 	// HTTP server, e.g. {"Authorization": "Bearer <token>"}.
 	Headers map[string]string `json:"headers,omitempty"`
+	// ConnectTimeoutS bounds this server's Initialize+ListAllTools for its
+	// FIRST connect attempt (and each background retry attempt after a
+	// failure — see engine.MCPManager), in seconds; <= 0 (the default)
+	// leaves engine.MCPServerConfig.ConnectTimeout at zero, which the
+	// engine itself then defaults to 15s (defaultMCPConnectTimeout). Named
+	// and typed like ProcessSpec.ReadyTimeoutS, the existing duration-ish
+	// config-field convention (a plain integer-seconds field, not a
+	// time.Duration/string, since JSON has no duration literal).
+	ConnectTimeoutS int `json:"connect_timeout_s,omitempty"`
 }
 
 // PluginSpec configures one plugin process, loaded verbatim into a

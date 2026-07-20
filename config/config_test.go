@@ -1038,6 +1038,31 @@ func TestLoadMCPServers(t *testing.T) {
 			t.Errorf("MCPServers = %+v, want my_server present", c.MCPServers)
 		}
 	})
+	// Invariant 1: connect_timeout_s round-trips through Load; absent means
+	// zero, which engine.MCPServerConfig.ConnectTimeout (via buildMCPManager,
+	// see cmd/harness/mcp.go) leaves at its own engine-side default.
+	t.Run("connect_timeout_s parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {"weather": {"url": "https://weather.example/mcp", "connect_timeout_s": 5}}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got := c.MCPServers["weather"].ConnectTimeoutS; got != 5 {
+			t.Errorf("weather.ConnectTimeoutS = %d, want 5", got)
+		}
+	})
+	t.Run("connect_timeout_s absent defaults to zero", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {"weather": {"url": "https://weather.example/mcp"}}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got := c.MCPServers["weather"].ConnectTimeoutS; got != 0 {
+			t.Errorf("weather.ConnectTimeoutS = %d, want 0 (absent)", got)
+		}
+	})
 }
 
 func TestMergeMCPServers(t *testing.T) {
@@ -1047,14 +1072,14 @@ func TestMergeMCPServers(t *testing.T) {
 			"gh": {URL: "https://user.example/mcp"},
 		}}
 		over := &Config{MCPServers: map[string]MCPServerSpec{
-			"fs": {Command: []string{"proj-fs", "--flag"}},
+			"fs": {Command: []string{"proj-fs", "--flag"}, ConnectTimeoutS: 7},
 		}}
 		merged := merge(base, over)
 		if len(merged.MCPServers) != 2 {
 			t.Fatalf("merged MCPServers = %+v, want 2 entries", merged.MCPServers)
 		}
-		if fs := merged.MCPServers["fs"]; len(fs.Command) != 2 || fs.Command[0] != "proj-fs" {
-			t.Errorf("merged fs = %+v, want project's entry", fs)
+		if fs := merged.MCPServers["fs"]; len(fs.Command) != 2 || fs.Command[0] != "proj-fs" || fs.ConnectTimeoutS != 7 {
+			t.Errorf("merged fs = %+v, want project's entry (including ConnectTimeoutS)", fs)
 		}
 		if gh := merged.MCPServers["gh"]; gh.URL != "https://user.example/mcp" {
 			t.Errorf("merged gh = %+v, want inherited user entry", gh)
