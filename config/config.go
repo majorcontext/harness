@@ -158,12 +158,14 @@ type MCPServerSpec struct {
 	Headers map[string]string `json:"headers,omitempty"`
 	// ConnectTimeoutS bounds this server's Initialize+ListAllTools for its
 	// FIRST connect attempt (and each background retry attempt after a
-	// failure — see engine.MCPManager), in seconds; <= 0 (the default)
+	// failure — see engine.MCPManager), in seconds; 0/absent (the default)
 	// leaves engine.MCPServerConfig.ConnectTimeout at zero, which the
-	// engine itself then defaults to 15s (defaultMCPConnectTimeout). Named
-	// and typed like ProcessSpec.ReadyTimeoutS, the existing duration-ish
-	// config-field convention (a plain integer-seconds field, not a
-	// time.Duration/string, since JSON has no duration literal).
+	// engine itself then defaults to 15s (defaultMCPConnectTimeout). A
+	// negative value cannot possibly be wired and is rejected loudly by
+	// validateMCPServers. Named and typed like ProcessSpec.ReadyTimeoutS,
+	// the existing duration-ish config-field convention (a plain
+	// integer-seconds field, not a time.Duration/string, since JSON has no
+	// duration literal).
 	ConnectTimeoutS int `json:"connect_timeout_s,omitempty"`
 }
 
@@ -444,6 +446,9 @@ func validateMCPServers(servers map[string]MCPServerSpec) error {
 			return fmt.Errorf("mcp_servers.%s: exactly one of command (stdio) or url (streamable HTTP) is required", name)
 		case hasCommand && hasURL:
 			return fmt.Errorf("mcp_servers.%s: command and url are mutually exclusive", name)
+		}
+		if s.ConnectTimeoutS < 0 {
+			return fmt.Errorf("mcp_servers.%s: connect_timeout_s must not be negative (got %d)", name, s.ConnectTimeoutS)
 		}
 	}
 	return nil
