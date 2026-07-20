@@ -78,13 +78,28 @@ condition; after **every** turn an independent, TOOL-LESS evaluator model
 `MaxTokens` 256) is asked to answer `MET: <reason>` / `NOT MET: <reason>`
 (parsed leniently). A NOT MET verdict re-prompts with a fixed-template guidance
 message carrying the reason; MET returns `Achieved`. `MaxTurns` (0 = unlimited)
-bounds it; two unparseable evaluator replies in a row error rather than spin.
-Durable `goal.set` / `goal.eval` / `goal.achieved` / `goal.cleared` records land
-in the session log, so `LoadSession` restores an active goal (condition only;
-counters reset) via `Session.ActiveGoal()` — resume never auto-runs it, the
-caller decides. The loop also emits `goal.*` engine events so the server
-journals them. Config `goal_evaluator_model` supplies the evaluator for
-`harness run -goal` and `POST /session/{id}/goal`.
+bounds it. Evaluation is advisory: a retryable-class provider error from the
+evaluator call rides the existing retryable backoff schedule in-boundary
+before the boundary counts as failed; two unparseable replies in a row (the
+second re-asked with a stricter prompt) or a non-retryable provider error also
+fail the boundary immediately. A failed boundary no longer clears the goal —
+it journals a durable `goal.eval_failed` record (carrying the consecutive
+failure count), substitutes a fixed evaluation-unavailable notice for the next
+turn's guidance in place of the evaluator's text, and `continue`s: the worker
+keeps working. Any later boundary that DOES parse a verdict (MET or NOT MET)
+resets the consecutive count to zero — the horizon is a streak, not a
+lifetime total. Only after `goalEvalFailureLimit` (5) consecutive failed
+boundaries does the loop treat the evaluator as durably broken: it clears the
+goal with a dedicated reason, and the server maps that terminal to a
+`session.error` plus a distinct `turn.end outcome=evaluator_exhausted` — loud
+and machine-distinguishable, since every failure below the horizon is
+deliberately silent apart from the journaled record.
+Durable `goal.set` / `goal.eval` / `goal.eval_failed` / `goal.achieved` /
+`goal.cleared` records land in the session log, so `LoadSession` restores an
+active goal (condition only; counters reset) via `Session.ActiveGoal()` —
+resume never auto-runs it, the caller decides. The loop also emits `goal.*`
+engine events so the server journals them. Config `goal_evaluator_model`
+supplies the evaluator for `harness run -goal` and `POST /session/{id}/goal`.
 
 The condition itself is adjustable mid-loop. `Session.UpdateGoal` rewrites an
 active goal's condition, journals a durable `goal.updated` record, and emits

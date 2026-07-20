@@ -83,15 +83,39 @@ Two independent layers, both TDD red-first (see `engine/goal_test.go` and
 
 ## Non-goals / things this does not change
 
-- `evaluateGoal`'s own error path (a provider error while asking the
-  evaluator) is unchanged: it still returns the error directly without
-  clearing the goal, since that failure is in the evaluator, not the worker,
-  and the goal's own state is still accurate and worth preserving for a
-  human-triggered resume.
-- Two unparseable evaluator replies in a row (`errEvaluatorUnparseable`) is
-  unchanged for the same reason.
 - `goal.stalled` is a pure trace record: it never flips `goalActive` by
   itself (see `LoadSession`'s `scanLog` switch in `store.go`).
+- `evaluateGoal`'s own error path — a provider error while asking the
+  evaluator, or two unparseable replies in a row — is **no longer**
+  unchanged from the worker-turn path. It used to clear the goal outright
+  (see "Round 3" below); as of NEP-4792 it is advisory, mirroring the
+  worker-turn retry machinery instead of bypassing it. See "Evaluator
+  resilience" below for the current behavior — this bullet exists only so a
+  reader following an old link lands somewhere accurate.
+
+## Round 3: closing the evaluator's own zombie path (superseded by NEP-4792)
+
+The paragraph below describes the fix as it shipped originally: any
+`evaluateGoal` error — a provider error, or two unparseable replies in a
+row — cleared the goal outright, on the theory that the goal's own state
+was "still accurate and worth preserving for a human-triggered resume."
+Production experience proved that theory wrong (see "Evaluator resilience"
+below): a transient evaluator hiccup killed sessions where the worker model
+was making fine progress. The clear-on-any-evaluator-error behavior is no
+longer current; it is kept here as a record of what changed and why.
+
+Originally: an evaluator call that failed outright (a provider error, or two
+unparseable replies in a row, see `errEvaluatorUnparseable`) was the one
+edge out of ACTIVE that had no clear-and-explain treatment. One production
+session (`ses_01kx3ts0pjfap950bmr9b2js0b.jsonl`) hit exactly this: the
+worker turn succeeded, the evaluator returned unparseable output twice in a
+row, `session.error` was emitted, and the goal stayed active in the log
+forever — turns=0, no `goal.eval` ever, nothing to explain the silence
+beyond that one error record. The original fix made a failing evaluator
+call clear the goal (unless the error was a cancelled context) before
+returning, the same "no third way out of ACTIVE" principle as the
+worker-turn fix above. See `TestPursueGoalUnparseableTwiceClearsGoal`
+(rewritten under NEP-4792 — see below).
 
 ## Review follow-up: two findings on the initial fix
 
@@ -300,6 +324,97 @@ and `TestPursueGoalRetryableErrorLongBackoffThenRecovers` /
 `TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing` for the
 tests (both run inside a `testing/synctest` bubble — no real sleeps, per
 AGENTS.md).
+
+## Evaluator resilience: advisory failures, bounded terminal (NEP-4792)
+
+### Incident
+
+Round 3 above closed the "evaluator failure leaves a zombie goal" hole by
+clearing the goal on ANY `evaluateGoal` error — a provider error, or two
+unparseable replies in a row. That traded one incident for another:
+production data showed two fleet boxes die mid-HEALTHY-work because the
+tool-less evaluator call hit a transient provider hiccup (or, once, a
+stretch of oddly-worded replies neither attempt could parse) while the
+worker model itself was making fine progress. Unlike a worker-turn error —
+expensive to retry blindly, see `promptTurnWithRetry`'s non-idempotency doc
+above — a failing evaluator call risks nothing by being retried or, failing
+that, simply skipped for one turn: the worker keeps working either way, and
+the only thing a bad verdict can do wrong is delay noticing completion, not
+corrupt anything.
+
+### The fix: in-boundary retry, then advisory failure, then a bounded terminal
+
+`evaluateGoal` now rides out a failure in-boundary before the boundary ever
+counts as "failed," mirroring `promptTurnWithRetry`'s own error
+classification:
+
+- A provider error classified `provider.AsRetryable` gets the SAME
+  retryable schedule and budget the worker turn uses
+  (`goalRetryableBackoff`, `goalRetryableMaxAttempts`) — the two paths
+  share provider weather, so they share a budget's shape, each keeping its
+  own counter.
+- A non-retryable provider error is not retried in-boundary at all (the
+  call is cheap; a permanently broken provider needs the boundary-failure
+  path below, not a wasted second attempt).
+- An unparseable reply still gets its original one extra attempt, but that
+  attempt now uses a STRICTER system prompt (`goalEvaluatorStrictSystem`)
+  instead of repeating the same instructions verbatim to a model that
+  already failed to follow them once.
+
+If `evaluateGoal` still errors after all that — the retryable budget
+exhausted, a non-retryable error, or two unparseable replies even with the
+stricter re-ask — the boundary "fails," but failing a boundary no longer
+clears the goal. `PursueGoal` journals a durable `goal.eval_failed` record
+(carrying the error and the CONSECUTIVE failure count), substitutes a fixed
+evaluation-unavailable notice for the next turn's guidance — never the raw
+error text, and never a stale NOT-MET reason from turns ago — waits a short
+backoff (`goalRetryDelay`, keyed on the consecutive count), and `continue`s:
+the worker gets another ordinary turn. A later boundary that DOES parse a
+verdict (MET or NOT MET) resets the consecutive count to zero — the horizon
+below is about a STREAK, not a lifetime total, so one good evaluation undoes
+any number of prior bad ones.
+
+### The horizon: a bounded, loud terminal
+
+Infinite advisory failures would just be Round 3's zombie-goal risk wearing
+a disguise (a goal that LOOKS active but whose evaluator has been dead for
+hours, silently). After `goalEvalFailureLimit` (5) CONSECUTIVE failed
+boundaries, `PursueGoal` clears the goal with a dedicated reason ("goal
+evaluator failed at N consecutive turn boundaries") and returns a distinct
+sentinel error type (`*goalEvaluatorExhaustedError`, recognized via
+`IsGoalEvaluatorExhausted`) instead of a bare error — a caller can tell this
+terminal apart from an ordinary worker-turn exhaustion via `errors.As`,
+never by string-matching `GoalReason`. Unlike every advisory boundary below
+the horizon, this terminal DOES emit `session.error`: it must be LOUD, since
+past this point nothing else will ever explain the goal's silence. The
+server (`server/journal.go`) maps it to a dedicated `turn.end` outcome,
+`outcomeEvaluatorExhausted` ("evaluator_exhausted"), a sibling of
+`outcomeContextExhausted`/`outcomeMaxTurnsExceeded` — consumers never have
+to string-match `GoalReason` to distinguish it.
+
+`GoalSummary`/`GET /session` surface the current consecutive count as
+`eval_failures` (omitted at zero), reset on any `goal.eval` /
+`goal.achieved` / `goal.cleared` / `goal.updated` record, exactly mirroring
+how `attempt`/`retryable`/`waiting` already reset on the worker-retry path.
+`goal.eval_failed`, like `goal.stalled`, is a pure trace record on resume —
+`LoadSession`'s fold does not change resume state from it, only the
+in-memory consecutive counter used while the loop is live.
+
+Five is deliberately much smaller than `goalRetryableMaxAttempts` (12): by
+the time a boundary counts as "failed" at all, the in-boundary retryable
+budget has already ridden out one boundary's worth of ordinary provider
+weather, so five separate TURNS of failure (each potentially minutes apart,
+each after its own full worker turn) is a much stronger signal of a truly
+broken evaluator than exhausting a single boundary's in-boundary retry
+budget ever is.
+
+See `engine/goal.go`'s package doc ("Round 6") for the full narrative,
+`TestPursueGoalEvaluatorUnparseableTwiceIsAdvisory`,
+`TestPursueGoalEvaluatorRetryableErrorRecoversWithinBoundary`, and
+`TestPursueGoalEvaluatorTerminalAfterConsecutiveFailureLimit` (all
+`testing/synctest`-bubbled) for the tests, and
+`server/goal_eval_resilience_test.go` for the server-side outcome/journal
+coverage.
 
 ## Operational reliability
 

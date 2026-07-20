@@ -305,6 +305,16 @@ type goalTracker struct {
 	// be wrong — an ordinary max-turns-exhausted goal in a live process is
 	// not "paused", only one observed unattended at boot is).
 	pausedRestart bool
+	// evalFailures is the most recent goal.eval_failed record's CONSECUTIVE
+	// failure count (see engine/goal.go's "Round 6" doc section, NEP-4792) —
+	// folded straight from the record, so it is idempotent for replay just
+	// like every other field here. Reset to 0 by goal.set/goal.eval/
+	// goal.achieved/goal.cleared/goal.updated, mirroring attempt's own reset
+	// set except that goal.updated resets it too (see publishGoal's
+	// evtGoalUpdated case): the streak is measured against a condition, and
+	// an UpdateGoal is exactly the event that invalidates the evaluator
+	// calls it counted.
+	evalFailures int
 }
 
 // pauseView derives the goal's "paused" wire presentation (see

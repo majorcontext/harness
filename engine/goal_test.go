@@ -65,6 +65,32 @@ type goalProvider struct {
 	// call in that attempt already executed a tool.
 	workerCall     int
 	failWorkerCall int
+
+	// evalErrN/evalErrHit/evalErr mirror workerErrN/workerErr on the
+	// evaluator side: the first evalErrN evaluator (tool-less) calls fail
+	// with evalErr instead of consuming a scripted verdict — a fake
+	// evaluator-side provider failure (see engine's evaluateGoal/
+	// runEvaluatorWithRetry and GitHub issue #61's evaluator-path mirror,
+	// NEP-4792). Each failing call still counts against ei's position: the
+	// scripted eval turns are consumed only once the failures are
+	// exhausted.
+	evalErrN   int
+	evalErrHit int
+	evalErr    error
+
+	// onEvalStream, if set, is called synchronously at the very start of
+	// every evaluator (tool-less) Stream call, with the 1-based call
+	// number, before any scripted response or failure is decided. Since
+	// Stream runs on the SAME goroutine as the PursueGoal call driving it,
+	// a test can use this hook to fire a same-goroutine mutation
+	// (UpdateGoal, ClearGoal) deterministically from inside an in-flight
+	// evaluator call — reproducing the exact generation/active-state race
+	// PursueGoal must handle, without any real concurrency (channels,
+	// goroutines) at all. See
+	// TestPursueGoalEvaluatorFailureDiscardedWhenGoalUpdatedMidCall and
+	// TestClearGoalMidFailingBoundariesStopsCleanly.
+	onEvalStream func(call int)
+	evalCall     int
 }
 
 func (p *goalProvider) Name() string { return "test" }
@@ -81,6 +107,18 @@ func (p *goalProvider) Stream(ctx context.Context, req *provider.Request) (provi
 	p.requests = append(p.requests, req)
 	if len(req.Tools) == 0 {
 		// Evaluator request (tool-less).
+		p.evalCall++
+		if p.onEvalStream != nil {
+			p.onEvalStream(p.evalCall)
+		}
+		if p.evalErrHit < p.evalErrN {
+			p.evalErrHit++
+			err := p.evalErr
+			if err == nil {
+				err = errors.New("fake transient evaluator provider error")
+			}
+			return nil, err
+		}
 		if p.ei >= len(p.eval) {
 			return &scriptedStream{}, nil
 		}
@@ -326,88 +364,130 @@ func TestPursueGoalMaxTurns(t *testing.T) {
 	}
 }
 
+// TestPursueGoalUnparseableTwice pins the NEW (Round 6, NEP-4792) contract for
+// two consecutive unparseable evaluator replies: REWRITTEN from its original
+// assertion (a bare error plus exactly one session.error) now that a single
+// failed evaluator boundary is advisory, not fatal — see the package doc's
+// "Round 6" section and TestPursueGoalUnparseableTwiceDoesNotClearGoal below.
+// MaxTurns:1 bounds the loop at exactly the failed boundary so the test can
+// observe its outcome without a second worker turn ever running.
+//
+// Run inside a synctest bubble: the failed boundary waits the short
+// goalRetryDelay before PursueGoal returns (see AGENTS.md on synctest for
+// all backoff timing).
 func TestPursueGoalUnparseableTwice(t *testing.T) {
-	prov := &goalProvider{
-		worker: [][]provider.Event{
-			asstTurn(provider.StopEndTurn, &message.Text{Text: "work"}),
-		},
-		eval: [][]provider.Event{
-			evalTurn("I am not sure about this"),
-			evalTurn("still rambling with no verdict"),
-		},
-	}
-	hooks := &fakeHooks{}
-	s := goalSession(t, prov, t.TempDir(), hooks)
-	_, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
-	if err == nil {
-		t.Fatal("PursueGoal with two unparseable evaluations succeeded, want error")
-	}
-	// The worker turn (Prompt) succeeded; the error comes from evaluateGoal,
-	// a goal-loop-specific error path that never goes through Prompt's own
-	// session.error emission. Exactly one session.error, for this error.
-	if msgs := sessionErrorMessages(t, hooks); len(msgs) != 1 || msgs[0] != err.Error() {
-		t.Errorf("session.error messages = %v, want [%q]", msgs, err.Error())
-	}
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProvider{
+			worker: [][]provider.Event{
+				asstTurn(provider.StopEndTurn, &message.Text{Text: "work"}),
+			},
+			eval: [][]provider.Event{
+				evalTurn("I am not sure about this"),
+				evalTurn("still rambling with no verdict"),
+			},
+		}
+		hooks := &fakeHooks{}
+		s := goalSession(t, prov, t.TempDir(), hooks)
+		res, err := s.PursueGoal(context.Background(), "cond", GoalOptions{MaxTurns: 1, Evaluator: evalModel})
+		if err != nil {
+			t.Fatalf("PursueGoal error = %v, want nil (a single failed evaluator boundary is advisory)", err)
+		}
+		if res.Achieved || res.Reason != "max turns" {
+			t.Errorf("result = %+v, want not achieved, reason \"max turns\"", res)
+		}
+		// A failed boundary must never emit session.error on its own — only the
+		// terminal (goalEvalFailureLimit consecutive failures) does that.
+		if msgs := sessionErrorMessages(t, hooks); len(msgs) != 0 {
+			t.Errorf("session.error messages = %v, want none for a single failed boundary", msgs)
+		}
+	})
 }
 
-// TestPursueGoalUnparseableTwiceClearsGoal reproduces the round-3 forensic
-// finding directly (ses_01kx3ts0pjfap950bmr9b2js0b.jsonl): the worker turn
-// succeeds, but the evaluator returns unparseable output twice in a row.
-// Before the fix, PursueGoal returned that error bare and left the goal
-// active forever — turns=0, no goal.eval, nothing durable explaining the
-// silence beyond a single session.error. The evaluator-failure edge must
-// obey the exact same no-zombie guarantee as a permanently failing worker
-// turn: clear the goal, carrying the error as the reason, before returning.
-func TestPursueGoalUnparseableTwiceClearsGoal(t *testing.T) {
+// TestPursueGoalUnparseableTwiceDoesNotClearGoal is the REWRITE of the
+// former TestPursueGoalUnparseableTwiceClearsGoal (Round 3), which pinned the
+// exact opposite of today's contract: it asserted that two consecutive
+// unparseable evaluator replies cleared the goal, carrying the error as the
+// reason. That was Round 3's fix for the ses_01kx3ts0pjfap950bmr9b2js0b
+// zombie-goal forensic finding (worker turn succeeded, evaluator failed
+// twice, goal stayed active forever) — but clearing on the FIRST failed
+// boundary traded that incident for a new one: production fleet boxes died
+// mid-healthy-work on a transient evaluator hiccup. Round 6 (NEP-4792) keeps
+// the no-zombie guarantee (something durable always explains the state —
+// see the goal.eval_failed record asserted below) without treating a single
+// failed boundary as fatal: the goal stays ACTIVE, not cleared, and the loop
+// keeps working. See TestPursueGoalEvaluatorTerminalAfterConsecutiveFailureLimit
+// for where a real, sustained evaluator outage still does eventually clear.
+//
+// Run inside a synctest bubble: the failed boundary waits the short
+// goalRetryDelay before PursueGoal returns (see AGENTS.md on synctest for
+// all backoff timing).
+func TestPursueGoalUnparseableTwiceDoesNotClearGoal(t *testing.T) {
 	dir := t.TempDir()
-	prov := &goalProvider{
-		worker: [][]provider.Event{
-			asstTurn(provider.StopEndTurn, &message.Text{Text: "work"}),
-		},
-		eval: [][]provider.Event{
-			evalTurn("I am not sure about this"),
-			evalTurn("still rambling with no verdict"),
-		},
-	}
+	var s *Session
 	var evs []Event
-	s := goalSession(t, prov, dir)
-	s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
-
-	_, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
-	if err == nil {
-		t.Fatal("PursueGoal with two unparseable evaluations succeeded, want error")
-	}
-
-	// No zombie: the goal must no longer be active in memory.
-	if cond, ok := s.ActiveGoal(); ok {
-		t.Fatalf("ActiveGoal = %q, still active after permanent evaluator failure — zombie goal", cond)
-	}
-
-	var sawCleared bool
-	for _, ev := range evs {
-		if ev.Type == EventGoalCleared {
-			sawCleared = true
-			if !strings.Contains(ev.GoalReason, err.Error()) && !strings.Contains(ev.GoalReason, "unparseable") {
-				t.Errorf("goal.cleared GoalReason = %q, want it to carry the evaluator error", ev.GoalReason)
-			}
+	var res *GoalResult
+	var err error
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProvider{
+			worker: [][]provider.Event{
+				asstTurn(provider.StopEndTurn, &message.Text{Text: "work"}),
+			},
+			eval: [][]provider.Event{
+				evalTurn("I am not sure about this"),
+				evalTurn("still rambling with no verdict"),
+			},
 		}
-		if ev.Type == EventGoalAchieved {
+		s = goalSession(t, prov, dir)
+		s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
+
+		res, err = s.PursueGoal(context.Background(), "cond", GoalOptions{MaxTurns: 1, Evaluator: evalModel})
+	})
+	if err != nil {
+		t.Fatalf("PursueGoal error = %v, want nil (a single failed evaluator boundary must not error)", err)
+	}
+	if res.Achieved || res.Reason != "max turns" {
+		t.Errorf("result = %+v, want not achieved, reason \"max turns\"", res)
+	}
+
+	// No zombie, but ALSO no clear: the goal must still be active in memory.
+	if cond, ok := s.ActiveGoal(); !ok || cond != "cond" {
+		t.Fatalf("ActiveGoal = %q, %v; want still active after one failed evaluator boundary (advisory, not fatal)", cond, ok)
+	}
+
+	var sawCleared, sawEvalFailed bool
+	for _, ev := range evs {
+		switch ev.Type {
+		case EventGoalCleared:
+			sawCleared = true
+		case EventGoalEvalFailed:
+			sawEvalFailed = true
+			if !strings.Contains(ev.GoalReason, "unparseable") {
+				t.Errorf("goal.eval_failed GoalReason = %q, want it to carry the evaluator error", ev.GoalReason)
+			}
+			if ev.GoalEvalFailures != 1 {
+				t.Errorf("goal.eval_failed GoalEvalFailures = %d, want 1", ev.GoalEvalFailures)
+			}
+		case EventGoalAchieved:
 			t.Error("goal.achieved emitted after an evaluator failure, want none")
 		}
 	}
-	if !sawCleared {
-		t.Fatal("no goal.cleared event emitted after permanent evaluator failure")
+	if sawCleared {
+		t.Error("goal.cleared emitted for a single failed evaluator boundary, want none — advisory, not fatal")
+	}
+	if !sawEvalFailed {
+		t.Fatal("no goal.eval_failed event emitted — the boundary's failure must still be durably explained, just not fatally")
 	}
 
-	// Nor on disk: a resumed session must not see an active goal either —
-	// the exact check that would have caught ses_01kx3ts0pjfap950bmr9b2js0b
-	// staying active forever.
+	// The failed boundary is durably explained on disk too, and the goal is
+	// still active there — the exact resumability check that would have
+	// caught ses_01kx3ts0pjfap950bmr9b2js0b staying silently active forever,
+	// now applied to the case where the goal SHOULD still be active.
 	loaded, err := LoadSession(s.cfg, s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cond, ok := loaded.ActiveGoal(); ok {
-		t.Errorf("resumed ActiveGoal = %q, active after permanent evaluator failure — zombie goal survives reload", cond)
+	if cond, ok := loaded.ActiveGoal(); !ok || cond != "cond" {
+		t.Errorf("resumed ActiveGoal = %q, %v; want active", cond, ok)
 	}
 }
 
@@ -911,16 +991,23 @@ func TestClearGoalDuringPendingEvaluationIsCleanStop(t *testing.T) {
 	}
 }
 
-// TestClearGoalDuringPendingEvaluatorFailureIsCleanStop reproduces the race
-// asymmetry finding: a ClearGoal (DELETE /goal) racing an in-flight
-// evaluator call that then fails with a genuine (non-cancellation) provider
-// error must be treated exactly like the same race on the worker-turn path
-// (see TestPursueGoalWorkerFailsPermanentlyClearsGoal's goalActiveWith guard)
-// — a clean stop, with no error returned and no session.error emitted. The
-// goal was already cleared by the time the evaluator failure is observed, so
-// there is nothing left to clear and nothing to journal as a failure: a
-// deliberately-cleared goal is not an error condition regardless of which
-// half of the loop the clear raced with.
+// TestClearGoalDuringPendingEvaluatorFailureIsCleanStop reproduces a
+// ClearGoal (DELETE /goal) racing an in-flight evaluator call that then fails
+// with a genuine (non-cancellation, non-retryable) provider error. REWRITTEN
+// (Round 6, NEP-4792) doc comment: this test's OLD framing ("must be treated
+// exactly like the same race on the worker-turn path... a deliberately-
+// cleared goal is not an error condition regardless of which half of the
+// loop the clear raced with") described an era where an evaluator failure
+// was otherwise just as fatal as a permanently-failing worker turn, and this
+// test's only point was that the race with ClearGoal pre-empted that
+// fatality. That symmetry no longer holds in general — an evaluator failure
+// is now advisory below goalEvalFailureLimit consecutive boundaries, not
+// fatal — but the race THIS test exercises is unaffected: recordGoalEvalFailed
+// follows recordGoalEval's own no-op-when-inactive convention (see
+// PursueGoal's evaluator-error branch), so a ClearGoal that wins the race
+// still produces exactly the same clean stop it always did — nothing is
+// journaled as a failed boundary for a goal that is already gone, and
+// nothing is left to clear a second time.
 func TestClearGoalDuringPendingEvaluatorFailureIsCleanStop(t *testing.T) {
 	dir := t.TempDir()
 	entered := make(chan struct{})
@@ -985,6 +1072,9 @@ func TestClearGoalDuringPendingEvaluatorFailureIsCleanStop(t *testing.T) {
 	if strings.Contains(log, evalErr.Error()) {
 		t.Errorf("session log carries the evaluator error even though the goal was already cleared:\n%s", log)
 	}
+	if strings.Contains(log, `"type":"goal.eval_failed"`) {
+		t.Errorf("session log contains a goal.eval_failed record for a boundary that resolved after ClearGoal:\n%s", log)
+	}
 }
 
 // TestGoalEventsEmitWhileLockHeld pins the follow-up ordering fix:
@@ -1041,6 +1131,16 @@ func TestGoalEventsEmitWhileLockHeld(t *testing.T) {
 					t.Fatal(err)
 				}
 				s.ClearGoal()
+			},
+		},
+		{
+			name: "recordGoalEvalFailed",
+			want: EventGoalEvalFailed,
+			run: func(s *Session) {
+				if err := s.RegisterGoal("cond"); err != nil {
+					t.Fatal(err)
+				}
+				s.recordGoalEvalFailed(errors.New("boom"), 1, 1, s.snapshotGoal().gen)
 			},
 		},
 	}

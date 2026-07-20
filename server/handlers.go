@@ -210,6 +210,13 @@ type goalJSON struct {
 	// for provider-backoff, the moment the loop's own retry succeeds.
 	Paused      bool   `json:"paused,omitempty"`
 	PauseReason string `json:"pause_reason,omitempty"`
+	// EvalFailures is the most recent goal.eval_failed record's consecutive
+	// failure count (see engine/goal.go's "Round 6" doc section, NEP-4792
+	// and goalTracker.evalFailures): rises with each failed evaluator
+	// boundary below goalEvalFailureLimit and resets to 0 on goal.set,
+	// goal.eval, goal.achieved, goal.cleared, or goal.updated. Omitted
+	// (zero) whenever no boundary has failed since the last reset.
+	EvalFailures int `json:"eval_failures,omitempty"`
 }
 
 // goalJSONFrom builds the goalJSON wire shape from a per-session goal
@@ -233,6 +240,7 @@ func goalJSONFrom(g *goalTracker) *goalJSON {
 		Waiting:        g.waiting,
 		Paused:         paused,
 		PauseReason:    reason,
+		EvalFailures:   g.evalFailures,
 	}
 }
 
