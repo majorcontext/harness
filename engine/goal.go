@@ -520,6 +520,18 @@ func (e *goalEvaluatorExhaustedError) Error() string {
 }
 func (e *goalEvaluatorExhaustedError) Unwrap() error { return e.err }
 
+// IsGoalEvaluatorExhausted reports whether err is (or wraps, via errors.As)
+// the sentinel PursueGoal returns once the evaluator has failed at
+// goalEvalFailureLimit consecutive turn boundaries (see
+// goalEvaluatorExhaustedError above) — the one hook a caller (the server, in
+// particular) needs to map this terminal onto its own outcome without
+// reaching into the unexported type itself or string-matching GoalReason.
+// Mirrors provider.IsContextOverflow's shape (provider/errors.go).
+func IsGoalEvaluatorExhausted(err error) bool {
+	var ee *goalEvaluatorExhaustedError
+	return errors.As(err, &ee)
+}
+
 // PursueGoal runs the goal loop: prompt the condition, then after every turn
 // ask the evaluator whether it is met, feeding the evaluator's reason back as
 // guidance until the condition is met or MaxTurns is exhausted.

@@ -596,3 +596,26 @@ func TestClearGoalMidFailingBoundariesStopsCleanly(t *testing.T) {
 		}
 	})
 }
+
+// TestIsGoalEvaluatorExhausted is the exported-hook test for Task 2 (server):
+// a caller outside this package (server/journal.go's turnEndOutcome) needs to
+// recognize the terminal sentinel without reaching into the unexported
+// goalEvaluatorExhaustedError type or string-matching GoalReason — mirrors
+// provider.IsContextOverflow's shape and its own test (provider/errors_test.go).
+func TestIsGoalEvaluatorExhausted(t *testing.T) {
+	if IsGoalEvaluatorExhausted(nil) {
+		t.Error("nil classified as evaluator-exhausted")
+	}
+	if IsGoalEvaluatorExhausted(errors.New("boom")) {
+		t.Error("plain error classified as evaluator-exhausted")
+	}
+	exhausted := &goalEvaluatorExhaustedError{err: errors.New("provider down"), failures: goalEvalFailureLimit}
+	if !IsGoalEvaluatorExhausted(exhausted) {
+		t.Error("goalEvaluatorExhaustedError not classified as evaluator-exhausted")
+	}
+	// errors.As sees through a wrapper too.
+	wrapped := fmt.Errorf("goal loop: %w", exhausted)
+	if !IsGoalEvaluatorExhausted(wrapped) {
+		t.Error("wrapped goalEvaluatorExhaustedError not classified as evaluator-exhausted")
+	}
+}

@@ -234,7 +234,7 @@ components:
       properties:
         outcome:
           type: string
-          enum: [completed, error, context_exhausted, max_turns_exceeded]
+          enum: [completed, error, context_exhausted, max_turns_exceeded, evaluator_exhausted]
           description: >
             "completed": the turn (or goal) finished successfully —for a
             goal, the evaluator returned MET. "error": the turn failed
@@ -253,12 +253,27 @@ components:
             A goal cleared via DELETE /session/{id}/goal (or a ClearGoal that
             wins a race against an in-flight worker retry or evaluator call)
             emits no turn.end at all — see the turn.end Event description.
+            "evaluator_exhausted": goal-loop only (NEP-4792) — the evaluator
+            itself failed at 5 CONSECUTIVE turn boundaries, a durable,
+            probably-permanent evaluator outage rather than an ordinary
+            worker-turn failure; distinct from generic "error" so a poller
+            can react to it specifically (e.g. alert an operator that the
+            evaluator is broken, rather than just retrying the goal). Every
+            failed boundary BELOW that limit is advisory only — no turn.end
+            at all, the goal stays active and the loop keeps working (see
+            GoalSummary.eval_failures and the goal.eval_failed event). This
+            outcome fires only once, at the terminal — and, UNLIKE the
+            operator-clear case just above, DOES emit turn.end: the
+            terminal always clears the goal first (goal.cleared, with a
+            dedicated reason distinct from an operator clear's), then emits
+            session.error (the terminal must be loud), then this turn.end,
+            in that order.
         error:
           type: string
           description: >
             Sanitized failure detail (never credentials or request bodies —
-            see the turn.end Event field) when outcome is "error". Absent
-            otherwise.
+            see the turn.end Event field) when outcome is "error" or
+            "evaluator_exhausted". Absent otherwise.
 
     SessionState:
       type: string
@@ -362,6 +377,18 @@ components:
           type: string
           enum: [restart, provider-backoff]
           description: Present only when paused is true.
+        eval_failures:
+          type: integer
+          description: >
+            The most recent goal.eval_failed record's CONSECUTIVE failure
+            count (NEP-4792, see docs/goal-loop.md): rises by one for each
+            evaluator boundary that fails outright (a non-retryable provider
+            error, an exhausted retryable-class in-boundary retry, or two
+            consecutive unparseable replies) while the goal stays active and
+            the worker keeps working. Reset to 0 by goal.set, goal.eval,
+            goal.achieved, goal.cleared, or goal.updated. Once this reaches
+            5, the goal is cleared and the run's turn.end reports outcome
+            "evaluator_exhausted" — see LastTurn.outcome.
 
     SessionStatus:
       type: string
@@ -633,6 +660,7 @@ components:
             - goal.updated
             - goal.eval
             - goal.stalled
+            - goal.eval_failed
             - goal.achieved
             - goal.cleared
             - goal.paused
@@ -677,9 +705,9 @@ components:
             system_hash differs from the session's previous request — the
             hash-on-change trick keeps unchanged prompts cheap while still
             making the exact system recoverable from a from=0 replay.
-            goal.set, goal.updated, goal.eval, goal.stalled, goal.achieved,
-            and goal.cleared are the durable records of a goal loop (POST
-            /session/{id}/goal). goal.set carries goal_condition; goal.updated
+            goal.set, goal.updated, goal.eval, goal.stalled, goal.eval_failed,
+            goal.achieved, and goal.cleared are the durable records of a goal
+            loop (POST /session/{id}/goal). goal.set carries goal_condition; goal.updated
             is journaled whenever the condition is rewritten in place — by a
             re-POST to /goal on an already-running loop, or by the `goal`
             session tool's `adjust` action — and carries only goal_condition
@@ -700,11 +728,25 @@ components:
             loop parks the turn (retries the same directive on the next
             ordinary turn) rather than clearing the goal, so a retryable
             exhaustion is never a dead stall requiring an operator re-POST.
-            goal.achieved carries goal_reason and goal_turns; goal.cleared
-            marks a goal cancelled via DELETE /session/{id}/goal (or a
-            worker turn that failed past its DETERMINISTIC retry budget,
-            carrying the failure as goal_reason — a retryable-budget
-            exhaustion never reaches this record, see above).
+            goal.eval_failed (NEP-4792) carries goal_reason (the sanitized
+            evaluator error) and goal_eval_failures (the consecutive-failure
+            count, inclusive) for each evaluator boundary that failed
+            outright — a non-retryable provider error, a retryable one whose
+            in-boundary budget was exhausted, or two consecutive unparseable
+            replies even after a stricter re-ask. It is non-terminal below 5
+            consecutive occurrences: the goal stays active and the worker
+            keeps working, with the next turn's guidance replaced by a fixed
+            "evaluator unavailable" notice rather than the raw error or a
+            stale prior verdict. goal.achieved carries goal_reason and
+            goal_turns; goal.cleared marks a goal cancelled via
+            DELETE /session/{id}/goal (empty goal_reason), a worker turn
+            that failed past its DETERMINISTIC retry budget (goal_reason
+            names the failure — a retryable-budget exhaustion never reaches
+            this record, see above), or the evaluator failing at 5
+            CONSECUTIVE goal.eval_failed boundaries (goal_reason "goal
+            evaluator failed at 5 consecutive turn boundaries" — see
+            turn.end's "evaluator_exhausted" outcome, which this clear
+            always precedes).
             Both goal.stalled (while goal_retryable && goal_waiting) and the
             boot-only goal.paused record carry goal_paused/
             goal_pause_reason — the wire form of GoalSummary.paused/
@@ -784,12 +826,15 @@ components:
             turn.end; see LastTurn.error.
         outcome:
           type: string
-          enum: [completed, error, context_exhausted, max_turns_exceeded]
+          enum: [completed, error, context_exhausted, max_turns_exceeded, evaluator_exhausted]
           description: >
             Turn result for turn.end events — see LastTurn.outcome for the
             full meaning of each value, including why a goal that exhausts
-            MaxTurns is "max_turns_exceeded" rather than "completed", and why
-            a cleared goal emits no turn.end at all.
+            MaxTurns is "max_turns_exceeded" rather than "completed", why a
+            cleared goal emits no turn.end at all, and why an
+            "evaluator_exhausted" terminal (NEP-4792) is the one clear that
+            DOES emit turn.end (preceded by goal.cleared and session.error,
+            in that order).
         system_hash:
           type: string
           description: SHA-256 of the joined system segments (request.meta).
@@ -817,7 +862,12 @@ components:
           description: The goal condition (goal.set, goal.updated, goal.paused).
         goal_reason:
           type: string
-          description: Evaluator reason (goal.eval, goal.achieved).
+          description: >
+            Evaluator reason (goal.eval, goal.achieved), or the clear reason
+            (goal.cleared) — empty for an operator-initiated clear, a fixed
+            "worker turn failed after N attempt(s): ..." for a permanently
+            failing worker turn, or "goal evaluator failed at 5 consecutive
+            turn boundaries" for the evaluator_exhausted terminal (NEP-4792).
         goal_met:
           type: boolean
           description: Whether the turn met the goal (goal.eval).
@@ -848,6 +898,18 @@ components:
             True while a goal.stalled record is still within the retryable
             backoff budget; false on the final such record, which reports
             the budget exhausted (see GoalSummary.waiting).
+        goal_eval_failures:
+          type: integer
+          description: >
+            Carried by goal.eval_failed only (NEP-4792, see GoalSummary.
+            eval_failures): the number of CONSECUTIVE failed evaluator
+            boundaries as of this record, inclusive — reset to zero the
+            moment a later boundary parses a verdict (goal.eval) or the goal
+            otherwise leaves this streak (goal.achieved, goal.cleared,
+            goal.updated). goal.cleared itself never carries a count, even
+            the terminal clear that fires once this reaches 5 — its
+            goal_reason names the limit instead (see that field's
+            description).
         goal_paused:
           type: boolean
           description: >
