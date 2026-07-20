@@ -376,7 +376,7 @@ any number of prior bad ones.
 
 ### The horizon: a bounded, loud terminal
 
-Infinite advisory failures would just be Round 4's zombie-goal risk wearing
+Infinite advisory failures would just be Round 3's zombie-goal risk wearing
 a disguise (a goal that LOOKS active but whose evaluator has been dead for
 hours, silently). After `goalEvalFailureLimit` (5) CONSECUTIVE failed
 boundaries, `PursueGoal` clears the goal with a dedicated reason ("goal

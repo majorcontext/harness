@@ -619,3 +619,92 @@ func TestIsGoalEvaluatorExhausted(t *testing.T) {
 		t.Error("wrapped goalEvaluatorExhaustedError not classified as evaluator-exhausted")
 	}
 }
+
+// TestEvalFailureStreakResetsOnConditionUpdate is the regression test for the
+// evalFailures/evalFailuresGen pairing: the CONSECUTIVE-failure streak must
+// reset whenever a turn's own fresh snapshot generation no longer matches
+// the generation the streak was last accumulated against (an UpdateGoal
+// landed in between), exactly mirroring the server's own fold
+// (server/journal.go's EventGoalUpdated case resets GoalSummary.evalFailures
+// to 0 "since the streak is measured against a condition").
+//
+// Uses scriptedGoalUpdateProvider's afterCall (see
+// TestPursueGoalPicksUpUpdatedConditionNextTurn) to fire UpdateGoal
+// deterministically right after turn 3's WORKER call returns — i.e. after
+// turns 1 and 2 have each failed a boundary cleanly (counts 1, 2) against
+// the original generation, but before turn 3's own evaluator calls run.
+// That timing makes turn 3's own boundary failure race the update and get
+// discarded as stale (the same generation-guard every other stale-discard
+// site in this loop already relies on — see goalStatus) — turn 3 contributes
+// no goal.eval_failed record at all — and turns 4-8 then fail cleanly
+// against the NEW generation.
+//
+// Pre-fix (evalFailures carried across the update with no generation check),
+// the streak instead continues from 2: turn 4 already logs count 3, and the
+// terminal fires two turns early, at turn 6, with only 5 total
+// goal.eval_failed records ([1,2,3,4,5]) instead of the honest 7
+// ([1,2,1,2,3,4,5]) a FULL fresh 5-failure horizon against the new
+// condition requires. This is the exact failure this test red-verifies
+// against.
+//
+// Run inside a synctest bubble: 7 failed boundaries each wait goalRetryDelay
+// (see AGENTS.md on synctest for all backoff timing).
+func TestEvalFailureStreakResetsOnConditionUpdate(t *testing.T) {
+	dir := t.TempDir()
+	synctest.Test(t, func(t *testing.T) {
+		const totalTurns = 8 // 2 pre-update + 1 discarded-by-the-race + 5 fresh post-update
+		worker := make([][]provider.Event, totalTurns)
+		var eval [][]provider.Event
+		for i := 0; i < totalTurns; i++ {
+			worker[i] = asstTurn(provider.StopEndTurn, &message.Text{Text: fmt.Sprintf("turn %d", i+1)})
+			eval = append(eval, evalTurn("unclear a"), evalTurn("unclear b")) // unparseable both attempts: every boundary fails
+		}
+		prov := &scriptedGoalUpdateProvider{worker: worker, eval: eval}
+		hooks := &fakeHooks{}
+		var evs []Event
+		s := goalSession(t, prov, dir, hooks)
+		s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
+		prov.afterCall = func(n int) {
+			// call 7 is turn 3's worker call (turn 1: calls 1-3, turn 2: calls
+			// 4-6, turn 3's worker: call 7) — right after it returns, before
+			// turn 3's own evaluator calls (8, 9) run.
+			if n == 7 {
+				if err := s.UpdateGoal("the new condition"); err != nil {
+					t.Fatalf("UpdateGoal = %v", err)
+				}
+			}
+		}
+
+		_, err := s.PursueGoal(context.Background(), "the original condition", GoalOptions{Evaluator: evalModel})
+		if err == nil {
+			t.Fatal("PursueGoal succeeded, want the terminal error")
+		}
+		var sentinel *goalEvaluatorExhaustedError
+		if !errors.As(err, &sentinel) {
+			t.Fatalf("err = %v (%T), want *goalEvaluatorExhaustedError", err, err)
+		}
+		if sentinel.failures != goalEvalFailureLimit {
+			t.Errorf("sentinel.failures = %d, want %d", sentinel.failures, goalEvalFailureLimit)
+		}
+
+		var counts []int
+		for _, ev := range evs {
+			if ev.Type == EventGoalEvalFailed {
+				counts = append(counts, ev.GoalEvalFailures)
+			}
+		}
+		want := []int{1, 2, 1, 2, 3, 4, 5}
+		if len(counts) != len(want) {
+			t.Fatalf("goal.eval_failed counts = %v, want %v (streak must reset to a FULL fresh %d-failure horizon after the mid-loop UpdateGoal)", counts, want, goalEvalFailureLimit)
+		}
+		for i := range want {
+			if counts[i] != want[i] {
+				t.Fatalf("goal.eval_failed counts = %v, want %v (streak must reset to a FULL fresh %d-failure horizon after the mid-loop UpdateGoal)", counts, want, goalEvalFailureLimit)
+			}
+		}
+
+		if msgs := sessionErrorMessages(t, hooks); len(msgs) != 1 || msgs[0] != err.Error() {
+			t.Errorf("session.error messages = %v, want exactly [%q] (the terminal must be loud)", msgs, err.Error())
+		}
+	})
+}

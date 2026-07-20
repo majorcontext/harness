@@ -204,6 +204,18 @@
 // below is about a STREAK, not a lifetime total, so one good evaluation
 // undoes any number of prior bad ones.
 //
+// The streak is also paired with the generation it accumulated against
+// (evalFailuresGen alongside evalFailures — the same pairing pattern
+// reason/reasonGen uses, see the "Round 5" section below), so an UpdateGoal
+// mid-streak resets it too: a self-adjust changes what the evaluator is
+// even checking, so failures counted against the OLD condition must not
+// carry over and let the terminal fire after fewer than
+// goalEvalFailureLimit failures against the NEW one. This mirrors the
+// server's own fold (server/journal.go's EventGoalUpdated case resets
+// GoalSummary.evalFailures to 0) — the engine's loop-local counter now
+// agrees with what the server surface already reports. See
+// TestEvalFailureStreakResetsOnConditionUpdate.
+//
 // The horizon has to exist somewhere, though — infinite advisory failures
 // would just be Round 3's zombie-goal risk wearing a disguise (a goal that
 // LOOKS active but whose evaluator has been dead for hours, silently). After
@@ -675,7 +687,20 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 		// happened for THIS streak's purposes — see the evaluator-failure
 		// branch below). Reaching goalEvalFailureLimit is the terminal
 		// horizon.
-		evalFailures int
+		//
+		// evalFailuresGen is only ever valid paired with evalFailures — the
+		// generation the streak was accumulated against — exactly the
+		// reason/reasonGen pairing rule below, applied to the OTHER piece of
+		// state a stale-discard can leave dangling. Every failed-boundary
+		// site compares it against that turn's OWN fresh snap.gen before
+		// adding to the count: a match continues the streak, a mismatch
+		// (an UpdateGoal moved the goal to a new generation since
+		// evalFailures was last set) starts a fresh streak at 1 instead of
+		// silently carrying a count accumulated against a condition the
+		// evaluator is no longer even checking — see the evaluator-failure
+		// branch below and TestEvalFailureStreakResetsOnConditionUpdate.
+		evalFailures    int
+		evalFailuresGen uint64
 	)
 	for turn := 1; opts.MaxTurns == 0 || turn <= opts.MaxTurns; turn++ {
 		// Per-turn-boundary snapshot (see goalSnapshot's doc comment): this
@@ -845,14 +870,27 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			// generation that is no longer current — discard silently,
 			// evalFailures left untouched, exactly like every other
 			// stale-discard site in this loop).
-			candidateFailures := evalFailures + 1
+			//
+			// The candidate is built off evalFailures ONLY when
+			// evalFailuresGen still matches THIS turn's snap.gen (see the
+			// pairing rule on the var block above): a mismatch means the
+			// running count was accumulated against a condition an
+			// UpdateGoal has since moved past, so it must not carry into a
+			// streak against the new one — start fresh at 1 instead of
+			// letting the terminal fire early against a horizon it never
+			// actually earned.
+			candidateBase := 0
+			if evalFailuresGen == snap.gen {
+				candidateBase = evalFailures
+			}
+			candidateFailures := candidateBase + 1
 			if !s.recordGoalEvalFailed(err, turn, candidateFailures, snap.gen) {
 				if _, stale := s.goalStatus(snap.gen); stale {
 					continue
 				}
 				return &GoalResult{Achieved: false, Turns: turn, Reason: "goal cleared"}, nil
 			}
-			evalFailures = candidateFailures
+			evalFailures, evalFailuresGen = candidateFailures, snap.gen
 			if evalFailures >= goalEvalFailureLimit {
 				// The terminal horizon: a durable, probably-permanent
 				// evaluator outage, not the ordinary provider weather
@@ -885,7 +923,7 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			reason, reasonGen = goalEvalUnavailableNotice, snap.gen
 			continue
 		}
-		evalFailures = 0
+		evalFailures, evalFailuresGen = 0, snap.gen
 		if !s.recordGoalEval(met, evalReason, turn, snap.gen) {
 			// Either ClearGoal fired while this evaluation was in flight (the
 			// goal is no longer active, so its verdict must not land in the

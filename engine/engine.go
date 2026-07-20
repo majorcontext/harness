@@ -71,13 +71,17 @@ type Event struct {
 	// die — see PursueGoal's doc comment). All three are zero-valued on a
 	// deterministic-path stall, unchanged from before they existed.
 	//
-	// GoalEvalFailures is carried by goal.eval_failed (see goal.go's "Round
-	// 6" doc section and evaluateGoal/recordGoalEvalFailed): the number of
-	// CONSECUTIVE failed evaluator boundaries as of this one, inclusive —
-	// reset to zero the moment a later boundary parses a verdict (MET or
-	// NOT MET), so it measures a streak, not a cumulative total. It also
-	// appears, unreset, on the terminal goal.cleared record/event that
-	// fires once this reaches goalEvalFailureLimit.
+	// GoalEvalFailures is carried by goal.eval_failed only (see goal.go's
+	// "Round 6" doc section and evaluateGoal/recordGoalEvalFailed): the
+	// number of CONSECUTIVE failed evaluator boundaries as of this one,
+	// inclusive — reset to zero the moment a later boundary parses a
+	// verdict (MET or NOT MET) or the generation changes (an UpdateGoal),
+	// so it measures a streak against one condition, never a cumulative
+	// total. goal.cleared itself never carries a count — even the terminal
+	// clear that fires once this reaches goalEvalFailureLimit — its
+	// dedicated GoalReason text names the limit instead (see
+	// server/journal.go's GoalEvalFailures doc comment for the mirrored
+	// server-side fold).
 	GoalCondition      string `json:"goal_condition,omitempty"`
 	GoalReason         string `json:"goal_reason,omitempty"`
 	GoalMet            bool   `json:"goal_met,omitempty"`

@@ -145,9 +145,12 @@ type goalRecord struct {
 	// EvalFailures carries a goal.eval_failed record's consecutive-failure
 	// count (see goal.go's recordGoalEvalFailed and "Round 6" doc section):
 	// the number of CONSECUTIVE failed evaluator boundaries as of this one,
-	// inclusive, reset to zero the moment a later boundary parses a verdict.
-	// It also names the count on the terminal goal.cleared record that
-	// fires once this reaches goalEvalFailureLimit.
+	// inclusive, reset to zero the moment a later boundary parses a verdict
+	// or the generation changes (an UpdateGoal). The terminal goal.cleared
+	// record that fires once this reaches goalEvalFailureLimit never carries
+	// a count itself — its Reason text names the limit instead (see
+	// server/journal.go's GoalEvalFailures doc comment for the mirrored
+	// server-side fold).
 	EvalFailures int `json:"eval_failures,omitempty"`
 }
 
