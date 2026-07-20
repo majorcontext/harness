@@ -4,16 +4,23 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/majorcontext/harness/mcp"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 )
@@ -205,6 +212,118 @@ func TestMCPManagerCallToolIsError(t *testing.T) {
 	}
 }
 
+// TestMCPManagerCallToolTransportErrorNeverLeaksURL is the runtime-call
+// sibling of TestMCPManagerCallServerToolRetryingErrorNeverLeaksURL: a
+// server that connected FINE and then drops before answering a tools/call
+// request yields a real *url.Error (net/http's shape for a failed dial),
+// which stringifies as `Post "<full-endpoint-URL>": <cause>` — the same
+// secret-in-URL class classifyMCPConnectError guards against on the
+// connect surface, but here on client.CallTool's error path in callTool
+// (engine/mcp.go). The endpoint URL below carries a fake secret in its
+// query string, mirroring a real MCP server auth pattern.
+func TestMCPManagerCallToolTransportErrorNeverLeaksURL(t *testing.T) {
+	const secret = "SUPERSECRET789"
+	srv := &fakeMCPHTTPServer{tools: []fakeMCPTool{
+		{name: "echo", content: []map[string]any{textContent("hi")}},
+	}}
+	hs := httptest.NewServer(http.HandlerFunc(srv.serveHTTP))
+	endpoint := hs.URL + "/mcp?token=" + secret
+
+	mgr := NewMCPManager(map[string]MCPServerConfig{"svc": {URL: endpoint}})
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+	// Connect succeeds first — the server is healthy at this point.
+	mgr.Tools(context.Background())
+
+	// The server now drops: nothing is listening on this port anymore, so
+	// the NEXT call's dial fails with a real connection-refused error
+	// wrapping the full (secret-bearing) endpoint URL.
+	hs.Close()
+
+	_, _, err := mgr.CallServerTool(context.Background(), "svc", "echo", nil)
+	if err == nil {
+		t.Fatal("want an error once the server has gone away mid-call")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("CallServerTool error = %q, leaked the fake secret", err)
+	}
+	if strings.Contains(err.Error(), "token=") || strings.Contains(err.Error(), endpoint) {
+		t.Fatalf("CallServerTool error = %q, leaked the endpoint URL", err)
+	}
+	if !strings.Contains(err.Error(), "connection refused") && !strings.Contains(err.Error(), "connection failed") {
+		t.Errorf("CallServerTool error = %q, want a classified connection-failure reason", err)
+	}
+}
+
+// TestMCPManagerCallToolContextCancellationPassesThroughCleanly pins the
+// ctx-cancellation decision documented on sanitizeMCPCallError: both HTTP
+// and stdio transports return ctx.Err() bare (never wrapped in a
+// *url.Error) on cancellation, so there is nothing to sanitize and the
+// call error should be exactly context.Canceled — not rewritten into a
+// misleading "call failed". This is also inert for turn-abort semantics:
+// runToolCall (engine.go) always turns a tool error into an ordinary
+// ToolResult regardless of its text, so sanitization here cannot itself
+// change abort behavior — the enclosing turn's own abort happens
+// separately, the next time Session.Prompt's loop makes a provider request
+// on the same cancelled ctx.
+//
+// The fake handler answers initialize/tools-list immediately (so the
+// server connects normally) and blocks only the tools/call request, so the
+// call is cancelled genuinely mid-flight rather than never reaching the
+// server at all.
+func TestMCPManagerCallToolContextCancellationPassesThroughCleanly(t *testing.T) {
+	callStarted := make(chan struct{})
+	block := make(chan struct{})
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), `"tools/call"`) {
+			close(callStarted)
+			<-block
+		}
+		(&fakeMCPHTTPServer{tools: []fakeMCPTool{
+			{name: "echo", content: []map[string]any{textContent("hi")}},
+		}}).serveHTTP(w, httptest.NewRequest(r.Method, r.URL.String(), bytes.NewReader(body)))
+	})
+	hs := httptest.NewServer(handler)
+	t.Cleanup(hs.Close)
+	// Registered AFTER hs's own t.Cleanup(hs.Close): cleanups run LIFO, so
+	// this closes the block channel (releasing the handler goroutine
+	// blocked on it) before hs.Close blocks waiting for that goroutine to
+	// finish — same ordering rule TestMCPManagerConnectTimeoutFailsOpen
+	// documents.
+	t.Cleanup(func() { close(block) })
+
+	mgr := NewMCPManager(map[string]MCPServerConfig{"svc": {URL: hs.URL}})
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+	mgr.Tools(context.Background()) // connect first, unblocked
+
+	connCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := mgr.CallServerTool(connCtx, "svc", "echo", nil)
+		done <- err
+	}()
+	<-callStarted
+	cancel()
+
+	err := <-done
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("CallServerTool error = %v, want context.Canceled somewhere in its chain (unwrapped by sanitizeMCPCallError, not rewritten)", err)
+	}
+	// The client wraps ctx.Err() with "mcp: tools/call <name>: %w" (see
+	// mcp/client.go's CallTool) before it ever reaches sanitizeMCPCallError
+	// — that wrapping is the mcp package's, not a rewrite this fix
+	// performs, and it contains no endpoint URL either way. Pin the exact
+	// unsanitized text so a future change accidentally rewriting it into a
+	// generic "call failed" would be caught here.
+	const want = `mcp: tools/call echo: context canceled`
+	if err.Error() != want {
+		t.Errorf("CallServerTool error text = %q, want %q (no sanitization applied)", err.Error(), want)
+	}
+}
+
 func TestMCPManagerCallServerTool(t *testing.T) {
 	srv := &fakeMCPHTTPServer{tools: []fakeMCPTool{
 		{name: "echo", content: []map[string]any{textContent("hi")}},
@@ -300,8 +419,15 @@ func TestMCPManagerConnectTimeoutFailsOpen(t *testing.T) {
 }
 
 // TestMCPManagerConnectsOnce verifies the connect-and-list step happens
-// exactly once per server even across repeated Tools()/CallTool() calls —
-// it is cached, not re-attempted every call.
+// exactly once for a server that connects successfully, even across
+// repeated Tools()/CallTool() calls — it is cached, not re-attempted every
+// call. REWRITTEN for the retry state machine (see
+// docs/plans/2026-07-20-mcp-init-resilience.md invariant 3): this is no
+// longer "every server connects exactly once, period" (a FAILED server now
+// gets an indefinite background retry — see
+// TestMCPManagerFailedServerRetriesInBackgroundAndRecovers) but narrows to
+// "a server that HAS connected is never re-probed," which is what this
+// test actually exercises (its one server always succeeds).
 func TestMCPManagerConnectsOnce(t *testing.T) {
 	srv := &fakeMCPHTTPServer{tools: []fakeMCPTool{{name: "ok", content: []map[string]any{textContent("fine")}}}}
 	var listCalls int
@@ -590,6 +716,12 @@ func TestDecodeMCPBase64MalformedLogsWarning(t *testing.T) {
 // dial, mid-handshake) when Close is invoked; the fake session header lets
 // the test observe, via the DELETE the client's Close then issues, whether
 // the client that connect is about to create actually got closed.
+//
+// This race is about the FIRST-attempt/connectOnce interlock specifically
+// (see engine/mcp.go's Close doc comment) and is unaffected by the retry
+// state machine layered on top of it: the server here connects
+// successfully, so no retryServer goroutine is ever spawned for it, and
+// this test's assertions hold exactly as before.
 func TestMCPManagerCloseWaitsForInFlightConnect(t *testing.T) {
 	const wantSession = "race-session-1"
 	gate := make(chan struct{})
@@ -694,6 +826,14 @@ func TestMCPManagerCloseWaitsForInFlightConnect(t *testing.T) {
 // It also covers the ordering the fix must additionally guarantee: a
 // Tools() call arriving after such a Close must not get to start a late
 // connect either, since connectOnce is only ever consumed once.
+//
+// Like TestMCPManagerCloseWaitsForInFlightConnect, this is about the
+// FIRST-attempt interlock and predates the retry state machine; since the
+// manager here is closed before any attempt ever resolves, no
+// retryServer goroutine is ever spawned (there is nothing to retry) —
+// Close's added retryCancel()/retryWG.Wait() steps are both instant no-ops
+// in this scenario, so the near-instant elapsed-time assertion below still
+// holds.
 func TestMCPManagerCloseOfNeverPromptedManagerNeverConnects(t *testing.T) {
 	block := make(chan struct{})
 	var requests int32
@@ -746,4 +886,524 @@ func TestMCPManagerCloseBounded(t *testing.T) {
 	if err := mgr.Close(ctx); err != nil {
 		t.Errorf("Close: %v", err)
 	}
+}
+
+// # Retry state machine (NEP-4814 upstream, docs/plans/2026-07-20-mcp-init-resilience.md)
+//
+// The tests below cover invariants 2-5 and 8 of that plan. Most run inside
+// a testing/synctest bubble with mcpConnectFunc swapped for a network-free
+// fake — AGENTS.md is explicit that real network I/O does not behave
+// deterministically inside a synctest bubble, so a fake keeps the whole
+// retry schedule bubble-native (fake timers only) and lets synctest's fake
+// clock fast-forward through minutes of backoff instantly. The one
+// exception (TestMCPManagerCallServerToolRetryingThenRecovers) drives a
+// real mcp.Client round trip end to end and so runs outside a bubble, with
+// real (bounded) backoff wall time and the mcpTestRetryCommitted hook for
+// synchronization instead of a sleep or a poll loop.
+
+// withMCPConnectFunc swaps mcpConnectFunc for fn for the duration of the
+// test and restores the original in Cleanup — the package-var seam tests
+// use to run the retry schedule without touching real network (see the
+// section doc comment above).
+func withMCPConnectFunc(t *testing.T, fn func(ctx context.Context, name string, spec MCPServerConfig) (*mcp.Client, []mcp.Tool, error)) {
+	t.Helper()
+	orig := mcpConnectFunc
+	t.Cleanup(func() { mcpConnectFunc = orig })
+	mcpConnectFunc = fn
+}
+
+// withZeroMCPJitter forces mcpJitterFunc to always return 0, making
+// mcpRetryBackoff(attempt) exactly half of mcpRetryDelay(attempt) — the
+// same "half fixed, half zeroed jitter" trick goal_test.go's
+// TestGoalRetryableBackoffJitter callers use, so a schedule's total elapsed
+// time is exactly assertable rather than merely bounded.
+func withZeroMCPJitter(t *testing.T) {
+	t.Helper()
+	orig := mcpJitterFunc
+	t.Cleanup(func() { mcpJitterFunc = orig })
+	mcpJitterFunc = func(time.Duration) time.Duration { return 0 }
+}
+
+// TestMCPRetryDelaySchedule is the pure-function schedule test, mirroring
+// goal.go's TestGoalRetryDelaySchedule: ~1s doubling to a 5-minute cap.
+func TestMCPRetryDelaySchedule(t *testing.T) {
+	cases := []struct {
+		attempt int
+		want    time.Duration
+	}{
+		{1, 1 * time.Second},
+		{2, 2 * time.Second},
+		{3, 4 * time.Second},
+		{4, 8 * time.Second},
+		{5, 16 * time.Second},
+		{6, 32 * time.Second},
+		{7, 64 * time.Second},
+		{8, 128 * time.Second},
+		{9, 256 * time.Second},
+		{10, mcpRetryBackoffCap}, // 512s would exceed the 5-minute cap
+		{11, mcpRetryBackoffCap},
+	}
+	for _, c := range cases {
+		if got := mcpRetryDelay(c.attempt); got != c.want {
+			t.Errorf("mcpRetryDelay(%d) = %v, want %v", c.attempt, got, c.want)
+		}
+	}
+}
+
+// TestMCPRetryBackoffJitter proves mcpRetryBackoff applies "equal jitter"
+// (half the base delay fixed, half randomized in [0, half)) at both ends of
+// the random range, via the mcpJitterFunc seam.
+func TestMCPRetryBackoffJitter(t *testing.T) {
+	orig := mcpJitterFunc
+	t.Cleanup(func() { mcpJitterFunc = orig })
+
+	mcpJitterFunc = func(time.Duration) time.Duration { return 0 }
+	if got, want := mcpRetryBackoff(1), 500*time.Millisecond; got != want {
+		t.Errorf("mcpRetryBackoff(1) with zero jitter = %v, want %v (half of the 1s base)", got, want)
+	}
+
+	mcpJitterFunc = func(max time.Duration) time.Duration { return max - 1 }
+	if got, want := mcpRetryBackoff(1), 1*time.Second-1; got != want {
+		t.Errorf("mcpRetryBackoff(1) with max jitter = %v, want %v (just under the full 1s base)", got, want)
+	}
+}
+
+// TestMCPManagerFailedServerRetriesInBackgroundAndRecovers is invariant 2's
+// headline test, red-verified against pre-Task-1 mcp.go (a throwaway
+// httptest-based check proved a recovered server's tools never appear —
+// see the commit message). A server whose first connect attempt fails
+// gets a background retry on the capped schedule; once one succeeds, the
+// tool appears in Tools() with no new session and no explicit trigger.
+// The retry loop's commit is observed via the mcpTestRetryCommitted hook
+// rather than synctest.Wait(): Wait() only blocks until the bubble reaches
+// its NEXT quiescent point, which — for a goroutine sitting in a backoff
+// timer wait — is immediately true (a goroutine durably blocked on an
+// as-yet-unfired timer already satisfies "durably blocked", so Wait()
+// returns before that timer ever fires; time only auto-advances while the
+// CALLING goroutine is itself durably blocked too, e.g. on a channel
+// receive, letting the bubble's clock fast-forward through the whole
+// nested sequence, matching testing/synctest's own canonical example of a
+// goroutine's timer resolving inside an enclosing blocked wait).
+func TestMCPManagerFailedServerRetriesInBackgroundAndRecovers(t *testing.T) {
+	withZeroMCPJitter(t)
+
+	synctest.Test(t, func(t *testing.T) {
+		var calls int32
+		committed := make(chan bool, 8)
+		orig := mcpTestRetryCommitted
+		t.Cleanup(func() { mcpTestRetryCommitted = orig })
+		mcpTestRetryCommitted = func(server string, connected bool) { committed <- connected }
+
+		withMCPConnectFunc(t, func(ctx context.Context, name string, spec MCPServerConfig) (*mcp.Client, []mcp.Tool, error) {
+			n := atomic.AddInt32(&calls, 1)
+			if n < 4 {
+				return nil, nil, errors.New("boom")
+			}
+			return nil, []mcp.Tool{{Name: "get_forecast", Description: "weather"}}, nil
+		})
+
+		mgr := NewMCPManager(map[string]MCPServerConfig{"weather": {URL: "http://unused"}})
+		t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+		start := time.Now()
+
+		defs := mgr.Tools(context.Background())
+		if len(defs) != 0 {
+			t.Fatalf("Tools() after the failed first attempt = %+v, want empty", defs)
+		}
+
+		// Block until a retry commits Connected == true — this receive is
+		// what forces the bubble's fake clock through the whole backoff
+		// schedule (two failed retries, then the third succeeding).
+		for !<-committed {
+		}
+
+		defs = mgr.Tools(context.Background())
+		if len(defs) != 1 || defs[0].Name != "mcp__weather__get_forecast" {
+			t.Fatalf("Tools() after recovery = %+v, want the recovered server's tool", defs)
+		}
+
+		// Attempts 1-3 failed (the first attempt plus two retries);
+		// attempt 4 succeeded. Elapsed (fake) time is the sum of the
+		// backoff waited after each of the three failures.
+		var want time.Duration
+		for attempt := 1; attempt <= 3; attempt++ {
+			want += mcpRetryDelay(attempt) / 2 // zero jitter above halves each delay
+		}
+		if elapsed := time.Since(start); elapsed != want {
+			t.Errorf("elapsed = %v, want exactly %v (the retry backoff schedule for 3 failed attempts)", elapsed, want)
+		}
+		if n := atomic.LoadInt32(&calls); n != 4 {
+			t.Errorf("connect attempts = %d, want exactly 4 (first + 3 retries, the last succeeding)", n)
+		}
+	})
+}
+
+// TestMCPManagerHealthyServerNeverReprobedWhileSiblingRetries covers
+// invariant 3 (a healthy server is initialized exactly once, never
+// re-probed) together with invariant 8 (independent per-server retry:
+// one server's still-in-progress backoff must not delay another's
+// recovery). "good" connects on its first attempt and must never be
+// dialed again; "slow" fails twice, is deliberately held mid-attempt by
+// the test so its recovery is observably LATER than good's, and only then
+// allowed to succeed.
+func TestMCPManagerHealthyServerNeverReprobedWhileSiblingRetries(t *testing.T) {
+	withZeroMCPJitter(t)
+
+	synctest.Test(t, func(t *testing.T) {
+		var goodCalls, slowCalls int32
+		gate := make(chan struct{})
+		reachedGate := make(chan struct{})
+
+		withMCPConnectFunc(t, func(ctx context.Context, name string, spec MCPServerConfig) (*mcp.Client, []mcp.Tool, error) {
+			switch name {
+			case "good":
+				atomic.AddInt32(&goodCalls, 1)
+				return nil, []mcp.Tool{{Name: "ping"}}, nil
+			case "slow":
+				n := atomic.AddInt32(&slowCalls, 1)
+				if n == 1 {
+					return nil, nil, errors.New("boom") // first attempt fails, spawning the retry
+				}
+				close(reachedGate) // signal BEFORE blocking, so the test can force fake time through the backoff wait that got us here
+				<-gate             // held here until the test releases it
+				return nil, []mcp.Tool{{Name: "pong"}}, nil
+			default:
+				t.Fatalf("unexpected server %q", name)
+				return nil, nil, nil
+			}
+		})
+
+		mgr := NewMCPManager(map[string]MCPServerConfig{
+			"good": {URL: "http://unused"},
+			"slow": {URL: "http://unused"},
+		})
+		t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+		defs := mgr.Tools(context.Background())
+		if len(defs) != 1 || defs[0].Name != "mcp__good__ping" {
+			t.Fatalf("Tools() after the first batch = %+v, want only good's tool", defs)
+		}
+
+		// Block until slow's retry goroutine has actually crossed its
+		// backoff wait and reached its second attempt (now durably blocked
+		// on gate) — a receive here, not synctest.Wait(), is what forces
+		// the bubble's fake clock through that backoff timer (see the
+		// comment on TestMCPManagerFailedServerRetriesInBackgroundAndRecovers).
+		<-reachedGate
+
+		defs = mgr.Tools(context.Background())
+		if len(defs) != 1 || defs[0].Name != "mcp__good__ping" {
+			t.Fatalf("Tools() while slow is still retrying = %+v, want only good's tool (slow must not be up yet)", defs)
+		}
+		if n := atomic.LoadInt32(&goodCalls); n != 1 {
+			t.Errorf("good connect attempts = %d, want exactly 1 (never re-probed while slow keeps retrying)", n)
+		}
+
+		close(gate)     // let slow's held attempt complete
+		synctest.Wait() // no further timer involved: slow just needs to run its commit and exit
+
+		defs = mgr.Tools(context.Background())
+		if len(defs) != 2 {
+			t.Fatalf("Tools() after slow recovers = %+v, want both tools", defs)
+		}
+		if n := atomic.LoadInt32(&goodCalls); n != 1 {
+			t.Errorf("good connect attempts = %d, want exactly 1 (still never re-probed)", n)
+		}
+	})
+}
+
+// mcpCommitEvent is one retryServer commit, as observed via the
+// mcpTestRetryCommitted hook.
+type mcpCommitEvent struct {
+	server    string
+	connected bool
+}
+
+// TestMCPManagerIndependentRetrySchedules is invariant 8's dedicated test:
+// two servers that BOTH fail their first attempt and are both actively
+// retrying must progress on independent schedules — "fast" (succeeds on
+// its 2nd attempt) must recover without waiting for "slow" (succeeds only
+// on its 5th), and Tools() must reflect that partial recovery immediately
+// rather than waiting for every retrying server to settle.
+func TestMCPManagerIndependentRetrySchedules(t *testing.T) {
+	withZeroMCPJitter(t)
+
+	synctest.Test(t, func(t *testing.T) {
+		var fastCalls, slowCalls int32
+		withMCPConnectFunc(t, func(ctx context.Context, name string, spec MCPServerConfig) (*mcp.Client, []mcp.Tool, error) {
+			switch name {
+			case "fast":
+				if atomic.AddInt32(&fastCalls, 1) < 2 {
+					return nil, nil, errors.New("boom")
+				}
+				return nil, []mcp.Tool{{Name: "go"}}, nil
+			case "slow":
+				if atomic.AddInt32(&slowCalls, 1) < 5 {
+					return nil, nil, errors.New("boom")
+				}
+				return nil, []mcp.Tool{{Name: "go"}}, nil
+			default:
+				t.Fatalf("unexpected server %q", name)
+				return nil, nil, nil
+			}
+		})
+
+		committed := make(chan mcpCommitEvent, 32)
+		orig := mcpTestRetryCommitted
+		t.Cleanup(func() { mcpTestRetryCommitted = orig })
+		mcpTestRetryCommitted = func(server string, connected bool) { committed <- mcpCommitEvent{server, connected} }
+
+		mgr := NewMCPManager(map[string]MCPServerConfig{
+			"fast": {URL: "http://unused"},
+			"slow": {URL: "http://unused"},
+		})
+		t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+		mgr.Tools(context.Background()) // both fail their first attempt, spawning independent retries
+
+		// Drain commits until fast succeeds. If slow succeeds FIRST, the
+		// schedules are not actually independent (fast got delayed behind
+		// slow's much longer one).
+		for {
+			ev := <-committed
+			if ev.server == "slow" && ev.connected {
+				t.Fatal("slow connected before fast — one server's retry blocked the other's")
+			}
+			if ev.server == "fast" && ev.connected {
+				break
+			}
+		}
+
+		defs := mgr.Tools(context.Background())
+		if len(defs) != 1 || defs[0].Name != "mcp__fast__go" {
+			t.Fatalf("Tools() right after fast recovers = %+v, want only fast's tool (slow must still be down)", defs)
+		}
+
+		for {
+			ev := <-committed
+			if ev.server == "slow" && ev.connected {
+				break
+			}
+		}
+
+		defs = mgr.Tools(context.Background())
+		if len(defs) != 2 {
+			t.Fatalf("Tools() after both recover = %+v, want both tools", defs)
+		}
+	})
+}
+
+// TestMCPManagerCallServerToolRetryingThenRecovers is invariant 4's test:
+// CallServerTool against a failed-but-retrying server errors with a
+// message distinguishing it from an unconfigured server; after a
+// background retry succeeds, the identical call succeeds. This drives a
+// REAL mcp.Client round trip (not the network-free fake the other tests in
+// this section use), so it runs outside a synctest bubble with real
+// backoff wall time — synchronized via the mcpTestRetryCommitted hook, not
+// a sleep or a poll loop.
+func TestMCPManagerCallServerToolRetryingThenRecovers(t *testing.T) {
+	var mu sync.Mutex
+	requestCount := 0
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requestCount++
+		first := requestCount == 1
+		mu.Unlock()
+		if first {
+			// Fail the very first request outright: the initial connect
+			// attempt's Initialize call fails immediately, no ConnectTimeout
+			// wait needed.
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		(&fakeMCPHTTPServer{tools: []fakeMCPTool{
+			{name: "echo", content: []map[string]any{textContent("hi")}},
+		}}).serveHTTP(w, r)
+	})
+	hs := httptest.NewServer(handler)
+	t.Cleanup(hs.Close)
+
+	committed := make(chan bool, 8)
+	orig := mcpTestRetryCommitted
+	t.Cleanup(func() { mcpTestRetryCommitted = orig })
+	mcpTestRetryCommitted = func(server string, connected bool) {
+		if server == "svc" {
+			committed <- connected
+		}
+	}
+
+	mgr := NewMCPManager(map[string]MCPServerConfig{"svc": {URL: hs.URL, ConnectTimeout: 500 * time.Millisecond}})
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+	// The first attempt fails synchronously inside Tools() (bounded by
+	// ConnectTimeout, but the 500 response returns immediately).
+	mgr.Tools(context.Background())
+
+	_, _, err := mgr.CallServerTool(context.Background(), "svc", "echo", nil)
+	if err == nil {
+		t.Fatal("want an error while the server is still retrying")
+	}
+	if !strings.Contains(err.Error(), "retrying") {
+		t.Errorf("error = %q, want it to mention retrying (distinct from the not-configured message)", err)
+	}
+	if strings.Contains(err.Error(), "not configured") {
+		t.Errorf("error = %q, must not say \"not configured\" for a server that IS configured", err)
+	}
+
+	// Block until a background retry actually commits — real backoff wall
+	// time (mcpRetryBackoffBase, ~0.5-1s here), not a sleep: this is the
+	// production retry goroutine's own real, bounded work completing.
+	for !<-committed {
+		// keep waiting through any further failed attempts
+	}
+
+	out, isErr, err := mgr.CallServerTool(context.Background(), "svc", "echo", nil)
+	if err != nil {
+		t.Fatalf("CallServerTool after recovery: %v", err)
+	}
+	if isErr {
+		t.Fatal("isErr = true, want false")
+	}
+	if out.Text() != "hi" {
+		t.Errorf("output = %q, want \"hi\"", out.Text())
+	}
+}
+
+// TestMCPManagerCallServerToolUnconfiguredMessageDistinctFromRetrying pins
+// the not-configured-vs-failed error split (invariant 4, engine/mcp.go
+// ~284-286 pre-change): a server name that was never configured at all
+// gets a different message than one that IS configured but hasn't
+// connected yet.
+func TestMCPManagerCallServerToolUnconfiguredMessageDistinctFromRetrying(t *testing.T) {
+	withMCPConnectFunc(t, func(ctx context.Context, name string, spec MCPServerConfig) (*mcp.Client, []mcp.Tool, error) {
+		return nil, nil, errors.New("boom")
+	})
+
+	mgr := NewMCPManager(map[string]MCPServerConfig{"svc": {URL: "http://unused"}})
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+	_, _, err := mgr.CallServerTool(context.Background(), "svc", "echo", nil)
+	if err == nil || !strings.Contains(err.Error(), "retrying") {
+		t.Fatalf("configured-but-failed error = %v, want it to mention retrying", err)
+	}
+
+	_, _, err = mgr.CallServerTool(context.Background(), "nope", "echo", nil)
+	if err == nil || !strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("unconfigured-server error = %v, want it to say not configured", err)
+	}
+	if strings.Contains(err.Error(), "retrying") {
+		t.Errorf("unconfigured-server error = %v, must not mention retrying", err)
+	}
+}
+
+// TestMCPManagerCallServerToolRetryingErrorNeverLeaksURL is the should-fix
+// finding's headline test for the second model-visible surface (the first
+// is mcp_status_test.go's TestMCPStatusSegmentClassifiesReasonNeverLeaksURL):
+// CallServerTool's failed-and-retrying error must carry only
+// classifyMCPConnectError's classified reason, never the raw connect
+// error's text — a *url.Error (the shape net/http returns on a failed
+// dial) stringifies as `Post "<full-URL>": <cause>`, and a real HTTP MCP
+// server's URL can carry a secret in its path or query.
+func TestMCPManagerCallServerToolRetryingErrorNeverLeaksURL(t *testing.T) {
+	const secret = "SUPERSECRET123"
+	leaky := &url.Error{
+		Op:  "Post",
+		URL: "https://mcp.example.com/v1?token=" + secret,
+		Err: &net.OpError{
+			Op:  "dial",
+			Net: "tcp",
+			Err: &os.SyscallError{Syscall: "connect", Err: syscall.ECONNREFUSED},
+		},
+	}
+	withMCPConnectFunc(t, func(ctx context.Context, name string, spec MCPServerConfig) (*mcp.Client, []mcp.Tool, error) {
+		return nil, nil, leaky
+	})
+
+	mgr := NewMCPManager(map[string]MCPServerConfig{"svc": {URL: "http://unused"}})
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+	_, _, err := mgr.CallServerTool(context.Background(), "svc", "echo", nil)
+	if err == nil {
+		t.Fatal("want an error while the server is still retrying")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("CallServerTool error = %q, leaked the fake secret", err)
+	}
+	if strings.Contains(err.Error(), "mcp.example.com") {
+		t.Fatalf("CallServerTool error = %q, leaked the endpoint host", err)
+	}
+	if !strings.Contains(err.Error(), "connection refused") {
+		t.Errorf("CallServerTool error = %q, want the classified reason %q", err, "connection refused")
+	}
+	if !strings.Contains(err.Error(), "retrying") {
+		t.Errorf("CallServerTool error = %q, want it to still mention retrying", err)
+	}
+}
+
+// TestMCPManagerCloseDuringBackoffWaitStopsRetryPromptly is invariant 5's
+// first scenario: Close while a failed server's retry goroutine is
+// durably parked in its backoff wait. Cancellation must end the wait
+// immediately rather than riding it out — asserted both directly (elapsed
+// FAKE time is exactly zero: no clock advance was needed) and implicitly
+// by the synctest bubble itself, which fails the test if the retry
+// goroutine is still alive when this function returns (goroutine leak
+// detection at bubble exit, per AGENTS.md).
+func TestMCPManagerCloseDuringBackoffWaitStopsRetryPromptly(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		withMCPConnectFunc(t, func(ctx context.Context, name string, spec MCPServerConfig) (*mcp.Client, []mcp.Tool, error) {
+			return nil, nil, errors.New("boom") // never recovers
+		})
+
+		mgr := NewMCPManager(map[string]MCPServerConfig{"svc": {URL: "http://unused"}})
+
+		mgr.Tools(context.Background()) // first attempt fails, spawning the retry
+		synctest.Wait()                 // let the retry goroutine reach its backoff wait
+
+		start := time.Now()
+		if err := mgr.Close(context.Background()); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+		if elapsed := time.Since(start); elapsed != 0 {
+			t.Errorf("Close took %v of fake time, want exactly 0 (cancellation must interrupt the wait, not ride it out)", elapsed)
+		}
+	})
+}
+
+// TestMCPManagerCloseDuringInFlightRetryConnectStopsPromptly is invariant
+// 5's second scenario: Close while a retry's connect ATTEMPT itself
+// (not the backoff wait between attempts) is in flight. The fake connect
+// func here blocks on ctx.Done(), simulating a real cancellable network
+// call — Close must cancel that ctx and return promptly rather than
+// waiting out the attempt's ConnectTimeout.
+func TestMCPManagerCloseDuringInFlightRetryConnectStopsPromptly(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var calls int32
+		reachedAttempt := make(chan struct{})
+		withMCPConnectFunc(t, func(ctx context.Context, name string, spec MCPServerConfig) (*mcp.Client, []mcp.Tool, error) {
+			if atomic.AddInt32(&calls, 1) == 1 {
+				return nil, nil, errors.New("boom") // first attempt: fail fast, spawn the retry
+			}
+			close(reachedAttempt) // signal BEFORE blocking, so the test can force fake time through the backoff wait between attempt 1 and this one
+			<-ctx.Done()          // the retry's own attempt: block until Close cancels it
+			return nil, nil, ctx.Err()
+		})
+
+		mgr := NewMCPManager(map[string]MCPServerConfig{"svc": {URL: "http://unused"}})
+
+		mgr.Tools(context.Background())
+		// A receive here (not synctest.Wait()) is what forces fake time
+		// through the backoff wait between attempt 1's failure and attempt
+		// 2 actually starting — see the comment on
+		// TestMCPManagerFailedServerRetriesInBackgroundAndRecovers.
+		<-reachedAttempt
+
+		start := time.Now()
+		if err := mgr.Close(context.Background()); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+		if elapsed := time.Since(start); elapsed != 0 {
+			t.Errorf("Close took %v of fake time, want exactly 0 (cancelling ctx must unblock the in-flight attempt immediately)", elapsed)
+		}
+	})
 }

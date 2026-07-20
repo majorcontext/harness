@@ -856,24 +856,39 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 	if params.MaxTokens != nil {
 		maxTokens = *params.MaxTokens
 	}
-	// Ambient process-status injection (see processStatusSegment):
-	// appended ONLY to this in-memory request copy — s.History() already
-	// returns a fresh slice (engine.go's append(nil, s.history...)), and
-	// withProcessStatus clones (never mutates in place) the one message it
-	// touches, so the durable s.history — and the message/journal log it
-	// is persisted from — never sees this text. It rides only the newest
+	// Ambient process-status and MCP-status injection (see
+	// processStatusSegment, mcpStatusSegment): appended ONLY to this
+	// in-memory request copy — s.History() already returns a fresh slice
+	// (engine.go's append(nil, s.history...)), and withAmbientStatus
+	// clones (never mutates in place) the one message it touches, so the
+	// durable s.history — and the message/journal log it is persisted
+	// from — never sees this text. Each segment rides only the newest
 	// user message so every earlier message, and therefore the cached
 	// request prefix, is byte-identical to a request built with no
-	// process ever started.
+	// process ever started and every MCP server healthy.
+	//
+	// toolDefs is computed FIRST, before either segment, and reused below
+	// as req.Tools rather than recomputed: for MCP, toolDefs ->
+	// s.cfg.MCP.Tools(ctx) is what actually TRIGGERS a server's first
+	// connect attempt (see MCPManager.ensureConnected). Computing
+	// mcpStatusSegment before that trigger would read Status() against
+	// stale pre-connect state, silently delaying THIS turn's own connect
+	// failure from surfacing until the NEXT turn — ordering toolDefs
+	// first means a server that fails its first attempt on turn 1 is
+	// reported in turn 1's own request, not turn 2's.
+	tools := s.toolDefs(ctx)
 	messages := s.History()
 	if seg := processStatusSegment(s.cfg.Processes, s.cfg.WorkDir); seg != "" {
-		messages = withProcessStatus(messages, seg)
+		messages = withAmbientStatus(messages, seg)
+	}
+	if seg := mcpStatusSegment(s.cfg.MCP); seg != "" {
+		messages = withAmbientStatus(messages, seg)
 	}
 	req := &provider.Request{
 		Model:       params.Model,
 		System:      system,
 		Messages:    messages,
-		Tools:       s.toolDefs(ctx),
+		Tools:       tools,
 		Temperature: params.Temperature,
 		TopP:        params.TopP,
 		MaxTokens:   maxTokens,
