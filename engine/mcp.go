@@ -583,6 +583,69 @@ func (m *MCPManager) callTool(ctx context.Context, server, tool string, args jso
 	return mcpContentToParts(server, tool, res.Content), res.IsError, nil
 }
 
+// MCPServerStatus is one server's live connection-state snapshot, as
+// returned by MCPManager.Status — a point-in-time copy of mcpServerEntry's
+// exported fields, safe for a caller to hold onto after the RLock that
+// produced it is released.
+type MCPServerStatus struct {
+	// Name is the server's configured name.
+	Name string
+	// Connected reports whether this server currently has a live client —
+	// the one-way latch mcpServerEntry.Connected documents (its first
+	// attempt succeeded, or a background retry has since committed one).
+	Connected bool
+	// Attempts is the total number of connect attempts made so far (the
+	// first attempt plus every background retry), whether or not any of
+	// them succeeded.
+	Attempts int
+	// LastErr is the most recent connect error, or nil once Connected is
+	// true.
+	LastErr error
+}
+
+// Status returns a point-in-time, sorted-by-name snapshot of every
+// configured server's connection state, read under RLock — the read side
+// of mcpServerEntry's Attempts/LastErr fields, which Task 1 left
+// "exported-cased for a future Task 2 status surface to read directly"
+// (see that struct's doc comment). This is that surface; see
+// mcp_status.go's mcpStatusSegment for the ambient status block built on
+// top of it.
+//
+// Status deliberately never triggers a connect: unlike Tools/CallTool/
+// CallServerTool, it does not call ensureConnected. Before any of those
+// three have ever been called on this manager, m.state is nil — it is
+// populated only once ensureConnected's one-time first batch commits (see
+// NewMCPManager/ensureConnected) — so Status returns nil too. That is
+// deliberate, not an oversight: there is no "never asked" status worth
+// reporting, only "healthy" and "degraded", and a manager that has never
+// attempted anything has not failed at anything either. mcpStatusSegment
+// relies on this to render no block at all until a real attempt has
+// actually happened, matching the zero happy-path cost the process-status
+// block already commits to.
+func (m *MCPManager) Status() []MCPServerStatus {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if len(m.state) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(m.state))
+	for name := range m.state {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]MCPServerStatus, 0, len(names))
+	for _, name := range names {
+		e := m.state[name]
+		out = append(out, MCPServerStatus{
+			Name:      name,
+			Connected: e.Connected,
+			Attempts:  e.Attempts,
+			LastErr:   e.LastErr,
+		})
+	}
+	return out
+}
+
 // mcpCloseTimeout bounds the whole Close, on top of the bounded timeouts
 // each mcp.Client.Close already self-enforces (see that method's doc
 // comment) — a defensive outer bound so a pathological client
