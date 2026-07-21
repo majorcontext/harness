@@ -1916,8 +1916,9 @@ func (s *Server) handleQueueGet(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
 	}
-	resp := queueGetResponse{Watermark: sess.EnqueueSeq(), Queued: []queuedItemJSON{}}
-	for _, p := range sess.QueuedPrompts() {
+	watermark, prompts := sess.QueueState()
+	resp := queueGetResponse{Watermark: watermark, Queued: []queuedItemJSON{}}
+	for _, p := range prompts {
 		resp.Queued = append(resp.Queued, queuedItemJSON{ID: p.ID, Text: p.Text, Seq: p.Seq})
 	}
 	writeJSON(w, http.StatusOK, resp)

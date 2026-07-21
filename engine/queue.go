@@ -227,6 +227,18 @@ func (s *Session) EnqueueSeq() int64 {
 	return s.enqueueSeq
 }
 
+// QueueState returns the durable-enqueue watermark and a copy of the
+// pending prompt queue in one critical section, so the pair is internally
+// consistent — a reconciliation reader (GET /session/{id}/queue) must never
+// observe a queued entry whose Seq exceeds the watermark it was returned
+// with, which the separate EnqueueSeq/QueuedPrompts calls cannot guarantee
+// under a concurrent EnqueuePromptDurable.
+func (s *Session) QueueState() (watermark int64, prompts []QueuedPrompt) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.enqueueSeq, append([]QueuedPrompt(nil), s.promptQueue...)
+}
+
 // DequeueAllPrompts is dequeueAllLocked's exported, self-locking wrapper —
 // the whole-queue counterpart to DequeuePrompt, for callers that need to
 // drain everything atomically in one critical section rather than one item

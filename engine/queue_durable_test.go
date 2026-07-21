@@ -190,6 +190,34 @@ func TestEnqueuePromptDurableWriteFailureReturnsErrorAndBurnsID(t *testing.T) {
 	}
 }
 
+// TestQueueStateConsistentSnapshot pins QueueState's one-critical-section
+// guarantee: watermark and queue come back together, so a reconciliation
+// reader can never observe (as the separate EnqueueSeq/QueuedPrompts calls
+// theoretically could, under a concurrent EnqueuePromptDurable landing
+// between them) a queued entry whose Seq exceeds the watermark returned
+// alongside it. The race window itself isn't practically unit-testable —
+// this pins the by-construction property (single lock, one return) instead.
+func TestQueueStateConsistentSnapshot(t *testing.T) {
+	s, _ := durableTestSession(t)
+	if _, _, err := s.EnqueuePromptDurable("hello", 3); err != nil {
+		t.Fatal(err)
+	}
+	watermark, prompts := s.QueueState()
+	if watermark != 3 {
+		t.Fatalf("watermark = %d, want 3", watermark)
+	}
+	if len(prompts) != 1 || prompts[0].Seq != 3 || prompts[0].Text != "hello" {
+		t.Fatalf("prompts = %+v", prompts)
+	}
+	// Returned slice is a copy: mutating it must not affect the session's
+	// own queue, confirmed by a second independent QueueState call.
+	prompts[0].Text = "mutated"
+	_, prompts2 := s.QueueState()
+	if len(prompts2) != 1 || prompts2[0].Text != "hello" {
+		t.Fatalf("QueueState leaked its internal slice: second read = %+v", prompts2)
+	}
+}
+
 // TestLoadSessionDequeueAfterFoldRemovesRetryEntry pins the guarantee the
 // fold's comments promise: after a torn record (id 1) and its successful
 // same-seq retry (id 2) fold to one entry with id 2, a prompt.dequeued
