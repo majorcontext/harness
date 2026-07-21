@@ -94,12 +94,64 @@ goal with a dedicated reason, and the server maps that terminal to a
 `session.error` plus a distinct `turn.end outcome=evaluator_exhausted` — loud
 and machine-distinguishable, since every failure below the horizon is
 deliberately silent apart from the journaled record.
-Durable `goal.set` / `goal.eval` / `goal.eval_failed` / `goal.achieved` /
-`goal.cleared` records land in the session log, so `LoadSession` restores an
-active goal (condition only; counters reset) via `Session.ActiveGoal()` —
-resume never auto-runs it, the caller decides. The loop also emits `goal.*`
-engine events so the server journals them. Config `goal_evaluator_model`
-supplies the evaluator for `harness run -goal` and `POST /session/{id}/goal`.
+Durable `goal.set` / `goal.eval` / `goal.eval_failed` / `goal.parked` /
+`goal.achieved` / `goal.cleared` records land in the session log, so
+`LoadSession` restores an active goal (condition only; counters reset) via
+`Session.ActiveGoal()` — resume never auto-runs it, the caller decides. The
+loop also emits `goal.*` engine events so the server journals them. Config
+`goal_evaluator_model` supplies the evaluator for `harness run -goal` and
+`POST /session/{id}/goal`.
+
+A worker-turn error (`s.Prompt` failing) is retried by `promptTurnWithRetry`:
+`goalWorkerRetries` (2) additional deterministic attempts (~5s total), or,
+for a provider error classified `provider.AsRetryable`, a separately
+budgeted `goalRetryableMaxAttempts` (12) backoff (~30min total) that never
+spends the deterministic budget — recording a `goal.stalled` record for
+every failed attempt either way, so the loop is never silent. Exhausting
+EITHER budget — or the non-idempotency gate stopping retries early once a
+tool has already executed this attempt — now PARKS the goal instead of
+clearing it: `PursueGoal` exits, journals a durable, CLASSIFIED `goal.parked`
+record (never raw provider error text — the same leak rule `goal.eval_failed`
+follows), and returns a distinct `*goalWorkerParkedError` sentinel
+(`engine.IsGoalWorkerParked`) WITHOUT calling `clearGoal` — `goalActive`
+stays true, the condition is untouched, generation-gated exactly like
+`goal.stalled`/`goal.eval_failed` so a park racing a concurrent `UpdateGoal`
+is silently discarded rather than attributed to a condition the model never
+saw. This supersedes both this package's earlier deterministic-tier clear
+and GitHub issue #61's in-loop retryable-tier self-re-arming `continue` — the
+latter pinned the run slot to the parked loop for the whole outage; exiting
+instead frees the slot, so a queued prompt dispatches as an ordinary turn
+during a long outage instead of only ever being injected mid-turn into a
+doomed attempt. Context overflow (issue #62) is the one deliberate exception
+and still clears immediately, never parks: no amount of waiting fixes an
+oversized request, so parking it would just be a slower-burning zombie
+instead of a fix. Parking has no streak horizon (unlike the evaluator's
+5-boundary terminal above) — every exhaustion parks immediately, and
+`DELETE /session/{id}/goal` remains the only clear path for a parked goal.
+
+On the server, a worker-parked sentinel maps to `session.error` plus a
+distinct `turn.end outcome=worker_parked`, and `goalTracker` folds the
+durable `goal.parked` record into a third `paused` arm (`pause_reason:
+"worker_failure"`, alongside the existing boot-only `"restart"` and live
+`"provider-backoff"`) — `compositeState` forces `idle` for it exactly like a
+restart pause, since no loop is actually driving the goal, unlike
+provider-backoff, whose loop is merely waiting and keeps reading
+`goal-running`. Resume needs no new machinery: the existing activity-driven
+`maybeAutoArmGoal` re-arms any active goal — parked or not — the next time an
+ordinary prompt turn completes, resetting the `worker_failure` presentation;
+`runGoal`'s own tail deliberately never auto-arms (the same anti-churn
+property that already stops a freshly-parked goal from immediately
+respawning a loop against an empty queue).
+
+A worker-parked goal is also surfaced in-session, model-facing:
+`Session.goalParked` (set when a park lands, cleared at every `PursueGoal`
+entry) drives a third ambient status segment — alongside the process and MCP
+segments — appended to the newest user message of any turn that is NOT
+itself one of this loop's own worker turns, naming the classified reason and
+stating the goal resumes automatically. It is runtime-only and never
+persisted; after a process restart, visibility reverts entirely to the
+boot-only `goal.paused`/`pause_reason: "restart"` presentation instead — a
+deliberate, documented asymmetry.
 
 The condition itself is adjustable mid-loop. `Session.UpdateGoal` rewrites an
 active goal's condition, journals a durable `goal.updated` record, and emits

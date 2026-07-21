@@ -92,6 +92,14 @@ type Event struct {
 	GoalRetryableClass string `json:"goal_retryable_class,omitempty"`
 	GoalWaiting        bool   `json:"goal_waiting,omitempty"`
 	GoalEvalFailures   int    `json:"goal_eval_failures,omitempty"`
+	// GoalAttempts is carried by goal.parked only (see goal.go's
+	// recordGoalParked and "Round 7" doc section): the TOTAL attempt count
+	// for the exhausted turn, distinct from GoalAttempt (singular), which
+	// is goal.stalled's 1-based per-attempt counter. GoalReason on a
+	// goal.parked event is classified, never raw provider error text (see
+	// classifyGoalWorkerError) — GoalRetryable/GoalRetryableClass above are
+	// reused unchanged from goal.stalled's convention.
+	GoalAttempts int `json:"goal_attempts,omitempty"`
 
 	// Compaction fields (see compact.go and docs/design/context-
 	// compaction.md §4 "Live event surface"). Carried on
@@ -142,6 +150,13 @@ const (
 	// advisory only: the goal stays active and the loop keeps working; at
 	// the limit a goal.cleared with a dedicated reason follows instead.
 	EventGoalEvalFailed = "goal.eval_failed"
+	// EventGoalParked fires once per exit-parked worker turn — either
+	// exhaustion tier (deterministic or retryable-class, see goal.go's
+	// "Round 7" doc section) — WITHOUT a following goal.cleared: the goal
+	// stays active. A server (Task 2) maps this onto a distinct paused
+	// presentation and resumes the loop on the next ordinary activity,
+	// exactly like it already does for the boot-only restart pause.
+	EventGoalParked = "goal.parked"
 
 	// Prompt-queue events (see queue.go and docs/plans/2026-07-19-prompt-
 	// queue.md). EventPromptQueued fires on every EnqueuePrompt call;
@@ -357,6 +372,27 @@ type Session struct {
 	// goal.updated fold, not from reproducing this counter's exact value).
 	// Guarded by mu.
 	goalGen uint64
+
+	// goalParked mirrors the most recent goal.parked record's classified
+	// reason and attempt count (see recordGoalParked/classifyGoalWorkerError
+	// in goal.go) for the ambient status segment goal_parked_status.go
+	// renders on a later Prompt call. True from the moment a worker turn
+	// exit-parks the goal (recordGoalParked sets it, still under the same
+	// s.mu critical section that journals goal.parked) until the NEXT
+	// PursueGoal call clears it at entry — before that call's own first
+	// worker turn ever runs (see PursueGoal's clearGoalParkedAtEntry call) —
+	// or a clearGoal call resets it (DELETE /goal, or the context-overflow
+	// clear branch immediately above the park branch in PursueGoal).
+	//
+	// Deliberately runtime-only: never persisted, never folded by
+	// LoadSession, never appears in a goal.* record itself (goal.parked's
+	// own Reason/Attempts fields are the durable source these mirror) — see
+	// goal_parked_status.go's doc comment for the post-restart asymmetry
+	// this implies (the boot-only goal.paused presentation, server-side,
+	// covers visibility after a restart instead). Guarded by mu.
+	goalParked         bool
+	goalParkedReason   string
+	goalParkedAttempts int
 
 	// toolExecCount counts tool-call executions across the session's
 	// lifetime: incremented once per call to runToolCall that actually
@@ -862,8 +898,9 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 	if params.MaxTokens != nil {
 		maxTokens = *params.MaxTokens
 	}
-	// Ambient process-status and MCP-status injection (see
-	// processStatusSegment, mcpStatusSegment): appended ONLY to this
+	// Ambient process-status, MCP-status, and parked-goal-status injection
+	// (see processStatusSegment, mcpStatusSegment, goalParkedSegment):
+	// appended ONLY to this
 	// in-memory request copy — s.History() already returns a fresh slice
 	// (engine.go's append(nil, s.history...)), and withAmbientStatus
 	// clones (never mutates in place) the one message it touches, so the
@@ -888,6 +925,9 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 		messages = withAmbientStatus(messages, seg)
 	}
 	if seg := mcpStatusSegment(s.cfg.MCP); seg != "" {
+		messages = withAmbientStatus(messages, seg)
+	}
+	if seg := goalParkedSegment(s); seg != "" {
 		messages = withAmbientStatus(messages, seg)
 	}
 	req := &provider.Request{

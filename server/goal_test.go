@@ -28,6 +28,19 @@ type goalProv struct {
 	started     chan struct{}
 	startedOnce sync.Once
 
+	// blockWorkerAfter, when > 0, lets the first blockWorkerAfter worker
+	// (tool-bearing) Stream calls proceed normally (consuming scripted
+	// turns from worker[] exactly like the unblocked path), then blocks
+	// every worker call after that one until the prompt context is
+	// cancelled — mirrors blockWorker but scoped to calls after a fixed
+	// count. This lets a test admit N ordinary turns (e.g. a resume
+	// prompt's own turn) before parking a specific LATER turn (e.g. a
+	// freshly auto-armed goal loop's first turn) for a deterministic
+	// mid-turn checkpoint, without racing the loop's own scheduling. See
+	// TestAutoArmAfterRestartResetsPausePresentation.
+	blockWorkerAfter int
+	workerCalls      int
+
 	// workerErrN, when > 0, makes the first workerErrN worker (tool-bearing)
 	// Stream calls fail with a fake transient error instead of consuming a
 	// scripted turn — exercises PursueGoal's retry path (see
@@ -75,6 +88,15 @@ func (p *goalProv) Stream(ctx context.Context, req *provider.Request) (provider.
 	}
 	if p.blockWorker {
 		return &goalBlockingStream{ctx: ctx, p: p}, nil
+	}
+	if p.blockWorkerAfter > 0 {
+		p.mu.Lock()
+		p.workerCalls++
+		calls := p.workerCalls
+		p.mu.Unlock()
+		if calls > p.blockWorkerAfter {
+			return &goalBlockingStream{ctx: ctx, p: p}, nil
+		}
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()

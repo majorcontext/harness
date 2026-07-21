@@ -178,6 +178,20 @@ const (
 	// from goal.stalled (which is a live worker-turn retry event, not a
 	// boot-time observation). Always carries GoalPauseReason "restart".
 	evtGoalPaused = "goal.paused"
+	// evtGoalParked mirrors engine.EventGoalParked (see engine/goal.go's
+	// "Round 7" doc section, NEP-4849): journaled once per exit-parked
+	// worker turn — either exhaustion tier (deterministic goalWorkerRetries
+	// or retryable-class goalRetryableMaxAttempts) — WITHOUT a following
+	// goal.cleared: the goal stays active. Unlike evtGoalPaused above (a
+	// boot-time OBSERVATION that no loop is attached), this is a LIVE event:
+	// the loop that just parked emitted it on its own way out. The server
+	// maps it onto the third "paused" arm (pause_reason "worker_failure",
+	// see pauseReasonWorkerFailure) and, at runGoal's tail, onto the
+	// turn.end outcome outcomeWorkerParked — the loop resumes on the next
+	// ordinary activity via the existing activity-driven auto-arm
+	// (maybeAutoArmGoal), exactly like a restart pause resumes via an
+	// operator's re-POST.
+	evtGoalParked = "goal.parked"
 
 	// evtPromptDequeued mirrors engine.EventPromptDequeued (see
 	// engine/queue.go): a queued prompt was popped off the head for
@@ -249,20 +263,41 @@ const outcomeContextExhausted = "context_exhausted"
 // session.error alongside this outcome — see runGoal's default branch.
 const outcomeEvaluatorExhausted = "evaluator_exhausted"
 
+// outcomeWorkerParked is the turn.end outcome recorded when a goal loop
+// exit-parks a worker turn instead of clearing the goal (engine/goal.go's
+// "Round 7" doc section, NEP-4849): either exhaustion tier — deterministic
+// (goalWorkerRetries) or retryable-class (goalRetryableMaxAttempts) —
+// without the evaluator ever running. Distinct from the generic "error" for
+// the same reason outcomeContextExhausted/outcomeMaxTurnsExceeded/
+// outcomeEvaluatorExhausted are: a poller needs to tell "this goal is
+// merely paused, waiting for the next ordinary activity to resume it" apart
+// from an operator-facing dead terminal. UNLIKE outcomeEvaluatorExhausted,
+// this outcome does NOT mean the goal was cleared — it stays fully active
+// (see goalTracker.pausedWorker/pauseView) — so a poller must not treat it
+// as a reason to give up on the goal, only as a reason to expect it to
+// resume on its own the next time this session sees any activity.
+const outcomeWorkerParked = "worker_parked"
+
 // turnEndOutcome decides the turn.end outcome for a non-nil, non-cancelled
 // prompt/goal-worker error: outcomeEvaluatorExhausted when the engine's
 // PursueGoal returned its evaluator-exhausted terminal sentinel (see
-// engine.IsGoalEvaluatorExhausted), outcomeContextExhausted when it
-// classified the error via provider.IsContextOverflow, otherwise the
+// engine.IsGoalEvaluatorExhausted), outcomeWorkerParked when it returned its
+// worker-parked sentinel (engine.IsGoalWorkerParked), outcomeContextExhausted
+// when it classified the error via provider.IsContextOverflow, otherwise the
 // generic "error" every other failure has always recorded. Shared by
 // runPrompt and runGoal so the two turn-ending paths can never drift on
-// this — runPrompt can never actually observe the evaluator-exhausted
-// sentinel (it has no evaluator), but sharing one function keeps the two
-// paths from drifting on the ordering/precedence of these classifications
-// as new ones are added.
+// this — runPrompt can never actually observe either goal-loop sentinel (it
+// has no evaluator and no worker-retry budget), but sharing one function
+// keeps the two paths from drifting on the ordering/precedence of these
+// classifications as new ones are added. The three sentinel/classification
+// checks are mutually exclusive by construction (each wraps a distinct
+// engine terminal), so their relative order here does not matter.
 func turnEndOutcome(err error) string {
 	if engine.IsGoalEvaluatorExhausted(err) {
 		return outcomeEvaluatorExhausted
+	}
+	if engine.IsGoalWorkerParked(err) {
+		return outcomeWorkerParked
 	}
 	if provider.IsContextOverflow(err) {
 		return outcomeContextExhausted
@@ -289,7 +324,7 @@ func (s *Server) Publish(ev engine.Event) {
 			Type: engine.EventToolEnd, SessionID: ev.SessionID,
 			ToolCall: ev.ToolCall, Output: ev.Output, IsError: ev.IsError,
 		})
-	case engine.EventGoalSet, engine.EventGoalUpdated, engine.EventGoalEval, engine.EventGoalStalled, engine.EventGoalAchieved, engine.EventGoalCleared, engine.EventGoalEvalFailed:
+	case engine.EventGoalSet, engine.EventGoalUpdated, engine.EventGoalEval, engine.EventGoalStalled, engine.EventGoalAchieved, engine.EventGoalCleared, engine.EventGoalEvalFailed, engine.EventGoalParked:
 		s.publishGoal(ev)
 	case engine.EventPromptQueued, engine.EventPromptDequeued:
 		s.publishQueue(ev)
@@ -326,6 +361,12 @@ func (s *Server) publishHistoryCompacted(ev engine.Event) {
 // back to ACTIVE or on to CLEARED) — it updates lastReason and attempt only,
 // leaving active/achieved untouched, so a client watching Session.goal sees
 // the goal still active while the loop retries.
+//
+// goal.parked (NEP-4849) is also non-terminal in the same "goal stays
+// active" sense, but unlike goal.stalled it means the loop has actually
+// EXITED — no further goal.stalled/goal.eval will arrive until something
+// external (the activity-driven auto-arm, or an operator's re-POST) starts
+// a fresh loop. See the pausedWorker fold below and pauseView's precedence.
 func (s *Server) publishGoal(ev engine.Event) {
 	out := &Event{
 		Type:               ev.Type,
@@ -351,6 +392,20 @@ func (s *Server) publishGoal(ev engine.Event) {
 		out.GoalPaused = true
 		out.GoalPauseReason = pauseReasonProviderBackoff
 	}
+	// goal.parked carries the worker-failure pause presentation directly on
+	// the live event too (Task 2, NEP-4849), mirroring the goal.stalled case
+	// above and the boot-only goal.paused record: an SSE watcher sees the
+	// pause the instant the loop exits, without waiting for a GET /session
+	// poll. GoalAttempt reuses the engine event's GoalAttempts (plural, the
+	// TOTAL attempt count for the exhausted turn) — by construction this is
+	// always the same number the final goal.stalled record for this turn
+	// already reported (see engine/goal.go's recordGoalParked), so no
+	// separate wire field is needed.
+	if ev.Type == engine.EventGoalParked {
+		out.GoalAttempt = ev.GoalAttempts
+		out.GoalPaused = true
+		out.GoalPauseReason = pauseReasonWorkerFailure
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	g := s.goalState[ev.SessionID]
@@ -370,6 +425,7 @@ func (s *Server) publishGoal(ev engine.Event) {
 		g.retryableClass = ""
 		g.waiting = false
 		g.pausedRestart = false
+		g.pausedWorker = false
 		g.evalFailures = 0
 	case engine.EventGoalUpdated:
 		// A condition change mid-loop, nothing else: no pause/retry/waiting
@@ -378,9 +434,14 @@ func (s *Server) publishGoal(ev engine.Event) {
 		// IS reset here per the design (Task 2): the consecutive-failure
 		// streak is measured against a condition, and UpdateGoal is exactly
 		// the event that invalidates the evaluator calls that streak counted
-		// (see engine/goal.go's generation-guard doc comment).
+		// (see engine/goal.go's generation-guard doc comment). pausedWorker
+		// (NEP-4849, Task 2) resets here too — an UpdateGoal against a
+		// worker-parked goal is itself a re-arm (the loop is about to be
+		// resumed with the new condition), so the stale park presentation
+		// must not linger.
 		g.condition = ev.GoalCondition
 		g.evalFailures = 0
+		g.pausedWorker = false
 	case engine.EventGoalEval:
 		g.turns = ev.GoalTurn
 		g.lastReason = ev.GoalReason
@@ -389,6 +450,7 @@ func (s *Server) publishGoal(ev engine.Event) {
 		g.retryableClass = ""
 		g.waiting = false
 		g.evalFailures = 0
+		g.pausedWorker = false
 	case engine.EventGoalStalled:
 		g.lastReason = ev.GoalReason
 		g.attempt = ev.GoalAttempt
@@ -402,6 +464,23 @@ func (s *Server) publishGoal(ev engine.Event) {
 		// increment this function would have to guard against double-
 		// applying.
 		g.evalFailures = ev.GoalEvalFailures
+	case engine.EventGoalParked:
+		// The worker-failure pause arm (NEP-4849, Task 2): the loop just
+		// exited without clearing the goal. lastReason/attempt/retryable/
+		// retryableClass are folded from this record exactly like
+		// goal.stalled's own fields (see the doc comment on GoalAttempt's
+		// reuse above) — waiting is explicitly false, never re-derived from
+		// the event (which does not set it): a park is never "still
+		// waiting", it already gave up on this turn. See
+		// goalTracker.pauseView's precedence (worker_failure over
+		// provider-backoff) for why this alone is enough to stop a stale
+		// GoalRetryable/GoalWaiting pair from misreporting provider-backoff.
+		g.pausedWorker = true
+		g.lastReason = ev.GoalReason
+		g.attempt = ev.GoalAttempts
+		g.retryable = ev.GoalRetryable
+		g.retryableClass = ev.GoalRetryableClass
+		g.waiting = false
 	case engine.EventGoalAchieved:
 		g.active = false
 		g.achieved = true
@@ -412,10 +491,12 @@ func (s *Server) publishGoal(ev engine.Event) {
 		g.retryableClass = ""
 		g.waiting = false
 		g.pausedRestart = false
+		g.pausedWorker = false
 		g.evalFailures = 0
 	case engine.EventGoalCleared:
 		g.active = false
 		g.pausedRestart = false
+		g.pausedWorker = false
 		g.evalFailures = 0
 	}
 	s.emitDurableLocked(out)
@@ -810,7 +891,7 @@ func (s *Server) loadJournal(data []byte) {
 // construction, before any client can reach the server).
 func (s *Server) foldGoalRecordLocked(ev Event) {
 	switch ev.Type {
-	case evtGoalSet, evtGoalUpdated, evtGoalEval, evtGoalStalled, evtGoalAchieved, evtGoalCleared, evtGoalEvalFailed:
+	case evtGoalSet, evtGoalUpdated, evtGoalEval, evtGoalStalled, evtGoalAchieved, evtGoalCleared, evtGoalEvalFailed, evtGoalParked:
 	default:
 		return
 	}
@@ -831,12 +912,14 @@ func (s *Server) foldGoalRecordLocked(ev Event) {
 		g.retryableClass = ""
 		g.waiting = false
 		g.pausedRestart = false
+		g.pausedWorker = false
 		g.evalFailures = 0
 	case evtGoalUpdated:
-		// Mirrors publishGoal's evtGoalUpdated case exactly: condition and
-		// eval_failures reset, nothing else.
+		// Mirrors publishGoal's evtGoalUpdated case exactly: condition,
+		// eval_failures, and pausedWorker reset, nothing else.
 		g.condition = ev.GoalCondition
 		g.evalFailures = 0
+		g.pausedWorker = false
 	case evtGoalEval:
 		g.turns = ev.GoalTurn
 		g.lastReason = ev.GoalReason
@@ -845,6 +928,7 @@ func (s *Server) foldGoalRecordLocked(ev Event) {
 		g.retryableClass = ""
 		g.waiting = false
 		g.evalFailures = 0
+		g.pausedWorker = false
 	case evtGoalStalled:
 		g.lastReason = ev.GoalReason
 		g.attempt = ev.GoalAttempt
@@ -855,6 +939,18 @@ func (s *Server) foldGoalRecordLocked(ev Event) {
 		// Mirrors publishGoal's evtGoalEvalFailed case exactly: folded
 		// straight from the record's own count, idempotent on replay.
 		g.evalFailures = ev.GoalEvalFailures
+	case evtGoalParked:
+		// Mirrors publishGoal's evtGoalParked case exactly (see its doc
+		// comment): GoalAttempt here already carries the record's total
+		// attempt count (publishGoal maps engine's GoalAttempts into this
+		// same wire field before journaling), so this replay-path read needs
+		// no separate field either.
+		g.pausedWorker = true
+		g.lastReason = ev.GoalReason
+		g.attempt = ev.GoalAttempt
+		g.retryable = ev.GoalRetryable
+		g.retryableClass = ev.GoalRetryableClass
+		g.waiting = false
 	case evtGoalAchieved:
 		g.active = false
 		g.achieved = true
@@ -865,10 +961,12 @@ func (s *Server) foldGoalRecordLocked(ev Event) {
 		g.retryableClass = ""
 		g.waiting = false
 		g.pausedRestart = false
+		g.pausedWorker = false
 		g.evalFailures = 0
 	case evtGoalCleared:
 		g.active = false
 		g.pausedRestart = false
+		g.pausedWorker = false
 		g.evalFailures = 0
 	}
 }

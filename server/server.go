@@ -42,11 +42,16 @@ const (
 
 // Goal "paused" reasons (see goalTracker.pauseView and GoalSummary.
 // pause_reason): "restart" is a boot-time observation (pauseArmedGoalsAtBoot)
-// that a goal is armed with no loop attached; "provider-backoff" mirrors the
+// that a goal is armed with no loop attached; "worker_failure" (NEP-4849,
+// Task 2) is a LIVE observation that a worker turn exit-parked the goal
+// (engine/goal.go's goal.parked, either exhaustion tier) — the loop itself
+// has exited, mirroring the restart case's "no loop attached" shape even
+// though this server never restarted; "provider-backoff" mirrors the
 // existing retryable-backoff park machinery in engine/goal.go (observability
 // only — see goalTracker.pauseView).
 const (
 	pauseReasonRestart         = "restart"
+	pauseReasonWorkerFailure   = "worker_failure"
 	pauseReasonProviderBackoff = "provider-backoff"
 )
 
@@ -305,6 +310,20 @@ type goalTracker struct {
 	// be wrong — an ordinary max-turns-exhausted goal in a live process is
 	// not "paused", only one observed unattended at boot is).
 	pausedRestart bool
+	// pausedWorker is set by publishGoal/foldGoalRecordLocked when a
+	// goal.parked record lands (NEP-4849, Task 2): a worker turn exhausted
+	// either exhaustion tier and PursueGoal exit-parked instead of clearing
+	// the goal — the worker-failure half of the "paused" presentation (see
+	// pauseView). Unlike pausedRestart (a boot-time-only observation), this
+	// is set LIVE, by the very loop that just parked; unlike waiting/
+	// retryable's provider-backoff pause below, the loop has genuinely
+	// exited (no goroutine is driving this goal at all) until the
+	// activity-driven auto-arm (maybeAutoArmGoal) or an operator's re-POST
+	// starts a fresh one. Reset to false everywhere pausedRestart is reset
+	// (goal.set/goal.achieved/goal.cleared) plus goal.eval and goal.updated
+	// — see publishGoal's per-case doc comments for why those two additional
+	// resets are needed here specifically.
+	pausedWorker bool
 	// evalFailures is the most recent goal.eval_failed record's CONSECUTIVE
 	// failure count (see engine/goal.go's "Round 6" doc section, NEP-4792) —
 	// folded straight from the record, so it is idempotent for replay just
@@ -319,21 +338,53 @@ type goalTracker struct {
 
 // pauseView derives the goal's "paused" wire presentation (see
 // GoalSummary.paused/pause_reason): pausedRestart (set once at boot, cleared
-// on re-arm) takes priority; otherwise a still-active, still-waiting
-// retryable stall (see engine/goal.go's retryable-backoff park machinery)
-// reads as paused/provider-backoff — purely derived from the existing
-// retryable/waiting fields, so it clears itself the instant the loop's next
-// goal.eval or goal.stalled record resets waiting, exactly mirroring the
-// self-re-arm behavior that machinery already has (see publishGoal).
+// on re-arm) takes priority; then pausedWorker (set live by an exit-parked
+// worker turn, NEP-4849 — the loop has genuinely exited, mirroring the
+// restart case's "nothing is driving this goal" shape even though the
+// server never restarted); otherwise a still-active, still-waiting
+// retryable stall (see engine/goal.go's retryable-backoff park machinery,
+// whose loop IS still alive, merely waiting) reads as paused/
+// provider-backoff — purely derived from the existing retryable/waiting
+// fields, so it clears itself the instant the loop's next goal.eval or
+// goal.stalled record resets waiting, exactly mirroring the self-re-arm
+// behavior that machinery already has (see publishGoal).
 func (g *goalTracker) pauseView() (paused bool, reason string) {
 	switch {
 	case g.pausedRestart:
 		return true, pauseReasonRestart
+	case g.pausedWorker:
+		return true, pauseReasonWorkerFailure
 	case g.active && g.retryable && g.waiting:
 		return true, pauseReasonProviderBackoff
 	default:
 		return false, ""
 	}
+}
+
+// resetGoalPauseLocked clears every pause-fold field pauseView reads from —
+// pausedRestart, pausedWorker, and the retryable-backoff trio
+// (retryable/retryableClass/waiting) — in one place, so a freshly (re)armed,
+// genuinely running loop is never seen wearing a stale paused presentation
+// from before it started. Callers MUST hold s.mu.
+//
+// Two call sites need this, and both mean "a loop is about to actually run
+// against g, right now": handleGoal's re-arm branch (an operator's fresh
+// POST /session/{id}/goal against a paused/idle goal) and maybeAutoArmGoal's
+// successful-claim path (ordinary activity resuming a goal left armed with
+// no loop attached — restart or worker-park). Before this helper existed,
+// each site reset a different subset of these fields by hand; maybeAutoArmGoal
+// resetting only pausedWorker left pausedRestart permanently stuck true when
+// a restart-paused goal was resumed by a plain prompt rather than a fresh
+// POST /goal — see TestAutoArmAfterRestartResetsPausePresentation.
+func resetGoalPauseLocked(g *goalTracker) {
+	if g == nil {
+		return
+	}
+	g.pausedRestart = false
+	g.pausedWorker = false
+	g.retryable = false
+	g.retryableClass = ""
+	g.waiting = false
 }
 
 // turnOutcome is the per-session last-turn summary surfaced on Session JSON

@@ -44,6 +44,17 @@ const (
 	// (the terminal horizon) or goal.eval/goal.achieved (a recovered
 	// boundary) does that.
 	recGoalEvalFailed = "goal.eval_failed"
+	// recGoalParked is the terminal PursueGoal reaches when a worker turn
+	// exhausts either exhaustion tier (deterministic goalWorkerRetries or
+	// retryable-class goalRetryableMaxAttempts — see goal.go's "Round 7"
+	// doc section and PursueGoal's exit-park branches) WITHOUT clearing the
+	// goal: the goal stays active, and PursueGoal returns instead of
+	// looping or waiting further. Like recGoalStalled/recGoalEvalFailed it
+	// is a pure trace record on resume — LoadSession folds it as trace,
+	// never touching goalActive (see the fold switch below) — a park is
+	// resumed by an external caller starting a fresh PursueGoal call, not
+	// by anything in this package.
+	recGoalParked = "goal.parked"
 	// recPromptQueued/recPromptDequeued are the prompt-queue records (see
 	// queue.go and docs/plans/2026-07-19-prompt-queue.md): one prompt.queued
 	// per EnqueuePrompt call, one prompt.dequeued per pop (whatever the
@@ -152,6 +163,21 @@ type goalRecord struct {
 	// server/journal.go's GoalEvalFailures doc comment for the mirrored
 	// server-side fold).
 	EvalFailures int `json:"eval_failures,omitempty"`
+	// Attempts carries a goal.parked record's total attempt count for the
+	// exhausted turn (see goal.go's recordGoalParked) — distinct from
+	// Attempt (singular), which is goal.stalled's 1-based PER-ATTEMPT
+	// counter. Reason on a goal.parked record is deliberately CLASSIFIED
+	// (see classifyGoalWorkerError), never the raw err.Error() text
+	// goal.stalled/goal.eval_failed carry: a park is a durable,
+	// potentially long-lived terminal an operator-facing surface (GET
+	// /session's pause presentation, a dashboard) may read well after the
+	// fact, so unlike those two per-attempt trace records it must never
+	// echo a provider's raw error text (request IDs, endpoint URLs, or
+	// other vendor-specific detail with no fixed shape). Retryable/
+	// RetryableClass (above) are reused unchanged from goal.stalled's
+	// convention: set on a retryable-tier park, zero/empty on a
+	// deterministic-tier one.
+	Attempts int `json:"attempts,omitempty"`
 }
 
 // promptRecord carries the durable payload of a prompt.queued/
@@ -467,12 +493,16 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 		case recGoalAchieved, recGoalCleared:
 			s.goalActive = false
 			s.goalCondition = ""
-		case recGoalEval, recGoalStalled, recGoalEvalFailed:
-			// Per-turn evaluation/stall/eval-failure trace; no resume state
-			// (counters reset). None of these ever change goalActive by
-			// itself — either a later record of the same kind follows, or a
-			// later goal.cleared/goal.eval/goal.achieved settles it, all
-			// handled above.
+		case recGoalEval, recGoalStalled, recGoalEvalFailed, recGoalParked:
+			// Per-turn evaluation/stall/eval-failure/park trace; no resume
+			// state (counters reset). None of these ever change goalActive
+			// by itself — either a later record of the same kind follows,
+			// or a later goal.cleared/goal.eval/goal.achieved settles it,
+			// all handled above. In particular, a resumed session that
+			// last saw goal.parked with nothing after it restores exactly
+			// like an ordinary active goal (recGoalSet's case above already
+			// set s.goalActive=true and the condition) — a park never
+			// clears the goal, live or on replay.
 		case recPromptQueued:
 			// Append to the folded queue and advance the next-ID counter past
 			// whatever this record used, so a resumed session's next
