@@ -794,6 +794,18 @@ test("goalPauseTreatment: unrecognized reason still renders (never throws), not 
   assert.equal(t.reason, "some-future-reason");
 });
 
+test("goalPauseTreatment: worker_failure (NEP-4849) renders via the generic fallback, not calm", () => {
+  // worker_failure has no dedicated branch in goalPauseTreatment — it falls
+  // through to the same generic, forward-compatible bucket "some-future-
+  // reason" above exercises. That is intentional: a new reason string must
+  // never crash the hub, and "paused" is an accurate-enough label even
+  // without a bespoke one.
+  const t = goalPauseTreatment(true, "worker_failure");
+  assert.equal(t.calm, false);
+  assert.equal(t.reason, "worker_failure");
+  assert.equal(t.label, "paused");
+});
+
 /* ---------- rearmNeeded ---------- */
 
 test("rearmNeeded: no condition at all -> none", () => {
@@ -815,6 +827,10 @@ test("rearmNeeded: active + paused/restart -> prominent", () => {
 
 test("rearmNeeded: active + paused/provider-backoff -> none (self-clearing, no CTA)", () => {
   assert.equal(rearmNeeded(true, "ship it", true, "provider-backoff"), "none");
+});
+
+test("rearmNeeded: active + paused/worker_failure -> none (NEP-4849: activity-driven auto-arm resumes it, no CTA)", () => {
+  assert.equal(rearmNeeded(true, "ship it", true, "worker_failure"), "none");
 });
 
 /* ---------- canRedispatch ---------- */
@@ -956,6 +972,41 @@ test("reduceGoal: goal.set/goal.eval/goal.achieved/goal.cleared reset paused", (
   assert.equal(reduceGoal(paused, { type: "goal.eval", goal_met: false }).paused, false);
   assert.equal(reduceGoal(paused, { type: "goal.achieved" }).paused, false);
   assert.equal(reduceGoal(paused, { type: "goal.cleared" }).paused, false);
+});
+
+/* ---------- reduceGoal: goal.parked (NEP-4849, worker-failure pause) ---------- */
+
+test("reduceGoal: goal.parked sets paused/pauseReason (worker_failure), folds attempt/retryable like goal.stalled, and keeps the goal active", () => {
+  let g = reduceGoal(null, { type: "goal.set", goal_condition: "ship it" });
+  g = reduceGoal(g, {
+    type: "goal.parked", goal_reason: "provider server_error errors exhausted the retry budget",
+    goal_attempt: 12, goal_retryable: true, goal_retryable_class: "server_error",
+    goal_paused: true, goal_pause_reason: "worker_failure",
+  });
+  assert.equal(g.active, true, "a park never clears the goal");
+  assert.equal(g.paused, true);
+  assert.equal(g.pauseReason, "worker_failure");
+  assert.equal(g.attempt, 12);
+  assert.equal(g.retryable, true);
+  assert.equal(g.retryableClass, "server_error");
+  assert.equal(g.waiting, false, "a park is never still waiting — it already gave up on this turn");
+  assert.equal(g.reason, "provider server_error errors exhausted the retry budget");
+});
+
+test("reduceGoal: goal.parked defaults pause_reason to worker_failure when absent, never crashes on missing fields", () => {
+  const g = reduceGoal(null, { type: "goal.parked", goal_paused: true });
+  assert.equal(g.paused, true);
+  assert.equal(g.pauseReason, "worker_failure");
+  assert.equal(g.attempt, 0);
+  assert.equal(g.retryable, false);
+});
+
+test("reduceGoal: goal.set/goal.eval/goal.achieved/goal.cleared reset a worker_failure pause too", () => {
+  const parked = reduceGoal(null, { type: "goal.parked", goal_paused: true, goal_pause_reason: "worker_failure" });
+  assert.equal(reduceGoal(parked, { type: "goal.set", goal_condition: "y" }).paused, false);
+  assert.equal(reduceGoal(parked, { type: "goal.eval", goal_met: false }).paused, false);
+  assert.equal(reduceGoal(parked, { type: "goal.achieved" }).paused, false);
+  assert.equal(reduceGoal(parked, { type: "goal.cleared" }).paused, false);
 });
 
 test("goalFromSession: seeds paused/pauseReason from the session's goal", () => {
