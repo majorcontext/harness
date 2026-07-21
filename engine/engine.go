@@ -442,6 +442,12 @@ type Session struct {
 	// LoadSession's fold to one past the highest prompt.queued ID it replays
 	// — see LoadSession's recPromptQueued case. Guarded by mu.
 	promptQueueNextID int64
+
+	// enqueueSeq is the durable-enqueue idempotency high-water mark (see
+	// EnqueuePromptDurable in queue.go and promptRecord.Seq in store.go):
+	// the largest caller-issued seq durably accepted. Monotonic; a seq at or
+	// below it is a duplicate no-op. Rebuilt on replay by LoadSession.
+	enqueueSeq int64
 }
 
 // NewSession creates a session. Nothing touches the network, spawns

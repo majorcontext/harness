@@ -193,6 +193,14 @@ type promptRecord struct {
 	ID     int64  `json:"id,omitempty"`
 	Text   string `json:"text,omitempty"`
 	Reason string `json:"reason,omitempty"`
+	// Seq is the caller-issued idempotency sequence carried on a
+	// prompt.queued record written by EnqueuePromptDurable (see queue.go);
+	// 0/omitted on plain EnqueuePrompt records and on every
+	// prompt.dequeued. LoadSession folds it into the session's enqueueSeq
+	// high-water mark and dedupes same-seq records last-writer-wins — see
+	// the recPromptQueued replay case for why that heals torn fsync
+	// failures.
+	Seq int64 `json:"seq,omitempty"`
 }
 
 // SessionInfo summarizes one persisted session for listings.
@@ -505,13 +513,38 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// clears the goal, live or on replay.
 		case recPromptQueued:
 			// Append to the folded queue and advance the next-ID counter past
-			// whatever this record used, so a resumed session's next
-			// EnqueuePrompt continues the same monotonic sequence instead of
-			// colliding with (or repeating) an ID already on disk — even if a
-			// prior process crashed right after writing this record without
-			// ever incrementing its own in-memory counter further.
+			// whatever this record used (IDs are burned on failed durable
+			// writes — see EnqueuePromptDurable — so advancing past every ID
+			// seen, folded or not, is what keeps a resumed session's counter
+			// collision-free).
+			//
+			// A record carrying Seq (durable enqueue) folds last-writer-wins
+			// against any already-folded entry with the SAME Seq: a failed
+			// fsync can leave a torn record on disk whose write reported
+			// failure, followed by its successful retry under a fresh ID —
+			// live memory only ever held the retry's entry, so replay must
+			// converge to that one too (a later prompt.dequeued references
+			// the retry's ID). Seq also advances the enqueueSeq high-water
+			// mark, which is what makes duplicate detection survive a
+			// process restart.
 			if rec.Prompt != nil {
-				s.promptQueue = append(s.promptQueue, QueuedPrompt{ID: rec.Prompt.ID, Text: rec.Prompt.Text})
+				q := QueuedPrompt{ID: rec.Prompt.ID, Text: rec.Prompt.Text, Seq: rec.Prompt.Seq}
+				replaced := false
+				if q.Seq > 0 {
+					for i, p := range s.promptQueue {
+						if p.Seq == q.Seq {
+							s.promptQueue[i] = q
+							replaced = true
+							break
+						}
+					}
+					if q.Seq > s.enqueueSeq {
+						s.enqueueSeq = q.Seq
+					}
+				}
+				if !replaced {
+					s.promptQueue = append(s.promptQueue, q)
+				}
 				if rec.Prompt.ID >= s.promptQueueNextID {
 					s.promptQueueNextID = rec.Prompt.ID + 1
 				}

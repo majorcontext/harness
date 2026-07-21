@@ -31,6 +31,10 @@ import (
 type QueuedPrompt struct {
 	ID   int64
 	Text string
+	// Seq is the caller-issued idempotency sequence for a prompt enqueued
+	// via EnqueuePromptDurable (see store.go's promptRecord.Seq); 0 for a
+	// plain EnqueuePrompt, which has no idempotency contract.
+	Seq int64
 }
 
 // EnqueuePrompt appends text to the session's durable FIFO prompt queue: it
@@ -123,6 +127,18 @@ func (s *Session) QueuedPrompts() []QueuedPrompt {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]QueuedPrompt(nil), s.promptQueue...)
+}
+
+// EnqueueSeq returns the durable-enqueue high-water mark: the largest seq
+// accepted by EnqueuePromptDurable, live or restored by LoadSession's
+// replay. A caller recovering after ITS OWN crash reads this to learn which
+// messages are already inside the durability domain and must not be re-sent
+// as fresh (they would be deduplicated anyway — this is the read that lets
+// it skip the round-trip).
+func (s *Session) EnqueueSeq() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.enqueueSeq
 }
 
 // DequeueAllPrompts is dequeueAllLocked's exported, self-locking wrapper —
