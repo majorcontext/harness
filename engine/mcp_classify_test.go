@@ -49,6 +49,8 @@ func TestClassifyMCPConnectError(t *testing.T) {
 		{"nil", nil, "initializing"},
 		{"deadline exceeded directly", context.DeadlineExceeded, "initialize timed out"},
 		{"deadline exceeded wrapped", fmt.Errorf("initialize: %w", context.DeadlineExceeded), "initialize timed out"},
+		{"canceled directly", context.Canceled, "initialize cancelled"},
+		{"canceled wrapped", fmt.Errorf("initialize: %w", context.Canceled), "initialize cancelled"},
 		{"connection refused via url.Error/net.OpError", secretURLErr, "connection refused"},
 		{"other dial failure via url.Error/net.OpError", dialFailedErr, "connection failed"},
 		{"generic error", errors.New("boom"), "initialize failed"},

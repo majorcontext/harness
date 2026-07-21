@@ -400,21 +400,46 @@ representation.
   per-server `connect_timeout_s` config field (`MCPServerSpec`, integer
   seconds, <= 0/absent defaults to the engine's own 15s). A server whose
   first attempt fails is never dropped for the process's life: it gets a
-  detached, indefinite background retry on a capped exponential backoff
-  (~1s doubling to a 5min cap, jittered) — a HEALTHY server, by contrast,
-  connects exactly once and is never re-probed. `Tools()` always reads
-  live state, so a server that recovers mid-session contributes tools on
-  the very next turn automatically, no new session or explicit trigger.
-  `CallTool`/`CallServerTool` split the old combined error into two: a
-  server name absent from config errors "not configured" (never
-  recoverable); a configured-but-still-retrying server errors naming that
-  state explicitly (recoverable — the next call after a successful retry
-  succeeds). While at least one server is degraded, request assembly
-  appends an ambient `[mcp: unavailable — <name> (<reason>; retrying),
-  ...]` block to the newest user message only — computed fresh every
-  turn, never persisted, self-correcting as retries succeed — sharing its
-  append-only-to-the-newest-message mechanism (`withAmbientStatus`) with
-  the managed-processes status block above.
+  detached background retry on a capped exponential backoff (~1s doubling
+  to a 5min cap, jittered) — but bounded to `mcpRetryMaxAttempts` (3)
+  further attempts (under ~10s of background effort total). Once those
+  are exhausted the entry is marked Parked and the retry goroutine exits
+  for good — no further attempt ever fires spontaneously; only an
+  explicit re-trigger (the `mcp` tool's `connect` action, below) can move
+  it again. A HEALTHY server, by contrast, connects exactly once and is
+  never re-probed. `Tools()` always reads live state, so a server that
+  recovers mid-session — background retry or explicit reconnect —
+  contributes tools on the very next turn automatically, no new session
+  required. `CallTool`/`CallServerTool` split the old combined error into
+  two: a server name absent from config errors "not configured" (never
+  recoverable); a configured-but-unconnected server (still retrying, or
+  parked) errors naming that state explicitly (recoverable — retrying may
+  still self-heal, parked needs the `mcp` tool). While at least one
+  server is degraded, request assembly appends an ambient `[mcp:
+  unavailable — <name> (<reason>; retrying), ...]` block to the newest
+  user message only — computed fresh every turn, never persisted,
+  self-correcting as retries succeed; a Parked server's clause instead
+  reads `<name> (<reason>; use the mcp tool action "connect" to retry)` —
+  sharing its append-only-to-the-newest-message mechanism
+  (`withAmbientStatus`) with the managed-processes status block above.
+
+  A built-in `mcp` session tool is registered in `newSession` whenever
+  the session's MCP registry reports at least one configured server (no
+  config flag, unlike `GoalTool`). `status` reports every configured
+  server's live state — `{name, connected, attempts, parked, reason}`;
+  `connect {server}` makes ONE bounded, synchronous attempt for a named
+  server — the only path back for a Parked server, though it works
+  against a still-retrying or never-yet-attempted one too. An
+  already-connected server is a friendly no-op; an unknown name errors
+  listing the configured names. A per-server in-flight guard (under the
+  manager's own lock) serializes a tool-triggered connect against both a
+  concurrent `connect` call and `retryServer`'s own background attempt
+  for the same server — whichever gets there first dials, the other
+  reports "attempt already in progress." Every model-visible string on
+  this surface — the ambient block, `status`'s `reason`, `connect`'s
+  failure result — is `classifyMCPConnectError`'s output, never a raw
+  error (which can embed the server's endpoint URL and any secret it
+  carries).
 - **OpenTelemetry GenAI semantic conventions** — for span/metric naming when
   observability lands. Configuration via standard `OTEL_*` env vars only.
 - **A2A** — deliberately not implemented. Cross-org agent meshes are a
