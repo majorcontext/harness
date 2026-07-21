@@ -96,6 +96,17 @@ func (s *Session) EnqueuePrompt(text string) (int64, error) {
 // Delivery of the enqueued prompt is unchanged queue machinery: FIFO with
 // plain-enqueued prompts, drained at idle dispatch or injected at
 // tool-call/goal-turn boundaries.
+//
+// A nil error attests durable ACCEPTANCE into the session's queue — the
+// watermark advance above is fsynced, so a retry with the same seq is
+// always a safe no-op from here on. It is not a delivery receipt: once the
+// queue's existing machinery dequeues this prompt for a turn, it carries
+// the exact same crash exposure as any in-flight prompt (see the server's
+// maybeDispatchQueued, "No-double-delivery equivalence", invariant 7). A
+// crash between that dequeue record and the turn's completion loses the
+// delivery — it is never redelivered — while the watermark correctly
+// continues to report the message as accepted: lose-once-on-crash, not
+// deliver-twice.
 func (s *Session) EnqueuePromptDurable(text string, seq int64) (id int64, duplicate bool, err error) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {

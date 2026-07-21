@@ -1644,7 +1644,10 @@ paths:
         request's own prompt), a busy one queues FIFO behind whatever is
         already waiting, drained at the next tool-call/goal-turn boundary
         or idle dispatch — see prompt_async's description for the full
-        delivery mechanics.
+        delivery mechanics. The 2xx attests durable acceptance into the
+        session's prompt queue; it is not an end-to-end delivery receipt —
+        delivery out of the queue shares the same crash semantics as any
+        in-flight prompt.
 
         `seq` is a caller-issued, session-monotonic idempotency sequence
         (integer, >= 1). The session tracks a durable high-water mark (see

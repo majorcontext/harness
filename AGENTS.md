@@ -352,7 +352,12 @@ rebuilt by `LoadSession` — a seq at or below the mark is a clean 200
 restart), and torn-write healing (a burned-but-failed queue ID is never
 reused, and replay folds same-seq records last-writer-wins). Delivery is the
 exact same FIFO/tool-boundary/goal-boundary machinery described above — this
-is a new *acceptance* contract, not a new delivery path. `GET
+is a new *acceptance* contract, not a new delivery path: durable means
+accepted into the queue, and delivery-out is still the queue's normal
+at-most-once-per-dequeue machinery, so a crash between dequeue and turn
+completion loses that delivery once rather than redelivering it, exactly
+like any in-flight prompt (`maybeDispatchQueued`'s "No-double-delivery
+equivalence", invariant 7, in server/handlers.go). `GET
 /session/{id}/queue` is the paired reconciliation read: the watermark plus
 the pending queue (FIFO, `seq` present only on durable-enqueue entries), for
 an upstream recovering from its own crash to check what's already inside the
