@@ -92,6 +92,14 @@ type Event struct {
 	GoalRetryableClass string `json:"goal_retryable_class,omitempty"`
 	GoalWaiting        bool   `json:"goal_waiting,omitempty"`
 	GoalEvalFailures   int    `json:"goal_eval_failures,omitempty"`
+	// GoalAttempts is carried by goal.parked only (see goal.go's
+	// recordGoalParked and "Round 7" doc section): the TOTAL attempt count
+	// for the exhausted turn, distinct from GoalAttempt (singular), which
+	// is goal.stalled's 1-based per-attempt counter. GoalReason on a
+	// goal.parked event is classified, never raw provider error text (see
+	// classifyGoalWorkerError) — GoalRetryable/GoalRetryableClass above are
+	// reused unchanged from goal.stalled's convention.
+	GoalAttempts int `json:"goal_attempts,omitempty"`
 
 	// Compaction fields (see compact.go and docs/design/context-
 	// compaction.md §4 "Live event surface"). Carried on
@@ -142,6 +150,13 @@ const (
 	// advisory only: the goal stays active and the loop keeps working; at
 	// the limit a goal.cleared with a dedicated reason follows instead.
 	EventGoalEvalFailed = "goal.eval_failed"
+	// EventGoalParked fires once per exit-parked worker turn — either
+	// exhaustion tier (deterministic or retryable-class, see goal.go's
+	// "Round 7" doc section) — WITHOUT a following goal.cleared: the goal
+	// stays active. A server (Task 2) maps this onto a distinct paused
+	// presentation and resumes the loop on the next ordinary activity,
+	// exactly like it already does for the boot-only restart pause.
+	EventGoalParked = "goal.parked"
 
 	// Prompt-queue events (see queue.go and docs/plans/2026-07-19-prompt-
 	// queue.md). EventPromptQueued fires on every EnqueuePrompt call;
