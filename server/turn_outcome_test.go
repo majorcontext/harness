@@ -141,13 +141,15 @@ func TestTurnEndOnPromptFailureIsSanitizedAndSurfaced(t *testing.T) {
 	}
 }
 
-// TestTurnEndOnGoalWorkerFailureClearsWithError exercises the goal-loop half
-// of the primitive: a permanently failing worker turn exhausts its retries,
-// clears the goal, and returns an error to runGoal (see engine/goal.go's
-// zombie-goal fix) — that must also land a turn.end{outcome: error} record,
-// exactly like a plain prompt's worker-turn death, without changing any goal
-// semantics itself.
-func TestTurnEndOnGoalWorkerFailureClearsWithError(t *testing.T) {
+// TestTurnEndOnGoalWorkerFailureParksWithError exercises the goal-loop half
+// of the primitive: a permanently failing worker turn exhausts its retries
+// and EXIT-PARKS the goal (NEP-4849, superseding this test's original
+// clear-based contract — see engine/goal.go's "Round 7" doc section and
+// docs/plans/2026-07-21-goal-worker-park.md) — that lands a distinct
+// turn.end{outcome: worker_parked} record, not the generic "error" a plain
+// prompt's worker-turn death still records, and — unlike a clear — the goal
+// itself stays fully active, ready to resume on the next ordinary activity.
+func TestTurnEndOnGoalWorkerFailureParksWithError(t *testing.T) {
 	prov := &goalProv{
 		name:       "test",
 		worker:     [][]provider.Event{},
@@ -164,8 +166,8 @@ func TestTurnEndOnGoalWorkerFailureClearsWithError(t *testing.T) {
 	}
 
 	end := sse.waitFor(t, "turn.end")
-	if end.Outcome != "error" {
-		t.Errorf("turn.end outcome = %q, want error", end.Outcome)
+	if end.Outcome != outcomeWorkerParked {
+		t.Errorf("turn.end outcome = %q, want %q", end.Outcome, outcomeWorkerParked)
 	}
 	if end.Error == "" {
 		t.Errorf("turn.end missing error detail")
@@ -177,11 +179,17 @@ func TestTurnEndOnGoalWorkerFailureClearsWithError(t *testing.T) {
 	}
 	var sess struct {
 		LastTurn *lastTurnJSONForTest `json:"last_turn"`
+		Goal     *struct {
+			Active bool `json:"active"`
+		} `json:"goal"`
 	}
 	if err := json.Unmarshal(data, &sess); err != nil {
 		t.Fatal(err)
 	}
-	if sess.LastTurn == nil || sess.LastTurn.Outcome != "error" {
-		t.Fatalf("last_turn = %+v, want outcome error", sess.LastTurn)
+	if sess.LastTurn == nil || sess.LastTurn.Outcome != outcomeWorkerParked {
+		t.Fatalf("last_turn = %+v, want outcome %q", sess.LastTurn, outcomeWorkerParked)
+	}
+	if sess.Goal == nil || !sess.Goal.Active {
+		t.Fatalf("goal = %+v, want active (a park must never clear the goal)", sess.Goal)
 	}
 }

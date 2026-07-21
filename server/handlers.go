@@ -152,8 +152,12 @@ type lastTurnJSON struct {
 // (see sessionJSON.State's doc comment for why momentary busy/idle is not
 // enough); otherwise busy or idle mirroring the plain status.
 //
-// restartPaused (see goalTracker.pauseView) OVERRIDES all of that to idle:
-// a goal restored from the journal at boot with no loop attached is not
+// forceIdle (see goalTracker.pauseView and forcesIdlePause below) OVERRIDES
+// all of that to idle for the two pause reasons whose loop has genuinely
+// stopped driving the goal — "restart" (a goal restored from the journal at
+// boot with no loop ever attached) and "worker_failure" (NEP-4849, Task 2:
+// a worker turn exit-parked the goal, and PursueGoal has actually returned —
+// no goroutine is running it until the next auto-arm or re-POST). Neither is
 // "goal-running" in any sense an operator or composer can act on — it will
 // never progress on its own, and "busy"/"goal-running" forever is exactly
 // the operator trap this field exists to close (see docs/design/
@@ -161,9 +165,9 @@ type lastTurnJSON struct {
 // does NOT take this path — its loop is genuinely alive and running, just
 // waiting out provider weather, so it keeps reading goal-running (see
 // TestGoalStalledProviderBackoffSurfacesPaused).
-func compositeState(running, goalActive, restartPaused bool) string {
+func compositeState(running, goalActive, forceIdle bool) string {
 	switch {
-	case restartPaused:
+	case forceIdle:
 		return "idle"
 	case goalActive:
 		return "goal-running"
@@ -174,11 +178,14 @@ func compositeState(running, goalActive, restartPaused bool) string {
 	}
 }
 
-// isRestartPaused reports whether goal represents a boot-time restart pause
-// (see goalTracker.pauseView) — the one pause reason that forces
-// compositeState to idle. nil-safe.
-func isRestartPaused(goal *goalJSON) bool {
-	return goal != nil && goal.Paused && goal.PauseReason == pauseReasonRestart
+// forcesIdlePause reports whether goal represents a pause reason whose loop
+// has genuinely stopped driving the goal — "restart" (see
+// pauseArmedGoalsAtBoot) or "worker_failure" (see goalTracker.pausedWorker,
+// NEP-4849) — the two pause reasons that force compositeState to idle.
+// "provider-backoff" deliberately returns false here: that loop is still
+// alive, merely waiting. nil-safe.
+func forcesIdlePause(goal *goalJSON) bool {
+	return goal != nil && goal.Paused && (goal.PauseReason == pauseReasonRestart || goal.PauseReason == pauseReasonWorkerFailure)
 }
 
 // goalJSON is the Session.goal sub-object: present only when a goal has been
@@ -204,10 +211,15 @@ type goalJSON struct {
 	// Paused/PauseReason present the "goal armed but nothing is driving it"
 	// state (see goalTracker.pauseView): true with pause_reason "restart"
 	// when this process booted and found the goal active with no loop ever
-	// attached (see pauseArmedGoalsAtBoot); true with "provider-backoff"
-	// while the retryable-backoff park machinery (engine/goal.go) waits out
-	// provider weather. Both clear on re-arm (POST /session/{id}/goal) or,
-	// for provider-backoff, the moment the loop's own retry succeeds.
+	// attached (see pauseArmedGoalsAtBoot); true with "worker_failure"
+	// (NEP-4849, Task 2) when a worker turn exit-parked the goal (engine/
+	// goal.go's goal.parked) — the loop has genuinely exited, resumed only
+	// by the next ordinary activity (maybeAutoArmGoal) or an operator
+	// re-POST; true with "provider-backoff" while the retryable-backoff
+	// park machinery (engine/goal.go) waits out provider weather — that
+	// loop is still alive, merely waiting. All three clear on re-arm (POST
+	// /session/{id}/goal) or, for provider-backoff, the moment the loop's
+	// own retry succeeds.
 	Paused      bool   `json:"paused,omitempty"`
 	PauseReason string `json:"pause_reason,omitempty"`
 	// EvalFailures is the most recent goal.eval_failed record's consecutive
@@ -713,7 +725,7 @@ func (s *Server) compositeStateFor(id string, running bool) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	goal := goalJSONFrom(s.goalState[id])
-	return compositeState(running, goal != nil && goal.Active, isRestartPaused(goal))
+	return compositeState(running, goal != nil && goal.Active, forcesIdlePause(goal))
 }
 
 // promptAsyncResponse is POST /session/{id}/prompt_async's success-response
@@ -1187,6 +1199,15 @@ func (s *Server) maybeAutoArmGoal(id string, st *sessionState) {
 	}
 	s.mu.Lock()
 	claimedSt.goalLoop = true
+	// Activity-driven resume of a worker-parked goal (NEP-4849, Task 2): a
+	// plain prompt completing is exactly what re-attaches a loop to a goal
+	// left paused/worker_failure (see goalTracker.pausedWorker) — reset it
+	// here, mirroring handleGoal's own re-arm reset block, so the freshly
+	// spawned loop below is never seen with a stale worker-failure pause
+	// presentation still attached.
+	if g := s.goalState[id]; g != nil {
+		g.pausedWorker = false
+	}
 	s.mu.Unlock()
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 	go s.runGoal(ctx, id, claimedSt, condition, 0)
@@ -1304,8 +1325,14 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 			// goal.stalled(retryable, waiting), clearing only
 			// pausedRestart leaves pauseView's provider-backoff case
 			// firing on a freshly re-armed, genuinely-running goal until
-			// its first goal.eval resets waiting.
+			// its first goal.eval resets waiting. pausedWorker (NEP-4849,
+			// Task 2) needs the same treatment: a goal left worker-parked
+			// (journal tail goal.parked, no loop attached) reaches this
+			// exact branch too — claimForPrompt succeeded, so nothing was
+			// running — and must not still read paused/worker_failure the
+			// instant this re-arm's fresh loop starts.
 			g.pausedRestart = false
+			g.pausedWorker = false
 			g.retryable = false
 			g.retryableClass = ""
 			g.waiting = false
@@ -1407,6 +1434,21 @@ func (s *Server) handleGoalBusy(w http.ResponseWriter, id string, condition stri
 // failure, and needs no session.error. Any other error is journaled as
 // session.error. Message journaling piggybacks on the same syncMessages path
 // as runPrompt.
+//
+// A worker-parked error (engine.IsGoalWorkerParked, NEP-4849 — either
+// exhaustion tier exit-parking instead of clearing) falls into the default
+// branch below like any other error: session.error, then turn.end via
+// turnEndOutcome, which maps it to outcomeWorkerParked rather than the
+// generic "error". This is NOT a clear — engine/goal.go's goal.parked record
+// (journaled by PursueGoal itself, under its own lock, before returning —
+// always ordered before this function's own session.error/turn.end) leaves
+// the goal fully active; publishGoal folds it into goalTracker.pausedWorker,
+// the third paused arm (pause_reason "worker_failure", see pauseView), which
+// forces compositeState to idle exactly like a restart pause. This function
+// deliberately does NOT auto-arm a fresh loop for it (see maybeDispatchQueued
+// below and maybeAutoArmGoal's own doc comment for why runGoal's tail never
+// auto-arms) — resume is entirely activity-driven, via the next plain
+// prompt's own runPrompt tail.
 //
 // turn.end outcome is decided from the RESULT, not merely from err == nil:
 // PursueGoal returns a nil error with Achieved:false in two cases that are
@@ -2088,7 +2130,7 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 		CreatedAt:       sess.CreatedAt(),
 		Model:           sess.Model(),
 		Status:          status,
-		State:           compositeState(status == "busy", goal != nil && goal.Active, isRestartPaused(goal)),
+		State:           compositeState(status == "busy", goal != nil && goal.Active, forcesIdlePause(goal)),
 		Messages:        len(sess.History()),
 		Seq:             seq,
 		Goal:            goal,
