@@ -1868,6 +1868,50 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// queueGetResponse is GET /session/{id}/queue: the durable-enqueue
+// watermark plus the pending (undelivered) prompt queue in FIFO order.
+// Queued is always present (empty array, never null) so consumers need no
+// nil check. Seq is 0/omitted on plain prompt_async-queued entries.
+type queueGetResponse struct {
+	Watermark int64            `json:"watermark"`
+	Queued    []queuedItemJSON `json:"queued"`
+}
+
+type queuedItemJSON struct {
+	ID   int64  `json:"id"`
+	Text string `json:"text"`
+	Seq  int64  `json:"seq,omitempty"`
+}
+
+// handleQueueGet is the reconciliation read surface for durable enqueue
+// (see docs/plans/2026-07-21-durable-enqueue.md): an upstream recovering
+// from its own crash reads the watermark to learn which messages are
+// already accepted rather than re-sending blind. It resolves the session
+// via s.lookup — the same resolve-or-load helper handleGet uses for every
+// other read endpoint: resident sessions answer from live state, and a
+// non-resident session gets a transparent transient load (idle status,
+// same as GET /session/{id}). Unlike handleQueueDelete's cold path, this
+// transient load is deliberately NOT registered into residency and takes no
+// run-slot claim — a read must never have those side effects. Resident and
+// non-resident answers can never disagree: both are folds of the exact same
+// on-disk journal.
+func (s *Server) handleQueueGet(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.sessionIDOrNotFound(w, r)
+	if !ok {
+		return
+	}
+	sess, _, ok := s.lookup(id)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "no such session")
+		return
+	}
+	resp := queueGetResponse{Watermark: sess.EnqueueSeq(), Queued: []queuedItemJSON{}}
+	for _, p := range sess.QueuedPrompts() {
+		resp.Queued = append(resp.Queued, queuedItemJSON{ID: p.ID, Text: p.Text, Seq: p.Seq})
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // handleQueueDelete is DELETE /session/{id}/queue (invariant 10): drains the
 // session's durable prompt queue, journaling a prompt.dequeued(reason=
 // "cleared") record for every pending item (see

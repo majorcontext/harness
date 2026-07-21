@@ -337,6 +337,120 @@ func TestEnqueueWatermarkSurvivesRestart(t *testing.T) {
 	}
 }
 
+// TestQueueGetReturnsWatermarkAndPending is the red-first test for GET
+// /session/{id}/queue (Task 6 of docs/plans/2026-07-21-durable-enqueue.md):
+// the reconciliation read surface. While the session is busy (queueProv's
+// blocking pattern, same occupant setup as
+// TestEnqueueBusyQueuesAndDeduplicates), enqueue durably queues a prompt,
+// then GET must report the watermark and exactly the one pending entry
+// (id/text/seq), live off the resident instance.
+func TestQueueGetReturnsWatermarkAndPending(t *testing.T) {
+	prov := &queueProv{
+		name:    "test",
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		turns:   [][]provider.Event{asstTurn("occupant done")},
+	}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "occupant"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("occupant prompt status %d: %s", resp.StatusCode, data)
+	}
+	<-prov.started
+
+	resp, data = h.enqueue(id, "pending", 4)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("enqueue status %d: %s", resp.StatusCode, data)
+	}
+
+	resp, data = h.do("GET", "/session/"+id+"/queue", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET queue status %d: %s", resp.StatusCode, data)
+	}
+	var q queueGetResponse
+	if err := json.Unmarshal(data, &q); err != nil {
+		t.Fatal(err)
+	}
+	if q.Watermark != 4 || len(q.Queued) != 1 {
+		t.Fatalf("queue read = %+v, want watermark=4 and exactly one queued entry", q)
+	}
+	if q.Queued[0].Text != "pending" || q.Queued[0].Seq != 4 || q.Queued[0].ID <= 0 {
+		t.Fatalf("queued[0] = %+v, want text=pending seq=4 id>0", q.Queued[0])
+	}
+
+	close(prov.release)
+	h.waitIdle(id)
+}
+
+// TestQueueGetNonResidentReadsFromDisk is TestQueueGetReturnsWatermarkAndPending's
+// cold-session counterpart: seed the durable queue on a resident session
+// (same technique TestQueueRestartRefoldNoAutoDispatch and
+// TestEnqueueDuplicateOnIdleWithQueueDrainsHead use), restart the process
+// over the same dir so the session is NOT resident in the successor, then
+// GET /session/{id}/queue there. It must read the same watermark and
+// pending entry back from a transient replay — same journal, same fold, so
+// resident and non-resident answers can never disagree — and it must NOT
+// make the session resident or claim the run slot: this is a pure read.
+func TestQueueGetNonResidentReadsFromDisk(t *testing.T) {
+	dir := t.TempDir()
+	prov1 := &scriptedProvider{name: "test"}
+	srv1 := newServer(t, dir, prov1, 0)
+	ts1 := httptest.NewServer(srv1)
+	h1 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv1, ts: ts1}
+
+	id := h1.createSession("test/m1")
+	srv1.mu.Lock()
+	st := srv1.sessions[id]
+	srv1.mu.Unlock()
+	if st == nil {
+		t.Fatal("session not resident right after creation")
+	}
+	if _, dup, err := st.sess.EnqueuePromptDurable("pending", 4); err != nil || dup {
+		t.Fatalf("seed EnqueuePromptDurable: dup=%v err=%v", dup, err)
+	}
+
+	if err := srv1.Close(); err != nil {
+		t.Fatalf("closing first server: %v", err)
+	}
+	ts1.Close()
+
+	prov2 := &scriptedProvider{name: "test"}
+	srv2 := newServer(t, dir, prov2, 0)
+	ts2 := httptest.NewServer(srv2)
+	t.Cleanup(ts2.Close)
+	h2 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv2, ts: ts2}
+
+	srv2.mu.Lock()
+	_, resident := srv2.sessions[id]
+	srv2.mu.Unlock()
+	if resident {
+		t.Fatal("test setup invariant broken: session must be non-resident before GET")
+	}
+
+	resp, data := h2.do("GET", "/session/"+id+"/queue", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET queue status %d: %s", resp.StatusCode, data)
+	}
+	var q queueGetResponse
+	if err := json.Unmarshal(data, &q); err != nil {
+		t.Fatal(err)
+	}
+	if q.Watermark != 4 || len(q.Queued) != 1 || q.Queued[0].Text != "pending" || q.Queued[0].Seq != 4 {
+		t.Fatalf("queue read = %+v, want watermark=4 one queued entry text=pending seq=4", q)
+	}
+
+	srv2.mu.Lock()
+	_, residentAfter := srv2.sessions[id]
+	srv2.mu.Unlock()
+	if residentAfter {
+		t.Fatal("GET /queue made the session resident; it must be a transient read, no run-slot claim")
+	}
+}
+
 func TestEnqueueWorkdirBusyRejected(t *testing.T) {
 	prov := newBlockingProvider("test")
 	h := newHarness(t, prov)
