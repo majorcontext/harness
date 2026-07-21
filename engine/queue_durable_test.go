@@ -216,3 +216,32 @@ func TestLoadSessionDequeueAfterFoldRemovesRetryEntry(t *testing.T) {
 		t.Fatalf("EnqueueSeq = %d, want 5 (dequeue never lowers the watermark)", got)
 	}
 }
+
+// TestLoadSessionFoldWithInterposedPlainRecordPreservesFIFO pins the fix for
+// the live-vs-reload FIFO divergence an in-place fold produced: when a plain
+// EnqueuePrompt lands BETWEEN a torn durable write and its same-seq retry
+// (log order id1/seq5 torn, id2/seq0 plain, id3/seq5 retry), live memory
+// only ever appended id2 then id3, in that order. Replay must converge to
+// that same order — remove the torn entry's slot, append the retry at the
+// tail — never [id3, id2].
+func TestLoadSessionFoldWithInterposedPlainRecordPreservesFIFO(t *testing.T) {
+	dir := t.TempDir()
+	writeSessionLog(t, dir, "ses_0000000000000004",
+		`{"type":"session","id":"ses_0000000000000004","created_at":"2026-07-21T00:00:00Z"}`,
+		`{"type":"model","model":"test/m1"}`,
+		`{"type":"prompt.queued","prompt":{"id":1,"text":"torn","seq":5}}`,
+		`{"type":"prompt.queued","prompt":{"id":2,"text":"plain"}}`,
+		`{"type":"prompt.queued","prompt":{"id":3,"text":"retry","seq":5}}`,
+	)
+	s, err := LoadSession(Config{SessionDir: dir}, "ses_0000000000000004")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := s.QueuedPrompts()
+	if len(q) != 2 || q[0].ID != 2 || q[0].Seq != 0 || q[1].ID != 3 || q[1].Seq != 5 {
+		t.Fatalf("queue = %+v, want [{ID:2 Seq:0} {ID:3 Seq:5}] (live append order)", q)
+	}
+	if got := s.EnqueueSeq(); got != 5 {
+		t.Fatalf("EnqueueSeq = %d, want 5", got)
+	}
+}

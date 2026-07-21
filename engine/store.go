@@ -529,14 +529,26 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// accepted, see queue.go). Seq also advances the enqueueSeq
 			// high-water mark, which is what makes duplicate detection
 			// survive a process restart.
+			//
+			// The fold REMOVES the old same-Seq entry from its slot and
+			// APPENDS the new one at the tail, rather than replacing it
+			// in place: a plain EnqueuePrompt can land BETWEEN the torn
+			// write and its retry (log order id1/seq5 torn, id2/seq0
+			// plain, id3/seq5 retry). Live memory only ever appended
+			// id2 then id3, in that order — an in-place replacement at
+			// id1's old slot would instead fold to [id3, id2], reordering
+			// delivery relative to what actually happened live. Remove+
+			// append reconstructs live append order faithfully (the retry
+			// always carries the highest ID seen so far, so this can never
+			// misorder against a later, genuinely-newer plain entry); the
+			// common case with no interposed record degenerates to the
+			// exact same single-entry result as an in-place replacement.
 			if rec.Prompt != nil {
 				q := QueuedPrompt{ID: rec.Prompt.ID, Text: rec.Prompt.Text, Seq: rec.Prompt.Seq}
-				replaced := false
 				if q.Seq > 0 {
 					for i, p := range s.promptQueue {
 						if p.Seq == q.Seq {
-							s.promptQueue[i] = q
-							replaced = true
+							s.promptQueue = append(s.promptQueue[:i], s.promptQueue[i+1:]...)
 							break
 						}
 					}
@@ -544,9 +556,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 						s.enqueueSeq = q.Seq
 					}
 				}
-				if !replaced {
-					s.promptQueue = append(s.promptQueue, q)
-				}
+				s.promptQueue = append(s.promptQueue, q)
 				if rec.Prompt.ID >= s.promptQueueNextID {
 					s.promptQueueNextID = rec.Prompt.ID + 1
 				}

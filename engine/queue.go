@@ -79,7 +79,7 @@ func (s *Session) EnqueuePrompt(text string) (int64, error) {
 //     out-of-order fresh seq is indistinguishable from a duplicate and is
 //     dropped.
 //   - The prompt.queued record (carrying seq) is written AND fsynced
-//     before any in-memory mutation and before success returns —
+//     before any queue/watermark mutation and before success returns —
 //     write-ahead, unlike every other persist path in this package, which
 //     buffers to the page cache and swallows errors into lastPersistErr.
 //     An error return means "not durably accepted; retry with the same
@@ -134,7 +134,9 @@ func (s *Session) EnqueuePromptDurable(text string, seq int64) (id int64, duplic
 	}
 	s.promptQueue = append(s.promptQueue, QueuedPrompt{ID: id, Text: trimmed, Seq: seq})
 	s.enqueueSeq = seq
-	// Emit while still holding s.mu, exactly like EnqueuePrompt above.
+	// Emit while still holding s.mu (see EnqueuePrompt above): keeps event
+	// order matching log order under a concurrent dequeue. OnEvent must not
+	// call back into this Session — that would deadlock on s.mu, held here.
 	s.emit(Event{Type: EventPromptQueued, QueueID: id, QueueText: trimmed, QueueSeq: seq, QueueLen: len(s.promptQueue)})
 	return id, false, nil
 }
