@@ -206,6 +206,60 @@ func TestAmbientGoalParkedStatusGoneAfterResume(t *testing.T) {
 	}
 }
 
+// TestAmbientGoalParkedStatusClearedByUpdateGoal covers the review followup
+// to the worker-park series: UpdateGoal rewriting an active goal's condition
+// must also clear the runtime goalParked/goalParkedReason/goalParkedAttempts
+// fields (see UpdateGoal's doc comment and the clear site in goal.go), not
+// just the next PursueGoal entry's clearGoalParkedAtEntry. Without this, a
+// plain Prompt landing in the window between an UpdateGoal call on a
+// parked-but-still-active goal and the next PursueGoal resume would render
+// goalParkedSegment's ambient block quoting the OLD park episode's
+// reason/attempts, paired confusingly against the NEW condition text the
+// model was never actually working toward when it parked.
+//
+// Red-verified: with the clear in UpdateGoal's condition-changed branch
+// removed, this test fails because the plain Prompt call's last request
+// still carries a "[goal:" ambient block.
+func TestAmbientGoalParkedStatusClearedByUpdateGoal(t *testing.T) {
+	dir := t.TempDir()
+	var s *Session
+	var prov *goalProvider
+	var parkErr error
+	synctest.Test(t, func(t *testing.T) {
+		prov = &goalProvider{
+			workerErrN: goalWorkerRetries + 1,
+			workerErr:  errors.New("provider: connection reset by peer"),
+			worker: [][]provider.Event{
+				asstTurn(provider.StopEndTurn, &message.Text{Text: "ok"}),
+			},
+		}
+		s = goalSession(t, prov, dir)
+		_, parkErr = s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+		if !IsGoalWorkerParked(parkErr) {
+			t.Fatalf("PursueGoal err = %v, want IsGoalWorkerParked", parkErr)
+		}
+
+		// Adjust the still-active (parked, not cleared) goal's condition —
+		// e.g. a self-adjust tool call or an operator's POST /goal landing
+		// while the goal sits parked, before any resume has happened.
+		if err := s.UpdateGoal("a completely different condition"); err != nil {
+			t.Fatalf("UpdateGoal = %v", err)
+		}
+
+		// A plain prompt turn in the window before the next PursueGoal
+		// resume must see no ambient block: the update already invalidated
+		// the stale park presentation.
+		if _, err := s.Prompt(context.Background(), "status?"); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	last := lastUserText(t, prov.requests[len(prov.requests)-1])
+	if strings.Contains(last, "[goal:") {
+		t.Fatalf("last user message = %q, want no ambient parked-goal block after UpdateGoal", last)
+	}
+}
+
 // TestAmbientGoalParkedStatusNeverPersisted mirrors
 // TestAmbientProcessStatusNeverPersisted: the block must never leak into
 // s.History() or a reloaded session's log.
