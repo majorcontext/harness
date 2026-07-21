@@ -662,6 +662,112 @@ components:
             override through to a future drain. Re-issue the request once it
             is confirmed `started` if the override must take effect.
 
+    EnqueueRequest:
+      type: object
+      required: [parts, seq]
+      properties:
+        parts:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/TextPart"
+          description: v1 accepts text parts only, same as PromptRequest.
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >
+            Caller-issued, session-monotonic idempotency sequence. Must be
+            issued in nondecreasing order for one session; a gap is fine
+            (the watermark simply jumps to it), but an out-of-order FRESH
+            seq is indistinguishable from a duplicate and is silently
+            dropped — see EnqueueResponse's `duplicate` status. No `model`
+            field: a durably-enqueued prompt is subject to the exact same
+            text-only, no-override limit as a queued PromptRequest (see
+            PromptRequest's `model` description) — there is simply no slot
+            to offer one here.
+
+    EnqueueResponse:
+      type: object
+      required: [status, watermark]
+      properties:
+        status:
+          type: string
+          enum: [started, queued, duplicate]
+          description: >
+            `started` (202): a turn is now running for THIS request's own
+            prompt. `queued` (202): durably accepted and waiting in the
+            FIFO — see `queued` below for the depth. `duplicate` (200): seq
+            was at or below the session's watermark when this request
+            landed — a clean idempotent no-op, nothing (re)persisted,
+            emitted, or delivered; safe to treat exactly like the original
+            accept for upstream-ack purposes. A `queued` prompt that is
+            later dispatched gets no second response of its own — its
+            progress and completion arrive on /event exactly like any
+            other turn.
+        watermark:
+          type: integer
+          format: int64
+          description: >
+            The session's durable-enqueue high-water mark (see GET
+            /session/{id}/queue) AFTER this call: this request's own seq on
+            `started`/`queued`, the pre-existing mark on `duplicate`. Only a
+            2xx (`started`/`queued`) response authorizes the caller to ack
+            its own upstream — the prompt.queued record was fsynced into
+            the session journal before this response was written.
+        queued:
+          type: integer
+          description: >
+            Current queue depth, including this request's own prompt.
+            Present (and non-zero) only when status is `queued` — same one
+            narrow exception as PromptAsyncResponse's `queued` field: a
+            concurrent DELETE /session/{id}/queue racing the durable accept
+            can leave it 0/absent even on a `queued` response. That is not
+            an error — the prompt was still durably accepted and journaled,
+            it simply never ran — so this case is still a 202, never a 500.
+
+    QueueGetResponse:
+      type: object
+      required: [watermark, queued]
+      properties:
+        watermark:
+          type: integer
+          format: int64
+          description: >
+            The durable-enqueue high-water mark: the largest seq any POST
+            /session/{id}/enqueue call has durably accepted for this
+            session, live or restored from the journal after a restart
+            (docs/plans/2026-07-21-durable-enqueue.md). 0 if the session has
+            never received a durable enqueue.
+        queued:
+          type: array
+          description: >
+            Every prompt still waiting for delivery, FIFO (oldest first,
+            the same order /event's prompt.dequeued records will drain
+            them in). Always an array, never null, even when empty — no nil
+            check needed. Mixes plain prompt_async-queued entries (no
+            `seq`) and durable-enqueue entries (carrying `seq`): the queue
+            is one FIFO regardless of origin.
+          items:
+            $ref: "#/components/schemas/QueuedItem"
+
+    QueuedItem:
+      type: object
+      required: [id, text]
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Session-monotonic queue ID assigned at enqueue time.
+        text: { type: string }
+        seq:
+          type: integer
+          format: int64
+          description: >
+            The idempotency sequence from POST /session/{id}/enqueue.
+            Omitted on an entry queued via prompt_async's plain,
+            non-attesting path, which carries no seq.
+
     Event:
       type: object
       description: |
@@ -815,9 +921,12 @@ components:
             above, not a boot-time observation either.
             prompt.queued and prompt.dequeued are the durable records of the
             prompt queue (docs/plans/2026-07-19-prompt-queue.md):
-            prompt.queued fires whenever prompt_async durably enqueues a
-            prompt against a busy session, carrying queue_id, queue_text,
-            and the resulting queue_len. prompt.dequeued fires whenever the
+            prompt.queued fires whenever prompt_async or POST
+            /session/{id}/enqueue (docs/plans/2026-07-21-durable-enqueue.md)
+            durably enqueues a prompt, carrying queue_id, queue_text, the
+            resulting queue_len, and — for a POST /session/{id}/enqueue
+            accept only — queue_seq (see that field). prompt.dequeued fires
+            whenever the
             head is popped for delivery, carrying the same queue_id/
             queue_text plus queue_reason — "delivered" (idle-drain
             dispatch), "injected" (delivered mid-turn as a labeled operator
@@ -1010,6 +1119,13 @@ components:
             prompt.dequeued is explicit on the wire, not indistinguishable
             from an event type that never carries a queue depth at all.
             Absent on every other event type.
+        queue_seq:
+          type: integer
+          description: >
+            The caller-issued idempotency sequence (docs/plans/2026-07-21-
+            durable-enqueue.md) on a prompt.queued event emitted by POST
+            /session/{id}/enqueue. Absent/0 on a plain prompt_async-queued
+            entry and on every prompt.dequeued event, regardless of origin.
         worktree_path:
           type: string
           description: >
@@ -1511,7 +1627,143 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /session/{id}/enqueue:
+    post:
+      operationId: enqueue
+      summary: Durably, idempotently deliver a prompt (attested 2xx).
+      description: |
+        docs/plans/2026-07-21-durable-enqueue.md's durability primitive: unlike
+        prompt_async, a 2xx from this endpoint is an honest attestation —
+        the prompt.queued record is fsynced into the session journal BEFORE
+        the response is written — for a caller (an inbox poller, a
+        coordinator relay) whose own upstream ack must ride on this call's
+        success without risk of ghost- or double-delivery. Delivery itself
+        is unchanged prompt-queue machinery (docs/plans/2026-07-19-prompt-
+        queue.md), shared exactly with prompt_async: an idle session
+        dispatches the queue HEAD immediately (not necessarily this
+        request's own prompt), a busy one queues FIFO behind whatever is
+        already waiting, drained at the next tool-call/goal-turn boundary
+        or idle dispatch — see prompt_async's description for the full
+        delivery mechanics. The 2xx attests durable acceptance into the
+        session's prompt queue; it is not an end-to-end delivery receipt —
+        delivery out of the queue shares the same crash semantics as any
+        in-flight prompt.
+
+        `seq` is a caller-issued, session-monotonic idempotency sequence
+        (integer, >= 1). The session tracks a durable high-water mark (see
+        GET /session/{id}/queue's `watermark`); a request whose seq is at or
+        below the mark is a clean 200 `duplicate` no-op — nothing
+        (re)persisted, emitted, or delivered — so retrying an
+        unacknowledged send is always safe. Seqs must be issued in
+        nondecreasing order for one session: a gap is fine (the mark simply
+        jumps to it), but an out-of-order FRESH seq is indistinguishable
+        from a duplicate and is silently dropped.
+
+        A non-2xx/200 response means the record's durability was NOT
+        attested: in particular, 500 means retry with the SAME seq (nothing
+        durable happened, so it is not yet a duplicate); the 409/503 cases
+        below mean no attempt was made either, so the same seq is safe to
+        retry once the condition clears. No `model` override — see
+        `EnqueueRequest`.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EnqueueRequest" }
+      responses:
+        "200":
+          description: >
+            Duplicate: seq was at or below the session's durable-enqueue
+            watermark when this request landed — a clean idempotent no-op.
+            Safe to treat exactly like the original accept for
+            upstream-ack purposes.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnqueueResponse" }
+        "202":
+          description: >
+            Accepted and durable: the prompt.queued record was fsynced into
+            the session journal before this response was written. `status`
+            is `started` when a turn is now running for THIS request's own
+            prompt, or `queued` when it is durably waiting in the FIFO for a
+            future drain (see `queued` in EnqueueResponse for the depth).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnqueueResponse" }
+        "400":
+          description: >
+            `parts` is empty, a part's type is not `text`, or `seq` is < 1.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >
+            Either another currently-running session holds the same workdir
+            and neither session set share_workdir on creation, and neither
+            session set workdir_isolation="worktree" (the error names the
+            holder session, same as prompt_async's 409) — or this session is
+            busy and a narrow benign race meant the busy occupant could not
+            be re-resolved to durably enqueue behind it (the window between
+            the failed claim and the retry lookup finding the occupant
+            already gone): the error reads "session is busy with another
+            prompt". Either way nothing was durably accepted, so the SAME
+            seq is safe to retry immediately — idempotency makes the retry
+            free once it lands.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: >
+            The prompt.queued record was not durably accepted — a journal
+            write or fsync failure — error text prefixed "enqueue not
+            durable: ". No upstream ack is authorized; retry with the SAME
+            seq once the underlying condition clears. A torn on-disk write
+            left by this failure (if any) heals automatically on the next
+            successful retry's replay (last-writer-wins fold,
+            docs/plans/2026-07-21-durable-enqueue.md) — no caller-visible
+            effect.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Server is shutting down (draining). Retry with the same seq later.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /session/{id}/queue:
+    get:
+      operationId: getPromptQueue
+      summary: Durable-enqueue watermark and the pending prompt queue (reconciliation read).
+      description: >
+        The reconciliation read for docs/plans/2026-07-21-durable-enqueue.md:
+        an upstream recovering from its own crash reads `watermark` to learn
+        which seqs are already inside the durability domain, instead of
+        re-sending blind (re-sending is always safe — see POST
+        /session/{id}/enqueue's duplicate semantics — just wasteful). A
+        resident session answers from live state; a non-resident one from a
+        transient, read-only replay of its journal — both are folds of the
+        exact same on-disk log, so the two can never disagree, and this call
+        never registers a session into residency or takes a run-slot claim.
+        `queued` lists every prompt still waiting for delivery, FIFO (oldest
+        first, the order /event's prompt.dequeued records will drain them
+        in), mixing plain prompt_async-queued entries (no `seq`) and
+        durable-enqueue entries (carrying `seq`) — the queue is one FIFO
+        regardless of origin.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QueueGetResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
     delete:
       operationId: clearPromptQueue
       summary: Drain a session's durable prompt queue.

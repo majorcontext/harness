@@ -336,6 +336,36 @@ per-request `model` override is silently dropped when the prompt is queued**
 a caller that needs a model swap to take effect must re-issue the request once
 it is confirmed `started`.
 
+`POST /session/{id}/enqueue` (docs/plans/2026-07-21-durable-enqueue.md) is
+`prompt_async`'s durable, idempotent sibling for a caller whose own upstream
+ack rides on this call succeeding — an inbox poller or coordinator relay,
+not an interactive client. `Session.EnqueuePromptDurable` extends
+`EnqueuePrompt` with three properties the plain path deliberately lacks:
+write-ahead durability (the `prompt.queued` record is written and *fsynced*
+before any in-memory mutation or response, so a 2xx is an honest attestation
+rather than a best-effort ack — a write/fsync failure returns 500 "enqueue
+not durable" instead of the swallowed `lastPersistErr` every other persist
+path uses), a caller-issued session-monotonic `seq` deduplicated against a
+durable high-water mark (`Session.EnqueueSeq()`, journaled on the record and
+rebuilt by `LoadSession` — a seq at or below the mark is a clean 200
+`duplicate` no-op, so retries are always safe, including across a process
+restart), and torn-write healing (a burned-but-failed queue ID is never
+reused, and replay folds same-seq records last-writer-wins). Delivery is the
+exact same FIFO/tool-boundary/goal-boundary machinery described above — this
+is a new *acceptance* contract, not a new delivery path: durable means
+accepted into the queue, and delivery-out is still the queue's normal
+at-most-once-per-dequeue machinery, so a crash between dequeue and turn
+completion loses that delivery once rather than redelivering it, exactly
+like any in-flight prompt (`maybeDispatchQueued`'s "No-double-delivery
+equivalence", invariant 7, in server/handlers.go). `GET
+/session/{id}/queue` is the paired reconciliation read: the watermark plus
+the pending queue (FIFO, `seq` present only on durable-enqueue entries), for
+an upstream recovering from its own crash to check what's already inside the
+durability domain instead of re-sending blind. `prompt_async` remains the
+right choice for an interactive client that has no upstream ack to protect —
+it is not going away, and `POST /session/{id}/enqueue` adds no new limits
+beyond what queued prompts already have (text-only, no model override).
+
 ### Managed processes
 
 `config.Config.Processes` (`processes` in JSON) declares named long-lived

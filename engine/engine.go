@@ -126,6 +126,10 @@ type Event struct {
 	QueueText   string `json:"queue_text,omitempty"`
 	QueueReason string `json:"queue_reason,omitempty"`
 	QueueLen    int    `json:"queue_len,omitempty"`
+	// QueueSeq is the caller-issued idempotency sequence on an
+	// EventPromptQueued emitted by EnqueuePromptDurable (see queue.go);
+	// 0/omitted on plain enqueues and on every EventPromptDequeued.
+	QueueSeq int64 `json:"queue_seq,omitempty"`
 }
 
 // Event types.
@@ -442,6 +446,12 @@ type Session struct {
 	// LoadSession's fold to one past the highest prompt.queued ID it replays
 	// — see LoadSession's recPromptQueued case. Guarded by mu.
 	promptQueueNextID int64
+
+	// enqueueSeq is the durable-enqueue idempotency high-water mark (see
+	// EnqueuePromptDurable in queue.go and promptRecord.Seq in store.go):
+	// the largest caller-issued seq durably accepted. Monotonic; a seq at or
+	// below it is a duplicate no-op. Rebuilt on replay by LoadSession.
+	enqueueSeq int64
 }
 
 // NewSession creates a session. Nothing touches the network, spawns

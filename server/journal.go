@@ -143,6 +143,12 @@ type Event struct {
 	QueueText   string `json:"queue_text,omitempty"`
 	QueueReason string `json:"queue_reason,omitempty"`
 	QueueLen    *int   `json:"queue_len,omitempty"`
+	// QueueSeq mirrors engine.Event.QueueSeq: the caller-issued idempotency
+	// sequence carried on a prompt.queued record from a durable enqueue
+	// (POST /session/{id}/enqueue, engine.Session.EnqueuePromptDurable) —
+	// see docs/plans/2026-07-21-durable-enqueue.md. 0/omitted on a plain
+	// enqueue (prompt_async) and on every prompt.dequeued.
+	QueueSeq int64 `json:"queue_seq,omitempty"`
 }
 
 // Durable and live event types (a superset of engine.Event types plus the
@@ -525,6 +531,7 @@ func (s *Server) publishQueue(ev engine.Event) {
 		QueueText:   ev.QueueText,
 		QueueReason: ev.QueueReason,
 		QueueLen:    &queueLen,
+		QueueSeq:    ev.QueueSeq,
 	})
 }
 
