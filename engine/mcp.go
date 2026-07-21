@@ -324,9 +324,14 @@ var mcpConnectFunc = connectMCPServer
 // mcpTestRetryCommitted, when non-nil, is called (outside m.mu, strictly
 // after the commit's Unlock so the committed state is already visible to
 // any goroutine that acquires the lock afterward) every time retryServer OR
-// Connect commits an outcome for one server — success (connected == true)
-// or a further failure (connected == false). Nil in production; a test-only
-// synchronization hook for the one test (real-network, real backoff, see
+// Connect commits an outcome for one server. retryServer fires it on either
+// commit — success (connected == true) or a further failure (connected ==
+// false) — but Connect fires it only on success: its own failure path
+// returns the dial error directly without calling the hook (see Connect),
+// an asymmetry TestMCPManagerAttemptsMonotonicAcrossToolAndBackgroundDials
+// relies on to isolate the background retry's own commit on the committed
+// channel. Nil in production; a test-only synchronization hook for the one
+// test (real-network, real backoff, see
 // TestMCPManagerCallServerToolRetryingThenRecovers) that cannot use
 // synctest.Wait() because it deliberately exercises a real mcp.Client
 // round trip end to end — it lets that test block on an actual commit
