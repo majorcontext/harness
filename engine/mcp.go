@@ -157,11 +157,23 @@ type mcpServerEntry struct {
 	Parked bool
 	client *mcp.Client
 	tools  map[string]mcpToolBinding // this server's own bindings, namespaced name -> binding
-	// Attempts and LastErr are updated after every attempt (the first one
-	// and each background retry) — exported-cased for the status surface
-	// (see MCPServerStatus/Status) to read directly.
+	// Attempts and LastErr are updated after every attempt (the first one,
+	// each background retry, and any on-demand attempt from the mcp
+	// session tool's connect action — see MCPManager.Connect) —
+	// exported-cased for the status surface (see MCPServerStatus/Status) to
+	// read directly.
 	Attempts int
 	LastErr  error
+	// connecting is the per-server in-flight guard: true while EITHER
+	// retryServer's background loop or a tool-triggered Connect call has
+	// an attempt actually dialing (not merely waiting in backoff) for this
+	// server. Whichever of the two sets it first proceeds with the dial;
+	// the other observes it true and backs off without dialing — see
+	// retryServer and Connect, both of which acquire/release this under
+	// m.mu around (not across) their own mcpConnectFunc call. Never
+	// exported: purely an internal coordination flag, not part of the
+	// public status surface.
+	connecting bool
 }
 
 // MCPManager is the production MCPRegistry: it owns one mcp.Client per
@@ -282,6 +294,22 @@ func (m *MCPManager) ensureConnected(ctx context.Context) {
 		}
 		m.mu.Unlock()
 	})
+}
+
+// ConfiguredNames returns the sorted names of every server this manager was
+// constructed with, WITHOUT connecting to any of them — m.servers is
+// immutable after NewMCPManager, so this needs no lock. It backs both the
+// mcp session tool's registration gate (newSession registers the tool only
+// when this is non-empty — see mcp_tool.go) and its connect action's
+// unknown-server error message, which lists these names so the model knows
+// what it CAN ask for.
+func (m *MCPManager) ConfiguredNames() []string {
+	names := make([]string, 0, len(m.servers))
+	for name := range m.servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // mcpConnectFunc is the seam ensureConnected/retryServer call to perform
@@ -467,11 +495,36 @@ func (m *MCPManager) retryServer(name string, lastAttempt int) {
 			return // retryCtx cancelled: Close is tearing the manager down
 		}
 
+		// Claim the in-flight guard before dialing, so a concurrent
+		// tool-triggered Connect (see Connect) can never race this
+		// goroutine into a double dial for the same server. If Connect got
+		// there first (or already succeeded while we were waiting), this
+		// round is skipped WITHOUT counting as a failed attempt — attempt
+		// and backgroundRetries stay unchanged — and the loop simply waits
+		// the same backoff again before checking once more.
+		m.mu.Lock()
+		if m.retryCtx.Err() != nil {
+			m.mu.Unlock()
+			return
+		}
+		entry := m.state[name]
+		if entry.Connected {
+			m.mu.Unlock()
+			return // a tool-triggered Connect already succeeded; nothing left to do
+		}
+		if entry.connecting {
+			m.mu.Unlock()
+			continue // someone else (a tool Connect) is dialing right now
+		}
+		entry.connecting = true
+		m.mu.Unlock()
+
 		client, toolList, err := mcpConnectFunc(m.retryCtx, name, spec)
 		attempt++
 		backgroundRetries++
 
 		m.mu.Lock()
+		entry.connecting = false
 		if m.retryCtx.Err() != nil {
 			// Close raced this attempt to completion. Don't commit a
 			// connection nobody asked for anymore; if it actually
@@ -486,7 +539,6 @@ func (m *MCPManager) retryServer(name string, lastAttempt int) {
 			}
 			return
 		}
-		entry := m.state[name]
 		entry.Attempts = attempt
 		if err != nil {
 			entry.LastErr = err
@@ -521,6 +573,115 @@ func (m *MCPManager) retryServer(name string, lastAttempt int) {
 		}
 		return
 	}
+}
+
+// errMCPConnectInProgress is Connect's sentinel for the in-flight-guard
+// collision case: another attempt (a concurrent Connect call, or
+// retryServer's own background attempt) is already dialing this server.
+// Safe to surface to the model verbatim (see mcp_tool.go) — it names no
+// endpoint or secret, unlike a raw connect error.
+var errMCPConnectInProgress = errors.New("attempt already in progress")
+
+// Connect performs ONE synchronous connect attempt for the named server,
+// bounded by that server's own ConnectTimeout, for the mcp session tool's
+// "connect" action (see mcp_tool.go). It is the on-demand escape hatch past
+// retryServer's bounded background schedule (see mcpRetryMaxAttempts): once
+// a server is Parked, no goroutine is left trying on its own, so this is
+// the only path back to Connected — but it works just as well against a
+// server that is still within its background retry budget, or one that has
+// never failed at all (name configured, first attempt just never
+// happened).
+//
+// Concurrency: the per-server in-flight guard (mcpServerEntry.connecting,
+// under m.mu) serializes this against BOTH a concurrent Connect call for
+// the same server and retryServer's own background attempt (see
+// retryServer's matching guard check) — whichever gets there first
+// performs the dial; the other observes the guard held and returns
+// errMCPConnectInProgress without attempting anything itself. Success from
+// either path is the same one-way latch: Connected, tools committed via
+// rebuildToolsLocked, Parked cleared — this mirrors retryServer's own
+// commit exactly (see its inline comment), just reached from a single
+// attempt instead of a loop.
+//
+// Connect does not itself validate that name is configured or already
+// connected: the mcp tool already has to enumerate configured names (via
+// ConfiguredNames) to build a helpful "unknown server" message, and already
+// has to read Status() to build the "already connected" friendly no-op —
+// re-deriving either check here would just duplicate it. A name Connect has
+// never heard of (no entry in m.state) returns a plain "not configured"
+// error as a defensive fallback, not the primary path.
+//
+// Close interlock: the attempt itself dials under a context that is
+// cancelled the moment EITHER ctx (the caller's) or m.retryCtx (cancelled
+// by Close) fires, so a Close racing an in-flight tool-triggered connect
+// unblocks it immediately — the same promptness
+// TestMCPManagerCloseDuringInFlightRetryConnectStopsPromptly proves for the
+// background path. After the dial returns, the same decline-and-self-close
+// discipline retryServer's own commit uses applies here too: if m.retryCtx
+// was cancelled while the dial was in flight, this declines to commit (no
+// commit-after-Close) and closes any client that the dial nonetheless
+// produced, so nothing is ever leaked.
+func (m *MCPManager) Connect(ctx context.Context, name string) error {
+	m.mu.Lock()
+	entry, ok := m.state[name]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("engine: mcp: server %q is not configured", name)
+	}
+	if entry.Connected {
+		m.mu.Unlock()
+		return nil
+	}
+	if entry.connecting {
+		m.mu.Unlock()
+		return errMCPConnectInProgress
+	}
+	entry.connecting = true
+	m.mu.Unlock()
+
+	spec := m.servers[name] // immutable after construction; safe unguarded read
+
+	dialCtx, cancel := context.WithCancel(ctx)
+	stopWatch := make(chan struct{})
+	go func() {
+		select {
+		case <-m.retryCtx.Done():
+			cancel()
+		case <-stopWatch:
+		}
+	}()
+	client, toolList, err := mcpConnectFunc(dialCtx, name, spec)
+	close(stopWatch)
+	cancel()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry.connecting = false
+	if m.retryCtx.Err() != nil {
+		// Close raced this attempt to completion — same decline-and-
+		// self-close discipline as retryServer (see its own comment): a
+		// connection nobody will ever close again must not be committed.
+		if err == nil && client != nil {
+			_ = client.Close()
+		}
+		return context.Canceled
+	}
+	entry.Attempts++
+	if err != nil {
+		entry.LastErr = err
+		return err
+	}
+	entry.Connected = true
+	entry.client = client
+	entry.tools = mcpBindTools(name, toolList)
+	entry.LastErr = nil
+	entry.Parked = false
+	m.rebuildToolsLocked()
+	log.Printf("engine: mcp server %q: connected via the mcp tool after %d attempt(s)", name, entry.Attempts)
+	if mcpTestRetryCommitted != nil {
+		mcpTestRetryCommitted(name, true)
+	}
+	return nil
 }
 
 // connectMCPServer builds the right transport for spec, opens a client,
