@@ -1063,6 +1063,17 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 		texts = append(texts, p.Text)
 	}
 	text := strings.Join(texts, "\n")
+	// EnqueuePromptDurable rejects empty/whitespace-only text too, but by
+	// then we'd have already taken (or failed to take) the run-slot claim,
+	// and from the handler's side that engine error is indistinguishable
+	// from a genuine persist failure — both fall through to the 500
+	// "enqueue not durable" mapping below, which tells the caller to retry
+	// with the same seq. An input that can never succeed must 400 instead,
+	// and before any claim is taken.
+	if strings.TrimSpace(text) == "" {
+		writeErr(w, http.StatusBadRequest, "text must be non-empty")
+		return
+	}
 
 	st, ctx, _, code, holder := s.claimForPrompt(id)
 	if code != 0 {

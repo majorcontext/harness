@@ -199,6 +199,20 @@ func TestEnqueueValidation(t *testing.T) {
 			t.Fatalf("status %d: %s", resp.StatusCode, data)
 		}
 	})
+
+	t.Run("empty text", func(t *testing.T) {
+		resp, data := h.enqueue(id, "", 1)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("status %d: %s", resp.StatusCode, data)
+		}
+	})
+
+	t.Run("whitespace-only text", func(t *testing.T) {
+		resp, data := h.enqueue(id, "   \n\t", 1)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("status %d: %s", resp.StatusCode, data)
+		}
+	})
 }
 
 // TestEnqueueDuplicateOnIdleWithQueueDrainsHead is the regression test for a
