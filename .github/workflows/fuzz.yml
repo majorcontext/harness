@@ -28,22 +28,37 @@ jobs:
         # Maintainers: when you add a new `func FuzzXxx(f *testing.F)`,
         # add a matching row here. Check this list is complete with:
         #   grep -rn "^func Fuzz" --include="*_test.go" .
+        #
+        # `id` must be unique across every row: `target` alone collides
+        # because FuzzStreamDecode exists in three provider packages, and
+        # both the corpus cache key and the failure-artifact name below are
+        # keyed on `id`, not `target`. Reusing an id makes cache legs
+        # clobber each other and makes upload-artifact fail on the
+        # duplicate name.
         include:
-          - package: ./engine/
+          - id: engine-loadsession
+            package: ./engine/
             target: FuzzLoadSessionReplay
-          - package: ./engine/
+          - id: engine-validsessionid
+            package: ./engine/
             target: FuzzValidSessionID
-          - package: ./message/
+          - id: message-unmarshal
+            package: ./message/
             target: FuzzUnmarshalMessage
-          - package: ./typeid/
+          - id: typeid-parse
+            package: ./typeid/
             target: FuzzParse
-          - package: ./skill/
+          - id: skill-frontmatter
+            package: ./skill/
             target: FuzzParseFrontmatter
-          - package: ./provider/anthropic/
+          - id: anthropic-streamdecode
+            package: ./provider/anthropic/
             target: FuzzStreamDecode
-          - package: ./provider/openai/
+          - id: openai-streamdecode
+            package: ./provider/openai/
             target: FuzzStreamDecode
-          - package: ./provider/openaicompat/
+          - id: openaicompat-streamdecode
+            package: ./provider/openaicompat/
             target: FuzzStreamDecode
     steps:
       - uses: actions/checkout@v5
@@ -62,9 +77,9 @@ jobs:
           # build on prior exploration instead of restarting from the seeds
           # every time.
           path: ${{ github.workspace }}/.gocache/fuzz
-          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          key: fuzz-corpus-${{ matrix.id }}-${{ github.run_id }}
           restore-keys: |
-            fuzz-corpus-${{ matrix.target }}-
+            fuzz-corpus-${{ matrix.id }}-
         env:
           GOCACHE: ${{ github.workspace }}/.gocache
 
@@ -83,6 +98,6 @@ jobs:
           # exploration progress, not failures). Uploading it lets a
           # maintainer download the file and commit it straight into the
           # package's seed corpus as a permanent regression test.
-          name: fuzz-failure-${{ matrix.target }}
+          name: fuzz-failure-${{ matrix.id }}
           path: "**/testdata/fuzz/${{ matrix.target }}/"
           if-no-files-found: ignore
