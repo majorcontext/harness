@@ -832,14 +832,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 			// non-empty text above, so this is not reachable in practice;
 			// fail closed rather than silently drop the request, releasing
 			// the claim just taken.
-			s.mu.Lock()
-			st.running = false
-			st.cancel = nil
-			st.goalLoop = false
-			st.lastUsed = time.Now()
-			s.evictResidentLocked()
-			s.mu.Unlock()
-			s.wg.Done()
+			s.releasePromptClaim(st)
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -1012,6 +1005,22 @@ func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string
 	writeJSON(w, http.StatusAccepted, resp)
 }
 
+// releasePromptClaim releases a run-slot claim taken by claimForPrompt
+// without running a turn: the exact reset runPrompt's own tail performs,
+// shared by every path that claims the slot and then discovers there is
+// nothing to run (an enqueue error, a queue emptied by a concurrent DELETE
+// /session/{id}/queue).
+func (s *Server) releasePromptClaim(st *sessionState) {
+	s.mu.Lock()
+	st.running = false
+	st.cancel = nil
+	st.goalLoop = false
+	st.lastUsed = time.Now()
+	s.evictResidentLocked()
+	s.mu.Unlock()
+	s.wg.Done()
+}
+
 // dispatchQueueHead dequeues the session's queue head (reason "delivered")
 // into the run slot st/ctx already holds — emitting its busy transition and
 // spawning its runPrompt turn — shared by every call site that has JUST
@@ -1028,14 +1037,7 @@ func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string
 func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Context) (head engine.QueuedPrompt, ok bool) {
 	head, ok = st.sess.DequeuePrompt("delivered")
 	if !ok {
-		s.mu.Lock()
-		st.running = false
-		st.cancel = nil
-		st.goalLoop = false
-		st.lastUsed = time.Now()
-		s.evictResidentLocked()
-		s.mu.Unlock()
-		s.wg.Done()
+		s.releasePromptClaim(st)
 		return head, false
 	}
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
