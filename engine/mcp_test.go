@@ -1124,8 +1124,15 @@ type mcpCommitEvent struct {
 // two servers that BOTH fail their first attempt and are both actively
 // retrying must progress on independent schedules — "fast" (succeeds on
 // its 2nd attempt) must recover without waiting for "slow" (succeeds only
-// on its 5th), and Tools() must reflect that partial recovery immediately
-// rather than waiting for every retrying server to settle.
+// on its 4th, its LAST possible attempt now that background retries are
+// bounded at mcpRetryMaxAttempts — deliberately at the boundary, see
+// docs/plans/2026-07-20-mcp-bounded-retry.md Task 1), and Tools() must
+// reflect that partial recovery immediately rather than waiting for every
+// retrying server to settle. Adjusted from "5th" (pre-Task-1: retries were
+// indefinite, so any attempt count demonstrated independence) down to "4th"
+// because a 5th attempt would never fire under the new bound — slow would
+// park after its 3rd background retry instead of ever recovering, which
+// would defeat this test's own point.
 func TestMCPManagerIndependentRetrySchedules(t *testing.T) {
 	withZeroMCPJitter(t)
 
@@ -1139,7 +1146,7 @@ func TestMCPManagerIndependentRetrySchedules(t *testing.T) {
 				}
 				return nil, []mcp.Tool{{Name: "go"}}, nil
 			case "slow":
-				if atomic.AddInt32(&slowCalls, 1) < 5 {
+				if atomic.AddInt32(&slowCalls, 1) < 4 {
 					return nil, nil, errors.New("boom")
 				}
 				return nil, []mcp.Tool{{Name: "go"}}, nil
@@ -1405,5 +1412,93 @@ func TestMCPManagerCloseDuringInFlightRetryConnectStopsPromptly(t *testing.T) {
 		if elapsed := time.Since(start); elapsed != 0 {
 			t.Errorf("Close took %v of fake time, want exactly 0 (cancelling ctx must unblock the in-flight attempt immediately)", elapsed)
 		}
+	})
+}
+
+// TestMCPManagerBackgroundRetryBoundedThenParked is invariant 1's headline
+// test (docs/plans/2026-07-20-mcp-bounded-retry.md Task 1), red-verified
+// against pre-Task-1 mcp.go: retryServer looped indefinitely, so a server
+// whose EVERY attempt fails never stopped retrying and Status() had no
+// notion of "gave up" at all (no Parked field existed). A server whose
+// first attempt and every subsequent background retry fail gets exactly
+// mcpRetryMaxAttempts (3) background attempts — on the jittered 1s/2s/4s
+// schedule this asserts exactly via withZeroMCPJitter — before the retry
+// goroutine gives up for good: the entry is marked Parked, Status()
+// reflects it, and testing/synctest's own goroutine-leak detection at
+// bubble exit proves no goroutine is left alive to fire a further attempt
+// (if retryServer still looped past the bound, it would be durably parked
+// in a future backoff wait when this closure returns, and synctest would
+// fail the test for a leaked goroutine).
+func TestMCPManagerBackgroundRetryBoundedThenParked(t *testing.T) {
+	withZeroMCPJitter(t)
+
+	synctest.Test(t, func(t *testing.T) {
+		var calls int32
+		committed := make(chan bool, 8)
+		orig := mcpTestRetryCommitted
+		t.Cleanup(func() { mcpTestRetryCommitted = orig })
+		mcpTestRetryCommitted = func(server string, connected bool) { committed <- connected }
+
+		withMCPConnectFunc(t, func(ctx context.Context, name string, spec MCPServerConfig) (*mcp.Client, []mcp.Tool, error) {
+			atomic.AddInt32(&calls, 1)
+			return nil, nil, errors.New("boom") // never recovers
+		})
+
+		mgr := NewMCPManager(map[string]MCPServerConfig{"weather": {URL: "http://unused"}})
+		t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+		start := time.Now()
+
+		defs := mgr.Tools(context.Background()) // first attempt: fails synchronously
+		if len(defs) != 0 {
+			t.Fatalf("Tools() after the failed first attempt = %+v, want empty", defs)
+		}
+
+		// Drain exactly mcpRetryMaxAttempts commits, each a failure — the
+		// last one is the giving-up commit. Receiving from committed is
+		// what forces the bubble's fake clock through the 1s/2s/4s backoff
+		// schedule (see TestMCPManagerFailedServerRetriesInBackgroundAndRecovers's
+		// comment on why a receive, not synctest.Wait(), does this).
+		for i := 0; i < mcpRetryMaxAttempts; i++ {
+			if connected := <-committed; connected {
+				t.Fatalf("commit %d reported connected=true, want every background retry to fail", i+1)
+			}
+		}
+		synctest.Wait() // let the goroutine finish returning after its last commit
+
+		var wantElapsed time.Duration
+		for attempt := 1; attempt <= mcpRetryMaxAttempts; attempt++ {
+			wantElapsed += mcpRetryDelay(attempt) / 2 // zero jitter above halves each delay: 0.5s + 1s + 2s
+		}
+		if elapsed := time.Since(start); elapsed != wantElapsed {
+			t.Errorf("elapsed = %v, want exactly %v (the 1s/2s/4s backoff schedule, halved by zero jitter)", elapsed, wantElapsed)
+		}
+
+		wantCalls := int32(1 + mcpRetryMaxAttempts)
+		if n := atomic.LoadInt32(&calls); n != wantCalls {
+			t.Errorf("connect attempts = %d, want exactly %d (first attempt + %d background retries)", n, wantCalls, mcpRetryMaxAttempts)
+		}
+
+		statuses := mgr.Status()
+		if len(statuses) != 1 || statuses[0].Name != "weather" {
+			t.Fatalf("Status() = %+v, want exactly one entry for weather", statuses)
+		}
+		st := statuses[0]
+		if !st.Parked {
+			t.Error("Status().Parked = false, want true once retries are exhausted")
+		}
+		if st.Connected {
+			t.Error("Status().Connected = true, want false")
+		}
+		if st.Attempts != int(wantCalls) {
+			t.Errorf("Status().Attempts = %d, want %d", st.Attempts, wantCalls)
+		}
+
+		// Because the closure is about to return, testing/synctest's own
+		// leak detection now proves no goroutine is left alive for this
+		// server: if retryServer had not actually exited (bound broken),
+		// it would be durably blocked in a future backoff wait and this
+		// test would fail with a goroutine-leak error, not the assertions
+		// above.
 	})
 }

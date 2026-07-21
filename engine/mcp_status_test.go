@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -12,8 +13,10 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/majorcontext/harness/mcp"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 )
@@ -218,6 +221,105 @@ func TestMCPStatusSegmentClassifiesReasonNeverLeaksURL(t *testing.T) {
 	if !strings.Contains(got, "linear") {
 		t.Errorf("mcpStatusSegment = %q, want it to still name the server", got)
 	}
+}
+
+// TestFormatMCPServerStatusRetryingClauseBeforeParked pins the
+// still-retrying rendering (unchanged by Task 1): a degraded server whose
+// background retry has not yet given up carries the "; retrying" clause.
+func TestFormatMCPServerStatusRetryingClauseBeforeParked(t *testing.T) {
+	st := MCPServerStatus{Name: "linear", Connected: false, Parked: false, LastErr: context.DeadlineExceeded}
+	got := formatMCPServerStatus(st)
+	want := `linear (initialize timed out; retrying)`
+	if got != want {
+		t.Errorf("formatMCPServerStatus(still retrying) = %q, want %q", got, want)
+	}
+}
+
+// TestFormatMCPServerStatusParkedHint is invariant 2's unit-level test
+// (docs/plans/2026-07-20-mcp-bounded-retry.md Task 1), red-verified against
+// pre-Task-1 mcp_status.go: MCPServerStatus had no Parked field at all, and
+// formatMCPServerStatus always rendered "; retrying" — indefinite retry
+// meant that clause was always true. Once retries are exhausted, the clause
+// must instead point the model at the mcp tool's connect action; the
+// reason stays classified (never a raw error) exactly like the
+// still-retrying clause.
+func TestFormatMCPServerStatusParkedHint(t *testing.T) {
+	st := MCPServerStatus{Name: "linear", Connected: false, Parked: true, LastErr: context.DeadlineExceeded}
+	got := formatMCPServerStatus(st)
+	want := `linear (initialize timed out; use the mcp tool action "connect" to retry)`
+	if got != want {
+		t.Errorf("formatMCPServerStatus(parked) = %q, want %q", got, want)
+	}
+}
+
+// TestAmbientMCPStatusParkedServerCarriesMCPToolHint is invariant 2's
+// Session-level test: over two turns, a server that fails EVERY attempt
+// (first plus all mcpRetryMaxAttempts background retries) renders the
+// still-retrying clause on the first request and, once parked, the
+// mcp-tool hint on the second — never both, and still no raw error text.
+// Runs inside a synctest bubble with the network-free mcpConnectFunc fake
+// (see engine/mcp_test.go's section comment on why: real network I/O
+// doesn't behave deterministically in a bubble), driven by the same
+// mcpTestRetryCommitted synchronization idiom
+// TestMCPManagerBackgroundRetryBoundedThenParked uses.
+func TestAmbientMCPStatusParkedServerCarriesMCPToolHint(t *testing.T) {
+	withZeroMCPJitter(t)
+
+	synctest.Test(t, func(t *testing.T) {
+		committed := make(chan bool, 8)
+		orig := mcpTestRetryCommitted
+		t.Cleanup(func() { mcpTestRetryCommitted = orig })
+		mcpTestRetryCommitted = func(server string, connected bool) { committed <- connected }
+
+		withMCPConnectFunc(t, func(ctx context.Context, name string, spec MCPServerConfig) (*mcp.Client, []mcp.Tool, error) {
+			return nil, nil, errors.New("boom") // never recovers
+		})
+
+		mgr := NewMCPManager(map[string]MCPServerConfig{"linear": {URL: "http://unused"}})
+		t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+		prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "first"}),
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "second"}),
+		}}
+		s := NewSession(Config{
+			Providers: provider.Registry{"test": prov},
+			Model:     message.ModelRef{Provider: "test", Model: "m1"},
+			MCP:       mgr,
+		})
+
+		if _, err := s.Prompt(context.Background(), "hello one"); err != nil {
+			t.Fatal(err)
+		}
+		first := lastUserText(t, prov.requests[0])
+		if !strings.Contains(first, "linear") || !strings.Contains(first, "; retrying)") {
+			t.Fatalf("first request's ambient text = %q, want the still-retrying clause naming linear", first)
+		}
+		if strings.Contains(first, "mcp tool") {
+			t.Errorf("first request's ambient text = %q, must not mention the mcp tool before parking", first)
+		}
+
+		for i := 0; i < mcpRetryMaxAttempts; i++ {
+			if connected := <-committed; connected {
+				t.Fatalf("commit %d reported connected=true, want every background retry to fail", i+1)
+			}
+		}
+		synctest.Wait()
+
+		if _, err := s.Prompt(context.Background(), "hello two"); err != nil {
+			t.Fatal(err)
+		}
+		second := lastUserText(t, prov.requests[1])
+		if !strings.Contains(second, "linear") {
+			t.Fatalf("second request's ambient text = %q, want it to still name linear", second)
+		}
+		if !strings.Contains(second, `use the mcp tool action "connect" to retry`) {
+			t.Errorf("second request's ambient text = %q, want the parked mcp-tool hint", second)
+		}
+		if strings.Contains(second, "; retrying)") {
+			t.Errorf("second request's ambient text = %q, must not still say retrying once parked", second)
+		}
+	})
 }
 
 // TestAmbientMCPStatusOnlyOnNewestUserMessage mirrors
