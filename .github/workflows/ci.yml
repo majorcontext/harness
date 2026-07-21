@@ -16,8 +16,11 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-          # No go.sum: the module has zero dependencies (by design).
-          cache: false
+          # Production code is stdlib-only, enforced by the absence of
+          # non-test imports (`go list -deps ./cmd/...` must never contain a
+          # third-party package). Test-only dependencies are allowed;
+          # currently just pgregory.net/rapid, which is why go.sum exists.
+          cache: true
 
       - run: go build ./...
 
