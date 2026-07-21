@@ -573,6 +573,32 @@ func TestMCPManagerConnectReturnsInProgressWhileBackgroundRetryDialing(t *testin
 	})
 }
 
+// TestMCPManagerConnectOnFreshManagerNeverAttempted covers the "name
+// configured, first attempt just never happened" case Connect's own doc
+// comment claims works: a manager whose Tools()/CallTool()/CallServerTool
+// has never been called has a nil m.state (see ensureConnected), so a
+// direct Connect call — bypassing the tool path, which always runs
+// toolDefs -> s.cfg.MCP.Tools(ctx) first and so always populates m.state
+// before any tool call is reachable — must still connect successfully
+// instead of returning the defensive-fallback "not configured" error meant
+// only for names Connect has genuinely never heard of.
+func TestMCPManagerConnectOnFreshManagerNeverAttempted(t *testing.T) {
+	withMCPConnectFunc(t, func(ctx context.Context, name string, spec MCPServerConfig) (*mcp.Client, []mcp.Tool, error) {
+		return nil, []mcp.Tool{{Name: "ping"}}, nil
+	})
+
+	mgr := NewMCPManager(map[string]MCPServerConfig{"svc": {URL: "http://unused"}})
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+	if err := mgr.Connect(context.Background(), "svc"); err != nil {
+		t.Fatalf("Connect on a fresh manager (no prior Tools() call) = %v, want nil", err)
+	}
+	status := mgr.Status()
+	if len(status) != 1 || !status[0].Connected {
+		t.Fatalf("Status() after Connect = %+v, want svc connected", status)
+	}
+}
+
 // # Invariant 7: Close during a tool-triggered in-flight connect — no leak, no commit-after-close.
 
 // TestMCPManagerCloseDuringInFlightToolConnectStopsPromptly mirrors

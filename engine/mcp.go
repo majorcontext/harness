@@ -608,8 +608,24 @@ var errMCPConnectInProgress = errors.New("attempt already in progress")
 // ConfiguredNames) to build a helpful "unknown server" message, and already
 // has to read Status() to build the "already connected" friendly no-op —
 // re-deriving either check here would just duplicate it. A name Connect has
-// never heard of (no entry in m.state) returns a plain "not configured"
-// error as a defensive fallback, not the primary path.
+// never heard of (no entry in m.state after ensureConnected below) returns
+// a plain "not configured" error as a defensive fallback, not the primary
+// path.
+//
+// Connect calls m.ensureConnected(ctx) first so the "first attempt just
+// never happened" case above actually works: m.state is nil until
+// ensureConnected's one-time first batch commits (see its own doc comment),
+// and a direct API caller (never Tools()/CallTool()/CallServerTool) can
+// reach Connect with no entry for name at all. ensureConnected is cheap and
+// idempotent past its first call (sync.Once), so this costs nothing on the
+// tool path, where toolDefs already calls Tools() -> ensureConnected before
+// any tool call — including this one — is even reachable. It is reachable
+// here: on a manager nothing has touched yet, this call performs the
+// parallel first-attempt batch for EVERY configured server, not just name —
+// acceptable for a direct-API caller (there is no cheaper way to populate
+// m.state for one server without also deciding the fate of the others), and
+// moot on the tool path since that batch has always already run by the time
+// a tool call fires.
 //
 // Close interlock: the attempt itself dials under a context that is
 // cancelled the moment EITHER ctx (the caller's) or m.retryCtx (cancelled
@@ -622,6 +638,8 @@ var errMCPConnectInProgress = errors.New("attempt already in progress")
 // commit-after-Close) and closes any client that the dial nonetheless
 // produced, so nothing is ever leaked.
 func (m *MCPManager) Connect(ctx context.Context, name string) error {
+	m.ensureConnected(ctx)
+
 	m.mu.Lock()
 	entry, ok := m.state[name]
 	if !ok {
@@ -742,6 +760,13 @@ func connectMCPServer(ctx context.Context, name string, spec MCPServerConfig) (*
 //     out" (the ConnectTimeout bound in connectMCPServer expired; both the
 //     HTTP and stdio transports return ctx.Err() verbatim on a deadline,
 //     see mcp/http.go's call() and mcp/conn.go's call())
+//   - context.Canceled anywhere in the chain -> "initialize cancelled" (the
+//     caller's own ctx was cancelled mid-connect — e.g. a tool-triggered
+//     Connect call racing an aborted turn — rather than a timeout or a dial
+//     failure; both transports return ctx.Err() verbatim here too, same as
+//     the deadline case, so this must be checked before the generic
+//     fallback or a cancelled connect would misleadingly read as a plain
+//     "initialize failed")
 //   - a *net.OpError anywhere in the chain (a failed dial, the shape both
 //     net/http's *url.Error and this package's stdio dialer produce) ->
 //     "connection refused" when the underlying cause is ECONNREFUSED,
@@ -764,6 +789,9 @@ func classifyMCPConnectError(err error) string {
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "initialize timed out"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "initialize cancelled"
 	}
 	var opErr *net.OpError
 	if errors.As(err, &opErr) {
@@ -1035,6 +1063,17 @@ const mcpCloseTimeout = 10 * time.Second
 // guarantees one of those two outcomes has already happened by the time
 // this method looks at m.state, so no successfully-connected client from a
 // racing retry is ever left unaccounted for.
+//
+// A tool-triggered Connect call is deliberately NOT in retryWG (it is not a
+// detached background goroutine spawned by this manager — it runs on the
+// caller's own goroutine, synchronously), so retryWG.Wait() above does not
+// wait for one that happens to be in flight. That race is closed a
+// different way instead: retryCancel firing unblocks Connect's own dial
+// immediately (it watches retryCtx via a dedicated watcher goroutine, see
+// Connect's doc comment), and Connect applies the same post-dial,
+// under-mu retryCtx-check-then-self-close discipline retryServer uses
+// above, so a Connect that loses the race never commits after Close and
+// never leaks the client its dial nonetheless produced.
 func (m *MCPManager) Close(ctx context.Context) error {
 	m.connectOnce.Do(func() {})
 
