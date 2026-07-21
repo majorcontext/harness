@@ -524,9 +524,11 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// failure, followed by its successful retry under a fresh ID —
 			// live memory only ever held the retry's entry, so replay must
 			// converge to that one too (a later prompt.dequeued references
-			// the retry's ID). Seq also advances the enqueueSeq high-water
-			// mark, which is what makes duplicate detection survive a
-			// process restart.
+			// the retry's ID — this holds under EnqueuePromptDurable's caller
+			// contract that the same seq is retried before any higher seq is
+			// accepted, see queue.go). Seq also advances the enqueueSeq
+			// high-water mark, which is what makes duplicate detection
+			// survive a process restart.
 			if rec.Prompt != nil {
 				q := QueuedPrompt{ID: rec.Prompt.ID, Text: rec.Prompt.Text, Seq: rec.Prompt.Seq}
 				replaced := false

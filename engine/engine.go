@@ -126,6 +126,10 @@ type Event struct {
 	QueueText   string `json:"queue_text,omitempty"`
 	QueueReason string `json:"queue_reason,omitempty"`
 	QueueLen    int    `json:"queue_len,omitempty"`
+	// QueueSeq is the caller-issued idempotency sequence on an
+	// EventPromptQueued emitted by EnqueuePromptDurable (see queue.go);
+	// 0/omitted on plain enqueues and on every EventPromptDequeued.
+	QueueSeq int64 `json:"queue_seq,omitempty"`
 }
 
 // Event types.

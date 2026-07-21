@@ -66,6 +66,79 @@ func (s *Session) EnqueuePrompt(text string) (int64, error) {
 	return id, nil
 }
 
+// EnqueuePromptDurable is EnqueuePrompt with an honest durability and
+// idempotency contract, for callers (an inbox poller, a coordinator relay)
+// whose OWN upstream ack rides on this call's success — see
+// docs/plans/2026-07-21-durable-enqueue.md:
+//
+//   - seq is a caller-issued, session-monotonic idempotency sequence. At or
+//     below the current high-water mark (EnqueueSeq) the call is a clean
+//     duplicate no-op — nothing persisted, emitted, or enqueued — so
+//     upstream retries are always safe. The caller must issue seqs for one
+//     session in nondecreasing order; a gap is fine (the mark jumps), an
+//     out-of-order fresh seq is indistinguishable from a duplicate and is
+//     dropped.
+//   - The prompt.queued record (carrying seq) is written AND fsynced
+//     before any in-memory mutation and before success returns —
+//     write-ahead, unlike every other persist path in this package, which
+//     buffers to the page cache and swallows errors into lastPersistErr.
+//     An error return means "not durably accepted; retry with the same
+//     seq"; only a nil error authorizes the caller to ack upstream.
+//   - The assigned queue ID is burned BEFORE the write is attempted, and so
+//     stays burned on every failure path (ensureLog opening/creating the
+//     log, the write itself, or the fsync): any of those may still have
+//     left a torn trace on disk (a half-created file, a partially written
+//     record), and reusing the ID for a later plain enqueue would fold two
+//     different prompts under one ID on replay. LoadSession converges a
+//     torn record and its successful same-seq retry last-writer-wins —
+//     see the recPromptQueued replay case in store.go.
+//
+// Delivery of the enqueued prompt is unchanged queue machinery: FIFO with
+// plain-enqueued prompts, drained at idle dispatch or injected at
+// tool-call/goal-turn boundaries.
+func (s *Session) EnqueuePromptDurable(text string, seq int64) (id int64, duplicate bool, err error) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return 0, false, errors.New("engine: EnqueuePromptDurable requires non-empty text")
+	}
+	if seq < 1 {
+		return 0, false, errors.New("engine: EnqueuePromptDurable requires seq >= 1")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if seq <= s.enqueueSeq {
+		return 0, true, nil
+	}
+	if s.cfg.SessionDir == "" {
+		return 0, false, errors.New("engine: EnqueuePromptDurable requires Config.SessionDir")
+	}
+	// Burn the ID now, before any I/O is attempted, so every failure path
+	// below advances the counter past it — see the doc comment above.
+	id = s.promptQueueNextID
+	s.promptQueueNextID++
+	if err := s.ensureLog(); err != nil {
+		s.lastPersistErr = err
+		return 0, false, err
+	}
+	rec := record{Type: recPromptQueued, Prompt: &promptRecord{ID: id, Text: trimmed, Seq: seq}}
+	if err := s.writeRecord(rec); err != nil {
+		s.lastPersistErr = err
+		return 0, false, err
+	}
+	if err := s.logFile.Sync(); err != nil {
+		// The record may or may not have reached stable storage — torn
+		// state. Nothing in memory moved, so a retry with the same seq is
+		// clean here; replay's last-writer-wins fold heals the disk side.
+		s.lastPersistErr = err
+		return 0, false, err
+	}
+	s.promptQueue = append(s.promptQueue, QueuedPrompt{ID: id, Text: trimmed, Seq: seq})
+	s.enqueueSeq = seq
+	// Emit while still holding s.mu, exactly like EnqueuePrompt above.
+	s.emit(Event{Type: EventPromptQueued, QueueID: id, QueueText: trimmed, QueueSeq: seq, QueueLen: len(s.promptQueue)})
+	return id, false, nil
+}
+
 // DequeuePrompt pops the head of the FIFO queue (the lowest-ID pending
 // prompt), persists a prompt.dequeued record carrying reason, and emits
 // EventPromptDequeued — under s.mu, mirroring EnqueuePrompt's persist-and-
