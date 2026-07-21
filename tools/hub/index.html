@@ -1233,14 +1233,20 @@ function goalPauseTreatment(paused, pauseReason) {
 // primitives so this stays shape-agnostic): "none" (nothing to re-arm, or
 // a live loop that will re-arm itself — provider-backoff self-clears with
 // no operator action per fleet-model.md §7), "normal" (the existing
-// after-the-fact Re-arm on an ended goal), "prominent" (an active-but-
-// paused/restart goal: the loop will NEVER resume itself — see ADOPT's
-// restart-pause story — so this is the one case that both needs and
-// deserves a loud CTA).
+// after-the-fact Re-arm on an ended goal, AND a worker_failure park: the
+// loop genuinely exited and resumes only on the next ordinary activity via
+// maybeAutoArmGoal — on a goal-only autonomous box with no queued prompts
+// and no further operator prompts, that activity may never arrive, so an
+// operator watching the hub needs a CTA even though the box could in
+// principle resume itself), "prominent" (an active-but-paused/restart
+// goal: the loop will NEVER resume itself under any circumstance — see
+// ADOPT's restart-pause story — so this is the one case that both needs
+// and deserves a loud CTA).
 function rearmNeeded(active, condition, paused, pauseReason) {
   if (!condition) return "none";
   if (!active) return "normal";
   if (paused && pauseReason === "restart") return "prominent";
+  if (paused && pauseReason === "worker_failure") return "normal";
   return "none";
 }
 

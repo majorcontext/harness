@@ -829,8 +829,12 @@ test("rearmNeeded: active + paused/provider-backoff -> none (self-clearing, no C
   assert.equal(rearmNeeded(true, "ship it", true, "provider-backoff"), "none");
 });
 
-test("rearmNeeded: active + paused/worker_failure -> none (NEP-4849: activity-driven auto-arm resumes it, no CTA)", () => {
-  assert.equal(rearmNeeded(true, "ship it", true, "worker_failure"), "none");
+test("rearmNeeded: active + paused/worker_failure -> normal (NEP-4849: loop exited, resumes only on next ordinary activity, which may never arrive on a goal-only box -- operator needs a CTA)", () => {
+  assert.equal(rearmNeeded(true, "ship it", true, "worker_failure"), "normal");
+});
+
+test("rearmNeeded: active + paused/unrecognized future reason -> none (not special-cased, unlike worker_failure)", () => {
+  assert.equal(rearmNeeded(true, "ship it", true, "some-future-reason"), "none");
 });
 
 /* ---------- canRedispatch ---------- */
