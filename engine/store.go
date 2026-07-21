@@ -411,24 +411,12 @@ func (s *Session) ensureLog() error {
 		// This syncs the log file's entry within SessionDir, not SessionDir's
 		// own entry in its parent — SessionDir is assumed to be a preexisting
 		// mount (e.g. a volume) at boot, so that entry predates the process
-		// and isn't this code's concern.
-		d, err := os.Open(s.cfg.SessionDir)
-		if err != nil {
+		// and isn't this code's concern. See syncDir for why this is a
+		// build-tagged no-op off unix.
+		if err := syncDir(s.cfg.SessionDir); err != nil {
 			f.Close()
 			s.logFile = nil
 			return err
-		}
-		syncErr := d.Sync()
-		closeErr := d.Close()
-		if syncErr != nil {
-			f.Close()
-			s.logFile = nil
-			return syncErr
-		}
-		if closeErr != nil {
-			f.Close()
-			s.logFile = nil
-			return closeErr
 		}
 	}
 	s.logStarted = true
