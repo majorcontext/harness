@@ -323,9 +323,9 @@ var mcpConnectFunc = connectMCPServer
 
 // mcpTestRetryCommitted, when non-nil, is called (outside m.mu, strictly
 // after the commit's Unlock so the committed state is already visible to
-// any goroutine that acquires the lock afterward) every time retryServer
-// commits an outcome for one server — success (connected == true) or a
-// further failure (connected == false). Nil in production; a test-only
+// any goroutine that acquires the lock afterward) every time retryServer OR
+// Connect commits an outcome for one server — success (connected == true)
+// or a further failure (connected == false). Nil in production; a test-only
 // synchronization hook for the one test (real-network, real backoff, see
 // TestMCPManagerCallServerToolRetryingThenRecovers) that cannot use
 // synctest.Wait() because it deliberately exercises a real mcp.Client
@@ -539,7 +539,7 @@ func (m *MCPManager) retryServer(name string, lastAttempt int) {
 			}
 			return
 		}
-		entry.Attempts = attempt
+		entry.Attempts++
 		if err != nil {
 			entry.LastErr = err
 			if backgroundRetries >= mcpRetryMaxAttempts {
