@@ -68,7 +68,10 @@ Two independent layers, both TDD red-first (see `engine/goal_test.go` and
    left `true` with nothing left to explain it. A `context.Canceled` error
    (DELETE /goal, shutdown drain) is never retried or treated as a failure —
    it is a deliberate, resumable stop, and the goal is left untouched. See the
-   state-machine diagram in the `goal.go` package doc.
+   state-machine diagram in the `goal.go` package doc. (**Superseded by
+   NEP-4849**: exhausting this budget no longer clears — it PARKS, exactly
+   like the retryable-class budget below — see "Worker-turn exit-park and
+   activity-driven resume" further down.)
 
 2. **Bash output cap** (`engine/bash.go`): tool output is now bounded by a new
    `Config.BashOutputCap` knob (default 96KB) enforced by a `cappedWriter`
@@ -282,6 +285,24 @@ same three fields from the most recent `goal.stalled` record, reset by
 
 ### Self-re-arm: park, don't die
 
+**Superseded by NEP-4849 — see "Worker-turn exit-park and activity-driven
+resume" further down.** The section below describes the fix as it shipped
+originally for issue #61: the retryable budget's exhaustion stayed *inside*
+`PursueGoal`, retrying the same directive on the loop's own next iteration
+without ever returning. That "park in-process" shape is kept here verbatim
+as the historical record of the design this section chose over the rejected
+server-timer alternative — the choice to retry via the ordinary turn loop
+rather than invent new scheduling state is still the right call and is
+unchanged. What changed is what happens once the budget is *actually*
+exhausted: staying inside `PursueGoal` to retry turned out to have its own
+cost in production — the run slot stayed pinned to the parked loop for the
+whole outage, so a prompt queued during a long provider outage could only
+ever be injected mid-turn into a doomed attempt, never dispatched as its own
+ordinary turn the way it would against any other idle session. NEP-4849
+changes the exhaustion branch to exit `PursueGoal` instead (freeing the run
+slot) while keeping this section's classification, schedule, and budget
+(`goalRetryableMaxAttempts`, `goalRetryableBackoff`) completely intact.
+
 This is deliverable 4 of the issue, and the one with a real design choice
 behind it. Two shapes were on the table:
 
@@ -416,13 +437,148 @@ See `engine/goal.go`'s package doc ("Round 6") for the full narrative,
 `server/goal_eval_resilience_test.go` for the server-side outcome/journal
 coverage.
 
+## Worker-turn exit-park and activity-driven resume (NEP-4849)
+
+### Incident
+
+OpenRouter returned HTTP 404s for a worker turn — a genuinely non-retryable,
+non-overload failure, so `provider.AsRetryable` correctly classified it as
+the fast, 3-attempt/~5s deterministic budget (`goalWorkerRetries`), not the
+long retryable one. That budget exhausted in seconds; the goal cleared
+(`goal.cleared`), `session.error` fired, and the box then sat idle for
+**hours** with nothing further ever explaining or resuming it — a human had
+to notice the silence and manually re-`POST /goal`, the exact zombie-adjacent
+failure mode "The fix" above was originally meant to close, just reached from
+the "successfully explained, then abandoned" side instead of the "silently
+zombied" side.
+
+The retryable tier's own #61 fix (see "Self-re-arm: park, don't die" above)
+was too passive in the opposite direction: it never actually left
+`PursueGoal`, so the run slot stayed pinned to the parked loop for the
+**entire** outage — a prompt queued during that outage (see the Prompt queue
+section of AGENTS.md) could only ever be injected mid-turn into a doomed
+worker attempt, never dispatched as its own ordinary turn the way it would
+against any other idle session. And every parked cycle re-spent a fresh
+`goalWorkerRetries`-shaped schedule internally, with no cross-cycle memory of
+how long the outage had already run.
+
+### The fix: exit-park both tiers, resume on activity
+
+Every way a worker turn can exhaust its retry budget — the deterministic
+tier, the retryable tier, or the non-idempotency gate stopping retries early
+once a tool has already executed this attempt (see "Retries are not
+idempotent" above) — now returns OUT of `PursueGoal` entirely instead of
+either clearing the goal or looping in place. The loop journals a durable,
+generation-gated `goal.parked` record (gated exactly like `goal.stalled`/
+`goal.eval_failed` above — a park racing a concurrent `UpdateGoal` is
+silently discarded, never attributed to a condition that is no longer
+current) and returns a distinct sentinel, `*goalWorkerParkedError`
+(`engine.IsGoalWorkerParked`), **without** ever calling `clearGoal` —
+`goalActive` stays true, `ActiveGoal()` keeps reporting the same condition,
+and `LoadSession` folds `goal.parked` as a pure trace record, exactly like
+`goal.stalled`. Unlike `goal.stalled`/`goal.eval_failed`, whose `Reason`
+carries the raw `err.Error()` text, `goal.parked`'s `Reason` is deliberately
+CLASSIFIED (`classifyGoalWorkerError`) — never a provider's raw error text —
+because a park is a durable, potentially long-lived terminal that an
+operator-facing surface can read long after the triggering request and its
+raw provider detail are gone, unlike the two per-attempt trace records that
+are read close to the moment they were written.
+
+Freeing the run slot this way is what closes the #61 retryable-tier gap
+above: a queued prompt dispatches as a normal turn the instant the slot is
+free, and the server's **pre-existing** activity-driven auto-arm
+(`maybeAutoArmGoal`, upstream of `engine` — see AGENTS.md's "Prompt queue"
+section) re-enters the loop with a fresh `PursueGoal` call the next time any
+ordinary prompt turn completes — no new timer, no new resume machinery, the
+same mechanism an ordinary idle goal already relies on. `runGoal`'s own tail
+deliberately never auto-arms itself (the pre-existing anti-churn property
+documented at `server/handlers.go`'s `maybeAutoArmGoal` — a park does not
+immediately respawn a loop against an empty queue).
+
+On the server side, a worker-parked sentinel maps to `session.error` plus a
+distinct `turn.end outcome=worker_parked` (`server/journal.go`'s
+`turnEndOutcome`), and `goalTracker` folds the `goal.parked` record into a
+third `paused` presentation arm — `pause_reason: "worker_failure"` — sitting
+between the existing `"restart"` (boot-time, no loop was ever attached) and
+`"provider-backoff"` (the loop IS alive, merely waiting) arms in
+`pauseView`'s precedence. `compositeState` forces `idle` for `worker_failure`
+exactly like it does for `restart`: no loop is actually driving the goal
+until the next auto-arm or an operator re-POST, unlike `provider-backoff`,
+which keeps reading `goal-running`. The `worker_failure` presentation resets
+everywhere `restart`'s does (`goal.set`/`achieved`/`cleared`/`updated`,
+`handleGoal`'s re-arm branch) plus in `maybeAutoArmGoal`'s own successful
+arm, so a resumed loop is never seen carrying a stale pause.
+
+There is deliberately **no streak horizon** on parking, unlike the
+evaluator's `goalEvalFailureLimit` (5) bounded terminal above: parking is
+immediate at exhaustion, every time, with no cross-park counter. A parked
+goal stays parked-and-armed indefinitely until either activity resumes it or
+an operator issues `DELETE /session/{id}/goal` — the only clear path a
+parked goal has.
+
+### An ambient, model-facing signal
+
+The durable `goal.parked` record and the server's boot-only `goal.paused`
+presentation both explain a park to an OPERATOR looking at the session from
+outside. Neither says anything to the MODEL itself: an agent prompted
+mid-outage — a queued prompt dispatching once the exit-park frees the run
+slot, or any other ordinary turn — would otherwise see nothing indicating a
+supervising goal exists, is still armed, and will resume on its own.
+`engine/goal_parked_status.go` closes that gap the same way `mcp_status.go`
+and `process.go` already do for their own degraded/live states: a small
+ambient text block — a third occupant alongside the process and MCP
+segments — computed fresh from live `Session` state
+(`goalParked`/`goalParkedReason`/`goalParkedAttempts`) and appended only to
+the newest user message of a request that is NOT itself one of this loop's
+own worker turns (`PursueGoal`'s `clearGoalParkedAtEntry` call makes that
+structural: the flag is always false again before this loop's very first
+worker turn of a resumed run). The text is deliberately CLASSIFIED, matching
+the record's own leak rule — never the raw provider error.
+
+This signal is **not persisted** and does not survive a process restart —
+`LoadSession` never restores it. That is a real, accepted asymmetry: after a
+restart mid-park, a fresh `Prompt` call sees no ambient block at all.
+Visibility in that case comes from a different surface entirely — the
+server's boot-only `goal.paused` presentation (`pause_reason: "restart"`),
+which is operator-facing, not model-facing, and reads the durable
+`goal.parked` trace record directly rather than this runtime-only field.
+
+### The asymmetry: context overflow still clears
+
+Context overflow (issue #62) is the one deliberate exception that keeps
+clearing exactly as before this round. Every other worker-turn exhaustion
+this round covers is a failure that MIGHT resolve if the loop simply waits
+and tries again later (a dead provider that gets fixed, an outage that ends,
+an operator intervening) — parking is a bet that time helps. Context
+overflow can never resolve by waiting: the same, now-too-long request fails
+identically on every future attempt no matter how long the goal sits parked,
+so parking it would just be a slower-burning zombie, not a fix. Clearing
+immediately, with a reason a human or automation can act on right away
+(compact, shorten the goal, start over), is strictly more honest than a park
+that can never self-resolve.
+
+See `engine/goal.go`'s package doc ("Round 7") for the full narrative and
+state diagram, `TestPursueGoalWorkerFailsPermanentlyParksGoal`,
+`TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing`, and
+`TestPursueGoalStaleWorkerFailureDiscarded` (`engine/goal_update_test.go`,
+proving a park never lands for a stale generation) for the engine-side
+tests; `server/goal_worker_park_test.go`
+(`TestTurnEndOutcomeWorkerParked`, `TestForcesIdlePauseIncludesWorkerFailure`,
+`TestGoalTrackerPauseViewPrecedence`, `TestGoalWorkerParkFreesRunSlotForQueuedPrompt`,
+`TestGoalWorkerParkResumesOnNextPromptActivity`,
+`TestGoalWorkerParkPauseSurvivesRestartAsRestartReason`) for the server-side
+outcome/pause/resume coverage; and `engine/goal_parked_status_test.go` for the
+ambient-segment tests.
+
 ## Operational reliability
 
 Goal-supervised turns are retried by the loop above and fail visibly with a
-journaled reason (`goal.stalled`, then `goal.cleared` if every DETERMINISTIC
-retry is exhausted — a retryable-class exhaustion parks instead, see above).
-Plain `prompt_async` turns get none of that: they are not
-retried, and a provider stream that dies mid-turn silently ends them. The
+journaled reason (`goal.stalled`, then `goal.parked` — never `goal.cleared`
+— if every retry budget, deterministic or retryable, is exhausted; see
+"Worker-turn exit-park and activity-driven resume" above. Context overflow
+remains the one exception that still clears). Plain `prompt_async` turns get
+none of that: they are not retried, and a provider stream that dies mid-turn
+silently ends them. The
 signature of that silent death is a final assistant message containing
 reasoning parts only — no text, no tool_call. Consequently, multi-step or
 long-running work dispatched over an unreliable link should be wrapped in a
