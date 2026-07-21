@@ -424,7 +424,7 @@ func TestMCPManagerConnectTimeoutFailsOpen(t *testing.T) {
 // call. REWRITTEN for the retry state machine (see
 // docs/plans/2026-07-20-mcp-init-resilience.md invariant 3): this is no
 // longer "every server connects exactly once, period" (a FAILED server now
-// gets an indefinite background retry — see
+// gets a bounded background retry — see
 // TestMCPManagerFailedServerRetriesInBackgroundAndRecovers) but narrows to
 // "a server that HAS connected is never re-probed," which is what this
 // test actually exercises (its one server always succeeds).
