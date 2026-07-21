@@ -19,14 +19,21 @@
 // is fail-open, the same philosophy as a crashed plugin (see
 // plugin/PROTOCOL.md) — one bad server must never prevent a session from
 // starting or take down an otherwise-healthy set of tools. It is not
-// dropped forever, though: a failed server gets a detached, indefinite
-// background retry on a capped exponential backoff (see mcpRetryDelay),
-// because a same-second cluster of cold-start timeouts across many remote
-// servers is exactly the kind of transient condition that clears on its
-// own — see docs/plans/2026-07-20-mcp-init-resilience.md for the incident
-// this generalizes from. A HEALTHY server, by contrast, is never
-// re-probed: once connected it is done for the process's life, exactly
-// like the old exactly-once behavior this replaces (see
+// dropped immediately, though: a failed server gets a detached, BOUNDED
+// background retry on a capped exponential backoff (see mcpRetryDelay,
+// mcpRetryMaxAttempts), because a same-second cluster of cold-start
+// timeouts across many remote servers is exactly the kind of transient
+// condition that clears on its own — see
+// docs/plans/2026-07-20-mcp-init-resilience.md for the incident this
+// generalizes from. Once mcpRetryMaxAttempts consecutive background
+// retries have all failed, the server is marked Parked (see retryServer)
+// and no further attempt ever fires spontaneously — an explicit
+// re-trigger (the mcp session tool's connect action, see
+// docs/plans/2026-07-20-mcp-bounded-retry.md) is required past that
+// point, matching Claude Code's bounded-effort-then-explicit-retrigger
+// shape. A HEALTHY server, by contrast, is never re-probed: once connected
+// it is done for the process's life, exactly like the old exactly-once
+// behavior this replaces (see
 // TestMCPManagerHealthyServerNeverReprobedWhileSiblingRetries). Tools()/CallTool()/
 // CallServerTool always read live, mu-guarded state, so a server that
 // recovers mid-session starts contributing tools on the very next call —
@@ -141,12 +148,18 @@ type mcpToolBinding struct {
 // exactly once, never re-probed" invariant.
 type mcpServerEntry struct {
 	Connected bool
-	client    *mcp.Client
-	tools     map[string]mcpToolBinding // this server's own bindings, namespaced name -> binding
+	// Parked reports that this server's background retry has exhausted
+	// mcpRetryMaxAttempts and given up: no goroutine is running for it
+	// anymore, and it will never connect again on its own — only an
+	// explicit re-trigger (the mcp session tool's connect action) can move
+	// it out of this state. Parked implies !Connected; a freshly-failed,
+	// still-retrying server has both false.
+	Parked bool
+	client *mcp.Client
+	tools  map[string]mcpToolBinding // this server's own bindings, namespaced name -> binding
 	// Attempts and LastErr are updated after every attempt (the first one
-	// and each background retry) — exported-cased for a future Task 2
-	// status surface to read directly, though nothing in this package does
-	// yet.
+	// and each background retry) — exported-cased for the status surface
+	// (see MCPServerStatus/Status) to read directly.
 	Attempts int
 	LastErr  error
 }
@@ -154,9 +167,10 @@ type mcpServerEntry struct {
 // MCPManager is the production MCPRegistry: it owns one mcp.Client per
 // configured server that has connected. A server's first connect attempt
 // happens lazily, on the first call to Tools/CallTool/CallServerTool,
-// bounded by its ConnectTimeout; a server that fails gets an indefinite
-// background retry (see retryServer) instead of being dropped for the
-// manager's whole life. Safe for concurrent use.
+// bounded by its ConnectTimeout; a server that fails gets a bounded
+// background retry (see retryServer, mcpRetryMaxAttempts) rather than
+// being dropped outright — and, once that bound is exhausted, is marked
+// Parked instead of retried further. Safe for concurrent use.
 type MCPManager struct {
 	servers map[string]MCPServerConfig
 
@@ -197,10 +211,11 @@ func NewMCPManager(servers map[string]MCPServerConfig) *MCPManager {
 // ConnectTimeout. A server whose first attempt fails is logged and
 // contributes no client/tools for now; it never causes this (or any other
 // server's) first attempt to fail, and — unlike the old exactly-once
-// behavior — it is not abandoned: a background retryServer goroutine is
-// spawned for it before this method returns, so it keeps trying
-// indefinitely on a capped backoff (see retryServer, mcpRetryDelay) until
-// it connects or the manager is closed.
+// behavior — it is not abandoned outright: a background retryServer
+// goroutine is spawned for it before this method returns, so it keeps
+// trying on a capped backoff (see retryServer, mcpRetryDelay) until it
+// connects, exhausts mcpRetryMaxAttempts background retries and parks, or
+// the manager is closed.
 //
 // The connect step is deliberately detached from ctx (the first caller to
 // trigger it, via context.WithoutCancel) rather than run under it: this is
@@ -345,15 +360,28 @@ func (m *MCPManager) rebuildToolsLocked() {
 // mcpRetryBackoffBase, mcpRetryBackoffMultiplier, and mcpRetryBackoffCap
 // define the capped exponential schedule a failed server's background
 // retry waits between attempts: ~1s after the first failure, doubling each
-// subsequent failure, capped at 5 minutes — indefinitely, there is no
-// "given up" state (see the package doc's incident reference). Mirrors
-// goal.go's goalRetryableDelay shape one-for-one, just with MCP's own
-// base/cap.
+// subsequent failure, capped at 5 minutes — for up to mcpRetryMaxAttempts
+// background retries (see the package doc's incident reference for why
+// backoff-and-retry at all; see mcpRetryMaxAttempts for why it stops).
+// Mirrors goal.go's goalRetryableDelay shape one-for-one, just with MCP's
+// own base/cap.
 const (
 	mcpRetryBackoffBase       = 1 * time.Second
 	mcpRetryBackoffMultiplier = 2
 	mcpRetryBackoffCap        = 5 * time.Minute
 )
+
+// mcpRetryMaxAttempts bounds how many BACKGROUND retries (in addition to
+// the failed first attempt already made synchronously in ensureConnected)
+// retryServer will make for one server before giving up: after this many
+// consecutive background failures the server is marked Parked and the
+// goroutine exits for good — no further connect attempt ever fires
+// spontaneously again. On the jittered 1s/2s/4s schedule (mcpRetryDelay)
+// this is under 10s of background effort before parking. An operator or
+// the model (via the mcp session tool's connect action, once it lands)
+// must re-trigger a connect explicitly to un-park a server past this
+// point — see docs/plans/2026-07-20-mcp-bounded-retry.md.
+const mcpRetryMaxAttempts = 3
 
 // mcpRetryDelay returns the base (pre-jitter) backoff for the given
 // 1-indexed attempt that just failed, doubling each time up to
@@ -417,8 +445,11 @@ func waitMCPRetryBackoff(ctx context.Context, attempt int) error {
 // lastAttempt, tries again, and either commits success (populating this
 // server's tools into the live merged view and exiting for good — a
 // healthy server is never re-probed) or records the new failure and loops
-// to wait again, indefinitely, until it succeeds or m.retryCtx is
-// cancelled (Close).
+// to wait again — up to mcpRetryMaxAttempts background retries total. Once
+// that many consecutive background attempts have all failed, the entry is
+// marked Parked and this goroutine exits for good: no further attempt ever
+// fires spontaneously past that point (see mcpRetryMaxAttempts). Either
+// way it can also exit early if m.retryCtx is cancelled (Close).
 //
 // Every attempt (and the wait before it) runs under m.retryCtx, never the
 // ctx of whichever caller happened to trigger the ORIGINAL first attempt —
@@ -430,6 +461,7 @@ func (m *MCPManager) retryServer(name string, lastAttempt int) {
 	spec := m.servers[name] // m.servers is immutable after construction; safe unguarded read
 
 	attempt := lastAttempt
+	backgroundRetries := 0
 	for {
 		if err := waitMCPRetryBackoff(m.retryCtx, attempt); err != nil {
 			return // retryCtx cancelled: Close is tearing the manager down
@@ -437,6 +469,7 @@ func (m *MCPManager) retryServer(name string, lastAttempt int) {
 
 		client, toolList, err := mcpConnectFunc(m.retryCtx, name, spec)
 		attempt++
+		backgroundRetries++
 
 		m.mu.Lock()
 		if m.retryCtx.Err() != nil {
@@ -457,6 +490,18 @@ func (m *MCPManager) retryServer(name string, lastAttempt int) {
 		entry.Attempts = attempt
 		if err != nil {
 			entry.LastErr = err
+			if backgroundRetries >= mcpRetryMaxAttempts {
+				// Bound exhausted: give up for good. No more waiting, no
+				// more looping — the entry is left Parked, and Close will
+				// find no goroutine left to stop for this server.
+				entry.Parked = true
+				m.mu.Unlock()
+				log.Printf("engine: mcp server %q: giving up after %d attempts; reconnect via the mcp tool", name, attempt)
+				if mcpTestRetryCommitted != nil {
+					mcpTestRetryCommitted(name, false)
+				}
+				return
+			}
 			m.mu.Unlock()
 			log.Printf("engine: mcp server %q: retry failed: %v (continuing to retry in the background)", name, err)
 			if mcpTestRetryCommitted != nil {
@@ -709,6 +754,10 @@ type MCPServerStatus struct {
 	// the one-way latch mcpServerEntry.Connected documents (its first
 	// attempt succeeded, or a background retry has since committed one).
 	Connected bool
+	// Parked mirrors mcpServerEntry.Parked: this server's background retry
+	// exhausted mcpRetryMaxAttempts and gave up. Mutually exclusive with
+	// Connected.
+	Parked bool
 	// Attempts is the total number of connect attempts made so far (the
 	// first attempt plus every background retry), whether or not any of
 	// them succeeded.
@@ -754,6 +803,7 @@ func (m *MCPManager) Status() []MCPServerStatus {
 		out = append(out, MCPServerStatus{
 			Name:      name,
 			Connected: e.Connected,
+			Parked:    e.Parked,
 			Attempts:  e.Attempts,
 			LastErr:   e.LastErr,
 		})
