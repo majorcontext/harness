@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -525,23 +526,106 @@ func TestResolveOrphanToolCallsPropertyFixedPoint(t *testing.T) {
 // TestResolveOrphanToolCallsPropertyDoesNotMutateInput pins ResolveOrphanToolCalls's
 // doc comment: "messages is never mutated in place; the input slice and its
 // Message values are safe to reuse after this call."
+//
+// This check used to compare json.Marshal(in) before and after the call
+// (byte-for-byte). That was insufficient: Marshal CANONICALIZES —
+// ProviderData.MarshalJSON drops zero-length/invalid entries, and
+// ToolCall.safeArguments coerces empty Arguments to "{}" — so an in-place
+// mutation that only touches bytes the canonical encoding already erases
+// (e.g. overwriting the value of an already-empty ProviderData entry, or an
+// already-empty Arguments) would marshal identically before and after and
+// slip through undetected. A structural snapshot compared with
+// reflect.DeepEqual has no such blind spot: it sees every byte regardless
+// of whether the canonical encoding would keep it.
 func TestResolveOrphanToolCallsPropertyDoesNotMutateInput(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		in := genMessageSequence(t)
-
-		before, err := json.Marshal(in)
-		if err != nil {
-			t.Fatalf("Marshal(in) before call: %v", err)
-		}
+		snapshot := deepCloneMessages(t, in)
 
 		_ = ResolveOrphanToolCalls(in)
 
-		after, err := json.Marshal(in)
-		if err != nil {
-			t.Fatalf("Marshal(in) after call: %v", err)
-		}
-		if !bytes.Equal(before, after) {
-			t.Fatalf("ResolveOrphanToolCalls mutated its input in place:\nbefore: %s\nafter:  %s", before, after)
+		if !reflect.DeepEqual(snapshot, in) {
+			t.Fatalf("ResolveOrphanToolCalls mutated its input in place:\nbefore: %+v\nafter:  %+v", snapshot, in)
 		}
 	})
+}
+
+// deepCloneMessages returns an independent structural copy of in: every
+// Part is cloned by concrete type, and every raw byte slice a part carries
+// (ToolCall.Arguments, Blob.Data, and each ProviderData entry) is copied
+// byte-for-byte rather than aliased, so a later in-place mutation of the
+// original can never be observed through the clone — including a mutation
+// that a canonical json.Marshal would hide (see
+// TestResolveOrphanToolCallsPropertyDoesNotMutateInput's doc comment for
+// why that matters here). message doesn't expose a Clone/Copy helper
+// (checked before writing this), so this is hand-rolled, one case per
+// concrete Part type the package defines.
+func deepCloneMessages(tb rapid.TB, in []Message) []Message {
+	tb.Helper()
+	out := make([]Message, len(in))
+	for i, m := range in {
+		out[i] = m
+		out[i].Parts = deepCloneParts(tb, m.Parts)
+	}
+	return out
+}
+
+func deepCloneParts(tb rapid.TB, parts Parts) Parts {
+	tb.Helper()
+	if parts == nil {
+		return nil
+	}
+	out := make(Parts, len(parts))
+	for i, p := range parts {
+		switch v := p.(type) {
+		case *Text:
+			c := *v
+			out[i] = &c
+		case *Blob:
+			c := *v
+			c.Data = cloneBytes(v.Data)
+			out[i] = &c
+		case *ToolCall:
+			c := *v
+			c.Arguments = json.RawMessage(cloneBytes(v.Arguments))
+			out[i] = &c
+		case *ToolResult:
+			c := *v
+			c.Content = deepCloneParts(tb, v.Content)
+			out[i] = &c
+		case *Reasoning:
+			c := *v
+			c.ProviderData = deepCloneProviderData(v.ProviderData)
+			out[i] = &c
+		default:
+			tb.Fatalf("deepCloneParts: unhandled Part type %T", p)
+		}
+	}
+	return out
+}
+
+func deepCloneProviderData(pd ProviderData) ProviderData {
+	if pd == nil {
+		return nil
+	}
+	out := make(ProviderData, len(pd))
+	for family, raw := range pd {
+		out[family] = json.RawMessage(cloneBytes(raw))
+	}
+	return out
+}
+
+// cloneBytes copies b's contents into a freshly allocated slice, preserving
+// the nil-vs-non-nil-but-empty distinction exactly (nil stays nil; a
+// non-nil zero-length slice clones to a distinct non-nil zero-length
+// slice) — collapsing that distinction would make deepCloneMessages'
+// snapshot diverge from an untouched original under reflect.DeepEqual,
+// producing a false mutation report.
+func cloneBytes(b []byte) []byte {
+	if b == nil {
+		return nil
+	}
+	c := make([]byte, len(b))
+	copy(c, b)
+	return c
 }
