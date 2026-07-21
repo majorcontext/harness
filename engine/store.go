@@ -193,6 +193,14 @@ type promptRecord struct {
 	ID     int64  `json:"id,omitempty"`
 	Text   string `json:"text,omitempty"`
 	Reason string `json:"reason,omitempty"`
+	// Seq is the caller-issued idempotency sequence carried on a
+	// prompt.queued record written by EnqueuePromptDurable (see queue.go);
+	// 0/omitted on plain EnqueuePrompt records and on every
+	// prompt.dequeued. LoadSession folds it into the session's enqueueSeq
+	// high-water mark and dedupes same-seq records last-writer-wins — see
+	// the recPromptQueued replay case for why that heals torn fsync
+	// failures.
+	Seq int64 `json:"seq,omitempty"`
 }
 
 // SessionInfo summarizes one persisted session for listings.
@@ -347,7 +355,11 @@ func (s *Session) ensureLog() error {
 	if err := os.MkdirAll(s.cfg.SessionDir, 0o755); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(sessionPath(s.cfg.SessionDir, s.ID), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	// O_RDWR, not O_WRONLY: the torn-tail repair below needs to ReadAt the
+	// file's own last byte. O_APPEND still governs every Write (here and in
+	// writeRecord) regardless of the file's read/write position, so this
+	// adds read capability without changing append semantics at all.
+	f, err := os.OpenFile(sessionPath(s.cfg.SessionDir, s.ID), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return err
 	}
@@ -357,7 +369,85 @@ func (s *Session) ensureLog() error {
 		return err
 	}
 	s.logFile = f
-	if fi.Size() == 0 {
+	size := fi.Size()
+	// A prior process can have crashed mid-write, leaving the file not
+	// ending in '\n'. Resuming WRITES onto that file is hazardous in a way
+	// resuming READS is not: appending a new record directly after it, with
+	// no separating newline, concatenates the two into ONE line ("{{"...),
+	// which is itself unparseable — silently dropping the new record for as
+	// long as it stays the last line (despite EnqueuePromptDurable having
+	// returned a nil, durability-attesting error for it — an attestation
+	// hole this closes), and then becoming a HARD load error the moment any
+	// later record makes it no longer last (scanLog below only tolerates a
+	// corrupt FINAL line; a corrupt non-final one is an error, never a
+	// silent drop), poisoning the whole session. This was reachable even
+	// when the missing-newline tail was the very first (and only) bytes
+	// ever written — e.g. a crash after 1 byte of this function's own
+	// header+model write below, before this repair existed.
+	//
+	// A missing trailing '\n' has TWO different honest causes, and they
+	// need opposite repairs:
+	//
+	//  1. The write was torn mid-record (crash before the content itself
+	//     finished landing) — the tail is not valid JSON. scanLog's
+	//     documented tolerance already decided such a tail "never happened"
+	//     (a corrupt/incomplete FINAL line is silently dropped), so the
+	//     correct repair is to TRUNCATE back to just after the last '\n'
+	//     (0 if there is none at all), making the file ON DISK agree
+	//     byte-for-byte with what a load already treats it as meaning.
+	//  2. The record content itself completed and is valid JSON, but the
+	//     single trailing '\n' that terminates it never landed (e.g. a
+	//     crash between the content write and the newline, or — as the
+	//     rapid model test's TornCrashReload found — a byte-exact
+	//     truncation that happens to land exactly on that newline). This
+	//     tail is NOT what scanLog's tolerance is for: scanLog decides
+	//     "torn" purely by whether the line parses, so it loads this record
+	//     just fine despite the missing newline. Truncating it away here
+	//     would silently destroy an already-durable, already-loadable
+	//     record — a worse violation than the one being fixed. The correct
+	//     repair is to APPEND the missing '\n', preserving the record and
+	//     terminating it so the next write cannot concatenate onto it.
+	//
+	// Distinguishing the two means replicating scanLog's own rule — attempt
+	// to parse the tail — rather than a cheaper newline-only heuristic.
+	if size > 0 {
+		var last [1]byte
+		if _, err := f.ReadAt(last[:], size-1); err != nil {
+			f.Close()
+			s.logFile = nil
+			return err
+		}
+		if last[0] != '\n' {
+			data, err := os.ReadFile(sessionPath(s.cfg.SessionDir, s.ID))
+			if err != nil {
+				f.Close()
+				s.logFile = nil
+				return err
+			}
+			tailStart := bytes.LastIndexByte(data, '\n') + 1 // 0 if no newline at all
+			tail := bytes.TrimSpace(data[tailStart:])
+			var rec record
+			if len(tail) > 0 && json.Unmarshal(tail, &rec) == nil {
+				// Case 2: complete, valid record — just terminate it.
+				if _, err := f.Write([]byte("\n")); err != nil {
+					f.Close()
+					s.logFile = nil
+					return err
+				}
+				size++
+			} else {
+				// Case 1: genuinely torn (or trailing whitespace with no
+				// record at all) — truncate the incomplete tail away.
+				if err := f.Truncate(int64(tailStart)); err != nil {
+					f.Close()
+					s.logFile = nil
+					return err
+				}
+				size = int64(tailStart)
+			}
+		}
+	}
+	if size == 0 {
 		// Header plus a model record for the session's current model, so
 		// every persisted session names its model explicitly — a SetModel
 		// before the first append would otherwise be silently lost and
@@ -384,6 +474,28 @@ func (s *Session) ensureLog() error {
 			buf.WriteByte('\n')
 		}
 		if _, err := f.Write(buf.Bytes()); err != nil {
+			f.Close()
+			s.logFile = nil
+			return err
+		}
+		// A file fsync (as EnqueuePromptDurable does before attesting
+		// durability — see queue.go) commits the file's *contents* but not
+		// its directory entry: POSIX leaves the entry itself up to the
+		// containing directory's own fsync. On a fresh log file, that entry
+		// only just got created above, so without this the durable-enqueue
+		// attestation is a lie on the first record after creation — the
+		// enqueue's file fsync can return clean, the response go out, and a
+		// crash before the directory entry is committed can lose both the
+		// message and the watermark on some filesystems (e.g. ext4). Doing
+		// it here, once per file creation rather than once per record, is
+		// enough: later records reuse this already-linked file.
+		//
+		// This syncs the log file's entry within SessionDir, not SessionDir's
+		// own entry in its parent — SessionDir is assumed to be a preexisting
+		// mount (e.g. a volume) at boot, so that entry predates the process
+		// and isn't this code's concern. See syncDir for why this is a
+		// build-tagged no-op off unix.
+		if err := syncDir(s.cfg.SessionDir); err != nil {
 			f.Close()
 			s.logFile = nil
 			return err
@@ -505,13 +617,50 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// clears the goal, live or on replay.
 		case recPromptQueued:
 			// Append to the folded queue and advance the next-ID counter past
-			// whatever this record used, so a resumed session's next
-			// EnqueuePrompt continues the same monotonic sequence instead of
-			// colliding with (or repeating) an ID already on disk — even if a
-			// prior process crashed right after writing this record without
-			// ever incrementing its own in-memory counter further.
+			// whatever this record used (IDs are burned on failed durable
+			// writes — see EnqueuePromptDurable — so advancing past every ID
+			// seen, folded or not, is what keeps a resumed session's counter
+			// collision-free).
+			//
+			// A record carrying Seq (durable enqueue) folds last-writer-wins
+			// against any already-folded entry with the SAME Seq: a failed
+			// fsync can leave a torn record on disk whose write reported
+			// failure, followed by its successful retry under a fresh ID —
+			// live memory only ever held the retry's entry, so replay must
+			// converge to that one too (a later prompt.dequeued references
+			// the retry's ID — this holds under EnqueuePromptDurable's caller
+			// contract that the same seq is retried before any higher seq is
+			// accepted, see queue.go). Seq also advances the enqueueSeq
+			// high-water mark, which is what makes duplicate detection
+			// survive a process restart.
+			//
+			// The fold REMOVES the old same-Seq entry from its slot and
+			// APPENDS the new one at the tail, rather than replacing it
+			// in place: a plain EnqueuePrompt can land BETWEEN the torn
+			// write and its retry (log order id1/seq5 torn, id2/seq0
+			// plain, id3/seq5 retry). Live memory only ever appended
+			// id2 then id3, in that order — an in-place replacement at
+			// id1's old slot would instead fold to [id3, id2], reordering
+			// delivery relative to what actually happened live. Remove+
+			// append reconstructs live append order faithfully (the retry
+			// always carries the highest ID seen so far, so this can never
+			// misorder against a later, genuinely-newer plain entry); the
+			// common case with no interposed record degenerates to the
+			// exact same single-entry result as an in-place replacement.
 			if rec.Prompt != nil {
-				s.promptQueue = append(s.promptQueue, QueuedPrompt{ID: rec.Prompt.ID, Text: rec.Prompt.Text})
+				q := QueuedPrompt{ID: rec.Prompt.ID, Text: rec.Prompt.Text, Seq: rec.Prompt.Seq}
+				if q.Seq > 0 {
+					for i, p := range s.promptQueue {
+						if p.Seq == q.Seq {
+							s.promptQueue = append(s.promptQueue[:i], s.promptQueue[i+1:]...)
+							break
+						}
+					}
+					if q.Seq > s.enqueueSeq {
+						s.enqueueSeq = q.Seq
+					}
+				}
+				s.promptQueue = append(s.promptQueue, q)
 				if rec.Prompt.ID >= s.promptQueueNextID {
 					s.promptQueueNextID = rec.Prompt.ID + 1
 				}

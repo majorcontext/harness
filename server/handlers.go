@@ -832,14 +832,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 			// non-empty text above, so this is not reachable in practice;
 			// fail closed rather than silently drop the request, releasing
 			// the claim just taken.
-			s.mu.Lock()
-			st.running = false
-			st.cancel = nil
-			st.goalLoop = false
-			st.lastUsed = time.Now()
-			s.evictResidentLocked()
-			s.mu.Unlock()
-			s.wg.Done()
+			s.releasePromptClaim(st)
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -1012,6 +1005,212 @@ func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string
 	writeJSON(w, http.StatusAccepted, resp)
 }
 
+// enqueueResponse is POST /session/{id}/enqueue's success body. Unlike
+// promptAsyncResponse it never carries the journal's SSE seq — the field
+// name "seq" is already taken by the request's own idempotency sequence,
+// and an enqueue caller acks by watermark, not by event cursor.
+// Watermark is the session's durable-enqueue high-water mark AFTER this
+// request (== the request's own seq on accept; the pre-existing mark on
+// duplicate). Queued mirrors promptAsyncResponse's rule: depth including
+// this prompt, only when status is "queued".
+type enqueueResponse struct {
+	Status    string `json:"status"` // "started" | "queued" | "duplicate"
+	Watermark int64  `json:"watermark"`
+	Queued    int    `json:"queued,omitempty"`
+}
+
+// handleEnqueue is POST /session/{id}/enqueue (see docs/plans/2026-07-21-
+// durable-enqueue.md): prompt_async's shape with an honest durability and
+// idempotency contract. The prompt is fsynced into the session journal
+// (engine.Session.EnqueuePromptDurable) BEFORE any success response — a 2xx
+// authorizes the caller to ack ITS upstream — and a seq at or below the
+// session's watermark is a 200 duplicate no-op, so upstream retries are
+// always safe. Delivery is unchanged queue machinery: idle sessions
+// dispatch the queue head immediately, busy sessions drain at turn/tool
+// boundaries. No model override (queued prompts carry text only — see
+// enqueueOrDispatch's doc comment); the workdir-busy 409, draining 503, and
+// unknown-session 404 mirror handlePrompt.
+func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.sessionIDOrNotFound(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Parts []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"parts"`
+		Seq int64 `json:"seq"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(body.Parts) == 0 {
+		writeErr(w, http.StatusBadRequest, "parts must be non-empty")
+		return
+	}
+	if body.Seq < 1 {
+		writeErr(w, http.StatusBadRequest, "seq must be >= 1")
+		return
+	}
+	var texts []string
+	for _, p := range body.Parts {
+		if p.Type != "text" {
+			writeErr(w, http.StatusBadRequest, "v1 accepts text parts only")
+			return
+		}
+		texts = append(texts, p.Text)
+	}
+	text := strings.Join(texts, "\n")
+	// EnqueuePromptDurable rejects empty/whitespace-only text too, but by
+	// then we'd have already taken (or failed to take) the run-slot claim,
+	// and from the handler's side that engine error is indistinguishable
+	// from a genuine persist failure — both fall through to the 500
+	// "enqueue not durable" mapping below, which tells the caller to retry
+	// with the same seq. An input that can never succeed must 400 instead,
+	// and before any claim is taken.
+	if strings.TrimSpace(text) == "" {
+		writeErr(w, http.StatusBadRequest, "text must be non-empty")
+		return
+	}
+
+	st, ctx, _, code, holder := s.claimForPrompt(id)
+	if code != 0 {
+		switch {
+		case code == http.StatusConflict && holder != "":
+			writeErr(w, code, fmt.Sprintf("workdir busy: held by session %s", holder))
+		case code == http.StatusConflict:
+			s.enqueueDurableBusy(w, id, text, body.Seq)
+		case code == http.StatusServiceUnavailable:
+			writeErr(w, code, "server shutting down")
+		default:
+			writeErr(w, http.StatusNotFound, "no such session")
+		}
+		return
+	}
+
+	// Idle: we hold the run slot. Durable-first, then dispatch the queue
+	// HEAD — not necessarily this request's prompt (global FIFO, same rule
+	// as handlePrompt's idle-with-queue branch).
+	ourID, dup, err := st.sess.EnqueuePromptDurable(text, body.Seq)
+	if dup {
+		s.releasePromptClaim(st)
+		// Stranded-head liveness fix: THIS request's prompt was a no-op,
+		// but the run slot we just released may be stranding SOMEONE
+		// ELSE's already-durable prompt. A concurrent same-seq retry can
+		// land in enqueueDurableBusy while we hold the claim above, durably
+		// enqueue there (advancing the watermark this call sees as a
+		// duplicate), and then lose ITS OWN one-shot claim retry to us —
+		// see enqueueDurableBusy's doc comment for that race. Without this
+		// call, that prompt would sit in the queue on a now-idle session
+		// with nothing left to dispatch it until unrelated future
+		// activity. maybeDispatchQueued (see its doc comment) is built for
+		// exactly this tail position: it re-claims the slot and dispatches
+		// the head, or safely no-ops if the queue is empty or something
+		// else wins the race — called BEFORE the response is written so
+		// that a client polling GET /session/{id}/wait immediately after
+		// this 2xx returns never observes a false "idle" ahead of the
+		// drain's own claim. See TestEnqueueDuplicateOnIdleWithQueueDrainsHead.
+		s.maybeDispatchQueued(id, st)
+		writeJSON(w, http.StatusOK, enqueueResponse{Status: "duplicate", Watermark: st.sess.EnqueueSeq()})
+		return
+	}
+	if err != nil {
+		s.releasePromptClaim(st)
+		// Same stranded-head exposure as the duplicate branch above: our
+		// own durable enqueue failed, but a concurrent request may already
+		// have durably queued behind us in enqueueDurableBusy and lost its
+		// claim retry to us. Drain before responding, for the same reason.
+		s.maybeDispatchQueued(id, st)
+		writeErr(w, http.StatusInternalServerError, "enqueue not durable: "+err.Error())
+		return
+	}
+	head, ok := s.dispatchQueueHead(id, st, ctx)
+	if !ok {
+		// Concurrent DELETE /session/{id}/queue cleared everything in the
+		// gap — same benign race as handlePrompt's idle-with-queue branch;
+		// the prompt WAS durably accepted (watermark advanced), which is
+		// exactly what the response must attest.
+		writeJSON(w, http.StatusAccepted, enqueueResponse{
+			Status: "queued", Watermark: st.sess.EnqueueSeq(), Queued: len(st.sess.QueuedPrompts()),
+		})
+		return
+	}
+	resp := enqueueResponse{Status: "queued", Watermark: st.sess.EnqueueSeq()}
+	if head.ID == ourID {
+		resp.Status = "started"
+	} else {
+		resp.Queued = len(st.sess.QueuedPrompts())
+	}
+	writeJSON(w, http.StatusAccepted, resp)
+}
+
+// enqueueDurableBusy is handleEnqueue's same-session-busy branch, the
+// durable mirror of enqueueOrDispatch: durably enqueue (fsynced, error on
+// failure — never a silent 2xx), then ONE claim retry to close the
+// freed-slot race. See enqueueOrDispatch's doc comment for the race
+// analysis; only the enqueue call and response shape differ.
+func (s *Server) enqueueDurableBusy(w http.ResponseWriter, id string, text string, seq int64) {
+	sess := s.residentSession(id)
+	if sess == nil {
+		// Same benign race window as enqueueOrDispatch: busy occupant
+		// finished and was evicted between the failed claim and here. The
+		// caller retries with the same seq — idempotency makes that free.
+		writeErr(w, http.StatusConflict, "session is busy with another prompt")
+		return
+	}
+	ourID, dup, err := sess.EnqueuePromptDurable(text, seq)
+	if dup {
+		writeJSON(w, http.StatusOK, enqueueResponse{Status: "duplicate", Watermark: sess.EnqueueSeq()})
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "enqueue not durable: "+err.Error())
+		return
+	}
+	if s.queueDispatchRace != nil {
+		s.queueDispatchRace() // test-only seam, mirrors enqueueOrDispatch
+	}
+	st, ctx, _, code, _ := s.claimForPrompt(id)
+	if code != 0 {
+		writeJSON(w, http.StatusAccepted, enqueueResponse{
+			Status: "queued", Watermark: sess.EnqueueSeq(), Queued: len(sess.QueuedPrompts()),
+		})
+		return
+	}
+	head, ok := s.dispatchQueueHead(id, st, ctx)
+	if !ok {
+		writeJSON(w, http.StatusAccepted, enqueueResponse{
+			Status: "queued", Watermark: sess.EnqueueSeq(), Queued: len(sess.QueuedPrompts()),
+		})
+		return
+	}
+	resp := enqueueResponse{Status: "queued", Watermark: sess.EnqueueSeq()}
+	if head.ID == ourID {
+		resp.Status = "started"
+	} else {
+		resp.Queued = len(sess.QueuedPrompts())
+	}
+	writeJSON(w, http.StatusAccepted, resp)
+}
+
+// releasePromptClaim releases a run-slot claim taken by claimForPrompt
+// without running a turn: the exact reset runPrompt's own tail performs,
+// shared by every path that claims the slot and then discovers there is
+// nothing to run (an enqueue error, a queue emptied by a concurrent DELETE
+// /session/{id}/queue).
+func (s *Server) releasePromptClaim(st *sessionState) {
+	s.mu.Lock()
+	st.running = false
+	st.cancel = nil
+	st.goalLoop = false
+	st.lastUsed = time.Now()
+	s.evictResidentLocked()
+	s.mu.Unlock()
+	s.wg.Done()
+}
+
 // dispatchQueueHead dequeues the session's queue head (reason "delivered")
 // into the run slot st/ctx already holds — emitting its busy transition and
 // spawning its runPrompt turn — shared by every call site that has JUST
@@ -1028,14 +1227,7 @@ func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string
 func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Context) (head engine.QueuedPrompt, ok bool) {
 	head, ok = st.sess.DequeuePrompt("delivered")
 	if !ok {
-		s.mu.Lock()
-		st.running = false
-		st.cancel = nil
-		st.goalLoop = false
-		st.lastUsed = time.Now()
-		s.evictResidentLocked()
-		s.mu.Unlock()
-		s.wg.Done()
+		s.releasePromptClaim(st)
 		return head, false
 	}
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
@@ -1685,6 +1877,51 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 		cancel()
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// queueGetResponse is GET /session/{id}/queue: the durable-enqueue
+// watermark plus the pending (undelivered) prompt queue in FIFO order.
+// Queued is always present (empty array, never null) so consumers need no
+// nil check. Seq is 0/omitted on plain prompt_async-queued entries.
+type queueGetResponse struct {
+	Watermark int64            `json:"watermark"`
+	Queued    []queuedItemJSON `json:"queued"`
+}
+
+type queuedItemJSON struct {
+	ID   int64  `json:"id"`
+	Text string `json:"text"`
+	Seq  int64  `json:"seq,omitempty"`
+}
+
+// handleQueueGet is the reconciliation read surface for durable enqueue
+// (see docs/plans/2026-07-21-durable-enqueue.md): an upstream recovering
+// from its own crash reads the watermark to learn which messages are
+// already accepted rather than re-sending blind. It resolves the session
+// via s.lookup — the same resolve-or-load helper handleGet uses for every
+// other read endpoint: resident sessions answer from live state, and a
+// non-resident session gets a transparent transient load (idle status,
+// same as GET /session/{id}). Unlike handleQueueDelete's cold path, this
+// transient load is deliberately NOT registered into residency and takes no
+// run-slot claim — a read must never have those side effects. Resident and
+// non-resident answers can never disagree: both are folds of the exact same
+// on-disk journal.
+func (s *Server) handleQueueGet(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.sessionIDOrNotFound(w, r)
+	if !ok {
+		return
+	}
+	sess, _, ok := s.lookup(id)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "no such session")
+		return
+	}
+	watermark, prompts := sess.QueueState()
+	resp := queueGetResponse{Watermark: watermark, Queued: []queuedItemJSON{}}
+	for _, p := range prompts {
+		resp.Queued = append(resp.Queued, queuedItemJSON{ID: p.ID, Text: p.Text, Seq: p.Seq})
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleQueueDelete is DELETE /session/{id}/queue (invariant 10): drains the
