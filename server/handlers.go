@@ -1085,11 +1085,33 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	ourID, dup, err := st.sess.EnqueuePromptDurable(text, body.Seq)
 	if dup {
 		s.releasePromptClaim(st)
+		// Stranded-head liveness fix: THIS request's prompt was a no-op,
+		// but the run slot we just released may be stranding SOMEONE
+		// ELSE's already-durable prompt. A concurrent same-seq retry can
+		// land in enqueueDurableBusy while we hold the claim above, durably
+		// enqueue there (advancing the watermark this call sees as a
+		// duplicate), and then lose ITS OWN one-shot claim retry to us —
+		// see enqueueDurableBusy's doc comment for that race. Without this
+		// call, that prompt would sit in the queue on a now-idle session
+		// with nothing left to dispatch it until unrelated future
+		// activity. maybeDispatchQueued (see its doc comment) is built for
+		// exactly this tail position: it re-claims the slot and dispatches
+		// the head, or safely no-ops if the queue is empty or something
+		// else wins the race — called BEFORE the response is written so
+		// that a client polling GET /session/{id}/wait immediately after
+		// this 2xx returns never observes a false "idle" ahead of the
+		// drain's own claim. See TestEnqueueDuplicateOnIdleWithQueueDrainsHead.
+		s.maybeDispatchQueued(id, st)
 		writeJSON(w, http.StatusOK, enqueueResponse{Status: "duplicate", Watermark: st.sess.EnqueueSeq()})
 		return
 	}
 	if err != nil {
 		s.releasePromptClaim(st)
+		// Same stranded-head exposure as the duplicate branch above: our
+		// own durable enqueue failed, but a concurrent request may already
+		// have durably queued behind us in enqueueDurableBusy and lost its
+		// claim retry to us. Drain before responding, for the same reason.
+		s.maybeDispatchQueued(id, st)
 		writeErr(w, http.StatusInternalServerError, "enqueue not durable: "+err.Error())
 		return
 	}

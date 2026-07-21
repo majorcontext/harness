@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/message"
@@ -197,4 +198,97 @@ func TestEnqueueValidation(t *testing.T) {
 			t.Fatalf("status %d: %s", resp.StatusCode, data)
 		}
 	})
+}
+
+// TestEnqueueDuplicateOnIdleWithQueueDrainsHead is the regression test for a
+// liveness bug in handleEnqueue's idle branch: a concurrent same-seq retry
+// can land in enqueueDurableBusy WHILE this request holds the idle claim,
+// durably enqueue there (advancing the watermark this request then sees as
+// a duplicate), and then lose its own one-shot claim retry back to this
+// request — see enqueueDurableBusy's doc comment for that exact race. The
+// old code released the claim on the duplicate (and error) path without
+// ever checking the queue again, stranding the concurrent request's
+// already-durable prompt on a now-idle session with nothing left to
+// dispatch it until unrelated future activity — durability held, but
+// delivery was delayed indefinitely.
+//
+// Reproduced here deterministically, without real concurrency: seed the
+// session's durable queue directly on the resident engine.Session (the same
+// technique TestQueueRestartRefoldNoAutoDispatch uses to arrange a
+// non-empty queue on an idle session), which also advances the watermark to
+// 1, then hit POST /session/{id}/enqueue with seq=1 — a clean duplicate
+// from the endpoint's point of view — and assert the pre-seeded head still
+// gets dispatched and drains.
+func TestEnqueueDuplicateOnIdleWithQueueDrainsHead(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("drained")}}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	h.srv.mu.Lock()
+	st := h.srv.sessions[id]
+	h.srv.mu.Unlock()
+	if st == nil {
+		t.Fatal("session not resident right after creation")
+	}
+	if _, dup, err := st.sess.EnqueuePromptDurable("queued before duplicate", 1); err != nil || dup {
+		t.Fatalf("seed EnqueuePromptDurable: dup=%v err=%v", dup, err)
+	}
+
+	resp, data := h.enqueue(id, "run this", 1) // seq == watermark: duplicate
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("enqueue status %d: %s", resp.StatusCode, data)
+	}
+	var er enqueueResponse
+	if err := json.Unmarshal(data, &er); err != nil {
+		t.Fatal(err)
+	}
+	if er.Status != "duplicate" || er.Watermark != 1 {
+		t.Fatalf("enqueue response = %+v, want status=duplicate watermark=1", er)
+	}
+
+	wr := h.waitIdle(id)
+	if wr.State != "idle" {
+		t.Fatalf("state after drain = %q, want idle", wr.State)
+	}
+	sess := h.getSessionJSON(id)
+	if sess.Queued != 0 {
+		t.Fatalf("queued after drain = %d, want 0 (stranded head must be dispatched)", sess.Queued)
+	}
+	if sess.LastTurn == nil || sess.LastTurn.Outcome != "completed" {
+		t.Fatalf("last_turn = %+v, want outcome=completed (the seeded head must actually run)", sess.LastTurn)
+	}
+}
+
+// TestEnqueueWorkdirBusyRejected mirrors TestPromptSameWorkdirBusyRejected
+// (workdir_test.go) for POST /session/{id}/enqueue: session A holds its
+// workdir busy (a channel-blocked provider mid-stream), so an enqueue
+// against session B — which defaults to the same workdir — is rejected with
+// 409 naming the holder, same as prompt_async's own workdir-busy path.
+func TestEnqueueWorkdirBusyRejected(t *testing.T) {
+	prov := newBlockingProvider("test")
+	h := newHarness(t, prov)
+	t.Cleanup(prov.releaseAll)
+
+	idA := h.createSession("test/m1")
+	idB := h.createSession("test/m1")
+
+	resp, data := h.do("POST", "/session/"+idA+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "first"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt A status %d: %s", resp.StatusCode, data)
+	}
+	<-prov.started // A is now blocked mid-stream, holding its workdir
+
+	resp, data = h.enqueue(idB, "second", 1)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("enqueue B (same workdir) status %d, want 409: %s", resp.StatusCode, data)
+	}
+	var e struct {
+		Error string `json:"error"`
+	}
+	json.Unmarshal(data, &e)
+	if !strings.Contains(e.Error, idA) {
+		t.Errorf("409 error = %q, want it to name holder session %s", e.Error, idA)
+	}
 }
