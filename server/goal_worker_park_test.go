@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -583,4 +584,156 @@ func TestGoalWorkerParkPauseSurvivesRestartAsRestartReason(t *testing.T) {
 	if pausedEv.GoalPauseReason != "restart" {
 		t.Errorf("goal.paused record GoalPauseReason = %q, want %q", pausedEv.GoalPauseReason, "restart")
 	}
+}
+
+// TestAutoArmAfterRestartResetsPausePresentation is the review-finding red
+// test for the latent gap maybeAutoArmGoal's worker-park reset block left
+// behind: it resets ONLY pausedWorker, while handleGoal's re-arm branch
+// resets all five pause-fold fields (pausedRestart, pausedWorker, retryable,
+// retryableClass, waiting). A restart leaves pausedRestart=true
+// (pauseArmedGoalsAtBoot); if the goal is resumed by an ordinary prompt's
+// tail (maybeAutoArmGoal) rather than a fresh POST /session/{id}/goal,
+// pausedRestart is never cleared — GET /session keeps reporting
+// paused=true/pause_reason=restart forever, even while the loop is actively
+// running (state reads goal-running, not idle) — the exact "operator can't
+// tell a live loop from a dead one" trap this whole subsystem exists to
+// prevent.
+//
+// The checkpoint uses blockWorkerAfter (not a race against an SSE event) so
+// it is deterministic: the resumed goal loop's own worker call is parked
+// in-flight, <-prov.started proves it has actually started, and only then
+// is GET /session read — no window where a fast scripted turn could race
+// past achievement before the assertion runs.
+//
+// Red-verified against the pre-fix code (maybeAutoArmGoal's reset block
+// resetting only pausedWorker): this test fails at the mid-run assertion,
+// where paused is still true, pause_reason is still "restart", and state
+// still reads "idle" even though the loop is actively running.
+func TestAutoArmAfterRestartResetsPausePresentation(t *testing.T) {
+	dir := t.TempDir()
+	prov := &goalProv{
+		name: "test",
+		// worker[0] is consumed by the pre-restart turn (max_turns exhausts
+		// after one NOT MET). worker[1] is the plain resume prompt's own
+		// turn. blockWorkerAfter=2 lets exactly those two calls through
+		// normally, then blocks the THIRD worker call — the auto-armed
+		// goal loop's own first turn — indefinitely, giving a deterministic
+		// mid-run checkpoint instead of racing a fast scripted turn to
+		// achievement.
+		worker:           [][]provider.Event{asstTurn("try 1"), asstTurn("plain prompt reply")},
+		eval:             [][]provider.Event{asstTurn("NOT MET: nope")},
+		blockWorkerAfter: 2,
+		started:          make(chan struct{}),
+	}
+	mutate := func(o *Options) {
+		o.GoalEvaluator = message.ModelRef{Provider: prov.Name(), Model: "eval"}
+	}
+	srv1 := newServer(t, dir, prov, 0, mutate)
+	ts1 := httptest.NewServer(srv1)
+	h1 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv1, ts: ts1}
+
+	id := h1.createSession("test/m1")
+	sse := h1.openSSE("?from=0", "")
+	resp, data := h1.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond", "max_turns": 1})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
+	}
+	sse.collectUntilIdle(t) // max-turns exhausted, still active, never cleared
+	sse.stop()
+	if err := srv1.Close(); err != nil {
+		t.Fatalf("closing first server: %v", err)
+	}
+	ts1.Close()
+
+	srv2 := newServer(t, dir, prov, 0, mutate)
+	ts2 := httptest.NewServer(srv2)
+	t.Cleanup(ts2.Close)
+	h2 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv2, ts: ts2}
+
+	before := h2.getPausedGoalView(id)
+	if before.Goal == nil || !before.Goal.Active {
+		t.Fatalf("before resume, goal = %+v, want active", before.Goal)
+	}
+	if !before.Goal.Paused || before.Goal.PauseReason != "restart" {
+		t.Fatalf("before resume, goal = %+v, want paused/restart", before.Goal)
+	}
+	if before.State != "idle" {
+		t.Fatalf("state before resume = %q, want idle", before.State)
+	}
+
+	// Replay only events from here on: from=0 would replay the first
+	// (pre-restart) turn's history, and collectUntilIdle would stop at its
+	// own idle. See TestGoalReArmClearsRestartPause's identical comment.
+	resp, data = h2.do("GET", "/session/"+id, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("get seq status %d: %s", resp.StatusCode, data)
+	}
+	var seqView struct {
+		Seq int64 `json:"seq"`
+	}
+	mustUnmarshal(t, data, &seqView)
+	sse2 := h2.openSSE(fmt.Sprintf("?from=%d", seqView.Seq), "")
+
+	// Resume via an ORDINARY prompt, not POST /goal: the whole point is
+	// exercising maybeAutoArmGoal's reset block, not handleGoal's (already
+	// correct) one.
+	resp, data = h2.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "hello"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("resume prompt status %d: %s", resp.StatusCode, data)
+	}
+	var pr promptAsyncResponse
+	if err := json.Unmarshal(data, &pr); err != nil {
+		t.Fatal(err)
+	}
+	if pr.Status != "started" {
+		t.Fatalf("resume prompt response = %+v, want status=started (session was idle)", pr)
+	}
+
+	// First batch: the plain prompt's own turn, ending in its own idle. No
+	// goal activity yet — maybeAutoArmGoal hasn't run.
+	promptEvs := sse2.collectUntilIdle(t)
+	for _, ev := range promptEvs {
+		if ev.Type == "goal.eval" || ev.Type == "goal.achieved" {
+			t.Fatalf("goal loop ran before the plain prompt's own turn finished: %v", promptEvs)
+		}
+	}
+
+	// maybeAutoArmGoal's own "busy" status follows immediately, emitted
+	// right after it resets the pause-fold fields under s.mu and right
+	// before it spawns the fresh loop goroutine.
+	armed := sse2.nextEvent(t)
+	if armed.Type != "session.status" || armed.Status != "busy" {
+		t.Fatalf("event after the prompt's idle = %+v, want session.status busy (maybeAutoArmGoal starting the loop)", armed)
+	}
+
+	// The resumed loop's own worker call is now in flight and blocked
+	// (blockWorkerAfter=2, this is call #3) — <-started proves it has
+	// actually begun, giving a stable, non-racy window to inspect the
+	// pause presentation while the loop is provably still running.
+	<-prov.started
+
+	mid := h2.getPausedGoalView(id)
+	if mid.Goal == nil || !mid.Goal.Active {
+		t.Fatalf("goal while the resumed loop's first turn is in flight = %+v, want active", mid.Goal)
+	}
+	if mid.Goal.Paused {
+		t.Errorf("goal while the resumed loop's first turn is in flight: paused=true pause_reason=%q, want paused=false (auto-arm must reset the FULL pause presentation, not just pausedWorker)", mid.Goal.PauseReason)
+	}
+	if mid.State != "goal-running" {
+		t.Errorf("state while the resumed loop's first turn is in flight = %q, want goal-running (loop is actively running, not idle)", mid.State)
+	}
+
+	// Teardown: unblock the parked worker call by clearing the goal (its
+	// context is the prompt context PursueGoal drives; clearing doesn't by
+	// itself cancel an in-flight turn, so also abort to release the
+	// blocked stream) — mirrors
+	// TestGoalReArmAfterRetryableStallRestartNotBackoffPaused's identical
+	// teardown for the same blockWorker shape.
+	resp, _ = h2.do("DELETE", "/session/"+id+"/goal", nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("clear goal status %d", resp.StatusCode)
+	}
+	_, _ = h2.do("POST", "/session/"+id+"/abort", nil)
 }

@@ -361,6 +361,32 @@ func (g *goalTracker) pauseView() (paused bool, reason string) {
 	}
 }
 
+// resetGoalPauseLocked clears every pause-fold field pauseView reads from —
+// pausedRestart, pausedWorker, and the retryable-backoff trio
+// (retryable/retryableClass/waiting) — in one place, so a freshly (re)armed,
+// genuinely running loop is never seen wearing a stale paused presentation
+// from before it started. Callers MUST hold s.mu.
+//
+// Two call sites need this, and both mean "a loop is about to actually run
+// against g, right now": handleGoal's re-arm branch (an operator's fresh
+// POST /session/{id}/goal against a paused/idle goal) and maybeAutoArmGoal's
+// successful-claim path (ordinary activity resuming a goal left armed with
+// no loop attached — restart or worker-park). Before this helper existed,
+// each site reset a different subset of these fields by hand; maybeAutoArmGoal
+// resetting only pausedWorker left pausedRestart permanently stuck true when
+// a restart-paused goal was resumed by a plain prompt rather than a fresh
+// POST /goal — see TestAutoArmAfterRestartResetsPausePresentation.
+func resetGoalPauseLocked(g *goalTracker) {
+	if g == nil {
+		return
+	}
+	g.pausedRestart = false
+	g.pausedWorker = false
+	g.retryable = false
+	g.retryableClass = ""
+	g.waiting = false
+}
+
 // turnOutcome is the per-session last-turn summary surfaced on Session JSON
 // (last_turn) and /session/status entries. outcome is "completed" or
 // "error"; error is the sanitized failure detail (empty on completion).

@@ -1199,15 +1199,15 @@ func (s *Server) maybeAutoArmGoal(id string, st *sessionState) {
 	}
 	s.mu.Lock()
 	claimedSt.goalLoop = true
-	// Activity-driven resume of a worker-parked goal (NEP-4849, Task 2): a
-	// plain prompt completing is exactly what re-attaches a loop to a goal
-	// left paused/worker_failure (see goalTracker.pausedWorker) — reset it
-	// here, mirroring handleGoal's own re-arm reset block, so the freshly
-	// spawned loop below is never seen with a stale worker-failure pause
-	// presentation still attached.
-	if g := s.goalState[id]; g != nil {
-		g.pausedWorker = false
-	}
+	// Activity-driven resume of a paused goal (restart, NEP-4849's
+	// worker_failure, or a stale retryable-backoff fold): a plain prompt
+	// completing is exactly what re-attaches a loop to a goal left armed
+	// with no loop running — reset the FULL pause presentation here via the
+	// same helper handleGoal's own re-arm branch uses, so the freshly
+	// spawned loop below is never seen wearing a stale paused presentation
+	// from before it started (see resetGoalPauseLocked's doc comment for
+	// why every field, not just pausedWorker, must reset here).
+	resetGoalPauseLocked(s.goalState[id])
 	s.mu.Unlock()
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 	go s.runGoal(ctx, id, claimedSt, condition, 0)
@@ -1319,24 +1319,19 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 		}
 		condition = body.Condition
 		s.mu.Lock()
-		if g := s.goalState[id]; g != nil {
-			// Reset ALL pause-relevant fold state, mirroring the
-			// evtGoalSet fold: if the journal tail before a restart was
-			// goal.stalled(retryable, waiting), clearing only
-			// pausedRestart leaves pauseView's provider-backoff case
-			// firing on a freshly re-armed, genuinely-running goal until
-			// its first goal.eval resets waiting. pausedWorker (NEP-4849,
-			// Task 2) needs the same treatment: a goal left worker-parked
-			// (journal tail goal.parked, no loop attached) reaches this
-			// exact branch too — claimForPrompt succeeded, so nothing was
-			// running — and must not still read paused/worker_failure the
-			// instant this re-arm's fresh loop starts.
-			g.pausedRestart = false
-			g.pausedWorker = false
-			g.retryable = false
-			g.retryableClass = ""
-			g.waiting = false
-		}
+		// Reset ALL pause-relevant fold state via the shared helper,
+		// mirroring the evtGoalSet fold: if the journal tail before a
+		// restart was goal.stalled(retryable, waiting), clearing only
+		// pausedRestart leaves pauseView's provider-backoff case firing on
+		// a freshly re-armed, genuinely-running goal until its first
+		// goal.eval resets waiting. pausedWorker (NEP-4849, Task 2) needs
+		// the same treatment: a goal left worker-parked (journal tail
+		// goal.parked, no loop attached) reaches this exact branch too —
+		// claimForPrompt succeeded, so nothing was running — and must not
+		// still read paused/worker_failure the instant this re-arm's fresh
+		// loop starts. See resetGoalPauseLocked's doc comment — this is
+		// also maybeAutoArmGoal's own reset site.
+		resetGoalPauseLocked(s.goalState[id])
 		s.mu.Unlock()
 	} else if err := st.sess.RegisterGoal(body.Condition); err != nil {
 		// Register the goal synchronously BEFORE the loop goroutine spawns
