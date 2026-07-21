@@ -1120,12 +1120,17 @@ type mcpCommitEvent struct {
 	connected bool
 }
 
-// TestMCPManagerIndependentRetrySchedules is invariant 8's dedicated test:
-// two servers that BOTH fail their first attempt and are both actively
-// retrying must progress on independent schedules — "fast" (succeeds on
-// its 2nd attempt) must recover without waiting for "slow" (succeeds only
-// on its 4th, its LAST possible attempt now that background retries are
-// bounded at mcpRetryMaxAttempts — deliberately at the boundary, see
+// TestMCPManagerIndependentRetrySchedules is
+// docs/plans/2026-07-20-mcp-init-resilience.md's invariant 8's dedicated
+// test ("multiple servers failing simultaneously retry independently") —
+// not to be confused with docs/plans/2026-07-20-mcp-bounded-retry.md's own,
+// differently-numbered invariant 8 ("tool absent when no MCP servers
+// configured"), which this test has nothing to do with: two servers that
+// BOTH fail their first attempt and are both actively retrying must
+// progress on independent schedules — "fast" (succeeds on its 2nd attempt)
+// must recover without waiting for "slow" (succeeds only on its 4th, its
+// LAST possible attempt now that background retries are bounded at
+// mcpRetryMaxAttempts — deliberately at the boundary, see
 // docs/plans/2026-07-20-mcp-bounded-retry.md Task 1), and Tools() must
 // reflect that partial recovery immediately rather than waiting for every
 // retrying server to settle. Adjusted from "5th" (pre-Task-1: retries were
