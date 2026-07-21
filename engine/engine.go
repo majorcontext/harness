@@ -211,7 +211,10 @@ type Config struct {
 	// built once per process and shared across every session — nil (the
 	// default) registers no MCP tools at all. See MCPRegistry's doc
 	// comment for why this is injected rather than built from raw server
-	// specs here.
+	// specs here. It also gates the built-in `mcp` session tool (status/
+	// connect — see mcp_tool.go): registered whenever MCP reports at least
+	// one configured server (via the narrow mcpConfigReader interface),
+	// with no separate config flag, unlike GoalTool below.
 	MCP MCPRegistry
 
 	// Processes is the managed-process integration the `process` session
@@ -438,6 +441,9 @@ func newSession(cfg Config) *Session {
 	}
 	if cfg.GoalTool {
 		s.tools[goalToolName] = goalTool()
+	}
+	if mcpConfiguredCount(cfg.MCP) > 0 {
+		s.tools[mcpSessionToolName] = mcpTool()
 	}
 	for _, t := range cfg.Tools {
 		s.tools[t.Def.Name] = t

@@ -71,13 +71,19 @@ func mcpStatusSegment(reg MCPRegistry) string {
 }
 
 // formatMCPServerStatus renders one degraded server as "<name> (<reason>;
-// retrying)" — a short error clause plus the retry posture, which is the
-// one-clause hint the model can act on: this server's tools may reappear
-// on their own, with no action needed from it. reason is always
-// classifyMCPConnectError's output, never st.LastErr.Error() directly —
-// this is model-visible context and a raw connect error can embed the
-// server's endpoint URL (and any secret it carries); see
-// classifyMCPConnectError's doc comment.
+// retrying)" while its background retry is still active, or "<name>
+// (<reason>; use the mcp tool action "connect" to retry)" once
+// mcpRetryMaxAttempts has been exhausted and the entry is Parked (see
+// retryServer) — either way a short error clause plus a posture the model
+// can act on: still-retrying needs nothing from it, parked needs an
+// explicit re-trigger. reason is always classifyMCPConnectError's output,
+// never st.LastErr.Error() directly — this is model-visible context and a
+// raw connect error can embed the server's endpoint URL (and any secret it
+// carries); see classifyMCPConnectError's doc comment.
 func formatMCPServerStatus(st MCPServerStatus) string {
-	return fmt.Sprintf("%s (%s; retrying)", st.Name, classifyMCPConnectError(st.LastErr))
+	reason := classifyMCPConnectError(st.LastErr)
+	if st.Parked {
+		return fmt.Sprintf("%s (%s; use the mcp tool action %q to retry)", st.Name, reason, "connect")
+	}
+	return fmt.Sprintf("%s (%s; retrying)", st.Name, reason)
 }

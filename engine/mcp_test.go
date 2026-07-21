@@ -424,7 +424,7 @@ func TestMCPManagerConnectTimeoutFailsOpen(t *testing.T) {
 // call. REWRITTEN for the retry state machine (see
 // docs/plans/2026-07-20-mcp-init-resilience.md invariant 3): this is no
 // longer "every server connects exactly once, period" (a FAILED server now
-// gets an indefinite background retry — see
+// gets a bounded background retry — see
 // TestMCPManagerFailedServerRetriesInBackgroundAndRecovers) but narrows to
 // "a server that HAS connected is never re-probed," which is what this
 // test actually exercises (its one server always succeeds).
@@ -1120,12 +1120,24 @@ type mcpCommitEvent struct {
 	connected bool
 }
 
-// TestMCPManagerIndependentRetrySchedules is invariant 8's dedicated test:
-// two servers that BOTH fail their first attempt and are both actively
-// retrying must progress on independent schedules — "fast" (succeeds on
-// its 2nd attempt) must recover without waiting for "slow" (succeeds only
-// on its 5th), and Tools() must reflect that partial recovery immediately
-// rather than waiting for every retrying server to settle.
+// TestMCPManagerIndependentRetrySchedules is
+// docs/plans/2026-07-20-mcp-init-resilience.md's invariant 8's dedicated
+// test ("multiple servers failing simultaneously retry independently") —
+// not to be confused with docs/plans/2026-07-20-mcp-bounded-retry.md's own,
+// differently-numbered invariant 8 ("tool absent when no MCP servers
+// configured"), which this test has nothing to do with: two servers that
+// BOTH fail their first attempt and are both actively retrying must
+// progress on independent schedules — "fast" (succeeds on its 2nd attempt)
+// must recover without waiting for "slow" (succeeds only on its 4th, its
+// LAST possible attempt now that background retries are bounded at
+// mcpRetryMaxAttempts — deliberately at the boundary, see
+// docs/plans/2026-07-20-mcp-bounded-retry.md Task 1), and Tools() must
+// reflect that partial recovery immediately rather than waiting for every
+// retrying server to settle. Adjusted from "5th" (pre-Task-1: retries were
+// indefinite, so any attempt count demonstrated independence) down to "4th"
+// because a 5th attempt would never fire under the new bound — slow would
+// park after its 3rd background retry instead of ever recovering, which
+// would defeat this test's own point.
 func TestMCPManagerIndependentRetrySchedules(t *testing.T) {
 	withZeroMCPJitter(t)
 
@@ -1139,7 +1151,7 @@ func TestMCPManagerIndependentRetrySchedules(t *testing.T) {
 				}
 				return nil, []mcp.Tool{{Name: "go"}}, nil
 			case "slow":
-				if atomic.AddInt32(&slowCalls, 1) < 5 {
+				if atomic.AddInt32(&slowCalls, 1) < 4 {
 					return nil, nil, errors.New("boom")
 				}
 				return nil, []mcp.Tool{{Name: "go"}}, nil
@@ -1404,6 +1416,176 @@ func TestMCPManagerCloseDuringInFlightRetryConnectStopsPromptly(t *testing.T) {
 		}
 		if elapsed := time.Since(start); elapsed != 0 {
 			t.Errorf("Close took %v of fake time, want exactly 0 (cancelling ctx must unblock the in-flight attempt immediately)", elapsed)
+		}
+	})
+}
+
+// TestMCPManagerBackgroundRetryBoundedThenParked is invariant 1's headline
+// test (docs/plans/2026-07-20-mcp-bounded-retry.md Task 1), red-verified
+// against pre-Task-1 mcp.go: retryServer looped indefinitely, so a server
+// whose EVERY attempt fails never stopped retrying and Status() had no
+// notion of "gave up" at all (no Parked field existed). A server whose
+// first attempt and every subsequent background retry fail gets exactly
+// mcpRetryMaxAttempts (3) background attempts — on the jittered 1s/2s/4s
+// schedule this asserts exactly via withZeroMCPJitter — before the retry
+// goroutine gives up for good: the entry is marked Parked, Status()
+// reflects it, and testing/synctest's own goroutine-leak detection at
+// bubble exit proves no goroutine is left alive to fire a further attempt
+// (if retryServer still looped past the bound, it would be durably parked
+// in a future backoff wait when this closure returns, and synctest would
+// fail the test for a leaked goroutine).
+func TestMCPManagerBackgroundRetryBoundedThenParked(t *testing.T) {
+	withZeroMCPJitter(t)
+
+	synctest.Test(t, func(t *testing.T) {
+		var calls int32
+		committed := make(chan bool, 8)
+		orig := mcpTestRetryCommitted
+		t.Cleanup(func() { mcpTestRetryCommitted = orig })
+		mcpTestRetryCommitted = func(server string, connected bool) { committed <- connected }
+
+		withMCPConnectFunc(t, func(ctx context.Context, name string, spec MCPServerConfig) (*mcp.Client, []mcp.Tool, error) {
+			atomic.AddInt32(&calls, 1)
+			return nil, nil, errors.New("boom") // never recovers
+		})
+
+		mgr := NewMCPManager(map[string]MCPServerConfig{"weather": {URL: "http://unused"}})
+		t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+		start := time.Now()
+
+		defs := mgr.Tools(context.Background()) // first attempt: fails synchronously
+		if len(defs) != 0 {
+			t.Fatalf("Tools() after the failed first attempt = %+v, want empty", defs)
+		}
+
+		// Drain exactly mcpRetryMaxAttempts commits, each a failure — the
+		// last one is the giving-up commit. Receiving from committed is
+		// what forces the bubble's fake clock through the 1s/2s/4s backoff
+		// schedule (see TestMCPManagerFailedServerRetriesInBackgroundAndRecovers's
+		// comment on why a receive, not synctest.Wait(), does this).
+		for i := 0; i < mcpRetryMaxAttempts; i++ {
+			if connected := <-committed; connected {
+				t.Fatalf("commit %d reported connected=true, want every background retry to fail", i+1)
+			}
+		}
+		synctest.Wait() // let the goroutine finish returning after its last commit
+
+		var wantElapsed time.Duration
+		for attempt := 1; attempt <= mcpRetryMaxAttempts; attempt++ {
+			wantElapsed += mcpRetryDelay(attempt) / 2 // zero jitter above halves each delay: 0.5s + 1s + 2s
+		}
+		if elapsed := time.Since(start); elapsed != wantElapsed {
+			t.Errorf("elapsed = %v, want exactly %v (the 1s/2s/4s backoff schedule, halved by zero jitter)", elapsed, wantElapsed)
+		}
+
+		wantCalls := int32(1 + mcpRetryMaxAttempts)
+		if n := atomic.LoadInt32(&calls); n != wantCalls {
+			t.Errorf("connect attempts = %d, want exactly %d (first attempt + %d background retries)", n, wantCalls, mcpRetryMaxAttempts)
+		}
+
+		statuses := mgr.Status()
+		if len(statuses) != 1 || statuses[0].Name != "weather" {
+			t.Fatalf("Status() = %+v, want exactly one entry for weather", statuses)
+		}
+		st := statuses[0]
+		if !st.Parked {
+			t.Error("Status().Parked = false, want true once retries are exhausted")
+		}
+		if st.Connected {
+			t.Error("Status().Connected = true, want false")
+		}
+		if st.Attempts != int(wantCalls) {
+			t.Errorf("Status().Attempts = %d, want %d", st.Attempts, wantCalls)
+		}
+
+		// Because the closure is about to return, testing/synctest's own
+		// leak detection now proves no goroutine is left alive for this
+		// server: if retryServer had not actually exited (bound broken),
+		// it would be durably blocked in a future backoff wait and this
+		// test would fail with a goroutine-leak error, not the assertions
+		// above.
+	})
+}
+
+// TestMCPManagerAttemptsMonotonicAcrossToolAndBackgroundDials pins the fix
+// for the non-monotonic Attempts counter a review of the bounded-retry PR
+// flagged: retryServer used to commit an ABSOLUTE local counter
+// (entry.Attempts = attempt) that had no knowledge of any tool-triggered
+// Connect dials interleaved with it, so a sequence like "first attempt
+// fails, two tool Connects fail, then the background retry's own second
+// dial commits" could make the model-visible Attempts count go DOWN (3 ->
+// 2) even though four real dials had happened. retryServer now increments
+// the shared field the same way Connect always has (entry.Attempts++), so
+// the count can only ever climb by exactly one per commit regardless of
+// which path performed the dial.
+//
+// The four dials here are ordered deterministically by testing/synctest's
+// fake-clock rule, not by an explicit gate: after the first attempt fails
+// synchronously inside Tools(), the spawned retryServer goroutine reaches
+// its backoff timer wait and durably blocks — the bubble's fake clock
+// cannot advance past that wait until every goroutine in the bubble
+// (including this test's own) is also durably blocked. Because the two
+// manual Connect calls below run synchronously on this same goroutine with
+// no timer of their own, retryServer's timer is structurally guaranteed to
+// still be pending when they dial, so they are always the 2nd and 3rd
+// calls — the background retry's own dial can only be the 4th, once this
+// goroutine itself blocks (the <-committed receive) and lets fake time
+// advance.
+func TestMCPManagerAttemptsMonotonicAcrossToolAndBackgroundDials(t *testing.T) {
+	withZeroMCPJitter(t)
+
+	synctest.Test(t, func(t *testing.T) {
+		var calls int32
+		committed := make(chan bool, 8)
+		orig := mcpTestRetryCommitted
+		t.Cleanup(func() { mcpTestRetryCommitted = orig })
+		mcpTestRetryCommitted = func(server string, connected bool) { committed <- connected }
+
+		withMCPConnectFunc(t, func(ctx context.Context, name string, spec MCPServerConfig) (*mcp.Client, []mcp.Tool, error) {
+			if atomic.AddInt32(&calls, 1) < 4 {
+				return nil, nil, errors.New("boom")
+			}
+			return nil, []mcp.Tool{{Name: "ping"}}, nil // the background retry's own dial: succeeds
+		})
+
+		mgr := NewMCPManager(map[string]MCPServerConfig{"svc": {URL: "http://unused"}})
+		t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+		mgr.Tools(context.Background()) // call 1: fails synchronously, spawns the background retry
+		if got := mgr.Status()[0].Attempts; got != 1 {
+			t.Fatalf("Attempts after the first attempt = %d, want 1", got)
+		}
+
+		if err := mgr.Connect(context.Background(), "svc"); err == nil {
+			t.Fatal("want the first tool Connect (call 2) to fail")
+		}
+		if got := mgr.Status()[0].Attempts; got != 2 {
+			t.Fatalf("Attempts after the first tool Connect = %d, want 2", got)
+		}
+
+		if err := mgr.Connect(context.Background(), "svc"); err == nil {
+			t.Fatal("want the second tool Connect (call 3) to fail")
+		}
+		if got := mgr.Status()[0].Attempts; got != 3 {
+			t.Fatalf("Attempts after the second tool Connect = %d, want 3 (still climbing, never decreasing)", got)
+		}
+
+		// Let fake time advance through the background retry's backoff wait
+		// and its own dial (call 4, which succeeds).
+		if connected := <-committed; !connected {
+			t.Fatal("want the background retry's own commit to succeed")
+		}
+
+		st := mgr.Status()[0]
+		if !st.Connected {
+			t.Fatal("want svc connected via the background retry")
+		}
+		if st.Attempts != 4 {
+			t.Fatalf("Attempts after the background retry commits = %d, want 4 (monotonic +1, not a regression to the retry loop's own local counter)", st.Attempts)
+		}
+		if n := atomic.LoadInt32(&calls); n != 4 {
+			t.Fatalf("connect dials = %d, want exactly 4", n)
 		}
 	})
 }
