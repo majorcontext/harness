@@ -1,0 +1,103 @@
+name: Fuzz
+
+# Runs the repo's native Go fuzz targets for an extended exploration budget.
+# Ordinary `go test` (in ci.yml) only replays each target's seed corpus —
+# it never mutates inputs — so regressions between seeds are invisible to
+# every PR. This workflow is where new failing inputs actually get found.
+on:
+  schedule:
+    # 09:00 UTC ~= 01:00-02:00 Pacific: off-peak for both the team and
+    # shared GitHub Actions runner capacity.
+    - cron: "0 9 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  fuzz:
+    name: ${{ matrix.target }} (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      # One slow/panicking target must not cancel exploration of the rest.
+      fail-fast: false
+      matrix:
+        # Explicit list, not dynamic discovery: a target that silently stops
+        # being picked up (typo, moved file, discovery bug) would fuzz
+        # nothing and no one would notice. Explicit entries fail loudly
+        # (unknown -run/-fuzz target) instead.
+        #
+        # Maintainers: when you add a new `func FuzzXxx(f *testing.F)`,
+        # add a matching row here. Check this list is complete with:
+        #   grep -rn "^func Fuzz" --include="*_test.go" .
+        #
+        # `id` must be unique across every row: `target` alone collides
+        # because FuzzStreamDecode exists in three provider packages, and
+        # both the corpus cache key and the failure-artifact name below are
+        # keyed on `id`, not `target`. Reusing an id makes cache legs
+        # clobber each other and makes upload-artifact fail on the
+        # duplicate name.
+        include:
+          - id: engine-loadsession
+            package: ./engine/
+            target: FuzzLoadSessionReplay
+          - id: engine-validsessionid
+            package: ./engine/
+            target: FuzzValidSessionID
+          - id: message-unmarshal
+            package: ./message/
+            target: FuzzUnmarshalMessage
+          - id: typeid-parse
+            package: ./typeid/
+            target: FuzzParse
+          - id: skill-frontmatter
+            package: ./skill/
+            target: FuzzParseFrontmatter
+          - id: anthropic-streamdecode
+            package: ./provider/anthropic/
+            target: FuzzStreamDecode
+          - id: openai-streamdecode
+            package: ./provider/openai/
+            target: FuzzStreamDecode
+          - id: openaicompat-streamdecode
+            package: ./provider/openaicompat/
+            target: FuzzStreamDecode
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Restore fuzz corpus cache
+        uses: actions/cache@v4
+        with:
+          # Go's fuzzing engine persists interesting inputs it discovers
+          # under GOCACHE/fuzz, separate from the committed seed corpus in
+          # testdata/fuzz/. Restoring it between nightly runs lets each run
+          # build on prior exploration instead of restarting from the seeds
+          # every time.
+          path: ${{ github.workspace }}/.gocache/fuzz
+          key: fuzz-corpus-${{ matrix.id }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.id }}-
+        env:
+          GOCACHE: ${{ github.workspace }}/.gocache
+
+      - name: Fuzz ${{ matrix.target }}
+        env:
+          GOCACHE: ${{ github.workspace }}/.gocache
+        run: go test ${{ matrix.package }} -fuzz "^${{ matrix.target }}$" -fuzztime 10m -run '^$'
+
+      - name: Upload failing corpus entries
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          # A fuzzing failure writes the minimized failing input under
+          # testdata/fuzz/<Target>/ in the repo tree (this is distinct from
+          # the GOCACHE/fuzz cache dir restored above, which only holds
+          # exploration progress, not failures). Uploading it lets a
+          # maintainer download the file and commit it straight into the
+          # package's seed corpus as a permanent regression test.
+          name: fuzz-failure-${{ matrix.id }}
+          path: "**/testdata/fuzz/${{ matrix.target }}/"
+          if-no-files-found: ignore

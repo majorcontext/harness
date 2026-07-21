@@ -108,12 +108,33 @@ type Message struct {
 // regardless of source (a shipped provider adapter, a plugin's generate
 // call, or a test's scripted provider) — which is the one ingest choke
 // point every message passes through.
+//
+// # A ProviderData entry has the exact same invalid-but-non-empty footgun
+//
+// The reasoning above ("A salvaged tool call must never carry invalid
+// Arguments") fixed ToolCall.Arguments for a non-empty-but-syntactically-
+// invalid value by clearing it here AND, as defense in depth, by having
+// safeArguments itself refuse to marshal one. ProviderData.MarshalJSON
+// already had the defense-in-depth half for its own zero-length footgun
+// (see ProviderData's package doc, "The map-shaped twin of the
+// ToolCall.Arguments footgun") but, discovered by this package's own
+// round-trip property test (message/properties_test.go,
+// TestNormalizeIdempotent), never got the "non-empty but invalid" half
+// either guard applies to: a Reasoning.ProviderData entry holding
+// non-empty, non-JSON bytes — the same shape a dropped connection or
+// malformed hand-rolled producer can leave behind — sailed through both
+// Normalize's old len==0-only check and MarshalJSON's matching check, and
+// only failed once nested inside a larger document forced encoding/json to
+// validate it, reproducing the exact "json: error calling MarshalJSON for
+// type json.RawMessage: ..." failure this package has already incurred once
+// in production for ToolCall.Arguments. Both guards below now check
+// json.Valid, exactly mirroring the ToolCall.Arguments fix.
 func (m *Message) Normalize() {
 	for _, p := range m.Parts {
 		switch v := p.(type) {
 		case *Reasoning:
 			for family, raw := range v.ProviderData {
-				if len(raw) == 0 {
+				if len(raw) == 0 || !json.Valid(raw) {
 					delete(v.ProviderData, family)
 				}
 			}
@@ -360,13 +381,22 @@ func (pd ProviderData) Get(family string) (json.RawMessage, bool) {
 // the wire shape exactly what it would have been had the entry never been
 // set, rather than introducing a new null-valued shape for the format to
 // support.
+//
+// A non-empty but syntactically invalid entry is dropped the same way, for
+// the same reason safeArguments (ToolCall's equivalent guard) treats
+// invalid Arguments as absent rather than encoding them: json.RawMessage's
+// own MarshalJSON does not validate its bytes, so an invalid value
+// "succeeds" here in isolation and only fails once nested inside a larger
+// document that encoding/json must compact to validate — see Normalize's
+// doc comment ("A ProviderData entry has the exact same invalid-but-non-
+// empty footgun") for the incident shape this closes.
 func (pd ProviderData) MarshalJSON() ([]byte, error) {
 	if pd == nil {
 		return []byte("null"), nil
 	}
 	out := make(map[string]json.RawMessage, len(pd))
 	for family, raw := range pd {
-		if len(raw) == 0 {
+		if len(raw) == 0 || !json.Valid(raw) {
 			continue
 		}
 		out[family] = raw
