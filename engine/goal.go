@@ -331,6 +331,35 @@
 // TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing, and
 // TestPursueGoalStaleWorkerFailureDiscarded (engine/goal_update_test.go),
 // which now also proves a park never lands for a stale generation.
+//
+// # Task 3: an ambient in-session signal, runtime-only
+//
+// The durable goal.parked record above and the server's boot-only
+// goal.paused presentation (upstream of this package) both explain a park
+// to an OPERATOR looking at the session from outside. Neither says anything
+// to the MODEL itself: an agent that gets prompted mid-outage — a queued
+// prompt dispatching once the exit-park frees the run slot, or any other
+// ordinary turn — would otherwise see nothing at all indicating a
+// supervising goal exists, is still armed, and will resume on its own.
+// goal_parked_status.go closes that gap the same way mcp_status.go and
+// process.go already do for their own degraded/live state: a small ambient
+// text block, computed fresh from live Session state (goalParked/
+// goalParkedReason/goalParkedAttempts, set by recordGoalParked above),
+// appended only to the newest user message of a request that is NOT itself
+// one of this loop's own worker turns — see PursueGoal's
+// clearGoalParkedAtEntry call, which makes that structural: the flag is
+// always false again before this loop's very first worker turn of a resumed
+// run.
+//
+// This signal is deliberately NOT persisted and does NOT survive a process
+// restart — LoadSession never restores it (see the goalParked field's doc
+// comment on *Session). That is a real, accepted asymmetry: after a restart
+// mid-park, a fresh Prompt call sees no ambient block, only whatever the
+// session's ordinary system prompt/history already says. Visibility in that
+// case comes from a different surface entirely — the server's boot-only
+// goal.paused presentation (pause_reason "worker_failure", Task 2 upstream
+// of this package) — which is operator-facing, not model-facing, and reads
+// the durable goal.parked record directly rather than this runtime field.
 package engine
 
 import (
@@ -771,8 +800,36 @@ func (s *Session) recordGoalParked(turn, attempts int, retryable bool, class pro
 		Type: EventGoalParked, GoalReason: reason, GoalTurn: turn, GoalAttempts: attempts,
 		GoalRetryable: retryable, GoalRetryableClass: string(class),
 	})
+	// Mirror the same classified reason + attempts into the runtime-only
+	// ambient-segment fields (see the goalParked field's doc comment on
+	// *Session) — still under the s.mu this function already holds, so a
+	// concurrent goalParkedSegment read can never observe the journaled
+	// record and this signal out of step with each other.
+	s.goalParked = true
+	s.goalParkedReason = reason
+	s.goalParkedAttempts = attempts
 	s.mu.Unlock()
 	return true
+}
+
+// clearGoalParkedAtEntry resets the ambient parked-goal signal (see the
+// goalParked field's doc comment on *Session) at the very top of PursueGoal,
+// before that call touches anything else — including its own first worker
+// turn. This is what makes "gone after resume" and "never visible during
+// the goal loop's own turns" structural rather than incidental: whether
+// this PursueGoal call is the server's activity-driven resume of a goal
+// this exact session parked, or an entirely fresh RegisterGoal, any signal
+// left over from a PRIOR exit-park episode describes a park this call is
+// about to supersede either way, so it is cleared unconditionally on every
+// entry — never conditioned on whether goalParked happens to be set, since
+// the overwhelmingly common case (no prior park) makes that check pure
+// overhead for no behavioral difference.
+func (s *Session) clearGoalParkedAtEntry() {
+	s.mu.Lock()
+	s.goalParked = false
+	s.goalParkedReason = ""
+	s.goalParkedAttempts = 0
+	s.mu.Unlock()
 }
 
 // PursueGoal runs the goal loop: prompt the condition, then after every turn
@@ -907,6 +964,13 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 		s.emitSessionError(err)
 		return nil, err
 	}
+
+	// Clear any parked signal left over from a prior exit-park episode
+	// before anything else — see clearGoalParkedAtEntry's doc comment. This
+	// runs unconditionally, even on the early "goal cleared" returns just
+	// below: either way, this call supersedes whatever park the leftover
+	// signal was describing.
+	s.clearGoalParkedAtEntry()
 
 	if opts.Registered {
 		// The accepting caller registered synchronously (the server handler
@@ -1435,6 +1499,13 @@ func (s *Session) clearGoal(reason string) bool {
 	}
 	s.goalActive = false
 	s.goalCondition = ""
+	// A clear (operator DELETE, or PursueGoal's context-overflow branch)
+	// always supersedes any parked signal still standing from an earlier
+	// exit-park episode — see the goalParked field's doc comment: there is
+	// no longer an active goal for the ambient segment to describe.
+	s.goalParked = false
+	s.goalParkedReason = ""
+	s.goalParkedAttempts = 0
 	s.persistGoalLocked(recGoalCleared, goalRecord{Reason: reason})
 	// Emit while still holding s.mu: this keeps the event stream (-> server
 	// journal/SSE seqs) ordered the same as the log write above under a

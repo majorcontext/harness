@@ -370,6 +370,27 @@ type Session struct {
 	// Guarded by mu.
 	goalGen uint64
 
+	// goalParked mirrors the most recent goal.parked record's classified
+	// reason and attempt count (see recordGoalParked/classifyGoalWorkerError
+	// in goal.go) for the ambient status segment goal_parked_status.go
+	// renders on a later Prompt call. True from the moment a worker turn
+	// exit-parks the goal (recordGoalParked sets it, still under the same
+	// s.mu critical section that journals goal.parked) until the NEXT
+	// PursueGoal call clears it at entry — before that call's own first
+	// worker turn ever runs (see PursueGoal's clearGoalParkedAtEntry call) —
+	// or a clearGoal call resets it (DELETE /goal, or the context-overflow
+	// clear branch immediately above the park branch in PursueGoal).
+	//
+	// Deliberately runtime-only: never persisted, never folded by
+	// LoadSession, never appears in a goal.* record itself (goal.parked's
+	// own Reason/Attempts fields are the durable source these mirror) — see
+	// goal_parked_status.go's doc comment for the post-restart asymmetry
+	// this implies (the boot-only goal.paused presentation, server-side,
+	// covers visibility after a restart instead). Guarded by mu.
+	goalParked         bool
+	goalParkedReason   string
+	goalParkedAttempts int
+
 	// toolExecCount counts tool-call executions across the session's
 	// lifetime: incremented once per call to runToolCall that actually
 	// invokes a tool (i.e. not one blocked by a tool.execute.before deny),
@@ -871,8 +892,9 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 	if params.MaxTokens != nil {
 		maxTokens = *params.MaxTokens
 	}
-	// Ambient process-status and MCP-status injection (see
-	// processStatusSegment, mcpStatusSegment): appended ONLY to this
+	// Ambient process-status, MCP-status, and parked-goal-status injection
+	// (see processStatusSegment, mcpStatusSegment, goalParkedSegment):
+	// appended ONLY to this
 	// in-memory request copy — s.History() already returns a fresh slice
 	// (engine.go's append(nil, s.history...)), and withAmbientStatus
 	// clones (never mutates in place) the one message it touches, so the
@@ -897,6 +919,9 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 		messages = withAmbientStatus(messages, seg)
 	}
 	if seg := mcpStatusSegment(s.cfg.MCP); seg != "" {
+		messages = withAmbientStatus(messages, seg)
+	}
+	if seg := goalParkedSegment(s); seg != "" {
 		messages = withAmbientStatus(messages, seg)
 	}
 	req := &provider.Request{
