@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -264,6 +265,78 @@ func TestEnqueueDuplicateOnIdleWithQueueDrainsHead(t *testing.T) {
 // workdir busy (a channel-blocked provider mid-stream), so an enqueue
 // against session B — which defaults to the same workdir — is rejected with
 // 409 naming the holder, same as prompt_async's own workdir-busy path.
+// TestEnqueueWatermarkSurvivesRestart is the primitive's reason to exist: a
+// message accepted (2xx) by one serve process must read as a duplicate to
+// its successor over the same session dir — the upstream that acked on the
+// first 2xx must never cause a double delivery by retrying into the new
+// process, and a message never accepted must not read as one.
+//
+// Mirrors restart_test.go's TestGoalActiveSurvivesRestart two-server-over-
+// one-dir pattern: server one is closed WITHOUT registering its
+// httptest.Server via t.Cleanup (a manual ts1.Close() below does that),
+// since t.Cleanup(ts.Close) on both servers over the same *testing.T would
+// leave the first Close racing/duplicating harmlessly at best and masking a
+// real double-close bug at worst — restart_test.go avoids it the same way.
+// Server two starts fresh (its own *Server, its own scriptedProvider) over
+// the SAME on-disk session dir, so nothing but the journal on disk connects
+// the two — no shared in-memory state survives the "restart".
+func TestEnqueueWatermarkSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	prov1 := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("m1 done")}}
+	srv1 := newServer(t, dir, prov1, 0)
+	ts1 := httptest.NewServer(srv1)
+	h1 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv1, ts: ts1}
+
+	id := h1.createSession("test/m1")
+	resp, data := h1.enqueue(id, "m1", 1)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("first enqueue status %d: %s", resp.StatusCode, data)
+	}
+	h1.waitIdle(id)
+
+	if err := srv1.Close(); err != nil {
+		t.Fatalf("closing first server: %v", err)
+	}
+	ts1.Close()
+
+	// Fresh process, fresh scripted provider, same dir: harness 2 has zero
+	// in-memory continuity with harness 1 — only the on-disk journal.
+	prov2 := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("m2 done")}}
+	srv2 := newServer(t, dir, prov2, 0)
+	ts2 := httptest.NewServer(srv2)
+	t.Cleanup(ts2.Close)
+	h2 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv2, ts: ts2}
+
+	// The message process one already accepted must read as a duplicate to
+	// process two — the upstream that got the first 2xx must never trigger
+	// a second delivery by retrying into the successor.
+	resp, data = h2.enqueue(id, "m1", 1)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("successor duplicate check status %d: %s, want 200", resp.StatusCode, data)
+	}
+	var dup enqueueResponse
+	if err := json.Unmarshal(data, &dup); err != nil {
+		t.Fatal(err)
+	}
+	if dup.Status != "duplicate" || dup.Watermark != 1 {
+		t.Fatalf("successor duplicate response = %+v, want status=duplicate watermark=1", dup)
+	}
+
+	// A message NEVER accepted by process one must not read as one: a fresh
+	// seq is accepted normally by the successor.
+	resp, data = h2.enqueue(id, "m2", 2)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("fresh seq after restart status %d: %s", resp.StatusCode, data)
+	}
+	var fresh enqueueResponse
+	if err := json.Unmarshal(data, &fresh); err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Watermark != 2 {
+		t.Fatalf("fresh enqueue response = %+v, want watermark=2", fresh)
+	}
+}
+
 func TestEnqueueWorkdirBusyRejected(t *testing.T) {
 	prov := newBlockingProvider("test")
 	h := newHarness(t, prov)
