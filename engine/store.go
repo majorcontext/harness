@@ -396,6 +396,40 @@ func (s *Session) ensureLog() error {
 			s.logFile = nil
 			return err
 		}
+		// A file fsync (as EnqueuePromptDurable does before attesting
+		// durability — see queue.go) commits the file's *contents* but not
+		// its directory entry: POSIX leaves the entry itself up to the
+		// containing directory's own fsync. On a fresh log file, that entry
+		// only just got created above, so without this the durable-enqueue
+		// attestation is a lie on the first record after creation — the
+		// enqueue's file fsync can return clean, the response go out, and a
+		// crash before the directory entry is committed can lose both the
+		// message and the watermark on some filesystems (e.g. ext4). Doing
+		// it here, once per file creation rather than once per record, is
+		// enough: later records reuse this already-linked file.
+		//
+		// This syncs the log file's entry within SessionDir, not SessionDir's
+		// own entry in its parent — SessionDir is assumed to be a preexisting
+		// mount (e.g. a volume) at boot, so that entry predates the process
+		// and isn't this code's concern.
+		d, err := os.Open(s.cfg.SessionDir)
+		if err != nil {
+			f.Close()
+			s.logFile = nil
+			return err
+		}
+		syncErr := d.Sync()
+		closeErr := d.Close()
+		if syncErr != nil {
+			f.Close()
+			s.logFile = nil
+			return syncErr
+		}
+		if closeErr != nil {
+			f.Close()
+			s.logFile = nil
+			return closeErr
+		}
 	}
 	s.logStarted = true
 	return nil
