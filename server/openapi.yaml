@@ -234,7 +234,7 @@ components:
       properties:
         outcome:
           type: string
-          enum: [completed, error, context_exhausted, max_turns_exceeded, evaluator_exhausted]
+          enum: [completed, error, context_exhausted, max_turns_exceeded, evaluator_exhausted, worker_parked]
           description: >
             "completed": the turn (or goal) finished successfully —for a
             goal, the evaluator returned MET. "error": the turn failed
@@ -267,13 +267,27 @@ components:
             terminal always clears the goal first (goal.cleared, with a
             dedicated reason distinct from an operator clear's), then emits
             session.error (the terminal must be loud), then this turn.end,
-            in that order.
+            in that order. "worker_parked": goal-loop only (NEP-4849) — a
+            worker turn exit-parked instead of clearing the goal, either
+            because its DETERMINISTIC retry budget was exhausted or because
+            its separately-budgeted RETRYABLE-class backoff was exhausted
+            (see GoalSummary.retryable/waiting) — a durable
+            goal.parked record precedes this (see the goal.parked Event
+            description) and the goal stays fully ACTIVE, unlike
+            "evaluator_exhausted" which always clears it first. Distinct
+            from generic "error" so a poller knows this goal is merely
+            paused (GoalSummary.paused / pause_reason "worker_failure") and
+            will resume automatically the next time this session sees any
+            activity (a plain prompt's own completion re-arms it) — never a
+            reason to give up on the goal the way an operator-facing
+            terminal would be. Session.error is still emitted alongside it
+            (see the goal.parked Event description for the exact order).
         error:
           type: string
           description: >
             Sanitized failure detail (never credentials or request bodies —
-            see the turn.end Event field) when outcome is "error" or
-            "evaluator_exhausted". Absent otherwise.
+            see the turn.end Event field) when outcome is "error",
+            "evaluator_exhausted", or "worker_parked". Absent otherwise.
 
     SessionState:
       type: string
@@ -293,14 +307,17 @@ components:
         hasn't answered yet). Otherwise `busy` or `idle` mirrors `status`
         directly. Poll it, or long-poll it via GET /session/{id}/wait.
 
-        Exception: when GoalSummary.pause_reason is "restart" (see
-        GoalSummary.paused), this reads `idle` even though goal.active is
-        still true — a goal restored from the journal at boot with no loop
-        attached is not progressing, and reporting it "goal-running" forever
-        would be indistinguishable from a live goal (see
-        docs/design/fleet-model.md's ADOPT lifecycle). A "provider-backoff"
-        pause does NOT take this exception: that loop is genuinely running,
-        just waiting out provider weather, so it still reads `goal-running`.
+        Exception: when GoalSummary.pause_reason is "restart" or
+        "worker_failure" (see GoalSummary.paused), this reads `idle` even
+        though goal.active is still true — a goal restored from the journal
+        at boot with no loop attached ("restart"), or one whose worker turn
+        just exit-parked (NEP-4849, "worker_failure" — see the goal.parked
+        event), is not progressing on its own, and reporting either
+        "goal-running" forever would be indistinguishable from a live goal
+        (see docs/design/fleet-model.md's ADOPT lifecycle). A
+        "provider-backoff" pause does NOT take this exception: that loop is
+        genuinely running, just waiting out provider weather, so it still
+        reads `goal-running`.
 
     GoalSummary:
       type: object
@@ -357,25 +374,34 @@ components:
             True while the goal loop is still within its retryable-class
             backoff budget ("waiting out provider weather"); false on the
             final retryable goal.stalled record, which reports that budget
-            exhausted — the loop is about to park the turn (retry the same
-            directive on the next ordinary turn) rather than clear the goal.
-            Meaningless (false) when retryable is false.
+            exhausted — the loop is about to EXIT-PARK the turn (NEP-4849:
+            journal a goal.parked record and return, leaving the goal
+            active but with no loop attached — see pause_reason
+            "worker_failure" below) rather than clear the goal or retry
+            further in place. Meaningless (false) when retryable is false.
         paused:
           type: boolean
           description: >
             True when the goal is active but nothing is currently driving
-            it: either this server booted and found the goal armed with no
-            loop ever attached in this process (pause_reason "restart"), or
-            the retryable-backoff park machinery is waiting out provider
+            it: this server booted and found the goal armed with no loop
+            ever attached in this process (pause_reason "restart"); a
+            worker turn exhausted either exhaustion tier and exit-parked
+            instead of clearing the goal (NEP-4849, pause_reason
+            "worker_failure" — see the goal.parked event; the loop has
+            genuinely exited, not merely paused mid-retry); or the
+            retryable-backoff park machinery is waiting out provider
             weather (pause_reason "provider-backoff" — mirrors retryable &&
             waiting above; no behavior change, only this observability).
-            Both clear on re-arm (POST /session/{id}/goal); a
-            "provider-backoff" pause also clears on its own the moment the
-            loop's retry succeeds. See docs/design/fleet-model.md's ADOPT
-            lifecycle for the restart case's operator story.
+            All three clear on re-arm (POST /session/{id}/goal), and
+            "worker_failure" also clears the moment a plain prompt's own
+            completion auto-arms a fresh loop for the goal (see
+            maybeAutoArmGoal); a "provider-backoff" pause similarly clears
+            on its own the moment the loop's retry succeeds. See
+            docs/design/fleet-model.md's ADOPT lifecycle for the restart
+            case's operator story.
         pause_reason:
           type: string
-          enum: [restart, provider-backoff]
+          enum: [restart, worker_failure, provider-backoff]
           description: Present only when paused is true.
         eval_failures:
           type: integer
@@ -664,6 +690,7 @@ components:
             - goal.achieved
             - goal.cleared
             - goal.paused
+            - goal.parked
             - prompt.queued
             - prompt.dequeued
             - workdir.worktree_kept
@@ -682,22 +709,25 @@ components:
             error, transcode failure); session.aborted confirms an
             orchestrator-requested abort ended the in-flight prompt. Both
             are followed by a session.status idle transition.
-            turn.end is durable and carries `outcome` ("completed", "error",
-            or "max_turns_exceeded") plus a sanitized `error` detail on
-            failure: it is emitted whenever a prompt (prompt_async) or a
-            goal-worker loop (POST /session/{id}/goal) finishes, mirrored
-            onto Session.last_turn and each /session/status entry's
-            last_turn, so a client can tell "idle because done" from "idle
-            because the turn died" without inferring it from message part
-            shapes. A goal loop that exhausts `max_turns` without the
-            evaluator ever returning MET records "max_turns_exceeded", never
-            "completed" — it gave up, it did not finish. A deliberate abort
-            or clear (POST /session/{id}/abort, DELETE /session/{id}/goal —
-            including a ClearGoal that wins a race against an in-flight
-            worker retry or evaluator call, even without the loop's context
-            being cancelled — or shutdown drain) does not emit turn.end at
-            all — session.aborted (or, for a cleared goal, goal.cleared)
-            already covers that case.
+            turn.end is durable and carries `outcome` (see LastTurn.outcome
+            for the full enum, including "worker_parked", NEP-4849) plus a
+            sanitized `error` detail on failure: it is emitted whenever a
+            prompt (prompt_async) or a goal-worker loop (POST
+            /session/{id}/goal) finishes, mirrored onto Session.last_turn
+            and each /session/status entry's last_turn, so a client can tell
+            "idle because done" from "idle because the turn died" without
+            inferring it from message part shapes. A goal loop that
+            exhausts `max_turns` without the evaluator ever returning MET
+            records "max_turns_exceeded", never "completed" — it gave up, it
+            did not finish. A deliberate abort or clear (POST
+            /session/{id}/abort, DELETE /session/{id}/goal — including a
+            ClearGoal that wins a race against an in-flight worker retry or
+            evaluator call, even without the loop's context being cancelled
+            — or shutdown drain) does not emit turn.end at all —
+            session.aborted (or, for a cleared goal, goal.cleared) already
+            covers that case. A worker-parked goal (NEP-4849) DOES emit
+            turn.end (outcome "worker_parked") — it is not a clear, see the
+            goal.parked description below.
             request.meta is a durable record of the model request the engine
             assembled for one turn: system_hash, system_len, segments (count),
             tools (names), messages (history count), and the model. The full
@@ -706,8 +736,8 @@ components:
             hash-on-change trick keeps unchanged prompts cheap while still
             making the exact system recoverable from a from=0 replay.
             goal.set, goal.updated, goal.eval, goal.stalled, goal.eval_failed,
-            goal.achieved, and goal.cleared are the durable records of a goal
-            loop (POST /session/{id}/goal). goal.set carries goal_condition; goal.updated
+            goal.achieved, goal.cleared, and goal.parked are the durable
+            records of a goal loop (POST /session/{id}/goal). goal.set carries goal_condition; goal.updated
             is journaled whenever the condition is rewritten in place — by a
             re-POST to /goal on an already-running loop, or by the `goal`
             session tool's `adjust` action — and carries only goal_condition
@@ -725,9 +755,9 @@ components:
             and docs/goal-loop.md): goal_waiting is true while still inside
             that separate, much longer retryable backoff budget, and false on
             the final such record, which reports the budget exhausted — the
-            loop parks the turn (retries the same directive on the next
-            ordinary turn) rather than clearing the goal, so a retryable
-            exhaustion is never a dead stall requiring an operator re-POST.
+            loop is about to EXIT-PARK the turn (NEP-4849 — see goal.parked
+            below), not retry further in place, so a retryable exhaustion is
+            never a dead stall requiring an operator re-POST.
             goal.eval_failed (NEP-4792) carries goal_reason (the sanitized
             evaluator error) and goal_eval_failures (the consecutive-failure
             count, inclusive) for each evaluator boundary that failed
@@ -739,16 +769,38 @@ components:
             "evaluator unavailable" notice rather than the raw error or a
             stale prior verdict. goal.achieved carries goal_reason and
             goal_turns; goal.cleared marks a goal cancelled via
-            DELETE /session/{id}/goal (empty goal_reason), a worker turn
-            that failed past its DETERMINISTIC retry budget (goal_reason
-            names the failure — a retryable-budget exhaustion never reaches
-            this record, see above), or the evaluator failing at 5
-            CONSECUTIVE goal.eval_failed boundaries (goal_reason "goal
-            evaluator failed at 5 consecutive turn boundaries" — see
+            DELETE /session/{id}/goal (empty goal_reason), or the evaluator
+            failing at 5 CONSECUTIVE goal.eval_failed boundaries (goal_reason
+            "goal evaluator failed at 5 consecutive turn boundaries" — see
             turn.end's "evaluator_exhausted" outcome, which this clear
-            always precedes).
-            Both goal.stalled (while goal_retryable && goal_waiting) and the
-            boot-only goal.paused record carry goal_paused/
+            always precedes). A worker turn that fails past either retry
+            budget (deterministic OR retryable-class) is deliberately NOT a
+            goal.cleared any more (superseded by NEP-4849) — see goal.parked
+            below.
+            goal.parked (NEP-4849) is journaled once per exit-parked worker
+            turn — the loop gave up on this turn (either exhaustion tier)
+            WITHOUT clearing the goal, which stays fully active. It carries
+            goal_reason (a CLASSIFIED, provider-detail-free string — see
+            engine/goal.go's classifyGoalWorkerError — distinct from
+            goal.stalled's raw error text, since this record can outlive the
+            request that produced it), goal_attempt (reused from the
+            per-attempt field above, but here holding the TOTAL attempt
+            count for the exhausted turn — by construction the same number
+            the final goal.stalled record for this turn already reported),
+            and goal_retryable/goal_retryable_class (set on a retryable-tier
+            park, empty on a deterministic-tier one, same convention as
+            goal.stalled). It also carries goal_paused=true and
+            goal_pause_reason "worker_failure" (see below) directly on the
+            event, and is immediately followed by session.error, then
+            turn.end (outcome "worker_parked" — see LastTurn.outcome),
+            unlike the evaluator-exhausted terminal, which precedes those
+            with a goal.cleared instead. Resume is entirely activity-driven:
+            the next plain prompt to complete on this session auto-arms a
+            fresh loop for the still-active goal (see GoalSummary.paused);
+            no timer, no operator action required, though DELETE
+            /session/{id}/goal remains available to clear it explicitly.
+            Both goal.stalled (while goal_retryable && goal_waiting), the
+            boot-only goal.paused record, and goal.parked carry goal_paused/
             goal_pause_reason — the wire form of GoalSummary.paused/
             pause_reason (see that schema and docs/design/fleet-model.md).
             goal.paused is journaled once per server boot for every session
@@ -758,7 +810,9 @@ components:
             about why the goal never progressed, instead of a silent gap.
             It carries goal_condition for convenience. It is NOT emitted for
             the "provider-backoff" pause, which is a live goal.stalled
-            attribute, not a boot-time observation.
+            attribute, not a boot-time observation, nor for the
+            "worker_failure" pause, which is goal.parked's own live event
+            above, not a boot-time observation either.
             prompt.queued and prompt.dequeued are the durable records of the
             prompt queue (docs/plans/2026-07-19-prompt-queue.md):
             prompt.queued fires whenever prompt_async durably enqueues a
@@ -826,7 +880,7 @@ components:
             turn.end; see LastTurn.error.
         outcome:
           type: string
-          enum: [completed, error, context_exhausted, max_turns_exceeded, evaluator_exhausted]
+          enum: [completed, error, context_exhausted, max_turns_exceeded, evaluator_exhausted, worker_parked]
           description: >
             Turn result for turn.end events — see LastTurn.outcome for the
             full meaning of each value, including why a goal that exhausts
@@ -863,11 +917,16 @@ components:
         goal_reason:
           type: string
           description: >
-            Evaluator reason (goal.eval, goal.achieved), or the clear reason
-            (goal.cleared) — empty for an operator-initiated clear, a fixed
-            "worker turn failed after N attempt(s): ..." for a permanently
-            failing worker turn, or "goal evaluator failed at 5 consecutive
-            turn boundaries" for the evaluator_exhausted terminal (NEP-4792).
+            Evaluator reason (goal.eval, goal.achieved), the clear reason
+            (goal.cleared) — empty for an operator-initiated clear, or "goal
+            evaluator failed at 5 consecutive turn boundaries" for the
+            evaluator_exhausted terminal (NEP-4792) — or a CLASSIFIED,
+            provider-detail-free park reason (goal.parked, NEP-4849): "worker
+            turn failed repeatedly and did not recover" (deterministic tier)
+            or "provider <class> errors exhausted the retry budget"
+            (retryable tier). A permanently failing worker turn no longer
+            produces a goal.cleared record at all (superseded by NEP-4849) —
+            see goal.parked above.
         goal_met:
           type: boolean
           description: Whether the turn met the goal (goal.eval).
@@ -879,7 +938,11 @@ components:
           description: Total turns taken when the goal was achieved (goal.achieved).
         goal_attempt:
           type: integer
-          description: 1-based worker-turn retry attempt number (goal.stalled).
+          description: >
+            1-based worker-turn retry attempt number (goal.stalled). Reused
+            on goal.parked (NEP-4849) to carry that turn's TOTAL attempt
+            count instead — by construction the same number the final
+            goal.stalled record for the same turn already reported.
         goal_retryable:
           type: boolean
           description: >
@@ -914,11 +977,12 @@ components:
           type: boolean
           description: >
             The "paused" presentation (see GoalSummary.paused): true on a
-            goal.paused record (always), and on a goal.stalled record while
-            goal_retryable && goal_waiting.
+            goal.paused record (always), a goal.parked record (always,
+            NEP-4849), and on a goal.stalled record while goal_retryable &&
+            goal_waiting.
         goal_pause_reason:
           type: string
-          enum: [restart, provider-backoff]
+          enum: [restart, worker_failure, provider-backoff]
           description: Present only when goal_paused is true.
         queue_id:
           type: integer

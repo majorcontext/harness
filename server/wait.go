@@ -161,7 +161,7 @@ func (s *Server) waitSnapshot(id string) (string, *goalJSON) {
 		running = st.running
 	}
 	goal := goalJSONFrom(s.goalState[id])
-	return compositeState(running, goal != nil && goal.Active, isRestartPaused(goal)), goal
+	return compositeState(running, goal != nil && goal.Active, forcesIdlePause(goal)), goal
 }
 
 // waitConditionMet reports whether the requested `until` condition holds

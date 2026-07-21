@@ -708,11 +708,16 @@ function usageSummary(usage) {
 // extending the inspector's version with goal.stalled (retryable-weather
 // backoff vs. a real, budget-exhausting stall — see GoalSummary in
 // server/openapi.yaml) and paused/pauseReason (docs/design/fleet-model.md
-// §7: goal.paused — boot-time, always "restart" — and goal.stalled while
-// goal_retryable && goal_waiting — "provider-backoff" — both carry
+// §7: goal.paused — boot-time, always "restart"; goal.stalled while
+// goal_retryable && goal_waiting — "provider-backoff"; goal.parked — always
+// "worker_failure" (NEP-4849: a worker turn exit-parked the goal instead of
+// clearing it, see AGENTS.md's Goal loop section) — all three carry
 // goal_paused/goal_pause_reason). Non-goal events return prev unchanged
 // (same reference); goal events return a fresh object so the input is
-// never mutated.
+// never mutated. An unrecognized future goal.* event type falls through
+// the switch untouched (still returns the merged-with-defaults clone, never
+// throws) — see goalPauseTreatment's own forward-compatible fallback for
+// the pause_reason string half of that same contract.
 function reduceGoal(prev, ev) {
   const isGoal = ev && typeof ev.type === "string" && ev.type.indexOf("goal.") === 0;
   if (!isGoal) return prev;
@@ -766,6 +771,26 @@ function reduceGoal(prev, ev) {
       g.active = true;
       g.paused = !!ev.goal_paused;
       g.pauseReason = g.paused ? (ev.goal_pause_reason || "restart") : "";
+      break;
+    case "goal.parked":
+      // NEP-4849, live event (not boot-only like goal.paused above): a
+      // worker turn exhausted either exhaustion tier and PursueGoal
+      // exit-parked instead of clearing — the goal stays active, resuming
+      // automatically the next time this session sees any ordinary
+      // activity (server's activity-driven auto-arm). Wire shape mirrors
+      // goal.stalled's own fields exactly (see server/journal.go's
+      // publishGoal doc comment: GoalAttempt reuses the engine event's
+      // GoalAttempts, no separate wire field), so this folds the same way;
+      // goal_waiting is always absent on this event type (the server never
+      // sets it — a park is never "still waiting"), so !!undefined already
+      // yields false with no special-casing needed.
+      if (ev.goal_reason) g.reason = ev.goal_reason;
+      g.attempt = ev.goal_attempt || 0;
+      g.retryable = !!ev.goal_retryable;
+      g.retryableClass = ev.goal_retryable_class || "";
+      g.waiting = !!ev.goal_waiting;
+      g.paused = !!ev.goal_paused;
+      g.pauseReason = g.paused ? (ev.goal_pause_reason || "worker_failure") : "";
       break;
   }
   return g;
@@ -1208,14 +1233,20 @@ function goalPauseTreatment(paused, pauseReason) {
 // primitives so this stays shape-agnostic): "none" (nothing to re-arm, or
 // a live loop that will re-arm itself — provider-backoff self-clears with
 // no operator action per fleet-model.md §7), "normal" (the existing
-// after-the-fact Re-arm on an ended goal), "prominent" (an active-but-
-// paused/restart goal: the loop will NEVER resume itself — see ADOPT's
-// restart-pause story — so this is the one case that both needs and
-// deserves a loud CTA).
+// after-the-fact Re-arm on an ended goal, AND a worker_failure park: the
+// loop genuinely exited and resumes only on the next ordinary activity via
+// maybeAutoArmGoal — on a goal-only autonomous box with no queued prompts
+// and no further operator prompts, that activity may never arrive, so an
+// operator watching the hub needs a CTA even though the box could in
+// principle resume itself), "prominent" (an active-but-paused/restart
+// goal: the loop will NEVER resume itself under any circumstance — see
+// ADOPT's restart-pause story — so this is the one case that both needs
+// and deserves a loud CTA).
 function rearmNeeded(active, condition, paused, pauseReason) {
   if (!condition) return "none";
   if (!active) return "normal";
   if (paused && pauseReason === "restart") return "prominent";
+  if (paused && pauseReason === "worker_failure") return "normal";
   return "none";
 }
 
@@ -2466,6 +2497,18 @@ function renderGoalNarrativeItem(ev) {
       return el("div", { class: "goalnarr stalled" + (pt && pt.calm ? " waiting" : "") },
         el("span", { class: "goaltag", text: (pt ? pt.label : "goal paused") + " (server restart)" }),
         ev.goal_condition ? el("div", { class: "goalreason", text: ev.goal_condition }) : null);
+    }
+    case "goal.parked": {
+      // NEP-4849, live event: a worker turn exhausted either exhaustion
+      // tier and PursueGoal exit-parked instead of clearing (see
+      // AGENTS.md's Goal loop section) — always pause_reason
+      // "worker_failure", never calm (unlike provider-backoff, this loop
+      // has genuinely exited; it resumes on the next ordinary activity,
+      // not on its own next retry).
+      const pt = goalPauseTreatment(true, "worker_failure");
+      return el("div", { class: "goalnarr stalled" },
+        el("span", { class: "goaltag", text: (pt ? pt.label : "goal parked") + " (worker turn exhausted, " + (ev.goal_attempt || 0) + " attempt(s))" }),
+        ev.goal_reason ? el("div", { class: "goalreason", text: ev.goal_reason }) : null);
     }
     default:
       return el("div", {});

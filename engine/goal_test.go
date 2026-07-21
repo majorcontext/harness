@@ -531,6 +531,18 @@ func TestPursueGoalUnparseableThenRecovers(t *testing.T) {
 // goalWorkerRetries+1 attempts, waiting the real backoff schedule between
 // them (see TestPursueGoalRetriesTransientWorkerError) — free on fake time,
 // costly on the wall clock (see AGENTS.md on time.Sleep-free tests).
+// TestPursueGoalWorkerFailureEmitsOnce is a Round 7 (NEP-4849) rewrite: the
+// original concern — a permanently failing worker turn must call
+// emitSessionError exactly once per attempt, never an extra time for
+// PursueGoal's own exhaustion handling — is unchanged, since only the
+// non-emitting tail of that handling (clear vs. park) changed. What
+// changed: PursueGoal no longer clears the goal on exhaustion. It now
+// wraps the underlying error in the *goalWorkerParkedError sentinel
+// (IsGoalWorkerParked) and leaves the goal active — see
+// TestPursueGoalWorkerFailsPermanentlyParksGoal for the full park-shape
+// assertions (the journaled record, ActiveGoal after LoadSession, etc.);
+// this test stays narrowly focused on the emit-count concern its name
+// promises.
 func TestPursueGoalWorkerFailureEmitsOnce(t *testing.T) {
 	workerErr := errors.New("worker provider exploded")
 	hooks := &fakeHooks{}
@@ -544,10 +556,15 @@ func TestPursueGoalWorkerFailureEmitsOnce(t *testing.T) {
 	if !errors.Is(err, workerErr) {
 		t.Fatalf("err = %v, want it to wrap %v", err, workerErr)
 	}
+	if !IsGoalWorkerParked(err) {
+		t.Fatalf("err = %v, want IsGoalWorkerParked", err)
+	}
 
-	// No zombie: every attempt failed, so the goal must have been cleared.
-	if cond, ok := s.ActiveGoal(); ok {
-		t.Fatalf("ActiveGoal = %q, still active after permanent failure — zombie goal", cond)
+	// No zombie AND no permanent loss: every attempt failed, so the loop
+	// exit-parked — the goal must still be active, ready to resume, not
+	// cleared.
+	if cond, ok := s.ActiveGoal(); !ok || cond != "cond" {
+		t.Fatalf("ActiveGoal = %q, %v; want still active after a worker-turn park", cond, ok)
 	}
 
 	// promptTurnWithRetry makes goalWorkerRetries+1 attempts total (the
@@ -556,12 +573,13 @@ func TestPursueGoalWorkerFailureEmitsOnce(t *testing.T) {
 	// tool runs), so the non-idempotency early-stop never triggers and all
 	// goalWorkerRetries+1 attempts run. Each attempt is a full s.Prompt call,
 	// and Prompt's own streamTurn-error path (engine.go) calls
-	// emitSessionError once per failing call; PursueGoal's retry/clear code
+	// emitSessionError once per failing call; PursueGoal's retry/park code
 	// does not additionally call emitSessionError itself for this path (see
-	// the loop in PursueGoal and promptTurnWithRetry) — the clear only
-	// journals goal.cleared, a distinct event. So the total session.error
-	// count for a permanent failure is exactly one per attempt:
-	// goalWorkerRetries+1, all carrying the same underlying error text.
+	// the loop in PursueGoal and promptTurnWithRetry) — the park only
+	// journals goal.parked, a distinct event, same as the clear it replaced
+	// did. So the total session.error count for a permanent failure is
+	// exactly one per attempt: goalWorkerRetries+1, all carrying the same
+	// underlying error text.
 	const wantEmits = goalWorkerRetries + 1
 	msgs := sessionErrorMessages(t, hooks)
 	if len(msgs) != wantEmits {
@@ -632,14 +650,27 @@ func TestPursueGoalRetriesTransientWorkerError(t *testing.T) {
 	})
 }
 
-// TestPursueGoalWorkerFailsPermanentlyClearsGoal reproduces the "zombie goal"
-// forensic finding directly: when a worker turn keeps failing past the
-// retry budget, PursueGoal must not just return an error and leave the goal
-// active forever (the bug that left ses_41813d5a411c2ba5's goal active for
-// nearly 7 hours until a human manually cleared it). It must clear the goal,
-// carrying the failure reason on the goal.cleared record/event, before
-// returning.
-func TestPursueGoalWorkerFailsPermanentlyClearsGoal(t *testing.T) {
+// TestPursueGoalWorkerFailsPermanentlyParksGoal is a Round 7 (NEP-4849)
+// rewrite of TestPursueGoalWorkerFailsPermanentlyClearsGoal. The original
+// concern — a worker turn that keeps failing past the retry budget must
+// never just return a bare error and leave the goal a silent zombie (the
+// bug that left ses_41813d5a411c2ba5's goal active for nearly 7 hours until
+// a human manually cleared it) — is unchanged; what changed is HOW
+// PursueGoal now closes that hole. A production incident showed the
+// original fix (clearing) traded one failure mode for another: OpenRouter
+// 404s (a genuinely non-retryable, deterministic-tier failure) exhausted
+// goalWorkerRetries in seconds, cleared the goal, and the box then sat idle
+// for HOURS with nothing further ever resuming it — a human had to notice
+// and manually re-POST /goal, the exact same "silently abandoned, only a
+// human's attention fixes it" shape Round 2 was meant to close, just
+// reached from the other direction. So PursueGoal must now wrap the error
+// in the *goalWorkerParkedError sentinel (IsGoalWorkerParked), journal a
+// durable, CLASSIFIED goal.parked record (never the raw provider error
+// text — see classifyGoalWorkerError) instead of goal.cleared, and leave
+// the goal fully active — both in memory and, after a reload, on disk —
+// so an external caller (the server's activity-driven auto-arm) can resume
+// it automatically the next time anything happens on the session.
+func TestPursueGoalWorkerFailsPermanentlyParksGoal(t *testing.T) {
 	dir := t.TempDir()
 	var s *Session
 	var evs []Event
@@ -660,39 +691,65 @@ func TestPursueGoalWorkerFailsPermanentlyClearsGoal(t *testing.T) {
 	if !strings.Contains(err.Error(), "connection reset by peer") {
 		t.Errorf("error = %v, want it to carry the underlying provider error", err)
 	}
+	if !IsGoalWorkerParked(err) {
+		t.Fatalf("err = %v, want IsGoalWorkerParked", err)
+	}
 
-	// No zombie: the goal must no longer be active in memory.
-	if cond, ok := s.ActiveGoal(); ok {
-		t.Fatalf("ActiveGoal = %q, still active after permanent failure — zombie goal", cond)
+	// No zombie AND no permanent loss: the goal must still be active in
+	// memory, ready to resume — not cleared.
+	if cond, ok := s.ActiveGoal(); !ok || cond != "cond" {
+		t.Fatalf("ActiveGoal = %q, %v; want still active after a worker-turn park", cond, ok)
 	}
 
 	var sawCleared bool
 	var stalled int
+	var parked int
 	for _, ev := range evs {
 		switch ev.Type {
 		case EventGoalStalled:
 			stalled++
 		case EventGoalCleared:
 			sawCleared = true
-			if !strings.Contains(ev.GoalReason, "connection reset by peer") {
-				t.Errorf("goal.cleared GoalReason = %q, want it to carry the error", ev.GoalReason)
+		case EventGoalParked:
+			parked++
+			// The goal.parked Reason is deliberately CLASSIFIED — see
+			// classifyGoalWorkerError — never the raw provider error text
+			// goal.stalled/goal.eval_failed carry: this record can outlive
+			// the request that produced it (an operator-facing pause
+			// presentation), so it must never echo provider detail that
+			// has no fixed shape across vendors.
+			if strings.Contains(ev.GoalReason, "connection reset by peer") {
+				t.Errorf("goal.parked GoalReason = %q, must NOT carry the raw provider error text", ev.GoalReason)
+			}
+			if ev.GoalReason == "" {
+				t.Error("goal.parked GoalReason is empty, want a classified reason")
+			}
+			if ev.GoalRetryable {
+				t.Error("goal.parked GoalRetryable = true, want false (this failure is not provider-retryable)")
+			}
+			if ev.GoalAttempts != goalWorkerRetries+1 {
+				t.Errorf("goal.parked GoalAttempts = %d, want %d", ev.GoalAttempts, goalWorkerRetries+1)
 			}
 		}
 	}
-	if !sawCleared {
-		t.Fatal("no goal.cleared event emitted after permanent worker failure")
+	if sawCleared {
+		t.Error("goal.cleared emitted — a worker-turn exhaustion must park, never clear")
+	}
+	if parked != 1 {
+		t.Fatalf("goal.parked events = %d, want exactly 1", parked)
 	}
 	if stalled != goalWorkerRetries+1 {
 		t.Errorf("goal.stalled events = %d, want %d (one per attempt)", stalled, goalWorkerRetries+1)
 	}
 
-	// Nor on disk: a resumed session must not see an active goal either.
+	// Still active on disk too: a resumed session must see the same active
+	// goal, not a zombie-free-but-abandoned clear.
 	loaded, err := LoadSession(s.cfg, s.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cond, ok := loaded.ActiveGoal(); ok {
-		t.Errorf("resumed ActiveGoal = %q, active after permanent failure — zombie goal survives reload", cond)
+	if cond, ok := loaded.ActiveGoal(); !ok || cond != "cond" {
+		t.Errorf("resumed ActiveGoal = %q, %v; want still active after a worker-turn park", cond, ok)
 	}
 }
 
@@ -1143,6 +1200,19 @@ func TestGoalEventsEmitWhileLockHeld(t *testing.T) {
 				s.recordGoalEvalFailed(errors.New("boom"), 1, 1, s.snapshotGoal().gen)
 			},
 		},
+		{
+			// recordGoalParked (Round 7, NEP-4849) follows the exact same
+			// emit-under-lock discipline as every other goal record — see
+			// its doc comment.
+			name: "recordGoalParked",
+			want: EventGoalParked,
+			run: func(s *Session) {
+				if err := s.RegisterGoal("cond"); err != nil {
+					t.Fatal(err)
+				}
+				s.recordGoalParked(1, 1, false, "", s.snapshotGoal().gen)
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1265,6 +1335,12 @@ func TestPursueGoalRetryBackoffCancellable(t *testing.T) {
 // toolExecCount snapshot) and stop retrying immediately rather than reissue
 // the directive — the failed attempt still counts (one goal.stalled record),
 // but no second attempt, and no second tool execution, ever happens.
+//
+// Updated for Round 7 (NEP-4849): the gate's own behavior (stop retrying
+// immediately) is unchanged — only what happens to the goal once retrying
+// stops changed, from a clear to a park (see
+// TestPursueGoalWorkerFailsPermanentlyParksGoal for that rewrite's full
+// rationale); this test's tail now asserts the park shape instead.
 func TestPursueGoalNoRetryAfterToolExecution(t *testing.T) {
 	var toolRuns int
 	testTool := Tool{
@@ -1297,6 +1373,9 @@ func TestPursueGoalNoRetryAfterToolExecution(t *testing.T) {
 	if err == nil {
 		t.Fatal("PursueGoal succeeded, want error (the worker call after tool execution always fails)")
 	}
+	if !IsGoalWorkerParked(err) {
+		t.Fatalf("err = %v, want IsGoalWorkerParked", err)
+	}
 
 	if toolRuns != 1 {
 		t.Errorf("tool executions = %d, want exactly 1 (a retry must not re-run it)", toolRuns)
@@ -1305,17 +1384,23 @@ func TestPursueGoalNoRetryAfterToolExecution(t *testing.T) {
 		t.Errorf("worker provider calls = %d, want exactly 2 (no third attempt after a post-tool-execution failure)", prov.workerCall)
 	}
 
-	var stalled int
+	var stalled, parked int
 	for _, ev := range evs {
-		if ev.Type == EventGoalStalled {
+		switch ev.Type {
+		case EventGoalStalled:
 			stalled++
+		case EventGoalParked:
+			parked++
 		}
 	}
 	if stalled != 1 {
 		t.Errorf("goal.stalled events = %d, want 1 (retries stop after the first, post-tool-execution failure)", stalled)
 	}
-	if cond, ok := s.ActiveGoal(); ok {
-		t.Errorf("ActiveGoal = %q, still active; want cleared (retries exhausted, non-idempotency risk)", cond)
+	if parked != 1 {
+		t.Errorf("goal.parked events = %d, want 1", parked)
+	}
+	if cond, ok := s.ActiveGoal(); !ok || cond != "cond" {
+		t.Errorf("ActiveGoal = %q, %v; want still active (parked, not cleared, after the non-idempotency gate stops retrying)", cond, ok)
 	}
 }
 
@@ -1439,15 +1524,26 @@ func TestPursueGoalRetryableErrorLongBackoffThenRecovers(t *testing.T) {
 	})
 }
 
-// TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing is the
-// red-first test for GitHub issue #61's deliverable 4 (self-re-arm): once
-// the retryable-class budget (goalRetryableMaxAttempts) is exhausted for a
-// turn — a truly long outage — the goal must NOT be cleared into a
-// permanently-dead stall requiring an operator re-POST. Instead the turn
-// parks (the same directive is retried on the next loop iteration, which
-// consumes an ordinary turn — see PursueGoal's doc comment), so with
-// MaxTurns set the loop reaches the ordinary, already-resumable "max turns"
-// terminal state (goal left ACTIVE) rather than "cleared".
+// TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing is a Round 7
+// (NEP-4849) rewrite of GitHub issue #61's original deliverable-4 test. The
+// original concern — once the retryable-class budget
+// (goalRetryableMaxAttempts) is exhausted for a turn (a truly long outage),
+// the goal must NOT be cleared into a permanently-dead stall requiring an
+// operator re-POST — is unchanged. What changed is HOW it avoids that dead
+// stall: issue #61's original fix parked by looping IN PLACE (an in-loop
+// `continue` that retried the same directive on the next ordinary turn,
+// never leaving PursueGoal — see goalRetryableExhaustedError's doc
+// comment), so with MaxTurns set the loop only reached the ordinary "max
+// turns" terminal after enough parked cycles. NEP-4849 supersedes that: the
+// FIRST retryable-budget exhaustion now exit-parks immediately — the same
+// terminal a deterministic-tier exhaustion reaches (see
+// TestPursueGoalWorkerFailsPermanentlyParksGoal) — freeing the run slot
+// instead of holding it for the rest of the outage (see the package doc's
+// "Round 7" section for why: a queued prompt can now dispatch as a normal
+// turn instead of only ever being injected into a doomed retry). So this
+// test now asserts exactly ONE turn's worth of retryable attempts before
+// PursueGoal returns the *goalWorkerParkedError sentinel — MaxTurns is no
+// longer even reachable via repeated parking.
 func TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing(t *testing.T) {
 	orig := goalJitterFunc
 	t.Cleanup(func() { goalJitterFunc = orig })
@@ -1463,18 +1559,18 @@ func TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing(t *testing.T) 
 		s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
 
 		res, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel, MaxTurns: 2})
-		if err != nil {
-			t.Fatalf("PursueGoal error = %v, want nil (parking, not a permanent error)", err)
+		if res != nil {
+			t.Fatalf("result = %+v, want nil (an exit-park returns an error, not a GoalResult)", res)
 		}
-		if res.Achieved || res.Reason != "max turns" {
-			t.Fatalf("result = %+v, want not achieved, reason \"max turns\"", res)
+		if !IsGoalWorkerParked(err) {
+			t.Fatalf("err = %v, want IsGoalWorkerParked", err)
 		}
 
 		// The critical assertion: no zombie AND no dead stall. The goal
-		// stays active — the exact same resumable terminal state an
-		// ordinary MaxTurns exhaustion leaves (see TestPursueGoalMaxTurns) —
-		// instead of being cleared the way a deterministic permanent
-		// failure is (see TestPursueGoalWorkerFailsPermanentlyClearsGoal).
+		// stays active — ready for an external caller to resume it — not
+		// cleared the way a permanent deterministic failure used to be
+		// (see TestPursueGoalWorkerFailsPermanentlyParksGoal, which now
+		// parks too).
 		if cond, ok := s.ActiveGoal(); !ok || cond != "cond" {
 			t.Errorf("ActiveGoal = %q, %v; want the goal left ACTIVE for resume, not cleared", cond, ok)
 		}
@@ -1482,6 +1578,7 @@ func TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing(t *testing.T) 
 		var sawCleared bool
 		var exhausted int
 		var waiting int
+		var parked int
 		for _, ev := range evs {
 			switch ev.Type {
 			case EventGoalCleared:
@@ -1498,20 +1595,39 @@ func TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing(t *testing.T) 
 						t.Errorf("exhausted goal.stalled: GoalRetryableClass = %q, want %q", ev.GoalRetryableClass, provider.RetryableOverloaded)
 					}
 				}
+			case EventGoalParked:
+				parked++
+				if !ev.GoalRetryable {
+					t.Errorf("goal.parked event: GoalRetryable = false, want true")
+				}
+				if ev.GoalRetryableClass != string(provider.RetryableOverloaded) {
+					t.Errorf("goal.parked event: GoalRetryableClass = %q, want %q", ev.GoalRetryableClass, provider.RetryableOverloaded)
+				}
+				if ev.GoalAttempts != goalRetryableMaxAttempts {
+					t.Errorf("goal.parked event: GoalAttempts = %d, want %d", ev.GoalAttempts, goalRetryableMaxAttempts)
+				}
+				if ev.GoalReason == "" {
+					t.Error("goal.parked GoalReason is empty, want a classified reason")
+				}
 			}
 		}
 		if sawCleared {
 			t.Error("goal.cleared emitted — a retryable-budget exhaustion must park, never clear")
 		}
-		// Two turns, each parking once its retryable budget exhausts.
-		if exhausted != 2 {
-			t.Errorf("exhausted (non-waiting) goal.stalled events = %d, want 2 (one per parked turn)", exhausted)
+		// Exactly one turn's worth: PursueGoal exits the instant the FIRST
+		// turn's retryable budget exhausts, not after MaxTurns worth of
+		// repeated in-loop parking (the pre-Round-7 shape this supersedes).
+		if parked != 1 {
+			t.Errorf("goal.parked events = %d, want exactly 1 (exit-park stops the loop on the first exhaustion)", parked)
 		}
-		if waiting != 2*(goalRetryableMaxAttempts-1) {
-			t.Errorf("waiting goal.stalled events = %d, want %d", waiting, 2*(goalRetryableMaxAttempts-1))
+		if exhausted != 1 {
+			t.Errorf("exhausted (non-waiting) goal.stalled events = %d, want 1 (one parked turn)", exhausted)
 		}
-		if prov.workerCall != 2*goalRetryableMaxAttempts {
-			t.Errorf("worker provider calls = %d, want %d (goalRetryableMaxAttempts per parked turn)", prov.workerCall, 2*goalRetryableMaxAttempts)
+		if waiting != goalRetryableMaxAttempts-1 {
+			t.Errorf("waiting goal.stalled events = %d, want %d", waiting, goalRetryableMaxAttempts-1)
+		}
+		if prov.workerCall != goalRetryableMaxAttempts {
+			t.Errorf("worker provider calls = %d, want %d (goalRetryableMaxAttempts for the one parked turn)", prov.workerCall, goalRetryableMaxAttempts)
 		}
 	})
 }
@@ -1523,6 +1639,17 @@ func TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing(t *testing.T) 
 // tool, must still stop retrying immediately rather than enter the long
 // backoff — retrying would risk re-running the tool no matter how
 // sympathetic the failure looks.
+//
+// Updated for Round 7 (NEP-4849): the gate itself is unchanged; the tail now
+// asserts a park (not a clear) — and, since PursueGoal derives
+// retryable/class straight from the returned error via provider.AsRetryable
+// rather than from whether promptTurnWithRetry happened to wrap it in
+// *goalRetryableExhaustedError (see PursueGoal's worker-turn error
+// handling), the goal.parked record/event for THIS gated case still
+// correctly reports GoalRetryable=true — the underlying failure really was
+// provider-retryable-classified weather, even though the gate stopped
+// retrying before the long retryable budget ever got a chance to exhaust on
+// its own.
 func TestPursueGoalRetryableErrorAfterToolExecutionStillGated(t *testing.T) {
 	var toolRuns int
 	testTool := Tool{
@@ -1555,6 +1682,9 @@ func TestPursueGoalRetryableErrorAfterToolExecutionStillGated(t *testing.T) {
 	if err == nil {
 		t.Fatal("PursueGoal succeeded, want error")
 	}
+	if !IsGoalWorkerParked(err) {
+		t.Fatalf("err = %v, want IsGoalWorkerParked", err)
+	}
 	if toolRuns != 1 {
 		t.Errorf("tool executions = %d, want exactly 1", toolRuns)
 	}
@@ -1562,15 +1692,31 @@ func TestPursueGoalRetryableErrorAfterToolExecutionStillGated(t *testing.T) {
 		t.Errorf("worker provider calls = %d, want exactly 2 (no retry after tool execution, even for a retryable error)", prov.workerCall)
 	}
 	var stalled int
+	var parked int
 	for _, ev := range evs {
-		if ev.Type == EventGoalStalled {
+		switch ev.Type {
+		case EventGoalStalled:
 			stalled++
+		case EventGoalParked:
+			parked++
+			if !ev.GoalRetryable {
+				t.Errorf("goal.parked event: GoalRetryable = false, want true (the underlying error was provider-retryable-classified)")
+			}
+			if ev.GoalRetryableClass != string(provider.RetryableOverloaded) {
+				t.Errorf("goal.parked event: GoalRetryableClass = %q, want %q", ev.GoalRetryableClass, provider.RetryableOverloaded)
+			}
+			if ev.GoalAttempts != 1 {
+				t.Errorf("goal.parked event: GoalAttempts = %d, want 1 (the gate stops after the first attempt)", ev.GoalAttempts)
+			}
 		}
 	}
 	if stalled != 1 {
 		t.Errorf("goal.stalled events = %d, want 1", stalled)
 	}
-	if cond, ok := s.ActiveGoal(); ok {
-		t.Errorf("ActiveGoal = %q, still active; want cleared (non-idempotency gate always wins)", cond)
+	if parked != 1 {
+		t.Errorf("goal.parked events = %d, want 1", parked)
+	}
+	if cond, ok := s.ActiveGoal(); !ok || cond != "cond" {
+		t.Errorf("ActiveGoal = %q, %v; want still active (parked, not cleared, after the non-idempotency gate stops retrying)", cond, ok)
 	}
 }
