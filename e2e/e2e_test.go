@@ -539,6 +539,17 @@ func (b *bufReader) readLine() (string, error) {
 // base_url at the fake server, and returns its path.
 func writeConfig(t *testing.T, baseURL string) string {
 	t.Helper()
+	return writeConfigWithSessionSync(t, baseURL, "")
+}
+
+// writeConfigWithSessionSync is writeConfig plus an optional session_sync
+// override (config.Config.SessionSync — "", "fsync", or "volume"): empty
+// omits the field entirely, matching writeConfig's plain output byte for
+// byte. Factored out so a test can run the identical scenario under a
+// non-default durability mode without duplicating the config-building body —
+// see enqueue_test.go's TestDurableEnqueueSurvivesSIGKILLVolumeMode.
+func writeConfigWithSessionSync(t *testing.T, baseURL, sessionSync string) string {
+	t.Helper()
 	cfg := map[string]any{
 		"model": "anthropic/claude-fable-5",
 		"providers": map[string]any{
@@ -547,6 +558,9 @@ func writeConfig(t *testing.T, baseURL string) string {
 				"base_url":    baseURL,
 			},
 		},
+	}
+	if sessionSync != "" {
+		cfg["session_sync"] = sessionSync
 	}
 	b, err := json.Marshal(cfg)
 	if err != nil {

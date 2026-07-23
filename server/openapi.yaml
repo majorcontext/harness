@@ -713,8 +713,11 @@ components:
             /session/{id}/queue) AFTER this call: this request's own seq on
             `started`/`queued`, the pre-existing mark on `duplicate`. Only a
             2xx (`started`/`queued`) response authorizes the caller to ack
-            its own upstream — the prompt.queued record was fsynced into
-            the session journal before this response was written.
+            its own upstream — the prompt.queued record was durably accepted
+            into the session journal before this response was written, per
+            the configured `session_sync` mode: fsynced (default) or
+            delegated to the volume layer's continuous sync (`session_sync:
+            "volume"`; see docs/deploy-modal.md).
         queued:
           type: integer
           description: >
@@ -1633,12 +1636,15 @@ paths:
       summary: Durably, idempotently deliver a prompt (attested 2xx).
       description: |
         docs/plans/2026-07-21-durable-enqueue.md's durability primitive: unlike
-        prompt_async, a 2xx from this endpoint is an honest attestation —
-        the prompt.queued record is fsynced into the session journal BEFORE
-        the response is written — for a caller (an inbox poller, a
-        coordinator relay) whose own upstream ack must ride on this call's
-        success without risk of ghost- or double-delivery. Delivery itself
-        is unchanged prompt-queue machinery (docs/plans/2026-07-19-prompt-
+        prompt_async, a 2xx from this endpoint is an honest attestation — the
+        prompt.queued record is durably accepted into the session journal
+        BEFORE the response is written, per the configured `session_sync`
+        mode: fsynced (the default) or, in "volume" mode, delegated to a
+        continuously-synced network volume's own commit layer (see
+        docs/deploy-modal.md) — for a caller (an inbox poller, a coordinator
+        relay) whose own upstream ack must ride on this call's success
+        without risk of ghost- or double-delivery. Delivery itself is
+        unchanged prompt-queue machinery (docs/plans/2026-07-19-prompt-
         queue.md), shared exactly with prompt_async: an idle session
         dispatches the queue HEAD immediately (not necessarily this
         request's own prompt), a busy one queues FIFO behind whatever is
@@ -1684,11 +1690,14 @@ paths:
               schema: { $ref: "#/components/schemas/EnqueueResponse" }
         "202":
           description: >
-            Accepted and durable: the prompt.queued record was fsynced into
-            the session journal before this response was written. `status`
-            is `started` when a turn is now running for THIS request's own
-            prompt, or `queued` when it is durably waiting in the FIFO for a
-            future drain (see `queued` in EnqueueResponse for the depth).
+            Accepted and durable: the prompt.queued record was durably
+            accepted into the session journal before this response was
+            written — fsynced (default `session_sync`) or delegated to the
+            volume layer's continuous sync (`session_sync: "volume"`; see
+            docs/deploy-modal.md). `status` is `started` when a turn is now
+            running for THIS request's own prompt, or `queued` when it is
+            durably waiting in the FIFO for a future drain (see `queued` in
+            EnqueueResponse for the depth).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/EnqueueResponse" }
@@ -1719,13 +1728,16 @@ paths:
         "500":
           description: >
             The prompt.queued record was not durably accepted — a journal
-            write or fsync failure — error text prefixed "enqueue not
-            durable: ". No upstream ack is authorized; retry with the SAME
-            seq once the underlying condition clears. A torn on-disk write
-            left by this failure (if any) heals automatically on the next
-            successful retry's replay (last-writer-wins fold,
+            write failure, or (default `session_sync` mode only) an fsync
+            failure — error text prefixed "enqueue not durable: ". No
+            upstream ack is authorized; retry with the SAME seq once the
+            underlying condition clears. A torn on-disk write left by this
+            failure (if any) heals automatically on the next successful
+            retry's replay (last-writer-wins fold,
             docs/plans/2026-07-21-durable-enqueue.md) — no caller-visible
-            effect.
+            effect, and this healing is identical in "volume" mode, which
+            has no fsync step to fail but can equally lose an unsynced tail
+            on abrupt process death.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

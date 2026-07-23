@@ -113,6 +113,55 @@ classic Volume preserved 1 of 7 messages; the same test on a v2 Volume
 preserved all of them. v2 syncs continuously and needs no explicit
 `commit()` calls.
 
+### Set `session_sync: "volume"` for Modal Volume v2
+
+Harness's durable-enqueue and session-create paths (`POST
+/session/{id}/enqueue`, session Persist) attest durability by fsyncing the
+session log file and, on first creation, its containing directory — the
+right thing on a local POSIX filesystem, but not on a Volume v2 mount:
+
+- **fsync adds no durability there.** v2's continuous background sync is
+  itself the documented durability boundary (see "Use Volumes v2" above) —
+  an fsync round-trip on top of it commits nothing an attestation doesn't
+  already have once the write(2) lands.
+- **fsync can wedge the mount.** The volume is mounted over a FUSE/9p-style
+  transport, and some such transports deadlock permanently on `fsync`
+  (`fsync(dirfd)` especially) rather than returning an error. A syscall
+  cannot be cancelled from userspace once it wedges, so the only fix is not
+  issuing it in the first place.
+
+In production this showed up as a boot-time hang traceable directly to the
+in-flight store/create watchdog's logs: the very first session create's
+`sync_dir` phase climbed past 134 seconds with no completion, and every
+create attempted afterward got stuck at a bare `open` on the same file —
+the wedged fsync had taken the whole mount down with it, not just the one
+call. Look for that shape (`sync_dir` — or `fsync` for the durable-enqueue
+path — reported "in flight" for an implausibly long time by the watchdog,
+followed by unrelated opens on the same volume also stalling) as the signal
+to set this.
+
+Set it in config (`~/.harness/config.json` or the project `.harness.json`,
+whichever layer configures the box):
+
+```json
+{
+  "session_sync": "volume"
+}
+```
+
+This skips both fsync round-trips entirely for this process — no syscall is
+issued, so there is nothing left to wedge. It does not weaken durability
+relative to what the backend actually provides: v2's own commit layer is
+already the durability boundary, so an attestation under `"volume"` means
+exactly what v2's continuous sync guarantees, no more and no less. Nothing
+else changes — the write(2) calls, the torn-tail repair on reopen, and the
+last-writer-wins replay fold that heals a lost tail all behave identically
+in both modes, because a volume can still lose an unsynced tail on an
+abrupt kill exactly like a torn fsync can (see "Ephemerality e2e" below,
+which continues to exercise this survival path either way). The boot log
+line (`harness serve`'s config summary) echoes `session_sync=volume` when
+set, so it's visible at a glance which mode a given box is running.
+
 ### (c) Keys via a credential-injecting proxy (alternative to Secrets)
 
 To keep the sandbox holding **no** API keys at all, route egress through

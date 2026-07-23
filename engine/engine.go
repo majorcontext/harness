@@ -170,6 +170,14 @@ const (
 	EventPromptDequeued = "prompt.dequeued"
 )
 
+// SessionSyncFsync and SessionSyncVolume are the two accepted values of
+// Config.SessionSync (see its doc comment) — SessionSyncFsync also names
+// the zero value's effective behavior.
+const (
+	SessionSyncFsync  = "fsync"
+	SessionSyncVolume = "volume"
+)
+
 // Config configures a Session.
 type Config struct {
 	Providers provider.Registry
@@ -181,6 +189,24 @@ type Config struct {
 	// SessionDir is where session logs are persisted, one JSONL file per
 	// session. Empty disables persistence entirely.
 	SessionDir string
+
+	// SessionSync selects the durability mechanism ensureLog and
+	// EnqueuePromptDurable use for attested session-store writes (see
+	// store.go/queue.go). SessionSyncFsync ("fsync", also the zero value's
+	// effective behavior) fsyncs the log file and, on first creation, its
+	// directory — correct for local POSIX filesystems. SessionSyncVolume
+	// ("volume") skips both fsync round-trips entirely — no syscall, no
+	// phase event — for stores on continuously-synced network volumes whose
+	// own commit layer is the documented durability boundary: fsync adds no
+	// durability there, and some FUSE/9p transports deadlock permanently on
+	// it (fsync(dirfd) especially — see docs/deploy-modal.md). The write(2)
+	// calls and all torn-write healing/replay logic (store.go's tail repair,
+	// queue.go's last-writer-wins fold) are identical in both modes; only
+	// the two fsync round-trips are gated. config.Config.SessionSync is the
+	// single validation point for this string (see its doc comment) — an
+	// unrecognized value here is a caller bug, not a runtime-checked
+	// condition, so it is treated as SessionSyncFsync rather than rejected.
+	SessionSync string
 
 	// ParentSession is an opaque provenance pointer to the session this one
 	// continues from — a re-dispatch after a failed goal, a follow-up fix

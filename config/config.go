@@ -94,6 +94,36 @@ type Config struct {
 	// Zero (omitted) defaults to 2 (see the engine); the effective value
 	// can never go below 1.
 	CompactionKeepTurns int `json:"compaction_keep_turns,omitempty"`
+	// SessionSync selects the durability mechanism for attested session-store
+	// writes (durable enqueue, session-create persist). "fsync" (default)
+	// fsyncs the log file and, on first creation, its directory — correct for
+	// local POSIX filesystems. "volume" skips both fsync round-trips: for
+	// stores on continuously-synced network volumes whose own commit layer is
+	// the documented durability boundary, where fsync adds no durability and
+	// some FUSE/9p transports deadlock permanently on it (fsync(dirfd)
+	// especially). With "volume", an attestation means the write(2) completed
+	// and durability is delegated to the volume layer.
+	SessionSync string `json:"session_sync,omitempty"`
+}
+
+// validSessionSync are the only accepted config values for SessionSync — see
+// its doc comment. Checked in Load (a per-layer field: SessionSync overrides
+// wholesale in merge, like Model/SessionDir, so an invalid value in either
+// layer must fail regardless of which one ends up winning).
+var validSessionSync = map[string]bool{"": true, "fsync": true, "volume": true}
+
+// validateSessionSync fails loudly on an unrecognized session_sync value —
+// same "cannot possibly be wired" philosophy as validatePlugins/
+// validateMCPServers: a typo (e.g. "volumes") must not silently fall back to
+// the default fsync behavior, since the whole point of "volume" mode is to
+// avoid a real deadlock hazard on certain network-volume backends (see
+// SessionSync's doc comment) — a silently-ignored typo would leave that
+// hazard live.
+func validateSessionSync(v string) error {
+	if !validSessionSync[v] {
+		return fmt.Errorf("session_sync: unknown value %q; valid values: \"\" (default), \"fsync\", \"volume\"", v)
+	}
+	return nil
 }
 
 // ProcessSpec configures one managed process (package engine's
@@ -353,6 +383,9 @@ func Load(path string) (*Config, error) {
 	if err := validateProcesses(c.Processes); err != nil {
 		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
 	}
+	if err := validateSessionSync(c.SessionSync); err != nil {
+		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
+	}
 	return &c, nil
 }
 
@@ -501,9 +534,9 @@ func Path() string {
 // exists, merges it on top. Merge rules, applied field by field (no
 // reflection):
 //
-//   - Model, SessionDir, InstructionsPath, GoalEvaluatorModel: a non-empty
-//     project value overrides the user value. Instructions (*bool): a non-nil
-//     project value overrides.
+//   - Model, SessionDir, InstructionsPath, GoalEvaluatorModel, SessionSync: a
+//     non-empty project value overrides the user value. Instructions (*bool):
+//     a non-nil project value overrides.
 //   - SkillsDirs: a non-empty project slice replaces the user slice entirely
 //     (arrays override, they do not concatenate); an empty/omitted project
 //     value inherits the user value.
@@ -550,6 +583,11 @@ type LoadInfo struct {
 	Processes  int
 	MCPServers int
 	Plugins    int
+	// SessionSync is the merged config's SessionSync value, verbatim ("",
+	// "fsync", or "volume") — carried here so the boot log line (cmd/harness's
+	// configlog.go) can call out non-default durability behavior without a
+	// separate config read.
+	SessionSync string
 }
 
 // LoadProjectWithInfo is LoadProject plus the LoadInfo an operator-facing
@@ -576,9 +614,10 @@ func LoadProjectWithInfo(dir string) (*Config, LoadInfo, error) {
 		return nil, LoadInfo{}, err
 	}
 	info := LoadInfo{
-		Processes:  len(cfg.Processes),
-		MCPServers: len(cfg.MCPServers),
-		Plugins:    len(cfg.Plugins),
+		Processes:   len(cfg.Processes),
+		MCPServers:  len(cfg.MCPServers),
+		Plugins:     len(cfg.Plugins),
+		SessionSync: cfg.SessionSync,
 	}
 	switch {
 	case projExists:
@@ -644,6 +683,9 @@ func merge(base, over *Config) *Config {
 	}
 	if over.CompactionKeepTurns != 0 {
 		out.CompactionKeepTurns = over.CompactionKeepTurns
+	}
+	if over.SessionSync != "" {
+		out.SessionSync = over.SessionSync
 	}
 	// Arrays override wholesale: a non-empty project value replaces the user
 	// value entirely; otherwise inherit. Copy so the merged config never

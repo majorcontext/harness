@@ -78,35 +78,44 @@ func (s *Session) EnqueuePrompt(text string) (int64, error) {
 //     session in nondecreasing order; a gap is fine (the mark jumps), an
 //     out-of-order fresh seq is indistinguishable from a duplicate and is
 //     dropped.
-//   - The prompt.queued record (carrying seq) is written AND fsynced
-//     before any queue/watermark mutation and before success returns —
-//     write-ahead, unlike every other persist path in this package, which
-//     buffers to the page cache and swallows errors into lastPersistErr.
-//     An error return means "not durably accepted; retry with the same
-//     seq"; only a nil error authorizes the caller to ack upstream.
+//   - The prompt.queued record (carrying seq) is written, and — in the
+//     default fsync mode (Config.SessionSync) — ALSO fsynced, before any
+//     queue/watermark mutation and before success returns: write-ahead,
+//     unlike every other persist path in this package, which buffers to the
+//     page cache and swallows errors into lastPersistErr. In "volume" mode
+//     the fsync round-trip is skipped (see volumeSync in store.go and
+//     Config.SessionSync's doc comment) — the write(2) landing IS the
+//     attestation there, and durability is delegated to the volume's own
+//     continuous-sync commit layer. Either way, an error return means "not
+//     durably accepted; retry with the same seq"; only a nil error
+//     authorizes the caller to ack upstream.
 //   - The assigned queue ID is burned BEFORE the write is attempted, and so
 //     stays burned on every failure path (ensureLog opening/creating the
-//     log, the write itself, or the fsync): any of those may still have
-//     left a torn trace on disk (a half-created file, a partially written
-//     record), and reusing the ID for a later plain enqueue would fold two
-//     different prompts under one ID on replay. LoadSession converges a
-//     torn record and its successful same-seq retry last-writer-wins —
-//     see the recPromptQueued replay case in store.go.
+//     log, the write itself, or the fsync when fsync mode is active): any of
+//     those may still have left a torn trace on disk (a half-created file, a
+//     partially written record), and reusing the ID for a later plain
+//     enqueue would fold two different prompts under one ID on replay.
+//     LoadSession converges a torn record and its successful same-seq retry
+//     last-writer-wins — see the recPromptQueued replay case in store.go.
+//     This healing is mode-independent: a volume can still lose an
+//     unsynced tail on abrupt death exactly like a torn fsync can, and the
+//     same fold repairs both.
 //
 // Delivery of the enqueued prompt is unchanged queue machinery: FIFO with
 // plain-enqueued prompts, drained at idle dispatch or injected at
 // tool-call/goal-turn boundaries.
 //
-// A nil error attests durable ACCEPTANCE into the session's queue — the
-// watermark advance above is fsynced, so a retry with the same seq is
-// always a safe no-op from here on. It is not a delivery receipt: once the
-// queue's existing machinery dequeues this prompt for a turn, it carries
-// the exact same crash exposure as any in-flight prompt (see the server's
-// maybeDispatchQueued, "No-double-delivery equivalence", invariant 7). A
-// crash between that dequeue record and the turn's completion loses the
-// delivery — it is never redelivered — while the watermark correctly
-// continues to report the message as accepted: lose-once-on-crash, not
-// deliver-twice.
+// A nil error attests durable ACCEPTANCE into the session's queue per the
+// configured Config.SessionSync mode: fsynced in the default mode, or
+// delegated to the volume layer's continuous sync in "volume" mode — so a
+// retry with the same seq is always a safe no-op from here on either way.
+// It is not a delivery receipt: once the queue's existing machinery
+// dequeues this prompt for a turn, it carries the exact same crash exposure
+// as any in-flight prompt (see the server's maybeDispatchQueued,
+// "No-double-delivery equivalence", invariant 7). A crash between that
+// dequeue record and the turn's completion loses the delivery — it is
+// never redelivered — while the watermark correctly continues to report
+// the message as accepted: lose-once-on-crash, not deliver-twice.
 func (s *Session) EnqueuePromptDurable(text string, seq int64) (id int64, duplicate bool, err error) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
@@ -139,14 +148,23 @@ func (s *Session) EnqueuePromptDurable(text string, seq int64) (id int64, duplic
 		s.lastPersistErr = err
 		return 0, false, err
 	}
-	if err := s.timedStorePhase(op, "fsync", func() error {
-		return s.logFile.Sync()
-	}); err != nil {
-		// The record may or may not have reached stable storage — torn
-		// state. Nothing in memory moved, so a retry with the same seq is
-		// clean here; replay's last-writer-wins fold heals the disk side.
-		s.lastPersistErr = err
-		return 0, false, err
+	// Skipped entirely in volume mode (see store.go's volumeSync): the
+	// write(2) above is unchanged in both modes, but this fsync round-trip —
+	// and its phase event — only happen in fsync mode. See Config.
+	// SessionSync's doc comment for why: on a continuously-synced network
+	// volume, this fsync would add no durability the volume's own commit
+	// layer doesn't already provide, and some FUSE/9p transports deadlock
+	// permanently on it.
+	if !s.volumeSync() {
+		if err := s.timedStorePhase(op, "fsync", func() error {
+			return s.logFile.Sync()
+		}); err != nil {
+			// The record may or may not have reached stable storage — torn
+			// state. Nothing in memory moved, so a retry with the same seq is
+			// clean here; replay's last-writer-wins fold heals the disk side.
+			s.lastPersistErr = err
+			return 0, false, err
+		}
 	}
 	s.promptQueue = append(s.promptQueue, QueuedPrompt{ID: id, Text: trimmed, Seq: seq})
 	s.enqueueSeq = seq

@@ -387,6 +387,19 @@ func (s *Session) timedStorePhase(op, phase string, fn func() error) error {
 	return err
 }
 
+// volumeSync reports whether Config.SessionSync selects "volume" mode (see
+// its doc comment): ensureLog's directory fsync and EnqueuePromptDurable's
+// file fsync are both skipped entirely in this mode — no syscall, no phase
+// event — rather than merely fast-pathed, since on some FUSE/9p transports
+// the fsync call itself (particularly fsync(dirfd)) is what deadlocks the
+// whole mount permanently. Any value other than SessionSyncVolume
+// (including the zero value) is fsync mode; config.Config.SessionSync is
+// the single validation point for the string, so an unrecognized value
+// reaching here defaults to the safe (fsync) behavior rather than erroring.
+func (s *Session) volumeSync() bool {
+	return s.cfg.SessionSync == SessionSyncVolume
+}
+
 // ensureLog opens the session log, creating the directory and file — and
 // writing the header — on first use. Caller holds s.mu. The fast path (log
 // already open) reports no phases.
@@ -552,12 +565,24 @@ func (s *Session) ensureLog() error {
 		// mount (e.g. a volume) at boot, so that entry predates the process
 		// and isn't this code's concern. See syncDir for why this is a
 		// build-tagged no-op off unix.
-		if err := s.timedStorePhase(op, "sync_dir", func() error {
-			return syncDir(s.cfg.SessionDir)
-		}); err != nil {
-			f.Close()
-			s.logFile = nil
-			return err
+		//
+		// Skipped entirely in volume mode (see volumeSync): a continuously-
+		// synced network volume's own commit layer is the documented
+		// durability boundary there, so this fsync would add nothing except
+		// the risk of joining it on a transport where fsync(dirfd) deadlocks
+		// the mount permanently — see Config.SessionSync's doc comment.
+		// Skipping the call is not enough on its own if it never returns; the
+		// point is not issuing the syscall at all. No phase event fires
+		// either, so the watchdog never carries a misleading sync_dir entry
+		// for a phase that, in this mode, does not exist.
+		if !s.volumeSync() {
+			if err := s.timedStorePhase(op, "sync_dir", func() error {
+				return syncDir(s.cfg.SessionDir)
+			}); err != nil {
+				f.Close()
+				s.logFile = nil
+				return err
+			}
 		}
 	}
 	s.logStarted = true
