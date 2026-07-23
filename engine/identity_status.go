@@ -15,6 +15,12 @@
 // diverge from the currently-serving process after a redeploy) or grepping
 // the serve log's boot line (reads what the process logged AT boot, which
 // can equally diverge from its current, possibly-since-reconfigured state).
+// This standing-vs-notable split is deliberate: identity, unlike "something
+// started/degraded/parked", is baseline context an agent should never have
+// to notice the absence of, so once version/start-time are configured this
+// segment is present on every request — a small, fixed per-request
+// formatting cost, and still cache-safe, since (like its siblings) it only
+// ever touches the newest user message, never the cached prefix before it.
 package engine
 
 import (
