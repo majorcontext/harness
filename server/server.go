@@ -124,29 +124,56 @@ type Options struct {
 	// achieveGoal/ClearGoal emit under Session.mu). Logging or forwarding to an
 	// external sink is the intended use.
 	OnError func(context.Context, error)
-	// OnCreatePhase, when non-nil, is invoked once per completed phase of
+	// OnCreatePhase, when non-nil, is invoked once per ENDED phase of
 	// handleCreate — "new_session", "persist", "register" (the in-memory
-	// session-map insert), and "emit_created" are reported only when that
-	// phase actually completes, so a failure partway through (e.g.
-	// recordWorktreeOwner or Persist erroring) means later phases in the
-	// list are simply never reported. "total" (elapsed from handler entry to
-	// the handler's return) is DIFFERENT: it is reported via a defer
-	// installed the moment a session ID exists, so it fires on every return
-	// path once NewSession has succeeded — success or error alike — and,
-	// because a defer runs only after the statement before it completes,
-	// total always spans past the response write: on success it includes
-	// writeJSON, and on a later failure it includes the writeErr call. This
-	// is deliberate: without it, a caller accumulating phases by session ID (see
-	// cmd/harness/main.go's createPhaseLogger) would leak an entry per
-	// failed create — a saturated storage volume is precisely what makes
-	// Persist fail or stall on every create — and it also means
-	// "total" on a failed create is real diagnostic signal: which phases ran
-	// (and how slowly) before the failure. sessionID is the ID minted by
-	// NewSession, carried on every phase report including "new_session"
-	// itself; a failed NewSession call reports nothing at all, since no ID
-	// exists yet to key it by. Called synchronously; keep it fast, mirroring
+	// session-map insert), and "emit_created". Each of "persist", "register",
+	// and "emit_created" is reported via timedCreatePhase (handlers.go), the
+	// shared call shape that guarantees a phase reports its own end — success
+	// OR error alike, with the real elapsed time either way — the instant its
+	// operation returns; "new_session" reports on success only (a failed
+	// NewSession call reports nothing at all, since no session ID exists yet
+	// to key it by). Regardless, a failure in one phase still means every
+	// LATER phase in the list is simply never reported at all, since
+	// handleCreate returns before ever reaching them — e.g. a Persist error
+	// still reports "persist" itself (now, unlike before this doc was
+	// updated) but never reaches "register" or "emit_created". "total"
+	// (elapsed from handler entry to the handler's return) is DIFFERENT: it
+	// is reported via a defer installed the moment a session ID exists, so it
+	// fires on every return path once NewSession has succeeded — success or
+	// error alike — and, because a defer runs only after the statement
+	// before it completes, total always spans past the response write: on
+	// success it includes writeJSON, and on a later failure it includes the
+	// writeErr call. This is deliberate: without it, a caller accumulating
+	// phases by session ID (see cmd/harness/main.go's createPhaseLogger)
+	// would leak an entry per failed create — a saturated storage volume is
+	// precisely what makes Persist fail or stall on every create — and it
+	// also means "total" on a failed create is real diagnostic signal: which
+	// phases ran (and how slowly) before the failure. sessionID is the ID
+	// minted by NewSession, carried on every phase report including
+	// "new_session" itself. Called synchronously; keep it fast, mirroring
 	// OnError's rules above.
 	OnCreatePhase func(sessionID, phase string, elapsed time.Duration)
+	// OnCreatePhaseStart, when non-nil, is invoked immediately before each of
+	// handleCreate's "persist", "register", and "emit_created" phases begins
+	// — the counterpart to OnCreatePhase that makes an in-flight watchdog
+	// possible (see engine.Config.OnStorePhaseStart's doc comment for the
+	// same rationale one layer down: completion-only phase logging is blind
+	// to a phase that never completes). Every Start call is guaranteed
+	// exactly one matching OnCreatePhase end, success or error alike (see
+	// OnCreatePhase's doc comment and timedCreatePhase) — a watchdog can
+	// therefore always clear its in-flight entry once a phase ends, never
+	// left warning forever about a phase that in fact already failed and
+	// returned. "new_session" is deliberately NOT instrumented here:
+	// NewSession touches no disk (see its doc comment in package engine) so
+	// it structurally cannot exhibit the permanently-hung-phase failure mode
+	// this exists to catch, and — more concretely — no session ID exists yet
+	// to key a watchdog entry by until it returns, so a Start call for it
+	// could never be matched back up with its OnCreatePhase completion
+	// (which does carry the real ID). "total" is also not instrumented here,
+	// to avoid double-reporting the same stuck window a currently-running
+	// named phase (persist/register/emit_created) already covers. Called
+	// synchronously; keep it fast, same rules as OnCreatePhase/OnError.
+	OnCreatePhaseStart func(sessionID, phase string)
 	// MCP is the MCP client integration shared by every session this server
 	// hosts (see engine.MCPRegistry): it is the same *engine.MCPManager the
 	// NewSession/LoadSession wrapper wires into each session's
@@ -564,6 +591,13 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /process/{name}/start", s.auth(s.handleProcessStart))
 	mux.HandleFunc("POST /process/{name}/stop", s.auth(s.handleProcessStop))
 	mux.HandleFunc("POST /process/{name}/restart", s.auth(s.handleProcessRestart))
+	// /debug/goroutines: an authed HTTP alternative to sending SIGQUIT (see
+	// handleGoroutines's doc comment and cmd/harness/main.go's serveCmd,
+	// which confirms SIGQUIT still produces Go's default all-goroutine dump
+	// since this process only intercepts os.Interrupt/SIGTERM) — for
+	// inspecting a wedged box in environments where signaling/exec-ing into
+	// the process is awkward or unavailable.
+	mux.HandleFunc("GET /debug/goroutines", s.auth(s.handleGoroutines))
 	s.mux = mux
 }
 

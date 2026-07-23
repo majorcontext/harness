@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"runtime/pprof"
 	"sort"
 	"strings"
 	"time"
@@ -312,6 +313,26 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, healthJSON{Version: s.opts.Version, VCSRevision: rev, VCSTime: t})
 }
 
+// handleGoroutines writes the full, all-goroutine stack dump (the exact
+// text Go's default SIGQUIT handler prints) as a diagnostic HTTP surface —
+// for a box wedged badly enough that even exec is awkward (or unavailable,
+// e.g. a managed sandbox with no shell access), this gets the same picture
+// SIGQUIT would give over authed HTTP instead. It is registered behind
+// s.auth like every other route (see routes()), deliberately NOT under
+// net/http/pprof's default mux registration (which would also register
+// /debug/pprof/* unauthenticated on http.DefaultServeMux as an import side
+// effect) — this calls runtime/pprof directly against the existing mux
+// instead, so the only new surface is this one explicit, authed route.
+// debug=2 (not the default 1) is what makes the output match SIGQUIT's own
+// format: full stack traces in the panic-style layout, not pprof's
+// symbolized-count summary.
+func (s *Server) handleGoroutines(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	// Lookup("goroutine") is always non-nil (a predefined profile registered
+	// by the runtime itself), so no nil check is needed here.
+	pprof.Lookup("goroutine").WriteTo(w, 2) //nolint:errcheck // best-effort diagnostic write; nothing to do with a failure once headers are sent
+}
+
 // maxParentSessionLen bounds POST /session's optional parent_session field:
 // an opaque provenance pointer, not a session ID this server necessarily
 // knows about (lineage may cross boxes — see engine.Config.ParentSession),
@@ -432,36 +453,66 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	// Persist the log now so the session has durable state even if it is
 	// evicted before its first prompt; otherwise eviction below would drop a
 	// never-prompted session with no on-disk backing to reload from.
-	phaseStart = time.Now()
-	if err := sess.Persist(); err != nil {
+	if err := s.timedCreatePhase(sess.ID, "persist", sess.Persist); err != nil {
 		if wt != nil {
 			s.discardWorktree(wt)
 		}
 		writeErr(w, http.StatusInternalServerError, "cannot create session")
 		return
 	}
-	s.reportCreatePhase(sess.ID, "persist", time.Since(phaseStart))
 
-	phaseStart = time.Now()
-	s.mu.Lock()
-	s.sessions[sess.ID] = &sessionState{sess: sess, lastUsed: time.Now(), shareWorkdir: body.ShareWorkdir, isolation: isolation, worktree: wt}
-	s.evictResidentLocked()
-	s.mu.Unlock()
-	s.reportCreatePhase(sess.ID, "register", time.Since(phaseStart))
+	s.timedCreatePhase(sess.ID, "register", func() error { //nolint:errcheck // never errors; see timedCreatePhase's uniform shape
+		s.mu.Lock()
+		s.sessions[sess.ID] = &sessionState{sess: sess, lastUsed: time.Now(), shareWorkdir: body.ShareWorkdir, isolation: isolation, worktree: wt}
+		s.evictResidentLocked()
+		s.mu.Unlock()
+		return nil
+	})
 
-	phaseStart = time.Now()
-	s.emitDurable(Event{Type: evtSessionCreated, SessionID: sess.ID, Model: sess.Model()})
-	s.reportCreatePhase(sess.ID, "emit_created", time.Since(phaseStart))
+	s.timedCreatePhase(sess.ID, "emit_created", func() error { //nolint:errcheck // never errors; see timedCreatePhase's uniform shape
+		s.emitDurable(Event{Type: evtSessionCreated, SessionID: sess.ID, Model: sess.Model()})
+		return nil
+	})
 
 	writeJSON(w, http.StatusCreated, s.buildSession(sess, "idle"))
 }
 
 // reportCreatePhase forwards elapsed to Options.OnCreatePhase, nil-guarded.
-// See its doc comment for the reported phases and success-only contract.
+// See its doc comment for the reported phases and per-phase end contract.
 func (s *Server) reportCreatePhase(sessionID, phase string, elapsed time.Duration) {
 	if s.opts.OnCreatePhase != nil {
 		s.opts.OnCreatePhase(sessionID, phase, elapsed)
 	}
+}
+
+// reportCreatePhaseStart forwards to Options.OnCreatePhaseStart, nil-guarded.
+// See its doc comment for which phases are covered (persist/register/
+// emit_created — not new_session, not total).
+func (s *Server) reportCreatePhaseStart(sessionID, phase string) {
+	if s.opts.OnCreatePhaseStart != nil {
+		s.opts.OnCreatePhaseStart(sessionID, phase)
+	}
+}
+
+// timedCreatePhase runs fn as one instrumented create phase:
+// reportCreatePhaseStart immediately before fn runs, reportCreatePhase
+// immediately after fn returns — success OR error — with the elapsed time fn
+// actually took either way. Mirrors engine.Session.timedStorePhase
+// (engine/store.go) one layer up, for the identical reason: a hand-paired
+// start-then-later-report around each phase let an early `return` on the
+// phase's own failure (e.g. Persist erroring) skip the matching report,
+// leaving a watchdog's in-flight table (see cmd/harness/main.go) with an
+// entry nothing would ever clear — a permanent false "still stuck" warning
+// for a phase that in fact failed and returned promptly. Every phase site in
+// handleCreate that calls reportCreatePhaseStart at all routes through this
+// one helper so that invariant is structural, not a rule each call site has
+// to remember.
+func (s *Server) timedCreatePhase(sessionID, phase string, fn func() error) error {
+	s.reportCreatePhaseStart(sessionID, phase)
+	t0 := time.Now()
+	err := fn()
+	s.reportCreatePhase(sessionID, phase, time.Since(t0))
+	return err
 }
 
 // createWorktreeForSession validates that workDir is inside a git repository
