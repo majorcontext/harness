@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/engine"
 )
 
 // loadConfigLogged loads the effective configuration exactly like
@@ -43,8 +44,10 @@ func logConfigSummary(logger *slog.Logger, info config.LoadInfo) {
 	// Only called out when it changes behavior from the built-in default:
 	// "" and the explicit "fsync" are behaviorally identical (see
 	// engine.Config.SessionSync), so only "volume" is worth an operator's
-	// attention here.
-	if info.SessionSync == "volume" {
+	// attention here. engine.SessionSyncVolume rather than a third string
+	// literal spelling — config can't import engine (cycle), but cmd/harness
+	// already does.
+	if info.SessionSync == engine.SessionSyncVolume {
 		msg += fmt.Sprintf(", session_sync=%s", info.SessionSync)
 	}
 	logger.Info(msg)
