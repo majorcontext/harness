@@ -541,7 +541,7 @@ func (p *blockingWorkerProvider) Stream(ctx context.Context, req *provider.Reque
 // be attributed to the (no-longer-current) condition it ran against — no
 // goal.stalled record (recordGoalStalled itself already discards a
 // stale-generation attempt, so this exercises that path too), no
-// goal.cleared record, no goal.parked record either (Round 7, NEP-4849: a
+// goal.cleared record, no goal.parked record either (Round 7: a
 // worker-turn exhaustion now parks instead of clearing — recordGoalParked
 // carries the exact same generation gate as recordGoalStalled/
 // recordGoalEval/recordGoalEvalFailed, so this is invariant 3 of that plan:
@@ -629,7 +629,7 @@ func TestPursueGoalStaleWorkerFailureDiscarded(t *testing.T) {
 		t.Errorf("log contains goal.stalled, want none (a stale-generation attempt must never be journaled): %s", log)
 	}
 	if strings.Contains(log, `"type":"goal.parked"`) {
-		t.Errorf("log contains goal.parked, want none (a park racing UpdateGoal must be a silent stale-discard, never journaled — invariant 3, NEP-4849): %s", log)
+		t.Errorf("log contains goal.parked, want none (a park racing UpdateGoal must be a silent stale-discard, never journaled — invariant 3): %s", log)
 	}
 	if strings.Contains(log, workerErr.Error()) {
 		t.Errorf("log carries the stale worker error text, want it fully discarded: %s", log)

@@ -171,7 +171,7 @@
 // is exhausted changed. See goalRetryableExhaustedError's doc comment and
 // the package doc's "Round 7" section for the current behavior.
 //
-// # Round 6: an evaluator failure must be advisory, not instantly fatal (NEP-4792)
+// # Round 6: an evaluator failure must be advisory, not instantly fatal
 //
 // Round 3 (above) closed the "evaluator failure leaves a zombie goal" hole by
 // clearing the goal on ANY evaluateGoal error — a provider error, or two
@@ -245,7 +245,7 @@
 // TestPursueGoalEvaluatorRetryableErrorRecoversWithinBoundary, and
 // TestPursueGoalEvaluatorTerminalAfterConsecutiveFailureLimit.
 //
-// # Round 7: worker-turn exhaustion must never clear an armed goal either (NEP-4849)
+// # Round 7: worker-turn exhaustion must never clear an armed goal either
 //
 // Round 6 made the EVALUATOR half of the loop advisory-by-default; the
 // WORKER half — Round 2's original fix — still cleared the goal outright on
@@ -628,9 +628,9 @@ func waitGoalRetryableBackoff(ctx context.Context, attempt int) error {
 // is exhausted while every failure was classified provider-retryable — a
 // truly long outage, not the "several minutes" the schedule is tuned for.
 //
-// # Round 7 supersession (NEP-4849)
+// # Round 7 supersession
 //
-// Before NEP-4849, PursueGoal recognized this type via errors.As and
+// Before the Round 7 exit-park work, PursueGoal recognized this type via errors.As and
 // treated it completely differently from an ordinary exhausted-retries
 // error: a self-re-arming in-loop `continue` (GitHub issue #61's "park,
 // don't die" design — see the package doc's "Round 4" section, whose
@@ -696,7 +696,7 @@ func IsGoalEvaluatorExhausted(err error) bool {
 // exhausts either exhaustion tier — deterministic (goalWorkerRetries) or
 // retryable-class (goalRetryableMaxAttempts) — and the loop exit-parks
 // instead of clearing the goal. See PursueGoal's doc comment and the
-// package doc's "Round 7" section (NEP-4849): unlike goalEvaluatorExhaustedError
+// package doc's "Round 7" section: unlike goalEvaluatorExhaustedError
 // above, reaching this sentinel is NOT a durable "give up" terminal — the
 // goal stays fully active, ready to resume the instant a caller starts a
 // new PursueGoal call for it (the server's activity-driven auto-arm,
@@ -851,14 +851,14 @@ func (s *Session) clearGoalParkedAtEntry() {
 //
 // Exhausting EITHER budget — or the non-idempotency gate stopping retries
 // early once a tool has already executed this attempt — EXIT-PARKS instead
-// of clearing (see the package doc's "Round 7" section, NEP-4849): PursueGoal
+// of clearing (see the package doc's "Round 7" section): PursueGoal
 // journals a durable, classified goal.parked record (recordGoalParked) and
 // returns a *goalWorkerParkedError (see IsGoalWorkerParked) wrapping the
 // underlying error, WITHOUT calling clearGoal — the goal stays fully active,
 // exactly as ActiveGoal reports it before this failure, ready for an
 // external caller (the server's activity-driven auto-arm, upstream of this
 // package) to resume with a fresh PursueGoal call. This supersedes both the
-// clear this package used before NEP-4849 for the deterministic tier AND
+// clear this package used before the Round 7 exit-park work for the deterministic tier AND
 // GitHub issue #61's in-loop `continue` self-re-arm for the retryable tier
 // (see goalRetryableExhaustedError's doc comment for why that in-loop shape
 // was itself later found unsafe). The one exception is context overflow
@@ -1099,7 +1099,7 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 				// snapshot pick up the new condition.
 				continue
 			}
-			// Round 7 (NEP-4849): every remaining shape of worker-turn
+			// Round 7: every remaining shape of worker-turn
 			// exhaustion — the deterministic budget (goalWorkerRetries)
 			// running out, the retryable-class budget
 			// (goalRetryableMaxAttempts) running out, or the non-idempotency
@@ -1169,7 +1169,7 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 				// drain must be resumable.
 				return nil, err
 			}
-			// Round 6 (NEP-4792): a failing evaluator call is advisory, not
+			// Round 6: a failing evaluator call is advisory, not
 			// fatal — see the package doc. evaluateGoal already spent its own
 			// in-boundary retry budget before returning here (a
 			// retryable-class provider error rode out

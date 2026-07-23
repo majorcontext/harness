@@ -155,7 +155,7 @@ type lastTurnJSON struct {
 // forceIdle (see goalTracker.pauseView and forcesIdlePause below) OVERRIDES
 // all of that to idle for the two pause reasons whose loop has genuinely
 // stopped driving the goal — "restart" (a goal restored from the journal at
-// boot with no loop ever attached) and "worker_failure" (NEP-4849, Task 2:
+// boot with no loop ever attached) and "worker_failure" (Task 2:
 // a worker turn exit-parked the goal, and PursueGoal has actually returned —
 // no goroutine is running it until the next auto-arm or re-POST). Neither is
 // "goal-running" in any sense an operator or composer can act on — it will
@@ -180,8 +180,8 @@ func compositeState(running, goalActive, forceIdle bool) string {
 
 // forcesIdlePause reports whether goal represents a pause reason whose loop
 // has genuinely stopped driving the goal — "restart" (see
-// pauseArmedGoalsAtBoot) or "worker_failure" (see goalTracker.pausedWorker,
-// NEP-4849) — the two pause reasons that force compositeState to idle.
+// pauseArmedGoalsAtBoot) or "worker_failure" (see goalTracker.pausedWorker)
+// — the two pause reasons that force compositeState to idle.
 // "provider-backoff" deliberately returns false here: that loop is still
 // alive, merely waiting. nil-safe.
 func forcesIdlePause(goal *goalJSON) bool {
@@ -212,7 +212,7 @@ type goalJSON struct {
 	// state (see goalTracker.pauseView): true with pause_reason "restart"
 	// when this process booted and found the goal active with no loop ever
 	// attached (see pauseArmedGoalsAtBoot); true with "worker_failure"
-	// (NEP-4849, Task 2) when a worker turn exit-parked the goal (engine/
+	// (Task 2) when a worker turn exit-parked the goal (engine/
 	// goal.go's goal.parked) — the loop has genuinely exited, resumed only
 	// by the next ordinary activity (maybeAutoArmGoal) or an operator
 	// re-POST; true with "provider-backoff" while the retryable-backoff
@@ -223,7 +223,7 @@ type goalJSON struct {
 	Paused      bool   `json:"paused,omitempty"`
 	PauseReason string `json:"pause_reason,omitempty"`
 	// EvalFailures is the most recent goal.eval_failed record's consecutive
-	// failure count (see engine/goal.go's "Round 6" doc section, NEP-4792
+	// failure count (see engine/goal.go's "Round 6" doc section
 	// and goalTracker.evalFailures): rises with each failed evaluator
 	// boundary below goalEvalFailureLimit and resets to 0 on goal.set,
 	// goal.eval, goal.achieved, goal.cleared, or goal.updated. Omitted
@@ -1391,8 +1391,8 @@ func (s *Server) maybeAutoArmGoal(id string, st *sessionState) {
 	}
 	s.mu.Lock()
 	claimedSt.goalLoop = true
-	// Activity-driven resume of a paused goal (restart, NEP-4849's
-	// worker_failure, or a stale retryable-backoff fold): a plain prompt
+	// Activity-driven resume of a paused goal (restart, worker_failure,
+	// or a stale retryable-backoff fold): a plain prompt
 	// completing is exactly what re-attaches a loop to a goal left armed
 	// with no loop running — reset the FULL pause presentation here via the
 	// same helper handleGoal's own re-arm branch uses, so the freshly
@@ -1516,7 +1516,7 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 		// restart was goal.stalled(retryable, waiting), clearing only
 		// pausedRestart leaves pauseView's provider-backoff case firing on
 		// a freshly re-armed, genuinely-running goal until its first
-		// goal.eval resets waiting. pausedWorker (NEP-4849, Task 2) needs
+		// goal.eval resets waiting. pausedWorker (Task 2) needs
 		// the same treatment: a goal left worker-parked (journal tail
 		// goal.parked, no loop attached) reaches this exact branch too —
 		// claimForPrompt succeeded, so nothing was running — and must not
@@ -1622,7 +1622,7 @@ func (s *Server) handleGoalBusy(w http.ResponseWriter, id string, condition stri
 // session.error. Message journaling piggybacks on the same syncMessages path
 // as runPrompt.
 //
-// A worker-parked error (engine.IsGoalWorkerParked, NEP-4849 — either
+// A worker-parked error (engine.IsGoalWorkerParked — either
 // exhaustion tier exit-parking instead of clearing) falls into the default
 // branch below like any other error: session.error, then turn.end via
 // turnEndOutcome, which maps it to outcomeWorkerParked rather than the

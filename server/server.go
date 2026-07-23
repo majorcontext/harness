@@ -42,8 +42,8 @@ const (
 
 // Goal "paused" reasons (see goalTracker.pauseView and GoalSummary.
 // pause_reason): "restart" is a boot-time observation (pauseArmedGoalsAtBoot)
-// that a goal is armed with no loop attached; "worker_failure" (NEP-4849,
-// Task 2) is a LIVE observation that a worker turn exit-parked the goal
+// that a goal is armed with no loop attached; "worker_failure" (Task 2)
+// is a LIVE observation that a worker turn exit-parked the goal
 // (engine/goal.go's goal.parked, either exhaustion tier) — the loop itself
 // has exited, mirroring the restart case's "no loop attached" shape even
 // though this server never restarted; "provider-backoff" mirrors the
@@ -311,7 +311,7 @@ type goalTracker struct {
 	// not "paused", only one observed unattended at boot is).
 	pausedRestart bool
 	// pausedWorker is set by publishGoal/foldGoalRecordLocked when a
-	// goal.parked record lands (NEP-4849, Task 2): a worker turn exhausted
+	// goal.parked record lands (Task 2): a worker turn exhausted
 	// either exhaustion tier and PursueGoal exit-parked instead of clearing
 	// the goal — the worker-failure half of the "paused" presentation (see
 	// pauseView). Unlike pausedRestart (a boot-time-only observation), this
@@ -325,7 +325,7 @@ type goalTracker struct {
 	// resets are needed here specifically.
 	pausedWorker bool
 	// evalFailures is the most recent goal.eval_failed record's CONSECUTIVE
-	// failure count (see engine/goal.go's "Round 6" doc section, NEP-4792) —
+	// failure count (see engine/goal.go's "Round 6" doc section) —
 	// folded straight from the record, so it is idempotent for replay just
 	// like every other field here. Reset to 0 by goal.set/goal.eval/
 	// goal.achieved/goal.cleared/goal.updated, mirroring attempt's own reset
@@ -339,7 +339,7 @@ type goalTracker struct {
 // pauseView derives the goal's "paused" wire presentation (see
 // GoalSummary.paused/pause_reason): pausedRestart (set once at boot, cleared
 // on re-arm) takes priority; then pausedWorker (set live by an exit-parked
-// worker turn, NEP-4849 — the loop has genuinely exited, mirroring the
+// worker turn — the loop has genuinely exited, mirroring the
 // restart case's "nothing is driving this goal" shape even though the
 // server never restarted); otherwise a still-active, still-waiting
 // retryable stall (see engine/goal.go's retryable-backoff park machinery,

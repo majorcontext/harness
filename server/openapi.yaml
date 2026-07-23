@@ -253,7 +253,7 @@ components:
             A goal cleared via DELETE /session/{id}/goal (or a ClearGoal that
             wins a race against an in-flight worker retry or evaluator call)
             emits no turn.end at all — see the turn.end Event description.
-            "evaluator_exhausted": goal-loop only (NEP-4792) — the evaluator
+            "evaluator_exhausted": goal-loop only (Round 6) — the evaluator
             itself failed at 5 CONSECUTIVE turn boundaries, a durable,
             probably-permanent evaluator outage rather than an ordinary
             worker-turn failure; distinct from generic "error" so a poller
@@ -267,7 +267,7 @@ components:
             terminal always clears the goal first (goal.cleared, with a
             dedicated reason distinct from an operator clear's), then emits
             session.error (the terminal must be loud), then this turn.end,
-            in that order. "worker_parked": goal-loop only (NEP-4849) — a
+            in that order. "worker_parked": goal-loop only (Round 7) — a
             worker turn exit-parked instead of clearing the goal, either
             because its DETERMINISTIC retry budget was exhausted or because
             its separately-budgeted RETRYABLE-class backoff was exhausted
@@ -311,7 +311,7 @@ components:
         "worker_failure" (see GoalSummary.paused), this reads `idle` even
         though goal.active is still true — a goal restored from the journal
         at boot with no loop attached ("restart"), or one whose worker turn
-        just exit-parked (NEP-4849, "worker_failure" — see the goal.parked
+        just exit-parked ("worker_failure" — see the goal.parked
         event), is not progressing on its own, and reporting either
         "goal-running" forever would be indistinguishable from a live goal
         (see docs/design/fleet-model.md's ADOPT lifecycle). A
@@ -374,7 +374,7 @@ components:
             True while the goal loop is still within its retryable-class
             backoff budget ("waiting out provider weather"); false on the
             final retryable goal.stalled record, which reports that budget
-            exhausted — the loop is about to EXIT-PARK the turn (NEP-4849:
+            exhausted — the loop is about to EXIT-PARK the turn (Round 7:
             journal a goal.parked record and return, leaving the goal
             active but with no loop attached — see pause_reason
             "worker_failure" below) rather than clear the goal or retry
@@ -386,7 +386,7 @@ components:
             it: this server booted and found the goal armed with no loop
             ever attached in this process (pause_reason "restart"); a
             worker turn exhausted either exhaustion tier and exit-parked
-            instead of clearing the goal (NEP-4849, pause_reason
+            instead of clearing the goal (pause_reason
             "worker_failure" — see the goal.parked event; the loop has
             genuinely exited, not merely paused mid-retry); or the
             retryable-backoff park machinery is waiting out provider
@@ -407,7 +407,7 @@ components:
           type: integer
           description: >
             The most recent goal.eval_failed record's CONSECUTIVE failure
-            count (NEP-4792, see docs/goal-loop.md): rises by one for each
+            count (see docs/goal-loop.md): rises by one for each
             evaluator boundary that fails outright (a non-retryable provider
             error, an exhausted retryable-class in-boundary retry, or two
             consecutive unparseable replies) while the goal stays active and
@@ -816,7 +816,7 @@ components:
             orchestrator-requested abort ended the in-flight prompt. Both
             are followed by a session.status idle transition.
             turn.end is durable and carries `outcome` (see LastTurn.outcome
-            for the full enum, including "worker_parked", NEP-4849) plus a
+            for the full enum, including "worker_parked") plus a
             sanitized `error` detail on failure: it is emitted whenever a
             prompt (prompt_async) or a goal-worker loop (POST
             /session/{id}/goal) finishes, mirrored onto Session.last_turn
@@ -831,7 +831,7 @@ components:
             evaluator call, even without the loop's context being cancelled
             — or shutdown drain) does not emit turn.end at all —
             session.aborted (or, for a cleared goal, goal.cleared) already
-            covers that case. A worker-parked goal (NEP-4849) DOES emit
+            covers that case. A worker-parked goal (Round 7) DOES emit
             turn.end (outcome "worker_parked") — it is not a clear, see the
             goal.parked description below.
             request.meta is a durable record of the model request the engine
@@ -861,10 +861,10 @@ components:
             and docs/goal-loop.md): goal_waiting is true while still inside
             that separate, much longer retryable backoff budget, and false on
             the final such record, which reports the budget exhausted — the
-            loop is about to EXIT-PARK the turn (NEP-4849 — see goal.parked
+            loop is about to EXIT-PARK the turn (Round 7 — see goal.parked
             below), not retry further in place, so a retryable exhaustion is
             never a dead stall requiring an operator re-POST.
-            goal.eval_failed (NEP-4792) carries goal_reason (the sanitized
+            goal.eval_failed (Round 6) carries goal_reason (the sanitized
             evaluator error) and goal_eval_failures (the consecutive-failure
             count, inclusive) for each evaluator boundary that failed
             outright — a non-retryable provider error, a retryable one whose
@@ -881,9 +881,9 @@ components:
             turn.end's "evaluator_exhausted" outcome, which this clear
             always precedes). A worker turn that fails past either retry
             budget (deterministic OR retryable-class) is deliberately NOT a
-            goal.cleared any more (superseded by NEP-4849) — see goal.parked
+            goal.cleared any more (superseded by the Round 7 exit-park work) — see goal.parked
             below.
-            goal.parked (NEP-4849) is journaled once per exit-parked worker
+            goal.parked (Round 7) is journaled once per exit-parked worker
             turn — the loop gave up on this turn (either exhaustion tier)
             WITHOUT clearing the goal, which stays fully active. It carries
             goal_reason (a CLASSIFIED, provider-detail-free string — see
@@ -995,7 +995,7 @@ components:
             full meaning of each value, including why a goal that exhausts
             MaxTurns is "max_turns_exceeded" rather than "completed", why a
             cleared goal emits no turn.end at all, and why an
-            "evaluator_exhausted" terminal (NEP-4792) is the one clear that
+            "evaluator_exhausted" terminal (Round 6) is the one clear that
             DOES emit turn.end (preceded by goal.cleared and session.error,
             in that order).
         system_hash:
@@ -1029,12 +1029,12 @@ components:
             Evaluator reason (goal.eval, goal.achieved), the clear reason
             (goal.cleared) — empty for an operator-initiated clear, or "goal
             evaluator failed at 5 consecutive turn boundaries" for the
-            evaluator_exhausted terminal (NEP-4792) — or a CLASSIFIED,
-            provider-detail-free park reason (goal.parked, NEP-4849): "worker
+            evaluator_exhausted terminal (Round 6) — or a CLASSIFIED,
+            provider-detail-free park reason (goal.parked, Round 7): "worker
             turn failed repeatedly and did not recover" (deterministic tier)
             or "provider <class> errors exhausted the retry budget"
             (retryable tier). A permanently failing worker turn no longer
-            produces a goal.cleared record at all (superseded by NEP-4849) —
+            produces a goal.cleared record at all (superseded by the Round 7 exit-park work) —
             see goal.parked above.
         goal_met:
           type: boolean
@@ -1049,7 +1049,7 @@ components:
           type: integer
           description: >
             1-based worker-turn retry attempt number (goal.stalled). Reused
-            on goal.parked (NEP-4849) to carry that turn's TOTAL attempt
+            on goal.parked (Round 7) to carry that turn's TOTAL attempt
             count instead — by construction the same number the final
             goal.stalled record for the same turn already reported.
         goal_retryable:
@@ -1073,7 +1073,7 @@ components:
         goal_eval_failures:
           type: integer
           description: >
-            Carried by goal.eval_failed only (NEP-4792, see GoalSummary.
+            Carried by goal.eval_failed only (Round 6, see GoalSummary.
             eval_failures): the number of CONSECUTIVE failed evaluator
             boundaries as of this record, inclusive — reset to zero the
             moment a later boundary parses a verdict (goal.eval) or the goal
@@ -1087,7 +1087,7 @@ components:
           description: >
             The "paused" presentation (see GoalSummary.paused): true on a
             goal.paused record (always), a goal.parked record (always,
-            NEP-4849), and on a goal.stalled record while goal_retryable &&
+            Round 7), and on a goal.stalled record while goal_retryable &&
             goal_waiting.
         goal_pause_reason:
           type: string
