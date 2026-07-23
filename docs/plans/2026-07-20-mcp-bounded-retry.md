@@ -52,7 +52,7 @@ engine/mcp_tool.go + test (invariants 3-8), `Connect(name)` manager method with 
 
 ### Task 3: Docs, review, e2e, PR
 
-AGENTS.md + engine/mcp.go doc comment (supersede "indefinite"), full gates, Opus review, live e2e (stub hangs → observe 3 retries then park + block hint → prompt the model to reconnect via the tool while stub healthy → tools usable same session; also tool status in healthy state), PR referencing #82 and NEP-4814, converge, merge on approval.
+AGENTS.md + engine/mcp.go doc comment (supersede "indefinite"), full gates, Opus review, live e2e (stub hangs → observe 3 retries then park + block hint → prompt the model to reconnect via the tool while stub healthy → tools usable same session; also tool status in healthy state), PR referencing #82, converge, merge on approval.
 
 ## Execution notes
 

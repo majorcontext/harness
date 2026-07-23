@@ -14,7 +14,7 @@ import "fmt"
 // goalParkedSegment renders the ambient status block request assembly
 // appends to the newest user message (see streamTurn) while a worker-turn
 // exhaustion has left the session's goal parked (see PursueGoal's "Round 7"
-// / NEP-4849 exit-park branches, and the goalParked field's doc comment on
+// exit-park branches, and the goalParked field's doc comment on
 // *Session).
 //
 // Renders "" — absent, the zero happy-path cost the other two ambient

@@ -1,4 +1,4 @@
-# Goal Worker-Failure Park Implementation Plan (NEP-4849 upstream)
+# Goal Worker-Failure Park Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
@@ -62,7 +62,7 @@ Session.goalParked lifecycle + third ambient occupant + tests (invariant 6). Com
 
 ### Task 4: Docs, review, e2e, PR
 
-AGENTS.md (goal-loop section: park-both-tiers, supersede the #61 in-loop-park description; the deliberate context-overflow asymmetry), docs/goal-loop.md new section, full gates, Opus review, live incident replay (stub provider returning 404s → park not clear → GET shows worker_failure → prompt the box → auto-arm resumes → flip healthy → achieves; also retryable-tier park under synctest-less live with short schedule if feasible, else covered by tests), PR referencing NEP-4849, converge, merge on approval, Linear closure.
+AGENTS.md (goal-loop section: park-both-tiers, supersede the #61 in-loop-park description; the deliberate context-overflow asymmetry), docs/goal-loop.md new section, full gates, Opus review, live incident replay (stub provider returning 404s → park not clear → GET shows worker_failure → prompt the box → auto-arm resumes → flip healthy → achieves; also retryable-tier park under synctest-less live with short schedule if feasible, else covered by tests), PR, converge, merge on approval.
 
 ## Execution notes
 

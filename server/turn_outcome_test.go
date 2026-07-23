@@ -143,7 +143,7 @@ func TestTurnEndOnPromptFailureIsSanitizedAndSurfaced(t *testing.T) {
 
 // TestTurnEndOnGoalWorkerFailureParksWithError exercises the goal-loop half
 // of the primitive: a permanently failing worker turn exhausts its retries
-// and EXIT-PARKS the goal (NEP-4849, superseding this test's original
+// and EXIT-PARKS the goal (superseding this test's original
 // clear-based contract — see engine/goal.go's "Round 7" doc section and
 // docs/plans/2026-07-21-goal-worker-park.md) — that lands a distinct
 // turn.end{outcome: worker_parked} record, not the generic "error" a plain

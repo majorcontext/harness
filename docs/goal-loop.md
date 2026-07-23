@@ -68,8 +68,8 @@ Two independent layers, both TDD red-first (see `engine/goal_test.go` and
    left `true` with nothing left to explain it. A `context.Canceled` error
    (DELETE /goal, shutdown drain) is never retried or treated as a failure —
    it is a deliberate, resumable stop, and the goal is left untouched. See the
-   state-machine diagram in the `goal.go` package doc. (**Superseded by
-   NEP-4849**: exhausting this budget no longer clears — it PARKS, exactly
+   state-machine diagram in the `goal.go` package doc. (**Superseded by the
+   Round 7 exit-park work**: exhausting this budget no longer clears — it PARKS, exactly
    like the retryable-class budget below — see "Worker-turn exit-park and
    activity-driven resume" further down.)
 
@@ -91,12 +91,12 @@ Two independent layers, both TDD red-first (see `engine/goal_test.go` and
 - `evaluateGoal`'s own error path — a provider error while asking the
   evaluator, or two unparseable replies in a row — is **no longer**
   unchanged from the worker-turn path. It used to clear the goal outright
-  (see "Round 3" below); as of NEP-4792 it is advisory, mirroring the
+  (see "Round 3" below); as of Round 6 it is advisory, mirroring the
   worker-turn retry machinery instead of bypassing it. See "Evaluator
   resilience" below for the current behavior — this bullet exists only so a
   reader following an old link lands somewhere accurate.
 
-## Round 3: closing the evaluator's own zombie path (superseded by NEP-4792)
+## Round 3: closing the evaluator's own zombie path (superseded by Round 6)
 
 The paragraph below describes the fix as it shipped originally: any
 `evaluateGoal` error — a provider error, or two unparseable replies in a
@@ -118,7 +118,7 @@ beyond that one error record. The original fix made a failing evaluator
 call clear the goal (unless the error was a cancelled context) before
 returning, the same "no third way out of ACTIVE" principle as the
 worker-turn fix above. See `TestPursueGoalUnparseableTwiceClearsGoal`
-(rewritten under NEP-4792 — see below).
+(rewritten under Round 6 — see below).
 
 ## Review follow-up: two findings on the initial fix
 
@@ -285,8 +285,8 @@ same three fields from the most recent `goal.stalled` record, reset by
 
 ### Self-re-arm: park, don't die
 
-**Superseded by NEP-4849 — see "Worker-turn exit-park and activity-driven
-resume" further down.** The section below describes the fix as it shipped
+**Superseded by the Round 7 exit-park work — see "Worker-turn exit-park and
+activity-driven resume" further down.** The section below describes the fix as it shipped
 originally for issue #61: the retryable budget's exhaustion stayed *inside*
 `PursueGoal`, retrying the same directive on the loop's own next iteration
 without ever returning. That "park in-process" shape is kept here verbatim
@@ -298,7 +298,7 @@ exhausted: staying inside `PursueGoal` to retry turned out to have its own
 cost in production — the run slot stayed pinned to the parked loop for the
 whole outage, so a prompt queued during a long provider outage could only
 ever be injected mid-turn into a doomed attempt, never dispatched as its own
-ordinary turn the way it would against any other idle session. NEP-4849
+ordinary turn the way it would against any other idle session. Round 7
 changes the exhaustion branch to exit `PursueGoal` instead (freeing the run
 slot) while keeping this section's classification, schedule, and budget
 (`goalRetryableMaxAttempts`, `goalRetryableBackoff`) completely intact.
@@ -346,7 +346,7 @@ and `TestPursueGoalRetryableErrorLongBackoffThenRecovers` /
 tests (both run inside a `testing/synctest` bubble — no real sleeps, per
 AGENTS.md).
 
-## Evaluator resilience: advisory failures, bounded terminal (NEP-4792)
+## Evaluator resilience: advisory failures, bounded terminal (Round 6)
 
 ### Incident
 
@@ -437,7 +437,7 @@ See `engine/goal.go`'s package doc ("Round 6") for the full narrative,
 `server/goal_eval_resilience_test.go` for the server-side outcome/journal
 coverage.
 
-## Worker-turn exit-park and activity-driven resume (NEP-4849)
+## Worker-turn exit-park and activity-driven resume (Round 7)
 
 ### Incident
 

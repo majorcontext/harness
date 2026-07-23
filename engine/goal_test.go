@@ -71,7 +71,7 @@ type goalProvider struct {
 	// with evalErr instead of consuming a scripted verdict — a fake
 	// evaluator-side provider failure (see engine's evaluateGoal/
 	// runEvaluatorWithRetry and GitHub issue #61's evaluator-path mirror,
-	// NEP-4792). Each failing call still counts against ei's position: the
+	// Round 6). Each failing call still counts against ei's position: the
 	// scripted eval turns are consumed only once the failures are
 	// exhausted.
 	evalErrN   int
@@ -364,7 +364,7 @@ func TestPursueGoalMaxTurns(t *testing.T) {
 	}
 }
 
-// TestPursueGoalUnparseableTwice pins the NEW (Round 6, NEP-4792) contract for
+// TestPursueGoalUnparseableTwice pins the NEW (Round 6) contract for
 // two consecutive unparseable evaluator replies: REWRITTEN from its original
 // assertion (a bare error plus exactly one session.error) now that a single
 // failed evaluator boundary is advisory, not fatal — see the package doc's
@@ -411,7 +411,7 @@ func TestPursueGoalUnparseableTwice(t *testing.T) {
 // zombie-goal forensic finding (worker turn succeeded, evaluator failed
 // twice, goal stayed active forever) — but clearing on the FIRST failed
 // boundary traded that incident for a new one: production fleet boxes died
-// mid-healthy-work on a transient evaluator hiccup. Round 6 (NEP-4792) keeps
+// mid-healthy-work on a transient evaluator hiccup. Round 6 keeps
 // the no-zombie guarantee (something durable always explains the state —
 // see the goal.eval_failed record asserted below) without treating a single
 // failed boundary as fatal: the goal stays ACTIVE, not cleared, and the loop
@@ -531,7 +531,7 @@ func TestPursueGoalUnparseableThenRecovers(t *testing.T) {
 // goalWorkerRetries+1 attempts, waiting the real backoff schedule between
 // them (see TestPursueGoalRetriesTransientWorkerError) — free on fake time,
 // costly on the wall clock (see AGENTS.md on time.Sleep-free tests).
-// TestPursueGoalWorkerFailureEmitsOnce is a Round 7 (NEP-4849) rewrite: the
+// TestPursueGoalWorkerFailureEmitsOnce is a Round 7 rewrite: the
 // original concern — a permanently failing worker turn must call
 // emitSessionError exactly once per attempt, never an extra time for
 // PursueGoal's own exhaustion handling — is unchanged, since only the
@@ -650,7 +650,7 @@ func TestPursueGoalRetriesTransientWorkerError(t *testing.T) {
 	})
 }
 
-// TestPursueGoalWorkerFailsPermanentlyParksGoal is a Round 7 (NEP-4849)
+// TestPursueGoalWorkerFailsPermanentlyParksGoal is a Round 7
 // rewrite of TestPursueGoalWorkerFailsPermanentlyClearsGoal. The original
 // concern — a worker turn that keeps failing past the retry budget must
 // never just return a bare error and leave the goal a silent zombie (the
@@ -1051,7 +1051,7 @@ func TestClearGoalDuringPendingEvaluationIsCleanStop(t *testing.T) {
 // TestClearGoalDuringPendingEvaluatorFailureIsCleanStop reproduces a
 // ClearGoal (DELETE /goal) racing an in-flight evaluator call that then fails
 // with a genuine (non-cancellation, non-retryable) provider error. REWRITTEN
-// (Round 6, NEP-4792) doc comment: this test's OLD framing ("must be treated
+// (Round 6) doc comment: this test's OLD framing ("must be treated
 // exactly like the same race on the worker-turn path... a deliberately-
 // cleared goal is not an error condition regardless of which half of the
 // loop the clear raced with") described an era where an evaluator failure
@@ -1201,7 +1201,7 @@ func TestGoalEventsEmitWhileLockHeld(t *testing.T) {
 			},
 		},
 		{
-			// recordGoalParked (Round 7, NEP-4849) follows the exact same
+			// recordGoalParked (Round 7) follows the exact same
 			// emit-under-lock discipline as every other goal record — see
 			// its doc comment.
 			name: "recordGoalParked",
@@ -1336,7 +1336,7 @@ func TestPursueGoalRetryBackoffCancellable(t *testing.T) {
 // the directive — the failed attempt still counts (one goal.stalled record),
 // but no second attempt, and no second tool execution, ever happens.
 //
-// Updated for Round 7 (NEP-4849): the gate's own behavior (stop retrying
+// Updated for Round 7: the gate's own behavior (stop retrying
 // immediately) is unchanged — only what happens to the goal once retrying
 // stops changed, from a clear to a park (see
 // TestPursueGoalWorkerFailsPermanentlyParksGoal for that rewrite's full
@@ -1525,7 +1525,7 @@ func TestPursueGoalRetryableErrorLongBackoffThenRecovers(t *testing.T) {
 }
 
 // TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing is a Round 7
-// (NEP-4849) rewrite of GitHub issue #61's original deliverable-4 test. The
+// rewrite of GitHub issue #61's original deliverable-4 test. The
 // original concern — once the retryable-class budget
 // (goalRetryableMaxAttempts) is exhausted for a turn (a truly long outage),
 // the goal must NOT be cleared into a permanently-dead stall requiring an
@@ -1534,7 +1534,7 @@ func TestPursueGoalRetryableErrorLongBackoffThenRecovers(t *testing.T) {
 // `continue` that retried the same directive on the next ordinary turn,
 // never leaving PursueGoal — see goalRetryableExhaustedError's doc
 // comment), so with MaxTurns set the loop only reached the ordinary "max
-// turns" terminal after enough parked cycles. NEP-4849 supersedes that: the
+// turns" terminal after enough parked cycles. The worker-park rework supersedes that: the
 // FIRST retryable-budget exhaustion now exit-parks immediately — the same
 // terminal a deterministic-tier exhaustion reaches (see
 // TestPursueGoalWorkerFailsPermanentlyParksGoal) — freeing the run slot
@@ -1640,7 +1640,7 @@ func TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing(t *testing.T) 
 // backoff — retrying would risk re-running the tool no matter how
 // sympathetic the failure looks.
 //
-// Updated for Round 7 (NEP-4849): the gate itself is unchanged; the tail now
+// Updated for Round 7: the gate itself is unchanged; the tail now
 // asserts a park (not a clear) — and, since PursueGoal derives
 // retryable/class straight from the returned error via provider.AsRetryable
 // rather than from whether promptTurnWithRetry happened to wrap it in

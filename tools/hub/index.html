@@ -710,7 +710,7 @@ function usageSummary(usage) {
 // server/openapi.yaml) and paused/pauseReason (docs/design/fleet-model.md
 // §7: goal.paused — boot-time, always "restart"; goal.stalled while
 // goal_retryable && goal_waiting — "provider-backoff"; goal.parked — always
-// "worker_failure" (NEP-4849: a worker turn exit-parked the goal instead of
+// "worker_failure" (a worker turn exit-parked the goal instead of
 // clearing it, see AGENTS.md's Goal loop section) — all three carry
 // goal_paused/goal_pause_reason). Non-goal events return prev unchanged
 // (same reference); goal events return a fresh object so the input is
@@ -773,7 +773,7 @@ function reduceGoal(prev, ev) {
       g.pauseReason = g.paused ? (ev.goal_pause_reason || "restart") : "";
       break;
     case "goal.parked":
-      // NEP-4849, live event (not boot-only like goal.paused above): a
+      // Round 7, live event (not boot-only like goal.paused above): a
       // worker turn exhausted either exhaustion tier and PursueGoal
       // exit-parked instead of clearing — the goal stays active, resuming
       // automatically the next time this session sees any ordinary
@@ -2499,7 +2499,7 @@ function renderGoalNarrativeItem(ev) {
         ev.goal_condition ? el("div", { class: "goalreason", text: ev.goal_condition }) : null);
     }
     case "goal.parked": {
-      // NEP-4849, live event: a worker turn exhausted either exhaustion
+      // Round 7, live event: a worker turn exhausted either exhaustion
       // tier and PursueGoal exit-parked instead of clearing (see
       // AGENTS.md's Goal loop section) — always pause_reason
       // "worker_failure", never calm (unlike provider-backoff, this loop

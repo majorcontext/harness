@@ -1,4 +1,4 @@
-# Goal Evaluator Resilience Implementation Plan (NEP-4792 upstream)
+# Goal Evaluator Resilience Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 

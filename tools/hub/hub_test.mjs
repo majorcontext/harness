@@ -794,7 +794,7 @@ test("goalPauseTreatment: unrecognized reason still renders (never throws), not 
   assert.equal(t.reason, "some-future-reason");
 });
 
-test("goalPauseTreatment: worker_failure (NEP-4849) renders via the generic fallback, not calm", () => {
+test("goalPauseTreatment: worker_failure (Round 7) renders via the generic fallback, not calm", () => {
   // worker_failure has no dedicated branch in goalPauseTreatment — it falls
   // through to the same generic, forward-compatible bucket "some-future-
   // reason" above exercises. That is intentional: a new reason string must
@@ -829,7 +829,7 @@ test("rearmNeeded: active + paused/provider-backoff -> none (self-clearing, no C
   assert.equal(rearmNeeded(true, "ship it", true, "provider-backoff"), "none");
 });
 
-test("rearmNeeded: active + paused/worker_failure -> normal (NEP-4849: loop exited, resumes only on next ordinary activity, which may never arrive on a goal-only box -- operator needs a CTA)", () => {
+test("rearmNeeded: active + paused/worker_failure -> normal (loop exited, resumes only on next ordinary activity, which may never arrive on a goal-only box -- operator needs a CTA)", () => {
   assert.equal(rearmNeeded(true, "ship it", true, "worker_failure"), "normal");
 });
 
@@ -978,7 +978,7 @@ test("reduceGoal: goal.set/goal.eval/goal.achieved/goal.cleared reset paused", (
   assert.equal(reduceGoal(paused, { type: "goal.cleared" }).paused, false);
 });
 
-/* ---------- reduceGoal: goal.parked (NEP-4849, worker-failure pause) ---------- */
+/* ---------- reduceGoal: goal.parked (Round 7, worker-failure pause) ---------- */
 
 test("reduceGoal: goal.parked sets paused/pauseReason (worker_failure), folds attempt/retryable like goal.stalled, and keeps the goal active", () => {
   let g = reduceGoal(null, { type: "goal.set", goal_condition: "ship it" });
