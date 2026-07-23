@@ -388,7 +388,15 @@ func (s *sseStream) waitFor(t *testing.T, typ string) Event {
 }
 
 // collectUntilIdle reads events until a session.status idle arrives, returning
-// all events (including the idle one).
+// all events (including the idle one). This idle is only the END of the
+// occupying turn that was in flight when the caller started watching — if a
+// prompt was queued behind it, maybeDispatchQueued's tail dispatches the
+// queued head IMMEDIATELY after this idle is fanned out (session.status busy
+// for the dispatched turn always arrives strictly after this idle — see
+// dispatchQueueHead's doc comment and TestQueuedPromptDispatchesOnDrain's
+// "SSE ordering" comment), so a caller that assumes this idle means "nothing
+// left to do for this session" is wrong whenever a queue is in play: use
+// collectUntilDrained for that case instead.
 func (s *sseStream) collectUntilIdle(t *testing.T) []Event {
 	t.Helper()
 	var out []Event
@@ -397,6 +405,38 @@ func (s *sseStream) collectUntilIdle(t *testing.T) []Event {
 		out = append(out, ev)
 		if ev.Type == "session.status" && ev.Status == "idle" {
 			return out
+		}
+	}
+}
+
+// collectUntilDrained is collectUntilIdle for a caller that needs the
+// session to have NO further turn coming — not just the next idle on the
+// wire, which (per collectUntilIdle's doc comment) may be an intermediate
+// hop in a queue-drain chain. Checking Queued==0 alone is NOT enough: a
+// queued prompt is dequeued (Queued drops to 0) the instant claimForPrompt
+// re-claims the run slot, which happens strictly BEFORE the dispatched
+// turn's own runPrompt call ever runs — so a snapshot taken while that turn
+// is still in flight can already read Queued==0 with State=="busy". This
+// requires BOTH State=="idle" (the run slot is free — so no dispatched turn
+// is mid-flight) AND Queued==0 (nothing left to dispatch) in the same
+// snapshot, and keeps consuming idle events until one lands with both true:
+// since running flips true again (claimForPrompt) strictly before Queued
+// drops to 0 (dispatchQueueHead's DequeuePrompt) for any dispatched turn,
+// and flips back to false only after that turn's own runPrompt fully
+// returns, "State==idle && Queued==0" can only be observed once the whole
+// chain has actually finished. Without this, a test that queues a second
+// prompt behind the one it is watching can read the session's message
+// history mid-flight on the dispatched turn — see
+// TestClaimForPromptSurvivesEvictionRace, whose "server history diverges
+// from disk" flake this fixes.
+func (s *sseStream) collectUntilDrained(t *testing.T, h *harness, id string) []Event {
+	t.Helper()
+	var all []Event
+	for {
+		all = append(all, s.collectUntilIdle(t)...)
+		sess := h.getSessionJSON(id)
+		if sess.State == "idle" && sess.Queued == 0 {
+			return all
 		}
 	}
 }
@@ -2020,9 +2060,12 @@ func TestClaimForPromptSurvivesEvictionRace(t *testing.T) {
 	}
 	_ = idB
 
-	// Release; A completes and returns to idle.
+	// Release; A completes and returns to idle. The queued "again" prompt
+	// dispatches immediately behind A's own idle (queue-beats-goal), so wait
+	// for the queue to actually drain rather than the first idle on the wire
+	// — see collectUntilDrained's doc comment.
 	prov.releaseAll()
-	sse.collectUntilIdle(t)
+	sse.collectUntilDrained(t, h, idA)
 	sse.stop()
 
 	// Re-prompt A and wait for it to fully complete (idle) so the log is stable:
@@ -2036,7 +2079,7 @@ func TestClaimForPromptSurvivesEvictionRace(t *testing.T) {
 	if resp.StatusCode != 202 {
 		t.Fatalf("re-prompt A status %d: %s", resp.StatusCode, data)
 	}
-	sse2.collectUntilIdle(t)
+	sse2.collectUntilDrained(t, h, idA)
 	sse2.stop()
 
 	// The messages endpoint (server's view) and a fresh independent load from
