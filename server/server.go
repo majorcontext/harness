@@ -130,11 +130,13 @@ type Options struct {
 	// phase actually completes, so a failure partway through (e.g.
 	// recordWorktreeOwner or Persist erroring) means later phases in the
 	// list are simply never reported. "total" (elapsed from handler entry to
-	// just before the response is written, or to the point of an error
-	// response) is DIFFERENT: it is reported via a defer installed the
-	// moment a session ID exists, so it fires on every return path once
-	// NewSession has succeeded — success or error alike. This is deliberate:
-	// without it, a caller accumulating phases by session ID (see
+	// the handler's return) is DIFFERENT: it is reported via a defer
+	// installed the moment a session ID exists, so it fires on every return
+	// path once NewSession has succeeded — success or error alike — and,
+	// because a defer runs only after the statement before it completes,
+	// total always spans past the response write: on success it includes
+	// writeJSON, and on a later failure it includes the writeErr call. This
+	// is deliberate: without it, a caller accumulating phases by session ID (see
 	// cmd/harness/main.go's createPhaseLogger) would leak an entry per
 	// failed create — a saturated storage volume is precisely what makes
 	// Persist fail or stall on every create — and it also means
