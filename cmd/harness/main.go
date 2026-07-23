@@ -50,9 +50,9 @@ const (
 	defaultOpenRouterAPIKeyEnv = "OPENROUTER_API_KEY"
 )
 
-// slowPhaseThreshold is NEP-4897's ask: surface store/create phases slower
-// than this in serve (and run) logs, without needing a debugger attached to
-// diagnose a stalled create on a saturated network volume.
+// slowPhaseThreshold surfaces store/create phases slower than this in serve
+// (and run) logs, so a stalled create on a slow volume is diagnosable from a
+// single spawn's logs without a debugger attached.
 const slowPhaseThreshold = 1 * time.Second
 
 // slowStorePhaseLogger returns an engine.Config.OnStorePhase callback that

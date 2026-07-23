@@ -43,7 +43,7 @@ func TestCreatePhaseLoggerEmptiesMapOnTotal(t *testing.T) {
 }
 
 // TestCreatePhaseLoggerHandlesTotalWithoutIntermediatePhases is the
-// regression case the leak actually manifested as: NEP-4897's saturated
+// regression case the leak actually manifested as: a saturated storage
 // volume makes Persist fail on every create, so handleCreate's defer (see
 // server/handlers.go) reports "new_session" then jumps straight to "total"
 // with no persist/register/emit_created in between. The summary line must

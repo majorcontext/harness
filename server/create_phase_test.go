@@ -107,8 +107,8 @@ func unwritableDir(t *testing.T) string {
 // TestOnCreatePhaseReportsTotalOnFailedCreate is a regression test for the
 // phase-accumulator leak found in PR #87 review: handleCreate originally
 // reported "total" only on its success tail, so a failure after
-// "new_session" (e.g. Persist erroring on a saturated volume — exactly
-// NEP-4897's scenario) never reported "total" at all, permanently orphaning
+// "new_session" (e.g. Persist erroring on a saturated storage volume) never
+// reported "total" at all, permanently orphaning
 // that session ID's entry in the cmd-layer accumulator (see
 // cmd/harness/main.go's createPhaseLogger, keyed by session ID). handleCreate
 // now reports "total" via a defer installed right after "new_session"

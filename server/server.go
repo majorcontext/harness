@@ -136,8 +136,8 @@ type Options struct {
 	// NewSession has succeeded — success or error alike. This is deliberate:
 	// without it, a caller accumulating phases by session ID (see
 	// cmd/harness/main.go's createPhaseLogger) would leak an entry per
-	// failed create — exactly the NEP-4897 scenario, where a saturated
-	// volume makes Persist fail or stall on every create — and it also means
+	// failed create — a saturated storage volume is precisely what makes
+	// Persist fail or stall on every create — and it also means
 	// "total" on a failed create is real diagnostic signal: which phases ran
 	// (and how slowly) before the failure. sessionID is the ID minted by
 	// NewSession, carried on every phase report including "new_session"
