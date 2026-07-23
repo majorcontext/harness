@@ -412,30 +412,62 @@ func (s *sseStream) collectUntilIdle(t *testing.T) []Event {
 // collectUntilDrained is collectUntilIdle for a caller that needs the
 // session to have NO further turn coming — not just the next idle on the
 // wire, which (per collectUntilIdle's doc comment) may be an intermediate
-// hop in a queue-drain chain. Checking Queued==0 alone is NOT enough: a
-// queued prompt is dequeued (Queued drops to 0) the instant claimForPrompt
-// re-claims the run slot, which happens strictly BEFORE the dispatched
-// turn's own runPrompt call ever runs — so a snapshot taken while that turn
-// is still in flight can already read Queued==0 with State=="busy". This
-// requires BOTH State=="idle" (the run slot is free — so no dispatched turn
-// is mid-flight) AND Queued==0 (nothing left to dispatch) in the same
-// snapshot, and keeps consuming idle events until one lands with both true:
-// since running flips true again (claimForPrompt) strictly before Queued
-// drops to 0 (dispatchQueueHead's DequeuePrompt) for any dispatched turn,
-// and flips back to false only after that turn's own runPrompt fully
-// returns, "State==idle && Queued==0" can only be observed once the whole
-// chain has actually finished. Without this, a test that queues a second
-// prompt behind the one it is watching can read the session's message
-// history mid-flight on the dispatched turn — see
-// TestClaimForPromptSurvivesEvictionRace, whose "server history diverges
-// from disk" flake this fixes.
+// hop in a queue-drain chain.
+//
+// This reads h.srv's own state directly rather than through a GET
+// /session/{id} round trip: buildSession computes State (from the running
+// flag, captured in lookup) and Queued (from a separate, later
+// QueuedPrompts() call) as two independent observations, so a JSON
+// snapshot can carry a stale State=="idle" alongside a Queued==0 that only
+// became true after State was already captured — exactly the torn read this
+// helper exists to avoid, just moved one layer down.
+//
+// The two direct reads below can't simply be taken under one h.srv.mu
+// critical section either: QueuedPrompts acquires the engine session's OWN
+// mutex, and Server.mu is documented as a LEAF with respect to that mutex
+// (see server.go's Server.mu doc comment) — calling it while holding
+// h.srv.mu would risk the exact deadlock that invariant exists to prevent.
+// So running is read under the lock, released, then QueuedPrompts is called
+// unlocked, then running is read under the lock a SECOND time. Ordering is
+// what makes this race-free: a queued prompt is dequeued (Queued drops to
+// 0) strictly BEFORE the dispatched turn's own runPrompt call ever runs,
+// and running flips back to false only after that call returns — so if a
+// dispatch is (or becomes) in flight anywhere around the QueuedPrompts
+// call, the SECOND running read, being the more recent of the two, observes
+// running==true and the loop goes around again. Only "QueuedPrompts()==0,
+// immediately followed by running==false" proves nothing was in flight as
+// of the more recent observation — and since nothing in this test enqueues
+// anything further once inside this loop, an empty queue observed here
+// stays empty, so that combination can only occur once the whole chain has
+// genuinely finished. (The first running read, before QueuedPrompts, is
+// just a fast early-exit for the common case — still running means
+// definitely not drained, no need to even call QueuedPrompts.)
+//
+// Without this, a test that queues a second prompt behind the one it is
+// watching can read the session's message history mid-flight on the
+// dispatched turn — see TestClaimForPromptSurvivesEvictionRace, whose
+// "server history diverges from disk" flake this fixes.
 func (s *sseStream) collectUntilDrained(t *testing.T, h *harness, id string) []Event {
 	t.Helper()
 	var all []Event
 	for {
 		all = append(all, s.collectUntilIdle(t)...)
-		sess := h.getSessionJSON(id)
-		if sess.State == "idle" && sess.Queued == 0 {
+
+		h.srv.mu.Lock()
+		st := h.srv.sessions[id]
+		running := st != nil && st.running
+		h.srv.mu.Unlock()
+		if running || st == nil {
+			continue // definitely not drained (or not resident — this test keeps id resident throughout)
+		}
+
+		queued := len(st.sess.QueuedPrompts()) // unlocked: QueuedPrompts acquires the session's own mutex
+
+		h.srv.mu.Lock()
+		running = st.running
+		h.srv.mu.Unlock()
+
+		if !running && queued == 0 {
 			return all
 		}
 	}
