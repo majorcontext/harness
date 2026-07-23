@@ -124,6 +124,29 @@ type Options struct {
 	// achieveGoal/ClearGoal emit under Session.mu). Logging or forwarding to an
 	// external sink is the intended use.
 	OnError func(context.Context, error)
+	// OnCreatePhase, when non-nil, is invoked once per completed phase of
+	// handleCreate — "new_session", "persist", "register" (the in-memory
+	// session-map insert), and "emit_created" are reported only when that
+	// phase actually completes, so a failure partway through (e.g.
+	// recordWorktreeOwner or Persist erroring) means later phases in the
+	// list are simply never reported. "total" (elapsed from handler entry to
+	// the handler's return) is DIFFERENT: it is reported via a defer
+	// installed the moment a session ID exists, so it fires on every return
+	// path once NewSession has succeeded — success or error alike — and,
+	// because a defer runs only after the statement before it completes,
+	// total always spans past the response write: on success it includes
+	// writeJSON, and on a later failure it includes the writeErr call. This
+	// is deliberate: without it, a caller accumulating phases by session ID (see
+	// cmd/harness/main.go's createPhaseLogger) would leak an entry per
+	// failed create — a saturated storage volume is precisely what makes
+	// Persist fail or stall on every create — and it also means
+	// "total" on a failed create is real diagnostic signal: which phases ran
+	// (and how slowly) before the failure. sessionID is the ID minted by
+	// NewSession, carried on every phase report including "new_session"
+	// itself; a failed NewSession call reports nothing at all, since no ID
+	// exists yet to key it by. Called synchronously; keep it fast, mirroring
+	// OnError's rules above.
+	OnCreatePhase func(sessionID, phase string, elapsed time.Duration)
 	// MCP is the MCP client integration shared by every session this server
 	// hosts (see engine.MCPRegistry): it is the same *engine.MCPManager the
 	// NewSession/LoadSession wrapper wires into each session's
