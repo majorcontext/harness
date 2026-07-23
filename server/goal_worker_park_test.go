@@ -1,4 +1,4 @@
-// Tests for Task 2 of the goal worker-failure park work (NEP-4849): the
+// Tests for Task 2 of the goal worker-failure park work (Round 7): the
 // server-side outcome mapping, pause-presentation fold, and resume-on-
 // activity behavior for engine/goal.go's exit-parked worker turns (Task 1,
 // commit 1ffb48a). See docs/plans/2026-07-21-goal-worker-park.md's
@@ -41,8 +41,8 @@ const goalWorkerRetriesForTest = 2
 func permanentWorkerErr() error { return errors.New("permanent failure: 404 not found") }
 
 // TestTurnEndOutcomeWorkerParked is invariant 1's outcome-mapping headline:
-// turnEndOutcome must map a worker-parked sentinel (engine.IsGoalWorkerParked,
-// NEP-4849) to the distinct "worker_parked" outcome, not the generic "error"
+// turnEndOutcome must map a worker-parked sentinel (engine.IsGoalWorkerParked)
+// to the distinct "worker_parked" outcome, not the generic "error"
 // every other failure has always recorded. engine.IsGoalWorkerParked has no
 // public constructor (see engine/goal.go's goalWorkerParkedError), so the
 // only way to obtain a genuine one is to actually exhaust a goal loop's
@@ -81,7 +81,7 @@ func TestTurnEndOutcomeWorkerParked(t *testing.T) {
 
 // TestForcesIdlePauseIncludesWorkerFailure is a focused unit test on the
 // renamed/extended helper (formerly isRestartPaused): "restart" and
-// "worker_failure" (NEP-4849) must both force compositeState to idle;
+// "worker_failure" (Round 7) must both force compositeState to idle;
 // "provider-backoff" must not (its loop is genuinely alive, merely waiting
 // — see TestGoalStalledProviderBackoffSurfacesPaused).
 func TestForcesIdlePauseIncludesWorkerFailure(t *testing.T) {
@@ -106,7 +106,7 @@ func TestForcesIdlePauseIncludesWorkerFailure(t *testing.T) {
 }
 
 // TestGoalTrackerPauseViewPrecedence locks in pauseView's three-way
-// precedence (NEP-4849, Task 2): restart > worker_failure > provider-backoff.
+// precedence (Task 2): restart > worker_failure > provider-backoff.
 func TestGoalTrackerPauseViewPrecedence(t *testing.T) {
 	cases := []struct {
 		name       string

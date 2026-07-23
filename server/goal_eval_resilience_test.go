@@ -1,4 +1,4 @@
-// Tests for Task 2 of the goal-evaluator resilience work (NEP-4792): the
+// Tests for Task 2 of the goal-evaluator resilience work (Round 6): the
 // server-side outcome mapping, journal folds, and Session JSON surfacing of
 // engine/goal.go's advisory goal.eval_failed boundaries and its bounded
 // evaluator_exhausted terminal. See docs/plans/2026-07-20-goal-eval-

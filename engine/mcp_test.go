@@ -888,7 +888,7 @@ func TestMCPManagerCloseBounded(t *testing.T) {
 	}
 }
 
-// # Retry state machine (NEP-4814 upstream, docs/plans/2026-07-20-mcp-init-resilience.md)
+// # Retry state machine (docs/plans/2026-07-20-mcp-init-resilience.md)
 //
 // The tests below cover invariants 2-5 and 8 of that plan. Most run inside
 // a testing/synctest bubble with mcpConnectFunc swapped for a network-free

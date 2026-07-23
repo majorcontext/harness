@@ -1,4 +1,4 @@
-# MCP Init Resilience Implementation Plan (NEP-4814 upstream)
+# MCP Init Resilience Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
@@ -63,7 +63,7 @@ Commit: `feat(engine): ambient status block surfaces degraded MCP servers to the
 
 ### Task 3: Docs + review + validation
 
-`AGENTS.md` (MCP bullet in External Protocol Surfaces or a short new paragraph — document retry/backoff, config field, status block, and the changed not-configured-vs-failed error split); check `docs/` for any MCP design doc to update. Full gates. Then Opus full-branch review; then live e2e: real `harness serve` + real worker model + a stub MCP HTTP server that (A) times out initialize for the first ~30s then recovers — prove the agent sees the status block, tools absent, then present mid-session after recovery; (B) config `connect_timeout_s` honored (set 2s, observe fast failure); (C) healthy-path unchanged (no block). Then PR (Fixes nothing app-side; reference NEP-4814), converge review rounds, merge on user approval, comment back to Linear.
+`AGENTS.md` (MCP bullet in External Protocol Surfaces or a short new paragraph — document retry/backoff, config field, status block, and the changed not-configured-vs-failed error split); check `docs/` for any MCP design doc to update. Full gates. Then Opus full-branch review; then live e2e: real `harness serve` + real worker model + a stub MCP HTTP server that (A) times out initialize for the first ~30s then recovers — prove the agent sees the status block, tools absent, then present mid-session after recovery; (B) config `connect_timeout_s` honored (set 2s, observe fast failure); (C) healthy-path unchanged (no block). Then PR (Fixes nothing app-side), converge review rounds, merge on user approval.
 
 ---
 
