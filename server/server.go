@@ -124,6 +124,17 @@ type Options struct {
 	// achieveGoal/ClearGoal emit under Session.mu). Logging or forwarding to an
 	// external sink is the intended use.
 	OnError func(context.Context, error)
+	// OnCreatePhase, when non-nil, is invoked once per completed phase of
+	// handleCreate's success path — "new_session", "persist", "register" (the
+	// in-memory session-map insert), "emit_created", and finally "total"
+	// (elapsed from handler entry to just before the response is written).
+	// Reported only on the success path — a failure at any phase returns an
+	// error response without reporting that or any later phase, so the
+	// handler's error paths are entirely unchanged. sessionID is the ID
+	// minted by NewSession, carried on every phase report including
+	// "new_session" itself, since a failed NewSession call is never reported.
+	// Called synchronously; keep it fast, mirroring OnError's rules above.
+	OnCreatePhase func(sessionID, phase string, elapsed time.Duration)
 	// MCP is the MCP client integration shared by every session this server
 	// hosts (see engine.MCPRegistry): it is the same *engine.MCPManager the
 	// NewSession/LoadSession wrapper wires into each session's

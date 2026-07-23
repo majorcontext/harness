@@ -339,6 +339,7 @@ func validateParentSession(v *string) (string, error) {
 }
 
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
+	handlerStart := time.Now()
 	var body struct {
 		Model        message.ModelRef `json:"model"`
 		WorkDir      string           `json:"workdir"`
@@ -388,6 +389,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		sessionWorkDir = wt.path
 	}
 
+	phaseStart := time.Now()
 	sess, err := s.opts.NewSession(body.Model, sessionWorkDir, parentSession)
 	if err != nil {
 		if wt != nil {
@@ -396,6 +398,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "cannot create session")
 		return
 	}
+	s.reportCreatePhase(sess.ID, "new_session", time.Since(phaseStart))
 	if wt != nil {
 		// Record the owning session in the meta BEFORE the session log
 		// becomes durable, and fail creation if it cannot be recorded. The
@@ -416,6 +419,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	// Persist the log now so the session has durable state even if it is
 	// evicted before its first prompt; otherwise eviction below would drop a
 	// never-prompted session with no on-disk backing to reload from.
+	phaseStart = time.Now()
 	if err := sess.Persist(); err != nil {
 		if wt != nil {
 			s.discardWorktree(wt)
@@ -423,13 +427,29 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "cannot create session")
 		return
 	}
+	s.reportCreatePhase(sess.ID, "persist", time.Since(phaseStart))
+
+	phaseStart = time.Now()
 	s.mu.Lock()
 	s.sessions[sess.ID] = &sessionState{sess: sess, lastUsed: time.Now(), shareWorkdir: body.ShareWorkdir, isolation: isolation, worktree: wt}
 	s.evictResidentLocked()
 	s.mu.Unlock()
+	s.reportCreatePhase(sess.ID, "register", time.Since(phaseStart))
 
+	phaseStart = time.Now()
 	s.emitDurable(Event{Type: evtSessionCreated, SessionID: sess.ID, Model: sess.Model()})
+	s.reportCreatePhase(sess.ID, "emit_created", time.Since(phaseStart))
+
+	s.reportCreatePhase(sess.ID, "total", time.Since(handlerStart))
 	writeJSON(w, http.StatusCreated, s.buildSession(sess, "idle"))
+}
+
+// reportCreatePhase forwards elapsed to Options.OnCreatePhase, nil-guarded.
+// See its doc comment for the reported phases and success-only contract.
+func (s *Server) reportCreatePhase(sessionID, phase string, elapsed time.Duration) {
+	if s.opts.OnCreatePhase != nil {
+		s.opts.OnCreatePhase(sessionID, phase, elapsed)
+	}
 }
 
 // createWorktreeForSession validates that workDir is inside a git repository

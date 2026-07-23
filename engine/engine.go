@@ -201,6 +201,17 @@ type Config struct {
 	// etc.), which would deadlock on that same mutex.
 	OnEvent func(Event)
 
+	// OnStorePhase, when non-nil, receives one call per completed phase of
+	// the durable store paths (op "ensure_log": phases "mkdir", "open",
+	// "stat", "tail_repair" (only when repair ran), "header_write" (only on
+	// fresh-file), "sync_dir" (only on fresh-file); op "enqueue_durable":
+	// phases "write_record", "fsync"). Called synchronously while the
+	// session mutex is held — the callback must be fast and must never call
+	// back into the Session (same rule as OnEvent). Purely observational:
+	// timing hooks for diagnosing slow storage (e.g. a saturated network
+	// volume), never control flow.
+	OnStorePhase func(op, phase string, elapsed time.Duration)
+
 	// OnRequest, when non-nil, is invoked synchronously in streamTurn with the
 	// exact final request about to be sent to the provider — after params,
 	// system-segment, and hook assembly, immediately before prov.Stream. turn

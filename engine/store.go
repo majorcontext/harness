@@ -346,28 +346,44 @@ func (s *Session) persistCompactLocked(firstID, lastID string, turnsFolded int, 
 	}
 }
 
+// storePhase reports elapsed as a completed op/phase to Config.OnStorePhase,
+// nil-guarded. Caller holds s.mu (see OnStorePhase's doc comment).
+func (s *Session) storePhase(op, phase string, elapsed time.Duration) {
+	if s.cfg.OnStorePhase != nil {
+		s.cfg.OnStorePhase(op, phase, elapsed)
+	}
+}
+
 // ensureLog opens the session log, creating the directory and file — and
-// writing the header — on first use. Caller holds s.mu.
+// writing the header — on first use. Caller holds s.mu. The fast path (log
+// already open) reports no phases.
 func (s *Session) ensureLog() error {
 	if s.logFile != nil {
 		return nil
 	}
+	const op = "ensure_log"
+	t0 := time.Now()
 	if err := os.MkdirAll(s.cfg.SessionDir, 0o755); err != nil {
 		return err
 	}
+	s.storePhase(op, "mkdir", time.Since(t0))
 	// O_RDWR, not O_WRONLY: the torn-tail repair below needs to ReadAt the
 	// file's own last byte. O_APPEND still governs every Write (here and in
 	// writeRecord) regardless of the file's read/write position, so this
 	// adds read capability without changing append semantics at all.
+	t0 = time.Now()
 	f, err := os.OpenFile(sessionPath(s.cfg.SessionDir, s.ID), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return err
 	}
+	s.storePhase(op, "open", time.Since(t0))
+	t0 = time.Now()
 	fi, err := f.Stat()
 	if err != nil {
 		f.Close()
 		return err
 	}
+	s.storePhase(op, "stat", time.Since(t0))
 	s.logFile = f
 	size := fi.Size()
 	// A prior process can have crashed mid-write, leaving the file not
@@ -418,6 +434,7 @@ func (s *Session) ensureLog() error {
 			return err
 		}
 		if last[0] != '\n' {
+			t0 := time.Now()
 			data, err := os.ReadFile(sessionPath(s.cfg.SessionDir, s.ID))
 			if err != nil {
 				f.Close()
@@ -445,6 +462,7 @@ func (s *Session) ensureLog() error {
 				}
 				size = int64(tailStart)
 			}
+			s.storePhase(op, "tail_repair", time.Since(t0))
 		}
 	}
 	if size == 0 {
@@ -473,11 +491,13 @@ func (s *Session) ensureLog() error {
 			buf.Write(b)
 			buf.WriteByte('\n')
 		}
+		t0 := time.Now()
 		if _, err := f.Write(buf.Bytes()); err != nil {
 			f.Close()
 			s.logFile = nil
 			return err
 		}
+		s.storePhase(op, "header_write", time.Since(t0))
 		// A file fsync (as EnqueuePromptDurable does before attesting
 		// durability — see queue.go) commits the file's *contents* but not
 		// its directory entry: POSIX leaves the entry itself up to the
@@ -495,11 +515,13 @@ func (s *Session) ensureLog() error {
 		// mount (e.g. a volume) at boot, so that entry predates the process
 		// and isn't this code's concern. See syncDir for why this is a
 		// build-tagged no-op off unix.
+		t0 = time.Now()
 		if err := syncDir(s.cfg.SessionDir); err != nil {
 			f.Close()
 			s.logFile = nil
 			return err
 		}
+		s.storePhase(op, "sync_dir", time.Since(t0))
 	}
 	s.logStarted = true
 	return nil

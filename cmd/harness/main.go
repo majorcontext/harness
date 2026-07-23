@@ -21,6 +21,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -48,6 +49,78 @@ const (
 	defaultOpenRouterBaseURL   = "https://openrouter.ai/api/v1"
 	defaultOpenRouterAPIKeyEnv = "OPENROUTER_API_KEY"
 )
+
+// slowPhaseThreshold is NEP-4897's ask: surface store/create phases slower
+// than this in serve (and run) logs, without needing a debugger attached to
+// diagnose a stalled create on a saturated network volume.
+const slowPhaseThreshold = 1 * time.Second
+
+// slowStorePhaseLogger returns an engine.Config.OnStorePhase callback that
+// warns on any durable-store phase (engine/store.go's ensureLog,
+// engine/queue.go's EnqueuePromptDurable) exceeding slowPhaseThreshold. Both
+// serveCmd and runCmd wire it, symmetrically, since the store paths it
+// observes don't differ between them. No per-phase Info logging here —
+// EnqueuePromptDurable runs once per queued message, so an always-on line
+// would spam; only the slow case is worth a serve log entry.
+func slowStorePhaseLogger(logger *slog.Logger) func(op, phase string, elapsed time.Duration) {
+	return func(op, phase string, elapsed time.Duration) {
+		if elapsed > slowPhaseThreshold {
+			logger.Warn("slow store phase", "op", op, "phase", phase, "elapsed_ms", elapsed.Milliseconds())
+		}
+	}
+}
+
+// createPhaseLogger wires server.Options.OnCreatePhase to the serve logger.
+// It warns on any individually slow phase (mirroring slowStorePhaseLogger)
+// and, unlike it, also emits ONE Info summary line per session when the
+// "total" phase lands — creates are rare (once per session, unlike the
+// per-message store phases above), so an always-on Info line is cheap and
+// is exactly what lets a single canary session spawn localize a stall to
+// one phase without a debugger.
+//
+// handleCreate calls back sequentially from one goroutine per request, but
+// multiple creates can be in flight concurrently, so phases are accumulated
+// per-call in a mutex-guarded map keyed by session ID, deleted on "total".
+type createPhaseLogger struct {
+	logger *slog.Logger
+
+	mu   sync.Mutex
+	byID map[string]map[string]time.Duration
+}
+
+func newCreatePhaseLogger(logger *slog.Logger) *createPhaseLogger {
+	return &createPhaseLogger{logger: logger, byID: make(map[string]map[string]time.Duration)}
+}
+
+// createPhaseOrder is the fixed field order for the "session create phases"
+// summary line — every phase handleCreate reports before "total".
+var createPhaseOrder = []string{"new_session", "persist", "register", "emit_created"}
+
+func (c *createPhaseLogger) OnCreatePhase(sessionID, phase string, elapsed time.Duration) {
+	if elapsed > slowPhaseThreshold {
+		c.logger.Warn("slow store phase", "op", "create", "phase", phase, "session", sessionID, "elapsed_ms", elapsed.Milliseconds())
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	phases := c.byID[sessionID]
+	if phases == nil {
+		phases = make(map[string]time.Duration)
+		c.byID[sessionID] = phases
+	}
+	phases[phase] = elapsed
+	if phase != "total" {
+		return
+	}
+	delete(c.byID, sessionID)
+	args := make([]any, 0, 2*len(createPhaseOrder)+4)
+	args = append(args, "session", sessionID, "total_ms", elapsed.Milliseconds())
+	for _, p := range createPhaseOrder {
+		if d, ok := phases[p]; ok {
+			args = append(args, p+"_ms", d.Milliseconds())
+		}
+	}
+	c.logger.Info("session create phases", args...)
+}
 
 var version = "0.1.0-dev"
 
@@ -403,6 +476,7 @@ func runCmd(args []string) error {
 		WorkDir:             workDir,
 		SessionDir:          sesDir,
 		OnEvent:             onEvent,
+		OnStorePhase:        slowStorePhaseLogger(logger),
 		Instructions:        instructionsConfig(cfg, opts.noInstructions),
 		SkillsDirs:          skillsDirs(cfg, opts.skillsDirs, workDir),
 		Hooks:               pluginHooks(host),
@@ -714,6 +788,8 @@ func serveCmd(args []string) error {
 	// server-backed — see server/clientapi.go); mkCfg closes over the srv
 	// variable, so it can reference it before it is assigned — same pattern
 	// as the OnEvent closure above it.
+	storePhase := slowStorePhaseLogger(logger)
+	createPhase := newCreatePhaseLogger(logger)
 	var srv *server.Server
 	mkCfg := func(model message.ModelRef) engine.Config {
 		return engine.Config{
@@ -723,6 +799,7 @@ func serveCmd(args []string) error {
 			WorkDir:             workDir,
 			SessionDir:          sesDir,
 			OnEvent:             func(ev engine.Event) { srv.Publish(ev) },
+			OnStorePhase:        storePhase,
 			Instructions:        instructionsConfig(cfg, noInstructions),
 			SkillsDirs:          skillsDirs(cfg, skillDirs, workDir),
 			Hooks:               pluginHooks(pluginHost),
@@ -750,8 +827,9 @@ func serveCmd(args []string) error {
 		OnError: func(_ context.Context, err error) {
 			logger.Error("serve error", "error", err.Error())
 		},
-		NewSession:  newSessionFn(mkCfg, defModel, cfg, skillDirs, func(id string, turn int, req *provider.Request) { srv.OnRequest(id, turn, req) }),
-		LoadSession: loadSessionFn(mkCfg, defModel, cfg, skillDirs, func(id string, turn int, req *provider.Request) { srv.OnRequest(id, turn, req) }),
+		OnCreatePhase: createPhase.OnCreatePhase,
+		NewSession:    newSessionFn(mkCfg, defModel, cfg, skillDirs, func(id string, turn int, req *provider.Request) { srv.OnRequest(id, turn, req) }),
+		LoadSession:   loadSessionFn(mkCfg, defModel, cfg, skillDirs, func(id string, turn int, req *provider.Request) { srv.OnRequest(id, turn, req) }),
 	})
 	if err != nil {
 		return err
