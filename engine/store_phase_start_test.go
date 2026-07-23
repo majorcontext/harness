@@ -103,6 +103,50 @@ func TestOnStorePhaseStartFiresBeforeCompletion(t *testing.T) {
 	}
 }
 
+// TestOnStorePhaseStartPairsOnErrorPath is a regression test for the bug
+// flagged in PR #89 review: a phase whose own operation FAILS (e.g. EIO,
+// ENOSPC — modeled here by an unwritable SessionDir) used to skip its
+// matching OnStorePhase call entirely, since the old code returned from
+// ensureLog before reaching it. That left a watchdog's in-flight table (see
+// cmd/harness/main.go) with a permanently stale entry — a false "still
+// stuck" warning for a phase that had, in fact, already failed and
+// returned. Every phase that starts must still get exactly one matching
+// completion, on the error path exactly as much as the success path (see
+// timedStorePhase, the shared call shape this pins).
+func TestOnStorePhaseStartPairsOnErrorPath(t *testing.T) {
+	dir := unwritableSessionDir(t)
+	type key struct{ op, phase string }
+	starts := make(map[key]int)
+	dones := make(map[key]int)
+	s := NewSession(Config{
+		SessionDir: dir,
+		OnStorePhaseStart: func(op, phase string) {
+			starts[key{op, phase}]++
+		},
+		OnStorePhase: func(op, phase string, elapsed time.Duration) {
+			dones[key{op, phase}]++
+		},
+	})
+
+	if err := s.Persist(); err == nil {
+		t.Fatal("Persist against an unwritable SessionDir returned nil, want an error")
+	}
+
+	if len(starts) == 0 {
+		t.Fatal("OnStorePhaseStart never fired against an unwritable SessionDir")
+	}
+	for k, n := range starts {
+		if dones[k] != n {
+			t.Errorf("phase %+v: %d starts but %d completions — a start with no matching completion leaks a permanent watchdog entry", k, n, dones[k])
+		}
+	}
+	for k, n := range dones {
+		if starts[k] != n {
+			t.Errorf("phase %+v: %d completions but %d starts", k, n, starts[k])
+		}
+	}
+}
+
 // TestOnStorePhaseStartNilSafe verifies a nil OnStorePhaseStart (the
 // zero-value default, exercised by every other engine test in this package)
 // never panics, mirroring OnStorePhase's own nil-safety.

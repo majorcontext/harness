@@ -7,6 +7,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/majorcontext/harness/engine"
+	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/provider"
 )
 
 // TestOnCreatePhaseStartFiresBeforeCompletion verifies Options.
@@ -85,6 +89,78 @@ func TestOnCreatePhaseStartFiresBeforeCompletion(t *testing.T) {
 		if d.sessionID != s.sessionID {
 			t.Errorf("phase %q: start sessionID %q != completion sessionID %q", s.phase, s.sessionID, d.sessionID)
 		}
+	}
+}
+
+// TestOnCreatePhaseReportsPersistEndOnFailure is a regression test for the
+// bug flagged in PR #89 review: handleCreate used to call
+// reportCreatePhaseStart(sess.ID, "persist") and then, on a Persist error,
+// return WITHOUT the matching reportCreatePhase — leaving a watchdog's
+// in-flight table (see cmd/harness/main.go) with a "persist" entry nothing
+// would ever clear, a permanent false "still stuck" warning for a phase
+// that had, in fact, already failed and returned. Reuses
+// TestOnCreatePhaseReportsTotalOnFailedCreate's arrangement (create_phase_
+// test.go): a session whose own log directory is unwritable, so Persist
+// fails deterministically while the server's own SessionDir (and so
+// server.New's own construction) stays untouched.
+func TestOnCreatePhaseReportsPersistEndOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	prov := &scriptedProvider{name: "test"}
+	model := message.ModelRef{Provider: prov.Name(), Model: "m1"}
+	badLogDir := unwritableDir(t)
+
+	type startCall struct{ sessionID, phase string }
+	type doneCall struct{ sessionID, phase string }
+	var mu sync.Mutex
+	var starts []startCall
+	var dones []doneCall
+	srv := newServer(t, dir, prov, 0, func(o *Options) {
+		o.OnCreatePhaseStart = func(sessionID, phase string) {
+			mu.Lock()
+			defer mu.Unlock()
+			starts = append(starts, startCall{sessionID, phase})
+		}
+		o.OnCreatePhase = func(sessionID, phase string, elapsed time.Duration) {
+			mu.Lock()
+			defer mu.Unlock()
+			dones = append(dones, doneCall{sessionID, phase})
+		}
+		o.NewSession = func(m message.ModelRef, workDir, parentSession string) (*engine.Session, error) {
+			if m.IsZero() {
+				m = model
+			}
+			return engine.NewSession(engine.Config{
+				Providers:     provider.Registry{prov.Name(): prov},
+				Model:         m,
+				SessionDir:    badLogDir,
+				WorkDir:       workDir,
+				ParentSession: parentSession,
+			}), nil
+		}
+	})
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	h := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv, ts: ts}
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "test/m1"})
+	if resp.StatusCode != 500 {
+		t.Fatalf("create status %d, want 500 (Persist should fail): %s", resp.StatusCode, data)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(starts) != 1 || starts[0].phase != "persist" {
+		t.Fatalf("OnCreatePhaseStart calls = %+v, want exactly one for \"persist\"", starts)
+	}
+	// new_session, then persist (this is the bug fix under test: persist
+	// must report its END despite Persist() erroring), then total (already
+	// unconditional via its own defer, unaffected by this bug, but still
+	// expected here since the handler still returns normally).
+	if len(dones) != 3 || dones[0].phase != "new_session" || dones[1].phase != "persist" || dones[2].phase != "total" {
+		t.Fatalf("OnCreatePhase calls = %+v, want new_session, persist, total", dones)
+	}
+	if dones[1].sessionID != starts[0].sessionID {
+		t.Errorf("persist completion sessionID %q != start sessionID %q", dones[1].sessionID, starts[0].sessionID)
 	}
 }
 

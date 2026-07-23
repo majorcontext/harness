@@ -64,6 +64,52 @@ func TestWatchdogWarnsWhileStorePhaseStuck(t *testing.T) {
 	}
 }
 
+// TestWatchdogClearsEntryOnErrorTimedCompletion models serveCmd's actual
+// wiring shape (see main.go's storePhase/onCreatePhase closures): the
+// watchdog's done call is unconditional, made BEFORE delegating to the
+// existing completion logger, regardless of whether the underlying
+// operation succeeded or errored. This is the piece that only works end to
+// end because of the PR #89 review fix one layer down (engine's
+// timedStorePhase / server's timedCreatePhase now guarantee OnStorePhase/
+// OnCreatePhase fire on error too, not just success) — a start with no
+// matching completion call at all is exactly what leaves a permanent, false
+// "still stuck" warning. Here that is modeled directly: start, then a
+// done call carrying error-path characteristics (a short elapsed, as a
+// fast-failing EIO/ENOSPC would produce) — the entry must be gone
+// afterward, with no warn on a later check.
+func TestWatchdogClearsEntryOnErrorTimedCompletion(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	w := newInFlightWatchdog(logger)
+
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	w.now = func() time.Time { return t0 }
+
+	// storePhase mirrors serveCmd's own closure: clear the watchdog entry
+	// unconditionally, then delegate to whatever the completion logger does
+	// with the (op, phase, elapsed) triple — irrespective of whether the
+	// underlying operation errored, which this signature can't even see.
+	var completionLogged []string
+	storePhase := func(op, phase string, elapsed time.Duration) {
+		w.doneStorePhase(op, phase)
+		completionLogged = append(completionLogged, op+"/"+phase)
+	}
+
+	w.startStorePhase("ensure_log", "open")
+	// A fast-failing EIO/ENOSPC still reports a real (short) elapsed —
+	// nothing about the watchdog's clearing depends on the outcome or the
+	// duration.
+	storePhase("ensure_log", "open", 2*time.Millisecond)
+
+	if len(completionLogged) != 1 || completionLogged[0] != "ensure_log/open" {
+		t.Fatalf("completion logger calls = %v, want exactly one for ensure_log/open", completionLogged)
+	}
+	w.check(t0.Add(20 * time.Second))
+	if buf.Len() != 0 {
+		t.Fatalf("warned after an error-path completion cleared the entry: %s", buf.String())
+	}
+}
+
 // TestWatchdogWarnsWhileCreatePhaseStuckIncludesSession is the create-phase
 // counterpart: entries started via startCreatePhase must carry the session
 // ID in the warn record, and doneCreatePhase must clear them the same way

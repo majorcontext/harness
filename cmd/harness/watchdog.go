@@ -41,11 +41,32 @@ type inFlightEntry struct {
 // OnStorePhase/OnStorePhaseStart don't carry one either (see their doc
 // comments: the engine has no notion of "which session" at that layer,
 // since the same callback closure is shared across every session an
-// instance serves) — so two sessions concurrently stuck in the identical
-// op/phase collapse to one table entry. That mirrors the existing
-// imprecision slowStorePhaseLogger already has (it can't disambiguate
-// concurrent same-op-phase warnings either); create-phase entries don't
-// have this problem, since they're additionally keyed by session ID.
+// instance serves) — so two sessions concurrently in the identical op/phase
+// collapse to ONE table entry, keyed only by storeWatchdogKey(op, phase).
+// That mirrors the existing imprecision slowStorePhaseLogger already has
+// (it can't disambiguate concurrent same-op-phase warnings either);
+// create-phase entries don't have this problem, since they're additionally
+// keyed by session ID.
+//
+// This collapse is an accepted v1 trade-off (no session-scoped op/phase
+// identity exists to key by without a larger engine change), and it cuts
+// both ways:
+//
+//   - A second concurrent start OVERWRITES the first entry's `since`
+//     (understating how long the ORIGINAL one has been stuck, never
+//     overstating it — the observed one is real, just not the oldest).
+//   - A completion from EITHER session clears the one shared slot. Every
+//     start is still guaranteed exactly one matching completion (see
+//     timedStorePhase/timedCreatePhase — the bug this file's tests were
+//     added for), so that completion is never spurious BY ITSELF; the
+//     failure mode is narrower: if session A's phase finishes while
+//     session B's identically-keyed phase is still genuinely wedged, A's
+//     (correct) completion clears the slot B was also occupying, and B's
+//     real hang goes unwarned until something else (a slow-phase log line
+//     if it eventually finishes, or a later tick if a THIRD start re-arms
+//     the same key) surfaces it. Bounded by how rare two sessions land in
+//     the identical ensureLog/enqueue_durable sub-phase at the same
+//     instant — accepted rather than solved here.
 //
 // One instance, one mutex, one ticker goroutine for the whole process (see
 // serveCmd) — not one per session — because both callback sources are

@@ -355,14 +355,36 @@ func (s *Session) storePhase(op, phase string, elapsed time.Duration) {
 }
 
 // storePhaseStart reports op/phase beginning to Config.OnStorePhaseStart,
-// nil-guarded. Caller holds s.mu (see OnStorePhaseStart's doc comment). Every
-// call here has a matching storePhase call once the operation completes —
-// each call site below fires this immediately before starting the timer
-// (t0 := time.Now()) that storePhase's elapsed argument measures.
+// nil-guarded. Caller holds s.mu (see OnStorePhaseStart's doc comment).
+// Prefer timedStorePhase over calling this directly — see its doc comment
+// for why a hand-paired storePhaseStart/storePhase at each call site is the
+// wrong shape.
 func (s *Session) storePhaseStart(op, phase string) {
 	if s.cfg.OnStorePhaseStart != nil {
 		s.cfg.OnStorePhaseStart(op, phase)
 	}
+}
+
+// timedStorePhase runs fn as one instrumented op/phase: storePhaseStart
+// immediately before fn runs, storePhase immediately after fn returns —
+// success OR error — with the elapsed time fn actually took either way.
+// This is the ONLY call shape used below (ensureLog, EnqueuePromptDurable):
+// a hand-paired storePhaseStart-then-later-storePhase around each op used
+// to let an early `return err` on the operation's own failure skip the
+// matching storePhase call, leaving the watchdog's in-flight table (see
+// cmd/harness/main.go) with an entry that nothing would ever clear —
+// exactly the failure mode an I/O error (EIO, ENOSPC) hits on a wedged
+// volume, producing a permanent false "still stuck" warning for a phase
+// that in fact failed and returned promptly. Routing every phase through
+// this one helper makes "exactly one completion per start, on every path"
+// structural rather than a rule each call site has to remember. Caller
+// holds s.mu (same rule as storePhase/storePhaseStart).
+func (s *Session) timedStorePhase(op, phase string, fn func() error) error {
+	s.storePhaseStart(op, phase)
+	t0 := time.Now()
+	err := fn()
+	s.storePhase(op, phase, time.Since(t0))
+	return err
 }
 
 // ensureLog opens the session log, creating the directory and file — and
@@ -373,31 +395,32 @@ func (s *Session) ensureLog() error {
 		return nil
 	}
 	const op = "ensure_log"
-	s.storePhaseStart(op, "mkdir")
-	t0 := time.Now()
-	if err := os.MkdirAll(s.cfg.SessionDir, 0o755); err != nil {
+	if err := s.timedStorePhase(op, "mkdir", func() error {
+		return os.MkdirAll(s.cfg.SessionDir, 0o755)
+	}); err != nil {
 		return err
 	}
-	s.storePhase(op, "mkdir", time.Since(t0))
 	// O_RDWR, not O_WRONLY: the torn-tail repair below needs to ReadAt the
 	// file's own last byte. O_APPEND still governs every Write (here and in
 	// writeRecord) regardless of the file's read/write position, so this
 	// adds read capability without changing append semantics at all.
-	s.storePhaseStart(op, "open")
-	t0 = time.Now()
-	f, err := os.OpenFile(sessionPath(s.cfg.SessionDir, s.ID), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
+	var f *os.File
+	if err := s.timedStorePhase(op, "open", func() error {
+		var err error
+		f, err = os.OpenFile(sessionPath(s.cfg.SessionDir, s.ID), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
+		return err
+	}); err != nil {
 		return err
 	}
-	s.storePhase(op, "open", time.Since(t0))
-	s.storePhaseStart(op, "stat")
-	t0 = time.Now()
-	fi, err := f.Stat()
-	if err != nil {
+	var fi os.FileInfo
+	if err := s.timedStorePhase(op, "stat", func() error {
+		var err error
+		fi, err = f.Stat()
+		return err
+	}); err != nil {
 		f.Close()
 		return err
 	}
-	s.storePhase(op, "stat", time.Since(t0))
 	s.logFile = f
 	size := fi.Size()
 	// A prior process can have crashed mid-write, leaving the file not
@@ -448,36 +471,34 @@ func (s *Session) ensureLog() error {
 			return err
 		}
 		if last[0] != '\n' {
-			s.storePhaseStart(op, "tail_repair")
-			t0 := time.Now()
-			data, err := os.ReadFile(sessionPath(s.cfg.SessionDir, s.ID))
-			if err != nil {
+			if err := s.timedStorePhase(op, "tail_repair", func() error {
+				data, err := os.ReadFile(sessionPath(s.cfg.SessionDir, s.ID))
+				if err != nil {
+					return err
+				}
+				tailStart := bytes.LastIndexByte(data, '\n') + 1 // 0 if no newline at all
+				tail := bytes.TrimSpace(data[tailStart:])
+				var rec record
+				if len(tail) > 0 && json.Unmarshal(tail, &rec) == nil {
+					// Case 2: complete, valid record — just terminate it.
+					if _, err := f.Write([]byte("\n")); err != nil {
+						return err
+					}
+					size++
+				} else {
+					// Case 1: genuinely torn (or trailing whitespace with no
+					// record at all) — truncate the incomplete tail away.
+					if err := f.Truncate(int64(tailStart)); err != nil {
+						return err
+					}
+					size = int64(tailStart)
+				}
+				return nil
+			}); err != nil {
 				f.Close()
 				s.logFile = nil
 				return err
 			}
-			tailStart := bytes.LastIndexByte(data, '\n') + 1 // 0 if no newline at all
-			tail := bytes.TrimSpace(data[tailStart:])
-			var rec record
-			if len(tail) > 0 && json.Unmarshal(tail, &rec) == nil {
-				// Case 2: complete, valid record — just terminate it.
-				if _, err := f.Write([]byte("\n")); err != nil {
-					f.Close()
-					s.logFile = nil
-					return err
-				}
-				size++
-			} else {
-				// Case 1: genuinely torn (or trailing whitespace with no
-				// record at all) — truncate the incomplete tail away.
-				if err := f.Truncate(int64(tailStart)); err != nil {
-					f.Close()
-					s.logFile = nil
-					return err
-				}
-				size = int64(tailStart)
-			}
-			s.storePhase(op, "tail_repair", time.Since(t0))
 		}
 	}
 	if size == 0 {
@@ -506,14 +527,14 @@ func (s *Session) ensureLog() error {
 			buf.Write(b)
 			buf.WriteByte('\n')
 		}
-		s.storePhaseStart(op, "header_write")
-		t0 := time.Now()
-		if _, err := f.Write(buf.Bytes()); err != nil {
+		if err := s.timedStorePhase(op, "header_write", func() error {
+			_, err := f.Write(buf.Bytes())
+			return err
+		}); err != nil {
 			f.Close()
 			s.logFile = nil
 			return err
 		}
-		s.storePhase(op, "header_write", time.Since(t0))
 		// A file fsync (as EnqueuePromptDurable does before attesting
 		// durability — see queue.go) commits the file's *contents* but not
 		// its directory entry: POSIX leaves the entry itself up to the
@@ -531,14 +552,13 @@ func (s *Session) ensureLog() error {
 		// mount (e.g. a volume) at boot, so that entry predates the process
 		// and isn't this code's concern. See syncDir for why this is a
 		// build-tagged no-op off unix.
-		s.storePhaseStart(op, "sync_dir")
-		t0 = time.Now()
-		if err := syncDir(s.cfg.SessionDir); err != nil {
+		if err := s.timedStorePhase(op, "sync_dir", func() error {
+			return syncDir(s.cfg.SessionDir)
+		}); err != nil {
 			f.Close()
 			s.logFile = nil
 			return err
 		}
-		s.storePhase(op, "sync_dir", time.Since(t0))
 	}
 	s.logStarted = true
 	return nil

@@ -453,35 +453,32 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	// Persist the log now so the session has durable state even if it is
 	// evicted before its first prompt; otherwise eviction below would drop a
 	// never-prompted session with no on-disk backing to reload from.
-	s.reportCreatePhaseStart(sess.ID, "persist")
-	phaseStart = time.Now()
-	if err := sess.Persist(); err != nil {
+	if err := s.timedCreatePhase(sess.ID, "persist", sess.Persist); err != nil {
 		if wt != nil {
 			s.discardWorktree(wt)
 		}
 		writeErr(w, http.StatusInternalServerError, "cannot create session")
 		return
 	}
-	s.reportCreatePhase(sess.ID, "persist", time.Since(phaseStart))
 
-	s.reportCreatePhaseStart(sess.ID, "register")
-	phaseStart = time.Now()
-	s.mu.Lock()
-	s.sessions[sess.ID] = &sessionState{sess: sess, lastUsed: time.Now(), shareWorkdir: body.ShareWorkdir, isolation: isolation, worktree: wt}
-	s.evictResidentLocked()
-	s.mu.Unlock()
-	s.reportCreatePhase(sess.ID, "register", time.Since(phaseStart))
+	s.timedCreatePhase(sess.ID, "register", func() error { //nolint:errcheck // never errors; see timedCreatePhase's uniform shape
+		s.mu.Lock()
+		s.sessions[sess.ID] = &sessionState{sess: sess, lastUsed: time.Now(), shareWorkdir: body.ShareWorkdir, isolation: isolation, worktree: wt}
+		s.evictResidentLocked()
+		s.mu.Unlock()
+		return nil
+	})
 
-	s.reportCreatePhaseStart(sess.ID, "emit_created")
-	phaseStart = time.Now()
-	s.emitDurable(Event{Type: evtSessionCreated, SessionID: sess.ID, Model: sess.Model()})
-	s.reportCreatePhase(sess.ID, "emit_created", time.Since(phaseStart))
+	s.timedCreatePhase(sess.ID, "emit_created", func() error { //nolint:errcheck // never errors; see timedCreatePhase's uniform shape
+		s.emitDurable(Event{Type: evtSessionCreated, SessionID: sess.ID, Model: sess.Model()})
+		return nil
+	})
 
 	writeJSON(w, http.StatusCreated, s.buildSession(sess, "idle"))
 }
 
 // reportCreatePhase forwards elapsed to Options.OnCreatePhase, nil-guarded.
-// See its doc comment for the reported phases and success-only contract.
+// See its doc comment for the reported phases and per-phase end contract.
 func (s *Server) reportCreatePhase(sessionID, phase string, elapsed time.Duration) {
 	if s.opts.OnCreatePhase != nil {
 		s.opts.OnCreatePhase(sessionID, phase, elapsed)
@@ -495,6 +492,27 @@ func (s *Server) reportCreatePhaseStart(sessionID, phase string) {
 	if s.opts.OnCreatePhaseStart != nil {
 		s.opts.OnCreatePhaseStart(sessionID, phase)
 	}
+}
+
+// timedCreatePhase runs fn as one instrumented create phase:
+// reportCreatePhaseStart immediately before fn runs, reportCreatePhase
+// immediately after fn returns — success OR error — with the elapsed time fn
+// actually took either way. Mirrors engine.Session.timedStorePhase
+// (engine/store.go) one layer up, for the identical reason: a hand-paired
+// start-then-later-report around each phase let an early `return` on the
+// phase's own failure (e.g. Persist erroring) skip the matching report,
+// leaving a watchdog's in-flight table (see cmd/harness/main.go) with an
+// entry nothing would ever clear — a permanent false "still stuck" warning
+// for a phase that in fact failed and returned promptly. Every phase site in
+// handleCreate that calls reportCreatePhaseStart at all routes through this
+// one helper so that invariant is structural, not a rule each call site has
+// to remember.
+func (s *Server) timedCreatePhase(sessionID, phase string, fn func() error) error {
+	s.reportCreatePhaseStart(sessionID, phase)
+	t0 := time.Now()
+	err := fn()
+	s.reportCreatePhase(sessionID, phase, time.Since(t0))
+	return err
 }
 
 // createWorktreeForSession validates that workDir is inside a git repository
