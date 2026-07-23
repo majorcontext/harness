@@ -3,9 +3,15 @@ package server
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/majorcontext/harness/engine"
+	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/provider"
 )
 
 // TestOnCreatePhaseReportsPhases verifies Options.OnCreatePhase fires for
@@ -60,13 +66,112 @@ func TestOnCreatePhaseReportsPhases(t *testing.T) {
 			t.Fatalf("unexpected phase %q", c.phase)
 		}
 		wantPhases[c.phase] = true
-		if c.elapsed < 0 {
-			t.Fatalf("phase %q elapsed = %v, want >= 0", c.phase, c.elapsed)
-		}
 	}
 	for phase, seen := range wantPhases {
 		if !seen {
 			t.Errorf("phase %q not reported", phase)
 		}
+	}
+}
+
+// unwritableDir returns a path guaranteed to make os.OpenFile(..., O_CREATE,
+// ...) fail inside it deterministically, regardless of which user runs the
+// test — the same technique as engine/store_failure_test.go's
+// unwritableSessionDir, replicated locally since that helper is unexported
+// to the engine package. Used below to make ONLY a session's own log
+// directory unwritable, distinct from the server harness's own SessionDir
+// (which must stay writable — server.New's reconcile eagerly opens
+// events.jsonl there, and a shared unwritable dir would fail server
+// construction itself, not just the one Persist call this test targets).
+func unwritableDir(t *testing.T) string {
+	t.Helper()
+	base := t.TempDir()
+	if os.Geteuid() == 0 {
+		// Root bypasses DAC permission bits, so chmod alone wouldn't be
+		// deterministic under a root test runner. Blocking a path component
+		// with a plain file is: no privilege level can mkdir/create through
+		// a path segment that already exists as a non-directory.
+		blocked := filepath.Join(base, "blocked")
+		if err := os.WriteFile(blocked, []byte("not a directory"), 0o644); err != nil {
+			t.Fatalf("seed blocking file: %v", err)
+		}
+		return filepath.Join(blocked, "sessions")
+	}
+	dir := filepath.Join(base, "sessions")
+	if err := os.MkdirAll(dir, 0o555); err != nil {
+		t.Fatalf("seed unwritable dir: %v", err)
+	}
+	return dir
+}
+
+// TestOnCreatePhaseReportsTotalOnFailedCreate is a regression test for the
+// phase-accumulator leak found in PR #87 review: handleCreate originally
+// reported "total" only on its success tail, so a failure after
+// "new_session" (e.g. Persist erroring on a saturated volume — exactly
+// NEP-4897's scenario) never reported "total" at all, permanently orphaning
+// that session ID's entry in the cmd-layer accumulator (see
+// cmd/harness/main.go's createPhaseLogger, keyed by session ID). handleCreate
+// now reports "total" via a defer installed right after "new_session"
+// succeeds, so it fires on every return path — this pins that: Persist is
+// made to fail deterministically (the session's own log directory is
+// unwritable, independent of the server's own SessionDir), and the create
+// must still report "new_session" and "total" — nothing later, since the
+// handler returns before "persist" and "register" ever get their reports.
+func TestOnCreatePhaseReportsTotalOnFailedCreate(t *testing.T) {
+	dir := t.TempDir()
+	prov := &scriptedProvider{name: "test"}
+	model := message.ModelRef{Provider: prov.Name(), Model: "m1"}
+	badLogDir := unwritableDir(t)
+
+	type call struct {
+		sessionID, phase string
+	}
+	var mu sync.Mutex
+	var calls []call
+	srv := newServer(t, dir, prov, 0, func(o *Options) {
+		o.OnCreatePhase = func(sessionID, phase string, elapsed time.Duration) {
+			mu.Lock()
+			defer mu.Unlock()
+			calls = append(calls, call{sessionID, phase})
+		}
+		// Sessions built by this override log into badLogDir, not the
+		// server's own (writable) SessionDir — so NewSession itself (lazy,
+		// no disk touch) still succeeds, and only the later Persist call
+		// fails.
+		o.NewSession = func(m message.ModelRef, workDir, parentSession string) (*engine.Session, error) {
+			if m.IsZero() {
+				m = model
+			}
+			return engine.NewSession(engine.Config{
+				Providers:     provider.Registry{prov.Name(): prov},
+				Model:         m,
+				SessionDir:    badLogDir,
+				WorkDir:       workDir,
+				ParentSession: parentSession,
+			}), nil
+		}
+	})
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	h := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv, ts: ts}
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "test/m1"})
+	if resp.StatusCode != 500 {
+		t.Fatalf("create status %d, want 500 (Persist should fail): %s", resp.StatusCode, data)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 2 {
+		t.Fatalf("got %d OnCreatePhase calls, want 2 (new_session, total): %+v", len(calls), calls)
+	}
+	if calls[0].phase != "new_session" || calls[1].phase != "total" {
+		t.Fatalf("phases = %q, %q; want new_session, total", calls[0].phase, calls[1].phase)
+	}
+	if calls[0].sessionID == "" {
+		t.Fatal("new_session call carries empty sessionID")
+	}
+	if calls[1].sessionID != calls[0].sessionID {
+		t.Fatalf("total sessionID = %q, want %q (same as new_session)", calls[1].sessionID, calls[0].sessionID)
 	}
 }

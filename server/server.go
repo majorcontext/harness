@@ -125,15 +125,25 @@ type Options struct {
 	// external sink is the intended use.
 	OnError func(context.Context, error)
 	// OnCreatePhase, when non-nil, is invoked once per completed phase of
-	// handleCreate's success path — "new_session", "persist", "register" (the
-	// in-memory session-map insert), "emit_created", and finally "total"
-	// (elapsed from handler entry to just before the response is written).
-	// Reported only on the success path — a failure at any phase returns an
-	// error response without reporting that or any later phase, so the
-	// handler's error paths are entirely unchanged. sessionID is the ID
-	// minted by NewSession, carried on every phase report including
-	// "new_session" itself, since a failed NewSession call is never reported.
-	// Called synchronously; keep it fast, mirroring OnError's rules above.
+	// handleCreate — "new_session", "persist", "register" (the in-memory
+	// session-map insert), and "emit_created" are reported only when that
+	// phase actually completes, so a failure partway through (e.g.
+	// recordWorktreeOwner or Persist erroring) means later phases in the
+	// list are simply never reported. "total" (elapsed from handler entry to
+	// just before the response is written, or to the point of an error
+	// response) is DIFFERENT: it is reported via a defer installed the
+	// moment a session ID exists, so it fires on every return path once
+	// NewSession has succeeded — success or error alike. This is deliberate:
+	// without it, a caller accumulating phases by session ID (see
+	// cmd/harness/main.go's createPhaseLogger) would leak an entry per
+	// failed create — exactly the NEP-4897 scenario, where a saturated
+	// volume makes Persist fail or stall on every create — and it also means
+	// "total" on a failed create is real diagnostic signal: which phases ran
+	// (and how slowly) before the failure. sessionID is the ID minted by
+	// NewSession, carried on every phase report including "new_session"
+	// itself; a failed NewSession call reports nothing at all, since no ID
+	// exists yet to key it by. Called synchronously; keep it fast, mirroring
+	// OnError's rules above.
 	OnCreatePhase func(sessionID, phase string, elapsed time.Duration)
 	// MCP is the MCP client integration shared by every session this server
 	// hosts (see engine.MCPRegistry): it is the same *engine.MCPManager the

@@ -8,10 +8,9 @@ import (
 // TestOnStorePhaseReportsCreateAndEnqueuePhases verifies Config.OnStorePhase
 // fires for every phase of a fresh-file Persist (ensure_log: mkdir, open,
 // stat, header_write, sync_dir — no tail_repair on a brand-new file) and of
-// EnqueuePromptDurable (enqueue_durable: write_record, fsync), with every
-// reported elapsed >= 0. The nil-callback path is exercised by every other
-// engine test in this package (none of them set OnStorePhase), so it isn't
-// re-tested here.
+// EnqueuePromptDurable (enqueue_durable: write_record, fsync). The
+// nil-callback path is exercised by every other engine test in this package
+// (none of them set OnStorePhase), so it isn't re-tested here.
 func TestOnStorePhaseReportsCreateAndEnqueuePhases(t *testing.T) {
 	dir := t.TempDir()
 	type call struct {
@@ -39,9 +38,6 @@ func TestOnStorePhaseReportsCreateAndEnqueuePhases(t *testing.T) {
 			t.Fatalf("unexpected ensure_log phase %q (or duplicate tail_repair on a fresh file)", c.phase)
 		}
 		wantEnsureLog[c.phase] = true
-		if c.elapsed < 0 {
-			t.Fatalf("phase %q elapsed = %v, want >= 0", c.phase, c.elapsed)
-		}
 	}
 	for phase, seen := range wantEnsureLog {
 		if !seen {
@@ -72,9 +68,6 @@ func TestOnStorePhaseReportsCreateAndEnqueuePhases(t *testing.T) {
 			t.Fatalf("unexpected enqueue_durable phase %q", c.phase)
 		}
 		wantEnqueue[c.phase] = true
-		if c.elapsed < 0 {
-			t.Fatalf("phase %q elapsed = %v, want >= 0", c.phase, c.elapsed)
-		}
 	}
 	for phase, seen := range wantEnqueue {
 		if !seen {

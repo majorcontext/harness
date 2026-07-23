@@ -399,6 +399,19 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.reportCreatePhase(sess.ID, "new_session", time.Since(phaseStart))
+	// Report "total" on every return past this point — success or error —
+	// not just the success tail below. Without this, a failure after
+	// new_session (recordWorktreeOwner, Persist) never reports "total", and
+	// the cmd-layer accumulator that keys phases by session ID (see
+	// cmd/harness/main.go's createPhaseLogger) leaks that entry forever —
+	// exactly the NEP-4897 scenario, since a saturated volume is precisely
+	// what makes Persist fail or stall on every create. Reporting "total" on
+	// the error path is also strictly better diagnostics: it is the one
+	// phase report that survives a failed create, showing which prior phase
+	// ran (and how slowly) before the failure.
+	defer func() {
+		s.reportCreatePhase(sess.ID, "total", time.Since(handlerStart))
+	}()
 	if wt != nil {
 		// Record the owning session in the meta BEFORE the session log
 		// becomes durable, and fail creation if it cannot be recorded. The
@@ -440,7 +453,6 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	s.emitDurable(Event{Type: evtSessionCreated, SessionID: sess.ID, Model: sess.Model()})
 	s.reportCreatePhase(sess.ID, "emit_created", time.Since(phaseStart))
 
-	s.reportCreatePhase(sess.ID, "total", time.Since(handlerStart))
 	writeJSON(w, http.StatusCreated, s.buildSession(sess, "idle"))
 }
 
