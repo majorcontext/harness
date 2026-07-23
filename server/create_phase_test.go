@@ -115,8 +115,13 @@ func unwritableDir(t *testing.T) string {
 // succeeds, so it fires on every return path — this pins that: Persist is
 // made to fail deterministically (the session's own log directory is
 // unwritable, independent of the server's own SessionDir), and the create
-// must still report "new_session" and "total" — nothing later, since the
-// handler returns before "persist" and "register" ever get their reports.
+// must still report "new_session" and "total". It must ALSO report "persist"
+// itself (a PR #89 review fix: timedCreatePhase, see handlers.go, guarantees
+// a started phase's own OnCreatePhase fires on error too, not just success —
+// see TestOnCreatePhaseReportsPersistEndOnFailure in create_phase_start_
+// test.go for the dedicated regression test of that fix). "register" and
+// "emit_created" still never fire, since the handler returns before ever
+// reaching them.
 func TestOnCreatePhaseReportsTotalOnFailedCreate(t *testing.T) {
 	dir := t.TempDir()
 	prov := &scriptedProvider{name: "test"}
@@ -162,16 +167,18 @@ func TestOnCreatePhaseReportsTotalOnFailedCreate(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(calls) != 2 {
-		t.Fatalf("got %d OnCreatePhase calls, want 2 (new_session, total): %+v", len(calls), calls)
+	if len(calls) != 3 {
+		t.Fatalf("got %d OnCreatePhase calls, want 3 (new_session, persist, total): %+v", len(calls), calls)
 	}
-	if calls[0].phase != "new_session" || calls[1].phase != "total" {
-		t.Fatalf("phases = %q, %q; want new_session, total", calls[0].phase, calls[1].phase)
+	if calls[0].phase != "new_session" || calls[1].phase != "persist" || calls[2].phase != "total" {
+		t.Fatalf("phases = %q, %q, %q; want new_session, persist, total", calls[0].phase, calls[1].phase, calls[2].phase)
 	}
 	if calls[0].sessionID == "" {
 		t.Fatal("new_session call carries empty sessionID")
 	}
-	if calls[1].sessionID != calls[0].sessionID {
-		t.Fatalf("total sessionID = %q, want %q (same as new_session)", calls[1].sessionID, calls[0].sessionID)
+	for _, c := range calls[1:] {
+		if c.sessionID != calls[0].sessionID {
+			t.Fatalf("%s sessionID = %q, want %q (same as new_session)", c.phase, c.sessionID, calls[0].sessionID)
+		}
 	}
 }

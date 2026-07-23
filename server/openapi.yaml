@@ -2129,6 +2129,26 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/ProcessNotFound" }
 
+  /debug/goroutines:
+    get:
+      operationId: debugGoroutines
+      summary: Full stack dump of every running goroutine.
+      description: >
+        A diagnostic surface, not a stable API: the response is the exact
+        text Go's runtime/pprof "goroutine" profile produces at debug=2 (the
+        same full-stack-trace format Go's default SIGQUIT handler prints),
+        for inspecting a wedged box over authed HTTP in environments where
+        sending SIGQUIT or exec-ing into the process is awkward or
+        unavailable. Its shape is whatever the Go runtime emits and may
+        change between Go versions; do not parse it programmatically.
+      responses:
+        "200":
+          description: OK — plain-text goroutine dump.
+          content:
+            text/plain:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   # Candidate for v1.1, deliberately deferred: GET /session/{id}/diff
   # (working-tree diff for orchestrator PR-preview rendering). Needs a
   # position on git ownership inside the engine first.

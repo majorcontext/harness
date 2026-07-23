@@ -201,16 +201,45 @@ type Config struct {
 	// etc.), which would deadlock on that same mutex.
 	OnEvent func(Event)
 
-	// OnStorePhase, when non-nil, receives one call per completed phase of
-	// the durable store paths (op "ensure_log": phases "mkdir", "open",
-	// "stat", "tail_repair" (only when repair ran), "header_write" (only on
+	// OnStorePhase, when non-nil, receives one call per ENDED phase of the
+	// durable store paths (op "ensure_log": phases "mkdir", "open", "stat",
+	// "tail_repair" (only when repair ran), "header_write" (only on
 	// fresh-file), "sync_dir" (only on fresh-file); op "enqueue_durable":
-	// phases "write_record", "fsync"). Called synchronously while the
+	// phases "write_record", "fsync") — "ended", not "completed
+	// successfully": it fires when the phase's operation RETURNS, whether
+	// that return is success or an error (elapsed is the real duration
+	// either way; see timedStorePhase in store.go, the single call shape
+	// every phase site uses to guarantee this). This is what makes
+	// OnStorePhaseStart/OnStorePhase a reliable start/end pair for an
+	// in-flight watchdog (see its doc comment below): an I/O error (EIO,
+	// ENOSPC) still reports its end promptly, so the watchdog's table entry
+	// is always cleared, never left stuck warning about a phase that in
+	// fact already failed and returned. Called synchronously while the
 	// session mutex is held — the callback must be fast and must never call
 	// back into the Session (same rule as OnEvent). Purely observational:
 	// timing hooks for diagnosing slow storage (e.g. a saturated network
 	// volume), never control flow.
 	OnStorePhase func(op, phase string, elapsed time.Duration)
+
+	// OnStorePhaseStart, when non-nil, is invoked immediately before each
+	// OnStorePhase-instrumented operation begins (same op/phase names — see
+	// OnStorePhase's doc comment above), which — see that comment — is
+	// GUARANTEED to fire exactly once for every Start call, on success or
+	// error alike. It is the counterpart that makes an in-flight watchdog
+	// possible: OnStorePhase alone only reports a phase once it ENDS, so a
+	// phase that never ends at all — e.g. a wedged network volume hanging a
+	// file operation indefinitely, neither succeeding nor erroring — produces
+	// no log line at all. That gap is exactly what a production canary hit:
+	// a create hung permanently mid-ensureLog with zero phase timing lines,
+	// because completion-only logging is blind to a phase that never
+	// completes. A caller pairs each Start call with the matching
+	// OnStorePhase end in a small table keyed by op/phase (see
+	// cmd/harness/main.go's watchdog) so it can warn, repeatedly, while a
+	// phase is still stuck — and reliably stop warning the moment it ends,
+	// by any outcome. Called synchronously while the session mutex is held
+	// — same rules as OnStorePhase/OnEvent: must be fast, must never call
+	// back into the Session.
+	OnStorePhaseStart func(op, phase string)
 
 	// OnRequest, when non-nil, is invoked synchronously in streamTurn with the
 	// exact final request about to be sent to the provider — after params,
