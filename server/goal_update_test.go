@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"runtime"
 	"sync"
 	"testing"
 
@@ -711,6 +710,7 @@ func TestAutoArmRaceWithIncomingPrompt(t *testing.T) {
 	}
 
 	racerDone := make(chan *http.Response, 1)
+	racerClaimed := make(chan struct{})
 	var once sync.Once
 	h.srv.autoArmRace = func() {
 		once.Do(func() {
@@ -718,22 +718,28 @@ func TestAutoArmRaceWithIncomingPrompt(t *testing.T) {
 				r, _ := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
 					"parts": []map[string]string{{"type": "text", "text": "racer"}},
 				})
+				close(racerClaimed)
 				racerDone <- r
 			}()
 			// Force a real, deterministic ordering (the racer wins) instead
 			// of an unobserved coin flip: block auto-arm's own
 			// claimForPrompt call (below, after this hook returns) until the
-			// racer has actually claimed the slot.
-			for {
-				h.srv.mu.Lock()
-				st := h.srv.sessions[id]
-				running := st != nil && st.running
-				h.srv.mu.Unlock()
-				if running {
-					return
-				}
-				runtime.Gosched()
-			}
+			// racer has actually claimed the slot. handlePrompt's
+			// claimForPrompt call (or its durable-enqueue fallback) always
+			// runs synchronously, BEFORE the HTTP response is written — so
+			// by the time h.do returns above, the racer has unconditionally
+			// already gone first, and closing racerClaimed right after is a
+			// signal that can never be missed. An earlier version of this
+			// hook instead polled st.running in a runtime.Gosched() loop:
+			// that is racing an edge (the racer's claim) with a level check
+			// under a lock, and if the racer's entire turn — claim, run,
+			// release — completes between two polls (observed under
+			// GOMAXPROCS=1 with -race, where this goroutine can dominate
+			// scheduling), the poll loop spins forever waiting for a
+			// transition that already happened and reverted, hanging the
+			// test. Waiting on a channel closed by the one event we
+			// actually care about removes the poll entirely.
+			<-racerClaimed
 		})
 	}
 
