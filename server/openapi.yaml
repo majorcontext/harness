@@ -713,8 +713,11 @@ components:
             /session/{id}/queue) AFTER this call: this request's own seq on
             `started`/`queued`, the pre-existing mark on `duplicate`. Only a
             2xx (`started`/`queued`) response authorizes the caller to ack
-            its own upstream — the prompt.queued record was fsynced into
-            the session journal before this response was written.
+            its own upstream — the prompt.queued record was durably accepted
+            into the session journal before this response was written, per
+            the configured `session_sync` mode: fsynced (default) or
+            delegated to the volume layer's continuous sync (`session_sync:
+            "volume"`; see docs/deploy-modal.md).
         queued:
           type: integer
           description: >
