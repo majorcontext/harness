@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // QueuedPrompt is one pending prompt in a session's durable FIFO queue (see
@@ -131,11 +132,15 @@ func (s *Session) EnqueuePromptDurable(text string, seq int64) (id int64, duplic
 		s.lastPersistErr = err
 		return 0, false, err
 	}
+	const op = "enqueue_durable"
 	rec := record{Type: recPromptQueued, Prompt: &promptRecord{ID: id, Text: trimmed, Seq: seq}}
+	t0 := time.Now()
 	if err := s.writeRecord(rec); err != nil {
 		s.lastPersistErr = err
 		return 0, false, err
 	}
+	s.storePhase(op, "write_record", time.Since(t0))
+	t0 = time.Now()
 	if err := s.logFile.Sync(); err != nil {
 		// The record may or may not have reached stable storage — torn
 		// state. Nothing in memory moved, so a retry with the same seq is
@@ -143,6 +148,7 @@ func (s *Session) EnqueuePromptDurable(text string, seq int64) (id int64, duplic
 		s.lastPersistErr = err
 		return 0, false, err
 	}
+	s.storePhase(op, "fsync", time.Since(t0))
 	s.promptQueue = append(s.promptQueue, QueuedPrompt{ID: id, Text: trimmed, Seq: seq})
 	s.enqueueSeq = seq
 	// Emit while still holding s.mu (see EnqueuePrompt above): keeps event
