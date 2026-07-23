@@ -39,7 +39,15 @@ func logConfigSummary(logger *slog.Logger, info config.LoadInfo) {
 		logger.Info("no config file found")
 		return
 	}
-	logger.Info(fmt.Sprintf("config: %s (%s)", info.Path, formatConfigCounts(info)))
+	msg := fmt.Sprintf("config: %s (%s)", info.Path, formatConfigCounts(info))
+	// Only called out when it changes behavior from the built-in default:
+	// "" and the explicit "fsync" are behaviorally identical (see
+	// engine.Config.SessionSync), so only "volume" is worth an operator's
+	// attention here.
+	if info.SessionSync == "volume" {
+		msg += fmt.Sprintf(", session_sync=%s", info.SessionSync)
+	}
+	logger.Info(msg)
 }
 
 // formatConfigCounts renders the "N processes, N mcp servers, N plugins"

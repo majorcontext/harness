@@ -47,6 +47,37 @@ func TestLogConfigSummary_NotFound(t *testing.T) {
 	}
 }
 
+// TestLogConfigSummary_SessionSync covers the backend-aware-durability boot
+// line addition: "volume" mode is called out (an operator-relevant
+// deviation from the default), while the default "" and the behaviorally
+// identical explicit "fsync" are not — the whole point is that only a
+// change from built-in default behavior deserves a log line.
+func TestLogConfigSummary_SessionSync(t *testing.T) {
+	cases := []struct {
+		sessionSync string
+		wantSuffix  string
+	}{
+		{"", ""},
+		{"fsync", ""},
+		{"volume", ", session_sync=volume"},
+	}
+	for _, c := range cases {
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+		logConfigSummary(logger, config.LoadInfo{
+			Path:        "/x.json",
+			Processes:   1,
+			MCPServers:  1,
+			Plugins:     1,
+			SessionSync: c.sessionSync,
+		})
+		want := `msg="config: /x.json (1 process, 1 mcp server, 1 plugin)` + c.wantSuffix + `"`
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("session_sync %q: log = %q, want it to contain %q", c.sessionSync, buf.String(), want)
+		}
+	}
+}
+
 func TestLogConfigSummary_Pluralization(t *testing.T) {
 	cases := []struct {
 		info config.LoadInfo

@@ -341,12 +341,13 @@ it is confirmed `started`.
 ack rides on this call succeeding — an inbox poller or coordinator relay,
 not an interactive client. `Session.EnqueuePromptDurable` extends
 `EnqueuePrompt` with three properties the plain path deliberately lacks:
-write-ahead durability (the `prompt.queued` record is written and *fsynced*
-before any in-memory mutation or response, so a 2xx is an honest attestation
-rather than a best-effort ack — a write/fsync failure returns 500 "enqueue
-not durable" instead of the swallowed `lastPersistErr` every other persist
-path uses), a caller-issued session-monotonic `seq` deduplicated against a
-durable high-water mark (`Session.EnqueueSeq()`, journaled on the record and
+write-ahead durability (the `prompt.queued` record is written and, in the
+default `session_sync: "fsync"` mode, *fsynced* before any in-memory
+mutation or response, so a 2xx is an honest attestation rather than a
+best-effort ack — a write/fsync failure returns 500 "enqueue not durable"
+instead of the swallowed `lastPersistErr` every other persist path uses), a
+caller-issued session-monotonic `seq` deduplicated against a durable
+high-water mark (`Session.EnqueueSeq()`, journaled on the record and
 rebuilt by `LoadSession` — a seq at or below the mark is a clean 200
 `duplicate` no-op, so retries are always safe, including across a process
 restart), and torn-write healing (a burned-but-failed queue ID is never
@@ -365,6 +366,22 @@ durability domain instead of re-sending blind. `prompt_async` remains the
 right choice for an interactive client that has no upstream ack to protect —
 it is not going away, and `POST /session/{id}/enqueue` adds no new limits
 beyond what queued prompts already have (text-only, no model override).
+
+The `fsync` in "write-ahead durability" above is itself mode-selectable:
+config's `session_sync` ("fsync", the default, or "volume") gates both this
+durable-enqueue fsync and the one-time session-create directory fsync
+(`ensureLog`'s fresh-file `syncDir` call, store.go) — nothing else changes.
+"volume" is for a session store on a continuously-synced network volume
+whose own commit layer is the documented durability boundary: fsync adds no
+durability there, and some FUSE/9p transports deadlock permanently on it
+(`fsync(dirfd)` especially — a wedge that hangs every later file op on the
+mount, not just the one call). In that mode the write(2) landing out of
+`EnqueuePromptDurable`/`ensureLog` is itself the attestation; the write
+ordering, torn-write healing, and replay/fold logic above are byte-for-byte
+identical in both modes — a volume can still lose an unsynced tail on abrupt
+death exactly like a torn fsync can, and the same last-writer-wins fold
+repairs both. See docs/deploy-modal.md for the recommended setting on Modal
+Volume v2 deployments.
 
 ### Managed processes
 
