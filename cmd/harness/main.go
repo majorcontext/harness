@@ -871,6 +871,8 @@ func serveCmd(args []string) error {
 		SessionDir:    sesDir,
 		RunToken:      token,
 		Version:       version,
+		SessionSync:   cfg.SessionSync,
+		StartedAt:     startedAt,
 		CORSOrigin:    corsOrigin,
 		GoalEvaluator: goalEval,
 		MCP:           mcpRegistry(mcpMgr),

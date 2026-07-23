@@ -533,6 +533,78 @@ func TestHealthReportsVCSInfo(t *testing.T) {
 	}
 }
 
+// TestHealthReportsSessionSyncAndStartedAt is /health's machine-checkable
+// counterpart to the ambient in-session engine-identity block (see
+// engine/identity_status_test.go): an unauthenticated caller — a canary —
+// must be able to see a box's durability mode and process start time with
+// no token and no session. Options.SessionSync is left at its zero value
+// here deliberately, so this also pins the EFFECTIVE-mode rendering rule:
+// "" must render as "fsync", the same self-describing-config guarantee the
+// ambient block gives, never left for the caller to infer from an empty
+// string.
+func TestHealthReportsSessionSyncAndStartedAt(t *testing.T) {
+	dir := t.TempDir()
+	started := time.Date(2026, 7, 21, 12, 30, 0, 0, time.FixedZone("PDT", -7*3600))
+	srv := newServer(t, dir, &scriptedProvider{name: "test"}, 0, func(o *Options) {
+		o.StartedAt = started
+		// o.SessionSync left "" — the effective-default case under test.
+	})
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+
+	req, _ := http.NewRequest("GET", ts.URL+"/health", nil) // no auth header
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("health status %d", resp.StatusCode)
+	}
+	var body struct {
+		SessionSync string `json:"session_sync"`
+		StartedAt   string `json:"started_at"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.SessionSync != "fsync" {
+		t.Errorf("session_sync = %q, want the effective default %q for an unset Options.SessionSync", body.SessionSync, "fsync")
+	}
+	want := started.UTC().Format(time.RFC3339)
+	if body.StartedAt != want {
+		t.Errorf("started_at = %q, want %q (UTC, RFC3339)", body.StartedAt, want)
+	}
+}
+
+// TestHealthSessionSyncVolumeMode covers the other effective mode: an
+// explicit "volume" Options.SessionSync renders verbatim, unlike every
+// other raw value (including "fsync" itself, "", or anything unrecognized),
+// which all collapse to "fsync" — see effectiveSessionSync.
+func TestHealthSessionSyncVolumeMode(t *testing.T) {
+	dir := t.TempDir()
+	srv := newServer(t, dir, &scriptedProvider{name: "test"}, 0, func(o *Options) {
+		o.SessionSync = engine.SessionSyncVolume
+	})
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+
+	resp, err := ts.Client().Get(ts.URL + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		SessionSync string `json:"session_sync"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.SessionSync != engine.SessionSyncVolume {
+		t.Errorf("session_sync = %q, want %q", body.SessionSync, engine.SessionSyncVolume)
+	}
+}
+
 func TestAuthRequired(t *testing.T) {
 	h := newHarness(t, &scriptedProvider{name: "test"})
 
