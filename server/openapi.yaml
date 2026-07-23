@@ -26,7 +26,7 @@ info:
       `prompt_async` name so existing orchestration code ports with a URL
       and auth swap; there is no synchronous variant.
     - Endpoint naming follows opencode's `/session` shapes where the
-      semantics match, so Neptune's handlers port mechanically. Everything
+      semantics match, so the internal handlers port mechanically. Everything
       opencode exposes for its in-box UI (tui, pty, lsp, find, file, config,
       provider/mcp auth, permissions, share/fork/revert) is deliberately
       absent: rendering belongs to the orchestrator, credentials belong to
