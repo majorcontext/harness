@@ -134,12 +134,14 @@ func (s *Session) EnqueuePromptDurable(text string, seq int64) (id int64, duplic
 	}
 	const op = "enqueue_durable"
 	rec := record{Type: recPromptQueued, Prompt: &promptRecord{ID: id, Text: trimmed, Seq: seq}}
+	s.storePhaseStart(op, "write_record")
 	t0 := time.Now()
 	if err := s.writeRecord(rec); err != nil {
 		s.lastPersistErr = err
 		return 0, false, err
 	}
 	s.storePhase(op, "write_record", time.Since(t0))
+	s.storePhaseStart(op, "fsync")
 	t0 = time.Now()
 	if err := s.logFile.Sync(); err != nil {
 		// The record may or may not have reached stable storage — torn

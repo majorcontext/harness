@@ -147,6 +147,23 @@ type Options struct {
 	// exists yet to key it by. Called synchronously; keep it fast, mirroring
 	// OnError's rules above.
 	OnCreatePhase func(sessionID, phase string, elapsed time.Duration)
+	// OnCreatePhaseStart, when non-nil, is invoked immediately before each of
+	// handleCreate's "persist", "register", and "emit_created" phases begins
+	// — the counterpart to OnCreatePhase that makes an in-flight watchdog
+	// possible (see engine.Config.OnStorePhaseStart's doc comment for the
+	// same rationale one layer down: completion-only phase logging is blind
+	// to a phase that never completes). "new_session" is deliberately NOT
+	// instrumented here: NewSession touches no disk (see its doc comment in
+	// package engine) so it structurally cannot exhibit the permanently-
+	// hung-phase failure mode this exists to catch, and — more concretely —
+	// no session ID exists yet to key a watchdog entry by until it returns,
+	// so a Start call for it could never be matched back up with its
+	// OnCreatePhase completion (which does carry the real ID). "total" is
+	// also not instrumented here, to avoid double-reporting the same stuck
+	// window a currently-running named phase (persist/register/
+	// emit_created) already covers. Called synchronously; keep it fast,
+	// same rules as OnCreatePhase/OnError.
+	OnCreatePhaseStart func(sessionID, phase string)
 	// MCP is the MCP client integration shared by every session this server
 	// hosts (see engine.MCPRegistry): it is the same *engine.MCPManager the
 	// NewSession/LoadSession wrapper wires into each session's
@@ -564,6 +581,13 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /process/{name}/start", s.auth(s.handleProcessStart))
 	mux.HandleFunc("POST /process/{name}/stop", s.auth(s.handleProcessStop))
 	mux.HandleFunc("POST /process/{name}/restart", s.auth(s.handleProcessRestart))
+	// /debug/goroutines: an authed HTTP alternative to sending SIGQUIT (see
+	// handleGoroutines's doc comment and cmd/harness/main.go's serveCmd,
+	// which confirms SIGQUIT still produces Go's default all-goroutine dump
+	// since this process only intercepts os.Interrupt/SIGTERM) — for
+	// inspecting a wedged box in environments where signaling/exec-ing into
+	// the process is awkward or unavailable.
+	mux.HandleFunc("GET /debug/goroutines", s.auth(s.handleGoroutines))
 	s.mux = mux
 }
 

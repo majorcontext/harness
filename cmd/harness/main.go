@@ -784,14 +784,43 @@ func serveCmd(args []string) error {
 		}
 	}()
 
+	// The in-flight watchdog gives visibility into a store/create phase that
+	// is stuck RIGHT NOW, not just ones that eventually finish slowly — see
+	// watchdog.go's doc comment for why that distinction matters (the #87
+	// canary: a create hung permanently mid-ensureLog with zero completion
+	// log lines). Its ticker goroutine is tied to watchdogCtx, cancelled by
+	// the deferred stopWatchdog below the moment serveCmd returns by any
+	// path — the same lifecycle precedent as engine.NewMCPManager's
+	// retryCtx (engine/mcp.go): a dedicated cancelable context so the
+	// goroutine never leaks past process shutdown.
+	watchdog := newInFlightWatchdog(logger)
+	watchdogCtx, stopWatchdog := context.WithCancel(context.Background())
+	defer stopWatchdog()
+	go watchdog.run(watchdogCtx)
+
 	// The event journal owner needs each engine session to report events to
 	// it, so the session wrappers wire OnEvent to the server's Publish.
 	// host is built just below, once srv exists (its ClientAPI is
 	// server-backed — see server/clientapi.go); mkCfg closes over the srv
 	// variable, so it can reference it before it is assigned — same pattern
 	// as the OnEvent closure above it.
-	storePhase := slowStorePhaseLogger(logger)
+	slowStorePhase := slowStorePhaseLogger(logger)
+	// storePhase clears the watchdog's in-flight entry before delegating to
+	// the existing slow-phase logger — order doesn't matter for
+	// correctness (the two are independent), but clearing first means a
+	// phase that happens to complete in the same instant a tick is
+	// scanning can never be double-reported.
+	storePhase := func(op, phase string, elapsed time.Duration) {
+		watchdog.doneStorePhase(op, phase)
+		slowStorePhase(op, phase, elapsed)
+	}
 	createPhase := newCreatePhaseLogger(logger)
+	// onCreatePhase mirrors storePhase above: clear the watchdog entry, then
+	// delegate to the existing per-session phase accumulator.
+	onCreatePhase := func(sessionID, phase string, elapsed time.Duration) {
+		watchdog.doneCreatePhase(sessionID, phase)
+		createPhase.OnCreatePhase(sessionID, phase, elapsed)
+	}
 	var srv *server.Server
 	mkCfg := func(model message.ModelRef) engine.Config {
 		return engine.Config{
@@ -802,6 +831,7 @@ func serveCmd(args []string) error {
 			SessionDir:          sesDir,
 			OnEvent:             func(ev engine.Event) { srv.Publish(ev) },
 			OnStorePhase:        storePhase,
+			OnStorePhaseStart:   watchdog.startStorePhase,
 			Instructions:        instructionsConfig(cfg, noInstructions),
 			SkillsDirs:          skillsDirs(cfg, skillDirs, workDir),
 			Hooks:               pluginHooks(pluginHost),
@@ -829,9 +859,10 @@ func serveCmd(args []string) error {
 		OnError: func(_ context.Context, err error) {
 			logger.Error("serve error", "error", err.Error())
 		},
-		OnCreatePhase: createPhase.OnCreatePhase,
-		NewSession:    newSessionFn(mkCfg, defModel, cfg, skillDirs, func(id string, turn int, req *provider.Request) { srv.OnRequest(id, turn, req) }),
-		LoadSession:   loadSessionFn(mkCfg, defModel, cfg, skillDirs, func(id string, turn int, req *provider.Request) { srv.OnRequest(id, turn, req) }),
+		OnCreatePhase:      onCreatePhase,
+		OnCreatePhaseStart: watchdog.startCreatePhase,
+		NewSession:         newSessionFn(mkCfg, defModel, cfg, skillDirs, func(id string, turn int, req *provider.Request) { srv.OnRequest(id, turn, req) }),
+		LoadSession:        loadSessionFn(mkCfg, defModel, cfg, skillDirs, func(id string, turn int, req *provider.Request) { srv.OnRequest(id, turn, req) }),
 	})
 	if err != nil {
 		return err

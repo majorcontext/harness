@@ -354,6 +354,17 @@ func (s *Session) storePhase(op, phase string, elapsed time.Duration) {
 	}
 }
 
+// storePhaseStart reports op/phase beginning to Config.OnStorePhaseStart,
+// nil-guarded. Caller holds s.mu (see OnStorePhaseStart's doc comment). Every
+// call here has a matching storePhase call once the operation completes —
+// each call site below fires this immediately before starting the timer
+// (t0 := time.Now()) that storePhase's elapsed argument measures.
+func (s *Session) storePhaseStart(op, phase string) {
+	if s.cfg.OnStorePhaseStart != nil {
+		s.cfg.OnStorePhaseStart(op, phase)
+	}
+}
+
 // ensureLog opens the session log, creating the directory and file — and
 // writing the header — on first use. Caller holds s.mu. The fast path (log
 // already open) reports no phases.
@@ -362,6 +373,7 @@ func (s *Session) ensureLog() error {
 		return nil
 	}
 	const op = "ensure_log"
+	s.storePhaseStart(op, "mkdir")
 	t0 := time.Now()
 	if err := os.MkdirAll(s.cfg.SessionDir, 0o755); err != nil {
 		return err
@@ -371,12 +383,14 @@ func (s *Session) ensureLog() error {
 	// file's own last byte. O_APPEND still governs every Write (here and in
 	// writeRecord) regardless of the file's read/write position, so this
 	// adds read capability without changing append semantics at all.
+	s.storePhaseStart(op, "open")
 	t0 = time.Now()
 	f, err := os.OpenFile(sessionPath(s.cfg.SessionDir, s.ID), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
 		return err
 	}
 	s.storePhase(op, "open", time.Since(t0))
+	s.storePhaseStart(op, "stat")
 	t0 = time.Now()
 	fi, err := f.Stat()
 	if err != nil {
@@ -434,6 +448,7 @@ func (s *Session) ensureLog() error {
 			return err
 		}
 		if last[0] != '\n' {
+			s.storePhaseStart(op, "tail_repair")
 			t0 := time.Now()
 			data, err := os.ReadFile(sessionPath(s.cfg.SessionDir, s.ID))
 			if err != nil {
@@ -491,6 +506,7 @@ func (s *Session) ensureLog() error {
 			buf.Write(b)
 			buf.WriteByte('\n')
 		}
+		s.storePhaseStart(op, "header_write")
 		t0 := time.Now()
 		if _, err := f.Write(buf.Bytes()); err != nil {
 			f.Close()
@@ -515,6 +531,7 @@ func (s *Session) ensureLog() error {
 		// mount (e.g. a volume) at boot, so that entry predates the process
 		// and isn't this code's concern. See syncDir for why this is a
 		// build-tagged no-op off unix.
+		s.storePhaseStart(op, "sync_dir")
 		t0 = time.Now()
 		if err := syncDir(s.cfg.SessionDir); err != nil {
 			f.Close()

@@ -212,6 +212,23 @@ type Config struct {
 	// volume), never control flow.
 	OnStorePhase func(op, phase string, elapsed time.Duration)
 
+	// OnStorePhaseStart, when non-nil, is invoked immediately before each
+	// OnStorePhase-instrumented operation begins (same op/phase names — see
+	// OnStorePhase's doc comment above). It is the counterpart that makes an
+	// in-flight watchdog possible: OnStorePhase alone only reports a phase
+	// once it COMPLETES, so a phase that never completes — e.g. a wedged
+	// network volume hanging a file operation indefinitely — produces no
+	// completion log line at all. That gap is exactly what a production
+	// canary hit: a create hung permanently mid-ensureLog with zero phase
+	// timing lines, because completion-only logging is blind to a phase
+	// that never completes. A caller pairs each Start call with the
+	// matching OnStorePhase completion in a small table keyed by op/phase
+	// (see cmd/harness/main.go's watchdog) so it can warn, repeatedly,
+	// while a phase is still stuck. Called synchronously while the session
+	// mutex is held — same rules as OnStorePhase/OnEvent: must be fast,
+	// must never call back into the Session.
+	OnStorePhaseStart func(op, phase string)
+
 	// OnRequest, when non-nil, is invoked synchronously in streamTurn with the
 	// exact final request about to be sent to the provider — after params,
 	// system-segment, and hook assembly, immediately before prov.Stream. turn
