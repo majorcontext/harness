@@ -368,6 +368,11 @@ func sessionsCmd(args []string) error {
 }
 
 func runCmd(args []string) error {
+	// Captured once, at the top of the command, before any flag parsing or
+	// session create/load — the ambient engine-identity block's StartedAt
+	// (see engine.Config.StartedAt) reports THIS process's start time, not
+	// the moment any individual session happened to be created or resumed.
+	startedAt := time.Now()
 	var opts runOptions
 	fs := runFlags(&opts)
 	if err := fs.Parse(args); err != nil {
@@ -478,6 +483,8 @@ func runCmd(args []string) error {
 		WorkDir:             workDir,
 		SessionDir:          sesDir,
 		SessionSync:         cfg.SessionSync,
+		EngineVersion:       version,
+		StartedAt:           startedAt,
 		OnEvent:             onEvent,
 		OnStorePhase:        slowStorePhaseLogger(logger),
 		Instructions:        instructionsConfig(cfg, opts.noInstructions),
@@ -702,6 +709,14 @@ func serveURLForAddr(addr string) string {
 // touches network egress, spawns processes, or scans beyond the session dir —
 // provider auth still validates on first message send.
 func serveCmd(args []string) error {
+	// Captured once, at the top of the command, before any flag parsing,
+	// config load, or session create/load — mkCfg below threads this same
+	// instant into every session's engine.Config.StartedAt (create AND
+	// resume alike, since mkCfg is shared by newSessionFn and
+	// loadSessionFn), so every session served by this process reports the
+	// SAME start time regardless of when the session itself was created or
+	// resumed. See runCmd's matching capture for the -no-save/one-shot path.
+	startedAt := time.Now()
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	var addr string
@@ -831,6 +846,8 @@ func serveCmd(args []string) error {
 			WorkDir:             workDir,
 			SessionDir:          sesDir,
 			SessionSync:         cfg.SessionSync,
+			EngineVersion:       version,
+			StartedAt:           startedAt,
 			OnEvent:             func(ev engine.Event) { srv.Publish(ev) },
 			OnStorePhase:        storePhase,
 			OnStorePhaseStart:   watchdog.startStorePhase,
@@ -854,6 +871,8 @@ func serveCmd(args []string) error {
 		SessionDir:    sesDir,
 		RunToken:      token,
 		Version:       version,
+		SessionSync:   cfg.SessionSync,
+		StartedAt:     startedAt,
 		CORSOrigin:    corsOrigin,
 		GoalEvaluator: goalEval,
 		MCP:           mcpRegistry(mcpMgr),

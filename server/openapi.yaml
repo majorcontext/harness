@@ -52,7 +52,7 @@ components:
   schemas:
     Health:
       type: object
-      required: [version, vcs_revision, vcs_time]
+      required: [version, vcs_revision, vcs_time, session_sync, started_at]
       properties:
         version:
           type: string
@@ -61,16 +61,40 @@ components:
           type: string
           description: >
             The running binary's VCS revision (commit hash), from
-            runtime/debug.ReadBuildInfo's "vcs.revision" setting. Always
-            present, but "" when build info carries no VCS settings — e.g. a
-            `go test` binary, or a binary built outside a VCS checkout.
+            runtime/debug.ReadBuildInfo's "vcs.revision" setting when
+            present (a build from a local VCS checkout), else parsed from
+            the Go module version instead (a `go install pkg@<sha>`-style
+            module-mode install, which embeds no vcs.revision at all) —
+            always present, but "" when build info is unavailable at all
+            (e.g. a `go test` binary) or names no commit (a plain `go
+            build`/`go run`, or an install by tag with no commit-specific
+            timestamp — see vcs_time).
           example: 1fdc1db1e2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7
         vcs_time:
           type: string
           description: >
-            The commit timestamp corresponding to vcs_revision, from
-            ReadBuildInfo's "vcs.time" setting (RFC 3339). Always present,
-            "" under the same conditions as vcs_revision.
+            The commit timestamp corresponding to vcs_revision (RFC 3339),
+            from ReadBuildInfo's "vcs.time" setting or, in the module-mode
+            fallback described under vcs_revision, parsed from a pseudo-
+            version's embedded timestamp. Always present, "" under the same
+            conditions as vcs_revision, and also "" when vcs_revision came
+            from a plain tag (which names no specific commit time).
+          example: "2024-06-01T12:00:00Z"
+        session_sync:
+          type: string
+          enum: [fsync, volume]
+          description: >
+            This process's EFFECTIVE session-durability mode — never the
+            raw, possibly-empty config value — so a caller never has to know
+            the default to know the mode a box is actually running in. See
+            the session_sync config field.
+          example: fsync
+        started_at:
+          type: string
+          description: >
+            This server process's start time (RFC 3339, UTC). Always
+            present, "" only when the serving process never set it (not
+            expected in production; a defensive default).
           example: "2024-06-01T12:00:00Z"
 
     Session:

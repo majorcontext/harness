@@ -67,6 +67,23 @@ type Options struct {
 	RunToken string
 	// Version is reported by /health.
 	Version string
+	// SessionSync is the raw session-durability mode this process's sessions
+	// were configured with (same value threaded into every session's
+	// engine.Config.SessionSync — see cmd/harness's mkCfg), reported by
+	// /health as its EFFECTIVE mode (see effectiveSessionSync in
+	// handlers.go): "fsync" for the zero value or any value other than
+	// "volume". /health is deliberately unauthenticated (see RunToken's doc
+	// comment above) — this is as low-sensitivity as the Version string
+	// already reported there, existing precisely so a canary can
+	// machine-check a box's durability mode with no token and no session.
+	SessionSync string
+	// StartedAt is this server process's start time (same instant threaded
+	// into every session's engine.Config.StartedAt — see cmd/harness's
+	// serveCmd), reported by /health as an RFC3339 UTC timestamp. Zero (the
+	// default, e.g. a test harness that doesn't set it) reports "" rather
+	// than a placeholder. As unauthenticated and low-sensitivity as Version
+	// and SessionSync above.
+	StartedAt time.Time
 	// NewSession creates a fresh engine session for the given model (zero
 	// model = caller's default), workdir (already resolved and validated
 	// by handleCreate against WorkspaceRoots — see resolveWorkDir), and

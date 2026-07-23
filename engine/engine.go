@@ -208,6 +208,31 @@ type Config struct {
 	// condition, so it is treated as SessionSyncFsync rather than rejected.
 	SessionSync string
 
+	// EngineVersion is the build version string of the serving process
+	// (cmd/harness's main.version, ldflags -X'd at release build time,
+	// "0.1.0-dev" in an unflagged dev build). Rendered into the ambient
+	// engine-identity block (see identityStatusSegment) alongside
+	// SessionSync and StartedAt, giving a session first-class, zero-tool-call
+	// answer to "what engine am I running under" — the honesty gap that
+	// makes `harness version` in bash or grepping the serve log's boot line
+	// unreliable is that the binary on disk and the process that logged at
+	// boot can both diverge from the currently-serving process. Empty (the
+	// zero value — e.g. an embedder that builds Config directly, bypassing
+	// cmd/harness) omits the version clause from the block rather than
+	// rendering a placeholder; it never suppresses the whole block, since
+	// SessionSync's effective mode and StartedAt (when set) are still worth
+	// reporting on their own.
+	EngineVersion string
+
+	// StartedAt is the serving process's start time, threaded through by
+	// cmd/harness (captured once, at the top of serveCmd/runCmd, before any
+	// session is created or loaded) so every session under that process
+	// reports the SAME instant regardless of when the session itself was
+	// created or resumed. Rendered into the ambient engine-identity block
+	// (see EngineVersion's doc comment) as a UTC RFC3339 timestamp. Zero
+	// (the default) omits the started clause from the block.
+	StartedAt time.Time
+
 	// ParentSession is an opaque provenance pointer to the session this one
 	// continues from — a re-dispatch after a failed goal, a follow-up fix
 	// picked up on a fresh box. It is set once at creation (like WorkDir),
@@ -974,8 +999,9 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 	if params.MaxTokens != nil {
 		maxTokens = *params.MaxTokens
 	}
-	// Ambient process-status, MCP-status, and parked-goal-status injection
-	// (see processStatusSegment, mcpStatusSegment, goalParkedSegment):
+	// Ambient process-status, MCP-status, parked-goal-status, and
+	// engine-identity injection (see processStatusSegment,
+	// mcpStatusSegment, goalParkedSegment, identityStatusSegment):
 	// appended ONLY to this
 	// in-memory request copy — s.History() already returns a fresh slice
 	// (engine.go's append(nil, s.history...)), and withAmbientStatus
@@ -1004,6 +1030,9 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 		messages = withAmbientStatus(messages, seg)
 	}
 	if seg := goalParkedSegment(s); seg != "" {
+		messages = withAmbientStatus(messages, seg)
+	}
+	if seg := identityStatusSegment(s.cfg.EngineVersion, s.cfg.StartedAt, s.cfg.SessionSync); seg != "" {
 		messages = withAmbientStatus(messages, seg)
 	}
 	req := &provider.Request{
