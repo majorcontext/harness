@@ -65,20 +65,21 @@ func (p *serveProc) queueGet(id string) queueGetRespJSON {
 	return q
 }
 
-// TestDurableEnqueueSurvivesSIGKILL is the black-box proof of durable
-// enqueue's headline guarantee (docs/plans/2026-07-21-durable-enqueue.md): a
-// 202 from POST /session/{id}/enqueue means the prompt.queued record is
-// already fsynced, so an upstream that acks on that 202 may safely crash and
-// retry into a successor process without double delivery — the
-// accepted-but-undelivered window across a real process death.
+// durableEnqueueSIGKILLScenario is the shared body of
+// TestDurableEnqueueSurvivesSIGKILL and TestDurableEnqueueSurvivesSIGKILLVolumeMode:
+// occupy a session with a stalled turn, durably enqueue behind it (202,
+// watermark 1), SIGKILL mid-turn, boot a fresh process on the same session
+// dir, and prove over real HTTP against the successor that (a) the pending
+// entry survived and refolded, (b) replaying the same seq is a clean 200
+// duplicate no-op, and (c) the successor still accepts new work.
 //
-// Sequence: occupy the session with a stalled turn, durably enqueue behind
-// it (202, watermark 1), SIGKILL mid-turn, boot a fresh process on the same
-// session dir, and prove over real HTTP against the successor that (a) the
-// pending entry survived and refolded, (b) replaying the same seq is a clean
-// 200 duplicate no-op, and (c) the successor still accepts new work.
-func TestDurableEnqueueSurvivesSIGKILL(t *testing.T) {
-	skipShort(t)
+// buildConfig receives the fake provider's base URL (known only once it's
+// started) and returns the config path to serve both processes with — the
+// ONE thing the two callers vary (see e2e_test.go's
+// writeConfigWithSessionSync), so every assertion below runs identically
+// under either durability mode.
+func durableEnqueueSIGKILLScenario(t *testing.T, buildConfig func(baseURL string) string) {
+	t.Helper()
 
 	fake := newFakeAnthropic(1) // stall the very first upstream request
 	srv := httptest.NewServer(fake)
@@ -86,7 +87,7 @@ func TestDurableEnqueueSurvivesSIGKILL(t *testing.T) {
 	t.Cleanup(fake.close)
 
 	sessDir := t.TempDir()
-	cfgPath := writeConfig(t, srv.URL)
+	cfgPath := buildConfig(srv.URL)
 
 	// Process 1: create a session and occupy it with a prompt that stalls
 	// upstream, so the session is busy when the durable enqueue lands.
@@ -104,7 +105,9 @@ func TestDurableEnqueueSurvivesSIGKILL(t *testing.T) {
 	}
 
 	// Durable enqueue behind the busy occupant: the 202 attests the
-	// prompt.queued record is fsynced BEFORE this response is written.
+	// prompt.queued record is durably accepted BEFORE this response is
+	// written — fsynced in the default mode, or (see the volume-mode test)
+	// delegated to the configured session_sync backend.
 	status, er := p1.enqueue(id, "queued msg", 1)
 	if status != http.StatusAccepted {
 		t.Fatalf("enqueue status = %d, want 202", status)
@@ -157,4 +160,43 @@ func TestDurableEnqueueSurvivesSIGKILL(t *testing.T) {
 	if er.Watermark != 2 {
 		t.Fatalf("fresh enqueue watermark = %d, want 2 (got status=%q)", er.Watermark, er.Status)
 	}
+}
+
+// TestDurableEnqueueSurvivesSIGKILL is the black-box proof of durable
+// enqueue's headline guarantee (docs/plans/2026-07-21-durable-enqueue.md): a
+// 202 from POST /session/{id}/enqueue means the prompt.queued record is
+// already fsynced, so an upstream that acks on that 202 may safely crash and
+// retry into a successor process without double delivery — the
+// accepted-but-undelivered window across a real process death. Runs under
+// the default session_sync ("fsync") mode.
+func TestDurableEnqueueSurvivesSIGKILL(t *testing.T) {
+	skipShort(t)
+	durableEnqueueSIGKILLScenario(t, func(baseURL string) string {
+		return writeConfig(t, baseURL)
+	})
+}
+
+// TestDurableEnqueueSurvivesSIGKILLVolumeMode is
+// TestDurableEnqueueSurvivesSIGKILL's identical scenario under
+// `"session_sync": "volume"` (see config.Config.SessionSync and
+// docs/deploy-modal.md) — the mode that skips both fsync round-trips
+// entirely on the theory that a continuously-synced network volume's own
+// commit layer is already the durability boundary.
+//
+// This pins something the fsync-mode test above cannot: that the journal's
+// torn-tail healing (store.go's ensureLog repair) and watermark replay
+// (queue.go's last-writer-wins seq fold) hold up with NO fsync safety net
+// at all — exactly the deployment shape volume mode targets. SIGKILL here
+// does not drop the page cache (unlike an abrupt VM/volume kill, which can
+// lose an unsynced tail — see docs/deploy-modal.md's "Ephemerality e2e"),
+// so this test validates the write-path and replay-fold correctness of
+// volume mode specifically; it does not and cannot exercise the volume
+// backend's own loss characteristics under a real infrastructure-level
+// kill — that is the backend's documented contract, not something a local
+// process test can observe.
+func TestDurableEnqueueSurvivesSIGKILLVolumeMode(t *testing.T) {
+	skipShort(t)
+	durableEnqueueSIGKILLScenario(t, func(baseURL string) string {
+		return writeConfigWithSessionSync(t, baseURL, "volume")
+	})
 }

@@ -1316,3 +1316,65 @@ func TestMergeProcesses(t *testing.T) {
 		}
 	})
 }
+
+func TestLoadSessionSyncAcceptedValues(t *testing.T) {
+	for _, v := range []string{"", "fsync", "volume"} {
+		t.Run(fmt.Sprintf("%q", v), func(t *testing.T) {
+			dir := t.TempDir()
+			p := filepath.Join(dir, "config.json")
+			body := `{}`
+			if v != "" {
+				body = fmt.Sprintf(`{"session_sync": %q}`, v)
+			}
+			writeFile(t, p, body)
+			c, err := Load(p)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if c.SessionSync != v {
+				t.Errorf("SessionSync = %q, want %q", c.SessionSync, v)
+			}
+		})
+	}
+}
+
+func TestLoadSessionSyncRejectsGarbage(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.json")
+	writeFile(t, p, `{"session_sync": "volumes"}`)
+	if _, err := Load(p); err == nil {
+		t.Fatal("Load accepted an unrecognized session_sync value")
+	} else if !strings.Contains(err.Error(), "session_sync") {
+		t.Errorf("error %q does not name session_sync", err.Error())
+	}
+}
+
+func TestMergeSessionSync(t *testing.T) {
+	t.Run("empty project inherits user", func(t *testing.T) {
+		base := &Config{SessionSync: "volume"}
+		got := merge(base, &Config{})
+		if got.SessionSync != "volume" {
+			t.Errorf("SessionSync = %q, want inherited %q", got.SessionSync, "volume")
+		}
+	})
+	t.Run("non-empty project overrides", func(t *testing.T) {
+		base := &Config{SessionSync: "volume"}
+		got := merge(base, &Config{SessionSync: "fsync"})
+		if got.SessionSync != "fsync" {
+			t.Errorf("SessionSync = %q, want project override %q", got.SessionSync, "fsync")
+		}
+	})
+}
+
+func TestLoadProjectWithInfoSessionSync(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".harness.json"), `{"session_sync": "volume"}`)
+	t.Setenv("HARNESS_CONFIG", filepath.Join(dir, "does-not-exist.json"))
+	_, info, err := LoadProjectWithInfo(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.SessionSync != "volume" {
+		t.Errorf("LoadInfo.SessionSync = %q, want %q", info.SessionSync, "volume")
+	}
+}
