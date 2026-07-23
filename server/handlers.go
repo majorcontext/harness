@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"runtime/pprof"
 	"sort"
@@ -275,13 +276,75 @@ func (s *Server) sessionIDOrNotFound(w http.ResponseWriter, r *http.Request) (st
 	return id, true
 }
 
-// healthJSON is the openapi Health shape. VCSRevision and VCSTime are always
-// present (never omitted, even empty) so a client never has to special-case
-// "field absent" vs "field empty" — see buildInfo.
+// healthJSON is the openapi Health shape. VCSRevision, VCSTime, SessionSync,
+// and StartedAt are always present (never omitted, even empty) so a client
+// never has to special-case "field absent" vs "field empty" — see buildInfo
+// and handleHealth. /health is deliberately unauthenticated (see Options.
+// RunToken's doc comment), and every field here is as low-sensitivity as the
+// Version string it has always reported: they exist precisely so a canary
+// can machine-check "what engine, what durability mode, since when" against
+// a running box with no token and no session, the /health counterpart to
+// the ambient in-session engine-identity block (see engine/
+// identity_status.go) an agent already gets for free every turn.
 type healthJSON struct {
 	Version     string `json:"version"`
 	VCSRevision string `json:"vcs_revision"`
 	VCSTime     string `json:"vcs_time"`
+	// SessionSync is the EFFECTIVE session-durability mode (see
+	// effectiveSessionSync) — never the raw, possibly-empty Options.
+	// SessionSync value — so a canary never has to know the zero value's
+	// meaning to know the mode a box is actually running in.
+	SessionSync string `json:"session_sync"`
+	// StartedAt is this server process's start time (Options.StartedAt),
+	// rendered as an RFC3339 UTC timestamp, or "" when Options.StartedAt was
+	// never set (e.g. a test harness that doesn't care about it).
+	StartedAt string `json:"started_at"`
+}
+
+// pseudoVersionRe matches the trailing "<14-digit-UTC-timestamp>-
+// <12-hex-commit>" suffix of a Go module pseudo-version (see
+// golang.org/ref/mod#pseudo-versions), e.g. the "20240102150405-
+// abcdef012345" tail of "v0.0.0-20240102150405-abcdef012345" — the shape
+// `go install pkg@<sha>` produces when the target commit carries no semver
+// tag, and parseModuleVersion's primary case. Anchored at the end of the
+// string; deliberately does NOT require the timestamp to be immediately
+// preceded by "-", so the same pattern also matches a tagged pre-release
+// pseudo-version like "v1.2.4-0.20240102150405-abcdef012345" (the "0."
+// prefix landing just before the timestamp there).
+var pseudoVersionRe = regexp.MustCompile(`(\d{14})-([0-9a-f]{12})$`)
+
+// parseModuleVersion extracts a VCS revision and commit time from a Go
+// module version string (debug.BuildInfo.Main.Version), for buildInfo's
+// fallback when ReadBuildInfo carries no vcs.revision setting at all — the
+// case for every `go install pkg@sha`-style module-mode build, since Go
+// only embeds vcs.* settings when the build reads them from a local .git
+// checkout, never from a downloaded module (see buildInfo's doc comment).
+// Two recognized shapes:
+//
+//   - A pseudo-version (see pseudoVersionRe): its trailing timestamp-commit
+//     suffix embeds exactly the two pieces vcs.revision/vcs.time would have
+//     carried, so this returns the 12-hex commit as revision and the
+//     timestamp reformatted as RFC3339 UTC as buildTime — vcs_revision is
+//     therefore meaningful under `go install pkg@<sha>` too, not just a
+//     local .git build.
+//   - Any other non-empty, non-"(devel)" version (a real tag, e.g. a module
+//     installed by "@v1.2.3" rather than by commit): returned in revision
+//     as-is, with buildTime left empty since a bare tag names no specific
+//     commit time.
+//
+// "(devel)" (what debug.ReadBuildInfo reports for a plain `go build`/`go
+// run` outside module-download mode) and "" both return ("", ""): neither
+// names any commit at all.
+func parseModuleVersion(version string) (revision, buildTime string) {
+	if version == "" || version == "(devel)" {
+		return "", ""
+	}
+	if m := pseudoVersionRe.FindStringSubmatch(version); m != nil {
+		if ts, err := time.Parse("20060102150405", m[1]); err == nil {
+			return m[2], ts.UTC().Format(time.RFC3339)
+		}
+	}
+	return version, ""
 }
 
 // buildInfo reads the running binary's VCS revision and commit time from
@@ -289,9 +352,15 @@ type healthJSON struct {
 // commit is live — a stale box binary otherwise looks identical to a fresh
 // one behind a fixed config Version string (an engineer once burned 30
 // minutes suspecting exactly that). Both return "" when build info is
-// unavailable or carries no VCS settings, which is the ordinary case for a
-// `go test` binary — ReadBuildInfo still succeeds there, it simply has no
-// "vcs.revision"/"vcs.time" entries in Settings.
+// unavailable, which is the ordinary case for a `go test` binary —
+// ReadBuildInfo still succeeds there, it simply has no "vcs.revision"/
+// "vcs.time" entries in Settings AND no usable Main.Version (a test binary's
+// Main.Version is also "(devel)"). When Settings carries no vcs.revision —
+// the ordinary case for a `go install pkg@sha`-style module-mode install,
+// which embeds no local .git at all — this falls back to parseModuleVersion
+// against info.Main.Version instead of returning empty, so vcs_revision
+// stays meaningful under every install method, not just a build from a
+// local checkout.
 func buildInfo() (revision, buildTime string) {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
@@ -305,12 +374,40 @@ func buildInfo() (revision, buildTime string) {
 			buildTime = setting.Value
 		}
 	}
+	if revision == "" {
+		revision, buildTime = parseModuleVersion(info.Main.Version)
+	}
 	return revision, buildTime
+}
+
+// effectiveSessionSync normalizes a raw Options.SessionSync value to the
+// mode it actually behaves as: any value other than "volume" (including the
+// zero value) is fsync mode. Mirrors engine's identityStatusSegment pairing
+// (engine/identity_status.go's effectiveSessionSync, which in turn mirrors
+// Session.volumeSync in engine/store.go) for the ambient in-session block —
+// kept as a small local copy rather than an import, since that engine
+// helper is unexported; the two are deliberately identical in behavior and
+// SHOULD be changed together if the default ever does.
+func effectiveSessionSync(mode string) string {
+	if mode == engine.SessionSyncVolume {
+		return engine.SessionSyncVolume
+	}
+	return engine.SessionSyncFsync
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	rev, t := buildInfo()
-	writeJSON(w, http.StatusOK, healthJSON{Version: s.opts.Version, VCSRevision: rev, VCSTime: t})
+	var startedAt string
+	if !s.opts.StartedAt.IsZero() {
+		startedAt = s.opts.StartedAt.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, healthJSON{
+		Version:     s.opts.Version,
+		VCSRevision: rev,
+		VCSTime:     t,
+		SessionSync: effectiveSessionSync(s.opts.SessionSync),
+		StartedAt:   startedAt,
+	})
 }
 
 // handleGoroutines writes the full, all-goroutine stack dump (the exact
