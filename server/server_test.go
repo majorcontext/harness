@@ -388,7 +388,15 @@ func (s *sseStream) waitFor(t *testing.T, typ string) Event {
 }
 
 // collectUntilIdle reads events until a session.status idle arrives, returning
-// all events (including the idle one).
+// all events (including the idle one). This idle is only the END of the
+// occupying turn that was in flight when the caller started watching — if a
+// prompt was queued behind it, maybeDispatchQueued's tail dispatches the
+// queued head IMMEDIATELY after this idle is fanned out (session.status busy
+// for the dispatched turn always arrives strictly after this idle — see
+// dispatchQueueHead's doc comment and TestQueuedPromptDispatchesOnDrain's
+// "SSE ordering" comment), so a caller that assumes this idle means "nothing
+// left to do for this session" is wrong whenever a queue is in play: use
+// collectUntilDrained for that case instead.
 func (s *sseStream) collectUntilIdle(t *testing.T) []Event {
 	t.Helper()
 	var out []Event
@@ -397,6 +405,70 @@ func (s *sseStream) collectUntilIdle(t *testing.T) []Event {
 		out = append(out, ev)
 		if ev.Type == "session.status" && ev.Status == "idle" {
 			return out
+		}
+	}
+}
+
+// collectUntilDrained is collectUntilIdle for a caller that needs the
+// session to have NO further turn coming — not just the next idle on the
+// wire, which (per collectUntilIdle's doc comment) may be an intermediate
+// hop in a queue-drain chain.
+//
+// This reads h.srv's own state directly rather than through a GET
+// /session/{id} round trip: buildSession computes State (from the running
+// flag, captured in lookup) and Queued (from a separate, later
+// QueuedPrompts() call) as two independent observations, so a JSON
+// snapshot can carry a stale State=="idle" alongside a Queued==0 that only
+// became true after State was already captured — exactly the torn read this
+// helper exists to avoid, just moved one layer down.
+//
+// The two direct reads below can't simply be taken under one h.srv.mu
+// critical section either: QueuedPrompts acquires the engine session's OWN
+// mutex, and Server.mu is documented as a LEAF with respect to that mutex
+// (see server.go's Server.mu doc comment) — calling it while holding
+// h.srv.mu would risk the exact deadlock that invariant exists to prevent.
+// So running is read under the lock, released, then QueuedPrompts is called
+// unlocked, then running is read under the lock a SECOND time. Ordering is
+// what makes this race-free: a queued prompt is dequeued (Queued drops to
+// 0) strictly BEFORE the dispatched turn's own runPrompt call ever runs,
+// and running flips back to false only after that call returns — so if a
+// dispatch is (or becomes) in flight anywhere around the QueuedPrompts
+// call, the SECOND running read, being the more recent of the two, observes
+// running==true and the loop goes around again. Only "QueuedPrompts()==0,
+// immediately followed by running==false" proves nothing was in flight as
+// of the more recent observation — and since nothing in this test enqueues
+// anything further once inside this loop, an empty queue observed here
+// stays empty, so that combination can only occur once the whole chain has
+// genuinely finished. (The first running read, before QueuedPrompts, is
+// just a fast early-exit for the common case — still running means
+// definitely not drained, no need to even call QueuedPrompts.)
+//
+// Without this, a test that queues a second prompt behind the one it is
+// watching can read the session's message history mid-flight on the
+// dispatched turn — see TestClaimForPromptSurvivesEvictionRace, whose
+// "server history diverges from disk" flake this fixes.
+func (s *sseStream) collectUntilDrained(t *testing.T, h *harness, id string) []Event {
+	t.Helper()
+	var all []Event
+	for {
+		all = append(all, s.collectUntilIdle(t)...)
+
+		h.srv.mu.Lock()
+		st := h.srv.sessions[id]
+		running := st != nil && st.running
+		h.srv.mu.Unlock()
+		if running || st == nil {
+			continue // definitely not drained (or not resident — this test keeps id resident throughout)
+		}
+
+		queued := len(st.sess.QueuedPrompts()) // unlocked: QueuedPrompts acquires the session's own mutex
+
+		h.srv.mu.Lock()
+		running = st.running
+		h.srv.mu.Unlock()
+
+		if !running && queued == 0 {
+			return all
 		}
 	}
 }
@@ -2020,9 +2092,12 @@ func TestClaimForPromptSurvivesEvictionRace(t *testing.T) {
 	}
 	_ = idB
 
-	// Release; A completes and returns to idle.
+	// Release; A completes and returns to idle. The queued "again" prompt
+	// dispatches immediately behind A's own idle (queue-beats-goal), so wait
+	// for the queue to actually drain rather than the first idle on the wire
+	// — see collectUntilDrained's doc comment.
 	prov.releaseAll()
-	sse.collectUntilIdle(t)
+	sse.collectUntilDrained(t, h, idA)
 	sse.stop()
 
 	// Re-prompt A and wait for it to fully complete (idle) so the log is stable:
@@ -2036,7 +2111,7 @@ func TestClaimForPromptSurvivesEvictionRace(t *testing.T) {
 	if resp.StatusCode != 202 {
 		t.Fatalf("re-prompt A status %d: %s", resp.StatusCode, data)
 	}
-	sse2.collectUntilIdle(t)
+	sse2.collectUntilDrained(t, h, idA)
 	sse2.stop()
 
 	// The messages endpoint (server's view) and a fresh independent load from
