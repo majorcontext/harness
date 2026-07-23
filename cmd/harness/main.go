@@ -71,12 +71,14 @@ func slowStorePhaseLogger(logger *slog.Logger) func(op, phase string, elapsed ti
 }
 
 // createPhaseLogger wires server.Options.OnCreatePhase to the serve logger.
-// It warns on any individually slow phase (mirroring slowStorePhaseLogger)
-// and, unlike it, also emits ONE Info summary line per session when the
-// "total" phase lands — creates are rare (once per session, unlike the
-// per-message store phases above), so an always-on Info line is cheap and
-// is exactly what lets a single canary session spawn localize a stall to
-// one phase without a debugger.
+// It warns on any individually slow phase — msg "slow create phase",
+// disambiguated from slowStorePhaseLogger's "slow store phase" so the two
+// are distinguishable at a glance in log search — and, unlike it, also
+// emits ONE Info summary line per session when the "total" phase lands —
+// creates are rare (once per session, unlike the per-message store phases
+// above), so an always-on Info line is cheap and is exactly what lets a
+// single canary session spawn localize a stall to one phase without a
+// debugger.
 //
 // handleCreate calls back sequentially from one goroutine per request, but
 // multiple creates can be in flight concurrently, so phases are accumulated
@@ -98,7 +100,7 @@ var createPhaseOrder = []string{"new_session", "persist", "register", "emit_crea
 
 func (c *createPhaseLogger) OnCreatePhase(sessionID, phase string, elapsed time.Duration) {
 	if elapsed > slowPhaseThreshold {
-		c.logger.Warn("slow store phase", "op", "create", "phase", phase, "session", sessionID, "elapsed_ms", elapsed.Milliseconds())
+		c.logger.Warn("slow create phase", "op", "create", "phase", phase, "session", sessionID, "elapsed_ms", elapsed.Milliseconds())
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
