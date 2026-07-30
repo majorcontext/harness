@@ -1049,6 +1049,20 @@ function entryKey(entry, index) {
 
 /* TESTABLE-END */
 
+// Test-only tuning seam: tools/monitor/e2e's jsdom driver sets
+// window.__monitorTuning = { QUIET_MS, STALL_MS } (via JSDOM's beforeParse,
+// so it lands before this inline script ever runs) to shrink the staleness
+// thresholds from their production 15s/60s down to something a scripted
+// turn's real wall-clock tool delay can cross inside a CI-sane test budget,
+// without touching the thresholds any real deployment sees — nothing in
+// production ever sets window.__monitorTuning, so this is a no-op there.
+// Kept outside TESTABLE-BEGIN/END (monitor_test.mjs's vm sandbox exposes no
+// `window`) and applied once, before bootstrap()/any staleness() call.
+if (typeof window !== "undefined" && window.__monitorTuning) {
+  if (typeof window.__monitorTuning.QUIET_MS === "number") QUIET_MS = window.__monitorTuning.QUIET_MS;
+  if (typeof window.__monitorTuning.STALL_MS === "number") STALL_MS = window.__monitorTuning.STALL_MS;
+}
+
 /* ---------- app state + DOM wiring (board live; detail view stays static
    until the next step) ----------
 
