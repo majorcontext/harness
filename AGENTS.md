@@ -666,7 +666,10 @@ with no Go-side handler of its own.
   `#b=<base>` (box base URL) and `#s=<session id>` (open detail view) — both
   bookmarkable, encoded/decoded by a tested pure helper.
 - **Embedded serving, frictionless local**: every `harness serve` box also
-  offers its own copy same-origin, at `GET /monitor` — `tools/monitor`
+  offers its own copy same-origin, at `GET /monitor` — by default
+  `http://localhost:4096/monitor` (the port follows `-addr`, default
+  `localhost:4096`; the exact URL, with any `#t=<token>` capability suffix, is
+  printed to the terminal on startup — `monitorTerminalHint`). `tools/monitor`
   (package `monitor`, `embed.go`) `//go:embed`s the exact committed
   `index.html`; `cmd/harness`'s `serveCmd` wires it into
   `server.Options.MonitorPage`, which the server serves unauthenticated
