@@ -35,7 +35,11 @@ import (
 //     a BUSY session and is replaced (not duplicated) once the durable
 //     message lands; a send into an idle session runs a normal turn; a send
 //     against an unknown session id surfaces the server's real non-2xx
-//     error text inline;
+//     error text inline; a composer submit renders the operator's own text
+//     SYNCHRONOUSLY, before the POST even resolves, settling to exactly one
+//     entry once the real message lands; a real, currently-running turn
+//     with no content yet shows a quiet "Thinking…" pending indicator,
+//     dismissed the instant real streaming content arrives;
 //   - killing the box's HTTP layer server-side flips the header to
 //     "reconnecting…", and restarting it resumes the stream;
 //   - a real provider stream failure renders a critical transcript error

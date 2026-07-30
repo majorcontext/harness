@@ -40,6 +40,11 @@ engine turns. It confirms:
    template-wrapped message lands; a send into an idle session runs a
    normal turn (a `message` event, not `prompt.queued`); a send against an
    unknown session id surfaces the server's real non-2xx error text inline;
+   a composer submit also renders the operator's own text **synchronously**,
+   before the POST even resolves, settling to exactly one entry once the
+   real message lands; a real, currently-running turn with no content yet
+   shows a quiet "Thinking…" pending indicator, dismissed the instant real
+   streaming content arrives;
 7. killing the box's HTTP layer **server-side** flips the header to
    "reconnecting…", and restarting it resumes the stream — proven live by a
    brand-new session created after the restart still arriving via SSE.

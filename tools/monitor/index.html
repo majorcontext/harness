@@ -51,13 +51,20 @@
        occurred, and the chip drops to idle promptly once session.status
        goes idle, without waiting on the next 5s poll.
     6. Send a message from the composer (Enter to send, Shift+Enter for a
-       newline) -> it appears as an operator entry the moment the stream's
-       `message` event lands (session was idle) or, if the session was
-       busy, the moment `prompt.queued` lands, later replaced (not
-       duplicated) by the real message once delivered. The input disables
-       only for the POST itself — sending into a busy session queues it
-       rather than blocking on it. A non-2xx response renders the server's
-       own error text inline under the input, in critical color.
+       newline) -> it appears as an operator entry IMMEDIATELY, before the
+       POST even resolves (no perceived network-hop lag), reconciled — not
+       duplicated — once the stream's real `message` event lands (session
+       was idle) or, for a busy session, once `prompt.queued` lands. A
+       non-2xx response or a network failure instead rolls the optimistic
+       entry back and renders the server's own error text inline under the
+       input, in critical color. The input disables only for the POST
+       itself — sending into a busy session queues it rather than blocking
+       on it. Once the turn actually starts running with nothing to show
+       yet (no reasoning, text, tool call, or error), a quiet "Thinking…"
+       indicator appears right where the reply will land, and disappears
+       the instant the first token/tool/error does — a QUEUED send shows
+       only its own operator entry until its turn actually starts; it never
+       shows "Thinking…" prematurely.
     7. Click the breadcrumb -> back to the board; focus returns to the row
        that was opened (or the session list if that row is gone).
     8. Kill `harness serve`, wait -> connection state flips to
@@ -300,6 +307,14 @@
 
   .transcript-note { font-size: 12.5px; color: var(--text-3); padding: 4px 0 8px; }
   .transcript-note.err { color: var(--critical); }
+  /* The "Thinking…" pending-assistant indicator (transcriptModel's "pending"
+     kind — see its own doc comment): shares .transcript-note's dim, quiet
+     register — it is not an error, not a loading state, just "nothing to
+     show yet for a turn that's genuinely running" — with the animation
+     applied only under the SAME prefers-reduced-motion gate every other
+     "something is live" animation in this file already uses (see the
+     .conn.streaming .dot / .live .pulse rules below). */
+  .pending-indicator { display: flex; align-items: center; gap: 2px; }
 
   .toolblock {
     font-family: var(--mono); font-size: 12px; line-height: 1.55;
@@ -351,7 +366,7 @@
   .streaming-tail { color: var(--text-1); }
   .caret { display: inline-block; width: 7px; height: 14px; background: var(--ok); vertical-align: text-bottom; margin-left: 2px; }
   @media (prefers-reduced-motion: no-preference) {
-    .live .pulse, .livechip .pulse2 { animation: breathe 2.4s ease-in-out infinite; }
+    .live .pulse, .livechip .pulse2, .pending-indicator { animation: breathe 2.4s ease-in-out infinite; }
     .caret { animation: blink 1.1s steps(1) infinite; }
     @keyframes breathe { 50% { opacity: 0.35; } }
     @keyframes blink { 50% { opacity: 0; } }
@@ -958,11 +973,11 @@ function boardModel(sessions, activities, nowMs) {
 
 // transcriptModel folds durable messages plus live (undurable) events into
 // render-ready transcript entries: {kind: "turn-mark"|"operator"|"assistant"
-// |"reasoning"|"tool"|"error", ...}. Durable messages are the source of
-// truth for everything they cover; `liveEvents` covers only what has
-// streamed in since the durable snapshot was taken. Tool calls (in an
-// assistant message) pair with their result (in the following tool-role
-// message) by call_id — durable or live, whichever arrives first —
+// |"reasoning"|"tool"|"error"|"turn-empty"|"pending", ...}. Durable messages
+// are the source of truth for everything they cover; `liveEvents` covers
+// only what has streamed in since the durable snapshot was taken. Tool calls
+// (in an assistant message) pair with their result (in the following
+// tool-role message) by call_id — durable or live, whichever arrives first —
 // matching message.go's own assembly rule. Streaming deltas and open tool
 // folds accumulate in a separate draft that a "message" event for the same
 // turn discards wholesale (superseded, not duplicated); anything still open
@@ -972,9 +987,67 @@ function boardModel(sessions, activities, nowMs) {
 // see pushIfNewError below), so a detail view opened well after a turn
 // already failed shows no error entry for it, same as this function never
 // fabricating a tool fold's elapsed time it didn't itself observe.
-function transcriptModel(messages, liveEvents, turnOffset) {
+//
+// `pendingSends` (a 4th, optional input — an array of {text, clientId}) is
+// the composer's own optimistic state: text the operator has submitted but
+// which has NOT yet round-tripped as a real durable/stream operator message.
+// Folded, purely, as TRAILING {kind:"operator", pendingSend:true, clientId}
+// entries — trailing because a pending send is always the newest thing on
+// the page, regardless of where any currently-open turn's own content sits.
+// Deduped against TWO candidates, matched by CONTAINMENT rather than strict
+// equality (candidateText.indexOf(pendingText) !== -1), because a queued
+// prompt's eventual delivery is template-wrapped by the engine ("OPERATOR
+// MESSAGES (address these, then continue the task): 1. <text>") — the same
+// tolerance prompt.queued's own placeholder dedup below already needs:
+//   1. lastUserMessageText — the MOST RECENT user-role message text seen
+//      across the WHOLE fold (durable `messages` AND live "message" events
+//      both update it, via foldMessage's user-role branch — see below),
+//      checked once at the very end of this function. Deliberately scoped
+//      to only the single latest user message, not every durable message in
+//      the window: a pendingSend, by construction, represents something
+//      just submitted, so if it matches ANY durable message at all, that
+//      match should be the most recent one — scanning the FULL 50-message
+//      history window instead would risk a false positive for a short/
+//      generic pendingSend text ("go", "continue") that happens to be a
+//      substring of some unrelated OLDER message, silently dismissing the
+//      optimistic entry before the real send even confirms. This one-slot
+//      scope is also what makes reconcileDetail's own eviction safe: once a
+//      reconcile refetches `messages` wholesale and trims the now-stale
+//      "message" liveEvent that first confirmed a send, the FRESH snapshot's
+//      own last user message re-derives the same match on the next render —
+//      self-healing, not a permanent duplicate.
+//   2. a LIVE "prompt.queued" event's queue_text (see that case below) — the
+//      busy-session composer path's own first confirmation, matched
+//      immediately as that one event is processed; prompt.queued is
+//      inherently live-only (never part of durable history), so this
+//      already carries no old-history false-positive risk to narrow.
+// FIFO: pendingRemaining is scanned oldest-first, so the FIRST still-
+// outstanding pendingSend whose text is contained in the candidate is the
+// one reconciled — this is a pure, side-effect-free filter of the
+// `pendingSends` argument (never mutates the caller's array), so a
+// pendingSend that has already been matched simply stops appearing on the
+// NEXT call with the same inputs — the caller (detailState.pendingSends)
+// never needs to be told which entry matched; it can stay append-only,
+// shrinking only on an explicit POST-failure removal (see wireComposer).
+function transcriptModel(messages, liveEvents, turnOffset, pendingSends) {
   var msgs = Array.isArray(messages) ? messages : [];
   var evs = Array.isArray(liveEvents) ? liveEvents : [];
+
+  // pendingRemaining: a local, mutable copy of `pendingSends` — entries are
+  // spliced out of THIS copy as they're matched, never touching the
+  // caller's array (keeps this function pure).
+  var pendingRemaining = Array.isArray(pendingSends) ? pendingSends.slice() : [];
+  function reconcilePendingSend(candidateText) {
+    if (!candidateText) return;
+    for (var pi = 0; pi < pendingRemaining.length; pi++) {
+      var p = pendingRemaining[pi];
+      if (p && p.text && candidateText.indexOf(p.text) !== -1) { pendingRemaining.splice(pi, 1); return; }
+    }
+  }
+  // lastUserMessageText: updated by foldMessage's user-role branch for
+  // EVERY user message it folds, durable or live — see reconcilePendingSend
+  // usage at the end of this function for why only the latest one matters.
+  var lastUserMessageText = null;
 
   // call_id -> tool_result, spanning every RoleTool message: durable, or a
   // live "message" event the caller hasn't migrated into `messages` yet.
@@ -1029,6 +1102,22 @@ function transcriptModel(messages, liveEvents, turnOffset) {
   // else branch, which also resets it on any non-busy transition.
   var liveTurnOpen = false;
 
+  // turnBusy is the pending "Thinking…" indicator's own open/closed flag —
+  // deliberately a SEPARATE flag from liveTurnOpen above, which is consumed
+  // (reset false) the instant the turn's user message lands, well before the
+  // turn itself is done running. turnBusy instead stays true for the WHOLE
+  // span a live "session.status":"busy" has been observed with no
+  // subsequent "session.status":"idle" — set by the "session.status" case
+  // below, read only once, after the whole fold, to decide whether a
+  // trailing {kind:"pending"} entry belongs in the result (see
+  // turnHasNoContentYet below). Starts false: with no live busy event
+  // observed at all (e.g. a detail view opened purely against durable
+  // history, or connecting mid-turn before this page ever saw the busy
+  // transition), there is nothing this fold can honestly call "currently
+  // open" — same "never fabricate what wasn't observed" spirit as
+  // toolElapsedText/seedActivity's null startedAt elsewhere in this file.
+  var turnBusy = false;
+
   function foldMessage(m) {
     if (!m) return;
     if (m.role === "user") {
@@ -1046,6 +1135,7 @@ function transcriptModel(messages, liveEvents, turnOffset) {
         turnNum += 1;
         entries.push({ kind: "turn-mark", turn: turnNum, at: m.created_at || null, live: false });
       }
+      lastUserMessageText = partsText(m.parts);
     }
     if (m.role === "tool") return; // consumed via resultsByCallID
     var parts = Array.isArray(m.parts) ? m.parts : [];
@@ -1105,33 +1195,52 @@ function transcriptModel(messages, liveEvents, turnOffset) {
     entries.push({ kind: "error", id: null, text: text });
   }
 
-  // turnHadVisibleOutput looks for an "assistant"/"tool"/"error" entry
-  // belonging to the current turn — the three kinds a turn can end with
-  // that an operator would actually SEE — checking `draft` first, THEN
-  // `entries` backward, stopping at (and not including) the most recent
-  // turn-mark. `draft` matters: a tool call whose "message" event (the
-  // assistant's tool_call, then the tool-role result) hasn't landed yet is
-  // represented ONLY by its live tool.start/tool.end pair, which mutates an
-  // entry already sitting in `draft` (see the "tool.start"/"tool.end" cases
-  // below) rather than ever migrating into `entries` — checking `entries`
-  // alone would miss a completed tool call still waiting on its durable
-  // message. Deliberately excludes "reasoning": a turn that only thought
-  // out loud and never replied or acted is exactly the "no output" case
-  // this exists to surface, not a false negative. Used only by the live
-  // turn.end(outcome:"completed") case below — this is a live-only fold
-  // (mirrors pushIfNewError/the "error" kind's own scoping: there is no
-  // durable record of "this turn produced no output" to reconstruct from a
-  // `messages`-only history fetch, so a detail view opened well after such
-  // a turn shows nothing special for it, same as it shows no error entry
-  // for a long-past failure).
-  function turnHadVisibleOutput() {
+  // turnHasContentSinceMark looks for a visible entry belonging to the
+  // current turn — checking `draft` first, THEN `entries` backward, stopping
+  // at (and not including) the most recent turn-mark. `draft` matters: a
+  // tool call whose "message" event (the assistant's tool_call, then the
+  // tool-role result) hasn't landed yet is represented ONLY by its live
+  // tool.start/tool.end pair, which mutates an entry already sitting in
+  // `draft` (see the "tool.start"/"tool.end" cases below) rather than ever
+  // migrating into `entries` — checking `entries` alone would miss a
+  // completed tool call still waiting on its durable message. "assistant"/
+  // "tool"/"error" always count; `includeReasoningAndEmpty` additionally
+  // counts "reasoning" and "turn-empty" — the two callers below need
+  // opposite answers for those two kinds:
+  //   - turnHadVisibleOutput (includeReasoningAndEmpty=false): the "turn
+  //     completed with no output" placeholder's own check. Deliberately
+  //     excludes reasoning — a turn that only thought out loud and never
+  //     replied or acted IS exactly the "no output" case this exists to
+  //     surface, not a false negative. "turn-empty" cannot occur here (this
+  //     runs BEFORE that placeholder would ever be pushed for the CURRENT
+  //     turn.end — see that case below). Live-only (mirrors pushIfNewError/
+  //     the "error" kind's own scoping: there is no durable record of "this
+  //     turn produced no output" to reconstruct from a `messages`-only
+  //     history fetch, so a detail view opened well after such a turn shows
+  //     nothing special for it, same as it shows no error entry for a
+  //     long-past failure).
+  //   - the pending "Thinking…" indicator's own derivation (see turnBusy,
+  //     read once at the very end of this function): includes reasoning — a
+  //     turn that has started thinking out loud is no longer silent, even
+  //     though it hasn't replied yet, the OPPOSITE of turnHadVisibleOutput's
+  //     exclusion above — and "turn-empty", so once turn.end(completed) has
+  //     already pushed that placeholder for this turn (see the "turn.end"
+  //     case below), the pending indicator stops claiming "nothing yet" even
+  //     though session.status(idle) — which flips turnBusy false — may not
+  //     have been processed yet on the real wire's own ordering (turn.end
+  //     precedes it). Without this, the two placeholders could both render
+  //     for one beat.
+  function turnHasContentSinceMark(includeReasoningAndEmpty) {
     for (var d = draft.length - 1; d >= 0; d--) {
-      if (draft[d].kind === "assistant" || draft[d].kind === "tool") return true;
+      var dk = draft[d].kind;
+      if (dk === "assistant" || dk === "tool") return true;
+      if (includeReasoningAndEmpty && dk === "reasoning") return true;
     }
     for (var i = entries.length - 1; i >= 0; i--) {
       var k = entries[i].kind;
       if (k === "turn-mark") return false;
       if (k === "assistant" || k === "tool" || k === "error") return true;
+      if (includeReasoningAndEmpty && (k === "reasoning" || k === "turn-empty")) return true;
     }
     return false;
   }
@@ -1146,12 +1255,14 @@ function transcriptModel(messages, liveEvents, turnOffset) {
           turnNum += 1;
           entries.push({ kind: "turn-mark", turn: turnNum, at: null, live: true });
           liveTurnOpen = true; // consumed by foldMessage's user-role branch above
+          turnBusy = true;
         } else {
           // Bounds how long an unconsumed liveTurnOpen can linger: a busy
           // cycle with no discrete user message (e.g. a goal-loop internal
           // turn) resets here at its idle transition, so it can never leak
           // into suppressing a later, unrelated user message's own mark.
           liveTurnOpen = false;
+          turnBusy = false;
         }
         break;
       case "message":
@@ -1168,6 +1279,13 @@ function transcriptModel(messages, liveEvents, turnOffset) {
             if (entries[qi].kind === "operator" && entries[qi].queued) { entries.splice(qi, 1); break; }
           }
         }
+        // pendingSends reconciliation for a "message" event is NOT wired
+        // here — foldMessage (called just below) already tracks
+        // lastUserMessageText for every user message it folds, durable or
+        // live alike, and this function reconciles against that ONE value
+        // once at the very end (see its own doc comment for why "the
+        // single latest user message" is the right scope, not every event
+        // individually).
         if (ev.message) foldMessage(ev.message);
         break;
       case "prompt.queued":
@@ -1179,6 +1297,12 @@ function transcriptModel(messages, liveEvents, turnOffset) {
         // unrelated resetDraft() elsewhere (e.g. the current turn's own
         // streaming text completing) cannot make it vanish before delivery.
         entries.push({ kind: "operator", id: null, text: ev.queue_text || "", queued: true, queueId: ev.queue_id != null ? ev.queue_id : null, at: null });
+        // This is the busy-session composer path's first real confirmation
+        // of the send — reconcile any still-optimistic pendingSend for the
+        // SAME text here too (prompt.queued events never route through
+        // foldMessage, unlike "message" above, so this is its own call
+        // site rather than falling out of foldMessage's user-role branch).
+        if (pendingRemaining.length) reconcilePendingSend(ev.queue_text || "");
         break;
       case "text.delta":
         if (!openText) { openText = { kind: "assistant", id: null, text: "", streaming: true }; draft.push(openText); }
@@ -1232,7 +1356,7 @@ function transcriptModel(messages, liveEvents, turnOffset) {
       case "turn.end":
         if (ev.outcome === "error" && ev.error) {
           pushIfNewError(ev.error);
-        } else if (ev.outcome === "completed" && !turnHadVisibleOutput()) {
+        } else if (ev.outcome === "completed" && !turnHasContentSinceMark(false)) {
           // A turn can legitimately complete with nothing to show: no
           // assistant text, no tool call, no error (observed with an
           // exhausted scripted provider; rare but real with an actual
@@ -1255,7 +1379,34 @@ function transcriptModel(messages, liveEvents, turnOffset) {
     }
   }
 
-  return entries.concat(draft);
+  // Reconcile pendingSends against the single most recent user message seen
+  // across the WHOLE fold (durable history's own tail, superseded by any
+  // fresher live "message" event — see lastUserMessageText/foldMessage's own
+  // doc comments for why exactly one candidate, not the full window, is the
+  // right scope). prompt.queued's own reconciliation already happened
+  // earlier, inline, as that event was processed — this is only the
+  // "message"-event path's single deferred check.
+  if (pendingRemaining.length) reconcilePendingSend(lastUserMessageText);
+
+  // The pending "Thinking…" indicator, if this turn is genuinely still open
+  // (turnBusy) and has shown nothing yet (turnHasContentSinceMark(true) is
+  // false) — computed fresh from the fold, not from any externally-supplied
+  // busy/idle flag (see turnBusy's own doc comment) — sits right after the
+  // open turn's own draft tail, BEFORE any trailing pendingSend entries: it
+  // belongs to the turn that is actually running, never to a pendingSend
+  // still waiting to even be dispatched (see the "queued behind a running
+  // turn" scenario in monitor_test.mjs).
+  var pendingIndicator = turnBusy && !turnHasContentSinceMark(true) ? [{ kind: "pending" }] : [];
+
+  // Trailing pendingSend entries: whatever's left in pendingRemaining after
+  // every reconciliation above had its chance to match one away. Always
+  // last — the newest thing on the page, regardless of any currently-open
+  // turn's own content above it.
+  var pendingSendEntries = pendingRemaining.map(function (p) {
+    return { kind: "operator", id: null, text: p.text, pendingSend: true, clientId: p.clientId, at: null };
+  });
+
+  return entries.concat(draft).concat(pendingIndicator).concat(pendingSendEntries);
 }
 
 // HISTORY_WINDOW is the number of most-recent durable messages the detail
@@ -1355,9 +1506,24 @@ function entryKey(entry, index) {
     // turn number is both stable across re-renders and, unlike "idx:",
     // never ambiguous if something else were ever inserted before it.
     case "turn-empty": return "turn-empty:" + entry.turn;
+    // At most one pending entry can ever exist per transcriptModel call (it
+    // reflects the ONE currently-open turn — see turnBusy's own doc
+    // comment), so — like turn-empty above — a fixed tag is both stable
+    // across re-renders and unambiguous: one DOM node is created once and
+    // then only removed (once content arrives) or repositioned, never
+    // rebuilt on every 1s tick.
+    case "pending": return "pending";
     case "operator":
     case "assistant":
     case "reasoning":
+      // pendingSend entries key by their clientId — independent of, and
+      // checked before, the `queued` case just below: a pendingSend and a
+      // prompt.queued placeholder are two distinct, never-simultaneous
+      // mechanisms for the SAME underlying send (see transcriptModel's own
+      // doc comment on pendingSends), so this ordering never matters in
+      // practice, but is explicit rather than relying on the two flags
+      // happening never to collide.
+      if (entry.pendingSend) return "pendingSend:" + entry.clientId;
       if (entry.queued) return "queued:" + (entry.queueId != null ? entry.queueId : "idx:" + index);
       if (entry.id) return "msg:" + entry.id;
       return "draft:" + entry.kind;
@@ -1988,16 +2154,39 @@ function updateTurnEmptyEl(el, entry) {
   el.textContent = entry.text || "";
 }
 
+// buildPendingEl/updatePendingEl render the "Thinking…" pending-assistant
+// indicator (transcriptModel's "pending" kind — see its own doc comment for
+// the derivation rule). Static content: nothing about it ever changes while
+// it exists (entrySignature's default case — entry.kind + text + streaming
+// — is constant for a bare {kind:"pending"} entry with no text field), so
+// updatePendingEl is a no-op; syncTranscript's signature gate means it is
+// built exactly once and then only removed (once real content dismisses it)
+// or repositioned, never re-touched on a tick, matching entryKey's own
+// "one node, never rebuilt" comment for this kind.
+function buildPendingEl() {
+  var d = document.createElement("div");
+  d.className = "transcript-note pending-indicator";
+  d.textContent = "Thinking";
+  var dots = document.createElement("span");
+  dots.setAttribute("aria-hidden", "true");
+  dots.textContent = "…";
+  d.append(dots);
+  return d;
+}
+function updatePendingEl() { /* static — nothing to patch */ }
+
 function buildEntryEl(entry) {
   if (entry.kind === "turn-mark") return buildTurnMarkEl();
   if (entry.kind === "tool") return buildToolEl();
   if (entry.kind === "turn-empty") return buildTurnEmptyEl();
+  if (entry.kind === "pending") return buildPendingEl();
   return buildMsgEl(entry.kind);
 }
 function updateEntryEl(el, entry, isCurrentTurn, nowMs) {
   if (entry.kind === "turn-mark") return updateTurnMarkEl(el, entry, isCurrentTurn, nowMs);
   if (entry.kind === "tool") return updateToolEl(el, entry, toolElapsedText(entry, nowMs));
   if (entry.kind === "turn-empty") return updateTurnEmptyEl(el, entry);
+  if (entry.kind === "pending") return updatePendingEl();
   return updateMsgEl(el, entry);
 }
 
@@ -2132,7 +2321,7 @@ function renderDetail() {
   if (!detailState) return;
   var now = Date.now();
   var win = historyWindow(detailState.messages, detailState.expanded ? null : HISTORY_WINDOW);
-  var entries = transcriptModel(win.window, detailState.liveEvents, win.hiddenTurns);
+  var entries = transcriptModel(win.window, detailState.liveEvents, win.hiddenTurns, detailState.pendingSends);
   syncTranscript(entries, now);
   updateShowEarlier(win);
   updateDetailHeader(entries, now);
@@ -2281,6 +2470,12 @@ function enterDetail(sessionId) {
     nodes: new Map(), showEarlierEl: null,
     toolStartedAt: new Map(), toolEndedAt: new Map(),
     postInFlight: false, loadToken: loadToken, reconciling: false, peakLiveEventsLength: 0,
+    // pendingSends: the composer's optimistic-send state (see wireComposer
+    // and transcriptModel's own doc comment) — {text, clientId} entries
+    // appended on submit, removed only on an explicit POST-failure rollback.
+    // A fresh, empty array per enterDetail — never carried over between
+    // sessions, same as every other detailState field.
+    pendingSends: [],
   };
   document.body.classList.add("showing-detail");
   document.getElementById("detail-sid-full").textContent = sessionId;
@@ -2354,12 +2549,41 @@ function applyRoute() {
 }
 window.addEventListener("hashchange", applyRoute);
 
-/* ---------- composer: POST prompt_async; the sent message renders once the
-   stream delivers it (a "message" event when the session was idle and the
-   turn starts immediately, or a "prompt.queued" event when it was busy —
-   transcriptModel handles both, see its "message"/"prompt.queued" cases).
-   The input is disabled ONLY for the duration of the POST itself — queueing
-   a prompt into a busy session is a feature, not a wait state. ---------- */
+/* ---------- composer: POST prompt_async. The sent message renders
+   IMMEDIATELY on submit — a pendingSend pushed into detailState.pendingSends
+   and folded by transcriptModel as a trailing optimistic operator entry (see
+   its own doc comment) — independent of the POST resolving, so there is no
+   perceived network-hop lag for the common idle-session case. It is
+   reconciled away (dropped, not duplicated) the instant a real durable/
+   stream operator message arrives: a "message" event when the session was
+   idle and the turn starts immediately, or a "prompt.queued" event when it
+   was busy. A non-2xx response or a network failure instead ROLLS BACK the
+   optimistic entry (removePendingSend) — it was never real — leaving the
+   existing inline composer error to explain why. The input is disabled ONLY
+   for the duration of the POST itself — queueing a prompt into a busy
+   session is a feature, not a wait state. See also the "Thinking…" pending
+   entry (transcriptModel's "pending" kind): a DIFFERENT, non-optimistic
+   mechanism — it reflects a real running turn, derived purely from the
+   fold, never from this composer's own submit path. ---------- */
+
+// nextPendingSendId hands out a small, monotonic, page-local id for a
+// pendingSend's clientId (see transcriptModel's own doc comment and
+// entryKey's "pendingSend:" case) — never sent over the wire, so it only
+// needs to be unique within this one page's lifetime, not globally.
+var pendingSendCounter = 0;
+function nextPendingSendId() {
+  pendingSendCounter += 1;
+  return "psend-" + pendingSendCounter;
+}
+
+// removePendingSend rolls back a pendingSend by clientId — used ONLY on a
+// failed POST (the send never actually happened), never on success (a
+// successful POST's pendingSend is left in place; the eventual stream event
+// reconciles it out via transcriptModel's own fold — see its doc comment).
+function removePendingSend(ds, clientId) {
+  if (!ds) return;
+  ds.pendingSends = ds.pendingSends.filter(function (p) { return p.clientId !== clientId; });
+}
 
 function setComposerBusy(busy) {
   document.getElementById("composer-input").disabled = busy;
@@ -2386,20 +2610,54 @@ function wireComposer() {
     // used to leak this POST's postInFlight-clear/setComposerBusy(false)
     // (and its success/error message) onto whichever session happened to
     // be open when the response finally landed, if the operator navigated
-    // away — or to a different session — while it was still in flight.
+    // away — or to a different session — while it was still in flight. The
+    // SAME guard protects the optimistic pendingSend's failure rollback
+    // below: a POST for a session the operator has since left must never
+    // reach into a DIFFERENT (possibly same-clientId-by-coincidence, though
+    // that can't actually happen — see nextPendingSendId) session's
+    // pendingSends array.
     var loadToken = detailState.loadToken;
     function stillCurrent() { return !!detailState && detailState.loadToken === loadToken; }
+
+    // Optimistic: render the operator's own text into the transcript RIGHT
+    // NOW, before the POST below has even been issued — see this section's
+    // header comment. detailState.pendingSends is model input, not a DOM
+    // hack: it survives every re-render (the 1s tick, a live delta) exactly
+    // like durable/live data, via transcriptModel's own pure fold, until
+    // reconciled (success path) or explicitly rolled back (failure path,
+    // below).
+    var clientId = nextPendingSendId();
+    detailState.pendingSends.push({ text: text, clientId: clientId });
+    renderDetail();
+
+    // rollback undoes the optimistic pendingSend on a failed POST (it was
+    // never real) and surfaces the failure text inline — the one thing the
+    // two failure branches below (a non-2xx response, a network throw) both
+    // need to do, factored out so that shared behavior can't drift apart.
+    function rollback(errText) {
+      err.textContent = errText;
+      removePendingSend(detailState, clientId);
+      renderDetail();
+    }
+
     api("POST", "/session/" + encodeURIComponent(sid) + "/prompt_async", { parts: [{ type: "text", text: text }] })
       .then(function (resp) {
         return resp.json().catch(function () { return null; }).then(function (body) { return { resp: resp, body: body }; });
       })
       .then(function (r) {
         if (!stillCurrent()) return;
-        if (r.resp.ok) { input.value = ""; }
-        else { err.textContent = (r.body && r.body.error) || ("send failed (status " + r.resp.status + ")"); }
+        if (r.resp.ok) {
+          input.value = "";
+          // No pendingSend removal here — leave it in place. The stream
+          // event (a "message" or "prompt.queued" arrival) will reconcile
+          // it out via transcriptModel's own dedup, same as it always has
+          // for prompt.queued's own placeholder.
+        } else {
+          rollback((r.body && r.body.error) || ("send failed (status " + r.resp.status + ")"));
+        }
       }, function (netErr) {
         if (!stillCurrent()) return;
-        err.textContent = "send failed: " + ((netErr && netErr.message) || "network error");
+        rollback("send failed: " + ((netErr && netErr.message) || "network error"));
       })
       .then(function () {
         if (stillCurrent()) {

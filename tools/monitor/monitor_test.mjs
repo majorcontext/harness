@@ -826,7 +826,11 @@ test("transcriptModel: single-source turn marks — a queued-prompt delivery (de
   const entries = transcriptModel([], evs);
   const marks = entries.filter(e => e.kind === "turn-mark");
   assert.equal(marks.length, 1, "a queued-delivery turn must mark exactly once");
-  assert.deepEqual(reify(entries.map(e => e.kind)), ["turn-mark", "operator"]);
+  // The turn is genuinely still open here (busy, no content, no turn.end) —
+  // the pending "Thinking…" indicator (Change 2) correctly trails it; see
+  // this file's own pending-indicator test block for that behavior in
+  // isolation.
+  assert.deepEqual(reify(entries.map(e => e.kind)), ["turn-mark", "operator", "pending"]);
 });
 
 test("transcriptModel: single-source turn marks — two consecutive live turns (busy/message pairs) each mark exactly once, numbered in order", () => {
@@ -1165,6 +1169,156 @@ test("transcriptModel: a live session.aborted event folds into an error-styled e
 
 test("entryKey: error entries key by their position among the folded entries", () => {
   assert.equal(entryKey({ kind: "error", text: "boom" }, 5), "error:5");
+});
+
+/* ---------- transcriptModel: pendingSends (Change 1, RED-FIRST — an
+   optimistic operator message rendered on composer submit, before the POST
+   even resolves). Passed as transcriptModel's 4th argument, folded as a
+   TRAILING operator entry ({kind:"operator", pendingSend:true, clientId}),
+   deduped the instant a real durable/stream operator message (a "message"
+   event, or the busy-session "prompt.queued" placeholder) arrives for it —
+   matched by containment/FIFO, the same tolerance prompt.queued's own
+   existing dedup already needs (the engine template-wraps a queued prompt's
+   eventual delivery — see server/handlers.go's queued-prompt injection), not
+   strict equality. ---------- */
+
+test("transcriptModel: a pendingSend renders as a trailing operator entry", () => {
+  const entries = transcriptModel([], [], 0, [{ text: "check the tests", clientId: "c1" }]);
+  const last = entries[entries.length - 1];
+  assert.equal(last.kind, "operator");
+  assert.equal(last.text, "check the tests");
+  assert.equal(last.pendingSend, true);
+  assert.equal(last.clientId, "c1");
+});
+
+test("transcriptModel: a pendingSend dedups to exactly one entry once its matching 'message' event lands (idle-dispatch case)", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t", parts: [{ type: "text", text: "check the tests" }] } },
+  ];
+  const entries = transcriptModel([], evs, 0, [{ text: "check the tests", clientId: "c1" }]);
+  const operatorEntries = entries.filter(e => e.kind === "operator");
+  assert.equal(operatorEntries.length, 1, "the pendingSend must not duplicate the real message: " + JSON.stringify(reify(operatorEntries)));
+  assert.equal(operatorEntries[0].pendingSend, undefined);
+  assert.equal(operatorEntries[0].text, "check the tests");
+});
+
+test("transcriptModel: a pendingSend dedups to exactly one entry once its matching 'prompt.queued' event lands (busy-session case)", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "prompt.queued", queue_text: "check the tests", queue_id: 3 },
+  ];
+  const entries = transcriptModel([], evs, 0, [{ text: "check the tests", clientId: "c1" }]);
+  const operatorEntries = entries.filter(e => e.kind === "operator");
+  assert.equal(operatorEntries.length, 1, "the pendingSend must not duplicate the real prompt.queued placeholder: " + JSON.stringify(reify(operatorEntries)));
+  assert.equal(operatorEntries[0].queued, true);
+  assert.equal(operatorEntries[0].pendingSend, undefined);
+});
+
+test("transcriptModel: a pendingSend with no matching event survives, alongside the unrelated real entry", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t", parts: [{ type: "text", text: "totally different text" }] } },
+  ];
+  const entries = transcriptModel([], evs, 0, [{ text: "check the tests", clientId: "c1" }]);
+  const operatorEntries = entries.filter(e => e.kind === "operator");
+  assert.equal(operatorEntries.length, 2, "an unmatched pendingSend must survive alongside the unrelated real message: " + JSON.stringify(reify(operatorEntries)));
+  assert.ok(operatorEntries.some(e => e.pendingSend && e.text === "check the tests"));
+  assert.ok(operatorEntries.some(e => !e.pendingSend && e.text === "totally different text"));
+});
+
+test("transcriptModel: a pendingSend matches a template-wrapped queued delivery by containment, not strict equality", () => {
+  const wrapped = "OPERATOR MESSAGES (address these, then continue the task): 1. check the tests";
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t", parts: [{ type: "text", text: wrapped }] } },
+  ];
+  const entries = transcriptModel([], evs, 0, [{ text: "check the tests", clientId: "c1" }]);
+  const operatorEntries = entries.filter(e => e.kind === "operator");
+  assert.equal(operatorEntries.length, 1, "containment match must dedup the wrapped delivery, not leave a duplicate: " + JSON.stringify(reify(operatorEntries)));
+  assert.equal(operatorEntries[0].text, wrapped);
+});
+
+test("entryKey: a pendingSend keys by its clientId, independent of a queued placeholder's queueId keying", () => {
+  assert.equal(entryKey({ kind: "operator", id: null, pendingSend: true, clientId: "c7" }, 0), "pendingSend:c7");
+});
+
+/* ---------- transcriptModel: the "Thinking…" pending-assistant indicator
+   (Change 2, RED-FIRST) — a real, currently OPEN turn (a live
+   session.status busy observed, with no session.status idle since) that has
+   produced no renderable content yet folds a single trailing
+   {kind:"pending"} entry, dismissed the instant ANY content (reasoning
+   delta, text delta, tool start, an already-assembled assistant message, or
+   an error) arrives, and never coexists with the turn-empty "turn completed
+   with no output" placeholder for the same turn — this is derived PURELY
+   from the fold (liveEvents), never from an externally-supplied busy/idle
+   flag, so a not-yet-dispatched queued send never triggers it on its own
+   (see the queued-behind-a-running-turn scenario below). ---------- */
+
+test("transcriptModel: an open turn with no content yet folds a pending entry", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t", parts: [{ type: "text", text: "go" }] } },
+  ];
+  const entries = transcriptModel([], evs);
+  assert.deepEqual(reify(entries.map(e => e.kind)), ["turn-mark", "operator", "pending"]);
+});
+
+test("transcriptModel: the first text.delta dismisses the pending entry, replaced by the streaming entry", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t", parts: [{ type: "text", text: "go" }] } },
+    { type: "text.delta", text: "working" },
+  ];
+  const entries = transcriptModel([], evs);
+  assert.equal(entries.filter(e => e.kind === "pending").length, 0);
+  assert.ok(entries.some(e => e.kind === "assistant" && e.streaming));
+});
+
+test("transcriptModel: the first reasoning.delta dismisses the pending entry", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t", parts: [{ type: "text", text: "go" }] } },
+    { type: "reasoning.delta", text: "thinking" },
+  ];
+  const entries = transcriptModel([], evs);
+  assert.equal(entries.filter(e => e.kind === "pending").length, 0);
+});
+
+test("transcriptModel: tool.start dismisses the pending entry", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t", parts: [{ type: "text", text: "go" }] } },
+    { type: "tool.start", tool_call: { call_id: "c1", name: "Bash", arguments: { command: "ls" } } },
+  ];
+  const entries = transcriptModel([], evs);
+  assert.equal(entries.filter(e => e.kind === "pending").length, 0);
+});
+
+test("transcriptModel: a turn completing with no output shows the 'no output' placeholder, never the pending entry — the two never coexist", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t", parts: [{ type: "text", text: "go" }] } },
+    { type: "turn.end", outcome: "completed" },
+  ];
+  const entries = transcriptModel([], evs);
+  assert.equal(entries.filter(e => e.kind === "pending").length, 0);
+  assert.equal(entries.filter(e => e.kind === "turn-empty").length, 1);
+});
+
+test("entryKey: the pending entry keys by a fixed tag — one node, created once, never rebuilt per tick", () => {
+  assert.equal(entryKey({ kind: "pending" }, 0), "pending");
+});
+
+test("transcriptModel: a pendingSend queued behind a DIFFERENT, currently-running turn renders its own operator entry, while the pending indicator attaches only to the running turn — no special-casing idle-vs-busy needed", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t", parts: [{ type: "text", text: "run turn A" }] } },
+  ];
+  const entries = transcriptModel([], evs, 0, [{ text: "also do B", clientId: "c9" }]);
+  assert.deepEqual(reify(entries.map(e => e.kind)), ["turn-mark", "operator", "pending", "operator"]);
+  assert.equal(entries[3].pendingSend, true);
+  assert.equal(entries[3].text, "also do B");
 });
 
 /* ---------- historyWindow ---------- */

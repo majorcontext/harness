@@ -52,11 +52,13 @@ const ProvStallDedup = "e2e-stall-dedup";
 const ProvStreamError = "e2e-stream-error";
 const ProvReconnectGap = "e2e-reconnect-gap";
 const ProvLiveCap = "e2e-live-cap";
-// Must match stub.go's StreamErrorText/ReconnectGapReply exactly — same
-// duplication-by-hand reasoning as the Prov* keys above (this script has no
-// Go tooling).
+const ProvPendingThink = "e2e-pending-think";
+// Must match stub.go's StreamErrorText/ReconnectGapReply/PendingThinkReply
+// exactly — same duplication-by-hand reasoning as the Prov* keys above (this
+// script has no Go tooling).
 const STREAM_ERROR_TEXT = "simulated upstream failure: connection reset by peer";
 const RECONNECT_GAP_REPLY = "reconnect-gap turn landed";
+const PENDING_THINK_REPLY = "pending-think reply landed";
 
 // TUNING shrinks the monitor's staleness thresholds (production QUIET_MS/
 // STALL_MS are 15000/60000 — see index.html) down to something a real,
@@ -440,6 +442,55 @@ async function main() {
   // missed (it counted operator/assistant text, never turn-marks).
   assert.equal(turnMarkCount(doc), 1, "one composer-sent turn must render exactly one turn-mark, not two: " + turnMarkCount(doc));
   console.error("PASS: composer send on an idle session runs a normal turn (message event, not prompt.queued), marking exactly one turn");
+
+  // ---- 4d-2. Optimistic composer send (Change 1): the operator's own text
+  // renders SYNCHRONOUSLY on submit — before the POST even round-trips, let
+  // alone before any assistant content streams back. No await/sleep sits
+  // between dispatching the submit event and the assertions below: a real
+  // browser's own submit-event dispatch runs its listeners synchronously,
+  // same as jsdom's here — so observing the operator entry already in the
+  // DOM at this exact point proves it rendered independent of, and strictly
+  // before, any network round trip (the composer's own POST response, let
+  // alone the eventual assistant reply). ----
+  const optID = await createSession(ProvQuickIdle);
+  const optRow = await waitFor(() => findRow(doc, optID), { label: "board row for " + optID });
+  await openDetailViaClick(w, doc, optRow);
+  const optText = "optimistic composer send check";
+  composerInput.value = optText;
+  composerForm.dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
+  assert.ok(operatorTexts(doc).includes(optText), "the operator's own text must render synchronously on submit, before any network round trip: " + JSON.stringify(operatorTexts(doc)));
+  assert.equal(assistantTexts(doc).length, 0, "no assistant content can possibly exist yet at this exact instant");
+  console.error("PASS: composer submit renders the operator entry synchronously, before the POST even resolves — optimistic, not stream-triggered");
+
+  await waitIdle(optID, 15);
+  await waitFor(() => assistantTexts(doc).some((t) => t.includes("hello")), { timeoutMs: 4000, label: "assistant reply eventually lands for the optimistic-send session" });
+  assert.equal(operatorTexts(doc).filter((t) => t === optText).length, 1, "the optimistic entry must settle to exactly one operator entry once the real message event lands, never duplicated: " + JSON.stringify(operatorTexts(doc)));
+  console.error("PASS: the optimistic entry reconciles to exactly one operator entry once the durable message lands");
+
+  // ---- 4d-3. The "Thinking…" pending-assistant indicator (Change 2): a
+  // real, currently-running turn with no content yet shows the quiet
+  // pending indicator, dismissed the instant real streaming content
+  // arrives. ProvPendingThink's scripted turn delays its first event
+  // (stub.go's pendingThinkTurns) so this observes a genuine, deterministic
+  // "busy, no content yet" window rather than racing a near-instant
+  // scripted turn's own streaming start (every other provider in this file
+  // streams its first event essentially immediately). ----
+  const pendID = await createSession(ProvPendingThink);
+  const pendRow = await waitFor(() => findRow(doc, pendID), { label: "board row for " + pendID });
+  await openDetailViaClick(w, doc, pendRow);
+  assert.equal((await promptAsync(pendID, "trigger the pending-indicator turn")).status, 202, "prompt_async accepted");
+
+  await waitFor(() => doc.querySelector("#transcript .pending-indicator"), { timeoutMs: 3000, label: "the Thinking… pending indicator appears while the turn is busy with no content yet" });
+  assert.equal(doc.querySelectorAll("#transcript .pending-indicator").length, 1, "exactly one pending indicator node: " + doc.querySelectorAll("#transcript .pending-indicator").length);
+  assert.equal(assistantTexts(doc).length, 0, "no assistant content has streamed yet — this IS the genuinely empty window the indicator exists for");
+  console.error("PASS: the Thinking… pending indicator appears while a real turn is busy with no content yet");
+
+  await waitFor(() => assistantTexts(doc).some((t) => t.includes(PENDING_THINK_REPLY)), { timeoutMs: 4000, label: "assistant reply streams in for the pending-indicator session" });
+  assert.equal(doc.querySelector("#transcript .pending-indicator"), null, "the pending indicator must be gone the instant streaming text is present");
+  console.error("PASS: the pending indicator is dismissed the instant streaming text is present");
+
+  await waitIdle(pendID, 15);
+  console.error("PASS: pending-indicator turn completed cleanly");
 
   // ---- 4e. Composer send against an unknown session: real non-2xx error
   // text surfaces inline. ----

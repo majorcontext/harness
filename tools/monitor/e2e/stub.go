@@ -33,6 +33,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
@@ -57,6 +58,7 @@ const (
 	ProvStreamError  = "e2e-stream-error"  // a genuine provider stream failure (detail transcript error entry)
 	ProvReconnectGap = "e2e-reconnect-gap" // reconcileDetail's reconnect-gap-heal trigger (finding 1)
 	ProvLiveCap      = "e2e-live-cap"      // reconcileDetail's liveEvents buffer-cap trigger (finding 3)
+	ProvPendingThink = "e2e-pending-think" // "Thinking…" pending-assistant indicator (Change 2) — the idle-session optimistic-send scenario (Change 1) reuses ProvQuickIdle
 )
 
 // StreamErrorText is the exact (sanitize-passthrough — see errorTurns' doc
@@ -74,6 +76,13 @@ const StreamErrorText = "simulated upstream failure: connection reset by peer"
 // reconnecting, not just that SOME turn happened to complete.
 const ReconnectGapReply = "reconnect-gap turn landed"
 
+// PendingThinkReply is the exact reply text ProvPendingThink's (delayed)
+// turn ends with; real_e2e.mjs duplicates this string (same reasoning as
+// StreamErrorText/ReconnectGapReply above) to assert the "Thinking…"
+// pending-assistant indicator is dismissed exactly once THIS text starts
+// streaming in, not merely "eventually".
+const PendingThinkReply = "pending-think reply landed"
+
 // scriptedTurn is one pre-built turn: a []provider.Event to stream, plus an
 // optional terminal error. When err is set, scriptedStream.Next() returns it
 // (instead of io.EOF) once events is exhausted — a REAL provider.Stream
@@ -85,9 +94,19 @@ const ReconnectGapReply = "reconnect-gap turn landed"
 // session.error + turn.end(outcome:"error") default branch — the exact wire
 // path tools/monitor's transcript "error" entry (see index.html's
 // pushIfNewError) exists to render.
+//
+// initialDelay, when set, is slept through before the turn's FIRST event is
+// returned (see scriptedStream.Next) — used exclusively by
+// pendingThinkTurns to give the "Thinking…" pending-assistant indicator
+// scenario (tools/monitor/index.html's transcriptModel "pending" kind) a
+// deterministic, CI-sane window in which the turn is genuinely
+// busy-with-nothing-to-show-yet, rather than racing a real turn's own
+// near-instant streaming start (every other scripted turn in this file
+// streams its first event essentially immediately).
 type scriptedTurn struct {
-	events []provider.Event
-	err    error
+	events       []provider.Event
+	err          error
+	initialDelay time.Duration
 }
 
 // scriptedProvider serves one pre-built scriptedTurn per call, numbered from
@@ -123,6 +142,9 @@ type scriptedStream struct {
 }
 
 func (s *scriptedStream) Next() (provider.Event, error) {
+	if s.i == 0 && s.turn.initialDelay > 0 {
+		time.Sleep(s.turn.initialDelay)
+	}
 	if s.i >= len(s.turn.events) {
 		if s.turn.err != nil {
 			return provider.Event{}, s.turn.err
@@ -186,6 +208,18 @@ func quickTurns(reply string) []scriptedTurn {
 	return []scriptedTurn{
 		{events: []provider.Event{textDelta(reply), doneEvent(provider.StopEndTurn, &message.Text{Text: reply})}},
 	}
+}
+
+// pendingThinkTurns is quickTurns' single plain text-only turn with an
+// initialDelay grafted onto it — see scriptedTurn's own doc comment for why:
+// it gives the "Thinking…" pending-assistant indicator e2e scenario
+// (ProvPendingThink) a deterministic window in which the turn is genuinely
+// busy with nothing to show yet, without racing a real turn's own
+// near-instant streaming start.
+func pendingThinkTurns(delay time.Duration, reply string) []scriptedTurn {
+	turns := quickTurns(reply)
+	turns[0].initialDelay = delay
+	return turns
 }
 
 // capTurns builds a single turn with MANY streaming text deltas (no tool
@@ -297,6 +331,7 @@ func Start() (*Stub, error) {
 		ProvStreamError:  &scriptedProvider{name: ProvStreamError, turns: errorTurns("starting the request", StreamErrorText)},
 		ProvReconnectGap: &scriptedProvider{name: ProvReconnectGap, turns: quickTurns(ReconnectGapReply)},
 		ProvLiveCap:      &scriptedProvider{name: ProvLiveCap, turns: capTurns(6)},
+		ProvPendingThink: &scriptedProvider{name: ProvPendingThink, turns: pendingThinkTurns(400*time.Millisecond, PendingThinkReply)},
 	}
 
 	var srv *server.Server
