@@ -2185,6 +2185,33 @@ paths:
               schema: { type: string }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /monitor:
+    get:
+      operationId: monitorPage
+      summary: The embedded, single-file session monitor UI.
+      description: >
+        Present only when this instance was started with the monitor page
+        embedded (cmd/harness's `serve` always does this; see
+        tools/monitor's AGENTS.md section); a box that omits it 404s here
+        exactly as it always has. Serves tools/monitor/index.html verbatim,
+        byte for byte — the same static, build-free, credential-free page
+        that can also be opened via file:// or hosted separately.
+        UNAUTHENTICATED like /health: the page itself carries no secrets,
+        and every API call it makes is still authenticated normally by the
+        browser entering a run token into the page. A
+        Content-Security-Policy header scopes it to same-origin
+        (connect-src 'self') — see server/handlers.go's
+        monitorContentSecurityPolicy.
+      security: []
+      responses:
+        "200":
+          description: OK — the monitor's index.html.
+          content:
+            text/html:
+              schema: { type: string }
+        "404":
+          description: This instance was not started with the monitor page embedded.
+
   # Candidate for v1.1, deliberately deferred: GET /session/{id}/diff
   # (working-tree diff for orchestrator PR-preview rendering). Needs a
   # position on git ownership inside the engine first.

@@ -643,6 +643,105 @@ which still wears the older soft theme — follows these rules:
   name (`.sess`, `.box-card`, `.dot`, `.goalnarr`, …). Restyle classes;
   never rename them in a styling pass.
 
+## Session monitor
+
+`tools/monitor` (`tools/monitor/index.html`) is the single-instance
+counterpart to the hub above: where the hub answers "what are my boxes doing"
+across a FLEET, the monitor answers "what is THIS `harness serve` instance
+doing right now" — a live board of every session on that one box (phase,
+current tool, staleness), a per-session detail view with a scrolling
+transcript, and a composer to speak into a session (`prompt_async`). Like the
+hub and the inspector, it is a build-free, dependency-free single HTML file
+with no Go-side handler of its own.
+
+- **How to run it**: open the file directly (`file://`) or serve it from any
+  static host — nothing box-specific is baked in. The target box must be
+  started with `-cors-origin` covering the monitor's origin (or `*` for local
+  hacking), exactly like the hub's requirement above; a box without it looks
+  permanently unreachable. The base URL and run token are entered in the
+  page itself and persisted to `localStorage` in plaintext (same documented
+  tradeoff as the inspector — a dev tool, not for a shared origin with a
+  long-lived token) so a reload can reconnect automatically. Routing lives in
+  the URL fragment as small explicit params, not the hub's base64 blob:
+  `#b=<base>` (box base URL) and `#s=<session id>` (open detail view) — both
+  bookmarkable, encoded/decoded by a tested pure helper.
+- **Embedded serving, frictionless local**: every `harness serve` box also
+  offers its own copy same-origin, at `GET /monitor` — `tools/monitor`
+  (package `monitor`, `embed.go`) `//go:embed`s the exact committed
+  `index.html`; `cmd/harness`'s `serveCmd` wires it into
+  `server.Options.MonitorPage`, which the server serves unauthenticated
+  (like `/health` — the page itself carries no secrets) with a
+  same-origin-scoped `Content-Security-Policy` (`connect-src 'self'`).
+  `server` itself never imports `tools/monitor` (layering: `server` must
+  not import `tools/*`); only `cmd/harness` does, the same pattern
+  `harness hub` already uses. The `file://`/static-host path is unaffected
+  — this is additive, and stays the only option for monitoring a box from a
+  different origin (the embedded route's CSP deliberately does not permit
+  that).
+  - **Unauthenticated-on-loopback** (`server.Options.Unauthenticated`, an
+    EXPLICIT opt-in never inferred from an empty `RunToken` on its own —
+    `New` still fails closed otherwise): `serveCmd` classifies `-addr`
+    (`isLoopbackAddr` — `localhost`, `127.0.0.1`/`::1`, any
+    `net.IP.IsLoopback()` address; a bare `:port`, `0.0.0.0`, `::`, or any
+    other routable address is NOT loopback). `HARNESS_RUN_TOKEN` unset +
+    loopback bind runs the box fully unauthenticated (every route, not just
+    `/health`/`/monitor`) and logs a clear warning; unset + non-loopback
+    still hard-errors `HARNESS_RUN_TOKEN is required` exactly as before. The
+    token guards network reachability, and loopback is a server-verifiable
+    proxy for that (unlike, say, `Origin`, which a client controls).
+  - **Same-origin auto-connect** (`embeddedConnectPlan`, index.html): opening
+    a box's own `/monitor` attempts the connection immediately against
+    `location.origin`, using whatever token is available (`#t=` fragment,
+    then a stored one, then none) — success lands straight on the board, no
+    panel, nothing typed (covers both the unauthenticated-loopback case and
+    a valid capability URL/returning operator with the SAME call). Only a
+    failed attempt (a real token is required and none was available) falls
+    back to a minimal token-only panel — host is already known, so the base
+    field never reappears. A `#t=<token>` fragment (mirroring `tools/hub`'s
+    "run tokens ride the URL by design" precedent, `extractFragmentToken`)
+    is adopted into the SAME `localStorage` key manual entry uses and
+    immediately scrubbed from the visible URL via `history.replaceState`; a
+    fragment `#b=` naming a DIFFERENT origin than this box's own — which the
+    embedded route's CSP would block outright if tried — surfaces a
+    plain-text notice instead of attempting it, composing with (never
+    blocking) the own-origin auto-connect. None of this weakens the auth
+    model itself: a token is still required and still checked exactly as a
+    hand-typed one would be, on every box that hasn't explicitly opted into
+    `Unauthenticated`.
+  - On a TTY, `serveCmd` also prints a click-ready line to stderr after
+    "serve start" — `monitor: http://<addr>/monitor#t=<token>` (or, when
+    running unauthenticated-loopback, the plain URL with no `#t=` at all,
+    since there's no credential to carry) — gated on `stderrIsTerminal`
+    (`os.ModeCharDevice`, stdlib-only) so a tokenized URL never lands in
+    piped/production stderr, only an interactive operator's own terminal.
+- **Test layers.** Pure helpers (SSE parser, activity reducer, transcript
+  fold, route codec, formatters) live inside index.html's `/* TESTABLE-BEGIN
+  */ … /* TESTABLE-END */` region and are covered by
+  `tools/monitor/monitor_test.mjs` (run: `node --test tools/monitor/*_test.mjs`),
+  using the same extraction-and-`vm`-evaluate pattern as the inspector's
+  `inspector_test.mjs` (and now the hub's, above) — no build step, so the
+  tests read the region straight out of the committed HTML. End-to-end,
+  against a real backend, is `tools/monitor/e2e` (see its README): a `go
+  test` subtree that starts a real `server.Server` plus a plain static file
+  server for the actual committed `index.html`, and drives it with Node +
+  jsdom and an unmocked `fetch` — mirroring `tools/hub/e2e`'s structure and
+  conventions. A `window.__monitorTuning = {QUIET_MS, STALL_MS}` seam (set
+  via jsdom's `beforeParse` before the page's own script runs, a no-op in
+  production since nothing else ever sets it) lets both the unit and e2e
+  suites shrink the staleness thresholds so `quiet`/`stalled` transitions are
+  observable in test time instead of real minutes.
+- **UI design language.** The monitor deliberately does NOT inherit the
+  hub's committed dark brutalist archetype above. It carries its own
+  "instrument sheet" language: light-first with a dark variant, both driven
+  by one OKLCH token set (`--surface`, `--text-1..3`, `--separator`, etc.);
+  semantic green/amber/red (`--ok`/`--warn`/`--critical`) are reserved
+  strictly for session/staleness state, never decoration; a single accent
+  color is owned by interaction (the composer's send affordance is the
+  page's only filled-accent control). `docs/design/monitor-mockup.html` is
+  the user-approved visual spec — its tokens, grid template, and markup
+  shapes are binding; restyle within that spec rather than importing the
+  hub's theme onto it.
+
 ## Fleet model (the deploy story)
 
 The full build spec lives in `docs/design/fleet-model.md` — read it before
