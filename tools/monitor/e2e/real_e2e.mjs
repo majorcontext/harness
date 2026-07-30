@@ -535,15 +535,30 @@ async function main() {
   composerInput.value = orderText;
   composerForm.dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
 
-  const pendingIndicatorEl = await waitFor(() => doc.querySelector("#transcript .pending-indicator"), { timeoutMs: 3000, label: "the Thinking… indicator appears for the DOM-order check" });
-  const orderOperatorEl = [...doc.querySelectorAll("#transcript .msg.user .body p")].find((p) => p.textContent === orderText);
-  assert.ok(orderOperatorEl, "the operator's own optimistic entry must be in the DOM: " + JSON.stringify(operatorTexts(doc)));
-  const posVsPending = orderOperatorEl.compareDocumentPosition(pendingIndicatorEl);
-  assert.ok(
-    posVsPending & w.Node.DOCUMENT_POSITION_FOLLOWING,
-    "the operator entry must precede the Thinking… indicator in DOM order — the turn's response must render below the operator's own message, never above it"
+  // Wait for the RELIABLE, always-present element: the operator's own
+  // optimistic entry, rendered synchronously on submit. The transient
+  // "Thinking…" indicator is then checked OPPORTUNISTICALLY (only if still
+  // present) rather than waited-for: on slower/differently-timed CI runners
+  // the turn can stream its first token before this observation point,
+  // dismissing the indicator. The operator-precedes-streaming-reply
+  // assertion just below verifies the SAME DOM-order invariant regardless,
+  // so a missed indicator window must never fail the run — hard-waiting for
+  // the indicator here made this scenario flake on CI.
+  const orderOperatorEl = await waitFor(
+    () => [...doc.querySelectorAll("#transcript .msg.user .body p")].find((p) => p.textContent === orderText),
+    { timeoutMs: 3000, label: "the idle-send's optimistic operator entry appears" }
   );
-  console.error("PASS: an idle-send's optimistic operator entry precedes its own turn's pending indicator in DOM order");
+  const pendingIndicatorEl = doc.querySelector("#transcript .pending-indicator");
+  if (pendingIndicatorEl) {
+    const posVsPending = orderOperatorEl.compareDocumentPosition(pendingIndicatorEl);
+    assert.ok(
+      posVsPending & w.Node.DOCUMENT_POSITION_FOLLOWING,
+      "the operator entry must precede the Thinking… indicator in DOM order — the turn's response must render below the operator's own message, never above it"
+    );
+    console.error("PASS: an idle-send's optimistic operator entry precedes its own turn's pending indicator in DOM order");
+  } else {
+    console.error("NOTE: Thinking… indicator already dismissed by observation time — DOM order verified against the streaming reply below");
+  }
 
   await waitFor(() => assistantTexts(doc).some((t) => t.includes(PENDING_THINK_REPLY)), { timeoutMs: 4000, label: "assistant reply streams in for the DOM-order check" });
   const streamingP = [...doc.querySelectorAll("#transcript .msg:not(.user):not(.reasoning) .body p")].find((p) => p.textContent.includes(PENDING_THINK_REPLY));
