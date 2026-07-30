@@ -194,7 +194,17 @@
   .connect button:focus-visible { outline: 2px solid var(--text-1); outline-offset: 2px; }
   .connect .err { color: var(--critical); font-size: 12.5px; margin: 8px 0 0; min-height: 16px; }
   body:not(.connected) .sessions, body:not(.connected) .legend { display: none; }
-  body.connected #connect-panel { display: none; }
+  /* The connect panel is hidden BY DEFAULT and revealed only when a panel is
+     genuinely wanted — bootstrap()/forceDisconnect add `show-connect`: a
+     non-embedded page with no stored creds up front, an embedded (or stored-
+     cred) auto-attempt that FAILED, or a hard disconnect. This is what
+     actually implements embeddedConnectPlan's "no panel shown at all" for the
+     common embedded case: the async auto-attempt now paints NOTHING rather
+     than flashing the token field for the fetch's duration before
+     `body.connected` lands. `:not(.connected)` keeps it hidden the instant a
+     connect succeeds, even before show-connect is cleared. */
+  #connect-panel { display: none; }
+  body.show-connect:not(.connected) #connect-panel { display: block; }
 
   .sessions { display: flex; flex-direction: column; gap: 18px; }
   .group-gap { height: 10px; }
@@ -2970,6 +2980,7 @@ function attemptConnect(base, token) {
     localStorage.setItem(LS_BASE, base);
     localStorage.setItem(LS_TOKEN, token);
     document.body.classList.add("connected");
+    document.body.classList.remove("show-connect"); // clear any panel left up by a prior failed attempt / disconnect
     renderIdentity();
     syncBoard(Date.now());
     // Preserve a "#s=<id>" deep link across the connect-time replaceState —
@@ -3014,6 +3025,7 @@ function forceDisconnect(reason) {
   clearInterval(state.pollTimer);
   clearInterval(state.tickTimer);
   document.body.classList.remove("connected");
+  document.body.classList.add("show-connect"); // a hard disconnect needs the panel back to reconnect / re-enter a token
   setConnState("disconnected");
   if (reason) connectErr.textContent = reason;
   // A disconnected instance can't serve a live detail view (history fetch
@@ -3087,10 +3099,11 @@ function forceDisconnect(reason) {
     // try immediately with whatever token is available (autoToken, or ""
     // when none — still worth trying: an Unauthenticated loopback box
     // accepts an empty Authorization header exactly like a correct
-    // bearer token everywhere else). Success flips body.classList to
-    // "connected", which the existing `body.connected #connect-panel {
-    // display: none }` rule already hides entirely — "no connect panel,
-    // no fields, nothing typed" falls out of THAT rule, not a new one.
+    // bearer token everywhere else). The panel is display:none by default
+    // (see the #connect-panel rule) and this path never adds show-connect,
+    // so it stays hidden the whole time — "no connect panel, no fields,
+    // nothing typed" — and never paints during the in-flight probe. Only a
+    // FAILED attempt (below) adds show-connect to reveal the token panel.
     introEl.textContent = "Connecting to " + plan.base + "…";
     baseInput.value = plan.base;
     tokenInput.value = plan.autoToken || "";
@@ -3106,12 +3119,13 @@ function forceDisconnect(reason) {
       // stays hidden); clear whatever token was just tried so the
       // operator types a fresh one rather than staring at a rejected
       // value sitting in the field.
+      document.body.classList.add("show-connect"); // reveal the token panel now that the silent auto-attempt has failed
       introEl.textContent = "Connect to " + plan.base + " to see its sessions.";
       tokenInput.value = "";
       setFormBusy(false, "Connect");
     });
   } else {
-    // show-full-panel: unchanged two-field flow.
+    // show-full-panel: the two-field flow.
     // Fragment #b= prefills the base URL field (e.g. a shared bookmark)
     // when nothing is stored yet; a stored preference still wins, since it
     // reflects a deliberate earlier choice this page must not override.
@@ -3119,8 +3133,20 @@ function forceDisconnect(reason) {
     tokenInput.value = storedToken;
     setConnState("disconnected");
     if (storedBase && storedToken) {
+      // Have creds — attempt SILENTLY (panel stays hidden), revealing it only
+      // on failure, exactly like the embedded auto-attempt above, so a
+      // returning operator with a stored connection sees the board appear
+      // without the panel flashing first.
       setFormBusy(true, "Connecting…");
-      attemptConnect(storedBase, storedToken).then(function () { setFormBusy(false, "Connect"); });
+      attemptConnect(storedBase, storedToken).then(function (ok) {
+        if (!ok) document.body.classList.add("show-connect");
+        setFormBusy(false, "Connect");
+      });
+    } else {
+      // No stored creds — the panel IS the entry point, so show it from the
+      // first paint (added synchronously here, before any paint, so it does
+      // not flash in either direction).
+      document.body.classList.add("show-connect");
     }
   }
 })();
