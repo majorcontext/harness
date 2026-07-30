@@ -318,7 +318,7 @@ async function main() {
   const syncText = doc.getElementById("hdr-sync").textContent;
   assert.ok(syncText.startsWith("session_sync "), "identity line must render a real /health session_sync: " + syncText);
   assert.ok(doc.querySelector(".board-empty"), "board must render empty before any session exists: " + doc.getElementById("sessions").textContent);
-  await waitFor(() => doc.getElementById("conn-text").textContent === "streaming", { label: "SSE stream opens after connect" });
+  await waitFor(() => doc.getElementById("conn-text").textContent === "connected", { label: "header shows connected after the SSE stream opens" });
   console.error("PASS: real connect — identity line (" + versionText + ", " + syncText + "), empty board, stream open");
 
   // ---- 2. Board transitions (scenario 2): a real scripted turn with
@@ -672,14 +672,14 @@ async function main() {
   // box's HTTP layer flips the header honestly and resumes. ----
   w.location.hash = "#";
   await waitFor(() => !doc.body.classList.contains("showing-detail"), { label: "back to the board before the reconnect scenario" });
-  await waitFor(() => doc.getElementById("conn-text").textContent === "streaming", { label: "streaming before the kill" });
+  await waitFor(() => doc.getElementById("conn-text").textContent === "connected", { label: "connected before the kill" });
 
   assert.equal((await fetch(monitorBase + "/__control/kill", { method: "POST" })).status, 200, "control-plane kill");
   await waitFor(() => doc.getElementById("conn-text").textContent === "reconnecting…", { timeoutMs: 5000, label: "header flips to reconnecting after a real server-side kill" });
   console.error("PASS: header honestly flips to reconnecting… after a real server-side kill");
 
   assert.equal((await fetch(monitorBase + "/__control/restart", { method: "POST" })).status, 200, "control-plane restart");
-  await waitFor(() => doc.getElementById("conn-text").textContent === "streaming", { timeoutMs: 8000, label: "stream resumes after a real server-side restart" });
+  await waitFor(() => doc.getElementById("conn-text").textContent === "connected", { timeoutMs: 8000, label: "stream resumes after a real server-side restart" });
   console.error("PASS: stream resumes after a real server-side restart");
 
   // Prove the resumed stream is REAL, not just cosmetic header text: a
@@ -729,7 +729,7 @@ async function main() {
   await waitIdle(gapID, 15);
   console.error("PASS: the reconnect-gap turn completed durably on the server while the monitor page's own stream was still down/reconnecting");
 
-  await waitFor(() => doc.getElementById("conn-text").textContent === "streaming", { timeoutMs: 8000, label: "the monitor's own stream eventually resumes" });
+  await waitFor(() => doc.getElementById("conn-text").textContent === "connected", { timeoutMs: 8000, label: "the monitor's own stream eventually resumes" });
 
   // The proof: the detail transcript — fed ONLY from liveEvents, and this
   // page's stream was down for the ENTIRE turn — must still end up showing
@@ -809,7 +809,7 @@ async function main() {
   // yet"/"0 msgs" live despite GET /session/{id}/message genuinely having
   // the history: applyRoute() resolves the deep link into enterDetail()
   // synchronously, right after attemptConnect's success — see
-  // connectStream's own "streaming" branch doc comment for why that
+  // connectStream's own "connected" branch doc comment for why that
   // single fetch used to be a silent single point of failure, and why
   // reconcileDetail() now also fires on the very first stream open (not
   // only a reconnect) while a detail view is showing, so this NEVER
