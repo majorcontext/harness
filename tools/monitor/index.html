@@ -1,0 +1,892 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>harness monitor</title>
+<!--
+  harness monitor — a single self-contained page answering "what is this
+  instance doing right now": a live board of every session (phase, current
+  tool, staleness), a per-session detail view with a scrolling transcript and
+  a composer, all driven by one `harness serve` instance's HTTP+SSE API. No
+  build step, no external resources: open it from file:// or serve it from
+  any static host. That instance must run with -cors-origin covering this
+  page's origin (or "*" for local hacking). See docs/deploy-modal.md
+  ("Inspecting sessions") and docs/design/monitor-mockup.html (the visual
+  spec this page's tokens, grid template, and markup shapes are drawn from).
+
+  SECURITY: the base URL and run token are persisted in this browser's
+  localStorage in plaintext so a reload can reconnect. Treat this as a dev
+  tool — don't host it on a shared origin with a long-lived token. Tokens are
+  workspace-scoped and rotate with the workspace.
+
+  The pure helpers below (SSE parser, activity reducer, transcript fold,
+  formatters, route codec) are unit-tested by monitor_test.mjs (run:
+  node --test tools/monitor/*_test.mjs). Manual verification (this page's
+  live wiring lands in a later step) covers what the tests can't:
+    1. Start:  HARNESS_RUN_TOKEN=t harness serve -cors-origin '*'
+    2. Open this file, paste the base URL (http://localhost:4096) + token,
+       Connect. -> the board lists sessions, newest activity first.
+    3. Drive a prompt against a session -> its row moves through
+       tool/streaming/between phases, elapsed ticks once a second.
+    4. Let a session sit idle for 15s -> quiet; 60s -> stalled (critical).
+    5. Click a session -> detail view: full transcript, live tail, a
+       running tool fold with tailing output and a caret.
+    6. Send a message from the composer -> it appears as an operator entry
+       the moment the stream's `message` event lands (no phantom entry).
+    7. Kill `harness serve`, wait -> connection state flips to
+       "reconnecting…" with backoff; restart -> it resyncs.
+    8. Reload the page -> base URL, token, and the open session (from the
+       URL fragment) are restored.
+    9. Toggle OS light/dark theme -> both variants stay legible.
+-->
+<style>
+  :root {
+    --surface: oklch(0.975 0.005 240);
+    --surface-inset: oklch(0.955 0.006 240);
+    --text-1: oklch(0.22 0.015 250);
+    --text-2: oklch(0.50 0.02 250);
+    --text-3: oklch(0.65 0.015 250);
+    --separator: oklch(0.91 0.008 240);
+    --accent: oklch(0.50 0.10 230);
+    --ok: oklch(0.60 0.14 150);
+    --warn: oklch(0.68 0.12 75);
+    --critical: oklch(0.54 0.19 25);
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --col-dot: 8px; --col-phase: 84px; --col-gap: 12px;
+  }
+  @media (prefers-color-scheme: dark) { :root {
+    --surface: oklch(0.19 0.012 250);
+    --surface-inset: oklch(0.165 0.012 250);
+    --text-1: oklch(0.93 0.005 250);
+    --text-2: oklch(0.66 0.012 250);
+    --text-3: oklch(0.50 0.012 250);
+    --separator: oklch(0.28 0.012 250);
+    --accent: oklch(0.72 0.10 230);
+    --ok: oklch(0.72 0.14 150);
+    --warn: oklch(0.78 0.12 80);
+    --critical: oklch(0.68 0.17 25);
+  } }
+  :root[data-theme="light"] {
+    --surface: oklch(0.975 0.005 240); --surface-inset: oklch(0.955 0.006 240);
+    --text-1: oklch(0.22 0.015 250); --text-2: oklch(0.50 0.02 250);
+    --text-3: oklch(0.65 0.015 250); --separator: oklch(0.91 0.008 240);
+    --accent: oklch(0.50 0.10 230); --ok: oklch(0.60 0.14 150);
+    --warn: oklch(0.68 0.12 75); --critical: oklch(0.54 0.19 25);
+  }
+  :root[data-theme="dark"] {
+    --surface: oklch(0.19 0.012 250); --surface-inset: oklch(0.165 0.012 250);
+    --text-1: oklch(0.93 0.005 250); --text-2: oklch(0.66 0.012 250);
+    --text-3: oklch(0.50 0.012 250); --separator: oklch(0.28 0.012 250);
+    --accent: oklch(0.72 0.10 230); --ok: oklch(0.72 0.14 150);
+    --warn: oklch(0.78 0.12 80); --critical: oklch(0.68 0.17 25);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--surface); color: var(--text-1);
+    font: 14px/1.5 var(--sans);
+    padding: 32px clamp(16px, 4vw, 48px) 64px;
+  }
+  .frame { max-width: 820px; margin: 0 auto; }
+
+  header.identity {
+    display: grid;
+    grid-template-columns: var(--col-dot) minmax(0, 1fr) auto;
+    column-gap: var(--col-gap);
+    align-items: baseline;
+    margin-bottom: 40px;
+  }
+  header.identity > .hgroup { grid-column: 1 / 3; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; min-width: 0; }
+  .app-name { font-size: 16px; font-weight: 650; letter-spacing: -0.01em; margin: 0; }
+  .app-name .dim { color: var(--text-3); font-weight: 400; }
+  .app-name a { color: inherit; text-decoration: none; }
+  .app-name a:hover { color: var(--accent); }
+  .id-line { font-family: var(--mono); font-size: 12px; color: var(--text-2); display: flex; flex-wrap: wrap; gap: 4px 14px; }
+  .conn { grid-column: 3; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); }
+  .conn .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+
+  /* Connect affordance: shown in place of the session list until a base URL
+     + token are set (localStorage empty on first visit, or cleared). */
+  .connect { margin: 8px 0 28px; }
+  .connect p { color: var(--text-2); font-size: 13px; margin: 0 0 14px; }
+  .connect form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+  .connect label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-3); }
+  .connect input {
+    background: var(--surface-inset); color: var(--text-1);
+    border: 1px solid var(--separator); border-radius: 8px;
+    padding: 8px 10px; font: 13px/1.4 var(--sans); min-width: 220px;
+  }
+  .connect input:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .connect button {
+    border: 1px solid transparent; border-radius: 8px; padding: 9px 16px;
+    background: var(--accent); color: oklch(0.99 0 0);
+    font: 600 13.5px/1.5 var(--sans); cursor: pointer;
+  }
+  .connect button:hover { filter: brightness(1.08); }
+  .connect button:focus-visible { outline: 2px solid var(--text-1); outline-offset: 2px; }
+  .connect .err { color: var(--critical); font-size: 12.5px; margin: 8px 0 0; min-height: 16px; }
+  body:not(.connected) .sessions, body:not(.connected) .legend { display: none; }
+  body.connected #connect-panel { display: none; }
+
+  .sessions { display: flex; flex-direction: column; gap: 18px; }
+  .group-gap { height: 10px; }
+
+  .session {
+    display: grid;
+    grid-template-columns: var(--col-dot) var(--col-phase) minmax(0, 1fr) auto;
+    column-gap: var(--col-gap);
+    row-gap: 4px;
+    align-items: baseline;
+    outline: none;
+    cursor: pointer;
+    text-decoration: none; color: inherit;
+  }
+  .session:focus-visible { outline: 2px solid var(--accent); outline-offset: 8px; border-radius: 2px; }
+  .session:hover .sid { color: var(--accent); }
+
+  .pulse { grid-column: 1; align-self: center; width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); }
+  .live .pulse { background: var(--ok); }
+  .quiet .pulse { background: var(--warn); }
+  .bad .pulse { background: var(--critical); }
+  .idle .pulse { background: transparent; border: 1.5px solid var(--separator); }
+
+  .phase { grid-column: 2; font-weight: 600; font-size: 13px; }
+  .live .phase { color: var(--ok); }
+  .quiet .phase { color: var(--warn); }
+  .bad .phase { color: var(--critical); }
+  .idle .phase { color: var(--text-3); font-weight: 500; }
+
+  .content { grid-column: 3; display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+  .sid {
+    font-family: var(--mono); font-size: 12.5px; color: var(--text-2);
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .detail {
+    font-family: var(--mono); font-size: 12.5px; color: var(--text-1);
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .idle .detail { color: var(--text-2); font-family: var(--sans); font-size: 12.5px; }
+  .extra { font-size: 12px; color: var(--text-3); flex: none; }
+  .elapsed {
+    grid-column: 4; font-family: var(--mono); font-variant-numeric: tabular-nums;
+    font-size: 12.5px; color: var(--text-2); text-align: right;
+  }
+  .line-2 { grid-column: 3 / 5; font-size: 12.5px; color: var(--text-2); min-width: 0; }
+  .bad .line-2 { color: var(--critical); }
+  .goal { color: var(--text-3); }
+  .goal::before { content: "goal · "; }
+  .live-goal { color: var(--ok); }
+
+  .legend {
+    margin-top: 44px; padding-top: 14px; border-top: 1px solid var(--separator);
+    font-size: 12px; color: var(--text-3); line-height: 1.7;
+  }
+  .legend .sw { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin: 0 3px 0 0; }
+
+  /* ── Session detail view ─────────────────────────────────────────── */
+  #detail { display: none; }
+  .showing-detail #board { display: none; }
+  .showing-detail #detail { display: block; }
+
+  .crumb { font-size: 12.5px; margin-bottom: 6px; }
+  .crumb a { color: var(--accent); text-decoration: none; }
+  .crumb a:hover { text-decoration: underline; }
+  .detail-head {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px;
+    margin-bottom: 36px;
+  }
+  .detail-head .sid-full { font-family: var(--mono); font-size: 14px; color: var(--text-1); font-weight: 600; }
+  .detail-head .meta { font-family: var(--mono); font-size: 12px; color: var(--text-2); display: flex; gap: 14px; flex-wrap: wrap; }
+  .detail-head .livechip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ok); font-weight: 600; margin-left: auto; }
+  .detail-head .livechip .pulse2 { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+
+  /* Transcript: a typographic document. Speaker rail on the left shares
+     the board's column rhythm; content stays near 70ch. */
+  .transcript { display: flex; flex-direction: column; gap: 26px; }
+  .turn-mark {
+    font-size: 11px; color: var(--text-3); letter-spacing: 0.06em; text-transform: uppercase;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .turn-mark::after { content: ""; flex: 1; border-top: 1px solid var(--separator); }
+
+  .msg { display: grid; grid-template-columns: 84px minmax(0, 1fr); column-gap: 20px; }
+  .who { font-size: 11.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-3); padding-top: 2px; }
+  .msg.user .who { color: var(--accent); }
+  .body { min-width: 0; max-width: 70ch; }
+  .body p { margin: 0 0 8px; } .body p:last-child { margin: 0; }
+
+  .toolblock {
+    font-family: var(--mono); font-size: 12px; line-height: 1.55;
+    background: var(--surface-inset); border-radius: 6px;
+    padding: 8px 12px; overflow-x: auto; white-space: pre;
+    color: var(--text-2);
+  }
+  .toolblock .cmd { color: var(--text-1); font-weight: 600; }
+  .tool-summary {
+    display: flex; gap: 10px; align-items: baseline; margin: 0 0 6px;
+    font-family: var(--mono); font-size: 12.5px; color: var(--text-1);
+  }
+  .tool-summary .t-elapsed { color: var(--text-3); font-size: 12px; margin-left: auto; }
+  details.toolfold > summary { list-style: none; cursor: pointer; }
+  details.toolfold > summary::-webkit-details-marker { display: none; }
+  details.toolfold > summary .fold-hint { color: var(--text-3); font-size: 11.5px; }
+  details.toolfold[open] > summary .fold-hint { display: none; }
+
+  /* Composer: the one colored action in the app. Sticky under the
+     transcript; sends prompt_async — idle starts a turn, busy queues with
+     tool-boundary injection, and the UI says which honestly. */
+  .composer {
+    position: sticky; bottom: 0; margin-top: 36px;
+    background: var(--surface); padding: 12px 0 4px;
+    border-top: 1px solid var(--separator);
+  }
+  .composer form { display: flex; gap: 10px; align-items: flex-end; }
+  .composer textarea {
+    flex: 1; min-width: 0; resize: none; field-sizing: content;
+    max-height: 8lh; min-height: 1.5lh;
+    background: var(--surface-inset); color: var(--text-1);
+    border: 1px solid var(--separator); border-radius: 8px;
+    padding: 9px 12px; font: 13.5px/1.5 var(--sans);
+  }
+  .composer textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .composer textarea::placeholder { color: var(--text-3); }
+  .composer textarea:disabled { opacity: .55; }
+  .composer button {
+    flex: none; border: 1px solid transparent; border-radius: 8px; padding: 9px 16px;
+    background: var(--accent); color: oklch(0.99 0 0);
+    font: 600 13.5px/1.5 var(--sans); cursor: pointer;
+  }
+  .composer button:hover:not(:disabled) { filter: brightness(1.08); }
+  .composer button:disabled { opacity: .55; cursor: not-allowed; }
+  .composer button:focus-visible { outline: 2px solid var(--text-1); outline-offset: 2px; }
+  .composer .hint { font-size: 11.5px; color: var(--text-3); margin-top: 6px; }
+  .composer .composer-err { color: var(--critical); font-size: 12px; margin: 6px 0 0; min-height: 14px; }
+
+  .streaming-tail { color: var(--text-1); }
+  .caret { display: inline-block; width: 7px; height: 14px; background: var(--ok); vertical-align: text-bottom; margin-left: 2px; }
+  @media (prefers-reduced-motion: no-preference) {
+    .live .pulse, .livechip .pulse2 { animation: breathe 2.4s ease-in-out infinite; }
+    .caret { animation: blink 1.1s steps(1) infinite; }
+    @keyframes breathe { 50% { opacity: 0.35; } }
+    @keyframes blink { 50% { opacity: 0; } }
+  }
+</style>
+</head>
+<body>
+  <div class="frame">
+
+    <div id="board">
+      <header class="identity">
+        <div class="hgroup">
+          <h1 class="app-name">monitor <span class="dim" id="hdr-box">/ —</span></h1>
+          <div class="id-line" id="hdr-idline">
+            <span id="hdr-version">—</span>
+            <span id="hdr-sync">—</span>
+            <span>up <span id="hdr-uptime">—</span></span>
+          </div>
+        </div>
+        <span class="conn"><span class="dot" id="conn-dot"></span><span id="conn-text">disconnected</span></span>
+      </header>
+
+      <section id="connect-panel" class="connect" aria-label="Connect to a harness instance">
+        <p>Connect to a harness serve instance to see its sessions.</p>
+        <form id="connect-form">
+          <label for="base-url">Base URL
+            <input id="base-url" type="text" placeholder="http://localhost:4096" autocomplete="off" spellcheck="false" required>
+          </label>
+          <label for="run-token">Run token
+            <input id="run-token" type="password" placeholder="run token" autocomplete="off"
+                   title="stored in this browser's localStorage in plaintext — use a dev token on a private origin" required>
+          </label>
+          <button type="submit">Connect</button>
+        </form>
+        <p class="err" id="connect-err" role="alert"></p>
+      </section>
+
+      <section class="sessions" id="sessions" aria-label="Sessions"></section>
+
+      <footer class="legend">
+        <div>
+          <span class="sw" style="background: var(--ok)"></span> live (streaming / tool) &nbsp;·&nbsp;
+          <span class="sw" style="background: var(--warn)"></span> quiet &gt;15s &nbsp;·&nbsp;
+          <span class="sw" style="background: var(--critical)"></span> stalled &gt;60s / failed &nbsp;·&nbsp;
+          click a session to open it
+        </div>
+      </footer>
+    </div>
+
+    <div id="detail">
+      <nav class="crumb"><a href="#" id="back-link">← monitor<span id="crumb-box"></span></a></nav>
+      <header class="detail-head">
+        <span class="sid-full" id="detail-sid-full"></span>
+        <span class="meta">
+          <span id="detail-msgcount"></span>
+          <span>turn <span id="detail-turn-elapsed"></span></span>
+          <span id="detail-toolcount"></span>
+        </span>
+        <span class="livechip" id="detail-livechip" hidden><span class="pulse2"></span>tool running</span>
+      </header>
+
+      <section class="transcript" id="transcript" aria-label="Session transcript"></section>
+
+      <div class="composer">
+        <form id="composer-form">
+          <textarea id="composer-input" rows="1" placeholder="Message the session" aria-label="Message the session"></textarea>
+          <button type="submit">Send</button>
+        </form>
+        <p class="hint">Enter to send · Shift+Enter for a new line</p>
+        <p class="composer-err" id="composer-err" role="alert"></p>
+      </div>
+    </div>
+
+  </div>
+
+<script>
+"use strict";
+
+/* ---------- pure helpers (kept small and side-effect free) ---------- */
+/* TESTABLE-BEGIN — the region below is extracted verbatim by
+   monitor_test.mjs and evaluated in a node:vm sandbox. Keep it pure (no
+   DOM, no globals beyond Date/JSON) so the single-file page stays
+   build-free while its logic is still unit-tested. */
+
+// createSSEParser: feed it decoded stream text; it invokes onEvent({id, data})
+// once per complete frame (terminated by a blank line). Handles: multi-line
+// data (joined with "\n"), id lines, and comment lines beginning with ":".
+// Values keep an optional single leading space stripped, per the SSE spec.
+// Stateful across chunk boundaries. Copied verbatim from tools/inspector —
+// an accepted duplication between these two single-file tools.
+function createSSEParser(onEvent) {
+  let buf = "", data = [], id = null;
+  return function feed(chunk) {
+    buf += chunk;
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      let line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      if (line.endsWith("\r")) line = line.slice(0, -1);
+      if (line === "") {                      // blank line: dispatch frame
+        if (data.length) onEvent({ id, data: data.join("\n") });
+        // Per the WHATWG SSE spec the last-event-ID buffer persists across
+        // frames — it is replaced only by a new `id:` line, never cleared
+        // when a frame omits one. Reset only the data buffer here.
+        data = [];
+        continue;
+      }
+      if (line[0] === ":") continue;          // comment / heartbeat
+      const c = line.indexOf(":");
+      let field, value;
+      if (c === -1) { field = line; value = ""; }
+      else {
+        field = line.slice(0, c);
+        value = line.slice(c + 1);
+        if (value[0] === " ") value = value.slice(1);
+      }
+      if (field === "data") data.push(value);
+      else if (field === "id") id = value;
+      // "event"/"retry" fields are unused by this API and ignored.
+    }
+  };
+}
+
+// maxSeq returns the largest `seq` across a session list (0 if none). The
+// SSE stream is opened from this cursor so replay picks up exactly what the
+// REST snapshot did not yet include — no gap, no double-counting. Copied
+// verbatim from tools/inspector.
+function maxSeq(list) {
+  let m = 0;
+  for (const s of list) if (typeof s.seq === "number" && s.seq > m) m = s.seq;
+  return m;
+}
+
+// partsText concatenates the text of Text parts (used for tool_result
+// content, which may hold only Text and Blob parts). Copied verbatim from
+// tools/inspector.
+function partsText(parts) {
+  if (!Array.isArray(parts)) return "";
+  return parts.filter(p => p && p.type === "text").map(p => p.text || "").join("\n");
+}
+
+// summarizeArgs pulls a short, human-legible summary out of a tool call's
+// (possibly JSON-string-encoded) arguments — the "go test ./server/ -race"
+// half of a "Bash · go test ./server/ -race" board/transcript label. Tries
+// a small set of common argument field names in priority order; returns ""
+// (name-only display) when nothing recognizable is found, rather than
+// dumping raw JSON into a one-line UI.
+function summarizeArgs(rawArguments) {
+  if (rawArguments == null) return "";
+  let obj = rawArguments;
+  if (typeof rawArguments === "string") {
+    try { obj = JSON.parse(rawArguments); } catch { return ""; }
+  }
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return "";
+  for (const key of ["command", "cmd", "query", "pattern", "path", "url"]) {
+    if (typeof obj[key] === "string" && obj[key]) return obj[key];
+  }
+  return "";
+}
+
+// toolLabel joins a tool name and its (possibly empty) argument summary into
+// the one-line "Bash · go test ./server/ -race" / "Bash" label used on both
+// the board and the transcript's tool folds.
+function toolLabel(name, argsSummary) {
+  const n = name || "tool";
+  return argsSummary ? n + " · " + argsSummary : n;
+}
+
+// fmtElapsed renders a whole-seconds duration the way the mockup's ticker
+// does: "41s", "2m 34s", "1h 3m".
+function fmtElapsed(seconds) {
+  if (seconds == null || !isFinite(seconds)) return "—";
+  const s = Math.max(0, Math.floor(seconds));
+  if (s < 60) return s + "s";
+  if (s < 3600) return Math.floor(s / 60) + "m " + String(s % 60).padStart(2, "0") + "s";
+  return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m";
+}
+
+// fmtAgo renders a millisecond duration as a coarse "12m ago" / "1h 3m ago"
+// — the format idle board rows use (no per-second ticking, so no seconds
+// precision once past a minute).
+function fmtAgo(ms) {
+  if (ms == null || !isFinite(ms)) return "—";
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return s + "s ago";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m ago";
+  const h = Math.floor(m / 60);
+  const remM = m % 60;
+  return remM > 0 ? h + "h " + remM + "m ago" : h + "h ago";
+}
+
+// route/unroute codec the app's URL fragment: "#b=<base>&s=<session id>",
+// small explicit params (not a base64 blob) so the URL stays readable and
+// bookmarkable. Values are percent-encoded; unroute tolerates junk (missing
+// "#", unknown keys, malformed percent-encoding) rather than throwing.
+function route(state) {
+  const s = state || {};
+  const params = [];
+  if (s.base) params.push("b=" + encodeURIComponent(s.base));
+  if (s.sessionId) params.push("s=" + encodeURIComponent(s.sessionId));
+  return params.length ? "#" + params.join("&") : "#";
+}
+
+function unroute(hash) {
+  const out = { base: null, sessionId: null };
+  if (typeof hash !== "string") return out;
+  const h = hash[0] === "#" ? hash.slice(1) : hash;
+  if (!h) return out;
+  for (const part of h.split("&")) {
+    if (!part) continue;
+    const eq = part.indexOf("=");
+    const key = eq === -1 ? part : part.slice(0, eq);
+    const rawVal = eq === -1 ? "" : part.slice(eq + 1);
+    let val;
+    try { val = decodeURIComponent(rawVal); } catch { val = rawVal; }
+    if (key === "b") out.base = val;
+    else if (key === "s") out.sessionId = val;
+    // unknown keys, and any other malformed junk, are silently ignored.
+  }
+  return out;
+}
+
+// QUIET_MS/STALL_MS are `var`, not `const`: top-level `const`/`let` bindings
+// live in a vm context's lexical environment, not as properties of it, so
+// monitor_test.mjs's sandbox destructure would see them as undefined (see
+// its extraction preamble comment). `var` (like a function declaration)
+// becomes a property of the global object either way.
+var QUIET_MS = 15000;
+var STALL_MS = 60000;
+
+// staleness classifies a session's live-ness purely from its activity fold:
+// "idle" (never quiet/stalled — there is nothing to be silent about),
+// "live" (recent event), "quiet" (>= QUIET_MS since the last event while
+// busy), or "stalled" (>= STALL_MS). Boundaries are inclusive at the
+// threshold (>=), matching the mockup's ">15s" / ">60s" legend read as "at
+// least this stale".
+function staleness(activity, nowMs) {
+  if (!activity || activity.phase === "idle") return "idle";
+  var last = typeof activity.lastEventAt === "number" ? activity.lastEventAt : null;
+  if (last == null) return "live";
+  var delta = nowMs - last;
+  if (delta >= STALL_MS) return "stalled";
+  if (delta >= QUIET_MS) return "quiet";
+  return "live";
+}
+
+function baseActivity() {
+  return { phase: "idle", tool: null, turn: null, lastEventAt: null, lastOutcome: null };
+}
+
+// reduceActivity folds one journal/live event into a session's activity
+// state: phase (idle | streaming | tool | between), the current tool (if
+// any), the open turn's start time + tool-call count, the last time any
+// event was observed, and the most recent turn's outcome. `prev` may be
+// null (a fresh session) or the result of seedActivity (a mid-turn connect,
+// whose turn.startedAt is null and must stay null — never fabricated).
+// `nowMs` defaults to Date.now() so callers don't have to thread it through
+// for ordinary use, but tests pass an explicit value for determinism.
+function reduceActivity(prev, ev, nowMs) {
+  var now = typeof nowMs === "number" ? nowMs : Date.now();
+  var a = Object.assign(baseActivity(), prev || {});
+  if (!ev || typeof ev.type !== "string") return a;
+  var next = Object.assign({}, a, { lastEventAt: now });
+  switch (ev.type) {
+    case "session.status":
+      if (ev.status === "busy") {
+        next.phase = "between";
+        next.tool = null;
+        next.turn = a.turn || { startedAt: now, toolCalls: 0 };
+      } else {
+        next.phase = "idle";
+        next.tool = null;
+        next.turn = null;
+      }
+      return next;
+    case "text.delta":
+    case "reasoning.delta":
+      next.phase = "streaming";
+      next.tool = null;
+      if (!next.turn) next.turn = { startedAt: now, toolCalls: 0 };
+      return next;
+    case "tool.start": {
+      if (!ev.tool_call) return next;
+      var turn = a.turn || { startedAt: now, toolCalls: 0 };
+      next.phase = "tool";
+      next.tool = {
+        name: ev.tool_call.name || "",
+        argsSummary: summarizeArgs(ev.tool_call.arguments),
+        sinceAt: now,
+      };
+      next.turn = { startedAt: turn.startedAt, toolCalls: turn.toolCalls + 1 };
+      return next;
+    }
+    case "tool.end":
+      // An end with no matching current tool is an unpaired/duplicate
+      // event: ignore it rather than guessing at a phase change.
+      if (!a.tool) return next;
+      next.phase = "between";
+      next.tool = null;
+      return next;
+    case "turn.end":
+      next.lastOutcome = ev.outcome || null;
+      return next;
+    default:
+      return next; // unrecognized event: still counts as activity (lastEventAt bump)
+  }
+}
+
+// seedActivity bootstraps an activity fold from a polled Session summary —
+// what a monitor connecting mid-turn knows before any live event arrives.
+// A running session (state busy or goal-running) seeds an OPEN turn with a
+// null startedAt: the poll snapshot carries no turn-start timestamp, and
+// fabricating "now" would understate elapsed time by an unknown, possibly
+// large amount. The renderer shows an em dash for that null rather than a
+// wrong number.
+function seedActivity(sessionSummary) {
+  var s = sessionSummary || {};
+  var parsed = s.last_activity_at ? Date.parse(s.last_activity_at) : NaN;
+  var lastEventAt = isNaN(parsed) ? null : parsed;
+  var lastOutcome = s.last_turn && s.last_turn.outcome ? s.last_turn.outcome : null;
+  var running = s.state === "busy" || s.state === "goal-running";
+  if (running) {
+    return { phase: "between", tool: null, turn: { startedAt: null, toolCalls: 0 }, lastEventAt: lastEventAt, lastOutcome: lastOutcome };
+  }
+  return { phase: "idle", tool: null, turn: null, lastEventAt: lastEventAt, lastOutcome: lastOutcome };
+}
+
+// outcomeLabel renders a LastTurn.outcome value (see server/openapi.yaml)
+// as the short word/phrase the idle board row's detail cell shows.
+function outcomeLabel(outcome) {
+  switch (outcome) {
+    case "completed": return "completed";
+    case "error": return "error";
+    case "context_exhausted": return "context exhausted";
+    case "max_turns_exceeded": return "max turns exceeded";
+    case "evaluator_exhausted": return "evaluator exhausted";
+    case "worker_parked": return "worker parked";
+    default: return outcome || "";
+  }
+}
+
+// detailFor picks the board row's detail-cell text (and whether it renders
+// critical), precedence: an active/last-known tool cmd, else — while
+// quiet/stalled — the raw phase word (what the session claims to be doing
+// despite the silence), else — while idle — the last turn's outcome, or a
+// paused-goal presentation ("worker parked" / "goal paused") when that's
+// why the session is sitting idle with an active goal.
+function detailFor(cssClass, activity, session) {
+  if (activity && activity.tool && activity.tool.name) {
+    return { text: toolLabel(activity.tool.name, activity.tool.argsSummary), critical: false };
+  }
+  if (cssClass === "quiet" || cssClass === "bad") {
+    if (activity && activity.phase && activity.phase !== "idle") return { text: activity.phase, critical: false };
+    return { text: null, critical: false };
+  }
+  if (cssClass === "idle") {
+    var goal = session && session.goal;
+    if (goal && goal.paused) {
+      if (goal.pause_reason === "worker_failure") return { text: "worker parked", critical: true };
+      if (goal.pause_reason === "restart") return { text: "goal paused", critical: true };
+      if (goal.pause_reason === "provider-backoff") return { text: "goal paused", critical: false };
+    }
+    var outcome = activity && activity.lastOutcome;
+    if (outcome) return { text: outcomeLabel(outcome), critical: outcome !== "completed" };
+    return { text: null, critical: false };
+  }
+  return { text: null, critical: false };
+}
+
+// boardModel merges the polled session list with each session's derived
+// activity fold into render-ready rows: css/status class, the phase word,
+// the detail cell, a non-zero-only queue count, elapsed/silence/ago timing
+// (pre-formatted, plus the raw seconds/ms a 1s ticker needs to keep
+// counting without recomputing the whole model), and the goal/stall line-2.
+// Sort: active sessions (live/quiet/bad) before idle, most-recently-active
+// first within each group; ties preserve input order (stable sort).
+function boardModel(sessions, activities, nowMs) {
+  var list = Array.isArray(sessions) ? sessions : [];
+  var acts = activities || {};
+  function activityFor(s) {
+    // Duck-type rather than `instanceof Map`: the caller's Map may have
+    // been constructed in a different realm (as in this file's own vm-
+    // sandboxed tests), where `instanceof` against this scope's own Map
+    // constructor would wrongly say no.
+    var found = acts && typeof acts.get === "function" ? acts.get(s.id) : acts[s.id];
+    return found || seedActivity(s);
+  }
+  var rows = list.map(function (s) {
+    var activity = activityFor(s);
+    var st = staleness(activity, nowMs); // "idle" | "live" | "quiet" | "stalled"
+    var cssClass = st === "stalled" ? "bad" : st;
+    var phase = cssClass === "idle" ? "idle" : (cssClass === "live" ? (activity.phase || "idle") : st);
+    var detail = detailFor(cssClass, activity, s);
+    var extra = typeof s.queued === "number" && s.queued > 0 ? s.queued + " queued" : null;
+
+    var elapsed;
+    if (cssClass === "idle") {
+      var agoMs = activity && typeof activity.lastEventAt === "number" ? Math.max(0, nowMs - activity.lastEventAt) : null;
+      elapsed = { kind: "ago", ms: agoMs, text: agoMs == null ? "—" : fmtAgo(agoMs) };
+    } else if (cssClass === "live") {
+      var startedAt = activity && activity.turn && typeof activity.turn.startedAt === "number" ? activity.turn.startedAt : null;
+      var turnSeconds = startedAt == null ? null : Math.max(0, Math.floor((nowMs - startedAt) / 1000));
+      elapsed = { kind: "turn", seconds: turnSeconds, text: turnSeconds == null ? "—" : fmtElapsed(turnSeconds) };
+    } else {
+      var lastEventAt = activity && typeof activity.lastEventAt === "number" ? activity.lastEventAt : null;
+      var silentSeconds = lastEventAt == null ? null : Math.max(0, Math.floor((nowMs - lastEventAt) / 1000));
+      elapsed = { kind: "silence", seconds: silentSeconds, text: silentSeconds == null ? "silent —" : "silent " + fmtElapsed(silentSeconds) };
+    }
+
+    var line2 = null;
+    if (cssClass === "bad") {
+      line2 = { kind: "note", text: "no events while busy — check the session" };
+    } else if (s.goal && s.goal.condition) {
+      line2 = { kind: "goal", text: s.goal.condition, live: cssClass === "live" };
+    }
+
+    var recencyAt = activity && typeof activity.lastEventAt === "number" ? activity.lastEventAt : 0;
+
+    return {
+      id: s.id,
+      cssClass: cssClass,
+      phase: phase,
+      sid: s.id,
+      detail: detail.text,
+      detailCritical: detail.critical,
+      extra: extra,
+      elapsed: elapsed,
+      line2: line2,
+      recencyAt: recencyAt,
+    };
+  });
+
+  rows.sort(function (x, y) {
+    var xIdle = x.cssClass === "idle", yIdle = y.cssClass === "idle";
+    if (xIdle !== yIdle) return xIdle ? 1 : -1;
+    return y.recencyAt - x.recencyAt;
+  });
+
+  return rows;
+}
+
+// transcriptModel folds durable messages plus live (undurable) events into
+// render-ready transcript entries: {kind: "turn-mark"|"operator"|"assistant"
+// |"reasoning"|"tool", ...}. Durable messages are the source of truth for
+// everything they cover; `liveEvents` covers only what has streamed in
+// since the durable snapshot was taken. Tool calls (in an assistant
+// message) pair with their result (in the following tool-role message) by
+// call_id — durable or live, whichever arrives first — matching
+// message.go's own assembly rule. Streaming deltas and open tool folds
+// accumulate in a separate draft that a "message" event for the same turn
+// discards wholesale (superseded, not duplicated); anything still open at
+// the end of `liveEvents` is the current in-progress tail.
+function transcriptModel(messages, liveEvents) {
+  var msgs = Array.isArray(messages) ? messages : [];
+  var evs = Array.isArray(liveEvents) ? liveEvents : [];
+
+  // call_id -> tool_result, spanning every RoleTool message: durable, or a
+  // live "message" event the caller hasn't migrated into `messages` yet.
+  var resultsByCallID = new Map();
+  function collectResults(m) {
+    if (m && m.role === "tool" && Array.isArray(m.parts)) {
+      for (var i = 0; i < m.parts.length; i++) {
+        var p = m.parts[i];
+        if (p && p.type === "tool_result" && p.call_id) resultsByCallID.set(p.call_id, p);
+      }
+    }
+  }
+  for (var mi = 0; mi < msgs.length; mi++) collectResults(msgs[mi]);
+  for (var ei2 = 0; ei2 < evs.length; ei2++) {
+    var ev0 = evs[ei2];
+    if (ev0 && ev0.type === "message" && ev0.message) collectResults(ev0.message);
+  }
+
+  var entries = [];
+  var turnNum = 0;
+
+  function foldMessage(m) {
+    if (!m) return;
+    if (m.role === "user") {
+      turnNum += 1;
+      entries.push({ kind: "turn-mark", turn: turnNum, at: m.created_at || null, live: false });
+    }
+    if (m.role === "tool") return; // consumed via resultsByCallID
+    var parts = Array.isArray(m.parts) ? m.parts : [];
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i];
+      if (!p) continue;
+      if (p.type === "text") {
+        entries.push({ kind: m.role === "user" ? "operator" : "assistant", id: m.id || null, text: p.text || "", at: m.created_at || null });
+      } else if (p.type === "reasoning") {
+        entries.push({ kind: "reasoning", id: m.id || null, text: p.text || "", at: m.created_at || null });
+      } else if (p.type === "tool_call") {
+        var result = resultsByCallID.get(p.call_id);
+        entries.push({
+          kind: "tool",
+          id: p.call_id,
+          name: p.name || "",
+          argsSummary: summarizeArgs(p.arguments),
+          output: result ? partsText(result.content) : "",
+          isError: !!(result && result.is_error),
+          running: !result,
+          at: m.created_at || null,
+        });
+      } else if (p.type === "blob") {
+        entries.push({ kind: m.role === "user" ? "operator" : "assistant", id: m.id || null, text: "[blob" + (p.media_type ? " " + p.media_type : "") + "]", at: m.created_at || null });
+      }
+    }
+  }
+
+  for (var mj = 0; mj < msgs.length; mj++) foldMessage(msgs[mj]);
+
+  // Live tail: a draft, held separately from `entries` so a "message" event
+  // that supersedes it can discard it wholesale instead of leaving
+  // duplicate content behind.
+  var draft = [];
+  var openText = null;
+  var openReasoning = null;
+  var openTools = new Map();
+
+  function resetDraft() {
+    draft = [];
+    openText = null;
+    openReasoning = null;
+    openTools = new Map();
+  }
+
+  for (var ek = 0; ek < evs.length; ek++) {
+    var ev = evs[ek];
+    if (!ev || typeof ev.type !== "string") continue;
+    switch (ev.type) {
+      case "session.status":
+        resetDraft();
+        if (ev.status === "busy") {
+          turnNum += 1;
+          entries.push({ kind: "turn-mark", turn: turnNum, at: null, live: true });
+        }
+        break;
+      case "message":
+        resetDraft();
+        if (ev.message) foldMessage(ev.message);
+        break;
+      case "text.delta":
+        if (!openText) { openText = { kind: "assistant", id: null, text: "", streaming: true }; draft.push(openText); }
+        openText.text += ev.text || "";
+        break;
+      case "reasoning.delta":
+        if (!openReasoning) { openReasoning = { kind: "reasoning", id: null, text: "", streaming: true }; draft.push(openReasoning); }
+        openReasoning.text += ev.text || "";
+        break;
+      case "tool.start":
+        if (ev.tool_call && ev.tool_call.call_id) {
+          var t = {
+            kind: "tool", id: ev.tool_call.call_id, name: ev.tool_call.name || "",
+            argsSummary: summarizeArgs(ev.tool_call.arguments),
+            output: "", isError: false, running: true,
+          };
+          draft.push(t);
+          openTools.set(ev.tool_call.call_id, t);
+          openText = null;
+          openReasoning = null;
+        }
+        break;
+      case "tool.end":
+        if (ev.tool_call && ev.tool_call.call_id) {
+          var running = openTools.get(ev.tool_call.call_id);
+          // No matching open tool: an unpaired/duplicate end. Ignore it
+          // rather than guessing which fold it belongs to.
+          if (running) {
+            running.running = false;
+            running.output = partsText(ev.output);
+            running.isError = !!ev.is_error;
+          }
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  return entries.concat(draft);
+}
+
+/* TESTABLE-END */
+
+/* ---------- bootstrap (presentation/persistence only — no network) ----------
+   Board/stream/poll wiring lands in a later step. This much is needed now so
+   the empty state is honest: the connect affordance shows only when no base
+   URL + token are stored, matching what a later connected session will look
+   like once it exists. */
+
+(function bootstrap() {
+  var baseInput = document.getElementById("base-url");
+  var tokenInput = document.getElementById("run-token");
+  var form = document.getElementById("connect-form");
+  var err = document.getElementById("connect-err");
+
+  function applyConnectedClass() {
+    var hasBase = !!localStorage.getItem("harness.monitor.base");
+    var hasToken = !!localStorage.getItem("harness.monitor.token");
+    document.body.classList.toggle("connected", hasBase && hasToken);
+  }
+
+  baseInput.value = localStorage.getItem("harness.monitor.base") || "";
+  tokenInput.value = localStorage.getItem("harness.monitor.token") || "";
+  applyConnectedClass();
+
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var base = baseInput.value.trim().replace(/\/+$/, "");
+    var token = tokenInput.value;
+    if (!base || !token) { err.textContent = "base URL and token are required"; return; }
+    err.textContent = "";
+    localStorage.setItem("harness.monitor.base", base);
+    localStorage.setItem("harness.monitor.token", token);
+    applyConnectedClass();
+    // Poll + stream connection wiring lands in a later step.
+  });
+})();
+</script>
+</body>
+</html>
