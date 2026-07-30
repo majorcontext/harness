@@ -30,6 +30,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -303,7 +304,80 @@ type Stub struct {
 	unauthSrv  *server.Server
 	sessionDir string
 	unauthDir  string
-	mu         sync.Mutex
+	// messageFailures backs the /__control/fail-message injection point
+	// (see armMessageFailure and flakyMessageInjector) — a test-only fault
+	// the monitor's self-heal (index.html's maybeSelfHealDetail/
+	// detailUnderpopulated) is meant to survive, never a real server
+	// behavior. Shared across KillBox/RestartBox (the SAME injector wraps
+	// whichever *http.Server is currently serving BoxBase).
+	messageFailures *flakyMessageInjector
+	mu              sync.Mutex
+}
+
+// flakyMessageInjector wraps the REAL server.Server (never modifying it —
+// "no server changes" holds for the product code, exactly like KillBox/
+// RestartBox's own doc comment) to inject a transient failure into a
+// specific session's GET /session/{id}/message responses for a bounded
+// window: real_e2e.mjs's self-heal scenario arms a deadline for one
+// session, opens a deep-linked page against it, and observes that
+// enterDetail's own initial history fetch (and any fetch racing it — the
+// stream-open reconcile, enterDetail's own immediate follow-up check) all
+// genuinely fail during that window, so ONLY maybeSelfHealDetail's
+// pollOnce-driven trigger — the mechanism actually under test — is left to
+// close the gap once the window lapses. Every other request (every other
+// session's history, /health, /session, /event, POSTs) passes straight
+// through untouched.
+type flakyMessageInjector struct {
+	inner http.Handler
+	mu    sync.Mutex
+	// deadlines[sessionID] is the time before which that session's GET
+	// .../message requests are failed. Absent (zero Time) means "never
+	// armed" — the common case for every scenario that isn't this one.
+	deadlines map[string]time.Time
+}
+
+func newFlakyMessageInjector(inner http.Handler) *flakyMessageInjector {
+	return &flakyMessageInjector{inner: inner, deadlines: map[string]time.Time{}}
+}
+
+// arm fails the given session's GET .../message requests for dur, starting
+// now. A zero/negative dur disarms (deletes the deadline) rather than
+// leaving a past-but-present entry around.
+func (f *flakyMessageInjector) arm(sessionID string, dur time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if dur <= 0 {
+		delete(f.deadlines, sessionID)
+		return
+	}
+	f.deadlines[sessionID] = time.Now().Add(dur)
+}
+
+// messageSessionID extracts "<id>" from a "/session/<id>/message" path, or
+// "" if the path doesn't match that exact shape — deliberately narrow (no
+// wildcard/prefix matching) so this can never misfire on some OTHER route
+// server.Server happens to register under /session/.
+func messageSessionID(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 3 && parts[0] == "session" && parts[2] == "message" && parts[1] != "" {
+		return parts[1]
+	}
+	return ""
+}
+
+func (f *flakyMessageInjector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		if sid := messageSessionID(r.URL.Path); sid != "" {
+			f.mu.Lock()
+			deadline, armed := f.deadlines[sid]
+			f.mu.Unlock()
+			if armed && time.Now().Before(deadline) {
+				http.Error(w, "e2e-injected transient failure (self-heal scenario)", http.StatusInternalServerError)
+				return
+			}
+		}
+	}
+	f.inner.ServeHTTP(w, r)
 }
 
 // Start builds and starts a real box server (server.New, five scripted
@@ -429,7 +503,8 @@ func Start() (*Stub, error) {
 		return nil, err
 	}
 
-	boxHTTP := &http.Server{Handler: srv}
+	messageFailures := newFlakyMessageInjector(srv)
+	boxHTTP := &http.Server{Handler: messageFailures}
 	go boxHTTP.Serve(boxLn) //nolint:errcheck
 	unauthHTTP := &http.Server{Handler: unauthSrv}
 	go unauthHTTP.Serve(unauthLn) //nolint:errcheck
@@ -447,28 +522,30 @@ func Start() (*Stub, error) {
 	}
 
 	stub := &Stub{
-		BoxBase:     "http://" + boxLn.Addr().String(),
-		MonitorBase: "http://" + monitorLn.Addr().String(),
-		Token:       RunToken,
-		UnauthBase:  "http://" + unauthLn.Addr().String(),
-		boxAddr:     boxLn.Addr().String(),
-		boxHTTP:     boxHTTP,
-		boxLn:       boxLn,
-		monitorLn:   monitorLn,
-		unauthLn:    unauthLn,
-		unauthHTTP:  unauthHTTP,
-		srv:         srv,
-		unauthSrv:   unauthSrv,
-		sessionDir:  dir,
-		unauthDir:   unauthDir,
+		BoxBase:         "http://" + boxLn.Addr().String(),
+		MonitorBase:     "http://" + monitorLn.Addr().String(),
+		Token:           RunToken,
+		UnauthBase:      "http://" + unauthLn.Addr().String(),
+		boxAddr:         boxLn.Addr().String(),
+		boxHTTP:         boxHTTP,
+		boxLn:           boxLn,
+		monitorLn:       monitorLn,
+		unauthLn:        unauthLn,
+		unauthHTTP:      unauthHTTP,
+		srv:             srv,
+		unauthSrv:       unauthSrv,
+		sessionDir:      dir,
+		unauthDir:       unauthDir,
+		messageFailures: messageFailures,
 	}
 
 	// The monitor's own static-file listener also carries a tiny, TEST-ONLY
-	// control plane (POST /__control/kill, /__control/restart) so
-	// real_e2e.mjs — a separate OS process from this one, with no other way
-	// to reach Go method calls — can drive the reconnect scenario's
-	// server-side kill/restart (see KillBox/RestartBox). This is scoped
-	// entirely to this e2e stub's own auxiliary listener; the REAL
+	// control plane (POST /__control/kill, /__control/restart, /__control/
+	// fail-message) so real_e2e.mjs — a separate OS process from this one,
+	// with no other way to reach Go method calls — can drive the reconnect
+	// scenario's server-side kill/restart (see KillBox/RestartBox) and the
+	// self-heal scenario's fault injection (see ArmMessageFailure). This is
+	// scoped entirely to this e2e stub's own auxiliary listener; the REAL
 	// server.Server (the box) gains no routes at all — "no server changes"
 	// (the plan's own words) holds for the product code.
 	mux := http.NewServeMux()
@@ -485,6 +562,20 @@ func Start() (*Stub, error) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("POST /__control/fail-message", func(w http.ResponseWriter, r *http.Request) {
+		sid := r.URL.Query().Get("session")
+		if sid == "" {
+			http.Error(w, "missing session query param", http.StatusBadRequest)
+			return
+		}
+		forMs, err := strconv.Atoi(r.URL.Query().Get("for_ms"))
+		if err != nil {
+			http.Error(w, "missing/invalid for_ms query param: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		stub.ArmMessageFailure(sid, time.Duration(forMs)*time.Millisecond)
 		w.WriteHeader(http.StatusOK)
 	})
 	go http.Serve(monitorLn, mux) //nolint:errcheck
@@ -521,9 +612,22 @@ func (s *Stub) RestartBox() error {
 		return err
 	}
 	s.boxLn = ln
-	s.boxHTTP = &http.Server{Handler: s.srv}
+	// Reuse the SAME messageFailures injector (not a fresh one wrapping
+	// s.srv directly) so an armed deadline survives a kill/restart —
+	// matters only to the self-heal scenario, harmless to every other one
+	// since messageFailures passes everything through when nothing's armed.
+	s.boxHTTP = &http.Server{Handler: s.messageFailures}
 	go s.boxHTTP.Serve(ln) //nolint:errcheck
 	return nil
+}
+
+// ArmMessageFailure makes sessionID's GET /session/{id}/message responses
+// fail with a real 500 for dur, starting now (see flakyMessageInjector's own
+// doc comment) — the self-heal scenario's fault injection. A zero/negative
+// dur disarms immediately. Safe to call at any time; takes effect on the
+// very next matching request, in-flight or not yet started.
+func (s *Stub) ArmMessageFailure(sessionID string, dur time.Duration) {
+	s.messageFailures.arm(sessionID, dur)
 }
 
 // Close tears down both listeners, closes the server, and removes the

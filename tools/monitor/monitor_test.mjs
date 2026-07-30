@@ -63,6 +63,7 @@ const {
   adaptHistory,
   countKind,
   liveMessageCount,
+  detailUnderpopulated,
   entryKey,
   turnMarkAgoText,
   keepsLiveEventAfterReconcile,
@@ -1445,6 +1446,36 @@ test("liveMessageCount counts only 'message' events", () => {
   const evs = [{ type: "message" }, { type: "text.delta" }, { type: "message" }, { type: "tool.start" }];
   assert.equal(liveMessageCount(evs), 2);
   assert.equal(liveMessageCount([]), 0);
+});
+
+/* ---------- detailUnderpopulated (RED-FIRST — the self-heal predicate
+   pollOnce/enterDetail's own fetch-resolved callback use to decide whether
+   the open detail view's history load silently stalled: see
+   maybeSelfHealDetail's doc comment in index.html) ---------- */
+
+test("detailUnderpopulated: RED-FIRST — the stuck-empty case (rendered nothing while the summary proves durable history exists)", () => {
+  assert.equal(detailUnderpopulated(6, 0), true);
+  assert.equal(detailUnderpopulated(1, 0), true);
+});
+
+test("detailUnderpopulated: a genuinely fresh, never-prompted session (both zero) is not stuck", () => {
+  assert.equal(detailUnderpopulated(0, 0), false);
+});
+
+test("detailUnderpopulated: already-rendered-something is never stuck, even if the summary is momentarily further ahead (a live turn's normal lag, not a stall)", () => {
+  assert.equal(detailUnderpopulated(9, 6), false);
+  assert.equal(detailUnderpopulated(2, 1), false);
+});
+
+test("detailUnderpopulated: rendered count can never legitimately exceed the summary's, but is still not 'stuck' by this predicate (no summary != stalled)", () => {
+  assert.equal(detailUnderpopulated(3, 5), false);
+});
+
+test("detailUnderpopulated: tolerates missing/malformed input without throwing, treating it as zero", () => {
+  assert.equal(detailUnderpopulated(undefined, undefined), false);
+  assert.equal(detailUnderpopulated(null, null), false);
+  assert.equal(detailUnderpopulated("6", 0), false); // non-numeric summary treated as 0 — never "stuck" on bad data
+  assert.equal(detailUnderpopulated(6, "0"), true); // non-numeric rendered treated as 0 — still catches the real stuck case
 });
 
 /* ---------- entryKey ---------- */

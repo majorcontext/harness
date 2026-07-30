@@ -77,6 +77,13 @@
        automatically; a bookmarked "#b=<base>" link prefills the base URL
        field when nothing is stored yet.
    11. Toggle OS light/dark theme -> both variants stay legible.
+   12. Navigate away (another site) then browser-Back into this page while
+       it was connected -> if the browser served it from bfcache (the
+       page's own scripts never re-run), the header re-syncs to a real
+       "streaming" state rather than sitting frozen on whatever it showed
+       the instant it was frozen, and an open detail view re-checks its
+       history against the board summary rather than showing stale/stuck
+       content.
 -->
 <style>
   :root {
@@ -1554,6 +1561,40 @@ function liveMessageCount(liveEvents) {
   return n;
 }
 
+// detailUnderpopulated (TESTABLE) is the self-heal predicate: given the
+// session's own board summary message count (sessionJSON's "messages" —
+// server/handlers.go's len(sess.History()), the SAME durable count GET
+// /session/{id}/message would report) and how many durable messages the
+// currently-open detail view has actually rendered (detailState.messages
+// .length — NOT + liveMessageCount(detailState.liveEvents); live-only
+// content legitimately has no board-summary backing yet), decides whether
+// the detail view has fallen behind in the one way that can never
+// self-correct on its own: it rendered NOTHING at all while the summary
+// proves durable history exists. pollOnce (every POLL_MS, already
+// fetching this summary regardless) and enterDetail's own fetch-resolved
+// callback (closing the gap immediately, without waiting a full poll
+// interval) both call this and trigger reconcileDetail() on true — see
+// their call sites' own doc comments for why this closes the deep-link
+// history race even when its exact trigger can't be pinned down (finding
+// 3 in reconcileDetail's own doc comment).
+//
+// Deliberately NOT "rendered < summary" in general: a session mid-live-
+// turn legitimately has the summary's count run ahead of
+// detailState.messages for seconds at a time (detailState.messages only
+// advances on enterDetail/reconcileDetail's own re-fetch, never on a live
+// event) — that lag is normal, already visible via liveEvents, and
+// closes itself the next time ANY reconcile trigger fires; treating it as
+// "stuck" would re-fetch on every single poll for every session someone
+// happens to be watching mid-turn. "Rendered zero while the summary says
+// otherwise" has no such false-positive: a genuinely fresh, never-
+// prompted session has summary 0 too, so this only fires on the one
+// combination that means the initial load never landed.
+function detailUnderpopulated(summaryMessages, renderedMessages) {
+  var summary = typeof summaryMessages === "number" && isFinite(summaryMessages) ? summaryMessages : 0;
+  var rendered = typeof renderedMessages === "number" && isFinite(renderedMessages) ? renderedMessages : 0;
+  return rendered === 0 && summary > 0;
+}
+
 // entryKey derives a stable DOM-reconciliation key for a transcriptModel
 // entry, so the detail view can patch existing nodes in place instead of
 // rebuilding the transcript on every delta (mirrors boardModel's row keying
@@ -2022,6 +2063,12 @@ function pollOnce() {
       var hw = maxSeq(list);
       if (hw > state.lastSeq) state.lastSeq = hw;
       syncBoard(Date.now());
+      // The primary self-heal trigger (maybeSelfHealDetail, TESTABLE
+      // predicate detailUnderpopulated) — every POLL_MS, unconditionally,
+      // while a detail view is open: whatever silently stalled its
+      // initial/reconciled history load self-corrects within one poll
+      // interval, independent of the stream ever (re)opening.
+      maybeSelfHealDetail();
     });
   }).catch(function () { /* transient; the next poll or the stream will refill */ });
 }
@@ -2579,6 +2626,34 @@ function reconcileDetail() {
     });
 }
 
+// maybeSelfHealDetail applies detailUnderpopulated (TESTABLE, above) against
+// LIVE state: the currently-open detail view's rendered durable message
+// count vs. its session's own board summary (state.sessions — already kept
+// current by pollOnce, and by attemptConnect's own initial GET /session
+// before enterDetail/applyRoute ever run). Triggers reconcileDetail() on a
+// true verdict — cheap and safe to call speculatively: reconcileDetail's own
+// detailState.reconciling guard drops an overlapping call, and its loadToken
+// guard drops a result for a session the operator has since left. Called
+// from two places:
+//   - pollOnce, every POLL_MS, unconditionally while a detail view is open —
+//     the primary self-heal: whatever silently stalled enterDetail's own
+//     initial fetch (network hiccup, dropped response, anything — this
+//     deliberately does not depend on diagnosing WHY), the view heals
+//     within one poll interval, not "whenever the stream happens to open"
+//     (connectStream's own reconcile trigger can be seconds away on a slow
+//     box, and does not fire at all until the stream successfully opens).
+//   - enterDetail's own fetch-resolved callback, checking IMMEDIATELY
+//     against the summary connect already fetched — closing the stuck-empty
+//     window well inside a single poll interval for the common case where
+//     the initial fetch resolves fast but empty/wrong, rather than making
+//     every deep link wait out a full POLL_MS regardless.
+function maybeSelfHealDetail() {
+  if (!detailState) return;
+  var summary = state.sessions.get(detailState.sessionId);
+  if (!summary) return;
+  if (detailUnderpopulated(summary.messages, detailState.messages.length)) reconcileDetail();
+}
+
 // enterDetail switches to the detail view for `sessionId` and fetches its
 // durable history. Focus moves to the breadcrumb immediately (a screen
 // reader/keyboard user lands at the top of the new view the moment
@@ -2588,11 +2663,14 @@ function reconcileDetail() {
 // This fetch is no longer the ONLY thing that can load this view's
 // history: connectStream's "streaming" branch also calls reconcileDetail()
 // on every successful stream open while a detail view is showing (see its
-// own doc comment and reconcileDetail's "DEEP-LINK BOOT RACE" finding) —
-// a deep link resolved via applyRoute() right after a fresh connect (this
-// call) races that same connect's own stream open, and either one landing
-// is enough to populate the transcript. Both are guarded by the SAME
-// loadToken, so whichever resolves is safe to apply regardless of order.
+// own doc comment and reconcileDetail's "DEEP-LINK BOOT RACE" finding),
+// and pollOnce/this function's own fetch-resolved callback both call
+// maybeSelfHealDetail() (see its doc comment) — a deep link resolved via
+// applyRoute() right after a fresh connect (this call) races that same
+// connect's own stream open AND is checked against the board summary
+// immediately and every POLL_MS after. Any of these landing is enough to
+// populate the transcript; all are guarded by the SAME loadToken, so
+// whichever resolves is safe to apply regardless of order.
 function enterDetail(sessionId) {
   var loadToken = ++detailLoadCounter;
   detailState = {
@@ -2626,7 +2704,7 @@ function enterDetail(sessionId) {
 
   api("GET", "/session/" + encodeURIComponent(sessionId) + "/message").then(function (resp) {
     if (!detailState || detailState.loadToken !== loadToken) return; // navigated away meanwhile
-    if (!resp.ok) { showTranscriptError("failed to load history (status " + resp.status + ")"); return; }
+    if (!resp.ok) { showTranscriptError("failed to load history (status " + resp.status + ")"); maybeSelfHealDetail(); return; }
     return resp.json().then(function (raw) {
       if (!detailState || detailState.loadToken !== loadToken) return;
       var adapted = adaptHistory(raw);
@@ -2639,9 +2717,18 @@ function enterDetail(sessionId) {
         note.textContent = adapted.unavailable + " message" + (adapted.unavailable === 1 ? "" : "s") + " could not be rendered";
         transcriptEl.append(note);
       }
+      // Checked here too, not only on the next poll: this fetch may have
+      // resolved 200-OK but genuinely empty (or truncated) despite the
+      // session's own board summary — already known from connect's own
+      // GET /session — reporting real durable messages. See
+      // maybeSelfHealDetail's own doc comment for why this is safe to
+      // call unconditionally (a no-op unless the stuck-empty case is
+      // detected).
+      maybeSelfHealDetail();
     });
   }).catch(function () {
     if (detailState && detailState.loadToken === loadToken) showTranscriptError("failed to load history — check the connection");
+    maybeSelfHealDetail();
   });
 }
 
@@ -2678,6 +2765,30 @@ function applyRoute() {
   }
 }
 window.addEventListener("hashchange", applyRoute);
+
+// bfcache restore (browser back/forward reviving this exact page instance
+// rather than re-running its scripts — event.persisted true): the
+// underlying SSE stream connection is presumed dead (suspended/discarded
+// by the browser while this page was frozen), even though state.running
+// and the header's "connected"/"streaming" styling still reflect
+// whatever they were the instant the page was frozen, not reality. Only
+// acts if this page was actually connected when frozen (state.running) —
+// nothing to resync for a frozen connect panel. Two independent, reused
+// mechanisms, no new reconnect logic of its own:
+//   - abort the (presumed-dead) stream: connectStream's OWN existing
+//     catch -> scheduleReconnect path re-establishes it with the SAME
+//     jittered backoff any other network failure gets, rather than this
+//     page silently never noticing the stream is gone.
+//   - pollOnce() immediately, rather than waiting out however much of the
+//     current POLL_MS interval happened to be left when the page froze —
+//     refreshes state.sessions and, via maybeSelfHealDetail (see its own
+//     doc comment), re-syncs an open detail view against the board
+//     summary right away.
+window.addEventListener("pageshow", function (e) {
+  if (!e.persisted || !state.running) return;
+  if (state.abort) state.abort.abort();
+  pollOnce();
+});
 
 /* ---------- composer: POST prompt_async. The sent message renders
    IMMEDIATELY on submit — a pendingSend pushed into detailState.pendingSends

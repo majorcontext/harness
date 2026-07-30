@@ -827,6 +827,76 @@ async function main() {
     console.error("PASS: a fresh page deep-linked (\"#t=...&s=...\") straight into a session with real durable history reliably renders that history — " + DEEP_LINK_ITERATIONS + "/" + DEEP_LINK_ITERATIONS + " clean iterations, no \"no messages yet\"/\"0 msgs\" stall");
   }
 
+  // ---- 6e. Self-heal: a FORCED empty/failed initial history load (task:
+  // "fix(monitor): self-heal empty detail history via poll reconcile;
+  // bfcache re-sync") — scenario 6d proves the deep-link path is reliable
+  // in this jsdom environment, but a fresh page-load's own network timing
+  // is exactly what jsdom+loopback can't reproduce (confirmed: the SAME
+  // scenario passes even against the PRE-fix code here, live Chrome shows
+  // it fail intermittently regardless). Rather than chase that exact
+  // timing, this forces the failure mode directly: stub.go's
+  // flakyMessageInjector (POST /__control/fail-message, TEST-ONLY, wraps
+  // the real server.Server without modifying it) makes THIS session's GET
+  // /session/{id}/message return a real 500 for a window comfortably
+  // spanning several of the tuned POLL_MS (300ms) intervals — long enough
+  // that enterDetail's own initial fetch, its own immediate follow-up
+  // check, AND connectStream's stream-open reconcile trigger (which fires
+  // almost immediately after a fresh connect) all genuinely fail during
+  // it, same as the "result is dropped" case live Chrome hit. Once the
+  // window lapses, ONLY maybeSelfHealDetail's pollOnce-driven trigger —
+  // detailUnderpopulated(summary.messages, detailState.messages.length),
+  // unit-tested separately in monitor_test.mjs — is left to close the
+  // gap, so this is the mechanism actually proven, not just "it healed
+  // somehow." Asserts the STUCK state is real first (proving the fault
+  // injection genuinely reproduces the live symptom, not a no-op), then
+  // that it heals within a bound comfortably inside a handful of poll
+  // intervals, never "whenever the stream next happens to open." ----
+  {
+    const healText = "self-heal forced-failure check";
+    const healID = await createSession(ProvQuickIdle);
+    assert.equal((await promptAsync(healID, healText)).status, 202, "prompt_async accepted (self-heal scenario)");
+    await waitIdle(healID, 15);
+
+    const FAIL_FOR_MS = 1200; // several TUNING.POLL_MS (300ms) intervals
+    assert.equal(
+      (await fetch(monitorBase + "/__control/fail-message?session=" + encodeURIComponent(healID) + "&for_ms=" + FAIL_FOR_MS, { method: "POST" })).status,
+      200,
+      "control-plane fail-message arm"
+    );
+
+    const { dom: healDom, doc: healDoc } = await openEmbeddedPage(boxBase + "/monitor#t=" + encodeURIComponent(token) + "&s=" + encodeURIComponent(healID));
+    await waitFor(() => healDoc.body.classList.contains("connected"), { timeoutMs: 5000, label: "self-heal scenario: page connects despite the armed history-fetch failure" });
+    await waitFor(() => healDoc.body.classList.contains("showing-detail"), { timeoutMs: 5000, label: "self-heal scenario: deep link still resolves into the detail view" });
+
+    // The stuck state is real: every history fetch this page can make
+    // right now is being forced to fail, so the transcript must show
+    // NOTHING rendered yet — proving the injection actually reproduces
+    // the live "no messages yet"/"0 msgs" symptom, not a scenario that
+    // happens to pass regardless of the fix.
+    await waitFor(() => {
+      const note = healDoc.querySelector("#transcript .transcript-note:not(.err)");
+      return (note && note.textContent === "no messages yet") || healDoc.querySelector("#transcript .transcript-note.err");
+    }, { timeoutMs: 2000, label: "self-heal scenario: the transcript genuinely shows the stuck-empty/error state while the fault is armed" });
+    assert.equal(healDoc.querySelectorAll("#transcript .msg").length, 0, "self-heal scenario: zero messages rendered while every history fetch is forced to fail");
+    console.error("PASS: the forced history-fetch failure genuinely reproduces the stuck-empty symptom (proving this scenario exercises the real bug, not a no-op)");
+
+    // The heal: well after FAIL_FOR_MS lapses, maybeSelfHealDetail's
+    // pollOnce trigger must have re-fetched and populated the real
+    // history — bounded comfortably inside a handful of poll intervals,
+    // not "eventually, whenever the stream reopens."
+    await waitFor(() => operatorTexts(healDoc).includes(healText), {
+      timeoutMs: 5000,
+      label: "self-heal scenario: the operator prompt renders once the poll-driven self-heal fires: " + JSON.stringify(operatorTexts(healDoc)),
+    });
+    await waitFor(() => assistantTexts(healDoc).some((t) => t.includes("hello")), {
+      timeoutMs: 5000,
+      label: "self-heal scenario: the assistant reply renders once the poll-driven self-heal fires: " + JSON.stringify(assistantTexts(healDoc)),
+    });
+    assert.notEqual(healDoc.getElementById("detail-msgcount").textContent, "0 msgs", "self-heal scenario: must not still read 0 msgs once healed");
+    healDom.window.close();
+    console.error("PASS: a stuck-empty detail view (every history fetch forced to fail) self-heals via the poll-driven reconcile within a bounded, poll-interval-scale wait, with no server changes and no arbitrary sleeps in index.html itself");
+  }
+
   dom.window.close();
   console.error("ALL REAL END-TO-END CHECKS PASSED");
 }
