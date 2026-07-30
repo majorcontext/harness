@@ -55,6 +55,12 @@ const {
   seedActivity,
   boardModel,
   transcriptModel,
+  HISTORY_WINDOW,
+  historyWindow,
+  adaptHistory,
+  countKind,
+  liveMessageCount,
+  entryKey,
 } = sandbox;
 
 // collect gathers every frame the parser dispatches for the given chunks.
@@ -564,4 +570,157 @@ test("transcriptModel: a live tool_result ('message' event) pairs with a durable
   const tool = entries.find(e => e.kind === "tool");
   assert.equal(tool.running, false);
   assert.equal(tool.output, "done");
+});
+
+test("transcriptModel: a live tool.end resolves a durable running tool_call fetched from history (no matching live tool.start)", () => {
+  // The tool started before this page ever fetched history, so the running
+  // fold comes from `messages`, not a live tool.start — tool.end is never
+  // itself durable (see server/journal.go's Publish), so it must still be
+  // able to patch this entry in place.
+  const messages = [
+    { id: "m1", role: "assistant", created_at: "t", parts: [{ type: "tool_call", call_id: "c1", name: "Bash", arguments: { command: "go test ./server/ -race" } }] },
+  ];
+  const evs = [
+    { type: "tool.end", tool_call: { call_id: "c1" }, output: [{ type: "text", text: "PASS" }], is_error: false },
+  ];
+  const entries = transcriptModel(messages, evs);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].kind, "tool");
+  assert.equal(entries[0].running, false);
+  assert.equal(entries[0].output, "PASS");
+});
+
+test("transcriptModel: turnOffset shifts turn numbering for a windowed (non-full) message list", () => {
+  const messages = [
+    { id: "m1", role: "user", created_at: "t", parts: [{ type: "text", text: "go" }] },
+  ];
+  const entries = transcriptModel(messages, [], 14);
+  const mark = entries.find(e => e.kind === "turn-mark");
+  assert.equal(mark.turn, 15);
+});
+
+test("transcriptModel: prompt.queued renders an optimistic operator entry with the queued text", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "prompt.queued", queue_text: "also check the linter", queue_id: 7 },
+  ];
+  const entries = transcriptModel([], evs);
+  const queued = entries.find(e => e.kind === "operator" && e.queued);
+  assert.ok(queued, "expected a queued operator entry");
+  assert.equal(queued.text, "also check the linter");
+  assert.equal(queued.queueId, 7);
+});
+
+test("transcriptModel: a delivered 'message' event supersedes its own prompt.queued placeholder without duplicating it", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "prompt.queued", queue_text: "also check the linter", queue_id: 7 },
+    { type: "message", message: { id: "m9", role: "user", created_at: "t", parts: [{ type: "text", text: "also check the linter" }] } },
+  ];
+  const entries = transcriptModel([], evs);
+  const operatorEntries = entries.filter(e => e.kind === "operator");
+  assert.equal(operatorEntries.length, 1, "the queued placeholder must be replaced, not duplicated");
+  assert.equal(operatorEntries[0].queued, undefined);
+  assert.equal(operatorEntries[0].text, "also check the linter");
+});
+
+test("transcriptModel: a queued placeholder not yet delivered survives an unrelated draft reset", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "text.delta", text: "working on it" },
+    { type: "prompt.queued", queue_text: "and also this", queue_id: 3 },
+    // The current turn's own assistant reply completes (a normal "message"
+    // event for the ASSISTANT, not the queued operator prompt) — this must
+    // not discard the still-undelivered queued placeholder.
+    { type: "message", message: { id: "m1", role: "assistant", created_at: "t", parts: [{ type: "text", text: "working on it" }] } },
+  ];
+  const entries = transcriptModel([], evs);
+  const queued = entries.find(e => e.kind === "operator" && e.queued);
+  assert.ok(queued, "the queued placeholder must survive an unrelated message event");
+  assert.equal(queued.text, "and also this");
+});
+
+/* ---------- historyWindow ---------- */
+
+test("HISTORY_WINDOW is exported with the documented value", () => {
+  assert.equal(HISTORY_WINDOW, 50);
+});
+
+test("historyWindow returns everything, no hidden count, when the list is at or under the limit", () => {
+  const messages = [{ role: "user" }, { role: "assistant" }];
+  assert.deepEqual(reify(historyWindow(messages, 2)), { window: messages, hiddenCount: 0, hiddenTurns: 0 });
+  assert.deepEqual(reify(historyWindow(messages, 50)), { window: messages, hiddenCount: 0, hiddenTurns: 0 });
+});
+
+test("historyWindow trims to the most recent `limit` messages and counts hidden turns", () => {
+  const messages = [
+    { role: "user", id: "1" }, { role: "assistant", id: "2" },
+    { role: "user", id: "3" }, { role: "assistant", id: "4" },
+    { role: "user", id: "5" }, { role: "assistant", id: "6" },
+  ];
+  const w = historyWindow(messages, 2);
+  assert.deepEqual(reify(w.window), [{ role: "user", id: "5" }, { role: "assistant", id: "6" }]);
+  assert.equal(w.hiddenCount, 4);
+  assert.equal(w.hiddenTurns, 2); // two user messages in the dropped prefix
+});
+
+test("historyWindow treats a null/undefined/Infinity limit as unbounded", () => {
+  const messages = [{ role: "user" }, { role: "assistant" }, { role: "user" }];
+  assert.equal(historyWindow(messages, null).window.length, 3);
+  assert.equal(historyWindow(messages, undefined).window.length, 3);
+  assert.equal(historyWindow(messages, Infinity).window.length, 3);
+});
+
+test("historyWindow tolerates a non-array input", () => {
+  assert.deepEqual(reify(historyWindow(null, 5)), { window: [], hiddenCount: 0, hiddenTurns: 0 });
+});
+
+/* ---------- adaptHistory ---------- */
+
+test("adaptHistory keeps real messages and drops unmarshalable placeholders, counting them", () => {
+  const raw = [
+    { id: "m1", role: "user", parts: [{ type: "text", text: "hi" }] },
+    { id: "m2", role: "assistant", marshal_error: "json: error calling MarshalJSON" }, // messagePlaceholder: no `parts`
+    { id: "m3", role: "assistant", parts: [{ type: "text", text: "ok" }] },
+  ];
+  const adapted = adaptHistory(raw);
+  assert.equal(adapted.messages.length, 2);
+  assert.deepEqual(reify(adapted.messages.map(m => m.id)), ["m1", "m3"]);
+  assert.equal(adapted.unavailable, 1);
+});
+
+test("adaptHistory tolerates a non-array/empty response", () => {
+  assert.deepEqual(reify(adaptHistory(null)), { messages: [], unavailable: 0 });
+  assert.deepEqual(reify(adaptHistory([])), { messages: [], unavailable: 0 });
+});
+
+/* ---------- countKind / liveMessageCount ---------- */
+
+test("countKind counts entries by kind", () => {
+  const entries = [{ kind: "tool" }, { kind: "assistant" }, { kind: "tool" }];
+  assert.equal(countKind(entries, "tool"), 2);
+  assert.equal(countKind(entries, "operator"), 0);
+  assert.equal(countKind(null, "tool"), 0);
+});
+
+test("liveMessageCount counts only 'message' events", () => {
+  const evs = [{ type: "message" }, { type: "text.delta" }, { type: "message" }, { type: "tool.start" }];
+  assert.equal(liveMessageCount(evs), 2);
+  assert.equal(liveMessageCount([]), 0);
+});
+
+/* ---------- entryKey ---------- */
+
+test("entryKey: turn marks key by turn number; tool folds key by call_id regardless of running state", () => {
+  assert.equal(entryKey({ kind: "turn-mark", turn: 3 }, 0), "turn:3");
+  assert.equal(entryKey({ kind: "tool", id: "c1", running: true }, 0), "tool:c1");
+  assert.equal(entryKey({ kind: "tool", id: "c1", running: false }, 0), "tool:c1");
+});
+
+test("entryKey: settled messages key by durable id; drafts and queued placeholders key without one", () => {
+  assert.equal(entryKey({ kind: "assistant", id: "m1" }, 0), "msg:m1");
+  assert.equal(entryKey({ kind: "assistant", id: null, streaming: true }, 0), "draft:assistant");
+  assert.equal(entryKey({ kind: "reasoning", id: null, streaming: true }, 0), "draft:reasoning");
+  assert.equal(entryKey({ kind: "operator", id: null, queued: true, queueId: 7 }, 0), "queued:7");
+  assert.equal(entryKey({ kind: "operator", id: null, queued: true, queueId: null }, 2), "queued:idx:2");
 });

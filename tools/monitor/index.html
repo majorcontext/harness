@@ -21,11 +21,12 @@
   workspace-scoped and rotate with the workspace.
 
   The pure helpers below (SSE parser, activity reducer, transcript fold,
-  formatters, route codec) are unit-tested by monitor_test.mjs (run:
-  node --test tools/monitor/*_test.mjs). The board is live (connect flow,
-  poll+stream event fold, jittered-backoff reconnect); the detail view below
-  it is still static chrome — its transcript/composer wiring is a later
-  step. Manual verification covers what the tests can't:
+  history windowing/adaptation, DOM-key derivation, formatters, route codec)
+  are unit-tested by monitor_test.mjs (run: node --test
+  tools/monitor/*_test.mjs). The board AND the detail view are both live,
+  fed from the SAME connect/stream/poll lifecycle — the detail view filters
+  handleEvent's dispatch by session id rather than opening a second
+  connection. Manual verification covers what the tests can't:
     1. Start:  HARNESS_RUN_TOKEN=t harness serve -cors-origin '*'
     2. Open this file, paste the base URL (http://localhost:4096) + token,
        Connect. -> the identity line fills in from /health, the board lists
@@ -33,19 +34,35 @@
     3. Drive a prompt against a session -> its row moves through
        tool/streaming/between phases, elapsed ticks once a second.
     4. Let a session sit idle for 15s -> quiet; 60s -> stalled (critical).
-    5. Click a session -> (detail view lands in a later step; the row is a
-       real, bookmarkable link today, but the destination is still static).
-    6. Send a message from the composer -> it appears as an operator entry
-       the moment the stream's `message` event lands (no phantom entry).
-       (Composer lands with the detail view, later.)
-    7. Kill `harness serve`, wait -> connection state flips to
-       "reconnecting…" with jittered backoff; restart -> it resyncs.
-    8. Enter a wrong run token -> an inline error on the connect panel (the
+    5. Click a session -> the detail view opens ("#b=<base>&s=<id>"),
+       fetches its history (most recent 50 messages; older ones sit behind a
+       "Show N earlier messages" affordance at the top), and renders it as a
+       transcript: operator/assistant entries, tool folds (running open with
+       a ticking elapsed once this page has watched it start; completed
+       collapsed with cmd + elapsed; a fold resolved before this page ever
+       watched it shows no elapsed number rather than a fabricated one).
+       Reload the URL directly (a bookmarked "#s=" deep link) -> connects,
+       then opens straight into the same session.
+    6. Send a message from the composer (Enter to send, Shift+Enter for a
+       newline) -> it appears as an operator entry the moment the stream's
+       `message` event lands (session was idle) or, if the session was
+       busy, the moment `prompt.queued` lands, later replaced (not
+       duplicated) by the real message once delivered. The input disables
+       only for the POST itself — sending into a busy session queues it
+       rather than blocking on it. A non-2xx response renders the server's
+       own error text inline under the input, in critical color.
+    7. Click the breadcrumb -> back to the board; focus returns to the row
+       that was opened (or the session list if that row is gone).
+    8. Kill `harness serve`, wait -> connection state flips to
+       "reconnecting…" with jittered backoff and the detail view (if open)
+       drops back to the board rather than show increasingly stale data;
+       restart -> it resyncs.
+    9. Enter a wrong run token -> an inline error on the connect panel (the
        401 comes from /session, not /health, which has no auth).
-    9. Reload the page -> base URL and token (from localStorage) reconnect
+   10. Reload the page -> base URL and token (from localStorage) reconnect
        automatically; a bookmarked "#b=<base>" link prefills the base URL
        field when nothing is stored yet.
-   10. Toggle OS light/dark theme -> both variants stay legible.
+   11. Toggle OS light/dark theme -> both variants stay legible.
 -->
 <style>
   :root {
@@ -227,8 +244,28 @@
   .msg { display: grid; grid-template-columns: 84px minmax(0, 1fr); column-gap: 20px; }
   .who { font-size: 11.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-3); padding-top: 2px; }
   .msg.user .who { color: var(--accent); }
+  .msg.reasoning .who, .msg.reasoning .body { color: var(--text-3); }
   .body { min-width: 0; max-width: 70ch; }
-  .body p { margin: 0 0 8px; } .body p:last-child { margin: 0; }
+  /* pre-wrap: an operator/assistant reply is prose the model chose to break
+     into lines (a pasted diff, a list) — collapsing those breaks the way
+     plain HTML text-flow does would scramble intentional structure on a
+     page whose whole point is reading a transcript accurately. */
+  .body p { margin: 0 0 8px; white-space: pre-wrap; }
+  .body p:last-child { margin: 0; }
+
+  /* "Show earlier" — a plain-text affordance sharing the turn-mark's rail
+     position and rhythm, not a button trying to look important. */
+  .show-earlier {
+    display: block; width: 100%; text-align: left; margin: 0 0 22px;
+    background: none; border: none; padding: 0; cursor: pointer;
+    font: 11.5px var(--sans); color: var(--text-3); text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .show-earlier:hover { color: var(--accent); }
+  .show-earlier:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+  .transcript-note { font-size: 12.5px; color: var(--text-3); padding: 4px 0 8px; }
+  .transcript-note.err { color: var(--critical); }
 
   .toolblock {
     font-family: var(--mono); font-size: 12px; line-height: 1.55;
@@ -339,7 +376,7 @@
           <span>turn <span id="detail-turn-elapsed"></span></span>
           <span id="detail-toolcount"></span>
         </span>
-        <span class="livechip" id="detail-livechip" hidden><span class="pulse2"></span>tool running</span>
+        <span class="livechip" id="detail-livechip" hidden><span class="pulse2"></span><span id="detail-livechip-text">tool running</span></span>
       </header>
 
       <section class="transcript" id="transcript" aria-label="Session transcript"></section>
@@ -749,13 +786,23 @@ function boardModel(sessions, activities, nowMs) {
 // accumulate in a separate draft that a "message" event for the same turn
 // discards wholesale (superseded, not duplicated); anything still open at
 // the end of `liveEvents` is the current in-progress tail.
-function transcriptModel(messages, liveEvents) {
+function transcriptModel(messages, liveEvents, turnOffset) {
   var msgs = Array.isArray(messages) ? messages : [];
   var evs = Array.isArray(liveEvents) ? liveEvents : [];
 
   // call_id -> tool_result, spanning every RoleTool message: durable, or a
   // live "message" event the caller hasn't migrated into `messages` yet.
   var resultsByCallID = new Map();
+  // call_id -> the entry object for a durable tool_call folded from
+  // `messages` (or an already-migrated "message" event) with no result yet.
+  // A live tool.end for that call_id is never itself durable/journaled (see
+  // Publish's EventToolEnd case in server/journal.go — only the eventual
+  // tool-role message is), so it can arrive for a call that started before
+  // `liveEvents` began, or before this page ever fetched history. The
+  // live-event loop below patches THIS object in place when that happens,
+  // rather than silently ignoring an end it has no live "started" record
+  // for (see the "tool.end" case).
+  var durableRunningTools = new Map();
   function collectResults(m) {
     if (m && m.role === "tool" && Array.isArray(m.parts)) {
       for (var i = 0; i < m.parts.length; i++) {
@@ -771,7 +818,7 @@ function transcriptModel(messages, liveEvents) {
   }
 
   var entries = [];
-  var turnNum = 0;
+  var turnNum = typeof turnOffset === "number" ? turnOffset : 0;
 
   function foldMessage(m) {
     if (!m) return;
@@ -790,7 +837,7 @@ function transcriptModel(messages, liveEvents) {
         entries.push({ kind: "reasoning", id: m.id || null, text: p.text || "", at: m.created_at || null });
       } else if (p.type === "tool_call") {
         var result = resultsByCallID.get(p.call_id);
-        entries.push({
+        var toolEntry = {
           kind: "tool",
           id: p.call_id,
           name: p.name || "",
@@ -799,7 +846,9 @@ function transcriptModel(messages, liveEvents) {
           isError: !!(result && result.is_error),
           running: !result,
           at: m.created_at || null,
-        });
+        };
+        entries.push(toolEntry);
+        if (!result) durableRunningTools.set(p.call_id, toolEntry);
       } else if (p.type === "blob") {
         entries.push({ kind: m.role === "user" ? "operator" : "assistant", id: m.id || null, text: "[blob" + (p.media_type ? " " + p.media_type : "") + "]", at: m.created_at || null });
       }
@@ -836,7 +885,29 @@ function transcriptModel(messages, liveEvents) {
         break;
       case "message":
         resetDraft();
+        // A "message" event whose role is "user" durably delivers a prompt
+        // that may have rendered earlier as an optimistic "prompt.queued"
+        // placeholder (below) while it waited its turn. Drop the oldest
+        // still-queued placeholder — FIFO, since the wire carries no shared
+        // id between prompt.queued's queue_id and this event's message id —
+        // so the real, turn-marked message replaces it instead of
+        // duplicating it.
+        if (ev.message && ev.message.role === "user") {
+          for (var qi = 0; qi < entries.length; qi++) {
+            if (entries[qi].kind === "operator" && entries[qi].queued) { entries.splice(qi, 1); break; }
+          }
+        }
         if (ev.message) foldMessage(ev.message);
+        break;
+      case "prompt.queued":
+        // Optimistic-but-honest: this fires only once the server has
+        // durably accepted the composer's prompt_async POST (see
+        // server/journal.go's publishQueue), so it is not a client-side
+        // phantom — it is the earliest the stream itself confirms the
+        // message. Pushed straight into `entries`, not the draft, so an
+        // unrelated resetDraft() elsewhere (e.g. the current turn's own
+        // streaming text completing) cannot make it vanish before delivery.
+        entries.push({ kind: "operator", id: null, text: ev.queue_text || "", queued: true, queueId: ev.queue_id != null ? ev.queue_id : null, at: null });
         break;
       case "text.delta":
         if (!openText) { openText = { kind: "assistant", id: null, text: "", streaming: true }; draft.push(openText); }
@@ -861,13 +932,17 @@ function transcriptModel(messages, liveEvents) {
         break;
       case "tool.end":
         if (ev.tool_call && ev.tool_call.call_id) {
-          var running = openTools.get(ev.tool_call.call_id);
-          // No matching open tool: an unpaired/duplicate end. Ignore it
-          // rather than guessing which fold it belongs to.
+          var callID = ev.tool_call.call_id;
+          var running = openTools.get(callID) || durableRunningTools.get(callID);
+          // No matching open (live-started or durable-running) tool: an
+          // unpaired/duplicate end. Ignore it rather than guessing which
+          // fold it belongs to.
           if (running) {
             running.running = false;
             running.output = partsText(ev.output);
             running.isError = !!ev.is_error;
+            openTools.delete(callID);
+            durableRunningTools.delete(callID);
           }
         }
         break;
@@ -877,6 +952,99 @@ function transcriptModel(messages, liveEvents) {
   }
 
   return entries.concat(draft);
+}
+
+// HISTORY_WINDOW is the number of most-recent durable messages the detail
+// view renders on open; historyWindow's "show earlier" affordance expands
+// past it on request. 50 messages runs roughly 15-25 turns deep for a
+// typical tool-heavy session — enough to orient the operator immediately
+// without laying out an entire long-running transcript by default (see the
+// plan's "no virtualization heroics").
+var HISTORY_WINDOW = 50;
+
+// historyWindow trims a full durable message list down to its most recent
+// `limit` messages (the detail view's default view), or returns it
+// untouched when `limit` is null/undefined/Infinity/>= the list length (the
+// "show earlier" expanded state). hiddenTurns counts the user-role messages
+// among the dropped prefix so the caller can start transcriptModel's turn
+// numbering (its `turnOffset` parameter) where the window begins, instead
+// of every windowed view restarting at "turn 1" for what may be turn 41.
+function historyWindow(messages, limit) {
+  var msgs = Array.isArray(messages) ? messages : [];
+  if (limit == null || !isFinite(limit) || limit >= msgs.length) {
+    return { window: msgs, hiddenCount: 0, hiddenTurns: 0 };
+  }
+  var cut = msgs.length - limit;
+  var hidden = msgs.slice(0, cut);
+  var hiddenTurns = 0;
+  for (var i = 0; i < hidden.length; i++) if (hidden[i] && hidden[i].role === "user") hiddenTurns++;
+  return { window: msgs.slice(cut), hiddenCount: hidden.length, hiddenTurns: hiddenTurns };
+}
+
+// adaptHistory turns GET /session/{id}/message's raw response (an array
+// mixing real messages with messagePlaceholder objects — see
+// server/handlers.go's handleMessages doc comment on why one unmarshalable
+// message must not take the whole endpoint down) into the message list
+// transcriptModel expects, plus a count of entries that had to be dropped
+// because they carry no renderable parts. Never throws on malformed input —
+// a non-array/empty response degrades to an empty, fully-available history
+// rather than crashing the detail view.
+function adaptHistory(raw) {
+  var list = Array.isArray(raw) ? raw : [];
+  var messages = [];
+  var unavailable = 0;
+  for (var i = 0; i < list.length; i++) {
+    var m = list[i];
+    if (m && Array.isArray(m.parts)) messages.push(m);
+    else unavailable++;
+  }
+  return { messages: messages, unavailable: unavailable };
+}
+
+// countKind counts how many transcriptModel entries match the given kind —
+// used for the detail header's tool-call count.
+function countKind(entries, kind) {
+  var list = Array.isArray(entries) ? entries : [];
+  var n = 0;
+  for (var i = 0; i < list.length; i++) if (list[i] && list[i].kind === kind) n++;
+  return n;
+}
+
+// liveMessageCount counts "message" events in a liveEvents buffer. Each one
+// durably adds exactly one message that the next GET /session/{id}/message
+// fetch would also report, so a detail header's msgCount = messages.length
+// + this, without waiting on a re-fetch to stay accurate.
+function liveMessageCount(liveEvents) {
+  var evs = Array.isArray(liveEvents) ? liveEvents : [];
+  var n = 0;
+  for (var i = 0; i < evs.length; i++) if (evs[i] && evs[i].type === "message") n++;
+  return n;
+}
+
+// entryKey derives a stable DOM-reconciliation key for a transcriptModel
+// entry, so the detail view can patch existing nodes in place instead of
+// rebuilding the transcript on every delta (mirrors boardModel's row keying
+// via session id). Turn marks key by turn number; tool folds key by
+// call_id, which stays the same whether the fold is running or resolved,
+// durable or live-started — the same object gets patched, not replaced,
+// when a tool.end lands. Settled messages key by their durable id; the
+// draft's singleton open-text/open-reasoning entries (transcriptModel holds
+// at most one of each) and not-yet-durable queued placeholders key by a
+// fixed per-kind (or per-queue-id) tag instead, since they have no id yet.
+// `index` is a last-resort tiebreaker never expected to matter in practice.
+function entryKey(entry, index) {
+  if (!entry) return "idx:" + index;
+  switch (entry.kind) {
+    case "turn-mark": return "turn:" + entry.turn;
+    case "tool": return "tool:" + entry.id;
+    case "operator":
+    case "assistant":
+    case "reasoning":
+      if (entry.queued) return "queued:" + (entry.queueId != null ? entry.queueId : "idx:" + index);
+      if (entry.id) return "msg:" + entry.id;
+      return "draft:" + entry.kind;
+    default: return "idx:" + index;
+  }
 }
 
 /* TESTABLE-END */
@@ -917,6 +1085,18 @@ var state = {
 // changes nothing for a row touches nothing. See syncBoard.
 var boardDom = { rows: new Map(), gapEl: null, emptyEl: null };
 
+// detailState is non-null exactly while the detail view is showing a
+// session, and holds everything that view needs that isn't already global
+// (state.sessions/activities cover the session's composite/activity fold;
+// this covers the transcript's own history + live tail + DOM keys). A
+// fresh object replaces it wholesale on every enterDetail — never mutated
+// in place across sessions — so a slow-resolving history fetch for a
+// session the operator has since navigated away from can detect that via
+// `loadToken` and discard its result instead of clobbering the new view.
+// See enterDetail/exitDetail/handleDetailEvent.
+var detailState = null;
+var detailLoadCounter = 0;
+
 var baseInput = document.getElementById("base-url");
 var tokenInput = document.getElementById("run-token");
 var connectForm = document.getElementById("connect-form");
@@ -928,8 +1108,13 @@ var connText = document.getElementById("conn-text");
 
 /* ---------- HTTP ---------- */
 
-function api(method, path) {
-  return fetch(state.base + path, { method: method, headers: { Authorization: "Bearer " + state.token } });
+function api(method, path, body) {
+  var opts = { method: method, headers: { Authorization: "Bearer " + state.token } };
+  if (body !== undefined) {
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  return fetch(state.base + path, opts);
 }
 
 /* ---------- identity + connection-state header ---------- */
@@ -1102,6 +1287,10 @@ function handleEvent(ev) {
   if (!prev && state.sessions.has(sid)) prev = seedActivity(state.sessions.get(sid));
   state.activities.set(sid, reduceActivity(prev, ev, Date.now()));
   syncBoard(Date.now());
+  // The board and an open detail view are both fed from this SAME stream
+  // (the plan's "single stream carries ALL sessions' events" — the detail
+  // view filters by session id, never a second connection).
+  if (detailState && sid === detailState.sessionId) handleDetailEvent(ev);
 }
 
 /* ---------- poll: health identity is fetched once at connect (started_at
@@ -1178,7 +1367,430 @@ function scheduleReconnect() {
 function tick() {
   renderUptime(Date.now());
   syncBoard(Date.now());
+  if (detailState) renderDetail();
 }
+
+/* ---------- detail view: history fetch + live tail + tool folds +
+   composer, all against the SAME connect/stream/poll lifecycle above (no
+   second connection — the plan's "single stream carries ALL sessions'
+   events"; this view just filters handleEvent's dispatch by session id, see
+   handleEvent's tail call into handleDetailEvent).
+
+   DOM reconciliation mirrors the board's keyed-row pattern (buildRowEl/
+   updateRowEl/rowSignature/syncBoard): each transcriptModel entry gets a
+   stable key (entryKey, TESTABLE), an element is created once per key and
+   patched in place on every subsequent render whose signature changed —
+   the durable prefix of a long transcript is touched exactly once; only
+   the live tail (streaming text, a running tool fold's ticking elapsed) is
+   ever re-patched on a delta or a 1s tick. ---------- */
+
+var transcriptEl = document.getElementById("transcript");
+
+// toolElapsedText renders a tool fold's elapsed time from LOCALLY observed
+// timestamps only (detailState.toolStartedAt/toolEndedAt, populated by
+// handleDetailEvent as tool.start/tool.end/tool-result events are actually
+// seen on this page) — never fabricated. A fold resolved entirely from the
+// initial history fetch (already running, or already finished, before this
+// page ever watched it) carries no local timing at all and renders no
+// number, same spirit as seedActivity's null startedAt on the board.
+function toolElapsedText(entry, nowMs) {
+  if (!detailState) return "";
+  var start = detailState.toolStartedAt.get(entry.id);
+  if (start == null) return "";
+  var end = entry.running ? nowMs : (detailState.toolEndedAt.get(entry.id) || nowMs);
+  return fmtElapsed(Math.max(0, Math.round((end - start) / 1000)));
+}
+
+function entrySignature(entry, isCurrentTurn, nowMs) {
+  switch (entry.kind) {
+    case "turn-mark":
+      return "turn|" + entry.turn + "|" + (isCurrentTurn ? "current" : (entry.at || ""));
+    case "tool":
+      return "tool|" + entry.running + "|" + entry.output + "|" + entry.isError + "|" + toolElapsedText(entry, nowMs);
+    default:
+      return entry.kind + "|" + (entry.text || "") + "|" + !!entry.streaming;
+  }
+}
+
+function buildTurnMarkEl() {
+  var d = document.createElement("div");
+  d.className = "turn-mark";
+  return d;
+}
+function updateTurnMarkEl(el, entry, isCurrentTurn) {
+  if (isCurrentTurn) { el.textContent = "current turn"; return; }
+  var label = "turn " + entry.turn;
+  if (entry.at) {
+    var ms = Date.parse(entry.at);
+    if (!isNaN(ms)) label += " · " + fmtAgo(Math.max(0, Date.now() - ms));
+  }
+  el.textContent = label;
+}
+
+function buildMsgEl(kind) {
+  var d = document.createElement("div");
+  d.className = "msg" + (kind === "operator" ? " user" : kind === "reasoning" ? " reasoning" : "");
+  var who = document.createElement("span");
+  who.className = "who";
+  who.textContent = kind === "operator" ? "operator" : kind;
+  var body = document.createElement("div");
+  body.className = "body";
+  var p = document.createElement("p");
+  body.append(p);
+  d.append(who, body);
+  d._refs = { p: p, caret: null };
+  return d;
+}
+function updateMsgEl(el, entry) {
+  var r = el._refs;
+  r.p.textContent = entry.text || "";
+  var wantCaret = !!entry.streaming;
+  if (wantCaret && !r.caret) {
+    r.caret = document.createElement("span");
+    r.caret.className = "caret";
+    r.p.append(r.caret);
+  } else if (!wantCaret && r.caret) {
+    r.caret.remove();
+    r.caret = null;
+  }
+}
+
+function buildToolEl() {
+  var d = document.createElement("div");
+  d.className = "msg";
+  var who = document.createElement("span");
+  who.className = "who";
+  who.textContent = "tool";
+  var body = document.createElement("div");
+  body.className = "body";
+  var details = document.createElement("details");
+  details.className = "toolfold";
+  var summary = document.createElement("summary");
+  var ts = document.createElement("div");
+  ts.className = "tool-summary";
+  var cmdEl = document.createElement("span");
+  var hint = document.createElement("span");
+  hint.className = "fold-hint";
+  hint.textContent = "show output";
+  var elapsedEl = document.createElement("span");
+  elapsedEl.className = "t-elapsed";
+  ts.append(cmdEl, hint, elapsedEl);
+  summary.append(ts);
+  var block = document.createElement("div");
+  block.className = "toolblock";
+  details.append(summary, block);
+  body.append(details);
+  d.append(who, body);
+  d._refs = { details: details, cmdEl: cmdEl, elapsedEl: elapsedEl, block: block };
+  return d;
+}
+function updateToolEl(el, entry, elapsedText) {
+  var r = el._refs;
+  r.cmdEl.textContent = toolLabel(entry.name, entry.argsSummary);
+  r.cmdEl.className = entry.running ? "cmd" : "";
+  r.elapsedEl.textContent = entry.running ? ("running" + (elapsedText ? " · " + elapsedText : "")) : elapsedText;
+  var out = entry.output || (entry.running ? "" : (entry.isError ? "(error, no output)" : "(no output)"));
+  r.block.textContent = out;
+  r.block.style.color = entry.isError ? "var(--critical)" : "";
+}
+
+function buildEntryEl(entry) {
+  if (entry.kind === "turn-mark") return buildTurnMarkEl();
+  if (entry.kind === "tool") return buildToolEl();
+  return buildMsgEl(entry.kind);
+}
+function updateEntryEl(el, entry, isCurrentTurn, nowMs) {
+  if (entry.kind === "turn-mark") return updateTurnMarkEl(el, entry, isCurrentTurn);
+  if (entry.kind === "tool") return updateToolEl(el, entry, toolElapsedText(entry, nowMs));
+  return updateMsgEl(el, entry);
+}
+
+function showTranscriptError(msg) {
+  transcriptEl.textContent = "";
+  var d = document.createElement("div");
+  d.className = "transcript-note err";
+  d.textContent = msg;
+  transcriptEl.append(d);
+  if (detailState) { detailState.nodes = new Map(); detailState.order = []; }
+}
+
+// syncTranscript reconciles `entries` (transcriptModel's full current
+// output) against the DOM by key (entryKey): existing nodes are patched in
+// place (only when their signature actually changed) and repositioned only
+// if out of order; nodes for keys no longer present are removed. The last
+// turn-mark is labeled "current turn" instead of a timestamp only while the
+// session's own activity fold (the SAME one the board uses) says it isn't
+// idle — so a turn that finished stops claiming to be current the next
+// time any event for this session ticks a render.
+function syncTranscript(entries, nowMs) {
+  if (!detailState) return;
+  if (!entries.length) {
+    transcriptEl.textContent = "";
+    detailState.nodes = new Map();
+    detailState.order = [];
+    var empty = document.createElement("div");
+    empty.className = "transcript-note";
+    empty.textContent = "no messages yet";
+    transcriptEl.append(empty);
+    return;
+  }
+  if (!detailState.nodes.size) transcriptEl.textContent = ""; // clear "no messages yet"/error note, if present
+
+  var lastTurnMarkIdx = -1;
+  for (var ti = 0; ti < entries.length; ti++) if (entries[ti].kind === "turn-mark") lastTurnMarkIdx = ti;
+  var activity = state.activities.get(detailState.sessionId);
+  var sessionLive = !!activity && activity.phase !== "idle";
+
+  var seen = new Set();
+  var prevEl = null;
+  for (var idx = 0; idx < entries.length; idx++) {
+    var entry = entries[idx];
+    var key = entryKey(entry, idx);
+    seen.add(key);
+    var isCurrentTurn = idx === lastTurnMarkIdx && sessionLive;
+    var node = detailState.nodes.get(key);
+    var isNew = !node;
+    if (isNew) {
+      node = buildEntryEl(entry);
+      detailState.nodes.set(key, node);
+    }
+    var sig = entrySignature(entry, isCurrentTurn, nowMs);
+    if (isNew || node._sig !== sig) {
+      updateEntryEl(node, entry, isCurrentTurn, nowMs);
+      node._sig = sig;
+      // A running tool fold starts open (so the operator watching it land
+      // sees output as it arrives); a completed fold discovered directly
+      // from history starts collapsed. Set only on creation — never forced
+      // open/closed again afterward, so a manual toggle is never overridden
+      // by a later, unrelated patch (better-accessibility: respect the
+      // user's own <details> state).
+      if (isNew && entry.kind === "tool") node._refs.details.open = entry.running;
+    }
+    if (prevEl) { if (prevEl.nextSibling !== node) transcriptEl.insertBefore(node, prevEl.nextSibling); }
+    else if (transcriptEl.firstChild !== node) transcriptEl.insertBefore(node, transcriptEl.firstChild);
+    prevEl = node;
+  }
+  detailState.nodes.forEach(function (node, key) {
+    if (!seen.has(key)) { node.remove(); detailState.nodes.delete(key); }
+  });
+}
+
+function updateShowEarlier(win) {
+  if (!detailState) return;
+  if (win.hiddenCount > 0 && !detailState.expanded) {
+    if (!detailState.showEarlierEl) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "show-earlier";
+      b.addEventListener("click", function () {
+        if (!detailState) return;
+        detailState.expanded = true;
+        renderDetail();
+      });
+      detailState.showEarlierEl = b;
+    }
+    detailState.showEarlierEl.textContent = "Show " + win.hiddenCount + " earlier message" + (win.hiddenCount === 1 ? "" : "s");
+    if (transcriptEl.firstChild !== detailState.showEarlierEl) transcriptEl.insertBefore(detailState.showEarlierEl, transcriptEl.firstChild);
+  } else if (detailState.showEarlierEl && detailState.showEarlierEl.parentNode) {
+    detailState.showEarlierEl.remove();
+  }
+}
+
+function updateDetailHeader(entries, nowMs) {
+  var sid = detailState.sessionId;
+  var msgs = detailState.messages.length + liveMessageCount(detailState.liveEvents);
+  document.getElementById("detail-msgcount").textContent = msgs + (msgs === 1 ? " msg" : " msgs");
+  var toolCalls = countKind(entries, "tool");
+  document.getElementById("detail-toolcount").textContent = toolCalls + (toolCalls === 1 ? " tool call" : " tool calls");
+
+  // Reuse boardModel for this one session so the header's phase/elapsed/
+  // live-ness is drawn from the exact same activity fold the board shows —
+  // "live chip mirroring board phase" by construction, not a second,
+  // possibly-divergent read of the same state.
+  var sessionSummary = state.sessions.get(sid) || { id: sid, state: "idle", queued: 0 };
+  var row = boardModel([sessionSummary], state.activities, nowMs)[0];
+  var turnEl = document.getElementById("detail-turn-elapsed");
+  var chip = document.getElementById("detail-livechip");
+  var chipText = document.getElementById("detail-livechip-text");
+  if (row && row.cssClass !== "idle") {
+    turnEl.textContent = row.elapsed.text;
+    chip.hidden = false;
+    chipText.textContent = row.phase === "tool" ? "tool running" : row.phase;
+  } else {
+    turnEl.textContent = "—";
+    chip.hidden = true;
+  }
+}
+
+// renderDetail is the detail view's whole render pass: pure model recompute
+// (historyWindow + transcriptModel, both cheap/pure — same cost profile as
+// the board's own boardModel-per-tick) followed by keyed DOM reconciliation
+// (syncTranscript), which is where "no full re-render per delta" actually
+// pays off — most calls here touch zero or one DOM node.
+function renderDetail() {
+  if (!detailState) return;
+  var now = Date.now();
+  var win = historyWindow(detailState.messages, detailState.expanded ? null : HISTORY_WINDOW);
+  var entries = transcriptModel(win.window, detailState.liveEvents, win.hiddenTurns);
+  syncTranscript(entries, now);
+  updateShowEarlier(win);
+  updateDetailHeader(entries, now);
+}
+
+// handleDetailEvent is handleEvent's per-session forward for whichever
+// session the detail view currently has open: it records local tool
+// start/end timestamps for honest elapsed rendering (see toolElapsedText),
+// appends the raw event to the live buffer transcriptModel folds, and
+// re-renders.
+function handleDetailEvent(ev) {
+  if (!detailState) return;
+  var now = Date.now();
+  if (ev.type === "tool.start" && ev.tool_call && ev.tool_call.call_id) {
+    detailState.toolStartedAt.set(ev.tool_call.call_id, now);
+  } else if (ev.type === "tool.end" && ev.tool_call && ev.tool_call.call_id) {
+    detailState.toolEndedAt.set(ev.tool_call.call_id, now);
+  } else if (ev.type === "message" && ev.message && ev.message.role === "tool" && Array.isArray(ev.message.parts)) {
+    for (var i = 0; i < ev.message.parts.length; i++) {
+      var p = ev.message.parts[i];
+      if (p && p.type === "tool_result" && p.call_id && !detailState.toolEndedAt.has(p.call_id)) {
+        detailState.toolEndedAt.set(p.call_id, now);
+      }
+    }
+  }
+  detailState.liveEvents.push(ev);
+  renderDetail();
+}
+
+// enterDetail switches to the detail view for `sessionId` and fetches its
+// durable history. Focus moves to the breadcrumb immediately (a screen
+// reader/keyboard user lands at the top of the new view the moment
+// navigation happens, not after the network round trip) — see
+// better-accessibility's focus-management pass in the plan.
+function enterDetail(sessionId) {
+  var loadToken = ++detailLoadCounter;
+  detailState = {
+    sessionId: sessionId, messages: [], unavailable: 0, liveEvents: [], expanded: false,
+    nodes: new Map(), showEarlierEl: null,
+    toolStartedAt: new Map(), toolEndedAt: new Map(),
+    postInFlight: false, loadToken: loadToken,
+  };
+  document.body.classList.add("showing-detail");
+  document.getElementById("detail-sid-full").textContent = sessionId;
+  document.getElementById("crumb-box").textContent = " / " + (hostLabel(state.base) || "—");
+  document.getElementById("back-link").href = route({ base: state.base });
+  document.getElementById("composer-err").textContent = "";
+  document.getElementById("composer-input").value = "";
+  transcriptEl.textContent = "";
+  var loading = document.createElement("div");
+  loading.className = "transcript-note";
+  loading.textContent = "loading history…";
+  transcriptEl.append(loading);
+  document.getElementById("detail-msgcount").textContent = "";
+  document.getElementById("detail-toolcount").textContent = "";
+  document.getElementById("detail-turn-elapsed").textContent = "—";
+  document.getElementById("detail-livechip").hidden = true;
+  document.getElementById("back-link").focus();
+
+  api("GET", "/session/" + encodeURIComponent(sessionId) + "/message").then(function (resp) {
+    if (!detailState || detailState.loadToken !== loadToken) return; // navigated away meanwhile
+    if (!resp.ok) { showTranscriptError("failed to load history (status " + resp.status + ")"); return; }
+    return resp.json().then(function (raw) {
+      if (!detailState || detailState.loadToken !== loadToken) return;
+      var adapted = adaptHistory(raw);
+      detailState.messages = adapted.messages;
+      detailState.unavailable = adapted.unavailable;
+      renderDetail();
+      if (adapted.unavailable > 0) {
+        var note = document.createElement("div");
+        note.className = "transcript-note";
+        note.textContent = adapted.unavailable + " message" + (adapted.unavailable === 1 ? "" : "s") + " could not be rendered";
+        transcriptEl.append(note);
+      }
+    });
+  }).catch(function () {
+    if (detailState && detailState.loadToken === loadToken) showTranscriptError("failed to load history — check the connection");
+  });
+}
+
+// exitDetail returns to the board, moving focus to the row that opened this
+// session if it still exists (better-accessibility: focus return on back
+// navigation), else to the session list itself.
+function exitDetail() {
+  if (!detailState) return;
+  var sid = detailState.sessionId;
+  detailState = null;
+  document.body.classList.remove("showing-detail");
+  var rowEntry = boardDom.rows.get(sid);
+  if (rowEntry) {
+    rowEntry.el.focus();
+  } else {
+    sessionsEl.setAttribute("tabindex", "-1");
+    sessionsEl.focus();
+  }
+}
+
+// applyRoute reads the URL fragment and enters/exits the detail view to
+// match it — the sole navigation path (hashchange-driven, house style):
+// clicking a board row, the back link, browser back/forward, and a direct
+// "#b=...&s=..." deep link all funnel through the SAME hash and this SAME
+// function, called after every hashchange and once more right after a
+// successful connect (a deep link's session id can arrive before this page
+// is even connected to fetch it).
+function applyRoute() {
+  var r = unroute(location.hash);
+  if (r.sessionId && state.running) {
+    if (!detailState || detailState.sessionId !== r.sessionId) enterDetail(r.sessionId);
+  } else if (!r.sessionId && detailState) {
+    exitDetail();
+  }
+}
+window.addEventListener("hashchange", applyRoute);
+
+/* ---------- composer: POST prompt_async; the sent message renders once the
+   stream delivers it (a "message" event when the session was idle and the
+   turn starts immediately, or a "prompt.queued" event when it was busy —
+   transcriptModel handles both, see its "message"/"prompt.queued" cases).
+   The input is disabled ONLY for the duration of the POST itself — queueing
+   a prompt into a busy session is a feature, not a wait state. ---------- */
+
+function setComposerBusy(busy) {
+  document.getElementById("composer-input").disabled = busy;
+  document.getElementById("composer-form").querySelector("button").disabled = busy;
+}
+
+function wireComposer() {
+  var form = document.getElementById("composer-form");
+  var input = document.getElementById("composer-input");
+  var err = document.getElementById("composer-err");
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    if (!detailState || detailState.postInFlight) return;
+    var text = input.value.trim();
+    if (!text) return;
+    err.textContent = "";
+    detailState.postInFlight = true;
+    setComposerBusy(true);
+    var sid = detailState.sessionId;
+    api("POST", "/session/" + encodeURIComponent(sid) + "/prompt_async", { parts: [{ type: "text", text: text }] })
+      .then(function (resp) {
+        return resp.json().catch(function () { return null; }).then(function (body) { return { resp: resp, body: body }; });
+      })
+      .then(function (r) {
+        if (r.resp.ok) { input.value = ""; }
+        else { err.textContent = (r.body && r.body.error) || ("send failed (status " + r.resp.status + ")"); }
+      }, function (netErr) {
+        err.textContent = "send failed: " + ((netErr && netErr.message) || "network error");
+      })
+      .then(function () {
+        if (detailState) detailState.postInFlight = false;
+        setComposerBusy(false);
+      });
+  });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); }
+  });
+}
+wireComposer();
 
 /* ---------- connect / disconnect lifecycle ---------- */
 
@@ -1222,7 +1834,10 @@ function attemptConnect(base, token) {
     document.body.classList.add("connected");
     renderIdentity();
     syncBoard(Date.now());
-    history.replaceState(null, "", route({ base: base }));
+    // Preserve a "#s=<id>" deep link across the connect-time replaceState —
+    // a bookmarked/shared session URL must still resolve to that session
+    // once connected, not be silently dropped back to the bare board route.
+    history.replaceState(null, "", route({ base: base, sessionId: unroute(location.hash).sessionId }));
 
     state.running = true;
     clearInterval(state.pollTimer);
@@ -1231,6 +1846,7 @@ function attemptConnect(base, token) {
     state.tickTimer = setInterval(tick, TICK_MS);
     setConnState("reconnecting"); // "connecting…" reuses the honest reconnecting label until the stream opens
     connectStream();
+    applyRoute(); // resolves a "#s=<id>" deep link into the detail view now that we're connected
     return true;
   }, function (err) {
     connectErr.textContent = (err && err.userMessage) || "connect failed";
@@ -1254,6 +1870,13 @@ function forceDisconnect(reason) {
   document.body.classList.remove("connected");
   setConnState("disconnected");
   if (reason) connectErr.textContent = reason;
+  // A disconnected instance can't serve a live detail view (history fetch
+  // and the composer both need an authed connection) — drop back to the
+  // board rather than leave a detail view showing frozen, increasingly
+  // stale data. The URL fragment is left alone so a subsequent reconnect
+  // (same token, corrected token, or the instance coming back) can resolve
+  // straight back into it via applyRoute.
+  if (detailState) exitDetail();
 }
 
 /* ---------- bootstrap ---------- */
