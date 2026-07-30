@@ -3099,10 +3099,11 @@ function forceDisconnect(reason) {
     // try immediately with whatever token is available (autoToken, or ""
     // when none — still worth trying: an Unauthenticated loopback box
     // accepts an empty Authorization header exactly like a correct
-    // bearer token everywhere else). Success flips body.classList to
-    // "connected", which the existing `body.connected #connect-panel {
-    // display: none }` rule already hides entirely — "no connect panel,
-    // no fields, nothing typed" falls out of THAT rule, not a new one.
+    // bearer token everywhere else). The panel is display:none by default
+    // (see the #connect-panel rule) and this path never adds show-connect,
+    // so it stays hidden the whole time — "no connect panel, no fields,
+    // nothing typed" — and never paints during the in-flight probe. Only a
+    // FAILED attempt (below) adds show-connect to reveal the token panel.
     introEl.textContent = "Connecting to " + plan.base + "…";
     baseInput.value = plan.base;
     tokenInput.value = plan.autoToken || "";
