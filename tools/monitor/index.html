@@ -991,9 +991,27 @@ function boardModel(sessions, activities, nowMs) {
 // `pendingSends` (a 4th, optional input — an array of {text, clientId}) is
 // the composer's own optimistic state: text the operator has submitted but
 // which has NOT yet round-tripped as a real durable/stream operator message.
-// Folded, purely, as TRAILING {kind:"operator", pendingSend:true, clientId}
-// entries — trailing because a pending send is always the newest thing on
-// the page, regardless of where any currently-open turn's own content sits.
+// Folded, purely, as {kind:"operator", pendingSend:true, clientId} entries,
+// positioned one of two ways depending on whether it OPENS a new turn or is
+// QUEUED behind one already running (see the turnMarkIdx/
+// turnAlreadyHasOperator block near the end of this function for the exact
+// mechanics):
+//   - OPENING (the idle-send case): a live "session.status":"busy" has
+//     already turn-marked a new turn, but no operator entry has landed for
+//     it yet (durable or prompt.queued) — this pendingSend IS that turn's
+//     own message, just not confirmed yet, so it is spliced right after
+//     that turn-mark, BEFORE the draft (the "Thinking…" indicator/streaming
+//     assistant or reasoning text). Getting this wrong — appending
+//     unconditionally at the very end, trailing the draft — was a real,
+//     visually-confirmed bug: submitting into an idle session briefly
+//     rendered the response ABOVE the operator's own just-sent message,
+//     snapping to the correct order only once the turn durably landed.
+//   - QUEUED: the currently open turn already has its own operator entry
+//     shown (it's mid-stream, unrelated to this pendingSend), so this one
+//     trails at the very end — the newest thing on the page, regardless of
+//     where that turn's own content sits, exactly like the OLD
+//     unconditional behavior above, just now scoped to the case it's
+//     actually correct for.
 // Deduped against TWO candidates, matched by CONTAINMENT rather than strict
 // equality (candidateText.indexOf(pendingText) !== -1), because a queued
 // prompt's eventual delivery is template-wrapped by the engine ("OPERATOR
@@ -1143,9 +1161,13 @@ function transcriptModel(messages, liveEvents, turnOffset, pendingSends) {
       var p = parts[i];
       if (!p) continue;
       if (p.type === "text") {
-        entries.push({ kind: m.role === "user" ? "operator" : "assistant", id: m.id || null, text: p.text || "", at: m.created_at || null });
+        // partIndex: this part's own index within m.parts — see entryKey's
+        // "operator"/"assistant"/"reasoning" case for why a text and a
+        // reasoning part of the SAME message (m.id shared by both) need
+        // this to avoid colliding on one DOM node.
+        entries.push({ kind: m.role === "user" ? "operator" : "assistant", id: m.id || null, partIndex: i, text: p.text || "", at: m.created_at || null });
       } else if (p.type === "reasoning") {
-        entries.push({ kind: "reasoning", id: m.id || null, text: p.text || "", at: m.created_at || null });
+        entries.push({ kind: "reasoning", id: m.id || null, partIndex: i, text: p.text || "", at: m.created_at || null });
       } else if (p.type === "tool_call") {
         var result = resultsByCallID.get(p.call_id);
         var toolEntry = {
@@ -1161,7 +1183,7 @@ function transcriptModel(messages, liveEvents, turnOffset, pendingSends) {
         entries.push(toolEntry);
         if (!result) durableRunningTools.set(p.call_id, toolEntry);
       } else if (p.type === "blob") {
-        entries.push({ kind: m.role === "user" ? "operator" : "assistant", id: m.id || null, text: "[blob" + (p.media_type ? " " + p.media_type : "") + "]", at: m.created_at || null });
+        entries.push({ kind: m.role === "user" ? "operator" : "assistant", id: m.id || null, partIndex: i, text: "[blob" + (p.media_type ? " " + p.media_type : "") + "]", at: m.created_at || null });
       }
     }
   }
@@ -1388,6 +1410,54 @@ function transcriptModel(messages, liveEvents, turnOffset, pendingSends) {
   // "message"-event path's single deferred check.
   if (pendingRemaining.length) reconcilePendingSend(lastUserMessageText);
 
+  // Does the CURRENT open turn already have its own operator entry showing
+  // (durable, via foldMessage's user-role branch, or a "prompt.queued"
+  // placeholder — both push kind:"operator" straight into `entries`)? Scan
+  // backward from the end of `entries`, stopping at (not including) the
+  // most recent turn-mark — same backward-scan shape as
+  // turnHasContentSinceMark just above, but checking for "operator"
+  // specifically, since that is what distinguishes the two pendingSend
+  // scenarios documented on this function's own pendingSends comment:
+  //   - IDLE-send: a live "session.status":"busy" already pushed a new
+  //     turn-mark (liveTurnOpen), but the user message that would carry an
+  //     "operator" entry for THIS turn hasn't landed yet — the pendingSend
+  //     IS that message, just not durable/confirmed yet. turnMarkIdx points
+  //     at that mark with turnAlreadyHasOperator still false.
+  //   - BUSY-send (queued behind a running turn): the running turn's own
+  //     operator entry already landed (real message or prompt.queued) well
+  //     before this NEW pendingSend was even added — turnAlreadyHasOperator
+  //     is true, so this pendingSend belongs to some turn that hasn't
+  //     opened yet, not the one currently running.
+  // If `entries` carries no turn-mark at all (nothing has ever opened),
+  // turnMarkIdx stays -1 and there is nothing to "open" — a pendingSend
+  // here is the very first thing on the page either way, so trailing vs.
+  // leading is unobservable and the code below leaves it to the trailing
+  // path unchanged.
+  var turnMarkIdx = -1;
+  var turnAlreadyHasOperator = false;
+  for (var bi = entries.length - 1; bi >= 0; bi--) {
+    if (entries[bi].kind === "turn-mark") { turnMarkIdx = bi; break; }
+    if (entries[bi].kind === "operator") turnAlreadyHasOperator = true;
+  }
+  // Only the FIRST (oldest, FIFO — pendingRemaining is scanned/shifted in
+  // submission order throughout this function) still-outstanding
+  // pendingSend can ever be the one that opened the CURRENT turn; a second,
+  // later pendingSend queued up behind it belongs to a turn this fold
+  // hasn't opened yet, so it stays in the ordinary trailing group either
+  // way (see pendingSendEntries below).
+  var openingPendingSend = turnMarkIdx !== -1 && !turnAlreadyHasOperator && pendingRemaining.length
+    ? pendingRemaining.shift()
+    : null;
+  // Spliced right after the turn-mark it opens — i.e. appended to `entries`
+  // itself, BEFORE the draft/pending-indicator/trailing groups below — so
+  // the render order is [turn-mark][operator (pending)][Thinking…/
+  // streaming draft], matching what a real idle-session send must look
+  // like: the operator's own message precedes the response it triggered,
+  // never the other way around.
+  var openedEntries = openingPendingSend
+    ? entries.concat([{ kind: "operator", id: null, text: openingPendingSend.text, pendingSend: true, clientId: openingPendingSend.clientId, at: null }])
+    : entries;
+
   // The pending "Thinking…" indicator, if this turn is genuinely still open
   // (turnBusy) and has shown nothing yet (turnHasContentSinceMark(true) is
   // false) — computed fresh from the fold, not from any externally-supplied
@@ -1399,14 +1469,16 @@ function transcriptModel(messages, liveEvents, turnOffset, pendingSends) {
   var pendingIndicator = turnBusy && !turnHasContentSinceMark(true) ? [{ kind: "pending" }] : [];
 
   // Trailing pendingSend entries: whatever's left in pendingRemaining after
-  // every reconciliation above had its chance to match one away. Always
-  // last — the newest thing on the page, regardless of any currently-open
-  // turn's own content above it.
+  // every reconciliation above (including the opening splice just above)
+  // had its chance to match/place one. Always last — the newest thing on
+  // the page, regardless of any currently-open turn's own content above
+  // it — this is the QUEUED case: a send made while a turn that already has
+  // its own operator entry is still running.
   var pendingSendEntries = pendingRemaining.map(function (p) {
     return { kind: "operator", id: null, text: p.text, pendingSend: true, clientId: p.clientId, at: null };
   });
 
-  return entries.concat(draft).concat(pendingIndicator).concat(pendingSendEntries);
+  return openedEntries.concat(draft).concat(pendingIndicator).concat(pendingSendEntries);
 }
 
 // HISTORY_WINDOW is the number of most-recent durable messages the detail
@@ -1482,7 +1554,20 @@ function liveMessageCount(liveEvents) {
 // via session id). Turn marks key by turn number; tool folds key by
 // call_id, which stays the same whether the fold is running or resolved,
 // durable or live-started — the same object gets patched, not replaced,
-// when a tool.end lands. Settled messages key by their durable id; the
+// when a tool.end lands. Settled messages key by their durable id PLUS
+// partIndex — NOT id alone: a single durable message can carry MULTIPLE
+// renderable parts (foldMessage's own loop — e.g. a Reasoning part followed
+// by a Text part, both stamped with the SAME m.id), so keying by id alone
+// collided the reasoning entry and the assistant entry from one message
+// onto the SAME map slot. syncTranscript's reuse-by-key then patched
+// whichever of the two entries it folded LAST onto the node the OTHER one
+// built — updateMsgEl only ever touches the body/caret, never the "who"
+// label or the kind-derived CSS class set at buildMsgEl time — so the node
+// kept its first entry's label (e.g. "reasoning") while showing the last
+// entry's text (e.g. the assistant reply): a real, visually-confirmed bug,
+// not hypothetical (a reasoning part always precedes a text part in
+// foldMessage's own part loop, so the label lost this race deterministically
+// every time, not just occasionally). partIndex disambiguates the two; the
 // draft's singleton open-text/open-reasoning entries (transcriptModel holds
 // at most one of each) and not-yet-durable queued placeholders key by a
 // fixed per-kind (or per-queue-id) tag instead, since they have no id yet.
@@ -1525,7 +1610,7 @@ function entryKey(entry, index) {
       // happening never to collide.
       if (entry.pendingSend) return "pendingSend:" + entry.clientId;
       if (entry.queued) return "queued:" + (entry.queueId != null ? entry.queueId : "idx:" + index);
-      if (entry.id) return "msg:" + entry.id;
+      if (entry.id) return "msg:" + entry.id + ":" + (typeof entry.partIndex === "number" ? entry.partIndex : 0);
       return "draft:" + entry.kind;
     default: return "idx:" + index;
   }

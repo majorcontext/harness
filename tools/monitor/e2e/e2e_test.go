@@ -39,7 +39,13 @@ import (
 //     SYNCHRONOUSLY, before the POST even resolves, settling to exactly one
 //     entry once the real message lands; a real, currently-running turn
 //     with no content yet shows a quiet "Thinking…" pending indicator,
-//     dismissed the instant real streaming content arrives;
+//     dismissed the instant real streaming content arrives; an idle-send's
+//     optimistic operator entry precedes — in actual DOM order, not merely
+//     "both exist" — that turn's own pending indicator and streaming
+//     assistant reply, never the other way around;
+//   - a durable message's reasoning part and text part (bundled together
+//     ahead of a real tool call) render as two distinct, correctly-labeled
+//     entries — never merged onto one DOM node showing the wrong label;
 //   - killing the box's HTTP layer server-side flips the header to
 //     "reconnecting…", and restarting it resumes the stream;
 //   - a real provider stream failure renders a critical transcript error

@@ -231,6 +231,9 @@ function operatorTexts(doc) {
 function assistantTexts(doc) {
   return [...doc.querySelectorAll("#transcript .msg:not(.user):not(.reasoning) .body p")].map((n) => n.textContent);
 }
+function reasoningTexts(doc) {
+  return [...doc.querySelectorAll("#transcript .msg.reasoning .body p")].map((n) => n.textContent);
+}
 function turnMarkCount(doc) {
   return doc.querySelectorAll("#transcript .turn-mark").length;
 }
@@ -385,6 +388,22 @@ async function main() {
   assert.ok(runningFold.querySelector(".t-elapsed").textContent.startsWith("running"), "fold summary says running: " + runningFold.querySelector(".t-elapsed").textContent);
   console.error("PASS: a running tool fold is visible, open, while the real tool executes");
 
+  // Reasoning-label regression (task gap c): stub.go's toolTurns bundles a
+  // Reasoning part ("checking the fold") and a Text part ("on it") into ONE
+  // durable message (same message id) ahead of the real tool call — by the
+  // time the board observed the "tool" phase above, that message has
+  // already landed durably. entryKey used to key BOTH parts by that shared
+  // message id alone, colliding them onto ONE syncTranscript DOM node:
+  // whichever part folded LAST (the text/assistant part, per foldMessage's
+  // own part order) overwrote the node's body, while the node's class/
+  // label stayed whatever the FIRST part (reasoning) had set — so the
+  // "REASONING"-labeled box ended up showing the assistant's OWN reply
+  // text, and no separate assistant entry existed for it at all. This is
+  // the actual DOM-visible symptom the video showed.
+  assert.deepEqual(reasoningTexts(doc), ["checking the fold"], "the reasoning entry must show the REAL reasoning text, not the assistant's reply: " + JSON.stringify(reasoningTexts(doc)));
+  assert.ok(assistantTexts(doc).includes("on it"), "the assistant/text part of the SAME message must render as its OWN separate entry, not be swallowed into the reasoning node: " + JSON.stringify(assistantTexts(doc)));
+  console.error("PASS: a durable message's reasoning part and text part render as two distinct, correctly-labeled entries, not merged onto one DOM node");
+
   await waitIdle(liveToolID, 15);
   await waitFor(() => !runningFold.querySelector(".t-elapsed").textContent.startsWith("running"), { label: "fold settles to completed live" });
   assert.equal(runningFold.open, true, "a fold must never be force-collapsed by a later patch, per index.html's syncTranscript contract");
@@ -491,6 +510,53 @@ async function main() {
 
   await waitIdle(pendID, 15);
   console.error("PASS: pending-indicator turn completed cleanly");
+
+  // ---- 4d-4. DOM ordering regression (task gap: the PRIMARY monitor bug
+  // this fix addresses) — an idle-session composer send's own optimistic
+  // operator entry (detailState.pendingSends, folded by transcriptModel's
+  // 4th argument) must render BEFORE that turn's own live draft: the
+  // "Thinking…" indicator, and the streaming assistant reply that follows
+  // it. Driven through the REAL composer (not promptAsync — pendingSends is
+  // populated only by the page's own submit handler), against
+  // ProvPendingThink's deterministic delay (same reasoning as 4d-3 above)
+  // so this observes the genuinely-open, not-yet-ended window rather than
+  // racing a near-instant scripted reply. The pre-fix code unconditionally
+  // appended EVERY pendingSend at the very end of transcriptModel's output
+  // (entries + draft + pendingIndicator + pendingSends, always in that
+  // order, with no opening/queued distinction) — recorded against the real
+  // running app, this exact scenario showed the "Thinking…" indicator, then
+  // the streaming reply, ABOVE the operator's own just-sent message,
+  // snapping to the correct order only once the turn durably landed. Not
+  // just "both entries exist" — the DOM ORDER is the assertion. ----
+  const orderID = await createSession(ProvPendingThink);
+  const orderRow = await waitFor(() => findRow(doc, orderID), { label: "board row for " + orderID });
+  await openDetailViaClick(w, doc, orderRow);
+  const orderText = "idle-send DOM order check";
+  composerInput.value = orderText;
+  composerForm.dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
+
+  const pendingIndicatorEl = await waitFor(() => doc.querySelector("#transcript .pending-indicator"), { timeoutMs: 3000, label: "the Thinking… indicator appears for the DOM-order check" });
+  const orderOperatorEl = [...doc.querySelectorAll("#transcript .msg.user .body p")].find((p) => p.textContent === orderText);
+  assert.ok(orderOperatorEl, "the operator's own optimistic entry must be in the DOM: " + JSON.stringify(operatorTexts(doc)));
+  const posVsPending = orderOperatorEl.compareDocumentPosition(pendingIndicatorEl);
+  assert.ok(
+    posVsPending & w.Node.DOCUMENT_POSITION_FOLLOWING,
+    "the operator entry must precede the Thinking… indicator in DOM order — the turn's response must render below the operator's own message, never above it"
+  );
+  console.error("PASS: an idle-send's optimistic operator entry precedes its own turn's pending indicator in DOM order");
+
+  await waitFor(() => assistantTexts(doc).some((t) => t.includes(PENDING_THINK_REPLY)), { timeoutMs: 4000, label: "assistant reply streams in for the DOM-order check" });
+  const streamingP = [...doc.querySelectorAll("#transcript .msg:not(.user):not(.reasoning) .body p")].find((p) => p.textContent.includes(PENDING_THINK_REPLY));
+  assert.ok(streamingP, "streaming assistant text must be in the DOM");
+  const posVsStreaming = orderOperatorEl.compareDocumentPosition(streamingP);
+  assert.ok(
+    posVsStreaming & w.Node.DOCUMENT_POSITION_FOLLOWING,
+    "the operator entry must also precede the turn's streaming assistant reply, not just the pending indicator that preceded it"
+  );
+  console.error("PASS: the operator entry also precedes the turn's streaming assistant reply in DOM order");
+
+  await waitIdle(orderID, 15);
+  console.error("PASS: idle-send DOM order check turn completed cleanly");
 
   // ---- 4e. Composer send against an unknown session: real non-2xx error
   // text surfaces inline. ----

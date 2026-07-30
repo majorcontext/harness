@@ -1321,6 +1321,63 @@ test("transcriptModel: a pendingSend queued behind a DIFFERENT, currently-runnin
   assert.equal(entries[3].text, "also do B");
 });
 
+/* ---------- transcriptModel: idle-send ordering (BUG FIX, RED-FIRST) — a
+   pendingSend that OPENS a new turn (the idle-session composer send: no
+   durable/prompt.queued operator entry exists for the turn a live
+   session.status busy just marked) must render its own operator entry
+   BEFORE that turn's own live draft (the "Thinking…" pending indicator, or
+   streaming assistant/reasoning text) — never after. The pre-fix code
+   unconditionally appended EVERY pendingSend at the very end of
+   transcriptModel's output (entries + draft + pendingIndicator +
+   pendingSends, in that fixed order, with no opening/queued distinction),
+   so an idle-send's own operator entry rendered BELOW the turn it had just
+   opened: recorded against the real running app, submitting into an idle
+   session showed the "Thinking…" indicator ABOVE the operator's own
+   just-sent message, then the streaming assistant text did too, snapping
+   to the correct order only once the turn durably landed — a real,
+   visually-confirmed bug, not hypothetical. Contrast with the
+   "queued behind a DIFFERENT, currently-running turn" test just above:
+   that scenario's turn already has its own durable operator entry
+   ("run turn A") before the pendingSend is even added, so it correctly
+   stays queued/trailing — these two tests together are what distinguishes
+   "opens the turn" from "queued behind it". ---------- */
+
+test("transcriptModel: an idle-send pendingSend precedes the turn's own pending indicator (no content streamed yet)", () => {
+  const evs = [{ type: "session.status", status: "busy" }];
+  const entries = transcriptModel([], evs, 0, [{ text: "hello there", clientId: "c1" }]);
+  const kinds = reify(entries.map(e => e.kind));
+  assert.deepEqual(kinds, ["turn-mark", "operator", "pending"], "the operator entry must open the turn, before the pending indicator: " + JSON.stringify(kinds));
+  assert.equal(entries[1].pendingSend, true);
+  assert.equal(entries[1].text, "hello there");
+});
+
+test("transcriptModel: an idle-send pendingSend precedes the turn's own streaming draft (text.delta already arriving)", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "text.delta", text: "working on it" },
+  ];
+  const entries = transcriptModel([], evs, 0, [{ text: "hello there", clientId: "c1" }]);
+  const kinds = reify(entries.map(e => e.kind));
+  const operatorIdx = kinds.indexOf("operator");
+  const assistantIdx = kinds.indexOf("assistant");
+  assert.ok(operatorIdx !== -1 && assistantIdx !== -1, "both entries must be present: " + JSON.stringify(kinds));
+  assert.ok(operatorIdx < assistantIdx, "the operator entry must precede the streaming assistant draft, not follow it: " + JSON.stringify(kinds));
+  assert.equal(entries[operatorIdx].pendingSend, true);
+  assert.equal(entries[assistantIdx].streaming, true);
+});
+
+test("transcriptModel: only the FIRST (oldest) unmatched pendingSend can open the current turn; a second stays trailing", () => {
+  const evs = [{ type: "session.status", status: "busy" }];
+  const entries = transcriptModel([], evs, 0, [
+    { text: "first send", clientId: "c1" },
+    { text: "second send", clientId: "c2" },
+  ]);
+  const kinds = reify(entries.map(e => e.kind));
+  assert.deepEqual(kinds, ["turn-mark", "operator", "pending", "operator"], JSON.stringify(kinds));
+  assert.equal(entries[1].clientId, "c1", "the oldest pendingSend opens the turn");
+  assert.equal(entries[3].clientId, "c2", "the newer one still trails, unopened");
+});
+
 /* ---------- historyWindow ---------- */
 
 test("HISTORY_WINDOW is exported with the documented value", () => {
@@ -1398,12 +1455,69 @@ test("entryKey: turn marks key by turn number; tool folds key by call_id regardl
   assert.equal(entryKey({ kind: "tool", id: "c1", running: false }, 0), "tool:c1");
 });
 
-test("entryKey: settled messages key by durable id; drafts and queued placeholders key without one", () => {
-  assert.equal(entryKey({ kind: "assistant", id: "m1" }, 0), "msg:m1");
+test("entryKey: settled messages key by durable id + partIndex; drafts and queued placeholders key without one", () => {
+  // partIndex defaults to 0 when absent (a message with exactly one
+  // renderable part, e.g. text-only — the overwhelmingly common case), so a
+  // bare {id} still keys predictably.
+  assert.equal(entryKey({ kind: "assistant", id: "m1" }, 0), "msg:m1:0");
   assert.equal(entryKey({ kind: "assistant", id: null, streaming: true }, 0), "draft:assistant");
   assert.equal(entryKey({ kind: "reasoning", id: null, streaming: true }, 0), "draft:reasoning");
   assert.equal(entryKey({ kind: "operator", id: null, queued: true, queueId: 7 }, 0), "queued:7");
   assert.equal(entryKey({ kind: "operator", id: null, queued: true, queueId: null }, 2), "queued:idx:2");
+});
+
+/* ---------- entryKey / transcriptModel: multi-part durable messages must
+   not collide on one DOM key (BUG FIX, RED-FIRST — see this file's own
+   "reasoning mislabeled ASSISTANT" investigation). A single durable
+   assistant message commonly carries BOTH a reasoning part and a text
+   part (foldMessage's own parts loop), stamped with the SAME message id.
+   Keying solely by that id (the pre-fix behavior — see the previous test's
+   "msg:m1" vs "msg:m1:0" diff) collided the reasoning entry and the text/
+   assistant entry from ONE message onto the SAME syncTranscript DOM node:
+   whichever entry folded LAST overwrote the node's body text via
+   updateMsgEl, while the node's CSS class and "who" label — set once, at
+   buildMsgEl time, for whichever entry claimed the key FIRST — never
+   changed thereafter. Since foldMessage always folds a Reasoning part
+   before its sibling Text part (message part order), this meant a turn's
+   REASONING-labeled box always ended up showing the ASSISTANT's own reply
+   text once durable, permanently — visually confirmed against the real
+   running app (recorded on video), not hypothetical: mid-stream (the
+   draft's separate openText/openReasoning objects, which never shared a
+   key to begin with) rendered correctly, then COLLAPSED into the wrong
+   label the instant the durable message landed. partIndex — the part's own
+   index within m.parts — disambiguates the two. ---------- */
+
+test("entryKey: a durable message's reasoning part and its sibling text part must not collide on one key", () => {
+  const m = {
+    id: "m2", role: "assistant", created_at: "t",
+    parts: [{ type: "reasoning", text: "checking the fold" }, { type: "text", text: "on it" }],
+  };
+  const entries = transcriptModel([m], []);
+  const reasoningEntry = entries.find(e => e.kind === "reasoning");
+  const assistantEntry = entries.find(e => e.kind === "assistant");
+  assert.ok(reasoningEntry && assistantEntry, "both parts must fold into their own entries: " + JSON.stringify(reify(entries)));
+  // The fold itself (transcriptModel's pure entries array) was never wrong
+  // — each part always carried its own correct kind/text. The bug lived
+  // entirely in entryKey/syncTranscript's DOM reconciliation, which this
+  // assertion is the one that actually exercises.
+  assert.equal(reasoningEntry.text, "checking the fold");
+  assert.equal(assistantEntry.text, "on it");
+  assert.notEqual(
+    entryKey(reasoningEntry, entries.indexOf(reasoningEntry)),
+    entryKey(assistantEntry, entries.indexOf(assistantEntry)),
+    "the reasoning and text/assistant entries of one durable message must key differently, or syncTranscript merges them onto one DOM node (wrong label, clobbered text): " +
+      JSON.stringify([reasoningEntry, assistantEntry])
+  );
+});
+
+test("entryKey: a live 'message' event's reasoning+text parts key uniquely too, not just durable-history ones", () => {
+  const evs = [{ type: "message", message: {
+    id: "m9", role: "assistant", created_at: "t",
+    parts: [{ type: "reasoning", text: "hmm" }, { type: "text", text: "here goes" }],
+  } }];
+  const entries = transcriptModel([], evs);
+  const keys = entries.map((e, i) => entryKey(e, i));
+  assert.equal(new Set(keys).size, keys.length, "no two entries may share a DOM-reconciliation key: " + JSON.stringify(keys));
 });
 
 /* ---------- turnMarkAgoText (NIT fix: settled turn-marks' "· Xm ago" used
