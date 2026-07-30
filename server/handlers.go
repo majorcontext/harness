@@ -458,6 +458,25 @@ func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleRoot 302-redirects the bare root path to the canonical monitor URL
+// at /monitor, so visiting a box's host with no path lands on the monitor
+// instead of a bare 404. Registered only when Options.MonitorPage is non-nil
+// (see routes(), which anchors it with the GET /{$} pattern so it matches "/"
+// EXACTLY — a plain "GET /" would be a catch-all swallowing every otherwise-
+// unmatched path's 404 and redirecting it here instead). A pure-API box that
+// never sets MonitorPage keeps / as a clean 404, not a redirect to a route it
+// doesn't serve. Unauthenticated and outside s.auth, same as handleMonitor:
+// the redirect carries no secret, and a browser preserves any #t=<token>
+// fragment across the 302 (the target carries none of its own — see
+// tools/monitor's capability-URL handling), so the capability flow still
+// works from the bare host. 302 (not 301) keeps / uncacheable as a permanent
+// alias: /monitor is the one canonical URL (printed by monitorTerminalHint,
+// carried in the capability link), and / stays a convenience we're free to
+// repurpose later.
+func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/monitor", http.StatusFound)
+}
+
 // handleGoroutines writes the full, all-goroutine stack dump (the exact
 // text Go's default SIGQUIT handler prints) as a diagnostic HTTP surface —
 // for a box wedged badly enough that even exec is awkward (or unavailable,

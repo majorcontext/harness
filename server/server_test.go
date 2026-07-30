@@ -642,21 +642,70 @@ func TestMonitorPageServed(t *testing.T) {
 	}
 }
 
+// TestMonitorRootRedirects covers the bare-host convenience: with
+// Options.MonitorPage set, GET / (the root path only) 302-redirects to the
+// canonical /monitor, unauthenticated (no Authorization header), so visiting a
+// box's host with no path lands on the monitor. The {$}-anchored route must
+// NOT be a catch-all — an unmatched non-root path still 404s, it does not
+// redirect here.
+func TestMonitorRootRedirects(t *testing.T) {
+	dir := t.TempDir()
+	const page = "<!doctype html><html><body>fake monitor page</body></html>"
+	srv := newServer(t, dir, &scriptedProvider{name: "test"}, 0, func(o *Options) {
+		o.MonitorPage = []byte(page)
+	})
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+
+	// Assert the redirect itself rather than following it through.
+	client := ts.Client()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	req, _ := http.NewRequest("GET", ts.URL+"/", nil) // no auth header
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("GET / status = %d, want 302 to /monitor", resp.StatusCode)
+	}
+	if loc := resp.Header.Get("Location"); loc != "/monitor" {
+		t.Errorf("GET / Location = %q, want %q", loc, "/monitor")
+	}
+
+	// The {$} anchor must keep root from becoming a catch-all: an unmatched
+	// path still 404s, it is not redirected to the monitor.
+	req2, _ := http.NewRequest("GET", ts.URL+"/no-such-path", nil)
+	resp2, err := client.Do(req2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Errorf("GET /no-such-path status = %d, want 404 (the root redirect must not be a catch-all)", resp2.StatusCode)
+	}
+}
+
 // TestMonitorPageNotConfigured guards the "existing deployments unchanged"
 // contract: a server that never sets Options.MonitorPage (the zero value,
 // same as every server.New call before this field existed) must 404 at
 // GET /monitor exactly as it always has — no route registered at all, not
-// merely an empty 200.
+// merely an empty 200 — and the bare root stays a 404 too (the root redirect
+// is registered under the SAME MonitorPage guard, so a pure-API box never
+// redirects / to a route it doesn't serve).
 func TestMonitorPageNotConfigured(t *testing.T) {
 	h := newHarness(t, &scriptedProvider{name: "test"})
-	req, _ := http.NewRequest("GET", h.ts.URL+"/monitor", nil)
-	resp, err := h.ts.Client().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("GET /monitor status = %d, want 404 when MonitorPage is not configured", resp.StatusCode)
+	for _, path := range []string{"/monitor", "/"} {
+		req, _ := http.NewRequest("GET", h.ts.URL+path, nil)
+		resp, err := h.ts.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("GET %s status = %d, want 404 when MonitorPage is not configured", path, resp.StatusCode)
+		}
 	}
 }
 
