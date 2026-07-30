@@ -669,7 +669,11 @@ with no Go-side handler of its own.
   offers its own copy same-origin, at `GET /monitor` — by default
   `http://localhost:4096/monitor` (the port follows `-addr`, default
   `localhost:4096`; the exact URL, with any `#t=<token>` capability suffix, is
-  printed to the terminal on startup — `monitorTerminalHint`). `tools/monitor`
+  printed to the terminal on startup — `monitorTerminalHint`). The bare root
+  is a convenience redirect: `GET /` 302s to `/monitor` (via the `GET /{$}`
+  route — `{$}`-anchored to the root path only, never a catch-all — registered
+  under the same `MonitorPage` guard, so a pure-API box keeps `/` a clean 404).
+  `tools/monitor`
   (package `monitor`, `embed.go`) `//go:embed`s the exact committed
   `index.html`; `cmd/harness`'s `serveCmd` wires it into
   `server.Options.MonitorPage`, which the server serves unauthenticated

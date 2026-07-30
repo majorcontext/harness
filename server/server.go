@@ -658,6 +658,11 @@ func (s *Server) routes() {
 	if s.opts.MonitorPage != nil {
 		mux.HandleFunc("GET /monitor", s.handleMonitor)
 		mux.HandleFunc("GET /monitor/", s.handleMonitor)
+		// Bare root -> the monitor. The {$} anchor matches "/" EXACTLY; a
+		// plain "GET /" would be a catch-all matching every otherwise-
+		// unmatched path, turning the whole API's 404s into redirects. See
+		// handleRoot.
+		mux.HandleFunc("GET /{$}", s.handleRoot)
 	}
 	s.mux = mux
 }
