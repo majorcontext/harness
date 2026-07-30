@@ -45,6 +45,7 @@ const {
   toolLabel,
   fmtElapsed,
   fmtAgo,
+  hostLabel,
   route,
   unroute,
   QUIET_MS,
@@ -191,6 +192,21 @@ test("fmtAgo renders a coarse ago string", () => {
   assert.equal(fmtAgo((60 * 60 + 3 * 60) * 1000), "1h 3m ago");
   assert.equal(fmtAgo(2 * 60 * 60 * 1000), "2h ago");
   assert.equal(fmtAgo(null), "—");
+});
+
+/* ---------- hostLabel ---------- */
+
+test("hostLabel strips the scheme and cuts at the first path/query/fragment", () => {
+  assert.equal(hostLabel("http://localhost:4096"), "localhost:4096");
+  assert.equal(hostLabel("https://box.example.com/"), "box.example.com");
+  assert.equal(hostLabel("http://127.0.0.1:4096/session?x=1#y"), "127.0.0.1:4096");
+});
+
+test("hostLabel tolerates missing scheme, and empty/missing input", () => {
+  assert.equal(hostLabel("localhost:4096"), "localhost:4096");
+  assert.equal(hostLabel(""), "");
+  assert.equal(hostLabel(null), "");
+  assert.equal(hostLabel(undefined), "");
 });
 
 /* ---------- route / unroute ---------- */

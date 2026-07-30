@@ -22,23 +22,30 @@
 
   The pure helpers below (SSE parser, activity reducer, transcript fold,
   formatters, route codec) are unit-tested by monitor_test.mjs (run:
-  node --test tools/monitor/*_test.mjs). Manual verification (this page's
-  live wiring lands in a later step) covers what the tests can't:
+  node --test tools/monitor/*_test.mjs). The board is live (connect flow,
+  poll+stream event fold, jittered-backoff reconnect); the detail view below
+  it is still static chrome — its transcript/composer wiring is a later
+  step. Manual verification covers what the tests can't:
     1. Start:  HARNESS_RUN_TOKEN=t harness serve -cors-origin '*'
     2. Open this file, paste the base URL (http://localhost:4096) + token,
-       Connect. -> the board lists sessions, newest activity first.
+       Connect. -> the identity line fills in from /health, the board lists
+       sessions (active first, newest activity first within each group).
     3. Drive a prompt against a session -> its row moves through
        tool/streaming/between phases, elapsed ticks once a second.
     4. Let a session sit idle for 15s -> quiet; 60s -> stalled (critical).
-    5. Click a session -> detail view: full transcript, live tail, a
-       running tool fold with tailing output and a caret.
+    5. Click a session -> (detail view lands in a later step; the row is a
+       real, bookmarkable link today, but the destination is still static).
     6. Send a message from the composer -> it appears as an operator entry
        the moment the stream's `message` event lands (no phantom entry).
+       (Composer lands with the detail view, later.)
     7. Kill `harness serve`, wait -> connection state flips to
-       "reconnecting…" with backoff; restart -> it resyncs.
-    8. Reload the page -> base URL, token, and the open session (from the
-       URL fragment) are restored.
-    9. Toggle OS light/dark theme -> both variants stay legible.
+       "reconnecting…" with jittered backoff; restart -> it resyncs.
+    8. Enter a wrong run token -> an inline error on the connect panel (the
+       401 comes from /session, not /health, which has no auth).
+    9. Reload the page -> base URL and token (from localStorage) reconnect
+       automatically; a bookmarked "#b=<base>" link prefills the base URL
+       field when nothing is stored yet.
+   10. Toggle OS light/dark theme -> both variants stay legible.
 -->
 <style>
   :root {
@@ -105,7 +112,12 @@
   .app-name a:hover { color: var(--accent); }
   .id-line { font-family: var(--mono); font-size: 12px; color: var(--text-2); display: flex; flex-wrap: wrap; gap: 4px 14px; }
   .conn { grid-column: 3; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); }
-  .conn .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+  .conn .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); }
+  .conn.streaming .dot { background: var(--ok); }
+  .conn.reconnecting .dot { background: var(--warn); }
+  @media (prefers-reduced-motion: no-preference) {
+    .conn.streaming .dot { animation: breathe 2.4s ease-in-out infinite; }
+  }
 
   /* Connect affordance: shown in place of the session list until a base URL
      + token are set (localStorage empty on first visit, or cleared). */
@@ -132,6 +144,7 @@
 
   .sessions { display: flex; flex-direction: column; gap: 18px; }
   .group-gap { height: 10px; }
+  .board-empty { color: var(--text-3); font-size: 13px; padding: 4px 0 8px; }
 
   .session {
     display: grid;
@@ -287,17 +300,17 @@
             <span>up <span id="hdr-uptime">—</span></span>
           </div>
         </div>
-        <span class="conn"><span class="dot" id="conn-dot"></span><span id="conn-text">disconnected</span></span>
+        <span class="conn" id="conn" role="status" aria-live="polite"><span class="dot" id="conn-dot"></span><span id="conn-text">disconnected</span></span>
       </header>
 
       <section id="connect-panel" class="connect" aria-label="Connect to a harness instance">
         <p>Connect to a harness serve instance to see its sessions.</p>
         <form id="connect-form">
           <label for="base-url">Base URL
-            <input id="base-url" type="text" placeholder="http://localhost:4096" autocomplete="off" spellcheck="false" required>
+            <input id="base-url" type="text" placeholder="http://localhost:4096" autocomplete="off" spellcheck="false" aria-describedby="connect-err" required>
           </label>
           <label for="run-token">Run token
-            <input id="run-token" type="password" placeholder="run token" autocomplete="off"
+            <input id="run-token" type="password" placeholder="run token" autocomplete="off" aria-describedby="connect-err"
                    title="stored in this browser's localStorage in plaintext — use a dev token on a private origin" required>
           </label>
           <button type="submit">Connect</button>
@@ -458,6 +471,21 @@ function fmtAgo(ms) {
   const h = Math.floor(m / 60);
   const remM = m % 60;
   return remM > 0 ? h + "h " + remM + "m ago" : h + "h ago";
+}
+
+// hostLabel extracts a short "host[:port]" identity string from a base URL
+// for the header's "monitor / <host>" line — the only per-instance identity
+// available (Health carries no box name; see server/openapi.yaml). Written
+// by hand (strip a leading "scheme://", cut at the first "/", "?", or "#")
+// rather than `new URL(...)` so this stays usable in the TESTABLE sandbox,
+// which exposes only Date/JSON (see monitor_test.mjs's extraction preamble).
+// Tolerates junk: an unparseable string is returned as-is rather than
+// throwing, and an empty/missing base yields "".
+function hostLabel(base) {
+  if (!base) return "";
+  var s = String(base).replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, "");
+  var end = s.search(/[/?#]/);
+  return end === -1 ? s : s.slice(0, end);
 }
 
 // route/unroute codec the app's URL fragment: "#b=<base>&s=<session id>",
@@ -853,39 +881,407 @@ function transcriptModel(messages, liveEvents) {
 
 /* TESTABLE-END */
 
-/* ---------- bootstrap (presentation/persistence only — no network) ----------
-   Board/stream/poll wiring lands in a later step. This much is needed now so
-   the empty state is honest: the connect affordance shows only when no base
-   URL + token are stored, matching what a later connected session will look
-   like once it exists. */
+/* ---------- app state + DOM wiring (board live; detail view stays static
+   until the next step) ----------
+
+   State shape:
+     base, token: the connected instance (mirrors localStorage once set).
+     health: raw GET /health body (identity: version/vcs_revision/
+       session_sync/started_at), or null before the first successful connect.
+     sessions: Map<id, Session> — the latest GET /session poll, replaced
+       wholesale each 5s tick (composite state/queue/goal fields the SSE
+       stream does not carry — see the plan's Connection lifecycle section).
+     activities: Map<id, activity> — reduceActivity's fold, updated by every
+       SSE event; boardModel seeds a missing entry from seedActivity(session)
+       so a session polled but never yet seen on the stream still renders.
+     lastSeq, backoff, running, abort, streamTimer, pollTimer, tickTimer:
+       the connection lifecycle's own bookkeeping (hub/inspector's pattern). */
+var LS_BASE = "harness.monitor.base";
+var LS_TOKEN = "harness.monitor.token";
+var POLL_MS = 5000;
+var TICK_MS = 1000;
+var BACKOFF_MIN = 500;
+var BACKOFF_MAX = 10000;
+
+var state = {
+  base: "", token: "",
+  health: null,
+  sessions: new Map(),
+  activities: new Map(),
+  lastSeq: 0, backoff: BACKOFF_MIN,
+  running: false, abort: null, streamTimer: null, pollTimer: null, tickTimer: null,
+};
+
+// boardDom holds the keyed row reconciliation state: one entry per session
+// id, `sig` gating the (cheap but not free) DOM patch so a render pass that
+// changes nothing for a row touches nothing. See syncBoard.
+var boardDom = { rows: new Map(), gapEl: null, emptyEl: null };
+
+var baseInput = document.getElementById("base-url");
+var tokenInput = document.getElementById("run-token");
+var connectForm = document.getElementById("connect-form");
+var connectErr = document.getElementById("connect-err");
+var connectBtn = connectForm.querySelector("button[type=submit]");
+var sessionsEl = document.getElementById("sessions");
+var connEl = document.getElementById("conn");
+var connText = document.getElementById("conn-text");
+
+/* ---------- HTTP ---------- */
+
+function api(method, path) {
+  return fetch(state.base + path, { method: method, headers: { Authorization: "Bearer " + state.token } });
+}
+
+/* ---------- identity + connection-state header ---------- */
+
+function renderIdentity() {
+  var h = state.health || {};
+  document.getElementById("hdr-box").textContent = "/ " + (hostLabel(state.base) || "—");
+  document.getElementById("hdr-version").textContent = "harness " + (h.vcs_revision || h.version || "—");
+  document.getElementById("hdr-sync").textContent = h.session_sync ? "session_sync " + h.session_sync : "—";
+  renderUptime(Date.now());
+}
+
+function renderUptime(nowMs) {
+  var h = state.health;
+  var startedMs = h && h.started_at ? Date.parse(h.started_at) : NaN;
+  document.getElementById("hdr-uptime").textContent = isNaN(startedMs) ? "—" : fmtElapsed(Math.floor((nowMs - startedMs) / 1000));
+}
+
+// setConnState renders the header's honest connection state (streaming /
+// reconnecting / disconnected — never a bare "connected", per the plan) into
+// a role="status" aria-live="polite" element so the transition is announced
+// without a manual screen-reader poll of the header.
+function setConnState(kind) {
+  connEl.className = "conn " + kind;
+  connText.textContent = kind === "streaming" ? "streaming" : kind === "reconnecting" ? "reconnecting…" : "disconnected";
+}
+
+/* ---------- board rendering: keyed per-row reconciliation ----------
+   Rows are keyed by session id and patched in place — a row's DOM subtree is
+   only rewritten when its boardModel signature changes, and its position is
+   only touched when it is actually out of place (append-in-sorted-order is a
+   no-op DOM move when a row is already where it belongs). A row element is
+   created or destroyed only when the session SET changes (new/gone id); the
+   1s ticker and every SSE event otherwise reuse the same nodes. Mirrors
+   tools/hub/index.html's renderFleet keyed-card pattern. */
+
+function buildRowEl() {
+  var a = document.createElement("a");
+  a.className = "session";
+  var pulse = document.createElement("span"); pulse.className = "pulse";
+  var phase = document.createElement("span"); phase.className = "phase";
+  var content = document.createElement("span"); content.className = "content";
+  var sid = document.createElement("span"); sid.className = "sid";
+  var detail = document.createElement("span"); detail.className = "detail";
+  var extra = document.createElement("span"); extra.className = "extra";
+  content.append(sid, detail, extra);
+  var elapsed = document.createElement("span"); elapsed.className = "elapsed";
+  var line2 = document.createElement("span"); line2.className = "line-2";
+  a.append(pulse, phase, content, elapsed, line2);
+  a._refs = { phase: phase, sid: sid, detail: detail, extra: extra, elapsed: elapsed, line2: line2 };
+  return a;
+}
+
+function updateRowEl(a, row) {
+  a.className = "session " + row.cssClass;
+  // Forward-looking: the detail view's own live wiring lands in the next
+  // step, but a stable, bookmarkable href (this app's route codec) costs
+  // nothing to wire now and keeps the row a real, keyboard-focusable link
+  // rather than a div with a click handler (better-accessibility: native
+  // elements first).
+  a.href = route({ base: state.base, sessionId: row.id });
+  var r = a._refs;
+  r.phase.textContent = row.phase;
+  r.sid.textContent = row.sid;
+  r.sid.title = row.sid;
+  if (row.detail) {
+    r.detail.hidden = false;
+    r.detail.textContent = row.detail;
+    r.detail.style.color = row.detailCritical ? "var(--critical)" : "";
+  } else {
+    r.detail.hidden = true;
+    r.detail.textContent = "";
+  }
+  if (row.extra) { r.extra.hidden = false; r.extra.textContent = row.extra; }
+  else { r.extra.hidden = true; r.extra.textContent = ""; }
+  r.elapsed.textContent = row.elapsed.text;
+  r.line2.textContent = "";
+  if (row.line2 && row.line2.kind === "goal") {
+    r.line2.hidden = false;
+    var g = document.createElement("span");
+    g.className = "goal" + (row.line2.live ? " live-goal" : "");
+    g.textContent = row.line2.text;
+    r.line2.append(g);
+  } else if (row.line2) {
+    r.line2.hidden = false;
+    r.line2.textContent = row.line2.text;
+  } else {
+    r.line2.hidden = true;
+  }
+}
+
+function rowSignature(row) {
+  return JSON.stringify([
+    row.cssClass, row.phase, row.detail, row.detailCritical, row.extra, row.elapsed.text,
+    row.line2 ? row.line2.kind : null, row.line2 ? row.line2.text : null, row.line2 ? row.line2.live : null,
+  ]);
+}
+
+function syncBoard(nowMs) {
+  var rows = boardModel(Array.from(state.sessions.values()), state.activities, nowMs);
+
+  if (!rows.length) {
+    boardDom.rows.forEach(function (entry) { entry.el.remove(); });
+    boardDom.rows.clear();
+    if (boardDom.gapEl) { boardDom.gapEl.remove(); boardDom.gapEl = null; }
+    if (!boardDom.emptyEl) {
+      boardDom.emptyEl = document.createElement("div");
+      boardDom.emptyEl.className = "board-empty";
+      boardDom.emptyEl.textContent = "no sessions yet";
+      sessionsEl.append(boardDom.emptyEl);
+    }
+    return;
+  }
+  if (boardDom.emptyEl) { boardDom.emptyEl.remove(); boardDom.emptyEl = null; }
+
+  var seen = new Set();
+  var prevEl = null;
+  var gapPlaced = false;
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    seen.add(row.id);
+    var entry = boardDom.rows.get(row.id);
+    if (!entry) {
+      entry = { el: buildRowEl(), sig: null };
+      boardDom.rows.set(row.id, entry);
+    }
+    var sig = rowSignature(row);
+    if (entry.sig !== sig) { updateRowEl(entry.el, row); entry.sig = sig; }
+
+    if (row.cssClass === "idle" && !gapPlaced && i > 0 && rows[i - 1].cssClass !== "idle") {
+      gapPlaced = true;
+      if (!boardDom.gapEl) {
+        boardDom.gapEl = document.createElement("div");
+        boardDom.gapEl.className = "group-gap";
+        boardDom.gapEl.setAttribute("role", "presentation");
+      }
+      if (prevEl) { if (prevEl.nextSibling !== boardDom.gapEl) sessionsEl.insertBefore(boardDom.gapEl, prevEl.nextSibling); }
+      else if (sessionsEl.firstChild !== boardDom.gapEl) sessionsEl.insertBefore(boardDom.gapEl, sessionsEl.firstChild);
+      prevEl = boardDom.gapEl;
+    }
+
+    if (prevEl) { if (prevEl.nextSibling !== entry.el) sessionsEl.insertBefore(entry.el, prevEl.nextSibling); }
+    else if (sessionsEl.firstChild !== entry.el) sessionsEl.insertBefore(entry.el, sessionsEl.firstChild);
+    prevEl = entry.el;
+  }
+  if (boardDom.gapEl && !gapPlaced) { boardDom.gapEl.remove(); boardDom.gapEl = null; }
+  boardDom.rows.forEach(function (entry, id) {
+    if (!seen.has(id)) { entry.el.remove(); boardDom.rows.delete(id); }
+  });
+}
+
+/* ---------- live event handling ---------- */
+
+function handleEvent(ev) {
+  if (!ev || typeof ev.type !== "string") return;
+  if (typeof ev.seq === "number" && ev.seq > state.lastSeq) state.lastSeq = ev.seq;
+  var sid = ev.session_id;
+  if (!sid) return;
+  if (ev.type === "session.created" && !state.sessions.has(sid)) {
+    // A minimal stub so the new row appears immediately; the next poll (at
+    // most POLL_MS later) fills in workdir/goal/queued/etc — see the plan's
+    // "5s poll refreshes composite/queue/goal fields the stream doesn't
+    // carry".
+    state.sessions.set(sid, {
+      id: sid, state: "idle", status: "idle", queued: 0, goal: null,
+      last_activity_at: new Date().toISOString(),
+    });
+  }
+  var prev = state.activities.get(sid);
+  if (!prev && state.sessions.has(sid)) prev = seedActivity(state.sessions.get(sid));
+  state.activities.set(sid, reduceActivity(prev, ev, Date.now()));
+  syncBoard(Date.now());
+}
+
+/* ---------- poll: health identity is fetched once at connect (started_at
+   never changes for a process's lifetime); GET /session refreshes composite
+   state/queue/goal every POLL_MS. ---------- */
+
+function pollOnce() {
+  return api("GET", "/session").then(function (resp) {
+    if (resp.status === 401) { forceDisconnect("run token was rejected — reconnect"); return; }
+    if (!resp.ok) return; // transient; the next poll or the stream will refill
+    return resp.json().then(function (list) {
+      if (!state.running) return;
+      state.sessions = new Map(list.map(function (s) { return [s.id, s]; }));
+      state.activities.forEach(function (_v, id) { if (!state.sessions.has(id)) state.activities.delete(id); });
+      var hw = maxSeq(list);
+      if (hw > state.lastSeq) state.lastSeq = hw;
+      syncBoard(Date.now());
+    });
+  }).catch(function () { /* transient; the next poll or the stream will refill */ });
+}
+
+/* ---------- SSE stream: resumes from state.lastSeq, jittered-backoff
+   reconnect. Never EventSource (can't set the Authorization header) — a
+   hand-rolled fetch-stream reader, same as hub/inspector. ---------- */
+
+function connectStream() {
+  if (!state.running) return;
+  var ac = new AbortController();
+  state.abort = ac;
+  fetch(state.base + "/event?from=" + state.lastSeq, {
+    headers: { Authorization: "Bearer " + state.token }, signal: ac.signal,
+  }).then(function (resp) {
+    if (!resp.ok || !resp.body) throw new Error("event stream " + resp.status);
+    state.backoff = BACKOFF_MIN;
+    setConnState("streaming");
+    var reader = resp.body.getReader();
+    var dec = new TextDecoder();
+    var parse = createSSEParser(function (frame) {
+      var ev;
+      try { ev = JSON.parse(frame.data); } catch (e) { return; }
+      handleEvent(ev);
+    });
+    function pump() {
+      return reader.read().then(function (r) {
+        if (r.done) return;
+        parse(dec.decode(r.value, { stream: true }));
+        return pump();
+      });
+    }
+    return pump();
+  }).catch(function () { /* fall through to reconnect below unless deliberately stopped */ })
+    .then(function () {
+      if (!state.running) return;
+      scheduleReconnect();
+    });
+}
+
+// scheduleReconnect backs off 500ms -> 1s -> 2s ... capped at 10s, jittered
+// to 50-100% of that delay each attempt so a reconnect never lands on an
+// exact, predictable cadence.
+function scheduleReconnect() {
+  setConnState("reconnecting");
+  var jitter = 0.5 + Math.random() * 0.5;
+  var delay = Math.round(state.backoff * jitter);
+  state.backoff = Math.min(state.backoff * 2, BACKOFF_MAX);
+  clearTimeout(state.streamTimer);
+  state.streamTimer = setTimeout(function () { if (state.running) connectStream(); }, delay);
+}
+
+/* ---------- 1s ticker: elapsed/staleness text + classes only, via the same
+   keyed syncBoard patch path (a no-op DOM write for any row whose signature
+   didn't change this tick). ---------- */
+
+function tick() {
+  renderUptime(Date.now());
+  syncBoard(Date.now());
+}
+
+/* ---------- connect / disconnect lifecycle ---------- */
+
+function setFormBusy(busy, label) {
+  baseInput.disabled = busy;
+  tokenInput.disabled = busy;
+  connectBtn.disabled = busy;
+  connectBtn.textContent = label;
+}
+
+// attemptConnect: GET /health (unauthenticated — identity + reachability)
+// THEN authed GET /session, so a wrong token surfaces as a 401 from /session,
+// never from /health (see the plan's Connect flow). On success this primes
+// the SSE resume cursor from the poll (hub's approach — from=lastSeq, never
+// from=0) before opening the stream.
+function attemptConnect(base, token) {
+  connectErr.textContent = "";
+  return fetch(base + "/health").then(function (hResp) {
+    if (!hResp.ok) throw { userMessage: "cannot reach " + base + " (health " + hResp.status + ")" };
+    return hResp.json();
+  }, function () {
+    throw { userMessage: "cannot reach " + base };
+  }).then(function (health) {
+    return api2(base, token, "GET", "/session").then(function (sResp) {
+      if (sResp.status === 401) throw { userMessage: "run token was rejected" };
+      if (!sResp.ok) throw { userMessage: "session list failed (" + sResp.status + ")" };
+      return sResp.json().then(function (list) { return { health: health, list: list }; });
+    }, function () {
+      throw { userMessage: "cannot reach " + base };
+    });
+  }).then(function (r) {
+    state.base = base;
+    state.token = token;
+    state.health = r.health;
+    state.sessions = new Map(r.list.map(function (s) { return [s.id, s]; }));
+    state.activities = new Map();
+    state.lastSeq = maxSeq(r.list);
+    state.backoff = BACKOFF_MIN;
+    localStorage.setItem(LS_BASE, base);
+    localStorage.setItem(LS_TOKEN, token);
+    document.body.classList.add("connected");
+    renderIdentity();
+    syncBoard(Date.now());
+    history.replaceState(null, "", route({ base: base }));
+
+    state.running = true;
+    clearInterval(state.pollTimer);
+    state.pollTimer = setInterval(pollOnce, POLL_MS);
+    clearInterval(state.tickTimer);
+    state.tickTimer = setInterval(tick, TICK_MS);
+    setConnState("reconnecting"); // "connecting…" reuses the honest reconnecting label until the stream opens
+    connectStream();
+    return true;
+  }, function (err) {
+    connectErr.textContent = (err && err.userMessage) || "connect failed";
+    return false;
+  });
+}
+
+// api2 is attemptConnect's pre-state fetch helper: state.base/state.token
+// aren't set until a connect attempt SUCCEEDS, so the /session probe during
+// connect can't go through api() (which reads them from state).
+function api2(base, token, method, path) {
+  return fetch(base + path, { method: method, headers: { Authorization: "Bearer " + token } });
+}
+
+function forceDisconnect(reason) {
+  state.running = false;
+  if (state.abort) state.abort.abort();
+  clearTimeout(state.streamTimer);
+  clearInterval(state.pollTimer);
+  clearInterval(state.tickTimer);
+  document.body.classList.remove("connected");
+  setConnState("disconnected");
+  if (reason) connectErr.textContent = reason;
+}
+
+/* ---------- bootstrap ---------- */
 
 (function bootstrap() {
-  var baseInput = document.getElementById("base-url");
-  var tokenInput = document.getElementById("run-token");
-  var form = document.getElementById("connect-form");
-  var err = document.getElementById("connect-err");
+  var storedBase = localStorage.getItem(LS_BASE) || "";
+  var storedToken = localStorage.getItem(LS_TOKEN) || "";
+  // Fragment #b= prefills the base URL field (e.g. a shared bookmark) when
+  // nothing is stored yet; the token is never carried in the URL — it lives
+  // in localStorage only (see the plan's Connect flow).
+  var fragBase = unroute(location.hash).base;
+  baseInput.value = storedBase || fragBase || "";
+  tokenInput.value = storedToken;
+  setConnState("disconnected");
 
-  function applyConnectedClass() {
-    var hasBase = !!localStorage.getItem("harness.monitor.base");
-    var hasToken = !!localStorage.getItem("harness.monitor.token");
-    document.body.classList.toggle("connected", hasBase && hasToken);
-  }
-
-  baseInput.value = localStorage.getItem("harness.monitor.base") || "";
-  tokenInput.value = localStorage.getItem("harness.monitor.token") || "";
-  applyConnectedClass();
-
-  form.addEventListener("submit", function (e) {
+  connectForm.addEventListener("submit", function (e) {
     e.preventDefault();
     var base = baseInput.value.trim().replace(/\/+$/, "");
     var token = tokenInput.value;
-    if (!base || !token) { err.textContent = "base URL and token are required"; return; }
-    err.textContent = "";
-    localStorage.setItem("harness.monitor.base", base);
-    localStorage.setItem("harness.monitor.token", token);
-    applyConnectedClass();
-    // Poll + stream connection wiring lands in a later step.
+    if (!base || !token) { connectErr.textContent = "base URL and token are required"; return; }
+    setFormBusy(true, "Connecting…");
+    attemptConnect(base, token).then(function () { setFormBusy(false, "Connect"); });
   });
+
+  if (storedBase && storedToken) {
+    setFormBusy(true, "Connecting…");
+    attemptConnect(storedBase, storedToken).then(function () { setFormBusy(false, "Connect"); });
+  }
 })();
 </script>
 </body>
