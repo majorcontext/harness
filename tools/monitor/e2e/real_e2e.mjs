@@ -49,6 +49,10 @@ const ProvToolBoard = "e2e-tool-board";
 const ProvToolDetail = "e2e-tool-detail";
 const ProvStallStale = "e2e-stall-stale";
 const ProvStallDedup = "e2e-stall-dedup";
+const ProvStreamError = "e2e-stream-error";
+// Must match stub.go's StreamErrorText exactly — same duplication-by-hand
+// reasoning as the Prov* keys above (this script has no Go tooling).
+const STREAM_ERROR_TEXT = "simulated upstream failure: connection reset by peer";
 
 // TUNING shrinks the monitor's staleness thresholds (production QUIET_MS/
 // STALL_MS are 15000/60000 — see index.html) down to something a real,
@@ -422,6 +426,34 @@ async function main() {
   const composerErrText = doc.getElementById("composer-err").textContent;
   assert.ok(composerErrText.includes("no such session"), "composer error should surface the server's real error text: " + composerErrText);
   console.error("PASS: composer send against an unknown session surfaces the server's real non-2xx error text: " + composerErrText);
+
+  // ---- 4f. Detail transcript error entry (task gap: a failed turn used to
+  // render NOTHING for the failure itself). A REAL provider stream failure
+  // (ProvStreamError's scriptedStream.Next() returns a genuine Go error, not
+  // a simulated event — see stub.go's errorTurns) drives
+  // server/handlers.go's runPrompt into its session.error +
+  // turn.end(outcome:"error") default branch. The detail view is opened
+  // BEFORE the prompt is sent so this observes the LIVE transition (not
+  // history already at rest) — the board row settles on the real "error"
+  // outcome, the transcript renders a critical error entry carrying the
+  // server's real (sanitized) error text, and the live chip drops to idle
+  // well inside a bound tighter than index.html's 5s GET /session poll
+  // interval, proving it is NOT waiting on that poll. ----
+  const errorID = await createSession(ProvStreamError);
+  const errorRow = await waitFor(() => findRow(doc, errorID), { label: "board row for " + errorID });
+  await openDetailViaClick(w, doc, errorRow);
+
+  assert.equal((await promptAsync(errorID, "trigger a real provider stream error")).status, 202, "prompt_async accepted");
+  await waitFor(() => doc.querySelector("#transcript .msg.error"), { label: "a critical error entry rendered in the detail transcript" });
+  const errorEntryText = doc.querySelector("#transcript .msg.error .body p").textContent;
+  assert.ok(errorEntryText.includes(STREAM_ERROR_TEXT), "the error entry must carry the server's REAL error text, not a placeholder: " + errorEntryText);
+  console.error("PASS: a real provider stream failure renders a critical error entry with the server's real error text: " + errorEntryText);
+
+  const chip = doc.getElementById("detail-livechip");
+  await waitFor(() => chip.hidden === true, { timeoutMs: 3000, label: "the live chip settling to idle well under the 5s poll interval, driven by the live session.status(idle) event" });
+  await waitFor(() => errorRow.classList.contains("idle"), { label: "board row settling idle after the failed turn" });
+  assert.equal(errorRow.querySelector(".detail").textContent, "error", "row shows the real turn.end outcome after a stream failure: " + errorRow.querySelector(".detail").textContent);
+  console.error("PASS: the live chip settles to idle promptly (no poll dependency), and the board row shows the real 'error' outcome");
 
   // ---- 5. Reconnect (scenario 5): a real server-side kill/restart of the
   // box's HTTP layer flips the header honestly and resumes. ----

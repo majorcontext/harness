@@ -439,6 +439,68 @@ test("boardModel: idle rows show the last turn outcome, or 'worker parked' when 
   assert.equal(byId.s2.detailCritical, true);
 });
 
+/* ---------- detail live-chip: fresh-idle phase + the hidden-attribute CSS
+   bug that actually made it visible (BUG 1) ----------
+
+   index.html's updateDetailHeader (outside the TESTABLE region — it touches
+   the DOM) derives the chip from the exact same boardModel call the board's
+   own syncBoard makes: `boardModel([sessionSummary], state.activities,
+   nowMs)[0]`, then sets `chip.hidden = row.cssClass === "idle"`. The two
+   tests below cover the two, independently-necessary halves of that being
+   correct end to end — the pure model computation (testable in the vm
+   sandbox) AND the CSS that has to actually respect `chip.hidden` for the
+   model's "idle" answer to be visible (not testable in the vm sandbox —
+   there is no DOM/CSS engine there — so this asserts against the raw
+   stylesheet text instead; see the comment below for why a naive jsdom
+   getComputedStyle check would not have caught this). */
+
+test("detail chip: a freshly created, zero-event session resolves through boardModel (the SAME call updateDetailHeader makes) to cssClass 'idle', matching the board row", () => {
+  // Mirrors updateDetailHeader's own fallback exactly: a session id not yet
+  // seen in a GET /session poll response, so it falls back to a minimal
+  // { id, state: "idle", queued: 0 } summary — and no activity has been
+  // folded for it yet (activities is empty), so boardModel's activityFor
+  // falls through to seedActivity(session) — the "zero messages, never
+  // polled, never streamed to" state a just-opened detail view starts in.
+  const now = 1_000_000;
+  const sessionSummary = { id: "s-fresh", state: "idle", queued: 0 };
+  const row = boardModel([sessionSummary], activityMap({}), now)[0];
+  assert.equal(row.cssClass, "idle", "a fresh, never-active session must resolve idle, not live/quiet/bad");
+  assert.equal(row.phase, "idle");
+});
+
+test("detail chip: the .livechip CSS rule must not defeat the `hidden` attribute", () => {
+  // ROOT CAUSE of BUG 1 (verified against a real Chrome tab, not just read):
+  // the browser's UA stylesheet hides a [hidden] element via a PLAIN (non-
+  // !important) `[hidden] { display: none }` rule. CSS cascade origin
+  // outranks specificity: ANY author-stylesheet rule that sets `display` on
+  // the same element — regardless of that rule's own selector's specificity
+  // — beats a user-agent-origin rule. index.html used to declare
+  // `.detail-head .livechip { display: inline-flex; ... }` unconditionally,
+  // which defeated `chip.hidden = true` outright: in a real browser the
+  // element stayed fully visible (getComputedStyle().display ===
+  // "inline-flex", non-null offsetParent) with `hidden` set, showing
+  // whatever text (or the markup's original hardcoded "tool running"
+  // default) was last assigned — exactly the reported symptom on a freshly
+  // opened, idle session's detail view. jsdom's own getComputedStyle does
+  // NOT reproduce this (it special-cases `hidden` rather than emulating the
+  // real cascade), which is exactly why this had to be found by live
+  // browser testing and why this regression check is a text/regex
+  // assertion against the shipped CSS, not a DOM-rendering one.
+  const styleMatch = html.match(/<style>([\s\S]*?)<\/style>/);
+  assert.ok(styleMatch, "index.html must contain a <style> block");
+  const css = styleMatch[1];
+  assert.doesNotMatch(
+    css,
+    /\.livechip\s*\{[^}]*display\s*:/,
+    "a bare `.livechip { ... display: ... }` rule (no :not([hidden]) guard) silently defeats chip.hidden = true in a real browser",
+  );
+  assert.match(
+    css,
+    /\.livechip:not\(\[hidden\]\)\s*\{[^}]*display\s*:/,
+    "the rule that sets .livechip's display must guard with :not([hidden]) so the hidden attribute isn't defeated",
+  );
+});
+
 /* ---------- transcriptModel (RED-FIRST: written before the implementation) ---------- */
 
 test("transcriptModel: durable messages fold into turn-mark + operator/assistant entries", () => {
@@ -735,6 +797,86 @@ test("transcriptModel: a queued placeholder not yet delivered survives an unrela
   const queued = entries.find(e => e.kind === "operator" && e.queued);
   assert.ok(queued, "the queued placeholder must survive an unrelated message event");
   assert.equal(queued.text, "and also this");
+});
+
+/* ---------- transcriptModel: error/aborted entries (BUG 2, RED-FIRST: a
+   failed or aborted turn used to render NOTHING for the failure itself —
+   only the preceding operator message — because transcriptModel had no
+   case at all for session.error/turn.end/session.aborted; they silently
+   fell into the live-event loop's `default: break;`.) ---------- */
+
+test("transcriptModel: [status busy, message(user), session.error(text), status idle] folds to [turn-mark, operator, error] with the error text", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t0", parts: [{ type: "text", text: "run it" }] } },
+    { type: "session.error", session_id: "s1", error: "provider request failed: 503" },
+    { type: "session.status", status: "idle" },
+  ];
+  const entries = transcriptModel([], evs);
+  assert.deepEqual(reify(entries.map(e => e.kind)), ["turn-mark", "operator", "error"]);
+  assert.equal(entries[2].text, "provider request failed: 503");
+});
+
+test("transcriptModel: turn.end-with-error variant — a live turn.end(outcome:'error') also folds an error entry when no session.error preceded it", () => {
+  // Exercises the OTHER of the two sources (see server/journal.go:
+  // recordTurnEnd's Error field is set whenever turnErr != nil) on its own,
+  // e.g. a page connecting to the stream in the narrow window between the
+  // real session.error and turn.end calls (both durable, but two separate
+  // SSE frames) would only observe this one.
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t0", parts: [{ type: "text", text: "run it" }] } },
+    { type: "turn.end", outcome: "error", error: "context deadline exceeded" },
+  ];
+  const entries = transcriptModel([], evs);
+  assert.deepEqual(reify(entries.map(e => e.kind)), ["turn-mark", "operator", "error"]);
+  assert.equal(entries[2].text, "context deadline exceeded");
+});
+
+test("transcriptModel: session.error immediately followed by turn.end(outcome:'error') with the SAME text folds exactly ONE error entry, not two", () => {
+  // The real wire ALWAYS pairs these for a genuine failure (see
+  // server/handlers.go's runPrompt/runGoal default branch: session.error
+  // then recordTurnEnd, same sanitized err.Error() text both times) — this
+  // is the ordinary case, not an edge case, so double-rendering it would be
+  // the common outcome, not a rare one.
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t0", parts: [{ type: "text", text: "run it" }] } },
+    { type: "session.error", error: "provider request failed: 503" },
+    { type: "turn.end", outcome: "error", error: "provider request failed: 503" },
+    { type: "session.status", status: "idle" },
+  ];
+  const entries = transcriptModel([], evs);
+  const errors = entries.filter(e => e.kind === "error");
+  assert.equal(errors.length, 1, "session.error and its matching turn.end must not double-render the same failure");
+  assert.equal(errors[0].text, "provider request failed: 503");
+});
+
+test("transcriptModel: turn.end outcomes other than 'error' (e.g. 'completed') never fold an error entry", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t0", parts: [{ type: "text", text: "run it" }] } },
+    { type: "turn.end", outcome: "completed" },
+    { type: "session.status", status: "idle" },
+  ];
+  const entries = transcriptModel([], evs);
+  assert.equal(entries.filter(e => e.kind === "error").length, 0);
+});
+
+test("transcriptModel: a live session.aborted event folds into an error-styled entry reading 'turn aborted'", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t0", parts: [{ type: "text", text: "run it" }] } },
+    { type: "session.aborted", session_id: "s1" },
+    { type: "session.status", status: "idle" },
+  ];
+  const entries = transcriptModel([], evs);
+  assert.deepEqual(reify(entries.map(e => e.kind)), ["turn-mark", "operator", "error"]);
+  assert.equal(entries[2].text, "turn aborted");
+});
+
+test("entryKey: error entries key by their position among the folded entries", () => {
+  assert.equal(entryKey({ kind: "error", text: "boom" }, 5), "error:5");
 });
 
 /* ---------- historyWindow ---------- */

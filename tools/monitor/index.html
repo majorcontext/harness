@@ -42,7 +42,14 @@
        collapsed with cmd + elapsed; a fold resolved before this page ever
        watched it shows no elapsed number rather than a fabricated one).
        Reload the URL directly (a bookmarked "#s=" deep link) -> connects,
-       then opens straight into the same session.
+       then opens straight into the same session. Opening a freshly created,
+       never-prompted session's detail view -> the live chip stays hidden
+       (idle), not a stale/default "tool running". Drive a turn that fails
+       (session.error/turn.end outcome "error") or that you abort mid-turn
+       -> a critical-styled "error" entry (the sanitized failure text, or
+       "turn aborted") lands inline in the transcript at the point it
+       occurred, and the chip drops to idle promptly once session.status
+       goes idle, without waiting on the next 5s poll.
     6. Send a message from the composer (Enter to send, Shift+Enter for a
        newline) -> it appears as an operator entry the moment the stream's
        `message` event lands (session was idle) or, if the session was
@@ -229,7 +236,19 @@
   }
   .detail-head .sid-full { font-family: var(--mono); font-size: 14px; color: var(--text-1); font-weight: 600; }
   .detail-head .meta { font-family: var(--mono); font-size: 12px; color: var(--text-2); display: flex; gap: 14px; flex-wrap: wrap; }
-  .detail-head .livechip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ok); font-weight: 600; margin-left: auto; }
+  /* :not([hidden]) is load-bearing, not decorative: the browser's own UA
+     stylesheet hides a [hidden] element via a PLAIN (non-!important)
+     `[hidden] { display: none }` rule, whose origin (user-agent) is always
+     lower-priority than ANY author-stylesheet rule that sets `display` on
+     the same element, regardless of that rule's selector specificity — a
+     bare `.livechip` rule setting `display` here would silently defeat
+     `chip.hidden = true` (verified in a real Chrome tab: the element stayed
+     fully visible, offsetParent non-null, computed display "inline-flex",
+     with `hidden` set). That was the bug: a freshly opened, idle session's
+     detail view showed the chip's stale/default text ("tool running")
+     forever, because JS's own hidden=true had no visual effect. Guarding
+     the display declaration with :not([hidden]) here restores it. */
+  .detail-head .livechip:not([hidden]) { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ok); font-weight: 600; margin-left: auto; }
   .detail-head .livechip .pulse2 { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
 
   /* Transcript: a typographic document. Speaker rail on the left shares
@@ -245,6 +264,11 @@
   .who { font-size: 11.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-3); padding-top: 2px; }
   .msg.user .who { color: var(--accent); }
   .msg.reasoning .who, .msg.reasoning .body { color: var(--text-3); }
+  /* session.error/turn.end(error)/session.aborted fold into this same "msg"
+     shape (see transcriptModel's "error" entry kind) so the failure lands
+     inline, aligned in the content column like every other transcript
+     entry — no banner/toast — styled in the mockup's critical register. */
+  .msg.error .who, .msg.error .body { color: var(--critical); }
   .body { min-width: 0; max-width: 70ch; }
   /* pre-wrap: an operator/assistant reply is prose the model chose to break
      into lines (a pasted diff, a list) — collapsing those breaks the way
@@ -376,7 +400,7 @@
           <span>turn <span id="detail-turn-elapsed"></span></span>
           <span id="detail-toolcount"></span>
         </span>
-        <span class="livechip" id="detail-livechip" hidden><span class="pulse2"></span><span id="detail-livechip-text">tool running</span></span>
+        <span class="livechip" id="detail-livechip" hidden><span class="pulse2"></span><span id="detail-livechip-text"></span></span>
       </header>
 
       <section class="transcript" id="transcript" aria-label="Session transcript"></section>
@@ -777,15 +801,20 @@ function boardModel(sessions, activities, nowMs) {
 
 // transcriptModel folds durable messages plus live (undurable) events into
 // render-ready transcript entries: {kind: "turn-mark"|"operator"|"assistant"
-// |"reasoning"|"tool", ...}. Durable messages are the source of truth for
-// everything they cover; `liveEvents` covers only what has streamed in
-// since the durable snapshot was taken. Tool calls (in an assistant
-// message) pair with their result (in the following tool-role message) by
-// call_id — durable or live, whichever arrives first — matching
-// message.go's own assembly rule. Streaming deltas and open tool folds
-// accumulate in a separate draft that a "message" event for the same turn
-// discards wholesale (superseded, not duplicated); anything still open at
-// the end of `liveEvents` is the current in-progress tail.
+// |"reasoning"|"tool"|"error", ...}. Durable messages are the source of
+// truth for everything they cover; `liveEvents` covers only what has
+// streamed in since the durable snapshot was taken. Tool calls (in an
+// assistant message) pair with their result (in the following tool-role
+// message) by call_id — durable or live, whichever arrives first —
+// matching message.go's own assembly rule. Streaming deltas and open tool
+// folds accumulate in a separate draft that a "message" event for the same
+// turn discards wholesale (superseded, not duplicated); anything still open
+// at the end of `liveEvents` is the current in-progress tail. The "error"
+// kind is live-only (session.error/turn.end-with-outcome-"error"/
+// session.aborted carry no durable message representation of their own —
+// see pushIfNewError below), so a detail view opened well after a turn
+// already failed shows no error entry for it, same as this function never
+// fabricating a tool fold's elapsed time it didn't itself observe.
 function transcriptModel(messages, liveEvents, turnOffset) {
   var msgs = Array.isArray(messages) ? messages : [];
   var evs = Array.isArray(liveEvents) ? liveEvents : [];
@@ -907,6 +936,18 @@ function transcriptModel(messages, liveEvents, turnOffset) {
     openTools = new Map();
   }
 
+  // pushIfNewError appends a critical "error" entry for `text` to `entries`
+  // (never `draft` — a failure must survive a later resetDraft(), e.g. the
+  // terminal session.status idle transition right behind it on the real
+  // wire), unless the immediately preceding entry is already that exact
+  // same error — the dedup for session.error/turn.end's redundant pair (see
+  // their cases in the event-loop switch below).
+  function pushIfNewError(text) {
+    var last = entries.length ? entries[entries.length - 1] : null;
+    if (last && last.kind === "error" && last.text === text) return;
+    entries.push({ kind: "error", id: null, text: text });
+  }
+
   for (var ek = 0; ek < evs.length; ek++) {
     var ev = evs[ek];
     if (!ev || typeof ev.type !== "string") continue;
@@ -987,6 +1028,27 @@ function transcriptModel(messages, liveEvents, turnOffset) {
             durableRunningTools.delete(callID);
           }
         }
+        break;
+      // session.error/turn.end(error)/session.aborted all fold into the SAME
+      // "error" entry kind (rendered via buildMsgEl/updateMsgEl like any
+      // other message, styled critical via CSS's .msg.error rule). See
+      // server/handlers.go's runPrompt/runGoal: a genuine turn failure
+      // ALWAYS emits session.error immediately followed by turn.end with
+      // the identical (sanitized) error text — pushIfNewError's dedup
+      // means whichever of the two arrives second is a no-op, while EITHER
+      // one arriving alone (a page connecting mid-failure, replaying only
+      // one of the two) still folds its own entry.
+      case "session.error":
+        pushIfNewError(ev.error || "");
+        break;
+      case "turn.end":
+        if (ev.outcome === "error" && ev.error) pushIfNewError(ev.error);
+        break;
+      case "session.aborted":
+        // No dedup needed: unlike session.error/turn.end, a deliberate
+        // abort (see runPrompt's context.Canceled branch) never pairs with
+        // a second event carrying the same text.
+        entries.push({ kind: "error", id: null, text: "turn aborted" });
         break;
       default:
         break;
@@ -1079,6 +1141,15 @@ function entryKey(entry, index) {
   switch (entry.kind) {
     case "turn-mark": return "turn:" + entry.turn;
     case "tool": return "tool:" + entry.id;
+    // error entries have no durable id of their own (session.error/turn.end/
+    // session.aborted are live-only, never part of durable `messages` — see
+    // pushIfNewError's doc comment); `entries` only ever grows (nothing is
+    // spliced out ahead of an error entry the way a queued placeholder can
+    // be), so an error entry's position among the full folded array is
+    // stable across re-renders, same as this function's own "idx:" fallback
+    // below — named explicitly here rather than falling through to default
+    // so this stability isn't accidental.
+    case "error": return "error:" + index;
     case "operator":
     case "assistant":
     case "reasoning":
@@ -1485,7 +1556,7 @@ function updateTurnMarkEl(el, entry, isCurrentTurn) {
 
 function buildMsgEl(kind) {
   var d = document.createElement("div");
-  d.className = "msg" + (kind === "operator" ? " user" : kind === "reasoning" ? " reasoning" : "");
+  d.className = "msg" + (kind === "operator" ? " user" : kind === "reasoning" ? " reasoning" : kind === "error" ? " error" : "");
   var who = document.createElement("span");
   who.className = "who";
   who.textContent = kind === "operator" ? "operator" : kind;
@@ -1675,6 +1746,11 @@ function updateDetailHeader(entries, nowMs) {
   } else {
     turnEl.textContent = "—";
     chip.hidden = true;
+    // Belt-and-suspenders, matching updateRowEl's own r.detail.textContent =
+    // "" on the board: never rely on `hidden` alone to keep stale content
+    // from being visible (see the .livechip:not([hidden]) CSS comment above
+    // for why `hidden` alone was, in fact, not enough).
+    chipText.textContent = "";
   }
 }
 

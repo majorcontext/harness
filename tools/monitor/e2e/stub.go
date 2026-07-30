@@ -19,6 +19,7 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -43,25 +44,49 @@ const RunToken = "monitor-e2e-token"
 // e2e scenario/session, so two sessions can never accidentally share a
 // turn index — see the doc comment on scriptedProvider.Stream.
 const (
-	ProvQuickIdle  = "e2e-quick-idle"  // composer-send-on-idle-session scenario
-	ProvToolBoard  = "e2e-tool-board"  // board phase transitions (streaming + real tool)
-	ProvToolDetail = "e2e-tool-detail" // detail view's live running-tool fold
-	ProvStallStale = "e2e-stall-stale" // staleness tiers (quiet/stalled)
-	ProvStallDedup = "e2e-stall-dedup" // busy composer send -> prompt.queued dedup
+	ProvQuickIdle   = "e2e-quick-idle"   // composer-send-on-idle-session scenario
+	ProvToolBoard   = "e2e-tool-board"   // board phase transitions (streaming + real tool)
+	ProvToolDetail  = "e2e-tool-detail"  // detail view's live running-tool fold
+	ProvStallStale  = "e2e-stall-stale"  // staleness tiers (quiet/stalled)
+	ProvStallDedup  = "e2e-stall-dedup"  // busy composer send -> prompt.queued dedup
+	ProvStreamError = "e2e-stream-error" // a genuine provider stream failure (detail transcript error entry)
 )
 
-// scriptedProvider serves one pre-built turn (a []provider.Event) per call,
-// numbered from 0; calls beyond the scripted turns repeat the last one
-// (defensive — a session should never be prompted more times than its
-// script anticipates, but repeating beats an opaque io.EOF panic if a test
-// timing assumption is ever off by one call). Each instance is used by
-// exactly ONE session for exactly ONE test's turns — see the Prov* consts
-// above — so its call counter is never shared or raced across sessions.
+// StreamErrorText is the exact (sanitize-passthrough — see errorTurns' doc
+// comment) error text ProvStreamError's turn fails with; real_e2e.mjs
+// duplicates this string (it has no Go tooling to import the const, same as
+// the Prov* keys above) to assert the detail transcript's error entry
+// renders the server's REAL error text, not a placeholder.
+const StreamErrorText = "simulated upstream failure: connection reset by peer"
+
+// scriptedTurn is one pre-built turn: a []provider.Event to stream, plus an
+// optional terminal error. When err is set, scriptedStream.Next() returns it
+// (instead of io.EOF) once events is exhausted — a REAL provider.Stream
+// failure mid-turn, the same shape a real provider adapter's connection
+// dying produces, not a simulated event. See engine/engine.go's runTurn: a
+// non-nil, non-io.EOF Next() error with no tool call yet recorded (the case
+// here — errorTurns below never includes a tool call) propagates straight
+// out of Session.Prompt, driving server/handlers.go's runPrompt into its
+// session.error + turn.end(outcome:"error") default branch — the exact wire
+// path tools/monitor's transcript "error" entry (see index.html's
+// pushIfNewError) exists to render.
+type scriptedTurn struct {
+	events []provider.Event
+	err    error
+}
+
+// scriptedProvider serves one pre-built scriptedTurn per call, numbered from
+// 0; calls beyond the scripted turns repeat the last one (defensive — a
+// session should never be prompted more times than its script anticipates,
+// but repeating beats an opaque io.EOF panic if a test timing assumption is
+// ever off by one call). Each instance is used by exactly ONE session for
+// exactly ONE test's turns — see the Prov* consts above — so its call
+// counter is never shared or raced across sessions.
 type scriptedProvider struct {
 	mu    sync.Mutex
 	name  string
 	call  int
-	turns [][]provider.Event
+	turns []scriptedTurn
 }
 
 func (p *scriptedProvider) Name() string { return p.name }
@@ -74,19 +99,22 @@ func (p *scriptedProvider) Stream(_ context.Context, _ *provider.Request) (provi
 	}
 	p.call++
 	p.mu.Unlock()
-	return &scriptedStream{events: p.turns[n]}, nil
+	return &scriptedStream{turn: p.turns[n]}, nil
 }
 
 type scriptedStream struct {
-	events []provider.Event
-	i      int
+	turn scriptedTurn
+	i    int
 }
 
 func (s *scriptedStream) Next() (provider.Event, error) {
-	if s.i >= len(s.events) {
+	if s.i >= len(s.turn.events) {
+		if s.turn.err != nil {
+			return provider.Event{}, s.turn.err
+		}
 		return provider.Event{}, io.EOF
 	}
-	ev := s.events[s.i]
+	ev := s.turn.events[s.i]
 	s.i++
 	return ev, nil
 }
@@ -139,9 +167,26 @@ func toolCallPart(callID string, sleepSeconds float64) *message.ToolCall {
 
 // quickTurns: one plain text-only turn, no tool call — the baseline
 // idle-session composer path (ProvQuickIdle).
-func quickTurns(reply string) [][]provider.Event {
-	return [][]provider.Event{
-		{textDelta(reply), doneEvent(provider.StopEndTurn, &message.Text{Text: reply})},
+func quickTurns(reply string) []scriptedTurn {
+	return []scriptedTurn{
+		{events: []provider.Event{textDelta(reply), doneEvent(provider.StopEndTurn, &message.Text{Text: reply})}},
+	}
+}
+
+// errorTurns builds a single scripted turn that streams a little text, then
+// fails with a genuine provider error before ever reaching EventDone — the
+// direct analog of a real provider connection dying mid-turn (see
+// scriptedTurn's doc comment). No tool call is ever recorded, so
+// engine/engine.go's runTurn returns the raw error unwrapped (not an
+// interruptedTurnError), and errText survives unmolested through
+// server/handlers.go's plugin.SanitizeSessionError (no credential-shaped
+// substring, comfortably under its 256-rune cap) to land, byte for byte, in
+// both the session.error and turn.end(outcome:"error") events' Error field —
+// what the detail transcript's "error" entry (index.html's pushIfNewError)
+// must render.
+func errorTurns(partialText, errText string) []scriptedTurn {
+	return []scriptedTurn{
+		{events: []provider.Event{textDelta(partialText)}, err: errors.New(errText)},
 	}
 }
 
@@ -150,17 +195,17 @@ func quickTurns(reply string) [][]provider.Event {
 // the engine once the tool result lands) streams a short final reply and
 // ends the turn (StopEndTurn). Used by ProvToolBoard/ProvToolDetail — the
 // board-phase-transition and running-tool-fold scenarios.
-func toolTurns(reasoning, midText, callID string, sleepSeconds float64, finalText string) [][]provider.Event {
-	return [][]provider.Event{
-		{
+func toolTurns(reasoning, midText, callID string, sleepSeconds float64, finalText string) []scriptedTurn {
+	return []scriptedTurn{
+		{events: []provider.Event{
 			reasoningDelta(reasoning),
 			textDelta(midText),
 			doneEvent(provider.StopToolUse,
 				&message.Reasoning{Text: reasoning},
 				&message.Text{Text: midText},
 				toolCallPart(callID, sleepSeconds)),
-		},
-		{textDelta(finalText), doneEvent(provider.StopEndTurn, &message.Text{Text: finalText})},
+		}},
+		{events: []provider.Event{textDelta(finalText), doneEvent(provider.StopEndTurn, &message.Text{Text: finalText})}},
 	}
 }
 
@@ -200,8 +245,9 @@ func Start() (*Stub, error) {
 		ProvStallStale: &scriptedProvider{name: ProvStallStale, turns: toolTurns("this will take a while", "starting the slow one", "tc-stale", 2.8, "finally done")},
 		ProvStallDedup: &scriptedProvider{name: ProvStallDedup, turns: append(
 			toolTurns("working on the first ask", "on it", "tc-dedup", 1.4, "first one done"),
-			[]provider.Event{textDelta("queued reply landed"), doneEvent(provider.StopEndTurn, &message.Text{Text: "queued reply landed"})},
+			scriptedTurn{events: []provider.Event{textDelta("queued reply landed"), doneEvent(provider.StopEndTurn, &message.Text{Text: "queued reply landed"})}},
 		)},
+		ProvStreamError: &scriptedProvider{name: ProvStreamError, turns: errorTurns("starting the request", StreamErrorText)},
 	}
 
 	var srv *server.Server
