@@ -665,23 +665,55 @@ with no Go-side handler of its own.
   the URL fragment as small explicit params, not the hub's base64 blob:
   `#b=<base>` (box base URL) and `#s=<session id>` (open detail view) — both
   bookmarkable, encoded/decoded by a tested pure helper.
-- **Embedded serving**: every `harness serve` box also offers its own copy
-  same-origin, at `GET /monitor` — `tools/monitor` (package `monitor`,
-  `embed.go`) `//go:embed`s the exact committed `index.html`; `cmd/harness`'s
-  `serveCmd` wires it into `server.Options.MonitorPage`, which the server
-  serves unauthenticated (like `/health` — the page itself carries no
-  secrets) with a same-origin-scoped `Content-Security-Policy`
-  (`connect-src 'self'`). This is one URL per box, no `-cors-origin` dance,
-  no separately hosted copy required: open `http://<box>/monitor` and the
-  base URL field defaults to that box's own origin
-  (`sameOriginDefaultBase`, keyed off `location.pathname` starting with
-  `/monitor`) — still just a default, a stored preference or a bookmarked
-  `#b=` link wins over it. `server` itself never imports `tools/monitor`
-  (layering: `server` must not import `tools/*`); only `cmd/harness` does,
-  the same pattern `harness hub` already uses. The `file://`/static-host
-  path above is unaffected — this is additive, not a replacement, and stays
-  the only option for monitoring a box from a different origin (the
-  embedded route's CSP deliberately does not permit that).
+- **Embedded serving, frictionless local**: every `harness serve` box also
+  offers its own copy same-origin, at `GET /monitor` — `tools/monitor`
+  (package `monitor`, `embed.go`) `//go:embed`s the exact committed
+  `index.html`; `cmd/harness`'s `serveCmd` wires it into
+  `server.Options.MonitorPage`, which the server serves unauthenticated
+  (like `/health` — the page itself carries no secrets) with a
+  same-origin-scoped `Content-Security-Policy` (`connect-src 'self'`).
+  `server` itself never imports `tools/monitor` (layering: `server` must
+  not import `tools/*`); only `cmd/harness` does, the same pattern
+  `harness hub` already uses. The `file://`/static-host path is unaffected
+  — this is additive, and stays the only option for monitoring a box from a
+  different origin (the embedded route's CSP deliberately does not permit
+  that).
+  - **Unauthenticated-on-loopback** (`server.Options.Unauthenticated`, an
+    EXPLICIT opt-in never inferred from an empty `RunToken` on its own —
+    `New` still fails closed otherwise): `serveCmd` classifies `-addr`
+    (`isLoopbackAddr` — `localhost`, `127.0.0.1`/`::1`, any
+    `net.IP.IsLoopback()` address; a bare `:port`, `0.0.0.0`, `::`, or any
+    other routable address is NOT loopback). `HARNESS_RUN_TOKEN` unset +
+    loopback bind runs the box fully unauthenticated (every route, not just
+    `/health`/`/monitor`) and logs a clear warning; unset + non-loopback
+    still hard-errors `HARNESS_RUN_TOKEN is required` exactly as before. The
+    token guards network reachability, and loopback is a server-verifiable
+    proxy for that (unlike, say, `Origin`, which a client controls).
+  - **Same-origin auto-connect** (`embeddedConnectPlan`, index.html): opening
+    a box's own `/monitor` attempts the connection immediately against
+    `location.origin`, using whatever token is available (`#t=` fragment,
+    then a stored one, then none) — success lands straight on the board, no
+    panel, nothing typed (covers both the unauthenticated-loopback case and
+    a valid capability URL/returning operator with the SAME call). Only a
+    failed attempt (a real token is required and none was available) falls
+    back to a minimal token-only panel — host is already known, so the base
+    field never reappears. A `#t=<token>` fragment (mirroring `tools/hub`'s
+    "run tokens ride the URL by design" precedent, `extractFragmentToken`)
+    is adopted into the SAME `localStorage` key manual entry uses and
+    immediately scrubbed from the visible URL via `history.replaceState`; a
+    fragment `#b=` naming a DIFFERENT origin than this box's own — which the
+    embedded route's CSP would block outright if tried — surfaces a
+    plain-text notice instead of attempting it, composing with (never
+    blocking) the own-origin auto-connect. None of this weakens the auth
+    model itself: a token is still required and still checked exactly as a
+    hand-typed one would be, on every box that hasn't explicitly opted into
+    `Unauthenticated`.
+  - On a TTY, `serveCmd` also prints a click-ready line to stderr after
+    "serve start" — `monitor: http://<addr>/monitor#t=<token>` (or, when
+    running unauthenticated-loopback, the plain URL with no `#t=` at all,
+    since there's no credential to carry) — gated on `stderrIsTerminal`
+    (`os.ModeCharDevice`, stdlib-only) so a tokenized URL never lands in
+    piped/production stderr, only an interactive operator's own terminal.
 - **Test layers.** Pure helpers (SSE parser, activity reducer, transcript
   fold, route codec, formatters) live inside index.html's `/* TESTABLE-BEGIN
   */ … /* TESTABLE-END */` region and are covered by

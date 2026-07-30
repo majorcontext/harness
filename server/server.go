@@ -226,6 +226,25 @@ type Options struct {
 	// the page a plain []byte it neither inspects nor depends on the
 	// shape of.
 	MonitorPage []byte
+	// Unauthenticated, when true, serves EVERY route (not just /health and
+	// MonitorPage) without requiring a bearer token — see authorized(),
+	// which returns true unconditionally in this mode. This is a
+	// deliberate, EXPLICIT opt-in, never inferred from RunToken=="" on its
+	// own: an empty RunToken with Unauthenticated left false still fails
+	// New() below exactly as before (fail closed) — a caller that forgot
+	// to set a token on what it THINKS is a public/production bind must
+	// get a hard error, not a silently-open server. cmd/harness's serveCmd
+	// is the only place that sets this, and only when it has ALREADY
+	// classified -addr as loopback-only (isLoopbackAddr) — see its own
+	// doc comment for the full reasoning (the token guards network
+	// reachability, and reachability is server-verifiable from the bind
+	// address; loopback is definitionally unreachable from anywhere this
+	// process's own token isn't already implied). server itself performs
+	// no such classification and trusts the caller's judgment completely:
+	// this field says "serve unauthenticated", full stop, regardless of
+	// what address this process is actually bound to — the safety
+	// property lives entirely in cmd/harness deciding WHEN to set it.
+	Unauthenticated bool
 }
 
 // Server implements http.Handler for the harness serve API.
@@ -530,7 +549,11 @@ type sessionState struct {
 // and journal appends). Reconciliation reads the session directory only — it
 // touches no network and spawns nothing, so it is safe on the startup path.
 func New(opts Options) (*Server, error) {
-	if opts.RunToken == "" {
+	// Unauthenticated is the ONLY way an empty RunToken is accepted — see
+	// its own doc comment: this must never be inferred, only explicitly
+	// opted into by a caller (cmd/harness's serveCmd) that has already
+	// verified the bind address is loopback-only.
+	if opts.RunToken == "" && !opts.Unauthenticated {
 		return nil, errors.New("server: RunToken is required")
 	}
 	if opts.NewSession == nil || opts.LoadSession == nil {
@@ -765,6 +788,12 @@ func (s *Server) auth(h http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) authorized(r *http.Request) bool {
+	// Unauthenticated mode: every route, unconditionally — see its doc
+	// comment on Options. Checked first so a missing/malformed
+	// Authorization header is never even inspected in this mode.
+	if s.opts.Unauthenticated {
+		return true
+	}
 	const prefix = "Bearer "
 	h := r.Header.Get("Authorization")
 	if !strings.HasPrefix(h, prefix) {

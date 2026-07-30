@@ -4,10 +4,13 @@
 // small scripted providers (no API key needed, and — for the tool-call
 // scenarios — a REAL "bash" tool execution via a short `sleep`, not a
 // simulated one), plus a tiny static file server for the ACTUAL committed
-// tools/monitor/index.html (the monitor has no Go-side handler of its own —
-// see index.html's header comment: "open it from file:// or serve it from
-// any static host" — so this test hosts it exactly the way a developer
-// would, unlike tools/hub which embeds and serves its page from Go).
+// tools/monitor/index.html (mirroring how a developer would statically host
+// it per index.html's own header comment: "open it from file:// or serve it
+// from any static host"). The box ALSO serves its own embedded copy at real
+// GET /monitor (server.Options.MonitorPage, tools/monitor.Page — the same
+// wiring cmd/harness's serveCmd uses), plus a SECOND, loopback-
+// Unauthenticated box (Stub.UnauthBase) for the same-origin auto-connect
+// scenarios (embeddedConnectPlan) that need a token-optional server.
 //
 // This exists specifically to answer "does the monitor page actually work
 // against a real harness box, or only against hand-rolled mocks in a JS
@@ -35,6 +38,7 @@ import (
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 	"github.com/majorcontext/harness/server"
+	"github.com/majorcontext/harness/tools/monitor"
 )
 
 // RunToken is the fixed run token the stub box authenticates with.
@@ -247,13 +251,24 @@ type Stub struct {
 	BoxBase     string // e.g. "http://127.0.0.1:54321" — a real harness serve-equivalent
 	MonitorBase string // e.g. "http://127.0.0.1:54322" — serves the real, committed tools/monitor/index.html
 	Token       string
+	// UnauthBase is a SECOND, independent box — server.Options.RunToken ""
+	// + Unauthenticated true, MonitorPage set — for embeddedConnectPlan's
+	// auto-attempt-same-origin scenario against a genuinely token-optional
+	// server (cmd/harness's loopback case (b)). It cannot be the same
+	// server.Server as BoxBase: every OTHER scenario in this package
+	// depends on BoxBase actually enforcing its RunToken.
+	UnauthBase string
 
 	boxAddr    string // fixed host:port the box listens on — reused across Kill/Restart
 	boxHTTP    *http.Server
 	boxLn      net.Listener
 	monitorLn  net.Listener
+	unauthLn   net.Listener
+	unauthHTTP *http.Server
 	srv        *server.Server
+	unauthSrv  *server.Server
 	sessionDir string
+	unauthDir  string
 	mu         sync.Mutex
 }
 
@@ -299,6 +314,13 @@ func Start() (*Stub, error) {
 		RunToken:   RunToken,
 		Version:    "monitor-e2e",
 		CORSOrigin: "*",
+		// MonitorPage: this box also serves its own embedded copy at real
+		// GET /monitor, exactly like cmd/harness's serveCmd wires it — see
+		// the reconnect-gap/buffer-cap scenarios above for the tokened,
+		// static-hosted path; the embeddedConnectPlan scenarios further
+		// down in real_e2e.mjs load THIS route directly (BoxBase +
+		// "/monitor[#t=...]") to prove the real thing, not a simulation.
+		MonitorPage: monitor.Page,
 		NewSession: func(m message.ModelRef, workDir string, parentSession string) (*engine.Session, error) {
 			cfg := mkCfg(m)
 			cfg.WorkDir = workDir
@@ -314,29 +336,78 @@ func Start() (*Stub, error) {
 		return nil, err
 	}
 
+	// unauthSrv: a SECOND, independent box for embeddedConnectPlan's
+	// auto-attempt-same-origin scenario against cmd/harness's loopback
+	// case (b) — RunToken "" + Unauthenticated true. No scripted providers
+	// are needed (this scenario only proves connect/board-render with zero
+	// typing, never runs a turn), so NewSession/LoadSession are non-nil
+	// only to satisfy server.New's own requirement — never expected to be
+	// called.
+	unauthDir, err := os.MkdirTemp("", "monitor-e2e-unauth-sessions")
+	if err != nil {
+		os.RemoveAll(dir) //nolint:errcheck
+		return nil, err
+	}
+	unauthSrv, err := server.New(server.Options{
+		SessionDir:      unauthDir,
+		Version:         "monitor-e2e-unauth",
+		Unauthenticated: true,
+		MonitorPage:     monitor.Page,
+		NewSession: func(m message.ModelRef, workDir string, parentSession string) (*engine.Session, error) {
+			return nil, errors.New("not exercised by the embeddedConnectPlan scenario")
+		},
+		LoadSession: func(id string) (*engine.Session, error) {
+			return nil, errors.New("not exercised by the embeddedConnectPlan scenario")
+		},
+	})
+	if err != nil {
+		os.RemoveAll(dir)       //nolint:errcheck
+		os.RemoveAll(unauthDir) //nolint:errcheck
+		return nil, err
+	}
+
 	boxLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		srv.Close() //nolint:errcheck
+		srv.Close()       //nolint:errcheck
+		unauthSrv.Close() //nolint:errcheck
 		os.RemoveAll(dir)
+		os.RemoveAll(unauthDir)
 		return nil, err
 	}
 	monitorLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		boxLn.Close() //nolint:errcheck
-		srv.Close()   //nolint:errcheck
+		boxLn.Close()     //nolint:errcheck
+		srv.Close()       //nolint:errcheck
+		unauthSrv.Close() //nolint:errcheck
 		os.RemoveAll(dir)
+		os.RemoveAll(unauthDir)
+		return nil, err
+	}
+	unauthLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		boxLn.Close()     //nolint:errcheck
+		monitorLn.Close() //nolint:errcheck
+		srv.Close()       //nolint:errcheck
+		unauthSrv.Close() //nolint:errcheck
+		os.RemoveAll(dir)
+		os.RemoveAll(unauthDir)
 		return nil, err
 	}
 
 	boxHTTP := &http.Server{Handler: srv}
 	go boxHTTP.Serve(boxLn) //nolint:errcheck
+	unauthHTTP := &http.Server{Handler: unauthSrv}
+	go unauthHTTP.Serve(unauthLn) //nolint:errcheck
 
 	monitorDir, err := staticMonitorDir()
 	if err != nil {
 		boxLn.Close()     //nolint:errcheck
 		monitorLn.Close() //nolint:errcheck
+		unauthLn.Close()  //nolint:errcheck
 		srv.Close()       //nolint:errcheck
+		unauthSrv.Close() //nolint:errcheck
 		os.RemoveAll(dir)
+		os.RemoveAll(unauthDir)
 		return nil, err
 	}
 
@@ -344,12 +415,17 @@ func Start() (*Stub, error) {
 		BoxBase:     "http://" + boxLn.Addr().String(),
 		MonitorBase: "http://" + monitorLn.Addr().String(),
 		Token:       RunToken,
+		UnauthBase:  "http://" + unauthLn.Addr().String(),
 		boxAddr:     boxLn.Addr().String(),
 		boxHTTP:     boxHTTP,
 		boxLn:       boxLn,
 		monitorLn:   monitorLn,
+		unauthLn:    unauthLn,
+		unauthHTTP:  unauthHTTP,
 		srv:         srv,
+		unauthSrv:   unauthSrv,
 		sessionDir:  dir,
+		unauthDir:   unauthDir,
 	}
 
 	// The monitor's own static-file listener also carries a tiny, TEST-ONLY
@@ -426,6 +502,9 @@ func (s *Stub) Close() {
 	if s.boxHTTP != nil {
 		s.boxHTTP.Close() //nolint:errcheck
 	}
+	if s.unauthHTTP != nil {
+		s.unauthHTTP.Close() //nolint:errcheck
+	}
 	s.mu.Unlock()
 	if s.monitorLn != nil {
 		s.monitorLn.Close() //nolint:errcheck
@@ -433,8 +512,14 @@ func (s *Stub) Close() {
 	if s.srv != nil {
 		s.srv.Close() //nolint:errcheck
 	}
+	if s.unauthSrv != nil {
+		s.unauthSrv.Close() //nolint:errcheck
+	}
 	if s.sessionDir != "" {
 		os.RemoveAll(s.sessionDir) //nolint:errcheck
+	}
+	if s.unauthDir != "" {
+		os.RemoveAll(s.unauthDir) //nolint:errcheck
 	}
 }
 

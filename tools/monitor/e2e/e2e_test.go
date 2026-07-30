@@ -37,7 +37,20 @@ import (
 //     against an unknown session id surfaces the server's real non-2xx
 //     error text inline;
 //   - killing the box's HTTP layer server-side flips the header to
-//     "reconnecting…", and restarting it resumes the stream.
+//     "reconnecting…", and restarting it resumes the stream;
+//   - a real provider stream failure renders a critical transcript error
+//     entry with the chip settling to idle promptly (no poll dependency);
+//   - detailState.liveEvents crosses a tuned cap and reconcileDetail trims
+//     it back down; a reconnect gap (pollOnce advancing state.lastSeq past
+//     what the page's own stream actually delivered) heals via the SAME
+//     reconcileDetail, backfilling a turn the detail view never observed
+//     live;
+//   - embeddedConnectPlan's "frictionless local" behavior against the
+//     box's REAL GET /monitor route on fresh page loads: an Unauthenticated
+//     box auto-connects with zero typing; a "#t=<token>" capability URL
+//     auto-connects a tokened box and scrubs the token from the visible
+//     URL; a tokened box with no token anywhere falls back to a usable,
+//     token-only panel (host absent).
 //
 // Dependency setup is automatic, not a documented manual prerequisite: if
 // jsdom isn't already installed in this directory, the test runs `npm ci`
@@ -78,7 +91,7 @@ func TestRealEndToEnd(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	cmd := exec.CommandContext(ctx, nodePath, script, stub.BoxBase, stub.MonitorBase, stub.Token)
+	cmd := exec.CommandContext(ctx, nodePath, script, stub.BoxBase, stub.MonitorBase, stub.Token, stub.UnauthBase)
 	cmd.Dir = dir
 	var out bytes.Buffer
 	cmd.Stdout = &out

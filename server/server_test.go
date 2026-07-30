@@ -660,6 +660,71 @@ func TestMonitorPageNotConfigured(t *testing.T) {
 	}
 }
 
+// TestUnauthenticatedServesWithoutToken covers cmd/harness's loopback-
+// unauthenticated path (server.Options.Unauthenticated): every route
+// serves successfully with NO Authorization header at all — not just
+// /health/MonitorPage, which were already unauthenticated before this
+// field existed.
+func TestUnauthenticatedServesWithoutToken(t *testing.T) {
+	dir := t.TempDir()
+	srv := newServer(t, dir, &scriptedProvider{name: "test"}, 0, func(o *Options) {
+		o.RunToken = ""
+		o.Unauthenticated = true
+	})
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+
+	req, _ := http.NewRequest("GET", ts.URL+"/session", nil) // no auth header
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /session status = %d, want 200 in Unauthenticated mode", resp.StatusCode)
+	}
+}
+
+// TestUnauthenticatedDoesNotWeakenNormalAuth guards the opposite direction:
+// a server that has NOT opted into Unauthenticated still 401s exactly as
+// before — Options.Unauthenticated is a per-instance opt-in, never a
+// package-level or accidental global weakening of the auth model.
+func TestUnauthenticatedDoesNotWeakenNormalAuth(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	req, _ := http.NewRequest("GET", h.ts.URL+"/session", nil) // no auth header
+	resp, err := h.ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (a normal server must still require a token)", resp.StatusCode)
+	}
+}
+
+// TestEmptyRunTokenFailsClosedWithoutUnauthenticated guards the "never
+// infer, only explicit opt-in" invariant from Options.Unauthenticated's
+// own doc comment: an empty RunToken with Unauthenticated left at its
+// zero value (false) must still fail server.New, exactly the pre-existing
+// behavior — a caller that forgot to set a token on what it thinks is a
+// production bind gets a hard error, never a silently-open server.
+func TestEmptyRunTokenFailsClosedWithoutUnauthenticated(t *testing.T) {
+	dir := t.TempDir()
+	_, err := New(Options{
+		SessionDir: dir,
+		RunToken:   "",
+		NewSession: func(m message.ModelRef, workDir string, parentSession string) (*engine.Session, error) {
+			return nil, errors.New("not reached")
+		},
+		LoadSession: func(id string) (*engine.Session, error) {
+			return nil, errors.New("not reached")
+		},
+	})
+	if err == nil {
+		t.Fatal("New with empty RunToken and Unauthenticated=false must fail closed, got nil error")
+	}
+}
+
 func TestAuthRequired(t *testing.T) {
 	h := newHarness(t, &scriptedProvider{name: "test"})
 

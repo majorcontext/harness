@@ -147,8 +147,18 @@
      + token are set (localStorage empty on first visit, or cleared). */
   .connect { margin: 8px 0 28px; }
   .connect p { color: var(--text-2); font-size: 13px; margin: 0 0 14px; }
+  /* Same house tone as the intro paragraph above (not critical/alarming —
+     see connectPanelState's own doc comment: this explains why a carried-in
+     #b= link won't be tried, it never blocks the own-origin connect). */
+  .connect .cross-box-notice { color: var(--text-2); font-size: 13px; margin: -6px 0 14px; }
   .connect form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
-  .connect label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-3); }
+  /* :not([hidden]) is load-bearing here for the SAME reason it is on
+     .detail-head .livechip (see that rule's own comment): a bare
+     `.connect label { display: flex }` would silently defeat
+     base-url-label.hidden = true (connectPanelState's showBaseField:
+     false case) — verified against that exact class of bug earlier in
+     this file's history, not a hypothetical. */
+  .connect label:not([hidden]) { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-3); }
   .connect input {
     background: var(--surface-inset); color: var(--text-1);
     border: 1px solid var(--separator); border-radius: 8px;
@@ -365,9 +375,10 @@
       </header>
 
       <section id="connect-panel" class="connect" aria-label="Connect to a harness instance">
-        <p>Connect to a harness serve instance to see its sessions.</p>
+        <p id="connect-intro">Connect to a harness serve instance to see its sessions.</p>
+        <p class="cross-box-notice" id="connect-cross-box-notice" hidden></p>
         <form id="connect-form">
-          <label for="base-url">Base URL
+          <label for="base-url" id="base-url-label">Base URL
             <input id="base-url" type="text" placeholder="http://localhost:4096" autocomplete="off" spellcheck="false" aria-describedby="connect-err" required>
           </label>
           <label for="run-token">Run token
@@ -602,6 +613,115 @@ function sameOriginDefaultBase(loc) {
   if (typeof l.pathname !== "string" || typeof l.origin !== "string" || !l.origin) return null;
   if (l.pathname !== "/monitor" && l.pathname.indexOf("/monitor/") !== 0) return null;
   return l.origin;
+}
+
+// embeddedConnectPlan is the single source of truth for the "frictionless
+// local" behavior: when this page is served embedded (sameOriginDefaultBase
+// — a box's own GET /monitor), bootstrap() ATTEMPTS the connection
+// immediately, with no panel shown at all, rather than making the operator
+// type anything. The auth model itself is UNCHANGED by any of this — a
+// token is still required by every route unless the box itself opted into
+// server.Options.Unauthenticated (loopback-only — see its own doc comment);
+// this only decides what the PAGE tries automatically and what it falls
+// back to showing, never what the SERVER accepts.
+//
+// The return value composes four outcomes rather than naming one
+// exclusive branch (they are not mutually exclusive in practice — see
+// each one below):
+//   - auto-attempt-same-origin: embedded — bootstrap() calls
+//     attemptConnect(base, autoToken || "") immediately, before rendering
+//     any panel. This covers BOTH the loopback-Unauthenticated case (no
+//     token needed — an empty Authorization header is fine, see
+//     authorized()) and the capability-URL/returning-operator case
+//     (autoToken carries a real one) with the SAME call: an empty token
+//     against an Unauthenticated box succeeds exactly like a correct one
+//     against any box.
+//   - show-full-panel: NOT embedded (file:// or a separately hosted static
+//     copy) — host is unknown to this page, so there is nothing to
+//     auto-attempt; the traditional two-field panel, entirely unchanged.
+//   - show-token-panel: embedded, but ONLY reached if/when the auto-
+//     attempt's own result is a failure (attemptConnect resolves false —
+//     see bootstrap()'s revealEmbeddedPanel) — this function cannot know
+//     that synchronously, so it only signals the STATIC part: showBaseField
+//     false (base is fixed/known, never re-typed) is what the eventual
+//     fallback panel renders as. A tunneled/non-loopback box with no
+//     capability link lands here, once, after one failed silent attempt.
+//   - show-cross-box-notice: crossBoxNotice is set whenever a fragment
+//     base names a DIFFERENT origin than this one — independent of (and
+//     composes with) the auto-attempt above: the embedded copy is pinned
+//     to its own box by server/handlers.go's monitorContentSecurityPolicy
+//     (connect-src 'self'), so a foreign #b= would only ever produce an
+//     opaque, undiagnosable network error if tried — this never attempts
+//     it, only explains it, while the SAME-origin auto-attempt (using
+//     autoToken) proceeds normally regardless.
+//
+// autoToken precedence (mirrors extractFragmentToken's own doc comment):
+// fragToken (the fresher credential, e.g. a rotated token shared via a new
+// link) wins over storedToken; neither present yields null, which
+// bootstrap() passes to attemptConnect as "" (still worth trying — see
+// auto-attempt-same-origin above).
+function embeddedConnectPlan(loc, fragToken, storedToken, fragBase) {
+  var base = sameOriginDefaultBase(loc);
+  if (base == null) {
+    return { embedded: false, base: null, autoToken: null, showBaseField: true, crossBoxNotice: null };
+  }
+  var autoToken = null;
+  if (typeof fragToken === "string" && fragToken) autoToken = fragToken;
+  else if (typeof storedToken === "string" && storedToken) autoToken = storedToken;
+  var crossBoxNotice = null;
+  if (typeof fragBase === "string" && fragBase && fragBase !== base) {
+    crossBoxNotice = "This embedded monitor can only watch its own instance — open " + fragBase + "/monitor instead.";
+  }
+  return { embedded: true, base: base, autoToken: autoToken, showBaseField: false, crossBoxNotice: crossBoxNotice };
+}
+
+// extractFragmentToken parses a run token carried in the URL fragment as
+// "#t=<token>" — a capability URL an operator can paste or click without
+// typing a token by hand. tools/hub (see AGENTS.md's "Development hub"
+// section) established the precedent in this repo that run tokens riding
+// the URL fragment is a deliberate, documented tradeoff ("run tokens ride
+// the URL by design; treat a link like a secret"), not a novel hazard —
+// this reuses that philosophy while keeping THIS file's own established
+// encoding (small explicit params, route/unroute — see their doc comments
+// — never the hub's base64 blob).
+//
+// Returns the adoption plan, not the side effects themselves (this stays
+// pure/TESTABLE; bootstrap() applies it: localStorage.setItem + a
+// history.replaceState scrub):
+//   - token: the decoded value, or null if no "t" param is present.
+//     Percent-decoding failures degrade to the raw text (matching
+//     unroute's own tolerance) rather than throwing; an explicitly empty
+//     "#t=" is also null (nothing to adopt). A repeated "t" param uses the
+//     LAST occurrence, matching unroute's own last-write-wins handling of
+//     repeated "b"/"s" params.
+//   - cleanedHash: the SAME hash with "t" removed but every other
+//     recognized param preserved (route(unroute(hash)) — minus token by
+//     construction, since unroute never parsed "t" from `hash` in the
+//     first place) — e.g. "#t=X&s=Y" -> "#s=Y", "#t=X" -> "#", "#s=Y"
+//     (no token) -> "#s=Y" unchanged. A totally unrecognized third param
+//     is dropped either way, same as unroute already tolerates (see its
+//     "unknown keys ... silently ignored" comment) — this never carried
+//     it forward to begin with.
+function extractFragmentToken(hash) {
+  var h = typeof hash === "string" ? hash : "";
+  var stripped = h[0] === "#" ? h.slice(1) : h;
+  var token = null;
+  if (stripped) {
+    var parts = stripped.split("&");
+    for (var i = 0; i < parts.length; i++) {
+      var part = parts[i];
+      if (!part) continue;
+      var eq = part.indexOf("=");
+      var key = eq === -1 ? part : part.slice(0, eq);
+      if (key !== "t") continue;
+      var rawVal = eq === -1 ? "" : part.slice(eq + 1);
+      try { token = decodeURIComponent(rawVal); } catch (e) { token = rawVal; }
+    }
+  }
+  if (token === "") token = null;
+  var r = unroute(hash);
+  var cleanedHash = route({ base: r.base, sessionId: r.sessionId });
+  return { token: token, cleanedHash: cleanedHash };
 }
 
 // QUIET_MS/STALL_MS are `var`, not `const`: top-level `const`/`let` bindings
@@ -2387,30 +2507,98 @@ function forceDisconnect(reason) {
 (function bootstrap() {
   var storedBase = localStorage.getItem(LS_BASE) || "";
   var storedToken = localStorage.getItem(LS_TOKEN) || "";
-  // Fragment #b= prefills the base URL field (e.g. a shared bookmark) when
-  // nothing is stored yet; the token is never carried in the URL — it lives
-  // in localStorage only (see the plan's Connect flow). Same-origin
-  // (sameOriginDefaultBase — this page being served BY the box itself at
-  // GET /monitor) is the LOWEST-priority default: a stored preference or a
-  // bookmarked fragment link still wins, since either reflects a deliberate
-  // earlier choice this page must not override.
+
+  // #t=<token> capability URL (extractFragmentToken, TESTABLE): adopt into
+  // the SAME localStorage key manual entry uses, then immediately scrub it
+  // from the visible/bookmarkable URL via history.replaceState — a token
+  // must never linger in browser history or a shared screenshot/link one
+  // beat longer than it takes to read it. An explicit #t= wins over a
+  // previously stored token: it is the fresher credential (e.g. shared via
+  // a new link after a rotation) — see extractFragmentToken's own doc
+  // comment for the tools/hub precedent this mirrors. This does NOT
+  // weaken the auth model in any way: the token is still required, still
+  // checked by attemptConnect exactly as a hand-typed one would be — this
+  // only removes the typing, not the credential.
+  var fragToken = extractFragmentToken(location.hash);
+  if (fragToken.token) {
+    storedToken = fragToken.token;
+    localStorage.setItem(LS_TOKEN, storedToken);
+    history.replaceState(null, "", fragToken.cleanedHash);
+  }
+
+  // embeddedConnectPlan (TESTABLE) is the single source of truth for the
+  // whole "frictionless local" behavior — see its own doc comment for the
+  // four composing outcomes. Read location.hash fresh (not the possibly-
+  // stale value fragToken parsed above): if the token scrub just ran, this
+  // is now the CLEANED hash, but "b" is preserved by cleanedHash's own
+  // construction, so the fragment base decision is identical either way.
   var fragBase = unroute(location.hash).base;
-  baseInput.value = storedBase || fragBase || sameOriginDefaultBase(location) || "";
-  tokenInput.value = storedToken;
-  setConnState("disconnected");
+  var plan = embeddedConnectPlan(location, fragToken.token, storedToken, fragBase);
+
+  var baseLabel = document.getElementById("base-url-label");
+  var introEl = document.getElementById("connect-intro");
+  var noticeEl = document.getElementById("connect-cross-box-notice");
+  baseLabel.hidden = !plan.showBaseField;
+  if (plan.crossBoxNotice) {
+    noticeEl.textContent = plan.crossBoxNotice;
+    noticeEl.hidden = false;
+  } else {
+    noticeEl.hidden = true;
+  }
 
   connectForm.addEventListener("submit", function (e) {
     e.preventDefault();
-    var base = baseInput.value.trim().replace(/\/+$/, "");
+    // Fixed to this box's own origin once embedded (never user-edited —
+    // the field is hidden): CSP (connect-src 'self') would block anything
+    // else anyway, and a differing fragment base is exactly what
+    // crossBoxNotice explains, not silently substitutes.
+    var base = plan.embedded ? plan.base : baseInput.value.trim().replace(/\/+$/, "");
     var token = tokenInput.value;
     if (!base || !token) { connectErr.textContent = "base URL and token are required"; return; }
     setFormBusy(true, "Connecting…");
     attemptConnect(base, token).then(function () { setFormBusy(false, "Connect"); });
   });
 
-  if (storedBase && storedToken) {
+  if (plan.embedded) {
+    // auto-attempt-same-origin: no panel interaction required up front —
+    // try immediately with whatever token is available (autoToken, or ""
+    // when none — still worth trying: an Unauthenticated loopback box
+    // accepts an empty Authorization header exactly like a correct
+    // bearer token everywhere else). Success flips body.classList to
+    // "connected", which the existing `body.connected #connect-panel {
+    // display: none }` rule already hides entirely — "no connect panel,
+    // no fields, nothing typed" falls out of THAT rule, not a new one.
+    introEl.textContent = "Connecting to " + plan.base + "…";
+    baseInput.value = plan.base;
+    tokenInput.value = plan.autoToken || "";
+    setConnState("disconnected");
     setFormBusy(true, "Connecting…");
-    attemptConnect(storedBase, storedToken).then(function () { setFormBusy(false, "Connect"); });
+    attemptConnect(plan.base, plan.autoToken || "").then(function (ok) {
+      if (ok) return;
+      // show-token-panel: the attempt failed (a real token is required
+      // and none of autoToken's sources had a valid one, or this box
+      // isn't reachable — either way attemptConnect already set
+      // connectErr's text). Base stays fixed/shown as plain text via
+      // introEl (showBaseField is already false — the field itself
+      // stays hidden); clear whatever token was just tried so the
+      // operator types a fresh one rather than staring at a rejected
+      // value sitting in the field.
+      introEl.textContent = "Connect to " + plan.base + " to see its sessions.";
+      tokenInput.value = "";
+      setFormBusy(false, "Connect");
+    });
+  } else {
+    // show-full-panel: unchanged two-field flow.
+    // Fragment #b= prefills the base URL field (e.g. a shared bookmark)
+    // when nothing is stored yet; a stored preference still wins, since it
+    // reflects a deliberate earlier choice this page must not override.
+    baseInput.value = storedBase || fragBase || "";
+    tokenInput.value = storedToken;
+    setConnState("disconnected");
+    if (storedBase && storedToken) {
+      setFormBusy(true, "Connecting…");
+      attemptConnect(storedBase, storedToken).then(function () { setFormBusy(false, "Connect"); });
+    }
   }
 })();
 </script>

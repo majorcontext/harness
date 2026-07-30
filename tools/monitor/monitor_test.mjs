@@ -49,6 +49,8 @@ const {
   route,
   unroute,
   sameOriginDefaultBase,
+  embeddedConnectPlan,
+  extractFragmentToken,
   QUIET_MS,
   STALL_MS,
   staleness,
@@ -270,6 +272,120 @@ test("sameOriginDefaultBase: tolerates missing/malformed input without throwing"
   assert.equal(sameOriginDefaultBase({}), null);
   assert.equal(sameOriginDefaultBase({ pathname: "/monitor" }), null); // no origin
   assert.equal(sameOriginDefaultBase({ pathname: "/monitor", origin: "" }), null); // empty origin
+});
+
+/* ---------- embeddedConnectPlan (RED-FIRST — same-origin auto-connect:
+   opening a local box's /monitor drops the operator straight on the board,
+   no panel, no typing, unless/until an attempt actually fails) ---------- */
+
+test("embeddedConnectPlan: not embedded (file:// / static host) — show-full-panel, no auto-attempt, no notice", () => {
+  const plan = embeddedConnectPlan({ pathname: "/", origin: "http://127.0.0.1:4096" }, null, "", "http://elsewhere:9000");
+  assert.deepEqual(reify(plan), { embedded: false, base: null, autoToken: null, showBaseField: true, crossBoxNotice: null });
+});
+
+test("embeddedConnectPlan: RED-FIRST — embedded with NO token anywhere still signals auto-attempt-same-origin (autoToken null, not a reason to skip trying — covers the loopback-Unauthenticated case)", () => {
+  const plan = embeddedConnectPlan({ pathname: "/monitor", origin: "http://127.0.0.1:4096" }, null, "", null);
+  assert.equal(plan.embedded, true);
+  assert.equal(plan.base, "http://127.0.0.1:4096");
+  assert.equal(plan.autoToken, null);
+  assert.equal(plan.showBaseField, false);
+  assert.equal(plan.crossBoxNotice, null);
+});
+
+test("embeddedConnectPlan: an explicit fragment token (#t=) wins as autoToken over a stored one — the fresher credential", () => {
+  const plan = embeddedConnectPlan({ pathname: "/monitor", origin: "http://127.0.0.1:4096" }, "fresh-tok", "stale-tok", null);
+  assert.equal(plan.autoToken, "fresh-tok");
+});
+
+test("embeddedConnectPlan: falls back to the stored token when no fragment token is present", () => {
+  const plan = embeddedConnectPlan({ pathname: "/monitor", origin: "http://127.0.0.1:4096" }, null, "stale-tok", null);
+  assert.equal(plan.autoToken, "stale-tok");
+});
+
+test("embeddedConnectPlan: RED-FIRST — a fragment base naming a DIFFERENT origin surfaces show-cross-box-notice, composing with (not replacing) the auto-attempt", () => {
+  const plan = embeddedConnectPlan({ pathname: "/monitor", origin: "http://127.0.0.1:4096" }, "tok", "", "http://other-box:4096");
+  assert.equal(plan.embedded, true, "the own-origin auto-attempt must still be signaled");
+  assert.equal(plan.base, "http://127.0.0.1:4096", "the own-origin base must still be usable despite the notice");
+  assert.equal(plan.autoToken, "tok", "the auto-attempt's token is unaffected by the notice");
+  assert.ok(plan.crossBoxNotice, "expected a cross-box notice");
+  assert.ok(plan.crossBoxNotice.includes("other-box:4096"), "notice must name the OTHER box: " + plan.crossBoxNotice);
+  assert.ok(plan.crossBoxNotice.includes("/monitor"), "notice should point at the other box's own /monitor: " + plan.crossBoxNotice);
+});
+
+test("embeddedConnectPlan: a fragment base that AGREES with this origin is not a conflict — no notice", () => {
+  const plan = embeddedConnectPlan({ pathname: "/monitor", origin: "http://127.0.0.1:4096" }, null, "", "http://127.0.0.1:4096");
+  assert.equal(plan.crossBoxNotice, null);
+});
+
+test("embeddedConnectPlan: show-token-panel's static half — embedded always signals showBaseField false (base fixed/known), regardless of whether a token is available yet", () => {
+  // The DYNAMIC half (whether a panel is ever actually shown) depends on
+  // the auto-attempt's real result, which this pure function cannot know
+  // — see its own doc comment. bootstrap() only reveals a panel when
+  // attemptConnect resolves false; when it does, THIS is what that panel
+  // renders as.
+  assert.equal(embeddedConnectPlan({ pathname: "/monitor", origin: "http://x" }, null, "", null).showBaseField, false);
+  assert.equal(embeddedConnectPlan({ pathname: "/monitor", origin: "http://x" }, "tok", "", null).showBaseField, false);
+});
+
+test("embeddedConnectPlan: tolerates missing/malformed input without throwing", () => {
+  assert.equal(embeddedConnectPlan(null, null, null, null).embedded, false);
+  assert.equal(embeddedConnectPlan({ pathname: "/monitor", origin: "http://x" }, undefined, undefined, undefined).autoToken, null);
+  assert.equal(embeddedConnectPlan({ pathname: "/monitor", origin: "http://x" }, "", "", "").crossBoxNotice, null); // empty strings are "absent", not conflicts
+});
+
+/* ---------- extractFragmentToken (RED-FIRST — #t= capability URL:
+   zero-typing access without weakening auth) ---------- */
+
+test("extractFragmentToken: adopts a plain '#t=<token>' and scrubs it, leaving a bare '#'", () => {
+  const r = extractFragmentToken("#t=abc123");
+  assert.equal(r.token, "abc123");
+  assert.equal(r.cleanedHash, "#");
+});
+
+test("extractFragmentToken: RED-FIRST — scrubbing preserves OTHER recognized params (s=) intact", () => {
+  const r = extractFragmentToken("#t=abc123&s=ses_01ky9fjq2wexvq8rn0m4tdq2m");
+  assert.equal(r.token, "abc123");
+  assert.equal(r.cleanedHash, "#s=ses_01ky9fjq2wexvq8rn0m4tdq2m");
+});
+
+test("extractFragmentToken: preserves the base param (b=) too, in either param order", () => {
+  const r1 = extractFragmentToken("#b=http%3A%2F%2Flocalhost%3A4096&t=abc123");
+  assert.equal(r1.token, "abc123");
+  assert.equal(r1.cleanedHash, "#b=http%3A%2F%2Flocalhost%3A4096");
+  const r2 = extractFragmentToken("#t=abc123&b=http%3A%2F%2Flocalhost%3A4096&s=xyz");
+  assert.equal(r2.token, "abc123");
+  assert.equal(r2.cleanedHash, "#b=http%3A%2F%2Flocalhost%3A4096&s=xyz");
+});
+
+test("extractFragmentToken: no 't' param — token null, cleanedHash unchanged (modulo re-encoding)", () => {
+  const r = extractFragmentToken("#s=xyz");
+  assert.equal(r.token, null);
+  assert.equal(r.cleanedHash, "#s=xyz");
+  const empty = extractFragmentToken("#");
+  assert.equal(empty.token, null);
+  assert.equal(empty.cleanedHash, "#");
+});
+
+test("extractFragmentToken: an explicitly empty '#t=' is null (nothing to adopt), not an empty-string credential", () => {
+  const r = extractFragmentToken("#t=");
+  assert.equal(r.token, null);
+});
+
+test("extractFragmentToken: percent-decodes the token value, tolerating malformed encoding (degrades to raw text)", () => {
+  assert.equal(extractFragmentToken("#t=a%20b").token, "a b");
+  assert.equal(extractFragmentToken("#t=%zz").token, "%zz");
+});
+
+test("extractFragmentToken: a repeated 't' param uses the LAST occurrence (matches unroute's own repeated-param handling)", () => {
+  const r = extractFragmentToken("#t=first&t=second");
+  assert.equal(r.token, "second");
+});
+
+test("extractFragmentToken: tolerates junk hashes without throwing", () => {
+  assert.deepEqual(reify(extractFragmentToken(undefined)), { token: null, cleanedHash: "#" });
+  assert.deepEqual(reify(extractFragmentToken(null)), { token: null, cleanedHash: "#" });
+  assert.deepEqual(reify(extractFragmentToken("not-a-hash-at-all")), { token: null, cleanedHash: "#" });
+  assert.deepEqual(reify(extractFragmentToken("#&&&")), { token: null, cleanedHash: "#" });
 });
 
 /* ---------- staleness / QUIET_MS / STALL_MS ---------- */

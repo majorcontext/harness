@@ -31,12 +31,12 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-const [, , boxBase, monitorBase, token] = process.argv;
-if (!boxBase || !monitorBase || !token) {
-  console.error("usage: node real_e2e.mjs <box_base> <monitor_base> <token>");
+const [, , boxBase, monitorBase, token, unauthBase] = process.argv;
+if (!boxBase || !monitorBase || !token || !unauthBase) {
+  console.error("usage: node real_e2e.mjs <box_base> <monitor_base> <token> <unauth_base>");
   process.exit(2);
 }
-console.error("box:", boxBase, "monitor:", monitorBase);
+console.error("box:", boxBase, "monitor:", monitorBase, "unauth:", unauthBase);
 
 const here = dirname(fileURLToPath(import.meta.url));
 const committedIndexHTML = readFileSync(join(here, "..", "index.html"), "utf8");
@@ -246,13 +246,38 @@ function installGlobals(w) {
   w.__monitorTuning = TUNING;
 }
 
+// openEmbeddedPage drives a FRESH page load of the box's own real GET
+// /monitor route (never the separate static monitorBase server — see
+// stub.go's Stub.UnauthBase/MonitorPage doc comments) at `url`, which may
+// carry its own hash (e.g. "#t=..."): a brand-new JSDOM instance, own
+// localStorage, own location — exactly what a genuinely fresh browser tab
+// opening that link would see, unlike the single shared `dom`/`w` the rest
+// of this file drives across many sequential scenarios (which accumulates
+// localStorage/hash state those scenarios themselves rely on). Fetches the
+// real bytes from `url` itself (not the already-cached committedIndexHTML)
+// so this is a genuine end-to-end check of the embedded route serving
+// working, connectable HTML — not a simulation of it.
+async function openEmbeddedPage(url) {
+  const html = await (await fetch(url)).text();
+  const dom = new JSDOM(html, {
+    url,
+    runScripts: "dangerously",
+    resources: "usable",
+    pretendToBeVisual: true,
+    beforeParse: installGlobals,
+  });
+  return { dom, w: dom.window, doc: dom.window.document };
+}
+
 async function main() {
   // ---- 0. The monitor's static file server must be serving the EXACT
-  // committed file (production wiring, not a stale copy) — the monitor has
-  // no Go-embedded handler of its own (see stub.go's package doc comment),
-  // so this checks the on-disk file the test's static server points at is
-  // the real one, the same guarantee tools/hub/e2e's real_e2e.mjs checks via
-  // its go:embed'd handler. ----
+  // committed file (production wiring, not a stale copy) — this checks the
+  // on-disk file the test's static server points at is the real one, the
+  // same guarantee tools/hub/e2e's real_e2e.mjs checks via its go:embed'd
+  // handler. The box's own REAL GET /monitor route (server.Options.
+  // MonitorPage, added since this comment was first written) is checked
+  // separately, further down, by the embeddedConnectPlan scenarios loading
+  // it directly. ----
   const servedHTML = await (await fetch(monitorBase + "/")).text();
   assert.equal(servedHTML, committedIndexHTML, "the monitor's static server must serve tools/monitor/index.html byte-for-byte");
   console.error("PASS: monitor static server serves the committed index.html byte-for-byte");
@@ -486,11 +511,19 @@ async function main() {
   await openDetailViaClick(w, doc, capRow);
   assert.equal((await promptAsync(capID, "trigger the live-events buffer cap")).status, 202, "prompt_async accepted");
 
-  await waitIdle(capID, 15);
-  const capPeak = w.__monitorDebug.liveEventsPeakLength();
-  assert.ok(capPeak !== null && capPeak > TUNING.DETAIL_LIVE_EVENTS_CAP, "liveEvents must have actually crossed the tuned cap (" + TUNING.DETAIL_LIVE_EVENTS_CAP + ") at its peak while the turn streamed: " + capPeak);
+  // Polled, not a single-shot check right after waitIdle: waitIdle resolves
+  // via a DIRECT box long-poll, independent of whether THIS page's own SSE
+  // stream has finished delivering everything yet — under heavier system
+  // load, a one-shot check immediately after waitIdle can race that
+  // delivery lag and observe an artificially low peak. Polling here (before
+  // waitIdle, not after) waits out that lag instead of racing it.
+  const capPeak = await waitFor(() => {
+    const peak = w.__monitorDebug.liveEventsPeakLength();
+    return peak !== null && peak > TUNING.DETAIL_LIVE_EVENTS_CAP ? peak : null;
+  }, { timeoutMs: 4000, label: "liveEvents actually crosses the tuned cap (" + TUNING.DETAIL_LIVE_EVENTS_CAP + ") at its peak while the turn streams" });
   console.error("PASS: liveEvents crossed the tuned buffer cap (peak " + capPeak + ") while a real scripted turn streamed");
 
+  await waitIdle(capID, 15);
   await waitFor(() => {
     const n = w.__monitorDebug.liveEventsLength();
     // A small slack margin above the raw cap: reconcileDetail's own
@@ -578,6 +611,60 @@ async function main() {
   const finalLiveEventsLength = w.__monitorDebug.liveEventsLength();
   assert.ok(finalLiveEventsLength !== null && finalLiveEventsLength < 20, "liveEvents stays bounded after the reconnect-gap reconcile, not accumulating a permanent backlog: " + finalLiveEventsLength);
   console.error("PASS: liveEvents stays bounded after the reconnect-gap reconcile: " + finalLiveEventsLength);
+
+  // ---- 6. embeddedConnectPlan — the "frictionless local" behavior, driven
+  // against the box's REAL GET /monitor route (never the static server),
+  // each on its OWN fresh page load (openEmbeddedPage: a brand-new JSDOM
+  // instance, empty localStorage, no state carried over from any scenario
+  // above). ----
+
+  // ---- 6a. An Unauthenticated box (stub.go's unauthBase — RunToken "" +
+  // Unauthenticated true) served embedded: the auto-attempt against
+  // location.origin with NO token at all must still succeed (an empty
+  // Authorization header is fine — see server.Server.authorized), landing
+  // straight on the board with nothing typed. ----
+  {
+    const { dom: unauthDom, doc: unauthDoc } = await openEmbeddedPage(unauthBase + "/monitor");
+    await waitFor(() => unauthDoc.body.classList.contains("connected"), { label: "Unauthenticated embedded page auto-connects with zero typing" });
+    assert.equal(unauthDoc.getElementById("run-token").value, "", "no token was ever typed or needed");
+    assert.equal(unauthDoc.getElementById("base-url-label").hidden, true, "the base field stays hidden — host is this box's own origin");
+    assert.ok(unauthDoc.getElementById("hdr-version").textContent.startsWith("harness "), "the identity line must reflect a REAL connected /health response: " + unauthDoc.getElementById("hdr-version").textContent);
+    unauthDom.window.close();
+    console.error("PASS: an Unauthenticated embedded box auto-connects to the board with NO token entry, zero fields");
+  }
+
+  // ---- 6b. A tokened box (boxBase), page loaded with a real "#t=<token>"
+  // capability URL: auto-connects with NO manual entry, and the token is
+  // scrubbed from the visible URL (extractFragmentToken/history.
+  // replaceState) the instant it's adopted. ----
+  {
+    const { dom: tDom, w: tw, doc: tdoc } = await openEmbeddedPage(boxBase + "/monitor#t=" + encodeURIComponent(token));
+    await waitFor(() => tdoc.body.classList.contains("connected"), { label: "a tokened box auto-connects via a #t= capability URL" });
+    assert.ok(!tw.location.hash.includes("t="), "the token must be scrubbed from the URL the instant it's adopted: " + tw.location.hash);
+    assert.equal(tw.localStorage.getItem("harness.monitor.token"), token, "the fragment token must be adopted into the SAME localStorage key manual entry uses");
+    tDom.window.close();
+    console.error("PASS: a #t= capability URL auto-connects a tokened box with no typing, and the token is scrubbed from the URL");
+  }
+
+  // ---- 6c. A tokened box, loaded with NO token anywhere (no #t=, no
+  // stored token — genuinely fresh): the silent auto-attempt fails (401),
+  // revealing a TOKEN-ONLY panel (host is known — it's this origin — so
+  // the base field stays absent/hidden even once revealed). Typing the
+  // real token and submitting still connects normally, proving the
+  // fallback panel is fully functional, not just visually reduced. ----
+  {
+    const { dom: noTokDom, w: noTokW, doc: noTokDoc } = await openEmbeddedPage(boxBase + "/monitor");
+    await waitFor(() => noTokDoc.getElementById("connect-err").textContent.trim().length > 0, { label: "the silent auto-attempt with no token fails against a tokened box" });
+    assert.ok(noTokDoc.getElementById("connect-err").textContent.includes("rejected"), "the real 401 rejection text must surface: " + noTokDoc.getElementById("connect-err").textContent);
+    assert.equal(noTokDoc.getElementById("base-url-label").hidden, true, "host is known (this origin) — the base field stays hidden even in the fallback panel");
+    assert.ok(!noTokDoc.body.classList.contains("connected"), "must not be connected yet");
+
+    noTokDoc.getElementById("run-token").value = token;
+    noTokDoc.getElementById("connect-form").dispatchEvent(new noTokW.Event("submit", { bubbles: true, cancelable: true }));
+    await waitFor(() => noTokDoc.body.classList.contains("connected"), { label: "manually typing the real token into the fallback token-only panel connects normally" });
+    noTokDom.window.close();
+    console.error("PASS: a tokened box with no token available falls back to a token-only panel (host absent), which is fully functional");
+  }
 
   dom.window.close();
   console.error("ALL REAL END-TO-END CHECKS PASSED");
