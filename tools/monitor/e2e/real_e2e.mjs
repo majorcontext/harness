@@ -809,7 +809,7 @@ async function main() {
   // yet"/"0 msgs" live despite GET /session/{id}/message genuinely having
   // the history: applyRoute() resolves the deep link into enterDetail()
   // synchronously, right after attemptConnect's success — see
-  // connectStream's own "streaming" branch doc comment for why that
+  // connectStream's own "connected" branch doc comment for why that
   // single fetch used to be a silent single point of failure, and why
   // reconcileDetail() now also fires on the very first stream open (not
   // only a reconnect) while a detail view is showing, so this NEVER
