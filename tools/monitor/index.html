@@ -1792,12 +1792,6 @@ var state = {
   activities: new Map(),
   lastSeq: 0, backoff: BACKOFF_MIN,
   running: false, abort: null, streamTimer: null, pollTimer: null, tickTimer: null,
-  // streamedOnce distinguishes THIS connect lifecycle's first successful
-  // stream open (nothing to reconcile — enterDetail's own fetch, if any,
-  // is already fresh) from a genuine RE-establish after a reconnect (see
-  // connectStream's "streaming" branch, which is reconcileDetail's finding-
-  // 1 trigger). Reset false in attemptConnect on every fresh connect.
-  streamedOnce: false,
 };
 
 // boardDom holds the keyed row reconciliation state: one entry per session
@@ -2046,14 +2040,38 @@ function connectStream() {
     if (!resp.ok || !resp.body) throw new Error("event stream " + resp.status);
     state.backoff = BACKOFF_MIN;
     setConnState("streaming");
-    // reconcileDetail's finding-1 trigger: only a genuine RE-establish
-    // (state.streamedOnce already true from an earlier successful open this
-    // connect lifecycle) can have missed events — the very first stream
-    // open has nothing behind it to have missed, and enterDetail's own
-    // history fetch (if a detail view raced ahead via a deep link) is
-    // already fresh as of right now.
-    if (state.streamedOnce && detailState) reconcileDetail();
-    state.streamedOnce = true;
+    // reconcileDetail's finding-1 trigger, now firing on EVERY successful
+    // stream open, not only a genuine RE-establish after a reconnect — see
+    // the deep-link-history race this closes ("deep-linked detail view
+    // reliably loads history after connect").
+    //
+    // The ORIGINAL reasoning here (still correct as far as it went) was:
+    // only a re-establish can have missed EVENTS, because the very first
+    // stream open has nothing behind it to have missed, and enterDetail's
+    // own history fetch (if a detail view raced ahead of connect via a
+    // deep link — applyRoute() runs synchronously right after THIS
+    // function is invoked, in attemptConnect, so enterDetail's fetch is
+    // always ISSUED with an already-correct state.base/state.token) is
+    // already fresh AS OF THE MOMENT IT WAS ISSUED. That data-freshness
+    // argument is still true. What it missed: freshness-as-issued is not
+    // the same as guaranteed delivery. enterDetail's initial fetch is a
+    // single, un-retried GET with no fallback — confirmed live, it can
+    // silently fail to land (a transient response hiccup on that one
+    // request while /health, /session and this very stream all succeed)
+    // and nothing ever retries it, leaving the transcript stuck on "no
+    // messages yet" until the operator navigates again. Re-running
+    // reconcileDetail() here — cheap, idempotent, already guarded by
+    // detailState.loadToken (a superseded/navigated-away session's result
+    // is discarded, never clobbers the current view) and
+    // detailState.reconciling (no overlapping fetches) — costs one extra
+    // GET /session/{id}/message on every fresh connect that happens to
+    // have a detail view already open (the deep-link case), and turns
+    // enterDetail's fetch from a single point of failure into a race this
+    // page always wins: whichever of the two GETs lands, the transcript
+    // renders. A stream that never reaches "streaming" at all (the box is
+    // genuinely down) leaves forceDisconnect's own exitDetail() to drop
+    // back to the board, same as before this change.
+    if (detailState) reconcileDetail();
     var reader = resp.body.getReader();
     var dec = new TextDecoder();
     var parse = createSSEParser(function (frame) {
@@ -2452,7 +2470,7 @@ function handleDetailEvent(ev) {
 }
 
 // reconcileDetail re-anchors the detail view's live tail against a fresh
-// durable snapshot, closing two independent gaps with the SAME mechanism:
+// durable snapshot, closing three independent gaps with the SAME mechanism:
 //
 //   1. RECONNECT GAP (finding 1): pollOnce silently advances state.lastSeq
 //      past whatever a poll snapshot's own maxSeq reports, REGARDLESS of
@@ -2469,8 +2487,20 @@ function handleDetailEvent(ev) {
 //   2. UNBOUNDED BUFFER (finding 3): liveEvents otherwise grows without
 //      bound across a long session's lifetime, and transcriptModel refolds
 //      the WHOLE buffer on every tick/delta (see DETAIL_LIVE_EVENTS_CAP).
+//   3. DEEP-LINK BOOT RACE: enterDetail's OWN initial history fetch (fired
+//      the instant a "#s=<id>" deep link resolves via applyRoute(), right
+//      after a fresh connect — see attemptConnect) is a single, un-retried
+//      GET with no fallback of its own. Confirmed live: it can silently
+//      fail to land while /health, /session, and this very stream all
+//      succeed, leaving the transcript stuck on "no messages yet" with no
+//      retry. connectStream's "streaming" branch now calls this function
+//      on EVERY successful stream open (first included, not only a
+//      genuine reconnect) whenever a detail view is already showing,
+//      turning enterDetail's fetch from a single point of failure into a
+//      race this page always wins — see connectStream's own doc comment
+//      for the full reasoning.
 //
-// The fix for both: re-fetch GET /session/{id}/message (guarded by
+// The fix for all three: re-fetch GET /session/{id}/message (guarded by
 // detailState.loadToken exactly like enterDetail's own initial fetch, so a
 // slow response for a session the operator has since navigated away from —
 // or into a different session — is discarded, never applied to the wrong
@@ -2554,6 +2584,15 @@ function reconcileDetail() {
 // reader/keyboard user lands at the top of the new view the moment
 // navigation happens, not after the network round trip) — see
 // better-accessibility's focus-management pass in the plan.
+//
+// This fetch is no longer the ONLY thing that can load this view's
+// history: connectStream's "streaming" branch also calls reconcileDetail()
+// on every successful stream open while a detail view is showing (see its
+// own doc comment and reconcileDetail's "DEEP-LINK BOOT RACE" finding) —
+// a deep link resolved via applyRoute() right after a fresh connect (this
+// call) races that same connect's own stream open, and either one landing
+// is enough to populate the transcript. Both are guarded by the SAME
+// loadToken, so whichever resolves is safe to apply regardless of order.
 function enterDetail(sessionId) {
   var loadToken = ++detailLoadCounter;
   detailState = {
@@ -2800,7 +2839,6 @@ function attemptConnect(base, token) {
     state.activities = new Map();
     state.lastSeq = maxSeq(r.list);
     state.backoff = BACKOFF_MIN;
-    state.streamedOnce = false; // fresh connect lifecycle: the first stream open below is not a "re-establish"
     localStorage.setItem(LS_BASE, base);
     localStorage.setItem(LS_TOKEN, token);
     document.body.classList.add("connected");

@@ -783,6 +783,50 @@ async function main() {
     console.error("PASS: a tokened box with no token available falls back to a token-only panel (host absent), which is fully functional");
   }
 
+  // ---- 6d. Deep-link boot into a session that ALREADY has durable
+  // history (task: "fix(monitor): deep-linked detail view reliably loads
+  // history after connect") — a "#t=<token>&s=<id>" capability link
+  // (scenario 6b's token path, PLUS a target session — exactly how an
+  // operator following a shared link to a specific, already-active
+  // session lands: NO prior visit, no stored token, "s=" present in the
+  // URL before the page has connected at all) opened on a BRAND NEW page.
+  // This is the exact path that intermittently rendered "no messages
+  // yet"/"0 msgs" live despite GET /session/{id}/message genuinely having
+  // the history: applyRoute() resolves the deep link into enterDetail()
+  // synchronously, right after attemptConnect's success — see
+  // connectStream's own "streaming" branch doc comment for why that
+  // single fetch used to be a silent single point of failure, and why
+  // reconcileDetail() now also fires on the very first stream open (not
+  // only a reconnect) while a detail view is showing, so this NEVER
+  // depends on exactly one fetch landing. Looped (not a single shot) to
+  // shake out the intermittency directly, each iteration a genuinely
+  // fresh page/session/connect, never reusing state across iterations.
+  {
+    const DEEP_LINK_ITERATIONS = 20;
+    for (let i = 0; i < DEEP_LINK_ITERATIONS; i++) {
+      const promptText = "deep-link history check " + i;
+      const dlID = await createSession(ProvQuickIdle);
+      assert.equal((await promptAsync(dlID, promptText)).status, 202, "prompt_async accepted (iteration " + i + ")");
+      await waitIdle(dlID, 15);
+
+      const { dom: dlDom, doc: dlDoc } = await openEmbeddedPage(boxBase + "/monitor#t=" + encodeURIComponent(token) + "&s=" + encodeURIComponent(dlID));
+      await waitFor(() => dlDoc.body.classList.contains("connected"), { timeoutMs: 5000, label: "deep-link page connects (iteration " + i + ")" });
+      await waitFor(() => dlDoc.body.classList.contains("showing-detail"), { timeoutMs: 5000, label: "deep link resolves straight into the detail view (iteration " + i + ")" });
+      await waitFor(() => operatorTexts(dlDoc).includes(promptText), {
+        timeoutMs: 5000,
+        label: "the deep-linked session's real history (operator prompt) renders (iteration " + i + "): " + JSON.stringify(operatorTexts(dlDoc)),
+      });
+      await waitFor(() => assistantTexts(dlDoc).some((t) => t.includes("hello")), {
+        timeoutMs: 5000,
+        label: "the deep-linked session's real history (assistant reply) renders (iteration " + i + "): " + JSON.stringify(assistantTexts(dlDoc)),
+      });
+      assert.notEqual(dlDoc.getElementById("detail-msgcount").textContent, "", "the msg count header must reflect the loaded history, not stay blank (iteration " + i + ")");
+      assert.notEqual(dlDoc.getElementById("detail-msgcount").textContent, "0 msgs", "the deep-linked view must never settle on 0 msgs when real history exists (iteration " + i + "): got " + JSON.stringify(operatorTexts(dlDoc)) + " / " + JSON.stringify(assistantTexts(dlDoc)));
+      dlDom.window.close();
+    }
+    console.error("PASS: a fresh page deep-linked (\"#t=...&s=...\") straight into a session with real durable history reliably renders that history — " + DEEP_LINK_ITERATIONS + "/" + DEEP_LINK_ITERATIONS + " clean iterations, no \"no messages yet\"/\"0 msgs\" stall");
+  }
+
   dom.window.close();
   console.error("ALL REAL END-TO-END CHECKS PASSED");
 }
