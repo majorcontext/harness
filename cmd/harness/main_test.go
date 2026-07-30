@@ -44,6 +44,67 @@ func TestServeURLForAddr(t *testing.T) {
 	}
 }
 
+// TestIsLoopbackAddr exhaustively covers isLoopbackAddr's rule table (see
+// its own doc comment): the unauthenticated-on-loopback decision fails
+// closed on anything this doesn't affirmatively classify as loopback, so
+// every case in that table — and a few beyond it — is pinned here.
+func TestIsLoopbackAddr(t *testing.T) {
+	cases := []struct {
+		addr string
+		want bool
+	}{
+		{"localhost:4096", true},
+		{"127.0.0.1:4096", true},
+		{"[::1]:4096", true},
+		{"127.5.5.5:4096", true}, // the whole 127.0.0.0/8 block is loopback
+		{":4096", false},         // bare :port binds every interface — public
+		{"0.0.0.0:4096", false},
+		{"[::]:4096", false},
+		{"10.0.0.5:4096", false},      // a routable private-network IP
+		{"93.184.216.34:4096", false}, // a routable public IP
+		{"example.com:4096", false},   // a hostname other than "localhost" — not resolved, not loopback
+		{"not-a-valid-addr", false},   // fails net.SplitHostPort entirely
+		{"", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.addr, func(t *testing.T) {
+			got := isLoopbackAddr(tc.addr)
+			if got != tc.want {
+				t.Errorf("isLoopbackAddr(%q) = %v, want %v", tc.addr, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMonitorTerminalHint covers monitorTerminalHint's full decision table
+// (the untestable half — the real os.Stderr.Stat() tty check — is
+// deliberately excluded via the explicit isTTY bool; see stderrIsTerminal's
+// own doc comment for why that piece is manually verified instead).
+func TestMonitorTerminalHint(t *testing.T) {
+	cases := []struct {
+		name           string
+		monitorEnabled bool
+		isTTY          bool
+		token          string
+		want           string
+	}{
+		{"tty, monitor enabled, token set: tokenized URL", true, true, "secret-tok", "monitor: http://localhost:4096/monitor#t=secret-tok\n"},
+		{"tty, monitor enabled, NO token (loopback-Unauthenticated): plain URL, no #t= at all", true, true, "", "monitor: http://localhost:4096/monitor\n"},
+		{"not a tty: nothing printed, even with a token", true, false, "secret-tok", ""},
+		{"monitor not enabled: nothing printed, even on a tty with a token", false, true, "secret-tok", ""},
+		{"neither tty nor monitor enabled: nothing printed", false, false, "secret-tok", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf strings.Builder
+			monitorTerminalHint(&buf, tc.monitorEnabled, tc.isTTY, "localhost:4096", tc.token)
+			if got := buf.String(); got != tc.want {
+				t.Errorf("monitorTerminalHint(...) wrote %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSessionDir(t *testing.T) {
 	t.Run("no-save disables persistence", func(t *testing.T) {
 		t.Setenv("HARNESS_SESSION_DIR", "/somewhere")

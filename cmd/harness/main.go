@@ -14,6 +14,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -34,6 +35,7 @@ import (
 	"github.com/majorcontext/harness/provider/openaicompat"
 	"github.com/majorcontext/harness/server"
 	"github.com/majorcontext/harness/tools/hub"
+	"github.com/majorcontext/harness/tools/monitor"
 )
 
 // defaultOpenRouterName is the providers map key that gets a built-in
@@ -682,6 +684,50 @@ func providerAuth(cfg *config.Config, family, defaultKeyEnv string) (apiKey, bas
 	return os.Getenv(keyEnv), baseURL
 }
 
+// isLoopbackAddr classifies a `harness serve -addr` listen address as
+// loopback-only (unreachable from anywhere but this machine) or not — the
+// decision serveCmd's unauthenticated-on-loopback rule (see Options.
+// Unauthenticated's own doc comment) gates on: the run token exists to
+// guard NETWORK reachability, and reachability is server-verifiable from
+// the bind address itself (unlike, say, an Origin header, which a client
+// controls) — loopback is definitionally that verification.
+//
+// Exact rule table:
+//   - "localhost" -> loopback. net.ParseIP does not resolve hostnames, and
+//     an actual DNS lookup here would be wrong for a synchronous startup
+//     decision (slow, side-effecting, and in principle spoofable by
+//     /etc/hosts or a resolver) — "localhost" is matched as a literal
+//     string, the same convention virtually every environment relies on.
+//   - "127.0.0.1", "::1", or any other IP literal with IsLoopback() true
+//     -> loopback.
+//   - An EMPTY host (a bare ":port", e.g. "-addr :4096") -> NOT loopback.
+//     net.Listen treats an empty host as "every interface" — the most
+//     public bind there is, not the least.
+//   - "0.0.0.0", "::", or any other unspecified/routable IP literal ->
+//     NOT loopback (IsLoopback() is false for all of these already; listed
+//     here for clarity, not as a separate code path).
+//   - Anything that fails to parse as host:port at all (malformed -addr)
+//     -> NOT loopback. Conservative by construction: every caller of this
+//     function fails closed on false, so unparsable input never
+//     accidentally unlocks the unauthenticated path.
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "" {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback()
+}
+
 // serveURLForAddr derives the URL plugins should use to reach this
 // process's `harness serve` HTTP API from the -addr flag's listen address.
 // A bind-all address isn't reliably dialable as-is from another process on
@@ -702,6 +748,69 @@ func serveURLForAddr(addr string) string {
 		host = "127.0.0.1"
 	}
 	return "http://" + net.JoinHostPort(host, port)
+}
+
+// stderrIsTerminal reports whether os.Stderr is an interactive terminal
+// (isatty), stdlib-only: os.ModeCharDevice on the file mode is the
+// established Go idiom for this check (no golang.org/x/term or other
+// dependency — this repo's zero-dep rule for production code). Used solely
+// to gate serveCmd's tokenized monitor URL print (monitorTerminalHint)
+// below: piped/redirected/production stderr (a file, a pipe into a log
+// collector, /dev/null) is never a character device, so this is false
+// there and true only for a human's own terminal session.
+//
+// NOT unit-tested: there is no PTY available in a plain `go test` process,
+// and pulling in a PTY library only to exercise this one syscall wrapper
+// would violate the zero-dependency rule for a trivial, well-established
+// stdlib idiom. monitorTerminalHint below is factored out specifically so
+// everything ELSE about the print (the gating logic, the exact format) IS
+// unit-tested with an explicit bool in place of this function's real
+// result — this is the one piece left manually verified: run
+// `HARNESS_RUN_TOKEN=x harness serve` from an actual terminal and confirm
+// the "monitor: ...#t=..." line appears; run it with stderr piped (e.g.
+// `2>&1 | cat`) and confirm it does not.
+func stderrIsTerminal() bool {
+	info, err := os.Stderr.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+// monitorTerminalHint writes the tty-gated, click-ready monitor URL line to
+// w when BOTH monitorEnabled (this box actually has MonitorPage configured)
+// and isTTY (see stderrIsTerminal's doc comment for why that half is not
+// itself unit-tested here) are true; a no-op otherwise. Two shapes,
+// depending on token:
+//   - token != "" (the normal, authenticated case): "monitor:
+//     http://host:port/monitor#t=<token>" — a capability URL index.html's
+//     own extractFragmentToken adopts on load with no manual typing.
+//   - token == "" (the loopback-Unauthenticated case — see server.Options.
+//     Unauthenticated): plain "monitor: http://host:port/monitor", no
+//     "#t=" at all, since there is no token to carry and appending an
+//     empty "#t=" would be misleading (it would round-trip through
+//     extractFragmentToken as "no token", but LOOKS like a credential is
+//     present).
+//
+// A tokenized URL is a credential riding the URL: gating it out of every
+// non-interactive destination (piped/redirected/production stderr) is what
+// keeps it off a log aggregator or a captured file — see the call site's
+// own comment for the full reasoning (the loopback-Unauthenticated case has
+// no credential to leak, but stays behind the SAME tty gate for one
+// uniform rule rather than a special case an operator has to remember).
+// Factored out of serveCmd so the DECISION (what to print, and the exact
+// format) is unit-testable with a bytes.Buffer and explicit bools,
+// independent of the real os.Stderr/os.Stderr.Stat() this function never
+// touches itself.
+func monitorTerminalHint(w io.Writer, monitorEnabled, isTTY bool, addr, token string) {
+	if !monitorEnabled || !isTTY {
+		return
+	}
+	url := serveURLForAddr(addr) + "/monitor"
+	if token != "" {
+		url += "#t=" + token
+	}
+	fmt.Fprintf(w, "monitor: %s\n", url)
 }
 
 // serveCmd starts the HTTP+SSE session API. The run token comes from
@@ -734,8 +843,19 @@ func serveCmd(args []string) error {
 		return err
 	}
 	token := os.Getenv("HARNESS_RUN_TOKEN")
+	// unauthenticated is case (b) of the decision table on server.Options.
+	// Unauthenticated's own doc comment: an EMPTY token is accepted only
+	// when -addr classifies as loopback-only (isLoopbackAddr) — any other
+	// empty-token bind (case (c): a bare ":port", "0.0.0.0", "::", any
+	// other routable address) still fails closed exactly as before. A
+	// non-empty token (case (a)) is unaffected either way: works exactly
+	// as today, on any bind, always enforced.
+	unauthenticated := false
 	if token == "" {
-		return fmt.Errorf("HARNESS_RUN_TOKEN is required")
+		if !isLoopbackAddr(addr) {
+			return fmt.Errorf("HARNESS_RUN_TOKEN is required")
+		}
+		unauthenticated = true
 	}
 	// Structured logging: JSON to stderr, stdlib log/slog only (no new
 	// dependency). Built early so the config-load summary below (see
@@ -744,6 +864,16 @@ func serveCmd(args []string) error {
 	// no request-level access logging, no metrics, no OTel (a separate
 	// future cmd-scoped task).
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	if unauthenticated {
+		// A clear, impossible-to-miss line: this process is about to serve
+		// its full API (not just /health/monitor) with no bearer token
+		// check at all. Loopback-only makes this safe (see
+		// isLoopbackAddr's doc comment), but it is still a deviation from
+		// this binary's normal secure-by-default behavior, worth a
+		// distinct log level (Warn, not Info) even though it is expected
+		// and intentional in the common "just run it locally" case.
+		logger.Warn("serving unauthenticated on loopback", "addr", addr, "reason", "no run token set")
+	}
 	cfg, err := loadConfigLogged(logger)
 	if err != nil {
 		return err
@@ -867,6 +997,12 @@ func serveCmd(args []string) error {
 			GoalTool: !goalEval.IsZero(),
 		}
 	}
+	// monitorPage is a named local (rather than inlining monitor.Page below)
+	// so serveCmd's tty-gated tokenized-URL print further down can gate on
+	// the SAME "is the monitor actually enabled" condition the Options
+	// literal itself uses, without repeating the tools/monitor.Page
+	// reference or risking the two silently drifting apart.
+	monitorPage := monitor.Page
 	srv, err = server.New(server.Options{
 		SessionDir:    sesDir,
 		RunToken:      token,
@@ -877,6 +1013,18 @@ func serveCmd(args []string) error {
 		GoalEvaluator: goalEval,
 		MCP:           mcpRegistry(mcpMgr),
 		Processes:     processRegistry(procMgr),
+		// MonitorPage: every `harness serve` box offers its own same-origin
+		// monitor at GET /monitor — no CORS/-cors-origin dance, no
+		// separately hosted copy required (see AGENTS.md's "Session
+		// monitor" section). tools/monitor.Page embeds the exact committed
+		// tools/monitor/index.html; the static/file:// hosting path it
+		// documents keeps working unchanged alongside this.
+		MonitorPage: monitorPage,
+		// Unauthenticated: set only in case (b) above (empty token +
+		// loopback bind) — see server.Options.Unauthenticated's own doc
+		// comment for why this is the ONE place that ever sets it (server
+		// itself never infers it from RunToken alone).
+		Unauthenticated: unauthenticated,
 		OnError: func(_ context.Context, err error) {
 			logger.Error("serve error", "error", err.Error())
 		},
@@ -898,7 +1046,26 @@ func serveCmd(args []string) error {
 
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.ListenAndServe() }()
-	logger.Info("serve start", "addr", addr, "version", version)
+	// monitor_url logs the same host:port serveURLForAddr already resolves
+	// -addr against (e.g. 0.0.0.0 -> 127.0.0.1) for the plugin-host URL
+	// above, so the two log lines never disagree about how to reach this
+	// same process.
+	logger.Info("serve start", "addr", addr, "version", version, "monitor_url", serveURLForAddr(addr)+"/monitor")
+	// A second, CLICK-READY monitor URL (monitorTerminalHint — see its own
+	// doc comment for the two shapes: tokenized via index.html's #t=
+	// capability-URL adoption, or plain when this process is running
+	// loopback-Unauthenticated) is convenient — no typing a run token, or
+	// no token needed at all — but a tokenized one IS a credential riding
+	// the URL: printing it into the structured "serve start" log line
+	// above would ship it into whatever piped/redirected destination this
+	// process's stderr normally lands in (a log aggregator, a captured
+	// file, a terminal multiplexer's scrollback in a shared session) — a
+	// credential leak, not a convenience, once it's off an operator's own
+	// screen. Gating this SEPARATE, plain (non-JSON) line on
+	// stderrIsTerminal confines it to an actual interactive terminal:
+	// piped/production stderr gets nothing extra here, only the tokenless
+	// monitor_url already logged above.
+	monitorTerminalHint(os.Stderr, monitorPage != nil, stderrIsTerminal(), addr, token)
 
 	select {
 	case err := <-errc:
