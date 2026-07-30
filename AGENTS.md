@@ -643,6 +643,56 @@ which still wears the older soft theme — follows these rules:
   name (`.sess`, `.box-card`, `.dot`, `.goalnarr`, …). Restyle classes;
   never rename them in a styling pass.
 
+## Session monitor
+
+`tools/monitor` (`tools/monitor/index.html`) is the single-instance
+counterpart to the hub above: where the hub answers "what are my boxes doing"
+across a FLEET, the monitor answers "what is THIS `harness serve` instance
+doing right now" — a live board of every session on that one box (phase,
+current tool, staleness), a per-session detail view with a scrolling
+transcript, and a composer to speak into a session (`prompt_async`). Like the
+hub and the inspector, it is a build-free, dependency-free single HTML file
+with no Go-side handler of its own.
+
+- **How to run it**: open the file directly (`file://`) or serve it from any
+  static host — nothing box-specific is baked in. The target box must be
+  started with `-cors-origin` covering the monitor's origin (or `*` for local
+  hacking), exactly like the hub's requirement above; a box without it looks
+  permanently unreachable. The base URL and run token are entered in the
+  page itself and persisted to `localStorage` in plaintext (same documented
+  tradeoff as the inspector — a dev tool, not for a shared origin with a
+  long-lived token) so a reload can reconnect automatically. Routing lives in
+  the URL fragment as small explicit params, not the hub's base64 blob:
+  `#b=<base>` (box base URL) and `#s=<session id>` (open detail view) — both
+  bookmarkable, encoded/decoded by a tested pure helper.
+- **Test layers.** Pure helpers (SSE parser, activity reducer, transcript
+  fold, route codec, formatters) live inside index.html's `/* TESTABLE-BEGIN
+  */ … /* TESTABLE-END */` region and are covered by
+  `tools/monitor/monitor_test.mjs` (run: `node --test tools/monitor/*_test.mjs`),
+  using the same extraction-and-`vm`-evaluate pattern as the inspector's
+  `inspector_test.mjs` (and now the hub's, above) — no build step, so the
+  tests read the region straight out of the committed HTML. End-to-end,
+  against a real backend, is `tools/monitor/e2e` (see its README): a `go
+  test` subtree that starts a real `server.Server` plus a plain static file
+  server for the actual committed `index.html`, and drives it with Node +
+  jsdom and an unmocked `fetch` — mirroring `tools/hub/e2e`'s structure and
+  conventions. A `window.__monitorTuning = {QUIET_MS, STALL_MS}` seam (set
+  via jsdom's `beforeParse` before the page's own script runs, a no-op in
+  production since nothing else ever sets it) lets both the unit and e2e
+  suites shrink the staleness thresholds so `quiet`/`stalled` transitions are
+  observable in test time instead of real minutes.
+- **UI design language.** The monitor deliberately does NOT inherit the
+  hub's committed dark brutalist archetype above. It carries its own
+  "instrument sheet" language: light-first with a dark variant, both driven
+  by one OKLCH token set (`--surface`, `--text-1..3`, `--separator`, etc.);
+  semantic green/amber/red (`--ok`/`--warn`/`--critical`) are reserved
+  strictly for session/staleness state, never decoration; a single accent
+  color is owned by interaction (the composer's send affordance is the
+  page's only filled-accent control). `docs/design/monitor-mockup.html` is
+  the user-approved visual spec — its tokens, grid template, and markup
+  shapes are binding; restyle within that spec rather than importing the
+  hub's theme onto it.
+
 ## Fleet model (the deploy story)
 
 The full build spec lives in `docs/design/fleet-model.md` — read it before

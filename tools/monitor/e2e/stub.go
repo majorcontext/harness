@@ -133,7 +133,7 @@ func toolCallPart(callID string, sleepSeconds float64) *message.ToolCall {
 	return &message.ToolCall{
 		CallID:    callID,
 		Name:      "bash",
-		Arguments: []byte(fmt.Sprintf(`{"command":"sleep %g"}`, sleepSeconds)),
+		Arguments: fmt.Appendf(nil, `{"command":"sleep %g"}`, sleepSeconds),
 	}
 }
 
