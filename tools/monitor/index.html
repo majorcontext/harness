@@ -80,7 +80,7 @@
    12. Navigate away (another site) then browser-Back into this page while
        it was connected -> if the browser served it from bfcache (the
        page's own scripts never re-run), the header re-syncs to a real
-       "streaming" state rather than sitting frozen on whatever it showed
+       "connected" state rather than sitting frozen on whatever it showed
        the instant it was frozen, and an open detail view re-checks its
        history against the board summary rather than showing stale/stuck
        content.
@@ -157,10 +157,10 @@
   .id-line { font-family: var(--mono); font-size: 12px; color: var(--text-2); display: flex; flex-wrap: wrap; gap: 4px 14px; }
   .conn { grid-column: 3; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); }
   .conn .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); }
-  .conn.streaming .dot { background: var(--ok); }
+  .conn.connected .dot { background: var(--ok); }
   .conn.reconnecting .dot { background: var(--warn); }
   @media (prefers-reduced-motion: no-preference) {
-    .conn.streaming .dot { animation: breathe 2.4s ease-in-out infinite; }
+    .conn.connected .dot { animation: breathe 2.4s ease-in-out infinite; }
   }
 
   /* Connect affordance: shown in place of the session list until a base URL
@@ -336,7 +336,7 @@
      show yet for a turn that's genuinely running" — with the animation
      applied only under the SAME prefers-reduced-motion gate every other
      "something is live" animation in this file already uses (see the
-     .conn.streaming .dot / .live .pulse rules below). */
+     .conn.connected .dot / .live .pulse rules below). */
   .pending-indicator { display: flex; align-items: center; gap: 2px; }
 
   .toolblock {
@@ -1915,13 +1915,17 @@ function renderUptime(nowMs) {
   document.getElementById("hdr-uptime").textContent = isNaN(startedMs) ? "—" : fmtElapsed(Math.floor((nowMs - startedMs) / 1000));
 }
 
-// setConnState renders the header's honest connection state (streaming /
-// reconnecting / disconnected — never a bare "connected", per the plan) into
-// a role="status" aria-live="polite" element so the transition is announced
-// without a manual screen-reader poll of the header.
+// setConnState renders the header's honest connection state (connected /
+// reconnecting / disconnected) into a role="status" aria-live="polite"
+// element so the transition is announced without a manual screen-reader poll
+// of the header. "connected" here means only that the SSE /event stream is
+// open — NOT that any session is doing model inference. A session's own
+// "streaming" phase (see boardModel / reduceActivity) is a separate, per-row
+// concept; the connection label deliberately avoids the word "streaming" so
+// an idle box's live-but-quiet stream never reads as "a chat is happening".
 function setConnState(kind) {
   connEl.className = "conn " + kind;
-  connText.textContent = kind === "streaming" ? "streaming" : kind === "reconnecting" ? "reconnecting…" : "disconnected";
+  connText.textContent = kind === "connected" ? "connected" : kind === "reconnecting" ? "reconnecting…" : "disconnected";
 }
 
 /* ---------- board rendering: keyed per-row reconciliation ----------
@@ -2113,7 +2117,7 @@ function connectStream() {
   }).then(function (resp) {
     if (!resp.ok || !resp.body) throw new Error("event stream " + resp.status);
     state.backoff = BACKOFF_MIN;
-    setConnState("streaming");
+    setConnState("connected");
     // reconcileDetail's finding-1 trigger, now firing on EVERY successful
     // stream open, not only a genuine RE-establish after a reconnect — see
     // the deep-link-history race this closes ("deep-linked detail view
@@ -2142,7 +2146,7 @@ function connectStream() {
     // have a detail view already open (the deep-link case), and turns
     // enterDetail's fetch from a single point of failure into a race this
     // page always wins: whichever of the two GETs lands, the transcript
-    // renders. A stream that never reaches "streaming" at all (the box is
+    // renders. A stream that never reaches "connected" at all (the box is
     // genuinely down) leaves forceDisconnect's own exitDetail() to drop
     // back to the board, same as before this change.
     if (detailState) reconcileDetail();
@@ -2567,7 +2571,7 @@ function handleDetailEvent(ev) {
 //      GET with no fallback of its own. Confirmed live: it can silently
 //      fail to land while /health, /session, and this very stream all
 //      succeed, leaving the transcript stuck on "no messages yet" with no
-//      retry. connectStream's "streaming" branch now calls this function
+//      retry. connectStream's "connected" branch now calls this function
 //      on EVERY successful stream open (first included, not only a
 //      genuine reconnect) whenever a detail view is already showing,
 //      turning enterDetail's fetch from a single point of failure into a
@@ -2688,7 +2692,7 @@ function maybeSelfHealDetail() {
 // better-accessibility's focus-management pass in the plan.
 //
 // This fetch is no longer the ONLY thing that can load this view's
-// history: connectStream's "streaming" branch also calls reconcileDetail()
+// history: connectStream's "connected" branch also calls reconcileDetail()
 // on every successful stream open while a detail view is showing (see its
 // own doc comment and reconcileDetail's "DEEP-LINK BOOT RACE" finding),
 // and pollOnce/this function's own fetch-resolved callback both call
@@ -2797,7 +2801,7 @@ window.addEventListener("hashchange", applyRoute);
 // rather than re-running its scripts — event.persisted true): the
 // underlying SSE stream connection is presumed dead (suspended/discarded
 // by the browser while this page was frozen), even though state.running
-// and the header's "connected"/"streaming" styling still reflect
+// and the header's "connected"/"reconnecting" styling still reflect
 // whatever they were the instant the page was frozen, not reality. Only
 // acts if this page was actually connected when frozen (state.running) —
 // nothing to resync for a frozen connect panel. Two independent, reused
