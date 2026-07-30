@@ -34,6 +34,7 @@ import (
 	"github.com/majorcontext/harness/provider/openaicompat"
 	"github.com/majorcontext/harness/server"
 	"github.com/majorcontext/harness/tools/hub"
+	"github.com/majorcontext/harness/tools/monitor"
 )
 
 // defaultOpenRouterName is the providers map key that gets a built-in
@@ -877,6 +878,13 @@ func serveCmd(args []string) error {
 		GoalEvaluator: goalEval,
 		MCP:           mcpRegistry(mcpMgr),
 		Processes:     processRegistry(procMgr),
+		// MonitorPage: every `harness serve` box offers its own same-origin
+		// monitor at GET /monitor — no CORS/-cors-origin dance, no
+		// separately hosted copy required (see AGENTS.md's "Session
+		// monitor" section). tools/monitor.Page embeds the exact committed
+		// tools/monitor/index.html; the static/file:// hosting path it
+		// documents keeps working unchanged alongside this.
+		MonitorPage: monitor.Page,
 		OnError: func(_ context.Context, err error) {
 			logger.Error("serve error", "error", err.Error())
 		},
@@ -898,7 +906,11 @@ func serveCmd(args []string) error {
 
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.ListenAndServe() }()
-	logger.Info("serve start", "addr", addr, "version", version)
+	// monitor_url logs the same host:port serveURLForAddr already resolves
+	// -addr against (e.g. 0.0.0.0 -> 127.0.0.1) for the plugin-host URL
+	// above, so the two log lines never disagree about how to reach this
+	// same process.
+	logger.Info("serve start", "addr", addr, "version", version, "monitor_url", serveURLForAddr(addr)+"/monitor")
 
 	select {
 	case err := <-errc:

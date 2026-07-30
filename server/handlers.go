@@ -410,6 +410,46 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// monitorContentSecurityPolicy hardens the embedded monitor page, mirroring
+// tools/hub/hub.go's contentSecurityPolicy (same reasoning: a single inline
+// file with no build step, so a per-response nonce/hash is not viable —
+// 'unsafe-inline' is the only way to permit its own inline script/style)
+// adapted to what THIS page actually needs when served from the box it
+// monitors: connect-src 'self', not '*'. The hub's page is deliberately
+// origin-agnostic (it drives arbitrary, operator-added box origins it keeps
+// no state about); the embedded monitor is the opposite — GET /monitor
+// exists specifically so a box can offer a same-origin, zero-CORS way to
+// watch ITSELF (see AGENTS.md's "Session monitor" section), so this CSP
+// scopes fetch/EventSource targets to that one origin, blocking it from
+// being used to reach anywhere else even if the served copy were somehow
+// pointed at a different base URL. An operator who genuinely wants
+// cross-origin monitoring still has the unrestricted, unauthenticated
+// file://-or-any-static-host path index.html's own header comment
+// documents — this route is additive, not a replacement.
+const monitorContentSecurityPolicy = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+
+// handleMonitor serves the embedded tools/monitor/index.html verbatim at
+// GET /monitor (and /monitor/ — see routes()), registered only when
+// Options.MonitorPage is non-nil (cmd/harness's serveCmd is the only
+// caller that sets it, via tools/monitor.Page). Deliberately UNAUTHENTICATED
+// — see MonitorPage's own doc comment for why that is correct here — and,
+// unlike every other handler in this file, reached WITHOUT s.auth wrapping
+// it (see routes()). GET or HEAD only, matching tools/hub/hub.go's
+// handleIndex precedent for its own embedded page.
+func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", monitorContentSecurityPolicy)
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodGet {
+		w.Write(s.opts.MonitorPage) //nolint:errcheck
+	}
+}
+
 // handleGoroutines writes the full, all-goroutine stack dump (the exact
 // text Go's default SIGQUIT handler prints) as a diagnostic HTTP surface —
 // for a box wedged badly enough that even exec is awkward (or unavailable,

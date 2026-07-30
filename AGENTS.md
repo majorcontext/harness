@@ -665,6 +665,23 @@ with no Go-side handler of its own.
   the URL fragment as small explicit params, not the hub's base64 blob:
   `#b=<base>` (box base URL) and `#s=<session id>` (open detail view) — both
   bookmarkable, encoded/decoded by a tested pure helper.
+- **Embedded serving**: every `harness serve` box also offers its own copy
+  same-origin, at `GET /monitor` — `tools/monitor` (package `monitor`,
+  `embed.go`) `//go:embed`s the exact committed `index.html`; `cmd/harness`'s
+  `serveCmd` wires it into `server.Options.MonitorPage`, which the server
+  serves unauthenticated (like `/health` — the page itself carries no
+  secrets) with a same-origin-scoped `Content-Security-Policy`
+  (`connect-src 'self'`). This is one URL per box, no `-cors-origin` dance,
+  no separately hosted copy required: open `http://<box>/monitor` and the
+  base URL field defaults to that box's own origin
+  (`sameOriginDefaultBase`, keyed off `location.pathname` starting with
+  `/monitor`) — still just a default, a stored preference or a bookmarked
+  `#b=` link wins over it. `server` itself never imports `tools/monitor`
+  (layering: `server` must not import `tools/*`); only `cmd/harness` does,
+  the same pattern `harness hub` already uses. The `file://`/static-host
+  path above is unaffected — this is additive, not a replacement, and stays
+  the only option for monitoring a box from a different origin (the
+  embedded route's CSP deliberately does not permit that).
 - **Test layers.** Pure helpers (SSE parser, activity reducer, transcript
   fold, route codec, formatters) live inside index.html's `/* TESTABLE-BEGIN
   */ … /* TESTABLE-END */` region and are covered by

@@ -580,6 +580,30 @@ function unroute(hash) {
   return out;
 }
 
+// sameOriginDefaultBase decides the base URL bootstrap() should prefill
+// when nothing is already stored/fragment-linked: when this page is being
+// served BY a box itself (GET /monitor — see server/handlers.go's
+// handleMonitor), pathname starts with "/monitor", and the box's own
+// origin IS the base URL to connect to — no separate host/port to type, no
+// -cors-origin needed at all (this becomes a same-origin fetch; see
+// server/handlers.go's monitorContentSecurityPolicy, which scopes
+// connect-src to 'self' on the assumption this holds). Every other serving
+// mode this file documents (file://, a separately hosted static copy) has
+// no such relationship between where the PAGE came from and where the BOX
+// is, so this returns null and bootstrap()'s existing stored/fragment-
+// prefill/blank behavior is unchanged — this is additive, never a
+// replacement for a stored preference (see bootstrap()'s own precedence:
+// storedBase still wins over this when both are present). Takes a plain
+// {pathname, origin} object rather than `location` itself so it stays
+// callable from this TESTABLE sandbox, which exposes no `location` (or any
+// other DOM/window global) — see monitor_test.mjs's extraction preamble.
+function sameOriginDefaultBase(loc) {
+  var l = loc || {};
+  if (typeof l.pathname !== "string" || typeof l.origin !== "string" || !l.origin) return null;
+  if (l.pathname !== "/monitor" && l.pathname.indexOf("/monitor/") !== 0) return null;
+  return l.origin;
+}
+
 // QUIET_MS/STALL_MS are `var`, not `const`: top-level `const`/`let` bindings
 // live in a vm context's lexical environment, not as properties of it, so
 // monitor_test.mjs's sandbox destructure would see them as undefined (see
@@ -2365,9 +2389,13 @@ function forceDisconnect(reason) {
   var storedToken = localStorage.getItem(LS_TOKEN) || "";
   // Fragment #b= prefills the base URL field (e.g. a shared bookmark) when
   // nothing is stored yet; the token is never carried in the URL — it lives
-  // in localStorage only (see the plan's Connect flow).
+  // in localStorage only (see the plan's Connect flow). Same-origin
+  // (sameOriginDefaultBase — this page being served BY the box itself at
+  // GET /monitor) is the LOWEST-priority default: a stored preference or a
+  // bookmarked fragment link still wins, since either reflects a deliberate
+  // earlier choice this page must not override.
   var fragBase = unroute(location.hash).base;
-  baseInput.value = storedBase || fragBase || "";
+  baseInput.value = storedBase || fragBase || sameOriginDefaultBase(location) || "";
   tokenInput.value = storedToken;
   setConnState("disconnected");
 

@@ -605,6 +605,61 @@ func TestHealthSessionSyncVolumeMode(t *testing.T) {
 	}
 }
 
+// TestMonitorPageServed covers cmd/harness's normal case (server.Options.
+// MonitorPage set — see tools/monitor.Page): GET /monitor and GET /monitor/
+// both serve the configured bytes verbatim, unauthenticated (no Authorization
+// header sent, same as /health), with the correct Content-Type and the
+// same-origin-scoped Content-Security-Policy header (monitorContentSecurityPolicy).
+func TestMonitorPageServed(t *testing.T) {
+	dir := t.TempDir()
+	const page = "<!doctype html><html><body>fake monitor page</body></html>"
+	srv := newServer(t, dir, &scriptedProvider{name: "test"}, 0, func(o *Options) {
+		o.MonitorPage = []byte(page)
+	})
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+
+	for _, path := range []string{"/monitor", "/monitor/"} {
+		req, _ := http.NewRequest("GET", ts.URL+path, nil) // no auth header
+		resp, err := ts.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want 200 (unauthenticated, like /health)", path, resp.StatusCode)
+		}
+		if string(body) != page {
+			t.Errorf("GET %s body = %q, want the configured MonitorPage verbatim: %q", path, body, page)
+		}
+		if ct := resp.Header.Get("Content-Type"); ct != "text/html; charset=utf-8" {
+			t.Errorf("GET %s Content-Type = %q", path, ct)
+		}
+		if csp := resp.Header.Get("Content-Security-Policy"); csp != monitorContentSecurityPolicy {
+			t.Errorf("GET %s Content-Security-Policy = %q, want %q", path, csp, monitorContentSecurityPolicy)
+		}
+	}
+}
+
+// TestMonitorPageNotConfigured guards the "existing deployments unchanged"
+// contract: a server that never sets Options.MonitorPage (the zero value,
+// same as every server.New call before this field existed) must 404 at
+// GET /monitor exactly as it always has — no route registered at all, not
+// merely an empty 200.
+func TestMonitorPageNotConfigured(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	req, _ := http.NewRequest("GET", h.ts.URL+"/monitor", nil)
+	resp, err := h.ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET /monitor status = %d, want 404 when MonitorPage is not configured", resp.StatusCode)
+	}
+}
+
 func TestAuthRequired(t *testing.T) {
 	h := newHarness(t, &scriptedProvider{name: "test"})
 

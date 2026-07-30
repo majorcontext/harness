@@ -48,6 +48,7 @@ const {
   hostLabel,
   route,
   unroute,
+  sameOriginDefaultBase,
   QUIET_MS,
   STALL_MS,
   staleness,
@@ -241,6 +242,34 @@ test("unroute tolerates junk hashes without throwing", () => {
   assert.deepEqual(reify(unroute("#x=1&y")), { base: null, sessionId: null });
   // Malformed percent-encoding must not throw; it degrades to the raw text.
   assert.deepEqual(reify(unroute("#b=%zz&s=ok")), { base: "%zz", sessionId: "ok" });
+});
+
+/* ---------- sameOriginDefaultBase (embedded GET /monitor same-origin
+   default) ---------- */
+
+test("sameOriginDefaultBase: pathname '/monitor' defaults the base URL to the page's own origin", () => {
+  assert.equal(sameOriginDefaultBase({ pathname: "/monitor", origin: "http://127.0.0.1:4096" }), "http://127.0.0.1:4096");
+});
+
+test("sameOriginDefaultBase: a trailing-slash pathname ('/monitor/') also matches", () => {
+  assert.equal(sameOriginDefaultBase({ pathname: "/monitor/", origin: "http://127.0.0.1:4096" }), "http://127.0.0.1:4096");
+});
+
+test("sameOriginDefaultBase: any other pathname (file://, a static host's own path, the board root) returns null", () => {
+  assert.equal(sameOriginDefaultBase({ pathname: "/", origin: "http://127.0.0.1:4096" }), null);
+  assert.equal(sameOriginDefaultBase({ pathname: "/tools/monitor/index.html", origin: "https://cdn.example.com" }), null);
+  assert.equal(sameOriginDefaultBase({ pathname: "/Users/dev/harness/tools/monitor/index.html", origin: "null" }), null);
+  // "monitoring" shares "/monitor" as a prefix but is a DIFFERENT path —
+  // must not false-positive on a substring match.
+  assert.equal(sameOriginDefaultBase({ pathname: "/monitoring", origin: "http://127.0.0.1:4096" }), null);
+});
+
+test("sameOriginDefaultBase: tolerates missing/malformed input without throwing", () => {
+  assert.equal(sameOriginDefaultBase(null), null);
+  assert.equal(sameOriginDefaultBase(undefined), null);
+  assert.equal(sameOriginDefaultBase({}), null);
+  assert.equal(sameOriginDefaultBase({ pathname: "/monitor" }), null); // no origin
+  assert.equal(sameOriginDefaultBase({ pathname: "/monitor", origin: "" }), null); // empty origin
 });
 
 /* ---------- staleness / QUIET_MS / STALL_MS ---------- */

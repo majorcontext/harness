@@ -209,6 +209,23 @@ type Options struct {
 	// per-session. Nil disables the /process endpoints entirely (they
 	// 404), matching a nil engine.Config.Processes.
 	Processes engine.ProcessRegistry
+	// MonitorPage, when non-nil, is served verbatim at GET /monitor (and
+	// /monitor/) — the single-file board+detail+composer UI documented in
+	// AGENTS.md's "Session monitor" section, letting a box serve its own
+	// copy same-origin instead of requiring a separately hosted one. Nil
+	// (the default) registers no route at all: GET /monitor 404s exactly
+	// as it always has, so an existing deployment that never sets this is
+	// completely unaffected. Deliberately UNAUTHENTICATED, like /health:
+	// the page is public, static, credential-free code (same "byte-for-
+	// byte, no build step" file this package never parses or executes) —
+	// every actual API call it makes still goes through s.auth like any
+	// other client, exactly as when the same file is opened via file:// or
+	// served from an unrelated static host. cmd/harness's serveCmd is the
+	// only place that sets this (via tools/monitor.Page) — server itself
+	// never imports tools/monitor, keeping this package's only coupling to
+	// the page a plain []byte it neither inspects nor depends on the
+	// shape of.
+	MonitorPage []byte
 }
 
 // Server implements http.Handler for the harness serve API.
@@ -615,6 +632,10 @@ func (s *Server) routes() {
 	// inspecting a wedged box in environments where signaling/exec-ing into
 	// the process is awkward or unavailable.
 	mux.HandleFunc("GET /debug/goroutines", s.auth(s.handleGoroutines))
+	if s.opts.MonitorPage != nil {
+		mux.HandleFunc("GET /monitor", s.handleMonitor)
+		mux.HandleFunc("GET /monitor/", s.handleMonitor)
+	}
 	s.mux = mux
 }
 
