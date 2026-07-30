@@ -536,6 +536,103 @@ test("transcriptModel: turn markers appear across busy -> idle -> busy transitio
   assert.deepEqual(reify(streamingTexts.map(e => e.text)), ["second turn"]);
 });
 
+test("transcriptModel: single-source turn marks — 'session.status busy' then a 'message' event for the SAME turn's user prompt marks once, not twice", () => {
+  // The real wire order for both an idle-dispatched prompt and a
+  // queued-prompt delivery: session.status(busy) opens the turn, THEN a
+  // "message" event durably delivers the user's own prompt text (see
+  // server/handlers.go's handlePrompt/dispatchQueueHead: emitDurable(busy)
+  // happens before the Prompt() call that appends + publishes the user
+  // message). Regression for the double turn-mark bug: session.status's own
+  // case used to unconditionally push a mark AND foldMessage's user-role
+  // branch pushed its own, independently, for the very same turn.
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t0", parts: [{ type: "text", text: "go" }] } },
+    { type: "text.delta", text: "on it" },
+  ];
+  const entries = transcriptModel([], evs);
+  assert.deepEqual(reify(entries.map(e => e.kind)), ["turn-mark", "operator", "assistant"]);
+  const marks = entries.filter(e => e.kind === "turn-mark");
+  assert.equal(marks.length, 1, "exactly one turn-mark for one turn, regardless of event count");
+  assert.equal(marks[0].turn, 1);
+  assert.equal(entries[1].text, "go");
+});
+
+test("transcriptModel: single-source turn marks — a queued-prompt delivery (dequeue -> busy -> message) also marks once", () => {
+  // Traced against server/handlers.go's dispatchQueueHead: DequeuePrompt
+  // publishes a durable prompt.dequeued record (transcriptModel has no
+  // dedicated case for it — falls through to the event-loop's default, a
+  // no-op), THEN emitDurable(session.status busy), THEN runPrompt's
+  // st.sess.Prompt call appends and publishes the user message — the exact
+  // same busy-then-message shape as an idle dispatch, just preceded by the
+  // dequeue record.
+  const evs = [
+    { type: "prompt.dequeued", queue_text: "also run lint", queue_reason: "delivered" },
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t0", parts: [{ type: "text", text: "also run lint" }] } },
+  ];
+  const entries = transcriptModel([], evs);
+  const marks = entries.filter(e => e.kind === "turn-mark");
+  assert.equal(marks.length, 1, "a queued-delivery turn must mark exactly once");
+  assert.deepEqual(reify(entries.map(e => e.kind)), ["turn-mark", "operator"]);
+});
+
+test("transcriptModel: single-source turn marks — two consecutive live turns (busy/message pairs) each mark exactly once, numbered in order", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t0", parts: [{ type: "text", text: "first" }] } },
+    { type: "message", message: { id: "m2", role: "assistant", created_at: "t1", parts: [{ type: "text", text: "done" }] } },
+    { type: "session.status", status: "idle" },
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m3", role: "user", created_at: "t2", parts: [{ type: "text", text: "second" }] } },
+  ];
+  const entries = transcriptModel([], evs);
+  const marks = entries.filter(e => e.kind === "turn-mark");
+  assert.equal(marks.length, 2);
+  assert.equal(marks[0].turn, 1);
+  assert.equal(marks[1].turn, 2);
+});
+
+test("transcriptModel: single-source turn marks — the durable-history fold (no session.status events at all) is unaffected: every user message still marks", () => {
+  const messages = [
+    { id: "m1", role: "user", created_at: "t0", parts: [{ type: "text", text: "first" }] },
+    { id: "m2", role: "assistant", created_at: "t1", parts: [{ type: "text", text: "ok" }] },
+    { id: "m3", role: "user", created_at: "t2", parts: [{ type: "text", text: "second" }] },
+    { id: "m4", role: "assistant", created_at: "t3", parts: [{ type: "text", text: "ok again" }] },
+  ];
+  const entries = transcriptModel(messages, []);
+  const marks = entries.filter(e => e.kind === "turn-mark");
+  assert.equal(marks.length, 2);
+  assert.equal(marks[0].turn, 1);
+  assert.equal(marks[1].turn, 2);
+});
+
+test("transcriptModel: single-source turn marks — a user 'message' with no preceding live session.status (e.g. connecting mid-stream) still marks, order-tolerant", () => {
+  const evs = [
+    { type: "message", message: { id: "m1", role: "user", created_at: "t0", parts: [{ type: "text", text: "go" }] } },
+  ];
+  const entries = transcriptModel([], evs);
+  const marks = entries.filter(e => e.kind === "turn-mark");
+  assert.equal(marks.length, 1);
+  assert.equal(marks[0].turn, 1);
+});
+
+test("transcriptModel: single-source turn marks — session.status busy with no following user message (e.g. a goal-internal cycle) does not leak into a later, unrelated user message", () => {
+  const evs = [
+    { type: "session.status", status: "busy" }, // e.g. a goal-loop internal turn with no discrete user message
+    { type: "text.delta", text: "internal step" },
+    { type: "session.status", status: "idle" },
+    // A later, genuinely separate user message arrives with no immediately
+    // preceding busy in THIS buffer — it must still mark its own turn, not
+    // be silently swallowed by a stale "turn already open" flag left over
+    // from the earlier busy/idle cycle.
+    { type: "message", message: { id: "m1", role: "user", created_at: "t0", parts: [{ type: "text", text: "go" }] } },
+  ];
+  const entries = transcriptModel([], evs);
+  const marks = entries.filter(e => e.kind === "turn-mark");
+  assert.equal(marks.length, 2, "the goal-internal busy/idle cycle marks once, the later user message marks its own turn");
+});
+
 test("transcriptModel: a live 'message' event supersedes the streaming draft it completes, without duplication", () => {
   const evs = [
     { type: "session.status", status: "busy" },

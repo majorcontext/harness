@@ -215,6 +215,9 @@ function operatorTexts(doc) {
 function assistantTexts(doc) {
   return [...doc.querySelectorAll("#transcript .msg:not(.user):not(.reasoning) .body p")].map((n) => n.textContent);
 }
+function turnMarkCount(doc) {
+  return doc.querySelectorAll("#transcript .turn-mark").length;
+}
 
 // jsdom does not implement the HTML Popover API; the monitor page never
 // calls it, but AbortController IS load-bearing (index.html's connectStream
@@ -382,13 +385,22 @@ async function main() {
   const idleComposeID = await createSession(ProvQuickIdle);
   const idleComposeRow = await waitFor(() => findRow(doc, idleComposeID), { label: "board row for " + idleComposeID });
   await openDetailViaClick(w, doc, idleComposeRow);
+  assert.equal(turnMarkCount(doc), 0, "a freshly created, never-prompted session must open with no turn marks: " + turnMarkCount(doc));
   const idleText = "composer message into an idle session";
   composerInput.value = idleText;
   composerForm.dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
   await waitFor(() => operatorTexts(doc).includes(idleText), { timeoutMs: 4000, label: "operator entry for an idle-session composer send" });
   await waitIdle(idleComposeID, 15);
   await waitFor(() => assistantTexts(doc).some((t) => t.includes("hello")), { timeoutMs: 4000, label: "assistant reply for the idle-session composer send" });
-  console.error("PASS: composer send on an idle session runs a normal turn (message event, not prompt.queued)");
+  // Regression for the double turn-mark bug: on the real wire this turn
+  // arrives as session.status(busy) -> a "message" event for the operator's
+  // own prompt -> assistant deltas. Both transcriptModel's session.status
+  // case and foldMessage's user-role branch used to mark the SAME turn
+  // independently, rendering two "turn 1" separators for one turn. Exactly
+  // one new marker for one turn is the observable this e2e originally
+  // missed (it counted operator/assistant text, never turn-marks).
+  assert.equal(turnMarkCount(doc), 1, "one composer-sent turn must render exactly one turn-mark, not two: " + turnMarkCount(doc));
+  console.error("PASS: composer send on an idle session runs a normal turn (message event, not prompt.queued), marking exactly one turn");
 
   // ---- 4e. Composer send against an unknown session: real non-2xx error
   // text surfaces inline. ----

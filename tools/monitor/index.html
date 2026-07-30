@@ -820,11 +820,46 @@ function transcriptModel(messages, liveEvents, turnOffset) {
   var entries = [];
   var turnNum = typeof turnOffset === "number" ? turnOffset : 0;
 
+  // liveTurnOpen is true exactly while a turn has been opened by a live
+  // "session.status":"busy" event but its user message hasn't arrived yet.
+  // Single-sources turn-mark emission: on the real wire, BOTH an
+  // idle-dispatched prompt and a queued prompt's delivery emit
+  // session.status(busy) BEFORE the "message" event that durably delivers
+  // the user's own prompt text (see server/handlers.go's handlePrompt and
+  // dispatchQueueHead — emitDurable(busy) precedes the Prompt() call that
+  // appends + publishes the message). Without this flag, the
+  // "session.status" case below and foldMessage's user-role branch each
+  // pushed their OWN mark for that same turn — every turn beginning while
+  // the detail view was open double-marked (and double-incremented
+  // turnNum). Declared here, before the durable `messages` loop runs, so it
+  // stays permanently false for every foldMessage call from that loop:
+  // durable history carries no session.status events at all, so that path
+  // (unaffected by this bug) is unchanged — every user message there still
+  // marks its own turn. Consumed (reset to false) the moment a user message
+  // actually lands, so a LATER, unrelated user message with no immediately
+  // preceding busy (connecting mid-stream; a goal-internal busy/idle cycle
+  // with no message of its own) still marks correctly rather than being
+  // silently swallowed by a stale flag — see the "session.status" case's
+  // else branch, which also resets it on any non-busy transition.
+  var liveTurnOpen = false;
+
   function foldMessage(m) {
     if (!m) return;
     if (m.role === "user") {
-      turnNum += 1;
-      entries.push({ kind: "turn-mark", turn: turnNum, at: m.created_at || null, live: false });
+      if (liveTurnOpen) {
+        liveTurnOpen = false;
+        // Backfill the real timestamp onto the turn-mark session.status
+        // already opened (it had none — status events carry no wall-clock
+        // content of their own) now that the message it was waiting for
+        // has actually arrived, instead of leaving that mark's `at` null
+        // forever.
+        for (var lm = entries.length - 1; lm >= 0; lm--) {
+          if (entries[lm].kind === "turn-mark") { if (!entries[lm].at) entries[lm].at = m.created_at || null; break; }
+        }
+      } else {
+        turnNum += 1;
+        entries.push({ kind: "turn-mark", turn: turnNum, at: m.created_at || null, live: false });
+      }
     }
     if (m.role === "tool") return; // consumed via resultsByCallID
     var parts = Array.isArray(m.parts) ? m.parts : [];
@@ -881,6 +916,13 @@ function transcriptModel(messages, liveEvents, turnOffset) {
         if (ev.status === "busy") {
           turnNum += 1;
           entries.push({ kind: "turn-mark", turn: turnNum, at: null, live: true });
+          liveTurnOpen = true; // consumed by foldMessage's user-role branch above
+        } else {
+          // Bounds how long an unconsumed liveTurnOpen can linger: a busy
+          // cycle with no discrete user message (e.g. a goal-loop internal
+          // turn) resets here at its idle transition, so it can never leak
+          // into suppressing a later, unrelated user message's own mark.
+          liveTurnOpen = false;
         }
         break;
       case "message":
