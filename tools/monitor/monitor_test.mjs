@@ -61,6 +61,8 @@ const {
   countKind,
   liveMessageCount,
   entryKey,
+  turnMarkAgoText,
+  keepsLiveEventAfterReconcile,
 } = sandbox;
 
 // collect gathers every frame the parser dispatches for the given chunks.
@@ -437,6 +439,49 @@ test("boardModel: idle rows show the last turn outcome, or 'worker parked' when 
   assert.equal(byId.s1.detailCritical, false);
   assert.equal(byId.s2.detail, "worker parked");
   assert.equal(byId.s2.detailCritical, true);
+});
+
+/* ---------- boardModel: the "empty" detail cell (RED-FIRST — a zero-message
+   idle session used to render a blank detail cell, indistinguishable from a
+   rendering failure; reported via live testing: an operator clicked one
+   expecting content). Precedence, lowest priority — verified: any outcome,
+   or a paused goal, still wins; any messages > 0, or a missing/unpolled
+   messages field, suppresses it. ---------- */
+
+test("boardModel: an idle, never-prompted session (messages: 0, no outcome, no goal) shows a dim 'empty' detail cell, not blank", () => {
+  const now = 100_000;
+  const fresh = { id: "s1", state: "idle", queued: 0, messages: 0, last_activity_at: new Date(now).toISOString() };
+  const row = boardModel([fresh], activityMap({ s1: seedActivity(fresh) }), now)[0];
+  assert.equal(row.detail, "empty");
+  assert.equal(row.detailCritical, false);
+});
+
+test("boardModel: 'empty' is suppressed the instant messages > 0", () => {
+  const now = 100_000;
+  const used = { id: "s1", state: "idle", queued: 0, messages: 1, last_activity_at: new Date(now).toISOString() };
+  const row = boardModel([used], activityMap({ s1: seedActivity(used) }), now)[0];
+  assert.equal(row.detail, null);
+});
+
+test("boardModel: 'empty' never overrides a real outcome or a paused-goal presentation, even when messages is also 0", () => {
+  const now = 100_000;
+  const completedButZero = { id: "s1", state: "idle", queued: 0, messages: 0, last_turn: { outcome: "completed" }, last_activity_at: new Date(now).toISOString() };
+  const parkedButZero = {
+    id: "s2", state: "idle", queued: 0, messages: 0,
+    goal: { condition: "ship it", active: true, paused: true, pause_reason: "worker_failure" },
+    last_activity_at: new Date(now).toISOString(),
+  };
+  const rows = boardModel([completedButZero, parkedButZero], activityMap({ s1: seedActivity(completedButZero), s2: seedActivity(parkedButZero) }), now);
+  const byId = Object.fromEntries(rows.map(r => [r.id, r]));
+  assert.equal(byId.s1.detail, "completed");
+  assert.equal(byId.s2.detail, "worker parked");
+});
+
+test("boardModel: a session this page has only seen via a live stub (no `messages` field yet, before the next poll) does not show 'empty'", () => {
+  const now = 100_000;
+  const unpolled = { id: "s1", state: "idle", queued: 0, last_activity_at: new Date(now).toISOString() }; // no `messages` field at all
+  const row = boardModel([unpolled], activityMap({ s1: seedActivity(unpolled) }), now)[0];
+  assert.equal(row.detail, null, "an undefined messages count must not be guessed as zero");
 });
 
 /* ---------- detail live-chip: fresh-idle phase + the hidden-attribute CSS
@@ -863,6 +908,104 @@ test("transcriptModel: turn.end outcomes other than 'error' (e.g. 'completed') n
   assert.equal(entries.filter(e => e.kind === "error").length, 0);
 });
 
+/* ---------- transcriptModel: "turn completed with no output" placeholder
+   (RED-FIRST — a turn that ends completed with no assistant text, no tool
+   call, and no error used to render NOTHING beyond its own operator
+   prompt, indistinguishable from the turn having silently vanished;
+   observed with an exhausted scripted provider, rare but real with an
+   actual model too). ---------- */
+
+test("transcriptModel: [status busy, message(user), turn.end(completed), status idle] folds a 'turn completed with no output' placeholder", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t0", parts: [{ type: "text", text: "do the thing" }] } },
+    { type: "turn.end", outcome: "completed" },
+    { type: "session.status", status: "idle" },
+  ];
+  const entries = transcriptModel([], evs);
+  assert.deepEqual(reify(entries.map(e => e.kind)), ["turn-mark", "operator", "turn-empty"]);
+  assert.equal(entries[2].text, "turn completed with no output");
+});
+
+test("transcriptModel: an assistant text entry in the turn suppresses the no-output placeholder", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t0", parts: [{ type: "text", text: "do the thing" }] } },
+    { type: "message", message: { id: "m2", role: "assistant", created_at: "t1", parts: [{ type: "text", text: "done" }] } },
+    { type: "turn.end", outcome: "completed" },
+    { type: "session.status", status: "idle" },
+  ];
+  const entries = transcriptModel([], evs);
+  assert.equal(entries.filter(e => e.kind === "turn-empty").length, 0);
+});
+
+test("transcriptModel: a tool call in the turn suppresses the no-output placeholder", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t0", parts: [{ type: "text", text: "do the thing" }] } },
+    { type: "tool.start", tool_call: { call_id: "c1", name: "Bash", arguments: { command: "ls" } } },
+    { type: "tool.end", tool_call: { call_id: "c1" }, output: [{ type: "text", text: "ok" }], is_error: false },
+    { type: "turn.end", outcome: "completed" },
+    { type: "session.status", status: "idle" },
+  ];
+  const entries = transcriptModel([], evs);
+  assert.equal(entries.filter(e => e.kind === "turn-empty").length, 0);
+});
+
+test("transcriptModel: an error entry in the turn suppresses the no-output placeholder (a failure is not silently-empty)", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t0", parts: [{ type: "text", text: "do the thing" }] } },
+    { type: "session.error", error: "boom" },
+    { type: "turn.end", outcome: "error", error: "boom" },
+    { type: "session.status", status: "idle" },
+  ];
+  const entries = transcriptModel([], evs);
+  assert.equal(entries.filter(e => e.kind === "turn-empty").length, 0);
+});
+
+test("transcriptModel: reasoning-only output still counts as 'no output' — the placeholder still folds", () => {
+  // Deliberate: the task's own definition of "output" is assistant text,
+  // tool call, or error — reasoning is explicitly excluded, so a turn that
+  // only thought out loud and never replied or acted is exactly the "no
+  // output" case, not a false negative. The open reasoning draft itself
+  // does not survive into the result: the trailing session.status(idle)
+  // resetDraft()s it away, same as it always has for ANY never-finalized
+  // draft, regardless of this placeholder feature — only entries already
+  // pushed into `entries` (turn-mark, operator, and now turn-empty) do.
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t0", parts: [{ type: "text", text: "do the thing" }] } },
+    { type: "reasoning.delta", text: "thinking about it" },
+    { type: "turn.end", outcome: "completed" },
+    { type: "session.status", status: "idle" },
+  ];
+  const entries = transcriptModel([], evs);
+  assert.deepEqual(reify(entries.map(e => e.kind)), ["turn-mark", "operator", "turn-empty"]);
+});
+
+test("transcriptModel: each turn is judged independently — an earlier turn's real output does not suppress a LATER empty turn's placeholder", () => {
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m1", role: "user", created_at: "t0", parts: [{ type: "text", text: "first" }] } },
+    { type: "message", message: { id: "m2", role: "assistant", created_at: "t1", parts: [{ type: "text", text: "first reply" }] } },
+    { type: "turn.end", outcome: "completed" },
+    { type: "session.status", status: "idle" },
+    { type: "session.status", status: "busy" },
+    { type: "message", message: { id: "m3", role: "user", created_at: "t2", parts: [{ type: "text", text: "second" }] } },
+    { type: "turn.end", outcome: "completed" },
+    { type: "session.status", status: "idle" },
+  ];
+  const entries = transcriptModel([], evs);
+  const emptyMarks = entries.filter(e => e.kind === "turn-empty");
+  assert.equal(emptyMarks.length, 1, "only the second (genuinely empty) turn gets a placeholder");
+  assert.equal(emptyMarks[0].turn, 2);
+});
+
+test("entryKey: turn-empty placeholders key by turn number", () => {
+  assert.equal(entryKey({ kind: "turn-empty", turn: 3 }, 0), "turn-empty:3");
+});
+
 test("transcriptModel: a live session.aborted event folds into an error-styled entry reading 'turn aborted'", () => {
   const evs = [
     { type: "session.status", status: "busy" },
@@ -962,4 +1105,80 @@ test("entryKey: settled messages key by durable id; drafts and queued placeholde
   assert.equal(entryKey({ kind: "reasoning", id: null, streaming: true }, 0), "draft:reasoning");
   assert.equal(entryKey({ kind: "operator", id: null, queued: true, queueId: 7 }, 0), "queued:7");
   assert.equal(entryKey({ kind: "operator", id: null, queued: true, queueId: null }, 2), "queued:idx:2");
+});
+
+/* ---------- turnMarkAgoText (NIT fix: settled turn-marks' "· Xm ago" used
+   to freeze, because entrySignature keyed on the immutable entry.at instead
+   of the RENDERED text — see entrySignature's turn-mark case, which now
+   keys on this function's own return value so a later tick's different
+   nowMs produces a different signature and actually re-patches the DOM
+   node, mirroring boardModel's elapsed.text-in-the-signature approach).
+   entrySignature itself lives outside this file's TESTABLE region (its
+   "tool" case reads the closured detailState, same reason toolElapsedText
+   was never made TESTABLE either) — this function is the pure heart of the
+   fix, factored out specifically so it IS unit-testable; the full
+   entrySignature/DOM integration is covered by the e2e's ticking
+   assertion. ---------- */
+
+test("turnMarkAgoText: empty for a still-open turn (no entry.at) or an unparseable one", () => {
+  assert.equal(turnMarkAgoText({ turn: 1, at: null }, 100_000), "");
+  assert.equal(turnMarkAgoText({ turn: 1, at: "not-a-date" }, 100_000), "");
+});
+
+test("turnMarkAgoText: RED-FIRST — the same settled entry (entry.at is immutable) renders a DIFFERENT string as nowMs advances", () => {
+  // This is the exact fact entrySignature's turn-mark case now keys on
+  // instead of the frozen entry.at alone — before the fix, nothing in the
+  // signature ever changed for a settled turn-mark, so syncTranscript's
+  // signature-gated patch never re-touched the node and the "ago" text
+  // froze at whatever it first rendered.
+  const entry = { turn: 1, at: new Date(0).toISOString() };
+  assert.equal(turnMarkAgoText(entry, 5_000), "5s ago");
+  assert.equal(turnMarkAgoText(entry, 12 * 60 * 1000), "12m ago");
+  assert.notEqual(turnMarkAgoText(entry, 5_000), turnMarkAgoText(entry, 12 * 60 * 1000));
+});
+
+/* ---------- keepsLiveEventAfterReconcile (MEDIUM fix: detail transcript
+   permanently missed events streamed during a reconnect / PERF fix:
+   liveEvents grew unbounded — reconcileDetail unifies both fixes around one
+   seq boundary; this is that boundary's pure predicate, RED-FIRST since
+   neither reconcileDetail nor this predicate existed before.) ---------- */
+
+test("keepsLiveEventAfterReconcile: keeps only events with a numeric seq strictly greater than snapSeq — equal is dropped, not kept", () => {
+  assert.equal(keepsLiveEventAfterReconcile({ type: "session.status", seq: 10 }, 5), true);
+  assert.equal(keepsLiveEventAfterReconcile({ type: "session.status", seq: 5 }, 5), false);
+  assert.equal(keepsLiveEventAfterReconcile({ type: "session.status", seq: 4 }, 5), false);
+});
+
+test("keepsLiveEventAfterReconcile: seq-less (transient, non-journaled) events are ALWAYS dropped, regardless of snapSeq", () => {
+  // text.delta/reasoning.delta/tool.start/tool.end/compaction_failed carry
+  // no seq at all (server/journal.go's publishLive, never emitDurable) —
+  // there is no way to place them relative to snapSeq's boundary, so the
+  // rule is an unconditional drop, not "keep if snapSeq is very low".
+  assert.equal(keepsLiveEventAfterReconcile({ type: "text.delta", text: "hi" }, 0), false);
+  assert.equal(keepsLiveEventAfterReconcile({ type: "tool.start" }, -1), false);
+  assert.equal(keepsLiveEventAfterReconcile({ type: "reasoning.delta" }, Number.MIN_SAFE_INTEGER), false);
+});
+
+test("keepsLiveEventAfterReconcile: a non-numeric seq is treated as absent (dropped), and null/undefined events never throw", () => {
+  assert.equal(keepsLiveEventAfterReconcile({ type: "text.delta", seq: "10" }, 0), false);
+  assert.equal(keepsLiveEventAfterReconcile(null, 5), false);
+  assert.equal(keepsLiveEventAfterReconcile(undefined, 5), false);
+});
+
+test("keepsLiveEventAfterReconcile: RED-FIRST — session.error/turn.end/session.aborted are ALWAYS kept, even with seq <= snapSeq", () => {
+  // These three are durable (carry a seq — server/journal.go's emitDurable)
+  // but have NO GET /session/{id}/message representation at all: unlike
+  // every other durable event this file handles, nothing in a fresh
+  // /message snapshot could ever reconstruct one. An earlier version of
+  // this rule dropped them like any other durable event once their seq
+  // fell behind snapSeq — which silently erased a failed/aborted turn's
+  // ENTIRE error entry (transcriptModel's pushIfNewError folds exclusively
+  // from these three) the instant reconcileDetail's cap trigger fired
+  // during a live error. Caught by the e2e's error-entry scenario timing
+  // out once DETAIL_LIVE_EVENTS_CAP was tuned low for the buffer-cap
+  // scenario — this is the regression test for that.
+  assert.equal(keepsLiveEventAfterReconcile({ type: "session.error", seq: 1, error: "boom" }, 100), true);
+  assert.equal(keepsLiveEventAfterReconcile({ type: "turn.end", seq: 1, outcome: "error", error: "boom" }, 100), true);
+  assert.equal(keepsLiveEventAfterReconcile({ type: "turn.end", seq: 1, outcome: "completed" }, 100), true);
+  assert.equal(keepsLiveEventAfterReconcile({ type: "session.aborted", seq: 1 }, 100), true);
 });

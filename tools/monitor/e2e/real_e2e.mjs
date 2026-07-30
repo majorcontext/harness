@@ -50,15 +50,25 @@ const ProvToolDetail = "e2e-tool-detail";
 const ProvStallStale = "e2e-stall-stale";
 const ProvStallDedup = "e2e-stall-dedup";
 const ProvStreamError = "e2e-stream-error";
-// Must match stub.go's StreamErrorText exactly — same duplication-by-hand
-// reasoning as the Prov* keys above (this script has no Go tooling).
+const ProvReconnectGap = "e2e-reconnect-gap";
+const ProvLiveCap = "e2e-live-cap";
+// Must match stub.go's StreamErrorText/ReconnectGapReply exactly — same
+// duplication-by-hand reasoning as the Prov* keys above (this script has no
+// Go tooling).
 const STREAM_ERROR_TEXT = "simulated upstream failure: connection reset by peer";
+const RECONNECT_GAP_REPLY = "reconnect-gap turn landed";
 
 // TUNING shrinks the monitor's staleness thresholds (production QUIET_MS/
 // STALL_MS are 15000/60000 — see index.html) down to something a real,
-// bounded bash `sleep` can cross inside a CI-sane test budget. Read by
-// index.html's window.__monitorTuning seam, set below via JSDOM's
-// beforeParse so it lands before the page's inline <script> ever runs.
+// bounded bash `sleep` can cross inside a CI-sane test budget, shrinks
+// DETAIL_LIVE_EVENTS_CAP (production 500) down to something a single
+// scripted turn's handful of live events comfortably crosses, and WIDENS
+// BACKOFF_MIN (production 500ms) so the reconnect-gap-heal scenario has a
+// deterministically generous window between a real server-side kill/
+// restart and the page's own next reconnect attempt, rather than depending
+// on exact wall-clock luck to land its race. Read by index.html's
+// window.__monitorTuning seam, set below via JSDOM's beforeParse so it
+// lands before the page's inline <script> ever runs.
 //
 // The gap between QUIET_MS and STALL_MS must be comfortably wider than the
 // board's own 1s ticker (index.html's TICK_MS): while a session sits mid-
@@ -66,7 +76,7 @@ const STREAM_ERROR_TEXT = "simulated upstream failure: connection reset by peer"
 // periodic tick (there is nothing else to trigger a re-render) — a gap
 // narrower than one tick period means the "quiet" tier can fall entirely
 // between two samples and never be observed, even though it was real.
-const TUNING = { QUIET_MS: 200, STALL_MS: 1800 };
+const TUNING = { QUIET_MS: 200, STALL_MS: 1800, DETAIL_LIVE_EVENTS_CAP: 2, BACKOFF_MIN: 4000, BACKOFF_MAX: 10000, POLL_MS: 300 };
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -455,6 +465,44 @@ async function main() {
   assert.equal(errorRow.querySelector(".detail").textContent, "error", "row shows the real turn.end outcome after a stream failure: " + errorRow.querySelector(".detail").textContent);
   console.error("PASS: the live chip settles to idle promptly (no poll dependency), and the board row shows the real 'error' outcome");
 
+  // ---- 4g. detail liveEvents buffer cap (finding 3 — PERF): a real
+  // scripted turn streams 6 text deltas (stub.go's capTurns), each with no
+  // seq of its own (see keepsLiveEventAfterReconcile's doc comment) —
+  // comfortably overshooting the tuned DETAIL_LIVE_EVENTS_CAP (2).
+  // handleDetailEvent must trigger reconcileDetail() once the buffer
+  // crosses that cap; this asserts BOTH halves — that liveEvents actually
+  // grew past the cap while the turn streamed (proving this scenario
+  // exercises something real — read via liveEventsPeakLength, NOT a
+  // liveEventsLength() polling loop: a real turn with no bash sleep can
+  // cross the cap and get reconciled back down within a single JS
+  // microtask, entirely between two poll samples, so the peak counter is
+  // the only way to reliably observe the spike happened at all), and that
+  // liveEvents itself shrinks back down once reconcileDetail's GET /message
+  // re-fetch resolves (proving the trigger actually fires and its filter
+  // actually trims the buffer, not just that the turn eventually
+  // finished). ----
+  const capID = await createSession(ProvLiveCap);
+  const capRow = await waitFor(() => findRow(doc, capID), { label: "board row for " + capID });
+  await openDetailViaClick(w, doc, capRow);
+  assert.equal((await promptAsync(capID, "trigger the live-events buffer cap")).status, 202, "prompt_async accepted");
+
+  await waitIdle(capID, 15);
+  const capPeak = w.__monitorDebug.liveEventsPeakLength();
+  assert.ok(capPeak !== null && capPeak > TUNING.DETAIL_LIVE_EVENTS_CAP, "liveEvents must have actually crossed the tuned cap (" + TUNING.DETAIL_LIVE_EVENTS_CAP + ") at its peak while the turn streamed: " + capPeak);
+  console.error("PASS: liveEvents crossed the tuned buffer cap (peak " + capPeak + ") while a real scripted turn streamed");
+
+  await waitFor(() => {
+    const n = w.__monitorDebug.liveEventsLength();
+    // A small slack margin above the raw cap: reconcileDetail's own
+    // in-flight guard (detailState.reconciling) means the LAST couple of
+    // events pushed while a reconcile was already outstanding may still be
+    // sitting in the buffer until the NEXT trigger — the assertion is
+    // "shrank back down near the cap", not "never even momentarily one
+    // or two over it".
+    return n !== null && n <= TUNING.DETAIL_LIVE_EVENTS_CAP + 2;
+  }, { timeoutMs: 4000, label: "liveEvents shrinks back down after reconcileDetail's buffer-cap trigger resolves" });
+  console.error("PASS: liveEvents shrank back down after reconcileDetail's buffer-cap trigger — the PERF fix (finding 3) closes the loop");
+
   // ---- 5. Reconnect (scenario 5): a real server-side kill/restart of the
   // box's HTTP layer flips the header honestly and resumes. ----
   w.location.hash = "#";
@@ -474,6 +522,62 @@ async function main() {
   const postReconnectID = await createSession(ProvQuickIdle);
   await waitFor(() => findRow(doc, postReconnectID), { timeoutMs: 4000, label: "a post-reconnect session.created event reaching the resumed stream" });
   console.error("PASS: a session created after the restart arrived over the resumed stream — reconnect is genuine, not cosmetic");
+
+  // ---- 5b. Reconnect gap heals the detail transcript (finding 1 —
+  // MEDIUM): pollOnce silently advances state.lastSeq past whatever a poll
+  // snapshot's own maxSeq reports, regardless of whether THIS page's own
+  // SSE connection actually delivered everything up to that point — so the
+  // NEXT connectStream() resumes from an already-advanced cursor and never
+  // redelivers what it missed. The board self-heals for free (every 5s poll
+  // REPLACES state.sessions wholesale); the detail view has no equivalent —
+  // liveEvents is purely additive. This scenario opens a detail view, kills
+  // the box, then — since nothing can be driven while the box is actually
+  // down — restarts it and IMMEDIATELY fires the turn's prompt via a RAW
+  // direct fetch to the box (never through the monitor page), racing the
+  // page's own reconnect timer. TUNING.BACKOFF_MIN is widened specifically
+  // so this race is reliably won (a generous multi-second window) rather
+  // than depending on exact wall-clock timing luck. waitIdle below
+  // long-polls the BOX directly, proving the turn is fully durable on the
+  // server regardless of whether the page has reconnected yet — then the
+  // assertion is: once the page's own stream DOES resume, reconcileDetail's
+  // stream-re-establish trigger must backfill the ENTIRE turn into the
+  // detail transcript, which had a chance to observe none of it live. ----
+  const gapID = await createSession(ProvReconnectGap);
+  const gapRow = await waitFor(() => findRow(doc, gapID), { label: "board row for " + gapID });
+  await openDetailViaClick(w, doc, gapRow);
+  // Let the initial (empty — a freshly created, never-prompted session)
+  // history fetch actually complete before killing, so the kill below
+  // tests ONLY the reconnect-gap/reconcile path, not a coincidental race
+  // with enterDetail's own unrelated initial fetch.
+  await waitFor(() => {
+    const note = doc.querySelector("#transcript .transcript-note:not(.err)");
+    return !!note && note.textContent === "no messages yet";
+  }, { timeoutMs: 4000, label: "initial (empty) history loads before the reconnect-gap kill" });
+  assert.equal(turnMarkCount(doc), 0, "the reconnect-gap session must open with no turn marks before the gap turn runs");
+
+  assert.equal((await fetch(monitorBase + "/__control/kill", { method: "POST" })).status, 200, "control-plane kill (reconnect-gap scenario)");
+  await waitFor(() => doc.getElementById("conn-text").textContent === "reconnecting…", { timeoutMs: 5000, label: "header flips to reconnecting before the gap turn runs" });
+
+  assert.equal((await fetch(monitorBase + "/__control/restart", { method: "POST" })).status, 200, "control-plane restart (reconnect-gap scenario)");
+  const gapPromptText = "trigger the reconnect-gap turn";
+  assert.equal((await promptAsync(gapID, gapPromptText)).status, 202, "prompt_async accepted (raw fetch, no monitor page involvement)");
+  await waitIdle(gapID, 15);
+  console.error("PASS: the reconnect-gap turn completed durably on the server while the monitor page's own stream was still down/reconnecting");
+
+  await waitFor(() => doc.getElementById("conn-text").textContent === "streaming", { timeoutMs: 8000, label: "the monitor's own stream eventually resumes" });
+
+  // The proof: the detail transcript — fed ONLY from liveEvents, and this
+  // page's stream was down for the ENTIRE turn — must still end up showing
+  // it in full once reconcileDetail's stream-re-establish trigger backfills
+  // it from a fresh GET /message snapshot.
+  await waitFor(() => operatorTexts(doc).includes(gapPromptText), { timeoutMs: 5000, label: "the operator's prompt text appears in the transcript after reconcile heals the gap" });
+  await waitFor(() => assistantTexts(doc).some((t) => t.includes(RECONNECT_GAP_REPLY)), { timeoutMs: 5000, label: "the assistant's reply appears in the transcript after reconcile heals the gap" });
+  assert.equal(turnMarkCount(doc), 1, "the reconciled turn renders exactly one turn-mark, not zero (lost) or duplicated: " + turnMarkCount(doc));
+  console.error("PASS: reconcileDetail healed the reconnect gap — the detail transcript shows the FULL turn (operator prompt + assistant reply) it could never have observed live, marked exactly once");
+
+  const finalLiveEventsLength = w.__monitorDebug.liveEventsLength();
+  assert.ok(finalLiveEventsLength !== null && finalLiveEventsLength < 20, "liveEvents stays bounded after the reconnect-gap reconcile, not accumulating a permanent backlog: " + finalLiveEventsLength);
+  console.error("PASS: liveEvents stays bounded after the reconnect-gap reconcile: " + finalLiveEventsLength);
 
   dom.window.close();
   console.error("ALL REAL END-TO-END CHECKS PASSED");

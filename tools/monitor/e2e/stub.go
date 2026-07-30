@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -44,12 +45,14 @@ const RunToken = "monitor-e2e-token"
 // e2e scenario/session, so two sessions can never accidentally share a
 // turn index — see the doc comment on scriptedProvider.Stream.
 const (
-	ProvQuickIdle   = "e2e-quick-idle"   // composer-send-on-idle-session scenario
-	ProvToolBoard   = "e2e-tool-board"   // board phase transitions (streaming + real tool)
-	ProvToolDetail  = "e2e-tool-detail"  // detail view's live running-tool fold
-	ProvStallStale  = "e2e-stall-stale"  // staleness tiers (quiet/stalled)
-	ProvStallDedup  = "e2e-stall-dedup"  // busy composer send -> prompt.queued dedup
-	ProvStreamError = "e2e-stream-error" // a genuine provider stream failure (detail transcript error entry)
+	ProvQuickIdle    = "e2e-quick-idle"    // composer-send-on-idle-session scenario
+	ProvToolBoard    = "e2e-tool-board"    // board phase transitions (streaming + real tool)
+	ProvToolDetail   = "e2e-tool-detail"   // detail view's live running-tool fold
+	ProvStallStale   = "e2e-stall-stale"   // staleness tiers (quiet/stalled)
+	ProvStallDedup   = "e2e-stall-dedup"   // busy composer send -> prompt.queued dedup
+	ProvStreamError  = "e2e-stream-error"  // a genuine provider stream failure (detail transcript error entry)
+	ProvReconnectGap = "e2e-reconnect-gap" // reconcileDetail's reconnect-gap-heal trigger (finding 1)
+	ProvLiveCap      = "e2e-live-cap"      // reconcileDetail's liveEvents buffer-cap trigger (finding 3)
 )
 
 // StreamErrorText is the exact (sanitize-passthrough — see errorTurns' doc
@@ -58,6 +61,14 @@ const (
 // the Prov* keys above) to assert the detail transcript's error entry
 // renders the server's REAL error text, not a placeholder.
 const StreamErrorText = "simulated upstream failure: connection reset by peer"
+
+// ReconnectGapReply is the exact reply text ProvReconnectGap's turn ends
+// with; real_e2e.mjs duplicates this string (same reasoning as
+// StreamErrorText above) to assert the detail transcript eventually
+// contains this turn's FULL content — proving reconcileDetail backfilled
+// whatever the page's own SSE connection missed while it was down/
+// reconnecting, not just that SOME turn happened to complete.
+const ReconnectGapReply = "reconnect-gap turn landed"
 
 // scriptedTurn is one pre-built turn: a []provider.Event to stream, plus an
 // optional terminal error. When err is set, scriptedStream.Next() returns it
@@ -173,6 +184,27 @@ func quickTurns(reply string) []scriptedTurn {
 	}
 }
 
+// capTurns builds a single turn with MANY streaming text deltas (no tool
+// call — keeps this fast, no real bash sleep needed) so its live event
+// count comfortably and unambiguously overshoots any small tuned
+// DETAIL_LIVE_EVENTS_CAP (see real_e2e.mjs's TUNING). This makes the "did
+// liveEvents actually shrink back down after crossing the cap" e2e
+// assertion a real, falsifiable regression check: a handful of events (as
+// toolTurns' single turn produces) would coincidentally look "small" even
+// with reconcileDetail's buffer-cap trigger removed outright, which
+// wouldn't prove anything.
+func capTurns(chunks int) []scriptedTurn {
+	events := make([]provider.Event, 0, chunks+1)
+	var full strings.Builder
+	for i := 0; i < chunks; i++ {
+		chunk := fmt.Sprintf("chunk%d ", i)
+		events = append(events, textDelta(chunk))
+		full.WriteString(chunk)
+	}
+	events = append(events, doneEvent(provider.StopEndTurn, &message.Text{Text: full.String()}))
+	return []scriptedTurn{{events: events}}
+}
+
 // errorTurns builds a single scripted turn that streams a little text, then
 // fails with a genuine provider error before ever reaching EventDone — the
 // direct analog of a real provider connection dying mid-turn (see
@@ -247,7 +279,9 @@ func Start() (*Stub, error) {
 			toolTurns("working on the first ask", "on it", "tc-dedup", 1.4, "first one done"),
 			scriptedTurn{events: []provider.Event{textDelta("queued reply landed"), doneEvent(provider.StopEndTurn, &message.Text{Text: "queued reply landed"})}},
 		)},
-		ProvStreamError: &scriptedProvider{name: ProvStreamError, turns: errorTurns("starting the request", StreamErrorText)},
+		ProvStreamError:  &scriptedProvider{name: ProvStreamError, turns: errorTurns("starting the request", StreamErrorText)},
+		ProvReconnectGap: &scriptedProvider{name: ProvReconnectGap, turns: quickTurns(ReconnectGapReply)},
+		ProvLiveCap:      &scriptedProvider{name: ProvLiveCap, turns: capTurns(6)},
 	}
 
 	var srv *server.Server

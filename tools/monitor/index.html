@@ -722,6 +722,19 @@ function detailFor(cssClass, activity, session) {
     }
     var outcome = activity && activity.lastOutcome;
     if (outcome) return { text: outcomeLabel(outcome), critical: outcome !== "completed" };
+    // Lowest priority: a truly untouched session (never prompted, zero
+    // durable messages) otherwise renders a plain "idle" phase word with an
+    // EMPTY detail cell — indistinguishable, at a glance, from a rendering
+    // failure (reported via live testing: an operator clicked one expecting
+    // content and read the blank detail cell as broken). `session.messages`
+    // is the session summary's own durable message count (server/
+    // handlers.go's sessionJSON.Messages field) — a real 0 here is
+    // unambiguous, never a missing/omitted-field guess (a session this page
+    // has only seen via a live "session.created" stub, not yet a poll,
+    // simply falls through to the null case below until the next poll fills
+    // `messages` in — the same staleness tolerance every other composite
+    // board field already has).
+    if (session && session.messages === 0) return { text: "empty", critical: false };
     return { text: null, critical: false };
   }
   return { text: null, critical: false };
@@ -948,6 +961,37 @@ function transcriptModel(messages, liveEvents, turnOffset) {
     entries.push({ kind: "error", id: null, text: text });
   }
 
+  // turnHadVisibleOutput looks for an "assistant"/"tool"/"error" entry
+  // belonging to the current turn — the three kinds a turn can end with
+  // that an operator would actually SEE — checking `draft` first, THEN
+  // `entries` backward, stopping at (and not including) the most recent
+  // turn-mark. `draft` matters: a tool call whose "message" event (the
+  // assistant's tool_call, then the tool-role result) hasn't landed yet is
+  // represented ONLY by its live tool.start/tool.end pair, which mutates an
+  // entry already sitting in `draft` (see the "tool.start"/"tool.end" cases
+  // below) rather than ever migrating into `entries` — checking `entries`
+  // alone would miss a completed tool call still waiting on its durable
+  // message. Deliberately excludes "reasoning": a turn that only thought
+  // out loud and never replied or acted is exactly the "no output" case
+  // this exists to surface, not a false negative. Used only by the live
+  // turn.end(outcome:"completed") case below — this is a live-only fold
+  // (mirrors pushIfNewError/the "error" kind's own scoping: there is no
+  // durable record of "this turn produced no output" to reconstruct from a
+  // `messages`-only history fetch, so a detail view opened well after such
+  // a turn shows nothing special for it, same as it shows no error entry
+  // for a long-past failure).
+  function turnHadVisibleOutput() {
+    for (var d = draft.length - 1; d >= 0; d--) {
+      if (draft[d].kind === "assistant" || draft[d].kind === "tool") return true;
+    }
+    for (var i = entries.length - 1; i >= 0; i--) {
+      var k = entries[i].kind;
+      if (k === "turn-mark") return false;
+      if (k === "assistant" || k === "tool" || k === "error") return true;
+    }
+    return false;
+  }
+
   for (var ek = 0; ek < evs.length; ek++) {
     var ev = evs[ek];
     if (!ev || typeof ev.type !== "string") continue;
@@ -1042,7 +1086,19 @@ function transcriptModel(messages, liveEvents, turnOffset) {
         pushIfNewError(ev.error || "");
         break;
       case "turn.end":
-        if (ev.outcome === "error" && ev.error) pushIfNewError(ev.error);
+        if (ev.outcome === "error" && ev.error) {
+          pushIfNewError(ev.error);
+        } else if (ev.outcome === "completed" && !turnHadVisibleOutput()) {
+          // A turn can legitimately complete with nothing to show: no
+          // assistant text, no tool call, no error (observed with an
+          // exhausted scripted provider; rare but real with an actual
+          // model too). Without this, the transcript renders NOTHING for
+          // that turn beyond its own operator prompt — indistinguishable
+          // from the turn having silently vanished. A dim, turn-mark-
+          // register placeholder (not the critical "error" register: this
+          // is not a failure) says so plainly instead.
+          entries.push({ kind: "turn-empty", turn: turnNum, text: "turn completed with no output" });
+        }
         break;
       case "session.aborted":
         // No dedup needed: unlike session.error/turn.end, a deliberate
@@ -1150,6 +1206,11 @@ function entryKey(entry, index) {
     // below — named explicitly here rather than falling through to default
     // so this stability isn't accidental.
     case "error": return "error:" + index;
+    // At most one "no output" placeholder can ever exist per turn (see
+    // transcriptModel's turnHadVisibleOutput/turn.end case), so keying by
+    // turn number is both stable across re-renders and, unlike "idx:",
+    // never ambiguous if something else were ever inserted before it.
+    case "turn-empty": return "turn-empty:" + entry.turn;
     case "operator":
     case "assistant":
     case "reasoning":
@@ -1160,21 +1221,90 @@ function entryKey(entry, index) {
   }
 }
 
+// turnMarkAgoText renders a settled turn-mark's "· Xm ago" suffix (empty
+// string when `entry.at` is missing/unparseable, or while the turn is still
+// current, i.e. entry.at is null) from an explicit nowMs. Pure (Date.parse
+// + fmtAgo only), so it lives here rather than beside its two DOM-touching
+// callers (entrySignature/updateTurnMarkEl, in the detail-view section
+// below) — factored out precisely so BOTH of them compute the IDENTICAL
+// string from the SAME nowMs on a given render pass, rather than one
+// quietly calling Date.now() a beat later and drifting from the other by a
+// tick's worth of skew, AND so the "does this value actually change as
+// nowMs advances" logic (the whole point of entrySignature keying on it —
+// see that function's own comment) is unit-testable on its own.
+function turnMarkAgoText(entry, nowMs) {
+  if (!entry || !entry.at) return "";
+  var ms = Date.parse(entry.at);
+  if (isNaN(ms)) return "";
+  return fmtAgo(Math.max(0, nowMs - ms));
+}
+
+// keepsLiveEventAfterReconcile decides whether a detailState.liveEvents
+// entry survives reconcileDetail's post-snapshot filter (see that
+// function's own doc comment, in the detail-view section below, for the
+// full reasoning). Two rules, in order:
+//
+//   1. session.error / turn.end / session.aborted are ALWAYS kept,
+//      unconditionally, regardless of seq or snapSeq. These three are
+//      durable (server/journal.go's emitDurable assigns them a seq) but —
+//      unlike every OTHER durable event this file handles — have NO
+//      GET /session/{id}/message representation at all: they are journal
+//      records, not message.Message objects, so a fresh /message snapshot
+//      can never reconstruct one. transcriptModel's "error" entry kind
+//      (pushIfNewError) is folded EXCLUSIVELY from these three live events
+//      — dropping one once its seq fell behind snapSeq would silently
+//      erase the one piece of the transcript an operator most needs to
+//      see, discovered the hard way: an earlier version of this rule
+//      dropped them like anything else durable, which made a detail view
+//      whose liveEvents crossed DETAIL_LIVE_EVENTS_CAP while rendering a
+//      failed turn's error entry lose that entry the instant
+//      reconcileDetail's cap trigger fired. transcriptModel's own
+//      pushIfNewError dedup (against the immediately preceding entry)
+//      already guards the one case that could otherwise duplicate one of
+//      these post-reconcile: session.error paired with its own matching
+//      turn.end. The cost is a small, bounded exception to
+//      DETAIL_LIVE_EVENTS_CAP's growth bound — at most a couple of these
+//      per TURN, never per delta, nowhere near the unbounded-per-delta
+//      growth finding 3 exists to cap.
+//   2. Everything else: kept iff `ev` carries a numeric `seq` strictly
+//      greater than `snapSeq`. Every OTHER durable event type either opens/
+//      resets a turn (session.status — transcriptModel recomputes
+//      liveTurnOpen fresh on every call, so dropping a stale one never
+//      loses a turn-mark: the message that would have consumed it marks
+//      its own turn instead) or IS itself directly superseded by a
+//      "message" event the fresh snapshot now already contains (message;
+//      prompt.queued, whose only downside if dropped un-delivered is a
+//      brief, self-healing optimistic-UI gap until the real "message"
+//      event lands). A transient, non-journaled live event (text.delta,
+//      reasoning.delta, tool.start, tool.end, compaction_failed —
+//      publishLive's events) never carries a seq at all, and is therefore
+//      ALWAYS dropped by this branch — there is no way to place it
+//      relative to snapSeq's boundary, and keeping it on a guess risks
+//      resurrecting the exact stale-duplicate problem reconcileDetail
+//      exists to prevent.
+//
+// Factored out as a pure predicate (reconcileDetail itself is DOM/fetch-
+// wiring, outside this TESTABLE region) so this boundary rule — the crux
+// of both the reconnect-gap fix and the buffer-cap fix — is unit-testable
+// independent of any network/DOM plumbing.
+function keepsLiveEventAfterReconcile(ev, snapSeq) {
+  if (!ev) return false;
+  if (ev.type === "session.error" || ev.type === "turn.end" || ev.type === "session.aborted") return true;
+  return typeof ev.seq === "number" && ev.seq > snapSeq;
+}
+
 /* TESTABLE-END */
 
-// Test-only tuning seam: tools/monitor/e2e's jsdom driver sets
-// window.__monitorTuning = { QUIET_MS, STALL_MS } (via JSDOM's beforeParse,
-// so it lands before this inline script ever runs) to shrink the staleness
-// thresholds from their production 15s/60s down to something a scripted
-// turn's real wall-clock tool delay can cross inside a CI-sane test budget,
-// without touching the thresholds any real deployment sees — nothing in
-// production ever sets window.__monitorTuning, so this is a no-op there.
-// Kept outside TESTABLE-BEGIN/END (monitor_test.mjs's vm sandbox exposes no
-// `window`) and applied once, before bootstrap()/any staleness() call.
-if (typeof window !== "undefined" && window.__monitorTuning) {
-  if (typeof window.__monitorTuning.QUIET_MS === "number") QUIET_MS = window.__monitorTuning.QUIET_MS;
-  if (typeof window.__monitorTuning.STALL_MS === "number") STALL_MS = window.__monitorTuning.STALL_MS;
-}
+// DETAIL_LIVE_EVENTS_CAP bounds detailState.liveEvents (a detail view's live
+// tail buffer): transcriptModel refolds the ENTIRE buffer on every
+// tick/delta (see renderDetail), so an unbounded buffer makes a long-lived
+// detail view's per-render cost grow without bound across a session's
+// lifetime. handleDetailEvent triggers reconcileDetail() once the buffer
+// exceeds this — see reconcileDetail's own doc comment for how that
+// actually shrinks it back down (this is only the trigger threshold, not
+// the mechanism). `var`, not `const` — see window.__monitorTuning below,
+// which overrides it the same way it overrides QUIET_MS/STALL_MS.
+var DETAIL_LIVE_EVENTS_CAP = 500;
 
 /* ---------- app state + DOM wiring (board live; detail view stays static
    until the next step) ----------
@@ -1198,6 +1328,62 @@ var TICK_MS = 1000;
 var BACKOFF_MIN = 500;
 var BACKOFF_MAX = 10000;
 
+// Test-only tuning seam: tools/monitor/e2e's jsdom driver sets
+// window.__monitorTuning = { QUIET_MS, STALL_MS, DETAIL_LIVE_EVENTS_CAP,
+// BACKOFF_MIN, BACKOFF_MAX } (via JSDOM's beforeParse, so it lands before
+// this inline script ever runs) to move these values off their production
+// defaults (staleness thresholds 15s/60s, live-events cap 500, reconnect
+// backoff 500ms-10s) to whatever a scripted test needs to cross inside a
+// CI-sane budget — shrunk for staleness/the cap, WIDENED for backoff (the
+// reconnect-gap-heal scenario needs a deterministically wide window between
+// a real server-side kill/restart and the page's own reconnect attempt to
+// reliably land a "the durable turn completed while this page was still in
+// backoff" race, rather than depending on exact wall-clock luck) — without
+// touching the values any real deployment sees; nothing in production ever
+// sets window.__monitorTuning, so this is a no-op there. Kept outside
+// TESTABLE-BEGIN/END (monitor_test.mjs's vm sandbox exposes no `window`),
+// and — unlike the QUIET_MS/STALL_MS/DETAIL_LIVE_EVENTS_CAP declarations
+// above, which sit right after TESTABLE-END — placed HERE, after
+// BACKOFF_MIN/BACKOFF_MAX's own declarations: applying an override before
+// the `var` statement that assigns its production default would just get
+// silently clobbered back to that default a few lines later (`var`
+// declarations hoist, but the ASSIGNMENT runs in source order). Applied
+// once, before bootstrap()/any staleness() call or state's own `backoff:
+// BACKOFF_MIN` initializer just below, which must see the FINAL value.
+if (typeof window !== "undefined" && window.__monitorTuning) {
+  if (typeof window.__monitorTuning.QUIET_MS === "number") QUIET_MS = window.__monitorTuning.QUIET_MS;
+  if (typeof window.__monitorTuning.STALL_MS === "number") STALL_MS = window.__monitorTuning.STALL_MS;
+  if (typeof window.__monitorTuning.DETAIL_LIVE_EVENTS_CAP === "number") DETAIL_LIVE_EVENTS_CAP = window.__monitorTuning.DETAIL_LIVE_EVENTS_CAP;
+  if (typeof window.__monitorTuning.BACKOFF_MIN === "number") BACKOFF_MIN = window.__monitorTuning.BACKOFF_MIN;
+  if (typeof window.__monitorTuning.BACKOFF_MAX === "number") BACKOFF_MAX = window.__monitorTuning.BACKOFF_MAX;
+  // POLL_MS: shrunk by the reconnect-gap-heal e2e scenario so a REAL poll
+  // tick reliably lands during a brief server-side outage window and
+  // genuinely advances state.lastSeq past it — the actual finding-1
+  // mechanism (see reconcileDetail's doc comment) — rather than leaving
+  // "did a poll happen to land in that window" to wall-clock chance.
+  if (typeof window.__monitorTuning.POLL_MS === "number") POLL_MS = window.__monitorTuning.POLL_MS;
+}
+
+// __monitorDebug exposes read-only test hooks for state this script keeps
+// closured (detailState.liveEvents.length is not otherwise reachable from
+// outside this <script>) — same "nothing in production ever reads this"
+// contract as window.__monitorTuning above; e2e's real_e2e.mjs uses this to
+// assert liveEvents actually stays bounded after a reconcile, rather than
+// merely trusting the cap was applied. liveEventsPeakLength reads
+// detailState.peakLiveEventsLength (maintained by handleDetailEvent — see
+// its own comment) rather than sampling liveEventsLength() on a polling
+// timer: a real scripted turn with no bash sleep can cross a small tuned
+// cap and get reconciled back down within a single JS microtask, entirely
+// between two 25ms poll samples — the peak counter can never miss that,
+// since it is updated synchronously on every push, before any reconcile
+// trim has a chance to run.
+if (typeof window !== "undefined") {
+  window.__monitorDebug = {
+    liveEventsLength: function () { return detailState ? detailState.liveEvents.length : null; },
+    liveEventsPeakLength: function () { return detailState ? detailState.peakLiveEventsLength : null; },
+  };
+}
+
 var state = {
   base: "", token: "",
   health: null,
@@ -1205,6 +1391,12 @@ var state = {
   activities: new Map(),
   lastSeq: 0, backoff: BACKOFF_MIN,
   running: false, abort: null, streamTimer: null, pollTimer: null, tickTimer: null,
+  // streamedOnce distinguishes THIS connect lifecycle's first successful
+  // stream open (nothing to reconcile — enterDetail's own fetch, if any,
+  // is already fresh) from a genuine RE-establish after a reconnect (see
+  // connectStream's "streaming" branch, which is reconcileDetail's finding-
+  // 1 trigger). Reset false in attemptConnect on every fresh connect.
+  streamedOnce: false,
 };
 
 // boardDom holds the keyed row reconciliation state: one entry per session
@@ -1453,6 +1645,14 @@ function connectStream() {
     if (!resp.ok || !resp.body) throw new Error("event stream " + resp.status);
     state.backoff = BACKOFF_MIN;
     setConnState("streaming");
+    // reconcileDetail's finding-1 trigger: only a genuine RE-establish
+    // (state.streamedOnce already true from an earlier successful open this
+    // connect lifecycle) can have missed events — the very first stream
+    // open has nothing behind it to have missed, and enterDetail's own
+    // history fetch (if a detail view raced ahead via a deep link) is
+    // already fresh as of right now.
+    if (state.streamedOnce && detailState) reconcileDetail();
+    state.streamedOnce = true;
     var reader = resp.body.getReader();
     var dec = new TextDecoder();
     var parse = createSSEParser(function (frame) {
@@ -1531,7 +1731,17 @@ function toolElapsedText(entry, nowMs) {
 function entrySignature(entry, isCurrentTurn, nowMs) {
   switch (entry.kind) {
     case "turn-mark":
-      return "turn|" + entry.turn + "|" + (isCurrentTurn ? "current" : (entry.at || ""));
+      // Keys on the RENDERED ago-text (mirroring boardModel's own
+      // elapsed.text-in-the-signature approach for idle rows), not
+      // entry.at itself: entry.at is immutable once a turn settles, so
+      // keying on it alone meant a settled turn-mark's "· Xm ago" froze at
+      // whatever it first rendered — syncTranscript's signature-gated patch
+      // (see its own doc comment) never saw a reason to re-touch the node
+      // on a later tick. Cheaper than special-casing turn-marks as an
+      // always-repatch exception, and consistent with how every other
+      // ticking display in this file (toolElapsedText, boardModel's own
+      // elapsed) is kept fresh.
+      return "turn|" + entry.turn + "|" + (isCurrentTurn ? "current" : turnMarkAgoText(entry, nowMs));
     case "tool":
       return "tool|" + entry.running + "|" + entry.output + "|" + entry.isError + "|" + toolElapsedText(entry, nowMs);
     default:
@@ -1544,13 +1754,11 @@ function buildTurnMarkEl() {
   d.className = "turn-mark";
   return d;
 }
-function updateTurnMarkEl(el, entry, isCurrentTurn) {
+function updateTurnMarkEl(el, entry, isCurrentTurn, nowMs) {
   if (isCurrentTurn) { el.textContent = "current turn"; return; }
   var label = "turn " + entry.turn;
-  if (entry.at) {
-    var ms = Date.parse(entry.at);
-    if (!isNaN(ms)) label += " · " + fmtAgo(Math.max(0, Date.now() - ms));
-  }
+  var ago = turnMarkAgoText(entry, nowMs);
+  if (ago) label += " · " + ago;
   el.textContent = label;
 }
 
@@ -1621,14 +1829,31 @@ function updateToolEl(el, entry, elapsedText) {
   r.block.style.color = entry.isError ? "var(--critical)" : "";
 }
 
+// buildTurnEmptyEl/updateTurnEmptyEl render the "turn completed with no
+// output" placeholder (transcriptModel's "turn-empty" kind) by reusing the
+// SAME .transcript-note class the empty-transcript/history-load-error notes
+// already use elsewhere in this file — already dim (var(--text-3)) and
+// unobtrusive, i.e. exactly the "turn-mark register, not error" the entry
+// calls for, with no new CSS needed.
+function buildTurnEmptyEl() {
+  var d = document.createElement("div");
+  d.className = "transcript-note";
+  return d;
+}
+function updateTurnEmptyEl(el, entry) {
+  el.textContent = entry.text || "";
+}
+
 function buildEntryEl(entry) {
   if (entry.kind === "turn-mark") return buildTurnMarkEl();
   if (entry.kind === "tool") return buildToolEl();
+  if (entry.kind === "turn-empty") return buildTurnEmptyEl();
   return buildMsgEl(entry.kind);
 }
 function updateEntryEl(el, entry, isCurrentTurn, nowMs) {
-  if (entry.kind === "turn-mark") return updateTurnMarkEl(el, entry, isCurrentTurn);
+  if (entry.kind === "turn-mark") return updateTurnMarkEl(el, entry, isCurrentTurn, nowMs);
   if (entry.kind === "tool") return updateToolEl(el, entry, toolElapsedText(entry, nowMs));
+  if (entry.kind === "turn-empty") return updateTurnEmptyEl(el, entry);
   return updateMsgEl(el, entry);
 }
 
@@ -1773,7 +1998,10 @@ function renderDetail() {
 // session the detail view currently has open: it records local tool
 // start/end timestamps for honest elapsed rendering (see toolElapsedText),
 // appends the raw event to the live buffer transcriptModel folds, and
-// re-renders.
+// re-renders. Triggers reconcileDetail() once liveEvents crosses
+// DETAIL_LIVE_EVENTS_CAP — the perf half of reconcileDetail's job (see its
+// doc comment); the reconnect half is triggered separately, from
+// connectStream, on stream re-establish.
 function handleDetailEvent(ev) {
   if (!detailState) return;
   var now = Date.now();
@@ -1790,7 +2018,111 @@ function handleDetailEvent(ev) {
     }
   }
   detailState.liveEvents.push(ev);
+  // Tracked synchronously, before reconcileDetail's async trim can ever
+  // run — see __monitorDebug.liveEventsPeakLength's own comment for why a
+  // test can't reliably observe a transient over-cap spike any other way
+  // for a fast turn.
+  if (detailState.liveEvents.length > detailState.peakLiveEventsLength) detailState.peakLiveEventsLength = detailState.liveEvents.length;
+  if (detailState.liveEvents.length > DETAIL_LIVE_EVENTS_CAP) reconcileDetail();
   renderDetail();
+}
+
+// reconcileDetail re-anchors the detail view's live tail against a fresh
+// durable snapshot, closing two independent gaps with the SAME mechanism:
+//
+//   1. RECONNECT GAP (finding 1): pollOnce silently advances state.lastSeq
+//      past whatever a poll snapshot's own maxSeq reports, REGARDLESS of
+//      whether this page's own SSE connection actually delivered every
+//      event up to that point — a durable event published while this
+//      page's stream was down (jittered backoff — see scheduleReconnect)
+//      is one this page never saw, yet the NEXT connectStream() resumes
+//      from that already-advanced from=state.lastSeq, so the resumed
+//      stream never redelivers it either. The board doesn't notice: every
+//      5s poll REPLACES state.sessions wholesale, a full resnapshot, not an
+//      incremental delta. The detail view has no equivalent — liveEvents is
+//      purely additive — so a gap during a reconnect leaves a permanent
+//      hole transcriptModel can never fill from what it's given.
+//   2. UNBOUNDED BUFFER (finding 3): liveEvents otherwise grows without
+//      bound across a long session's lifetime, and transcriptModel refolds
+//      the WHOLE buffer on every tick/delta (see DETAIL_LIVE_EVENTS_CAP).
+//
+// The fix for both: re-fetch GET /session/{id}/message (guarded by
+// detailState.loadToken exactly like enterDetail's own initial fetch, so a
+// slow response for a session the operator has since navigated away from —
+// or into a different session — is discarded, never applied to the wrong
+// detailState), replace detailState.messages wholesale, THEN capture
+// snapSeq = state.lastSeq (the highest seq this page has observed
+// ANYWHERE — board or detail; server/journal.go's Seq is ONE monotonically
+// increasing counter across every session on one server, see maxSeq/
+// journal.go's emitDurableLocked) and drop every liveEvents entry whose seq
+// is <= snapSeq. What's left is exactly what postdates the snapshot — no
+// gap, no duplication, by the monotonic-seq guarantee.
+//
+// snapSeq is read AFTER the fetch resolves, not when it's issued: a stream
+// re-establish (this function's OTHER trigger, from connectStream) can
+// itself cause the server to replay a small backlog over the SAME newly
+// reconnected stream (whenever state.lastSeq was NOT already advanced past
+// some durable events — e.g. no poll happened to land during a brief
+// outage), concurrently with this fetch. handleEvent bumps state.lastSeq
+// for EVERY event BEFORE forwarding it to handleDetailEvent, so any such
+// replayed event that this page has already processed by the time the
+// fetch resolves has already pushed state.lastSeq past its own seq — this
+// function then correctly recognizes it as already reflected in the JUST-
+// fetched snapshot and drops it, rather than keeping it (its seq was
+// captured-as-"new" under the old, pre-fetch reading) and rendering it
+// TWICE — once from the fresh `messages` fold, once from the surviving
+// liveEvents entry. Capturing snapSeq first (before the fetch) is what
+// caused exactly that double-render in practice. This still leaves one
+// narrow, accepted race: an event journaled on the server WHILE the
+// GET /message response was already being serialized (so it missed that
+// snapshot) but that streams in and gets processed here BEFORE this
+// function reads state.lastSeq would be dropped without ever appearing —
+// a real gap, but one bounded by a single fast local read's duration, not
+// an entire reconnect backoff window.
+//
+// Which liveEvents entries actually survive the seq boundary — including
+// the seq-less-events rule and the session.error/turn.end/session.aborted
+// exception (these three have NO GET /message representation at all, so a
+// fresh snapshot can never reconstruct one that the boundary dropped; see
+// the hard-won lesson in that doc comment) — is keepsLiveEventAfterReconcile
+// (TESTABLE region, above)'s own doc comment; not repeated here.
+// detailState's own toolStartedAt/toolEndedAt maps (separate from
+// liveEvents, keyed by call_id, never touched by this function) keep a
+// genuinely still-running tool's LOCALLY OBSERVED elapsed time ticking
+// accurately straight through the reconcile regardless of what happens to
+// its tool.start/tool.end liveEvents entries.
+//
+// detailState.reconciling guards against overlapping fetches (e.g. the
+// buffer is still over-cap immediately after one reconcile, because every
+// surviving event genuinely postdates snapSeq) — the same in-flight-guard
+// shape as the composer's own postInFlight.
+function reconcileDetail() {
+  if (!detailState || detailState.reconciling) return;
+  detailState.reconciling = true;
+  var sessionId = detailState.sessionId;
+  var loadToken = detailState.loadToken;
+  api("GET", "/session/" + encodeURIComponent(sessionId) + "/message").then(function (resp) {
+    if (!detailState || detailState.loadToken !== loadToken) return; // navigated away meanwhile
+    if (!resp.ok) return; // transient; the next trigger (cap or reconnect) retries
+    return resp.json().then(function (raw) {
+      if (!detailState || detailState.loadToken !== loadToken) return;
+      var adapted = adaptHistory(raw);
+      detailState.messages = adapted.messages;
+      detailState.unavailable = adapted.unavailable;
+      // Read AFTER the fetch resolves — see this function's doc comment
+      // for why that ordering, not "before the fetch", is what avoids
+      // double-rendering a turn the reconnect itself also naturally
+      // replayed live.
+      var snapSeq = state.lastSeq;
+      detailState.liveEvents = detailState.liveEvents.filter(function (ev) {
+        return keepsLiveEventAfterReconcile(ev, snapSeq);
+      });
+      renderDetail();
+    });
+  }).catch(function () { /* transient; the next trigger (cap or reconnect) retries */ })
+    .then(function () {
+      if (detailState && detailState.loadToken === loadToken) detailState.reconciling = false;
+    });
 }
 
 // enterDetail switches to the detail view for `sessionId` and fetches its
@@ -1804,7 +2136,7 @@ function enterDetail(sessionId) {
     sessionId: sessionId, messages: [], unavailable: 0, liveEvents: [], expanded: false,
     nodes: new Map(), showEarlierEl: null,
     toolStartedAt: new Map(), toolEndedAt: new Map(),
-    postInFlight: false, loadToken: loadToken,
+    postInFlight: false, loadToken: loadToken, reconciling: false, peakLiveEventsLength: 0,
   };
   document.body.classList.add("showing-detail");
   document.getElementById("detail-sid-full").textContent = sessionId;
@@ -1903,19 +2235,33 @@ function wireComposer() {
     detailState.postInFlight = true;
     setComposerBusy(true);
     var sid = detailState.sessionId;
+    // Captured so this POST's eventual completion can never mutate a LATER
+    // session's detailState/composer DOM: the composer's input/err/button
+    // elements are singletons reused across every session's detail view
+    // (never recreated per enterDetail), so an unguarded completion here
+    // used to leak this POST's postInFlight-clear/setComposerBusy(false)
+    // (and its success/error message) onto whichever session happened to
+    // be open when the response finally landed, if the operator navigated
+    // away — or to a different session — while it was still in flight.
+    var loadToken = detailState.loadToken;
+    function stillCurrent() { return !!detailState && detailState.loadToken === loadToken; }
     api("POST", "/session/" + encodeURIComponent(sid) + "/prompt_async", { parts: [{ type: "text", text: text }] })
       .then(function (resp) {
         return resp.json().catch(function () { return null; }).then(function (body) { return { resp: resp, body: body }; });
       })
       .then(function (r) {
+        if (!stillCurrent()) return;
         if (r.resp.ok) { input.value = ""; }
         else { err.textContent = (r.body && r.body.error) || ("send failed (status " + r.resp.status + ")"); }
       }, function (netErr) {
+        if (!stillCurrent()) return;
         err.textContent = "send failed: " + ((netErr && netErr.message) || "network error");
       })
       .then(function () {
-        if (detailState) detailState.postInFlight = false;
-        setComposerBusy(false);
+        if (stillCurrent()) {
+          detailState.postInFlight = false;
+          setComposerBusy(false);
+        }
       });
   });
   input.addEventListener("keydown", function (e) {
@@ -1961,6 +2307,7 @@ function attemptConnect(base, token) {
     state.activities = new Map();
     state.lastSeq = maxSeq(r.list);
     state.backoff = BACKOFF_MIN;
+    state.streamedOnce = false; // fresh connect lifecycle: the first stream open below is not a "re-establish"
     localStorage.setItem(LS_BASE, base);
     localStorage.setItem(LS_TOKEN, token);
     document.body.classList.add("connected");
