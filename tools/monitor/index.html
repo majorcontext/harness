@@ -1030,23 +1030,24 @@ function boardModel(sessions, activities, nowMs) {
 // prompt's eventual delivery is template-wrapped by the engine ("OPERATOR
 // MESSAGES (address these, then continue the task): 1. <text>") — the same
 // tolerance prompt.queued's own placeholder dedup below already needs:
-//   1. lastUserMessageText — the MOST RECENT user-role message text seen
-//      across the WHOLE fold (durable `messages` AND live "message" events
-//      both update it, via foldMessage's user-role branch — see below),
-//      checked once at the very end of this function. Deliberately scoped
-//      to only the single latest user message, not every durable message in
-//      the window: a pendingSend, by construction, represents something
-//      just submitted, so if it matches ANY durable message at all, that
-//      match should be the most recent one — scanning the FULL 50-message
-//      history window instead would risk a false positive for a short/
-//      generic pendingSend text ("go", "continue") that happens to be a
-//      substring of some unrelated OLDER message, silently dismissing the
-//      optimistic entry before the real send even confirms. This one-slot
-//      scope is also what makes reconcileDetail's own eviction safe: once a
-//      reconcile refetches `messages` wholesale and trims the now-stale
-//      "message" liveEvent that first confirmed a send, the FRESH snapshot's
-//      own last user message re-derives the same match on the next render —
-//      self-healing, not a permanent duplicate.
+//   1. the BOUNDED TAIL of userMessageTexts — the last pendingSends.length
+//      user-role message texts seen across the whole fold (durable `messages`
+//      AND live "message" events both append, via foldMessage's user-role
+//      branch — see below), each reconciled oldest-first at the very end of
+//      this function. Scoped to that P-message tail, not every durable
+//      message in the window: P outstanding pendingSends become exactly P
+//      durable user messages in submit order, so only the P most recent user
+//      messages can be their confirmations — matching each clears EVERY
+//      confirmed send (a second send no longer strands the first as a
+//      permanent phantom), while the bounded window still keeps a short/
+//      generic pending text ("go", "continue") from false-matching some
+//      unrelated OLDER message far outside the tail and dismissing the
+//      optimistic entry before its real send confirms. This bounded scope is
+//      also what keeps reconcileDetail's own eviction safe: once a reconcile
+//      refetches `messages` wholesale and trims the now-stale "message"
+//      liveEvent that first confirmed a send, the FRESH snapshot's own tail
+//      re-derives the same matches on the next render — self-healing, not a
+//      permanent duplicate.
 //   2. a LIVE "prompt.queued" event's queue_text (see that case below) — the
 //      busy-session composer path's own first confirmation, matched
 //      immediately as that one event is processed; prompt.queued is
@@ -1075,10 +1076,11 @@ function transcriptModel(messages, liveEvents, turnOffset, pendingSends) {
       if (p && p.text && candidateText.indexOf(p.text) !== -1) { pendingRemaining.splice(pi, 1); return; }
     }
   }
-  // lastUserMessageText: updated by foldMessage's user-role branch for
-  // EVERY user message it folds, durable or live — see reconcilePendingSend
-  // usage at the end of this function for why only the latest one matters.
-  var lastUserMessageText = null;
+  // userMessageTexts: every user-role message text foldMessage folds, in
+  // order, durable AND live — see the reconcilePendingSend usage at the end
+  // of this function for why the last pendingSends.length of them (a bounded
+  // tail), not just the single newest, is the right reconcile scope.
+  var userMessageTexts = [];
 
   // call_id -> tool_result, spanning every RoleTool message: durable, or a
   // live "message" event the caller hasn't migrated into `messages` yet.
@@ -1166,7 +1168,7 @@ function transcriptModel(messages, liveEvents, turnOffset, pendingSends) {
         turnNum += 1;
         entries.push({ kind: "turn-mark", turn: turnNum, at: m.created_at || null, live: false });
       }
-      lastUserMessageText = partsText(m.parts);
+      userMessageTexts.push(partsText(m.parts));
     }
     if (m.role === "tool") return; // consumed via resultsByCallID
     var parts = Array.isArray(m.parts) ? m.parts : [];
@@ -1414,14 +1416,29 @@ function transcriptModel(messages, liveEvents, turnOffset, pendingSends) {
     }
   }
 
-  // Reconcile pendingSends against the single most recent user message seen
-  // across the WHOLE fold (durable history's own tail, superseded by any
-  // fresher live "message" event — see lastUserMessageText/foldMessage's own
-  // doc comments for why exactly one candidate, not the full window, is the
-  // right scope). prompt.queued's own reconciliation already happened
-  // earlier, inline, as that event was processed — this is only the
-  // "message"-event path's single deferred check.
-  if (pendingRemaining.length) reconcilePendingSend(lastUserMessageText);
+  // Reconcile any still-outstanding pendingSends against the BOUNDED TAIL of
+  // user messages seen across the fold — the last pendingRemaining.length of
+  // them, oldest-first. Each pendingSend becomes exactly one durable user
+  // message, in submit order (FIFO), so the P still-outstanding pendingSends
+  // can only be confirmed by the P most recent user messages; matching each
+  // in order clears EVERY confirmed send, not just the newest. Scoping the
+  // scan to that P-message tail (not the full ~50-message window) preserves
+  // the false-positive protection that motivated the original single-message
+  // check: a short/generic pending text ("go", "continue") that happens to be
+  // a substring of some unrelated OLDER message stays outside the window and
+  // never dismisses the optimistic entry before its own real send confirms.
+  // Matching only the single newest message here was the multi-send phantom
+  // bug: a second send left the first pendingSend rendering as a permanent
+  // trailing duplicate until the operator navigated away and back.
+  // prompt.queued's own reconciliation already happened earlier, inline, as
+  // that event was processed — this is only the "message"-event path's
+  // deferred check.
+  if (pendingRemaining.length) {
+    var tail = userMessageTexts.slice(-pendingRemaining.length);
+    for (var uti = 0; uti < tail.length && pendingRemaining.length; uti++) {
+      reconcilePendingSend(tail[uti]);
+    }
+  }
 
   // Does the CURRENT open turn already have its own operator entry showing
   // (durable, via foldMessage's user-role branch, or a "prompt.queued"

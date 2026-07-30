@@ -1240,6 +1240,40 @@ test("transcriptModel: a pendingSend matches a template-wrapped queued delivery 
   assert.equal(operatorEntries[0].text, wrapped);
 });
 
+test("transcriptModel: two successive sends in one detail view both reconcile once durable — zero trailing phantom (RED-FIRST, 8th-round finding)", () => {
+  // Both messages were sent from one open detail view and have round-tripped
+  // to durable user messages. pendingSends is append-only (it shrinks only on
+  // an explicit POST-failure removal), so BOTH are still present when the
+  // refetched history lands. The old reconcile matched only the single most
+  // recent user message ("world"), so the first send ("hello") re-rendered as
+  // a permanent trailing pendingSend phantom. Neither may survive.
+  const messages = [
+    { id: "m1", role: "user", created_at: "t1", parts: [{ type: "text", text: "hello" }] },
+    { id: "m2", role: "user", created_at: "t2", parts: [{ type: "text", text: "world" }] },
+  ];
+  const pending = [{ text: "hello", clientId: "c1" }, { text: "world", clientId: "c2" }];
+  const entries = transcriptModel(messages, [], 0, pending);
+  const operators = entries.filter(e => e.kind === "operator");
+  assert.equal(operators.filter(e => e.pendingSend).length, 0, "both durable sends must reconcile, leaving zero pendingSend phantoms: " + JSON.stringify(reify(operators)));
+  assert.deepEqual(reify(operators.map(e => e.text)), ["hello", "world"], "exactly the two real durable operator entries remain, in order");
+});
+
+test("transcriptModel: a short pendingSend text is not falsely reconciled by an unrelated OLDER message outside the tail window", () => {
+  // The bounded-tail reconcile only considers the last pendingSends.length
+  // user messages. A short/generic pending text ("go") that happens to be a
+  // substring of an OLD unrelated message ("let's go home") far back in the
+  // window must NOT dismiss the optimistic entry before its own real send
+  // confirms — the older message is outside the one-slot tail here.
+  const messages = [
+    { id: "m1", role: "user", created_at: "t1", parts: [{ type: "text", text: "let's go home" }] },
+    { id: "a1", role: "assistant", created_at: "t2", parts: [{ type: "text", text: "ok" }] },
+    { id: "m2", role: "user", created_at: "t3", parts: [{ type: "text", text: "run the linter" }] },
+  ];
+  const entries = transcriptModel(messages, [], 0, [{ text: "go", clientId: "c1" }]);
+  const operators = entries.filter(e => e.kind === "operator");
+  assert.ok(operators.some(e => e.pendingSend && e.text === "go"), "the unconfirmed short pendingSend must survive — the only in-window user message is 'run the linter', which does not contain 'go': " + JSON.stringify(reify(operators)));
+});
+
 test("entryKey: a pendingSend keys by its clientId, independent of a queued placeholder's queueId keying", () => {
   assert.equal(entryKey({ kind: "operator", id: null, pendingSend: true, clientId: "c7" }, 0), "pendingSend:c7");
 });
