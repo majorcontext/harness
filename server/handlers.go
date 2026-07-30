@@ -444,6 +444,14 @@ func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Security-Policy", monitorContentSecurityPolicy)
+	// no-cache: the page is embedded at build time, so a box that respawns
+	// on a newer image serves a newer page — but browsers heuristically
+	// cache an HTML response with no freshness headers, so an operator who
+	// revisits the same box URL would keep seeing a stale page across a pin
+	// bump (or a local dev rebuild) until a hard reload. no-cache forces a
+	// revalidation on every load; the page itself is a few KB, so the cost
+	// is negligible and correctness (always the current build) wins.
+	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodGet {
 		w.Write(s.opts.MonitorPage) //nolint:errcheck

@@ -125,9 +125,15 @@
   body {
     margin: 0; background: var(--surface); color: var(--text-1);
     font: 14px/1.5 var(--sans);
-    padding: 32px clamp(16px, 4vw, 48px) 64px;
+    /* No bottom padding on body: it sits BELOW the detail view's
+       position:sticky composer, so scrolling into it un-pins the composer
+       (it rides up by the padding height at max scroll). Breathing room at
+       the bottom is applied per-view instead — the board wants it, the
+       detail view must not have anything scrollable beneath its composer. */
+    padding: 32px clamp(16px, 4vw, 48px) 0;
   }
   .frame { max-width: 820px; margin: 0 auto; }
+  #board { padding-bottom: 64px; }
 
   header.identity {
     display: grid;
@@ -338,7 +344,7 @@
      tool-boundary injection, and the UI says which honestly. */
   .composer {
     position: sticky; bottom: 0; margin-top: 36px;
-    background: var(--surface); padding: 12px 0 4px;
+    background: var(--surface); padding: 12px 0 14px;
     border-top: 1px solid var(--separator);
   }
   .composer form { display: flex; gap: 10px; align-items: flex-end; }
