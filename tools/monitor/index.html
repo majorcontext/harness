@@ -2966,8 +2966,16 @@ function attemptConnect(base, token) {
     clearInterval(state.tickTimer);
     state.tickTimer = setInterval(tick, TICK_MS);
     setConnState("reconnecting"); // "connecting…" reuses the honest reconnecting label until the stream opens
-    connectStream();
+    // applyRoute BEFORE connectStream: a "#s=<id>" deep link's history GET
+    // (issued synchronously inside enterDetail) must claim its HTTP
+    // connection before connectStream opens the long-lived, never-completing
+    // SSE /event stream. On HTTP/1.1 (and behind some proxies) the streaming
+    // response can otherwise pin a connection and queue the finite history
+    // GET behind it for seconds — the intermittent "no messages yet on a
+    // session that has history" seen live. Issuing the finite request first
+    // lets it complete promptly; the stream then opens on its own connection.
     applyRoute(); // resolves a "#s=<id>" deep link into the detail view now that we're connected
+    connectStream();
     return true;
   }, function (err) {
     connectErr.textContent = (err && err.userMessage) || "connect failed";
