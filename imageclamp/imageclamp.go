@@ -48,14 +48,18 @@
 // materializes; v1 keeps it simple because the incident-class image is small.
 //
 // The memory guards below (absurdDimension, maxDecodePixels) deliberately DROP
-// an image past the bound to a text placeholder rather than downscaling it. A
-// very tall full-page capture — over 30000px on a side, or over ~96M px total
-// (e.g. 2560x40000) — therefore heals the wedge but loses its pixels to the
-// model, even though downscaling the result to the 7680px target would have
-// been safe to EMIT; the only obstacle is decoding the source at full
-// resolution into memory. This is a v1 memory bound, not a fundamental limit:
-// a tiled/streaming downscale that resamples such images instead of dropping
-// them is the natural follow-up so that healing does not also blind the model.
+// an image past the bound to a text placeholder rather than downscaling it.
+// Two shapes hit this, not just the obvious one: a very tall full-page capture
+// (over 30000px on a side, e.g. 2560x40000), AND — via the area bound — a
+// moderately-sized SQUARE capture only modestly over cap, since ~96M px is
+// reached at roughly 9800x9800 (e.g. a 10000x10000 retina screenshot, each
+// side just 25% over the 8000 cap, is dropped). Both heal the wedge but lose
+// their pixels to the model, even though downscaling the result to the 7680px
+// target would have been safe to EMIT; the only obstacle is decoding the
+// source at full resolution into memory. This is a v1 memory bound, not a
+// fundamental limit: a tiled/streaming downscale that resamples such images
+// instead of dropping them is the natural follow-up so that healing does not
+// also blind the model.
 package imageclamp
 
 import (
