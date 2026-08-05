@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/majorcontext/harness/imageclamp"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 )
@@ -14,6 +15,12 @@ import (
 // Family is the provider family key: ModelRef.Provider values and
 // ProviderData tags this adapter reads and writes.
 const Family = "anthropic"
+
+// imageDimensionCap is the per-side pixel limit Bedrock and the Anthropic API
+// enforce (a larger image 400s with "image dimensions exceed max allowed size:
+// 8000 pixels"). imageclamp.Clamp downscales anything past it at transcode
+// time so a poisoned transcript heals on its next request build.
+const imageDimensionCap = 8000
 
 type apiRequest struct {
 	Model       string       `json:"model"`
@@ -137,7 +144,7 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 	// — a plugin hook, a hand-rolled adapter, a replayed log from an
 	// older binary — so a request never ships an orphaned tool_use. See
 	// message.ResolveOrphanToolCalls's doc comment for the full incident.
-	messages := message.ResolveOrphanToolCalls(req.Messages)
+	messages := imageclamp.Clamp(message.ResolveOrphanToolCalls(req.Messages), imageDimensionCap)
 
 	for i := range messages {
 		m := &messages[i]

@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/majorcontext/harness/imageclamp"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 )
@@ -14,6 +15,14 @@ import (
 // Family is the provider family key: ModelRef.Provider values and
 // ProviderData tags this adapter reads and writes.
 const Family = "openai"
+
+// imageDimensionCap is a conservative shared upper bound on image side length,
+// not a cited OpenAI limit (unlike Anthropic's documented 8000px). It exists
+// as defense-in-depth against the same wedged-transcript failure class: an
+// image past it is downscaled at transcode time by imageclamp.Clamp. 8000px is
+// comfortably above any practical need while still catching a pathological
+// full-page screenshot.
+const imageDimensionCap = 8000
 
 // apiRequest is the OpenAI Responses API request body. Input is a flat,
 // heterogeneous list of items encoded as raw JSON so that stored reasoning
@@ -104,8 +113,9 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 		})
 	}
 
-	for i := range req.Messages {
-		m := &req.Messages[i]
+	messages := imageclamp.Clamp(req.Messages, imageDimensionCap)
+	for i := range messages {
+		m := &messages[i]
 		items, err := transcodeMessage(m)
 		if err != nil {
 			return nil, fmt.Errorf("openai: message %s: %w", m.ID, err)

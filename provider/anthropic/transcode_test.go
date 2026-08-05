@@ -210,7 +210,7 @@ func TestTranscodeToolCallAndResult(t *testing.T) {
 		message.Message{Role: message.RoleTool, Parts: message.Parts{
 			&message.ToolResult{CallID: "toolu_abc", Content: message.Parts{
 				&message.Text{Text: "file.go"},
-				&message.Blob{MediaType: "image/png", Data: []byte{1, 2}},
+				&message.Blob{MediaType: "image/png", Data: tinyPNG(t)},
 			}, IsError: true},
 		}},
 	))

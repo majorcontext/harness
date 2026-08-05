@@ -7,9 +7,18 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/majorcontext/harness/imageclamp"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 )
+
+// imageDimensionCap is a conservative shared upper bound on image side length,
+// not a cited limit for any particular OpenAI-compatible endpoint. It exists
+// as defense-in-depth against the wedged-transcript failure class: an image
+// past it is downscaled at transcode time by imageclamp.Clamp. 8000px is
+// comfortably above any practical need while still catching a pathological
+// full-page screenshot.
+const imageDimensionCap = 8000
 
 // apiRequest is the wire body for POST {base}/chat/completions, the wire
 // spoken by OpenAI-compatible chat-completions endpoints (OpenRouter,
@@ -133,7 +142,7 @@ func transcodeRequest(req *provider.Request, family string) (*apiRequest, error)
 	// ingest self-consistent (see engine/engine.go), but this backstops
 	// any OTHER producer of history. See message.ResolveOrphanToolCalls's
 	// doc comment for the full incident.
-	messages := message.ResolveOrphanToolCalls(req.Messages)
+	messages := imageclamp.Clamp(message.ResolveOrphanToolCalls(req.Messages), imageDimensionCap)
 
 	for i := range messages {
 		m := &messages[i]
