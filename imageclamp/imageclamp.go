@@ -40,10 +40,13 @@
 // (same source bytes -> same clamped bytes), so a clamped image stays
 // prompt-cache-stable turn to turn despite being recomputed. The realistic
 // incident image (100x8500, sub-megapixel) is cheap, but the cost recurs per
-// turn and is NOT serialized across sessions: each concurrent request build
-// can hold up to maxDecodePixels of decoded RGBA (~384 MB) at once, so many
-// sessions each carrying a near-limit image could pressure a fleet box's
-// memory. A bounded-concurrency decode (a package-level semaphore) or a
+// turn and is NOT serialized across sessions. A single build's peak holds the
+// decoded source AND the resample destination at once: up to maxDecodePixels
+// of source RGBA (~384 MB) plus the destination (up to a 7680x7680 square,
+// ~236 MB) during draw.Scale — a worst-case near ~620 MB for one near-square
+// image just under the area bound, so many concurrent such builds could
+// pressure a fleet box's memory. A bounded-concurrency decode (a package-level
+// semaphore) or a
 // tiled/streaming resample is the natural follow-up if that pressure ever
 // materializes; v1 keeps it simple because the incident-class image is small.
 // ClampTopLevel already removes one source of this waste: adapters that omit
