@@ -277,6 +277,30 @@ func TestClampRecursesIntoToolResult(t *testing.T) {
 	}
 }
 
+func TestClampTopLevelClampsTopLevelButSkipsToolResult(t *testing.T) {
+	toolResultBlob := &message.Blob{MediaType: "image/png", Data: pngBytes(t, 100, 8500)}
+	in := []message.Message{
+		userMsg(&message.Blob{MediaType: "image/png", Data: pngBytes(t, 100, 8500)}),
+		{ID: "m2", Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "c1", Content: message.Parts{toolResultBlob}},
+		}},
+	}
+
+	out := ClampTopLevel(in, cap8000)
+
+	// Top-level oversized image is still downscaled.
+	top := out[0].Parts[0].(*message.Blob)
+	if w, _ := decodeDims(t, top.Data); w > 7680 {
+		t.Errorf("top-level image not clamped: width %d", w)
+	}
+	// Tool-result image is left byte-identical — those adapters omit it on the
+	// wire, so clamping it would be wasted work.
+	gotTR := out[1].Parts[0].(*message.ToolResult)
+	if !bytes.Equal(gotTR.Content[0].(*message.Blob).Data, toolResultBlob.Data) {
+		t.Error("ClampTopLevel should not touch tool-result content")
+	}
+}
+
 func TestClampReturnsInputUnchangedWhenNothingOversized(t *testing.T) {
 	in := []message.Message{userMsg(
 		&message.Text{Text: "hello"},

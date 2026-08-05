@@ -142,7 +142,9 @@ func transcodeRequest(req *provider.Request, family string) (*apiRequest, error)
 	// ingest self-consistent (see engine/engine.go), but this backstops
 	// any OTHER producer of history. See message.ResolveOrphanToolCalls's
 	// doc comment for the full incident.
-	messages := imageclamp.Clamp(message.ResolveOrphanToolCalls(req.Messages), imageDimensionCap)
+	// ClampTopLevel, not Clamp: tool-result images are omitted on the wire
+	// (see toolResultOutput), so clamping them would be wasted work.
+	messages := imageclamp.ClampTopLevel(message.ResolveOrphanToolCalls(req.Messages), imageDimensionCap)
 
 	for i := range messages {
 		m := &messages[i]

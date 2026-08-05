@@ -113,7 +113,9 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 		})
 	}
 
-	messages := imageclamp.Clamp(req.Messages, imageDimensionCap)
+	// ClampTopLevel, not Clamp: tool-result images are omitted on the wire
+	// (see toolResultOutput), so clamping them would be wasted work.
+	messages := imageclamp.ClampTopLevel(req.Messages, imageDimensionCap)
 	for i := range messages {
 		m := &messages[i]
 		items, err := transcodeMessage(m)

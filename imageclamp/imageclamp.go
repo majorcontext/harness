@@ -46,6 +46,9 @@
 // memory. A bounded-concurrency decode (a package-level semaphore) or a
 // tiled/streaming resample is the natural follow-up if that pressure ever
 // materializes; v1 keeps it simple because the incident-class image is small.
+// ClampTopLevel already removes one source of this waste: adapters that omit
+// tool-result images on the wire skip resampling them entirely, since such an
+// image could never reach the provider.
 //
 // The memory guards below (absurdDimension, maxDecodePixels) deliberately DROP
 // an image past the bound to a text placeholder rather than downscaling it.
@@ -151,12 +154,31 @@ func fitWithin(w, h, target int) (int, int) {
 // placeholder. Everything else — text, tool calls, non-image blobs, URL-only
 // blobs, and images already within maxDim — is carried through unchanged, and
 // the pass recurses into tool-result content (where a browser-tool screenshot
-// commonly lands). The input is never mutated; when nothing needs clamping,
-// msgs itself is returned.
+// commonly lands). Adapters that omit tool-result images on the wire should
+// use ClampTopLevel to skip that recursion. The input is never mutated; when
+// nothing needs clamping, msgs itself is returned.
 func Clamp(msgs []message.Message, maxDim int) []message.Message {
+	return clampAll(msgs, maxDim, true)
+}
+
+// ClampTopLevel is Clamp for adapters that OMIT tool-result images on the wire.
+// provider/openai and provider/openaicompat replace a tool result's image
+// blobs with a "[N image attachment(s) omitted]" text note, so a nested image
+// can never reach the provider and never 400s it. Recursing into tool-result
+// content there would decode + resample + re-encode — up to maxDecodePixels of
+// RGBA — an image that is then thrown away, every turn (see the package doc
+// "Cost and bounds"). ClampTopLevel therefore clamps only top-level image
+// parts and leaves tool-result content untouched. Adapters that DO emit
+// tool-result images (provider/anthropic, whose transcodeParts recurses) must
+// use Clamp instead.
+func ClampTopLevel(msgs []message.Message, maxDim int) []message.Message {
+	return clampAll(msgs, maxDim, false)
+}
+
+func clampAll(msgs []message.Message, maxDim int, recurseToolResults bool) []message.Message {
 	var out []message.Message
 	for i := range msgs {
-		newParts, changed := clampParts(msgs[i].Parts, maxDim)
+		newParts, changed := clampParts(msgs[i].Parts, maxDim, recurseToolResults)
 		if !changed {
 			if out != nil {
 				out = append(out, msgs[i])
@@ -177,9 +199,10 @@ func Clamp(msgs []message.Message, maxDim int) []message.Message {
 	return out
 }
 
-// clampParts applies the clamp to a parts slice, recursing into tool results.
-// It returns the input slice and false when nothing changed (copy-on-write).
-func clampParts(parts message.Parts, maxDim int) (message.Parts, bool) {
+// clampParts applies the clamp to a parts slice. When recurseToolResults is
+// true it also descends into tool-result content. It returns the input slice
+// and false when nothing changed (copy-on-write).
+func clampParts(parts message.Parts, maxDim int, recurseToolResults bool) (message.Parts, bool) {
 	var out message.Parts
 	for i, p := range parts {
 		var np message.Part
@@ -187,7 +210,11 @@ func clampParts(parts message.Parts, maxDim int) (message.Parts, bool) {
 		case *message.Blob:
 			np = normalizeBlob(v, maxDim)
 		case *message.ToolResult:
-			newContent, changed := clampParts(v.Content, maxDim)
+			if !recurseToolResults {
+				np = v
+				break
+			}
+			newContent, changed := clampParts(v.Content, maxDim, recurseToolResults)
 			if changed {
 				tr := *v
 				tr.Content = newContent
