@@ -30,6 +30,32 @@
 // mutates a caller's stored messages, and it returns the input slice
 // unchanged when nothing needed clamping, so the common path allocates
 // nothing and an unchanged history still retranscodes byte-identically.
+//
+// # Cost and bounds
+//
+// Healing is not a one-time repair. Because the durable log is never
+// rewritten, Clamp runs on every request build, so an oversized image is
+// re-decoded, resampled, and re-encoded on EVERY subsequent turn until it
+// falls out of the context window — not once. The re-encode is deterministic
+// (same source bytes -> same clamped bytes), so a clamped image stays
+// prompt-cache-stable turn to turn despite being recomputed. The realistic
+// incident image (100x8500, sub-megapixel) is cheap, but the cost recurs per
+// turn and is NOT serialized across sessions: each concurrent request build
+// can hold up to maxDecodePixels of decoded RGBA (~384 MB) at once, so many
+// sessions each carrying a near-limit image could pressure a fleet box's
+// memory. A bounded-concurrency decode (a package-level semaphore) or a
+// tiled/streaming resample is the natural follow-up if that pressure ever
+// materializes; v1 keeps it simple because the incident-class image is small.
+//
+// The memory guards below (absurdDimension, maxDecodePixels) deliberately DROP
+// an image past the bound to a text placeholder rather than downscaling it. A
+// very tall full-page capture — over 30000px on a side, or over ~96M px total
+// (e.g. 2560x40000) — therefore heals the wedge but loses its pixels to the
+// model, even though downscaling the result to the 7680px target would have
+// been safe to EMIT; the only obstacle is decoding the source at full
+// resolution into memory. This is a v1 memory bound, not a fundamental limit:
+// a tiled/streaming downscale that resamples such images instead of dropping
+// them is the natural follow-up so that healing does not also blind the model.
 package imageclamp
 
 import (
@@ -50,7 +76,9 @@ import (
 const (
 	// absurdDimension: any image declaring a single side larger than this in
 	// its header is replaced by a placeholder WITHOUT ever decoding its
-	// pixels. Guards against a pathological or hostile header.
+	// pixels. Guards against a pathological or hostile header. See the package
+	// doc "Cost and bounds": this drops (does not downscale) very tall
+	// captures, a deliberate v1 memory bound.
 	absurdDimension = 30000
 
 	// maxDecodePixels bounds the total pixel area we will decode into memory.
@@ -58,7 +86,8 @@ const (
 	// realistically-oversized screenshots through to downscaling while
 	// refusing a decode bomb (a 20000x20000 image would be 1.6GB). An image
 	// past this ceiling but under absurdDimension per side still becomes a
-	// placeholder, never a decode.
+	// placeholder, never a decode — see the package doc "Cost and bounds" for
+	// why this drops rather than downscales, and the follow-up it invites.
 	maxDecodePixels = 96_000_000
 
 	// The downscale target is a fraction of the provider cap, leaving margin
@@ -204,7 +233,10 @@ func normalizeBlob(b *message.Blob, maxDim int) message.Part {
 	}
 
 	// classDownscale: decode pixels (bounded by classify above), resample,
-	// and re-encode.
+	// and re-encode. This full decode + resample + re-encode runs on every
+	// request build for the life of the session (the durable log is never
+	// rewritten), so it recurs per turn and is not serialized across sessions
+	// — see the package doc "Cost and bounds".
 	img, _, err := image.Decode(bytes.NewReader(b.Data))
 	if err != nil {
 		return placeholder(fmt.Sprintf("[image dropped: %dx%d undecodable image (%d bytes)]", cfg.Width, cfg.Height, len(b.Data)))
