@@ -248,13 +248,18 @@ type Options struct {
 	Unauthenticated bool
 	// Logger, when non-nil, receives structured turn-lifecycle and
 	// goal-lifecycle log lines: a "turn end" line at every recordTurnEnd
-	// call (INFO for outcome "completed", WARN otherwise), and WARN/INFO
-	// lines at the goal.* durable-record choke point (publishGoal) and the
-	// session.error choke point (emitDurableLocked). Nil (the default,
-	// e.g. every existing test harness and any caller that predates this
-	// field) disables all of it — every call site here nil-guards before
-	// touching it, so an unset Logger is exactly today's silent behavior,
-	// not a panic.
+	// call (INFO for outcome "completed", WARN otherwise), WARN/INFO lines
+	// at the goal.* durable-record choke point (publishGoal, including a
+	// "goal eval" INFO line once per completed worker turn — the
+	// per-worker-turn heartbeat recordTurnEnd itself cannot provide for a
+	// goal loop, see its doc comment), and the session.error choke point
+	// (emitDurable). Every one of these logging call sites runs AFTER its
+	// own s.mu critical section ends, never inside one — a slow or stalled
+	// Logger sink must never be able to block the server's global mutex.
+	// Nil (the default, e.g. every existing test harness and any caller
+	// that predates this field) disables all of it — every call site here
+	// nil-guards before touching it, so an unset Logger is exactly today's
+	// silent behavior, not a panic.
 	//
 	// This exists because of a field report (2026-08-06): a session ran
 	// 631 messages / 141k output tokens and produced ZERO log lines: an

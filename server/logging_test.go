@@ -4,10 +4,19 @@
 // operator tailing `harness serve`'s stderr could not tell a box mid-turn
 // from a dead one. These tests drive the same durable-record choke points
 // the existing journal tests already exercise (recordTurnEnd,
-// publishGoal's goal.parked fold, and the session.error emit site in
+// publishGoal's goal.* folds, and the session.error emit site in
 // handlers.go) and assert the configured slog.Logger actually receives a
 // line at each of them — and that a nil Logger (every other test's default)
 // stays completely silent, never panics.
+//
+// Every assertion below is scoped to the SINGLE log line carrying the
+// record's own msg=, via findLogLine — not a whole-buffer strings.Contains
+// check. A whole-buffer check is satisfiable by the WRONG line: e.g.
+// asserting "level=WARN" anywhere in the buffer passes even if the "turn
+// end" line itself logged at INFO, so long as some unrelated WARN line (a
+// "session error" from a different code path) also landed in the same
+// buffer. findLogLine finds the one line whose msg matches and every
+// attribute assertion below reads only that line.
 package server
 
 import (
@@ -25,14 +34,14 @@ import (
 )
 
 // syncBuffer is a mutex-guarded bytes.Buffer: the logging call sites under
-// test (recordTurnEnd's post-unlock logWarn/logInfo, publishGoal's and
-// emitDurableLocked's under-lock ones) run on the server's own request/turn
-// goroutine, while these tests read the buffer from the test goroutine —
-// concurrently, since receiving an SSE event only orders that event's own
-// send-before-receive, never the sender's later, unrelated log write versus
-// the receiver's subsequent read. A plain bytes.Buffer would race (caught by
-// go test -race); this is the standard fix, not a change to production
-// behavior.
+// test (recordTurnEnd's and emitDurable's post-unlock logWarn/logInfo,
+// publishGoal's own post-unlock log switch) run on the server's own
+// request/turn goroutine, while these tests read the buffer from the test
+// goroutine — concurrently, since receiving an SSE event only orders that
+// event's own send-before-receive, never the sender's later, unrelated log
+// write versus the receiver's subsequent read. A plain bytes.Buffer would
+// race (caught by go test -race); this is the standard fix, not a change to
+// production behavior.
 type syncBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
@@ -50,6 +59,29 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
+// findLogLine is a t.Helper() that returns the single line in log carrying
+// msg="<msg>" (slog's text handler quotes any value containing a space,
+// which every message here does), failing the test if there is not exactly
+// one such line. Assertions must run against the returned line, never
+// against the whole buffer — see the package doc comment above for why a
+// whole-buffer strings.Contains check can pass on the wrong line entirely.
+func findLogLine(t *testing.T, log, msg string) string {
+	t.Helper()
+	want := `msg="` + msg + `"`
+	var match string
+	count := 0
+	for _, line := range strings.Split(log, "\n") {
+		if strings.Contains(line, want) {
+			match = line
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one log line with %s, found %d in:\n%s", want, count, log)
+	}
+	return match
+}
+
 // newLoggingHarness builds a harness identical to newHarness but with
 // Options.Logger wired to a slog.Logger writing text lines into buf, so a
 // test can assert on the exact rendered attrs.
@@ -58,6 +90,22 @@ func newLoggingHarness(t *testing.T, prov provider.Provider, buf *syncBuffer) *h
 	dir := t.TempDir()
 	logger := slog.New(slog.NewTextHandler(buf, nil))
 	srv := newServer(t, dir, prov, 0, func(o *Options) {
+		o.Logger = logger
+	})
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	return &harness{t: t, dir: dir, token: "secret-run-token", srv: srv, ts: ts}
+}
+
+// newLoggingGoalHarness mirrors newGoalHarness (goal_test.go) but wires
+// Options.Logger the same way newLoggingHarness does, for the goal-lifecycle
+// logging tests below.
+func newLoggingGoalHarness(t *testing.T, prov provider.Provider, buf *syncBuffer) *harness {
+	t.Helper()
+	dir := t.TempDir()
+	logger := slog.New(slog.NewTextHandler(buf, nil))
+	srv := newServer(t, dir, prov, 0, func(o *Options) {
+		o.GoalEvaluator = message.ModelRef{Provider: prov.Name(), Model: "eval"}
 		o.Logger = logger
 	})
 	ts := httptest.NewServer(srv)
@@ -92,21 +140,18 @@ func TestLoggerTurnEndCompletedLogsInfo(t *testing.T) {
 		t.Fatalf("turn.end outcome = %q, want completed", end.Outcome)
 	}
 
-	log := buf.String()
-	if !strings.Contains(log, "turn end") {
-		t.Fatalf("log missing %q line: %s", "turn end", log)
+	line := findLogLine(t, buf.String(), "turn end")
+	if !strings.Contains(line, "level=INFO") {
+		t.Errorf("completed turn end logged below INFO: %s", line)
 	}
-	if !strings.Contains(log, "level=INFO") {
-		t.Errorf("completed turn end logged below INFO: %s", log)
+	if !strings.Contains(line, "session="+id) {
+		t.Errorf("log line missing session attr: %s", line)
 	}
-	if !strings.Contains(log, "session="+id) {
-		t.Errorf("log missing session attr: %s", log)
+	if !strings.Contains(line, "outcome=completed") {
+		t.Errorf("log line missing outcome attr: %s", line)
 	}
-	if !strings.Contains(log, "outcome=completed") {
-		t.Errorf("log missing outcome attr: %s", log)
-	}
-	if strings.Contains(log, "error=") {
-		t.Errorf("completed turn end must omit an empty error attr: %s", log)
+	if strings.Contains(line, "error=") {
+		t.Errorf("completed turn end must omit an empty error attr: %s", line)
 	}
 }
 
@@ -114,6 +159,14 @@ func TestLoggerTurnEndCompletedLogsInfo(t *testing.T) {
 // mid-stream must log at WARN (not INFO), carrying the sanitized error
 // detail — exactly the "operator tailing the log concluded the box was
 // dead" scenario from the field report, except now there is a line to see.
+//
+// Red-verified against the tightened, line-scoped assertion below (see the
+// report accompanying this change): with recordTurnEnd's failure branch
+// temporarily changed to log "turn end" at INFO instead of WARN, this test's
+// level=WARN check on findLogLine's line correctly failed, while the OLD
+// whole-buffer style check (strings.Contains(buf.String(), "level=WARN"))
+// kept passing — satisfied by the unrelated "session error" WARN line this
+// same request also produces. Reverted after confirming the failure.
 func TestLoggerTurnEndErrorLogsWarn(t *testing.T) {
 	var buf syncBuffer
 	prov := &errThenOKProvider{name: "test", err: errors.New("provider request failed: boom")}
@@ -132,28 +185,25 @@ func TestLoggerTurnEndErrorLogsWarn(t *testing.T) {
 		t.Fatalf("turn.end outcome = %q, want error", end.Outcome)
 	}
 
-	log := buf.String()
-	if !strings.Contains(log, "turn end") {
-		t.Fatalf("log missing %q line: %s", "turn end", log)
+	line := findLogLine(t, buf.String(), "turn end")
+	if !strings.Contains(line, "level=WARN") {
+		t.Errorf("failed turn end must log at WARN: %s", line)
 	}
-	if !strings.Contains(log, "level=WARN") {
-		t.Errorf("failed turn end must log at WARN: %s", log)
+	if !strings.Contains(line, "session="+id) {
+		t.Errorf("log line missing session attr: %s", line)
 	}
-	if !strings.Contains(log, "session="+id) {
-		t.Errorf("log missing session attr: %s", log)
+	if !strings.Contains(line, "outcome=error") {
+		t.Errorf("log line missing outcome attr: %s", line)
 	}
-	if !strings.Contains(log, "outcome=error") {
-		t.Errorf("log missing outcome attr: %s", log)
-	}
-	if !strings.Contains(log, "error=") {
-		t.Errorf("failed turn end must carry the error attr: %s", log)
+	if !strings.Contains(line, "error=") {
+		t.Errorf("failed turn end must carry the error attr: %s", line)
 	}
 }
 
 // TestLoggerSessionErrorLogsWarn exercises the session.error choke point
-// (emitted directly by handlers.go, folded through emitDurableLocked): it
-// must WARN-log "session error" with the session id and detail, the same
-// bar as turn end's failure case above.
+// (emitted directly by handlers.go, logged from emitDurable after s.mu is
+// released): it must WARN-log "session error" with the session id and
+// detail, the same bar as turn end's failure case above.
 func TestLoggerSessionErrorLogsWarn(t *testing.T) {
 	var buf syncBuffer
 	prov := &errThenOKProvider{name: "test"}
@@ -172,15 +222,12 @@ func TestLoggerSessionErrorLogsWarn(t *testing.T) {
 		t.Fatalf("session.error missing detail")
 	}
 
-	log := buf.String()
-	if !strings.Contains(log, "session error") {
-		t.Fatalf("log missing %q line: %s", "session error", log)
+	line := findLogLine(t, buf.String(), "session error")
+	if !strings.Contains(line, "level=WARN") {
+		t.Errorf("session error must log at WARN: %s", line)
 	}
-	if !strings.Contains(log, "level=WARN") {
-		t.Errorf("session error must log at WARN: %s", log)
-	}
-	if !strings.Contains(log, "session="+id) {
-		t.Errorf("log missing session attr: %s", log)
+	if !strings.Contains(line, "session="+id) {
+		t.Errorf("log line missing session attr: %s", line)
 	}
 }
 
@@ -201,15 +248,7 @@ func TestLoggerGoalParkedLogsWarn(t *testing.T) {
 		eval:       [][]provider.Event{},
 		workerErrN: 100, // every attempt fails, exhausting deterministic retries
 	}
-	dir := t.TempDir()
-	logger := slog.New(slog.NewTextHandler(&buf, nil))
-	srv := newServer(t, dir, prov, 0, func(o *Options) {
-		o.GoalEvaluator = message.ModelRef{Provider: prov.Name(), Model: "eval"}
-		o.Logger = logger
-	})
-	ts := httptest.NewServer(srv)
-	t.Cleanup(ts.Close)
-	h := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv, ts: ts}
+	h := newLoggingGoalHarness(t, prov, &buf)
 	id := h.createSession("test/m1")
 
 	sse := h.openSSE("?from=0", "")
@@ -222,15 +261,203 @@ func TestLoggerGoalParkedLogsWarn(t *testing.T) {
 		t.Fatalf("turn.end outcome = %q, want %q", end.Outcome, outcomeWorkerParked)
 	}
 
-	log := buf.String()
-	if !strings.Contains(log, "goal parked") {
-		t.Fatalf("log missing %q line: %s", "goal parked", log)
+	line := findLogLine(t, buf.String(), "goal parked")
+	if !strings.Contains(line, "level=WARN") {
+		t.Errorf("goal parked must log at WARN: %s", line)
 	}
-	if !strings.Contains(log, "level=WARN") {
-		t.Errorf("goal parked must log at WARN: %s", log)
+	if !strings.Contains(line, "session="+id) {
+		t.Errorf("log line missing session attr: %s", line)
 	}
-	if !strings.Contains(log, "attempts=") {
-		t.Errorf("log missing attempts attr: %s", log)
+	if !strings.Contains(line, "attempts=") {
+		t.Errorf("log line missing attempts attr: %s", line)
+	}
+}
+
+// TestLoggerGoalStalledLogsWarn scripts one transient worker-turn failure
+// (retried, then succeeding, then achieved) — the same setup as
+// TestGoalStalledJournaledAndActive in goal_test.go — and asserts
+// publishGoal's goal.stalled fold logs a WARN line naming the session,
+// reason, and attempt number: the retry itself is a failure worth an
+// operator's attention even though the loop recovers.
+func TestLoggerGoalStalledLogsWarn(t *testing.T) {
+	var buf syncBuffer
+	prov := &goalProv{
+		name:       "test",
+		workerErrN: 1, // first attempt fails, second (retried) attempt succeeds
+		worker:     [][]provider.Event{asstTurn("done")},
+		eval:       [][]provider.Event{asstTurn("MET: looks complete")},
+	}
+	h := newLoggingGoalHarness(t, prov, &buf)
+	id := h.createSession("test/m1")
+
+	sse := h.openSSE("?from=0", "")
+	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond"})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
+	}
+	sse.waitFor(t, "goal.stalled")
+
+	line := findLogLine(t, buf.String(), "goal stalled")
+	if !strings.Contains(line, "level=WARN") {
+		t.Errorf("goal stalled must log at WARN: %s", line)
+	}
+	if !strings.Contains(line, "session="+id) {
+		t.Errorf("log line missing session attr: %s", line)
+	}
+	if !strings.Contains(line, "attempt=") {
+		t.Errorf("log line missing attempt attr: %s", line)
+	}
+
+	// Let the loop finish (achieves on the retried turn) so the goroutine
+	// unwinds cleanly before the test ends.
+	sse.collectUntilIdle(t)
+}
+
+// TestLoggerGoalSetLogsInfo asserts publishGoal's goal.set fold logs an INFO
+// line naming the session and condition — an ordinary lifecycle transition,
+// not a failure, so INFO rather than WARN.
+func TestLoggerGoalSetLogsInfo(t *testing.T) {
+	var buf syncBuffer
+	prov := &goalProv{
+		name:   "test",
+		worker: [][]provider.Event{asstTurn("done")},
+		eval:   [][]provider.Event{asstTurn("MET: looks complete")},
+	}
+	h := newLoggingGoalHarness(t, prov, &buf)
+	id := h.createSession("test/m1")
+
+	sse := h.openSSE("?from=0", "")
+	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "write a summary"})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
+	}
+	sse.waitFor(t, "goal.set")
+
+	line := findLogLine(t, buf.String(), "goal set")
+	if !strings.Contains(line, "level=INFO") {
+		t.Errorf("goal set must log at INFO: %s", line)
+	}
+	if !strings.Contains(line, "session="+id) {
+		t.Errorf("log line missing session attr: %s", line)
+	}
+	if !strings.Contains(line, `condition="write a summary"`) {
+		t.Errorf("log line missing condition attr: %s", line)
+	}
+
+	sse.collectUntilIdle(t)
+}
+
+// TestLoggerGoalEvalLogsInfo is the new per-worker-turn heartbeat this
+// change adds: publishGoal's goal.eval fold must log an INFO line naming the
+// session, whether the evaluator found the condition met, and its reason —
+// the evaluator runs exactly once per completed worker turn, so this gives a
+// goal-supervised session (the primary long-running shape) a periodic log
+// line between "goal set" and its eventual terminal record, where
+// recordTurnEnd's own turn.end line fires only once per loop EXIT, not once
+// per worker turn (see recordTurnEnd's doc comment).
+func TestLoggerGoalEvalLogsInfo(t *testing.T) {
+	var buf syncBuffer
+	prov := &goalProv{
+		name:   "test",
+		worker: [][]provider.Event{asstTurn("working"), asstTurn("done")},
+		eval:   [][]provider.Event{asstTurn("NOT MET: needs a summary"), asstTurn("MET: summary present")},
+	}
+	h := newLoggingGoalHarness(t, prov, &buf)
+	id := h.createSession("test/m1")
+
+	sse := h.openSSE("?from=0", "")
+	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "write a summary"})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
+	}
+	first := sse.waitFor(t, "goal.eval")
+	if first.GoalMet {
+		t.Fatalf("first goal.eval met = true, want false")
+	}
+
+	line := findLogLine(t, buf.String(), "goal eval")
+	if !strings.Contains(line, "level=INFO") {
+		t.Errorf("goal eval must log at INFO: %s", line)
+	}
+	if !strings.Contains(line, "session="+id) {
+		t.Errorf("log line missing session attr: %s", line)
+	}
+	if !strings.Contains(line, "met=false") {
+		t.Errorf("log line missing met=false attr: %s", line)
+	}
+	if !strings.Contains(line, "reason=") {
+		t.Errorf("log line missing reason attr: %s", line)
+	}
+
+	sse.collectUntilIdle(t)
+}
+
+// TestLoggerGoalAchievedLogsInfo asserts publishGoal's goal.achieved fold
+// logs an INFO line naming the session, reason, and turn count.
+func TestLoggerGoalAchievedLogsInfo(t *testing.T) {
+	var buf syncBuffer
+	prov := &goalProv{
+		name:   "test",
+		worker: [][]provider.Event{asstTurn("done")},
+		eval:   [][]provider.Event{asstTurn("MET: looks complete")},
+	}
+	h := newLoggingGoalHarness(t, prov, &buf)
+	id := h.createSession("test/m1")
+
+	sse := h.openSSE("?from=0", "")
+	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond"})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
+	}
+	sse.waitFor(t, "goal.achieved")
+
+	line := findLogLine(t, buf.String(), "goal achieved")
+	if !strings.Contains(line, "level=INFO") {
+		t.Errorf("goal achieved must log at INFO: %s", line)
+	}
+	if !strings.Contains(line, "session="+id) {
+		t.Errorf("log line missing session attr: %s", line)
+	}
+	if !strings.Contains(line, "turns=") {
+		t.Errorf("log line missing turns attr: %s", line)
+	}
+
+	sse.collectUntilIdle(t)
+}
+
+// TestLoggerGoalClearedLogsInfo drives the same DELETE-while-active setup as
+// TestGoalDeleteClearsAndStops (goal_test.go) and asserts publishGoal's
+// goal.cleared fold logs an INFO line naming the session and reason.
+func TestLoggerGoalClearedLogsInfo(t *testing.T) {
+	var buf syncBuffer
+	prov := &goalProv{
+		name:        "test",
+		blockWorker: true,
+		started:     make(chan struct{}),
+		eval:        [][]provider.Event{asstTurn("MET: ok")},
+	}
+	h := newLoggingGoalHarness(t, prov, &buf)
+	id := h.createSession("test/m1")
+
+	sse := h.openSSE("?from=0", "")
+	resp, _ := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond"})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST goal status %d", resp.StatusCode)
+	}
+	<-prov.started
+
+	resp, _ = h.do("DELETE", "/session/"+id+"/goal", nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE goal = %d, want 204", resp.StatusCode)
+	}
+	sse.collectUntilIdle(t)
+
+	line := findLogLine(t, buf.String(), "goal cleared")
+	if !strings.Contains(line, "level=INFO") {
+		t.Errorf("goal cleared must log at INFO: %s", line)
+	}
+	if !strings.Contains(line, "session="+id) {
+		t.Errorf("log line missing session attr: %s", line)
 	}
 }
 
