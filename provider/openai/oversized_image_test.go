@@ -68,8 +68,8 @@ func TestTranscodePoisonedHistoryClampsOversizedImage(t *testing.T) {
 		if c.Type == "input_image" && strings.HasPrefix(c.ImageURL, "data:image/") {
 			found = true
 			w, h := dataURLDims(t, c.ImageURL)
-			if w > 7680 || h > 7680 {
-				t.Errorf("emitted image %dx%d exceeds downscale target 7680", w, h)
+			if w > 2576 || h > 2576 {
+				t.Errorf("emitted image %dx%d exceeds downscale target 2576", w, h)
 			}
 		}
 	}

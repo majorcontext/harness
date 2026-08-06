@@ -16,13 +16,19 @@ import (
 // ProviderData tags this adapter reads and writes.
 const Family = "openai"
 
-// imageDimensionCap is a conservative shared upper bound on image side length,
-// not a cited OpenAI limit (unlike Anthropic's documented 8000px). It exists
-// as defense-in-depth against the same wedged-transcript failure class: an
-// image past it is downscaled at transcode time by imageclamp.Clamp. 8000px is
-// comfortably above any practical need while still catching a pathological
-// full-page screenshot.
-const imageDimensionCap = 8000
+// imageLimits are the image caps imageclamp enforces for OpenAI. OpenAI does
+// NOT hard-reject on dimension (it auto-resizes; tile models to ~2048px), so
+// the 8000px cap and 2576px target are defensive — they keep a pathological
+// screenshot from bloating the request, matching the other adapters, while
+// costing nothing in fidelity (OpenAI resizes below 2576 anyway). OpenAI has no
+// per-image byte limit (only a 512MB total-request cap) and no >20-image
+// stricter rule, so both are disabled.
+var imageLimits = imageclamp.Limits{
+	MaxDim:    8000,
+	TargetDim: 2576,
+	// ManyImageThreshold / MaxImageBytes: 0 (not enforced by OpenAI).
+	RecurseToolResults: false, // tool-result images are omitted on the wire
+}
 
 // apiRequest is the OpenAI Responses API request body. Input is a flat,
 // heterogeneous list of items encoded as raw JSON so that stored reasoning
@@ -113,9 +119,9 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 		})
 	}
 
-	// ClampTopLevel, not Clamp: tool-result images are omitted on the wire
-	// (see toolResultOutput), so clamping them would be wasted work.
-	messages := imageclamp.ClampTopLevel(req.Messages, imageDimensionCap)
+	// imageLimits.RecurseToolResults is false: tool-result images are omitted
+	// on the wire (see toolResultOutput), so clamping them would be wasted work.
+	messages := imageclamp.Clamp(req.Messages, imageLimits)
 	for i := range messages {
 		m := &messages[i]
 		items, err := transcodeMessage(m)

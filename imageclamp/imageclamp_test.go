@@ -2,11 +2,13 @@ package imageclamp
 
 import (
 	"bytes"
+	"encoding/base64"
 	"image"
 	"image/color"
 	"image/gif"
 	"image/jpeg"
 	"image/png"
+	"math/rand"
 	"os"
 	"strings"
 	"testing"
@@ -14,7 +16,16 @@ import (
 	"github.com/majorcontext/harness/message"
 )
 
-const cap8000 = 8000
+// baseLimits mirrors a typical adapter's caps for tests: 8000px hard cap,
+// 2576px target, the many-image rule, and a 5MB byte budget.
+func baseLimits() Limits {
+	return Limits{
+		MaxDim: 8000, TargetDim: 2576,
+		ManyImageThreshold: 20, ManyImageDim: 2000,
+		MaxImageBytes:      5_000_000,
+		RecurseToolResults: true,
+	}
+}
 
 // pngBytes encodes a solid-color RGBA image of the given size as PNG.
 func pngBytes(t *testing.T, w, h int) []byte {
@@ -30,7 +41,19 @@ func pngBytes(t *testing.T, w, h int) []byte {
 	return buf.Bytes()
 }
 
-// jpegBytes encodes a solid-color image of the given size as JPEG.
+// noisePNG encodes an incompressible random-noise PNG — the worst case for byte
+// size, used to exercise the byte budget.
+func noisePNG(t *testing.T, w, h int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	rand.New(rand.NewSource(1)).Read(img.Pix)
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("png.Encode: %v", err)
+	}
+	return buf.Bytes()
+}
+
 func jpegBytes(t *testing.T, w, h int) []byte {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
@@ -44,7 +67,6 @@ func jpegBytes(t *testing.T, w, h int) []byte {
 	return buf.Bytes()
 }
 
-// gifBytes encodes a small paletted image of the given size as GIF.
 func gifBytes(t *testing.T, w, h int) []byte {
 	t.Helper()
 	img := image.NewPaletted(image.Rect(0, 0, w, h), color.Palette{color.Black, color.White})
@@ -75,10 +97,10 @@ func TestFitWithinPreservesAspectAndHitsTarget(t *testing.T) {
 		w, h, target int
 		wantW, wantH int
 	}{
-		{100, 8500, 7680, 90, 7680},      // tall: height hits target
-		{8500, 100, 7680, 7680, 90},      // wide: width hits target
-		{16000, 16000, 7680, 7680, 7680}, // square
-		{1, 40000, 7680, 1, 7680},        // extreme aspect: min side floored to 1
+		{100, 8500, 2576, 30, 2576},      // tall: height hits target
+		{8500, 100, 2576, 2576, 30},      // wide: width hits target
+		{16000, 16000, 2576, 2576, 2576}, // square
+		{1, 40000, 2576, 1, 2576},        // extreme aspect: min side floored to 1
 	}
 	for _, tc := range tests {
 		gotW, gotH := fitWithin(tc.w, tc.h, tc.target)
@@ -100,69 +122,55 @@ func TestClassify(t *testing.T) {
 		want dimClass
 	}{
 		{"within cap", 100, 100, classKeep},
-		{"exactly at cap", cap8000, cap8000, classKeep},
+		{"exactly at cap", 8000, 8000, classKeep},
 		{"one dim over", 100, 8500, classDownscale},
 		{"absurd single dimension", 40000, 1, classDrop},
 		{"absurd area under per-dim cap", 20000, 20000, classDrop},
 	}
 	for _, tc := range tests {
-		if got := classify(tc.w, tc.h, cap8000); got != tc.want {
+		if got := classify(tc.w, tc.h, 8000); got != tc.want {
 			t.Errorf("classify(%d,%d) [%s]: got %v, want %v", tc.w, tc.h, tc.name, got, tc.want)
 		}
 	}
 }
 
-// --- behavior tests -------------------------------------------------------
+// --- dimension behavior ---------------------------------------------------
 
-func TestClampDownscalesOversizedPNG(t *testing.T) {
+func TestClampDownscalesOversizedPNGToTarget(t *testing.T) {
 	orig := pngBytes(t, 100, 8500)
 	in := []message.Message{userMsg(&message.Blob{MediaType: "image/png", Data: orig})}
 
-	out := Clamp(in, cap8000)
+	out := Clamp(in, baseLimits())
 
-	blob, ok := out[0].Parts[0].(*message.Blob)
-	if !ok {
-		t.Fatalf("part is %T, want *message.Blob", out[0].Parts[0])
-	}
+	blob := out[0].Parts[0].(*message.Blob)
 	w, h := decodeDims(t, blob.Data)
-	if w > 7680 || h > 7680 {
-		t.Errorf("clamped dims %dx%d exceed 7680", w, h)
+	if h != 2576 || w != 30 {
+		t.Errorf("clamped dims = %dx%d, want 30x2576 (target 2576, aspect preserved)", w, h)
 	}
-	if h != 7680 {
-		t.Errorf("expected long side downscaled to 7680, got height %d", h)
-	}
-	// Aspect ratio preserved: 100/8500 == w/h within rounding.
-	if w != 90 {
-		t.Errorf("aspect not preserved: width %d, want 90", w)
-	}
-	// Original input must not be mutated (stateless transcoding invariant).
-	if in[0].Parts[0].(*message.Blob).Data == nil || len(in[0].Parts[0].(*message.Blob).Data) != len(orig) {
+	// Original input must not be mutated.
+	if len(in[0].Parts[0].(*message.Blob).Data) != len(orig) {
 		t.Error("input blob was mutated")
 	}
 }
 
 func TestClampDownscalesOversizedJPEGKeepsFormat(t *testing.T) {
 	in := []message.Message{userMsg(&message.Blob{MediaType: "image/jpeg", Data: jpegBytes(t, 8500, 100)})}
-	out := Clamp(in, cap8000)
+	out := Clamp(in, baseLimits())
 	blob := out[0].Parts[0].(*message.Blob)
 	if blob.MediaType != "image/jpeg" {
 		t.Errorf("media type = %q, want image/jpeg (source format preserved)", blob.MediaType)
 	}
-	if _, _, err := image.Decode(bytes.NewReader(blob.Data)); err != nil {
-		t.Errorf("clamped jpeg not decodable: %v", err)
-	}
-	w, h := decodeDims(t, blob.Data)
-	if w > 7680 || h > 7680 {
-		t.Errorf("clamped dims %dx%d exceed 7680", w, h)
+	if w, h := decodeDims(t, blob.Data); w > 2576 || h > 2576 {
+		t.Errorf("clamped dims %dx%d exceed 2576", w, h)
 	}
 }
 
 func TestClampReEncodesOversizedGIFAsPNG(t *testing.T) {
 	in := []message.Message{userMsg(&message.Blob{MediaType: "image/gif", Data: gifBytes(t, 8500, 40)})}
-	out := Clamp(in, cap8000)
+	out := Clamp(in, baseLimits())
 	blob := out[0].Parts[0].(*message.Blob)
 	if blob.MediaType != "image/png" {
-		t.Errorf("media type = %q, want image/png (gif re-encoded as png)", blob.MediaType)
+		t.Errorf("media type = %q, want image/png (gif re-encoded)", blob.MediaType)
 	}
 	if _, format, err := image.Decode(bytes.NewReader(blob.Data)); err != nil || format != "png" {
 		t.Errorf("clamped gif not valid png: format=%q err=%v", format, err)
@@ -174,26 +182,23 @@ func TestClampDownscalesOversizedWebP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
-	// Sanity: fixture really is oversized.
-	if w, _ := decodeDims(t, data); w <= cap8000 {
+	if w, _ := decodeDims(t, data); w <= 8000 {
 		t.Fatalf("fixture width %d not oversized", w)
 	}
 	in := []message.Message{userMsg(&message.Blob{MediaType: "image/webp", Data: data})}
-	out := Clamp(in, cap8000)
+	out := Clamp(in, baseLimits())
 	blob := out[0].Parts[0].(*message.Blob)
-	// No webp encoder in x/image, so webp is re-encoded as png.
 	if blob.MediaType != "image/png" {
 		t.Errorf("media type = %q, want image/png (webp re-encoded)", blob.MediaType)
 	}
-	w, h := decodeDims(t, blob.Data)
-	if w > 7680 || h > 7680 {
-		t.Errorf("clamped webp dims %dx%d exceed 7680", w, h)
+	if w, h := decodeDims(t, blob.Data); w > 2576 || h > 2576 {
+		t.Errorf("clamped webp dims %dx%d exceed 2576", w, h)
 	}
 }
 
 func TestClampReplacesUndecodableWithPlaceholder(t *testing.T) {
 	in := []message.Message{userMsg(&message.Blob{MediaType: "image/png", Data: []byte("this is not a png")})}
-	out := Clamp(in, cap8000)
+	out := Clamp(in, baseLimits())
 	txt, ok := out[0].Parts[0].(*message.Text)
 	if !ok {
 		t.Fatalf("part is %T, want *message.Text placeholder", out[0].Parts[0])
@@ -204,10 +209,8 @@ func TestClampReplacesUndecodableWithPlaceholder(t *testing.T) {
 }
 
 func TestClampDropsAbsurdDimensionAsPlaceholder(t *testing.T) {
-	// 40000x1 is tiny to build but its declared dimension exceeds the absurd
-	// per-dimension guard, so pixels must never be decoded.
 	in := []message.Message{userMsg(&message.Blob{MediaType: "image/png", Data: pngBytes(t, 40000, 1)})}
-	out := Clamp(in, cap8000)
+	out := Clamp(in, baseLimits())
 	txt, ok := out[0].Parts[0].(*message.Text)
 	if !ok {
 		t.Fatalf("part is %T, want *message.Text placeholder", out[0].Parts[0])
@@ -220,11 +223,8 @@ func TestClampDropsAbsurdDimensionAsPlaceholder(t *testing.T) {
 func TestClampPassesCompliantImageByteIdentical(t *testing.T) {
 	orig := pngBytes(t, 100, 100)
 	in := []message.Message{userMsg(&message.Blob{MediaType: "image/png", Data: orig})}
-	out := Clamp(in, cap8000)
-	blob, ok := out[0].Parts[0].(*message.Blob)
-	if !ok {
-		t.Fatalf("part is %T, want *message.Blob", out[0].Parts[0])
-	}
+	out := Clamp(in, baseLimits())
+	blob := out[0].Parts[0].(*message.Blob)
 	if !bytes.Equal(blob.Data, orig) {
 		t.Error("compliant image was not passed through byte-identical")
 	}
@@ -233,11 +233,8 @@ func TestClampPassesCompliantImageByteIdentical(t *testing.T) {
 func TestClampLeavesNonImageBlobUntouched(t *testing.T) {
 	pdf := []byte("%PDF-1.4\nfake pdf body")
 	in := []message.Message{userMsg(&message.Blob{MediaType: "application/pdf", Data: pdf})}
-	out := Clamp(in, cap8000)
-	blob, ok := out[0].Parts[0].(*message.Blob)
-	if !ok {
-		t.Fatalf("part is %T, want *message.Blob", out[0].Parts[0])
-	}
+	out := Clamp(in, baseLimits())
+	blob := out[0].Parts[0].(*message.Blob)
 	if blob.MediaType != "application/pdf" || !bytes.Equal(blob.Data, pdf) {
 		t.Error("non-image blob was modified")
 	}
@@ -245,7 +242,7 @@ func TestClampLeavesNonImageBlobUntouched(t *testing.T) {
 
 func TestClampLeavesURLBlobUntouched(t *testing.T) {
 	in := []message.Message{userMsg(&message.Blob{MediaType: "image/png", URL: "https://example.com/x.png"})}
-	out := Clamp(in, cap8000)
+	out := Clamp(in, baseLimits())
 	blob := out[0].Parts[0].(*message.Blob)
 	if blob.URL != "https://example.com/x.png" || blob.Data != nil {
 		t.Error("URL-referenced blob was modified")
@@ -258,46 +255,36 @@ func TestClampRecursesIntoToolResult(t *testing.T) {
 		Content: message.Parts{&message.Blob{MediaType: "image/png", Data: pngBytes(t, 100, 8500)}},
 	}
 	in := []message.Message{{ID: "m1", Role: message.RoleTool, Parts: message.Parts{tr}}}
-	out := Clamp(in, cap8000)
-	gotTR, ok := out[0].Parts[0].(*message.ToolResult)
-	if !ok {
-		t.Fatalf("part is %T, want *message.ToolResult", out[0].Parts[0])
-	}
-	blob, ok := gotTR.Content[0].(*message.Blob)
-	if !ok {
-		t.Fatalf("nested part is %T, want *message.Blob", gotTR.Content[0])
-	}
-	w, h := decodeDims(t, blob.Data)
-	if w > 7680 || h > 7680 {
+	out := Clamp(in, baseLimits())
+	gotTR := out[0].Parts[0].(*message.ToolResult)
+	blob := gotTR.Content[0].(*message.Blob)
+	if w, h := decodeDims(t, blob.Data); w > 2576 || h > 2576 {
 		t.Errorf("nested oversized image not clamped: %dx%d", w, h)
 	}
-	// Original tool result must be untouched.
 	if len(tr.Content[0].(*message.Blob).Data) == len(blob.Data) {
 		t.Error("input tool-result blob appears mutated")
 	}
 }
 
-func TestClampTopLevelClampsTopLevelButSkipsToolResult(t *testing.T) {
+func TestClampSkipsToolResultWhenRecursionOff(t *testing.T) {
 	toolResultBlob := &message.Blob{MediaType: "image/png", Data: pngBytes(t, 100, 8500)}
+	lim := baseLimits()
+	lim.RecurseToolResults = false
 	in := []message.Message{
 		userMsg(&message.Blob{MediaType: "image/png", Data: pngBytes(t, 100, 8500)}),
 		{ID: "m2", Role: message.RoleTool, Parts: message.Parts{
 			&message.ToolResult{CallID: "c1", Content: message.Parts{toolResultBlob}},
 		}},
 	}
-
-	out := ClampTopLevel(in, cap8000)
-
-	// Top-level oversized image is still downscaled.
-	top := out[0].Parts[0].(*message.Blob)
-	if w, _ := decodeDims(t, top.Data); w > 7680 {
+	out := Clamp(in, lim)
+	// Top-level oversized image is downscaled...
+	if w, _ := decodeDims(t, out[0].Parts[0].(*message.Blob).Data); w > 2576 {
 		t.Errorf("top-level image not clamped: width %d", w)
 	}
-	// Tool-result image is left byte-identical — those adapters omit it on the
-	// wire, so clamping it would be wasted work.
-	gotTR := out[1].Parts[0].(*message.ToolResult)
-	if !bytes.Equal(gotTR.Content[0].(*message.Blob).Data, toolResultBlob.Data) {
-		t.Error("ClampTopLevel should not touch tool-result content")
+	// ...but the tool-result image is left byte-identical.
+	gotBlob := out[1].Parts[0].(*message.ToolResult).Content[0].(*message.Blob)
+	if !bytes.Equal(gotBlob.Data, toolResultBlob.Data) {
+		t.Error("RecurseToolResults=false should not touch tool-result content")
 	}
 }
 
@@ -306,9 +293,102 @@ func TestClampReturnsInputUnchangedWhenNothingOversized(t *testing.T) {
 		&message.Text{Text: "hello"},
 		&message.Blob{MediaType: "image/png", Data: pngBytes(t, 50, 50)},
 	)}
-	out := Clamp(in, cap8000)
-	// Copy-on-write: same backing slice when no change was needed.
+	out := Clamp(in, baseLimits())
 	if &out[0] != &in[0] {
 		t.Error("Clamp allocated a new message when nothing needed clamping")
+	}
+}
+
+// --- byte budget ----------------------------------------------------------
+
+func TestClampReducesImageOverByteBudget(t *testing.T) {
+	// Dimensions are well under the 8000px cap, so this is purely a byte-size
+	// reduction: an incompressible PNG far over budget must be shrunk to fit.
+	orig := noisePNG(t, 1200, 1000)
+	budget := 1_000_000
+	if base64.StdEncoding.EncodedLen(len(orig)) <= budget {
+		t.Fatalf("fixture base64 %d already under budget %d", base64.StdEncoding.EncodedLen(len(orig)), budget)
+	}
+	lim := baseLimits()
+	lim.MaxImageBytes = budget
+	in := []message.Message{userMsg(&message.Blob{MediaType: "image/png", Data: orig})}
+
+	out := Clamp(in, lim)
+
+	blob, ok := out[0].Parts[0].(*message.Blob)
+	if !ok {
+		t.Fatalf("part is %T, want a reduced *message.Blob", out[0].Parts[0])
+	}
+	if got := base64.StdEncoding.EncodedLen(len(blob.Data)); got > budget {
+		t.Errorf("reduced image base64 %d still over budget %d", got, budget)
+	}
+	if _, _, err := image.Decode(bytes.NewReader(blob.Data)); err != nil {
+		t.Errorf("reduced image not decodable: %v", err)
+	}
+	if w, h := decodeDims(t, blob.Data); w > 1200 || h > 1000 {
+		t.Errorf("reduced image grew: %dx%d", w, h)
+	}
+}
+
+func TestClampByteBudgetDisabledLeavesLargeImage(t *testing.T) {
+	orig := noisePNG(t, 800, 800)
+	lim := baseLimits()
+	lim.MaxImageBytes = 0 // disabled
+	in := []message.Message{userMsg(&message.Blob{MediaType: "image/png", Data: orig})}
+	out := Clamp(in, lim)
+	blob := out[0].Parts[0].(*message.Blob)
+	if !bytes.Equal(blob.Data, orig) {
+		t.Error("byte budget disabled but image was still altered")
+	}
+}
+
+// --- many-image stricter cap ---------------------------------------------
+
+func manyImages(t *testing.T, n, w, h int) message.Message {
+	t.Helper()
+	parts := make(message.Parts, n)
+	for i := range parts {
+		parts[i] = &message.Blob{MediaType: "image/png", Data: pngBytes(t, w, h)}
+	}
+	return userMsg(parts...)
+}
+
+func TestClampManyImagesAppliesStricterCap(t *testing.T) {
+	// 21 images (> threshold 20), each 3000px — under the normal 8000 cap but
+	// over the stricter 2000 many-image cap, so each must be downscaled.
+	in := []message.Message{manyImages(t, 21, 3000, 100)}
+	out := Clamp(in, baseLimits())
+	for i, p := range out[0].Parts {
+		if w, _ := decodeDims(t, p.(*message.Blob).Data); w > 2000 {
+			t.Errorf("image %d width %d exceeds many-image cap 2000", i, w)
+		}
+	}
+}
+
+func TestClampAtOrUnderThresholdKeepsNormalCap(t *testing.T) {
+	// Exactly 20 images (not > threshold): the stricter cap does NOT apply, so
+	// a 3000px image (under 8000) passes through unchanged.
+	in := []message.Message{manyImages(t, 20, 3000, 100)}
+	out := Clamp(in, baseLimits())
+	if w, h := decodeDims(t, out[0].Parts[0].(*message.Blob).Data); w != 3000 || h != 100 {
+		t.Errorf("image was clamped at threshold boundary: %dx%d, want 3000x100", w, h)
+	}
+}
+
+func TestClampManyImagesCountsPDFsTowardThreshold(t *testing.T) {
+	// 19 images + 2 PDFs = 21 blocks > threshold 20; on Bedrock/Vertex PDFs
+	// count too, so the stricter cap applies to the images.
+	parts := make(message.Parts, 0, 21)
+	for i := 0; i < 19; i++ {
+		parts = append(parts, &message.Blob{MediaType: "image/png", Data: pngBytes(t, 3000, 100)})
+	}
+	parts = append(parts,
+		&message.Blob{MediaType: "application/pdf", Data: []byte("%PDF-1.4 a")},
+		&message.Blob{MediaType: "application/pdf", Data: []byte("%PDF-1.4 b")},
+	)
+	in := []message.Message{userMsg(parts...)}
+	out := Clamp(in, baseLimits())
+	if w, _ := decodeDims(t, out[0].Parts[0].(*message.Blob).Data); w > 2000 {
+		t.Errorf("image width %d not reduced under many-image cap when PDFs counted", w)
 	}
 }
