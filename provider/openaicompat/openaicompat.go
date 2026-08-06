@@ -298,6 +298,14 @@ func (s *stream) Next() (provider.Event, error) {
 		if err := s.handle(line); err != nil {
 			return provider.Event{}, err
 		}
+		if len(s.queue) == 0 && !s.done {
+			// Handled but queued nothing consumer-visible (a chunk whose
+			// only content is tool_call argument deltas, buffered until
+			// the finish chunk): surface as activity so idle-watchdog
+			// consumers see the wire is alive — see
+			// provider.EventActivity and provider/anthropic's Next.
+			return provider.Event{Type: provider.EventActivity}, nil
+		}
 	}
 }
 
@@ -308,13 +316,11 @@ func (s *stream) readDataLine() ([]byte, error) {
 	for {
 		line, err := s.r.ReadString('\n')
 		if err != nil {
-			if err == io.EOF {
-				line = trimEOL(line)
-				if payload, ok := dataPayload(line); ok {
-					return payload, nil
-				}
-				return nil, io.EOF
-			}
+			// A data line whose newline never arrived is DISCARDED, per
+			// the SSE spec — see provider/anthropic's readSSE for why
+			// handing the fragment up dodged truncation classification
+			// ("bad chunk: unexpected end of JSON input", deterministic-
+			// looking, from what was really a mid-flush connection cut).
 			return nil, err
 		}
 		line = trimEOL(line)

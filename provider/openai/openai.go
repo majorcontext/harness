@@ -180,6 +180,12 @@ func (s *stream) Next() (provider.Event, error) {
 		if err := s.handle(name, data); err != nil {
 			return provider.Event{}, err
 		}
+		if len(s.queue) == 0 && !s.done {
+			// Handled but queued nothing consumer-visible: surface as
+			// activity so idle-watchdog consumers see the wire is alive —
+			// see provider.EventActivity and provider/anthropic's Next.
+			return provider.Event{Type: provider.EventActivity}, nil
+		}
 	}
 }
 
@@ -190,9 +196,10 @@ func (s *stream) readSSE() (name string, data []byte, err error) {
 	for {
 		line, err := s.r.ReadString('\n')
 		if err != nil {
-			if err == io.EOF && (name != "" || buf.Len() > 0) {
-				return name, buf.Bytes(), nil
-			}
+			// An event whose blank-line terminator never arrived is
+			// DISCARDED, per the SSE spec — see provider/anthropic's
+			// readSSE for why handing the fragment up dodged truncation
+			// classification.
 			return "", nil, err
 		}
 		line = trimEOL(line)

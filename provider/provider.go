@@ -77,6 +77,16 @@ const (
 	// EventDone carries the fully assembled canonical assistant message,
 	// stop reason, and usage. It is always the final event of a stream.
 	EventDone EventType = "done"
+	// EventActivity carries no content at all: it reports that a wire
+	// event arrived and was handled but produced nothing consumer-visible
+	// — a keep-alive ping, a tool call's arguments still streaming
+	// (input_json_delta), a message_start. Adapters surface one per such
+	// wire event instead of looping silently, so a consumer timing the
+	// gaps between Next returns (the engine's idle-stream watchdog)
+	// measures real wire activity rather than content cadence — a large
+	// tool-argument block can stream for minutes with zero content
+	// events. Consumers that only want content simply skip it.
+	EventActivity EventType = "activity"
 )
 
 // Event is one streaming event from a model call.
