@@ -75,6 +75,15 @@ type goalProvider struct {
 	// scripted eval turns are consumed only once the failures are
 	// exhausted.
 	evalErrN   int
+	// evalDieN/evalDieHit/evalDieEvents/evalDieErr make the first evalDieN
+	// evaluator calls return a dyingStream: evalDieEvents delivered
+	// normally (typically text deltas — a partial verdict), then
+	// evalDieErr instead of EventDone — the shape of an evaluator response
+	// stream cut mid-verdict.
+	evalDieN      int
+	evalDieHit    int
+	evalDieEvents []provider.Event
+	evalDieErr    error
 	evalErrHit int
 	evalErr    error
 
@@ -118,6 +127,10 @@ func (p *goalProvider) Stream(ctx context.Context, req *provider.Request) (provi
 				err = errors.New("fake transient evaluator provider error")
 			}
 			return nil, err
+		}
+		if p.evalDieHit < p.evalDieN {
+			p.evalDieHit++
+			return &dyingStream{events: p.evalDieEvents, err: p.evalDieErr}, nil
 		}
 		if p.ei >= len(p.eval) {
 			return &scriptedStream{}, nil
