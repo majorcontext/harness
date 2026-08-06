@@ -506,6 +506,34 @@ func (s *Server) publishGoal(ev engine.Event) {
 		g.evalFailures = 0
 	}
 	s.emitDurableLocked(out)
+
+	// Structured goal-lifecycle logging (Options.Logger, see the field
+	// report on its doc comment): goal.parked and goal.stalled are the
+	// background-loop analogue of a plain turn dying silently — a parked
+	// goal has already exited and is waiting on external activity to
+	// resume it, exactly the "operator tailing the log concluded the box
+	// was dead" scenario, so both log at WARN with the same
+	// turn/attempt/reason/retry-budget shape the AGENTS.md brief asks for
+	// (mirroring Codex's structured stream-retry warn!). set/achieved/
+	// cleared are ordinary lifecycle transitions, not failures, so INFO.
+	// goal.eval/goal.updated/goal.eval_failed are deliberately not logged
+	// here: eval fires every turn (too frequent for a heartbeat log) and
+	// eval_failed's advisory-failure semantics are already covered by the
+	// turn itself continuing to log via recordTurnEnd above.
+	switch ev.Type {
+	case engine.EventGoalParked:
+		s.logWarn("goal parked", "session", ev.SessionID, "reason", ev.GoalReason,
+			"attempts", ev.GoalAttempts, "retryable_class", ev.GoalRetryableClass)
+	case engine.EventGoalStalled:
+		s.logWarn("goal stalled", "session", ev.SessionID, "reason", ev.GoalReason,
+			"attempt", ev.GoalAttempt, "waiting", ev.GoalWaiting)
+	case engine.EventGoalAchieved:
+		s.logInfo("goal achieved", "session", ev.SessionID, "reason", ev.GoalReason, "turns", ev.GoalTurns)
+	case engine.EventGoalSet:
+		s.logInfo("goal set", "session", ev.SessionID, "condition", ev.GoalCondition)
+	case engine.EventGoalCleared:
+		s.logInfo("goal cleared", "session", ev.SessionID, "reason", ev.GoalReason)
+	}
 }
 
 // publishQueue journals a durable prompt.queued/prompt.dequeued record (see
@@ -548,6 +576,18 @@ func (s *Server) publishQueue(ev engine.Event) {
 // infer death from message part shapes. turn.end plus Session.last_turn make
 // that heuristic unnecessary — a poller reads the outcome directly instead
 // of reverse-engineering it from transcript content.
+//
+// It also logs (Options.Logger, see the field report on its doc comment):
+// INFO for outcome "completed", WARN for every other outcome — session and
+// outcome always, error only when non-empty (a completed turn has none, so
+// omitting it there keeps a clean run's line free of a stray empty attr).
+// This is the single choke point every plain-prompt turn AND every goal
+// worker turn passes through (runPrompt and runGoal's tails both call it),
+// so it alone turns a silent multi-hundred-message session into one log
+// line per turn — usage/token counts are deliberately not threaded in here:
+// they are not already available at this call site (only outcome and the
+// sanitized error string are), and this fix's scope is "log what exists",
+// not "thread new state through the engine for logging".
 func (s *Server) recordTurnEnd(sessionID, outcome string, turnErr error) {
 	errStr := ""
 	if turnErr != nil {
@@ -557,6 +597,16 @@ func (s *Server) recordTurnEnd(sessionID, outcome string, turnErr error) {
 	s.lastTurn[sessionID] = &turnOutcome{outcome: outcome, error: errStr}
 	s.emitDurableLocked(&Event{Type: evtTurnEnd, SessionID: sessionID, Outcome: outcome, Error: errStr})
 	s.mu.Unlock()
+
+	if outcome == "completed" {
+		s.logInfo("turn end", "session", sessionID, "outcome", outcome)
+		return
+	}
+	attrs := []any{"session", sessionID, "outcome", outcome}
+	if errStr != "" {
+		attrs = append(attrs, "error", errStr)
+	}
+	s.logWarn("turn end", attrs...)
 }
 
 // requestSnapshot is the latest fully-assembled model request for a session,
@@ -675,6 +725,15 @@ func (s *Server) emitDurable(ev Event) int64 {
 }
 
 // emitDurableLocked is emitDurable with s.mu held.
+//
+// This is the one choke point every durable record of every type passes
+// through (turn.end and goal.* included — recordTurnEnd and publishGoal
+// both route here too), which is why the session.error case below lives
+// here rather than at its emit call sites (handlers.go, out of scope for
+// this change): logging a specific ev.Type here can never miss a
+// session.error record regardless of which handler emitted it, and can
+// never double-log one either, since no other durable event ever carries
+// this Type. See Options.Logger's doc comment for why this exists.
 func (s *Server) emitDurableLocked(ev *Event) {
 	s.seq++
 	ev.Seq = s.seq
@@ -682,6 +741,9 @@ func (s *Server) emitDurableLocked(ev *Event) {
 	s.journal = append(s.journal, *ev)
 	s.fanoutLocked(*ev)
 	s.notifyWaitersLocked(ev.SessionID)
+	if ev.Type == evtSessionError {
+		s.logWarn("session error", "session", ev.SessionID, "error", ev.Error)
+	}
 }
 
 // notifyWaitersLocked wakes every GET /session/{id}/wait long-poll registered
