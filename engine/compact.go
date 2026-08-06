@@ -301,6 +301,62 @@ func spliceCompact(history []message.Message, firstID, lastID string, summary me
 	return out, nil
 }
 
+// bytesPerTokenEstimate is the standard ~4-bytes-per-token heuristic used by
+// estimatePromptTokensFromHistory below when a provider's own usage
+// accounting is unavailable.
+const bytesPerTokenEstimate = 4
+
+// estimatePromptTokensFromHistory is maybeAutoCompact's fallback for the
+// 2026-08-06 nimble-pizza incident: a Bedrock-via-gateway route reported
+// InputTokens=0, CacheReadTokens=0, CacheWriteTokens=0 on EVERY turn of a
+// 631-message session (OutputTokens was correct throughout, so this was a
+// prompt-accounting gap on that route, not a dead provider). maybeAutoCompact's
+// threshold check sums exactly those three fields; permanently zero meant
+// `over` could never become true, so automatic compaction could never fire on
+// that route no matter how large history actually grew — the session ran to
+// a hard context overflow instead, which (per the goal loop's design) CLEARS
+// an active goal rather than parking it: an unrecoverable dead end that
+// existed only because the safety net's own trigger signal was silently
+// broken.
+//
+// This walks the actual session history and sums the byte length of every
+// part that contributes real content to a future request — Text, ToolCall
+// arguments, ToolResult content, Blob payloads/URLs, and Reasoning text —
+// then divides by bytesPerTokenEstimate. It is deliberately crude: the goal
+// is not an accurate token count (the real transcoder + provider tokenizer
+// already do that job when accounting works) but a signal that survives a
+// provider reporting nothing at all, so the overflow-prevention layer keeps
+// functioning instead of going permanently dark.
+func estimatePromptTokensFromHistory(history []message.Message) int {
+	var bytes int
+	for _, m := range history {
+		bytes += estimatePartsBytes(m.Parts)
+	}
+	return bytes / bytesPerTokenEstimate
+}
+
+// estimatePartsBytes sums the content bytes of parts for
+// estimatePromptTokensFromHistory, recursing once into ToolResult.Content
+// (itself Text/Blob parts only, per ToolResult's doc comment).
+func estimatePartsBytes(parts message.Parts) int {
+	var bytes int
+	for _, p := range parts {
+		switch v := p.(type) {
+		case *message.Text:
+			bytes += len(v.Text)
+		case *message.ToolCall:
+			bytes += len(v.Name) + len(v.Arguments)
+		case *message.ToolResult:
+			bytes += len(v.CallID) + estimatePartsBytes(v.Content)
+		case *message.Blob:
+			bytes += len(v.Data) + len(v.URL)
+		case *message.Reasoning:
+			bytes += len(v.Text)
+		}
+	}
+	return bytes
+}
+
 // maybeAutoCompact is Prompt's automatic-trigger check (see docs/design/
 // context-compaction.md §1): a no-op unless Config.ContextWindowTokens is
 // positive (opt-in) and at least one turn has completed. Best-effort: a
@@ -330,6 +386,21 @@ func (s *Session) maybeAutoCompact(ctx context.Context) {
 	// meant auto-compaction never fired in exactly the long-cached-session
 	// shape it exists for.
 	promptTokens := lastUsage.InputTokens + lastUsage.CacheReadTokens + lastUsage.CacheWriteTokens
+	// A provider that reports SOME input usage — even a small amount, e.g. a
+	// short warm-cache turn — is trusted as-is: promptTokens > 0 here is real
+	// accounting and must never be second-guessed. All-zero across every
+	// input component on a turn that DID complete (haveLastUsage is true) is
+	// a different case entirely: it is missing data, not evidence of a cheap
+	// prompt, and treating it as "0 tokens, never over" is exactly the
+	// nimble-pizza failure mode (see estimatePromptTokensFromHistory's doc
+	// comment). Falling back to the size-derived estimate here keeps this
+	// overflow-prevention layer alive on a route with broken input-usage
+	// accounting; it is used for this threshold comparison ONLY and is never
+	// written into s.usage/lastUsage — real accounting stays untouched (see
+	// the "cumulative-only accounting" comment in Compact above).
+	if promptTokens == 0 {
+		promptTokens = estimatePromptTokensFromHistory(s.History())
+	}
 	over := float64(promptTokens) >= threshold*float64(windowTokens)
 	if !over {
 		// Churn-guard reset: LastUsage has dipped below the threshold at
