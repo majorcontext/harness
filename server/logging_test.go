@@ -10,13 +10,15 @@
 // stays completely silent, never panics.
 //
 // Every assertion below is scoped to the SINGLE log line carrying the
-// record's own msg=, via findLogLine — not a whole-buffer strings.Contains
-// check. A whole-buffer check is satisfiable by the WRONG line: e.g.
+// record's own msg=, via syncBuffer.waitLogLine — not a whole-buffer
+// strings.Contains check. A whole-buffer check is satisfiable by the WRONG line: e.g.
 // asserting "level=WARN" anywhere in the buffer passes even if the "turn
 // end" line itself logged at INFO, so long as some unrelated WARN line (a
 // "session error" from a different code path) also landed in the same
-// buffer. findLogLine finds the one line whose msg matches and every
-// attribute assertion below reads only that line.
+// buffer. waitLogLine blocks until the one line whose msg matches has
+// actually been written (log writes happen after the SSE emit for the same
+// record, so an SSE receipt does not order them) and every attribute
+// assertion below reads only that line.
 package server
 
 import (
@@ -43,14 +45,26 @@ import (
 // race (caught by go test -race); this is the standard fix, not a change to
 // production behavior.
 type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
+	mu     sync.Mutex
+	buf    bytes.Buffer
+	notify chan struct{}
 }
 
 func (b *syncBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
+	n, err := b.buf.Write(p)
+	ch := b.notify
+	b.mu.Unlock()
+	if ch != nil {
+		// Non-blocking: one pending signal is enough — waitLogLine
+		// re-scans the whole buffer on every wake, so coalesced writes
+		// are never missed.
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+	return n, err
 }
 
 func (b *syncBuffer) String() string {
@@ -59,27 +73,38 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-// findLogLine is a t.Helper() that returns the single line in log carrying
-// msg="<msg>" (slog's text handler quotes any value containing a space,
-// which every message here does), failing the test if there is not exactly
-// one such line. Assertions must run against the returned line, never
-// against the whole buffer — see the package doc comment above for why a
+// waitLogLine blocks until the buffer contains a line carrying msg="<msg>"
+// (slog's text handler quotes any value containing a space, which every
+// message here does) and returns the FIRST such line. Assertions must run
+// against the returned line, never against the whole buffer — a
 // whole-buffer strings.Contains check can pass on the wrong line entirely.
-func findLogLine(t *testing.T, log, msg string) string {
+//
+// Blocking on the buffer's own write signal is the point: every log line
+// here is written AFTER the server releases s.mu (see logInfo's doc
+// comment), which is strictly after the SSE event for the same record was
+// emitted — so receiving the SSE event does NOT order the log write before
+// a subsequent read, and reading the buffer immediately after an SSE event
+// is a race (found as a real flake in TestLoggerGoalEvalLogsInfo, where a
+// second goal boundary's line could land — or the first's could be absent
+// — at read time). The test binary's own timeout bounds a wait that never
+// completes, per AGENTS.md's no-guessed-deadlines rule.
+func (b *syncBuffer) waitLogLine(t *testing.T, msg string) string {
 	t.Helper()
 	want := `msg="` + msg + `"`
-	var match string
-	count := 0
-	for _, line := range strings.Split(log, "\n") {
-		if strings.Contains(line, want) {
-			match = line
-			count++
+	b.mu.Lock()
+	if b.notify == nil {
+		b.notify = make(chan struct{}, 1)
+	}
+	ch := b.notify
+	b.mu.Unlock()
+	for {
+		for _, line := range strings.Split(b.String(), "\n") {
+			if strings.Contains(line, want) {
+				return line
+			}
 		}
+		<-ch
 	}
-	if count != 1 {
-		t.Fatalf("expected exactly one log line with %s, found %d in:\n%s", want, count, log)
-	}
-	return match
 }
 
 // newLoggingHarness builds a harness identical to newHarness but with
@@ -140,7 +165,7 @@ func TestLoggerTurnEndCompletedLogsInfo(t *testing.T) {
 		t.Fatalf("turn.end outcome = %q, want completed", end.Outcome)
 	}
 
-	line := findLogLine(t, buf.String(), "turn end")
+	line := buf.waitLogLine(t, "turn end")
 	if !strings.Contains(line, "level=INFO") {
 		t.Errorf("completed turn end logged below INFO: %s", line)
 	}
@@ -163,7 +188,7 @@ func TestLoggerTurnEndCompletedLogsInfo(t *testing.T) {
 // Red-verified against the tightened, line-scoped assertion below (see the
 // report accompanying this change): with recordTurnEnd's failure branch
 // temporarily changed to log "turn end" at INFO instead of WARN, this test's
-// level=WARN check on findLogLine's line correctly failed, while the OLD
+// level=WARN check on waitLogLine's line correctly failed, while the OLD
 // whole-buffer style check (strings.Contains(buf.String(), "level=WARN"))
 // kept passing — satisfied by the unrelated "session error" WARN line this
 // same request also produces. Reverted after confirming the failure.
@@ -185,7 +210,7 @@ func TestLoggerTurnEndErrorLogsWarn(t *testing.T) {
 		t.Fatalf("turn.end outcome = %q, want error", end.Outcome)
 	}
 
-	line := findLogLine(t, buf.String(), "turn end")
+	line := buf.waitLogLine(t, "turn end")
 	if !strings.Contains(line, "level=WARN") {
 		t.Errorf("failed turn end must log at WARN: %s", line)
 	}
@@ -222,7 +247,7 @@ func TestLoggerSessionErrorLogsWarn(t *testing.T) {
 		t.Fatalf("session.error missing detail")
 	}
 
-	line := findLogLine(t, buf.String(), "session error")
+	line := buf.waitLogLine(t, "session error")
 	if !strings.Contains(line, "level=WARN") {
 		t.Errorf("session error must log at WARN: %s", line)
 	}
@@ -261,7 +286,7 @@ func TestLoggerGoalParkedLogsWarn(t *testing.T) {
 		t.Fatalf("turn.end outcome = %q, want %q", end.Outcome, outcomeWorkerParked)
 	}
 
-	line := findLogLine(t, buf.String(), "goal parked")
+	line := buf.waitLogLine(t, "goal parked")
 	if !strings.Contains(line, "level=WARN") {
 		t.Errorf("goal parked must log at WARN: %s", line)
 	}
@@ -297,7 +322,7 @@ func TestLoggerGoalStalledLogsWarn(t *testing.T) {
 	}
 	sse.waitFor(t, "goal.stalled")
 
-	line := findLogLine(t, buf.String(), "goal stalled")
+	line := buf.waitLogLine(t, "goal stalled")
 	if !strings.Contains(line, "level=WARN") {
 		t.Errorf("goal stalled must log at WARN: %s", line)
 	}
@@ -333,7 +358,7 @@ func TestLoggerGoalSetLogsInfo(t *testing.T) {
 	}
 	sse.waitFor(t, "goal.set")
 
-	line := findLogLine(t, buf.String(), "goal set")
+	line := buf.waitLogLine(t, "goal set")
 	if !strings.Contains(line, "level=INFO") {
 		t.Errorf("goal set must log at INFO: %s", line)
 	}
@@ -375,7 +400,7 @@ func TestLoggerGoalEvalLogsInfo(t *testing.T) {
 		t.Fatalf("first goal.eval met = true, want false")
 	}
 
-	line := findLogLine(t, buf.String(), "goal eval")
+	line := buf.waitLogLine(t, "goal eval")
 	if !strings.Contains(line, "level=INFO") {
 		t.Errorf("goal eval must log at INFO: %s", line)
 	}
@@ -411,7 +436,7 @@ func TestLoggerGoalAchievedLogsInfo(t *testing.T) {
 	}
 	sse.waitFor(t, "goal.achieved")
 
-	line := findLogLine(t, buf.String(), "goal achieved")
+	line := buf.waitLogLine(t, "goal achieved")
 	if !strings.Contains(line, "level=INFO") {
 		t.Errorf("goal achieved must log at INFO: %s", line)
 	}
@@ -452,7 +477,7 @@ func TestLoggerGoalClearedLogsInfo(t *testing.T) {
 	}
 	sse.collectUntilIdle(t)
 
-	line := findLogLine(t, buf.String(), "goal cleared")
+	line := buf.waitLogLine(t, "goal cleared")
 	if !strings.Contains(line, "level=INFO") {
 		t.Errorf("goal cleared must log at INFO: %s", line)
 	}
