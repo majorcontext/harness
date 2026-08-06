@@ -375,6 +375,29 @@ func TestClampAtOrUnderThresholdKeepsNormalCap(t *testing.T) {
 	}
 }
 
+func TestClampManyImageCountExcludesToolResultsWhenNotRecursing(t *testing.T) {
+	// With RecurseToolResults=false (openai/openaicompat), tool-result images
+	// are omitted on the wire, so they must NOT count toward the >20 threshold.
+	// Here the wire carries exactly one image (the top-level 3000px one), far
+	// under the threshold, so it must not be downscaled to the 2000 cap.
+	lim := baseLimits()
+	lim.RecurseToolResults = false
+	trContent := make(message.Parts, 21)
+	for i := range trContent {
+		trContent[i] = &message.Blob{MediaType: "image/png", Data: pngBytes(t, 100, 100)}
+	}
+	in := []message.Message{
+		userMsg(&message.Blob{MediaType: "image/png", Data: pngBytes(t, 3000, 100)}),
+		{ID: "m2", Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "c1", Content: trContent},
+		}},
+	}
+	out := Clamp(in, lim)
+	if w, _ := decodeDims(t, out[0].Parts[0].(*message.Blob).Data); w != 3000 {
+		t.Errorf("top-level image width %d (want 3000): omitted tool-result images must not trip the many-image cap", w)
+	}
+}
+
 func TestClampManyImagesCountsPDFsTowardThreshold(t *testing.T) {
 	// 19 images + 2 PDFs = 21 blocks > threshold 20; on Bedrock/Vertex PDFs
 	// count too, so the stricter cap applies to the images.

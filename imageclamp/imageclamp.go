@@ -222,9 +222,12 @@ func fitWithin(w, h, target int) (int, int) {
 // itself is returned.
 func Clamp(msgs []message.Message, lim Limits) []message.Message {
 	maxDim, targetDim := lim.MaxDim, lim.TargetDim
-	// Resolve the many-image stricter cap once for the whole request.
+	// Resolve the many-image stricter cap once for the whole request. Count only
+	// blocks that actually reach the provider: tool-result images are omitted on
+	// the wire for adapters that don't recurse (openai/openaicompat), so counting
+	// them would over-trip the threshold and needlessly downscale other images.
 	if lim.ManyImageThreshold > 0 && lim.ManyImageDim > 0 &&
-		countImageDocBlocks(msgs) > lim.ManyImageThreshold {
+		countImageDocBlocks(msgs, lim.RecurseToolResults) > lim.ManyImageThreshold {
 		if lim.ManyImageDim < maxDim || maxDim == 0 {
 			maxDim = lim.ManyImageDim
 		}
@@ -257,10 +260,12 @@ func Clamp(msgs []message.Message, lim Limits) []message.Message {
 	return out
 }
 
-// countImageDocBlocks counts image and PDF blobs across the whole request
-// (recursing into tool-result content), for the many-image rule. On
-// Bedrock/Vertex document blocks count toward the same threshold as images.
-func countImageDocBlocks(msgs []message.Message) int {
+// countImageDocBlocks counts the image and PDF blobs that will actually be
+// emitted, for the many-image rule. On Bedrock/Vertex document blocks count
+// toward the same threshold as images. It descends into tool-result content
+// only when recurse is set — an adapter that omits tool-result images on the
+// wire must not count them, or an unrelated image gets needlessly downscaled.
+func countImageDocBlocks(msgs []message.Message, recurse bool) int {
 	n := 0
 	var walk func(parts message.Parts)
 	walk = func(parts message.Parts) {
@@ -271,7 +276,9 @@ func countImageDocBlocks(msgs []message.Message) int {
 					n++
 				}
 			case *message.ToolResult:
-				walk(v.Content)
+				if recurse {
+					walk(v.Content)
+				}
 			}
 		}
 	}
