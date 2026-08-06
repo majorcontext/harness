@@ -1859,9 +1859,16 @@ func (s *Session) runEvaluator(ctx context.Context, condition string, evaluator 
 		}},
 		MaxTokens: 256,
 	}
+	// The evaluator's stream gets the same idle watchdog worker turns get
+	// (see armIdleWatchdog): it runs at EVERY goal turn boundary, so a
+	// permanently silent evaluator stream would wedge PursueGoal forever
+	// while holding the run slot — no goal.eval_failed, no turn.end, and
+	// the prompt queue never drains.
+	ctx, watch, release := s.armIdleWatchdog(ctx)
+	defer release()
 	stream, err := prov.Stream(ctx, req)
 	if err != nil {
-		return "", err
+		return "", watch.explain(err)
 	}
 	defer stream.Close()
 
@@ -1869,6 +1876,7 @@ func (s *Session) runEvaluator(ctx context.Context, condition string, evaluator 
 	var doneText string
 	for {
 		ev, err := stream.Next()
+		watch.kick()
 		// Identity comparison, deliberately not errors.Is: adapters return
 		// the LITERAL io.EOF only as the normal post-terminal
 		// end-of-iteration signal. A TRUNCATED stream's error (see
@@ -1880,7 +1888,7 @@ func (s *Session) runEvaluator(ctx context.Context, condition string, evaluator 
 			break
 		}
 		if err != nil {
-			return "", err
+			return "", watch.explain(err)
 		}
 		switch ev.Type {
 		case provider.EventTextDelta:

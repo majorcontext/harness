@@ -36,6 +36,27 @@ type streamWatchdog struct {
 	fired   atomic.Bool
 }
 
+// armIdleWatchdog wires the session's idle-stream watchdog around one
+// provider stream call: it derives a cancellable child context, arms the
+// watchdog against it, and returns the context to dial with, the watchdog
+// (nil when disabled — all methods are nil-safe), and a release func the
+// caller must defer. Used by streamTurn, evaluateGoal, and the compaction
+// summarizer alike: the evaluator runs at every goal turn boundary and
+// maybeAutoCompact at the top of every Prompt, so an unwatched silent
+// stream at either site wedges the session exactly the way an unwatched
+// worker stream would — while holding the server's run slot.
+func (s *Session) armIdleWatchdog(ctx context.Context) (context.Context, *streamWatchdog, func()) {
+	if s.cfg.StreamIdleTimeout <= 0 {
+		return ctx, nil, func() {}
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	w := startStreamWatchdog(cancel, s.cfg.StreamIdleTimeout)
+	return ctx, w, func() {
+		w.stop()
+		cancel()
+	}
+}
+
 // startStreamWatchdog arms a watchdog that calls cancel if timeout elapses
 // with no kick. The caller must defer stop.
 func startStreamWatchdog(cancel context.CancelFunc, timeout time.Duration) *streamWatchdog {

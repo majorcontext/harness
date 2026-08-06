@@ -232,9 +232,15 @@ func (s *Session) runCompactionSummary(ctx context.Context, model message.ModelR
 		Messages:  append([]message.Message(nil), folded...),
 		MaxTokens: compactionMaxTokens,
 	}
+	// The summarizer's stream gets the same idle watchdog worker turns get
+	// (see armIdleWatchdog): maybeAutoCompact runs at the top of every
+	// Prompt, so a permanently silent summarizer stream would wedge the
+	// very turn it was trying to protect.
+	ctx, watch, release := s.armIdleWatchdog(ctx)
+	defer release()
 	stream, err := prov.Stream(ctx, req)
 	if err != nil {
-		return "", provider.Usage{}, err
+		return "", provider.Usage{}, watch.explain(err)
 	}
 	defer stream.Close()
 
@@ -243,6 +249,7 @@ func (s *Session) runCompactionSummary(ctx context.Context, model message.ModelR
 	var usage provider.Usage
 	for {
 		ev, err := stream.Next()
+		watch.kick()
 		// Identity comparison, deliberately not errors.Is: a truncated
 		// stream's classified error wraps an underlying io.EOF, and
 		// folding real history into a summary the model never finished is
@@ -252,7 +259,7 @@ func (s *Session) runCompactionSummary(ctx context.Context, model message.ModelR
 			break
 		}
 		if err != nil {
-			return "", provider.Usage{}, err
+			return "", provider.Usage{}, watch.explain(err)
 		}
 		switch ev.Type {
 		case provider.EventTextDelta:
