@@ -431,6 +431,20 @@ const goalPartCap = 4096
 // evaluateGoal's callers — it just counts as one failed evaluator boundary.
 var errEvaluatorUnparseable = errors.New("engine: goal evaluator returned unparseable output twice in a row")
 
+// goalStreamTruncatedMaxAttempts bounds worker-turn attempts whose failure
+// is classified provider.RetryableStreamTruncated — a response stream that
+// died before its terminal event. Truncation is retryable (the 2026-08-06
+// incident's truncated turns were followed by clean successes minutes
+// later on the same model — the cut was a gateway's per-response ceiling,
+// not a dead provider) but it is NOT weather: waiting longer does not
+// raise a stream ceiling, and every retry re-prompts a full turn at full
+// input cost, so it must never ride goalRetryableMaxAttempts' 12-attempt/
+// ~30-minute schedule. Three attempts on the short goalRetryDelay
+// schedule (~5s of waiting total) is enough to survive an isolated cut;
+// exhaustion PARKS, same as every other tier, so a persistent ceiling
+// still never kills the goal.
+const goalStreamTruncatedMaxAttempts = 3
+
 // goalEvalFailureLimit is the number of CONSECUTIVE failed evaluator
 // boundaries (see goal.go's "Round 6" doc section) PursueGoal tolerates
 // before treating the evaluator as durably broken and clearing the goal. It
@@ -1343,7 +1357,7 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 // journaled once an UpdateGoal has moved the goal past this turn's
 // generation — see recordGoalStalled and PursueGoal's stale-discard handling.
 func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, turn int, gen uint64) (attempts int, err error) {
-	var deterministicAttempt, retryableAttempt int
+	var deterministicAttempt, retryableAttempt, truncatedAttempt int
 	for {
 		attempts++
 		toolsBefore := s.toolExecutions()
@@ -1356,12 +1370,19 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 			return attempts, err
 		}
 		class, retryable := provider.AsRetryable(err)
+		// Stream truncation is retryable-CLASS (it parks on exhaustion,
+		// carries its class on every stall record, and never spends the
+		// deterministic budget) but runs its OWN, much smaller budget on
+		// the SHORT schedule — see goalStreamTruncatedMaxAttempts for why
+		// it must ride neither of the other two tiers.
+		truncated := class == provider.RetryableStreamTruncated
 		// exhausted decides, for a retryable failure, whether THIS attempt
-		// is the one that exhausts goalRetryableMaxAttempts — computed
-		// before retryableAttempt is incremented below, so the comparison
-		// reads as "one more than the retries already spent, including this
-		// one, would meet or exceed the ceiling".
-		exhausted := retryable && retryableAttempt+1 >= goalRetryableMaxAttempts
+		// is the one that exhausts its tier's budget — computed before the
+		// tier counter is incremented below, so the comparison reads as
+		// "one more than the retries already spent, including this one,
+		// would meet or exceed the ceiling".
+		exhausted := retryable && ((truncated && truncatedAttempt+1 >= goalStreamTruncatedMaxAttempts) ||
+			(!truncated && retryableAttempt+1 >= goalRetryableMaxAttempts))
 		// The tool-execution gate is evaluated BEFORE the stall is
 		// journaled so the record's waiting flag tells the truth: an
 		// attempt that ran a tool and then failed is about to stop
@@ -1399,6 +1420,19 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 				return attempts, err
 			}
 			if werr := waitGoalRetryBackoff(ctx, deterministicAttempt); werr != nil {
+				return attempts, werr
+			}
+			continue
+		}
+		if truncated {
+			truncatedAttempt++
+			if exhausted {
+				return attempts, &goalRetryableExhaustedError{err: err, class: class}
+			}
+			// Short schedule, no jitter: a stream ceiling is hit by
+			// LONG turns, so attempts are naturally minutes apart already
+			// — the wait only needs to clear a momentary network blip.
+			if werr := waitGoalRetryBackoff(ctx, truncatedAttempt); werr != nil {
 				return attempts, werr
 			}
 			continue
@@ -1835,7 +1869,14 @@ func (s *Session) runEvaluator(ctx context.Context, condition string, evaluator 
 	var doneText string
 	for {
 		ev, err := stream.Next()
-		if errors.Is(err, io.EOF) {
+		// Identity comparison, deliberately not errors.Is: adapters return
+		// the LITERAL io.EOF only as the normal post-terminal
+		// end-of-iteration signal. A TRUNCATED stream's error (see
+		// provider.MarkStreamTruncated) wraps an underlying io.EOF, so
+		// errors.Is would match it too — and treat text cut off
+		// mid-verdict as a complete verdict, achieving (or re-prompting)
+		// a goal on words the evaluator never finished.
+		if err == io.EOF {
 			break
 		}
 		if err != nil {

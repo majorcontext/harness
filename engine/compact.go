@@ -243,7 +243,12 @@ func (s *Session) runCompactionSummary(ctx context.Context, model message.ModelR
 	var usage provider.Usage
 	for {
 		ev, err := stream.Next()
-		if errors.Is(err, io.EOF) {
+		// Identity comparison, deliberately not errors.Is: a truncated
+		// stream's classified error wraps an underlying io.EOF, and
+		// folding real history into a summary the model never finished is
+		// silent data loss — see goal.go's evaluateGoal loop for the same
+		// rule and TestCompactTruncatedSummaryNeverFolds.
+		if err == io.EOF {
 			break
 		}
 		if err != nil {
