@@ -198,3 +198,50 @@ func TestStreamNoAPIKey(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// TestStreamUsageFromMessageDelta: Bedrock-translating gateways (bifrost's
+// /anthropic route, captured live 2026-08-06) emit message_start with ALL
+// usage fields zero and deliver the real input/cache counts in
+// message_delta's usage alongside output_tokens — the Bedrock convention of
+// usage-in-final-metadata, translated. Reading input usage only from
+// message_start meant input_tokens=0 on every turn of every session on that
+// route, which silently disarmed auto-compaction (its threshold sums the
+// input components). Nonzero input/cache fields in message_delta must win;
+// real Anthropic omits them there (zero), which must NOT clobber the
+// message_start values.
+func TestStreamUsageFromMessageDelta(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// Verbatim shape from the live bifrost capture: zeros up front...
+		io.WriteString(w, sse("message_start", `{"type":"message_start","message":{"id":"msg_1786049760","usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0}}}`)) //nolint:errcheck
+		io.WriteString(w, sse("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`))                                                                            //nolint:errcheck
+		io.WriteString(w, sse("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}`))                                                                            //nolint:errcheck
+		io.WriteString(w, sse("content_block_stop", `{"type":"content_block_stop","index":0}`))                                                                                                                        //nolint:errcheck
+		// ...real counts only here.
+		io.WriteString(w, sse("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":17,"cache_creation_input_tokens":3,"cache_read_input_tokens":5,"output_tokens":7}}`)) //nolint:errcheck
+		io.WriteString(w, sse("message_stop", `{"type":"message_stop"}`))                                                                                                                                              //nolint:errcheck
+	})
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+		MaxTokens: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	events := collect(t, s)
+	done := events[len(events)-1]
+	if done.Type != provider.EventDone {
+		t.Fatalf("last event = %v, want EventDone", done.Type)
+	}
+	if done.Usage.InputTokens != 17 {
+		t.Errorf("InputTokens = %d, want 17 (from message_delta)", done.Usage.InputTokens)
+	}
+	if done.Usage.CacheWriteTokens != 3 || done.Usage.CacheReadTokens != 5 {
+		t.Errorf("cache tokens = %d/%d, want 3/5 (from message_delta)", done.Usage.CacheWriteTokens, done.Usage.CacheReadTokens)
+	}
+	if done.Usage.OutputTokens != 7 {
+		t.Errorf("OutputTokens = %d, want 7", done.Usage.OutputTokens)
+	}
+}

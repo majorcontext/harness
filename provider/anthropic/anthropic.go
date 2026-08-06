@@ -390,7 +390,10 @@ func (s *stream) handle(name string, data []byte) error {
 				StopReason string `json:"stop_reason"`
 			} `json:"delta"`
 			Usage struct {
-				OutputTokens int `json:"output_tokens"`
+				InputTokens              int `json:"input_tokens"`
+				CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+				CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+				OutputTokens             int `json:"output_tokens"`
 			} `json:"usage"`
 		}
 		if err := json.Unmarshal(data, &ev); err != nil {
@@ -401,6 +404,25 @@ func (s *stream) handle(name string, data []byte) error {
 		}
 		if ev.Usage.OutputTokens > 0 {
 			s.usage.OutputTokens = ev.Usage.OutputTokens
+		}
+		// Input/cache counts normally arrive in message_start and are zero
+		// here (real Anthropic omits them from message_delta) — but a
+		// Bedrock-translating gateway (bifrost's /anthropic route, captured
+		// live 2026-08-06) emits message_start with ALL usage fields zero
+		// and delivers the real input/cache counts in message_delta
+		// instead, the Bedrock convention of usage-in-final-metadata.
+		// Nonzero values here win; zeros never clobber message_start's.
+		// Without this, every turn on such a route reported input_tokens=0,
+		// silently disarming auto-compaction (its threshold sums exactly
+		// these components).
+		if ev.Usage.InputTokens > 0 {
+			s.usage.InputTokens = ev.Usage.InputTokens
+		}
+		if ev.Usage.CacheCreationInputTokens > 0 {
+			s.usage.CacheWriteTokens = ev.Usage.CacheCreationInputTokens
+		}
+		if ev.Usage.CacheReadInputTokens > 0 {
+			s.usage.CacheReadTokens = ev.Usage.CacheReadInputTokens
 		}
 
 	case "message_stop":
