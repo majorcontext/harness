@@ -18,6 +18,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -245,6 +246,30 @@ type Options struct {
 	// what address this process is actually bound to — the safety
 	// property lives entirely in cmd/harness deciding WHEN to set it.
 	Unauthenticated bool
+	// Logger, when non-nil, receives structured turn-lifecycle and
+	// goal-lifecycle log lines: a "turn end" line at every recordTurnEnd
+	// call (INFO for outcome "completed", WARN otherwise), and WARN/INFO
+	// lines at the goal.* durable-record choke point (publishGoal) and the
+	// session.error choke point (emitDurableLocked). Nil (the default,
+	// e.g. every existing test harness and any caller that predates this
+	// field) disables all of it — every call site here nil-guards before
+	// touching it, so an unset Logger is exactly today's silent behavior,
+	// not a panic.
+	//
+	// This exists because of a field report (2026-08-06): a session ran
+	// 631 messages / 141k output tokens and produced ZERO log lines: an
+	// operator tailing `harness serve`'s stderr could not tell a box
+	// mid-turn from a dead one, because nothing on the turn/goal path ever
+	// logged anything — only boot/config/MCP wiring did. Codex's
+	// equivalent path logs every stream retry via a structured warn!
+	// (turn id, retries, max, delay); this field is the same bar applied
+	// to this server's own durable-record choke points, so an operator
+	// gets a heartbeat for the life of the box, not just at boot.
+	// `harness serve` (cmd/harness/main.go's serveCmd) wires its own
+	// `slog.NewJSONHandler(os.Stderr, nil)` logger in here; a caller
+	// embedding this package (e.g. tests) that wants no such logging
+	// simply leaves this zero.
+	Logger *slog.Logger
 }
 
 // Server implements http.Handler for the harness serve API.
@@ -816,6 +841,29 @@ func (s *Server) reportError(err error) {
 		return
 	}
 	s.opts.OnError(context.Background(), err)
+}
+
+// logInfo and logWarn forward to Options.Logger, nil-guarded: every call
+// site in journal.go's turn-lifecycle/goal-lifecycle choke points calls
+// these instead of repeating the nil check inline (a nil *slog.Logger
+// panics if a method is called on it directly, so the guard here is load-
+// bearing, not stylistic). Safe to call with s.mu held — unlike OnError,
+// slog never calls back into the Server, so there is no lock-ordering
+// hazard (see the mu doc comment above and writeJournalLocked, which
+// already does comparable I/O — a journal file write — under the same
+// lock).
+func (s *Server) logInfo(msg string, args ...any) {
+	if s.opts.Logger == nil {
+		return
+	}
+	s.opts.Logger.Info(msg, args...)
+}
+
+func (s *Server) logWarn(msg string, args ...any) {
+	if s.opts.Logger == nil {
+		return
+	}
+	s.opts.Logger.Warn(msg, args...)
 }
 
 // writeJSON marshals v to a buffer BEFORE writing anything to w: the status
