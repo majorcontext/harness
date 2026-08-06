@@ -287,7 +287,10 @@ func TestTranscodeToolCallEmptyArguments(t *testing.T) {
 			&message.ToolCall{CallID: "call_x", Name: "now"},
 		}},
 	))
-	call := probeItem(t, out.Input[len(out.Input)-1])
+	// The dangling ToolCall now gets a synthetic function_call_output
+	// appended after it (see TestTranscodeResolvesOrphanToolCalls), so the
+	// function_call itself is the second-to-last item.
+	call := probeItem(t, out.Input[len(out.Input)-2])
 	if call.Arguments != "{}" {
 		t.Errorf("empty arguments = %q", call.Arguments)
 	}
@@ -477,4 +480,61 @@ func jsonEqual(t *testing.T, a, b json.RawMessage) bool {
 	ab, _ := json.Marshal(av)
 	bb, _ := json.Marshal(bv)
 	return string(ab) == string(bb)
+}
+
+// TestTranscodeResolvesOrphanToolCalls: the Responses transcoder was the
+// one transcoder NOT calling message.ResolveOrphanToolCalls at request
+// build (anthropic and openaicompat both do — see their transcode.go and
+// message.ResolveOrphanToolCalls's incident doc), so an assistant ToolCall
+// with no following ToolResult transcoded to a dangling function_call item
+// the API rejects on every retry. The repair must run here too: the
+// dangling call gets a synthetic function_call_output immediately after.
+func TestTranscodeResolvesOrphanToolCalls(t *testing.T) {
+	req := &provider.Request{
+		Model: message.ModelRef{Provider: Family, Model: "gpt-x"},
+		Messages: []message.Message{
+			{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "run it"}}},
+			{Role: message.RoleAssistant, Parts: message.Parts{
+				&message.ToolCall{CallID: "call_orphan", Name: "bash", Arguments: []byte(`{}`)},
+			}},
+			// No tool message follows: the turn died before execution and
+			// the synthetic-result append was lost (crash window), or the
+			// history came from another producer entirely.
+			{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "continue"}}},
+		},
+		MaxTokens: 10,
+	}
+	out, err := transcodeRequest(req)
+	if err != nil {
+		t.Fatalf("transcodeRequest: %v", err)
+	}
+	var callIdx, outputIdx = -1, -1
+	for i, raw := range out.Input {
+		var item struct {
+			Type   string `json:"type"`
+			CallID string `json:"call_id"`
+		}
+		if err := json.Unmarshal(raw, &item); err != nil {
+			t.Fatalf("input item %d: %v", i, err)
+		}
+		switch item.Type {
+		case "function_call":
+			if item.CallID == "call_orphan" {
+				callIdx = i
+			}
+		case "function_call_output":
+			if item.CallID == "call_orphan" {
+				outputIdx = i
+			}
+		}
+	}
+	if callIdx == -1 {
+		t.Fatal("function_call item for the orphaned ToolCall not transcoded at all")
+	}
+	if outputIdx == -1 {
+		t.Fatal("no function_call_output synthesized for the orphaned ToolCall — the request ships dangling and the API will reject it")
+	}
+	if outputIdx != callIdx+1 {
+		t.Errorf("function_call_output at %d, want immediately after the call at %d", outputIdx, callIdx)
+	}
 }
