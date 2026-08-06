@@ -398,6 +398,35 @@ func TestClampManyImageCountExcludesToolResultsWhenNotRecursing(t *testing.T) {
 	}
 }
 
+func TestClampManyImageCountExcludesDroppedImages(t *testing.T) {
+	// 5 real 3000px images + 16 undecodable "images" = 21 image blobs by media
+	// type, but the undecodable ones become text placeholders and never reach
+	// the wire — so the request carries only 5 images, under the threshold, and
+	// the 3000px survivors must NOT be downscaled to the 2000 many-image cap.
+	parts := message.Parts{}
+	for i := 0; i < 5; i++ {
+		parts = append(parts, &message.Blob{MediaType: "image/png", Data: pngBytes(t, 3000, 100)})
+	}
+	for i := 0; i < 16; i++ {
+		parts = append(parts, &message.Blob{MediaType: "image/png", Data: []byte("not a png")})
+	}
+	out := Clamp([]message.Message{userMsg(parts...)}, baseLimits())
+
+	survivors := 0
+	for _, p := range out[0].Parts {
+		b, ok := p.(*message.Blob)
+		if !ok {
+			continue
+		}
+		if w, _ := decodeDims(t, b.Data); w == 3000 {
+			survivors++
+		}
+	}
+	if survivors != 5 {
+		t.Errorf("got %d surviving 3000px images, want 5: dropped images must not trip the many-image cap", survivors)
+	}
+}
+
 func TestClampManyImagesCountsPDFsTowardThreshold(t *testing.T) {
 	// 19 images + 2 PDFs = 21 blocks > threshold 20; on Bedrock/Vertex PDFs
 	// count too, so the stricter cap applies to the images.

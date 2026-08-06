@@ -267,10 +267,12 @@ func Clamp(msgs []message.Message, lim Limits) []message.Message {
 }
 
 // countImageDocBlocks counts the image and PDF blobs that will actually be
-// emitted, for the many-image rule. On Bedrock/Vertex document blocks count
-// toward the same threshold as images. It descends into tool-result content
-// only when recurse is set — an adapter that omits tool-result images on the
-// wire must not count them, or an unrelated image gets needlessly downscaled.
+// emitted as blocks on the wire, for the many-image rule. On Bedrock/Vertex
+// document blocks count toward the same threshold as images. It descends into
+// tool-result content only when recurse is set (an adapter that omits
+// tool-result images must not count them) and skips a blob that normalizeBlob
+// will turn into a text placeholder — otherwise a dropped or nested-but-omitted
+// image needlessly downscales the images that DO reach the wire.
 func countImageDocBlocks(msgs []message.Message, recurse bool) int {
 	n := 0
 	var walk func(parts message.Parts)
@@ -278,7 +280,7 @@ func countImageDocBlocks(msgs []message.Message, recurse bool) int {
 		for _, p := range parts {
 			switch v := p.(type) {
 			case *message.Blob:
-				if strings.HasPrefix(v.MediaType, "image/") || v.MediaType == "application/pdf" {
+				if emitsAsBlock(v) {
 					n++
 				}
 			case *message.ToolResult:
@@ -292,6 +294,29 @@ func countImageDocBlocks(msgs []message.Message, recurse bool) int {
 		walk(msgs[i].Parts)
 	}
 	return n
+}
+
+// emitsAsBlock reports whether a blob reaches the wire as an image or document
+// block (rather than being replaced by a text placeholder), so the many-image
+// count matches what the provider actually sees. Whether a blob is dropped is
+// independent of the many-image cap — undecodable data and the absurd/area
+// memory guards do not depend on maxDim — so this can be decided header-only,
+// with the cap left at 0.
+func emitsAsBlock(b *message.Blob) bool {
+	if b.MediaType == "application/pdf" {
+		return true
+	}
+	if !strings.HasPrefix(b.MediaType, "image/") {
+		return false
+	}
+	if len(b.Data) == 0 {
+		return true // URL-referenced image: emitted as-is, not measurable here
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(b.Data))
+	if err != nil {
+		return false // undecodable -> placeholder
+	}
+	return classify(cfg.Width, cfg.Height, 0) != classDrop // absurd/area -> placeholder
 }
 
 // clampParts applies the clamp to a parts slice, descending into tool-result
