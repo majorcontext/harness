@@ -79,11 +79,16 @@ condition; after **every** turn an independent, TOOL-LESS evaluator model
 (parsed leniently). A NOT MET verdict re-prompts with a fixed-template guidance
 message carrying the reason; MET returns `Achieved`. `MaxTurns` (0 = unlimited)
 bounds it. Evaluation is advisory: a retryable-class provider error from the
-evaluator call rides the existing retryable backoff schedule in-boundary
-before the boundary counts as failed; two unparseable replies in a row (the
-second re-asked with a stricter prompt) or a non-retryable provider error also
-fail the boundary immediately. A failed boundary no longer clears the goal —
-it journals a durable `goal.eval_failed` record (carrying the consecutive
+evaluator call rides the matching in-boundary backoff before the boundary
+counts as failed — the long weather-tier schedule
+(`goalRetryableMaxAttempts`, ~30min) for `overloaded`/`rate_limited`/
+`server_error`, or the short stream-truncation tier
+(`goalStreamTruncatedMaxAttempts`, 3 attempts, ~5s) for a stream cut before
+its terminal event — `runEvaluatorWithRetry` mirrors `promptTurnWithRetry`'s
+own per-class split exactly (see below); two unparseable replies in a row
+(the second re-asked with a stricter prompt) or a non-retryable provider
+error also fail the boundary immediately. A failed boundary no longer
+clears the goal — it journals a durable `goal.eval_failed` record (carrying the consecutive
 failure count), substitutes a fixed evaluation-unavailable notice for the next
 turn's guidance in place of the evaluator's text, and `continue`s: the worker
 keeps working. Any later boundary that DOES parse a verdict (MET or NOT MET)
@@ -102,46 +107,94 @@ loop also emits `goal.*` engine events so the server journals them. Config
 `goal_evaluator_model` supplies the evaluator for `harness run -goal` and
 `POST /session/{id}/goal`.
 
-A worker-turn error (`s.Prompt` failing) is retried by `promptTurnWithRetry`:
-`goalWorkerRetries` (2) additional deterministic attempts (~5s total), or,
-for a provider error classified `provider.AsRetryable`, a separately
-budgeted `goalRetryableMaxAttempts` (12) backoff (~30min total) that never
-spends the deterministic budget — recording a `goal.stalled` record for
-every failed attempt either way, so the loop is never silent. Exhausting
-EITHER budget — or the non-idempotency gate stopping retries early once a
-tool has already executed this attempt — now PARKS the goal instead of
-clearing it: `PursueGoal` exits, journals a durable, CLASSIFIED `goal.parked`
-record (never raw provider error text — the same leak rule `goal.eval_failed`
-follows), and returns a distinct `*goalWorkerParkedError` sentinel
-(`engine.IsGoalWorkerParked`) WITHOUT calling `clearGoal` — `goalActive`
-stays true, the condition is untouched, generation-gated exactly like
-`goal.stalled`/`goal.eval_failed` so a park racing a concurrent `UpdateGoal`
-is silently discarded rather than attributed to a condition the model never
-saw. This supersedes both this package's earlier deterministic-tier clear
-and GitHub issue #61's in-loop retryable-tier self-re-arming `continue` — the
-latter pinned the run slot to the parked loop for the whole outage; exiting
-instead frees the slot, so a queued prompt dispatches as an ordinary turn
-during a long outage instead of only ever being injected mid-turn into a
-doomed attempt. Context overflow (issue #62) is the one deliberate exception
-and still clears immediately, never parks: no amount of waiting fixes an
-oversized request, so parking it would just be a slower-burning zombie
-instead of a fix. Parking has no streak horizon (unlike the evaluator's
-5-boundary terminal above) — every exhaustion parks immediately, and
-`DELETE /session/{id}/goal` remains the only clear path for a parked goal.
+A worker-turn error (`s.Prompt` failing) is retried by `promptTurnWithRetry`
+on one of THREE independent budgets, chosen by classification via
+`provider.AsRetryable` — never by matching error text. A deterministic
+failure (not classified retryable) gets `goalWorkerRetries` (2) additional
+attempts on the short schedule (~5s total: 1s, then 4s). A provider error
+classified `overloaded`/`rate_limited`/`server_error` gets a separately
+budgeted `goalRetryableMaxAttempts` (12) backoff (~30min total, jittered, 5s
+doubling to a 5min cap) that never spends the deterministic budget. A
+provider error classified `provider.RetryableStreamTruncated` — a response
+stream that died before its terminal event, with no HTTP status or inline
+error to classify from (see the idle-stream watchdog below) — gets its own
+`goalStreamTruncatedMaxAttempts` (3) budget on the SAME short schedule the
+deterministic tier uses (~5s total): truncation is retryable, but it is not
+weather — waiting longer never raises a stream ceiling, and every retry
+re-prompts a full turn at full input cost — so it must ride neither the fast
+deterministic budget nor the long weather-tier one. Every attempt records a
+`goal.stalled` record regardless of tier, so the loop is never silent.
+Exhausting ANY of the three budgets — or the non-idempotency gate stopping
+retries early once a tool has already executed this attempt — PARKS the goal
+instead of clearing it: `PursueGoal` exits, journals a durable, CLASSIFIED
+`goal.parked` record (never raw provider error text — the same leak rule
+`goal.eval_failed` follows), and returns a distinct `*goalWorkerParkedError`
+sentinel (`engine.IsGoalWorkerParked`) WITHOUT calling `clearGoal` —
+`goalActive` stays true, the condition is untouched, generation-gated exactly
+like `goal.stalled`/`goal.eval_failed` so a park racing a concurrent
+`UpdateGoal` is silently discarded rather than attributed to a condition the
+model never saw. This supersedes both this package's earlier
+deterministic-tier clear and GitHub issue #61's in-loop retryable-tier
+self-re-arming `continue` — the latter pinned the run slot to the parked loop
+for the whole outage; exiting instead frees the slot, so a queued prompt
+dispatches as an ordinary turn during a long outage instead of only ever
+being injected mid-turn into a doomed attempt. Context overflow (issue #62)
+is the one deliberate exception and still clears immediately, never parks:
+no amount of waiting fixes an oversized request, so parking it would just be
+a slower-burning zombie instead of a fix. Parking has no streak horizon
+(unlike the evaluator's 5-boundary terminal above) — every exhaustion parks
+immediately, and `DELETE /session/{id}/goal` remains the only clear path for
+a parked goal.
+
+An idle provider stream — one that goes silent with no bytes, no
+`EventDone`, no error, ever — is bounded by a per-request idle-stream
+watchdog (`engine/stream_watchdog.go`, `Config.StreamIdleTimeout`, config key
+`stream_idle_timeout_s`): every stream event resets its timer, and on expiry
+it cancels the request's child context and converts the resulting
+cancellation into a classified `provider.RetryableStreamTruncated` error
+instead of an anonymous "context canceled" — this is what feeds the
+stream-truncation tier above. It defaults to 5 minutes (mirroring Codex's
+`stream_idle_timeout_ms`), a negative value disables it, and it guards the
+worker turn, the goal evaluator, and the compaction summarizer's streams
+alike (`armIdleWatchdog` wraps all three, so a silent stream at any of them
+can no longer wedge the session forever while holding the run slot).
+
+Automatic compaction's over-threshold check
+(`maybeAutoCompact`/`estimatePromptTokensFromHistory`, `engine/compact.go`)
+has its own resilience fallback: a provider route that reports all-zero
+input usage on a turn that DID complete is treated as missing data, never as
+"0 tokens, never over" — the check falls back to a crude ~4-bytes-per-token
+estimate walked from the actual session history so the overflow-prevention
+layer keeps functioning instead of going permanently dark on that route,
+which otherwise runs to a hard context overflow that clears (never parks) an
+active goal.
 
 On the server, a worker-parked sentinel maps to `session.error` plus a
 distinct `turn.end outcome=worker_parked`, and `goalTracker` folds the
 durable `goal.parked` record into a third `paused` arm (`pause_reason:
 "worker_failure"`, alongside the existing boot-only `"restart"` and live
-`"provider-backoff"`) — `compositeState` forces `idle` for it exactly like a
-restart pause, since no loop is actually driving the goal, unlike
-provider-backoff, whose loop is merely waiting and keeps reading
-`goal-running`. Resume needs no new machinery: the existing activity-driven
+`"provider-backoff"`) — `compositeState` forces `idle` for it, and for a
+restart pause, unless a turn is actually running, which reads `busy`: forced
+idle must never mask a live turn (an ordinary prompt, or the resume prompt
+that eventually re-arms the goal, can be streaming while the goal itself
+sits parked), whereas provider-backoff's loop is merely waiting and keeps
+reading `goal-running` regardless of whether a turn happens to be running.
+Resume needs no new machinery: the existing activity-driven
 `maybeAutoArmGoal` re-arms any active goal — parked or not — the next time an
 ordinary prompt turn completes, resetting the `worker_failure` presentation;
 `runGoal`'s own tail deliberately never auto-arms (the same anti-churn
 property that already stops a freshly-parked goal from immediately
 respawning a loop against an empty queue).
+
+`harness serve` can also make this turn/goal lifecycle visible on stderr:
+`server.Options.Logger`, when set (`cmd/harness/main.go` wires a
+`slog.NewJSONHandler(os.Stderr, nil)` logger into it for `serveCmd`), emits a
+structured line at every `recordTurnEnd` call (INFO for outcome "completed",
+WARN otherwise) and at the `goal.*`/`session.error` durable-record choke
+points — a heartbeat for the life of the box instead of logging only at
+boot/config/MCP wiring, matching Codex's own structured stream-retry
+logging. Nil (the default) disables all of it; every call site nil-guards
+first, so an unset Logger is exactly the prior silent behavior.
 
 A worker-parked goal is also surfaced in-session, model-facing:
 `Session.goalParked` (set when a park lands, cleared at every `PursueGoal`

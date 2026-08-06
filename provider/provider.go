@@ -101,6 +101,20 @@ type Event struct {
 
 // Stream yields events for one model call. Next returns io.EOF after the
 // EventDone event has been consumed.
+//
+// That io.EOF MUST be the literal, unwrapped sentinel value on clean
+// termination — never wrapped or replaced by an adapter-specific error type.
+// Two engine consumers (engine/goal.go's evaluateGoal loop and
+// engine/compact.go's compaction summarizer) tell a clean end apart from a
+// truncated-stream failure via identity comparison (err == io.EOF),
+// deliberately not errors.Is: a stream cut before its terminal event is
+// wrapped by provider.MarkStreamTruncated (see provider/retryable.go) around
+// the underlying transport error — typically io.EOF itself, when the
+// connection simply closes early — so errors.Is(err, io.EOF) would report
+// true for BOTH a clean end and a truncation once that wrapping is in play,
+// and a consumer relying on it would silently fold an unfinished stream into
+// a "done" result. An adapter returning anything other than the literal
+// io.EOF on clean termination is a contract violation.
 type Stream interface {
 	Next() (Event, error)
 	Close() error
