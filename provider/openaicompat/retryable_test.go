@@ -54,3 +54,39 @@ func TestStreamHTTPErrorClassification(t *testing.T) {
 		})
 	}
 }
+
+// TestStreamTruncationClassification mirrors provider/anthropic's test of
+// the same name (see the 2026-08-06 incident described there): a stream cut
+// before the [DONE] sentinel — no HTTP error, no error payload, the body
+// just ends — must be classified provider.RetryableStreamTruncated, never
+// surface as a bare, deterministic-looking io.EOF.
+func TestStreamTruncationClassification(t *testing.T) {
+	c := testClient(t, "openrouter", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// A complete tool call, then the body ends with no finish_reason
+		// chunk and no [DONE].
+		io.WriteString(w, sseData(`{"id":"chatcmpl_1","model":"some/model","choices":[{"index":0,"delta":{"role":"assistant"}}]}`))                                             //nolint:errcheck
+		io.WriteString(w, sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_77","function":{"name":"bash","arguments":"{}"}}]}}]}`)) //nolint:errcheck
+	})
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:     message.ModelRef{Provider: "openrouter", Model: "m"},
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+		MaxTokens: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var streamErr error
+	for streamErr == nil {
+		var ev provider.Event
+		ev, streamErr = s.Next()
+		if streamErr == nil && ev.Type == provider.EventDone {
+			t.Fatal("stream reported EventDone despite the body ending before [DONE]")
+		}
+	}
+	class, ok := provider.AsRetryable(streamErr)
+	if !ok || class != provider.RetryableStreamTruncated {
+		t.Fatalf("AsRetryable(%v) = %q, %v; want %q, true", streamErr, class, ok, provider.RetryableStreamTruncated)
+	}
+}
