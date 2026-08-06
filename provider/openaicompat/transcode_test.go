@@ -146,7 +146,7 @@ func TestTranscodeUserImage(t *testing.T) {
 	out := mustTranscode(t, baseRequest(
 		message.Message{Role: message.RoleUser, Parts: message.Parts{
 			&message.Text{Text: "what is this"},
-			&message.Blob{MediaType: "image/png", Data: []byte{1, 2, 3}},
+			&message.Blob{MediaType: "image/png", Data: tinyPNG(t)},
 			&message.Blob{MediaType: "image/jpeg", URL: "https://example.com/x.jpg"},
 		}},
 	))
@@ -305,8 +305,8 @@ func TestTranscodeToolResultBlobNote(t *testing.T) {
 		message.Message{Role: message.RoleTool, Parts: message.Parts{
 			&message.ToolResult{CallID: "call_img", Content: message.Parts{
 				&message.Text{Text: "captured"},
-				&message.Blob{MediaType: "image/png", Data: []byte{1}},
-				&message.Blob{MediaType: "image/png", Data: []byte{2}},
+				&message.Blob{MediaType: "image/png", Data: tinyPNG(t)},
+				&message.Blob{MediaType: "image/png", Data: tinyPNG(t)},
 			}},
 		}},
 	))

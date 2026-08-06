@@ -7,9 +7,28 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/majorcontext/harness/imageclamp"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 )
+
+// imageLimits are the image caps imageclamp enforces for OpenAI-compatible
+// endpoints. This adapter commonly fronts Amazon Bedrock / Google Vertex (the
+// NEP-5109 incident path, via OpenRouter), so it carries their documented
+// constraints: 8000px per side, a stricter 2000px cap with >20 image/document
+// blocks, and 5MB base64 per image — the tightest per-image size limit of the
+// common OpenAI-compatible vision backends, so a clamped image is accepted by
+// any of them. TargetDim is 2576px (the most any model consumes). A proxy such
+// as OpenRouter may tolerate larger images, but 5MB guarantees the emitted
+// request is valid against the strictest documented origin.
+var imageLimits = imageclamp.Limits{
+	MaxDim:             8000,
+	TargetDim:          2576,
+	ManyImageThreshold: 20,
+	ManyImageDim:       2000,
+	MaxImageBytes:      5_000_000,
+	RecurseToolResults: false, // tool-result images are omitted on the wire
+}
 
 // apiRequest is the wire body for POST {base}/chat/completions, the wire
 // spoken by OpenAI-compatible chat-completions endpoints (OpenRouter,
@@ -133,7 +152,9 @@ func transcodeRequest(req *provider.Request, family string) (*apiRequest, error)
 	// ingest self-consistent (see engine/engine.go), but this backstops
 	// any OTHER producer of history. See message.ResolveOrphanToolCalls's
 	// doc comment for the full incident.
-	messages := message.ResolveOrphanToolCalls(req.Messages)
+	// imageLimits.RecurseToolResults is false: tool-result images are omitted
+	// on the wire (see toolResultOutput), so clamping them would be wasted work.
+	messages := imageclamp.Clamp(message.ResolveOrphanToolCalls(req.Messages), imageLimits)
 
 	for i := range messages {
 		m := &messages[i]
