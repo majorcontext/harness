@@ -164,3 +164,41 @@ func TestStreamActivityDuringToolArgumentStreaming(t *testing.T) {
 		t.Error("no EventActivity surfaced while tool-call arguments were streaming")
 	}
 }
+
+// TestStreamCommentHeartbeatCountsAsActivity mirrors provider/anthropic's
+// test of the same name: a ": heartbeat" SSE comment line (bifrost's
+// keepalive shape, maximhq/bifrost#5010) must surface as EventActivity.
+func TestStreamCommentHeartbeatCountsAsActivity(t *testing.T) {
+	c := testClient(t, "openrouter", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, ": heartbeat\n")                                                                                        //nolint:errcheck
+		io.WriteString(w, sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":"stop"}]}`)) //nolint:errcheck
+		io.WriteString(w, ": heartbeat\n")                                                                                        //nolint:errcheck
+		io.WriteString(w, sseDone)                                                                                                //nolint:errcheck
+	})
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:     message.ModelRef{Provider: "openrouter", Model: "m"},
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+		MaxTokens: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var activity int
+	for {
+		ev, err := s.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ev.Type == provider.EventActivity {
+			activity++
+		}
+	}
+	if activity < 2 {
+		t.Errorf("activity events = %d, want >= 2 (comment heartbeats must count as wire activity)", activity)
+	}
+}

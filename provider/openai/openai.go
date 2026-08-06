@@ -208,12 +208,19 @@ func (s *stream) readSSE() (name string, data []byte, err error) {
 			if name != "" || buf.Len() > 0 {
 				return name, buf.Bytes(), nil
 			}
+		case line[0] == ':':
+			// Keepalive heartbeat comment — see provider/anthropic's
+			// readSSE: surface it between events so Next emits
+			// EventActivity and idle watchdogs see the wire is alive.
+			if name == "" && buf.Len() == 0 {
+				return "", nil, nil
+			}
 		case len(line) > 6 && line[:6] == "event:":
 			name = trimSpaceLeft(line[6:])
 		case len(line) > 5 && line[:5] == "data:":
 			buf.WriteString(trimSpaceLeft(line[5:]))
 		}
-		// Comments and unknown fields are ignored per the SSE spec.
+		// Unknown fields are ignored per the SSE spec.
 	}
 }
 
