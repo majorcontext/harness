@@ -57,6 +57,18 @@ type goalProvider struct {
 	workerErrHit int
 	workerErr    error
 
+	// workerErrSeq, when non-empty, overrides workerErr for the first
+	// workerErrN failing worker calls: failing call k (0-indexed) returns
+	// workerErrSeq[min(k, len(workerErrSeq)-1)] instead of the single fixed
+	// workerErr — letting a test script an alternating sequence of failure
+	// classes (e.g. truncated, overloaded, truncated) within one attempt
+	// budget, to prove promptTurnWithRetry's three retry-tier counters
+	// (deterministic/retryable/truncated) are independent. Leave workerErrN
+	// set to (at least) len(workerErrSeq) so every scripted error is
+	// actually hit. Empty (the default) leaves workerErrN/workerErr
+	// behavior unchanged.
+	workerErrSeq []error
+
 	// workerCall counts every worker (tool-bearing) Stream call made so far
 	// (1-indexed once incremented). failWorkerCall, when > 0, makes exactly
 	// that call fail with workerErr instead of consuming a scripted turn or
@@ -74,7 +86,7 @@ type goalProvider struct {
 	// Round 6). Each failing call still counts against ei's position: the
 	// scripted eval turns are consumed only once the failures are
 	// exhausted.
-	evalErrN   int
+	evalErrN int
 	// evalDieN/evalDieHit/evalDieEvents/evalDieErr make the first evalDieN
 	// evaluator calls return a dyingStream: evalDieEvents delivered
 	// normally (typically text deltas — a partial verdict), then
@@ -90,8 +102,8 @@ type goalProvider struct {
 	// watchdog exists to cut.
 	evalHangN   int
 	evalHangHit int
-	evalErrHit int
-	evalErr    error
+	evalErrHit  int
+	evalErr     error
 
 	// onEvalStream, if set, is called synchronously at the very start of
 	// every evaluator (tool-less) Stream call, with the 1-based call
@@ -158,7 +170,14 @@ func (p *goalProvider) Stream(ctx context.Context, req *provider.Request) (provi
 		return nil, err
 	}
 	if p.workerErrHit < p.workerErrN {
+		idx := p.workerErrHit
 		p.workerErrHit++
+		if len(p.workerErrSeq) > 0 {
+			if idx >= len(p.workerErrSeq) {
+				idx = len(p.workerErrSeq) - 1
+			}
+			return nil, p.workerErrSeq[idx]
+		}
 		err := p.workerErr
 		if err == nil {
 			err = errors.New("fake transient provider error")

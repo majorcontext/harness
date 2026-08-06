@@ -118,8 +118,8 @@ func TestForcesIdlePauseIncludesWorkerFailure(t *testing.T) {
 //
 // Red-verified against the pre-fix compositeState (forceIdle checked before
 // running): the (true,true,true) and (true,false,true) cases both want
-// "busy"/"idle" respectively, but the pre-fix code returns "idle" for the
-// first case too, so this table failed at that case before the fix.
+// "busy"; the pre-fix code returned "idle" for both, so this table failed at
+// both cases before the fix.
 func TestCompositeStateForceIdleNeverMasksRunningTurn(t *testing.T) {
 	cases := []struct {
 		name                           string
@@ -131,6 +131,7 @@ func TestCompositeStateForceIdleNeverMasksRunningTurn(t *testing.T) {
 		{"forceIdle, not running, goalActive: idle (unchanged)", false, true, true, "idle"},
 		{"forceIdle, not running, no goalActive: idle (unchanged)", false, false, true, "idle"},
 		{"no forceIdle, goalActive: goal-running (unchanged)", false, true, false, "goal-running"},
+		{"no forceIdle, running, goalActive: goal-running wins over running (the precedence this fix reorders around)", true, true, false, "goal-running"},
 		{"no forceIdle, running, no goalActive: busy (unchanged)", true, false, false, "busy"},
 		{"no forceIdle, not running, no goalActive: idle (unchanged)", false, false, false, "idle"},
 	}
