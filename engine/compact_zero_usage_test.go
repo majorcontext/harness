@@ -31,10 +31,10 @@ func TestMaybeAutoCompactFallsBackToSizeEstimateOnZeroUsage(t *testing.T) {
 	bigText := strings.Repeat("x", 4000)              // 4000 bytes / 4 = 1000 estimated tokens alone
 
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
-		compactTurn("t1", zeroInputUsage), // call 1: no lastUsage yet, no trigger possible
-		compactTurn(bigText, zeroInputUsage), // call 2: lastUsage(t1) has zero usage, no trigger (history still small)
+		compactTurn("t1", zeroInputUsage),                                           // call 1: no lastUsage yet, no trigger possible
+		compactTurn(bigText, zeroInputUsage),                                        // call 2: lastUsage(t1) has zero usage, no trigger (history still small)
 		compactSummaryTurn("gist", provider.Usage{InputTokens: 5, OutputTokens: 5}), // the fallback-triggered compaction's own summarization call
-		compactTurn("t3", zeroInputUsage), // call 3: post-compaction, proceeds
+		compactTurn("t3", zeroInputUsage),                                           // call 3: post-compaction, proceeds
 	}}
 	s := NewSession(Config{
 		Providers:           provider.Registry{"test": prov},

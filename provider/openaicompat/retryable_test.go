@@ -65,7 +65,7 @@ func TestStreamTruncationClassification(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		// A complete tool call, then the body ends with no finish_reason
 		// chunk and no [DONE].
-		io.WriteString(w, sseData(`{"id":"chatcmpl_1","model":"some/model","choices":[{"index":0,"delta":{"role":"assistant"}}]}`))                                             //nolint:errcheck
+		io.WriteString(w, sseData(`{"id":"chatcmpl_1","model":"some/model","choices":[{"index":0,"delta":{"role":"assistant"}}]}`))                                               //nolint:errcheck
 		io.WriteString(w, sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_77","function":{"name":"bash","arguments":"{}"}}]}}]}`)) //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
@@ -99,7 +99,7 @@ func TestStreamMidChunkTruncationClassification(t *testing.T) {
 	c := testClient(t, "openrouter", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		io.WriteString(w, sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{"role":"assistant"}}]}`)) //nolint:errcheck
-		io.WriteString(w, `data: {"id":"chatcmpl_1","choices":[{"index":0,"delta":{"content":"par`)          //nolint:errcheck
+		io.WriteString(w, `data: {"id":"chatcmpl_1","choices":[{"index":0,"delta":{"content":"par`)            //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
 		Model:     message.ModelRef{Provider: "openrouter", Model: "m"},
@@ -130,7 +130,7 @@ func TestStreamActivityDuringToolArgumentStreaming(t *testing.T) {
 		io.WriteString(w, sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_77","function":{"name":"bash","arguments":""}}]}}]}`)) //nolint:errcheck
 		io.WriteString(w, sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"command\":\"ls\"}"}}]}}]}`))          //nolint:errcheck
 		io.WriteString(w, sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`))                                                       //nolint:errcheck
-		io.WriteString(w, sseDone)                                                                                                                                             //nolint:errcheck
+		io.WriteString(w, sseDone)                                                                                                                                              //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
 		Model:     message.ModelRef{Provider: "openrouter", Model: "m"},

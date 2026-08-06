@@ -122,7 +122,7 @@ func TestStreamTruncationClassification(t *testing.T) {
 		// Everything up to and including a COMPLETE tool_use block, then
 		// the body ends with no message_stop — the incident fingerprint
 		// (EOF exactly as a write_file call finished streaming).
-		io.WriteString(w, sse("message_start", `{"type":"message_start","message":{"id":"msg_01","usage":{"input_tokens":100}}}`))                                     //nolint:errcheck
+		io.WriteString(w, sse("message_start", `{"type":"message_start","message":{"id":"msg_01","usage":{"input_tokens":100}}}`))                                             //nolint:errcheck
 		io.WriteString(w, sse("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_77","name":"bash","input":{}}}`)) //nolint:errcheck
 		io.WriteString(w, sse("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"ls\"}"}}`))    //nolint:errcheck
 		io.WriteString(w, sse("content_block_stop", `{"type":"content_block_stop","index":0}`))                                                                                //nolint:errcheck
