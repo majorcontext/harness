@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -215,4 +217,30 @@ func TestStreamIdleWatchdogNegativeDisables(t *testing.T) {
 			t.Errorf("text = %q, want %q", msg.Parts.Text(), "late")
 		}
 	})
+}
+
+// TestStreamWatchdogExplainKeepsRealErrorIdentity: once the watchdog has
+// fired, explain must still pass a NON-cancellation error through untouched
+// — a real provider failure racing the timer (most pointedly a
+// context-overflow classification, whose clear-don't-park semantics are
+// deliberate) must never be laundered into a retryable truncation. Only the
+// watchdog's own cut — which always surfaces as the child context's
+// cancellation — is converted.
+func TestStreamWatchdogExplainKeepsRealErrorIdentity(t *testing.T) {
+	w := startStreamWatchdog(func() {}, time.Nanosecond)
+	defer w.stop()
+	for !w.fired.Load() {
+		// The nanosecond timer fires effectively immediately; spin until
+		// the flag is observable (bounded by the test binary timeout).
+		runtime.Gosched()
+	}
+	realErr := errors.New("anthropic: prompt is too long (invalid_request_error, HTTP 400)")
+	if got := w.explain(realErr); got != realErr { //nolint:errorlint // identity is the point
+		t.Fatalf("explain(real error) = %v, want the error returned unchanged", got)
+	}
+	cancelErr := fmt.Errorf("read: %w", context.Canceled)
+	got := w.explain(cancelErr)
+	if class, ok := provider.AsRetryable(got); !ok || class != provider.RetryableStreamTruncated {
+		t.Fatalf("explain(cancellation) = %v, want classified %q", got, provider.RetryableStreamTruncated)
+	}
 }

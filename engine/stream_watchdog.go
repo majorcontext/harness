@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -107,8 +108,17 @@ func (w *streamWatchdog) stop() {
 // underlying cancellation: chaining to context.Canceled would make every
 // retry loop's errors.Is(err, context.Canceled) abort check read the cut
 // as deliberate.
+//
+// The conversion requires BOTH fired and a cancellation-shaped err, not
+// fired alone: the watchdog's own cut always surfaces as the child
+// context's cancellation, so an error that does NOT chain to
+// context.Canceled arriving in the same instant the timer fires is a real
+// provider failure that must keep its own identity — most pointedly a
+// context-overflow classification, whose deliberate clear-don't-park
+// semantics (see AGENTS.md) would otherwise be laundered into a retryable
+// truncation.
 func (w *streamWatchdog) explain(err error) error {
-	if w == nil || err == nil || !w.fired.Load() {
+	if w == nil || err == nil || !w.fired.Load() || !errors.Is(err, context.Canceled) {
 		return err
 	}
 	return provider.MarkRetryable(
