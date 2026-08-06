@@ -852,11 +852,12 @@ func (s *Server) reportError(err error) {
 // site in journal.go's turn-lifecycle/goal-lifecycle choke points calls
 // these instead of repeating the nil check inline (a nil *slog.Logger
 // panics if a method is called on it directly, so the guard here is load-
-// bearing, not stylistic). Safe to call with s.mu held — unlike OnError,
-// slog never calls back into the Server, so there is no lock-ordering
-// hazard (see the mu doc comment above and writeJournalLocked, which
-// already does comparable I/O — a journal file write — under the same
-// lock).
+// bearing, not stylistic). Call these AFTER releasing s.mu — every
+// existing call site does (see recordTurnEnd, publishGoal, emitDurable):
+// slog never calls back into the Server, so there is no deadlock, but the
+// Logger sink is arbitrary I/O (a full stderr pipe, a suspended terminal)
+// and a stalled sink must never be able to block the server's global
+// mutex.
 func (s *Server) logInfo(msg string, args ...any) {
 	if s.opts.Logger == nil {
 		return
