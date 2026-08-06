@@ -254,3 +254,48 @@ func TestStreamCommentHeartbeatCountsAsActivity(t *testing.T) {
 		t.Errorf("activity events = %d, want >= 2 (comment heartbeats must count as wire activity)", activity)
 	}
 }
+
+// TestStreamInsaneOutputIndexRejected: itemAt grows the assembled-items
+// slice to whatever output_index the wire names, so a hostile or corrupt
+// stream naming output_index 177777777 forced a ~1.4GB allocation (found
+// by FuzzStreamDecode — the nightly job's fuzz worker died of resource
+// exhaustion "hung or terminated unexpectedly"), and a NEGATIVE index
+// panicked with index-out-of-range. Both must be rejected as protocol
+// errors instead.
+func TestStreamInsaneOutputIndexRejected(t *testing.T) {
+	for _, tc := range []struct{ name, idx string }{
+		{"huge", "20001"},
+		{"negative", "-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				io.WriteString(w, sse("response.output_text.delta", `{"type":"response.output_text.delta","output_index":`+tc.idx+`,"delta":"x"}`)) //nolint:errcheck
+				io.WriteString(w, sse("response.completed", `{"type":"response.completed","response":{"id":"resp_1"}}`))                            //nolint:errcheck
+			})
+			s, err := c.Stream(context.Background(), &provider.Request{
+				Model:     message.ModelRef{Provider: Family, Model: "m"},
+				Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+				MaxTokens: 10,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			var streamErr error
+			for streamErr == nil {
+				var ev provider.Event
+				ev, streamErr = s.Next()
+				if streamErr == nil && ev.Type == provider.EventDone {
+					t.Fatal("stream completed despite an out-of-range output_index")
+				}
+			}
+			if streamErr == io.EOF {
+				t.Fatal("stream ended cleanly, want a protocol error naming output_index")
+			}
+			if !strings.Contains(streamErr.Error(), "output_index") {
+				t.Errorf("err = %v, want it to name output_index", streamErr)
+			}
+		})
+	}
+}

@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"tYpe\":\"prompt.queued\",\"prompt\":{}}\n{\"tYpe\":\"prompt.queued\",\"prompt\":{}}")

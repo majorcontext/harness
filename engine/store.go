@@ -733,20 +733,39 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// exact same single-entry result as an in-place replacement.
 			if rec.Prompt != nil {
 				q := QueuedPrompt{ID: rec.Prompt.ID, Text: rec.Prompt.Text, Seq: rec.Prompt.Seq}
-				if q.Seq > 0 {
-					for i, p := range s.promptQueue {
-						if p.Seq == q.Seq {
-							s.promptQueue = append(s.promptQueue[:i], s.promptQueue[i+1:]...)
-							break
-						}
-					}
-					if q.Seq > s.enqueueSeq {
-						s.enqueueSeq = q.Seq
+				// Malformed-record guards (found by FuzzLoadSessionReplay):
+				// the live path can never write a queued record with ID <= 0
+				// (promptQueueNextID starts at 1) nor two records with the
+				// same ID (IDs are burned, never reused — see
+				// EnqueuePromptDurable), so either shape in a journal is
+				// corruption, not history. Folding them anyway would violate
+				// the queue's ID-uniqueness invariant (two ID-0 entries from
+				// two `{"prompt":{}}` lines) and a later dequeue-by-ID would
+				// remove an arbitrary one. Skip the record; same defensive
+				// posture as message.ResolveOrphanToolCalls at this layer.
+				valid := q.ID > 0
+				for _, p := range s.promptQueue {
+					if p.ID == q.ID {
+						valid = false
+						break
 					}
 				}
-				s.promptQueue = append(s.promptQueue, q)
-				if rec.Prompt.ID >= s.promptQueueNextID {
-					s.promptQueueNextID = rec.Prompt.ID + 1
+				if valid {
+					if q.Seq > 0 {
+						for i, p := range s.promptQueue {
+							if p.Seq == q.Seq {
+								s.promptQueue = append(s.promptQueue[:i], s.promptQueue[i+1:]...)
+								break
+							}
+						}
+						if q.Seq > s.enqueueSeq {
+							s.enqueueSeq = q.Seq
+						}
+					}
+					s.promptQueue = append(s.promptQueue, q)
+					if rec.Prompt.ID >= s.promptQueueNextID {
+						s.promptQueueNextID = rec.Prompt.ID + 1
+					}
 				}
 			}
 		case recPromptDequeued:

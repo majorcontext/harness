@@ -238,16 +238,28 @@ func trimSpaceLeft(s string) string {
 	return s
 }
 
-// itemAt returns the assembled item at output_index idx, growing the slice as
-// needed.
-func (s *stream) itemAt(idx int) *assembledItem {
+// maxOutputIndex bounds the output_index values itemAt accepts: the slice
+// grows to the index named on the wire, so an unbounded value is an
+// attacker/corruption-controlled allocation. FuzzStreamDecode found
+// output_index 177777777 forcing a ~1.4GB slice (the nightly fuzz worker
+// died of resource exhaustion), and a negative index panicked. Real
+// responses carry at most a few dozen output items; 10000 is generous
+// beyond any legitimate stream.
+const maxOutputIndex = 10000
+
+// itemAt returns the assembled item at output_index idx, growing the slice
+// as needed, or an error for an index no legitimate stream produces.
+func (s *stream) itemAt(idx int) (*assembledItem, error) {
+	if idx < 0 || idx > maxOutputIndex {
+		return nil, fmt.Errorf("openai: output_index %d out of range [0, %d]", idx, maxOutputIndex)
+	}
 	for len(s.items) <= idx {
 		s.items = append(s.items, nil)
 	}
 	if s.items[idx] == nil {
 		s.items[idx] = &assembledItem{}
 	}
-	return s.items[idx]
+	return s.items[idx], nil
 }
 
 func (s *stream) handle(name string, data []byte) error {
@@ -271,7 +283,10 @@ func (s *stream) handle(name string, data []byte) error {
 		if err := json.Unmarshal(data, &ev); err != nil {
 			return fmt.Errorf("openai: bad response.output_text.delta: %w", err)
 		}
-		it := s.itemAt(ev.OutputIndex)
+		it, err := s.itemAt(ev.OutputIndex)
+		if err != nil {
+			return err
+		}
 		if it.kind == "" {
 			it.kind = "message"
 		}
@@ -286,7 +301,10 @@ func (s *stream) handle(name string, data []byte) error {
 		if err := json.Unmarshal(data, &ev); err != nil {
 			return fmt.Errorf("openai: bad response.reasoning_summary_text.delta: %w", err)
 		}
-		it := s.itemAt(ev.OutputIndex)
+		it, err := s.itemAt(ev.OutputIndex)
+		if err != nil {
+			return err
+		}
 		if it.kind == "" {
 			it.kind = "reasoning"
 		}
@@ -310,7 +328,10 @@ func (s *stream) handle(name string, data []byte) error {
 		if err := json.Unmarshal(ev.Item, &head); err != nil {
 			return fmt.Errorf("openai: bad output item: %w", err)
 		}
-		it := s.itemAt(ev.OutputIndex)
+		it, err := s.itemAt(ev.OutputIndex)
+		if err != nil {
+			return err
+		}
 		switch head.Type {
 		case "function_call":
 			it.kind = "function_call"
