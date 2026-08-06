@@ -916,6 +916,24 @@ without knowing the incidents:
   `vcs.revision`/`vcs.time` — check that before hypothesizing that a fix is
   missing from a running process.
 
+## Writing Style
+
+You MUST use ASD-STE100 Simplified Technical English — the aerospace
+controlled-writing standard — for all prose you write in this repository
+(doc comments, docs/, commit messages, PR bodies, reports):
+
+- One word for one idea — pick a term and reuse it verbatim; a synonym
+  reads as a second concept.
+- Short sentences: ≤20 words for instructions, ≤25 for descriptions.
+- Active voice with an explicit subject ("Run `pnpm check-types`", not
+  "type checks should be run").
+- One topic per paragraph; simple common words ("use" not "utilize").
+- Name the thing — never "the code", "the system", "this"; name the
+  function, file, or table, with file:line when you have one.
+- No hedges or filler ("it's worth noting that", "in order to").
+- Exception: error messages, code, identifiers, and paths are quoted
+  verbatim, never simplified.
+
 ## Code Style
 
 - Standard Go conventions, `go fmt`, `go vet` clean.
