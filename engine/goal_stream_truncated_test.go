@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"strings"
 	"testing"
@@ -170,6 +171,169 @@ func TestPursueGoalStreamTruncatedBudgetExhaustedParks(t *testing.T) {
 	}
 	if parked != 1 {
 		t.Fatalf("goal.parked events = %d, want exactly 1", parked)
+	}
+}
+
+// TestPursueGoalMixedClassInterleavingBudgetsIndependent proves the three
+// retry counters in promptTurnWithRetry — deterministic, retryable
+// ("weather"), and truncated — are tracked independently, not sharing one
+// budget: an ALTERNATING sequence of failure classes within a single
+// worker-turn attempt loop (truncated, overloaded, truncated) must be
+// bounded by the SUM of the relevant tiers' per-class counters, each
+// evaluated against its OWN ceiling, not have an unrelated class's failure
+// count against — or exhaust — a different tier's budget. Neither the
+// truncated tier (goalStreamTruncatedMaxAttempts == 3, so 2 failures leaves
+// it short of exhaustion) nor the retryable tier (goalRetryableMaxAttempts
+// == 12, so 1 failure is nowhere near exhaustion) is anywhere close to its
+// own ceiling here, so recovery on the 4th attempt must succeed.
+func TestPursueGoalMixedClassInterleavingBudgetsIndependent(t *testing.T) {
+	orig := goalJitterFunc
+	t.Cleanup(func() { goalJitterFunc = orig })
+	goalJitterFunc = func(max time.Duration) time.Duration { return 0 }
+
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProvider{
+			workerErrN: 3,
+			workerErrSeq: []error{
+				truncatedProviderErr(),
+				retryableProviderErr(provider.RetryableOverloaded),
+				truncatedProviderErr(),
+			},
+			worker: [][]provider.Event{
+				asstTurn(provider.StopEndTurn, &message.Text{Text: "all done"}),
+			},
+			eval: [][]provider.Event{
+				evalTurn("MET: looks complete"),
+			},
+		}
+		var evs []Event
+		s := goalSession(t, prov, t.TempDir())
+		s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
+
+		start := time.Now()
+		res, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+		elapsed := time.Since(start)
+		if err != nil {
+			t.Fatalf("PursueGoal error = %v, want nil (each class's budget is far from exhausted)", err)
+		}
+		if !res.Achieved || res.Turns != 1 {
+			t.Fatalf("result = %+v, want achieved in 1 turn after recovering from the interleaved failures", res)
+		}
+
+		// The independent-budget claim is exactly this schedule: the two
+		// truncated failures each wait on the SHORT goalRetryDelay schedule
+		// (attempt 1, then attempt 2 of the truncated tier alone — the
+		// intervening overloaded failure does not advance it), and the one
+		// overloaded failure waits on the jittered (here zeroed)
+		// goalRetryableBackoff(1) — never the other tier's schedule, and
+		// never a schedule keyed to the combined attempt count instead of
+		// each tier's own.
+		want := goalRetryDelay(1) + goalRetryableDelay(1)/2 + goalRetryDelay(2)
+		if elapsed != want {
+			t.Errorf("elapsed = %v, want exactly %v (goalRetryDelay(1) + goalRetryableDelay(1)/2 + goalRetryDelay(2))", elapsed, want)
+		}
+
+		var gotClasses []string
+		for _, ev := range evs {
+			if ev.Type != EventGoalStalled {
+				continue
+			}
+			if !ev.GoalRetryable {
+				t.Errorf("goal.stalled event: GoalRetryable = false, want true (class %q)", ev.GoalRetryableClass)
+			}
+			if !ev.GoalWaiting {
+				t.Errorf("goal.stalled event: GoalWaiting = false, want true (no tier anywhere near exhausted)")
+			}
+			gotClasses = append(gotClasses, ev.GoalRetryableClass)
+		}
+		wantClasses := []string{
+			string(provider.RetryableStreamTruncated),
+			string(provider.RetryableOverloaded),
+			string(provider.RetryableStreamTruncated),
+		}
+		if strings.Join(gotClasses, ",") != strings.Join(wantClasses, ",") {
+			t.Errorf("goal.stalled classes = %v, want %v (the exact scripted interleaving)", gotClasses, wantClasses)
+		}
+	})
+}
+
+// TestPursueGoalTruncatedAfterToolExecutionParksImmediately mirrors
+// TestPursueGoalRetryableErrorAfterToolExecutionStillGated for the
+// truncated class specifically: the non-idempotency tool gate in
+// promptTurnWithRetry (see its doc comment) pre-empts EVERY retry tier,
+// including the truncated one added alongside the deterministic and
+// retryable("weather") tiers — a truncated failure on a LATER model call
+// within an attempt that already executed a tool must stop retrying
+// immediately and park on attempt 1, never entering the truncated tier's
+// own (short) backoff schedule.
+func TestPursueGoalTruncatedAfterToolExecutionParksImmediately(t *testing.T) {
+	var toolRuns int
+	testTool := Tool{
+		Def: provider.ToolDef{Name: "test_tool", Description: "test", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Run: func(ctx context.Context, s *Session, args json.RawMessage) (message.Parts, error) {
+			toolRuns++
+			return message.Parts{&message.Text{Text: "ok"}}, nil
+		},
+	}
+	prov := &goalProvider{
+		failWorkerCall: 2, // the SECOND worker call fails, after the first ran a tool
+		workerErr:      truncatedProviderErr(),
+		worker: [][]provider.Event{
+			asstTurn(provider.StopToolUse, toolCall("tc1", "test_tool", `{}`)),
+		},
+	}
+	var evs []Event
+	s := NewSession(Config{
+		Providers:    provider.Registry{prov.Name(): prov},
+		Model:        message.ModelRef{Provider: prov.Name(), Model: "m1"},
+		System:       []string{"base"},
+		SessionDir:   t.TempDir(),
+		Instructions: &InstructionsConfig{Disabled: true},
+		SkillsDirs:   []string{},
+		Tools:        []Tool{testTool},
+	})
+	s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
+
+	_, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+	if err == nil {
+		t.Fatal("PursueGoal succeeded, want error (the worker call after tool execution always fails)")
+	}
+	if !IsGoalWorkerParked(err) {
+		t.Fatalf("err = %v, want IsGoalWorkerParked", err)
+	}
+	if toolRuns != 1 {
+		t.Errorf("tool executions = %d, want exactly 1 (a retry must not re-run it)", toolRuns)
+	}
+	if prov.workerCall != 2 {
+		t.Errorf("worker provider calls = %d, want exactly 2 (no third attempt after a post-tool-execution failure, even for the truncated class)", prov.workerCall)
+	}
+
+	var stalled, parked int
+	for _, ev := range evs {
+		switch ev.Type {
+		case EventGoalStalled:
+			stalled++
+		case EventGoalParked:
+			parked++
+			if !ev.GoalRetryable {
+				t.Errorf("goal.parked event: GoalRetryable = false, want true (stream truncation is a retryable class)")
+			}
+			if ev.GoalRetryableClass != string(provider.RetryableStreamTruncated) {
+				t.Errorf("goal.parked event: GoalRetryableClass = %q, want %q", ev.GoalRetryableClass, provider.RetryableStreamTruncated)
+			}
+			if ev.GoalAttempts != 1 {
+				t.Errorf("goal.parked event: GoalAttempts = %d, want 1 (the gate stops after the first attempt)", ev.GoalAttempts)
+			}
+		}
+	}
+	if stalled != 1 {
+		t.Errorf("goal.stalled events = %d, want 1 (retries stop after the first, post-tool-execution failure)", stalled)
+	}
+	if parked != 1 {
+		t.Errorf("goal.parked events = %d, want 1", parked)
+	}
+	if cond, ok := s.ActiveGoal(); !ok || cond != "cond" {
+		t.Errorf("ActiveGoal = %q, %v; want still active (parked, not cleared) after the non-idempotency gate stops retrying", cond, ok)
 	}
 }
 

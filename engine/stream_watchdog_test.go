@@ -29,9 +29,25 @@ func (p *stallProvider) Stream(ctx context.Context, _ *provider.Request) (provid
 // permanently silent without dying: no bytes, no EOF, no error. This is
 // the field report's missing-watchdog fingerprint (finding 2b): with no
 // idle bound, such a stream wedges the turn forever.
-type hangingStream struct{ ctx context.Context }
+//
+// entered, when non-nil, is closed the first time Next is entered — letting
+// a test synchronize on "the stream call is now blocked" instead of
+// sleeping a guessed duration before acting (e.g. cancelling a parent
+// context). Nil-safe: a zero-value hangingStream (entered == nil) behaves
+// exactly as before.
+type hangingStream struct {
+	ctx     context.Context
+	entered chan struct{}
+}
 
 func (s *hangingStream) Next() (provider.Event, error) {
+	if s.entered != nil {
+		select {
+		case <-s.entered:
+		default:
+			close(s.entered)
+		}
+	}
 	<-s.ctx.Done()
 	return provider.Event{}, s.ctx.Err()
 }
@@ -139,14 +155,59 @@ func TestStreamIdleWatchdogResetsOnActivity(t *testing.T) {
 	})
 }
 
+// hangingDialProvider's Stream never returns a Stream at all — it blocks
+// inside Stream itself until ctx is done, then returns ctx.Err(). This is
+// the OTHER half of the field report's missing-watchdog fingerprint: a
+// provider adapter can wedge during the dial (TLS handshake, connection
+// pool exhaustion, a DNS lookup that never resolves) just as easily as
+// during body reads, and streamTurn's doc comment (engine.go, armIdleWatchdog
+// call site) promises the watchdog is armed BEFORE the dial precisely so
+// this case is bounded too.
+type hangingDialProvider struct{}
+
+func (p *hangingDialProvider) Name() string { return "hangdial" }
+func (p *hangingDialProvider) Stream(ctx context.Context, _ *provider.Request) (provider.Stream, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// TestStreamIdleWatchdogCutsHangingDial: the watchdog must bound a hanging
+// DIAL (Stream itself never returning), not just a hanging in-stream read —
+// see hangingDialProvider's doc comment. Prompt must fail at exactly the
+// configured idle timeout, classified RetryableStreamTruncated, via the same
+// watch.explain path streamTurn runs the dial error through.
+func TestStreamIdleWatchdogCutsHangingDial(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := NewSession(Config{
+			Providers:         provider.Registry{"hangdial": &hangingDialProvider{}},
+			Model:             message.ModelRef{Provider: "hangdial", Model: "m"},
+			StreamIdleTimeout: 90 * time.Second,
+		})
+		start := time.Now()
+		_, err := s.Prompt(context.Background(), "go")
+		elapsed := time.Since(start)
+		if err == nil {
+			t.Fatal("Prompt against a permanently hanging dial succeeded, want watchdog cut")
+		}
+		if elapsed != 90*time.Second {
+			t.Errorf("elapsed = %v, want exactly 90s (the idle timeout)", elapsed)
+		}
+		class, ok := provider.AsRetryable(err)
+		if !ok || class != provider.RetryableStreamTruncated {
+			t.Fatalf("AsRetryable(%v) = %q, %v; want %q, true", err, class, ok, provider.RetryableStreamTruncated)
+		}
+	})
+}
+
 // TestStreamIdleWatchdogParentCancelStaysCanceled: a caller abort (POST
 // /abort cancelling the turn ctx) during a stalled stream must surface as
 // context.Canceled — never converted into a retryable truncation, or an
 // abort would trigger retries of the very turn the operator just killed.
 func TestStreamIdleWatchdogParentCancelStaysCanceled(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		entered := make(chan struct{})
 		prov := &stallProvider{mk: func(ctx context.Context) provider.Stream {
-			return &hangingStream{ctx: ctx}
+			return &hangingStream{ctx: ctx, entered: entered}
 		}}
 		s := NewSession(Config{
 			Providers:         provider.Registry{"stall": prov},
@@ -155,8 +216,8 @@ func TestStreamIdleWatchdogParentCancelStaysCanceled(t *testing.T) {
 		})
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
-			time.Sleep(10 * time.Second) // well inside the idle window
-			cancel()
+			<-entered // wait until the stream call is actually blocked in Next
+			cancel()  // well inside the idle window: no Sleep, no guessed deadline
 		}()
 		_, err := s.Prompt(ctx, "go")
 		if !errors.Is(err, context.Canceled) {
