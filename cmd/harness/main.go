@@ -495,6 +495,7 @@ func runCmd(args []string) error {
 		MCP:                 mcpRegistry(mcpMgr),
 		Processes:           processRegistry(procMgr),
 		ContextWindowTokens: cfg.ContextWindowTokens,
+		StreamIdleTimeout:   time.Duration(cfg.StreamIdleTimeoutS) * time.Second,
 		CompactionThreshold: cfg.CompactionThreshold,
 		CompactionKeepTurns: cfg.CompactionKeepTurns,
 		// GoalTool mirrors serveCmd's mkCfg below: the `goal` session tool is
@@ -987,6 +988,7 @@ func serveCmd(args []string) error {
 			MCP:                 mcpRegistry(mcpMgr),
 			Processes:           processRegistry(procMgr),
 			ContextWindowTokens: cfg.ContextWindowTokens,
+			StreamIdleTimeout:   time.Duration(cfg.StreamIdleTimeoutS) * time.Second,
 			CompactionThreshold: cfg.CompactionThreshold,
 			CompactionKeepTurns: cfg.CompactionKeepTurns,
 			// GoalTool enables the `goal` session tool (status/set/adjust)

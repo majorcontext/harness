@@ -362,6 +362,17 @@ type Config struct {
 	// otherwise dump megabytes into a single message and poison the session.
 	BashOutputCap int
 
+	// StreamIdleTimeout bounds the gap between consecutive provider
+	// stream events within one model call — an idle-stream watchdog, NOT
+	// a total-turn deadline (a legitimate long turn that keeps streaming
+	// is never cut). When a stream goes silent for this long, the request
+	// is cancelled and the failure surfaces classified
+	// provider.RetryableStreamTruncated, riding the same retry tier a
+	// dropped stream does. Zero defaults to 5 minutes — the same knob and
+	// default as Codex's stream_idle_timeout_ms (300_000), and far above
+	// any healthy stream's inter-event gap (adapters see provider
+	// keep-alive pings as events). Negative disables the watchdog.
+	StreamIdleTimeout time.Duration
 	// ContextWindowTokens is the model's context window size, in tokens.
 	// Zero (the default, a fresh Config's zero value) disables automatic
 	// compaction entirely: the engine has no built-in per-model table, so
@@ -559,6 +570,9 @@ func NewSession(cfg Config) *Session {
 func newSession(cfg Config) *Session {
 	if cfg.MaxTokens <= 0 {
 		cfg.MaxTokens = 8192
+	}
+	if cfg.StreamIdleTimeout == 0 {
+		cfg.StreamIdleTimeout = 5 * time.Minute
 	}
 	if cfg.BashTimeout <= 0 {
 		cfg.BashTimeout = 2 * time.Minute
@@ -1058,9 +1072,23 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 		s.cfg.OnRequest(turn, req)
 	}
 
+	// Idle-stream watchdog (see Config.StreamIdleTimeout): started BEFORE
+	// the dial so a Stream call that never returns is bounded too, kicked
+	// on every event, cut by cancelling the request's own child context —
+	// the same unblocking path a caller abort takes through the adapter's
+	// HTTP body read. All methods are nil-safe, so the disabled
+	// (negative-timeout) case costs nothing.
+	var watch *streamWatchdog
+	if s.cfg.StreamIdleTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		watch = startStreamWatchdog(cancel, s.cfg.StreamIdleTimeout)
+		defer watch.stop()
+	}
 	stream, err := prov.Stream(ctx, req)
 	if err != nil {
-		return nil, "", provider.Usage{}, err
+		return nil, "", provider.Usage{}, watch.explain(err)
 	}
 	defer stream.Close()
 
@@ -1074,6 +1102,11 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 	for {
 		ev, err := stream.Next()
 		if err != nil {
+			// A watchdog-cut stream surfaces here as the child context's
+			// cancellation; explain converts it into the classified
+			// idle-timeout error (and passes every other failure — parent
+			// aborts included — through untouched).
+			err = watch.explain(err)
 			if len(toolCalls) == 0 {
 				// No tool call was ever recorded this turn: nothing can
 				// be orphaned, so this is an ordinary turn failure —
@@ -1085,6 +1118,7 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 				partial: s.assemblePartial(text.String(), toolCalls),
 			}
 		}
+		watch.kick()
 		switch ev.Type {
 		case provider.EventTextDelta:
 			text.WriteString(ev.Text)
