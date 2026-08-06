@@ -1072,20 +1072,13 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 		s.cfg.OnRequest(turn, req)
 	}
 
-	// Idle-stream watchdog (see Config.StreamIdleTimeout): started BEFORE
-	// the dial so a Stream call that never returns is bounded too, kicked
-	// on every event, cut by cancelling the request's own child context —
-	// the same unblocking path a caller abort takes through the adapter's
-	// HTTP body read. All methods are nil-safe, so the disabled
-	// (negative-timeout) case costs nothing.
-	var watch *streamWatchdog
-	if s.cfg.StreamIdleTimeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithCancel(ctx)
-		defer cancel()
-		watch = startStreamWatchdog(cancel, s.cfg.StreamIdleTimeout)
-		defer watch.stop()
-	}
+	// Idle-stream watchdog (see Config.StreamIdleTimeout and
+	// armIdleWatchdog): armed BEFORE the dial so a Stream call that never
+	// returns is bounded too, kicked on every event, cut by cancelling the
+	// request's own child context — the same unblocking path a caller
+	// abort takes through the adapter's HTTP body read.
+	ctx, watch, release := s.armIdleWatchdog(ctx)
+	defer release()
 	stream, err := prov.Stream(ctx, req)
 	if err != nil {
 		return nil, "", provider.Usage{}, watch.explain(err)

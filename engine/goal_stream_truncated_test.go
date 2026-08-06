@@ -279,3 +279,95 @@ func TestCompactTruncatedSummaryNeverFolds(t *testing.T) {
 		}
 	}
 }
+
+// TestGoalEvaluatorHangingStreamCutByWatchdog: the idle-stream watchdog
+// must guard the EVALUATOR's stream too, not just worker turns — a
+// permanently silent evaluator stream otherwise wedges PursueGoal forever
+// while holding the server's run slot: no goal.eval_failed, no turn.end,
+// and the prompt queue never drains (review finding on the watchdog work;
+// strictly worse than the wedge the watchdog exists to bound). Here eval
+// call 1 hangs forever; the watchdog cuts it at the default 5m, the
+// in-boundary retry consumes the scripted verdict, and the goal achieves.
+func TestGoalEvaluatorHangingStreamCutByWatchdog(t *testing.T) {
+	orig := goalJitterFunc
+	t.Cleanup(func() { goalJitterFunc = orig })
+	goalJitterFunc = func(max time.Duration) time.Duration { return 0 }
+
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProvider{
+			worker: [][]provider.Event{
+				asstTurn(provider.StopEndTurn, &message.Text{Text: "did the work"}),
+			},
+			evalHangN: 1,
+			eval: [][]provider.Event{
+				evalTurn("MET: done"),
+			},
+		}
+		s := goalSession(t, prov, t.TempDir())
+
+		res, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+		if err != nil {
+			t.Fatalf("PursueGoal error = %v, want nil (the watchdog must cut the hanging evaluator stream)", err)
+		}
+		if !res.Achieved || res.Reason != "done" {
+			t.Fatalf("result = %+v, want achieved via the post-cut retry verdict", res)
+		}
+	})
+}
+
+// TestCompactHangingSummarizerCutByWatchdog: same guard for the compaction
+// summarizer stream — maybeAutoCompact runs at the top of every Prompt, so
+// a permanently silent summarizer stream would otherwise wedge the very
+// turn it was trying to protect.
+func TestCompactHangingSummarizerCutByWatchdog(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		prov := &hangingSummarizerProvider{
+			turns: [][]provider.Event{
+				compactTurn("one", provider.Usage{InputTokens: 10, OutputTokens: 5}),
+				compactTurn("two", provider.Usage{InputTokens: 20, OutputTokens: 5}),
+				compactTurn("three", provider.Usage{InputTokens: 30, OutputTokens: 5}),
+			},
+			hangOn: 4, // the summarization call
+		}
+		s := NewSession(Config{
+			Providers: provider.Registry{"test": prov},
+			Model:     message.ModelRef{Provider: "test", Model: "m1"},
+		})
+		runTurns(t, s, 3)
+		before := len(s.History())
+
+		start := time.Now()
+		_, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
+		if err == nil {
+			t.Fatal("Compact with a hanging summarizer stream succeeded, want a watchdog cut")
+		}
+		if got := time.Since(start); got != 5*time.Minute {
+			t.Errorf("elapsed = %v, want exactly 5m (the default idle timeout)", got)
+		}
+		if got := len(s.History()); got != before {
+			t.Fatalf("history = %d messages after failed compact, want %d untouched", got, before)
+		}
+	})
+}
+
+// hangingSummarizerProvider serves scripted turns, then returns a
+// ctx-blocking hangingStream for call number hangOn (1-indexed).
+type hangingSummarizerProvider struct {
+	name   string
+	turns  [][]provider.Event
+	hangOn int
+	call   int
+}
+
+func (p *hangingSummarizerProvider) Name() string { return "test" }
+
+func (p *hangingSummarizerProvider) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
+	p.call++
+	if p.call == p.hangOn {
+		return &hangingStream{ctx: ctx}, nil
+	}
+	if p.call-1 >= len(p.turns) {
+		return nil, io.ErrUnexpectedEOF
+	}
+	return &scriptedStream{events: p.turns[p.call-1]}, nil
+}

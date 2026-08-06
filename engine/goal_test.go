@@ -84,6 +84,12 @@ type goalProvider struct {
 	evalDieHit    int
 	evalDieEvents []provider.Event
 	evalDieErr    error
+	// evalHangN/evalHangHit make the first evalHangN evaluator calls return
+	// a hangingStream (see stream_watchdog_test.go): permanently silent,
+	// unblocked only by the request context — the shape the idle-stream
+	// watchdog exists to cut.
+	evalHangN   int
+	evalHangHit int
 	evalErrHit int
 	evalErr    error
 
@@ -131,6 +137,10 @@ func (p *goalProvider) Stream(ctx context.Context, req *provider.Request) (provi
 		if p.evalDieHit < p.evalDieN {
 			p.evalDieHit++
 			return &dyingStream{events: p.evalDieEvents, err: p.evalDieErr}, nil
+		}
+		if p.evalHangHit < p.evalHangN {
+			p.evalHangHit++
+			return &hangingStream{ctx: ctx}, nil
 		}
 		if p.ei >= len(p.eval) {
 			return &scriptedStream{}, nil
