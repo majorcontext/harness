@@ -231,6 +231,16 @@ func (s *stream) Next() (provider.Event, error) {
 		if err := s.handle(name, data); err != nil {
 			return provider.Event{}, err
 		}
+		if len(s.queue) == 0 && !s.done {
+			// The wire event was handled but queued nothing consumer-
+			// visible (ping, input_json_delta, message_start, ...).
+			// Surface it as activity instead of looping into another
+			// blocking read, so a consumer timing Next returns (the
+			// engine's idle-stream watchdog) sees the wire is alive — a
+			// large tool-argument block otherwise streams for minutes
+			// with zero events. See provider.EventActivity.
+			return provider.Event{Type: provider.EventActivity}, nil
+		}
 	}
 }
 
@@ -241,9 +251,12 @@ func (s *stream) readSSE() (name string, data []byte, err error) {
 	for {
 		line, err := s.r.ReadString('\n')
 		if err != nil {
-			if err == io.EOF && (name != "" || buf.Len() > 0) {
-				return name, buf.Bytes(), nil
-			}
+			// An event whose blank-line terminator never arrived is
+			// DISCARDED, per the SSE spec — never handed up as if
+			// complete. The cut can land anywhere (TCP fragmentation makes
+			// the boundary a coin flip), and parsing a mid-JSON fragment
+			// here used to surface a raw, deterministic-looking decode
+			// error that dodged Next's truncation classification.
 			return "", nil, err
 		}
 		line = trimEOL(line)

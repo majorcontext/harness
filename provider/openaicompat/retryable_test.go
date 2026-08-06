@@ -90,3 +90,77 @@ func TestStreamTruncationClassification(t *testing.T) {
 		t.Fatalf("AsRetryable(%v) = %q, %v; want %q, true", streamErr, class, ok, provider.RetryableStreamTruncated)
 	}
 }
+
+// TestStreamMidChunkTruncationClassification mirrors provider/anthropic's
+// TestStreamMidEventTruncationClassification: a data line cut mid-JSON with
+// no trailing newline must classify as stream truncation, not surface as a
+// raw "bad chunk" parse error the retry tiers treat as deterministic.
+func TestStreamMidChunkTruncationClassification(t *testing.T) {
+	c := testClient(t, "openrouter", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{"role":"assistant"}}]}`)) //nolint:errcheck
+		io.WriteString(w, `data: {"id":"chatcmpl_1","choices":[{"index":0,"delta":{"content":"par`)          //nolint:errcheck
+	})
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:     message.ModelRef{Provider: "openrouter", Model: "m"},
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+		MaxTokens: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var streamErr error
+	for streamErr == nil {
+		_, streamErr = s.Next()
+	}
+	class, ok := provider.AsRetryable(streamErr)
+	if !ok || class != provider.RetryableStreamTruncated {
+		t.Fatalf("AsRetryable(%v) = %q, %v; want %q, true", streamErr, class, ok, provider.RetryableStreamTruncated)
+	}
+}
+
+// TestStreamActivityDuringToolArgumentStreaming mirrors provider/anthropic's
+// test of the same name: chunks whose only content is tool_call argument
+// deltas (buffered until the finish chunk) must surface as EventActivity so
+// the engine's idle-stream watchdog sees the wire is alive.
+func TestStreamActivityDuringToolArgumentStreaming(t *testing.T) {
+	c := testClient(t, "openrouter", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_77","function":{"name":"bash","arguments":""}}]}}]}`)) //nolint:errcheck
+		io.WriteString(w, sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"command\":\"ls\"}"}}]}}]}`))          //nolint:errcheck
+		io.WriteString(w, sseData(`{"id":"chatcmpl_1","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`))                                                       //nolint:errcheck
+		io.WriteString(w, sseDone)                                                                                                                                             //nolint:errcheck
+	})
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:     message.ModelRef{Provider: "openrouter", Model: "m"},
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+		MaxTokens: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var activity, sawDone bool
+	for {
+		ev, err := s.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch ev.Type {
+		case provider.EventActivity:
+			activity = true
+		case provider.EventDone:
+			sawDone = true
+		}
+	}
+	if !sawDone {
+		t.Fatal("stream never completed")
+	}
+	if !activity {
+		t.Error("no EventActivity surfaced while tool-call arguments were streaming")
+	}
+}

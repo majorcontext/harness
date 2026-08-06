@@ -143,3 +143,76 @@ func TestStreamTruncationClassification(t *testing.T) {
 		t.Fatalf("AsRetryable(%v) = %q, %v; want %q, true", streamErr, class, ok, provider.RetryableStreamTruncated)
 	}
 }
+
+// TestStreamMidEventTruncationClassification mirrors provider/anthropic's
+// test of the same name: an SSE event cut mid-JSON with no terminator must
+// classify as stream truncation, not a deterministic parse error.
+func TestStreamMidEventTruncationClassification(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse("response.created", `{"type":"response.created","response":{"id":"resp_1"}}`)) //nolint:errcheck
+		io.WriteString(w, "event: response.output_text.delta\ndata: {\"type\":\"resp")                       //nolint:errcheck
+	})
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+		MaxTokens: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var streamErr error
+	for streamErr == nil {
+		_, streamErr = s.Next()
+	}
+	class, ok := provider.AsRetryable(streamErr)
+	if !ok || class != provider.RetryableStreamTruncated {
+		t.Fatalf("AsRetryable(%v) = %q, %v; want %q, true", streamErr, class, ok, provider.RetryableStreamTruncated)
+	}
+}
+
+// TestStreamActivityDuringSilentWireEvents mirrors provider/anthropic's
+// TestStreamActivityDuringToolArgumentStreaming: wire events that queue no
+// content (response.created, unrecognized delta kinds) must surface as
+// EventActivity so the engine's idle-stream watchdog sees the wire is alive.
+func TestStreamActivityDuringSilentWireEvents(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse("response.created", `{"type":"response.created","response":{"id":"resp_1"}}`))                                                                                              //nolint:errcheck
+		io.WriteString(w, sse("response.function_call_arguments.delta", `{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"comm"}`))                                          //nolint:errcheck
+		io.WriteString(w, sse("response.output_item.done", `{"type":"response.output_item.done","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_77","name":"bash","arguments":"{}"}}`)) //nolint:errcheck
+		io.WriteString(w, sse("response.completed", `{"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":1,"output_tokens":1}}}`))                                             //nolint:errcheck
+	})
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+		MaxTokens: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var activity, sawDone bool
+	for {
+		ev, err := s.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch ev.Type {
+		case provider.EventActivity:
+			activity = true
+		case provider.EventDone:
+			sawDone = true
+		}
+	}
+	if !sawDone {
+		t.Fatal("stream never completed")
+	}
+	if !activity {
+		t.Error("no EventActivity surfaced for silent wire events")
+	}
+}
