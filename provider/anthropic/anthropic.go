@@ -265,12 +265,24 @@ func (s *stream) readSSE() (name string, data []byte, err error) {
 			if name != "" || buf.Len() > 0 {
 				return name, buf.Bytes(), nil
 			}
+		case line[0] == ':':
+			// A comment line is a keepalive heartbeat (bifrost sends
+			// ": heartbeat" every second on idle streams —
+			// maximhq/bifrost#5010). It carries no event, but it IS wire
+			// activity: hand it up between events so Next surfaces
+			// EventActivity and the engine's idle watchdog sees the
+			// stream is alive. A comment INSIDE a partially-read event
+			// (name or data already buffered) stays skipped — the event's
+			// own arrival is the activity signal there.
+			if name == "" && buf.Len() == 0 {
+				return "", nil, nil
+			}
 		case len(line) > 6 && line[:6] == "event:":
 			name = trimSpaceLeft(line[6:])
 		case len(line) > 5 && line[:5] == "data:":
 			buf.WriteString(trimSpaceLeft(line[5:]))
 		}
-		// Comments and unknown fields are ignored per the SSE spec.
+		// Unknown fields are ignored per the SSE spec.
 	}
 }
 

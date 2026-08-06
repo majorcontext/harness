@@ -295,6 +295,11 @@ func (s *stream) Next() (provider.Event, error) {
 			// retryable.
 			return provider.Event{}, provider.MarkStreamTruncated(err)
 		}
+		if line == nil {
+			// readDataLine's comment marker: a keepalive heartbeat, wire
+			// activity with no payload — never handed to handle.
+			return provider.Event{Type: provider.EventActivity}, nil
+		}
 		if err := s.handle(line); err != nil {
 			return provider.Event{}, err
 		}
@@ -327,9 +332,16 @@ func (s *stream) readDataLine() ([]byte, error) {
 		if payload, ok := dataPayload(line); ok {
 			return payload, nil
 		}
-		// Blank lines and non-"data:" fields (comments, "event:", ...) are
-		// ignored: this wire never sends anything but data lines in
-		// practice, but skipping keeps the reader spec-compliant.
+		if line != "" && line[0] == ':' {
+			// Keepalive heartbeat comment — see provider/anthropic's
+			// readSSE. A nil payload with nil error is the comment
+			// marker; Next surfaces it as EventActivity so idle
+			// watchdogs see the wire is alive.
+			return nil, nil
+		}
+		// Blank lines and non-"data:" fields ("event:", ...) are ignored:
+		// this wire never sends anything but data lines in practice, but
+		// skipping keeps the reader spec-compliant.
 	}
 }
 

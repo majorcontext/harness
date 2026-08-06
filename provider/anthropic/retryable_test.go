@@ -239,3 +239,48 @@ func TestStreamActivityDuringToolArgumentStreaming(t *testing.T) {
 		t.Error("no EventActivity surfaced while the tool call's arguments were streaming — the idle watchdog is blind for the whole block")
 	}
 }
+
+// TestStreamCommentHeartbeatCountsAsActivity: SSE comment lines are the
+// keepalive shape gateways actually send (bifrost's SendHeartbeat emits
+// ": heartbeat\n" every second on idle streams — maximhq/bifrost#5010,
+// added because intermediaries like Cloudflare cut silent connections).
+// readSSE used to skip comments silently inside its read loop, so a
+// heartbeat kept every OTHER timer on the path alive while this client's
+// own idle watchdog stayed blind and cut the healthy stream. A comment
+// line must surface as EventActivity.
+func TestStreamCommentHeartbeatCountsAsActivity(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse("message_start", `{"type":"message_start","message":{"id":"msg_01","usage":{"input_tokens":1}}}`)) //nolint:errcheck
+		io.WriteString(w, ": heartbeat\n")                                                                                       //nolint:errcheck
+		io.WriteString(w, ": heartbeat\n")                                                                                       //nolint:errcheck
+		io.WriteString(w, sse("message_stop", `{"type":"message_stop"}`))                                                        //nolint:errcheck
+	})
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+		MaxTokens: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var activity int
+	for {
+		ev, err := s.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ev.Type == provider.EventActivity {
+			activity++
+		}
+	}
+	// message_start contributes one activity event (it queues no content);
+	// the two heartbeat comments must contribute two more.
+	if activity < 3 {
+		t.Errorf("activity events = %d, want >= 3 (comment heartbeats must count as wire activity)", activity)
+	}
+}
