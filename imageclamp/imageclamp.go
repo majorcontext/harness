@@ -63,7 +63,13 @@
 // re-decoded, resampled, and re-encoded on EVERY subsequent turn until it
 // falls out of the context window — not once. The re-encode is deterministic
 // (same source bytes -> same clamped bytes), so a clamped image stays
-// prompt-cache-stable turn to turn despite being recomputed. The realistic
+// prompt-cache-stable turn to turn despite being recomputed — with one
+// intra-session exception: the many-image cap (Limits.ManyImageThreshold)
+// makes an image's clamped size depend on the request's total image/document
+// block count, so a request growing past the threshold downscales every image
+// to ManyImageDim and invalidates that cache prefix once at the boundary. This
+// is unavoidable and mirrors the provider's own server-side behavior (it too
+// applies the stricter cap by request block count). The realistic
 // incident image (100x8500, sub-megapixel) is cheap, but the cost recurs per
 // turn and is NOT serialized across sessions: a single build's peak holds the
 // decoded source (up to maxDecodePixels of RGBA, ~384 MB) plus the resample
