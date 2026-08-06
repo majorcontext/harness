@@ -132,6 +132,11 @@
   body {
     margin: 0; background: var(--surface); color: var(--text-1);
     font: 14px/1.5 var(--sans);
+    /* macOS renders text heavier than intended; grayscale antialiasing keeps
+       the mono/sans UI at the weight it was designed for. Set once on the root
+       so it covers every descendant. */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     /* No bottom padding on body: it sits BELOW the detail view's
        position:sticky composer, so scrolling into it un-pins the composer
        (it rides up by the padding height at max scroll). Breathing room at

@@ -118,7 +118,7 @@ func TestStreamInlineErrorClassification(t *testing.T) {
 func TestStreamTruncationClassification(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		io.WriteString(w, sse("response.created", `{"type":"response.created","response":{"id":"resp_1"}}`))                                                                                              //nolint:errcheck
+		io.WriteString(w, sse("response.created", `{"type":"response.created","response":{"id":"resp_1"}}`))                                                                                                        //nolint:errcheck
 		io.WriteString(w, sse("response.output_item.done", `{"type":"response.output_item.done","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_77","name":"bash","arguments":"{}"}}`)) //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
@@ -179,10 +179,10 @@ func TestStreamMidEventTruncationClassification(t *testing.T) {
 func TestStreamActivityDuringSilentWireEvents(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		io.WriteString(w, sse("response.created", `{"type":"response.created","response":{"id":"resp_1"}}`))                                                                                              //nolint:errcheck
-		io.WriteString(w, sse("response.function_call_arguments.delta", `{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"comm"}`))                                          //nolint:errcheck
+		io.WriteString(w, sse("response.created", `{"type":"response.created","response":{"id":"resp_1"}}`))                                                                                                        //nolint:errcheck
+		io.WriteString(w, sse("response.function_call_arguments.delta", `{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"comm"}`))                                                    //nolint:errcheck
 		io.WriteString(w, sse("response.output_item.done", `{"type":"response.output_item.done","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_77","name":"bash","arguments":"{}"}}`)) //nolint:errcheck
-		io.WriteString(w, sse("response.completed", `{"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":1,"output_tokens":1}}}`))                                             //nolint:errcheck
+		io.WriteString(w, sse("response.completed", `{"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":1,"output_tokens":1}}}`))                                                       //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
 		Model:     message.ModelRef{Provider: Family, Model: "m"},
@@ -223,10 +223,10 @@ func TestStreamActivityDuringSilentWireEvents(t *testing.T) {
 func TestStreamCommentHeartbeatCountsAsActivity(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		io.WriteString(w, ": heartbeat\n")                                                                                                                            //nolint:errcheck
-		io.WriteString(w, sse("response.created", `{"type":"response.created","response":{"id":"resp_1"}}`))                                                          //nolint:errcheck
-		io.WriteString(w, ": heartbeat\n")                                                                                                                            //nolint:errcheck
-		io.WriteString(w, sse("response.completed", `{"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":1,"output_tokens":1}}}`))         //nolint:errcheck
+		io.WriteString(w, ": heartbeat\n")                                                                                                                    //nolint:errcheck
+		io.WriteString(w, sse("response.created", `{"type":"response.created","response":{"id":"resp_1"}}`))                                                  //nolint:errcheck
+		io.WriteString(w, ": heartbeat\n")                                                                                                                    //nolint:errcheck
+		io.WriteString(w, sse("response.completed", `{"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":1,"output_tokens":1}}}`)) //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
 		Model:     message.ModelRef{Provider: Family, Model: "m"},

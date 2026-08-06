@@ -219,7 +219,7 @@ func TestStreamUsageFromMessageDelta(t *testing.T) {
 		io.WriteString(w, sse("content_block_stop", `{"type":"content_block_stop","index":0}`))                                                                                                                        //nolint:errcheck
 		// ...real counts only here.
 		io.WriteString(w, sse("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":17,"cache_creation_input_tokens":3,"cache_read_input_tokens":5,"output_tokens":7}}`)) //nolint:errcheck
-		io.WriteString(w, sse("message_stop", `{"type":"message_stop"}`))                                                                                                                                              //nolint:errcheck
+		io.WriteString(w, sse("message_stop", `{"type":"message_stop"}`))                                                                                                                                                //nolint:errcheck
 	})
 	s, err := c.Stream(context.Background(), &provider.Request{
 		Model:     message.ModelRef{Provider: Family, Model: "m"},
