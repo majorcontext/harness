@@ -169,6 +169,113 @@ func TestCompositeStateGoalRunningDuringBlockedWorker(t *testing.T) {
 	}
 }
 
+// TestCompositeStateBusyDuringForcedIdlePause is the integration-level red
+// test for the nimble-pizza incident (2026-08-06, live): a session whose
+// goal is worker-parked (pause_reason "worker_failure", forcesIdlePause==
+// true) read state="idle" even while an ordinary prompt turn was actively
+// streaming — an operator watching the monitor concluded the box was dead
+// mid-turn. forceIdle exists because no loop drives the GOAL; it must never
+// claim a running TURN isn't running. Mirrors
+// TestCompositeStateGoalRunningDuringBlockedWorker's shape (same dual GET
+// /session + GET /session/status check) but for the forceIdle case instead
+// of the plain goal-active case, and
+// TestAutoArmAfterRestartResetsPausePresentation's blockWorkerAfter
+// mid-turn-checkpoint technique.
+//
+// Red-verified: against the pre-fix compositeState (forceIdle checked
+// before running, unconditionally returning "idle"), the mid-turn
+// assertions below fail — state reads "idle" while an ordinary prompt turn
+// is provably still in flight.
+func TestCompositeStateBusyDuringForcedIdlePause(t *testing.T) {
+	prov := &goalProv{
+		name:       "test",
+		workerErrN: goalWorkerRetriesForTest + 1,
+		workerErr:  permanentWorkerErr(),
+		// The first goalWorkerRetriesForTest+1 tool-bearing calls are the
+		// goal loop's own failing attempts (workerErrN, counted before the
+		// blockWorkerAfter gate since goalProv.Stream checks blockWorkerAfter
+		// first but only blocks calls PAST the threshold) — they exhaust the
+		// deterministic retry budget and exit-park the goal. The very next
+		// tool-bearing call — the plain resume prompt's own turn, below —
+		// is the one blockWorkerAfter actually blocks, giving a
+		// deterministic mid-turn checkpoint.
+		blockWorkerAfter: goalWorkerRetriesForTest + 1,
+		started:          make(chan struct{}),
+	}
+	h := newGoalHarness(t, prov)
+	id := h.createSession("test/m1")
+	sse := h.openSSE("?from=0", "")
+
+	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond"})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
+	}
+	sse.collectUntilIdle(t) // the park's own turn-end and idle
+
+	mid := h.getPausedGoalView(id)
+	if mid.Goal == nil || !mid.Goal.Active || !mid.Goal.Paused || mid.Goal.PauseReason != "worker_failure" {
+		t.Fatalf("goal right after park = %+v, want active/paused/worker_failure", mid.Goal)
+	}
+	if mid.State != "idle" {
+		t.Fatalf("state right after park (nothing running) = %q, want idle", mid.State)
+	}
+
+	// An ordinary prompt now starts against the still-parked goal. Its own
+	// turn is the 4th tool-bearing call overall, which blockWorkerAfter
+	// blocks mid-stream — a deterministic window in which the goal is
+	// provably still worker-failure-paused AND the turn is provably still
+	// running.
+	resp, data = h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "hello"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt status %d: %s", resp.StatusCode, data)
+	}
+	var pr promptAsyncResponse
+	if err := json.Unmarshal(data, &pr); err != nil {
+		t.Fatal(err)
+	}
+	if pr.Status != "started" {
+		t.Fatalf("prompt response = %+v, want status=started (session was idle)", pr)
+	}
+	<-prov.started // the prompt's own worker call is now in flight and blocked
+
+	running := h.getPausedGoalView(id)
+	if running.Goal == nil || !running.Goal.Active || !running.Goal.Paused || running.Goal.PauseReason != "worker_failure" {
+		t.Fatalf("goal while the prompt turn is in flight = %+v, want unchanged active/paused/worker_failure", running.Goal)
+	}
+	if running.State != "busy" {
+		t.Errorf("state while an ordinary prompt turn is actively streaming = %q, want busy (a forced-idle goal pause must never mask a running turn)", running.State)
+	}
+
+	// /session/status must agree — the same compositeStateFor source.
+	resp, data = h.do("GET", "/session/status", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET status %d: %s", resp.StatusCode, data)
+	}
+	var statuses map[string]struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(data, &statuses); err != nil {
+		t.Fatal(err)
+	}
+	if statuses[id].State != "busy" {
+		t.Errorf("/session/status state = %q, want busy: %s", statuses[id].State, data)
+	}
+
+	// Teardown: this blocked call belongs to the plain prompt's own turn,
+	// not the goal loop, so clearing the goal alone doesn't cancel it —
+	// clear first (so the turn's own tail never auto-arms a fresh loop once
+	// it ends), then abort to release the blocked stream. Mirrors
+	// TestAutoArmAfterRestartResetsPausePresentation's identical teardown
+	// shape.
+	resp, _ = h.do("DELETE", "/session/"+id+"/goal", nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("clear goal status %d", resp.StatusCode)
+	}
+	_, _ = h.do("POST", "/session/"+id+"/abort", nil)
+}
+
 // TestWaitReturnsImmediatelyWhenConditionPreHolds covers the immediate-return
 // branch for both `until` values: a freshly created session is already idle
 // (until=idle holds at once) and has never had a goal (until=goal-done holds

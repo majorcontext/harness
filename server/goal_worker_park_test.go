@@ -105,6 +105,45 @@ func TestForcesIdlePauseIncludesWorkerFailure(t *testing.T) {
 	}
 }
 
+// TestCompositeStateForceIdleNeverMasksRunningTurn is the unit-level red
+// test for the nimble-pizza incident (2026-08-06, live): compositeState
+// checked forceIdle first and returned "idle" unconditionally, so a session
+// whose goal was worker-parked (forceIdle==true) read "idle" even while an
+// ordinary prompt turn was actively streaming (running==true) — an operator
+// watching the monitor concluded the box was dead mid-turn. The fix:
+// forceIdle&&running must read "busy" (never "goal-running" either —
+// goalActive must not win in the forceIdle case, that's the zombie-goal trap
+// forceIdle exists to close), and forceIdle&&!running must still read
+// "idle" exactly as before.
+//
+// Red-verified against the pre-fix compositeState (forceIdle checked before
+// running): the (true,true,true) and (true,false,true) cases both want
+// "busy"/"idle" respectively, but the pre-fix code returns "idle" for the
+// first case too, so this table failed at that case before the fix.
+func TestCompositeStateForceIdleNeverMasksRunningTurn(t *testing.T) {
+	cases := []struct {
+		name                           string
+		running, goalActive, forceIdle bool
+		want                           string
+	}{
+		{"forceIdle, running, goalActive: busy wins", true, true, true, "busy"},
+		{"forceIdle, running, no goalActive: busy wins", true, false, true, "busy"},
+		{"forceIdle, not running, goalActive: idle (unchanged)", false, true, true, "idle"},
+		{"forceIdle, not running, no goalActive: idle (unchanged)", false, false, true, "idle"},
+		{"no forceIdle, goalActive: goal-running (unchanged)", false, true, false, "goal-running"},
+		{"no forceIdle, running, no goalActive: busy (unchanged)", true, false, false, "busy"},
+		{"no forceIdle, not running, no goalActive: idle (unchanged)", false, false, false, "idle"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := compositeState(c.running, c.goalActive, c.forceIdle); got != c.want {
+				t.Errorf("compositeState(running=%v, goalActive=%v, forceIdle=%v) = %q, want %q",
+					c.running, c.goalActive, c.forceIdle, got, c.want)
+			}
+		})
+	}
+}
+
 // TestGoalTrackerPauseViewPrecedence locks in pauseView's three-way
 // precedence (Task 2): restart > worker_failure > provider-backoff.
 func TestGoalTrackerPauseViewPrecedence(t *testing.T) {
