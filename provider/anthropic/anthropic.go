@@ -222,7 +222,11 @@ func (s *stream) Next() (provider.Event, error) {
 		}
 		name, data, err := s.readSSE()
 		if err != nil {
-			return provider.Event{}, err
+			// Reaching this read at all means message_stop has not been
+			// seen (s.done, checked above, would have returned the normal
+			// end-of-iteration io.EOF) — so any read failure here is the
+			// stream dying mid-response: transient, classified retryable.
+			return provider.Event{}, provider.MarkStreamTruncated(err)
 		}
 		if err := s.handle(name, data); err != nil {
 			return provider.Event{}, err
