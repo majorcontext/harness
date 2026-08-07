@@ -1,6 +1,9 @@
 package message
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // wireNormalizePrefix marks the synthetic message IDs NormalizeForWire mints
 // for a newly inserted RoleTool message. It is deliberately distinct from
@@ -231,12 +234,20 @@ type partKey struct{ msgIdx, partIdx int }
 // a demoted part into a new, adjacent RoleUser message instead, which every
 // transcoder in this package accepts, keeping the canonical output
 // uniformly valid rather than provider-specific. A RoleAssistant message's
-// demoted parts stay demoted IN PLACE (never hoisted): a Text part is
-// already valid there on every transcoder (an assistant wire turn's content
-// is exactly the union of its parts, role-agnostic same as RoleUser), and
-// this is invariant 2's OWN violation this function exists to repair — a
+// demoted LABEL TEXT stays demoted IN PLACE: a Text part is already valid
+// there on every transcoder (an assistant wire turn's content is exactly
+// the union of its parts, role-agnostic same as RoleUser), and this is
+// invariant 2's OWN violation this function exists to repair — a
 // tool_result can never legally sit in an assistant-role wire block, but
-// ordinary text always can.
+// ordinary text always can. A demoted result's BLOB is different and is
+// NEVER left in place, even here: provider/openaicompat's
+// transcodeAssistantMessage rejects any Blob outright, and even where a
+// transcoder's own code has no such check (anthropic's transcodeBlob is
+// role-agnostic), the Anthropic Messages API itself rejects an image block
+// in an assistant turn — images are user-turn only (PR #108 round 5's
+// finding on this line). demoteToolResult's own doc comment and
+// buildSafeBlob cover the split in full; see demoteWireInvalidToolResults'
+// own rebuild loop below for where a surviving Blob is hoisted to instead.
 //
 // # Why the hoisted message lands after the whole RUN, not after one message
 //
@@ -356,10 +367,21 @@ func demoteWireInvalidToolResults(messages []Message) []Message {
 	out := make([]Message, 0, len(messages))
 	for ri, r := range runs {
 		if r.assistant {
-			// A demoted Text part is already valid right where it sits in
+			// A demoted label Text is already valid right where it sits in
 			// an assistant-role wire block on every transcoder — see this
 			// function's own doc comment for why only a non-assistant run
-			// needs the run-boundary hoist below.
+			// needs the run-boundary hoist below. A demoted Blob is
+			// DIFFERENT: it must NEVER be left in a RoleAssistant message
+			// (openaicompat's transcodeAssistantMessage rejects any Blob
+			// outright, and even where a transcoder's own code has no such
+			// check — anthropic's transcodeBlob is role-agnostic — the
+			// Anthropic Messages API itself rejects an image block in an
+			// assistant turn; images are user-turn only). So a
+			// buildSafeBlob surviving this demotion is collected across the
+			// WHOLE run, same as the non-assistant branch below, and hoisted
+			// into its own RoleUser message after the run's last message —
+			// never spliced into the run itself.
+			var hoistedBlobs Parts
 			for i := r.msgStart; i <= r.msgEnd; i++ {
 				m := messages[i]
 				var newParts Parts
@@ -367,7 +389,9 @@ func demoteWireInvalidToolResults(messages []Message) []Message {
 				for pi, p := range m.Parts {
 					tr, ok := p.(*ToolResult)
 					if ok && toDemote[partKey{i, pi}] {
-						newParts = append(newParts, demoteToolResult(tr)...)
+						label, blobs := demoteToolResult(tr)
+						newParts = append(newParts, label)
+						hoistedBlobs = append(hoistedBlobs, blobs...)
 						changed = true
 					} else {
 						newParts = append(newParts, p)
@@ -380,6 +404,13 @@ func demoteWireInvalidToolResults(messages []Message) []Message {
 				} else {
 					out = append(out, m)
 				}
+			}
+			if len(hoistedBlobs) > 0 {
+				out = append(out, Message{
+					ID:    fmt.Sprintf("%s%d-demoted-blobs", wireNormalizePrefix, ri),
+					Role:  RoleUser,
+					Parts: hoistedBlobs,
+				})
 			}
 			continue
 		}
@@ -407,7 +438,9 @@ func demoteWireInvalidToolResults(messages []Message) []Message {
 				switch v := p.(type) {
 				case *ToolResult:
 					hasDemoted = true
-					demoted = append(demoted, demoteToolResult(v)...)
+					label, blobs := demoteToolResult(v)
+					demoted = append(demoted, label)
+					demoted = append(demoted, blobs...)
 				case *ToolCall:
 					hasDemoted = true
 					demoted = append(demoted, demoteToolCall(v))
@@ -439,44 +472,86 @@ func demoteWireInvalidToolResults(messages []Message) []Message {
 	return out
 }
 
-// demoteToolResult renders tr as ordinary parts: a label Text first,
-// preserving every byte of its real Content's TEXT and its IsError flag in
-// readable form, followed by every Blob tr.Content carried, UNCHANGED and
-// in their original relative order — see demoteWireInvalidToolResults's
-// doc comment for why changing TYPE, not deleting or dropping bytes, is the
+// buildSafeBlob reports whether b can survive demotion as a REAL wire Blob
+// part without failing to BUILD on any of this package's three
+// transcoders, in the ONE position a demoted Blob is ever placed: a
+// RoleUser message (see demoteWireInvalidToolResults's own doc comment —
+// a survivingBlob is always hoisted there, never left in a RoleAssistant
+// one). Derived from reading each transcoder's own Blob handling, not
+// assumed:
+//
+//   - provider/anthropic/transcode.go's transcodeBlob (~line 277) accepts
+//     ANY MediaType — image/* becomes an "image" block, anything else a
+//     "document" block — as long as Data or URL is present; a blob with
+//     neither errors "blob has neither data nor url".
+//   - provider/openai/transcode.go's transcodeBlob (~line 298) accepts
+//     image/* (Data or URL) or application/pdf (Data only — a PDF by URL
+//     errors "is not supported"); anything else errors "unsupported blob
+//     media type".
+//   - provider/openaicompat/transcode.go's blobURL (~line 343) accepts
+//     ONLY image/* (Data or URL); anything else — including
+//     application/pdf, which openai alone tolerates — errors "unsupported
+//     blob media type". This is the narrowest of the three and forces the
+//     intersection below: no PDF (openaicompat has no wire form for one at
+//     all), and never a data-less, URL-less blob (every transcoder errors
+//     on that regardless of media type).
+func buildSafeBlob(b *Blob) bool {
+	return strings.HasPrefix(b.MediaType, "image/") && (len(b.Data) > 0 || b.URL != "")
+}
+
+// demoteToolResult renders tr as a label Text — preserving every byte of
+// its real Content's TEXT and its IsError flag in readable form — plus
+// any of tr's own Blobs that are buildSafeBlob, returned separately so the
+// caller can hoist them (see demoteWireInvalidToolResults's own doc
+// comment for why changing TYPE, not deleting or dropping bytes, is the
 // only valid repair for a tool_result that can never be wire-valid
-// wherever it sits.
+// wherever it sits).
 //
-// # Why the Blob survives as a real Part, not a count note
+// # Why a non-build-safe Blob is note-flattened, not kept as a real Part
 //
-// An earlier version of this function replaced every Blob with a bare
-// "[N image attachment(s) omitted]" note, discarding the bytes outright.
-// That is honest on provider/openai and provider/openaicompat — their own
-// toolResultOutput/blobURL helpers omit a tool-result image the same way,
-// because their wire shape for an ANSWERED tool_result has no image slot
-// at all — but it is a real fidelity regression on anthropic: a
-// tool_result Blob there transcodes to a genuine wire "image" block
-// (provider/anthropic/transcode.go's transcodeBlob), so an image-bearing
-// orphan or surplus result loses its pixels on this path where the
-// prior additive ResolveOrphanToolCalls left it a valid ToolResult and the
-// image survived (PR #108's finding 1). The caller already places this
-// function's returned Parts wherever the demoted label Text itself lands
-// — in place for a ToolResult stranded in an assistant-role wire block
-// (Blob is ordinary content there, same as Text), or in the hoisted
-// RoleUser message for a non-assistant run (Blob is an ordinary image on
-// every transcoder in a RoleUser message) — so keeping the Blob adjacent
-// to its label, rather than converting it to a note, costs nothing and
-// loses nothing.
-func demoteToolResult(tr *ToolResult) Parts {
+// An earlier version of this function kept EVERY Blob as a real Part
+// (PR #108's `02a0fa6`, fixing an anthropic-only fidelity loss where a
+// bare "[N image attachment(s) omitted]" note replaced a tool_result
+// Blob that anthropic transcodes to a genuine wire "image" block). That
+// went too far the other way: a demoted Blob is always hoisted into (or
+// left in) a RoleUser message, and provider/openai and
+// provider/openaicompat both hard-error building ANY request containing a
+// non-image/*, or data-less/URL-less, Blob there (see buildSafeBlob's own
+// doc comment) — turning the orphan/surplus-tool_result wedge this whole
+// file exists to fix back into a total request-BUILD failure for exactly
+// the blob-bearing shape (PR #108 round 5). A Blob that is NOT
+// buildSafeBlob is therefore folded into the label's own note instead,
+// naming its media type, exactly the trade provider/openai's and
+// provider/openaicompat's own toolResultOutput helpers already make for
+// EVERY tool-result Blob today — this file accepts the same trade for the
+// narrower non-build-safe case rather than shipping a request that cannot
+// build. A buildSafeBlob (the common case: a real screenshot with inline
+// data or a URL) still survives byte-for-byte, keeping anthropic's
+// fidelity win for that case.
+func demoteToolResult(tr *ToolResult) (label *Text, survivingBlobs Parts) {
 	body := tr.Content.Text()
-	var blobs Parts
+	var droppedTypes []string
 	for _, p := range tr.Content {
-		if b, ok := p.(*Blob); ok {
-			blobs = append(blobs, b)
+		b, ok := p.(*Blob)
+		if !ok {
+			continue
+		}
+		if buildSafeBlob(b) {
+			survivingBlobs = append(survivingBlobs, b)
+		} else {
+			droppedTypes = append(droppedTypes, fmt.Sprintf("%q", b.MediaType))
 		}
 	}
-	if len(blobs) > 0 {
-		note := fmt.Sprintf("[%d image attachment(s) attached below]", len(blobs))
+	if len(survivingBlobs) > 0 {
+		note := fmt.Sprintf("[%d image attachment(s) attached below]", len(survivingBlobs))
+		if body == "" {
+			body = note
+		} else {
+			body += "\n" + note
+		}
+	}
+	if len(droppedTypes) > 0 {
+		note := fmt.Sprintf("[%d attachment(s) omitted: %s]", len(droppedTypes), strings.Join(droppedTypes, ", "))
 		if body == "" {
 			body = note
 		} else {
@@ -488,12 +563,11 @@ func demoteToolResult(tr *ToolResult) Parts {
 	// barrier-blocked shape) or may not exist at all (the original
 	// zero-ToolCall-anywhere shape) — this label makes no claim either
 	// way, only that it could not be placed as a wire-valid answer.
-	label := fmt.Sprintf("tool result for call %q, not placed as an answer", tr.CallID)
+	labelStr := fmt.Sprintf("tool result for call %q, not placed as an answer", tr.CallID)
 	if tr.IsError {
-		label += " (reported as an error)"
+		labelStr += " (reported as an error)"
 	}
-	parts := Parts{&Text{Text: fmt.Sprintf("[%s]: %s", label, body)}}
-	return append(parts, blobs...)
+	return &Text{Text: fmt.Sprintf("[%s]: %s", labelStr, body)}, survivingBlobs
 }
 
 // demoteToolCall renders tc as a plain Text part, preserving its call id,

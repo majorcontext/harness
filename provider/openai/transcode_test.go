@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -583,6 +584,97 @@ func TestTranscodeOrphanToolResultBuildsSuccessfully(t *testing.T) {
 		if probed.CallID == "GHOST" {
 			t.Fatalf("GHOST survived as a %s item instead of being demoted to text: %s", probed.Type, item)
 		}
+	}
+}
+
+// TestTranscodeOrphanToolResultImageBlobArrivesAsRealImagePart is the
+// golden regression test for PR #108 round 5's finding on
+// message/wire_normalize.go:496: a demoted ToolResult's Blob used to
+// survive as a raw Part regardless of media type, and this adapter's own
+// transcodeBlob (~line 298) hard-errors building a request containing a
+// non-image/*, non-application/pdf Blob, or an application/pdf Blob
+// referenced by URL rather than inline data — turning the orphan-
+// tool_result wedge NormalizeForWire exists to fix back into a total
+// request-BUILD failure. This carries a build-safe image AND an
+// unsupported media type in the SAME demoted result: the request must
+// still build, the image must arrive as a real input_image part, and the
+// unsupported Blob must be note-flattened, never a raw content part.
+func TestTranscodeOrphanToolResultImageBlobArrivesAsRealImagePart(t *testing.T) {
+	png := tinyPNG(t)
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "GHOST", Content: message.Parts{
+				&message.Text{Text: "ORPHAN OUTPUT"},
+				&message.Blob{MediaType: "image/png", Data: png},
+				&message.Blob{MediaType: "audio/mpeg", Data: []byte{1, 2, 3}},
+			}},
+		}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "ok"}}},
+	))
+
+	wantImageURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+	var foundImage bool
+	var rendered strings.Builder
+	for i, item := range out.Input {
+		raw, err := json.Marshal(item)
+		if err != nil {
+			t.Fatalf("marshal item %d: %v", i, err)
+		}
+		rendered.Write(raw)
+		for _, c := range probeContents(t, item) {
+			if c.Type == "input_image" && c.ImageURL == wantImageURL {
+				foundImage = true
+			}
+			if strings.Contains(c.FileData, "audio") || strings.Contains(c.ImageURL, "audio") {
+				t.Fatalf("non-build-safe Blob survived as a raw content part: %+v", c)
+			}
+		}
+	}
+	if !foundImage {
+		t.Fatalf("demoted ToolResult's image did not arrive as a real input_image part: %s", rendered.String())
+	}
+	if !strings.Contains(rendered.String(), "audio/mpeg") {
+		t.Fatalf("note-flattened Blob's media type is not findable in the transcoded request: %s", rendered.String())
+	}
+}
+
+// TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn is
+// the golden regression test for PR #108 round 5's finding on
+// message/wire_normalize.go:370: a demoted ToolResult's Blob must never be
+// left inside an assistant-role wire item. Two ToolResults sharing one
+// assistant message (both with no ToolCall anywhere) reach
+// demoteWireInvalidToolResults' assistant-run branch at all — see
+// message/wire_normalize_test.go's
+// TestNormalizeForWireAssistantRunBlobHoistedOutOfAssistantMessage for why
+// a single one alone would not.
+func TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn(t *testing.T) {
+	png := tinyPNG(t)
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolResult{CallID: "A", Content: message.Parts{
+				&message.Text{Text: "stuck in assistant"},
+				&message.Blob{MediaType: "image/png", Data: png},
+			}},
+			&message.ToolResult{CallID: "B", Content: message.Parts{&message.Text{Text: "also stuck"}}},
+		}},
+	))
+
+	wantImageURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+	var foundImage bool
+	for i, item := range out.Input {
+		p := probeItem(t, item)
+		for _, c := range p.Content {
+			if p.Role == "assistant" && c.Type == "input_image" {
+				t.Fatalf("input item %d: a demoted Blob landed in an assistant-role item: %+v", i, p)
+			}
+			if c.Type == "input_image" && c.ImageURL == wantImageURL {
+				foundImage = true
+			}
+		}
+	}
+	if !foundImage {
+		t.Fatalf("the hoisted image did not arrive as a real input_image part anywhere: %+v", out.Input)
 	}
 }
 

@@ -565,31 +565,101 @@ func TestTranscodeUnanswerableToolResultDemotedNotShippedAsBlock(t *testing.T) {
 }
 
 // TestTranscodeUnanswerableToolResultImageBlobArrivesAsRealImageBlock is the
-// golden regression test for PR #108's finding 1: an unanswerable
-// ToolResult's image Blob used to be replaced by demoteWireInvalidToolResults
-// with a bare "[N image attachment(s) omitted]" text note, discarding the
-// actual bytes. Anthropic transcodes a tool_result Blob to a real wire
-// "image" block (transcodeBlob), so the demoted result's image must still
-// arrive as one on the wire — not merely be mentioned in text.
+// golden regression test for PR #108's finding 1 AND its round-5 follow-up:
+// an unanswerable ToolResult's image Blob used to be replaced by
+// demoteWireInvalidToolResults with a bare "[N image attachment(s)
+// omitted]" text note, discarding the actual bytes (`02a0fa6` fixed that),
+// but the fix then kept EVERY Blob as a real Part regardless of media type
+// — build-safe on anthropic (transcodeBlob accepts any media type), but
+// not on openai/openaicompat, which this test's siblings in those packages
+// pin. This test carries BOTH shapes in the SAME demoted result: a
+// build-safe image (must arrive as a real wire "image" block) and a
+// non-image Blob (must be note-flattened, never a raw wire block of any
+// kind), proving the intersection gating (buildSafeBlob,
+// message/wire_normalize.go) is applied even where anthropic's own code
+// alone would have tolerated more.
 func TestTranscodeUnanswerableToolResultImageBlobArrivesAsRealImageBlock(t *testing.T) {
 	png := tinyPNG(t)
+	pdfData := []byte("%PDF-fake")
 	out := mustTranscode(t, baseRequest(
 		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
 		message.Message{Role: message.RoleTool, Parts: message.Parts{
 			&message.ToolResult{CallID: "GHOST", Content: message.Parts{
 				&message.Text{Text: "ORPHAN OUTPUT"},
 				&message.Blob{MediaType: "image/png", Data: png},
+				&message.Blob{MediaType: "application/pdf", Data: pdfData},
 			}},
 		}},
 		message.Message{Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "ok"}}},
+	))
+
+	wantImageData := base64.StdEncoding.EncodeToString(png)
+	wantPDFData := base64.StdEncoding.EncodeToString(pdfData)
+	var foundImage bool
+	for _, m := range out.Messages {
+		for _, b := range m.Content {
+			if b.Type == "tool_result" {
+				t.Fatalf("an unanswerable tool_result shipped as a wire tool_result block: %+v", b)
+			}
+			if b.Source != nil && b.Source.Data == wantPDFData {
+				t.Fatalf("non-image Blob survived as a raw wire block (type %q) instead of being note-flattened: %+v", b.Type, b)
+			}
+			if (b.Type == "image" || b.Type == "document") && m.Role == "assistant" {
+				t.Fatalf("a demoted Blob block landed in an assistant wire turn: %+v", b)
+			}
+			if b.Type == "image" && b.Source != nil && b.Source.Data == wantImageData {
+				foundImage = true
+			}
+		}
+	}
+	if !foundImage {
+		t.Fatalf("demoted ToolResult's image did not arrive as a real wire image block: %+v", out.Messages)
+	}
+
+	var joined string
+	for _, m := range out.Messages {
+		for _, b := range m.Content {
+			if b.Type == "text" {
+				joined += b.Text + "\n"
+			}
+		}
+	}
+	if !strings.Contains(joined, "application/pdf") {
+		t.Fatalf("note-flattened Blob's media type is not findable in the wire text: %q", joined)
+	}
+}
+
+// TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn is
+// the golden regression test for PR #108 round 5's finding on
+// message/wire_normalize.go:370: a demoted ToolResult's Blob must never be
+// left inside a RoleAssistant wire turn — the Anthropic Messages API
+// rejects an image block there (images are user-turn only), even though
+// transcodeBlob's own code has no role check and would otherwise build one
+// without error. Two ToolResults sharing one assistant message (both with
+// no ToolCall anywhere) is the shape that reaches demoteWireInvalidToolResults'
+// assistant-run branch at all: a single one would instead be force-relocated,
+// still a ToolResult, by NormalizeForWire's own earlier pass (see
+// message/wire_normalize_test.go's
+// TestNormalizeForWireAssistantRunBlobHoistedOutOfAssistantMessage for the
+// canonical-level account of why).
+func TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn(t *testing.T) {
+	png := tinyPNG(t)
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolResult{CallID: "A", Content: message.Parts{
+				&message.Text{Text: "stuck in assistant"},
+				&message.Blob{MediaType: "image/png", Data: png},
+			}},
+			&message.ToolResult{CallID: "B", Content: message.Parts{&message.Text{Text: "also stuck"}}},
+		}},
 	))
 
 	wantData := base64.StdEncoding.EncodeToString(png)
 	var foundImage bool
 	for _, m := range out.Messages {
 		for _, b := range m.Content {
-			if b.Type == "tool_result" {
-				t.Fatalf("an unanswerable tool_result shipped as a wire tool_result block: %+v", b)
+			if m.Role == "assistant" && (b.Type == "image" || b.Type == "document") {
+				t.Fatalf("a demoted Blob block landed in an assistant wire turn: %+v", b)
 			}
 			if b.Type == "image" && b.Source != nil && b.Source.Data == wantData {
 				foundImage = true
@@ -597,7 +667,7 @@ func TestTranscodeUnanswerableToolResultImageBlobArrivesAsRealImageBlock(t *test
 		}
 	}
 	if !foundImage {
-		t.Fatalf("demoted ToolResult's image did not arrive as a real wire image block: %+v", out.Messages)
+		t.Fatalf("the hoisted image did not arrive as a real wire image block anywhere: %+v", out.Messages)
 	}
 }
 
