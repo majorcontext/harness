@@ -851,3 +851,309 @@ func TestResolveOrphanToolCallsDistinctSyntheticIDs(t *testing.T) {
 		t.Errorf("synthetic message IDs collide: %q", first.ID)
 	}
 }
+
+// TestToolResultNilContentNeverMarshalsNull reproduces the second root
+// cause folded into NEP-5272: ToolResult.Content has json tag "content"
+// with no omitempty, so json.Marshal of a ToolResult whose Content is nil
+// (a tool that produced truly no output, e.g. box hyper-lemon's `grep ... |
+// head -20` matching nothing) marshals as literal `"content": null`.
+// Bedrock/Anthropic's own API rejects a null-content tool_result block
+// with the same "tool_use ids were found without tool_result blocks
+// immediately after" 400 a fully missing tool_result produces — this is
+// why the wedge could fire with no crash, no stream truncation, and no
+// sandbox death at all. Content must never marshal as null.
+func TestToolResultNilContentNeverMarshalsNull(t *testing.T) {
+	m := Message{
+		ID:    "msg_tr_nil",
+		Role:  RoleTool,
+		Parts: Parts{&ToolResult{CallID: "tc1", Content: nil}},
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("json.Marshal = %v, want success", err)
+	}
+	if strings.Contains(string(raw), `"content":null`) {
+		t.Fatalf("marshaled ToolResult carries literal null content: %s", raw)
+	}
+	var out Message
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("json.Unmarshal = %v", err)
+	}
+	tr, ok := out.Parts[0].(*ToolResult)
+	if !ok {
+		t.Fatalf("out.Parts[0] = %T, want *ToolResult", out.Parts[0])
+	}
+	if len(tr.Content) == 0 {
+		t.Errorf("round-tripped Content is empty, want a non-empty marker")
+	}
+}
+
+// TestToolResultBlankTextContentNeverMarshalsNull covers the EXACT shape
+// behind box hyper-lemon's wedge: the tool ran successfully (no error) and
+// returned Content holding one Text part whose Text is the empty string
+// (bash.go's captured-output path for a command with no stdout/stderr) --
+// non-nil, len 1, but empty in every way that matters. This must be
+// treated the same as nil Content: transcodeParts (provider/anthropic/
+// transcode.go) skips an empty Text part entirely, so this shape collapses
+// to zero wire blocks exactly like a nil Content would.
+func TestToolResultBlankTextContentNeverMarshalsNull(t *testing.T) {
+	m := Message{
+		ID:    "msg_tr_blank",
+		Role:  RoleTool,
+		Parts: Parts{&ToolResult{CallID: "tc1", Content: Parts{&Text{Text: ""}}}},
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("json.Marshal = %v, want success", err)
+	}
+	if strings.Contains(string(raw), `"content":null`) {
+		t.Fatalf("marshaled ToolResult carries literal null content: %s", raw)
+	}
+	var out Message
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("json.Unmarshal = %v", err)
+	}
+	tr := out.Parts[0].(*ToolResult)
+	if tr.Content.Text() == "" {
+		t.Errorf("round-tripped Content still renders blank, want a non-empty marker")
+	}
+}
+
+// TestMessageNormalizeFillsEmptyToolResultContent proves Normalize -- the
+// one ingest choke point every message passes through (Session.append) --
+// repairs an empty ToolResult.Content in place, mirroring how it already
+// repairs a truncated ToolCall.Arguments. This is the primary fix: by the
+// time a message this poisoned enters history, Content is already the
+// marker text, so no later marshal ever has to fall back to safeContent's
+// own defense-in-depth substitution.
+func TestMessageNormalizeFillsEmptyToolResultContent(t *testing.T) {
+	m := Message{
+		Role:  RoleTool,
+		Parts: Parts{&ToolResult{CallID: "tc1", Content: nil}},
+	}
+	m.Normalize()
+	tr := m.Parts[0].(*ToolResult)
+	if len(tr.Content) == 0 {
+		t.Fatalf("Normalize left Content empty: %+v", tr)
+	}
+	if tr.Content.Text() == "" {
+		t.Errorf("Normalize left Content rendering blank: %+v", tr)
+	}
+}
+
+// TestMessageNormalizeLeavesRealToolResultContentAlone proves the fix is
+// scoped: a ToolResult that genuinely has content (text or otherwise) is
+// never touched.
+func TestMessageNormalizeLeavesRealToolResultContentAlone(t *testing.T) {
+	m := Message{
+		Role:  RoleTool,
+		Parts: Parts{&ToolResult{CallID: "tc1", Content: Parts{&Text{Text: "real output"}}}},
+	}
+	m.Normalize()
+	tr := m.Parts[0].(*ToolResult)
+	if tr.Content.Text() != "real output" {
+		t.Errorf("Normalize disturbed real content: got %q", tr.Content.Text())
+	}
+}
+
+// wireBlockCounts transcodes messages through the real Anthropic adapter
+// and counts tool_use/tool_result blocks, walking each tool_use forward to
+// its immediately-following wire message to confirm a matching
+// tool_result id is present there. It is the same style of probe used to
+// discover the three orphan shapes ResolveOrphanToolCalls's hardening
+// below repairs -- kept in this package (rather than provider/anthropic)
+// so message's own tests can assert on wire balance without an import
+// cycle; provider/anthropic carries its own, real end-to-end versions of
+// these same three cases (transcode_test.go), out of this package's file
+// scope for production changes but added here as tests only.
+type wireCounts struct {
+	toolUse    int
+	toolResult int
+	unpaired   []string // tool_use ids with no tool_result in the next block-group
+}
+
+// countAnthropicWireBlocks is a minimal stand-in transcoder mirroring
+// enough of provider/anthropic/transcode.go's own block shape (tool_use /
+// tool_result, merged consecutive same-role messages) to count blocks
+// without importing provider/anthropic (which imports this package,
+// so the reverse import is not possible). It exists purely so this
+// package's own tests can assert wire-level balance; it is deliberately
+// not exported.
+func countAnthropicWireBlocks(t *testing.T, messages []Message) wireCounts {
+	t.Helper()
+	type wireMsg struct {
+		role    Role
+		toolUse []string
+		toolRes []string
+	}
+	var wire []wireMsg
+	for _, m := range messages {
+		role := m.Role
+		if role != RoleAssistant {
+			role = RoleUser
+		}
+		var tu, tr []string
+		for _, p := range m.Parts {
+			switch v := p.(type) {
+			case *ToolCall:
+				tu = append(tu, v.CallID)
+			case *ToolResult:
+				tr = append(tr, v.CallID)
+			}
+		}
+		if len(tu) == 0 && len(tr) == 0 {
+			continue
+		}
+		if n := len(wire); n > 0 && wire[n-1].role == role {
+			wire[n-1].toolUse = append(wire[n-1].toolUse, tu...)
+			wire[n-1].toolRes = append(wire[n-1].toolRes, tr...)
+			continue
+		}
+		wire = append(wire, wireMsg{role: role, toolUse: tu, toolRes: tr})
+	}
+	var out wireCounts
+	for i, w := range wire {
+		out.toolUse += len(w.toolUse)
+		out.toolResult += len(w.toolRes)
+		// Count-aware pairing: consume one occurrence of a matching id per
+		// tool_use, so a duplicate CallID within one message (the shape
+		// TestResolveOrphanToolCallsDuplicateCallIDInOneMessage covers)
+		// only counts as satisfied once per actual result present, not
+		// once per distinct id. The pool includes THIS wire message's own
+		// tool_result blocks, not just the next one's: a ToolCall living
+		// in a non-assistant canonical message (gap 2) maps to wire role
+		// "user" exactly like the synthetic tool-role repair message
+		// inserted right after it, so the two merge into a single wire
+		// message (Anthropic merges consecutive same-role messages) —
+		// call and result land in the SAME api message rather than
+		// adjacent ones, which is still paired, just not across a message
+		// boundary.
+		var available []string
+		available = append(available, w.toolRes...)
+		if i+1 < len(wire) {
+			available = append(available, wire[i+1].toolRes...)
+		}
+		for _, id := range w.toolUse {
+			idx := -1
+			for j, rid := range available {
+				if rid == id {
+					idx = j
+					break
+				}
+			}
+			if idx == -1 {
+				out.unpaired = append(out.unpaired, id)
+				continue
+			}
+			available = append(available[:idx], available[idx+1:]...)
+		}
+	}
+	return out
+}
+
+// TestResolveOrphanToolCallsDuplicateCallIDInOneMessage reproduces the
+// first hardening gap: two ToolCall parts sharing one CallID within a
+// single assistant message, followed by only ONE matching ToolResult.
+// present (the old set-membership map) marks that id satisfied the moment
+// it sees a single match, so both calls look resolved -- the wire ends up
+// with 2 tool_use blocks for the id but only 1 tool_result. Repair must be
+// count-aware: it must synthesize exactly one more result for the id, not
+// zero.
+func TestResolveOrphanToolCallsDuplicateCallIDInOneMessage(t *testing.T) {
+	in := []Message{
+		{Role: RoleUser, Parts: Parts{&Text{Text: "go"}}},
+		{Role: RoleAssistant, Parts: Parts{
+			toolCallPart("dup1", "bash", `{}`),
+			toolCallPart("dup1", "bash", `{}`),
+		}},
+		{Role: RoleTool, Parts: Parts{
+			&ToolResult{CallID: "dup1", Content: Parts{&Text{Text: "ok"}}},
+		}},
+	}
+	before := countAnthropicWireBlocks(t, in)
+	if len(before.unpaired) == 0 {
+		t.Fatalf("test setup: expected an unpaired duplicate call id before repair, got none (before=%+v)", before)
+	}
+
+	out := ResolveOrphanToolCalls(in)
+	after := countAnthropicWireBlocks(t, out)
+	if after.toolUse != after.toolResult {
+		t.Fatalf("after repair: tool_use=%d tool_result=%d, want equal counts", after.toolUse, after.toolResult)
+	}
+	if len(after.unpaired) != 0 {
+		t.Fatalf("after repair: still unpaired ids: %v", after.unpaired)
+	}
+	// Input must not have been mutated in place.
+	if len(in[2].Parts) != 1 {
+		t.Errorf("ResolveOrphanToolCalls mutated its input slice: in[2].Parts = %+v", in[2].Parts)
+	}
+}
+
+// TestResolveOrphanToolCallsNonAssistantMessage reproduces the second
+// hardening gap: a ToolCall part sitting in a non-assistant message (a
+// malformed history no legitimate producer should build, but one this
+// defense-in-depth function must still not choke on -- a hand-rolled
+// provider adapter or a replayed log from an older binary can still
+// produce it). The old scan's `if m.Role != RoleAssistant { continue }`
+// skipped it entirely, even though every transcoder in this codebase
+// still emits a tool_use block for a ToolCall regardless of its host
+// message's declared role.
+func TestResolveOrphanToolCallsNonAssistantMessage(t *testing.T) {
+	in := []Message{
+		{Role: RoleUser, Parts: Parts{
+			&Text{Text: "go"},
+			toolCallPart("stray_call", "bash", `{}`),
+		}},
+		{Role: RoleUser, Parts: Parts{&Text{Text: "no result ever follows"}}},
+	}
+	before := countAnthropicWireBlocks(t, in)
+	if len(before.unpaired) == 0 {
+		t.Fatalf("test setup: expected an unpaired non-assistant call before repair, got none (before=%+v)", before)
+	}
+
+	out := ResolveOrphanToolCalls(in)
+	after := countAnthropicWireBlocks(t, out)
+	if after.toolUse != after.toolResult {
+		t.Fatalf("after repair: tool_use=%d tool_result=%d, want equal counts", after.toolUse, after.toolResult)
+	}
+	if len(after.unpaired) != 0 {
+		t.Fatalf("after repair: still unpaired ids: %v", after.unpaired)
+	}
+	if len(out) != len(in)+1 {
+		t.Fatalf("len(out) = %d, want %d (one synthetic message inserted)", len(out), len(in)+1)
+	}
+}
+
+// TestResolveOrphanToolCallsStrayResultBeforeCall reproduces the third
+// hardening gap: a ToolResult for callX appears BEFORE the assistant
+// message that actually issues callX (a tool message at index i, its
+// matching ToolCall at index i+1 -- backwards from every legitimate
+// producer's own ordering). The old scan never looked at the message
+// preceding a ToolCall's own message, so it left the stray result in
+// place AND, finding no result immediately after the real call, synthesized
+// a second one: 1 tool_use, 2 tool_result on the wire.
+func TestResolveOrphanToolCallsStrayResultBeforeCall(t *testing.T) {
+	in := []Message{
+		{Role: RoleUser, Parts: Parts{&Text{Text: "go"}}},
+		{Role: RoleTool, Parts: Parts{
+			&ToolResult{CallID: "callX", Content: Parts{&Text{Text: "stray"}}},
+		}},
+		{Role: RoleAssistant, Parts: Parts{toolCallPart("callX", "bash", `{}`)}},
+	}
+	before := countAnthropicWireBlocks(t, in)
+	if before.toolUse != 1 || before.toolResult != 1 {
+		t.Fatalf("test setup: before=%+v, want 1 tool_use and 1 tool_result (the stray)", before)
+	}
+
+	out := ResolveOrphanToolCalls(in)
+	after := countAnthropicWireBlocks(t, out)
+	if after.toolUse != 1 {
+		t.Fatalf("after repair: tool_use = %d, want 1 (unchanged)", after.toolUse)
+	}
+	if after.toolResult != 1 {
+		t.Fatalf("after repair: tool_result = %d, want exactly 1 -- the stray must be dropped and replaced by exactly one properly-paired result, not left duplicated", after.toolResult)
+	}
+	if len(after.unpaired) != 0 {
+		t.Fatalf("after repair: still unpaired ids: %v", after.unpaired)
+	}
+}

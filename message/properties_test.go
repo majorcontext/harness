@@ -450,36 +450,43 @@ func TestNormalizeIdempotent(t *testing.T) {
 
 // hasOrphanToolCall re-derives ResolveOrphanToolCalls's own documented
 // definition of "orphan" independently of its implementation: a ToolCall
-// carried by a RoleAssistant message at index i is orphaned unless
-// messages[i+1] exists, has RoleTool, and carries a ToolResult with a
-// matching CallID — ResolveOrphanToolCalls's doc comment, "Immediately
-// after mirrors the wire requirement ... a ToolCall in messages[i] is
-// satisfied only by a ToolResult carrying its CallID in messages[i+1] when
-// that message has RoleTool".
+// at index i is orphaned unless messages[i+1] exists and carries AT LEAST
+// AS MANY ToolResult parts with a matching CallID as messages[i] carries
+// ToolCall parts for that id.
+//
+// Two properties this oracle deliberately mirrors from
+// ResolveOrphanToolCalls's own hardening (see its doc comment, "Three
+// hardening gaps found probing the real Anthropic transcoder"), NOT the
+// original narrower definition this function used to check:
+//
+//   - Role-agnostic on both sides (gap 2): a ToolCall-bearing message need
+//     not be RoleAssistant, and a ToolResult-bearing message need not be
+//     RoleTool, to matter on the wire — every transcoder in this codebase
+//     emits a block for a part based on its TYPE, never gated on its host
+//     message's own declared Role.
+//   - Count-aware, not set-membership (gap 1): two ToolCall parts sharing
+//     one CallID need two matching ToolResults, not one.
 func hasOrphanToolCall(messages []Message) bool {
 	for i, m := range messages {
-		if m.Role != RoleAssistant {
-			continue
-		}
-		var callIDs []string
+		needCount := make(map[string]int)
 		for _, p := range m.Parts {
 			if tc, ok := p.(*ToolCall); ok {
-				callIDs = append(callIDs, tc.CallID)
+				needCount[tc.CallID]++
 			}
 		}
-		if len(callIDs) == 0 {
+		if len(needCount) == 0 {
 			continue
 		}
-		present := make(map[string]bool)
-		if i+1 < len(messages) && messages[i+1].Role == RoleTool {
+		presentCount := make(map[string]int)
+		if i+1 < len(messages) {
 			for _, p := range messages[i+1].Parts {
 				if tr, ok := p.(*ToolResult); ok {
-					present[tr.CallID] = true
+					presentCount[tr.CallID]++
 				}
 			}
 		}
-		for _, id := range callIDs {
-			if !present[id] {
+		for id, need := range needCount {
+			if presentCount[id] < need {
 				return true
 			}
 		}

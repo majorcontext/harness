@@ -129,6 +129,20 @@ type Message struct {
 // type json.RawMessage: ..." failure this package has already incurred once
 // in production for ToolCall.Arguments. Both guards below now check
 // json.Valid, exactly mirroring the ToolCall.Arguments fix.
+//
+// # An empty ToolResult.Content is the same footgun, in reverse
+//
+// See safeContent's doc comment (NEP-5272, root cause 2) for the full
+// incident: a ToolResult whose Content is empty — nil, or non-nil but
+// carrying only a blank Text part, the exact shape bash.go leaves behind
+// for a command with no output — transcodes to a tool_result block every
+// provider adapter this package targets either rejects or drops entirely,
+// wedging a session with no crash at all. The case below is this
+// function's primary fix: it replaces an empty Content with
+// NoToolOutputText in place, at the one ingest choke point every message
+// passes through, so by the time a message this poisoned enters history
+// it is already repaired — safeContent's own check is the marshal-time
+// backstop for a producer that bypasses Normalize entirely.
 func (m *Message) Normalize() {
 	for _, p := range m.Parts {
 		switch v := p.(type) {
@@ -141,6 +155,10 @@ func (m *Message) Normalize() {
 		case *ToolCall:
 			if len(v.Arguments) > 0 && !json.Valid(v.Arguments) {
 				v.Arguments = nil
+			}
+		case *ToolResult:
+			if v.isEmpty() {
+				v.Content = Parts{&Text{Text: NoToolOutputText}}
 			}
 		}
 	}
@@ -261,6 +279,92 @@ type ToolResult struct {
 }
 
 func (*ToolResult) partType() PartType { return PartToolResult }
+
+// NoToolOutputText is the Content text substituted, via safeContent below
+// and Message.Normalize, for a ToolResult whose real Content is empty in
+// every sense that matters — see safeContent's doc comment for the full
+// incident. A marker string, rather than an empty Text part, is chosen
+// deliberately: an agent (or an operator) reading its own transcript
+// benefits from seeing "(no output)" in place of a blank line, the same
+// way a shell prompt distinguishes "ran, produced nothing" from "never
+// ran".
+const NoToolOutputText = "(no output)"
+
+// isEmpty reports whether tr's Content carries nothing a reader (model,
+// transcript, or wire protocol) would recognize as actual output: no parts
+// at all, or parts that are exclusively blank Text (the exact shape
+// bash.go's captured-output path leaves behind for a command with no
+// stdout/stderr, e.g. a grep that matches nothing). Any other part type —
+// Blob, a Text with real content — counts as content and is left alone.
+func (tr ToolResult) isEmpty() bool {
+	for _, p := range tr.Content {
+		t, ok := p.(*Text)
+		if !ok || t.Text != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// safeContent normalizes Content for marshaling, mirroring
+// ToolCall.safeArguments's role for Arguments.
+//
+// # Incident NEP-5272, root cause 2: a null/absent tool_result content
+// wedges a session with no crash at all
+//
+// Folded into the same incident as the stop-reason orphan (see
+// engine.unexecutedToolCallStopReasonTextFmt's doc comment): replaying box
+// hyper-lemon's actual wedged history (session
+// ses_01kze9vds5fxd89dtv4accqjcp) against the live Bedrock/bifrost gateway
+// showed a request that was internally balanced — 44 tool_use, 44
+// tool_result, every pair adjacent — yet still 400'd with the identical
+// "tool_use ids were found without tool_result blocks immediately after".
+// The offending block was the tool_result for a `grep ... | head -20` that
+// matched nothing: empty stdout, so bash.go's captured-output path
+// returned a ToolResult whose Content was a single blank Text part. A
+// minimal 3-message repro against the live gateway isolated the shape
+// precisely: a tool_result block encoded with no recognizable content
+// (whether that arrives on the wire as an explicit null, an omitted
+// field, or — the case provider/anthropic/transcode.go's own transcodeParts
+// produces today, since it skips a blank Text part and then omits the
+// resulting empty content array via the wire struct's own omitempty tag —
+// a key that never makes it onto the wire at all) is rejected exactly like
+// a missing tool_result altogether. Unlike the stop-reason orphan, this
+// shape requires no crash, no stream truncation, no sandbox death: an
+// ordinary, successful tool call with unremarkable empty output is enough.
+//
+// The fix is a canonical-layer guarantee, not a per-transcoder patch:
+// ToolResult.Content must never be empty by the time anything marshals or
+// transcodes it, so every adapter (anthropic, openaicompat, openai — and
+// any future one) inherits the fix for free rather than needing its own
+// copy of this check. Message.Normalize applies this in place at the one
+// ingest choke point every message passes through (Session.append), which
+// is the primary fix; safeContent is the marshal-time defense-in-depth
+// backstop — mirroring safeArguments's own relationship to Normalize's
+// ToolCall.Arguments repair — for a ToolResult built by a producer that
+// bypasses Normalize entirely: a plugin's chat.message hook, a hand-rolled
+// provider adapter, a test's scripted provider, or a session log replayed
+// from an older, unpatched binary.
+func (tr ToolResult) safeContent() Parts {
+	if tr.isEmpty() {
+		return Parts{&Text{Text: NoToolOutputText}}
+	}
+	return tr.Content
+}
+
+// MarshalJSON implements json.Marshaler so any direct encoding of a
+// ToolResult (or *ToolResult) goes through safeContent automatically,
+// exactly mirroring ToolCall.MarshalJSON's role for Arguments. It must NOT
+// be relied on from marshalPart's tagged-union wrapper below, for the same
+// reason ToolCall.MarshalJSON's own doc comment gives: embedding a type
+// that implements json.Marshaler promotes the method onto the wrapper,
+// silently dropping the "type" discriminator.
+func (tr ToolResult) MarshalJSON() ([]byte, error) {
+	type alias ToolResult
+	a := alias(tr)
+	a.Content = tr.safeContent()
+	return json.Marshal(a)
+}
 
 // Reasoning is a model reasoning block.
 type Reasoning struct {
@@ -479,10 +583,19 @@ func marshalPart(p Part) ([]byte, error) {
 			Arguments json.RawMessage `json:"arguments"`
 		}{PartToolCall, v.CallID, v.Name, v.safeArguments()})
 	case *ToolResult:
+		// Deliberately not embedding *ToolResult (mirroring the ToolCall
+		// case above, for the exact same reason): now that ToolResult
+		// defines its own MarshalJSON (see safeContent's doc comment),
+		// embedding it here would promote that method onto this wrapper
+		// and silently drop the "type" discriminator. Reconstructing the
+		// fields explicitly sidesteps that and applies the same
+		// empty-Content normalization inline.
 		return json.Marshal(struct {
-			Type PartType `json:"type"`
-			*ToolResult
-		}{PartToolResult, v})
+			Type    PartType `json:"type"`
+			CallID  string   `json:"call_id"`
+			Content Parts    `json:"content"`
+			IsError bool     `json:"is_error,omitempty"`
+		}{PartToolResult, v.CallID, v.safeContent(), v.IsError})
 	case *Reasoning:
 		return json.Marshal(struct {
 			Type PartType `json:"type"`
@@ -579,10 +692,95 @@ const SyntheticOrphanResultText = "synthesized: no tool_result was found in hist
 // inserted immediately after messages[i]. Every synthetic ToolResult is
 // IsError true with Content set to SyntheticOrphanResultText.
 //
+// # Three hardening gaps found probing the real Anthropic transcoder (NEP-5272)
+//
+// The scan below closes three shapes the original set-membership version
+// let through to an unbalanced wire request:
+//
+//  1. A duplicate CallID within one ToolCall-bearing message (two ToolCall
+//     parts sharing an id, one matching ToolResult): the old `present
+//     map[string]bool` marked the id satisfied on the FIRST matching
+//     result it saw, so both calls looked resolved even though the wire
+//     needs two tool_results for two tool_use blocks sharing that id. The
+//     scan below counts occurrences per id (need vs. present) instead of
+//     just checking membership, so it synthesizes exactly as many extra
+//     results as are actually missing for that id — never zero just
+//     because one already matched.
+//  2. A ToolCall sitting in a non-assistant message: the old scan's `if
+//     m.Role != RoleAssistant { continue }` skipped it outright, but every
+//     transcoder in this codebase (provider/anthropic, provider/
+//     openaicompat, provider/openai) emits a tool_use/function_call block
+//     for a ToolCall regardless of its host message's own declared role —
+//     a role check here was never actually load-bearing for whether the
+//     wire needs a paired result. The scan below considers every message,
+//     any role, that carries a ToolCall part.
+//  3. A stray ToolResult that appears BEFORE the ToolCall it is meant to
+//     pair with (a tool-role message at index i, its matching assistant
+//     call at i+1 — backwards from any legitimate producer's own
+//     ordering): the old scan never looked at what precedes a
+//     ToolCall-bearing message, so it left the misplaced result in the
+//     wire AND, finding nothing immediately after the real call,
+//     synthesized a second one — 1 tool_use, 2 tool_result. A first pass
+//     below drops any ToolResult whose CallID has no matching ToolCall in
+//     the message immediately before it, so the later count-aware pass
+//     synthesizes exactly the one result the call actually needs.
+//
 // messages is never mutated in place; the input slice and its Message
 // values are safe to reuse after this call. When no orphan exists the
 // input slice itself is returned unchanged (no allocation).
 func ResolveOrphanToolCalls(messages []Message) []Message {
+	// Pass 1 (gap 3): find every "reverse-orphaned" ToolResult -- one
+	// whose CallID has no matching ToolCall in the immediately preceding
+	// message -- and mark it for removal. strayDrop[i][id] means "drop
+	// every ToolResult in messages[i] carrying CallID id".
+	strayDrop := make(map[int]map[string]bool)
+	for i := range messages {
+		var resultIDs []string
+		for _, p := range messages[i].Parts {
+			if tr, ok := p.(*ToolResult); ok {
+				resultIDs = append(resultIDs, tr.CallID)
+			}
+		}
+		if len(resultIDs) == 0 {
+			continue
+		}
+		precedingCallIDs := make(map[string]bool)
+		if i > 0 {
+			for _, p := range messages[i-1].Parts {
+				if tc, ok := p.(*ToolCall); ok {
+					precedingCallIDs[tc.CallID] = true
+				}
+			}
+		}
+		for _, id := range resultIDs {
+			if precedingCallIDs[id] {
+				continue
+			}
+			if strayDrop[i] == nil {
+				strayDrop[i] = make(map[string]bool)
+			}
+			strayDrop[i][id] = true
+		}
+	}
+
+	// Pass 2 (gaps 1 and 2): every message, any role, carrying ToolCall
+	// parts needs a matching COUNT of ToolResults in the immediately
+	// following message — a stray result marked for removal above is
+	// treated as absent here, since it is about to be dropped.
+	//
+	// "Immediately following" is judged by CONTENT (does the next message
+	// carry a ToolResult part at all), not by that message's own Role, for
+	// the same reason gap 2 above generalizes the ToolCall side past
+	// RoleAssistant: every transcoder in this codebase emits a tool_result
+	// block for a ToolResult part regardless of its host message's
+	// declared role, so gating on Role == RoleTool here would silently
+	// treat a genuinely-pairing ToolResult sitting in a non-tool-role
+	// message as absent — re-synthesizing a redundant second result for
+	// the same call and breaking this function's own fixed-point property
+	// (TestResolveOrphanToolCallsPropertyFixedPoint caught exactly this:
+	// a re-run would then see the ORIGINAL result as newly stray, since
+	// its preceding message is now the freshly-inserted synthetic one
+	// instead of the real call).
 	type insertion struct {
 		afterIndex int
 		parts      Parts
@@ -592,9 +790,6 @@ func ResolveOrphanToolCalls(messages []Message) []Message {
 
 	for i := range messages {
 		m := &messages[i]
-		if m.Role != RoleAssistant {
-			continue
-		}
 		var callIDs []string
 		for _, p := range m.Parts {
 			if tc, ok := p.(*ToolCall); ok {
@@ -604,18 +799,30 @@ func ResolveOrphanToolCalls(messages []Message) []Message {
 		if len(callIDs) == 0 {
 			continue
 		}
-		followingIsTool := i+1 < len(messages) && messages[i+1].Role == RoleTool
-		present := make(map[string]bool)
+		needCount := make(map[string]int)
+		for _, id := range callIDs {
+			needCount[id]++
+		}
+		followingIsTool := i+1 < len(messages) && hasToolResult(messages[i+1].Parts)
+		presentCount := make(map[string]int)
 		if followingIsTool {
+			dropped := strayDrop[i+1]
 			for _, p := range messages[i+1].Parts {
-				if tr, ok := p.(*ToolResult); ok {
-					present[tr.CallID] = true
+				tr, ok := p.(*ToolResult)
+				if !ok || dropped[tr.CallID] {
+					continue
 				}
+				presentCount[tr.CallID]++
 			}
 		}
 		var missing []string
+		seen := make(map[string]bool)
 		for _, id := range callIDs {
-			if !present[id] {
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			for n := needCount[id] - presentCount[id]; n > 0; n-- {
 				missing = append(missing, id)
 			}
 		}
@@ -637,13 +844,23 @@ func ResolveOrphanToolCalls(messages []Message) []Message {
 		}
 	}
 
-	if len(pendingMerge) == 0 && len(insertions) == 0 {
+	if len(strayDrop) == 0 && len(pendingMerge) == 0 && len(insertions) == 0 {
 		return messages
 	}
 
 	out := make([]Message, 0, len(messages)+len(insertions))
 	for i := range messages {
 		m := messages[i]
+		if drop := strayDrop[i]; len(drop) > 0 {
+			kept := make(Parts, 0, len(m.Parts))
+			for _, p := range m.Parts {
+				if tr, ok := p.(*ToolResult); ok && drop[tr.CallID] {
+					continue
+				}
+				kept = append(kept, p)
+			}
+			m.Parts = kept
+		}
 		if extra, ok := pendingMerge[i]; ok {
 			merged := m
 			merged.Parts = append(append(Parts(nil), m.Parts...), extra...)
@@ -679,6 +896,21 @@ func callIDsOf(parts Parts) []string {
 		}
 	}
 	return ids
+}
+
+// hasToolResult reports whether parts contains at least one ToolResult
+// part. Used by ResolveOrphanToolCalls's Pass 2 to judge "the following
+// message pairs with this ToolCall" by content rather than by that
+// message's own Role — see the doc comment on the followingIsTool
+// variable there for why a role-based check is insufficient once gap 2
+// (a ToolCall in a non-assistant message) is in scope.
+func hasToolResult(parts Parts) bool {
+	for _, p := range parts {
+		if _, ok := p.(*ToolResult); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // ProviderCallID derives a deterministic, provider-safe tool-call ID from a
