@@ -678,6 +678,26 @@ func IsSyntheticOrphanID(id string) bool {
 // missing (Anthropic: HTTP 400 "tool_use ids were found without
 // tool_result blocks immediately after").
 //
+// # Superseded at transcode time by NormalizeForWire (NEP-5293 part 2)
+//
+// This function is purely additive by design — see its own "never
+// mutated in place" guarantee below — because engine.LoadSession applies
+// it to LIVE history (engine/store.go), where a destructive repair would
+// lose data for the life of the session, not just one request (AGENTS.md,
+// "A history repair that runs on live or persisted state is
+// additive-only"). That safety has a cost: its messages[i+1] adjacency
+// check cannot see a tool_use/tool_result pair separated by an
+// intervening same-role message, a duplicate call id sharing one
+// tool_result, a ToolCall outside an assistant message, or a ToolResult
+// preceding its ToolCall — see wire_oracle_meta_test.go's TestGap*_NEP5293Part2
+// cases for each. NormalizeForWire (wire_normalize.go) is the
+// transcode-only sibling every transcoder in this module now calls
+// instead: it closes all four gaps, including by relocating a real
+// ToolResult, which is safe there ONLY because a transcode-time repair
+// builds one throwaway request and never touches the durable record. This
+// function's own behavior is unchanged and remains exactly what
+// engine.LoadSession relies on.
+//
 // # Incident ses_01kx48z4rqfkpbwmzfdv1jzeg6
 //
 // A goal worker turn died with exactly that 400 naming one tool_use id,

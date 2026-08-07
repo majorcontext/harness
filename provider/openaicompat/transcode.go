@@ -144,17 +144,27 @@ func transcodeRequest(req *provider.Request, family string) (*apiRequest, error)
 
 	// Defense-in-depth against a poisoned history (incident
 	// ses_01kx48z4rqfkpbwmzfdv1jzeg6): a tool call with no matching result
-	// in the immediately-following message would otherwise transcode to a
+	// in the immediately-following wire turn would otherwise transcode to a
 	// dangling tool_calls entry with no paired "tool"-role message, which
 	// this wire protocol also requires immediately after (mirrors
 	// provider/anthropic/transcode.go's identical guard).
 	// engine.Session's turn loop is the primary fix and keeps its own
 	// ingest self-consistent (see engine/engine.go), but this backstops
-	// any OTHER producer of history. See message.ResolveOrphanToolCalls's
-	// doc comment for the full incident.
+	// any OTHER producer of history. message.NormalizeForWire (NEP-5293
+	// part 2) is the transcode-only repair used here — this call site
+	// builds one throwaway request and never touches the durable record,
+	// so its destructive/relocating repairs are safe here; see its doc
+	// comment for the full incident and the additive
+	// (message.ResolveOrphanToolCalls, LIVE history only) / transcode-only
+	// split. Note this adapter's own transcodeMessage below is role-strict
+	// (RoleUser/RoleAssistant/RoleTool each accept only their expected part
+	// types and error otherwise), so a ToolCall stranded in a non-assistant
+	// message already fails loudly here rather than reaching the wire
+	// malformed — NormalizeForWire's repair for that shape matters for the
+	// other two (role-agnostic) transcoders, not this one.
 	// imageLimits.RecurseToolResults is false: tool-result images are omitted
 	// on the wire (see toolResultOutput), so clamping them would be wasted work.
-	messages := imageclamp.Clamp(message.ResolveOrphanToolCalls(req.Messages), imageLimits)
+	messages := imageclamp.Clamp(message.NormalizeForWire(req.Messages), imageLimits)
 
 	for i := range messages {
 		m := &messages[i]

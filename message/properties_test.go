@@ -484,6 +484,107 @@ func TestResolveOrphanToolCallsPropertyNoDataLoss(t *testing.T) {
 	})
 }
 
+// TestNormalizeForWirePropertyNoDataLoss is NormalizeForWire's own
+// no-data-loss guard, run against the SAME fully arbitrary, unconstrained
+// generator (genMessageSequence) TestResolveOrphanToolCallsPropertyNoDataLoss
+// above uses. This is the one invariant that must hold unconditionally,
+// for ANY input whatsoever, including the adversarial/unrealistic shapes
+// (see TestNormalizeForWirePropertyWireValid's own doc comment for
+// why full WIRE-VALIDITY needs a different, realistic generator instead —
+// that is a distinct property from this one): NormalizeForWire may decline
+// a relocation rather than risk a reorder (see its own "Relocation safety"
+// doc comment) and leave a shape wire-imperfect, but it must never, on any
+// input, lose or reorder a real ToolResult.
+//
+// This checks checkNoDataLossAllowingDemotion (wire_normalize_test.go),
+// not the oracle's own checkNoDataLoss directly: an id with NO ToolCall
+// anywhere is demoted to a Text part (see demoteUnanswerableToolResults),
+// which checkNoDataLoss's OWN definition of survival ("still a
+// ToolResult") correctly reports as vanished — that function is
+// unmodified and unrelaxed, still called for every other real result.
+// checkNoDataLossAllowingDemotion adds nothing but recognition of that one
+// additional, understood-safe transformation, verified against the
+// input's own raw data rather than NormalizeForWire's internal formatting.
+func TestNormalizeForWirePropertyNoDataLoss(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		in := genMessageSequence(t)
+		for i := range in {
+			in[i].Normalize()
+		}
+		out := NormalizeForWire(in)
+		if v := checkNoDataLossAllowingDemotion(in, out); len(v) != 0 {
+			t.Fatalf("NormalizeForWire lost or reordered a genuine tool_result: %v", v)
+		}
+	})
+}
+
+// TestNormalizeForWirePropertyWireValid runs the independent oracle's
+// full structural check (invariants 1-4: adjacency, role placement,
+// non-empty content, exact counts — message/wire_oracle_test.go's
+// checkWire) over message.NormalizeForWire's output, using the SAME fully
+// arbitrary, unconstrained generator (genMessageSequence) every other
+// property in this file uses. Narrowing the generator to avoid a shape
+// the implementation could not yet handle was tried once and was wrong:
+// it hid two real, fixable gaps (a ToolResult with no ToolCall anywhere,
+// and a ToolResult barrier-blocked from relocating out of an
+// assistant-role block or into a run that actually demands it) rather
+// than proving them unsatisfiable — the same class of mistake that sank
+// the first attempt at NEP-5293, there by bending the oracle to match the
+// implementation, here by bending the input space instead. Both gaps are
+// now closed by demoteWireInvalidToolResults (message/wire_normalize.go):
+// any ToolResult still wire-invalid after every relocation and synthesis
+// NormalizeForWire's main pass can perform is rewritten to plain text
+// (see that function's own doc comment for why changing its part type,
+// never deleting or reordering it, is the correct third option) — closing
+// every shape this property's fuzzing can reach, confirmed at 500,000
+// rapid iterations. No class of unconstrained input is known to remain
+// unsatisfiable under this package's no-delete/no-reorder rules for
+// wire-validity itself; checkNoDataLossAllowingDemotion (below) is the
+// still-necessary complement verifying every demotion's REAL content
+// survives.
+//
+// # Why this checks NormalizeForWire, not ResolveOrphanToolCalls
+//
+// NEP-5293 part 2's required architecture (see the issue and its "fourth
+// gap shape" comment) keeps ResolveOrphanToolCalls purely additive forever
+// — engine.LoadSession applies it to LIVE history, where a destructive
+// repair would lose data for the session's whole life, not one request —
+// and puts every destructive/relocating repair in a NEW transcode-only
+// function, NormalizeForWire (message/wire_normalize.go), which every
+// transcoder now calls instead. Full wire-validity is consequently a claim
+// about NormalizeForWire, not ResolveOrphanToolCalls: the latter is
+// documented (see its own doc comment and
+// TestResolveOrphanToolCallsRemainsAdditiveAcrossAllGapShapes in
+// wire_normalize_test.go) to still leave several shapes wire-invalid, on
+// purpose, forever.
+//
+// Each message is Normalized before repair, mirroring the real pipeline
+// (Session.append and LoadSession always Normalize before any transcoder
+// calls NormalizeForWire) — otherwise this property would also flag raw
+// empty tool_result content that Normalize/SafeContent already guarantee
+// never reaches the wire, a different, already-covered concern
+// (TestNormalizeIdempotent and TestMessageNormalizedMarshalStable above)
+// that would only obscure the adjacency-related gaps this test tracks.
+func TestNormalizeForWirePropertyWireValid(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		in := genMessageSequence(t)
+		for i := range in {
+			in[i].Normalize()
+		}
+		out := NormalizeForWire(in)
+		if v := checkWire(out); len(v) != 0 {
+			ij, _ := json.MarshalIndent(in, "", "  ")
+			oj, _ := json.MarshalIndent(out, "", "  ")
+			t.Fatalf("NormalizeForWire's output is not wire-valid:\n input: %s\noutput: %s\n violations: %s", ij, oj, violationStrings(v))
+		}
+		if v := checkNoDataLossAllowingDemotion(in, out); len(v) != 0 {
+			ij, _ := json.MarshalIndent(in, "", "  ")
+			oj, _ := json.MarshalIndent(out, "", "  ")
+			t.Fatalf("NormalizeForWire lost or altered real data:\n input: %s\noutput: %s\n violations: %s", ij, oj, violationStrings(v))
+		}
+	})
+}
+
 // TestResolveOrphanToolCallsPropertyFixedPoint checks the second of
 // property 4's three parts: re-applying ResolveOrphanToolCalls to its own
 // output changes nothing further — every orphan it can find, it resolves in
