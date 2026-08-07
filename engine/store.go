@@ -804,6 +804,10 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			if rec.Compact == nil {
 				return fmt.Errorf("compact record without payload at line %d", line)
 			}
+			// Normalize before splicing, same as every recMessage above:
+			// LoadSession calls Normalize on every message it replays,
+			// including a compact record's inline summary.
+			rec.Compact.Summary.Normalize()
 			spliced, err := spliceCompact(s.history, rec.Compact.FirstID, rec.Compact.LastID, rec.Compact.Summary)
 			if err != nil {
 				return fmt.Errorf("%w at line %d", err, line)
@@ -832,11 +836,17 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 	// A log from an older binary or an external writer can carry an
 	// assistant tool_call whose turn died before a result was recorded.
 	// Repair at ingest so every downstream consumer sees a protocol-valid
-	// history, not just the transcoders' wire-time backstop. This is the
-	// load-path counterpart of only ONE of Session.append's Normalize
-	// repairs — the orphaned-tool_use gap, not the empty-ToolResult-content
-	// gap, which the per-message Normalize call in the scanLog loop above
-	// already covers. The repair is re-derived deterministically on every
+	// history, not just the transcoders' wire-time backstop. This is NOT
+	// the load-path counterpart of a Normalize repair: Normalize's three
+	// repairs (ProviderData, ToolCall.Arguments, empty ToolResult.Content —
+	// applied per message in the scanLog loop above) never touch an
+	// orphaned tool_use at all. The live-path counterpart of THIS repair is
+	// appendUnexecutedToolCallResults/interruptedToolResults in
+	// engine/engine.go, which synthesizes results for an abnormally-ended
+	// turn's unexecuted tool calls before they ever reach history.
+	// ResolveOrphanToolCalls is the load-time backstop for a history that
+	// bypassed that path entirely (an older binary, a plugin, or an
+	// external writer). The repair is re-derived deterministically on every
 	// load; the log itself stays append-only and unmodified.
 	s.history = message.ResolveOrphanToolCalls(s.history)
 	return s, nil

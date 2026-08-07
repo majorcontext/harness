@@ -15,7 +15,7 @@ import (
 // truly empty output (mirroring box hyper-lemon's `grep ... | head -20`
 // that matched nothing) must never leave a ToolResult in history whose
 // Content collapses to nothing on the wire. Session.append's call to
-// Message.Normalize (see message.ToolResult.safeContent's doc comment) is
+// Message.Normalize (see message.ToolResult.SafeContent's doc comment) is
 // the fix under test here; this exercises it through the real engine loop
 // rather than calling Normalize directly.
 func TestEmptyToolOutputNeverAppendsNullContent(t *testing.T) {

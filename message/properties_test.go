@@ -450,77 +450,36 @@ func TestNormalizeIdempotent(t *testing.T) {
 
 // hasOrphanToolCall re-derives ResolveOrphanToolCalls's own documented
 // definition of "orphan" independently of its implementation: a ToolCall
-// at index i is orphaned unless its run — the maximal contiguous sequence
-// of messages starting at i+1 that each carry no ToolCall of their own and
-// share one wire role with messages[i+1] — carries EXACTLY as many
-// ToolResult parts with a matching CallID as messages[i] carries ToolCall
-// parts for that id.
-//
-// Four properties this oracle deliberately mirrors from
-// ResolveOrphanToolCalls's own hardening (see its doc comment, "Four
-// hardening gaps found probing the real Anthropic transcoder"), NOT the
-// original narrower definition this function used to check:
-//
-//   - Role-agnostic for matching (gap 2): a ToolCall-bearing message need
-//     not be RoleAssistant, and a ToolResult-bearing message need not be
-//     RoleTool, to matter on the wire — every transcoder in this codebase
-//     emits a block for a part based on its TYPE, never gated on its host
-//     message's own declared Role.
-//   - Count-aware, not set-membership (gap 1): two ToolCall parts sharing
-//     one CallID need two matching ToolResults, not one.
-//   - Strict equality, not a floor (gap 4): a SURPLUS of ToolResults for
-//     one id is also an imbalance the wire rejects, not just a shortfall.
-//   - Role-bounded for the run's OWN extent: two adjacent messages merge
-//     into one wire block only when they share a wire role (RoleAssistant
-//     maps to "assistant"; everything else maps to "user" — see
-//     message.go's wireRole), so the run stops the instant that role
-//     changes, even if the next message still carries a ToolResult and no
-//     ToolCall of its own. A property-test fuzz run found this the hard
-//     way: without this bound, a role-mismatched message got folded into
-//     an unrelated run and this oracle mis-scored the result.
-//
-// The run, not a single next message, is the pairing unit: every
-// transcoder in this package folds several adjacent same-wire-role
-// messages into one wire block (provider/anthropic/transcode.go's
-// role-merge), so a call answered across two consecutive tool messages is
-// not orphaned. The run makes no distinction between a message that
-// currently carries a ToolResult and one that carries neither a ToolResult
-// nor a ToolCall (Reasoning, Blob, Text only) — a SECOND fuzz-property
-// finding: gating run entry on the first message already carrying a
-// ToolResult let a genuinely matching result one message further down
-// (past a content-only message) get scored as an orphan, because the
-// message that would have started the run had, by the time this oracle
-// runs, already had its own unrelated ToolResult dropped as surplus.
+// carried by a RoleAssistant message at index i is orphaned unless
+// messages[i+1] exists, has RoleTool, and carries a ToolResult with a
+// matching CallID — ResolveOrphanToolCalls's doc comment, "Immediately
+// after mirrors the wire requirement ... a ToolCall in messages[i] is
+// satisfied only by a ToolResult carrying its CallID in messages[i+1] when
+// that message has RoleTool".
 func hasOrphanToolCall(messages []Message) bool {
-	wireRole := func(m Message) string {
-		if m.Role == RoleAssistant {
-			return "assistant"
-		}
-		return "user"
-	}
 	for i, m := range messages {
-		needCount := make(map[string]int)
-		for _, p := range m.Parts {
-			if tc, ok := p.(*ToolCall); ok {
-				needCount[tc.CallID]++
-			}
-		}
-		if len(needCount) == 0 {
+		if m.Role != RoleAssistant {
 			continue
 		}
-		presentCount := make(map[string]int)
-		if i+1 < len(messages) {
-			runRole := wireRole(messages[i+1])
-			for j := i + 1; j < len(messages) && !hasToolCall(messages[j].Parts) && wireRole(messages[j]) == runRole; j++ {
-				for _, p := range messages[j].Parts {
-					if tr, ok := p.(*ToolResult); ok {
-						presentCount[tr.CallID]++
-					}
+		var callIDs []string
+		for _, p := range m.Parts {
+			if tc, ok := p.(*ToolCall); ok {
+				callIDs = append(callIDs, tc.CallID)
+			}
+		}
+		if len(callIDs) == 0 {
+			continue
+		}
+		present := make(map[string]bool)
+		if i+1 < len(messages) && messages[i+1].Role == RoleTool {
+			for _, p := range messages[i+1].Parts {
+				if tr, ok := p.(*ToolResult); ok {
+					present[tr.CallID] = true
 				}
 			}
 		}
-		for id, need := range needCount {
-			if presentCount[id] != need {
+		for _, id := range callIDs {
+			if !present[id] {
 				return true
 			}
 		}

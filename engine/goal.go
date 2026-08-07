@@ -1497,18 +1497,24 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 			// of waiting and trying again — regardless of classification.
 			return attempts, err
 		}
-		// NEP-5272 defect 2 (partial mitigation). Every branch below this
-		// point is about to retry, so undo this attempt's own unanswered
-		// directive before looping back to the top, where s.Prompt appends
-		// the same directive again. See dropUnansweredDirective's own doc
-		// comment for exactly what this does and does not remove, and for
-		// the residual gap it does NOT close.
-		s.dropUnansweredDirective(anchorID)
+		// NEP-5272 defect 2 (partial mitigation). NOT every branch below
+		// this point is about to retry — the three budget-exhaustion
+		// returns just below (deterministic, and the two
+		// goalRetryableExhaustedError cases) are about to PARK instead, and
+		// a parked attempt's directive must stay in live history (see
+		// dropUnansweredDirective's doc comment on the embedded-operator-
+		// block case). So each branch below calls dropUnansweredDirective
+		// itself, individually, ONLY immediately before the backoff/continue
+		// that actually re-issues the same directive — never before a
+		// parking return. See dropUnansweredDirective's own doc comment for
+		// exactly what the call does and does not remove, and for the
+		// residual gap it does NOT close.
 		if !retryable {
 			deterministicAttempt++
 			if deterministicAttempt > goalWorkerRetries {
 				return attempts, err
 			}
+			s.dropUnansweredDirective(anchorID)
 			if werr := waitGoalRetryBackoff(ctx, deterministicAttempt); werr != nil {
 				return attempts, werr
 			}
@@ -1519,6 +1525,7 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 			if exhausted {
 				return attempts, &goalRetryableExhaustedError{err: err, class: class}
 			}
+			s.dropUnansweredDirective(anchorID)
 			// Short schedule, no jitter: a stream ceiling is hit by
 			// LONG turns, so attempts are naturally minutes apart already
 			// — the wait only needs to clear a momentary network blip.
@@ -1531,6 +1538,7 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 		if exhausted {
 			return attempts, &goalRetryableExhaustedError{err: err, class: class}
 		}
+		s.dropUnansweredDirective(anchorID)
 		if werr := waitGoalRetryableBackoff(ctx, retryableAttempt); werr != nil {
 			return attempts, werr
 		}
@@ -1583,16 +1591,23 @@ func (s *Session) lastMessageID() string {
 // lastMessageID's own doc comment).
 //
 // Called only from a point in promptTurnWithRetry where toolGateStops is
-// already known false, so this attempt executed no real tool call. That
-// does NOT mean the tail after anchorID holds nothing but the directive —
-// a plugin's tool.execute.before hook can DENY a tool call, which still
-// appends a ToolResult message without incrementing toolExecCount (see
-// engine.go's runToolCall), and the model can then make a further request
-// in the SAME Prompt call that fails; a queued prompt can also be
-// delivered into that same window (Prompt's own tool-call-boundary drain).
-// Either produces additional, already-DELIVERED messages in the tail — a
-// denied tool's result, an "OPERATOR MESSAGES" block already journaled
-// prompt.dequeued("injected") — that must never be discarded.
+// already known false (this attempt executed no real tool call) AND this
+// attempt is about to retry — never on a path that is about to park (see
+// promptTurnWithRetry's own call sites: each sits immediately before that
+// branch's backoff/continue, strictly after the branch's own
+// budget-exhaustion return). A parked attempt's tail must survive verbatim,
+// including any embedded operator mail (next paragraph) — nothing will ever
+// re-append it.
+//
+// toolGateStops-false does NOT mean the tail after anchorID holds nothing
+// but the directive — a plugin's tool.execute.before hook can DENY a tool
+// call, which still appends a ToolResult message without incrementing
+// toolExecCount (see engine.go's runToolCall), and the model can then make a
+// further request in the SAME Prompt call that fails; a queued prompt can
+// also be delivered into that same window (Prompt's own tool-call-boundary
+// drain). Either produces additional, already-DELIVERED messages in the
+// tail — a denied tool's result, an "OPERATOR MESSAGES" block already
+// journaled prompt.dequeued("injected") — that must never be discarded.
 //
 // isSafeToDropDirectiveTail below only approves the two shapes a failed
 // attempt with NO tool execution and NO intervening delivery can produce:
@@ -1601,6 +1616,23 @@ func (s *Session) lastMessageID() string {
 // interruptedTurnError in engine.go). Any other shape in the tail is left
 // untouched — the mitigation simply does not apply to that attempt, rather
 // than risk dropping delivered mail.
+//
+// The "directive alone" shape above is not always the goal condition on its
+// own, and isSafeToDropDirectiveTail's role-shape check cannot see inside
+// it: PursueGoal's OWN turn-boundary queue drain (distinct from Prompt's
+// tool-call-boundary drain two paragraphs up) bakes a drained "OPERATOR
+// MESSAGES" block directly INTO the directive STRING, before
+// promptTurnWithRetry ever sees it (see PursueGoal's directive construction
+// just above promptTurnWithRetry). That mail then rides inside the single
+// RoleUser message case 1 approves, indistinguishable by shape from an
+// ordinary directive with no operator mail at all. Dropping it here is safe
+// ONLY because the very next attempt re-appends the identical directive
+// string — same embedded block included — so the mail is never actually
+// gone, just moved forward one attempt. It would NOT be safe on a park: no
+// next attempt ever comes, so the drop would be a real, permanent loss of
+// already-delivered mail from live history — which is exactly why every
+// call site sits strictly after its branch's own exhaustion check now,
+// never before it.
 //
 // # Residual gaps — deliberately NOT fixed here
 //
