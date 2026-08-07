@@ -731,3 +731,65 @@ func TestTranscodeOrphanToolResultBuildsSuccessfully(t *testing.T) {
 		}
 	}
 }
+
+// TestTranscodeOrphanToolResultDoesNotSplitContiguousToolRun is the golden,
+// wire-level counterpart to openaicompat's regression test of the same name
+// (PR #108's review round 2): a stray (unanswerable) ToolResult sitting in
+// the FIRST of two consecutive RoleTool messages must not have its demoted
+// text land between the two tool_result blocks that answer the preceding
+// assistant's tool_use calls. This adapter merges adjacent same-role
+// canonical messages into one wire turn, so the two RoleTool messages and
+// the demoted-text message all land in ONE merged "user" wire message here
+// -- this was never the regressed provider for this shape, but it is
+// pinned against the REAL transcodeRequest so a future change to the merge
+// step is caught by the same golden shape all three providers share.
+func TestTranscodeOrphanToolResultDoesNotSplitContiguousToolRun(t *testing.T) {
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolCall{CallID: "A", Name: "bash", Arguments: json.RawMessage(`{}`)},
+			&message.ToolCall{CallID: "B", Name: "bash", Arguments: json.RawMessage(`{}`)},
+		}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "A", Content: message.Parts{&message.Text{Text: "RA"}}},
+			&message.ToolResult{CallID: "GHOST", Content: message.Parts{&message.Text{Text: "STRAY"}}},
+		}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "B", Content: message.Parts{&message.Text{Text: "RB"}}},
+		}},
+	))
+
+	if len(out.Messages) != 3 {
+		t.Fatalf("wire message count = %d, want 3 (user / assistant / merged-user): %+v", len(out.Messages), out.Messages)
+	}
+	merged := out.Messages[2]
+	if merged.Role != "user" {
+		t.Fatalf("wire[2] role = %q, want user", merged.Role)
+	}
+
+	var foundA, foundB, foundGhost bool
+	for _, b := range merged.Content {
+		switch {
+		case b.Type == "tool_result" && b.ToolUseID == "A":
+			foundA = true
+			if len(b.Content) != 1 || b.Content[0].Text != "RA" {
+				t.Errorf("tool_result A = %+v, want text RA", b)
+			}
+		case b.Type == "tool_result" && b.ToolUseID == "B":
+			foundB = true
+			if len(b.Content) != 1 || b.Content[0].Text != "RB" {
+				t.Errorf("tool_result B = %+v, want text RB", b)
+			}
+		case b.Type == "tool_result" && b.ToolUseID == "GHOST":
+			t.Fatalf("GHOST survived as a tool_result block instead of being demoted to text: %+v", b)
+		case b.Type == "text" && strings.Contains(b.Text, "GHOST") && strings.Contains(b.Text, "STRAY"):
+			foundGhost = true
+		}
+	}
+	if !foundA || !foundB {
+		t.Fatalf("merged message must carry real tool_result blocks for A and B: %+v", merged.Content)
+	}
+	if !foundGhost {
+		t.Fatalf("merged message must carry the demoted GHOST text (call id and content): %+v", merged.Content)
+	}
+}

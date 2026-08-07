@@ -186,15 +186,52 @@ type partKey struct{ msgIdx, partIdx int }
 // anthropic and the OpenAI Responses adapter are both role-agnostic (a Text
 // part is valid in any wire role there), so demoting in place never wedged
 // them — but the fix below does not special-case openaicompat: it hoists
-// every RoleTool message's demoted parts into a new, adjacent RoleUser
-// message instead, which every transcoder in this package accepts, keeping
-// the canonical output uniformly valid rather than provider-specific. A
-// RoleAssistant message's demoted parts stay demoted IN PLACE (never
-// hoisted): a Text part is already valid there on every transcoder (an
-// assistant wire turn's content is exactly the union of its parts,
-// role-agnostic same as RoleUser), and this is invariant 2's OWN violation
-// this function exists to repair — a tool_result can never legally sit in
-// an assistant-role wire block, but ordinary text always can.
+// a demoted part into a new, adjacent RoleUser message instead, which every
+// transcoder in this package accepts, keeping the canonical output
+// uniformly valid rather than provider-specific. A RoleAssistant message's
+// demoted parts stay demoted IN PLACE (never hoisted): a Text part is
+// already valid there on every transcoder (an assistant wire turn's content
+// is exactly the union of its parts, role-agnostic same as RoleUser), and
+// this is invariant 2's OWN violation this function exists to repair — a
+// tool_result can never legally sit in an assistant-role wire block, but
+// ordinary text always can.
+//
+// # Why the hoisted message lands after the whole RUN, not after one message
+//
+// A first attempt at the hoist above inserted the new message immediately
+// after the single canonical message the demoted part came from. That is
+// wrong whenever that message is not alone in its wire run: two consecutive
+// RoleTool messages both answering one assistant's tool_calls (the
+// legitimate "results split across two consecutive RoleTool messages"
+// shape — see NormalizeForWire's own gap enumeration) are ONE wire run
+// under this file's model (computeTranscodeSpans groups every consecutive
+// non-assistant message together, regardless of which non-assistant Role
+// each one carries). Splicing a new message after only the FIRST of the
+// two strands the demoted text BETWEEN them — provider/openaicompat's
+// chat/completions wire requires every "tool" message answering a given
+// assistant's tool_calls to be contiguous and to directly follow it, so an
+// interleaved non-"tool" message breaks that association. The request
+// still BUILDS (Text is valid in a RoleUser message), so this was not
+// caught by a build-only check — it produces a request the PROVIDER then
+// rejects with an asynchronous 400 at request time, which is the exact
+// wedge class this whole line of work exists to remove, just moved later.
+// See provider/openaicompat/transcode_test.go's
+// TestTranscodeOrphanToolResultDoesNotSplitContiguousToolRun, which drives
+// the real transcoder over exactly this two-consecutive-RoleTool-messages
+// shape.
+//
+// The fix: gather every demoted part found ANYWHERE across a whole
+// non-assistant RUN (computeTranscodeSpans' own run boundaries — the same
+// abstraction NormalizeForWire's own prepend/appendTo already key off of)
+// into one message, and place it after the run's LAST message
+// (runs[ri].msgEnd), never after an individual message inside it. Real,
+// kept parts stay in their original message and position — only the
+// demoted ones move, and they move exactly once, past every other message
+// in their own run, never past a message in a DIFFERENT run. Order among
+// multiple demoted parts is preserved: they are collected in strict
+// document order (by message, then by part) as the run is scanned, and
+// runs themselves are processed in document order, so a demoted part from
+// an earlier run is always emitted before one from a later run.
 func demoteWireInvalidToolResults(messages []Message) []Message {
 	runs := computeTranscodeSpans(messages)
 	msgRun := make([]int, len(messages))
@@ -259,65 +296,75 @@ func demoteWireInvalidToolResults(messages []Message) []Message {
 		return messages
 	}
 	out := make([]Message, 0, len(messages))
-	for i, m := range messages {
-		if m.Role != RoleTool {
-			// RoleUser or RoleAssistant: a demoted Text part is already
-			// valid right where it sits — see this function's own doc
-			// comment ("Why a demoted Text part is never left inside a
-			// RoleTool message") for why RoleTool alone needs the split
-			// below.
-			newParts := make(Parts, len(m.Parts))
-			changed := false
-			for pi, p := range m.Parts {
-				tr, ok := p.(*ToolResult)
-				if ok && toDemote[partKey{i, pi}] {
-					newParts[pi] = demoteToolResult(tr)
-					changed = true
-				} else {
-					newParts[pi] = p
+	for ri, r := range runs {
+		if r.assistant {
+			// A demoted Text part is already valid right where it sits in
+			// an assistant-role wire block on every transcoder — see this
+			// function's own doc comment for why only a non-assistant run
+			// needs the run-boundary hoist below.
+			for i := r.msgStart; i <= r.msgEnd; i++ {
+				m := messages[i]
+				newParts := make(Parts, len(m.Parts))
+				changed := false
+				for pi, p := range m.Parts {
+					tr, ok := p.(*ToolResult)
+					if ok && toDemote[partKey{i, pi}] {
+						newParts[pi] = demoteToolResult(tr)
+						changed = true
+					} else {
+						newParts[pi] = p
+					}
 				}
-			}
-			if changed {
-				nm := m
-				nm.Parts = newParts
-				out = append(out, nm)
-			} else {
-				out = append(out, m)
+				if changed {
+					nm := m
+					nm.Parts = newParts
+					out = append(out, nm)
+				} else {
+					out = append(out, m)
+				}
 			}
 			continue
 		}
 
-		// RoleTool: split any demoted part OUT of this message rather than
-		// mutating its Role or leaving a Text part stranded inside a "tool"
-		// wire message. Non-demoted parts (a real, still-valid ToolResult, a
-		// ToolCall sharing this message per the off-label same-message
-		// shape) keep their original message and Role untouched; demoted
-		// parts move to a new, adjacent RoleUser message — a role every
-		// transcoder in this package accepts Text in unconditionally.
-		var kept Parts
+		// Non-assistant run: pull every demoted part OUT of wherever it
+		// sits, across every message in this WHOLE run, and collect them
+		// into one message placed AFTER the run's own last message — never
+		// between two of the run's own messages (see this function's doc
+		// comment, "Why the hoisted message lands after the whole RUN").
+		// Non-demoted parts (a real, still-valid ToolResult; a ToolCall
+		// sharing a message per the off-label same-message shape) keep
+		// their original message and position untouched.
 		var demoted Parts
-		for pi, p := range m.Parts {
-			tr, ok := p.(*ToolResult)
-			if ok && toDemote[partKey{i, pi}] {
-				demoted = append(demoted, demoteToolResult(tr))
+		for i := r.msgStart; i <= r.msgEnd; i++ {
+			m := messages[i]
+			var kept Parts
+			hasDemoted := false
+			for pi, p := range m.Parts {
+				tr, ok := p.(*ToolResult)
+				if ok && toDemote[partKey{i, pi}] {
+					hasDemoted = true
+					demoted = append(demoted, demoteToolResult(tr))
+					continue
+				}
+				kept = append(kept, p)
+			}
+			if !hasDemoted {
+				out = append(out, m)
 				continue
 			}
-			kept = append(kept, p)
+			if len(kept) > 0 {
+				nm := m
+				nm.Parts = kept
+				out = append(out, nm)
+			}
 		}
-		if len(demoted) == 0 {
-			out = append(out, m)
-			continue
+		if len(demoted) > 0 {
+			out = append(out, Message{
+				ID:    fmt.Sprintf("%s%d-demoted", wireNormalizePrefix, ri),
+				Role:  RoleUser,
+				Parts: demoted,
+			})
 		}
-		if len(kept) > 0 {
-			nm := m
-			nm.Parts = kept
-			out = append(out, nm)
-		}
-		out = append(out, Message{
-			ID:    m.ID + "-demoted",
-			Role:  RoleUser,
-			Parts: demoted,
-		})
 	}
 	return out
 }
