@@ -1,6 +1,7 @@
 package openaicompat
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -583,6 +584,110 @@ func TestTranscodeOrphanToolResultBuildsSuccessfully(t *testing.T) {
 		}
 	}
 	assertToolCallsAnsweredContiguously(t, out)
+}
+
+// TestTranscodeOrphanToolResultImageBlobArrivesAsRealImagePart is the
+// golden regression test for PR #108 round 5's finding on
+// message/wire_normalize.go:496: a demoted ToolResult's Blob used to
+// survive as a raw Part regardless of media type, and this adapter's own
+// blobURL (~line 343) hard-errors building a request containing ANY
+// non-image/* Blob — the narrowest of the three transcoders (it has no
+// PDF wire form at all, unlike provider/openai) — turning the orphan-
+// tool_result wedge NormalizeForWire exists to fix back into a total
+// request-BUILD failure. This carries a build-safe image AND an
+// unsupported media type in the SAME demoted result: the request must
+// still build, the image must arrive as a real image_url part, and the
+// unsupported Blob must be note-flattened, never a raw content part.
+func TestTranscodeOrphanToolResultImageBlobArrivesAsRealImagePart(t *testing.T) {
+	png := tinyPNG(t)
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "GHOST", Content: message.Parts{
+				&message.Text{Text: "ORPHAN OUTPUT"},
+				&message.Blob{MediaType: "image/png", Data: png},
+				&message.Blob{MediaType: "application/pdf", Data: []byte("%PDF-fake")},
+			}},
+		}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "ok"}}},
+	))
+
+	wantImageURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+	var foundImage bool
+	var rendered strings.Builder
+	for _, m := range out.Messages {
+		raw := marshalRaw(t, &m)
+		rendered.Write(raw)
+		if len(m.Content) == 0 {
+			continue
+		}
+		var arr []probeContentPart
+		if err := json.Unmarshal(m.Content, &arr); err != nil {
+			continue // a plain string content, not a multimodal array
+		}
+		for _, c := range arr {
+			if c.Type == "image_url" && c.ImageURL.URL == wantImageURL {
+				foundImage = true
+			}
+			if c.Type == "image_url" && strings.Contains(c.ImageURL.URL, "pdf") {
+				t.Fatalf("non-build-safe Blob survived as a raw image_url part: %+v", c)
+			}
+		}
+	}
+	if !foundImage {
+		t.Fatalf("demoted ToolResult's image did not arrive as a real image_url part: %s", rendered.String())
+	}
+	if !strings.Contains(rendered.String(), "application/pdf") {
+		t.Fatalf("note-flattened Blob's media type is not findable in the transcoded request: %s", rendered.String())
+	}
+	assertToolCallsAnsweredContiguously(t, out)
+}
+
+// TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn is
+// the golden regression test for PR #108 round 5's finding on
+// message/wire_normalize.go:370: a demoted ToolResult's Blob left inside a
+// RoleAssistant message used to make transcodeAssistantMessage hard-error
+// "unsupported part type *message.Blob in assistant message" -- the
+// finding this test package's own transcodeAssistantMessage is named in.
+// Two ToolResults sharing one assistant message (both with no ToolCall
+// anywhere) reach demoteWireInvalidToolResults' assistant-run branch at
+// all -- see message/wire_normalize_test.go's
+// TestNormalizeForWireAssistantRunBlobHoistedOutOfAssistantMessage for why
+// a single one alone would not.
+func TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn(t *testing.T) {
+	png := tinyPNG(t)
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolResult{CallID: "A", Content: message.Parts{
+				&message.Text{Text: "stuck in assistant"},
+				&message.Blob{MediaType: "image/png", Data: png},
+			}},
+			&message.ToolResult{CallID: "B", Content: message.Parts{&message.Text{Text: "also stuck"}}},
+		}},
+	))
+
+	wantImageURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+	var foundImage bool
+	for _, m := range out.Messages {
+		if len(m.Content) == 0 {
+			continue
+		}
+		var arr []probeContentPart
+		if err := json.Unmarshal(m.Content, &arr); err != nil {
+			continue
+		}
+		for _, c := range arr {
+			if m.Role == "assistant" {
+				t.Fatalf("a demoted Blob's content landed in an assistant-role message: %+v", m)
+			}
+			if c.Type == "image_url" && c.ImageURL.URL == wantImageURL {
+				foundImage = true
+			}
+		}
+	}
+	if !foundImage {
+		t.Fatalf("the hoisted image did not arrive as a real image_url part anywhere: %+v", out.Messages)
+	}
 }
 
 // TestTranscodeOrphanToolResultDoesNotSplitContiguousToolRun is the golden,

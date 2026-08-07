@@ -3,6 +3,7 @@ package message
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -408,6 +409,129 @@ func TestNormalizeForWireDemotionPreservesImageBlob(t *testing.T) {
 	}
 }
 
+// TestNormalizeForWireDemotionNoteFlattensNonImageBlob is the regression
+// test for PR #108 round 5's findings on lines 496/370: `02a0fa6` kept
+// EVERY demoted Blob as a real Part, including a non-image or
+// data-less/URL-less one, which provider/openai and provider/openaicompat
+// hard-error building (see buildSafeBlob's own doc comment,
+// message/wire_normalize.go) -- turning the orphan-tool_result wedge this
+// file exists to fix back into a total request-BUILD failure for that
+// shape. A build-safe image Blob must still survive byte-for-byte (the
+// anthropic fidelity win `02a0fa6` intended to keep); a non-build-safe one
+// must be note-flattened instead -- present in the label's text as a
+// count and media type, never shipped as a raw Blob part.
+func TestNormalizeForWireDemotionNoteFlattensNonImageBlob(t *testing.T) {
+	img := &Blob{MediaType: "image/png", Data: []byte{1, 2, 3, 4, 5}}
+	pdf := &Blob{MediaType: "application/pdf", Data: []byte{6, 7, 8, 9}}
+	in := []Message{
+		{Role: RoleUser, Parts: Parts{&Text{Text: "go"}}},
+		{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "GHOST", Content: Parts{
+			&Text{Text: "ORPHAN OUTPUT"},
+			img,
+			pdf,
+		}}}},
+		{Role: RoleAssistant, Parts: Parts{&Text{Text: "ok"}}},
+	}
+	out := NormalizeForWire(in)
+
+	if v := checkWire(out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire left an unanswerable tool_result wire-invalid: %s", violationStrings(v))
+	}
+	if v := checkNoDataLossAllowingDemotion(in, out); len(v) != 0 {
+		t.Fatalf("demotion mishandled the mixed blob shape: %s", violationStrings(v))
+	}
+
+	var foundImage, foundPDFAsPart bool
+	var rendered strings.Builder
+	for _, m := range out {
+		rendered.WriteString(m.Parts.Text())
+		rendered.WriteByte('\n')
+		for _, p := range m.Parts {
+			b, ok := p.(*Blob)
+			if !ok {
+				continue
+			}
+			if b.MediaType == img.MediaType && string(b.Data) == string(img.Data) {
+				foundImage = true
+			}
+			if b.MediaType == pdf.MediaType {
+				foundPDFAsPart = true
+			}
+		}
+	}
+	if !foundImage {
+		t.Fatalf("build-safe image Blob did not survive as a real Part: %+v", out)
+	}
+	if foundPDFAsPart {
+		t.Fatalf("non-build-safe application/pdf Blob survived as a raw Part instead of being note-flattened: %+v", out)
+	}
+	if !strings.Contains(rendered.String(), "application/pdf") {
+		t.Fatalf("note-flattened Blob's media type is not findable in the output text: %s", rendered.String())
+	}
+}
+
+// TestNormalizeForWireAssistantRunBlobHoistedOutOfAssistantMessage is the
+// regression test for PR #108 round 5's finding on line 370: a demoted
+// result's build-safe Blob must NEVER be left inside a RoleAssistant wire
+// block. provider/openaicompat's transcodeAssistantMessage rejects any
+// Blob outright, and even where a transcoder's own code has no such check
+// (anthropic's transcodeBlob is role-agnostic), the Anthropic Messages API
+// itself rejects an image block in an assistant turn. A ToolResult sitting
+// inside a RoleAssistant message (invariant 2's tool_result half,
+// message/wire_oracle_test.go) is unconditionally demoted; its label Text
+// stays in place, but any surviving Blob must be hoisted into a NEW,
+// separate RoleUser message.
+//
+// Two ToolResults, not one, are needed to reach this shape: a SINGLE
+// ToolResult sitting alone in an assistant run is instead force-relocated
+// (still a real ToolResult, never demoted) by NormalizeForWire's own
+// earlier pass (the "still sitting unclaimed in the pool" loop) into the
+// following run before demoteWireInvalidToolResults ever runs -- so the
+// assistant branch's demotion never even sees it. TWO real results
+// sharing one assistant message (both with no ToolCall anywhere, itself
+// off-label -- see properties_test.go's generator comment) hit
+// computeRelocationBarrier: forcing the FIRST past the SECOND would
+// reorder them, which relocation refuses (see NormalizeForWire's own
+// "Relocation safety" doc comment) -- so A stays exactly where it is,
+// still inside the RoleAssistant message, and demoteWireInvalidToolResults
+// is what finally repairs it.
+func TestNormalizeForWireAssistantRunBlobHoistedOutOfAssistantMessage(t *testing.T) {
+	img := &Blob{MediaType: "image/png", Data: []byte{9, 9, 9, 9}}
+	in := []Message{
+		{Role: RoleAssistant, Parts: Parts{
+			&ToolResult{CallID: "A", Content: Parts{&Text{Text: "stuck in assistant"}, img}},
+			&ToolResult{CallID: "B", Content: Parts{&Text{Text: "also stuck"}}},
+		}},
+	}
+	out := NormalizeForWire(in)
+
+	if v := checkWire(out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire left the assistant-run ToolResult wire-invalid: %s", violationStrings(v))
+	}
+	if v := checkNoDataLossAllowingDemotion(in, out); len(v) != 0 {
+		t.Fatalf("demotion dropped or altered real data: %s", violationStrings(v))
+	}
+
+	var foundElsewhere bool
+	for _, m := range out {
+		for _, p := range m.Parts {
+			b, ok := p.(*Blob)
+			if !ok {
+				continue
+			}
+			if m.Role == RoleAssistant {
+				t.Fatalf("a demoted Blob survived inside a RoleAssistant message: %+v", out)
+			}
+			if b.MediaType == img.MediaType && string(b.Data) == string(img.Data) {
+				foundElsewhere = true
+			}
+		}
+	}
+	if !foundElsewhere {
+		t.Fatalf("the hoisted image Blob did not survive anywhere in the output: %+v", out)
+	}
+}
+
 // TestNormalizeForWireClaimSkipsUnclaimableHeadOfPool is the regression test
 // for PR #108's finding 2: claimFromPool used to inspect only pool[0], so an
 // unclaimable head entry (a surplus id nothing ever demands) permanently
@@ -532,10 +656,25 @@ func checkNoDataLossAllowingDemotion(input, output []Message) []wireViolation {
 		if body != "" {
 			bodyFound = strings.Contains(rendered, body)
 		}
+		// Blobs split into two survival classes, mirroring demoteToolResult's
+		// own split (see buildSafeBlob, message/wire_normalize.go): a
+		// buildSafeBlob (image/* with Data or URL) must survive
+		// byte-identical as a real, loose Blob part -- unrelaxed from the
+		// check this replaces. Anything else is deliberately note-flattened
+		// (PR #108 round 5: a raw, non-build-safe Blob left as a real part
+		// failed the whole request to BUILD on openai/openaicompat), so
+		// THIS CLASS ONLY is narrowed to require its dropped COUNT be
+		// findable in the rendered note text, never its bytes -- it was
+		// never a candidate to survive as a real part in the first place.
 		blobsFound := true
+		var droppedCount int
 		for _, p := range tr.Content {
 			bl, ok := p.(*Blob)
 			if !ok {
+				continue
+			}
+			if !buildSafeBlob(bl) {
+				droppedCount++
 				continue
 			}
 			k := blobKeyOf(bl)
@@ -544,6 +683,9 @@ func checkNoDataLossAllowingDemotion(input, output []Message) []wireViolation {
 			} else {
 				blobsFound = false
 			}
+		}
+		if droppedCount > 0 && !strings.Contains(rendered, strconv.Itoa(droppedCount)) {
+			blobsFound = false
 		}
 		if !idFound || !bodyFound || !blobsFound {
 			violations = append(violations, wireViolation{
