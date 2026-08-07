@@ -652,6 +652,23 @@ func unmarshalPart(raw json.RawMessage) (Part, error) {
 // the model's tool actually produced.
 const SyntheticOrphanResultText = "synthesized: no tool_result was found in history for this tool_use; injected to keep the request protocol-valid"
 
+// SyntheticOrphanIDPrefix is the fixed prefix of every RoleTool message ID
+// ResolveOrphanToolCalls mints (see its doc comment for the full ID shape).
+// IsSyntheticOrphanID tests exactly this prefix, and ResolveOrphanToolCalls
+// builds its IDs from this same constant, so the two can never drift apart.
+const SyntheticOrphanIDPrefix = "synthetic-orphan-tool-result-"
+
+// IsSyntheticOrphanID reports whether id names a message that
+// ResolveOrphanToolCalls synthesizes rather than one that ever passed
+// through Session.append. Such a message exists only in the in-memory
+// history LoadSession rebuilds on every load — it is never itself
+// persisted to a session's durable log — so a durable record (a compact
+// record's FirstID/LastID, for example) must never name one. See NEP-5292
+// and engine/compact.go's Session.Compact.
+func IsSyntheticOrphanID(id string) bool {
+	return strings.HasPrefix(id, SyntheticOrphanIDPrefix)
+}
+
 // ResolveOrphanToolCalls returns messages with a synthetic, is_error
 // tool_result injected for every ToolCall that has no matching ToolResult
 // immediately after it — every provider wire protocol this package
@@ -781,7 +798,7 @@ func ResolveOrphanToolCalls(messages []Message) []Message {
 					// keyed by message ID must never see two collide. Still
 					// deterministic: the same history always yields the
 					// same IDs.
-					ID:    fmt.Sprintf("synthetic-orphan-tool-result-%d-%s", ins.afterIndex, strings.Join(callIDsOf(ins.parts), "-")),
+					ID:    fmt.Sprintf("%s%d-%s", SyntheticOrphanIDPrefix, ins.afterIndex, strings.Join(callIDsOf(ins.parts), "-")),
 					Role:  RoleTool,
 					Parts: ins.parts,
 				})

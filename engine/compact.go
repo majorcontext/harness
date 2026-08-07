@@ -144,8 +144,61 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 	foldEndExclusive := starts[foldTurns] // first KEPT turn's leading RoleUser message
 	foldEnd := foldEndExclusive - 1
 
-	firstID := history[foldStart].ID
-	lastID := history[foldEnd].ID
+	// spliceFirstID/spliceLastID name the fold range as it actually sits in
+	// LIVE history, which can include a message.ResolveOrphanToolCalls
+	// synthetic repair message (see engine/store.go's LoadSession, which
+	// applies that repair to live history AFTER replay). The fold RANGE is
+	// correct either way; only the ID used to splice LIVE history needs the
+	// exact live boundary, synthetic or not.
+	spliceFirstID := history[foldStart].ID
+	spliceLastID := history[foldEnd].ID
+
+	// journaledFirstID/journaledLastID are the durable record's IDs (NEP-
+	// 5292): a synthetic repair message is never itself persisted, so a
+	// journal record naming one is unloadable forever afterward (see
+	// message.IsSyntheticOrphanID's doc comment). Walk to the nearest real,
+	// persisted message on each edge before writing anything durable. The
+	// synthetic message does not exist in raw replayed history at all, so
+	// folding it live while journaling the last real ID before it produces
+	// identical kept-history CONTENT on both the live path and a future
+	// reload — see TestCompactNeverJournalsSyntheticOrphanID.
+	//
+	// Content, not byte-identical messages: a synthetic that survives in the
+	// KEPT range gets a different ID after a reload, because
+	// ResolveOrphanToolCalls numbers afterIndex against the spliced slice on
+	// reload but against full history live. That difference is cosmetic and
+	// cannot reach disk — a synthetic ID is never persisted (this function
+	// is what guarantees it) and never survives transcode.
+	//
+	// # Version skew: this is a persisted-format change, verified both ways
+	//
+	// The compactRecord SHAPE is unchanged (FirstID/LastID/TurnsFolded/
+	// Summary, same fields, same json tags) — only the VALUE a fixed
+	// Session.Compact chooses for LastID differs from an unpatched build's.
+	// That value is always a real, persisted message id, so an OLD binary
+	// (no heal path, plain spliceCompact) reading a log THIS fixed code
+	// wrote replays it correctly with no changes on its side: the id it
+	// looks for is one that was always in raw history, at exactly the same
+	// index a synthetic-aware reader would land on after healing. See
+	// TestCompactNewRecordReplaysIdenticallyWithoutHealPath, which asserts
+	// this directly by calling spliceCompact with no heal involved at all
+	// and comparing to the live result — this is what makes downgrading to
+	// an old binary after this fix safe. The reverse direction (a NEW
+	// binary reading an OLD log that already carries a phantom synthetic
+	// LastID) is store.go's heal path (Part B), covered by
+	// TestLoadSessionHealsPhantomSyntheticCompactLastID.
+	journaledFirstID, ok := nonSyntheticIDForward(history, foldStart, foldEnd)
+	if !ok {
+		err := fmt.Errorf("engine: compact fold start at index %d has no persisted message id to journal", foldStart)
+		s.emit(Event{Type: EventCompactionFailed, Text: err.Error()})
+		return CompactResult{}, err
+	}
+	journaledLastID, ok := nonSyntheticIDBackward(history, foldStart, foldEnd)
+	if !ok {
+		err := fmt.Errorf("engine: compact fold end at index %d has no persisted message id to journal", foldEnd)
+		s.emit(Event{Type: EventCompactionFailed, Text: err.Error()})
+		return CompactResult{}, err
+	}
 
 	model := opts.Model
 	if model.IsZero() {
@@ -171,7 +224,7 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 	summary.Normalize()
 
 	s.mu.Lock()
-	spliced, err := spliceCompact(s.history, firstID, lastID, summary)
+	spliced, err := spliceCompact(s.history, spliceFirstID, spliceLastID, summary)
 	if err != nil {
 		s.mu.Unlock()
 		s.emit(Event{Type: EventCompactionFailed, Text: err.Error()})
@@ -189,7 +242,10 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 	s.usage.CacheWriteTokens += usage.CacheWriteTokens
 	s.compactCount++
 	s.lastCompactedAt = summary.CreatedAt
-	s.persistCompactLocked(firstID, lastID, foldTurns, summary, usage)
+	// Journal only the real, persisted boundary IDs (see journaledFirstID/
+	// journaledLastID's doc comment above) — never the live splice IDs,
+	// which can name a synthetic message that will never exist on replay.
+	s.persistCompactLocked(journaledFirstID, journaledLastID, foldTurns, summary, usage)
 	s.mu.Unlock()
 
 	// Live event surface (§4): the summary flows through the ordinary
@@ -201,18 +257,50 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 	s.emit(Event{Type: EventMessage, Message: &summary})
 	s.emit(Event{
 		Type:               EventHistoryCompacted,
-		CompactFirstID:     firstID,
-		CompactLastID:      lastID,
+		CompactFirstID:     journaledFirstID,
+		CompactLastID:      journaledLastID,
 		CompactTurnsFolded: foldTurns,
 		CompactSummaryID:   summary.ID,
 	})
 
 	return CompactResult{
 		TurnsFolded: foldTurns,
-		FirstID:     firstID,
-		LastID:      lastID,
+		FirstID:     journaledFirstID,
+		LastID:      journaledLastID,
 		Summary:     &summary,
 	}, nil
+}
+
+// nonSyntheticIDForward walks forward from index i (within [start, end]
+// inclusive) and returns the ID of the first message that is not a
+// message.ResolveOrphanToolCalls synthetic (see message.IsSyntheticOrphanID).
+// foldStart is always a turn boundary — a RoleUser message — so it should
+// never itself be synthetic; this walk is defensive only. ok is false when
+// every message in [start, end] is synthetic, which should never happen
+// (start itself is a turn boundary) but is guarded rather than assumed.
+func nonSyntheticIDForward(history []message.Message, start, end int) (id string, ok bool) {
+	for i := start; i <= end; i++ {
+		if !message.IsSyntheticOrphanID(history[i].ID) {
+			return history[i].ID, true
+		}
+	}
+	return "", false
+}
+
+// nonSyntheticIDBackward walks backward from index end down to start
+// (inclusive) and returns the ID of the first message that is not a
+// message.ResolveOrphanToolCalls synthetic (see message.IsSyntheticOrphanID)
+// — the nearest real, persisted message at or before the fold's end. ok is
+// false when every message in [start, end] is synthetic (the walk-back-
+// crosses-before-foldStart guard): that range can then never be journaled,
+// and the caller must fail loudly rather than journal a phantom ID anyway.
+func nonSyntheticIDBackward(history []message.Message, start, end int) (id string, ok bool) {
+	for i := end; i >= start; i-- {
+		if !message.IsSyntheticOrphanID(history[i].ID) {
+			return history[i].ID, true
+		}
+	}
+	return "", false
 }
 
 // runCompactionSummary issues the tool-less summarization call: a request
@@ -308,6 +396,63 @@ func spliceCompact(history []message.Message, firstID, lastID string, summary me
 	out = append(out, summary)
 	out = append(out, history[end+1:]...)
 	return out, nil
+}
+
+// indexOfMessageID returns the index of the first message in history whose
+// ID equals id, and whether one was found. Used by LoadSession's recCompact
+// replay (store.go) to decide, BEFORE calling spliceCompact, whether a
+// record's LastID needs NEP-5292's heal path below.
+func indexOfMessageID(history []message.Message, id string) (int, bool) {
+	for i, m := range history {
+		if m.ID == id {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// healCompactFoldEnd re-derives a compact record's fold-end message ID when
+// the recorded LastID cannot be found verbatim in replayed history
+// (NEP-5292, candidate fix 3): an unpatched build could journal
+// message.ResolveOrphanToolCalls's synthetic repair-message ID as LastID,
+// but that message is minted fresh on every LoadSession, AFTER the scan
+// loop that calls this runs — it was never itself persisted, so this replay
+// can never see it. Re-derives from firstID's position within history plus
+// the record's own turnsFolded count (using turnBoundaries, the same turn-
+// boundary logic Session.Compact itself uses to compute a fold range) —
+// deliberately NOT by parsing call IDs out of the synthetic ID string: that
+// format joins call IDs with "-", which is ambiguous whenever a call ID
+// itself contains a "-".
+//
+// Returns an error — never a silent guess — when firstID itself cannot be
+// found (still corruption, unhealable), when firstID is not itself a turn
+// boundary, or when turnsFolded does not name a KEPT turn boundary that
+// actually exists after it.
+func healCompactFoldEnd(history []message.Message, firstID string, turnsFolded int) (string, error) {
+	firstIdx, found := indexOfMessageID(history, firstID)
+	if !found {
+		return "", fmt.Errorf("first_id %q not found in history", firstID)
+	}
+	starts := turnBoundaries(history)
+	startPos := -1
+	for i, idx := range starts {
+		if idx == firstIdx {
+			startPos = i
+			break
+		}
+	}
+	if startPos == -1 {
+		return "", fmt.Errorf("first_id %q at index %d is not a turn boundary", firstID, firstIdx)
+	}
+	if turnsFolded <= 0 || startPos+turnsFolded >= len(starts) {
+		return "", fmt.Errorf("turns_folded %d out of range for %d turn boundaries after first_id %q", turnsFolded, len(starts), firstID)
+	}
+	foldEndExclusive := starts[startPos+turnsFolded]
+	foldEnd := foldEndExclusive - 1
+	if foldEnd < firstIdx {
+		return "", fmt.Errorf("re-derived fold end %d precedes first_id %q at index %d", foldEnd, firstID, firstIdx)
+	}
+	return history[foldEnd].ID, nil
 }
 
 // bytesPerTokenEstimate is the standard ~4-bytes-per-token heuristic used by
