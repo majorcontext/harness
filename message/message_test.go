@@ -851,3 +851,107 @@ func TestResolveOrphanToolCallsDistinctSyntheticIDs(t *testing.T) {
 		t.Errorf("synthetic message IDs collide: %q", first.ID)
 	}
 }
+
+// TestToolResultNilContentNeverMarshalsNull reproduces the second root
+// cause folded into NEP-5272: ToolResult.Content has json tag "content"
+// with no omitempty, so json.Marshal of a ToolResult whose Content is nil
+// (a tool that produced truly no output, e.g. box hyper-lemon's `grep ... |
+// head -20` matching nothing) marshals as literal `"content": null`.
+// Bedrock/Anthropic's own API rejects a null-content tool_result block
+// with the same "tool_use ids were found without tool_result blocks
+// immediately after" 400 a fully missing tool_result produces — this is
+// why the wedge could fire with no crash, no stream truncation, and no
+// sandbox death at all. Content must never marshal as null.
+func TestToolResultNilContentNeverMarshalsNull(t *testing.T) {
+	m := Message{
+		ID:    "msg_tr_nil",
+		Role:  RoleTool,
+		Parts: Parts{&ToolResult{CallID: "tc1", Content: nil}},
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("json.Marshal = %v, want success", err)
+	}
+	if strings.Contains(string(raw), `"content":null`) {
+		t.Fatalf("marshaled ToolResult carries literal null content: %s", raw)
+	}
+	var out Message
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("json.Unmarshal = %v", err)
+	}
+	tr, ok := out.Parts[0].(*ToolResult)
+	if !ok {
+		t.Fatalf("out.Parts[0] = %T, want *ToolResult", out.Parts[0])
+	}
+	if len(tr.Content) == 0 {
+		t.Errorf("round-tripped Content is empty, want a non-empty marker")
+	}
+}
+
+// TestToolResultBlankTextContentNeverMarshalsNull covers the EXACT shape
+// behind box hyper-lemon's wedge: the tool ran successfully (no error) and
+// returned Content holding one Text part whose Text is the empty string
+// (bash.go's captured-output path for a command with no stdout/stderr) --
+// non-nil, len 1, but empty in every way that matters. This must be
+// treated the same as nil Content: transcodeParts (provider/anthropic/
+// transcode.go) skips an empty Text part entirely, so this shape collapses
+// to zero wire blocks exactly like a nil Content would.
+func TestToolResultBlankTextContentNeverMarshalsNull(t *testing.T) {
+	m := Message{
+		ID:    "msg_tr_blank",
+		Role:  RoleTool,
+		Parts: Parts{&ToolResult{CallID: "tc1", Content: Parts{&Text{Text: ""}}}},
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("json.Marshal = %v, want success", err)
+	}
+	if strings.Contains(string(raw), `"content":null`) {
+		t.Fatalf("marshaled ToolResult carries literal null content: %s", raw)
+	}
+	var out Message
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("json.Unmarshal = %v", err)
+	}
+	tr := out.Parts[0].(*ToolResult)
+	if tr.Content.Text() == "" {
+		t.Errorf("round-tripped Content still renders blank, want a non-empty marker")
+	}
+}
+
+// TestMessageNormalizeFillsEmptyToolResultContent proves Normalize -- the
+// one ingest choke point every message passes through (Session.append) --
+// repairs an empty ToolResult.Content in place, mirroring how it already
+// repairs a truncated ToolCall.Arguments. This is the primary fix: by the
+// time a message this poisoned enters history, Content is already the
+// marker text, so no later marshal ever has to fall back to SafeContent's
+// own defense-in-depth substitution.
+func TestMessageNormalizeFillsEmptyToolResultContent(t *testing.T) {
+	m := Message{
+		Role:  RoleTool,
+		Parts: Parts{&ToolResult{CallID: "tc1", Content: nil}},
+	}
+	m.Normalize()
+	tr := m.Parts[0].(*ToolResult)
+	if len(tr.Content) == 0 {
+		t.Fatalf("Normalize left Content empty: %+v", tr)
+	}
+	if tr.Content.Text() == "" {
+		t.Errorf("Normalize left Content rendering blank: %+v", tr)
+	}
+}
+
+// TestMessageNormalizeLeavesRealToolResultContentAlone proves the fix is
+// scoped: a ToolResult that genuinely has content (text or otherwise) is
+// never touched.
+func TestMessageNormalizeLeavesRealToolResultContentAlone(t *testing.T) {
+	m := Message{
+		Role:  RoleTool,
+		Parts: Parts{&ToolResult{CallID: "tc1", Content: Parts{&Text{Text: "real output"}}}},
+	}
+	m.Normalize()
+	tr := m.Parts[0].(*ToolResult)
+	if tr.Content.Text() != "real output" {
+		t.Errorf("Normalize disturbed real content: got %q", tr.Content.Text())
+	}
+}

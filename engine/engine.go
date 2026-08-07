@@ -920,12 +920,27 @@ func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, er
 		s.emit(Event{Type: EventMessage, Message: asst, StopReason: stop, Usage: &usage})
 
 		if stop != provider.StopToolUse {
+			// See appendUnexecutedToolCallResults (NEP-5272): a provider
+			// reporting a non-tool_use stop reason ALONGSIDE tool_use
+			// blocks is exactly the shape that permanently wedged three
+			// production boxes -- asst just got appended two lines above,
+			// so if it carries any ToolCall parts, this appends their
+			// synthetic results before Prompt ever returns, closing the
+			// hole instead of leaving them orphaned in history.
+			s.appendUnexecutedToolCallResults(asst, stop)
 			return asst, nil
 		}
 		results := s.runToolCalls(ctx, asst)
 		if len(results) == 0 {
 			// tool_use stop with no tool calls: treat as end of turn
-			// rather than looping forever.
+			// rather than looping forever. runToolCalls only ever omits a
+			// ToolCall from results if asst carried none to begin with
+			// (every ToolCall part it does find gets exactly one result),
+			// so this call is a defensive no-op today -- kept for the same
+			// reason as the branch above: a future producer of asst that
+			// ever DOES leave a ToolCall unexecuted here must not get a
+			// free pass on the orphan invariant.
+			s.appendUnexecutedToolCallResults(asst, stop)
 			return asst, nil
 		}
 		s.append(message.Message{
@@ -1231,15 +1246,29 @@ func (e *interruptedTurnError) Unwrap() error { return e.err }
 // the partial assistant message with no following results for the
 // interrupted calls until it reloads history (GET /message, LoadSession).
 func interruptedToolResults(partial *message.Message) message.Message {
+	return syntheticUnexecutedToolResults(partial, interruptedTurnErrorText)
+}
+
+// syntheticUnexecutedToolResults builds a tool-role message with one
+// is_error ToolResult per ToolCall part in msg, in order, each carrying
+// text. It is the one shared implementation behind every synthetic-result
+// producer in this file: interruptedToolResults (a stream that died before
+// EventDone, see interruptedTurnError above) and
+// appendUnexecutedToolCallResults below (a stream that reached EventDone
+// normally but with a stop reason other than StopToolUse, see NEP-5272) --
+// both need the exact same "one result per unexecuted call" shape, and a
+// second hand-rolled copy of this loop is exactly the kind of drift that
+// leaves a future third case unpaired.
+func syntheticUnexecutedToolResults(msg *message.Message, text string) message.Message {
 	var results message.Parts
-	for _, p := range partial.Parts {
+	for _, p := range msg.Parts {
 		tc, ok := p.(*message.ToolCall)
 		if !ok {
 			continue
 		}
 		results = append(results, &message.ToolResult{
 			CallID:  tc.CallID,
-			Content: message.Parts{&message.Text{Text: interruptedTurnErrorText}},
+			Content: message.Parts{&message.Text{Text: text}},
 			IsError: true,
 		})
 	}
@@ -1249,6 +1278,83 @@ func interruptedToolResults(partial *message.Message) message.Message {
 		Parts:     results,
 		CreatedAt: time.Now().UTC(),
 	}
+}
+
+// unexecutedToolCallStopReasonTextFmt is the Printf format behind the
+// Content text of the synthetic, is_error tool-role result
+// appendUnexecutedToolCallResults appends for a ToolCall the engine never
+// executed because the turn's own stop reason wasn't StopToolUse. Kept as
+// a package-level constant (rather than inlined) so a test can assert on
+// the exact rendered string via fmt.Sprintf(unexecutedToolCallStopReasonTextFmt,
+// stop) — see TestPersistTruncatedToolCallArguments — rather than
+// duplicating the literal.
+//
+// # Incident NEP-5272 (boxes bumpy-grape, royal-cupcake, hyper-lemon, 2026-08-07)
+//
+// Three production boxes wedged permanently in one day. Wire capture from
+// box hyper-lemon (session ses_01kze9vds5fxd89dtv4accqjcp, the
+// Bedrock/bifrost provider path) showed a request with 44 tool_use blocks
+// but only 43 tool_result blocks: the orphaned call sat at wire index 91,
+// immediately followed by a plain user message. Anthropic's API then 400s
+// every subsequent request with "tool_use ids were found without
+// tool_result blocks immediately after" -- permanently, since nothing in
+// this session's own history ever removed the orphan and every later
+// Prompt call just appends new messages above it.
+//
+// The mechanism, unlike the sibling interruptedTurnError case above: the
+// provider stream did NOT error and DID reach EventDone -- a completed,
+// ordinary turn -- but its reported StopReason was something other than
+// StopToolUse (StopEndTurn observed on the wire capture; nothing rules out
+// StopMaxTokens or another value from a different route) while the
+// assistant message it returned nonetheless carried one or more ToolCall
+// parts. Session.Prompt's `if stop != provider.StopToolUse { return asst,
+// nil }` early return appended asst (with its ToolCall parts) to history
+// and returned -- with no following tool-role message ever appended for
+// those calls. Every later request replay finds the same unpaired
+// tool_use.
+//
+// The fix does NOT execute the orphaned calls: a StopMaxTokens stop can
+// truncate ToolCall.Arguments mid-JSON (see the sibling incident fixed by
+// "truncated ToolCall.Arguments must never poison history"), and running a
+// tool against truncated, possibly invalid arguments is its own hazard --
+// worse than a visible failure. Synthesizing an is_error result instead is
+// deterministic, loses no information (the ToolCall itself, with the
+// model's full original intent, stays in history right where it was), and
+// converts a fatal, permanent wedge into an ordinary tool failure the
+// model can see and react to on its very next turn -- exactly the
+// "execute instead of synthesize" alternative considered and deliberately
+// rejected here.
+const unexecutedToolCallStopReasonTextFmt = "unexecuted: tool call was never run because the provider reported stop reason %q for this turn instead of tool_use"
+
+// appendUnexecutedToolCallResults appends a synthetic tool-role message --
+// one is_error ToolResult per ToolCall part found in asst, via
+// syntheticUnexecutedToolResults -- if and only if asst carries at least
+// one. It is a no-op for the overwhelmingly common case (a turn with no
+// ToolCall parts at all), so every call site above can call it
+// unconditionally right after appending asst to history, closing the
+// NEP-5272 hole without disturbing any turn that never had an orphan risk
+// in the first place.
+//
+// Like every other tool-result append in this file, this message is
+// persisted without an EventMessage emit and without an EventToolEnd for
+// the unexecuted calls (see interruptedToolResults's doc comment for why:
+// a pure event-stream consumer sees the gap only until it reloads
+// history). toolExecCount is never touched here -- these calls did not
+// run, so a goal-loop retry of this same attempt remains exactly as safe
+// as it always was (see promptTurnWithRetry's non-idempotency doc comment
+// in goal.go).
+func (s *Session) appendUnexecutedToolCallResults(asst *message.Message, stop provider.StopReason) {
+	hasToolCall := false
+	for _, p := range asst.Parts {
+		if _, ok := p.(*message.ToolCall); ok {
+			hasToolCall = true
+			break
+		}
+	}
+	if !hasToolCall {
+		return
+	}
+	s.append(syntheticUnexecutedToolResults(asst, fmt.Sprintf(unexecutedToolCallStopReasonTextFmt, stop)))
 }
 
 // toolDefs merges built-in tools, MCP-provided tools, and plugin-provided

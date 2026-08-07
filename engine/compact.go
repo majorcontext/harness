@@ -168,6 +168,8 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 		CreatedAt: time.Now().UTC(),
 	}
 
+	summary.Normalize()
+
 	s.mu.Lock()
 	spliced, err := spliceCompact(s.history, firstID, lastID, summary)
 	if err != nil {

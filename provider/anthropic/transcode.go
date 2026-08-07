@@ -219,12 +219,22 @@ func transcodeParts(parts message.Parts) ([]apiBlock, error) {
 			})
 
 		case *message.ToolResult:
-			content, err := transcodeParts(v.Content)
+			// SafeContent, not Content: the canonical-layer guarantee
+			// (message.Message.Normalize, at both live append and
+			// LoadSession) is the primary fix, but this is the last stop
+			// before the wire, for a ToolResult built by a producer that
+			// bypasses Normalize entirely — see SafeContent's doc comment.
+			content, err := transcodeParts(v.SafeContent())
 			if err != nil {
 				return nil, err
 			}
 			if content == nil {
-				content = []apiBlock{}
+				// Should not happen once SafeContent has run — kept as a
+				// defensive fallback so a non-empty Content whose parts
+				// all happen to transcode to nothing still ships a
+				// present, non-empty content array rather than an omitted
+				// key (see the incident in SafeContent's own doc comment).
+				content = []apiBlock{{Type: "text", Text: message.NoToolOutputText}}
 			}
 			blocks = append(blocks, apiBlock{
 				Type:      "tool_result",

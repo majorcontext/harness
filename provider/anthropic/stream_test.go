@@ -187,6 +187,43 @@ func TestStreamInlineError(t *testing.T) {
 	}
 }
 
+// TestStreamInlineInvalidRequestErrorIsPermanent is the red-first
+// regression test for NEP-5272's NEW MAJOR #5: apiError's HTTP-path
+// classifies a 400 invalid_request_error permanent (fail fast, never
+// retry), but the mid-stream "error" SSE case handled here went through
+// classifyErrorType only, which knows nothing but
+// overloaded/rate_limit/api_error — so the identical malformed-request
+// shape, delivered mid-stream instead of as an HTTP status, burned the
+// full deterministic retry budget instead of failing fast on attempt 1.
+func TestStreamInlineInvalidRequestErrorIsPermanent(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse("message_start", `{"type":"message_start","message":{"id":"msg_03","usage":{"input_tokens":1}}}`))                                                      //nolint:errcheck
+		io.WriteString(w, sse("error", `{"type":"error","error":{"type":"invalid_request_error","message":"tool_use ids were found without tool_result blocks immediately after"}}`)) //nolint:errcheck
+	})
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+		MaxTokens: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for {
+		_, err := s.Next()
+		if err != nil {
+			if !provider.AsPermanent(err) {
+				t.Fatalf("err = %v, want provider.AsPermanent", err)
+			}
+			if _, retryable := provider.AsRetryable(err); retryable {
+				t.Errorf("err = %v, want NOT classified retryable (permanent and retryable are mutually exclusive)", err)
+			}
+			return
+		}
+	}
+}
+
 func TestStreamNoAPIKey(t *testing.T) {
 	c := &Client{}
 	_, err := c.Stream(context.Background(), &provider.Request{

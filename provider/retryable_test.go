@@ -98,3 +98,80 @@ func TestRetryableErrorMessageNamesClass(t *testing.T) {
 		t.Errorf("Error() = %q, want %q", got, want)
 	}
 }
+
+// TestMarkPermanentNilIsNil mirrors MarkRetryable's nil-passthrough
+// convention (see MarkPermanent's doc comment), so an adapter can call it
+// unconditionally.
+func TestMarkPermanentNilIsNil(t *testing.T) {
+	if err := MarkPermanent(nil); err != nil {
+		t.Fatalf("MarkPermanent(nil) = %v, want nil", err)
+	}
+}
+
+// TestAsPermanentRoundTrip mirrors TestAsRetryableRoundTrip: the
+// classification round-trips through AsPermanent, and Unwrap still exposes
+// the original error to errors.Is.
+func TestAsPermanentRoundTrip(t *testing.T) {
+	base := errors.New(`anthropic: messages.5: tool_use ids were found without tool_result blocks immediately after (invalid_request_error, HTTP 400)`)
+	wrapped := MarkPermanent(base)
+
+	if !AsPermanent(wrapped) {
+		t.Fatalf("AsPermanent(wrapped) = false, want true")
+	}
+	if !errors.Is(wrapped, base) {
+		t.Errorf("errors.Is(wrapped, base) = false, want true (Unwrap must expose the original error)")
+	}
+}
+
+// TestAsPermanentFalseForOrdinaryError guards the negative case: a plain,
+// unmarked error is never mistaken for a permanent classification.
+func TestAsPermanentFalseForOrdinaryError(t *testing.T) {
+	base := errors.New("anthropic: invalid request (invalid_request_error, HTTP 400)")
+	if AsPermanent(base) {
+		t.Fatalf("AsPermanent(ordinary error) = true, want false")
+	}
+}
+
+// TestAsPermanentThroughWrapping mirrors TestAsRetryableThroughWrapping: the
+// classification survives being wrapped by an unrelated error type via
+// fmt.Errorf's %w, the same shape engine's interruptedTurnError wraps a
+// stream error in.
+func TestAsPermanentThroughWrapping(t *testing.T) {
+	base := errors.New("bad request")
+	permanent := MarkPermanent(base)
+	outer := fmt.Errorf("engine: turn interrupted: %w", permanent)
+
+	if !AsPermanent(outer) {
+		t.Fatalf("AsPermanent(outer) = false, want true")
+	}
+}
+
+// TestPermanentErrorMessageFormat pins the fixed "[permanent] " prefix
+// PermanentError.Error renders. PermanentError deliberately carries no
+// class enum (see its own doc comment) — unlike RetryableError, there is
+// only one undifferentiated "do not retry this" bucket — so this checks a
+// fixed prefix, not a named class.
+func TestPermanentErrorMessageFormat(t *testing.T) {
+	err := MarkPermanent(errors.New("bad request"))
+	const want = "[permanent] bad request"
+	if got := err.Error(); got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+}
+
+// TestPermanentAndRetryableAreMutuallyExclusive guards the structural
+// boundary between the two classifications: an error marked permanent must
+// never also report as retryable, and vice versa, since promptTurnWithRetry
+// (engine/goal.go) chooses mutually exclusive branches — a fail-fast, single
+// attempt for permanent versus a bounded, backed-off retry loop for
+// retryable — off exactly this pair of predicates.
+func TestPermanentAndRetryableAreMutuallyExclusive(t *testing.T) {
+	permanent := MarkPermanent(errors.New("bad request"))
+	if _, ok := AsRetryable(permanent); ok {
+		t.Errorf("AsRetryable(MarkPermanent(...)) = true, want false")
+	}
+	retryable := MarkRetryable(errors.New("overloaded"), RetryableOverloaded)
+	if AsPermanent(retryable) {
+		t.Errorf("AsPermanent(MarkRetryable(...)) = true, want false")
+	}
+}
