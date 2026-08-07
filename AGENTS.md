@@ -31,8 +31,42 @@ tui/               a client, nothing more
 - **The session log stores the canonical message format, never a provider's.** Every request, the provider adapter transcodes canonical history → provider wire format from scratch (stateless transcoding). Mid-session model swap = next request uses a different transcoder. No migration step.
 - **Provider-specific opaque data (reasoning/thinking blocks, encrypted reasoning items) is stored as provider-tagged attachments** on canonical messages: replayed verbatim to the same provider, dropped when crossing providers. Tool-call IDs are internal; each transcoder maps deterministically to provider-compliant IDs. Prompt-cache markers are injected at transcode time, never stored.
 - **Model refs are `provider/model`** plus user-defined aliases (`fast`, `smart`) from config. The models.dev catalog snapshot is embedded at build time and refreshed async — never on the startup path.
-- **A history repair that runs on live or persisted state is additive-only.** `LoadSession` writes the repaired slice back into live history, so a repair that deletes loses data permanently — not for one request, but for the life of the session. Add synthetic parts; never drop, reorder, or relocate a part another producer wrote. A transcode-time repair MAY be destructive, because it builds one throwaway request and never touches the record. Put every destructive rule on that side of the line. (Incident: a `ResolveOrphanToolCalls` rewrite deleted genuine tool output in three shapes and was reverted; see NEP-5293.)
+- **A history repair that runs on live or persisted state is additive-only.** `LoadSession` writes the repaired slice back into live history, so a repair that deletes loses data permanently — not for one request, but for the life of the session. Add synthetic parts; never drop, reorder, or relocate a part another producer wrote. A transcode-time repair MAY be destructive, because it builds one throwaway request and never touches the record. Put every destructive rule on that side of the line. (Incident: a `ResolveOrphanToolCalls` rewrite deleted genuine tool output in three shapes and was reverted; see NEP-5293.) The concrete split is in "Wire normalization" below.
 - **An empty tool result must never serialize as `null`.** The provider reads a null-content `tool_result` as ABSENT and rejects the whole request with "tool_use ids were found without tool_result blocks immediately after" — naming a block that IS in the payload. A tool that produces no output (a `grep` that matches nothing) is enough to wedge a session forever. `message.NoToolOutputText`, `ToolResult.SafeContent`, and `ToolResult.MarshalJSON` hold this line; every transcoder reads through `SafeContent`, never `Content`. (Incident: NEP-5272.)
+
+### Wire normalization
+
+Two functions repair `tool_use`/`tool_result` pairing. They sit on opposite
+sides of the live-versus-transcode line in the invariant above.
+
+`message.ResolveOrphanToolCalls` is the LIVE-path repair. `LoadSession`
+applies it and writes the result back into history, so it stays purely
+additive. It deliberately leaves several shapes wire-invalid. Do not "fix"
+it — that is the whole point of the split.
+
+`message.NormalizeForWire` (`message/wire_normalize.go`) is the
+transcode-only sibling. Every transcoder calls it instead. It builds one
+throwaway request, so it may relocate a part. It must still never delete a
+real `ToolResult`.
+
+`NormalizeForWire` closes four shapes `ResolveOrphanToolCalls` cannot:
+
+1. Two `tool_use` blocks share one call ID in one assistant message.
+2. A `ToolCall` sits in a non-assistant message.
+3. A `ToolResult` precedes its `ToolCall`.
+4. An intervening same-side message separates a `ToolResult` from its
+   `ToolCall`. Every transcoder merges adjacent same-role messages (see
+   `provider/anthropic/transcode.go:177`), so the wire sees RUNS.
+   `ResolveOrphanToolCalls` tests strict `messages[i+1]` and is blind to
+   this.
+
+Relocation is bounded. `computeRelocationBarrier` moves a result no later
+than the origin run of the next real result. That keeps the original
+relative order intact. A move that would break the bound is refused.
+
+`message/wire_oracle_test.go` is the specification both functions are
+tested against. Derive it from the provider contract only, never from
+either function's internals. See the oracle rule under Testing.
 
 ### Project instructions (AGENTS.md)
 

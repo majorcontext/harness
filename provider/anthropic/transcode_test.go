@@ -446,6 +446,123 @@ func assertToolUseFollowedByResult(t *testing.T, out *apiRequest, id string) {
 	t.Fatalf("tool_use %q not found in transcoded request at all", id)
 }
 
+// TestTranscodeSplitAssistantMessageRelocatesRealResult is the golden,
+// wire-level test for NEP-5293 part 2's fourth gap shape: a real
+// ToolResult separated from its ToolCall by an intervening assistant
+// message. It asserts the ACTUAL apiMessage sequence transcodeRequest
+// emits, not just the message-package oracle's structural check —
+// checkWire cannot see wire-level defects the oracle itself doesn't model
+// (block order, is_error, exact text), which is exactly how this shape's
+// second defect (see below) was found in the first place.
+//
+// # The exact defect on current main this pins the fix for
+//
+// This adapter merges adjacent same-role canonical messages into one wire
+// turn (transcodeRequest, "The API requires strict user/assistant
+// alternation; merge adjacent same-role messages"), so the wire sees ONE
+// assistant turn spanning both assistant messages below. Before
+// NormalizeForWire, message.ResolveOrphanToolCalls reasoned about strict
+// messages[i+1] adjacency instead: it saw messages[1] (the SECOND
+// assistant message) is not a tool message, concluded the tool_use was
+// unanswered, and spliced a SYNTHETIC is_error tool_result in between —
+// leaving the REAL result dangling at the end with no tool_use immediately
+// before it (an HTTP 400) while ALSO telling the model, falsely, that its
+// tool call had failed. This test asserts BOTH defects are gone: exactly
+// one tool_result for the call, carrying the REAL text, not is_error, and
+// the resulting three-message wire shape the run-merge produces.
+func TestTranscodeSplitAssistantMessageRelocatesRealResult(t *testing.T) {
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolCall{CallID: "A", Name: "bash", Arguments: json.RawMessage(`{}`)},
+		}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "thinking out loud"}}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "A", Content: message.Parts{&message.Text{Text: "REAL OUTPUT"}}},
+		}},
+	))
+
+	if len(out.Messages) != 3 {
+		t.Fatalf("wire message count = %d, want 3 (user / merged-assistant / user): %+v", len(out.Messages), out.Messages)
+	}
+
+	wire0, wire1, wire2 := out.Messages[0], out.Messages[1], out.Messages[2]
+
+	if wire0.Role != "user" || len(wire0.Content) != 1 || wire0.Content[0].Type != "text" || wire0.Content[0].Text != "go" {
+		t.Errorf("wire[0] = %+v, want a single user text block \"go\"", wire0)
+	}
+
+	if wire1.Role != "assistant" || len(wire1.Content) != 2 {
+		t.Fatalf("wire[1] = %+v, want one merged assistant turn with 2 blocks (tool_use, text)", wire1)
+	}
+	if wire1.Content[0].Type != "tool_use" || wire1.Content[0].ID != "A" {
+		t.Errorf("wire[1] block 0 = %+v, want tool_use A", wire1.Content[0])
+	}
+	if wire1.Content[1].Type != "text" || wire1.Content[1].Text != "thinking out loud" {
+		t.Errorf("wire[1] block 1 = %+v, want the interleaved assistant text", wire1.Content[1])
+	}
+
+	if wire2.Role != "user" || len(wire2.Content) != 1 {
+		t.Fatalf("wire[2] = %+v, want exactly one tool_result block (the real one) — a stray synthetic here is the exact reverted defect", wire2)
+	}
+	result := wire2.Content[0]
+	if result.Type != "tool_result" || result.ToolUseID != "A" {
+		t.Fatalf("wire[2] block 0 = %+v, want tool_result answering A", result)
+	}
+	if result.IsError {
+		t.Errorf("tool_result IsError = true, want false — the real call succeeded and must not be reported as failed")
+	}
+	if len(result.Content) != 1 || result.Content[0].Text != "REAL OUTPUT" {
+		t.Errorf("tool_result content = %+v, want the real output text, not a synthesized marker", result.Content)
+	}
+}
+
+// TestTranscodeUnanswerableToolResultDemotedNotShippedAsBlock is the
+// golden, wire-level test for the fifth gap: a ToolResult whose CallID
+// matches no ToolCall anywhere in history at all. Before the demotion fix,
+// this transcoded straight through as a tool_result block naming an id no
+// tool_use ever carried — verified live against this real transcoder — the
+// SAME permanent-wedge HTTP 400 class as NEP-5272 ("tool_use ids were
+// found without tool_result blocks immediately after" is the mirror image
+// of this: a tool_result naming a tool_use that was never made). Neither
+// counting nor relocation can ever answer an id with zero ToolCalls
+// anywhere, so the fix changes representation instead: the block becomes
+// plain text, preserving every byte of the real output and its error
+// state, never claiming to answer a call that never happened.
+func TestTranscodeUnanswerableToolResultDemotedNotShippedAsBlock(t *testing.T) {
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "GHOST", Content: message.Parts{&message.Text{Text: "ORPHAN OUTPUT"}}},
+		}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "ok"}}},
+	))
+
+	for _, m := range out.Messages {
+		for _, b := range m.Content {
+			if b.Type == "tool_result" {
+				t.Fatalf("an unanswerable tool_result shipped as a wire tool_result block: %+v — Anthropic rejects a tool_use_id naming no tool_use with HTTP 400", b)
+			}
+			if b.Type == "tool_use" {
+				t.Fatalf("no ToolCall was ever in this history, yet a tool_use block was transcoded: %+v", b)
+			}
+		}
+	}
+
+	// The real content must still be plainly present as text somewhere.
+	var joined string
+	for _, m := range out.Messages {
+		for _, b := range m.Content {
+			if b.Type == "text" {
+				joined += b.Text + "\n"
+			}
+		}
+	}
+	if !strings.Contains(joined, "GHOST") || !strings.Contains(joined, "ORPHAN OUTPUT") {
+		t.Errorf("wire text = %q, want the call id and real output both plainly present somewhere", joined)
+	}
+}
+
 // TestTranscodeCompactionDoubleRoleUserMerges is the red-first test for the
 // compaction splice shape docs/design/context-compaction.md's §2 calls out
 // as load-bearing on existing transcoder behavior, not luck: a successful
