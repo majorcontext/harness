@@ -1,6 +1,10 @@
 package provider
 
-import "errors"
+import (
+	"context"
+	"errors"
+	"fmt"
+)
 
 // RetryableClass names why an adapter considers an error transient provider
 // weather — worth an automatic retry — rather than a deterministic failure
@@ -17,6 +21,19 @@ const (
 	// Anthropic inline "api_error" stream event, which is the same failure
 	// mode delivered mid-stream instead of as an HTTP status).
 	RetryableServerError RetryableClass = "server_error"
+	// RetryableStreamTruncated marks a response stream that died before
+	// its terminal event (Anthropic message_stop, OpenAI-compat [DONE],
+	// Responses response.completed): the connection was cut, reset, or
+	// closed mid-body. This is the one transient failure that carries NO
+	// structured provider response to classify from — no HTTP status (the
+	// header already said 200), no inline error event — so it gets its own
+	// mark (MarkStreamTruncated) at the adapters' stream-read boundary
+	// rather than riding classifyStatus/classifyErrorType. Field data:
+	// the 2026-08-06 incident's gateway cut streams at a ~111s ceiling
+	// with HTTP 200 and a handful of chunks delivered; the resulting bare
+	// io.EOF was classified deterministic and parked a goal loop that a
+	// prompt re-issue minutes later showed was perfectly healthy.
+	RetryableStreamTruncated RetryableClass = "stream_truncated"
 )
 
 // RetryableError marks an adapter error as retryable provider weather (an
@@ -59,6 +76,30 @@ func MarkRetryable(err error, class RetryableClass) error {
 		return nil
 	}
 	return &RetryableError{Err: err, Class: class}
+}
+
+// MarkStreamTruncated wraps a stream-read error as RetryableStreamTruncated,
+// giving the bare transport error (typically io.EOF, or a "connection reset"
+// net error) a message that names what actually happened. Adapters call it
+// at exactly one place each: the stream-read error return in Next, BEFORE
+// the terminal event was seen — never on the post-terminal io.EOF that
+// signals normal end-of-iteration.
+//
+// A context cancellation or deadline is returned unchanged: that is the
+// caller's own abort (POST /abort, shutdown, a stream watchdog's parent
+// deadline), not provider weather, and callers like the goal loop check
+// errors.Is(err, context.Canceled) to stop retrying — a check that would
+// still work through RetryableError's Unwrap, but wrapping would lie about
+// the failure being provider-side. Nil is returned unchanged, mirroring
+// MarkRetryable.
+func MarkStreamTruncated(err error) error {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return &RetryableError{
+		Err:   fmt.Errorf("provider stream ended before completion: %w", err),
+		Class: RetryableStreamTruncated,
+	}
 }
 
 // AsRetryable reports whether err (or any error it wraps, per errors.As)

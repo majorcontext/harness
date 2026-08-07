@@ -495,6 +495,7 @@ func runCmd(args []string) error {
 		MCP:                 mcpRegistry(mcpMgr),
 		Processes:           processRegistry(procMgr),
 		ContextWindowTokens: cfg.ContextWindowTokens,
+		StreamIdleTimeout:   time.Duration(cfg.StreamIdleTimeoutS) * time.Second,
 		CompactionThreshold: cfg.CompactionThreshold,
 		CompactionKeepTurns: cfg.CompactionKeepTurns,
 		// GoalTool mirrors serveCmd's mkCfg below: the `goal` session tool is
@@ -987,6 +988,7 @@ func serveCmd(args []string) error {
 			MCP:                 mcpRegistry(mcpMgr),
 			Processes:           processRegistry(procMgr),
 			ContextWindowTokens: cfg.ContextWindowTokens,
+			StreamIdleTimeout:   time.Duration(cfg.StreamIdleTimeoutS) * time.Second,
 			CompactionThreshold: cfg.CompactionThreshold,
 			CompactionKeepTurns: cfg.CompactionKeepTurns,
 			// GoalTool enables the `goal` session tool (status/set/adjust)
@@ -1025,6 +1027,12 @@ func serveCmd(args []string) error {
 		// comment for why this is the ONE place that ever sets it (server
 		// itself never infers it from RunToken alone).
 		Unauthenticated: unauthenticated,
+		// Logger: the same JSON stderr logger built above for the
+		// config-load summary and "serve start" lines now also drives
+		// server.Options.Logger's turn-lifecycle/goal-lifecycle logging
+		// (see that field's doc comment for the field report motivating
+		// it) — one logger for the whole process, not a second one.
+		Logger: logger,
 		OnError: func(_ context.Context, err error) {
 			logger.Error("serve error", "error", err.Error())
 		},

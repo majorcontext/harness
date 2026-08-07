@@ -610,6 +610,67 @@ func TestGoalEvaluatorModel(t *testing.T) {
 	})
 }
 
+// TestStreamIdleTimeoutS is the red-first test for the stream_idle_timeout_s
+// config field: 0/omitted means "engine default", negative means "disable
+// the watchdog", and project non-zero values override the user layer, same
+// scalar-override rule as GoalEvaluatorModel.
+func TestStreamIdleTimeoutS(t *testing.T) {
+	t.Run("load", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"stream_idle_timeout_s": 120}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.StreamIdleTimeoutS != 120 {
+			t.Errorf("StreamIdleTimeoutS = %d, want 120", c.StreamIdleTimeoutS)
+		}
+	})
+	t.Run("load negative disables watchdog", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"stream_idle_timeout_s": -1}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.StreamIdleTimeoutS != -1 {
+			t.Errorf("StreamIdleTimeoutS = %d, want -1", c.StreamIdleTimeoutS)
+		}
+	})
+	t.Run("unset leaves zero", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.StreamIdleTimeoutS != 0 {
+			t.Errorf("StreamIdleTimeoutS = %d, want 0 (unset)", c.StreamIdleTimeoutS)
+		}
+	})
+	t.Run("project overrides user", func(t *testing.T) {
+		base := &Config{StreamIdleTimeoutS: 60}
+		merged := merge(base, &Config{StreamIdleTimeoutS: 30})
+		if merged.StreamIdleTimeoutS != 30 {
+			t.Errorf("merged = %d, want project override 30", merged.StreamIdleTimeoutS)
+		}
+	})
+	t.Run("project overrides user with negative (disable)", func(t *testing.T) {
+		base := &Config{StreamIdleTimeoutS: 60}
+		merged := merge(base, &Config{StreamIdleTimeoutS: -1})
+		if merged.StreamIdleTimeoutS != -1 {
+			t.Errorf("merged = %d, want project override -1", merged.StreamIdleTimeoutS)
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{StreamIdleTimeoutS: 60}
+		merged := merge(base, &Config{})
+		if merged.StreamIdleTimeoutS != 60 {
+			t.Errorf("merged = %d, want inherited 60", merged.StreamIdleTimeoutS)
+		}
+	})
+}
+
 func TestMergeDoesNotAliasBaseMaps(t *testing.T) {
 	base := &Config{
 		Aliases:   map[string]string{"fast": "anthropic/claude-haiku-4-5"},

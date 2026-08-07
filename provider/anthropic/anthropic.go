@@ -222,10 +222,24 @@ func (s *stream) Next() (provider.Event, error) {
 		}
 		name, data, err := s.readSSE()
 		if err != nil {
-			return provider.Event{}, err
+			// Reaching this read at all means message_stop has not been
+			// seen (s.done, checked above, would have returned the normal
+			// end-of-iteration io.EOF) — so any read failure here is the
+			// stream dying mid-response: transient, classified retryable.
+			return provider.Event{}, provider.MarkStreamTruncated(err)
 		}
 		if err := s.handle(name, data); err != nil {
 			return provider.Event{}, err
+		}
+		if len(s.queue) == 0 && !s.done {
+			// The wire event was handled but queued nothing consumer-
+			// visible (ping, input_json_delta, message_start, ...).
+			// Surface it as activity instead of looping into another
+			// blocking read, so a consumer timing Next returns (the
+			// engine's idle-stream watchdog) sees the wire is alive — a
+			// large tool-argument block otherwise streams for minutes
+			// with zero events. See provider.EventActivity.
+			return provider.Event{Type: provider.EventActivity}, nil
 		}
 	}
 }
@@ -237,9 +251,12 @@ func (s *stream) readSSE() (name string, data []byte, err error) {
 	for {
 		line, err := s.r.ReadString('\n')
 		if err != nil {
-			if err == io.EOF && (name != "" || buf.Len() > 0) {
-				return name, buf.Bytes(), nil
-			}
+			// An event whose blank-line terminator never arrived is
+			// DISCARDED, per the SSE spec — never handed up as if
+			// complete. The cut can land anywhere (TCP fragmentation makes
+			// the boundary a coin flip), and parsing a mid-JSON fragment
+			// here used to surface a raw, deterministic-looking decode
+			// error that dodged Next's truncation classification.
 			return "", nil, err
 		}
 		line = trimEOL(line)
@@ -248,12 +265,24 @@ func (s *stream) readSSE() (name string, data []byte, err error) {
 			if name != "" || buf.Len() > 0 {
 				return name, buf.Bytes(), nil
 			}
+		case line[0] == ':':
+			// A comment line is a keepalive heartbeat (bifrost sends
+			// ": heartbeat" every second on idle streams —
+			// maximhq/bifrost#5010). It carries no event, but it IS wire
+			// activity: hand it up between events so Next surfaces
+			// EventActivity and the engine's idle watchdog sees the
+			// stream is alive. A comment INSIDE a partially-read event
+			// (name or data already buffered) stays skipped — the event's
+			// own arrival is the activity signal there.
+			if name == "" && buf.Len() == 0 {
+				return "", nil, nil
+			}
 		case len(line) > 6 && line[:6] == "event:":
 			name = trimSpaceLeft(line[6:])
 		case len(line) > 5 && line[:5] == "data:":
 			buf.WriteString(trimSpaceLeft(line[5:]))
 		}
-		// Comments and unknown fields are ignored per the SSE spec.
+		// Unknown fields are ignored per the SSE spec.
 	}
 }
 
@@ -373,7 +402,10 @@ func (s *stream) handle(name string, data []byte) error {
 				StopReason string `json:"stop_reason"`
 			} `json:"delta"`
 			Usage struct {
-				OutputTokens int `json:"output_tokens"`
+				InputTokens              int `json:"input_tokens"`
+				CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+				CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+				OutputTokens             int `json:"output_tokens"`
 			} `json:"usage"`
 		}
 		if err := json.Unmarshal(data, &ev); err != nil {
@@ -384,6 +416,25 @@ func (s *stream) handle(name string, data []byte) error {
 		}
 		if ev.Usage.OutputTokens > 0 {
 			s.usage.OutputTokens = ev.Usage.OutputTokens
+		}
+		// Input/cache counts normally arrive in message_start and are zero
+		// here (real Anthropic omits them from message_delta) — but a
+		// Bedrock-translating gateway (bifrost's /anthropic route, captured
+		// live 2026-08-06) emits message_start with ALL usage fields zero
+		// and delivers the real input/cache counts in message_delta
+		// instead, the Bedrock convention of usage-in-final-metadata.
+		// Nonzero values here win; zeros never clobber message_start's.
+		// Without this, every turn on such a route reported input_tokens=0,
+		// silently disarming auto-compaction (its threshold sums exactly
+		// these components).
+		if ev.Usage.InputTokens > 0 {
+			s.usage.InputTokens = ev.Usage.InputTokens
+		}
+		if ev.Usage.CacheCreationInputTokens > 0 {
+			s.usage.CacheWriteTokens = ev.Usage.CacheCreationInputTokens
+		}
+		if ev.Usage.CacheReadInputTokens > 0 {
+			s.usage.CacheReadTokens = ev.Usage.CacheReadInputTokens
 		}
 
 	case "message_stop":

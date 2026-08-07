@@ -245,8 +245,11 @@ free, with no extra plumbing.
   matter how long the loop waits; only transient provider weather earns the
   long budget below.
 
-**2. `promptTurnWithRetry` runs two independent budgets, chosen per
-attempt.** A failure that is *not* classified retryable takes the original,
+**2. `promptTurnWithRetry` runs three independent budgets, chosen per
+attempt** (the third — stream truncation — is a distinct tier described in
+"A third tier: stream truncation" further down; this section describes the
+original two-way deterministic/retryable-weather split as it shipped for
+this issue). A failure that is *not* classified retryable takes the original,
 completely unchanged fast path described above. A failure that *is*
 classified retryable instead runs its own loop:
 
@@ -273,7 +276,8 @@ Every failed attempt — deterministic or retryable — still gets exactly one
 `goal.stalled` record, so the loop can never go silent (the original,
 `goal.go`-level invariant this whole document exists to protect). A
 retryable-class record additionally carries `retryable: true`,
-`retryable_class` (`overloaded` / `rate_limited` / `server_error`), and
+`retryable_class` (`overloaded` / `rate_limited` / `server_error` /
+`stream_truncated` — see "A third tier: stream truncation" below), and
 `waiting: true` — except the *final* one, if the retryable budget is
 actually exhausted, which flips `waiting` to `false` to mark that the loop is
 giving up on waiting and about to do something else (see below). This is
@@ -570,13 +574,90 @@ tests; `server/goal_worker_park_test.go`
 outcome/pause/resume coverage; and `engine/goal_parked_status_test.go` for the
 ambient-segment tests.
 
+## A third tier: stream truncation (2026-08-06 incident)
+
+### Incident
+
+A gateway in front of one provider route was found to cut response streams
+at a fixed ceiling well under two minutes: the connection closed with the
+response still incomplete after a handful of chunks, HTTP status already a
+clean 200, and no inline provider error event — nothing structured to
+classify the failure from at all. The resulting error was a bare `io.EOF`,
+which `provider.AsRetryable` correctly reported as NOT retryable (there was
+nothing to mark it with), so it took the fast, `goalWorkerRetries`-shaped
+deterministic path and parked in seconds. A prompt re-issued minutes later
+on the same model succeeded cleanly — the cut was the gateway's own
+per-response ceiling, not a dead or overloaded provider, so the fast park
+was premature in exactly the same way the original `overloaded_error`
+incident above was, just from an entirely different cause.
+
+Two problems, in the same shape as the #61 incident above: the truncation
+wasn't classified as anything retryable at all (so it fell into the
+deterministic bucket instead), and even if it had been, the 12-attempt/
+~30-minute weather schedule (`goalRetryableMaxAttempts`) is the wrong shape
+for it regardless — waiting longer never raises a gateway's fixed stream
+ceiling, and every retry re-prompts a full turn at full input cost, so a
+long weather-style budget just burns tokens and wall-clock time waiting for
+something that will never change.
+
+### The fix: a dedicated class, an idle-stream watchdog, and a short-schedule tier
+
+**Classification without a wire signal.** Every provider adapter now marks a
+stream-read error that occurs *before* its terminal event was ever seen
+(`provider.MarkStreamTruncated`, `provider/retryable.go`) as
+`provider.RetryableStreamTruncated` — a fourth `RetryableClass` alongside
+`overloaded`/`rate_limited`/`server_error`, and the one member of the family
+with no structured provider response behind it: the bare transport error
+(typically `io.EOF`, or a "connection reset" net error) is wrapped as-is,
+with a message naming what actually happened. A context cancellation or
+deadline is left unmarked — that is the caller's own abort (`POST /abort`,
+shutdown, the watchdog's own parent deadline — see below), not provider
+weather, so wrapping it would misclassify a deliberate stop as a transient
+failure.
+
+**An idle-stream watchdog gives a silent-forever stream the same identity.**
+Before this round, a stream that went completely silent — no bytes, no
+`EventDone`, no error, ever — was unbounded: nothing in the engine or the
+adapters would ever cut it, and the turn (and any goal loop driving it)
+wedged forever, holding the run slot. `engine/stream_watchdog.go`'s
+per-request watchdog (`Config.StreamIdleTimeout`, config key
+`stream_idle_timeout_s`, default 5 minutes mirroring Codex's
+`stream_idle_timeout_ms`, a negative value disabling it) resets on every
+stream event and, on expiry, cancels the request's own child context and
+converts the resulting cancellation into the same `RetryableStreamTruncated`
+classification — deliberately never chained to `context.Canceled` itself, so
+a retry loop's `errors.Is(err, context.Canceled)` abort check still means "a
+real caller abort," never "the watchdog fired." It guards the worker turn,
+the goal evaluator, and the compaction summarizer's streams identically
+(`armIdleWatchdog` wraps all three).
+
+**A third, short-schedule tier — neither deterministic nor weather.**
+`promptTurnWithRetry` (and `runEvaluatorWithRetry`, its evaluator-side
+counterpart) gives a `RetryableStreamTruncated` failure its own
+`goalStreamTruncatedMaxAttempts` (3) budget on the SAME short backoff
+schedule (`goalRetryDelay`) the deterministic tier uses (~5s total): it
+never spends the deterministic budget (the failure IS classified retryable),
+and it never rides the long weather-tier schedule (waiting longer cannot fix
+a fixed ceiling, and unlike a cheap evaluator poll every worker attempt is a
+full-price re-prompt). Exhausting this tier parks exactly like the other
+two — `goal.parked`'s `retryable_class` field reads `stream_truncated`, and
+every `goal.stalled` record along the way carries the same class — so an
+operator or a log reader can tell "waiting out a gateway ceiling" apart from
+"waiting out an overload wave" apart from "a dead deterministic failure"
+without ever decoding free text.
+
+See `engine/goal.go`'s `goalStreamTruncatedMaxAttempts` doc comment,
+`provider/retryable.go`'s `RetryableStreamTruncated`/`MarkStreamTruncated`,
+and `engine/stream_watchdog_test.go` for the watchdog's own coverage.
+
 ## Operational reliability
 
 Goal-supervised turns are retried by the loop above and fail visibly with a
 journaled reason (`goal.stalled`, then `goal.parked` — never `goal.cleared`
-— if every retry budget, deterministic or retryable, is exhausted; see
-"Worker-turn exit-park and activity-driven resume" above. Context overflow
-remains the one exception that still clears). Plain `prompt_async` turns get
+— if every retry budget, deterministic, retryable-weather, or
+stream-truncated, is exhausted; see "Worker-turn exit-park and
+activity-driven resume" above. Context overflow remains the one exception
+that still clears). Plain `prompt_async` turns get
 none of that: they are not retried, and a provider stream that dies mid-turn
 silently ends them. The
 signature of that silent death is a final assistant message containing

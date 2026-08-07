@@ -288,10 +288,28 @@ func (s *stream) Next() (provider.Event, error) {
 		}
 		line, err := s.readDataLine()
 		if err != nil {
-			return provider.Event{}, err
+			// Reaching this read at all means the [DONE] sentinel has not
+			// been seen (s.done, checked above, would have returned the
+			// normal end-of-iteration io.EOF) — so any read failure here
+			// is the stream dying mid-response: transient, classified
+			// retryable.
+			return provider.Event{}, provider.MarkStreamTruncated(err)
+		}
+		if line == nil {
+			// readDataLine's comment marker: a keepalive heartbeat, wire
+			// activity with no payload — never handed to handle.
+			return provider.Event{Type: provider.EventActivity}, nil
 		}
 		if err := s.handle(line); err != nil {
 			return provider.Event{}, err
+		}
+		if len(s.queue) == 0 && !s.done {
+			// Handled but queued nothing consumer-visible (a chunk whose
+			// only content is tool_call argument deltas, buffered until
+			// the finish chunk): surface as activity so idle-watchdog
+			// consumers see the wire is alive — see
+			// provider.EventActivity and provider/anthropic's Next.
+			return provider.Event{Type: provider.EventActivity}, nil
 		}
 	}
 }
@@ -303,22 +321,27 @@ func (s *stream) readDataLine() ([]byte, error) {
 	for {
 		line, err := s.r.ReadString('\n')
 		if err != nil {
-			if err == io.EOF {
-				line = trimEOL(line)
-				if payload, ok := dataPayload(line); ok {
-					return payload, nil
-				}
-				return nil, io.EOF
-			}
+			// A data line whose newline never arrived is DISCARDED, per
+			// the SSE spec — see provider/anthropic's readSSE for why
+			// handing the fragment up dodged truncation classification
+			// ("bad chunk: unexpected end of JSON input", deterministic-
+			// looking, from what was really a mid-flush connection cut).
 			return nil, err
 		}
 		line = trimEOL(line)
 		if payload, ok := dataPayload(line); ok {
 			return payload, nil
 		}
-		// Blank lines and non-"data:" fields (comments, "event:", ...) are
-		// ignored: this wire never sends anything but data lines in
-		// practice, but skipping keeps the reader spec-compliant.
+		if line != "" && line[0] == ':' {
+			// Keepalive heartbeat comment — see provider/anthropic's
+			// readSSE. A nil payload with nil error is the comment
+			// marker; Next surfaces it as EventActivity so idle
+			// watchdogs see the wire is alive.
+			return nil, nil
+		}
+		// Blank lines and non-"data:" fields ("event:", ...) are ignored:
+		// this wire never sends anything but data lines in practice, but
+		// skipping keeps the reader spec-compliant.
 	}
 }
 

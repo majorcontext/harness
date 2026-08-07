@@ -154,10 +154,10 @@ type lastTurnJSON struct {
 // (see sessionJSON.State's doc comment for why momentary busy/idle is not
 // enough); otherwise busy or idle mirroring the plain status.
 //
-// forceIdle (see goalTracker.pauseView and forcesIdlePause below) OVERRIDES
-// all of that to idle for the two pause reasons whose loop has genuinely
-// stopped driving the goal — "restart" (a goal restored from the journal at
-// boot with no loop ever attached) and "worker_failure" (Task 2:
+// forceIdle (see goalTracker.pauseView and forcesIdlePause below) overrides
+// the goalActive branch above for the two pause reasons whose loop has
+// genuinely stopped driving the goal — "restart" (a goal restored from the
+// journal at boot with no loop ever attached) and "worker_failure" (Task 2:
 // a worker turn exit-parked the goal, and PursueGoal has actually returned —
 // no goroutine is running it until the next auto-arm or re-POST). Neither is
 // "goal-running" in any sense an operator or composer can act on — it will
@@ -167,9 +167,23 @@ type lastTurnJSON struct {
 // does NOT take this path — its loop is genuinely alive and running, just
 // waiting out provider weather, so it keeps reading goal-running (see
 // TestGoalStalledProviderBackoffSurfacesPaused).
+//
+// forceIdle does NOT override running, though: it means no loop is driving
+// the GOAL, not that no TURN is running — an ordinary prompt (or the plain
+// resume prompt that eventually re-arms the goal) can be actively streaming
+// while the goal itself sits parked, and "idle" would be a lie in that
+// window (incident: an operator watching the monitor concluded a box was
+// dead while it was mid-turn). So forceIdle&&running reads "busy", never
+// "goal-running" — goalActive must not win here either, that's exactly the
+// zombie-goal trap forceIdle exists to close — and only forceIdle&&!running
+// reads "idle" (see TestCompositeStateForceIdleNeverMasksRunningTurn and
+// TestCompositeStateBusyDuringForcedIdlePause).
 func compositeState(running, goalActive, forceIdle bool) string {
 	switch {
 	case forceIdle:
+		if running {
+			return "busy"
+		}
 		return "idle"
 	case goalActive:
 		return "goal-running"

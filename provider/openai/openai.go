@@ -170,10 +170,21 @@ func (s *stream) Next() (provider.Event, error) {
 		}
 		name, data, err := s.readSSE()
 		if err != nil {
-			return provider.Event{}, err
+			// Reaching this read at all means response.completed has not
+			// been seen (s.done, checked above, would have returned the
+			// normal end-of-iteration io.EOF) — so any read failure here
+			// is the stream dying mid-response: transient, classified
+			// retryable.
+			return provider.Event{}, provider.MarkStreamTruncated(err)
 		}
 		if err := s.handle(name, data); err != nil {
 			return provider.Event{}, err
+		}
+		if len(s.queue) == 0 && !s.done {
+			// Handled but queued nothing consumer-visible: surface as
+			// activity so idle-watchdog consumers see the wire is alive —
+			// see provider.EventActivity and provider/anthropic's Next.
+			return provider.Event{Type: provider.EventActivity}, nil
 		}
 	}
 }
@@ -185,9 +196,10 @@ func (s *stream) readSSE() (name string, data []byte, err error) {
 	for {
 		line, err := s.r.ReadString('\n')
 		if err != nil {
-			if err == io.EOF && (name != "" || buf.Len() > 0) {
-				return name, buf.Bytes(), nil
-			}
+			// An event whose blank-line terminator never arrived is
+			// DISCARDED, per the SSE spec — see provider/anthropic's
+			// readSSE for why handing the fragment up dodged truncation
+			// classification.
 			return "", nil, err
 		}
 		line = trimEOL(line)
@@ -196,12 +208,19 @@ func (s *stream) readSSE() (name string, data []byte, err error) {
 			if name != "" || buf.Len() > 0 {
 				return name, buf.Bytes(), nil
 			}
+		case line[0] == ':':
+			// Keepalive heartbeat comment — see provider/anthropic's
+			// readSSE: surface it between events so Next emits
+			// EventActivity and idle watchdogs see the wire is alive.
+			if name == "" && buf.Len() == 0 {
+				return "", nil, nil
+			}
 		case len(line) > 6 && line[:6] == "event:":
 			name = trimSpaceLeft(line[6:])
 		case len(line) > 5 && line[:5] == "data:":
 			buf.WriteString(trimSpaceLeft(line[5:]))
 		}
-		// Comments and unknown fields are ignored per the SSE spec.
+		// Unknown fields are ignored per the SSE spec.
 	}
 }
 
@@ -219,16 +238,28 @@ func trimSpaceLeft(s string) string {
 	return s
 }
 
-// itemAt returns the assembled item at output_index idx, growing the slice as
-// needed.
-func (s *stream) itemAt(idx int) *assembledItem {
+// maxOutputIndex bounds the output_index values itemAt accepts: the slice
+// grows to the index named on the wire, so an unbounded value is an
+// attacker/corruption-controlled allocation. FuzzStreamDecode found
+// output_index 177777777 forcing a ~1.4GB slice (the nightly fuzz worker
+// died of resource exhaustion), and a negative index panicked. Real
+// responses carry at most a few dozen output items; 10000 is generous
+// beyond any legitimate stream.
+const maxOutputIndex = 10000
+
+// itemAt returns the assembled item at output_index idx, growing the slice
+// as needed, or an error for an index no legitimate stream produces.
+func (s *stream) itemAt(idx int) (*assembledItem, error) {
+	if idx < 0 || idx > maxOutputIndex {
+		return nil, fmt.Errorf("openai: output_index %d out of range [0, %d]", idx, maxOutputIndex)
+	}
 	for len(s.items) <= idx {
 		s.items = append(s.items, nil)
 	}
 	if s.items[idx] == nil {
 		s.items[idx] = &assembledItem{}
 	}
-	return s.items[idx]
+	return s.items[idx], nil
 }
 
 func (s *stream) handle(name string, data []byte) error {
@@ -252,7 +283,10 @@ func (s *stream) handle(name string, data []byte) error {
 		if err := json.Unmarshal(data, &ev); err != nil {
 			return fmt.Errorf("openai: bad response.output_text.delta: %w", err)
 		}
-		it := s.itemAt(ev.OutputIndex)
+		it, err := s.itemAt(ev.OutputIndex)
+		if err != nil {
+			return err
+		}
 		if it.kind == "" {
 			it.kind = "message"
 		}
@@ -267,7 +301,10 @@ func (s *stream) handle(name string, data []byte) error {
 		if err := json.Unmarshal(data, &ev); err != nil {
 			return fmt.Errorf("openai: bad response.reasoning_summary_text.delta: %w", err)
 		}
-		it := s.itemAt(ev.OutputIndex)
+		it, err := s.itemAt(ev.OutputIndex)
+		if err != nil {
+			return err
+		}
 		if it.kind == "" {
 			it.kind = "reasoning"
 		}
@@ -291,7 +328,10 @@ func (s *stream) handle(name string, data []byte) error {
 		if err := json.Unmarshal(ev.Item, &head); err != nil {
 			return fmt.Errorf("openai: bad output item: %w", err)
 		}
-		it := s.itemAt(ev.OutputIndex)
+		it, err := s.itemAt(ev.OutputIndex)
+		if err != nil {
+			return err
+		}
 		switch head.Type {
 		case "function_call":
 			it.kind = "function_call"
