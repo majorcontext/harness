@@ -364,6 +364,50 @@ func TestNormalizeForWireDemotesUnanswerableToolResult(t *testing.T) {
 	}
 }
 
+// TestNormalizeForWireDemotionPreservesImageBlob is the regression test for
+// PR #108's finding 1: demoteToolResult used to replace an unanswerable
+// ToolResult's image Blob with a bare "[N image attachment(s) omitted]"
+// note, discarding the actual bytes. On anthropic a tool_result Blob
+// transcodes to a real image block (provider/anthropic/transcode.go's
+// transcodeBlob), so the demote path used to lose real pixel data the
+// pre-stack additive ResolveOrphanToolCalls path kept. The fix must carry
+// the Blob PART itself into the demoted message, not merely describe it.
+func TestNormalizeForWireDemotionPreservesImageBlob(t *testing.T) {
+	img := &Blob{MediaType: "image/png", Data: []byte{1, 2, 3, 4, 5}}
+	in := []Message{
+		{Role: RoleUser, Parts: Parts{&Text{Text: "go"}}},
+		{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "GHOST", Content: Parts{
+			&Text{Text: "ORPHAN OUTPUT"},
+			img,
+		}}}},
+		{Role: RoleAssistant, Parts: Parts{&Text{Text: "ok"}}},
+	}
+	out := NormalizeForWire(in)
+
+	if v := checkWire(out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire left an unanswerable tool_result wire-invalid: %s", violationStrings(v))
+	}
+	if v := checkNoDataLossAllowingDemotion(in, out); len(v) != 0 {
+		t.Fatalf("demotion dropped or altered real data: %s", violationStrings(v))
+	}
+
+	var found bool
+	for _, m := range out {
+		for _, p := range m.Parts {
+			b, ok := p.(*Blob)
+			if !ok {
+				continue
+			}
+			if b.MediaType == img.MediaType && string(b.Data) == string(img.Data) {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("demoted ToolResult's image Blob bytes did not survive to the output: %+v", out)
+	}
+}
+
 // TestNormalizeForWireClaimSkipsUnclaimableHeadOfPool is the regression test
 // for PR #108's finding 2: claimFromPool used to inspect only pool[0], so an
 // unclaimable head entry (a surplus id nothing ever demands) permanently
@@ -444,7 +488,12 @@ func TestNormalizeForWireClaimSkipsUnclaimableHeadOfPool(t *testing.T) {
 // checkNoDataLoss's own criterion, unrelaxed) — or it doesn't, in which
 // case it is required to be individually recoverable as plain text
 // somewhere in the output, using the INPUT's own raw data, never
-// NormalizeForWire's internal formatting choice for the replacement.
+// NormalizeForWire's internal formatting choice for the replacement — and
+// its Blob parts, if any, are required to survive as real Blob parts, not
+// merely be mentioned (see looseBlobCounts below and PR #108's finding 1: a
+// Blob-only Content has an empty Text() body, which used to make bodyFound
+// unconditionally true regardless of whether the Blob's bytes survived
+// anywhere at all).
 func checkNoDataLossAllowingDemotion(input, output []Message) []wireViolation {
 	before := toolResultRecords(input, false)
 	rawBefore := rawToolResults(input)
@@ -456,6 +505,7 @@ func checkNoDataLossAllowingDemotion(input, output []Message) []wireViolation {
 		outputText.WriteByte('\n')
 	}
 	rendered := outputText.String()
+	looseBlobPool := looseBlobCounts(output)
 
 	var violations []wireViolation
 	j := 0
@@ -473,11 +523,32 @@ func checkNoDataLossAllowingDemotion(input, output []Message) []wireViolation {
 		// textual representation, not hard-coding one.
 		idFound := strings.Contains(rendered, tr.CallID) || strings.Contains(rendered, fmt.Sprintf("%q", tr.CallID))
 		body := tr.Content.Text()
-		bodyFound := body == "" || strings.Contains(rendered, body)
-		if !idFound || !bodyFound {
+		// An empty body has no text to search rendered for at all — it is
+		// NOT a free pass independent of idFound (a Blob-only Content, with
+		// no Text part, still names its call id in demoteToolResult's own
+		// label): require idFound to stand in for it instead of always
+		// passing.
+		bodyFound := idFound
+		if body != "" {
+			bodyFound = strings.Contains(rendered, body)
+		}
+		blobsFound := true
+		for _, p := range tr.Content {
+			bl, ok := p.(*Blob)
+			if !ok {
+				continue
+			}
+			k := blobKeyOf(bl)
+			if looseBlobPool[k] > 0 {
+				looseBlobPool[k]--
+			} else {
+				blobsFound = false
+			}
+		}
+		if !idFound || !bodyFound || !blobsFound {
 			violations = append(violations, wireViolation{
 				invariant: "no-data-loss",
-				detail:    fmt.Sprintf("tool_result %q neither survived as a ToolResult in sequence nor was found demoted to text (call id findable: %v, content findable: %v)", tr.CallID, idFound, bodyFound),
+				detail:    fmt.Sprintf("tool_result %q neither survived as a ToolResult in sequence nor was found demoted to text/blobs (call id findable: %v, content findable: %v, blobs findable: %v)", tr.CallID, idFound, bodyFound, blobsFound),
 			})
 		}
 	}
@@ -504,4 +575,38 @@ func rawToolResults(messages []Message) []*ToolResult {
 		}
 	}
 	return out
+}
+
+// blobKey identifies a Blob by its full byte-exact identity: media type,
+// URL, and inline data. Two Blobs sharing a blobKey are indistinguishable
+// on the wire.
+type blobKey struct {
+	mediaType string
+	url       string
+	data      string
+}
+
+func blobKeyOf(b *Blob) blobKey {
+	return blobKey{mediaType: b.MediaType, url: b.URL, data: string(b.Data)}
+}
+
+// looseBlobCounts multiset-counts every Blob PART sitting directly in a
+// message's Parts list — never one still nested inside a surviving
+// ToolResult's own Content, which toolResultRecords/checkNoDataLoss's
+// sequence match above already accounts for byte-for-byte. This is
+// exactly where demoteToolResult places a demoted result's own Blobs (see
+// its doc comment): loose, adjacent to its label Text, never left behind
+// inside a ToolResult. Keeping the two populations disjoint means a
+// genuinely surviving ToolResult's own Blob can never be double-counted as
+// satisfying a DIFFERENT, demoted result's Blob requirement.
+func looseBlobCounts(messages []Message) map[blobKey]int {
+	counts := make(map[blobKey]int)
+	for _, m := range messages {
+		for _, p := range m.Parts {
+			if b, ok := p.(*Blob); ok {
+				counts[blobKeyOf(b)]++
+			}
+		}
+	}
+	return counts
 }

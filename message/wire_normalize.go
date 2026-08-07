@@ -362,15 +362,15 @@ func demoteWireInvalidToolResults(messages []Message) []Message {
 			// needs the run-boundary hoist below.
 			for i := r.msgStart; i <= r.msgEnd; i++ {
 				m := messages[i]
-				newParts := make(Parts, len(m.Parts))
+				var newParts Parts
 				changed := false
 				for pi, p := range m.Parts {
 					tr, ok := p.(*ToolResult)
 					if ok && toDemote[partKey{i, pi}] {
-						newParts[pi] = demoteToolResult(tr)
+						newParts = append(newParts, demoteToolResult(tr)...)
 						changed = true
 					} else {
-						newParts[pi] = p
+						newParts = append(newParts, p)
 					}
 				}
 				if changed {
@@ -407,7 +407,7 @@ func demoteWireInvalidToolResults(messages []Message) []Message {
 				switch v := p.(type) {
 				case *ToolResult:
 					hasDemoted = true
-					demoted = append(demoted, demoteToolResult(v))
+					demoted = append(demoted, demoteToolResult(v)...)
 				case *ToolCall:
 					hasDemoted = true
 					demoted = append(demoted, demoteToolCall(v))
@@ -439,24 +439,44 @@ func demoteWireInvalidToolResults(messages []Message) []Message {
 	return out
 }
 
-// demoteToolResult renders tr as a plain Text part, preserving every byte
-// of its real Content and its IsError flag in readable form — see
-// demoteWireInvalidToolResults's doc comment for why this, not deletion or
-// relocation, is the only valid repair for a tool_result that can never be
-// wire-valid wherever it sits. Mirrors provider/openai and
-// provider/openaicompat's own toolResultOutput for the blob-omission note:
-// a Blob cannot be represented inline in text, so its presence is noted
-// rather than silently dropped.
-func demoteToolResult(tr *ToolResult) *Text {
+// demoteToolResult renders tr as ordinary parts: a label Text first,
+// preserving every byte of its real Content's TEXT and its IsError flag in
+// readable form, followed by every Blob tr.Content carried, UNCHANGED and
+// in their original relative order — see demoteWireInvalidToolResults's
+// doc comment for why changing TYPE, not deleting or dropping bytes, is the
+// only valid repair for a tool_result that can never be wire-valid
+// wherever it sits.
+//
+// # Why the Blob survives as a real Part, not a count note
+//
+// An earlier version of this function replaced every Blob with a bare
+// "[N image attachment(s) omitted]" note, discarding the bytes outright.
+// That is honest on provider/openai and provider/openaicompat — their own
+// toolResultOutput/blobURL helpers omit a tool-result image the same way,
+// because their wire shape for an ANSWERED tool_result has no image slot
+// at all — but it is a real fidelity regression on anthropic: a
+// tool_result Blob there transcodes to a genuine wire "image" block
+// (provider/anthropic/transcode.go's transcodeBlob), so an image-bearing
+// orphan or surplus result loses its pixels on this path where the
+// prior additive ResolveOrphanToolCalls left it a valid ToolResult and the
+// image survived (PR #108's finding 1). The caller already places this
+// function's returned Parts wherever the demoted label Text itself lands
+// — in place for a ToolResult stranded in an assistant-role wire block
+// (Blob is ordinary content there, same as Text), or in the hoisted
+// RoleUser message for a non-assistant run (Blob is an ordinary image on
+// every transcoder in a RoleUser message) — so keeping the Blob adjacent
+// to its label, rather than converting it to a note, costs nothing and
+// loses nothing.
+func demoteToolResult(tr *ToolResult) Parts {
 	body := tr.Content.Text()
-	blobs := 0
+	var blobs Parts
 	for _, p := range tr.Content {
-		if _, ok := p.(*Blob); ok {
-			blobs++
+		if b, ok := p.(*Blob); ok {
+			blobs = append(blobs, b)
 		}
 	}
-	if blobs > 0 {
-		note := fmt.Sprintf("[%d image attachment(s) omitted]", blobs)
+	if len(blobs) > 0 {
+		note := fmt.Sprintf("[%d image attachment(s) attached below]", len(blobs))
 		if body == "" {
 			body = note
 		} else {
@@ -472,7 +492,8 @@ func demoteToolResult(tr *ToolResult) *Text {
 	if tr.IsError {
 		label += " (reported as an error)"
 	}
-	return &Text{Text: fmt.Sprintf("[%s]: %s", label, body)}
+	parts := Parts{&Text{Text: fmt.Sprintf("[%s]: %s", label, body)}}
+	return append(parts, blobs...)
 }
 
 // demoteToolCall renders tc as a plain Text part, preserving its call id,

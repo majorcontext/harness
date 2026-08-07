@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -560,6 +561,43 @@ func TestTranscodeUnanswerableToolResultDemotedNotShippedAsBlock(t *testing.T) {
 	}
 	if !strings.Contains(joined, "GHOST") || !strings.Contains(joined, "ORPHAN OUTPUT") {
 		t.Errorf("wire text = %q, want the call id and real output both plainly present somewhere", joined)
+	}
+}
+
+// TestTranscodeUnanswerableToolResultImageBlobArrivesAsRealImageBlock is the
+// golden regression test for PR #108's finding 1: an unanswerable
+// ToolResult's image Blob used to be replaced by demoteWireInvalidToolResults
+// with a bare "[N image attachment(s) omitted]" text note, discarding the
+// actual bytes. Anthropic transcodes a tool_result Blob to a real wire
+// "image" block (transcodeBlob), so the demoted result's image must still
+// arrive as one on the wire — not merely be mentioned in text.
+func TestTranscodeUnanswerableToolResultImageBlobArrivesAsRealImageBlock(t *testing.T) {
+	png := tinyPNG(t)
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "GHOST", Content: message.Parts{
+				&message.Text{Text: "ORPHAN OUTPUT"},
+				&message.Blob{MediaType: "image/png", Data: png},
+			}},
+		}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "ok"}}},
+	))
+
+	wantData := base64.StdEncoding.EncodeToString(png)
+	var foundImage bool
+	for _, m := range out.Messages {
+		for _, b := range m.Content {
+			if b.Type == "tool_result" {
+				t.Fatalf("an unanswerable tool_result shipped as a wire tool_result block: %+v", b)
+			}
+			if b.Type == "image" && b.Source != nil && b.Source.Data == wantData {
+				foundImage = true
+			}
+		}
+	}
+	if !foundImage {
+		t.Fatalf("demoted ToolResult's image did not arrive as a real wire image block: %+v", out.Messages)
 	}
 }
 
