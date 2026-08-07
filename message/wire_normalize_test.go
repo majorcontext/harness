@@ -316,6 +316,65 @@ func TestNormalizeForWireDemotesUnanswerableToolResult(t *testing.T) {
 	}
 }
 
+// TestNormalizeForWireClaimSkipsUnclaimableHeadOfPool is the regression test
+// for PR #108's finding 2: claimFromPool used to inspect only pool[0], so an
+// unclaimable head entry (a surplus id nothing ever demands) permanently
+// blocked a real, matching answer queued behind it in the pool. Here "B" is
+// deposited before "A" in the same non-assistant run, and nothing anywhere
+// ever demands "B" -- while "A" is later demanded by a ToolCall. Both land
+// in the pool in that order ([B, A]). A claimFromPool that only checks
+// pool[0] sees "B" first, refuses (wrong id), and gives up entirely instead
+// of scanning past it to find "A" -- so the call for "A" gets a fabricated
+// is_error "no result was found" AND the real answer for "A" is left
+// unclaimed (later demoted to plain text by demoteWireInvalidToolResults,
+// since it has no legitimate placement once relocation gave up on it).
+// Wire-valid and lossless either way, which is why this needs its own
+// targeted test rather than relying on the property tests (see the PR
+// review finding for the full trace).
+func TestNormalizeForWireClaimSkipsUnclaimableHeadOfPool(t *testing.T) {
+	in := []Message{
+		{Role: RoleTool, Parts: Parts{
+			&ToolResult{CallID: "B", Content: Parts{&Text{Text: "surplus, never demanded"}}},
+			&ToolResult{CallID: "A", Content: Parts{&Text{Text: "REAL A OUTPUT"}}},
+		}},
+		{Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
+	}
+	out := NormalizeForWire(in)
+
+	if v := checkWire(out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire left the pool head-of-line-blocking shape wire-invalid: %s", violationStrings(v))
+	}
+	if v := checkNoDataLossAllowingDemotion(in, out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire lost or altered real data: %s", violationStrings(v))
+	}
+
+	// The real answer for "A" must survive as an actual ToolResult -- a
+	// genuine, non-error answer to the call -- not be demoted to text while
+	// a synthetic is_error result stands in for it.
+	var foundReal bool
+	for _, m := range out {
+		for _, p := range m.Parts {
+			tr, ok := p.(*ToolResult)
+			if !ok || tr.CallID != "A" {
+				continue
+			}
+			if tr.Content.Text() == SyntheticOrphanResultText {
+				t.Fatalf("NormalizeForWire synthesized a spurious is_error result for A instead of relocating the real one behind B in the pool: %+v", out)
+			}
+			if tr.IsError {
+				t.Fatalf("the real result for A must not be marked is_error: %+v", tr)
+			}
+			if tr.Content.Text() != "REAL A OUTPUT" {
+				t.Fatalf("the real result for A has the wrong content: %+v", tr)
+			}
+			foundReal = true
+		}
+	}
+	if !foundReal {
+		t.Fatalf("no real ToolResult A survived in output: %+v", out)
+	}
+}
+
 // checkNoDataLossAllowingDemotion is checkNoDataLoss's test-side
 // counterpart for NormalizeForWire specifically. It does NOT modify,
 // relax, or reimplement checkNoDataLoss (message/wire_oracle_test.go):

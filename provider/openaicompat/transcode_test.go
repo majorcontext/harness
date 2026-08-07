@@ -503,3 +503,48 @@ func assertToolCallFollowedByToolMessage(t *testing.T, out *apiRequest, id strin
 	}
 	t.Fatalf("tool_call %q has no matching \"tool\" wire message after it", id)
 }
+
+// TestTranscodeOrphanToolResultBuildsSuccessfully is the golden, wire-level
+// regression test for PR #108's finding 1: an orphan ToolResult (its CallID
+// matches no ToolCall anywhere in history) that message.NormalizeForWire
+// demotes to a Text part. The demoted Text part used to be left inside its
+// original RoleTool message; this adapter's own transcodeToolMessages is
+// role-strict and hard-errors on any non-ToolResult part in a "tool"-role
+// message, so the exact orphan-tool_result wedge NormalizeForWire exists to
+// fix turned into a total request-build failure here. This drives the REAL
+// transcodeRequest (not message.NormalizeForWire's own output checked
+// against message's internal oracle, which cannot see a provider-specific
+// role-strictness failure) and asserts the request still builds, with the
+// demoted content readable somewhere on the wire.
+func TestTranscodeOrphanToolResultBuildsSuccessfully(t *testing.T) {
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "GHOST", Content: message.Parts{&message.Text{Text: "ORPHAN OUTPUT"}}},
+		}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "ok"}}},
+	))
+
+	raw, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal transcoded request: %v", err)
+	}
+	rendered := string(raw)
+	if !strings.Contains(rendered, "GHOST") {
+		t.Errorf("transcoded request does not mention the orphan call id GHOST: %s", rendered)
+	}
+	if !strings.Contains(rendered, "ORPHAN OUTPUT") {
+		t.Errorf("transcoded request does not carry the orphan result's real content: %s", rendered)
+	}
+	// No "tool"-role wire message may carry a demoted Text part -- every
+	// "tool" message on this wire must still carry only real tool_call_id
+	// outputs.
+	for _, m := range out.Messages {
+		if m.Role != "tool" {
+			continue
+		}
+		if m.ToolCallID == "" {
+			t.Errorf("a \"tool\"-role wire message has no tool_call_id: %+v", m)
+		}
+	}
+}
