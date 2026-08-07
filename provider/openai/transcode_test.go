@@ -585,3 +585,75 @@ func TestTranscodeOrphanToolResultBuildsSuccessfully(t *testing.T) {
 		}
 	}
 }
+
+// TestTranscodeOrphanToolResultDoesNotSplitContiguousToolRun is the golden,
+// wire-level counterpart to openaicompat's regression test of the same name
+// (PR #108's review round 2): a stray (unanswerable) ToolResult sitting in
+// the FIRST of two consecutive RoleTool messages must not corrupt the real
+// function_call_output items answering the preceding assistant's
+// function_calls. This adapter's flat, call-id-addressed item list was
+// never the regressed provider for this shape (no contiguity requirement
+// to violate), but it is pinned against the REAL transcodeRequest so a
+// future change here is caught by the same golden shape all three
+// providers share.
+func TestTranscodeOrphanToolResultDoesNotSplitContiguousToolRun(t *testing.T) {
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolCall{CallID: "A", Name: "bash", Arguments: json.RawMessage(`{}`)},
+			&message.ToolCall{CallID: "B", Name: "bash", Arguments: json.RawMessage(`{}`)},
+		}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "A", Content: message.Parts{&message.Text{Text: "RA"}}},
+			&message.ToolResult{CallID: "GHOST", Content: message.Parts{&message.Text{Text: "STRAY"}}},
+		}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "B", Content: message.Parts{&message.Text{Text: "RB"}}},
+		}},
+	))
+
+	outputIdxA, outputIdxB, ghostIdx := -1, -1, -1
+	for i, raw := range out.Input {
+		var item struct {
+			Type    string `json:"type"`
+			CallID  string `json:"call_id"`
+			Output  string `json:"output"`
+			Role    string `json:"role"`
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		}
+		if err := json.Unmarshal(raw, &item); err != nil {
+			t.Fatalf("input item %d: %v", i, err)
+		}
+		switch {
+		case item.Type == "function_call_output" && item.CallID == "A":
+			outputIdxA = i
+			if item.Output != "RA" {
+				t.Errorf("function_call_output A = %q, want %q", item.Output, "RA")
+			}
+		case item.Type == "function_call_output" && item.CallID == "B":
+			outputIdxB = i
+			if item.Output != "RB" {
+				t.Errorf("function_call_output B = %q, want %q", item.Output, "RB")
+			}
+		case item.Type == "function_call_output" && item.CallID == "GHOST":
+			t.Fatalf("GHOST survived as a function_call_output item instead of being demoted to text: %s", raw)
+		case item.Type == "message":
+			for _, c := range item.Content {
+				if strings.Contains(c.Text, "GHOST") && strings.Contains(c.Text, "STRAY") {
+					ghostIdx = i
+				}
+			}
+		}
+	}
+	if outputIdxA == -1 || outputIdxB == -1 {
+		t.Fatalf("real function_call_output items for A and B must both survive: %+v", out.Input)
+	}
+	if ghostIdx == -1 {
+		t.Fatalf("demoted GHOST result (call id and content) not found in any message item: %+v", out.Input)
+	}
+	if ghostIdx < outputIdxA || ghostIdx < outputIdxB {
+		t.Fatalf("demoted GHOST item at index %d must come after both real outputs (A at %d, B at %d): %+v", ghostIdx, outputIdxA, outputIdxB, out.Input)
+	}
+}
