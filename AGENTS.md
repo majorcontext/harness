@@ -114,8 +114,9 @@ on one of THREE independent budgets, chosen by classification via
 `provider.AsRetryable` — never by matching error text.
 
 One class skips every budget. Before it selects a budget,
-`promptTurnWithRetry` tests `provider.AsPermanent` (`engine/goal.go:1468`)
-and fails fast: a permanent error gets ONE attempt and no retry.
+`promptTurnWithRetry` tests `provider.AsPermanent` — its fail-fast check
+(`engine/goal.go`) — and fails fast: a permanent error gets ONE attempt and
+no retry.
 `provider.MarkPermanent` marks a malformed request shape. The anthropic
 adapter applies it to an HTTP 400 `invalid_request_error`, and to the same
 error type mid-stream (`provider/anthropic/anthropic.go:114` and `:484`),
