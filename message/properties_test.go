@@ -498,7 +498,7 @@ func TestResolveOrphanToolCallsPropertyNoDataLoss(t *testing.T) {
 //
 // This checks checkNoDataLossAllowingDemotion (wire_normalize_test.go),
 // not the oracle's own checkNoDataLoss directly: an id with NO ToolCall
-// anywhere is demoted to a Text part (see demoteUnanswerableToolResults),
+// anywhere is demoted to a Text part (see demoteWireInvalidToolResults),
 // which checkNoDataLoss's OWN definition of survival ("still a
 // ToolResult") correctly reports as vanished — that function is
 // unmodified and unrelaxed, still called for every other real result.
