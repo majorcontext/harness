@@ -31,6 +31,8 @@ tui/               a client, nothing more
 - **The session log stores the canonical message format, never a provider's.** Every request, the provider adapter transcodes canonical history → provider wire format from scratch (stateless transcoding). Mid-session model swap = next request uses a different transcoder. No migration step.
 - **Provider-specific opaque data (reasoning/thinking blocks, encrypted reasoning items) is stored as provider-tagged attachments** on canonical messages: replayed verbatim to the same provider, dropped when crossing providers. Tool-call IDs are internal; each transcoder maps deterministically to provider-compliant IDs. Prompt-cache markers are injected at transcode time, never stored.
 - **Model refs are `provider/model`** plus user-defined aliases (`fast`, `smart`) from config. The models.dev catalog snapshot is embedded at build time and refreshed async — never on the startup path.
+- **A history repair that runs on live or persisted state is additive-only.** `LoadSession` writes the repaired slice back into live history, so a repair that deletes loses data permanently — not for one request, but for the life of the session. Add synthetic parts; never drop, reorder, or relocate a part another producer wrote. A transcode-time repair MAY be destructive, because it builds one throwaway request and never touches the record. Put every destructive rule on that side of the line. (Incident: a `ResolveOrphanToolCalls` rewrite deleted genuine tool output in three shapes and was reverted; see NEP-5293.)
+- **An empty tool result must never serialize as `null`.** The provider reads a null-content `tool_result` as ABSENT and rejects the whole request with "tool_use ids were found without tool_result blocks immediately after" — naming a block that IS in the payload. A tool that produces no output (a `grep` that matches nothing) is enough to wedge a session forever. `message.NoToolOutputText`, `ToolResult.SafeContent`, and `ToolResult.MarshalJSON` hold this line; every transcoder reads through `SafeContent`, never `Content`. (Incident: NEP-5272.)
 
 ### Project instructions (AGENTS.md)
 
@@ -109,8 +111,24 @@ loop also emits `goal.*` engine events so the server journals them. Config
 
 A worker-turn error (`s.Prompt` failing) is retried by `promptTurnWithRetry`
 on one of THREE independent budgets, chosen by classification via
-`provider.AsRetryable` — never by matching error text. A deterministic
-failure (not classified retryable) gets `goalWorkerRetries` (2) additional
+`provider.AsRetryable` — never by matching error text.
+
+One class skips every budget. Before it selects a budget,
+`promptTurnWithRetry` tests `provider.AsPermanent` (`engine/goal.go:1468`)
+and fails fast: a permanent error gets ONE attempt and no retry.
+`provider.MarkPermanent` marks a malformed request shape. The anthropic
+adapter applies it to an HTTP 400 `invalid_request_error`, and to the same
+error type mid-stream (`provider/anthropic/anthropic.go:114` and `:484`),
+only after `parseContextOverflow` rules overflow out — the two are disjoint.
+A retry never repairs a malformed request, and each attempt costs a full
+turn at full input price. A permanent error still PARKS, exactly like every
+budget exhaustion; it never clears. `permanent` is threaded through only to
+select a more accurate classified reason and tier name
+(`classifyGoalWorkerError`, `goalWorkerParkedError`), so an operator can
+tell a single-attempt park from `goalWorkerRetries`+1 identical attempts.
+
+A deterministic
+failure (not classified retryable, not permanent) gets `goalWorkerRetries` (2) additional
 attempts on the short schedule (~5s total: 1s, then 4s). A provider error
 classified `overloaded`/`rate_limited`/`server_error` gets a separately
 budgeted `goalRetryableMaxAttempts` (12) backoff (~30min total, jittered, 5s
@@ -145,6 +163,21 @@ a slower-burning zombie instead of a fix. Parking has no streak horizon
 (unlike the evaluator's 5-boundary terminal above) — every exhaustion parks
 immediately, and `DELETE /session/{id}/goal` remains the only clear path for
 a parked goal.
+
+Each retry re-issues the SAME directive through `Prompt`, and `Prompt`
+appends whatever text it gets as a brand-new user message — it has no notion
+of "this is a retry, do not duplicate." Left alone, N failed attempts leave N
+unanswered copies of one directive in history, and every LATER request pays
+for all of them. `dropUnansweredDirective` (`engine/goal.go`) removes the
+copy before the next attempt. It anchors on the message ID
+`lastMessageID` captured before this attempt's `s.Prompt` call, never on a
+history length, and `isSafeToDropDirectiveTail` approves only two shapes: the
+directive alone, or the directive plus an interrupted turn's partial
+assistant message and its synthetic tool-result message. Any other tail shape
+is left untouched — a denied tool's result, or an already-delivered
+"OPERATOR MESSAGES" block, must never be discarded. Every call site sits
+strictly AFTER its branch's own budget-exhaustion check, so a parking attempt
+keeps its tail verbatim: no next attempt ever re-appends it.
 
 An idle provider stream — one that goes silent with no bytes, no
 `EventDone`, no error, ever — is bounded by a per-request idle-stream
@@ -889,6 +922,37 @@ Rules:
 - **Regression tests must be red-verified.** Prove the test fails against the
   pre-fix code — revert the fix, observe red, re-apply it — and show that
   evidence. A regression guard that never ran red is unverified.
+- **Red-verify the NAMED mechanism, not just some failure.** A test name is a
+  claim. Revert the exact mechanism the name asserts, then confirm THAT test
+  fails for THAT reason. A test that passes from birth, or that goes red for
+  an unrelated reason, is not a guard. (Incident: three tests on one branch
+  were green against the exact defect they were named for.)
+- **Verification drives the production entry point.** Call the same function
+  production calls. A check that builds, normalizes, or repairs its input by
+  hand proves nothing about the path a user takes — it verifies the
+  preparation. (Incident: a fix was reported "verified end-to-end" from a
+  test that called `Normalize` by hand. That skipped the `LoadSession` resume
+  path, which was the only path that mattered.)
+- **An oracle never imports the implementation.** Derive a property-test
+  oracle from the external contract — the provider's wire rules, the API
+  spec. A predicate that calls a production symbol, or copies its logic,
+  cannot fail on a wrong definition, which is the defect class an oracle
+  exists to catch. (Incident: `hasOrphanToolCall` was rewritten to call the
+  production `hasToolCall`, and then could not see the data loss beside it.)
+- **Assert the surplus direction too.** A count check that only looks for
+  what is missing passes a payload that ships two of something where one
+  belongs.
+
+## Scope discipline
+
+- **Ship the fix the incident proves. File the hardening you found while
+  looking.** An opportunistic fix bundled with an urgent one inherits its
+  urgency and escapes its scrutiny. (Incident: an unobserved,
+  probe-discovered hardening rode an incident fix and cost two review rounds
+  of data-loss bugs before it was reverted — see NEP-5293.)
+- **A behavior change updates AGENTS.md in the same commit.** This file is
+  the binding spec every agent reads first. Four commits once changed the
+  goal-loop retry tiers and left this file describing the old ones.
 
 ## Debugging invariants
 
