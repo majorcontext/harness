@@ -119,9 +119,16 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 		})
 	}
 
-	// imageLimits.RecurseToolResults is false: tool-result images are omitted
-	// on the wire (see toolResultOutput), so clamping them would be wasted work.
-	messages := imageclamp.Clamp(req.Messages, imageLimits)
+	// Orphaned-tool_use repair, same as the anthropic and openaicompat
+	// transcoders (this was the one transcoder missing it): a ToolCall
+	// with no matching ToolResult in the immediately-following message
+	// would transcode to a dangling function_call item the API rejects on
+	// every retry. See message.ResolveOrphanToolCalls's doc comment for
+	// the incident history. Composed with image clamping exactly as the
+	// anthropic transcoder does; imageLimits.RecurseToolResults is false
+	// because tool-result images are omitted on the wire (see
+	// toolResultOutput), so clamping them would be wasted work.
+	messages := imageclamp.Clamp(message.ResolveOrphanToolCalls(req.Messages), imageLimits)
 	for i := range messages {
 		m := &messages[i]
 		items, err := transcodeMessage(m)

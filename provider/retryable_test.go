@@ -1,8 +1,10 @@
 package provider
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +24,49 @@ func TestAsRetryableRoundTrip(t *testing.T) {
 	}
 	if !errors.Is(wrapped, base) {
 		t.Errorf("errors.Is(wrapped, base) = false, want true (Unwrap must expose the original error)")
+	}
+}
+
+func TestMarkStreamTruncatedClassifies(t *testing.T) {
+	base := errors.New("EOF")
+	wrapped := MarkStreamTruncated(base)
+
+	class, ok := AsRetryable(wrapped)
+	if !ok || class != RetryableStreamTruncated {
+		t.Fatalf("AsRetryable(wrapped) = %q, %v; want %q, true", class, ok, RetryableStreamTruncated)
+	}
+	if !errors.Is(wrapped, base) {
+		t.Errorf("errors.Is(wrapped, base) = false, want true (Unwrap must expose the original error)")
+	}
+	// The journaled reason must name the failure, not just re-surface a
+	// cryptic "EOF" — the 2026-08-06 incident's goal.stalled records read
+	// bare "EOF" and cost hours of diagnosis.
+	if got := wrapped.Error(); !strings.Contains(got, "stream ended before completion") {
+		t.Errorf("Error() = %q, want it to contain %q", got, "stream ended before completion")
+	}
+}
+
+// TestMarkStreamTruncatedContextPassthrough: a context cancellation or
+// deadline surfacing through the stream read is a deliberate abort (or the
+// caller's own budget), never provider weather — it must pass through
+// unwrapped so errors.Is(err, context.Canceled) keeps short-circuiting
+// retry loops before any classification check.
+func TestMarkStreamTruncatedContextPassthrough(t *testing.T) {
+	for _, base := range []error{context.Canceled, context.DeadlineExceeded} {
+		wrapped := fmt.Errorf("read tcp: %w", base)
+		got := MarkStreamTruncated(wrapped)
+		if got != wrapped { //nolint:errorlint // identity check is the point
+			t.Errorf("MarkStreamTruncated(%v) = %v, want the error returned unchanged", base, got)
+		}
+		if _, ok := AsRetryable(got); ok {
+			t.Errorf("AsRetryable(MarkStreamTruncated(%v)) = true, want false", base)
+		}
+	}
+}
+
+func TestMarkStreamTruncatedNilIsNil(t *testing.T) {
+	if err := MarkStreamTruncated(nil); err != nil {
+		t.Fatalf("MarkStreamTruncated(nil) = %v, want nil", err)
 	}
 }
 

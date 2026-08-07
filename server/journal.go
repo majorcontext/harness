@@ -413,7 +413,6 @@ func (s *Server) publishGoal(ev engine.Event) {
 		out.GoalPauseReason = pauseReasonWorkerFailure
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	g := s.goalState[ev.SessionID]
 	if g == nil {
 		g = &goalTracker{}
@@ -506,6 +505,59 @@ func (s *Server) publishGoal(ev engine.Event) {
 		g.evalFailures = 0
 	}
 	s.emitDurableLocked(out)
+	s.mu.Unlock()
+
+	// Structured goal-lifecycle logging (Options.Logger, see the field
+	// report on its doc comment). Deliberately runs AFTER s.mu is released
+	// above, not under it: emitDurableLocked's own journal write/fanout is
+	// cheap and bounded, but Options.Logger is caller-supplied I/O (a file, a
+	// pipe, a remote sink) with no such guarantee — a stalled stderr (full
+	// pipe, suspended terminal) blocking a log write while holding s.mu would
+	// wedge every other handler and SSE fanout on the server, not just this
+	// session's. See emitDurable's matching fix for the session.error choke
+	// point and its doc comment for why "log after unlock" is the rule for
+	// every logging call site in this file, not just this one.
+	//
+	// goal.parked and goal.stalled are the background-loop analogue of a
+	// plain turn dying silently — a parked goal has already exited and is
+	// waiting on external activity to resume it, exactly the "operator
+	// tailing the log concluded the box was dead" scenario, so both log at
+	// WARN with the same turn/attempt/reason/retry-budget shape the
+	// AGENTS.md brief asks for (mirroring Codex's structured stream-retry
+	// warn!). set/achieved/cleared are ordinary lifecycle transitions, not
+	// failures, so INFO.
+	//
+	// goal.eval also logs at INFO, one line per completed worker turn (the
+	// evaluator runs exactly once per turn — see engine/goal.go's
+	// PursueGoal): this is the per-turn heartbeat a goal-supervised session
+	// needs, since recordTurnEnd's own turn.end line fires only once per LOOP
+	// EXIT for a goal loop (runGoal's tail), not once per worker turn — see
+	// recordTurnEnd's doc comment. Without this, a long-running goal produced
+	// no periodic log line at all between "goal set" and its eventual
+	// terminal record, which is exactly backwards for the primary
+	// long-running shape this server serves. goal.updated and
+	// goal.eval_failed remain unlogged here: goal.updated is a mid-loop
+	// condition edit with no lifecycle/failure signal of its own, and
+	// goal.eval_failed's advisory-failure semantics (the goal stays active
+	// below goalEvalFailureLimit) are already durably recorded via the
+	// goal.eval_failed record itself even without a log line — revisit if a
+	// field report asks for it.
+	switch ev.Type {
+	case engine.EventGoalParked:
+		s.logWarn("goal parked", "session", ev.SessionID, "reason", ev.GoalReason,
+			"attempts", ev.GoalAttempts, "retryable_class", ev.GoalRetryableClass)
+	case engine.EventGoalStalled:
+		s.logWarn("goal stalled", "session", ev.SessionID, "reason", ev.GoalReason,
+			"attempt", ev.GoalAttempt, "waiting", ev.GoalWaiting)
+	case engine.EventGoalAchieved:
+		s.logInfo("goal achieved", "session", ev.SessionID, "reason", ev.GoalReason, "turns", ev.GoalTurns)
+	case engine.EventGoalSet:
+		s.logInfo("goal set", "session", ev.SessionID, "condition", ev.GoalCondition)
+	case engine.EventGoalCleared:
+		s.logInfo("goal cleared", "session", ev.SessionID, "reason", ev.GoalReason)
+	case engine.EventGoalEval:
+		s.logInfo("goal eval", "session", ev.SessionID, "met", ev.GoalMet, "reason", ev.GoalReason)
+	}
 }
 
 // publishQueue journals a durable prompt.queued/prompt.dequeued record (see
@@ -548,6 +600,31 @@ func (s *Server) publishQueue(ev engine.Event) {
 // infer death from message part shapes. turn.end plus Session.last_turn make
 // that heuristic unnecessary — a poller reads the outcome directly instead
 // of reverse-engineering it from transcript content.
+//
+// It also logs (Options.Logger, see the field report on its doc comment):
+// INFO for outcome "completed", WARN for every other outcome — session and
+// outcome always, error only when non-empty (a completed turn has none, so
+// omitting it there keeps a clean run's line free of a stray empty attr).
+// The log call runs AFTER s.mu is released above, never under it — see
+// emitDurable's doc comment for why a logging call site must never run
+// inside a locked section.
+//
+// This is NOT one log line per worker turn for a goal-supervised session,
+// despite runPrompt's and runGoal's tails both calling it: runPrompt calls
+// it once per plain-prompt turn (so for that shape it is exactly the "one
+// line per turn" heartbeat), but runGoal calls it exactly once per goal LOOP
+// EXIT — after PursueGoal itself returns, whether that took one worker turn
+// or several hundred — recording the loop's own terminal outcome (achieved,
+// cleared, parked, max-turns-exceeded, evaluator-exhausted, or a plain
+// error). Since goal-supervised sessions are this server's primary
+// long-running shape, the per-worker-turn heartbeat instead comes from
+// publishGoal's own logging: "goal eval" at INFO (the evaluator runs exactly
+// once per completed worker turn) and "goal stalled" at WARN (a worker-turn
+// retry) — see publishGoal's doc comment. Usage/token counts are
+// deliberately not threaded in here: they are not already available at this
+// call site (only outcome and the sanitized error string are), and this
+// fix's scope is "log what exists", not "thread new state through the
+// engine for logging".
 func (s *Server) recordTurnEnd(sessionID, outcome string, turnErr error) {
 	errStr := ""
 	if turnErr != nil {
@@ -557,6 +634,16 @@ func (s *Server) recordTurnEnd(sessionID, outcome string, turnErr error) {
 	s.lastTurn[sessionID] = &turnOutcome{outcome: outcome, error: errStr}
 	s.emitDurableLocked(&Event{Type: evtTurnEnd, SessionID: sessionID, Outcome: outcome, Error: errStr})
 	s.mu.Unlock()
+
+	if outcome == "completed" {
+		s.logInfo("turn end", "session", sessionID, "outcome", outcome)
+		return
+	}
+	attrs := []any{"session", sessionID, "outcome", outcome}
+	if errStr != "" {
+		attrs = append(attrs, "error", errStr)
+	}
+	s.logWarn("turn end", attrs...)
 }
 
 // requestSnapshot is the latest fully-assembled model request for a session,
@@ -665,16 +752,41 @@ func (s *Server) syncMessages(sessionID string) {
 	}
 }
 
-// emitDurable assigns the next sequence number, journals the event, and fans it
-// out to connected clients.
+// emitDurable assigns the next sequence number, journals the event, and fans
+// it out to connected clients.
+//
+// The session.error log line lives here, AFTER s.mu is released, rather than
+// in emitDurableLocked itself: emitDurableLocked runs with s.mu held, and
+// Options.Logger is caller-supplied I/O (a file, a pipe, a suspended
+// terminal) with no bound on how long a write can block — logging under
+// s.mu would let a stalled sink wedge the server's single global mutex,
+// taking every other handler and SSE fanout down with it. See the doc
+// comment on emitDurableLocked for why this is the only clean single point
+// for it: every current session.error emission (handlers.go, both call
+// sites) goes through this exact function, never emitDurableLocked directly,
+// so this covers every record exactly once. A future call site that needs
+// to emit session.error from inside a function that already holds s.mu
+// (calling emitDurableLocked directly, the way recordTurnEnd and publishGoal
+// do for their own event types) must add its own post-unlock log call
+// mirroring this one — emitDurableLocked deliberately never logs anything
+// itself, so there is no single choke point below this wrapper to rely on.
 func (s *Server) emitDurable(ev Event) int64 {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.emitDurableLocked(&ev)
+	s.mu.Unlock()
+	if ev.Type == evtSessionError {
+		s.logWarn("session error", "session", ev.SessionID, "error", ev.Error)
+	}
 	return ev.Seq
 }
 
-// emitDurableLocked is emitDurable with s.mu held.
+// emitDurableLocked is emitDurable's critical section: assigns the next
+// sequence number, journals the event, fans it out, and wakes waiters — all
+// under s.mu, and nothing else. It deliberately does no logging of its own
+// (see emitDurable's doc comment above): every logging call site in this
+// file runs after its caller's s.mu section ends, never inside one, so a
+// slow Options.Logger sink can never block the mutex every handler and SSE
+// fanout depends on. Caller holds s.mu.
 func (s *Server) emitDurableLocked(ev *Event) {
 	s.seq++
 	ev.Seq = s.seq

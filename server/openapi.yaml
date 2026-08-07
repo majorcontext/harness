@@ -382,16 +382,20 @@ components:
           type: boolean
           description: >
             True when the most recent goal.stalled record's failure was
-            classified provider-retryable weather (an Anthropic 529/
-            overloaded_error, 429, or 5xx — see provider.RetryableError)
+            classified provider-retryable — either provider-side weather (an
+            Anthropic 529/overloaded_error, 429, or 5xx — see
+            provider.RetryableError) or a response stream that was cut
+            before its terminal event (provider.RetryableStreamTruncated) —
             rather than a deterministic failure. Reset the same way attempt
             is. See docs/goal-loop.md's "Retryable-class backoff" section.
         retryable_class:
           type: string
           description: >
             The retryable classification of the most recent goal.stalled
-            record (overloaded, rate_limited, or server_error), present only
-            when retryable is true.
+            record (overloaded, rate_limited, server_error, or
+            stream_truncated — the last for a stream cut before its
+            terminal event, with no HTTP status or inline provider error to
+            classify from), present only when retryable is true.
         waiting:
           type: boolean
           description: >
@@ -1083,14 +1087,15 @@ components:
           type: boolean
           description: >
             True when a goal.stalled record's failure was classified
-            provider-retryable weather (see GoalSummary.retryable and
+            provider-retryable — provider-side weather or a response stream
+            cut before its terminal event (see GoalSummary.retryable and
             docs/goal-loop.md).
         goal_retryable_class:
           type: string
           description: >
-            The retryable classification (overloaded, rate_limited, or
-            server_error) of a goal.stalled record, present only when
-            goal_retryable is true.
+            The retryable classification (overloaded, rate_limited,
+            server_error, or stream_truncated) of a goal.stalled record,
+            present only when goal_retryable is true.
         goal_waiting:
           type: boolean
           description: >

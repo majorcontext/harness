@@ -18,6 +18,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -245,6 +246,35 @@ type Options struct {
 	// what address this process is actually bound to — the safety
 	// property lives entirely in cmd/harness deciding WHEN to set it.
 	Unauthenticated bool
+	// Logger, when non-nil, receives structured turn-lifecycle and
+	// goal-lifecycle log lines: a "turn end" line at every recordTurnEnd
+	// call (INFO for outcome "completed", WARN otherwise), WARN/INFO lines
+	// at the goal.* durable-record choke point (publishGoal, including a
+	// "goal eval" INFO line once per completed worker turn — the
+	// per-worker-turn heartbeat recordTurnEnd itself cannot provide for a
+	// goal loop, see its doc comment), and the session.error choke point
+	// (emitDurable). Every one of these logging call sites runs AFTER its
+	// own s.mu critical section ends, never inside one — a slow or stalled
+	// Logger sink must never be able to block the server's global mutex.
+	// Nil (the default, e.g. every existing test harness and any caller
+	// that predates this field) disables all of it — every call site here
+	// nil-guards before touching it, so an unset Logger is exactly today's
+	// silent behavior, not a panic.
+	//
+	// This exists because of a field report (2026-08-06): a session ran
+	// 631 messages / 141k output tokens and produced ZERO log lines: an
+	// operator tailing `harness serve`'s stderr could not tell a box
+	// mid-turn from a dead one, because nothing on the turn/goal path ever
+	// logged anything — only boot/config/MCP wiring did. Codex's
+	// equivalent path logs every stream retry via a structured warn!
+	// (turn id, retries, max, delay); this field is the same bar applied
+	// to this server's own durable-record choke points, so an operator
+	// gets a heartbeat for the life of the box, not just at boot.
+	// `harness serve` (cmd/harness/main.go's serveCmd) wires its own
+	// `slog.NewJSONHandler(os.Stderr, nil)` logger in here; a caller
+	// embedding this package (e.g. tests) that wants no such logging
+	// simply leaves this zero.
+	Logger *slog.Logger
 }
 
 // Server implements http.Handler for the harness serve API.
@@ -816,6 +846,30 @@ func (s *Server) reportError(err error) {
 		return
 	}
 	s.opts.OnError(context.Background(), err)
+}
+
+// logInfo and logWarn forward to Options.Logger, nil-guarded: every call
+// site in journal.go's turn-lifecycle/goal-lifecycle choke points calls
+// these instead of repeating the nil check inline (a nil *slog.Logger
+// panics if a method is called on it directly, so the guard here is load-
+// bearing, not stylistic). Call these AFTER releasing s.mu — every
+// existing call site does (see recordTurnEnd, publishGoal, emitDurable):
+// slog never calls back into the Server, so there is no deadlock, but the
+// Logger sink is arbitrary I/O (a full stderr pipe, a suspended terminal)
+// and a stalled sink must never be able to block the server's global
+// mutex.
+func (s *Server) logInfo(msg string, args ...any) {
+	if s.opts.Logger == nil {
+		return
+	}
+	s.opts.Logger.Info(msg, args...)
+}
+
+func (s *Server) logWarn(msg string, args ...any) {
+	if s.opts.Logger == nil {
+		return
+	}
+	s.opts.Logger.Warn(msg, args...)
 }
 
 // writeJSON marshals v to a buffer BEFORE writing anything to w: the status

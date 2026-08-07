@@ -85,6 +85,13 @@ type Config struct {
 	// entirely — see docs/design/context-compaction.md and issue #62 layer
 	// 3. Opt-in: the engine has no built-in per-model table.
 	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
+	// StreamIdleTimeoutS sets engine.Config.StreamIdleTimeout (in seconds)
+	// for every session this process creates: how long a streamed response
+	// may go without a delta before the engine's idle-stream watchdog aborts
+	// it. Zero (omitted, the default) leaves the engine's own 5-minute
+	// default in place (mirroring Codex's stream_idle_timeout_ms=300000);
+	// negative disables the watchdog entirely.
+	StreamIdleTimeoutS int `json:"stream_idle_timeout_s,omitempty"`
 	// CompactionThreshold sets engine.Config.CompactionThreshold: the
 	// fraction of ContextWindowTokens at which automatic compaction
 	// triggers. Zero (omitted) defaults to 0.8 (see the engine).
@@ -677,6 +684,9 @@ func merge(base, over *Config) *Config {
 	}
 	if over.ContextWindowTokens != 0 {
 		out.ContextWindowTokens = over.ContextWindowTokens
+	}
+	if over.StreamIdleTimeoutS != 0 {
+		out.StreamIdleTimeoutS = over.StreamIdleTimeoutS
 	}
 	if over.CompactionThreshold != 0 {
 		out.CompactionThreshold = over.CompactionThreshold

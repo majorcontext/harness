@@ -192,9 +192,14 @@
 // gets the SAME retryable schedule and budget the worker turn uses
 // (goalRetryableBackoff, goalRetryableMaxAttempts) — the two paths share
 // provider weather, so they share a budget's shape, just each keeping its
-// own counter. A non-retryable provider error is not retried at all (the
-// call is cheap; a permanently broken provider needs the boundary-failure
-// path below, not a wasted second attempt). Separately, an unparseable reply
+// own counter. provider.RetryableStreamTruncated is the one exception:
+// mirroring promptTurnWithRetry's own truncated tier, it never rides that
+// weather budget — a stream ceiling is not weather, so it gets its own
+// short-schedule budget instead (goalStreamTruncatedMaxAttempts,
+// goalRetryDelay — see runEvaluatorWithRetry). A non-retryable provider
+// error is not retried at all (the call is cheap; a permanently broken
+// provider needs the boundary-failure path below, not a wasted second
+// attempt). Separately, an unparseable reply
 // still gets its original one extra attempt, but that attempt now uses a
 // STRICTER system prompt (goalEvaluatorStrictSystem) instead of repeating the
 // same instructions verbatim — repeating unchanged instructions to a model
@@ -430,6 +435,20 @@ const goalPartCap = 4096
 // before Round 6, this no longer terminates the loop by itself — see
 // evaluateGoal's callers — it just counts as one failed evaluator boundary.
 var errEvaluatorUnparseable = errors.New("engine: goal evaluator returned unparseable output twice in a row")
+
+// goalStreamTruncatedMaxAttempts bounds worker-turn attempts whose failure
+// is classified provider.RetryableStreamTruncated — a response stream that
+// died before its terminal event. Truncation is retryable (the 2026-08-06
+// incident's truncated turns were followed by clean successes minutes
+// later on the same model — the cut was a gateway's per-response ceiling,
+// not a dead provider) but it is NOT weather: waiting longer does not
+// raise a stream ceiling, and every retry re-prompts a full turn at full
+// input cost, so it must never ride goalRetryableMaxAttempts' 12-attempt/
+// ~30-minute schedule. Three attempts on the short goalRetryDelay
+// schedule (~5s of waiting total) is enough to survive an isolated cut;
+// exhaustion PARKS, same as every other tier, so a persistent ceiling
+// still never kills the goal.
+const goalStreamTruncatedMaxAttempts = 3
 
 // goalEvalFailureLimit is the number of CONSECUTIVE failed evaluator
 // boundaries (see goal.go's "Round 6" doc section) PursueGoal tolerates
@@ -844,14 +863,17 @@ func (s *Session) clearGoalParkedAtEntry() {
 // A worker-turn error (s.Prompt failing) is retried up to goalWorkerRetries
 // times — see promptTurnWithRetry — recording a goal.stalled record for every
 // failed attempt so the session log always explains a pause instead of going
-// silent. A provider error classified provider.AsRetryable (see GitHub issue
-// #61) instead rides a much longer, separately-budgeted backoff
-// (goalRetryableMaxAttempts) that never touches goalWorkerRetries — see the
-// package doc's "Round 4" section for that classification's rationale.
+// silent. A provider error classified provider.AsRetryable rides one of two
+// further, separately-budgeted backoffs that never touch goalWorkerRetries:
+// provider.RetryableStreamTruncated gets its own short-schedule budget
+// (goalStreamTruncatedMaxAttempts — see that constant's doc comment), and
+// every other retryable class rides a much longer one (goalRetryableMaxAttempts,
+// see GitHub issue #61 and the package doc's "Round 4" section for that
+// classification's rationale).
 //
-// Exhausting EITHER budget — or the non-idempotency gate stopping retries
-// early once a tool has already executed this attempt — EXIT-PARKS instead
-// of clearing (see the package doc's "Round 7" section): PursueGoal
+// Exhausting ANY of these budgets — or the non-idempotency gate stopping
+// retries early once a tool has already executed this attempt — EXIT-PARKS
+// instead of clearing (see the package doc's "Round 7" section): PursueGoal
 // journals a durable, classified goal.parked record (recordGoalParked) and
 // returns a *goalWorkerParkedError (see IsGoalWorkerParked) wrapping the
 // underlying error, WITHOUT calling clearGoal — the goal stays fully active,
@@ -1317,19 +1339,29 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 // later — there is no bound on how many times this can recur short of
 // Prompt gaining a resumable, sub-turn checkpoint, which it does not have.
 //
-// # Two independent budgets, chosen by error classification
+// # Three independent budgets, chosen by error classification
 //
 // Every failed attempt is first classified via provider.AsRetryable (never
 // by matching error text — see provider/retryable.go). A DETERMINISTIC
 // failure (not classified retryable) runs the fast path exactly as
 // described above: goalWorkerRetries additional attempts, goalRetryDelay's
-// short backoff. A RETRYABLE failure instead runs its own loop, up to
-// goalRetryableMaxAttempts attempts, spaced by goalRetryableBackoff's much
-// longer jittered schedule (see the doc comment on that function) — and
-// these attempts never increment the deterministic counter, so surviving a
-// long provider outage costs a turn nothing against goalWorkerRetries.
+// short backoff. A RETRYABLE failure runs one of two further loops,
+// depending on its class, and neither increments the deterministic counter,
+// so surviving either kind of failure costs a turn nothing against
+// goalWorkerRetries:
 //
-// If the retryable budget is exhausted, this function returns a
+//   - provider.RetryableStreamTruncated (a response stream that died before
+//     its terminal event) runs its OWN, much smaller loop, up to
+//     goalStreamTruncatedMaxAttempts attempts, spaced by goalRetryDelay's
+//     same SHORT schedule the deterministic tier uses — see that constant's
+//     doc comment for why: waiting longer can never raise a stream ceiling,
+//     so this class must not be allowed to ride the long weather schedule
+//     below.
+//   - every other retryable class runs its own loop, up to
+//     goalRetryableMaxAttempts attempts, spaced by goalRetryableBackoff's
+//     much longer jittered schedule (see the doc comment on that function).
+//
+// If either retryable budget is exhausted, this function returns a
 // *goalRetryableExhaustedError wrapping the last error, which PursueGoal
 // recognizes and parks the turn instead of clearing the goal (see
 // PursueGoal's doc comment and goalRetryableExhaustedError's).
@@ -1343,7 +1375,7 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 // journaled once an UpdateGoal has moved the goal past this turn's
 // generation — see recordGoalStalled and PursueGoal's stale-discard handling.
 func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, turn int, gen uint64) (attempts int, err error) {
-	var deterministicAttempt, retryableAttempt int
+	var deterministicAttempt, retryableAttempt, truncatedAttempt int
 	for {
 		attempts++
 		toolsBefore := s.toolExecutions()
@@ -1356,12 +1388,19 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 			return attempts, err
 		}
 		class, retryable := provider.AsRetryable(err)
+		// Stream truncation is retryable-CLASS (it parks on exhaustion,
+		// carries its class on every stall record, and never spends the
+		// deterministic budget) but runs its OWN, much smaller budget on
+		// the SHORT schedule — see goalStreamTruncatedMaxAttempts for why
+		// it must ride neither of the other two tiers.
+		truncated := class == provider.RetryableStreamTruncated
 		// exhausted decides, for a retryable failure, whether THIS attempt
-		// is the one that exhausts goalRetryableMaxAttempts — computed
-		// before retryableAttempt is incremented below, so the comparison
-		// reads as "one more than the retries already spent, including this
-		// one, would meet or exceed the ceiling".
-		exhausted := retryable && retryableAttempt+1 >= goalRetryableMaxAttempts
+		// is the one that exhausts its tier's budget — computed before the
+		// tier counter is incremented below, so the comparison reads as
+		// "one more than the retries already spent, including this one,
+		// would meet or exceed the ceiling".
+		exhausted := retryable && ((truncated && truncatedAttempt+1 >= goalStreamTruncatedMaxAttempts) ||
+			(!truncated && retryableAttempt+1 >= goalRetryableMaxAttempts))
 		// The tool-execution gate is evaluated BEFORE the stall is
 		// journaled so the record's waiting flag tells the truth: an
 		// attempt that ran a tool and then failed is about to stop
@@ -1399,6 +1438,19 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 				return attempts, err
 			}
 			if werr := waitGoalRetryBackoff(ctx, deterministicAttempt); werr != nil {
+				return attempts, werr
+			}
+			continue
+		}
+		if truncated {
+			truncatedAttempt++
+			if exhausted {
+				return attempts, &goalRetryableExhaustedError{err: err, class: class}
+			}
+			// Short schedule, no jitter: a stream ceiling is hit by
+			// LONG turns, so attempts are naturally minutes apart already
+			// — the wait only needs to clear a momentary network blip.
+			if werr := waitGoalRetryBackoff(ctx, truncatedAttempt); werr != nil {
 				return attempts, werr
 			}
 			continue
@@ -1770,20 +1822,31 @@ func (s *Session) evaluateGoal(ctx context.Context, condition string, evaluator 
 
 // runEvaluatorWithRetry issues one evaluator request, retrying a provider
 // error classified provider.AsRetryable on the exact same budget and backoff
-// schedule promptTurnWithRetry uses for the worker turn
+// schedule promptTurnWithRetry uses for the worker turn's WEATHER tier
 // (goalRetryableMaxAttempts, goalRetryableBackoff/waitGoalRetryableBackoff —
 // see GitHub issue #61 and the package doc's "Round 4" section) — the two
 // paths ride out the same shared provider weather, so they share a budget's
-// shape, each keeping its own counter. A non-retryable provider error is
-// returned immediately, unretried: unlike a worker turn, the evaluator call
-// is cheap and tool-less, so this budget exists purely to survive transient
-// weather, not to paper over a provider that is permanently broken — see
-// evaluateGoal's caller, PursueGoal, for what happens when this ultimately
-// returns an error (the boundary counts as failed; it is never immediately
-// fatal on its own). context.Canceled is never retried, matching every other
-// backoff wait in this package.
+// shape, each keeping its own counter.
+//
+// A response stream classified provider.RetryableStreamTruncated is
+// retryable-CLASS but must never ride that weather budget, for exactly the
+// reason documented on goalStreamTruncatedMaxAttempts: waiting longer cannot
+// raise a stream ceiling, so burning up to ~30 minutes per evaluator call
+// against a truncating stream buys nothing a much shorter wait wouldn't —
+// it instead runs its OWN, much smaller budget (goalStreamTruncatedMaxAttempts)
+// on the SHORT schedule (waitGoalRetryBackoff), mirroring
+// promptTurnWithRetry's own truncated tier exactly, including its own
+// counter kept separate from retryableAttempt below.
+//
+// A non-retryable provider error is returned immediately, unretried: unlike
+// a worker turn, the evaluator call is cheap and tool-less, so this budget
+// exists purely to survive transient weather, not to paper over a provider
+// that is permanently broken — see evaluateGoal's caller, PursueGoal, for
+// what happens when this ultimately returns an error (the boundary counts
+// as failed; it is never immediately fatal on its own). context.Canceled is
+// never retried, matching every other backoff wait in this package.
 func (s *Session) runEvaluatorWithRetry(ctx context.Context, condition string, evaluator message.ModelRef, systemPrompt string) (string, error) {
-	var retryableAttempt int
+	var retryableAttempt, truncatedAttempt int
 	for {
 		out, err := s.runEvaluator(ctx, condition, evaluator, systemPrompt)
 		if err == nil {
@@ -1792,8 +1855,19 @@ func (s *Session) runEvaluatorWithRetry(ctx context.Context, condition string, e
 		if errors.Is(err, context.Canceled) {
 			return "", err
 		}
-		if _, retryable := provider.AsRetryable(err); !retryable {
+		class, retryable := provider.AsRetryable(err)
+		if !retryable {
 			return "", err
+		}
+		if class == provider.RetryableStreamTruncated {
+			truncatedAttempt++
+			if truncatedAttempt >= goalStreamTruncatedMaxAttempts {
+				return "", err
+			}
+			if werr := waitGoalRetryBackoff(ctx, truncatedAttempt); werr != nil {
+				return "", werr
+			}
+			continue
 		}
 		retryableAttempt++
 		if retryableAttempt >= goalRetryableMaxAttempts {
@@ -1825,9 +1899,16 @@ func (s *Session) runEvaluator(ctx context.Context, condition string, evaluator 
 		}},
 		MaxTokens: 256,
 	}
+	// The evaluator's stream gets the same idle watchdog worker turns get
+	// (see armIdleWatchdog): it runs at EVERY goal turn boundary, so a
+	// permanently silent evaluator stream would wedge PursueGoal forever
+	// while holding the run slot — no goal.eval_failed, no turn.end, and
+	// the prompt queue never drains.
+	ctx, watch, release := s.armIdleWatchdog(ctx)
+	defer release()
 	stream, err := prov.Stream(ctx, req)
 	if err != nil {
-		return "", err
+		return "", watch.explain(err)
 	}
 	defer stream.Close()
 
@@ -1835,11 +1916,19 @@ func (s *Session) runEvaluator(ctx context.Context, condition string, evaluator 
 	var doneText string
 	for {
 		ev, err := stream.Next()
-		if errors.Is(err, io.EOF) {
+		watch.kick()
+		// Identity comparison, deliberately not errors.Is: adapters return
+		// the LITERAL io.EOF only as the normal post-terminal
+		// end-of-iteration signal. A TRUNCATED stream's error (see
+		// provider.MarkStreamTruncated) wraps an underlying io.EOF, so
+		// errors.Is would match it too — and treat text cut off
+		// mid-verdict as a complete verdict, achieving (or re-prompting)
+		// a goal on words the evaluator never finished.
+		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return "", err
+			return "", watch.explain(err)
 		}
 		switch ev.Type {
 		case provider.EventTextDelta:

@@ -109,3 +109,193 @@ func TestStreamInlineErrorClassification(t *testing.T) {
 		})
 	}
 }
+
+// TestStreamTruncationClassification mirrors provider/anthropic's test of
+// the same name (see the 2026-08-06 incident described there): a stream cut
+// before response.completed must be classified
+// provider.RetryableStreamTruncated, never surface as a bare,
+// deterministic-looking io.EOF.
+func TestStreamTruncationClassification(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse("response.created", `{"type":"response.created","response":{"id":"resp_1"}}`))                                                                                                        //nolint:errcheck
+		io.WriteString(w, sse("response.output_item.done", `{"type":"response.output_item.done","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_77","name":"bash","arguments":"{}"}}`)) //nolint:errcheck
+	})
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+		MaxTokens: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var streamErr error
+	for streamErr == nil {
+		var ev provider.Event
+		ev, streamErr = s.Next()
+		if streamErr == nil && ev.Type == provider.EventDone {
+			t.Fatal("stream reported EventDone despite missing response.completed")
+		}
+	}
+	class, ok := provider.AsRetryable(streamErr)
+	if !ok || class != provider.RetryableStreamTruncated {
+		t.Fatalf("AsRetryable(%v) = %q, %v; want %q, true", streamErr, class, ok, provider.RetryableStreamTruncated)
+	}
+}
+
+// TestStreamMidEventTruncationClassification mirrors provider/anthropic's
+// test of the same name: an SSE event cut mid-JSON with no terminator must
+// classify as stream truncation, not a deterministic parse error.
+func TestStreamMidEventTruncationClassification(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse("response.created", `{"type":"response.created","response":{"id":"resp_1"}}`)) //nolint:errcheck
+		io.WriteString(w, "event: response.output_text.delta\ndata: {\"type\":\"resp")                       //nolint:errcheck
+	})
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+		MaxTokens: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var streamErr error
+	for streamErr == nil {
+		_, streamErr = s.Next()
+	}
+	class, ok := provider.AsRetryable(streamErr)
+	if !ok || class != provider.RetryableStreamTruncated {
+		t.Fatalf("AsRetryable(%v) = %q, %v; want %q, true", streamErr, class, ok, provider.RetryableStreamTruncated)
+	}
+}
+
+// TestStreamActivityDuringSilentWireEvents mirrors provider/anthropic's
+// TestStreamActivityDuringToolArgumentStreaming: wire events that queue no
+// content (response.created, unrecognized delta kinds) must surface as
+// EventActivity so the engine's idle-stream watchdog sees the wire is alive.
+func TestStreamActivityDuringSilentWireEvents(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse("response.created", `{"type":"response.created","response":{"id":"resp_1"}}`))                                                                                                        //nolint:errcheck
+		io.WriteString(w, sse("response.function_call_arguments.delta", `{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"comm"}`))                                                    //nolint:errcheck
+		io.WriteString(w, sse("response.output_item.done", `{"type":"response.output_item.done","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_77","name":"bash","arguments":"{}"}}`)) //nolint:errcheck
+		io.WriteString(w, sse("response.completed", `{"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":1,"output_tokens":1}}}`))                                                       //nolint:errcheck
+	})
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+		MaxTokens: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var activity, sawDone bool
+	for {
+		ev, err := s.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch ev.Type {
+		case provider.EventActivity:
+			activity = true
+		case provider.EventDone:
+			sawDone = true
+		}
+	}
+	if !sawDone {
+		t.Fatal("stream never completed")
+	}
+	if !activity {
+		t.Error("no EventActivity surfaced for silent wire events")
+	}
+}
+
+// TestStreamCommentHeartbeatCountsAsActivity mirrors provider/anthropic's
+// test of the same name: a ": heartbeat" SSE comment line (bifrost's
+// keepalive shape, maximhq/bifrost#5010) must surface as EventActivity.
+func TestStreamCommentHeartbeatCountsAsActivity(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, ": heartbeat\n")                                                                                                                    //nolint:errcheck
+		io.WriteString(w, sse("response.created", `{"type":"response.created","response":{"id":"resp_1"}}`))                                                  //nolint:errcheck
+		io.WriteString(w, ": heartbeat\n")                                                                                                                    //nolint:errcheck
+		io.WriteString(w, sse("response.completed", `{"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":1,"output_tokens":1}}}`)) //nolint:errcheck
+	})
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+		MaxTokens: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var activity int
+	for {
+		ev, err := s.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ev.Type == provider.EventActivity {
+			activity++
+		}
+	}
+	if activity < 2 {
+		t.Errorf("activity events = %d, want >= 2 (comment heartbeats must count as wire activity)", activity)
+	}
+}
+
+// TestStreamInsaneOutputIndexRejected: itemAt grows the assembled-items
+// slice to whatever output_index the wire names, so a hostile or corrupt
+// stream naming output_index 177777777 forced a ~1.4GB allocation (found
+// by FuzzStreamDecode — the nightly job's fuzz worker died of resource
+// exhaustion "hung or terminated unexpectedly"), and a NEGATIVE index
+// panicked with index-out-of-range. Both must be rejected as protocol
+// errors instead.
+func TestStreamInsaneOutputIndexRejected(t *testing.T) {
+	for _, tc := range []struct{ name, idx string }{
+		{"huge", "20001"},
+		{"negative", "-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				io.WriteString(w, sse("response.output_text.delta", `{"type":"response.output_text.delta","output_index":`+tc.idx+`,"delta":"x"}`)) //nolint:errcheck
+				io.WriteString(w, sse("response.completed", `{"type":"response.completed","response":{"id":"resp_1"}}`))                            //nolint:errcheck
+			})
+			s, err := c.Stream(context.Background(), &provider.Request{
+				Model:     message.ModelRef{Provider: Family, Model: "m"},
+				Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+				MaxTokens: 10,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			var streamErr error
+			for streamErr == nil {
+				var ev provider.Event
+				ev, streamErr = s.Next()
+				if streamErr == nil && ev.Type == provider.EventDone {
+					t.Fatal("stream completed despite an out-of-range output_index")
+				}
+			}
+			if streamErr == io.EOF {
+				t.Fatal("stream ended cleanly, want a protocol error naming output_index")
+			}
+			if !strings.Contains(streamErr.Error(), "output_index") {
+				t.Errorf("err = %v, want it to name output_index", streamErr)
+			}
+		})
+	}
+}
