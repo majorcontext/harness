@@ -75,6 +75,13 @@ type goalProvider struct {
 	// checking workerErrN — used to simulate a provider error on a LATER
 	// model call within the same Prompt invocation, i.e. after an earlier
 	// call in that attempt already executed a tool.
+	//
+	// failWorkerCall and workerErrN do NOT compose the way this reads at a
+	// glance. "Instead of checking workerErrN" applies to the TARGETED call
+	// only. workerErrN still spends its own budget from call 1 onward, so
+	// setting both makes calls 1..workerErrN fail through workerErrN AND
+	// call failWorkerCall fail through this field. Write a purpose-built
+	// provider when a test needs exact call-by-call control.
 	workerCall     int
 	failWorkerCall int
 

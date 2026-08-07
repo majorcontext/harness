@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -475,6 +476,125 @@ func TestPursueGoalRetryFallsBackWhenAnchorFoldedAwayMidTurn(t *testing.T) {
 		}
 		if prov.workerCall != 3 {
 			t.Errorf("worker provider calls = %d, want exactly 3 (turn 1, turn 2's failing attempt, turn 2's fallback attempt)", prov.workerCall)
+		}
+	})
+}
+
+// fallbackAnchorRegressionProvider gives exact, call-number-precise control
+// over the worker stream that TestPursueGoalRetryFallbackBoundsDuplicates
+// AfterUndroppableResidue needs — goalProvider's workerErrN/failWorkerCall
+// combination cannot express it, because workerErrN consumes its failure
+// budget starting at call 1 regardless of failWorkerCall's own exact-match
+// target (the two do not compose the way their doc comments alone suggest).
+// Call 1 always returns the tool-call turn (the hook denies it); calls
+// 2 through failN all fail with a retryable-classified error; every call
+// after that succeeds with the final turn.
+type fallbackAnchorRegressionProvider struct {
+	calls int
+	failN int
+}
+
+func (p *fallbackAnchorRegressionProvider) Name() string { return "test" }
+
+func (p *fallbackAnchorRegressionProvider) Stream(_ context.Context, req *provider.Request) (provider.Stream, error) {
+	if len(req.Tools) == 0 {
+		return &scriptedStream{events: evalTurn("MET: looks complete")}, nil
+	}
+	p.calls++
+	switch {
+	case p.calls == 1:
+		return &scriptedStream{events: asstTurn(provider.StopToolUse, toolCall("tc1", "test_tool", `{}`))}, nil
+	case p.calls <= p.failN:
+		return nil, retryableProviderErr(provider.RetryableOverloaded)
+	default:
+		return &scriptedStream{events: asstTurn(provider.StopEndTurn, &message.Text{Text: "all done"})}, nil
+	}
+}
+
+// TestPursueGoalRetryFallbackBoundsDuplicatesAfterUndroppableResidue is the
+// red-first regression test for the review finding on PR #107 at
+// engine/goal.go:1428: moving anchorID capture from per-attempt to
+// once-per-turn is correct for the reuse path above, but it breaks the
+// FALLBACK path (dropUnansweredDirective, invoked when the tail is some
+// OTHER shape than the bare directive — see directiveReuseEligible's doc
+// comment).
+//
+// A plugin tool.execute.before DENY appends [assistant(tool call),
+// tool(denied)] without incrementing toolExecCount (engine.go), so a
+// retry still runs. That residue does not match either shape
+// isSafeToDropDirectiveTail approves (the directive alone, or the
+// three-message interrupted-turn trio), so it is — correctly — never
+// dropped. With a FIXED anchor pinned to the start of the turn, the tail
+// after that anchor never again shrinks to a droppable shape for the rest
+// of the turn: every later attempt's fallback re-appends a fresh
+// directive and drops none. Across this test's ten retryable-tier
+// failures (well under goalRetryableMaxAttempts = 12) that means ten
+// extra duplicate directives, live AND in the durable log — the exact
+// NEP-5272 growth this package exists to eliminate, reopened on this one
+// path.
+//
+// Call 1 makes a tool call the hook denies. Calls 2-11 (ten retryable-tier
+// failures — attempt 1's own post-deny continuation, then nine more
+// single-call attempts) each fail; call 12 (attempt 11) succeeds, well
+// under goalRetryableMaxAttempts (12).
+//
+// The fix re-anchors after a fallback append, to the point right before
+// the fresh directive it just appended: attempt 3 onward then finds THAT
+// directive alone in its own tail and reuses it (directiveReuseEligible)
+// instead of appending yet another copy. The final duplicate count is
+// bounded at 2 — the original directive, permanently stuck behind its own
+// undroppable denied-tool residue, plus the one fallback directive that
+// goes on to be reused for every remaining attempt and is finally
+// answered — never 11.
+//
+// Red-verified: reverting the re-anchor (restoring the single anchorID
+// captured once before the loop, used unmodified by every fallback call)
+// makes both counts 11, not 2 — see this test's PR description note for
+// the captured red output.
+func TestPursueGoalRetryFallbackBoundsDuplicatesAfterUndroppableResidue(t *testing.T) {
+	orig := goalJitterFunc
+	t.Cleanup(func() { goalJitterFunc = orig })
+	goalJitterFunc = func(max time.Duration) time.Duration { return 0 }
+
+	synctest.Test(t, func(t *testing.T) {
+		testTool := Tool{
+			Def: provider.ToolDef{Name: "test_tool", Description: "test", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			Run: func(ctx context.Context, s *Session, args json.RawMessage) (message.Parts, error) {
+				t.Fatal("test_tool.Run must never be called — the hook denies every call")
+				return nil, nil
+			},
+		}
+		prov := &fallbackAnchorRegressionProvider{failN: 11}
+		hooks := &fakeHooks{deny: "denied by policy"}
+		s := NewSession(Config{
+			Providers:    provider.Registry{prov.Name(): prov},
+			Model:        message.ModelRef{Provider: prov.Name(), Model: "m1"},
+			System:       []string{"base"},
+			SessionDir:   t.TempDir(),
+			Instructions: &InstructionsConfig{Disabled: true},
+			SkillsDirs:   []string{},
+			Tools:        []Tool{testTool},
+			Hooks:        hooks,
+		})
+
+		res, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+		if err != nil {
+			t.Fatalf("PursueGoal error = %v, want nil (a retryable outage well under budget must eventually succeed)", err)
+		}
+		if !res.Achieved {
+			t.Fatalf("result = %+v, want achieved", res)
+		}
+
+		if got := countUserMessagesWithText(s.History(), "cond"); got != 2 {
+			t.Errorf("live directive count = %d, want exactly 2 (the original, stuck behind undroppable residue, plus one reused fallback copy)", got)
+		}
+
+		loaded, err := LoadSession(s.cfg, s.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := countUserMessagesWithText(loaded.History(), "cond"); got != 2 {
+			t.Errorf("reloaded (durable log) directive count = %d, want exactly 2", got)
 		}
 	})
 }

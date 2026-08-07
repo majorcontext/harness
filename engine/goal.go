@@ -1417,14 +1417,28 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 // generation — see recordGoalStalled and PursueGoal's stale-discard handling.
 func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, turn int, gen uint64) (attempts int, err error) {
 	var deterministicAttempt, retryableAttempt, truncatedAttempt int
-	// anchorID is the ID of the last message in history before attempt 1's
-	// own call appends this turn's directive — captured ONCE, before the
-	// loop, not per attempt. A retry that reuses the directive (see the
-	// dispatch below) never moves it, and a retry that falls back to
-	// appending a fresh copy only does so for a tail shape this package
-	// leaves untouched (dropUnansweredDirective is a no-op on it) — so this
-	// same anchor identifies the start of THIS turn's own tail on every
-	// attempt, not just the first.
+	// anchorID identifies the message directiveReuseEligible and
+	// dropUnansweredDirective both measure their tail from — the point
+	// immediately before whichever directive is CURRENTLY this turn's live,
+	// still-unanswered one. Captured once before attempt 1's own call
+	// appends the turn's first directive, then advanced (see the fallback
+	// branch below) exactly when a fresh directive replaces the one it
+	// named.
+	//
+	// It must NOT stay pinned to the turn's start for the whole turn: a
+	// fallback append (below) can leave undroppable residue behind an
+	// earlier directive forever (a denied tool call's own ToolResult, say —
+	// dropUnansweredDirective correctly refuses to touch it). A fixed
+	// anchor's tail then never again shrinks to a droppable shape, so
+	// EVERY later fallback re-appends yet another duplicate and drops none
+	// — up to one per remaining attempt over a long outage
+	// (goalRetryableMaxAttempts = 12), the exact NEP-5272 growth this
+	// package exists to eliminate, reopened on this one path. Re-anchoring
+	// to right before the fresh directive each fallback appends means the
+	// NEXT attempt's tail is that directive alone, so directiveReuseEligible
+	// picks it up and reuse resumes — bounding the damage to the one
+	// fallback copy that was unavoidable, exactly like the per-attempt
+	// anchor this package used before it could reuse a directive at all.
 	anchorID := s.lastMessageID()
 	for {
 		attempts++
@@ -1456,6 +1470,14 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 			// a fresh directive exactly as every attempt did before this
 			// package could reuse one.
 			s.dropUnansweredDirective(anchorID)
+			// Re-anchor to right before the fresh directive about to be
+			// appended (see anchorID's own doc comment above for why this
+			// must happen here): whatever dropUnansweredDirective did or did
+			// not remove, THIS is the new boundary a later attempt's tail is
+			// measured from, so a subsequent reuse check sees only what
+			// happens from here on, never the residue this fallback is
+			// leaving behind for good.
+			anchorID = s.lastMessageID()
 			_, perr = s.Prompt(ctx, directive)
 		}
 		if perr == nil {
@@ -1583,6 +1605,34 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 	}
 }
 
+// tailAfterAnchor returns the slice of s.history strictly after the message
+// identified by anchorID, and whether the lookup succeeded. anchorID == ""
+// names the very start of history (used for a turn whose directive was the
+// session's first-ever message). A non-empty anchorID missing from CURRENT
+// history — maybeAutoCompact folded away the message it names since it was
+// captured (see lastMessageID's doc comment and the design's §6 risk) —
+// reports ok=false: the caller must not guess a fallback position, since
+// every other message in a folded history is unrelated to this turn.
+//
+// Callers must hold s.mu; both directiveReuseEligible and
+// dropUnansweredDirective need the exact same anchor-to-tail lookup and
+// previously duplicated it inline.
+func (s *Session) tailAfterAnchor(anchorID string) ([]message.Message, bool) {
+	idx := -1
+	if anchorID != "" {
+		for i, m := range s.history {
+			if m.ID == anchorID {
+				idx = i
+				break
+			}
+		}
+		if idx == -1 {
+			return nil, false
+		}
+	}
+	return s.history[idx+1:], true
+}
+
 // directiveReuseEligible reports whether the tail of history after anchorID
 // is EXACTLY the single unanswered directive message a previous attempt
 // appended — the only shape promptTurnWithRetry's retry dispatch reuses
@@ -1598,29 +1648,18 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 // result, delivered operator mail — see dropUnansweredDirective's doc
 // comment), fall through to the caller's drop-and-reappend fallback instead.
 //
-// anchorID missing from CURRENT history — maybeAutoCompact folded away the
-// message it names since it was captured (see lastMessageID's doc comment
-// and the design's §6 risk) — is reported as NOT eligible: the caller falls
-// back to dropUnansweredDirective (a safe no-op in that case) plus an
-// ordinary Prompt call, exactly the path every attempt took before this fix
-// existed.
+// anchorID missing from CURRENT history is reported as NOT eligible (see
+// tailAfterAnchor): the caller falls back to dropUnansweredDirective (a safe
+// no-op in that case) plus an ordinary Prompt call, exactly the path every
+// attempt took before this fix existed.
 func (s *Session) directiveReuseEligible(anchorID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	idx := -1
-	if anchorID != "" {
-		for i, m := range s.history {
-			if m.ID == anchorID {
-				idx = i
-				break
-			}
-		}
-		if idx == -1 {
-			return false
-		}
+	tail, ok := s.tailAfterAnchor(anchorID)
+	if !ok {
+		return false
 	}
-	tail := s.history[idx+1:]
 	return len(tail) == 1 && isSafeToDropDirectiveTail(tail)
 }
 
@@ -1718,23 +1757,14 @@ func (s *Session) dropUnansweredDirective(anchorID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	idx := -1
-	if anchorID != "" {
-		for i, m := range s.history {
-			if m.ID == anchorID {
-				idx = i
-				break
-			}
-		}
-		if idx == -1 {
-			return
-		}
+	tail, ok := s.tailAfterAnchor(anchorID)
+	if !ok {
+		return
 	}
-	tail := s.history[idx+1:]
 	if !isSafeToDropDirectiveTail(tail) {
 		return
 	}
-	end := idx + 1
+	end := len(s.history) - len(tail)
 	s.history = s.history[:end:end]
 }
 
