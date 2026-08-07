@@ -54,6 +54,17 @@ import (
 // Arguments), the reloaded log matches in-memory history exactly, and a
 // following worker turn — which now transcodes a clean history — succeeds
 // instead of dying identically on every retry.
+//
+// # NEP-5272 update: this exact stop reason is now paired, not left orphaned
+//
+// StopMaxTokens-with-a-ToolCall is precisely the shape
+// appendUnexecutedToolCallResults exists for (see its doc comment and
+// unexecutedToolCallStopReasonTextFmt's incident writeup): the engine still
+// never executes truncated arguments, but Session.Prompt now appends a
+// synthetic is_error tool-role result for tc1 immediately after the
+// assistant message, so the ToolCall this test cares about is the
+// second-to-last history entry, not the last — history no longer ends
+// with a dangling tool_use at all.
 func TestPersistTruncatedToolCallArguments(t *testing.T) {
 	dir := t.TempDir()
 	truncated := toolCall("tc1", "bash", `{"command":"echo hel`) // cut off mid-argument, non-empty, invalid JSON
@@ -84,22 +95,42 @@ func TestPersistTruncatedToolCallArguments(t *testing.T) {
 	// The tool call's identity survives; only the unusable truncated
 	// arguments are gone, normalized the same way empty Arguments already
 	// are (see ToolCall.safeArguments) rather than dropping the whole part
-	// and losing which tool the model was calling.
+	// and losing which tool the model was calling. The assistant message is
+	// now the second-to-last entry, not the last (see the NEP-5272 update
+	// above): appendUnexecutedToolCallResults appends a synthetic tool-role
+	// result for tc1 right after it, so history never ends on a dangling
+	// tool_use.
 	h := s.History()
+	if len(h) != 3 {
+		t.Fatalf("history len = %d, want 3 (user, assistant(tool_call), synthetic tool result): %+v", len(h), h)
+	}
+	assistant := h[len(h)-2]
 	var found *message.ToolCall
-	for _, p := range h[len(h)-1].Parts {
+	for _, p := range assistant.Parts {
 		if tc, ok := p.(*message.ToolCall); ok {
 			found = tc
 		}
 	}
 	if found == nil {
-		t.Fatalf("assistant message lost its ToolCall part entirely: %+v", h[len(h)-1])
+		t.Fatalf("assistant message lost its ToolCall part entirely: %+v", assistant)
 	}
 	if found.CallID != "tc1" || found.Name != "bash" {
 		t.Errorf("ToolCall identity not preserved: %+v", found)
 	}
 	if len(found.Arguments) != 0 {
 		t.Errorf("ToolCall.Arguments = %s, want cleared (truncated JSON is unusable)", found.Arguments)
+	}
+
+	// The synthetic pairing itself: the last message is now a tool-role
+	// result for tc1, is_error true — the engine still never executed the
+	// truncated call, it just no longer leaves it orphaned.
+	synth := h[len(h)-1]
+	if synth.Role != message.RoleTool {
+		t.Fatalf("h[len(h)-1].Role = %s, want tool (the synthetic unexecuted-call result)", synth.Role)
+	}
+	tr, ok := synth.Parts[0].(*message.ToolResult)
+	if !ok || tr.CallID != "tc1" || !tr.IsError {
+		t.Fatalf("synthetic tool result = %+v, want an is_error ToolResult for tc1", synth.Parts[0])
 	}
 
 	// The session log is loadable and agrees with in-memory history — the
