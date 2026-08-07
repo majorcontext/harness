@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/synctest"
 
+	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 )
 
@@ -150,46 +153,76 @@ func TestTurnEndOnPromptFailureIsSanitizedAndSurfaced(t *testing.T) {
 // prompt's worker-turn death still records, and — unlike a clear — the goal
 // itself stays fully active, ready to resume on the next ordinary activity.
 func TestTurnEndOnGoalWorkerFailureParksWithError(t *testing.T) {
-	prov := &goalProv{
-		name:       "test",
-		worker:     [][]provider.Event{},
-		eval:       [][]provider.Event{},
-		workerErrN: 100, // every attempt fails, exhausting retries
-	}
-	h := newGoalHarness(t, prov)
-	id := h.createSession("test/m1")
+	// Runs under synctest so the deterministic worker retry backoff
+	// (goalRetryDelay: 1s+4s between the 3 attempts) costs no real wall-clock
+	// time; drives the server in-process via handleGoal + the journal (no
+	// httptest.Server, whose real listener a bubble forbids) exactly like
+	// TestGoalWorkerParkSurfacesPausedWorkerFailure.
+	dir := t.TempDir()
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProv{
+			name:       "test",
+			worker:     [][]provider.Event{},
+			eval:       [][]provider.Event{},
+			workerErrN: 100, // every attempt fails, exhausting retries
+		}
+		srv := newServer(t, dir, prov, 0, func(o *Options) {
+			o.GoalEvaluator = message.ModelRef{Provider: prov.Name(), Model: "eval"}
+		})
+		id := createSessionDirect(t, srv, "test/m1")
 
-	sse := h.openSSE("?from=0", "")
-	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "do the thing"})
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
-	}
+		grec := httptest.NewRecorder()
+		greq := httptest.NewRequest("POST", "/session/"+id+"/goal", strings.NewReader(`{"condition":"do the thing"}`))
+		greq.SetPathValue("id", id)
+		srv.handleGoal(grec, greq)
+		if grec.Code != http.StatusAccepted {
+			t.Fatalf("POST goal status %d: %s", grec.Code, grec.Body)
+		}
 
-	end := sse.waitFor(t, "turn.end")
-	if end.Outcome != outcomeWorkerParked {
-		t.Errorf("turn.end outcome = %q, want %q", end.Outcome, outcomeWorkerParked)
-	}
-	if end.Error == "" {
-		t.Errorf("turn.end missing error detail")
-	}
+		srv.wg.Wait() // the parked loop (and its fake-time backoff) finishes
 
-	resp, data = h.do("GET", "/session/"+id, nil)
-	if resp.StatusCode != 200 {
-		t.Fatalf("GET session status %d: %s", resp.StatusCode, data)
-	}
-	var sess struct {
-		LastTurn *lastTurnJSONForTest `json:"last_turn"`
-		Goal     *struct {
-			Active bool `json:"active"`
-		} `json:"goal"`
-	}
-	if err := json.Unmarshal(data, &sess); err != nil {
-		t.Fatal(err)
-	}
-	if sess.LastTurn == nil || sess.LastTurn.Outcome != outcomeWorkerParked {
-		t.Fatalf("last_turn = %+v, want outcome %q", sess.LastTurn, outcomeWorkerParked)
-	}
-	if sess.Goal == nil || !sess.Goal.Active {
-		t.Fatalf("goal = %+v, want active (a park must never clear the goal)", sess.Goal)
-	}
+		srv.mu.Lock()
+		var turnEndOutcomeGot, turnEndError string
+		var sawTurnEnd bool
+		for _, ev := range srv.journal {
+			if ev.SessionID == id && ev.Type == evtTurnEnd && !sawTurnEnd {
+				sawTurnEnd = true
+				turnEndOutcomeGot = ev.Outcome
+				turnEndError = ev.Error
+			}
+		}
+		srv.mu.Unlock()
+		if !sawTurnEnd {
+			t.Fatal("no turn.end event in journal")
+		}
+		if turnEndOutcomeGot != outcomeWorkerParked {
+			t.Errorf("turn.end outcome = %q, want %q", turnEndOutcomeGot, outcomeWorkerParked)
+		}
+		if turnEndError == "" {
+			t.Errorf("turn.end missing error detail")
+		}
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/session/"+id, nil)
+		req.SetPathValue("id", id)
+		srv.handleGet(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET session status %d: %s", rec.Code, rec.Body)
+		}
+		var sess struct {
+			LastTurn *lastTurnJSONForTest `json:"last_turn"`
+			Goal     *struct {
+				Active bool `json:"active"`
+			} `json:"goal"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &sess); err != nil {
+			t.Fatal(err)
+		}
+		if sess.LastTurn == nil || sess.LastTurn.Outcome != outcomeWorkerParked {
+			t.Fatalf("last_turn = %+v, want outcome %q", sess.LastTurn, outcomeWorkerParked)
+		}
+		if sess.Goal == nil || !sess.Goal.Active {
+			t.Fatalf("goal = %+v, want active (a park must never clear the goal)", sess.Goal)
+		}
+	})
 }

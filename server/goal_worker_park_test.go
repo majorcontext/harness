@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"testing/synctest"
 
@@ -229,84 +230,122 @@ func TestGoalParkedRoutedThroughPublish(t *testing.T) {
 // for the park terminal, which — unlike the evaluator-exhausted terminal —
 // does NOT clear the goal.
 func TestGoalWorkerParkSurfacesPausedWorkerFailure(t *testing.T) {
-	prov := &goalProv{
-		name:       "test",
-		workerErrN: goalWorkerRetriesForTest + 1,
-		workerErr:  permanentWorkerErr(),
-	}
-	h := newGoalHarness(t, prov)
-	id := h.createSession("test/m1")
-	sse := h.openSSE("?from=0", "")
-
-	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond"})
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
-	}
-	evs := sse.collectUntilIdle(t)
-
-	idx := map[string]int{}
-	for i, ev := range evs {
-		switch ev.Type {
-		case "goal.parked":
-			if _, ok := idx["goal.parked"]; !ok {
-				idx["goal.parked"] = i
-			}
-			if !ev.GoalPaused || ev.GoalPauseReason != pauseReasonWorkerFailure {
-				t.Errorf("goal.parked event GoalPaused/GoalPauseReason = %v/%q, want true/%q", ev.GoalPaused, ev.GoalPauseReason, pauseReasonWorkerFailure)
-			}
-			if ev.GoalReason == "" {
-				t.Error("goal.parked event missing GoalReason")
-			}
-			if want := goalWorkerRetriesForTest + 1; ev.GoalAttempt != want {
-				t.Errorf("goal.parked event GoalAttempt = %d, want %d", ev.GoalAttempt, want)
-			}
-			if ev.GoalRetryable {
-				t.Error("goal.parked event GoalRetryable = true, want false (deterministic tier)")
-			}
-		case evtSessionError:
-			if _, ok := idx[evtSessionError]; !ok {
-				idx[evtSessionError] = i
-			}
-		case evtTurnEnd:
-			if _, ok := idx[evtTurnEnd]; !ok {
-				idx[evtTurnEnd] = i
-				if ev.Outcome != outcomeWorkerParked {
-					t.Errorf("turn.end outcome = %q, want %q", ev.Outcome, outcomeWorkerParked)
-				}
-				if ev.Error == "" {
-					t.Error("turn.end missing sanitized error detail")
-				}
-			}
-		case evtSessionStatus:
-			if ev.Status == "idle" {
-				if _, ok := idx["idle"]; !ok {
-					idx["idle"] = i
-				}
-			}
-		case "goal.cleared":
-			t.Error("goal.cleared emitted — a worker-turn park must never clear the goal")
+	// Runs under synctest so the deterministic retry backoff (goalRetryDelay:
+	// 1s+4s) costs no real wall-clock time; drives the server in-process via
+	// handleGoal + the journal (no httptest.Server, whose real listener a
+	// bubble forbids) exactly like TestGoalEvaluatorExhaustedTerminalOutcome.
+	dir := t.TempDir()
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProv{
+			name:       "test",
+			workerErrN: goalWorkerRetriesForTest + 1,
+			workerErr:  permanentWorkerErr(),
 		}
-	}
-	for _, want := range []string{"goal.parked", evtSessionError, evtTurnEnd, "idle"} {
-		if _, ok := idx[want]; !ok {
-			t.Fatalf("missing expected event %q in stream: %+v", want, evs)
-		}
-	}
-	if !(idx["goal.parked"] < idx[evtSessionError] && idx[evtSessionError] < idx[evtTurnEnd] && idx[evtTurnEnd] < idx["idle"]) {
-		t.Errorf("event order = goal.parked:%d session.error:%d turn.end:%d idle:%d, want strictly increasing",
-			idx["goal.parked"], idx[evtSessionError], idx[evtTurnEnd], idx["idle"])
-	}
+		srv := newServer(t, dir, prov, 0, func(o *Options) {
+			o.GoalEvaluator = message.ModelRef{Provider: prov.Name(), Model: "eval"}
+		})
+		id := createSessionDirect(t, srv, "test/m1")
 
-	view := h.getPausedGoalView(id)
-	if view.Goal == nil || !view.Goal.Active {
-		t.Fatalf("goal after park = %+v, want active (park never clears)", view.Goal)
-	}
-	if !view.Goal.Paused || view.Goal.PauseReason != "worker_failure" {
-		t.Errorf("goal paused/pause_reason after park = %v/%q, want true/worker_failure", view.Goal.Paused, view.Goal.PauseReason)
-	}
-	if view.State != "idle" {
-		t.Errorf("state after park = %q, want idle (worker_failure forces idle like restart)", view.State)
-	}
+		grec := httptest.NewRecorder()
+		greq := httptest.NewRequest("POST", "/session/"+id+"/goal", strings.NewReader(`{"condition":"cond"}`))
+		greq.SetPathValue("id", id)
+		srv.handleGoal(grec, greq)
+		if grec.Code != http.StatusAccepted {
+			t.Fatalf("POST goal status %d: %s", grec.Code, grec.Body)
+		}
+
+		srv.wg.Wait() // the parked loop (and its fake-time backoff) finishes
+
+		srv.mu.Lock()
+		var evs []Event
+		for _, ev := range srv.journal {
+			if ev.SessionID == id {
+				evs = append(evs, ev)
+			}
+		}
+		srv.mu.Unlock()
+
+		idx := map[string]int{}
+		for i, ev := range evs {
+			switch ev.Type {
+			case "goal.parked":
+				if _, ok := idx["goal.parked"]; !ok {
+					idx["goal.parked"] = i
+				}
+				if !ev.GoalPaused || ev.GoalPauseReason != pauseReasonWorkerFailure {
+					t.Errorf("goal.parked event GoalPaused/GoalPauseReason = %v/%q, want true/%q", ev.GoalPaused, ev.GoalPauseReason, pauseReasonWorkerFailure)
+				}
+				if ev.GoalReason == "" {
+					t.Error("goal.parked event missing GoalReason")
+				}
+				if want := goalWorkerRetriesForTest + 1; ev.GoalAttempt != want {
+					t.Errorf("goal.parked event GoalAttempt = %d, want %d", ev.GoalAttempt, want)
+				}
+				if ev.GoalRetryable {
+					t.Error("goal.parked event GoalRetryable = true, want false (deterministic tier)")
+				}
+			case evtSessionError:
+				if _, ok := idx[evtSessionError]; !ok {
+					idx[evtSessionError] = i
+				}
+			case evtTurnEnd:
+				if _, ok := idx[evtTurnEnd]; !ok {
+					idx[evtTurnEnd] = i
+					if ev.Outcome != outcomeWorkerParked {
+						t.Errorf("turn.end outcome = %q, want %q", ev.Outcome, outcomeWorkerParked)
+					}
+					if ev.Error == "" {
+						t.Error("turn.end missing sanitized error detail")
+					}
+				}
+			case evtSessionStatus:
+				if ev.Status == "idle" {
+					if _, ok := idx["idle"]; !ok {
+						idx["idle"] = i
+					}
+				}
+			case "goal.cleared":
+				t.Error("goal.cleared emitted — a worker-turn park must never clear the goal")
+			}
+		}
+		for _, want := range []string{"goal.parked", evtSessionError, evtTurnEnd, "idle"} {
+			if _, ok := idx[want]; !ok {
+				t.Fatalf("missing expected event %q in stream: %+v", want, evs)
+			}
+		}
+		if !(idx["goal.parked"] < idx[evtSessionError] && idx[evtSessionError] < idx[evtTurnEnd] && idx[evtTurnEnd] < idx["idle"]) {
+			t.Errorf("event order = goal.parked:%d session.error:%d turn.end:%d idle:%d, want strictly increasing",
+				idx["goal.parked"], idx[evtSessionError], idx[evtTurnEnd], idx["idle"])
+		}
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/session/"+id, nil)
+		req.SetPathValue("id", id)
+		srv.handleGet(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET session status %d: %s", rec.Code, rec.Body)
+		}
+		var view struct {
+			State string `json:"state"`
+			Goal  *struct {
+				Active      bool   `json:"active"`
+				Paused      bool   `json:"paused"`
+				PauseReason string `json:"pause_reason"`
+			} `json:"goal"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+			t.Fatal(err)
+		}
+		if view.Goal == nil || !view.Goal.Active {
+			t.Fatalf("goal after park = %+v, want active (park never clears)", view.Goal)
+		}
+		if !view.Goal.Paused || view.Goal.PauseReason != "worker_failure" {
+			t.Errorf("goal paused/pause_reason after park = %v/%q, want true/worker_failure", view.Goal.Paused, view.Goal.PauseReason)
+		}
+		if view.State != "idle" {
+			t.Errorf("state after park = %q, want idle (worker_failure forces idle like restart)", view.State)
+		}
+	})
 }
 
 // TestGoalWorkerParkFreesRunSlotForQueuedPrompt is invariant 2's server
@@ -317,102 +356,152 @@ func TestGoalWorkerParkSurfacesPausedWorkerFailure(t *testing.T) {
 // park happens — "delivered", not "injected" — mirroring
 // TestQueuedDispatchAfterGoalLoopEnds's shape for the achieved-goal case.
 func TestGoalWorkerParkFreesRunSlotForQueuedPrompt(t *testing.T) {
-	prov := &goalProv{
-		name:       "test",
-		workerErrN: goalWorkerRetriesForTest + 1,
-		workerErr:  permanentWorkerErr(),
-		// worker[0] serves the dispatched queued prompt; worker[1] serves
-		// the fresh loop that prompt's own tail auto-arms (see below) — its
-		// eval script lets that loop achieve immediately instead of
-		// cascading into a second park with an empty script.
-		worker: [][]provider.Event{asstTurn("queued-done"), asstTurn("resumed-goal-turn")},
-		eval:   [][]provider.Event{asstTurn("MET: done")},
-	}
-	h := newGoalHarness(t, prov)
-	id := h.createSession("test/m1")
-	sse := h.openSSE("?from=0", "")
-
-	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond"})
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
-	}
-
-	resp, data = h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
-		"parts": []map[string]string{{"type": "text", "text": "queued"}},
-	})
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("queued prompt status %d: %s", resp.StatusCode, data)
-	}
-	var qr promptAsyncResponse
-	if err := json.Unmarshal(data, &qr); err != nil {
-		t.Fatal(err)
-	}
-	if qr.Status != "queued" || qr.Queued != 1 {
-		t.Fatalf("queued prompt response = %+v, want status=queued queued=1", qr)
-	}
-
-	// First SSE batch: the parked goal loop's own turn-end.
-	parkEvs := sse.collectUntilIdle(t)
-	var sawParked bool
-	for _, ev := range parkEvs {
-		if ev.Type == "goal.parked" {
-			sawParked = true
+	// Runs under synctest so the deterministic worker retry backoff
+	// (goalRetryDelay: 1s+4s) costs no real wall-clock time; drives the server
+	// in-process via handleGoal/handlePrompt + the journal (no httptest.Server,
+	// whose real listener a bubble forbids) exactly like
+	// TestGoalWorkerParkSurfacesPausedWorkerFailure. srv.wg.Wait covers the
+	// whole chain — the park frees the slot, the queued prompt dispatches, and
+	// that prompt's own tail auto-arms the goal to achievement — because every
+	// tail's dispatch/auto-arm does its wg.Add before the previous goroutine's
+	// deferred wg.Done (see handlers.go's wg.Add-before-wg.Done ordering note).
+	dir := t.TempDir()
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProv{
+			name:       "test",
+			workerErrN: goalWorkerRetriesForTest + 1,
+			workerErr:  permanentWorkerErr(),
+			// worker[0] serves the dispatched queued prompt; worker[1] serves
+			// the fresh loop that prompt's own tail auto-arms (see below) — its
+			// eval script lets that loop achieve immediately instead of
+			// cascading into a second park with an empty script.
+			worker: [][]provider.Event{asstTurn("queued-done"), asstTurn("resumed-goal-turn")},
+			eval:   [][]provider.Event{asstTurn("MET: done")},
 		}
-	}
-	if !sawParked {
-		t.Fatalf("goal loop events = %v, want goal.parked", parkEvs)
-	}
+		srv := newServer(t, dir, prov, 0, func(o *Options) {
+			o.GoalEvaluator = message.ModelRef{Provider: prov.Name(), Model: "eval"}
+		})
+		id := createSessionDirect(t, srv, "test/m1")
 
-	// Second SSE batch: the QUEUED prompt, dispatched into the just-freed run
-	// slot as a normal turn.
-	dispatchEvs := sse.collectUntilIdle(t)
-	var sawBusy, sawText, sawDelivered bool
-	for _, ev := range dispatchEvs {
-		if ev.Type == evtSessionStatus && ev.Status == "busy" {
-			sawBusy = true
+		grec := httptest.NewRecorder()
+		greq := httptest.NewRequest("POST", "/session/"+id+"/goal", strings.NewReader(`{"condition":"cond"}`))
+		greq.SetPathValue("id", id)
+		srv.handleGoal(grec, greq)
+		if grec.Code != http.StatusAccepted {
+			t.Fatalf("POST goal status %d: %s", grec.Code, grec.Body)
 		}
-		if ev.Type == "message" && ev.Message != nil && ev.Message.Role == message.RoleAssistant && ev.Message.Parts.Text() == "queued-done" {
-			sawText = true
+
+		// Let the goal loop claim the run slot, run its turn-boundary queue
+		// drain (empty), fail its first worker attempt, and settle into the
+		// retry backoff BEFORE the prompt is queued. Real HTTP timing gave the
+		// original test this ordering for free; without it the prompt can race
+		// ahead of the turn-boundary drain and be delivered "injected" (mid-goal
+		// turn) rather than "delivered" (a normal turn after the park frees the
+		// slot), the invariant under test.
+		synctest.Wait()
+
+		prec := httptest.NewRecorder()
+		preq := httptest.NewRequest("POST", "/session/"+id+"/prompt_async", strings.NewReader(`{"parts":[{"type":"text","text":"queued"}]}`))
+		preq.SetPathValue("id", id)
+		srv.handlePrompt(prec, preq)
+		if prec.Code != http.StatusAccepted {
+			t.Fatalf("queued prompt status %d: %s", prec.Code, prec.Body)
 		}
-		if ev.Type == "prompt.dequeued" {
-			if ev.QueueReason != "delivered" {
-				t.Errorf("queued prompt dequeue reason = %q, want %q (a normal turn, not a mid-turn injection)", ev.QueueReason, "delivered")
+		var qr promptAsyncResponse
+		if err := json.Unmarshal(prec.Body.Bytes(), &qr); err != nil {
+			t.Fatal(err)
+		}
+		if qr.Status != "queued" || qr.Queued != 1 {
+			t.Fatalf("queued prompt response = %+v, want status=queued queued=1", qr)
+		}
+
+		srv.wg.Wait() // park -> dispatch queued prompt -> the prompt's tail auto-arms the goal to achievement
+
+		srv.mu.Lock()
+		var evs []Event
+		for _, ev := range srv.journal {
+			if ev.SessionID == id {
+				evs = append(evs, ev)
 			}
-			sawDelivered = true
 		}
-	}
-	if !sawBusy || !sawText {
-		t.Fatalf("dispatch events after park = %v, want a busy transition and %q", dispatchEvs, "queued-done")
-	}
-	if !sawDelivered {
-		t.Fatal("no prompt.dequeued event for the queued prompt")
-	}
+		srv.mu.Unlock()
 
-	sess := h.getSessionJSON(id)
-	if sess.Queued != 0 {
-		t.Errorf("queued after dispatch = %d, want 0", sess.Queued)
-	}
-	if sess.LastTurn == nil || sess.LastTurn.Outcome != "completed" {
-		t.Errorf("dispatched queued prompt's last_turn = %+v, want outcome completed", sess.LastTurn)
-	}
-
-	// The dispatched queued prompt is an ordinary runPrompt turn, so ITS OWN
-	// tail also calls maybeAutoArmGoal (every runPrompt tail does, queued
-	// dispatch included — see runPrompt's doc comment) — the goal is still
-	// active, so a fresh loop starts immediately and (against the
-	// now-scripted-to-succeed provider) achieves. Drain it so no goroutine
-	// is left running past this test; TestGoalWorkerParkResumesOnNextPromptActivity
-	// is this file's dedicated, more detailed proof of that resume path.
-	resumeEvs := sse.collectUntilIdle(t)
-	var sawAchieved bool
-	for _, ev := range resumeEvs {
-		if ev.Type == "goal.achieved" {
-			sawAchieved = true
+		idxParked, idxDelivered, idxAchieved := -1, -1, -1
+		var sawBusyAfterPark, sawText, sawDelivered bool
+		for i, ev := range evs {
+			switch {
+			case ev.Type == "goal.parked":
+				if idxParked == -1 {
+					idxParked = i
+				}
+			case ev.Type == "prompt.dequeued":
+				// The QUEUED prompt, dispatched into the just-freed run slot as
+				// a normal turn: "delivered", never a mid-turn "injected".
+				if ev.QueueReason != "delivered" {
+					t.Errorf("queued prompt dequeue reason = %q, want %q (a normal turn, not a mid-turn injection)", ev.QueueReason, "delivered")
+				}
+				if idxDelivered == -1 {
+					idxDelivered = i
+				}
+				sawDelivered = true
+			case ev.Type == "goal.achieved":
+				if idxAchieved == -1 {
+					idxAchieved = i
+				}
+			case ev.Type == evtSessionStatus && ev.Status == "busy":
+				if idxParked != -1 {
+					sawBusyAfterPark = true
+				}
+			case ev.Type == "message" && ev.Message != nil && ev.Message.Role == message.RoleAssistant && ev.Message.Parts.Text() == "queued-done":
+				sawText = true
+			}
 		}
-	}
-	if !sawAchieved {
-		t.Fatalf("goal events after the queued prompt's own auto-arm = %v, want goal.achieved", resumeEvs)
-	}
+		if idxParked == -1 {
+			t.Fatalf("goal loop events = %+v, want goal.parked", evs)
+		}
+		if !sawDelivered {
+			t.Fatal("no prompt.dequeued event for the queued prompt")
+		}
+		if !sawBusyAfterPark || !sawText {
+			t.Fatalf("dispatch events after park = %+v, want a busy transition and %q", evs, "queued-done")
+		}
+		// The dispatched queued prompt is an ordinary runPrompt turn, so ITS
+		// OWN tail also calls maybeAutoArmGoal (every runPrompt tail does,
+		// queued dispatch included — see runPrompt's doc comment) — the goal is
+		// still active, so a fresh loop starts immediately and (against the
+		// now-scripted-to-succeed provider) achieves.
+		// TestGoalWorkerParkResumesOnNextPromptActivity is this file's
+		// dedicated, more detailed proof of that resume path.
+		if idxAchieved == -1 {
+			t.Fatalf("goal events after the queued prompt's own auto-arm = %+v, want goal.achieved", evs)
+		}
+		if !(idxParked < idxDelivered && idxDelivered < idxAchieved) {
+			t.Errorf("event order = goal.parked:%d prompt.dequeued(delivered):%d goal.achieved:%d, want strictly increasing", idxParked, idxDelivered, idxAchieved)
+		}
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/session/"+id, nil)
+		req.SetPathValue("id", id)
+		srv.handleGet(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET session status %d: %s", rec.Code, rec.Body)
+		}
+		var view struct {
+			Queued   int `json:"queued"`
+			LastTurn *struct {
+				Outcome string `json:"outcome"`
+			} `json:"last_turn"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+			t.Fatal(err)
+		}
+		if view.Queued != 0 {
+			t.Errorf("queued after dispatch = %d, want 0", view.Queued)
+		}
+		if view.LastTurn == nil || view.LastTurn.Outcome != "completed" {
+			t.Errorf("dispatched queued prompt's last_turn = %+v, want outcome completed", view.LastTurn)
+		}
+	})
 }
 
 // TestGoalWorkerParkResumesOnNextPromptActivity is invariant 4: after a
@@ -425,89 +514,150 @@ func TestGoalWorkerParkFreesRunSlotForQueuedPrompt(t *testing.T) {
 // tail deliberately never calls maybeAutoArmGoal (see its doc comment) —
 // only the NEXT ordinary prompt does.
 func TestGoalWorkerParkResumesOnNextPromptActivity(t *testing.T) {
-	prov := &goalProv{
-		name:       "test",
-		workerErrN: goalWorkerRetriesForTest + 1,
-		workerErr:  permanentWorkerErr(),
-		worker:     [][]provider.Event{asstTurn("plain prompt turn"), asstTurn("goal turn")},
-		eval:       [][]provider.Event{asstTurn("MET: now it is")},
-	}
-	h := newGoalHarness(t, prov)
-	id := h.createSession("test/m1")
-	sse := h.openSSE("?from=0", "")
-
-	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond"})
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
-	}
-	sse.collectUntilIdle(t) // the park's own turn-end
-
-	mid := h.getPausedGoalView(id)
-	if mid.Goal == nil || !mid.Goal.Active || !mid.Goal.Paused || mid.Goal.PauseReason != "worker_failure" {
-		t.Fatalf("goal right after park = %+v, want active/paused/worker_failure", mid.Goal)
-	}
-	if mid.State != "idle" {
-		t.Errorf("state right after park = %q, want idle", mid.State)
-	}
-
-	// Anti-churn: nothing has happened since the park's own idle — an empty
-	// queue must never trigger an immediate re-arm (runGoal's tail calls
-	// ONLY maybeDispatchQueued, never maybeAutoArmGoal).
-	h.srv.mu.Lock()
-	var lastEv Event
-	for _, ev := range h.srv.journal {
-		if ev.SessionID == id {
-			lastEv = ev
+	// Runs under synctest so the deterministic worker retry backoff costs no
+	// real wall-clock time; two phases (park, then a resume prompt) driven
+	// in-process via handleGoal/handlePrompt + the journal. The park exits its
+	// own loop (runGoal's tail never auto-arms with an empty queue), so
+	// srv.wg.Wait after phase 1 settles at the paused state, then the resume
+	// prompt's chain (plain turn -> auto-armed goal loop -> achievement) is a
+	// second srv.wg.Wait.
+	dir := t.TempDir()
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProv{
+			name:       "test",
+			workerErrN: goalWorkerRetriesForTest + 1,
+			workerErr:  permanentWorkerErr(),
+			worker:     [][]provider.Event{asstTurn("plain prompt turn"), asstTurn("goal turn")},
+			eval:       [][]provider.Event{asstTurn("MET: now it is")},
 		}
-	}
-	h.srv.mu.Unlock()
-	if lastEv.Type != evtSessionStatus || lastEv.Status != "idle" {
-		t.Fatalf("last journaled event before the resume prompt = %+v, want the park's own idle (anti-churn: no immediate re-arm with an empty queue)", lastEv)
-	}
+		srv := newServer(t, dir, prov, 0, func(o *Options) {
+			o.GoalEvaluator = message.ModelRef{Provider: prov.Name(), Model: "eval"}
+		})
+		id := createSessionDirect(t, srv, "test/m1")
 
-	// A plain prompt is the activity that resumes the goal.
-	resp, data = h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
-		"parts": []map[string]string{{"type": "text", "text": "hello"}},
+		grec := httptest.NewRecorder()
+		greq := httptest.NewRequest("POST", "/session/"+id+"/goal", strings.NewReader(`{"condition":"cond"}`))
+		greq.SetPathValue("id", id)
+		srv.handleGoal(grec, greq)
+		if grec.Code != http.StatusAccepted {
+			t.Fatalf("POST goal status %d: %s", grec.Code, grec.Body)
+		}
+
+		srv.wg.Wait() // the park's own turn ends and the loop exits (empty queue: no auto-rearm)
+
+		midRec := httptest.NewRecorder()
+		midReq := httptest.NewRequest("GET", "/session/"+id, nil)
+		midReq.SetPathValue("id", id)
+		srv.handleGet(midRec, midReq)
+		var mid struct {
+			State string `json:"state"`
+			Goal  *struct {
+				Active      bool   `json:"active"`
+				Paused      bool   `json:"paused"`
+				PauseReason string `json:"pause_reason"`
+			} `json:"goal"`
+		}
+		if err := json.Unmarshal(midRec.Body.Bytes(), &mid); err != nil {
+			t.Fatal(err)
+		}
+		if mid.Goal == nil || !mid.Goal.Active || !mid.Goal.Paused || mid.Goal.PauseReason != "worker_failure" {
+			t.Fatalf("goal right after park = %+v, want active/paused/worker_failure", mid.Goal)
+		}
+		if mid.State != "idle" {
+			t.Errorf("state right after park = %q, want idle", mid.State)
+		}
+
+		// Anti-churn: nothing has happened since the park's own idle — an empty
+		// queue must never trigger an immediate re-arm (runGoal's tail calls
+		// ONLY maybeDispatchQueued, never maybeAutoArmGoal). Record the phase-1
+		// event count so the resume prompt's events can be sliced off cleanly
+		// below.
+		srv.mu.Lock()
+		var lastEv Event
+		phase1Count := 0
+		for _, ev := range srv.journal {
+			if ev.SessionID == id {
+				lastEv = ev
+				phase1Count++
+			}
+		}
+		srv.mu.Unlock()
+		if lastEv.Type != evtSessionStatus || lastEv.Status != "idle" {
+			t.Fatalf("last journaled event before the resume prompt = %+v, want the park's own idle (anti-churn: no immediate re-arm with an empty queue)", lastEv)
+		}
+
+		// A plain prompt is the activity that resumes the goal.
+		prec := httptest.NewRecorder()
+		preq := httptest.NewRequest("POST", "/session/"+id+"/prompt_async", strings.NewReader(`{"parts":[{"type":"text","text":"hello"}]}`))
+		preq.SetPathValue("id", id)
+		srv.handlePrompt(prec, preq)
+		if prec.Code != http.StatusAccepted {
+			t.Fatalf("resume prompt status %d: %s", prec.Code, prec.Body)
+		}
+		var pr promptAsyncResponse
+		if err := json.Unmarshal(prec.Body.Bytes(), &pr); err != nil {
+			t.Fatal(err)
+		}
+		if pr.Status != "started" {
+			t.Fatalf("resume prompt response = %+v, want status=started (session was idle)", pr)
+		}
+
+		srv.wg.Wait() // the plain prompt's own turn, then the auto-armed goal loop to achievement
+
+		srv.mu.Lock()
+		var phase2 []Event
+		n := 0
+		for _, ev := range srv.journal {
+			if ev.SessionID != id {
+				continue
+			}
+			n++
+			if n > phase1Count {
+				phase2 = append(phase2, ev)
+			}
+		}
+		srv.mu.Unlock()
+
+		// The plain prompt's own turn runs first (ending in its own idle) with
+		// no goal activity; only then does maybeAutoArmGoal start a fresh loop
+		// that achieves against the now-healthy provider.
+		firstIdle := -1
+		var sawAchieved bool
+		for i, ev := range phase2 {
+			if firstIdle == -1 && (ev.Type == "goal.eval" || ev.Type == "goal.achieved") {
+				t.Fatalf("goal loop ran before the plain prompt's own turn finished: %+v", phase2)
+			}
+			if firstIdle == -1 && ev.Type == evtSessionStatus && ev.Status == "idle" {
+				firstIdle = i
+			}
+			if ev.Type == "goal.achieved" {
+				sawAchieved = true
+			}
+		}
+		if !sawAchieved {
+			t.Fatalf("goal events after the resume prompt = %+v, want goal.achieved", phase2)
+		}
+
+		afterRec := httptest.NewRecorder()
+		afterReq := httptest.NewRequest("GET", "/session/"+id, nil)
+		afterReq.SetPathValue("id", id)
+		srv.handleGet(afterRec, afterReq)
+		var after struct {
+			Goal *struct {
+				Active bool `json:"active"`
+				Paused bool `json:"paused"`
+			} `json:"goal"`
+		}
+		if err := json.Unmarshal(afterRec.Body.Bytes(), &after); err != nil {
+			t.Fatal(err)
+		}
+		if after.Goal == nil || after.Goal.Active {
+			t.Fatalf("goal after achievement = %+v, want inactive", after.Goal)
+		}
+		if after.Goal.Paused {
+			t.Errorf("goal.Paused after achievement = true, want false")
+		}
 	})
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("resume prompt status %d: %s", resp.StatusCode, data)
-	}
-	var pr promptAsyncResponse
-	if err := json.Unmarshal(data, &pr); err != nil {
-		t.Fatal(err)
-	}
-	if pr.Status != "started" {
-		t.Fatalf("resume prompt response = %+v, want status=started (session was idle)", pr)
-	}
-
-	// First batch: the plain prompt's own turn — no goal activity yet.
-	promptEvs := sse.collectUntilIdle(t)
-	for _, ev := range promptEvs {
-		if ev.Type == "goal.eval" || ev.Type == "goal.achieved" {
-			t.Fatalf("goal loop ran before the plain prompt's own turn finished: %v", promptEvs)
-		}
-	}
-
-	// Second batch: only now does maybeAutoArmGoal start a fresh loop, which
-	// achieves against the now-healthy provider.
-	goalEvs := sse.collectUntilIdle(t)
-	var sawAchieved bool
-	for _, ev := range goalEvs {
-		if ev.Type == "goal.achieved" {
-			sawAchieved = true
-		}
-	}
-	if !sawAchieved {
-		t.Fatalf("goal events after the resume prompt = %v, want goal.achieved", goalEvs)
-	}
-
-	after := h.getPausedGoalView(id)
-	if after.Goal == nil || after.Goal.Active {
-		t.Fatalf("goal after achievement = %+v, want inactive", after.Goal)
-	}
-	if after.Goal.Paused {
-		t.Errorf("goal.Paused after achievement = true, want false")
-	}
 }
 
 // TestGoalWorkerParkPauseSurvivesRestartAsRestartReason is invariant 5's
@@ -520,70 +670,101 @@ func TestGoalWorkerParkResumesOnNextPromptActivity(t *testing.T) {
 // TestGoalReArmAfterRetryableStallRestartNotBackoffPaused's restart-wins
 // precedent for the provider-backoff arm, extended here to worker_failure.
 func TestGoalWorkerParkPauseSurvivesRestartAsRestartReason(t *testing.T) {
+	// Runs under synctest so the deterministic worker retry backoff costs no
+	// real wall-clock time; the restart is a SECOND newServer over the SAME dir
+	// (ADOPT), constructed only after the first server's goal loop has finished
+	// (srv1.wg.Wait) and its journal file is closed. Both servers are driven
+	// in-process via direct handler calls (no httptest.Server, whose real
+	// listener a bubble forbids).
 	dir := t.TempDir()
-	prov := &goalProv{
-		name:       "test",
-		workerErrN: goalWorkerRetriesForTest + 1,
-		workerErr:  permanentWorkerErr(),
-	}
-	mutate := func(o *Options) {
-		o.GoalEvaluator = message.ModelRef{Provider: prov.Name(), Model: "eval"}
-	}
-	srv1 := newServer(t, dir, prov, 0, mutate)
-	ts1 := httptest.NewServer(srv1)
-	h1 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv1, ts: ts1}
-
-	id := h1.createSession("test/m1")
-	sse := h1.openSSE("?from=0", "")
-	resp, data := h1.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond"})
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
-	}
-	sse.collectUntilIdle(t)
-	sse.stop()
-
-	before := h1.getPausedGoalView(id)
-	if before.Goal == nil || !before.Goal.Active || !before.Goal.Paused || before.Goal.PauseReason != "worker_failure" {
-		t.Fatalf("before restart, goal = %+v, want active/paused/worker_failure", before.Goal)
-	}
-
-	if err := srv1.Close(); err != nil {
-		t.Fatalf("closing first server: %v", err)
-	}
-	ts1.Close()
-
-	srv2 := newServer(t, dir, prov, 0, mutate)
-	ts2 := httptest.NewServer(srv2)
-	t.Cleanup(ts2.Close)
-	h2 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv2, ts: ts2}
-
-	after := h2.getPausedGoalView(id)
-	if after.Goal == nil || !after.Goal.Active {
-		t.Fatalf("after restart, goal = %+v, want active", after.Goal)
-	}
-	if !after.Goal.Paused || after.Goal.PauseReason != "restart" {
-		t.Errorf("after restart, goal paused/pause_reason = %v/%q, want true/restart (restart wins over stale worker_failure)", after.Goal.Paused, after.Goal.PauseReason)
-	}
-	if after.State != "idle" {
-		t.Errorf("state after restart = %q, want idle", after.State)
-	}
-
-	srv2.mu.Lock()
-	var pausedEv *Event
-	for i := range srv2.journal {
-		ev := srv2.journal[i]
-		if ev.SessionID == id && ev.Type == "goal.paused" {
-			pausedEv = &ev
-			break
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProv{
+			name:       "test",
+			workerErrN: goalWorkerRetriesForTest + 1,
+			workerErr:  permanentWorkerErr(),
 		}
-	}
-	srv2.mu.Unlock()
-	if pausedEv == nil {
-		t.Fatal("no boot-time goal.paused record found in the restarted server's journal")
-	}
-	if pausedEv.GoalPauseReason != "restart" {
-		t.Errorf("goal.paused record GoalPauseReason = %q, want %q", pausedEv.GoalPauseReason, "restart")
-	}
+		mutate := func(o *Options) {
+			o.GoalEvaluator = message.ModelRef{Provider: prov.Name(), Model: "eval"}
+		}
+		srv1 := newServer(t, dir, prov, 0, mutate)
+		id := createSessionDirect(t, srv1, "test/m1")
+
+		grec := httptest.NewRecorder()
+		greq := httptest.NewRequest("POST", "/session/"+id+"/goal", strings.NewReader(`{"condition":"cond"}`))
+		greq.SetPathValue("id", id)
+		srv1.handleGoal(grec, greq)
+		if grec.Code != http.StatusAccepted {
+			t.Fatalf("POST goal status %d: %s", grec.Code, grec.Body)
+		}
+
+		srv1.wg.Wait() // the park's own turn ends and the loop exits
+
+		beforeRec := httptest.NewRecorder()
+		beforeReq := httptest.NewRequest("GET", "/session/"+id, nil)
+		beforeReq.SetPathValue("id", id)
+		srv1.handleGet(beforeRec, beforeReq)
+		var before struct {
+			Goal *struct {
+				Active      bool   `json:"active"`
+				Paused      bool   `json:"paused"`
+				PauseReason string `json:"pause_reason"`
+			} `json:"goal"`
+		}
+		if err := json.Unmarshal(beforeRec.Body.Bytes(), &before); err != nil {
+			t.Fatal(err)
+		}
+		if before.Goal == nil || !before.Goal.Active || !before.Goal.Paused || before.Goal.PauseReason != "worker_failure" {
+			t.Fatalf("before restart, goal = %+v, want active/paused/worker_failure", before.Goal)
+		}
+
+		if err := srv1.Close(); err != nil {
+			t.Fatalf("closing first server: %v", err)
+		}
+
+		srv2 := newServer(t, dir, prov, 0, mutate)
+
+		afterRec := httptest.NewRecorder()
+		afterReq := httptest.NewRequest("GET", "/session/"+id, nil)
+		afterReq.SetPathValue("id", id)
+		srv2.handleGet(afterRec, afterReq)
+		var after struct {
+			State string `json:"state"`
+			Goal  *struct {
+				Active      bool   `json:"active"`
+				Paused      bool   `json:"paused"`
+				PauseReason string `json:"pause_reason"`
+			} `json:"goal"`
+		}
+		if err := json.Unmarshal(afterRec.Body.Bytes(), &after); err != nil {
+			t.Fatal(err)
+		}
+		if after.Goal == nil || !after.Goal.Active {
+			t.Fatalf("after restart, goal = %+v, want active", after.Goal)
+		}
+		if !after.Goal.Paused || after.Goal.PauseReason != "restart" {
+			t.Errorf("after restart, goal paused/pause_reason = %v/%q, want true/restart (restart wins over stale worker_failure)", after.Goal.Paused, after.Goal.PauseReason)
+		}
+		if after.State != "idle" {
+			t.Errorf("state after restart = %q, want idle", after.State)
+		}
+
+		srv2.mu.Lock()
+		var pausedEv *Event
+		for i := range srv2.journal {
+			ev := srv2.journal[i]
+			if ev.SessionID == id && ev.Type == "goal.paused" {
+				pausedEv = &ev
+				break
+			}
+		}
+		srv2.mu.Unlock()
+		if pausedEv == nil {
+			t.Fatal("no boot-time goal.paused record found in the restarted server's journal")
+		}
+		if pausedEv.GoalPauseReason != "restart" {
+			t.Errorf("goal.paused record GoalPauseReason = %q, want %q", pausedEv.GoalPauseReason, "restart")
+		}
+	})
 }
 
 // TestAutoArmAfterRestartResetsPausePresentation is the review-finding red
