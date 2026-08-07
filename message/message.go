@@ -327,14 +327,16 @@ func (tr ToolResult) isEmpty() bool {
 // a ToolResult whose Content was a single blank Text part.
 //
 // A minimal 3-message reproduction against the live gateway isolated the
-// exact shape: a tool_result block with no recognizable content. Three
-// wire shapes trigger the same rejection: an explicit null, an omitted
-// field, or an empty content array. The third shape is what
-// provider/anthropic/transcode.go's own transcodeParts produced before this
-// fix — omitempty drops an empty array from the wire entirely. Any of the
-// three is rejected exactly like a missing tool_result. Unlike the
-// stop-reason orphan, this shape needs no crash, no stream truncation, and
-// no sandbox death. An ordinary, successful tool call with unremarkable
+// exact shape. Two wire shapes trigger the rejection: an explicit null,
+// and an omitted content field. The gateway ACCEPTS an empty array, an
+// empty string, and a single blank text block — only the absent forms
+// fail. That distinction matters here, because omitempty on
+// provider/anthropic/transcode.go's apiBlock.Content turns an empty array
+// into an omitted field on the wire, which is how a blank tool result
+// reached the failing shape.
+//
+// Unlike the stop-reason orphan, this shape needs no crash, no stream
+// truncation, and no sandbox death. An ordinary, successful tool call with
 // empty output is enough.
 //
 // # Two enforcement points, not one
