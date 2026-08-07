@@ -304,8 +304,8 @@ func TestClampReturnsInputUnchangedWhenNothingOversized(t *testing.T) {
 func TestClampReducesImageOverByteBudget(t *testing.T) {
 	// Dimensions are well under the 8000px cap, so this is purely a byte-size
 	// reduction: an incompressible PNG far over budget must be shrunk to fit.
-	orig := noisePNG(t, 1200, 1000)
-	budget := 1_000_000
+	orig := noisePNG(t, 300, 300)
+	budget := 200_000
 	if base64.StdEncoding.EncodedLen(len(orig)) <= budget {
 		t.Fatalf("fixture base64 %d already under budget %d", base64.StdEncoding.EncodedLen(len(orig)), budget)
 	}
@@ -325,13 +325,13 @@ func TestClampReducesImageOverByteBudget(t *testing.T) {
 	if _, _, err := image.Decode(bytes.NewReader(blob.Data)); err != nil {
 		t.Errorf("reduced image not decodable: %v", err)
 	}
-	if w, h := decodeDims(t, blob.Data); w > 1200 || h > 1000 {
+	if w, h := decodeDims(t, blob.Data); w > 300 || h > 300 {
 		t.Errorf("reduced image grew: %dx%d", w, h)
 	}
 }
 
 func TestClampByteBudgetDisabledLeavesLargeImage(t *testing.T) {
-	orig := noisePNG(t, 800, 800)
+	orig := noisePNG(t, 200, 200)
 	lim := baseLimits()
 	lim.MaxImageBytes = 0 // disabled
 	in := []message.Message{userMsg(&message.Blob{MediaType: "image/png", Data: orig})}
@@ -356,7 +356,7 @@ func manyImages(t *testing.T, n, w, h int) message.Message {
 func TestClampManyImagesAppliesStricterCap(t *testing.T) {
 	// 21 images (> threshold 20), each 3000px — under the normal 8000 cap but
 	// over the stricter 2000 many-image cap, so each must be downscaled.
-	in := []message.Message{manyImages(t, 21, 3000, 100)}
+	in := []message.Message{manyImages(t, 21, 3000, 4)}
 	out := Clamp(in, baseLimits())
 	for i, p := range out[0].Parts {
 		if w, _ := decodeDims(t, p.(*message.Blob).Data); w > 2000 {
@@ -368,10 +368,10 @@ func TestClampManyImagesAppliesStricterCap(t *testing.T) {
 func TestClampAtOrUnderThresholdKeepsNormalCap(t *testing.T) {
 	// Exactly 20 images (not > threshold): the stricter cap does NOT apply, so
 	// a 3000px image (under 8000) passes through unchanged.
-	in := []message.Message{manyImages(t, 20, 3000, 100)}
+	in := []message.Message{manyImages(t, 20, 3000, 4)}
 	out := Clamp(in, baseLimits())
-	if w, h := decodeDims(t, out[0].Parts[0].(*message.Blob).Data); w != 3000 || h != 100 {
-		t.Errorf("image was clamped at threshold boundary: %dx%d, want 3000x100", w, h)
+	if w, h := decodeDims(t, out[0].Parts[0].(*message.Blob).Data); w != 3000 || h != 4 {
+		t.Errorf("image was clamped at threshold boundary: %dx%d, want 3000x4", w, h)
 	}
 }
 
@@ -387,7 +387,7 @@ func TestClampManyImageCountExcludesToolResultsWhenNotRecursing(t *testing.T) {
 		trContent[i] = &message.Blob{MediaType: "image/png", Data: pngBytes(t, 100, 100)}
 	}
 	in := []message.Message{
-		userMsg(&message.Blob{MediaType: "image/png", Data: pngBytes(t, 3000, 100)}),
+		userMsg(&message.Blob{MediaType: "image/png", Data: pngBytes(t, 3000, 4)}),
 		{ID: "m2", Role: message.RoleTool, Parts: message.Parts{
 			&message.ToolResult{CallID: "c1", Content: trContent},
 		}},
@@ -405,7 +405,7 @@ func TestClampManyImageCountExcludesDroppedImages(t *testing.T) {
 	// the 3000px survivors must NOT be downscaled to the 2000 many-image cap.
 	parts := message.Parts{}
 	for i := 0; i < 5; i++ {
-		parts = append(parts, &message.Blob{MediaType: "image/png", Data: pngBytes(t, 3000, 100)})
+		parts = append(parts, &message.Blob{MediaType: "image/png", Data: pngBytes(t, 3000, 4)})
 	}
 	for i := 0; i < 16; i++ {
 		parts = append(parts, &message.Blob{MediaType: "image/png", Data: []byte("not a png")})
@@ -432,7 +432,7 @@ func TestClampManyImagesCountsPDFsTowardThreshold(t *testing.T) {
 	// count too, so the stricter cap applies to the images.
 	parts := make(message.Parts, 0, 21)
 	for i := 0; i < 19; i++ {
-		parts = append(parts, &message.Blob{MediaType: "image/png", Data: pngBytes(t, 3000, 100)})
+		parts = append(parts, &message.Blob{MediaType: "image/png", Data: pngBytes(t, 3000, 4)})
 	}
 	parts = append(parts,
 		&message.Blob{MediaType: "application/pdf", Data: []byte("%PDF-1.4 a")},
