@@ -78,6 +78,20 @@ type goalProvider struct {
 	workerCall     int
 	failWorkerCall int
 
+	// workerDieN/workerDieHit/workerDieEvents/workerDieErr mirror
+	// evalDieN/evalDieHit/evalDieEvents/evalDieErr, but for the worker
+	// (tool-bearing) side: the first workerDieN worker calls return a
+	// dyingStream — workerDieEvents delivered normally (typically one or
+	// more provider.EventToolCall entries — a complete tool_use/tool_call
+	// block), then workerDieErr instead of EventDone. This is the shape
+	// engine.go's interruptedTurnError handling captures: the model's
+	// partial assistant message (its ToolCall preserved) plus a synthetic
+	// tool-role result, both appended to history before the error surfaces.
+	workerDieN      int
+	workerDieHit    int
+	workerDieEvents []provider.Event
+	workerDieErr    error
+
 	// evalErrN/evalErrHit/evalErr mirror workerErrN/workerErr on the
 	// evaluator side: the first evalErrN evaluator (tool-less) calls fail
 	// with evalErr instead of consuming a scripted verdict — a fake
@@ -118,6 +132,15 @@ type goalProvider struct {
 	// TestClearGoalMidFailingBoundariesStopsCleanly.
 	onEvalStream func(call int)
 	evalCall     int
+
+	// onWorkerStream is onEvalStream's worker-side mirror: called
+	// synchronously at the very start of every worker (tool-bearing) Stream
+	// call, with the 1-based call number, before any scripted response or
+	// failure is decided. A test can use this to fire a same-goroutine
+	// history mutation — e.g. simulating maybeAutoCompact folding away a
+	// retry's anchor message between attempts (see
+	// TestPursueGoalRetryFallsBackWhenAnchorFoldedAwayMidTurn).
+	onWorkerStream func(call int)
 }
 
 func (p *goalProvider) Name() string { return "test" }
@@ -162,6 +185,13 @@ func (p *goalProvider) Stream(ctx context.Context, req *provider.Request) (provi
 		return &scriptedStream{events: ev}, nil
 	}
 	p.workerCall++
+	if p.onWorkerStream != nil {
+		p.onWorkerStream(p.workerCall)
+	}
+	if p.workerDieHit < p.workerDieN {
+		p.workerDieHit++
+		return &dyingStream{events: p.workerDieEvents, err: p.workerDieErr}, nil
+	}
 	if p.failWorkerCall > 0 && p.workerCall == p.failWorkerCall {
 		err := p.workerErr
 		if err == nil {

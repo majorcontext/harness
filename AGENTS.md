@@ -164,20 +164,41 @@ a slower-burning zombie instead of a fix. Parking has no streak horizon
 immediately, and `DELETE /session/{id}/goal` remains the only clear path for
 a parked goal.
 
-Each retry re-issues the SAME directive through `Prompt`, and `Prompt`
-appends whatever text it gets as a brand-new user message — it has no notion
-of "this is a retry, do not duplicate." Left alone, N failed attempts leave N
-unanswered copies of one directive in history, and every LATER request pays
-for all of them. `dropUnansweredDirective` (`engine/goal.go`) removes the
-copy before the next attempt. It anchors on the message ID
-`lastMessageID` captured before this attempt's `s.Prompt` call, never on a
-history length, and `isSafeToDropDirectiveTail` approves only two shapes: the
-directive alone, or the directive plus an interrupted turn's partial
-assistant message and its synthetic tool-result message. Any other tail shape
-is left untouched — a denied tool's result, or an already-delivered
-"OPERATOR MESSAGES" block, must never be discarded. Every call site sits
-strictly AFTER its branch's own budget-exhaustion check, so a parking attempt
-keeps its tail verbatim: no next attempt ever re-appends it.
+Each retry re-issues the SAME directive, and `Prompt` appends whatever text
+it gets as a brand-new user message — it has no notion of "this is a retry,
+do not duplicate." Left alone, N failed attempts leave N unanswered copies of
+one directive, and every LATER request pays for all of them. `Prompt`
+persists each copy before the provider call that fails, so the duplicates
+reach the durable log, not just live history.
+
+`promptTurnWithRetry` therefore never appends a second copy. It captures one
+`anchorID` (`lastMessageID`) per turn, then dispatches each attempt three
+ways (`engine/goal.go`, see docs/design/goal-retry-directive-reuse.md):
+
+- Attempt 1 calls `Prompt`, which appends the directive.
+- A retry whose tail after `anchorID` is EXACTLY the previous attempt's
+  unanswered directive (`directiveReuseEligible`) calls `runAgenticLoop`
+  instead. That runs the turn loop against history as it stands and appends
+  nothing, so the existing message is answered rather than duplicated.
+- Any other tail falls back to `dropUnansweredDirective` plus `Prompt` —
+  today's behavior.
+
+`runAgenticLoop` is `Prompt`'s own loop body, split out unchanged
+(`engine/engine.go`). `Prompt` still appends and then calls it, so `Prompt`'s
+observable behavior is identical: same events, same `emitStatus`, same usage
+accounting. Note that `maybeAutoCompact` stays in `Prompt` and does NOT run
+on the reuse path. That is deliberate — it removes any chance of folding
+away the very directive the attempt is about to reuse, and the reuse path is
+reachable only when the tail is one message, so history did not grow.
+
+`dropUnansweredDirective` remains the fallback for the interrupted-turn tail
+(the directive plus a partial assistant message and its synthetic
+tool-result message). It anchors on a message ID, never on a history length,
+and `isSafeToDropDirectiveTail` approves only that shape and the bare
+directive. Any other tail is left untouched — a denied tool's result, or an
+already-delivered "OPERATOR MESSAGES" block, must never be discarded. It
+mutates only live history and can never retract a journaled record, which is
+why the reuse path above, not a retraction, is what keeps the log clean.
 
 An idle provider stream — one that goes silent with no bytes, no
 `EventDone`, no error, ever — is bounded by a per-request idle-stream
