@@ -956,16 +956,17 @@ func TestMessageNormalizeLeavesRealToolResultContentAlone(t *testing.T) {
 	}
 }
 
-// wireBlockCounts transcodes messages through the real Anthropic adapter
-// and counts tool_use/tool_result blocks, walking each tool_use forward to
-// its immediately-following wire message to confirm a matching
-// tool_result id is present there. It is the same style of probe used to
-// discover the three orphan shapes ResolveOrphanToolCalls's hardening
-// below repairs -- kept in this package (rather than provider/anthropic)
-// so message's own tests can assert on wire balance without an import
-// cycle; provider/anthropic carries its own, real end-to-end versions of
-// these same three cases (transcode_test.go), out of this package's file
-// scope for production changes but added here as tests only.
+// wireCounts is countAnthropicWireBlocks's result: tool_use/tool_result
+// counts and any unpaired tool_use ids, from a HAND-ROLLED stand-in
+// transcoder (see countAnthropicWireBlocks's own doc comment) — not the
+// real Anthropic adapter, which this package cannot import (see below).
+// It is the same style of probe used to discover the four orphan shapes
+// ResolveOrphanToolCalls's hardening below repairs — kept in this package
+// (rather than provider/anthropic) so message's own tests can assert on
+// wire balance without an import cycle; provider/anthropic carries its
+// own, real end-to-end versions of these same shapes (transcode_test.go),
+// out of this package's file scope for production changes but added here
+// as tests only.
 type wireCounts struct {
 	toolUse    int
 	toolResult int
@@ -1155,5 +1156,102 @@ func TestResolveOrphanToolCallsStrayResultBeforeCall(t *testing.T) {
 	}
 	if len(after.unpaired) != 0 {
 		t.Fatalf("after repair: still unpaired ids: %v", after.unpaired)
+	}
+}
+
+// TestResolveOrphanToolCallsSplitAcrossMultipleToolMessages reproduces a
+// second-reviewer finding on this same hardening: an assistant message
+// makes two calls, and their results land in two SEPARATE, consecutive
+// RoleTool messages instead of one merged message — the canonical shape
+// an OpenAI-style producer builds (one tool-role message per ToolResult;
+// see provider/openaicompat/transcode.go's transcodeToolMessages). Every
+// transcoder in this package folds adjacent tool-result-only messages into
+// one wire block, so this shape is already wire-valid and must be left
+// alone: neither result may be dropped, relabeled as an error, or
+// replaced by a synthesized placeholder. A single-message lookahead
+// mistook the second result for a stray orphan (its own immediately
+// preceding message carries no ToolCall, only the first result does) and
+// deleted real tool output.
+func TestResolveOrphanToolCallsSplitAcrossMultipleToolMessages(t *testing.T) {
+	in := []Message{
+		{Role: RoleUser, Parts: Parts{&Text{Text: "go"}}},
+		{Role: RoleAssistant, Parts: Parts{
+			toolCallPart("a", "bash", `{}`),
+			toolCallPart("b", "bash", `{}`),
+		}},
+		{Role: RoleTool, Parts: Parts{
+			&ToolResult{CallID: "a", Content: Parts{&Text{Text: "real output A"}}},
+		}},
+		{Role: RoleTool, Parts: Parts{
+			&ToolResult{CallID: "b", Content: Parts{&Text{Text: "real output B"}}},
+		}},
+	}
+	out := ResolveOrphanToolCalls(in)
+
+	after := countAnthropicWireBlocks(t, out)
+	if after.toolUse != after.toolResult {
+		t.Fatalf("after repair: tool_use=%d tool_result=%d, want equal counts", after.toolUse, after.toolResult)
+	}
+	if len(after.unpaired) != 0 {
+		t.Fatalf("after repair: still unpaired ids: %v", after.unpaired)
+	}
+
+	if len(out) != len(in) {
+		t.Fatalf("len(out) = %d, want %d (already wire-valid, nothing added or removed)", len(out), len(in))
+	}
+	for i, m := range out {
+		if len(m.Parts) == 0 {
+			t.Fatalf("out[%d] has zero parts, want a message no producer ever emptied", i)
+		}
+	}
+
+	trA, ok := out[2].Parts[0].(*ToolResult)
+	if !ok || trA.CallID != "a" || trA.IsError || trA.Content.Text() != "real output A" {
+		t.Fatalf("out[2] = %+v, want the untouched real result for call a", out[2])
+	}
+	trB, ok := out[3].Parts[0].(*ToolResult)
+	if !ok || trB.CallID != "b" || trB.IsError || trB.Content.Text() != "real output B" {
+		t.Fatalf("out[3] = %+v, want the untouched real result for call b, not dropped or replaced by a synthesized error", out[3])
+	}
+}
+
+// TestResolveOrphanToolCallsRunStopsAtWireRoleBoundary is the red-first
+// regression test for a bug a property-test fuzz run found in this same
+// hardening pass: a result run must stop at the first message with a
+// DIFFERENT wire role (RoleAssistant maps to "assistant"; every other Role
+// maps to "user" — see wireRole), even when that message still carries a
+// ToolResult and no ToolCall of its own. Two messages of different wire
+// roles never merge into one wire block, so folding across that boundary
+// misattributes a later message's content to an earlier, unrelated
+// ToolCall's pairing count — which starved calls "a" and "b" below of the
+// run position their own synthesized results needed to land in.
+func TestResolveOrphanToolCallsRunStopsAtWireRoleBoundary(t *testing.T) {
+	in := []Message{
+		{Role: RoleAssistant, Parts: Parts{
+			toolCallPart("a", "bash", `{}`),
+			toolCallPart("b", "bash", `{}`),
+		}},
+		{Role: RoleTool, Parts: Parts{
+			&ToolResult{CallID: "unrelated", Content: Parts{&Text{Text: "noise"}}},
+		}},
+		// A different wire role (RoleAssistant, not RoleTool/RoleUser) never
+		// merges with the RoleTool message above on the wire, even though it
+		// carries a ToolResult and no ToolCall of its own.
+		{Role: RoleAssistant, Parts: Parts{
+			&ToolResult{CallID: "c", Content: Parts{&Text{Text: "real output for c"}}},
+		}},
+		{Role: RoleAssistant, Parts: Parts{toolCallPart("c", "bash", `{}`)}},
+	}
+	out := ResolveOrphanToolCalls(in)
+
+	after := countAnthropicWireBlocks(t, out)
+	if after.toolUse != after.toolResult {
+		t.Fatalf("after repair: tool_use=%d tool_result=%d, want equal counts", after.toolUse, after.toolResult)
+	}
+	if len(after.unpaired) != 0 {
+		t.Fatalf("after repair: still unpaired ids: %v", after.unpaired)
+	}
+	if hasOrphanToolCall(out) {
+		t.Fatalf("output still has an orphan tool call: %+v", out)
 	}
 }

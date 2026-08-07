@@ -1283,10 +1283,11 @@ func syntheticUnexecutedToolResults(msg *message.Message, text string) message.M
 // unexecutedToolCallStopReasonTextFmt is the Printf format behind the
 // Content text of the synthetic, is_error tool-role result
 // appendUnexecutedToolCallResults appends for a ToolCall the engine never
-// executed because the turn's own stop reason wasn't StopToolUse. Exported
-// as a package-level constant (rather than inlined) so tests can assert on
+// executed because the turn's own stop reason wasn't StopToolUse. Kept as
+// a package-level constant (rather than inlined) so a test can assert on
 // the exact rendered string via fmt.Sprintf(unexecutedToolCallStopReasonTextFmt,
-// stop).
+// stop) — see TestPersistTruncatedToolCallArguments — rather than
+// duplicating the literal.
 //
 // # Incident NEP-5272 (boxes bumpy-grape, royal-cupcake, hyper-lemon, 2026-08-07)
 //

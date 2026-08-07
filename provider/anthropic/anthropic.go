@@ -471,6 +471,18 @@ func (s *stream) handle(name string, data []byte) error {
 			return fmt.Errorf("anthropic: stream error: %s", data)
 		}
 		err := fmt.Errorf("anthropic: %s (%s)", ev.Error.Message, ev.Error.Type)
+		// Mirror apiError's HTTP-path classification (NEP-5272): an
+		// invalid_request_error naming a structurally malformed request —
+		// most notably an orphaned tool_use — fails identically on every
+		// retry, whether it arrives as an HTTP 400 before the stream ever
+		// starts or, as here, as a mid-stream "error" SSE event. Without
+		// this, a mid-stream invalid_request_error burned the full
+		// deterministic retry budget instead of failing fast on attempt 1.
+		// No context-overflow carve-out is needed here: an oversized
+		// request is rejected before any stream opens, never mid-stream.
+		if ev.Error.Type == "invalid_request_error" {
+			return provider.MarkPermanent(err)
+		}
 		if class, ok := classifyErrorType(ev.Error.Type); ok {
 			return provider.MarkRetryable(err, class)
 		}

@@ -132,17 +132,20 @@ type Message struct {
 //
 // # An empty ToolResult.Content is the same footgun, in reverse
 //
-// See safeContent's doc comment (NEP-5272, root cause 2) for the full
-// incident: a ToolResult whose Content is empty — nil, or non-nil but
-// carrying only a blank Text part, the exact shape bash.go leaves behind
-// for a command with no output — transcodes to a tool_result block every
-// provider adapter this package targets either rejects or drops entirely,
-// wedging a session with no crash at all. The case below is this
-// function's primary fix: it replaces an empty Content with
-// NoToolOutputText in place, at the one ingest choke point every message
-// passes through, so by the time a message this poisoned enters history
-// it is already repaired — safeContent's own check is the marshal-time
-// backstop for a producer that bypasses Normalize entirely.
+// See SafeContent's doc comment (NEP-5272, root cause 2) for the full
+// incident. A ToolResult with empty Content transcodes to a tool_result
+// block every provider adapter in this package either rejects or drops.
+// Content counts as empty when it is nil, or when it carries only a blank
+// Text part — the exact shape bash.go leaves behind for a command with no
+// output. Either shape wedges a session with no crash at all.
+//
+// The case below is this function's primary fix. It replaces an empty
+// Content with NoToolOutputText in place. Every LIVE message passes
+// through Normalize at Session.append, and engine.LoadSession calls
+// Normalize on every message it replays from a session log, so a
+// poisoned message is already repaired by the time anything downstream
+// sees it. SafeContent's own check is the marshal/transcode-time backstop
+// for a producer that bypasses Normalize entirely.
 func (m *Message) Normalize() {
 	for _, p := range m.Parts {
 		switch v := p.(type) {
@@ -280,9 +283,9 @@ type ToolResult struct {
 
 func (*ToolResult) partType() PartType { return PartToolResult }
 
-// NoToolOutputText is the Content text substituted, via safeContent below
+// NoToolOutputText is the Content text substituted, via SafeContent below
 // and Message.Normalize, for a ToolResult whose real Content is empty in
-// every sense that matters — see safeContent's doc comment for the full
+// every sense that matters — see SafeContent's doc comment for the full
 // incident. A marker string, rather than an empty Text part, is chosen
 // deliberately: an agent (or an operator) reading its own transcript
 // benefits from seeing "(no output)" in place of a blank line, the same
@@ -306,7 +309,7 @@ func (tr ToolResult) isEmpty() bool {
 	return true
 }
 
-// safeContent normalizes Content for marshaling, mirroring
+// SafeContent normalizes Content for marshaling and transcoding, mirroring
 // ToolCall.safeArguments's role for Arguments.
 //
 // # Incident NEP-5272, root cause 2: a null/absent tool_result content
@@ -320,32 +323,36 @@ func (tr ToolResult) isEmpty() bool {
 // tool_result, every pair adjacent — yet still 400'd with the identical
 // "tool_use ids were found without tool_result blocks immediately after".
 // The offending block was the tool_result for a `grep ... | head -20` that
-// matched nothing: empty stdout, so bash.go's captured-output path
-// returned a ToolResult whose Content was a single blank Text part. A
-// minimal 3-message repro against the live gateway isolated the shape
-// precisely: a tool_result block encoded with no recognizable content
-// (whether that arrives on the wire as an explicit null, an omitted
-// field, or — the case provider/anthropic/transcode.go's own transcodeParts
-// produces today, since it skips a blank Text part and then omits the
-// resulting empty content array via the wire struct's own omitempty tag —
-// a key that never makes it onto the wire at all) is rejected exactly like
-// a missing tool_result altogether. Unlike the stop-reason orphan, this
-// shape requires no crash, no stream truncation, no sandbox death: an
-// ordinary, successful tool call with unremarkable empty output is enough.
+// matched nothing. Empty stdout made bash.go's captured-output path return
+// a ToolResult whose Content was a single blank Text part.
 //
-// The fix is a canonical-layer guarantee, not a per-transcoder patch:
-// ToolResult.Content must never be empty by the time anything marshals or
-// transcodes it, so every adapter (anthropic, openaicompat, openai — and
-// any future one) inherits the fix for free rather than needing its own
-// copy of this check. Message.Normalize applies this in place at the one
-// ingest choke point every message passes through (Session.append), which
-// is the primary fix; safeContent is the marshal-time defense-in-depth
-// backstop — mirroring safeArguments's own relationship to Normalize's
-// ToolCall.Arguments repair — for a ToolResult built by a producer that
-// bypasses Normalize entirely: a plugin's chat.message hook, a hand-rolled
-// provider adapter, a test's scripted provider, or a session log replayed
-// from an older, unpatched binary.
-func (tr ToolResult) safeContent() Parts {
+// A minimal 3-message reproduction against the live gateway isolated the
+// exact shape: a tool_result block with no recognizable content. Three
+// wire shapes trigger the same rejection: an explicit null, an omitted
+// field, or an empty content array. The third shape is what
+// provider/anthropic/transcode.go's own transcodeParts produced before this
+// fix — omitempty drops an empty array from the wire entirely. Any of the
+// three is rejected exactly like a missing tool_result. Unlike the
+// stop-reason orphan, this shape needs no crash, no stream truncation, and
+// no sandbox death. An ordinary, successful tool call with unremarkable
+// empty output is enough.
+//
+// # Two enforcement points, not one
+//
+// The primary fix is a canonical-layer guarantee: Message.Normalize applies
+// it in place at the one ingest choke point every LIVE-appended message
+// passes through (Session.append), and engine.LoadSession applies the same
+// Normalize call to every message it replays from a session log, so a
+// resumed session repairs an old, unpatched empty ToolResult exactly like a
+// live one. SafeContent is the second enforcement point: every transcoder
+// (anthropic, openaicompat, openai) calls it directly when building a
+// tool_result wire block, rather than reading Content unchecked. This is
+// deliberate belt-and-suspenders, not redundancy — Normalize cannot reach a
+// ToolResult built by a producer that bypasses it entirely: a plugin's
+// chat.message hook, a hand-rolled provider adapter, or a test's scripted
+// provider. SafeContent is also what ToolResult.MarshalJSON calls, so any
+// direct JSON encoding of a ToolResult gets the same guarantee for free.
+func (tr ToolResult) SafeContent() Parts {
 	if tr.isEmpty() {
 		return Parts{&Text{Text: NoToolOutputText}}
 	}
@@ -353,7 +360,7 @@ func (tr ToolResult) safeContent() Parts {
 }
 
 // MarshalJSON implements json.Marshaler so any direct encoding of a
-// ToolResult (or *ToolResult) goes through safeContent automatically,
+// ToolResult (or *ToolResult) goes through SafeContent automatically,
 // exactly mirroring ToolCall.MarshalJSON's role for Arguments. It must NOT
 // be relied on from marshalPart's tagged-union wrapper below, for the same
 // reason ToolCall.MarshalJSON's own doc comment gives: embedding a type
@@ -362,7 +369,7 @@ func (tr ToolResult) safeContent() Parts {
 func (tr ToolResult) MarshalJSON() ([]byte, error) {
 	type alias ToolResult
 	a := alias(tr)
-	a.Content = tr.safeContent()
+	a.Content = tr.SafeContent()
 	return json.Marshal(a)
 }
 
@@ -585,7 +592,7 @@ func marshalPart(p Part) ([]byte, error) {
 	case *ToolResult:
 		// Deliberately not embedding *ToolResult (mirroring the ToolCall
 		// case above, for the exact same reason): now that ToolResult
-		// defines its own MarshalJSON (see safeContent's doc comment),
+		// defines its own MarshalJSON (see SafeContent's doc comment),
 		// embedding it here would promote that method onto this wrapper
 		// and silently drop the "type" discriminator. Reconstructing the
 		// fields explicitly sidesteps that and applies the same
@@ -595,7 +602,7 @@ func marshalPart(p Part) ([]byte, error) {
 			CallID  string   `json:"call_id"`
 			Content Parts    `json:"content"`
 			IsError bool     `json:"is_error,omitempty"`
-		}{PartToolResult, v.CallID, v.safeContent(), v.IsError})
+		}{PartToolResult, v.CallID, v.SafeContent(), v.IsError})
 	case *Reasoning:
 		return json.Marshal(struct {
 			Type PartType `json:"type"`
@@ -645,185 +652,261 @@ const SyntheticOrphanResultText = "synthesized: no tool_result was found in hist
 
 // ResolveOrphanToolCalls returns messages with a synthetic, is_error
 // tool_result injected for every ToolCall that has no matching ToolResult
-// immediately after it — every provider wire protocol this package
-// transcodes to (Anthropic's tool_use/tool_result, the OpenAI-compatible
-// chat-completions tool_calls/tool message) requires a tool call to be
-// followed immediately by its result, and rejects a request where one is
-// missing (Anthropic: HTTP 400 "tool_use ids were found without
-// tool_result blocks immediately after").
+// where a provider's wire protocol requires one. Every provider wire
+// protocol this package transcodes to (Anthropic's tool_use/tool_result,
+// the OpenAI-compatible chat-completions tool_calls/tool message) requires
+// a tool call to be followed immediately by its result. A provider rejects
+// a request where one is missing (Anthropic: HTTP 400 "tool_use ids were
+// found without tool_result blocks immediately after").
 //
 // # Incident ses_01kx48z4rqfkpbwmzfdv1jzeg6
 //
-// A goal worker turn died with exactly that 400 naming one tool_use id,
-// and every subsequent goal-loop retry failed identically, killing the
-// goal: once an assistant message carrying a ToolCall part enters a
-// session's history without a following tool-role result — the provider
-// stream died between emitting the tool_call and the engine executing it,
-// or errored mid-turn — every later request replays that same orphaned
-// tool_use and is rejected the same way. This is the sibling, at the wire
-// protocol level, of the marshal-level poisoning fixed in the commit
-// titled "fix(message,engine): truncated ToolCall.Arguments must never
-// poison history" (see message.Normalize and
-// engine/tool_call_poison_test.go): that fix keeps a poisoned ToolCall
+// A goal worker turn died with exactly that 400, naming one tool_use id.
+// Every subsequent goal-loop retry then failed identically, killing the
+// goal. Once an assistant message carrying a ToolCall part enters history
+// with no following tool-role result, every later request replays that
+// same orphaned tool_use and is rejected the same way. The provider stream
+// died between emitting the tool_call and the engine executing it, or it
+// errored mid-turn.
+//
+// This is the sibling, at the wire protocol level, of the marshal-level
+// poisoning fixed in the commit titled "fix(message,engine): truncated
+// ToolCall.Arguments must never poison history" (see message.Normalize and
+// engine/tool_call_poison_test.go). That fix keeps a poisoned ToolCall
 // marshalable; this one keeps a poisoned history transcodable.
 //
-// engine.Session's own turn loop is the primary fix (see engine/engine.go:
+// engine.Session's own turn loop is the primary fix (see engine/engine.go):
 // a turn that ends abnormally after recording one or more tool calls now
 // synthesizes their results immediately, before the poisoned history could
-// ever be replayed), which keeps ingest self-consistent for every message
+// ever be replayed. That keeps ingest self-consistent for every message
 // that actually passes through Session.append. ResolveOrphanToolCalls is
 // the defense-in-depth counterpart every transcoder calls at request-build
 // time, exactly as ToolCall.safeArguments backstops message.Normalize: a
 // history built or mutated by any OTHER producer — a plugin's
 // chat.message hook, a hand-rolled provider adapter, a test's scripted
-// provider, a session log edited or replayed from an older, unpatched
-// binary — must still transcode to a protocol-valid request rather than
+// provider — must still transcode to a protocol-valid request rather than
 // silently dropping the orphaned tool_use or shipping a request the
 // provider will reject.
 //
-// "Immediately after" mirrors the wire requirement: a ToolCall in
-// messages[i] is satisfied only by a ToolResult carrying its CallID in
-// messages[i+1] when that message has RoleTool — a ToolResult anywhere
-// else in history (an earlier or later, non-adjacent tool message) does
-// not count, because no transcoder looks for one there either. When
-// messages[i+1] is already a RoleTool message, missing results are merged
-// into it; otherwise (end of history, or the next message is not
-// RoleTool) a new RoleTool message carrying only the synthetic results is
-// inserted immediately after messages[i]. Every synthetic ToolResult is
-// IsError true with Content set to SyntheticOrphanResultText.
+// # "Immediately after" means a run, not one single message
 //
-// # Three hardening gaps found probing the real Anthropic transcoder (NEP-5272)
+// Every transcoder in this package folds several adjacent messages sharing
+// one wire role into ONE wire block (see wireRole and provider/anthropic/
+// transcode.go's role-merge). So a ToolCall in messages[i] is satisfied by
+// the CallID counts across the whole maximal run of contiguous messages
+// starting at messages[i+1] that each carry no ToolCall of their own and
+// share ONE wire role with messages[i+1] — not only messages[i+1] itself,
+// and not only messages that themselves already carry a ToolResult (see
+// runOwner's own doc comment below for why that distinction matters).
 //
-// The scan below closes three shapes the original set-membership version
-// let through to an unbalanced wire request:
+// Whether a message carries a ToolCall or a ToolResult is judged purely by
+// content, never by its own declared Role (gap 2 below): every transcoder
+// emits a block for a part based on its type, regardless of its host
+// message's Role. The run's BOUNDARY, in contrast, does depend on Role,
+// through wireRole: two messages of different wire roles never merge on
+// the wire, so a role change always ends a run, even mid-content-match.
+//
+// Missing results are merged into the LAST message of that run which
+// genuinely carries a ToolResult of its own. When no such message exists
+// — the run is empty, or every member is content-only — a new RoleTool
+// message carrying only the synthetic results is inserted immediately
+// after messages[i] instead. Every synthetic ToolResult is IsError true
+// with Content set to SyntheticOrphanResultText.
+//
+// # Four hardening gaps found probing the real Anthropic transcoder (NEP-5272)
+//
+// The scan below closes four shapes a naive set-membership, single-message
+// version lets through to an unbalanced, or worse data-losing, wire
+// request:
 //
 //  1. A duplicate CallID within one ToolCall-bearing message (two ToolCall
-//     parts sharing an id, one matching ToolResult): the old `present
-//     map[string]bool` marked the id satisfied on the FIRST matching
-//     result it saw, so both calls looked resolved even though the wire
-//     needs two tool_results for two tool_use blocks sharing that id. The
-//     scan below counts occurrences per id (need vs. present) instead of
-//     just checking membership, so it synthesizes exactly as many extra
-//     results as are actually missing for that id — never zero just
-//     because one already matched.
-//  2. A ToolCall sitting in a non-assistant message: the old scan's `if
-//     m.Role != RoleAssistant { continue }` skipped it outright, but every
-//     transcoder in this codebase (provider/anthropic, provider/
+//     parts sharing an id, one matching ToolResult): a set-membership check
+//     marks the id satisfied on the FIRST matching result it sees. Both
+//     calls then look resolved, even though the wire needs two
+//     tool_results for two tool_use blocks sharing that id. The scan below
+//     counts occurrences per id (need vs. present) instead, so it
+//     synthesizes exactly as many extra results as are actually missing.
+//  2. A ToolCall sitting in a non-assistant message: a role check (`if
+//     m.Role != RoleAssistant { continue }`) would skip it outright. But
+//     every transcoder in this codebase (provider/anthropic, provider/
 //     openaicompat, provider/openai) emits a tool_use/function_call block
-//     for a ToolCall regardless of its host message's own declared role —
-//     a role check here was never actually load-bearing for whether the
-//     wire needs a paired result. The scan below considers every message,
-//     any role, that carries a ToolCall part.
+//     for a ToolCall regardless of its host message's own declared role.
+//     The scan below considers every message, any role, that carries a
+//     ToolCall part.
 //  3. A stray ToolResult that appears BEFORE the ToolCall it is meant to
 //     pair with (a tool-role message at index i, its matching assistant
-//     call at i+1 — backwards from any legitimate producer's own
-//     ordering): the old scan never looked at what precedes a
-//     ToolCall-bearing message, so it left the misplaced result in the
-//     wire AND, finding nothing immediately after the real call,
-//     synthesized a second one — 1 tool_use, 2 tool_result. A first pass
-//     below drops any ToolResult whose CallID has no matching ToolCall in
-//     the message immediately before it, so the later count-aware pass
-//     synthesizes exactly the one result the call actually needs.
+//     call at index i+1 — backwards from any legitimate producer's own
+//     ordering): a scan that never looks at what precedes a
+//     ToolCall-bearing message leaves the misplaced result in the wire.
+//     Finding nothing after the real call, it then synthesizes a second
+//     one — 1 tool_use, 2 tool_result. Pass 1 below drops any ToolResult
+//     with no owning run, so Pass 2 synthesizes exactly the one result the
+//     call actually needs.
+//  4. SURPLUS results for one id (a ToolCall id A followed by two
+//     ToolResults id A): a scan that only checks "is at least one result
+//     present" never trims the extra one. The wire then ships 1 tool_use
+//     and 2 tool_result for the same id — the mirror image of gap 1. Pass
+//     1 below is count-aware in both directions: it drops any result
+//     beyond what its run's owning call actually needs, never stopping at
+//     "at least one is present."
 //
 // messages is never mutated in place; the input slice and its Message
-// values are safe to reuse after this call. When no orphan exists the
-// input slice itself is returned unchanged (no allocation).
+// values are safe to reuse after this call. When no orphan and no surplus
+// exists, the input slice itself is returned unchanged (no allocation). A
+// message left with zero parts because every part it carried was dropped
+// is omitted from the output entirely: no consumer of History() or GET
+// /session/{id}/message should ever see a message no producer created.
 func ResolveOrphanToolCalls(messages []Message) []Message {
-	// Pass 1 (gap 3): find every "reverse-orphaned" ToolResult -- one
-	// whose CallID has no matching ToolCall in the immediately preceding
-	// message -- and mark it for removal. strayDrop[i][id] means "drop
-	// every ToolResult in messages[i] carrying CallID id".
-	strayDrop := make(map[int]map[string]bool)
-	for i := range messages {
-		var resultIDs []string
-		for _, p := range messages[i].Parts {
-			if tr, ok := p.(*ToolResult); ok {
-				resultIDs = append(resultIDs, tr.CallID)
-			}
-		}
-		if len(resultIDs) == 0 {
+	n := len(messages)
+
+	// runOwner[j] is the index of the ToolCall-bearing message whose result
+	// run message j belongs to, or -1 when message j has no owning call
+	// (a genuine orphan — gap 3). Built by scanning forward from every
+	// ToolCall-bearing message, through the maximal run of contiguous
+	// later messages that each carry no ToolCall of their own and share
+	// one wire role (see wireRole) with the first such message.
+	//
+	// The run makes NO distinction between a message that currently
+	// carries a ToolResult and one that carries neither a ToolResult nor a
+	// ToolCall (Reasoning, Blob, Text only). Every transcoder in this
+	// package folds a whole same-wire-role, no-ToolCall stretch into ONE
+	// wire block, regardless of content. Any message in that stretch can
+	// carry the pairing result.
+	//
+	// An earlier version gated run entry on the FIRST message already
+	// carrying a ToolResult. That looked conservative but was not. A
+	// fuzz-property test found a case where the gate skipped a genuinely
+	// matching result one message further down, past a content-only
+	// message with no ToolCall. The call's REAL result was dropped as an
+	// unrelated orphan. A useless synthetic result was inserted in a
+	// brand-new message instead — worse than doing nothing.
+	//
+	// The wire role check matters on its own, independent of the above:
+	// two messages merge into one wire block only when they share a wire
+	// role, so a message of a DIFFERENT wire role never joins an
+	// in-progress run, even if it carries a ToolResult and no ToolCall of
+	// its own. The same fuzz run found this too: without the role check, a
+	// RoleAssistant message holding a stray ToolResult got folded into a
+	// preceding RoleTool run, which misattributed its content and starved
+	// a later, unrelated ToolCall of the run position its own synthesized
+	// result was supposed to land in.
+	runOwner := make([]int, n)
+	for j := range runOwner {
+		runOwner[j] = -1
+	}
+	for i := 0; i < n; i++ {
+		if !hasToolCall(messages[i].Parts) || i+1 >= n {
 			continue
 		}
-		precedingCallIDs := make(map[string]bool)
-		if i > 0 {
-			for _, p := range messages[i-1].Parts {
-				if tc, ok := p.(*ToolCall); ok {
-					precedingCallIDs[tc.CallID] = true
-				}
-			}
-		}
-		for _, id := range resultIDs {
-			if precedingCallIDs[id] {
-				continue
-			}
-			if strayDrop[i] == nil {
-				strayDrop[i] = make(map[string]bool)
-			}
-			strayDrop[i][id] = true
+		runRole := wireRole(messages[i+1])
+		for j := i + 1; j < n && !hasToolCall(messages[j].Parts) && wireRole(messages[j]) == runRole; j++ {
+			runOwner[j] = i
 		}
 	}
 
-	// Pass 2 (gaps 1 and 2): every message, any role, carrying ToolCall
-	// parts needs a matching COUNT of ToolResults in the immediately
-	// following message — a stray result marked for removal above is
-	// treated as absent here, since it is about to be dropped.
-	//
-	// "Immediately following" is judged by CONTENT (does the next message
-	// carry a ToolResult part at all), not by that message's own Role, for
-	// the same reason gap 2 above generalizes the ToolCall side past
-	// RoleAssistant: every transcoder in this codebase emits a tool_result
-	// block for a ToolResult part regardless of its host message's
-	// declared role, so gating on Role == RoleTool here would silently
-	// treat a genuinely-pairing ToolResult sitting in a non-tool-role
-	// message as absent — re-synthesizing a redundant second result for
-	// the same call and breaking this function's own fixed-point property
-	// (TestResolveOrphanToolCallsPropertyFixedPoint caught exactly this:
-	// a re-run would then see the ORIGINAL result as newly stray, since
-	// its preceding message is now the freshly-inserted synthetic one
-	// instead of the real call).
+	// need caches, per owner index, that owner's ToolCall CallIDs counted.
+	// Pass 1 and Pass 2 both need it, so it is computed once and cached.
+	need := make(map[int]map[string]int)
+	needFor := func(owner int) map[string]int {
+		if owner < 0 {
+			return nil
+		}
+		if m, ok := need[owner]; ok {
+			return m
+		}
+		m := make(map[string]int)
+		for _, p := range messages[owner].Parts {
+			if tc, ok := p.(*ToolCall); ok {
+				m[tc.CallID]++
+			}
+		}
+		need[owner] = m
+		return m
+	}
+
+	// Pass 1 (gaps 3 and 4): walk every ToolResult in document order and
+	// drop any occurrence beyond what its run's owner needs for that id.
+	// Zero is needed for an orphan run (owner == -1); fewer than present is
+	// needed for a surplus. dropped marks one specific part for removal,
+	// never a whole CallID — a run can legitimately need SOME but not ALL
+	// of the occurrences of one id, e.g. a duplicate ToolCall id needing
+	// two results when three are present.
+	type partKey struct{ msg, part int }
+	dropped := make(map[partKey]bool)
+	seenInRun := make(map[int]map[string]int)
+	for i := 0; i < n; i++ {
+		for pi, p := range messages[i].Parts {
+			tr, ok := p.(*ToolResult)
+			if !ok {
+				continue
+			}
+			owner := runOwner[i]
+			seen := seenInRun[owner]
+			if seen == nil {
+				seen = make(map[string]int)
+				seenInRun[owner] = seen
+			}
+			seen[tr.CallID]++
+			if seen[tr.CallID] > needFor(owner)[tr.CallID] {
+				dropped[partKey{i, pi}] = true
+			}
+		}
+	}
+
+	// Pass 2 (gaps 1 and 2): every ToolCall-bearing message needs, from its
+	// own run (after Pass 1's drops), exactly as many ToolResults per id as
+	// it has ToolCalls for that id. Missing ones are merged into the LAST
+	// run message that genuinely carried a ToolResult of its own — not
+	// necessarily the run's last message, which may be a content-only
+	// message (Reasoning, Blob, Text) that happens to trail the real
+	// result chain (see runOwner's own doc comment for why the run reaches
+	// through such messages for counting purposes in the first place).
+	// Attaching there, rather than to that trailing content-only message,
+	// keeps a synthesized error out of an otherwise-unrelated plain
+	// message. When NO message in the run ever carried a ToolResult (the
+	// run is empty, or purely content-only), a new message is inserted
+	// immediately after the owner instead — unchanged from the original,
+	// single-message-lookahead behavior for that case.
 	type insertion struct {
 		afterIndex int
 		parts      Parts
 	}
-	pendingMerge := make(map[int]Parts)
+	pendingAppend := make(map[int]Parts)
 	var insertions []insertion
 
-	for i := range messages {
-		m := &messages[i]
-		var callIDs []string
-		for _, p := range m.Parts {
-			if tc, ok := p.(*ToolCall); ok {
-				callIDs = append(callIDs, tc.CallID)
-			}
-		}
-		if len(callIDs) == 0 {
+	for owner := 0; owner < n; owner++ {
+		callNeed := needFor(owner)
+		if len(callNeed) == 0 {
 			continue
 		}
-		needCount := make(map[string]int)
-		for _, id := range callIDs {
-			needCount[id]++
-		}
-		followingIsTool := i+1 < len(messages) && hasToolResult(messages[i+1].Parts)
-		presentCount := make(map[string]int)
-		if followingIsTool {
-			dropped := strayDrop[i+1]
-			for _, p := range messages[i+1].Parts {
+		present := make(map[string]int)
+		attachIdx := -1
+		for j := owner + 1; j < n && runOwner[j] == owner; j++ {
+			sawResult := false
+			for pi, p := range messages[j].Parts {
 				tr, ok := p.(*ToolResult)
-				if !ok || dropped[tr.CallID] {
+				if !ok {
 					continue
 				}
-				presentCount[tr.CallID]++
+				sawResult = true
+				if !dropped[partKey{j, pi}] {
+					present[tr.CallID]++
+				}
+			}
+			if sawResult {
+				attachIdx = j
 			}
 		}
 		var missing []string
-		seen := make(map[string]bool)
-		for _, id := range callIDs {
-			if seen[id] {
+		seenIDs := make(map[string]bool)
+		for _, p := range messages[owner].Parts {
+			tc, ok := p.(*ToolCall)
+			if !ok || seenIDs[tc.CallID] {
 				continue
 			}
-			seen[id] = true
-			for n := needCount[id] - presentCount[id]; n > 0; n-- {
-				missing = append(missing, id)
+			seenIDs[tc.CallID] = true
+			for k := callNeed[tc.CallID] - present[tc.CallID]; k > 0; k-- {
+				missing = append(missing, tc.CallID)
 			}
 		}
 		if len(missing) == 0 {
@@ -837,36 +920,45 @@ func ResolveOrphanToolCalls(messages []Message) []Message {
 				IsError: true,
 			})
 		}
-		if followingIsTool {
-			pendingMerge[i+1] = append(pendingMerge[i+1], synth...)
+		if attachIdx >= 0 {
+			pendingAppend[attachIdx] = append(pendingAppend[attachIdx], synth...)
 		} else {
-			insertions = append(insertions, insertion{afterIndex: i, parts: synth})
+			insertions = append(insertions, insertion{afterIndex: owner, parts: synth})
 		}
 	}
 
-	if len(strayDrop) == 0 && len(pendingMerge) == 0 && len(insertions) == 0 {
+	if len(dropped) == 0 && len(pendingAppend) == 0 && len(insertions) == 0 {
 		return messages
 	}
 
-	out := make([]Message, 0, len(messages)+len(insertions))
-	for i := range messages {
+	out := make([]Message, 0, n+len(insertions))
+	for i := 0; i < n; i++ {
 		m := messages[i]
-		if drop := strayDrop[i]; len(drop) > 0 {
+		hasDropHere := false
+		for pi := range m.Parts {
+			if dropped[partKey{i, pi}] {
+				hasDropHere = true
+				break
+			}
+		}
+		touched := false
+		if hasDropHere {
 			kept := make(Parts, 0, len(m.Parts))
-			for _, p := range m.Parts {
-				if tr, ok := p.(*ToolResult); ok && drop[tr.CallID] {
+			for pi, p := range m.Parts {
+				if dropped[partKey{i, pi}] {
+					touched = true
 					continue
 				}
 				kept = append(kept, p)
 			}
 			m.Parts = kept
 		}
-		if extra, ok := pendingMerge[i]; ok {
-			merged := m
-			merged.Parts = append(append(Parts(nil), m.Parts...), extra...)
-			m = merged
+		if extra, ok := pendingAppend[i]; ok {
+			m.Parts = append(append(Parts(nil), m.Parts...), extra...)
 		}
-		out = append(out, m)
+		if !(touched && len(m.Parts) == 0) {
+			out = append(out, m)
+		}
 		for _, ins := range insertions {
 			if ins.afterIndex == i {
 				out = append(out, Message{
@@ -898,19 +990,31 @@ func callIDsOf(parts Parts) []string {
 	return ids
 }
 
-// hasToolResult reports whether parts contains at least one ToolResult
-// part. Used by ResolveOrphanToolCalls's Pass 2 to judge "the following
-// message pairs with this ToolCall" by content rather than by that
-// message's own Role — see the doc comment on the followingIsTool
-// variable there for why a role-based check is insufficient once gap 2
-// (a ToolCall in a non-assistant message) is in scope.
-func hasToolResult(parts Parts) bool {
+// hasToolCall reports whether parts contains at least one ToolCall part.
+// Used by ResolveOrphanToolCalls to find a message that owns a result run,
+// and to find where that run ends — see ResolveOrphanToolCalls's own doc
+// comment on runOwner for the run itself.
+func hasToolCall(parts Parts) bool {
 	for _, p := range parts {
-		if _, ok := p.(*ToolResult); ok {
+		if _, ok := p.(*ToolCall); ok {
 			return true
 		}
 	}
 	return false
+}
+
+// wireRole mirrors every transcoder's canonical-Role-to-wire-role mapping
+// (provider/anthropic/transcode.go, provider/openaicompat/transcode.go):
+// RoleAssistant maps to "assistant"; every other Role — RoleUser, RoleTool,
+// and any off-label value a producer might use — maps to "user". Only
+// messages sharing this wire role merge into one wire block, so it decides
+// whether two adjacent canonical messages count as one adjacency unit for
+// the "immediately after" requirement.
+func wireRole(m Message) string {
+	if m.Role == RoleAssistant {
+		return "assistant"
+	}
+	return "user"
 }
 
 // ProviderCallID derives a deterministic, provider-safe tool-call ID from a

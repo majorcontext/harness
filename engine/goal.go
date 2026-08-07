@@ -1414,11 +1414,11 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 	for {
 		attempts++
 		toolsBefore := s.toolExecutions()
-		// Snapshot history's length before this attempt's own s.Prompt call
-		// appends anything — see the dedup mitigation just below the
-		// tool-gate check, and its doc comment for the full rationale and
-		// residual gap.
-		histBefore := s.historyLen()
+		// Snapshot history's last message ID before this attempt's own
+		// s.Prompt call appends anything — see the dedup mitigation just
+		// below the tool-gate check, and lastMessageID's own doc comment
+		// for why this is an identity, not a length.
+		anchorID := s.lastMessageID()
 		_, perr := s.Prompt(ctx, directive)
 		if perr == nil {
 			return attempts, nil
@@ -1497,18 +1497,13 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 			// of waiting and trying again — regardless of classification.
 			return attempts, err
 		}
-		// NEP-5272 defect 2 (partial mitigation — see the doc comment on
-		// dropUnansweredDirective for the residual gap this does NOT
-		// close): every branch below this point is about to retry, so undo
-		// exactly what THIS failed attempt appended (the directive user
-		// message, plus, on a stream cut mid-tool-call-parse, a partial
-		// assistant message and its synthetic tool result — see
-		// interruptedTurnError in engine.go) before looping back to the top,
-		// where s.Prompt appends the same directive again. toolGateStops is
-		// already known false here (the branch above returned otherwise),
-		// so nothing this attempt appended can be a real, executed tool
-		// call — only an unanswered directive is ever at stake.
-		s.dropUnansweredDirective(histBefore)
+		// NEP-5272 defect 2 (partial mitigation). Every branch below this
+		// point is about to retry, so undo this attempt's own unanswered
+		// directive before looping back to the top, where s.Prompt appends
+		// the same directive again. See dropUnansweredDirective's own doc
+		// comment for exactly what this does and does not remove, and for
+		// the residual gap it does NOT close.
+		s.dropUnansweredDirective(anchorID)
 		if !retryable {
 			deterministicAttempt++
 			if deterministicAttempt > goalWorkerRetries {
@@ -1542,15 +1537,27 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 	}
 }
 
-// historyLen returns the current number of messages in history without
-// copying it (unlike the public History(), which allocates a full copy) —
-// used only by the retry-dedup bookkeeping below, where all that matters is
-// the count, taken right before an attempt's own s.Prompt call appends
-// anything.
-func (s *Session) historyLen() int {
+// lastMessageID returns the ID of the last message in history, or "" if
+// history is empty — used only by the retry-dedup bookkeeping below, taken
+// right before an attempt's own s.Prompt call appends anything.
+//
+// An identity, not a length: s.Prompt's FIRST action is maybeAutoCompact
+// (engine.go), which can splice s.history to an entirely different length
+// before the directive is even appended. A length snapshot taken here would
+// go stale the instant that splice runs, then either silently miss a
+// truncation it should have made (the snapshotted length no longer maps to
+// the right position, or is now past the end of a shrunk history) or, on a
+// history that grew back past the stale length by other means, cut an
+// arbitrary interior point of this attempt's own work. A message ID has no
+// such failure mode: dropUnansweredDirective below looks it up fresh every
+// time, and safely does nothing if compaction folded it away entirely.
+func (s *Session) lastMessageID() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.history)
+	if len(s.history) == 0 {
+		return ""
+	}
+	return s.history[len(s.history)-1].ID
 }
 
 // dropUnansweredDirective is promptTurnWithRetry's mitigation for NEP-5272's
@@ -1566,23 +1573,36 @@ func (s *Session) historyLen() int {
 // request's input cost for the rest of the session — the production
 // incident's exact complaint ("a single wake of the box added 3 more").
 //
-// Called only from a point in promptTurnWithRetry where toolGateStops is
-// already known false — i.e. this failed attempt executed no tool call, so
-// by construction the only things it could have appended to history are: a
-// plain top-level provider error, which appends just the directive itself
-// (Prompt's own s.append call, before the model is ever asked anything); or
-// an interruptedTurnError (a stream that died after the model emitted
-// tool_call blocks but before they were ever executed — see
-// interruptedTurnError in engine.go), which additionally appends the
-// model's partial assistant message and a synthetic tool-result message for
-// it. Either shape is entirely this attempt's own doing, with nothing else
-// interleaved (PursueGoal never calls Prompt concurrently with itself), so
-// truncating history back to n — the length captured immediately before
-// this attempt's s.Prompt call — removes exactly what this attempt added
-// and nothing more, leaving the NEXT attempt's fresh append as the only
-// outstanding copy.
+// anchorID is the ID lastMessageID captured immediately before this
+// attempt's own s.Prompt call, or "" if history was empty at that point.
+// dropUnansweredDirective looks up anchorID fresh in the CURRENT
+// s.history: if it is no longer present (maybeAutoCompact folded it into a
+// summary in the meantime), there is no safe way to identify this
+// attempt's own tail, so this is a no-op — leaving one duplicate directive
+// in history is better than truncating an unrelated interior point (see
+// lastMessageID's own doc comment).
 //
-// # Residual gap — deliberately NOT fixed here
+// Called only from a point in promptTurnWithRetry where toolGateStops is
+// already known false, so this attempt executed no real tool call. That
+// does NOT mean the tail after anchorID holds nothing but the directive —
+// a plugin's tool.execute.before hook can DENY a tool call, which still
+// appends a ToolResult message without incrementing toolExecCount (see
+// engine.go's runToolCall), and the model can then make a further request
+// in the SAME Prompt call that fails; a queued prompt can also be
+// delivered into that same window (Prompt's own tool-call-boundary drain).
+// Either produces additional, already-DELIVERED messages in the tail — a
+// denied tool's result, an "OPERATOR MESSAGES" block already journaled
+// prompt.dequeued("injected") — that must never be discarded.
+//
+// isSafeToDropDirectiveTail below only approves the two shapes a failed
+// attempt with NO tool execution and NO intervening delivery can produce:
+// the directive alone, or the directive plus an interrupted turn's partial
+// assistant message and its synthetic tool-result message (see
+// interruptedTurnError in engine.go). Any other shape in the tail is left
+// untouched — the mitigation simply does not apply to that attempt, rather
+// than risk dropping delivered mail.
+//
+// # Residual gaps — deliberately NOT fixed here
 //
 // This mutates only the LIVE in-memory s.history; it does not and cannot
 // touch the durable session log. Prompt's own append already persisted a
@@ -1594,7 +1614,11 @@ func (s *Session) historyLen() int {
 // retracting or amending an already-journaled record without engine.go/
 // store.go changes, which are out of this fix's scope (see the task's
 // framing: "if a clean fix is not possible without restructuring Prompt...
-// implement the best available mitigation").
+// implement the best available mitigation"). Separately, maybeAutoCompact
+// itself can shrink history inside this same attempt's own s.Prompt call —
+// so "this attempt appended X" is not the same claim as "history grew by
+// exactly len(X)"; anchorID's identity-based lookup sidesteps needing that
+// claim to be true at all.
 //
 // The practical consequence: within a single live process, this closes the
 // unbounded-growth problem for as long as that process keeps running — at
@@ -1610,12 +1634,79 @@ func (s *Session) historyLen() int {
 // earlier, still-unanswered one" (or a new journal record type analogous to
 // compaction's recCompact fold), which belongs in engine.go/store.go, not
 // here.
-func (s *Session) dropUnansweredDirective(n int) {
+func (s *Session) dropUnansweredDirective(anchorID string) {
 	s.mu.Lock()
-	if n >= 0 && n < len(s.history) {
-		s.history = s.history[:n:n]
+	defer s.mu.Unlock()
+
+	idx := -1
+	if anchorID != "" {
+		for i, m := range s.history {
+			if m.ID == anchorID {
+				idx = i
+				break
+			}
+		}
+		if idx == -1 {
+			return
+		}
 	}
-	s.mu.Unlock()
+	tail := s.history[idx+1:]
+	if !isSafeToDropDirectiveTail(tail) {
+		return
+	}
+	end := idx + 1
+	s.history = s.history[:end:end]
+}
+
+// isSafeToDropDirectiveTail reports whether tail is EXACTLY what a single
+// failed, no-tool-executed attempt could have appended to history: the
+// directive alone (RoleUser), or the directive plus an interrupted turn's
+// partial assistant message and its synthetic tool-result message
+// (RoleUser, RoleAssistant, RoleTool — see interruptedTurnError in
+// engine.go). Any other shape means something besides this attempt's own
+// unanswered directive landed in the gap — a denied tool call's result, an
+// injected operator message, more than one round of either — and must
+// never be dropped (see dropUnansweredDirective's doc comment).
+//
+// The role shape alone is NOT enough for the three-message case: a
+// tool.execute.before hook DENY also produces [RoleUser, RoleAssistant,
+// RoleTool] — a real assistant turn with a genuine ToolCall, denied rather
+// than executed, so toolGateStops stays false exactly like an interrupted
+// turn. isInterruptedToolResultMessage's content check is what tells the
+// two apart.
+func isSafeToDropDirectiveTail(tail []message.Message) bool {
+	switch len(tail) {
+	case 1:
+		return tail[0].Role == message.RoleUser
+	case 3:
+		return tail[0].Role == message.RoleUser &&
+			tail[1].Role == message.RoleAssistant &&
+			tail[2].Role == message.RoleTool &&
+			isInterruptedToolResultMessage(tail[2])
+	default:
+		return false
+	}
+}
+
+// isInterruptedToolResultMessage reports whether m is EXACTLY the synthetic
+// tool-result message interruptedToolResults (engine.go) builds for a
+// stream that died before its terminal event: every ToolResult part's
+// Content must render interruptedTurnErrorText verbatim, and there must be
+// at least one. A denied tool call's own ToolResult carries the hook's own
+// deny message instead, and a real executed tool's error result carries
+// the tool's own output, so neither is ever mistaken for this one — even
+// though both share the same three-message role shape.
+func isInterruptedToolResultMessage(m message.Message) bool {
+	if len(m.Parts) == 0 {
+		return false
+	}
+	for _, p := range m.Parts {
+		tr, ok := p.(*message.ToolResult)
+		if !ok || tr.Content.Text() != interruptedTurnErrorText {
+			return false
+		}
+	}
+	return true
 }
 
 // recordGoalStalled records one failed worker-turn attempt for a turn. Like

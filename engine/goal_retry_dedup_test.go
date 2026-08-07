@@ -2,6 +2,9 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 	"testing/synctest"
 
@@ -72,4 +75,87 @@ func TestPursueGoalRetryDoesNotDuplicateDirectiveInHistory(t *testing.T) {
 			t.Errorf("user messages carrying the directive text %q = %d, want exactly 1 (two failed attempts must not leave permanent duplicates)", "cond", got)
 		}
 	})
+}
+
+// TestPursueGoalRetryNeverDropsDeliveredOperatorMessageAfterDeniedTool is the
+// red-first regression test for the MAJOR finding on dropUnansweredDirective:
+// its old enumeration of "what a failed, no-tool-executed attempt could have
+// appended" was wrong. A plugin's tool.execute.before hook can DENY a tool
+// call — appending a ToolResult message without incrementing toolExecCount
+// (engine.go's runToolCall), so toolGateStops stays false — and the model can
+// then make a further request in the SAME Prompt call, during which a
+// prompt already sitting in the queue gets delivered at the tool-call
+// boundary (Prompt's own DequeueAllPrompts drain) as an "OPERATOR MESSAGES"
+// block, already journaled prompt.dequeued("injected") before that further
+// request ever runs. If THAT further request then fails, toolGateStops is
+// still false (no tool ever executed this attempt), so
+// dropUnansweredDirective ran — and the old version truncated history back
+// to the length snapshotted before the whole attempt, discarding the
+// already-delivered operator message along with the unanswered directive.
+// This test proves the fix: the operator message, and the denied tool's own
+// result, both survive every retry and the eventual success.
+func TestPursueGoalRetryNeverDropsDeliveredOperatorMessageAfterDeniedTool(t *testing.T) {
+	testTool := Tool{
+		Def: provider.ToolDef{Name: "test_tool", Description: "test", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Run: func(ctx context.Context, s *Session, args json.RawMessage) (message.Parts, error) {
+			t.Fatal("test_tool.Run must never be called — the hook denies every call")
+			return nil, nil
+		},
+	}
+	prov := &goalProvider{
+		worker: [][]provider.Event{
+			asstTurn(provider.StopToolUse, toolCall("tc1", "test_tool", `{}`)),
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "all done"}),
+		},
+		// The SECOND worker call is this same attempt's post-tool-round
+		// request (the model asked to continue after the denied call) — it
+		// fails, forcing a retry.
+		failWorkerCall: 2,
+		workerErr:      errors.New("fake transient provider error"),
+		eval: [][]provider.Event{
+			evalTurn("MET: looks complete"),
+		},
+	}
+	hooks := &fakeHooks{deny: "denied by policy"}
+	s := NewSession(Config{
+		Providers:    provider.Registry{prov.Name(): prov},
+		Model:        message.ModelRef{Provider: prov.Name(), Model: "m1"},
+		System:       []string{"base"},
+		SessionDir:   t.TempDir(),
+		Instructions: &InstructionsConfig{Disabled: true},
+		SkillsDirs:   []string{},
+		Tools:        []Tool{testTool},
+		Hooks:        hooks,
+	})
+
+	if _, err := s.EnqueuePrompt("urgent operator update"); err != nil {
+		t.Fatalf("EnqueuePrompt = %v", err)
+	}
+
+	res, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: evalModel})
+	if err != nil {
+		t.Fatalf("PursueGoal error = %v, want nil (a deterministic failure with no tool execution must retry)", err)
+	}
+	if !res.Achieved {
+		t.Fatalf("result = %+v, want achieved", res)
+	}
+
+	history := s.History()
+	var sawOperatorMessage, sawDeniedResult bool
+	for _, m := range history {
+		if strings.Contains(m.Parts.Text(), "urgent operator update") {
+			sawOperatorMessage = true
+		}
+		for _, p := range m.Parts {
+			if tr, ok := p.(*message.ToolResult); ok && tr.CallID == "tc1" && strings.Contains(tr.Content.Text(), "denied by policy") {
+				sawDeniedResult = true
+			}
+		}
+	}
+	if !sawOperatorMessage {
+		t.Errorf("history = %+v, want the delivered operator message to survive the retry", history)
+	}
+	if !sawDeniedResult {
+		t.Errorf("history = %+v, want the denied tool's own result to survive the retry", history)
+	}
 }

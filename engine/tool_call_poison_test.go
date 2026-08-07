@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/majorcontext/harness/message"
@@ -132,17 +133,22 @@ func TestPersistTruncatedToolCallArguments(t *testing.T) {
 	if !ok || tr.CallID != "tc1" || !tr.IsError {
 		t.Fatalf("synthetic tool result = %+v, want an is_error ToolResult for tc1", synth.Parts[0])
 	}
+	if want := fmt.Sprintf(unexecutedToolCallStopReasonTextFmt, provider.StopMaxTokens); tr.Content.Text() != want {
+		t.Errorf("synthetic tool result Content = %q, want %q", tr.Content.Text(), want)
+	}
 
 	// The session log is loadable and agrees with in-memory history — the
 	// turn that used to fail persist ("never journaled") is now durable.
-	// LoadSession additionally repairs orphaned tool_calls at ingest (see
-	// TestLoadSessionRepairsOrphanedToolCalls), so the loaded history is
-	// the repaired view of the resident one.
+	// The resident history is already orphan-free by this point
+	// (appendUnexecutedToolCallResults paired tc1 immediately, live), so
+	// the comparison is against s.History() raw — wrapping it in
+	// ResolveOrphanToolCalls here would repair both sides identically and
+	// let a future regression that left a resident orphan pass unnoticed.
 	loaded, err := LoadSession(cfg, s.ID)
 	if err != nil {
 		t.Fatalf("LoadSession: %v", err)
 	}
-	if got, want := historyJSON(t, loaded.History()), historyJSON(t, message.ResolveOrphanToolCalls(s.History())); got != want {
+	if got, want := historyJSON(t, loaded.History()), historyJSON(t, s.History()); got != want {
 		t.Errorf("loaded history = %s\nwant %s", got, want)
 	}
 

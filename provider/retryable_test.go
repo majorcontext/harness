@@ -146,7 +146,12 @@ func TestAsPermanentThroughWrapping(t *testing.T) {
 	}
 }
 
-func TestPermanentErrorMessageNamesClass(t *testing.T) {
+// TestPermanentErrorMessageFormat pins the fixed "[permanent] " prefix
+// PermanentError.Error renders. PermanentError deliberately carries no
+// class enum (see its own doc comment) — unlike RetryableError, there is
+// only one undifferentiated "do not retry this" bucket — so this checks a
+// fixed prefix, not a named class.
+func TestPermanentErrorMessageFormat(t *testing.T) {
 	err := MarkPermanent(errors.New("bad request"))
 	const want = "[permanent] bad request"
 	if got := err.Error(); got != want {

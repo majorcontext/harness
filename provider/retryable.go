@@ -134,11 +134,26 @@ func AsRetryable(err error) (RetryableClass, bool) {
 // type existed, that error was classified deterministic-but-retryable (see
 // goalWorkerRetries in engine/goal.go) and burned a full 3-attempt retry
 // budget — three identical, guaranteed-to-fail model calls — before parking.
-// See provider/anthropic/anthropic.go's apiError for the one place this gets
-// marked, and engine/goal.go's promptTurnWithRetry for the fail-fast
+// See provider/anthropic/anthropic.go's apiError and stream.handle for the
+// two places this gets marked (an HTTP 400 and a mid-stream "error" SSE
+// event), and engine/goal.go's promptTurnWithRetry for the fail-fast
 // consumer, which mirrors the existing provider.IsContextOverflow precedent
 // (see that function's doc comment) exactly: one stall record, no backoff,
 // no further attempt.
+//
+// # A third wrapper type, not a third ErrKind
+//
+// provider/errors.go's ErrorKind doc comment asks classifications to
+// converge on ONE shared Kind enum plus ONE wrapper type, specifically so a
+// later addition adds a Kind value rather than a second ad hoc type. This
+// type is the SECOND wrapper regardless (RetryableError, added first,
+// already diverged from that plan for its own reasons), and now a third.
+// The two are provably disjoint (see
+// TestPermanentAndRetryableAreMutuallyExclusive) and the engine only ever
+// consults them via errors.As, never a raw Kind switch, so this is not a
+// correctness defect — but it IS the exact drift errors.go's comment warns
+// against, and a future classification need should seriously consider
+// folding into ErrorKind instead of adding a fourth type.
 type PermanentError struct {
 	Err error
 }

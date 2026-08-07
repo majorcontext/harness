@@ -123,16 +123,17 @@ func TestPursueGoalPermanentWorkerErrorParksAfterOneAttempt(t *testing.T) {
 	}
 }
 
-// TestPursueGoalPermanentErrorAfterToolExecutionStillGated proves the
-// non-idempotency gate (stop retrying once a tool has executed this attempt)
-// pre-empts the permanent-error fail-fast path too, exactly like it already
-// does for the deterministic and retryable tiers (see
-// TestPursueGoalNoRetryAfterToolExecution and
-// TestPursueGoalRetryableErrorAfterToolExecutionStillGated) — not that it
-// changes the OUTCOME here (a permanent error never retries regardless), but
-// the attempt count and single stall record must still reflect exactly one
-// attempt either way.
-func TestPursueGoalPermanentErrorAfterToolExecutionStillGated(t *testing.T) {
+// TestPursueGoalPermanentErrorSingleAttemptRegardlessOfPriorToolExecution
+// proves the permanent-error fail-fast path (no retry, ever) behaves
+// identically whether or not a tool already executed earlier in the same
+// attempt. It does NOT exercise the non-idempotency gate itself — the
+// permanent branch in promptTurnWithRetry returns before that gate is ever
+// reached, so a tool running first changes nothing about which branch
+// fires. What this test actually pins: the attempt count and single stall
+// record still reflect exactly one attempt, matching
+// TestPursueGoalPermanentWorkerErrorParksAfterOneAttempt's shape, even when
+// a tool ran on the way to the permanent failure.
+func TestPursueGoalPermanentErrorSingleAttemptRegardlessOfPriorToolExecution(t *testing.T) {
 	var toolRuns int
 	testTool := Tool{
 		Def: provider.ToolDef{Name: "test_tool", Description: "test", InputSchema: json.RawMessage(`{"type":"object"}`)},

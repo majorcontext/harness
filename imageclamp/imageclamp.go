@@ -11,9 +11,9 @@
 // a fleet box the transcript lives on a durable volume re-adopted on respawn,
 // so the wedge survives a restart (incident 2026-07-30, three Neptune boxes:
 // full-page screenshots >8000px, Bedrock "At least one of the image dimensions
-// exceed max allowed size: 8000 pixels"). provider/errors.go classifies that
-// 400 as ErrKindPermanent (fail fast), but nothing removed or repaired the
-// poison.
+// exceed max allowed size: 8000 pixels"). provider/anthropic's apiError marks
+// that 400 provider.MarkPermanent (fail fast, see provider.PermanentError),
+// but nothing removed or repaired the poison.
 //
 // Two distinct caps can wedge a session, and Clamp enforces both:
 //
