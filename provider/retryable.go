@@ -113,3 +113,67 @@ func AsRetryable(err error) (RetryableClass, bool) {
 	}
 	return "", false
 }
+
+// PermanentError marks an adapter error as PERMANENTLY, deterministically
+// failing — a request that will fail identically no matter how many times
+// it is retried — as opposed to RetryableError's transient provider weather
+// (an overload, a rate limit, a 5xx). It mirrors RetryableError's shape
+// exactly (wrap via Unwrap, recover via errors.As, never string-matched by
+// the engine), minus a class enum: unlike retryable weather, which comes in
+// several named shapes an engine caller may want to distinguish (overloaded
+// vs rate-limited vs stream-truncated), "permanent" is a single, undifferentiated
+// bucket — the only thing a caller needs to know is "do not retry this",
+// never which specific kind of unrecoverable request shape it was.
+//
+// Field motivation (NEP-5272, 2026-08-07): an orphaned tool_use left in
+// session history by an earlier bug made every subsequent model call fail
+// with the identical HTTP 400 invalid_request_error ("tool_use ids were
+// found without tool_result blocks immediately after") — a request shape no
+// amount of waiting or retrying can ever fix, since the malformed history is
+// still exactly as malformed on attempt 2 as it was on attempt 1. Before this
+// type existed, that error was classified deterministic-but-retryable (see
+// goalWorkerRetries in engine/goal.go) and burned a full 3-attempt retry
+// budget — three identical, guaranteed-to-fail model calls — before parking.
+// See provider/anthropic/anthropic.go's apiError for the one place this gets
+// marked, and engine/goal.go's promptTurnWithRetry for the fail-fast
+// consumer, which mirrors the existing provider.IsContextOverflow precedent
+// (see that function's doc comment) exactly: one stall record, no backoff,
+// no further attempt.
+type PermanentError struct {
+	Err error
+}
+
+// Error prefixes the wrapped error's message with "[permanent]", mirroring
+// RetryableError.Error's convention so any consumer that only ever calls
+// Error() (a journaled goal.stalled reason, a turn.end error, a
+// session.error message) still surfaces the classification without needing
+// to unwrap anything.
+func (e *PermanentError) Error() string {
+	return "[permanent] " + e.Err.Error()
+}
+
+// Unwrap exposes the original error to errors.Is/errors.As.
+func (e *PermanentError) Unwrap() error { return e.Err }
+
+// MarkPermanent wraps err as a PermanentError, or returns nil unchanged if
+// err is nil (mirrors MarkRetryable's nil-passthrough convention, so
+// adapters can call it unconditionally).
+func MarkPermanent(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &PermanentError{Err: err}
+}
+
+// AsPermanent reports whether err (or any error it wraps, per errors.As) was
+// marked permanent by an adapter. Mirrors AsRetryable's shape exactly; this
+// is the ONLY sanctioned way for the engine to fail fast on a
+// deterministically-unrecoverable provider error — never string-matching.
+// A PermanentError and a RetryableError are mutually exclusive: an adapter
+// never marks the same error both ways (see classifyStatus/apiError in
+// provider/anthropic), so AsRetryable and AsPermanent never both report true
+// for the same error.
+func AsPermanent(err error) bool {
+	var pe *PermanentError
+	return errors.As(err, &pe)
+}

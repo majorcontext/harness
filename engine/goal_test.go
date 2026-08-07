@@ -1252,7 +1252,7 @@ func TestGoalEventsEmitWhileLockHeld(t *testing.T) {
 				if err := s.RegisterGoal("cond"); err != nil {
 					t.Fatal(err)
 				}
-				s.recordGoalParked(1, 1, false, "", s.snapshotGoal().gen)
+				s.recordGoalParked(1, 1, false, false, "", s.snapshotGoal().gen)
 			},
 		},
 	}

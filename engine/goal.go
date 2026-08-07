@@ -733,12 +733,24 @@ type goalWorkerParkedError struct {
 	err       error
 	attempts  int
 	retryable bool
+	// permanent is true when err was classified provider.AsPermanent (NEP-
+	// 5272 defect 1) — a fail-fast, single-attempt park, distinct from an
+	// ordinary deterministic exhaustion (goalWorkerRetries+1 attempts). Only
+	// ever true when retryable is false (the two classifications are
+	// mutually exclusive — see provider.AsPermanent's doc comment); named
+	// separately from retryable/class rather than folded into a fourth
+	// RetryableClass value because a permanent error is never provider
+	// weather and must never be confused with one.
+	permanent bool
 	class     provider.RetryableClass
 }
 
 func (e *goalWorkerParkedError) Error() string {
 	tier := "deterministic"
-	if e.retryable {
+	switch {
+	case e.permanent:
+		tier = "permanent"
+	case e.retryable:
 		tier = "retryable"
 	}
 	return fmt.Sprintf("engine: goal worker turn parked after %d %s-tier attempt(s): %v", e.attempts, tier, e.err)
@@ -772,11 +784,22 @@ func IsGoalWorkerParked(err error) bool {
 // classification precisely for a retryable-tier park (overloaded/
 // rate_limited/server_error, see provider.RetryableClass), so this string
 // only needs to say which TIER parked the turn, not repeat that detail.
-func classifyGoalWorkerError(retryable bool, class provider.RetryableClass) string {
-	if retryable {
+//
+// permanent (NEP-5272 defect 1) distinguishes a fail-fast, single-attempt
+// park (a malformed-request-shape error provider.AsPermanent classified) —
+// which never spent the deterministic budget at all — from an ordinary
+// exhausted-retries park, so an operator reading this reason is never
+// misled into thinking goalWorkerRetries+1 identical attempts happened when
+// only one ever did. Only ever true when retryable is false.
+func classifyGoalWorkerError(retryable, permanent bool, class provider.RetryableClass) string {
+	switch {
+	case retryable:
 		return fmt.Sprintf("provider %s errors exhausted the retry budget", class)
+	case permanent:
+		return "worker turn failed with a permanent provider error and cannot succeed on retry"
+	default:
+		return "worker turn failed repeatedly and did not recover"
 	}
-	return "worker turn failed repeatedly and did not recover"
 }
 
 // recordGoalParked records goal.parked: the terminal PursueGoal reaches
@@ -798,13 +821,13 @@ func classifyGoalWorkerError(retryable bool, class provider.RetryableClass) stri
 // stop ("goal cleared" result, a concurrent DELETE won the race) — never
 // journaling or returning the sentinel for a generation that is no longer
 // current.
-func (s *Session) recordGoalParked(turn, attempts int, retryable bool, class provider.RetryableClass, gen uint64) bool {
+func (s *Session) recordGoalParked(turn, attempts int, retryable, permanent bool, class provider.RetryableClass, gen uint64) bool {
 	s.mu.Lock()
 	if !s.goalActive || s.goalGen != gen {
 		s.mu.Unlock()
 		return false
 	}
-	reason := classifyGoalWorkerError(retryable, class)
+	reason := classifyGoalWorkerError(retryable, permanent, class)
 	s.persistGoalLocked(recGoalParked, goalRecord{
 		Reason:         reason,
 		Turn:           turn,
@@ -1162,6 +1185,18 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 				s.clearGoal(err.Error())
 				return nil, err
 			}
+			// NEP-5272 defect 1: a permanent-classified error (see
+			// promptTurnWithRetry's fail-fast branch above) is, like context
+			// overflow, never classified retryable — but unlike context
+			// overflow it does NOT clear: the malformed request shape that
+			// produced it might be fixed by something else entirely before a
+			// later resume, so it falls through to the same park path every
+			// other worker-turn exhaustion uses. permanent is threaded
+			// through only to select a more accurate classified reason (see
+			// classifyGoalWorkerError) and a distinct tier name on the
+			// returned sentinel (see goalWorkerParkedError) — it changes no
+			// other behavior on this path.
+			permanent := !retryable && provider.AsPermanent(err)
 			// Every remaining case parks: journal a durable, classified
 			// goal.parked record (see recordGoalParked/
 			// classifyGoalWorkerError) and return the sentinel WITHOUT
@@ -1174,13 +1209,13 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			// split every other record in this loop already uses (see
 			// recordGoalEvalFailed's caller for the identical shape) rather
 			// than ever parking a generation that is no longer current.
-			if !s.recordGoalParked(turn, attempts, retryable, class, snap.gen) {
+			if !s.recordGoalParked(turn, attempts, retryable, permanent, class, snap.gen) {
 				if _, stale := s.goalStatus(snap.gen); stale {
 					continue
 				}
 				return &GoalResult{Achieved: false, Turns: turn - 1, Reason: "goal cleared"}, nil
 			}
-			return nil, &goalWorkerParkedError{err: err, attempts: attempts, retryable: retryable, class: class}
+			return nil, &goalWorkerParkedError{err: err, attempts: attempts, retryable: retryable, permanent: permanent, class: class}
 		}
 		met, evalReason, err := s.evaluateGoal(ctx, snap.condition, opts.Evaluator)
 		if err != nil {
@@ -1379,6 +1414,11 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 	for {
 		attempts++
 		toolsBefore := s.toolExecutions()
+		// Snapshot history's length before this attempt's own s.Prompt call
+		// appends anything — see the dedup mitigation just below the
+		// tool-gate check, and its doc comment for the full rationale and
+		// residual gap.
+		histBefore := s.historyLen()
 		_, perr := s.Prompt(ctx, directive)
 		if perr == nil {
 			return attempts, nil
@@ -1425,6 +1465,31 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 			// comment).
 			return attempts, err
 		}
+		if provider.AsPermanent(err) {
+			// NEP-5272 defect 1: a provider error classified permanent (an
+			// HTTP 400 invalid_request_error naming a structurally
+			// malformed request — e.g. an orphaned tool_use left over from
+			// an earlier bug) is, like context overflow above, deterministic
+			// and never worth retrying: the exact same request will fail
+			// the exact same way on attempt 2 as it did on attempt 1, so
+			// three identical guaranteed-to-fail model calls (the production
+			// shape this closes: "goal worker turn parked after 3
+			// deterministic-tier attempt(s)") buy nothing. Fail fast after
+			// the single stall record above (permanent is never classified
+			// retryable, so waiting is already false): no backoff wait, no
+			// further attempt.
+			//
+			// Unlike context overflow, this does NOT return a bare
+			// classification PursueGoal's caller clears on — a malformed
+			// request shape may be fixed by something else entirely (an
+			// orphan-tool-call repair, an operator edit further up the
+			// history) between now and a later resume, so PursueGoal's
+			// caller falls through to its ordinary park path instead (see
+			// PursueGoal's error handling: retryable is false and
+			// IsContextOverflow is false, so this reaches the "every
+			// remaining case parks" branch unmodified).
+			return attempts, err
+		}
 		if toolGateStops {
 			// This attempt executed a tool call before failing: see the
 			// non-idempotency doc above. Retrying would reissue the
@@ -1432,6 +1497,18 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 			// of waiting and trying again — regardless of classification.
 			return attempts, err
 		}
+		// NEP-5272 defect 2 (partial mitigation — see the doc comment on
+		// dropUnansweredDirective for the residual gap this does NOT
+		// close): every branch below this point is about to retry, so undo
+		// exactly what THIS failed attempt appended (the directive user
+		// message, plus, on a stream cut mid-tool-call-parse, a partial
+		// assistant message and its synthetic tool result — see
+		// interruptedTurnError in engine.go) before looping back to the top,
+		// where s.Prompt appends the same directive again. toolGateStops is
+		// already known false here (the branch above returned otherwise),
+		// so nothing this attempt appended can be a real, executed tool
+		// call — only an unanswered directive is ever at stake.
+		s.dropUnansweredDirective(histBefore)
 		if !retryable {
 			deterministicAttempt++
 			if deterministicAttempt > goalWorkerRetries {
@@ -1463,6 +1540,82 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 			return attempts, werr
 		}
 	}
+}
+
+// historyLen returns the current number of messages in history without
+// copying it (unlike the public History(), which allocates a full copy) —
+// used only by the retry-dedup bookkeeping below, where all that matters is
+// the count, taken right before an attempt's own s.Prompt call appends
+// anything.
+func (s *Session) historyLen() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.history)
+}
+
+// dropUnansweredDirective is promptTurnWithRetry's mitigation for NEP-5272's
+// defect 2 (operator finding on box hyper-lemon): "goal-worker retries
+// append the goal condition as a NEW operator message on every attempt."
+// Each retry re-issues the same directive through Prompt (see
+// promptTurnWithRetry's "Non-idempotency" doc section above), and Prompt
+// unconditionally appends whatever text it is given as a brand-new user
+// message — it has no notion of "this is a retry of the same directive,
+// don't duplicate it." Left alone, N failed attempts before an eventual
+// success (or an eventual park) leave N unanswered copies of the identical
+// directive sitting in history forever, each one inflating every LATER
+// request's input cost for the rest of the session — the production
+// incident's exact complaint ("a single wake of the box added 3 more").
+//
+// Called only from a point in promptTurnWithRetry where toolGateStops is
+// already known false — i.e. this failed attempt executed no tool call, so
+// by construction the only things it could have appended to history are: a
+// plain top-level provider error, which appends just the directive itself
+// (Prompt's own s.append call, before the model is ever asked anything); or
+// an interruptedTurnError (a stream that died after the model emitted
+// tool_call blocks but before they were ever executed — see
+// interruptedTurnError in engine.go), which additionally appends the
+// model's partial assistant message and a synthetic tool-result message for
+// it. Either shape is entirely this attempt's own doing, with nothing else
+// interleaved (PursueGoal never calls Prompt concurrently with itself), so
+// truncating history back to n — the length captured immediately before
+// this attempt's s.Prompt call — removes exactly what this attempt added
+// and nothing more, leaving the NEXT attempt's fresh append as the only
+// outstanding copy.
+//
+// # Residual gap — deliberately NOT fixed here
+//
+// This mutates only the LIVE in-memory s.history; it does not and cannot
+// touch the durable session log. Prompt's own append already persisted a
+// recMessage record for the directive (and, for the interruptedTurnError
+// case, the partial assistant/tool-result messages too) via
+// appendWithUsage before promptTurnWithRetry ever saw the failure — that
+// record is on disk, and the append-only session log (see AGENTS.md's core
+// invariants) has no sanctioned mechanism this package can reach for
+// retracting or amending an already-journaled record without engine.go/
+// store.go changes, which are out of this fix's scope (see the task's
+// framing: "if a clean fix is not possible without restructuring Prompt...
+// implement the best available mitigation").
+//
+// The practical consequence: within a single live process, this closes the
+// unbounded-growth problem for as long as that process keeps running — at
+// most ONE unanswered copy of the directive is ever outstanding at a time,
+// never a permanently growing pile, and a turn that eventually succeeds
+// carries forward exactly one copy of its own directive, matching what a
+// turn with no retries at all would have left behind. But a resumed session
+// (LoadSession, after a crash or restart mid-retry) replays every persisted
+// record from disk, including the ones this method already pruned from
+// memory — so the duplicate directives this method removes from a LIVE
+// session's view can still reappear after a reload. Closing that half
+// requires Prompt itself to gain a notion of "this append supersedes an
+// earlier, still-unanswered one" (or a new journal record type analogous to
+// compaction's recCompact fold), which belongs in engine.go/store.go, not
+// here.
+func (s *Session) dropUnansweredDirective(n int) {
+	s.mu.Lock()
+	if n >= 0 && n < len(s.history) {
+		s.history = s.history[:n:n]
+	}
+	s.mu.Unlock()
 }
 
 // recordGoalStalled records one failed worker-turn attempt for a turn. Like

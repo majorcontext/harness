@@ -19,19 +19,24 @@ import (
 // as before.
 func TestStreamHTTPErrorClassification(t *testing.T) {
 	cases := []struct {
-		name      string
-		status    int
-		errType   string
-		wantClass provider.RetryableClass
-		wantRetry bool
+		name          string
+		status        int
+		errType       string
+		wantClass     provider.RetryableClass
+		wantRetry     bool
+		wantPermanent bool
 	}{
-		{"overloaded 529", 529, "overloaded_error", provider.RetryableOverloaded, true},
-		{"rate limit 429", http.StatusTooManyRequests, "rate_limit_error", provider.RetryableRateLimited, true},
-		{"internal 500", http.StatusInternalServerError, "api_error", provider.RetryableServerError, true},
-		{"bad gateway 502", http.StatusBadGateway, "api_error", provider.RetryableServerError, true},
-		{"bad request 400", http.StatusBadRequest, "invalid_request_error", "", false},
-		{"auth 401", http.StatusUnauthorized, "authentication_error", "", false},
-		{"not found 404", http.StatusNotFound, "not_found_error", "", false},
+		{"overloaded 529", 529, "overloaded_error", provider.RetryableOverloaded, true, false},
+		{"rate limit 429", http.StatusTooManyRequests, "rate_limit_error", provider.RetryableRateLimited, true, false},
+		{"internal 500", http.StatusInternalServerError, "api_error", provider.RetryableServerError, true, false},
+		{"bad gateway 502", http.StatusBadGateway, "api_error", provider.RetryableServerError, true, false},
+		// bad request 400/invalid_request_error is the permanent case
+		// (NEP-5272): never retryable, always classified permanent so the
+		// goal loop fails fast instead of burning a retry budget on a
+		// request shape that can never succeed.
+		{"bad request 400", http.StatusBadRequest, "invalid_request_error", "", false, true},
+		{"auth 401", http.StatusUnauthorized, "authentication_error", "", false, false},
+		{"not found 404", http.StatusNotFound, "not_found_error", "", false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -53,6 +58,9 @@ func TestStreamHTTPErrorClassification(t *testing.T) {
 			}
 			if ok && class != tc.wantClass {
 				t.Errorf("class = %q, want %q", class, tc.wantClass)
+			}
+			if got := provider.AsPermanent(err); got != tc.wantPermanent {
+				t.Errorf("AsPermanent(%v) = %v, want %v", err, got, tc.wantPermanent)
 			}
 		})
 	}
