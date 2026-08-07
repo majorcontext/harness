@@ -37,9 +37,14 @@ func TestNormalizeForWireRepairsDuplicateCallID(t *testing.T) {
 
 // TestNormalizeForWireRepairsToolCallInNonAssistantMessage is gap 2: a
 // ToolCall sits in a RoleUser message, never scanned by
-// ResolveOrphanToolCalls's RoleAssistant-gated scan. NormalizeForWire must
-// scan every message's parts regardless of role and answer it within its
-// own run.
+// ResolveOrphanToolCalls's RoleAssistant-gated scan. A tool_use block is
+// wire-valid ONLY inside an assistant turn (invariant 2's tool_use half,
+// message/wire_oracle_test.go) independent of whether anything answers it,
+// so NormalizeForWire must DEMOTE the misplaced ToolCall to plain text,
+// preserving its name/id/arguments — mirroring how a stray ToolResult is
+// demoted (demoteWireInvalidToolResults) — never merely synthesize an
+// answer and leave the tool_use block itself sitting on the wrong side of
+// the wire.
 func TestNormalizeForWireRepairsToolCallInNonAssistantMessage(t *testing.T) {
 	in := []Message{
 		{Role: RoleUser, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
@@ -51,6 +56,26 @@ func TestNormalizeForWireRepairsToolCallInNonAssistantMessage(t *testing.T) {
 	}
 	if v := checkNoDataLoss(in, out); len(v) != 0 {
 		t.Fatalf("NormalizeForWire lost or altered real data: %s", violationStrings(v))
+	}
+	for _, m := range out {
+		for _, p := range m.Parts {
+			if tc, ok := p.(*ToolCall); ok {
+				t.Fatalf("ToolCall %q survived as a tool_use part outside an assistant message: %+v -- it must be demoted to Text", tc.CallID, tc)
+			}
+		}
+	}
+	var rendered strings.Builder
+	for _, m := range out {
+		rendered.WriteString(m.Parts.Text())
+	}
+	if !strings.Contains(rendered.String(), "A") || !strings.Contains(rendered.String(), "bash") {
+		t.Fatalf("demoted ToolCall's id/name are not findable in the output text: %s", rendered.String())
+	}
+	// The call was never a legitimate demand in the first place (it never
+	// belonged on the wire at all), so NormalizeForWire must not manufacture
+	// a synthetic "answer" for it — that would be noise, not a repair.
+	if strings.Contains(rendered.String(), SyntheticOrphanResultText) {
+		t.Fatalf("NormalizeForWire manufactured a synthetic answer for a call that was never a legitimate demand: %s", rendered.String())
 	}
 }
 
@@ -148,10 +173,16 @@ func TestNormalizeForWireRepairsResultsSplitAcrossToolMessages(t *testing.T) {
 	}
 }
 
-// TestNormalizeForWirePreservesResultInSameMessageAsCall confirms the
-// off-label but blessed shape (ToolCall and its ToolResult sharing one
-// non-assistant message) stays valid and untouched.
-func TestNormalizeForWirePreservesResultInSameMessageAsCall(t *testing.T) {
+// TestNormalizeForWireDemotesSelfAnsweredNonAssistantCall confirms a shape
+// this file used to (wrongly) call legitimate and untouched: a ToolCall
+// answered by its own ToolResult in the SAME non-assistant message. Nothing
+// is orphaned in the demand/supply sense, but invariant 2's tool_use half
+// still applies (message/wire_oracle_test.go): the enclosing message's Role
+// is not RoleAssistant, so the tool_use block is wire-invalid regardless of
+// the matching result sitting right next to it. NormalizeForWire must
+// demote BOTH the ToolCall and its ToolResult to plain text, preserving
+// every byte of the real content.
+func TestNormalizeForWireDemotesSelfAnsweredNonAssistantCall(t *testing.T) {
 	in := []Message{
 		{Role: RoleTool, Parts: Parts{
 			toolCallPart("A", "bash", `{}`),
@@ -160,10 +191,27 @@ func TestNormalizeForWirePreservesResultInSameMessageAsCall(t *testing.T) {
 	}
 	out := NormalizeForWire(in)
 	if v := checkWire(out); len(v) != 0 {
-		t.Fatalf("NormalizeForWire flagged a legitimate same-message call/result shape: %s", violationStrings(v))
+		t.Fatalf("NormalizeForWire left the self-answered non-assistant call wire-invalid: %s", violationStrings(v))
 	}
-	if v := checkNoDataLoss(in, out); len(v) != 0 {
-		t.Fatalf("checkNoDataLoss flagged a legitimate shape: %s", violationStrings(v))
+	if v := checkNoDataLossAllowingDemotion(in, out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire lost or altered real data: %s", violationStrings(v))
+	}
+	for _, m := range out {
+		for _, p := range m.Parts {
+			switch p.(type) {
+			case *ToolCall:
+				t.Fatalf("ToolCall A survived as a tool_use part in a non-assistant message: %+v", out)
+			case *ToolResult:
+				t.Fatalf("ToolResult A survived as a tool_result part with no legitimate demand: %+v", out)
+			}
+		}
+	}
+	var rendered strings.Builder
+	for _, m := range out {
+		rendered.WriteString(m.Parts.Text())
+	}
+	if !strings.Contains(rendered.String(), "self-answered") {
+		t.Fatalf("demoted ToolResult's real content is not findable in the output text: %s", rendered.String())
 	}
 }
 

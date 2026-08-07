@@ -122,14 +122,19 @@ type wireResultOcc struct {
 // partKey identifies one Part's original position for removal tracking.
 type partKey struct{ msgIdx, partIdx int }
 
-// demoteWireInvalidToolResults returns messages with every ToolResult that
-// is STILL wire-invalid — after every relocation and synthesis this file's
-// main pass can perform — rewritten to an ordinary Text part: one sitting
-// in an assistant-role wire block (invariant 2, unconditionally, no
-// exception), or one that is surplus for its run (more occurrences of an
-// id than that run's demand needs, invariant 4's surplus direction,
-// including a CallID with literally zero ToolCalls anywhere, which is
-// always surplus everywhere it could possibly sit).
+// demoteWireInvalidToolResults returns messages with every ToolResult or
+// ToolCall that is STILL wire-invalid — after every relocation and
+// synthesis this file's main pass can perform — rewritten to an ordinary
+// Text part. A ToolResult is demoted when it sits in an assistant-role wire
+// block (invariant 2's tool_result half, unconditionally, no exception) or
+// is surplus for its run (more occurrences of an id than that run's demand
+// needs, invariant 4's surplus direction, including a CallID with literally
+// zero ToolCalls anywhere, which is always surplus everywhere it could
+// possibly sit). A ToolCall is demoted, unconditionally, whenever it sits
+// in a non-assistant run (invariant 2's tool_use half) — no ToolCall there
+// is ever counted as legitimate demand for a ToolResult, so answering it
+// (the gap's original fix) is not enough; the misplaced tool_use block
+// itself must be demoted too.
 //
 // # Why a POST-pass, checked against the oracle's own invariants, not a
 // # narrower pre-pass keyed on "no ToolCall anywhere"
@@ -158,20 +163,22 @@ type partKey struct{ msgIdx, partIdx int }
 //
 // # Why demotion is still safe here, not just for the original shape
 //
-// Nothing this pass demotes was ever a legitimate answer to any demand:
-// checkWire's own invariants (message/wire_oracle_test.go) are exactly
-// the definition of "this tool_result block can never be valid here, no
-// matter what". Changing its TYPE — not deleting it, not moving it again
-// — keeps every byte of the real Content and IsError state plainly
-// visible to the model as ordinary text (see demoteToolResult) while
-// removing it from the tool_use/tool_result adjacency accounting
-// entirely. This runs strictly AFTER NormalizeForWire's own relocation
-// pass returns, over its output, never touching input.
+// Nothing this pass demotes was ever a legitimate answer to any demand, and
+// nothing it demotes was ever a legitimate call either: checkWire's own
+// invariants (message/wire_oracle_test.go) are exactly the definition of
+// "this tool_result or tool_use block can never be valid here, no matter
+// what". Changing its TYPE — not deleting it, not moving it again — keeps
+// every byte of the real Content/IsError state (see demoteToolResult) or
+// CallID/Name/Arguments (see demoteToolCall) plainly visible to the model
+// as ordinary text, while removing it from the tool_use/tool_result
+// adjacency accounting entirely. This runs strictly AFTER NormalizeForWire's
+// own relocation pass returns, over its output, never touching input.
 //
 // # Why a demoted Text part is never left inside a RoleTool message
 //
 // A demoted part loses every reason to sit in a RoleTool message: it is no
-// longer a ToolResult, so it answers no tool_use and needs no
+// longer a ToolResult (or, for a demoted ToolCall, no longer a ToolCall), so
+// it answers no tool_use, proposes none either, and needs no
 // tool_call_id-addressed wire slot. Leaving it there anyway (mutating only
 // the Part, never the Message.Role, as an earlier version of this function
 // did) is a real, transcode-time regression: provider/openaicompat's own
@@ -240,9 +247,18 @@ func demoteWireInvalidToolResults(messages []Message) []Message {
 			msgRun[i] = ri
 		}
 	}
+	// useByRun only ever collects demand from an ASSISTANT run's own
+	// ToolCalls: a ToolCall sitting in a non-assistant run is never a
+	// legitimate tool_use no matter what answers it (invariant 2's
+	// symmetric tool_use half, message/wire_oracle_test.go) — it is
+	// unconditionally demoted below, never counted as demand for a
+	// ToolResult in its own or any other run.
 	useByRun := make([][]string, len(runs))
 	for i := range messages {
 		ri := msgRun[i]
+		if !runs[ri].assistant {
+			continue
+		}
 		for _, p := range messages[i].Parts {
 			if tc, ok := p.(*ToolCall); ok {
 				useByRun[ri] = append(useByRun[ri], tc.CallID)
@@ -264,11 +280,18 @@ func demoteWireInvalidToolResults(messages []Message) []Message {
 			carry = useByRun[ri]
 			continue
 		}
-		demandCount := make(map[string]int, len(carry)+len(useByRun[ri]))
-		for _, id := range carry {
-			demandCount[id]++
+		// Every ToolCall in a non-assistant run is unconditionally
+		// wire-invalid regardless of whether anything answers it — see this
+		// function's doc comment.
+		for i := r.msgStart; i <= r.msgEnd; i++ {
+			for pi, p := range messages[i].Parts {
+				if _, ok := p.(*ToolCall); ok {
+					toDemote[partKey{i, pi}] = true
+				}
+			}
 		}
-		for _, id := range useByRun[ri] {
+		demandCount := make(map[string]int, len(carry))
+		for _, id := range carry {
 			demandCount[id]++
 		}
 		carry = nil
@@ -331,22 +354,34 @@ func demoteWireInvalidToolResults(messages []Message) []Message {
 		// into one message placed AFTER the run's own last message — never
 		// between two of the run's own messages (see this function's doc
 		// comment, "Why the hoisted message lands after the whole RUN").
-		// Non-demoted parts (a real, still-valid ToolResult; a ToolCall
-		// sharing a message per the off-label same-message shape) keep
-		// their original message and position untouched.
+		// A demoted part is either a surplus ToolResult or a ToolCall that
+		// can never be wire-valid here (every ToolCall in a non-assistant
+		// run — see the unconditional marking loop above); non-demoted
+		// parts (a real, still-answered ToolResult) keep their original
+		// message and position untouched.
 		var demoted Parts
 		for i := r.msgStart; i <= r.msgEnd; i++ {
 			m := messages[i]
 			var kept Parts
 			hasDemoted := false
 			for pi, p := range m.Parts {
-				tr, ok := p.(*ToolResult)
-				if ok && toDemote[partKey{i, pi}] {
-					hasDemoted = true
-					demoted = append(demoted, demoteToolResult(tr))
+				if !toDemote[partKey{i, pi}] {
+					kept = append(kept, p)
 					continue
 				}
-				kept = append(kept, p)
+				switch v := p.(type) {
+				case *ToolResult:
+					hasDemoted = true
+					demoted = append(demoted, demoteToolResult(v))
+				case *ToolCall:
+					hasDemoted = true
+					demoted = append(demoted, demoteToolCall(v))
+				default:
+					// toDemote is only ever set for a ToolResult or
+					// ToolCall part above; keep any other part type
+					// unchanged rather than silently dropping it.
+					kept = append(kept, p)
+				}
 			}
 			if !hasDemoted {
 				out = append(out, m)
@@ -405,6 +440,23 @@ func demoteToolResult(tr *ToolResult) *Text {
 	return &Text{Text: fmt.Sprintf("[%s]: %s", label, body)}
 }
 
+// demoteToolCall renders tc as a plain Text part, preserving its call id,
+// name, and raw arguments in readable form. A ToolCall has no execution
+// semantics on any provider once it sits in a non-assistant wire turn: every
+// transcoder in this module only ever accepts a tool_use block inside an
+// assistant-role block (invariant 2's tool_use half,
+// message/wire_oracle_test.go), independent of whether a matching
+// ToolResult sits right next to it. Mirrors demoteToolResult: change the
+// part's TYPE, never delete it or move it again, so every byte of the real
+// name/id/arguments stays plainly visible to the model.
+func demoteToolCall(tc *ToolCall) *Text {
+	args := "{}"
+	if len(tc.Arguments) > 0 {
+		args = string(tc.Arguments)
+	}
+	return &Text{Text: fmt.Sprintf("[tool call %q (id %q), not placed as a call]: %s", tc.Name, tc.CallID, args)}
+}
+
 // NormalizeForWire returns messages repaired so every transcoder in this
 // module emits a wire-valid provider request: every tool_use is answered,
 // id for id, by a tool_result in the immediately following wire RUN (the
@@ -434,11 +486,15 @@ func demoteToolResult(tr *ToolResult) *Text {
 //  1. A duplicate call id within one assistant message (the two-tool_use
 //     one-tool_result shape): fixed by counting occurrences per id per run,
 //     not testing set membership.
-//  2. A ToolCall sitting in a non-assistant message: fixed by scanning
-//     every message's parts for a ToolCall, not only RoleAssistant ones,
-//     and answering it within its OWN run (a non-assistant run's tool_use
-//     can only ever be answered inside that same run — nothing ever
-//     follows it under the wire model this file's oracle encodes).
+//  2. A ToolCall sitting in a non-assistant message: a tool_use block is
+//     wire-invalid on a non-assistant turn independent of whether anything
+//     answers it (invariant 2's tool_use half, message/wire_oracle_test.go,
+//     added after review found this gap's original fix — answering it
+//     within its own run — left the misplaced tool_use itself untouched).
+//     Fixed by demoteWireInvalidToolResults (below) unconditionally
+//     demoting every ToolCall found in a non-assistant run to plain text,
+//     the same repair already applied to a ToolResult that can never be
+//     wire-valid — see that function's own doc comment.
 //  3. A ToolResult preceding its ToolCall: fixed by relocating the stray
 //     real result forward to sit in the run that answers its (later)
 //     ToolCall, rather than leaving it in place AND adding a synthetic.
@@ -499,6 +555,14 @@ func NormalizeForWire(messages []Message) []Message {
 		}
 	}
 
+	// useByRun only ever collects demand from an ASSISTANT run's own
+	// ToolCalls, mirroring demoteWireInvalidToolResults's own rule below: a
+	// ToolCall sitting in a non-assistant run is never a legitimate
+	// tool_use, so it must never be treated as demand a ToolResult can
+	// satisfy, and no synthetic "answer" is ever worth manufacturing for
+	// one — demoteWireInvalidToolResults demotes the misplaced call itself
+	// to plain text regardless, so synthesizing an answer here would only
+	// add confusing noise around a call that never belonged on the wire.
 	useByRun := make([][]string, len(runs))
 	var allResults []wireResultOcc
 	resultsByRun := make([][]int, len(runs))
@@ -508,7 +572,9 @@ func NormalizeForWire(messages []Message) []Message {
 		for pi, p := range messages[i].Parts {
 			switch v := p.(type) {
 			case *ToolCall:
-				useByRun[ri] = append(useByRun[ri], v.CallID)
+				if runs[ri].assistant {
+					useByRun[ri] = append(useByRun[ri], v.CallID)
+				}
 			case *ToolResult:
 				idx := len(allResults)
 				allResults = append(allResults, wireResultOcc{
