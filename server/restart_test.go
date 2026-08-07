@@ -100,6 +100,10 @@ func TestGoalActiveSurvivesRestart(t *testing.T) {
 		}
 
 		srv2 := newServer(t, dir, prov, 0, mutate)
+		// Close srv2 before the bubble ends: harmless today (New spawns no
+		// goroutine), but if it ever does, a leaked goroutine would surface as
+		// an obvious close rather than an opaque synctest deadlock.
+		defer srv2.Close()
 
 		after := getRestartGoalView(t, srv2, id)
 		if after.Goal == nil || !after.Goal.Active {
