@@ -56,9 +56,9 @@ real `ToolResult`.
 3. A `ToolResult` precedes its `ToolCall`.
 4. An intervening same-side message separates a `ToolResult` from its
    `ToolCall`. Every transcoder merges adjacent same-role messages (see
-   `provider/anthropic/transcode.go:177`), so the wire sees RUNS.
-   `ResolveOrphanToolCalls` tests strict `messages[i+1]` and is blind to
-   this.
+   `transcodeRequest`'s same-role merge, `provider/anthropic/transcode.go`),
+   so the wire sees RUNS. `ResolveOrphanToolCalls` tests strict
+   `messages[i+1]` and is blind to this.
 
 Relocation is bounded. `computeRelocationBarrier` moves a result no later
 than the origin run of the next real result. That keeps the original

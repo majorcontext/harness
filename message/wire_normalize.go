@@ -12,10 +12,10 @@ const wireNormalizePrefix = "wire-normalized-"
 
 // transcodeSpan is a maximal span of consecutive ORIGINAL messages sharing
 // one side (assistant or not). This is NOT borrowed from the oracle's own
-// wireRun/foldRuns (message/wire_oracle_test.go): it is read directly off
+// wireRun/foldRuns (message/wire_oracle_test.go): it models
 // provider/anthropic/transcode.go's own merge step ("The API requires
 // strict user/assistant alternation; merge adjacent same-role messages",
-// transcodeRequest, around line 177) — the actual, already-shipped code
+// transcodeRequest's same-role merge) — the actual, already-shipped code
 // that decides which canonical messages land in one wire turn. The oracle
 // and this file both model that same external, independently-checkable
 // fact because any correct model of it must; neither derives it from the
@@ -30,8 +30,31 @@ const wireNormalizePrefix = "wire-normalized-"
 // machinery, and this package's golden test against the REAL anthropic
 // transcoder (provider/anthropic/transcode_test.go,
 // TestTranscodeSplitAssistantMessageRelocatesRealResult) for independent
-// proof this span model matches the shipped merge code, not just this
-// file's own re-derivation of it.
+// proof this span model matches the shipped merge code on the shapes that
+// test covers.
+//
+// # This model is not exact — NEP-5304
+//
+// "Models the merge step" above is not "is read directly off it": on one
+// input shape the two diverge, and computeTranscodeSpans's own doc comment
+// states the divergence precisely. The verified impact, confirmed by
+// running both the pre-stack and current anthropic transcoders against the
+// same input: for `[user(ToolCall X), assistant(foreign reasoning only),
+// tool(ToolResult X)]`, the pre-stack (main) anthropic transcoder paired
+// `tool_use(X)` and `tool_result(X)` as adjacent blocks in one valid wire
+// message — the dropped assistant message left them touching. This
+// package's span model instead sees TWO separate non-assistant runs, so
+// demoteWireInvalidToolResults treats both the real ToolCall and the real
+// ToolResult as unanswered and rewrites BOTH to plain text. That is worse
+// fidelity than main on this one shape.
+//
+// No byte is lost — every real value survives, readable, as text — and no
+// session wedges. This is fidelity loss, never a wedge, never data loss.
+// The common shape this whole file exists for — a ToolCall properly inside
+// an assistant message — is unaffected and strictly better than main:
+// NormalizeForWire relocates and repairs shapes main never touched at all.
+// NEP-5304 tracks the fix: fold a zero-block message into its neighbor's
+// span instead of starting a new one.
 type transcodeSpan struct {
 	assistant        bool
 	msgStart, msgEnd int
@@ -91,6 +114,18 @@ func computeRelocationBarrier(msgRun []int, allResults []wireResultOcc) []int {
 	return barrierAfter
 }
 
+// computeTranscodeSpans partitions messages into maximal spans sharing one
+// side (assistant or not), keyed purely on Message.Role — see transcodeSpan
+// above for what a span models and why.
+//
+// Known divergence — NEP-5304: transcodeRequest drops a message that
+// transcodes to zero blocks (an assistant turn whose only content is
+// another provider's reasoning) and opens no wire message for it, merging
+// the runs on either side. computeTranscodeSpans does not know this: a
+// zero-block assistant message still starts its own span here, so it is a
+// span boundary to this function though it is invisible on the wire. See
+// transcodeSpan's own doc comment for the verified, worse-than-main impact
+// this causes on one input shape.
 func computeTranscodeSpans(messages []Message) []transcodeSpan {
 	var spans []transcodeSpan
 	for i, m := range messages {
