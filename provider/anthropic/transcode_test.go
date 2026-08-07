@@ -233,6 +233,82 @@ func TestTranscodeToolCallAndResult(t *testing.T) {
 	}
 }
 
+// TestTranscodeEmptyToolResultContentNeverOmitsWireField is the red-first
+// regression test for NEP-5272's B1 finding: a ToolResult with empty
+// Content used to transcode to a tool_result block whose Content ended up
+// nil/empty, and apiBlock.Content's own "content,omitempty" tag then
+// dropped the key from the wire entirely — the exact shape the live
+// Anthropic/Bedrock gateway 400s with "tool_use ids were found without
+// tool_result blocks immediately after", even though the block IS present,
+// because it carries no recognizable content. transcodeParts now reads
+// through ToolResult.SafeContent, so an empty Content is a text block
+// reading NoToolOutputText, never an omitted key.
+func TestTranscodeEmptyToolResultContentNeverOmitsWireField(t *testing.T) {
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolCall{CallID: "toolu_empty", Name: "bash", Arguments: json.RawMessage(`{"command":"grep x"}`)},
+		}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			// The exact shape bash.go's captured-output path leaves for a
+			// command with no stdout/stderr: non-nil Content, one blank
+			// Text part.
+			&message.ToolResult{CallID: "toolu_empty", Content: message.Parts{&message.Text{Text: ""}}},
+		}},
+	))
+
+	res := out.Messages[1]
+	if res.Role != "user" {
+		t.Fatalf("tool result role = %s, want user", res.Role)
+	}
+	tr := res.Content[0]
+	if tr.Type != "tool_result" || tr.ToolUseID != "toolu_empty" {
+		t.Fatalf("tool_result = %+v", tr)
+	}
+	if len(tr.Content) == 0 {
+		t.Fatalf("tool_result.Content is empty, want a non-empty marker block")
+	}
+	if tr.Content[0].Type != "text" || tr.Content[0].Text != message.NoToolOutputText {
+		t.Errorf("tool_result.Content[0] = %+v, want a text block reading %q", tr.Content[0], message.NoToolOutputText)
+	}
+
+	// Prove the wire-level claim directly: the marshaled JSON must carry a
+	// present, non-empty "content" array for this block, not an omitted key.
+	raw, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("json.Marshal(out) = %v", err)
+	}
+	var wire struct {
+		Messages []struct {
+			Content []struct {
+				Type      string          `json:"type"`
+				ToolUseID string          `json:"tool_use_id"`
+				Content   json.RawMessage `json:"content"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatalf("json.Unmarshal(wire) = %v", err)
+	}
+	var found bool
+	for _, m := range wire.Messages {
+		for _, b := range m.Content {
+			if b.Type != "tool_result" || b.ToolUseID != "toolu_empty" {
+				continue
+			}
+			found = true
+			if len(b.Content) == 0 {
+				t.Fatalf("wire tool_result block has no \"content\" key at all")
+			}
+			if string(b.Content) == "[]" || string(b.Content) == "null" {
+				t.Fatalf("wire tool_result block's content = %s, want a non-empty array", b.Content)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("wire request never carried a tool_result block for toolu_empty: %s", raw)
+	}
+}
+
 func TestTranscodeEmptyThinkingKeepsField(t *testing.T) {
 	// The API requires the "thinking" field on thinking blocks even when the
 	// text is empty; omitempty dropping it causes an invalid_request_error

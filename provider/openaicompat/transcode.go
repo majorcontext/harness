@@ -294,10 +294,18 @@ func transcodeToolMessages(m *message.Message) ([]apiMessage, error) {
 // IsError is encoded as a marker prefix, and Blob parts — which cannot be
 // carried inline in the string — are surfaced with an explicit omission note
 // rather than dropped silently (mirrors provider/openai's toolResultOutput).
+//
+// SafeContent, not Content: this adapter's own wire shape (a plain JSON
+// string, never an omittable array) never reproduced the empty-tool_result
+// wedge SafeContent's doc comment describes, but reading through
+// SafeContent anyway keeps this adapter covered by the same
+// canonical-layer guarantee the others rely on, rather than needing its
+// own separate argument for why it happens to be safe.
 func toolResultOutput(v *message.ToolResult) string {
-	out := v.Content.Text()
+	content := v.SafeContent()
+	out := content.Text()
 	blobs := 0
-	for _, p := range v.Content {
+	for _, p := range content {
 		if _, ok := p.(*message.Blob); ok {
 			blobs++
 		}

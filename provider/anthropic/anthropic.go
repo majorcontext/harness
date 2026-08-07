@@ -90,8 +90,8 @@ func apiError(resp *http.Response) error {
 	if json.Unmarshal(raw, &body) == nil && body.Error.Message != "" {
 		msg := fmt.Sprintf("anthropic: %s (%s, HTTP %d)", body.Error.Message, body.Error.Type, resp.StatusCode)
 		// Context overflow is deterministic (400 invalid_request_error) and
-		// disjoint from the retryable statuses below — classify it first so
-		// it never reaches the retryable mark.
+		// disjoint from both the retryable statuses below and the permanent
+		// mark just below it — classify it first so it never reaches either.
 		if promptTokens, limit, ok := parseContextOverflow(body.Error.Type, resp.StatusCode, body.Error.Message); ok {
 			return &provider.Error{
 				Kind:         provider.ErrKindContextOverflow,
@@ -99,6 +99,19 @@ func apiError(resp *http.Response) error {
 				PromptTokens: promptTokens,
 				TokenLimit:   limit,
 			}
+		}
+		// Every OTHER 400 invalid_request_error is a permanent, deterministic
+		// failure (NEP-5272): a malformed request — most notably a message
+		// array with an orphaned tool_use, the incident that motivated this —
+		// fails identically no matter how many times it is retried, unlike
+		// the transient weather classifyStatus recognizes below. Checked
+		// only once context overflow is ruled out (the two are disjoint:
+		// overflow always returns above), and only for this one status/type
+		// combination — classifyStatus already reports 400 as not
+		// retryable, so this mark and that one can never collide on the
+		// same error.
+		if resp.StatusCode == http.StatusBadRequest && body.Error.Type == "invalid_request_error" {
+			return provider.MarkPermanent(errors.New(msg))
 		}
 		err = errors.New(msg)
 	} else {
@@ -458,6 +471,18 @@ func (s *stream) handle(name string, data []byte) error {
 			return fmt.Errorf("anthropic: stream error: %s", data)
 		}
 		err := fmt.Errorf("anthropic: %s (%s)", ev.Error.Message, ev.Error.Type)
+		// Mirror apiError's HTTP-path classification (NEP-5272): an
+		// invalid_request_error naming a structurally malformed request —
+		// most notably an orphaned tool_use — fails identically on every
+		// retry, whether it arrives as an HTTP 400 before the stream ever
+		// starts or, as here, as a mid-stream "error" SSE event. Without
+		// this, a mid-stream invalid_request_error burned the full
+		// deterministic retry budget instead of failing fast on attempt 1.
+		// No context-overflow carve-out is needed here: an oversized
+		// request is rejected before any stream opens, never mid-stream.
+		if ev.Error.Type == "invalid_request_error" {
+			return provider.MarkPermanent(err)
+		}
 		if class, ok := classifyErrorType(ev.Error.Type); ok {
 			return provider.MarkRetryable(err, class)
 		}

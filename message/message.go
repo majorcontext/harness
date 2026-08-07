@@ -129,6 +129,23 @@ type Message struct {
 // type json.RawMessage: ..." failure this package has already incurred once
 // in production for ToolCall.Arguments. Both guards below now check
 // json.Valid, exactly mirroring the ToolCall.Arguments fix.
+//
+// # An empty ToolResult.Content is the same footgun, in reverse
+//
+// See SafeContent's doc comment (NEP-5272, root cause 2) for the full
+// incident. A ToolResult with empty Content transcodes to a tool_result
+// block every provider adapter in this package either rejects or drops.
+// Content counts as empty when it is nil, or when it carries only a blank
+// Text part — the exact shape bash.go leaves behind for a command with no
+// output. Either shape wedges a session with no crash at all.
+//
+// The case below is this function's primary fix. It replaces an empty
+// Content with NoToolOutputText in place. Every LIVE message passes
+// through Normalize at Session.append, and engine.LoadSession calls
+// Normalize on every message it replays from a session log, so a
+// poisoned message is already repaired by the time anything downstream
+// sees it. SafeContent's own check is the marshal/transcode-time backstop
+// for a producer that bypasses Normalize entirely.
 func (m *Message) Normalize() {
 	for _, p := range m.Parts {
 		switch v := p.(type) {
@@ -141,6 +158,10 @@ func (m *Message) Normalize() {
 		case *ToolCall:
 			if len(v.Arguments) > 0 && !json.Valid(v.Arguments) {
 				v.Arguments = nil
+			}
+		case *ToolResult:
+			if v.isEmpty() {
+				v.Content = Parts{&Text{Text: NoToolOutputText}}
 			}
 		}
 	}
@@ -261,6 +282,98 @@ type ToolResult struct {
 }
 
 func (*ToolResult) partType() PartType { return PartToolResult }
+
+// NoToolOutputText is the Content text substituted, via SafeContent below
+// and Message.Normalize, for a ToolResult whose real Content is empty in
+// every sense that matters — see SafeContent's doc comment for the full
+// incident. A marker string, rather than an empty Text part, is chosen
+// deliberately: an agent (or an operator) reading its own transcript
+// benefits from seeing "(no output)" in place of a blank line, the same
+// way a shell prompt distinguishes "ran, produced nothing" from "never
+// ran".
+const NoToolOutputText = "(no output)"
+
+// isEmpty reports whether tr's Content carries nothing a reader (model,
+// transcript, or wire protocol) would recognize as actual output: no parts
+// at all, or parts that are exclusively blank Text (the exact shape
+// bash.go's captured-output path leaves behind for a command with no
+// stdout/stderr, e.g. a grep that matches nothing). Any other part type —
+// Blob, a Text with real content — counts as content and is left alone.
+func (tr ToolResult) isEmpty() bool {
+	for _, p := range tr.Content {
+		t, ok := p.(*Text)
+		if !ok || t.Text != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// SafeContent normalizes Content for marshaling and transcoding, mirroring
+// ToolCall.safeArguments's role for Arguments.
+//
+// # Incident NEP-5272, root cause 2: a null/absent tool_result content
+// wedges a session with no crash at all
+//
+// Folded into the same incident as the stop-reason orphan (see
+// engine.unexecutedToolCallStopReasonTextFmt's doc comment): replaying box
+// hyper-lemon's actual wedged history (session
+// ses_01kze9vds5fxd89dtv4accqjcp) against the live Bedrock/bifrost gateway
+// showed a request that was internally balanced — 44 tool_use, 44
+// tool_result, every pair adjacent — yet still 400'd with the identical
+// "tool_use ids were found without tool_result blocks immediately after".
+// The offending block was the tool_result for a `grep ... | head -20` that
+// matched nothing. Empty stdout made bash.go's captured-output path return
+// a ToolResult whose Content was a single blank Text part.
+//
+// A minimal 3-message reproduction against the live gateway isolated the
+// exact shape. Two wire shapes trigger the rejection: an explicit null,
+// and an omitted content field. The gateway ACCEPTS an empty array, an
+// empty string, and a single blank text block — only the absent forms
+// fail. That distinction matters here, because omitempty on
+// provider/anthropic/transcode.go's apiBlock.Content turns an empty array
+// into an omitted field on the wire, which is how a blank tool result
+// reached the failing shape.
+//
+// Unlike the stop-reason orphan, this shape needs no crash, no stream
+// truncation, and no sandbox death. An ordinary, successful tool call with
+// empty output is enough.
+//
+// # Two enforcement points, not one
+//
+// The primary fix is a canonical-layer guarantee: Message.Normalize applies
+// it in place at the one ingest choke point every LIVE-appended message
+// passes through (Session.append), and engine.LoadSession applies the same
+// Normalize call to every message it replays from a session log, so a
+// resumed session repairs an old, unpatched empty ToolResult exactly like a
+// live one. SafeContent is the second enforcement point: every transcoder
+// (anthropic, openaicompat, openai) calls it directly when building a
+// tool_result wire block, rather than reading Content unchecked. This is
+// deliberate belt-and-suspenders, not redundancy — Normalize cannot reach a
+// ToolResult built by a producer that bypasses it entirely: a plugin's
+// chat.message hook, a hand-rolled provider adapter, or a test's scripted
+// provider. SafeContent is also what ToolResult.MarshalJSON calls, so any
+// direct JSON encoding of a ToolResult gets the same guarantee for free.
+func (tr ToolResult) SafeContent() Parts {
+	if tr.isEmpty() {
+		return Parts{&Text{Text: NoToolOutputText}}
+	}
+	return tr.Content
+}
+
+// MarshalJSON implements json.Marshaler so any direct encoding of a
+// ToolResult (or *ToolResult) goes through SafeContent automatically,
+// exactly mirroring ToolCall.MarshalJSON's role for Arguments. It must NOT
+// be relied on from marshalPart's tagged-union wrapper below, for the same
+// reason ToolCall.MarshalJSON's own doc comment gives: embedding a type
+// that implements json.Marshaler promotes the method onto the wrapper,
+// silently dropping the "type" discriminator.
+func (tr ToolResult) MarshalJSON() ([]byte, error) {
+	type alias ToolResult
+	a := alias(tr)
+	a.Content = tr.SafeContent()
+	return json.Marshal(a)
+}
 
 // Reasoning is a model reasoning block.
 type Reasoning struct {
@@ -479,10 +592,19 @@ func marshalPart(p Part) ([]byte, error) {
 			Arguments json.RawMessage `json:"arguments"`
 		}{PartToolCall, v.CallID, v.Name, v.safeArguments()})
 	case *ToolResult:
+		// Deliberately not embedding *ToolResult (mirroring the ToolCall
+		// case above, for the exact same reason): now that ToolResult
+		// defines its own MarshalJSON (see SafeContent's doc comment),
+		// embedding it here would promote that method onto this wrapper
+		// and silently drop the "type" discriminator. Reconstructing the
+		// fields explicitly sidesteps that and applies the same
+		// empty-Content normalization inline.
 		return json.Marshal(struct {
-			Type PartType `json:"type"`
-			*ToolResult
-		}{PartToolResult, v})
+			Type    PartType `json:"type"`
+			CallID  string   `json:"call_id"`
+			Content Parts    `json:"content"`
+			IsError bool     `json:"is_error,omitempty"`
+		}{PartToolResult, v.CallID, v.SafeContent(), v.IsError})
 	case *Reasoning:
 		return json.Marshal(struct {
 			Type PartType `json:"type"`

@@ -258,10 +258,18 @@ func transcodeMessage(m *message.Message) ([]json.RawMessage, error) {
 // marker prefix so the model can distinguish failed/denied calls, and Blob
 // parts — which cannot be carried in the string — are surfaced with an
 // explicit omission note rather than dropped silently.
+//
+// SafeContent, not Content: this adapter's own wire shape (a plain JSON
+// string field, never an omittable array) never reproduced the
+// empty-tool_result wedge SafeContent's doc comment describes, but reading
+// through SafeContent anyway keeps this adapter covered by the same
+// canonical-layer guarantee the others rely on, rather than needing its
+// own separate argument for why it happens to be safe.
 func toolResultOutput(v *message.ToolResult) string {
-	out := v.Content.Text()
+	content := v.SafeContent()
+	out := content.Text()
 	blobs := 0
-	for _, p := range v.Content {
+	for _, p := range content {
 		if _, ok := p.(*message.Blob); ok {
 			blobs++
 		}
