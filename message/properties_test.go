@@ -489,9 +489,8 @@ func TestResolveOrphanToolCallsPropertyNoDataLoss(t *testing.T) {
 // generator (genMessageSequence) TestResolveOrphanToolCallsPropertyNoDataLoss
 // above uses. This is the one invariant that must hold unconditionally,
 // for ANY input whatsoever, including the adversarial/unrealistic shapes
-// (see TestNormalizeForWirePropertyWireValid's own doc comment for
-// why full WIRE-VALIDITY needs a different, realistic generator instead —
-// that is a distinct property from this one): NormalizeForWire may decline
+// (TestNormalizeForWirePropertyWireValid asserts full wire VALIDITY over
+// the same generator; that is a distinct property from this one): NormalizeForWire may decline
 // a relocation rather than risk a reorder (see its own "Relocation safety"
 // doc comment) and leave a shape wire-imperfect, but it must never, on any
 // input, lose or reorder a real ToolResult.
