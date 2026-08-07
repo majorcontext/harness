@@ -722,6 +722,10 @@ func TestGoalWorkerParkPauseSurvivesRestartAsRestartReason(t *testing.T) {
 		}
 
 		srv2 := newServer(t, dir, prov, 0, mutate)
+		// Close srv2 before the bubble ends: harmless today (New spawns no
+		// goroutine), but if it ever does, a leaked goroutine would surface as
+		// an obvious close rather than an opaque synctest deadlock.
+		defer srv2.Close()
 
 		afterRec := httptest.NewRecorder()
 		afterReq := httptest.NewRequest("GET", "/session/"+id, nil)
