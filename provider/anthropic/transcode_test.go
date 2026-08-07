@@ -687,3 +687,47 @@ func containsAll(ss []string, wants ...string) bool {
 	}
 	return true
 }
+
+// TestTranscodeOrphanToolResultBuildsSuccessfully is the golden, wire-level
+// counterpart to the openaicompat regression test of the same name (see PR
+// #108's finding 1): an orphan ToolResult (its CallID matches no ToolCall
+// anywhere in history) is demoted to a Text part by message.NormalizeForWire.
+// This adapter's own transcodeParts is role-agnostic -- Text is valid in any
+// wire role -- so this was never the regressed provider, but it is asserted
+// here too, against the REAL transcodeRequest, so a future change to this
+// adapter's own role handling is caught by the same golden shape all three
+// providers share.
+func TestTranscodeOrphanToolResultBuildsSuccessfully(t *testing.T) {
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "GHOST", Content: message.Parts{&message.Text{Text: "ORPHAN OUTPUT"}}},
+		}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "ok"}}},
+	))
+
+	raw, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal transcoded request: %v", err)
+	}
+	rendered := string(raw)
+	if !strings.Contains(rendered, "GHOST") {
+		t.Errorf("transcoded request does not mention the orphan call id GHOST: %s", rendered)
+	}
+	if !strings.Contains(rendered, "ORPHAN OUTPUT") {
+		t.Errorf("transcoded request does not carry the orphan result's real content: %s", rendered)
+	}
+	// No wire tool_result/tool_use block may carry the orphan id -- it must
+	// have been demoted to plain text, not left claiming to answer a call
+	// that never happened.
+	for _, m := range out.Messages {
+		for _, b := range m.Content {
+			if b.Type == "tool_result" && b.ToolUseID == "GHOST" {
+				t.Fatalf("GHOST survived as a tool_result block instead of being demoted to text: %+v", b)
+			}
+			if b.Type == "tool_use" && b.ID == "GHOST" {
+				t.Fatalf("GHOST survived as a tool_use block instead of being demoted to text: %+v", b)
+			}
+		}
+	}
+}

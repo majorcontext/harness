@@ -117,7 +117,6 @@ type wireResultOcc struct {
 	callID          string
 	isError         bool
 	content         Parts
-	seq             int
 }
 
 // partKey identifies one Part's original position for removal tracking.
@@ -168,6 +167,34 @@ type partKey struct{ msgIdx, partIdx int }
 // removing it from the tool_use/tool_result adjacency accounting
 // entirely. This runs strictly AFTER NormalizeForWire's own relocation
 // pass returns, over its output, never touching input.
+//
+// # Why a demoted Text part is never left inside a RoleTool message
+//
+// A demoted part loses every reason to sit in a RoleTool message: it is no
+// longer a ToolResult, so it answers no tool_use and needs no
+// tool_call_id-addressed wire slot. Leaving it there anyway (mutating only
+// the Part, never the Message.Role, as an earlier version of this function
+// did) is a real, transcode-time regression: provider/openaicompat's own
+// transcodeToolMessages is role-strict and hard-errors on any non-ToolResult
+// part in a "tool"-role message, so the exact orphan-tool_result wedge this
+// function exists to fix turned into a total request-BUILD failure on that
+// provider (see PR #108's finding 1, and
+// provider/openaicompat/transcode_test.go's
+// TestTranscodeOrphanToolResultBuildsSuccessfully, which drives the REAL
+// transcoder — a canonical-slice-only check, like this package's own
+// property tests, cannot see a provider's own role-strictness at all).
+// anthropic and the OpenAI Responses adapter are both role-agnostic (a Text
+// part is valid in any wire role there), so demoting in place never wedged
+// them — but the fix below does not special-case openaicompat: it hoists
+// every RoleTool message's demoted parts into a new, adjacent RoleUser
+// message instead, which every transcoder in this package accepts, keeping
+// the canonical output uniformly valid rather than provider-specific. A
+// RoleAssistant message's demoted parts stay demoted IN PLACE (never
+// hoisted): a Text part is already valid there on every transcoder (an
+// assistant wire turn's content is exactly the union of its parts,
+// role-agnostic same as RoleUser), and this is invariant 2's OWN violation
+// this function exists to repair — a tool_result can never legally sit in
+// an assistant-role wire block, but ordinary text always can.
 func demoteWireInvalidToolResults(messages []Message) []Message {
 	runs := computeTranscodeSpans(messages)
 	msgRun := make([]int, len(messages))
@@ -231,26 +258,66 @@ func demoteWireInvalidToolResults(messages []Message) []Message {
 	if len(toDemote) == 0 {
 		return messages
 	}
-	out := make([]Message, len(messages))
+	out := make([]Message, 0, len(messages))
 	for i, m := range messages {
-		newParts := make(Parts, len(m.Parts))
-		changed := false
+		if m.Role != RoleTool {
+			// RoleUser or RoleAssistant: a demoted Text part is already
+			// valid right where it sits — see this function's own doc
+			// comment ("Why a demoted Text part is never left inside a
+			// RoleTool message") for why RoleTool alone needs the split
+			// below.
+			newParts := make(Parts, len(m.Parts))
+			changed := false
+			for pi, p := range m.Parts {
+				tr, ok := p.(*ToolResult)
+				if ok && toDemote[partKey{i, pi}] {
+					newParts[pi] = demoteToolResult(tr)
+					changed = true
+				} else {
+					newParts[pi] = p
+				}
+			}
+			if changed {
+				nm := m
+				nm.Parts = newParts
+				out = append(out, nm)
+			} else {
+				out = append(out, m)
+			}
+			continue
+		}
+
+		// RoleTool: split any demoted part OUT of this message rather than
+		// mutating its Role or leaving a Text part stranded inside a "tool"
+		// wire message. Non-demoted parts (a real, still-valid ToolResult, a
+		// ToolCall sharing this message per the off-label same-message
+		// shape) keep their original message and Role untouched; demoted
+		// parts move to a new, adjacent RoleUser message — a role every
+		// transcoder in this package accepts Text in unconditionally.
+		var kept Parts
+		var demoted Parts
 		for pi, p := range m.Parts {
 			tr, ok := p.(*ToolResult)
 			if ok && toDemote[partKey{i, pi}] {
-				newParts[pi] = demoteToolResult(tr)
-				changed = true
-			} else {
-				newParts[pi] = p
+				demoted = append(demoted, demoteToolResult(tr))
+				continue
 			}
+			kept = append(kept, p)
 		}
-		if changed {
+		if len(demoted) == 0 {
+			out = append(out, m)
+			continue
+		}
+		if len(kept) > 0 {
 			nm := m
-			nm.Parts = newParts
-			out[i] = nm
-		} else {
-			out[i] = m
+			nm.Parts = kept
+			out = append(out, nm)
 		}
+		out = append(out, Message{
+			ID:    m.ID + "-demoted",
+			Role:  RoleUser,
+			Parts: demoted,
+		})
 	}
 	return out
 }
@@ -389,7 +456,6 @@ func NormalizeForWire(messages []Message) []Message {
 	var allResults []wireResultOcc
 	resultsByRun := make([][]int, len(runs))
 
-	seq := 0
 	for i := range messages {
 		ri := msgRun[i]
 		for pi, p := range messages[i].Parts {
@@ -401,10 +467,8 @@ func NormalizeForWire(messages []Message) []Message {
 				allResults = append(allResults, wireResultOcc{
 					msgIdx: i, partIdx: pi,
 					callID: v.CallID, isError: v.IsError, content: v.Content,
-					seq: seq,
 				})
 				resultsByRun[ri] = append(resultsByRun[ri], idx)
-				seq++
 			}
 		}
 	}
@@ -413,7 +477,7 @@ func NormalizeForWire(messages []Message) []Message {
 
 	removed := make(map[partKey]bool)
 	claimed := make([]bool, len(allResults))
-	var pool []int // indices into allResults, ascending seq, not yet claimed
+	var pool []int // indices into allResults, ascending document order, not yet claimed
 
 	// A relocated (claimed) real result and a synthesized one land in two
 	// DIFFERENT new messages around a target run, not one: prepend[r] goes
@@ -438,16 +502,25 @@ func NormalizeForWire(messages []Message) []Message {
 	prepend := make([][]Part, len(runs)+1)
 	appendTo := make([][]Part, len(runs)+1)
 
+	// claimFromPool scans the WHOLE pool, not just its head: an earlier
+	// version tested only pool[0], so one unclaimable head entry (a surplus
+	// id nothing ever demands) permanently blocked every matching real
+	// result queued behind it, forcing a fabricated is_error synthesis for
+	// a call whose real answer was sitting right there (see PR #108's
+	// finding 2). Scanning past a non-matching or barrier-blocked head entry
+	// is safe: computeRelocationBarrier's per-INDEX guard is what actually
+	// keeps relative order intact (see its own doc comment), and that check
+	// is applied to whichever entry this function returns, independent of
+	// where in the pool it sat or in what order the pool is scanned.
 	claimFromPool := func(id string, target int) (int, bool) {
-		if len(pool) == 0 {
-			return -1, false
+		for i, idx := range pool {
+			if allResults[idx].callID != id || target > barrierAfter[idx] {
+				continue
+			}
+			pool = append(pool[:i], pool[i+1:]...)
+			return idx, true
 		}
-		idx := pool[0]
-		if allResults[idx].callID != id || target > barrierAfter[idx] {
-			return -1, false
-		}
-		pool = pool[1:]
-		return idx, true
+		return -1, false
 	}
 	claimInto := func(target, idx int) {
 		claimed[idx] = true
@@ -599,7 +672,32 @@ func NormalizeForWire(messages []Message) []Message {
 		claimInto(target, idx)
 	}
 
-	return demoteWireInvalidToolResults(rebuildWithAdditions(messages, msgRun, runs, removed, prepend, appendTo))
+	// Already-valid history (the common case: every provider request goes
+	// through this function) needs no rebuild at all -- rebuildWithAdditions
+	// otherwise allocates a fresh slice and copies every message for zero
+	// actual changes whenever nothing was removed, relocated, or
+	// synthesized. demoteWireInvalidToolResults still runs unconditionally:
+	// it is a POST-pass that can find work to do (e.g. gap 5's
+	// zero-ToolCall-anywhere orphan) even when the relocation pass above
+	// made no changes of its own, and it already short-circuits internally
+	// (its own len(toDemote)==0 check) when there is nothing for IT to do
+	// either.
+	rebuilt := messages
+	if len(removed) > 0 || anyNonEmpty(prepend) || anyNonEmpty(appendTo) {
+		rebuilt = rebuildWithAdditions(messages, msgRun, runs, removed, prepend, appendTo)
+	}
+	return demoteWireInvalidToolResults(rebuilt)
+}
+
+// anyNonEmpty reports whether any slot in a per-target [][]Part table (the
+// shape of NormalizeForWire's own prepend/appendTo) holds at least one Part.
+func anyNonEmpty(byTarget [][]Part) bool {
+	for _, parts := range byTarget {
+		if len(parts) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // rebuildWithAdditions materializes NormalizeForWire's decisions into a new
