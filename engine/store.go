@@ -808,7 +808,45 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// LoadSession calls Normalize on every message it replays,
 			// including a compact record's inline summary.
 			rec.Compact.Summary.Normalize()
-			spliced, err := spliceCompact(s.history, rec.Compact.FirstID, rec.Compact.LastID, rec.Compact.Summary)
+			// Heal path (NEP-5292 candidate fix 3): a record journaled by an
+			// unpatched build can name a message.ResolveOrphanToolCalls
+			// synthetic ID as LastID — that message is minted fresh by the
+			// repair below, AFTER this scan loop finishes, and was never
+			// itself persisted, so it can never be found in s.history here.
+			// Re-derive the fold end from FirstID's position plus this
+			// record's own TurnsFolded count instead of trusting a LastID
+			// that is genuinely absent. A FOUND LastID keeps today's exact
+			// behavior unchanged; the heal never runs for it. If FirstID
+			// itself is missing, that is still corruption — spliceCompact
+			// below fails exactly as it always has, heal or not.
+			//
+			// Deliberately NOT gated on message.IsSyntheticOrphanID: the heal
+			// fires for ANY absent LastID, not only a synthetic one. A
+			// genuinely corrupt non-synthetic LastID now heals where it used
+			// to fail the whole load. healCompactFoldEnd catches an
+			// out-of-range TurnsFolded or a FirstID that is not a turn
+			// boundary, but not every mismatch: it re-derives the fold end as
+			// starts[startPos+turnsFolded], which assumes replayed history has
+			// the SAME count of RoleUser turn boundaries the writing binary
+			// saw live. dropUnansweredDirective (goal.go) removes a RoleUser
+			// message from live history without retracting an already-
+			// journaled compact record, so live and replayed turn counts can
+			// disagree — the heal then lands on the wrong message with no
+			// error. Not a regression: main hard-fails this load every time,
+			// and a session that loads with a slightly-wrong fold beats a
+			// session that never loads again.
+			lastID := rec.Compact.LastID
+			if _, found := indexOfMessageID(s.history, lastID); !found {
+				healed, herr := healCompactFoldEnd(s.history, rec.Compact.FirstID, rec.Compact.TurnsFolded)
+				if herr == nil {
+					lastID = healed
+				}
+				// A failed heal falls through unchanged: spliceCompact below
+				// will look for the original (unhealed) LastID, fail to find
+				// it exactly as before, and return its usual loud, explicit
+				// error — never a silent best-effort guess.
+			}
+			spliced, err := spliceCompact(s.history, rec.Compact.FirstID, lastID, rec.Compact.Summary)
 			if err != nil {
 				return fmt.Errorf("%w at line %d", err, line)
 			}
