@@ -264,7 +264,7 @@ type partKey struct{ msgIdx, partIdx int }
 //
 // The fix: gather every demoted part found ANYWHERE across a whole
 // non-assistant RUN (computeTranscodeSpans' own run boundaries — the same
-// abstraction NormalizeForWire's own prepend/appendTo already key off of)
+// abstraction NormalizeForWire's own prepend table already keys off of)
 // into one message, and place it after the run's LAST message
 // (runs[ri].msgEnd), never after an individual message inside it. Real,
 // kept parts stay in their original message and position — only the
@@ -648,10 +648,8 @@ func NormalizeForWire(messages []Message) []Message {
 	claimed := make([]bool, len(allResults))
 	var pool []int // indices into allResults, ascending document order, not yet claimed
 
-	// A relocated (claimed) real result and a synthesized one land in two
-	// DIFFERENT new messages around a target run, not one: prepend[r] goes
-	// BEFORE run r's own first message, append[r] AFTER its last.
-	// This split matters for order, not just tidiness: a pool item's
+	// A relocated (claimed) real result and a synthesized one both land in
+	// prepend[r], placed BEFORE run r's own first message: a pool item's
 	// origin run is always STRICTLY earlier than any run that claims it
 	// (a same-run claim is impossible — see claimFromPool's callers below
 	// — so every claim moves an item forward across at least one run
@@ -665,11 +663,9 @@ func NormalizeForWire(messages []Message) []Message {
 	// IsFixedPoint and its sibling in properties_test.go, for the shape
 	// that broke before this split existed — a claimed item incorrectly
 	// appended after an unrelated in-place result it actually precedes).
-	// A synthesized entry carries no original position at all, so where it
-	// lands among the run's own content never matters; appending it after
-	// is simplest and keeps the run's real content undisturbed.
+	// A synthesized entry carries no original position at all, so sharing
+	// a prepend slot with a claimed one never risks a reorder either.
 	prepend := make([][]Part, len(runs)+1)
-	appendTo := make([][]Part, len(runs)+1)
 
 	// claimFromPool scans the WHOLE pool, not just its head: an earlier
 	// version tested only pool[0], so one unclaimable head entry (a surplus
@@ -699,8 +695,8 @@ func NormalizeForWire(messages []Message) []Message {
 			CallID: r.callID, Content: r.content, IsError: r.isError,
 		})
 	}
-	// synthesizeInto's toPrepend chooses WHERE a synthesized entry lands,
-	// mirroring claimInto's placement rule for the same reason: a
+	// synthesizeInto places a synthesized "no result" entry into
+	// prepend[target], mirroring claimInto's own placement rule: a
 	// synthesized answer to demand CARRIED FORWARD from a preceding
 	// assistant run belongs immediately after that assistant run's own
 	// content (prepend, the START of the target run) — not merely
@@ -713,24 +709,15 @@ func NormalizeForWire(messages []Message) []Message {
 	// own abstraction, not a wire-level unit OpenAI's API recognizes —
 	// appending at the run's end left an unrelated item sitting between
 	// the call and its synthesized answer, a real regression this
-	// caught). Demand answered WITHIN its own run (a call and its answer
-	// both native to run ri) keeps appending at the run's end, which
-	// still lands immediately after the call for the single-message case
-	// every one of this package's own tests exercises (see
-	// TestNormalizeForWireRepairsToolCallInNonAssistantMessage).
-	synthesizeInto := func(target int, id string, toPrepend bool) {
-		entry := &ToolResult{
+	// caught).
+	synthesizeInto := func(target int, id string) {
+		prepend[target] = append(prepend[target], &ToolResult{
 			CallID:  id,
 			Content: Parts{&Text{Text: SyntheticOrphanResultText}},
 			IsError: true,
-		}
-		if toPrepend {
-			prepend[target] = append(prepend[target], entry)
-		} else {
-			appendTo[target] = append(appendTo[target], entry)
-		}
+		})
 	}
-	fillDemand := func(target int, order []string, count map[string]int, toPrepend bool) {
+	fillDemand := func(target int, order []string, count map[string]int) {
 		seen := make(map[string]bool, len(order))
 		for _, id := range order {
 			if seen[id] {
@@ -741,7 +728,7 @@ func NormalizeForWire(messages []Message) []Message {
 				if idx, ok := claimFromPool(id, target); ok {
 					claimInto(target, idx)
 				} else {
-					synthesizeInto(target, id, toPrepend)
+					synthesizeInto(target, id)
 				}
 				count[id]--
 			}
@@ -759,49 +746,43 @@ func NormalizeForWire(messages []Message) []Message {
 			continue
 		}
 
-		// carryCount and ownCount are tracked SEPARATELY, not merged into
-		// one demand map, purely so a MISS on each can be routed to the
-		// correct placement above — own-run supply is still consumed
-		// against both indifferently (a real in-run result answers either
-		// equally well), carry-demand first since it is chronologically
-		// older.
+		// A non-assistant run's OWN ToolCalls are never legitimate demand
+		// (invariant 2's tool_use half, message/wire_oracle_test.go) — see
+		// useByRun's own doc comment just above: it only ever collects from
+		// an ASSISTANT run, so there is no "answered within its own
+		// non-assistant run" case to route supply into here. A real
+		// ToolResult native to this run either answers demand CARRIED
+		// FORWARD from the preceding assistant run (carryCount) or is
+		// surplus, with nothing left to answer it, and joins the pool.
 		carryIDs := carry
 		carry = nil
 		carryCount := make(map[string]int, len(carryIDs))
 		for _, id := range carryIDs {
 			carryCount[id]++
 		}
-		ownCount := make(map[string]int, len(useByRun[ri]))
-		for _, id := range useByRun[ri] {
-			ownCount[id]++
-		}
 
 		for _, idx := range resultsByRun[ri] {
 			id := allResults[idx].callID
-			switch {
-			case carryCount[id] > 0:
+			if carryCount[id] > 0 {
 				carryCount[id]--
-			case ownCount[id] > 0:
-				ownCount[id]--
-			default:
+			} else {
 				pool = append(pool, idx)
 			}
 		}
 
-		fillDemand(ri, carryIDs, carryCount, true)
-		fillDemand(ri, useByRun[ri], ownCount, false)
+		fillDemand(ri, carryIDs, carryCount)
 	}
 
 	// A trailing assistant run's demand has no following run at all; its
-	// virtual "run" has no pre-existing content for either placement to
-	// be relative to, but prepend-vs-append still governs claim-vs-
-	// synthesize ordering within it (see rebuildWithAdditions).
+	// virtual "run" has no pre-existing content for prepend to be
+	// relative to, but rebuildWithAdditions still renders it the same way
+	// as every other target.
 	if len(carry) > 0 {
 		demandCount := make(map[string]int, len(carry))
 		for _, id := range carry {
 			demandCount[id]++
 		}
-		fillDemand(len(runs), carry, demandCount, true)
+		fillDemand(len(runs), carry, demandCount)
 	}
 
 	// Anything still sitting unclaimed in the pool either came from a
@@ -852,14 +833,14 @@ func NormalizeForWire(messages []Message) []Message {
 	// (its own len(toDemote)==0 check) when there is nothing for IT to do
 	// either.
 	rebuilt := messages
-	if len(removed) > 0 || anyNonEmpty(prepend) || anyNonEmpty(appendTo) {
-		rebuilt = rebuildWithAdditions(messages, msgRun, runs, removed, prepend, appendTo)
+	if len(removed) > 0 || anyNonEmpty(prepend) {
+		rebuilt = rebuildWithAdditions(messages, msgRun, runs, removed, prepend)
 	}
 	return demoteWireInvalidToolResults(rebuilt)
 }
 
 // anyNonEmpty reports whether any slot in a per-target [][]Part table (the
-// shape of NormalizeForWire's own prepend/appendTo) holds at least one Part.
+// shape of NormalizeForWire's own prepend) holds at least one Part.
 func anyNonEmpty(byTarget [][]Part) bool {
 	for _, parts := range byTarget {
 		if len(parts) > 0 {
@@ -871,13 +852,12 @@ func anyNonEmpty(byTarget [][]Part) bool {
 
 // rebuildWithAdditions materializes NormalizeForWire's decisions into a new
 // []Message: every original message with any removed (relocated) parts
-// filtered out, dropped entirely if that leaves it with no parts; a new
-// message carrying prepend[r]'s relocated real results spliced in BEFORE
-// run r's first message; and a new message carrying appendTo[r]'s
-// synthesized results spliced in AFTER run r's last message. See
-// NormalizeForWire's own "prepend" doc comment above for why relocated and
-// synthesized entries are never merged into one message at one position.
-func rebuildWithAdditions(messages []Message, msgRun []int, runs []transcodeSpan, removed map[partKey]bool, prepend, appendTo [][]Part) []Message {
+// filtered out, dropped entirely if that leaves it with no parts; and a new
+// message carrying prepend[r]'s relocated-and/or-synthesized results
+// spliced in BEFORE run r's first message. See NormalizeForWire's own
+// "prepend" doc comment above for why a claimed or synthesized entry must
+// land before the target run's own pre-existing content.
+func rebuildWithAdditions(messages []Message, msgRun []int, runs []transcodeSpan, removed map[partKey]bool, prepend [][]Part) []Message {
 	out := make([]Message, 0, len(messages))
 	for i, m := range messages {
 		ri := msgRun[i]
@@ -907,26 +887,11 @@ func rebuildWithAdditions(messages []Message, msgRun []int, runs []transcodeSpan
 			}
 			out = append(out, nm)
 		}
-
-		if i == runs[ri].msgEnd {
-			if post := appendTo[ri]; len(post) > 0 {
-				out = append(out, Message{
-					ID:    fmt.Sprintf("%s%d-synthetic", wireNormalizePrefix, ri),
-					Role:  RoleTool,
-					Parts: post,
-				})
-			}
-		}
 	}
-	// The virtual trailing run (index len(runs)): a claimed real result
-	// (prepend) always precedes a synthesized one (appendTo) here too, for
-	// the same reason as every other target — see this function's doc
-	// comment.
+	// The virtual trailing run (index len(runs)): rendered the same way as
+	// every other target.
 	if trailingReal := prepend[len(runs)]; len(trailingReal) > 0 {
 		out = append(out, Message{ID: wireNormalizePrefix + "trailing-real", Role: RoleTool, Parts: trailingReal})
-	}
-	if trailingSynthetic := appendTo[len(runs)]; len(trailingSynthetic) > 0 {
-		out = append(out, Message{ID: wireNormalizePrefix + "trailing-synthetic", Role: RoleTool, Parts: trailingSynthetic})
 	}
 	return out
 }
