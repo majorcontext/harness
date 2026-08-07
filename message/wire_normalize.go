@@ -136,7 +136,7 @@ type partKey struct{ msgIdx, partIdx int }
 //
 // An earlier version of this function only handled the zero-ToolCall-
 // anywhere case, run BEFORE relocation. That missed a real, DIFFERENT
-// shape TestResolveOrphanToolCallsPropertyWireValid's fully arbitrary
+// shape TestNormalizeForWirePropertyWireValid's fully arbitrary
 // generator found: two real results answering DIFFERENT ids both sitting
 // in one assistant message. computeRelocationBarrier correctly refuses to
 // relocate the first past the second (relocating it would reorder them),
@@ -423,7 +423,7 @@ func demoteToolResult(tr *ToolResult) *Text {
 // touches the durable record, so it MAY relocate a real ToolResult to a
 // different position in the returned slice, closing gaps
 // ResolveOrphanToolCalls's strict messages[i+1] adjacency model cannot see
-// (see wire_oracle_meta_test.go's TestGap*_NEP5293Part2 cases). It still
+// (see wire_oracle_meta_test.go's TestResolveOrphanToolCallsLeaves*Unrepaired cases). It still
 // never DELETES a real ToolResult — every one that goes in comes out
 // somewhere, unchanged, in the same relative order among all other real
 // results (see checkNoDataLoss in wire_oracle_test.go, and NEP-5293's
@@ -483,7 +483,7 @@ func demoteToolResult(tr *ToolResult) *Text {
 // just a part type ordinary text is always valid in. The combination is
 // what makes NormalizeForWire's own wire-validity total (confirmed against
 // the fully arbitrary property-test generator, message/properties_test.go's
-// TestResolveOrphanToolCallsPropertyWireValid, at 500,000 rapid
+// TestNormalizeForWirePropertyWireValid, at 500,000 rapid
 // iterations): relocation handles what it can prove safe, and demotion
 // closes everything relocation must decline.
 func NormalizeForWire(messages []Message) []Message {

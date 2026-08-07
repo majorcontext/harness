@@ -241,7 +241,7 @@ func TestNormalizeForWireIsFixedPoint(t *testing.T) {
 // own output, run through EVERY one of the four gap shapes, never drops or
 // reorders a real ToolResult — regardless of whether it also manages to
 // make the shape wire-valid (it is documented NOT to, for most of these;
-// see wire_oracle_meta_test.go's TestGap*_NEP5293Part2 and
+// see wire_oracle_meta_test.go's TestResolveOrphanToolCallsLeaves*Unrepaired and
 // TestLegitimate* cases, which pin the precise wire-validity gaps this
 // test deliberately does not re-assert). A future change that makes
 // ResolveOrphanToolCalls itself destructive — the exact defect class that

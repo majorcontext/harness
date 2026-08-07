@@ -689,7 +689,7 @@ func IsSyntheticOrphanID(id string) bool {
 // check cannot see a tool_use/tool_result pair separated by an
 // intervening same-role message, a duplicate call id sharing one
 // tool_result, a ToolCall outside an assistant message, or a ToolResult
-// preceding its ToolCall — see wire_oracle_meta_test.go's TestGap*_NEP5293Part2
+// preceding its ToolCall — see wire_oracle_meta_test.go's TestResolveOrphanToolCallsLeaves*Unrepaired
 // cases for each. NormalizeForWire (wire_normalize.go) is the
 // transcode-only sibling every transcoder in this module now calls
 // instead: it closes all four gaps, including by relocating a real
