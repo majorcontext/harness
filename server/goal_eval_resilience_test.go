@@ -32,15 +32,22 @@ type evalFailuresView struct {
 	} `json:"goal"`
 }
 
-func (h *harness) getEvalFailuresView(id string) evalFailuresView {
-	h.t.Helper()
-	resp, data := h.do("GET", "/session/"+id, nil)
-	if resp.StatusCode != 200 {
-		h.t.Fatalf("GET session status %d: %s", resp.StatusCode, data)
+// getEvalFailuresViewDirect drives handleGet in-process (no httptest.Server,
+// whose real listener a synctest bubble forbids) and decodes the eval-failures
+// Session view — the direct-handler counterpart to the terminal test's inline
+// GET, shared by both synctest-converted tests below.
+func getEvalFailuresViewDirect(t *testing.T, srv *Server, id string) evalFailuresView {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/session/"+id, nil)
+	req.SetPathValue("id", id)
+	srv.handleGet(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET session status %d: %s", rec.Code, rec.Body)
 	}
 	var v evalFailuresView
-	if err := json.Unmarshal(data, &v); err != nil {
-		h.t.Fatal(err)
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+		t.Fatal(err)
 	}
 	return v
 }
@@ -197,102 +204,134 @@ const goalEvalFailureLimitForTest = 5
 // the streak; the very next boundary parses a verdict (MET), which resets
 // eval_failures to 0 and lets the loop finish normally.
 //
-// Only one failed boundary is scripted, so this pays one real backoff wait
-// (goalRetryDelay(1) == 1s) driving a real httptest.Server + SSE stream —
-// the same real-wall-clock tradeoff TestGoalStalledJournaledAndActive and
-// TestGoalStalledRetryableFieldsSurfaced already make for their own
-// one-failure cases, and far cheaper than the terminal test's 5-boundary,
-// 50+s schedule (which is why that one runs under synctest instead).
+// Only one failed boundary is scripted, so the loop pays one backoff wait
+// (goalRetryDelay(1) == 1s) between the failed and the retried, MET boundary.
+// Per AGENTS.md's synctest rule for timer-dependent logic, this runs on fake
+// time inside a synctest bubble — driving handleGoal directly with an
+// httptest.ResponseRecorder and reading the journal instead of an SSE stream
+// (no real listener; real network I/O does not work in a bubble) exactly like
+// the terminal test above — so the backoff costs no real wall-clock time. The
+// mid-run checkpoint is made deterministic by synctest.Wait: it returns once
+// the loop is durably blocked in that fake-time backoff, i.e. strictly after
+// the failed boundary and strictly before the retried boundary lands.
 func TestGoalEvalFailedAdvisoryDuringRunNoSessionErrorOrTurnEnd(t *testing.T) {
-	prov := &goalProv{
-		name:     "test",
-		worker:   [][]provider.Event{asstTurn("try 1"), asstTurn("try 2")},
-		evalErrN: 1,
-		evalErr:  errors.New("evaluator down"),
-		eval:     [][]provider.Event{asstTurn("MET: done")},
-	}
-	h := newGoalHarness(t, prov)
-	id := h.createSession("test/m1")
-
-	sse := h.openSSE("?from=0", "")
-	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond"})
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
-	}
-
-	failed := sse.waitFor(t, "goal.eval_failed")
-	if failed.Seq == 0 {
-		t.Error("goal.eval_failed event has no seq (must be durable)")
-	}
-	if failed.GoalEvalFailures != 1 {
-		t.Errorf("goal.eval_failed GoalEvalFailures = %d, want 1", failed.GoalEvalFailures)
-	}
-
-	// Read state right after the failed boundary, before the retried
-	// evaluation (which succeeds) can land: no session.error, no turn.end
-	// yet, and the goal summary already reflects the streak.
-	h.srv.mu.Lock()
-	var sawSessionError, sawTurnEnd bool
-	for _, ev := range h.srv.journal {
-		if ev.SessionID != id {
-			continue
+	dir := t.TempDir()
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProv{
+			name:     "test",
+			worker:   [][]provider.Event{asstTurn("try 1"), asstTurn("try 2")},
+			evalErrN: 1,
+			evalErr:  errors.New("evaluator down"),
+			eval:     [][]provider.Event{asstTurn("MET: done")},
 		}
-		switch ev.Type {
-		case evtSessionError:
-			sawSessionError = true
-		case evtTurnEnd:
-			sawTurnEnd = true
+		srv := newServer(t, dir, prov, 0, func(o *Options) {
+			o.GoalEvaluator = message.ModelRef{Provider: prov.Name(), Model: "eval"}
+		})
+		id := createSessionDirect(t, srv, "test/m1")
+
+		grec := httptest.NewRecorder()
+		greq := httptest.NewRequest("POST", "/session/"+id+"/goal", strings.NewReader(`{"condition":"cond"}`))
+		greq.SetPathValue("id", id)
+		srv.handleGoal(grec, greq)
+		if grec.Code != http.StatusAccepted {
+			t.Fatalf("POST goal status %d: %s", grec.Code, grec.Body)
 		}
-	}
-	h.srv.mu.Unlock()
-	if sawSessionError {
-		t.Error("session.error journaled after a single failed boundary (below the terminal), want none")
-	}
-	if sawTurnEnd {
-		t.Error("turn.end journaled after a single failed boundary while the loop is still running, want none")
-	}
 
-	mid := h.getEvalFailuresView(id)
-	if mid.Goal == nil || !mid.Goal.Active {
-		t.Fatalf("goal right after goal.eval_failed = %+v, want active", mid.Goal)
-	}
-	if mid.Goal.EvalFailures != 1 {
-		t.Errorf("goal.eval_failures right after goal.eval_failed = %d, want 1", mid.Goal.EvalFailures)
-	}
-	if mid.State != "goal-running" {
-		t.Errorf("state right after goal.eval_failed = %q, want goal-running (advisory failure, loop keeps working)", mid.State)
-	}
+		// The loop runs its single failed evaluator boundary, then blocks in
+		// the fake-time retry backoff before the retried (MET) boundary; that
+		// durable block is where synctest.Wait returns — the deterministic
+		// mid-run checkpoint the original test raced against a real 1s wait.
+		synctest.Wait()
 
-	// The retried boundary parses MET, achieving the goal — eval_failures
-	// resets to 0 (goal.eval, then goal.achieved). runGoal's own completed
-	// branch does emit turn.end (outcome "completed") once the loop actually
-	// finishes, but no session.error: a goal that recovered and achieved is
-	// never the loud terminal.
-	evs := sse.collectUntilIdle(t)
-	var achieved bool
-	for _, ev := range evs {
-		switch ev.Type {
-		case "goal.achieved":
-			achieved = true
-		case evtSessionError:
-			t.Error("session.error emitted for a goal that recovered and achieved, want none")
-		case evtTurnEnd:
-			if ev.Outcome != "completed" {
-				t.Errorf("turn.end outcome for an achieved goal = %q, want completed", ev.Outcome)
+		srv.mu.Lock()
+		var failed *Event
+		var sawSessionError, sawTurnEnd bool
+		for i := range srv.journal {
+			ev := srv.journal[i]
+			if ev.SessionID != id {
+				continue
+			}
+			switch ev.Type {
+			case "goal.eval_failed":
+				if failed == nil {
+					e := ev
+					failed = &e
+				}
+			case evtSessionError:
+				sawSessionError = true
+			case evtTurnEnd:
+				sawTurnEnd = true
 			}
 		}
-	}
-	if !achieved {
-		t.Fatalf("goal events after the recovered boundary = %v, want a goal.achieved", goalEvents(evs))
-	}
+		srv.mu.Unlock()
 
-	after := h.getEvalFailuresView(id)
-	if after.Goal == nil || !after.Goal.Achieved {
-		t.Fatalf("goal after achievement = %+v, want achieved", after.Goal)
-	}
-	if after.Goal.EvalFailures != 0 {
-		t.Errorf("eval_failures after achievement = %d, want 0 (reset by the parsed verdict)", after.Goal.EvalFailures)
-	}
+		if failed == nil {
+			t.Fatal("no goal.eval_failed event journaled")
+		}
+		if failed.Seq == 0 {
+			t.Error("goal.eval_failed event has no seq (must be durable)")
+		}
+		if failed.GoalEvalFailures != 1 {
+			t.Errorf("goal.eval_failed GoalEvalFailures = %d, want 1", failed.GoalEvalFailures)
+		}
+		// State right after the failed boundary, before the retried evaluation
+		// (which succeeds) can land: no session.error, no turn.end yet.
+		if sawSessionError {
+			t.Error("session.error journaled after a single failed boundary (below the terminal), want none")
+		}
+		if sawTurnEnd {
+			t.Error("turn.end journaled after a single failed boundary while the loop is still running, want none")
+		}
+
+		mid := getEvalFailuresViewDirect(t, srv, id)
+		if mid.Goal == nil || !mid.Goal.Active {
+			t.Fatalf("goal right after goal.eval_failed = %+v, want active", mid.Goal)
+		}
+		if mid.Goal.EvalFailures != 1 {
+			t.Errorf("goal.eval_failures right after goal.eval_failed = %d, want 1", mid.Goal.EvalFailures)
+		}
+		if mid.State != "goal-running" {
+			t.Errorf("state right after goal.eval_failed = %q, want goal-running (advisory failure, loop keeps working)", mid.State)
+		}
+
+		// Let the loop finish: the retried boundary parses MET, achieving the
+		// goal — eval_failures resets to 0 (goal.eval, then goal.achieved).
+		// runGoal's own completed branch does emit turn.end (outcome
+		// "completed") once the loop actually finishes, but no session.error: a
+		// goal that recovered and achieved is never the loud terminal.
+		srv.wg.Wait()
+
+		srv.mu.Lock()
+		var achieved bool
+		for i := range srv.journal {
+			ev := srv.journal[i]
+			if ev.SessionID != id {
+				continue
+			}
+			switch ev.Type {
+			case "goal.achieved":
+				achieved = true
+			case evtSessionError:
+				t.Error("session.error emitted for a goal that recovered and achieved, want none")
+			case evtTurnEnd:
+				if ev.Outcome != "completed" {
+					t.Errorf("turn.end outcome for an achieved goal = %q, want completed", ev.Outcome)
+				}
+			}
+		}
+		srv.mu.Unlock()
+		if !achieved {
+			t.Fatal("goal never achieved after the recovered boundary, want a goal.achieved")
+		}
+
+		after := getEvalFailuresViewDirect(t, srv, id)
+		if after.Goal == nil || !after.Goal.Achieved {
+			t.Fatalf("goal after achievement = %+v, want achieved", after.Goal)
+		}
+		if after.Goal.EvalFailures != 0 {
+			t.Errorf("eval_failures after achievement = %d, want 0 (reset by the parsed verdict)", after.Goal.EvalFailures)
+		}
+	})
 }
 
 // TestGoalEvalFailuresSurviveRestart is invariant 9's replay half: a session
@@ -307,59 +346,63 @@ func TestGoalEvalFailedAdvisoryDuringRunNoSessionErrorOrTurnEnd(t *testing.T) {
 // exhausting its turn budget, never by achieving or being cleared) — the
 // last durable goal.* record is goal.eval_failed(count=2), with nothing
 // after it to reset the streak, so eval_failures must read 2 both before and
-// after the restart. Two boundaries pay two real backoff waits
-// (goalRetryDelay(1)+goalRetryDelay(2) == 1s+4s == 5s), a deliberately small
-// multiple of the single-boundary test above's cost rather than the
-// terminal test's 50+s schedule.
+// after the restart. Two boundaries pay two backoff waits
+// (goalRetryDelay(1)+goalRetryDelay(2) == 1s+4s == 5s of real wall-clock
+// time); per AGENTS.md's synctest rule this runs on fake time inside a bubble,
+// driving handleGoal directly with an httptest.ResponseRecorder and reading
+// state through handleGet (no real listener; real network I/O does not work in
+// a bubble) so those backoffs cost nothing. The restart is a SECOND newServer
+// over the SAME dir — ADOPT — whose New reconciles the on-disk journal
+// synchronously (file I/O, which the terminal test above already exercises in
+// a bubble); srv1.wg.Wait guarantees every durable goal.eval_failed record is
+// flushed before the second server replays it.
 func TestGoalEvalFailuresSurviveRestart(t *testing.T) {
 	dir := t.TempDir()
-	prov := &goalProv{
-		name:     "test",
-		worker:   [][]provider.Event{asstTurn("try 1"), asstTurn("try 2")},
-		evalErrN: 2,
-		evalErr:  errors.New("evaluator down"),
-	}
-	mutate := func(o *Options) {
-		o.GoalEvaluator = message.ModelRef{Provider: prov.Name(), Model: "eval"}
-	}
-	srv1 := newServer(t, dir, prov, 0, mutate)
-	ts1 := httptest.NewServer(srv1)
-	h1 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv1, ts: ts1}
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProv{
+			name:     "test",
+			worker:   [][]provider.Event{asstTurn("try 1"), asstTurn("try 2")},
+			evalErrN: 2,
+			evalErr:  errors.New("evaluator down"),
+		}
+		mutate := func(o *Options) {
+			o.GoalEvaluator = message.ModelRef{Provider: prov.Name(), Model: "eval"}
+		}
+		srv1 := newServer(t, dir, prov, 0, mutate)
+		id := createSessionDirect(t, srv1, "test/m1")
 
-	id := h1.createSession("test/m1")
-	sse := h1.openSSE("?from=0", "")
-	resp, data := h1.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond", "max_turns": 2})
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
-	}
-	sse.collectUntilIdle(t)
-	sse.stop()
+		grec := httptest.NewRecorder()
+		greq := httptest.NewRequest("POST", "/session/"+id+"/goal", strings.NewReader(`{"condition":"cond","max_turns":2}`))
+		greq.SetPathValue("id", id)
+		srv1.handleGoal(grec, greq)
+		if grec.Code != http.StatusAccepted {
+			t.Fatalf("POST goal status %d: %s", grec.Code, grec.Body)
+		}
 
-	before := h1.getEvalFailuresView(id)
-	if before.Goal == nil || !before.Goal.Active {
-		t.Fatalf("before restart, goal = %+v, want active (max turns exhausted, never cleared)", before.Goal)
-	}
-	if before.Goal.EvalFailures != 2 {
-		t.Fatalf("before restart, eval_failures = %d, want 2", before.Goal.EvalFailures)
-	}
+		srv1.wg.Wait() // both failed boundaries + their fake-time backoffs, then max-turns exhaustion
 
-	if err := srv1.Close(); err != nil {
-		t.Fatalf("closing first server: %v", err)
-	}
-	ts1.Close()
+		before := getEvalFailuresViewDirect(t, srv1, id)
+		if before.Goal == nil || !before.Goal.Active {
+			t.Fatalf("before restart, goal = %+v, want active (max turns exhausted, never cleared)", before.Goal)
+		}
+		if before.Goal.EvalFailures != 2 {
+			t.Fatalf("before restart, eval_failures = %d, want 2", before.Goal.EvalFailures)
+		}
 
-	srv2 := newServer(t, dir, prov, 0, mutate)
-	ts2 := httptest.NewServer(srv2)
-	t.Cleanup(ts2.Close)
-	h2 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv2, ts: ts2}
+		if err := srv1.Close(); err != nil {
+			t.Fatalf("closing first server: %v", err)
+		}
 
-	after := h2.getEvalFailuresView(id)
-	if after.Goal == nil || !after.Goal.Active {
-		t.Fatalf("after restart, goal = %+v, want active", after.Goal)
-	}
-	if after.Goal.EvalFailures != 2 {
-		t.Errorf("after restart, eval_failures = %d, want 2 (journal replay must reproduce the fold)", after.Goal.EvalFailures)
-	}
+		srv2 := newServer(t, dir, prov, 0, mutate)
 
-	srv2.Drain(context.Background())
+		after := getEvalFailuresViewDirect(t, srv2, id)
+		if after.Goal == nil || !after.Goal.Active {
+			t.Fatalf("after restart, goal = %+v, want active", after.Goal)
+		}
+		if after.Goal.EvalFailures != 2 {
+			t.Errorf("after restart, eval_failures = %d, want 2 (journal replay must reproduce the fold)", after.Goal.EvalFailures)
+		}
+
+		srv2.Drain(context.Background())
+	})
 }

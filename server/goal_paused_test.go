@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"testing/synctest"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -159,58 +161,119 @@ func TestGoalPausedRestartYieldsIdleAndUsable(t *testing.T) {
 // pause_reason="provider-backoff" — without changing the underlying
 // behavior (the loop retries and eventually succeeds exactly as before).
 func TestGoalStalledProviderBackoffSurfacesPaused(t *testing.T) {
-	prov := &goalProv{
-		name:       "test",
-		workerErrN: 1, // first attempt fails retryably, second (retried) attempt succeeds
-		workerErr:  provider.MarkRetryable(errFakeOverload(), provider.RetryableOverloaded),
-		worker:     [][]provider.Event{asstTurn("done")},
-		eval:       [][]provider.Event{asstTurn("MET: looks complete")},
-	}
-	h := newGoalHarness(t, prov)
-	id := h.createSession("test/m1")
-
-	sse := h.openSSE("?from=0", "")
-	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond"})
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
-	}
-
-	stalled := sse.waitFor(t, "goal.stalled")
-	if !stalled.GoalPaused {
-		t.Error("goal.stalled event GoalPaused = false, want true (waiting out provider weather)")
-	}
-	if stalled.GoalPauseReason != "provider-backoff" {
-		t.Errorf("goal.stalled event GoalPauseReason = %q, want %q", stalled.GoalPauseReason, "provider-backoff")
-	}
-
-	view := h.getPausedGoalView(id)
-	if view.Goal == nil || !view.Goal.Paused || view.Goal.PauseReason != "provider-backoff" {
-		t.Errorf("session goal = %+v, want paused=true pause_reason=provider-backoff", view.Goal)
-	}
-	// Behavior is unchanged: state stays goal-running (a loop IS attached
-	// and running, just waiting), never idle, during a provider-backoff
-	// pause — only the restart pause forces idle.
-	if view.State != "goal-running" {
-		t.Errorf("state during provider-backoff pause = %q, want goal-running", view.State)
-	}
-
-	// The park machinery self-re-arms once the backoff elapses and the
-	// retry succeeds: paused clears without any client action ("already
-	// re-arms" per the spec).
-	evs := sse.collectUntilIdle(t)
-	var sawAchieved bool
-	for _, ev := range evs {
-		if ev.Type == "goal.achieved" {
-			sawAchieved = true
+	// Runs under synctest so the retryable-tier provider backoff (a real
+	// multi-second wait between the failed first worker attempt and the
+	// retried, succeeding one) costs no real wall-clock time; drives the
+	// server in-process via handleGoal + the journal (no httptest.Server,
+	// whose real listener a bubble forbids) exactly like
+	// TestGoalWorkerParkSurfacesPausedWorkerFailure. Unlike the deterministic
+	// park tier, this loop does NOT exit while stalled — it WAITS out the
+	// backoff — so the mid-backoff paused state is observed at the
+	// synctest.Wait() point (all other goroutines durably blocked, the loop
+	// parked in its backoff timer), and only THEN is fake time allowed to
+	// advance (srv.wg.Wait) so the retry succeeds and the goal achieves.
+	dir := t.TempDir()
+	synctest.Test(t, func(t *testing.T) {
+		prov := &goalProv{
+			name:       "test",
+			workerErrN: 1, // first attempt fails retryably, second (retried) attempt succeeds
+			workerErr:  provider.MarkRetryable(errFakeOverload(), provider.RetryableOverloaded),
+			worker:     [][]provider.Event{asstTurn("done")},
+			eval:       [][]provider.Event{asstTurn("MET: looks complete")},
 		}
-	}
-	if !sawAchieved {
-		t.Fatal("expected goal.achieved after the retryable stall recovered")
-	}
-	after := h.getPausedGoalView(id)
-	if after.Goal != nil && after.Goal.Paused {
-		t.Errorf("goal.Paused after achievement = true, want false")
-	}
+		srv := newServer(t, dir, prov, 0, func(o *Options) {
+			o.GoalEvaluator = message.ModelRef{Provider: prov.Name(), Model: "eval"}
+		})
+		id := createSessionDirect(t, srv, "test/m1")
+
+		// getView reads the paused-goal view straight through handleGet — the
+		// in-process, bubble-safe stand-in for h.getPausedGoalView's HTTP round
+		// trip (a real listener is forbidden inside a synctest bubble).
+		getView := func() pausedGoalView {
+			t.Helper()
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("GET", "/session/"+id, nil)
+			req.SetPathValue("id", id)
+			srv.handleGet(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET session status %d: %s", rec.Code, rec.Body)
+			}
+			var v pausedGoalView
+			if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+				t.Fatal(err)
+			}
+			return v
+		}
+
+		grec := httptest.NewRecorder()
+		greq := httptest.NewRequest("POST", "/session/"+id+"/goal", strings.NewReader(`{"condition":"cond"}`))
+		greq.SetPathValue("id", id)
+		srv.handleGoal(grec, greq)
+		if grec.Code != http.StatusAccepted {
+			t.Fatalf("POST goal status %d: %s", grec.Code, grec.Body)
+		}
+
+		// Reach the backoff-blocked state: the first worker attempt has failed
+		// retryably, goal.stalled is journaled, and the loop is now durably
+		// parked in its backoff timer wait. synctest.Wait does NOT advance fake
+		// time, so the loop stays parked there while the mid-backoff assertions
+		// below run — it has NOT exited (the retryable tier waits).
+		synctest.Wait()
+
+		srv.mu.Lock()
+		var stalled *Event
+		for i := range srv.journal {
+			ev := srv.journal[i]
+			if ev.SessionID == id && ev.Type == "goal.stalled" {
+				stalled = &ev
+				break
+			}
+		}
+		srv.mu.Unlock()
+		if stalled == nil {
+			t.Fatal("no goal.stalled record found while the loop waits out provider weather")
+		}
+		if !stalled.GoalPaused {
+			t.Error("goal.stalled event GoalPaused = false, want true (waiting out provider weather)")
+		}
+		if stalled.GoalPauseReason != "provider-backoff" {
+			t.Errorf("goal.stalled event GoalPauseReason = %q, want %q", stalled.GoalPauseReason, "provider-backoff")
+		}
+
+		view := getView()
+		if view.Goal == nil || !view.Goal.Paused || view.Goal.PauseReason != "provider-backoff" {
+			t.Errorf("session goal = %+v, want paused=true pause_reason=provider-backoff", view.Goal)
+		}
+		// Behavior is unchanged: state stays goal-running (a loop IS attached
+		// and running, just waiting), never idle, during a provider-backoff
+		// pause — only the restart pause forces idle.
+		if view.State != "goal-running" {
+			t.Errorf("state during provider-backoff pause = %q, want goal-running", view.State)
+		}
+
+		// The park machinery self-re-arms once the backoff elapses and the
+		// retry succeeds: releasing the test goroutine (wg.Wait) lets fake time
+		// advance, the backoff timer fires, the retried worker attempt
+		// succeeds, and the goal achieves — paused clears without any client
+		// action ("already re-arms" per the spec).
+		srv.wg.Wait()
+
+		srv.mu.Lock()
+		var sawAchieved bool
+		for _, ev := range srv.journal {
+			if ev.SessionID == id && ev.Type == "goal.achieved" {
+				sawAchieved = true
+			}
+		}
+		srv.mu.Unlock()
+		if !sawAchieved {
+			t.Fatal("expected goal.achieved after the retryable stall recovered")
+		}
+		after := getView()
+		if after.Goal != nil && after.Goal.Paused {
+			t.Errorf("goal.Paused after achievement = true, want false")
+		}
+	})
 }
 
 // TestGoalReArmClearsRestartPause is deliverable 2(c)'s test for the
