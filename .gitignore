@@ -3,3 +3,6 @@
 *.out
 .DS_Store
 __pycache__/
+
+# rapid property-test failure seeds are local reproduction artifacts, never committed.
+testdata/rapid/
