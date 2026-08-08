@@ -852,6 +852,30 @@ func TestResolveOrphanToolCallsDistinctSyntheticIDs(t *testing.T) {
 	}
 }
 
+// TestIsSyntheticOrphanIDMatchesResolveOrphanToolCalls is the red-first test
+// for NEP-5292's shared-prefix requirement: IsSyntheticOrphanID must report
+// true for exactly the IDs ResolveOrphanToolCalls actually mints (built from
+// the same SyntheticOrphanIDPrefix constant, so the two can never drift) and
+// false for an ordinary message ID.
+func TestIsSyntheticOrphanIDMatchesResolveOrphanToolCalls(t *testing.T) {
+	in := []Message{
+		{ID: "msg_1", Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
+	}
+	out := ResolveOrphanToolCalls(in)
+	if len(out) != 2 {
+		t.Fatalf("len(out) = %d, want 2 (assistant + synthetic tool result)", len(out))
+	}
+	synthID := out[1].ID
+	if !IsSyntheticOrphanID(synthID) {
+		t.Errorf("IsSyntheticOrphanID(%q) = false, want true", synthID)
+	}
+	for _, ordinary := range []string{"msg_1", "msg_synthetic", "", "synthetic-orphan-tool-resul"} {
+		if IsSyntheticOrphanID(ordinary) {
+			t.Errorf("IsSyntheticOrphanID(%q) = true, want false", ordinary)
+		}
+	}
+}
+
 // TestToolResultNilContentNeverMarshalsNull reproduces the second root
 // cause folded into NEP-5272: ToolResult.Content has json tag "content"
 // with no omitempty, so json.Marshal of a ToolResult whose Content is nil
