@@ -95,14 +95,31 @@ import (
 //     ProviderData entries, invalid ToolCall.Arguments). Nothing on a
 //     Message survives a second pass differently from the first, since
 //     Normalize's mutations are all saturating (delete once; nil once).
-//  4. ResolveOrphanToolCalls's own doc: output carries no orphaned ToolCall
-//     (re-derived from "Immediately after mirrors the wire requirement..."
-//     below as hasOrphanToolCall), re-applying it to its own output changes
-//     nothing further, and the input is never mutated in place ("messages is
-//     never mutated in place" — ResolveOrphanToolCalls's doc). See
-//     TestResolveOrphanToolCallsPropertyNoOrphans,
+//  4. ResolveOrphanToolCalls never loses data, re-applying it to its own
+//     output changes nothing further, and the input is never mutated in
+//     place ("messages is never mutated in place" — ResolveOrphanToolCalls's
+//     doc). See TestResolveOrphanToolCallsPropertyNoDataLoss,
 //     TestResolveOrphanToolCallsPropertyFixedPoint, and
 //     TestResolveOrphanToolCallsPropertyDoesNotMutateInput.
+//
+//     This file used to check a fifth property here — "output carries no
+//     orphaned ToolCall" — via a predicate named hasOrphanToolCall that
+//     re-derived ResolveOrphanToolCalls's own documented scan line-for-line
+//     (RoleAssistant-gated, checks only messages[i+1], set-membership
+//     presence). That predicate is DELETED, not merely renamed: an oracle
+//     that shares its implementation's definition of correctness cannot
+//     fail on a wrong definition, and that is exactly what happened in
+//     production — a rewrite of ResolveOrphanToolCalls that deleted genuine
+//     tool output shipped and was reverted, because hasOrphanToolCall could
+//     never have caught it. See message/wire_oracle_test.go (an
+//     independent oracle built only from the provider wire contract, never
+//     from this function's own scan) and
+//     TestResolveOrphanToolCallsPropertyNoDataLoss below, and the
+//     deliberate-gap tests in message/wire_oracle_meta_test.go, which
+//     replace it. Wire VALIDITY is not asserted against
+//     ResolveOrphanToolCalls at all: it is additive-only by design and
+//     leaves several shapes wire-invalid forever. The transcode-only
+//     repair NEP-5293 part 2 introduces owns that property instead.
 
 // --- Generators --------------------------------------------------------
 //
@@ -112,7 +129,8 @@ import (
 // the properties below depend on role/part correspondence (Normalize and
 // the marshal round trip are role-agnostic by construction, and
 // ResolveOrphanToolCalls's own "orphan" definition already ignores any
-// ToolCall not sitting in a RoleAssistant message — see hasOrphanToolCall),
+// ToolCall not sitting in a RoleAssistant message — see that function's
+// RoleAssistant-gated scan),
 // so generating "off-label" combinations, e.g. a ToolCall inside a
 // RoleUser message, is still valid input space and exercises that ignoring
 // behavior directly instead of assuming it.
@@ -448,61 +466,28 @@ func TestNormalizeIdempotent(t *testing.T) {
 	})
 }
 
-// hasOrphanToolCall re-derives ResolveOrphanToolCalls's own documented
-// definition of "orphan" independently of its implementation: a ToolCall
-// carried by a RoleAssistant message at index i is orphaned unless
-// messages[i+1] exists, has RoleTool, and carries a ToolResult with a
-// matching CallID — ResolveOrphanToolCalls's doc comment, "Immediately
-// after mirrors the wire requirement ... a ToolCall in messages[i] is
-// satisfied only by a ToolResult carrying its CallID in messages[i+1] when
-// that message has RoleTool".
-func hasOrphanToolCall(messages []Message) bool {
-	for i, m := range messages {
-		if m.Role != RoleAssistant {
-			continue
-		}
-		var callIDs []string
-		for _, p := range m.Parts {
-			if tc, ok := p.(*ToolCall); ok {
-				callIDs = append(callIDs, tc.CallID)
-			}
-		}
-		if len(callIDs) == 0 {
-			continue
-		}
-		present := make(map[string]bool)
-		if i+1 < len(messages) && messages[i+1].Role == RoleTool {
-			for _, p := range messages[i+1].Parts {
-				if tr, ok := p.(*ToolResult); ok {
-					present[tr.CallID] = true
-				}
-			}
-		}
-		for _, id := range callIDs {
-			if !present[id] {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// TestResolveOrphanToolCallsPropertyNoOrphans is the first half of property 3: no
-// output of ResolveOrphanToolCalls contains an orphan under hasOrphan
-// ToolCall's independent re-derivation of the function's own doc comment.
-func TestResolveOrphanToolCallsPropertyNoOrphans(t *testing.T) {
+// TestResolveOrphanToolCallsPropertyNoDataLoss is invariant 5 from the
+// independent wire-model oracle (message/wire_oracle_test.go): every
+// ToolResult present in the input is present, unchanged and in the same
+// relative order, in ResolveOrphanToolCalls's output. This is the property
+// that actually matters here — see this file's doc comment above for why
+// the predicate this test used to rely on (hasOrphanToolCall, now deleted)
+// could never have caught the exact bug class this checks for: a rewrite
+// of ResolveOrphanToolCalls that deletes genuine tool output.
+func TestResolveOrphanToolCallsPropertyNoDataLoss(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		in := genMessageSequence(t)
 		out := ResolveOrphanToolCalls(in)
-		if hasOrphanToolCall(out) {
-			t.Fatalf("ResolveOrphanToolCalls left an orphan tool call in its output: %+v", out)
+		if v := checkNoDataLoss(in, out); len(v) != 0 {
+			t.Fatalf("ResolveOrphanToolCalls lost or altered a genuine tool_result: %v", v)
 		}
 	})
 }
 
-// TestResolveOrphanToolCallsPropertyFixedPoint is the second half of property 3:
-// re-applying ResolveOrphanToolCalls to its own output changes nothing
-// further — every orphan it can find, it resolves in one pass.
+// TestResolveOrphanToolCallsPropertyFixedPoint checks the second of
+// property 4's three parts: re-applying ResolveOrphanToolCalls to its own
+// output changes nothing further — every orphan it can find, it resolves in
+// one pass.
 func TestResolveOrphanToolCallsPropertyFixedPoint(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		in := genMessageSequence(t)
