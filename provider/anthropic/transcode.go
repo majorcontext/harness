@@ -146,16 +146,21 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 
 	// Defense-in-depth against a poisoned history (incident
 	// ses_01kx48z4rqfkpbwmzfdv1jzeg6): a ToolCall with no matching
-	// ToolResult in the immediately-following message would otherwise
+	// ToolResult in the immediately-following wire turn would otherwise
 	// transcode to a dangling tool_use block, which the Anthropic API
 	// rejects wholesale with HTTP 400 "tool_use ids were found without
 	// tool_result blocks immediately after". engine.Session's turn loop is
 	// the primary fix and keeps its own ingest self-consistent (see
 	// engine/engine.go), but this backstops any OTHER producer of history
 	// — a plugin hook, a hand-rolled adapter, a replayed log from an
-	// older binary — so a request never ships an orphaned tool_use. See
-	// message.ResolveOrphanToolCalls's doc comment for the full incident.
-	messages := imageclamp.Clamp(message.ResolveOrphanToolCalls(req.Messages), imageLimits)
+	// older binary — so a request never ships an orphaned tool_use.
+	// NormalizeForWire (NEP-5293 part 2), not ResolveOrphanToolCalls,
+	// belongs here: this call site builds one throwaway request and never
+	// touches the durable record, so the destructive/relocating repairs
+	// only NormalizeForWire performs are safe here specifically. See its
+	// doc comment for the full incident and the additive/transcode-only
+	// split.
+	messages := imageclamp.Clamp(message.NormalizeForWire(req.Messages), imageLimits)
 
 	for i := range messages {
 		m := &messages[i]

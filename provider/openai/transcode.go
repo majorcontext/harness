@@ -120,15 +120,19 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 	}
 
 	// Orphaned-tool_use repair, same as the anthropic and openaicompat
-	// transcoders (this was the one transcoder missing it): a ToolCall
-	// with no matching ToolResult in the immediately-following message
-	// would transcode to a dangling function_call item the API rejects on
-	// every retry. See message.ResolveOrphanToolCalls's doc comment for
-	// the incident history. Composed with image clamping exactly as the
-	// anthropic transcoder does; imageLimits.RecurseToolResults is false
-	// because tool-result images are omitted on the wire (see
+	// transcoders: a ToolCall with no matching ToolResult in the
+	// immediately-following wire turn would transcode to a dangling
+	// function_call item the API rejects on every retry.
+	// message.NormalizeForWire (NEP-5293 part 2) is the transcode-only
+	// repair — this call site builds one throwaway request and never
+	// touches the durable record, so its destructive/relocating repairs
+	// are safe here; see its doc comment for the incident history and the
+	// additive (message.ResolveOrphanToolCalls, used only against LIVE
+	// history) / transcode-only split. Composed with image clamping
+	// exactly as the anthropic transcoder does; imageLimits.RecurseToolResults
+	// is false because tool-result images are omitted on the wire (see
 	// toolResultOutput), so clamping them would be wasted work.
-	messages := imageclamp.Clamp(message.ResolveOrphanToolCalls(req.Messages), imageLimits)
+	messages := imageclamp.Clamp(message.NormalizeForWire(req.Messages), imageLimits)
 	for i := range messages {
 		m := &messages[i]
 		items, err := transcodeMessage(m)

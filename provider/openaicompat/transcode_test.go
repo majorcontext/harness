@@ -1,6 +1,7 @@
 package openaicompat
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -502,4 +503,331 @@ func assertToolCallFollowedByToolMessage(t *testing.T, out *apiRequest, id strin
 		}
 	}
 	t.Fatalf("tool_call %q has no matching \"tool\" wire message after it", id)
+}
+
+// assertToolCallsAnsweredContiguously asserts, for every "assistant" wire
+// message carrying N tool_calls, that the N wire messages immediately
+// following it are ALL "tool"-role, with no other role interleaved. This is
+// the chat/completions contract this adapter must never violate: the tool
+// messages answering an assistant's tool_calls must be contiguous and must
+// directly follow it. A demoted part landing between two of them -- even
+// though the request still BUILDS -- produces a request the provider
+// rejects with an asynchronous 400 at request time instead of a loud,
+// synchronous, local build failure: exactly the wedge class this whole line
+// of work exists to remove (see PR #108 review round 2, finding on
+// TestTranscodeOrphanToolResultBuildsSuccessfully's original, too-weak
+// build-only assertion).
+func assertToolCallsAnsweredContiguously(t *testing.T, out *apiRequest) {
+	t.Helper()
+	for i, m := range out.Messages {
+		p := probeMessage(t, marshalRaw(t, &m))
+		if p.Role != "assistant" || len(p.ToolCalls) == 0 {
+			continue
+		}
+		want := len(p.ToolCalls)
+		got := 0
+		for j := i + 1; j < len(out.Messages) && got < want; j++ {
+			pj := probeMessage(t, marshalRaw(t, &out.Messages[j]))
+			if pj.Role != "tool" {
+				break
+			}
+			got++
+		}
+		if got != want {
+			t.Fatalf("assistant wire message %d has %d tool_calls but only %d contiguous \"tool\" messages directly follow it (want exactly %d, with no other role interleaved): %+v", i, want, got, want, out.Messages)
+		}
+	}
+}
+
+// TestTranscodeOrphanToolResultBuildsSuccessfully is the golden, wire-level
+// regression test for PR #108's finding 1: an orphan ToolResult (its CallID
+// matches no ToolCall anywhere in history) that message.NormalizeForWire
+// demotes to a Text part. The demoted Text part used to be left inside its
+// original RoleTool message; this adapter's own transcodeToolMessages is
+// role-strict and hard-errors on any non-ToolResult part in a "tool"-role
+// message, so the exact orphan-tool_result wedge NormalizeForWire exists to
+// fix turned into a total request-build failure here. This drives the REAL
+// transcodeRequest (not message.NormalizeForWire's own output checked
+// against message's internal oracle, which cannot see a provider-specific
+// role-strictness failure) and asserts both that the request builds AND
+// that its SHAPE is valid -- "it builds" alone let a wedge slip through
+// PR #108's first review round (see the split-tool-run test below).
+func TestTranscodeOrphanToolResultBuildsSuccessfully(t *testing.T) {
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "GHOST", Content: message.Parts{&message.Text{Text: "ORPHAN OUTPUT"}}},
+		}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "ok"}}},
+	))
+
+	raw, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal transcoded request: %v", err)
+	}
+	rendered := string(raw)
+	if !strings.Contains(rendered, "GHOST") {
+		t.Errorf("transcoded request does not mention the orphan call id GHOST: %s", rendered)
+	}
+	if !strings.Contains(rendered, "ORPHAN OUTPUT") {
+		t.Errorf("transcoded request does not carry the orphan result's real content: %s", rendered)
+	}
+	// No "tool"-role wire message may carry a demoted Text part -- every
+	// "tool" message on this wire must still carry only real tool_call_id
+	// outputs.
+	for _, m := range out.Messages {
+		if m.Role != "tool" {
+			continue
+		}
+		if m.ToolCallID == "" {
+			t.Errorf("a \"tool\"-role wire message has no tool_call_id: %+v", m)
+		}
+	}
+	assertToolCallsAnsweredContiguously(t, out)
+}
+
+// TestTranscodeOrphanToolResultImageBlobArrivesAsRealImagePart is the
+// golden regression test for PR #108 round 5's finding on
+// message/wire_normalize.go:496: a demoted ToolResult's Blob used to
+// survive as a raw Part regardless of media type, and this adapter's own
+// blobURL (~line 343) hard-errors building a request containing ANY
+// non-image/* Blob — the narrowest of the three transcoders (it has no
+// PDF wire form at all, unlike provider/openai) — turning the orphan-
+// tool_result wedge NormalizeForWire exists to fix back into a total
+// request-BUILD failure. This carries a build-safe image AND an
+// unsupported media type in the SAME demoted result: the request must
+// still build, the image must arrive as a real image_url part, and the
+// unsupported Blob must be note-flattened, never a raw content part.
+func TestTranscodeOrphanToolResultImageBlobArrivesAsRealImagePart(t *testing.T) {
+	png := tinyPNG(t)
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "GHOST", Content: message.Parts{
+				&message.Text{Text: "ORPHAN OUTPUT"},
+				&message.Blob{MediaType: "image/png", Data: png},
+				&message.Blob{MediaType: "application/pdf", Data: []byte("%PDF-fake")},
+			}},
+		}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "ok"}}},
+	))
+
+	wantImageURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+	var foundImage bool
+	var rendered strings.Builder
+	for _, m := range out.Messages {
+		raw := marshalRaw(t, &m)
+		rendered.Write(raw)
+		if len(m.Content) == 0 {
+			continue
+		}
+		var arr []probeContentPart
+		if err := json.Unmarshal(m.Content, &arr); err != nil {
+			continue // a plain string content, not a multimodal array
+		}
+		for _, c := range arr {
+			if c.Type == "image_url" && c.ImageURL.URL == wantImageURL {
+				foundImage = true
+			}
+			if c.Type == "image_url" && strings.Contains(c.ImageURL.URL, "pdf") {
+				t.Fatalf("non-build-safe Blob survived as a raw image_url part: %+v", c)
+			}
+		}
+	}
+	if !foundImage {
+		t.Fatalf("demoted ToolResult's image did not arrive as a real image_url part: %s", rendered.String())
+	}
+	if !strings.Contains(rendered.String(), "application/pdf") {
+		t.Fatalf("note-flattened Blob's media type is not findable in the transcoded request: %s", rendered.String())
+	}
+	assertToolCallsAnsweredContiguously(t, out)
+}
+
+// TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn is
+// the golden regression test for PR #108 round 5's finding on
+// message/wire_normalize.go:370: a demoted ToolResult's Blob left inside a
+// RoleAssistant message used to make transcodeAssistantMessage hard-error
+// "unsupported part type *message.Blob in assistant message" -- the
+// finding this test package's own transcodeAssistantMessage is named in.
+// Two ToolResults sharing one assistant message (both with no ToolCall
+// anywhere) reach demoteWireInvalidToolResults' assistant-run branch at
+// all -- see message/wire_normalize_test.go's
+// TestNormalizeForWireAssistantRunBlobHoistedOutOfAssistantMessage for why
+// a single one alone would not.
+func TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn(t *testing.T) {
+	png := tinyPNG(t)
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolResult{CallID: "A", Content: message.Parts{
+				&message.Text{Text: "stuck in assistant"},
+				&message.Blob{MediaType: "image/png", Data: png},
+			}},
+			&message.ToolResult{CallID: "B", Content: message.Parts{&message.Text{Text: "also stuck"}}},
+		}},
+	))
+
+	wantImageURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+	var foundImage bool
+	for _, m := range out.Messages {
+		if len(m.Content) == 0 {
+			continue
+		}
+		var arr []probeContentPart
+		if err := json.Unmarshal(m.Content, &arr); err != nil {
+			continue
+		}
+		for _, c := range arr {
+			if m.Role == "assistant" {
+				t.Fatalf("a demoted Blob's content landed in an assistant-role message: %+v", m)
+			}
+			if c.Type == "image_url" && c.ImageURL.URL == wantImageURL {
+				foundImage = true
+			}
+		}
+	}
+	if !foundImage {
+		t.Fatalf("the hoisted image did not arrive as a real image_url part anywhere: %+v", out.Messages)
+	}
+}
+
+// TestTranscodeAssistantRunBlobHoistDoesNotSplitToolCallsFromTheirAnswer is
+// the golden regression test for PR #108 round 6's finding: the
+// assistant-run blob hoist (round 5) placed the hoisted "user"-role wire
+// message immediately after the assistant run's own wire message -- which
+// is BEFORE the "tool"-role wire message(s) answering that SAME assistant
+// message's live tool_calls. This adapter has distinct "user" and "tool"
+// wire roles with no folding, so the interposed "user" message breaks the
+// tool_calls' required contiguity with their "tool" answer -- the same
+// wedge class round 3's fix already closed for the non-assistant branch's
+// own hoist, one branch over. See
+// message/wire_normalize_test.go's
+// TestNormalizeForWireAssistantRunBlobHoistLandsAfterTheAnswerRunToo for the
+// canonical-level account of the shape (why TWO ToolResults, A and B, are
+// needed alongside the live, answered ToolCall C).
+func TestTranscodeAssistantRunBlobHoistDoesNotSplitToolCallsFromTheirAnswer(t *testing.T) {
+	png := tinyPNG(t)
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolCall{CallID: "C", Name: "bash", Arguments: json.RawMessage(`{}`)},
+			&message.ToolResult{CallID: "A", Content: message.Parts{
+				&message.Text{Text: "stuck in assistant"},
+				&message.Blob{MediaType: "image/png", Data: png},
+			}},
+			&message.ToolResult{CallID: "B", Content: message.Parts{&message.Text{Text: "also stuck"}}},
+		}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "C", Content: message.Parts{&message.Text{Text: "REAL C OUTPUT"}}},
+		}},
+	))
+
+	assertToolCallsAnsweredContiguously(t, out)
+
+	wantImageURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+	var foundImage bool
+	for _, m := range out.Messages {
+		if len(m.Content) == 0 {
+			continue
+		}
+		var arr []probeContentPart
+		if err := json.Unmarshal(m.Content, &arr); err != nil {
+			continue
+		}
+		for _, c := range arr {
+			if m.Role == "assistant" {
+				t.Fatalf("a demoted Blob's content landed in an assistant-role message: %+v", m)
+			}
+			if c.Type == "image_url" && c.ImageURL.URL == wantImageURL {
+				foundImage = true
+			}
+		}
+	}
+	if !foundImage {
+		t.Fatalf("the hoisted image did not arrive as a real image_url part anywhere: %+v", out.Messages)
+	}
+}
+
+// TestTranscodeOrphanToolResultDoesNotSplitContiguousToolRun is the golden,
+// wire-level regression test for PR #108's review round 2: a stray
+// (unanswerable) ToolResult sitting in the FIRST of two consecutive
+// RoleTool messages must not have its demoted text land BETWEEN the two
+// "tool" wire messages that answer the preceding assistant's tool_calls.
+// An earlier fix hoisted the demoted part into a new message positioned
+// immediately after the single canonical message it came from -- which,
+// for this exact shape, splits the contiguous "tool" run this adapter's
+// wire contract requires, so the request still built but the PROVIDER
+// would reject it with an asynchronous 400. The fix must place a demoted
+// part after the WHOLE contiguous run of non-assistant messages it belongs
+// to (see message.computeTranscodeSpans), not after one message within it.
+func TestTranscodeOrphanToolResultDoesNotSplitContiguousToolRun(t *testing.T) {
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolCall{CallID: "A", Name: "bash", Arguments: json.RawMessage(`{}`)},
+			&message.ToolCall{CallID: "B", Name: "bash", Arguments: json.RawMessage(`{}`)},
+		}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "A", Content: message.Parts{&message.Text{Text: "RA"}}},
+			&message.ToolResult{CallID: "GHOST", Content: message.Parts{&message.Text{Text: "STRAY"}}},
+		}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "B", Content: message.Parts{&message.Text{Text: "RB"}}},
+		}},
+	))
+
+	assertToolCallsAnsweredContiguously(t, out)
+
+	// The real answers must both still be present, unaltered, as proper
+	// "tool" wire messages.
+	foundA, foundB := false, false
+	for _, m := range out.Messages {
+		if m.Role != "tool" {
+			continue
+		}
+		switch m.ToolCallID {
+		case "A":
+			foundA = true
+			if contentString(t, m.Content) != "RA" {
+				t.Errorf("tool message for A content = %q, want %q", contentString(t, m.Content), "RA")
+			}
+		case "B":
+			foundB = true
+			if contentString(t, m.Content) != "RB" {
+				t.Errorf("tool message for B content = %q, want %q", contentString(t, m.Content), "RB")
+			}
+		}
+	}
+	if !foundA || !foundB {
+		t.Fatalf("real tool_call_id A and B results must both survive as \"tool\" wire messages: %+v", out.Messages)
+	}
+
+	// The demoted GHOST result must appear, readable, in a non-"tool" wire
+	// message positioned AFTER the entire contiguous A/B tool run -- never
+	// between them, and never itself claiming a tool_call_id.
+	lastToolIdx := -1
+	demotedIdx := -1
+	for i, m := range out.Messages {
+		if m.Role == "tool" {
+			lastToolIdx = i
+			continue
+		}
+		content := m.Content
+		if content == nil {
+			continue
+		}
+		var s string
+		if json.Unmarshal(content, &s) == nil && strings.Contains(s, "GHOST") && strings.Contains(s, "STRAY") {
+			demotedIdx = i
+		}
+	}
+	if demotedIdx == -1 {
+		t.Fatalf("demoted GHOST result (call id and content) not found in any non-\"tool\" wire message: %+v", out.Messages)
+	}
+	if demotedIdx < lastToolIdx {
+		t.Fatalf("demoted GHOST message at index %d sits BEFORE the last \"tool\" message at index %d -- it split the contiguous A/B tool run: %+v", demotedIdx, lastToolIdx, out.Messages)
+	}
+	for _, m := range out.Messages {
+		if m.Role == "tool" && m.ToolCallID == "GHOST" {
+			t.Fatalf("GHOST survived as a \"tool\"-role message instead of being demoted to text: %+v", m)
+		}
+	}
 }
