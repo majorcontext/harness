@@ -1344,10 +1344,16 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 //
 // # Non-idempotency: a retry can re-run tool calls
 //
-// Each retry re-issues the same directive through Prompt, which re-appends it
-// as a fresh user message — Prompt has no partial-turn resume point to retry
-// from below itself, so this is the same "ask again" a human operator would
-// do by hand, just automatic and bounded. That is harmless when the failed
+// Each retry re-issues the same directive. When the previous attempt left
+// that directive sitting unanswered at the tail of history — the common
+// case, see directiveReuseEligible below — the retry reuses that exact
+// message (runAgenticLoop, engine.go) instead of appending a second copy;
+// otherwise it falls back to calling Prompt again, which appends a fresh
+// one. See docs/design/goal-retry-directive-reuse.md for the reuse design
+// and its invariants. Either way, neither Prompt nor its internal loop body
+// has a partial-turn resume point to retry from below itself, so this is
+// the same "ask again" a human operator would do by hand, just automatic
+// and bounded. That is harmless when the failed
 // attempt never got as far as executing a tool call: nothing happened yet to
 // redo. It is NOT harmless when the failure happened on a LATER model call
 // within that same attempt — Prompt's loop is model call -> tool calls ->
@@ -1411,15 +1417,69 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 // generation — see recordGoalStalled and PursueGoal's stale-discard handling.
 func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, turn int, gen uint64) (attempts int, err error) {
 	var deterministicAttempt, retryableAttempt, truncatedAttempt int
+	// anchorID identifies the message directiveReuseEligible and
+	// dropUnansweredDirective both measure their tail from — the point
+	// immediately before whichever directive is CURRENTLY this turn's live,
+	// still-unanswered one. Captured once before attempt 1's own call
+	// appends the turn's first directive, then advanced (see the fallback
+	// branch below) exactly when a fresh directive replaces the one it
+	// named.
+	//
+	// It must NOT stay pinned to the turn's start for the whole turn: a
+	// fallback append (below) can leave undroppable residue behind an
+	// earlier directive forever (a denied tool call's own ToolResult, say —
+	// dropUnansweredDirective correctly refuses to touch it). A fixed
+	// anchor's tail then never again shrinks to a droppable shape, so
+	// EVERY later fallback re-appends yet another duplicate and drops none
+	// — up to one per remaining attempt over a long outage
+	// (goalRetryableMaxAttempts = 12), the exact NEP-5272 growth this
+	// package exists to eliminate, reopened on this one path. Re-anchoring
+	// to right before the fresh directive each fallback appends means the
+	// NEXT attempt's tail is that directive alone, so directiveReuseEligible
+	// picks it up and reuse resumes — bounding the damage to the one
+	// fallback copy that was unavoidable, exactly like the per-attempt
+	// anchor this package used before it could reuse a directive at all.
+	anchorID := s.lastMessageID()
 	for {
 		attempts++
 		toolsBefore := s.toolExecutions()
-		// Snapshot history's last message ID before this attempt's own
-		// s.Prompt call appends anything — see the dedup mitigation just
-		// below the tool-gate check, and lastMessageID's own doc comment
-		// for why this is an identity, not a length.
-		anchorID := s.lastMessageID()
-		_, perr := s.Prompt(ctx, directive)
+		var perr error
+		switch {
+		case attempts == 1:
+			// Nothing to reuse yet: the ordinary path appends the directive
+			// as history's first mention of it this turn.
+			_, perr = s.Prompt(ctx, directive)
+		case s.directiveReuseEligible(anchorID):
+			// The tail after anchorID is exactly the previous attempt's own
+			// unanswered directive (see directiveReuseEligible) — reuse it
+			// instead of appending a second copy: run the turn loop against
+			// history as it stands, answering that same message. See
+			// docs/design/goal-retry-directive-reuse.md §3.
+			_, perr = s.runAgenticLoop(ctx)
+		default:
+			// Not safe to reuse: either anchorID is no longer in history
+			// (maybeAutoCompact folded it away since it was captured — see
+			// the design's §6 risk) or the tail is some other shape this
+			// package must never touch on its own (the three-message
+			// interrupted-turn tail §5 deliberately keeps today's behavior
+			// for; a denied tool's result; delivered operator mail — see
+			// dropUnansweredDirective's doc comment). dropUnansweredDirective
+			// drops the previous attempt's dangling directive from LIVE
+			// history when it safely can (the interrupted-turn shape); it is
+			// a harmless no-op otherwise. Either way, fall back to appending
+			// a fresh directive exactly as every attempt did before this
+			// package could reuse one.
+			s.dropUnansweredDirective(anchorID)
+			// Re-anchor to right before the fresh directive about to be
+			// appended (see anchorID's own doc comment above for why this
+			// must happen here): whatever dropUnansweredDirective did or did
+			// not remove, THIS is the new boundary a later attempt's tail is
+			// measured from, so a subsequent reuse check sees only what
+			// happens from here on, never the residue this fallback is
+			// leaving behind for good.
+			anchorID = s.lastMessageID()
+			_, perr = s.Prompt(ctx, directive)
+		}
 		if perr == nil {
 			return attempts, nil
 		}
@@ -1497,24 +1557,26 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 			// of waiting and trying again — regardless of classification.
 			return attempts, err
 		}
-		// NEP-5272 defect 2 (partial mitigation). NOT every branch below
-		// this point is about to retry — the three budget-exhaustion
-		// returns just below (deterministic, and the two
-		// goalRetryableExhaustedError cases) are about to PARK instead, and
-		// a parked attempt's directive must stay in live history (see
+		// NEP-5272 defect 2. Before docs/design/goal-retry-directive-reuse.md,
+		// NOT every branch below this point was about to retry — the three
+		// budget-exhaustion returns just below (deterministic, and the two
+		// goalRetryableExhaustedError cases) PARK instead, and a parked
+		// attempt's directive must stay in live history verbatim (see
 		// dropUnansweredDirective's doc comment on the embedded-operator-
-		// block case). So each branch below calls dropUnansweredDirective
-		// itself, individually, ONLY immediately before the backoff/continue
-		// that actually re-issues the same directive — never before a
-		// parking return. See dropUnansweredDirective's own doc comment for
-		// exactly what the call does and does not remove, and for the
-		// residual gap it does NOT close.
+		// block case). That distinction no longer needs a call site of its
+		// own here: nothing in this loop drops or re-appends anything on a
+		// retry path anymore — the dispatch at the top of the loop (see
+		// directiveReuseEligible) decides reuse-vs-append fresh, once, right
+		// before the NEXT attempt's own call runs, using the exact same
+		// anchorID a park below leaves untouched. A parking return below
+		// simply never reaches that dispatch again, so the exhausting
+		// attempt's directive — and any operator mail embedded in it — is
+		// never touched, with no separate care required at each return.
 		if !retryable {
 			deterministicAttempt++
 			if deterministicAttempt > goalWorkerRetries {
 				return attempts, err
 			}
-			s.dropUnansweredDirective(anchorID)
 			if werr := waitGoalRetryBackoff(ctx, deterministicAttempt); werr != nil {
 				return attempts, werr
 			}
@@ -1525,7 +1587,6 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 			if exhausted {
 				return attempts, &goalRetryableExhaustedError{err: err, class: class}
 			}
-			s.dropUnansweredDirective(anchorID)
 			// Short schedule, no jitter: a stream ceiling is hit by
 			// LONG turns, so attempts are naturally minutes apart already
 			// — the wait only needs to clear a momentary network blip.
@@ -1538,11 +1599,68 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 		if exhausted {
 			return attempts, &goalRetryableExhaustedError{err: err, class: class}
 		}
-		s.dropUnansweredDirective(anchorID)
 		if werr := waitGoalRetryableBackoff(ctx, retryableAttempt); werr != nil {
 			return attempts, werr
 		}
 	}
+}
+
+// tailAfterAnchor returns the slice of s.history strictly after the message
+// identified by anchorID, and whether the lookup succeeded. anchorID == ""
+// names the very start of history (used for a turn whose directive was the
+// session's first-ever message). A non-empty anchorID missing from CURRENT
+// history — maybeAutoCompact folded away the message it names since it was
+// captured (see lastMessageID's doc comment and the design's §6 risk) —
+// reports ok=false: the caller must not guess a fallback position, since
+// every other message in a folded history is unrelated to this turn.
+//
+// Callers must hold s.mu; both directiveReuseEligible and
+// dropUnansweredDirective need the exact same anchor-to-tail lookup and
+// previously duplicated it inline.
+func (s *Session) tailAfterAnchor(anchorID string) ([]message.Message, bool) {
+	idx := -1
+	if anchorID != "" {
+		for i, m := range s.history {
+			if m.ID == anchorID {
+				idx = i
+				break
+			}
+		}
+		if idx == -1 {
+			return nil, false
+		}
+	}
+	return s.history[idx+1:], true
+}
+
+// directiveReuseEligible reports whether the tail of history after anchorID
+// is EXACTLY the single unanswered directive message a previous attempt
+// appended — the only shape promptTurnWithRetry's retry dispatch reuses
+// instead of re-appending (see docs/design/goal-retry-directive-reuse.md
+// §3). It reuses isSafeToDropDirectiveTail's existing shape check but adds
+// its own length==1 gate: isSafeToDropDirectiveTail's OTHER approved shape —
+// the three-message interrupted-turn tail (directive, partial assistant
+// reply, synthetic tool result; §5 of the design) — is deliberately
+// EXCLUDED from reuse, because reusing it would hand the retried turn back
+// the model's own partial output and a synthetic tool result: a
+// model-visible behavior change this fix does not make. That shape, and any
+// shape isSafeToDropDirectiveTail does not approve at all (a denied tool's
+// result, delivered operator mail — see dropUnansweredDirective's doc
+// comment), fall through to the caller's drop-and-reappend fallback instead.
+//
+// anchorID missing from CURRENT history is reported as NOT eligible (see
+// tailAfterAnchor): the caller falls back to dropUnansweredDirective (a safe
+// no-op in that case) plus an ordinary Prompt call, exactly the path every
+// attempt took before this fix existed.
+func (s *Session) directiveReuseEligible(anchorID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tail, ok := s.tailAfterAnchor(anchorID)
+	if !ok {
+		return false
+	}
+	return len(tail) == 1 && isSafeToDropDirectiveTail(tail)
 }
 
 // lastMessageID returns the ID of the last message in history, or "" if
@@ -1568,125 +1686,85 @@ func (s *Session) lastMessageID() string {
 	return s.history[len(s.history)-1].ID
 }
 
-// dropUnansweredDirective is promptTurnWithRetry's mitigation for NEP-5272's
-// defect 2 (operator finding on box hyper-lemon): "goal-worker retries
-// append the goal condition as a NEW operator message on every attempt."
-// Each retry re-issues the same directive through Prompt (see
-// promptTurnWithRetry's "Non-idempotency" doc section above), and Prompt
-// unconditionally appends whatever text it is given as a brand-new user
-// message — it has no notion of "this is a retry of the same directive,
-// don't duplicate it." Left alone, N failed attempts before an eventual
-// success (or an eventual park) leave N unanswered copies of the identical
-// directive sitting in history forever, each one inflating every LATER
-// request's input cost for the rest of the session — the production
-// incident's exact complaint ("a single wake of the box added 3 more").
+// dropUnansweredDirective is promptTurnWithRetry's FALLBACK for the one
+// retry shape directiveReuseEligible does not cover: the three-message
+// interrupted-turn tail (directive, partial assistant reply, synthetic tool
+// result — see interruptedTurnError in engine.go and §5 of
+// docs/design/goal-retry-directive-reuse.md). For the common shape — the
+// directive alone, unanswered — promptTurnWithRetry no longer calls this at
+// all; it reuses that exact message instead (runAgenticLoop, engine.go), so
+// no duplicate is ever appended and nothing here needs to run.
 //
-// anchorID is the ID lastMessageID captured immediately before this
-// attempt's own s.Prompt call, or "" if history was empty at that point.
-// dropUnansweredDirective looks up anchorID fresh in the CURRENT
-// s.history: if it is no longer present (maybeAutoCompact folded it into a
-// summary in the meantime), there is no safe way to identify this
-// attempt's own tail, so this is a no-op — leaving one duplicate directive
-// in history is better than truncating an unrelated interior point (see
-// lastMessageID's own doc comment).
+// This originated as NEP-5272 defect 2's mitigation (operator finding on
+// box hyper-lemon): before the reuse fix, EVERY retry re-issued the
+// directive through Prompt, which appends whatever text it is given as a
+// brand-new user message with no notion of "this is a retry, don't
+// duplicate it" — N failed attempts left N unanswered copies in history,
+// each inflating every LATER request's input cost. The reuse fix closes
+// that for the directive-alone shape at its root (no append, so nothing to
+// drop); this method remains the mitigation for the one shape reuse
+// deliberately excludes (see directiveReuseEligible's doc comment for why)
+// and for the compaction-fold edge case below.
 //
-// Called only from a point in promptTurnWithRetry where toolGateStops is
-// already known false (this attempt executed no real tool call) AND this
-// attempt is about to retry — never on a path that is about to park (see
-// promptTurnWithRetry's own call sites: each sits immediately before that
-// branch's backoff/continue, strictly after the branch's own
-// budget-exhaustion return). A parked attempt's tail must survive verbatim,
+// anchorID is the ID lastMessageID captured before attempt 1's own append —
+// see promptTurnWithRetry. dropUnansweredDirective looks up anchorID fresh
+// in the CURRENT s.history: if it is no longer present (maybeAutoCompact
+// folded it into a summary in the meantime), there is no safe way to
+// identify this turn's own tail, so this is a no-op — leaving one duplicate
+// directive in history is better than truncating an unrelated interior
+// point (see lastMessageID's own doc comment).
+//
+// Called only from promptTurnWithRetry's top-of-loop dispatch fallback,
+// which runs strictly BEFORE the next attempt's own call — never on a path
+// that is about to park (a park returns without ever reaching that dispatch
+// again). A parked attempt's tail therefore always survives verbatim,
 // including any embedded operator mail (next paragraph) — nothing will ever
 // re-append it.
 //
-// toolGateStops-false does NOT mean the tail after anchorID holds nothing
-// but the directive — a plugin's tool.execute.before hook can DENY a tool
-// call, which still appends a ToolResult message without incrementing
-// toolExecCount (see engine.go's runToolCall), and the model can then make a
-// further request in the SAME Prompt call that fails; a queued prompt can
-// also be delivered into that same window (Prompt's own tool-call-boundary
-// drain). Either produces additional, already-DELIVERED messages in the
-// tail — a denied tool's result, an "OPERATOR MESSAGES" block already
-// journaled prompt.dequeued("injected") — that must never be discarded.
-//
+// A failed, no-tool-executed attempt is not guaranteed to leave behind
+// nothing but the directive or the interrupted-turn trio, either — a
+// plugin's tool.execute.before hook can DENY a tool call, which still
+// appends a ToolResult message without incrementing toolExecCount (see
+// engine.go's runToolCall), and the model can then make a further request
+// in the SAME Prompt call that fails; a queued prompt can also be delivered
+// into that same window (Prompt's own tool-call-boundary drain). Either
+// produces additional, already-DELIVERED messages in the tail — a denied
+// tool's result, an "OPERATOR MESSAGES" block already journaled
+// prompt.dequeued("injected") — that must never be discarded.
 // isSafeToDropDirectiveTail below only approves the two shapes a failed
 // attempt with NO tool execution and NO intervening delivery can produce:
-// the directive alone, or the directive plus an interrupted turn's partial
-// assistant message and its synthetic tool-result message (see
-// interruptedTurnError in engine.go). Any other shape in the tail is left
-// untouched — the mitigation simply does not apply to that attempt, rather
-// than risk dropping delivered mail.
+// the directive alone, or the directive plus the interrupted-turn trio. Any
+// other shape in the tail is left untouched — this method simply does not
+// apply to that attempt, rather than risk dropping delivered mail.
 //
-// The "directive alone" shape above is not always the goal condition on its
-// own, and isSafeToDropDirectiveTail's role-shape check cannot see inside
-// it: PursueGoal's OWN turn-boundary queue drain (distinct from Prompt's
-// tool-call-boundary drain two paragraphs up) bakes a drained "OPERATOR
-// MESSAGES" block directly INTO the directive STRING, before
-// promptTurnWithRetry ever sees it (see PursueGoal's directive construction
-// just above promptTurnWithRetry). That mail then rides inside the single
-// RoleUser message case 1 approves, indistinguishable by shape from an
-// ordinary directive with no operator mail at all. Dropping it here is safe
-// ONLY because the very next attempt re-appends the identical directive
-// string — same embedded block included — so the mail is never actually
-// gone, just moved forward one attempt. It would NOT be safe on a park: no
-// next attempt ever comes, so the drop would be a real, permanent loss of
-// already-delivered mail from live history — which is exactly why every
-// call site sits strictly after its branch's own exhaustion check now,
-// never before it.
-//
-// # Residual gaps — deliberately NOT fixed here
+// # Residual gap — deliberately NOT fixed here
 //
 // This mutates only the LIVE in-memory s.history; it does not and cannot
 // touch the durable session log. Prompt's own append already persisted a
-// recMessage record for the directive (and, for the interruptedTurnError
-// case, the partial assistant/tool-result messages too) via
-// appendWithUsage before promptTurnWithRetry ever saw the failure — that
-// record is on disk, and the append-only session log (see AGENTS.md's core
-// invariants) has no sanctioned mechanism this package can reach for
-// retracting or amending an already-journaled record without engine.go/
-// store.go changes, which are out of this fix's scope (see the task's
-// framing: "if a clean fix is not possible without restructuring Prompt...
-// implement the best available mitigation"). Separately, maybeAutoCompact
-// itself can shrink history inside this same attempt's own s.Prompt call —
-// so "this attempt appended X" is not the same claim as "history grew by
-// exactly len(X)"; anchorID's identity-based lookup sidesteps needing that
-// claim to be true at all.
-//
-// The practical consequence: within a single live process, this closes the
-// unbounded-growth problem for as long as that process keeps running — at
-// most ONE unanswered copy of the directive is ever outstanding at a time,
-// never a permanently growing pile, and a turn that eventually succeeds
-// carries forward exactly one copy of its own directive, matching what a
-// turn with no retries at all would have left behind. But a resumed session
-// (LoadSession, after a crash or restart mid-retry) replays every persisted
-// record from disk, including the ones this method already pruned from
-// memory — so the duplicate directives this method removes from a LIVE
-// session's view can still reappear after a reload. Closing that half
-// requires Prompt itself to gain a notion of "this append supersedes an
-// earlier, still-unanswered one" (or a new journal record type analogous to
-// compaction's recCompact fold), which belongs in engine.go/store.go, not
-// here.
+// recMessage record for the interrupted-turn trio via appendWithUsage
+// before promptTurnWithRetry ever saw the failure — that record is on disk,
+// and the append-only session log (see AGENTS.md's core invariants) has no
+// sanctioned mechanism this package can reach for retracting or amending an
+// already-journaled record without engine.go/store.go changes, which
+// docs/design/goal-retry-directive-reuse.md §4 rejects outright (a new
+// retract record risks wedging a session in a mixed-version fleet — see
+// that section). So a resumed session (LoadSession, after a crash or
+// restart mid-retry on THIS one shape) still replays the dropped trio from
+// disk even though live history does not carry it — an accepted, narrower
+// version of the gap this whole fix otherwise closes for the far more
+// common directive-alone shape.
 func (s *Session) dropUnansweredDirective(anchorID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	idx := -1
-	if anchorID != "" {
-		for i, m := range s.history {
-			if m.ID == anchorID {
-				idx = i
-				break
-			}
-		}
-		if idx == -1 {
-			return
-		}
+	tail, ok := s.tailAfterAnchor(anchorID)
+	if !ok {
+		return
 	}
-	tail := s.history[idx+1:]
 	if !isSafeToDropDirectiveTail(tail) {
 		return
 	}
-	end := idx + 1
+	end := len(s.history) - len(tail)
 	s.history = s.history[:end:end]
 }
 

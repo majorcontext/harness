@@ -894,6 +894,28 @@ func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, er
 		Parts:     message.Parts{&message.Text{Text: text}},
 		CreatedAt: time.Now().UTC(),
 	})
+	return s.runAgenticLoop(ctx)
+}
+
+// runAgenticLoop drives the agentic loop — stream a turn, execute any tool
+// calls, feed results back — against history AS IT STANDS, until the model
+// ends its turn. It returns the final assistant message.
+//
+// This is Prompt's own loop body, split out unchanged: Prompt still calls it
+// as its last step, right after appending the user message, so Prompt's own
+// observable behavior — emitted events, emitStatus("busy")/("idle"), usage
+// accounting, and the appendUnexecutedToolCallResults/DequeueAllPrompts
+// ordering below — is identical to before the split.
+//
+// The split exists so a caller that already holds an appended, still-
+// unanswered directive at the tail of history can drive that SAME message
+// through the loop without appending a second copy. promptTurnWithRetry
+// (goal.go) is that caller: a goal-loop retry whose tail is exactly one
+// unanswered directive (see directiveReuseEligible) calls this directly
+// instead of Prompt, so the retried attempt answers the existing message
+// rather than duplicating it — see
+// docs/design/goal-retry-directive-reuse.md.
+func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) {
 	s.emitStatus("busy")
 	defer s.emitStatus("idle")
 

@@ -63,6 +63,87 @@ func TestDropUnansweredDirectiveSkipsWhenAnchorGone(t *testing.T) {
 	}
 }
 
+// TestDirectiveReuseEligibleFalseWhenAnchorGone is
+// TestDropUnansweredDirectiveSkipsWhenAnchorGone's mirror for
+// directiveReuseEligible (goal.go) — the dispatch check
+// docs/design/goal-retry-directive-reuse.md §3/§6 adds alongside
+// dropUnansweredDirective. It reuses the EXACT same setup: anchorID names a
+// message maybeAutoCompact folded away entirely, leaving behind exactly one
+// RoleUser message that is — by role shape alone — indistinguishable from
+// "this attempt's own unanswered directive." A buggy lookup that treated
+// "not found" (idx stays -1) the same as "start of history" (tail :=
+// s.history[0:]) would wrongly report this AS eligible, since a single
+// RoleUser message is exactly the shape a real unanswered directive takes:
+// promptTurnWithRetry would then reuse — answer — a message that is not
+// actually this turn's own directive at all. The fix must recognize the
+// gone anchor and report NOT eligible before ever reaching that shape
+// check.
+func TestDirectiveReuseEligibleFalseWhenAnchorGone(t *testing.T) {
+	s := NewSession(Config{
+		SessionDir:   t.TempDir(),
+		Instructions: &InstructionsConfig{Disabled: true},
+		SkillsDirs:   []string{},
+	})
+
+	s.append(message.Message{ID: "before1", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "turn 1"}}})
+	anchorID := s.lastMessageID()
+	if anchorID != "before1" {
+		t.Fatalf("lastMessageID = %q, want %q", anchorID, "before1")
+	}
+
+	// Simulate compaction folding "before1" away entirely, leaving behind
+	// exactly one RoleUser message — see
+	// TestDropUnansweredDirectiveSkipsWhenAnchorGone's doc comment for why
+	// this exact shape is chosen.
+	s.mu.Lock()
+	s.history = []message.Message{
+		{ID: "directive1", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "cond"}}},
+	}
+	s.mu.Unlock()
+
+	if got := s.directiveReuseEligible(anchorID); got {
+		t.Fatalf("directiveReuseEligible = true, want false (anchor gone, must not guess)")
+	}
+}
+
+// TestDirectiveReuseEligibleFalseForInterruptedTurnTail is the red-first
+// regression test for directiveReuseEligible's own length==1 gate (goal.go):
+// isSafeToDropDirectiveTail alone approves TWO shapes — the directive
+// alone, and the three-message interrupted-turn tail (directive, partial
+// assistant reply, synthetic tool result) — but
+// docs/design/goal-retry-directive-reuse.md §5 keeps the second shape OUT
+// OF SCOPE for reuse: reusing it would hand the retried turn back the
+// model's own partial output and a synthetic tool result it never actually
+// answered, a model-visible behavior change this fix does not make. Only
+// directiveReuseEligible's own extra len(tail)==1 check — not
+// isSafeToDropDirectiveTail by itself — excludes this shape.
+func TestDirectiveReuseEligibleFalseForInterruptedTurnTail(t *testing.T) {
+	s := NewSession(Config{
+		SessionDir:   t.TempDir(),
+		Instructions: &InstructionsConfig{Disabled: true},
+		SkillsDirs:   []string{},
+	})
+
+	s.append(message.Message{ID: "anchor", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "turn 1 reply"}}})
+	anchorID := s.lastMessageID()
+
+	s.append(message.Message{ID: "directive1", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "cond"}}})
+	s.append(message.Message{ID: "partial1", Role: message.RoleAssistant, Parts: message.Parts{&message.ToolCall{CallID: "tc1", Name: "test_tool", Arguments: json.RawMessage(`{}`)}}})
+	s.append(message.Message{ID: "toolresult1", Role: message.RoleTool, Parts: message.Parts{&message.ToolResult{CallID: "tc1", Content: message.Parts{&message.Text{Text: interruptedTurnErrorText}}}}})
+
+	// Sanity: isSafeToDropDirectiveTail alone DOES approve this shape (case
+	// 3) — proving directiveReuseEligible's false result below comes from
+	// its own extra length gate, not from isSafeToDropDirectiveTail
+	// disagreeing.
+	if !isSafeToDropDirectiveTail(s.History()[1:]) {
+		t.Fatalf("isSafeToDropDirectiveTail = false, want true (the three-message interrupted-turn shape is one of its two approved shapes)")
+	}
+
+	if got := s.directiveReuseEligible(anchorID); got {
+		t.Fatalf("directiveReuseEligible = true, want false (the interrupted-turn tail is deliberately excluded from reuse — see §5)")
+	}
+}
+
 // TestDropUnansweredDirectiveByIdentityIgnoresLaterUnrelatedGrowth proves
 // the identity-based anchor is immune to the OTHER histBefore failure mode
 // lastMessageID's doc comment names: history that SHRANK (compaction
