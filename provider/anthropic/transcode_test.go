@@ -671,6 +671,59 @@ func TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn(t *t
 	}
 }
 
+// TestTranscodeAssistantRunBlobHoistDoesNotSplitToolCallsFromTheirAnswer is
+// the golden regression test for PR #108 round 6's finding: the
+// assistant-run blob hoist (round 5) placed the hoisted "user"-role wire
+// message immediately after the assistant run's own wire message -- before
+// the "tool_result" answering that SAME assistant message's live
+// tool_calls. Anthropic tolerates this shape (adjacent same-role wire
+// messages merge, so tool_use and tool_result stay in one merged block
+// regardless), but this test pins the shape here too so a future change to
+// the merge rule is caught by the same golden repro all three providers
+// share. See message/wire_normalize_test.go's
+// TestNormalizeForWireAssistantRunBlobHoistLandsAfterTheAnswerRunToo for the
+// canonical-level account (why TWO ToolResults, A and B, are needed
+// alongside the live, answered ToolCall C).
+func TestTranscodeAssistantRunBlobHoistDoesNotSplitToolCallsFromTheirAnswer(t *testing.T) {
+	png := tinyPNG(t)
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolCall{CallID: "C", Name: "bash", Arguments: json.RawMessage(`{}`)},
+			&message.ToolResult{CallID: "A", Content: message.Parts{
+				&message.Text{Text: "stuck in assistant"},
+				&message.Blob{MediaType: "image/png", Data: png},
+			}},
+			&message.ToolResult{CallID: "B", Content: message.Parts{&message.Text{Text: "also stuck"}}},
+		}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "C", Content: message.Parts{&message.Text{Text: "REAL C OUTPUT"}}},
+		}},
+	))
+
+	// tool_use C's answering tool_result must arrive somewhere in the wire
+	// request, and never inside an assistant-role turn.
+	var foundAnswer, foundImage bool
+	for _, m := range out.Messages {
+		for _, b := range m.Content {
+			if m.Role == "assistant" && (b.Type == "image" || b.Type == "document") {
+				t.Fatalf("a demoted Blob block landed in an assistant wire turn: %+v", b)
+			}
+			if b.Type == "tool_result" && b.ToolUseID == "C" {
+				foundAnswer = true
+			}
+			if b.Type == "image" && b.Source != nil && b.Source.Data == base64.StdEncoding.EncodeToString(png) {
+				foundImage = true
+			}
+		}
+	}
+	if !foundAnswer {
+		t.Fatalf("no tool_result answering tool_use C found anywhere: %+v", out.Messages)
+	}
+	if !foundImage {
+		t.Fatalf("the hoisted image did not arrive as a real wire image block anywhere: %+v", out.Messages)
+	}
+}
+
 // TestTranscodeCompactionDoubleRoleUserMerges is the red-first test for the
 // compaction splice shape docs/design/context-compaction.md's §2 calls out
 // as load-bearing on existing transcoder behavior, not luck: a successful

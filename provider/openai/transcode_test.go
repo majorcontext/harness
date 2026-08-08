@@ -678,6 +678,63 @@ func TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn(t *t
 	}
 }
 
+// TestTranscodeAssistantRunBlobHoistDoesNotSplitToolCallsFromTheirAnswer is
+// the golden regression test for PR #108 round 6's finding: the
+// assistant-run blob hoist (round 5) placed the hoisted item immediately
+// after the assistant's own function_call item -- before the
+// function_call_output answering that SAME function_call. This adapter's
+// flat, call-id-addressed item list tolerates the interposed item (there is
+// no message-turn grouping to violate), but this test pins the shape here
+// too, so a future change to this adapter's own item ordering is caught by
+// the same golden repro all three providers share. See
+// message/wire_normalize_test.go's
+// TestNormalizeForWireAssistantRunBlobHoistLandsAfterTheAnswerRunToo for the
+// canonical-level account (why TWO ToolResults, A and B, are needed
+// alongside the live, answered ToolCall C).
+func TestTranscodeAssistantRunBlobHoistDoesNotSplitToolCallsFromTheirAnswer(t *testing.T) {
+	png := tinyPNG(t)
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolCall{CallID: "C", Name: "bash", Arguments: json.RawMessage(`{}`)},
+			&message.ToolResult{CallID: "A", Content: message.Parts{
+				&message.Text{Text: "stuck in assistant"},
+				&message.Blob{MediaType: "image/png", Data: png},
+			}},
+			&message.ToolResult{CallID: "B", Content: message.Parts{&message.Text{Text: "also stuck"}}},
+		}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "C", Content: message.Parts{&message.Text{Text: "REAL C OUTPUT"}}},
+		}},
+	))
+
+	wantImageURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+	var foundAnswer, foundImage bool
+	for i, item := range out.Input {
+		p := probeItem(t, item)
+		if p.Role == "assistant" {
+			for _, c := range p.Content {
+				if c.Type == "input_image" {
+					t.Fatalf("input item %d: a demoted Blob landed in an assistant-role item: %+v", i, p)
+				}
+			}
+		}
+		if p.Type == "function_call_output" && p.CallID == "C" && p.Output == "REAL C OUTPUT" {
+			foundAnswer = true
+		}
+		for _, c := range p.Content {
+			if c.Type == "input_image" && c.ImageURL == wantImageURL {
+				foundImage = true
+			}
+		}
+	}
+	if !foundAnswer {
+		t.Fatalf("no function_call_output answering C found anywhere: %+v", out.Input)
+	}
+	if !foundImage {
+		t.Fatalf("the hoisted image did not arrive as a real input_image part anywhere: %+v", out.Input)
+	}
+}
+
 // TestTranscodeOrphanToolResultDoesNotSplitContiguousToolRun is the golden,
 // wire-level counterpart to openaicompat's regression test of the same name
 // (PR #108's review round 2): a stray (unanswerable) ToolResult sitting in

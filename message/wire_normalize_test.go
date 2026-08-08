@@ -532,6 +532,93 @@ func TestNormalizeForWireAssistantRunBlobHoistedOutOfAssistantMessage(t *testing
 	}
 }
 
+// TestNormalizeForWireAssistantRunBlobHoistLandsAfterTheAnswerRunToo is the
+// regression test for PR #108 round 6's finding: the assistant-run blob
+// hoist (added in round 5 to fix the finding above) placed the hoisted
+// RoleUser blob message immediately after the assistant run's OWN last
+// message -- which is BEFORE the following non-assistant run that answers
+// that assistant's own live tool_calls. On provider/openaicompat (distinct
+// "user" and "tool" wire roles, no folding), that interposed "user" message
+// breaks the tool_calls' required contiguity with their "tool" answers,
+// the same wedge class round 3's fix (hoist after the whole RUN, not one
+// message) already closed for the non-assistant branch -- this is the
+// assistant branch's own version of that same rule.
+//
+// TWO ToolResults are needed in the assistant message to reach the
+// assistant branch at all (see the sibling test above for why one alone
+// gets force-relocated first): A carries the blob and is barrier-blocked
+// from relocating past B (a later real result in the SAME message), so A
+// stays in the assistant message for demoteWireInvalidToolResults to
+// demote. B is NOT barrier-blocked (the next real result, C, has a LATER
+// origin run), so NormalizeForWire's own force-relocation moves B, a real
+// ToolResult, into the answer run ahead of C -- itself harmless (both are
+// "tool"-role there) but necessary bookkeeping this test's assertions
+// below also account for.
+func TestNormalizeForWireAssistantRunBlobHoistLandsAfterTheAnswerRunToo(t *testing.T) {
+	img := &Blob{MediaType: "image/png", Data: []byte{7, 7, 7, 7}}
+	in := []Message{
+		{Role: RoleAssistant, Parts: Parts{
+			toolCallPart("C", "bash", `{}`),
+			&ToolResult{CallID: "A", Content: Parts{&Text{Text: "stuck in assistant"}, img}},
+			&ToolResult{CallID: "B", Content: Parts{&Text{Text: "also stuck"}}},
+		}},
+		{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "C", Content: Parts{&Text{Text: "REAL C OUTPUT"}}}}},
+	}
+	out := NormalizeForWire(in)
+
+	if v := checkWire(out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire left this shape wire-invalid: %s", violationStrings(v))
+	}
+	if v := checkNoDataLossAllowingDemotion(in, out); len(v) != 0 {
+		t.Fatalf("demotion dropped or altered real data: %s", violationStrings(v))
+	}
+
+	// The real answer for C must be the message directly following the
+	// assistant message -- no RoleUser (hoisted blob or demoted-surplus)
+	// message may land between them, mirroring the non-assistant branch's
+	// own "after the whole run" rule.
+	assistantIdx := -1
+	for i, m := range out {
+		if m.Role == RoleAssistant {
+			assistantIdx = i
+			break
+		}
+	}
+	if assistantIdx == -1 || assistantIdx+1 >= len(out) {
+		t.Fatalf("no assistant message (or nothing follows it) in output: %+v", out)
+	}
+	next := out[assistantIdx+1]
+	var foundRealC bool
+	for _, p := range next.Parts {
+		tr, ok := p.(*ToolResult)
+		if ok && tr.CallID == "C" && tr.Content.Text() == "REAL C OUTPUT" {
+			foundRealC = true
+		}
+	}
+	if !foundRealC {
+		t.Fatalf("the message directly after the assistant message must be C's real answer, got: %+v", next)
+	}
+
+	var foundImage bool
+	for _, m := range out {
+		for _, p := range m.Parts {
+			b, ok := p.(*Blob)
+			if !ok {
+				continue
+			}
+			if m.Role == RoleAssistant {
+				t.Fatalf("a demoted Blob survived inside a RoleAssistant message: %+v", out)
+			}
+			if b.MediaType == img.MediaType && string(b.Data) == string(img.Data) {
+				foundImage = true
+			}
+		}
+	}
+	if !foundImage {
+		t.Fatalf("the hoisted image Blob did not survive anywhere in the output: %+v", out)
+	}
+}
+
 // TestNormalizeForWireClaimSkipsUnclaimableHeadOfPool is the regression test
 // for PR #108's finding 2: claimFromPool used to inspect only pool[0], so an
 // unclaimable head entry (a surplus id nothing ever demands) permanently
