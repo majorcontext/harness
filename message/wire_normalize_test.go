@@ -1,0 +1,841 @@
+package message
+
+import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// This file tests NormalizeForWire, the transcode-only sibling of
+// ResolveOrphanToolCalls (see NormalizeForWire's own doc comment and
+// NEP-5293 part 2). Every case below is checked against the independent
+// wire-model oracle in wire_oracle_test.go — never against this function's
+// own internals — exactly as message/wire_oracle_meta_test.go's red-
+// verification cases do for ResolveOrphanToolCalls.
+
+// TestNormalizeForWireRepairsDuplicateCallID is gap 1: two tool_use blocks
+// in one assistant message share a CallID, answered by a single
+// tool_result. NormalizeForWire must count occurrences (not just presence)
+// and add a second synthetic result so both are answered.
+func TestNormalizeForWireRepairsDuplicateCallID(t *testing.T) {
+	in := []Message{
+		{Role: RoleAssistant, Parts: Parts{
+			toolCallPart("A", "bash", `{}`),
+			toolCallPart("A", "bash", `{}`),
+		}},
+		{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "A", Content: Parts{&Text{Text: "ok"}}}}},
+	}
+	out := NormalizeForWire(in)
+	if v := checkWire(out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire did not repair duplicate-CallID gap: %s", violationStrings(v))
+	}
+	if v := checkNoDataLoss(in, out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire lost or altered real data: %s", violationStrings(v))
+	}
+}
+
+// TestNormalizeForWireRepairsToolCallInNonAssistantMessage is gap 2: a
+// ToolCall sits in a RoleUser message, never scanned by
+// ResolveOrphanToolCalls's RoleAssistant-gated scan. A tool_use block is
+// wire-valid ONLY inside an assistant turn (invariant 2's tool_use half,
+// message/wire_oracle_test.go) independent of whether anything answers it,
+// so NormalizeForWire must DEMOTE the misplaced ToolCall to plain text,
+// preserving its name/id/arguments — mirroring how a stray ToolResult is
+// demoted (demoteWireInvalidToolResults) — never merely synthesize an
+// answer and leave the tool_use block itself sitting on the wrong side of
+// the wire.
+func TestNormalizeForWireRepairsToolCallInNonAssistantMessage(t *testing.T) {
+	in := []Message{
+		{Role: RoleUser, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
+		{Role: RoleAssistant, Parts: Parts{&Text{Text: "carries on"}}},
+	}
+	out := NormalizeForWire(in)
+	if v := checkWire(out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire did not repair the non-assistant tool_call gap: %s", violationStrings(v))
+	}
+	if v := checkNoDataLoss(in, out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire lost or altered real data: %s", violationStrings(v))
+	}
+	for _, m := range out {
+		for _, p := range m.Parts {
+			if tc, ok := p.(*ToolCall); ok {
+				t.Fatalf("ToolCall %q survived as a tool_use part outside an assistant message: %+v -- it must be demoted to Text", tc.CallID, tc)
+			}
+		}
+	}
+	var rendered strings.Builder
+	for _, m := range out {
+		rendered.WriteString(m.Parts.Text())
+	}
+	if !strings.Contains(rendered.String(), "A") || !strings.Contains(rendered.String(), "bash") {
+		t.Fatalf("demoted ToolCall's id/name are not findable in the output text: %s", rendered.String())
+	}
+	// The call was never a legitimate demand in the first place (it never
+	// belonged on the wire at all), so NormalizeForWire must not manufacture
+	// a synthetic "answer" for it — that would be noise, not a repair.
+	if strings.Contains(rendered.String(), SyntheticOrphanResultText) {
+		t.Fatalf("NormalizeForWire manufactured a synthetic answer for a call that was never a legitimate demand: %s", rendered.String())
+	}
+}
+
+// TestNormalizeForWireRepairsToolResultPrecedingToolCall is gap 3: a real
+// ToolResult appears before its ToolCall ever exists in history.
+// NormalizeForWire must RELOCATE the real result to sit after the call it
+// answers, never leave it stranded while also inserting a synthetic.
+func TestNormalizeForWireRepairsToolResultPrecedingToolCall(t *testing.T) {
+	in := []Message{
+		{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "A", Content: Parts{&Text{Text: "stray, too early"}}}}},
+		{Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
+	}
+	out := NormalizeForWire(in)
+	if v := checkWire(out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire did not repair the preceding-tool_result gap: %s", violationStrings(v))
+	}
+	if v := checkNoDataLoss(in, out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire lost or altered real data: %s", violationStrings(v))
+	}
+	// The real content must have been relocated, not replaced by a
+	// synthetic marker: exactly one ToolResult in the output, and it must
+	// carry the ORIGINAL text.
+	got := toolResultRecords(out, false)
+	if len(got) != 1 || got[0].callID != "A" || got[0].content == "" {
+		t.Fatalf("expected exactly one real ToolResult A in output, got %+v", got)
+	}
+	for _, m := range out {
+		for _, p := range m.Parts {
+			if tr, ok := p.(*ToolResult); ok && tr.Content.Text() == SyntheticOrphanResultText {
+				t.Fatalf("NormalizeForWire synthesized a result when the real one should have been relocated: %+v", out)
+			}
+		}
+	}
+}
+
+// TestNormalizeForWireRepairsIntervalAssistantMessageSplit is gap 4 (the
+// fourth shape found by the oracle, see the Linear comment on NEP-5293): a
+// real ToolResult is separated from its ToolCall by an intervening
+// assistant message. provider/anthropic/transcode.go merges adjacent
+// same-role messages, so the wire sees ONE assistant run spanning both
+// assistant messages — the run-merged wire is therefore already valid, and
+// NormalizeForWire must not disturb it (must not synthesize an erroneous
+// "no result was found" error ahead of the real one, the exact defect
+// documented on current main).
+func TestNormalizeForWireRepairsIntervalAssistantMessageSplit(t *testing.T) {
+	in := []Message{
+		{Role: RoleUser, Parts: Parts{&Text{Text: "go"}}},
+		{Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
+		{Role: RoleAssistant, Parts: Parts{&Text{Text: "thinking out loud"}}},
+		{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "A", Content: Parts{&Text{Text: "REAL OUTPUT"}}}}},
+	}
+	out := NormalizeForWire(in)
+	if v := checkWire(out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire left the split-assistant-message shape wire-invalid: %s", violationStrings(v))
+	}
+	if v := checkNoDataLoss(in, out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire lost or altered real data: %s", violationStrings(v))
+	}
+	got := toolResultRecords(out, false)
+	if len(got) != 1 || got[0].callID != "A" {
+		t.Fatalf("expected exactly one real ToolResult A in output, got %+v", got)
+	}
+	if got[0].isError {
+		t.Fatalf("the real result must not be marked is_error: %+v", got[0])
+	}
+	for _, m := range out {
+		for _, p := range m.Parts {
+			if tr, ok := p.(*ToolResult); ok && tr.Content.Text() == SyntheticOrphanResultText {
+				t.Fatalf("NormalizeForWire synthesized a spurious error result: %+v", out)
+			}
+		}
+	}
+}
+
+// TestNormalizeForWireRepairsResultsSplitAcrossToolMessages is the second
+// legitimate shape named in the revert commit and repeated in this issue:
+// results answering two tool_use blocks split across two consecutive
+// RoleTool messages. Run-level matching must see both without adding a
+// spurious synthetic for the second.
+func TestNormalizeForWireRepairsResultsSplitAcrossToolMessages(t *testing.T) {
+	in := []Message{
+		{Role: RoleAssistant, Parts: Parts{
+			toolCallPart("A", "bash", `{}`),
+			toolCallPart("B", "bash", `{}`),
+		}},
+		{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "A", Content: Parts{&Text{Text: "a-out"}}}}},
+		{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "B", Content: Parts{&Text{Text: "b-out"}}}}},
+	}
+	out := NormalizeForWire(in)
+	if v := checkWire(out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire left the split-tool-messages shape wire-invalid: %s", violationStrings(v))
+	}
+	if v := checkNoDataLoss(in, out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire lost or altered real data: %s", violationStrings(v))
+	}
+}
+
+// TestNormalizeForWireDemotesSelfAnsweredNonAssistantCall confirms a shape
+// this file used to (wrongly) call legitimate and untouched: a ToolCall
+// answered by its own ToolResult in the SAME non-assistant message. Nothing
+// is orphaned in the demand/supply sense, but invariant 2's tool_use half
+// still applies (message/wire_oracle_test.go): the enclosing message's Role
+// is not RoleAssistant, so the tool_use block is wire-invalid regardless of
+// the matching result sitting right next to it. NormalizeForWire must
+// demote BOTH the ToolCall and its ToolResult to plain text, preserving
+// every byte of the real content.
+func TestNormalizeForWireDemotesSelfAnsweredNonAssistantCall(t *testing.T) {
+	in := []Message{
+		{Role: RoleTool, Parts: Parts{
+			toolCallPart("A", "bash", `{}`),
+			&ToolResult{CallID: "A", Content: Parts{&Text{Text: "self-answered"}}},
+		}},
+	}
+	out := NormalizeForWire(in)
+	if v := checkWire(out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire left the self-answered non-assistant call wire-invalid: %s", violationStrings(v))
+	}
+	if v := checkNoDataLossAllowingDemotion(in, out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire lost or altered real data: %s", violationStrings(v))
+	}
+	for _, m := range out {
+		for _, p := range m.Parts {
+			switch p.(type) {
+			case *ToolCall:
+				t.Fatalf("ToolCall A survived as a tool_use part in a non-assistant message: %+v", out)
+			case *ToolResult:
+				t.Fatalf("ToolResult A survived as a tool_result part with no legitimate demand: %+v", out)
+			}
+		}
+	}
+	var rendered strings.Builder
+	for _, m := range out {
+		rendered.WriteString(m.Parts.Text())
+	}
+	if !strings.Contains(rendered.String(), "self-answered") {
+		t.Fatalf("demoted ToolResult's real content is not findable in the output text: %s", rendered.String())
+	}
+}
+
+// TestNormalizeForWireNoOpOnValidHistory pins that ordinary, already-valid
+// history is left untouched.
+func TestNormalizeForWireNoOpOnValidHistory(t *testing.T) {
+	in := []Message{
+		{Role: RoleUser, Parts: Parts{&Text{Text: "go"}}},
+		{Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
+		{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "A", Content: Parts{&Text{Text: "ok"}}}}},
+		{Role: RoleAssistant, Parts: Parts{&Text{Text: "done"}}},
+	}
+	out := NormalizeForWire(in)
+	if v := checkWire(out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire flagged already-valid history: %s", violationStrings(v))
+	}
+	if len(out) != len(in) {
+		t.Fatalf("NormalizeForWire changed message count on already-valid history: got %d, want %d", len(out), len(in))
+	}
+}
+
+// TestNormalizeForWireOrdinaryOrphanAtEndOfHistory pins that the ordinary,
+// already-repaired-by-ResolveOrphanToolCalls case (a trailing unanswered
+// tool_use, incident ses_01kx48z4rqfkpbwmzfdv1jzeg6) is still handled.
+func TestNormalizeForWireOrdinaryOrphanAtEndOfHistory(t *testing.T) {
+	in := []Message{
+		{Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
+	}
+	out := NormalizeForWire(in)
+	if v := checkWire(out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire did not repair a trailing orphaned tool_use: %s", violationStrings(v))
+	}
+	if v := checkNoDataLoss(in, out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire lost or altered real data: %s", violationStrings(v))
+	}
+}
+
+// TestNormalizeForWireIsFixedPoint proves re-applying NormalizeForWire to
+// its own output changes nothing further, mirroring
+// TestResolveOrphanToolCallsPropertyFixedPoint in properties_test.go.
+func TestNormalizeForWireIsFixedPoint(t *testing.T) {
+	cases := [][]Message{
+		{
+			{Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`), toolCallPart("A", "bash", `{}`)}},
+			{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "A", Content: Parts{&Text{Text: "ok"}}}}},
+		},
+		{
+			{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "A", Content: Parts{&Text{Text: "stray"}}}}},
+			{Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
+		},
+	}
+	for i, in := range cases {
+		out := NormalizeForWire(in)
+		again := NormalizeForWire(out)
+		raw1, err := json.Marshal(out)
+		if err != nil {
+			t.Fatalf("case %d: marshal(out): %v", i, err)
+		}
+		raw2, err := json.Marshal(again)
+		if err != nil {
+			t.Fatalf("case %d: marshal(again): %v", i, err)
+		}
+		if string(raw1) != string(raw2) {
+			t.Fatalf("case %d: NormalizeForWire is not a fixed point:\n first: %s\nsecond: %s", i, raw1, raw2)
+		}
+	}
+}
+
+// TestResolveOrphanToolCallsRemainsAdditiveAcrossAllGapShapes guards the
+// architecture NEP-5293 part 2 requires: ResolveOrphanToolCalls is the
+// function engine.LoadSession applies to LIVE history (engine/store.go),
+// so it must stay purely additive FOREVER, even for the four gap shapes
+// NormalizeForWire (this file's own subject) exists specifically to
+// repair at transcode time. This test pins that ResolveOrphanToolCalls's
+// own output, run through EVERY one of the four gap shapes, never drops or
+// reorders a real ToolResult — regardless of whether it also manages to
+// make the shape wire-valid (it is documented NOT to, for most of these;
+// see wire_oracle_meta_test.go's TestResolveOrphanToolCallsLeaves*Unrepaired and
+// TestLegitimate* cases, which pin the precise wire-validity gaps this
+// test deliberately does not re-assert). A future change that makes
+// ResolveOrphanToolCalls itself destructive — the exact defect class that
+// was reverted once already — fails this test first, before it could ever
+// reach LIVE history.
+func TestResolveOrphanToolCallsRemainsAdditiveAcrossAllGapShapes(t *testing.T) {
+	shapes := map[string][]Message{
+		"duplicate call id": {
+			{Role: RoleAssistant, Parts: Parts{
+				toolCallPart("A", "bash", `{}`),
+				toolCallPart("A", "bash", `{}`),
+			}},
+			{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "A", Content: Parts{&Text{Text: "ok"}}}}},
+		},
+		"tool call in non-assistant message": {
+			{Role: RoleUser, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
+			{Role: RoleAssistant, Parts: Parts{&Text{Text: "carries on"}}},
+		},
+		"tool result preceding its tool call": {
+			{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "A", Content: Parts{&Text{Text: "stray, too early"}}}}},
+			{Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
+		},
+		"tool result separated by an intervening assistant message": {
+			{Role: RoleUser, Parts: Parts{&Text{Text: "go"}}},
+			{Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
+			{Role: RoleAssistant, Parts: Parts{&Text{Text: "thinking out loud"}}},
+			{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "A", Content: Parts{&Text{Text: "REAL OUTPUT"}}}}},
+		},
+	}
+	for name, in := range shapes {
+		t.Run(name, func(t *testing.T) {
+			out := ResolveOrphanToolCalls(in)
+			if v := checkNoDataLoss(in, out); len(v) != 0 {
+				t.Fatalf("ResolveOrphanToolCalls lost or reordered real data for shape %q: %s", name, violationStrings(v))
+			}
+		})
+	}
+}
+
+// TestNormalizeForWireDemotesUnanswerableToolResult is the golden
+// regression test for the fifth gap: a ToolResult whose CallID matches NO
+// ToolCall anywhere in history at all. Neither counting nor relocation can
+// ever answer it (there is no tool_use to answer), and it is the SAME
+// permanent-wedge class as NEP-5272 if shipped as a tool_result block —
+// found live against the real anthropic transcoder. The fix changes its
+// PART TYPE (ToolResult -> Text) rather than deleting or moving it: every
+// byte of the real output stays plainly visible to the model, just no
+// longer claiming to be an answer to a call that never happened.
+func TestNormalizeForWireDemotesUnanswerableToolResult(t *testing.T) {
+	in := []Message{
+		{Role: RoleUser, Parts: Parts{&Text{Text: "go"}}},
+		{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "GHOST", Content: Parts{&Text{Text: "ORPHAN OUTPUT"}}}}},
+		{Role: RoleAssistant, Parts: Parts{&Text{Text: "ok"}}},
+	}
+	out := NormalizeForWire(in)
+
+	if v := checkWire(out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire left an unanswerable tool_result wire-invalid: %s", violationStrings(v))
+	}
+	// No ToolResult part survives for GHOST at all -- it must have been
+	// demoted, not merely left in place (which checkWire's own
+	// "tool-result-count-exact" surplus check above would already reject).
+	for _, m := range out {
+		for _, p := range m.Parts {
+			if tr, ok := p.(*ToolResult); ok && tr.CallID == "GHOST" {
+				t.Fatalf("GHOST survived as a ToolResult part: %+v -- it must be demoted to Text, not left as a tool_result with no answering tool_use", tr)
+			}
+		}
+	}
+	if v := checkNoDataLossAllowingDemotion(in, out); len(v) != 0 {
+		t.Fatalf("demotion did not preserve the real output byte-for-byte: %s", violationStrings(v))
+	}
+}
+
+// TestNormalizeForWireDemotionPreservesImageBlob is the regression test for
+// PR #108's finding 1: demoteToolResult used to replace an unanswerable
+// ToolResult's image Blob with a bare "[N image attachment(s) omitted]"
+// note, discarding the actual bytes. On anthropic a tool_result Blob
+// transcodes to a real image block (provider/anthropic/transcode.go's
+// transcodeBlob), so the demote path used to lose real pixel data the
+// pre-stack additive ResolveOrphanToolCalls path kept. The fix must carry
+// the Blob PART itself into the demoted message, not merely describe it.
+func TestNormalizeForWireDemotionPreservesImageBlob(t *testing.T) {
+	img := &Blob{MediaType: "image/png", Data: []byte{1, 2, 3, 4, 5}}
+	in := []Message{
+		{Role: RoleUser, Parts: Parts{&Text{Text: "go"}}},
+		{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "GHOST", Content: Parts{
+			&Text{Text: "ORPHAN OUTPUT"},
+			img,
+		}}}},
+		{Role: RoleAssistant, Parts: Parts{&Text{Text: "ok"}}},
+	}
+	out := NormalizeForWire(in)
+
+	if v := checkWire(out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire left an unanswerable tool_result wire-invalid: %s", violationStrings(v))
+	}
+	if v := checkNoDataLossAllowingDemotion(in, out); len(v) != 0 {
+		t.Fatalf("demotion dropped or altered real data: %s", violationStrings(v))
+	}
+
+	var found bool
+	for _, m := range out {
+		for _, p := range m.Parts {
+			b, ok := p.(*Blob)
+			if !ok {
+				continue
+			}
+			if b.MediaType == img.MediaType && string(b.Data) == string(img.Data) {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("demoted ToolResult's image Blob bytes did not survive to the output: %+v", out)
+	}
+}
+
+// TestNormalizeForWireDemotionNoteFlattensNonImageBlob is the regression
+// test for PR #108 round 5's findings on lines 496/370: `02a0fa6` kept
+// EVERY demoted Blob as a real Part, including a non-image or
+// data-less/URL-less one, which provider/openai and provider/openaicompat
+// hard-error building (see buildSafeBlob's own doc comment,
+// message/wire_normalize.go) -- turning the orphan-tool_result wedge this
+// file exists to fix back into a total request-BUILD failure for that
+// shape. A build-safe image Blob must still survive byte-for-byte (the
+// anthropic fidelity win `02a0fa6` intended to keep); a non-build-safe one
+// must be note-flattened instead -- present in the label's text as a
+// count and media type, never shipped as a raw Blob part.
+func TestNormalizeForWireDemotionNoteFlattensNonImageBlob(t *testing.T) {
+	img := &Blob{MediaType: "image/png", Data: []byte{1, 2, 3, 4, 5}}
+	pdf := &Blob{MediaType: "application/pdf", Data: []byte{6, 7, 8, 9}}
+	in := []Message{
+		{Role: RoleUser, Parts: Parts{&Text{Text: "go"}}},
+		{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "GHOST", Content: Parts{
+			&Text{Text: "ORPHAN OUTPUT"},
+			img,
+			pdf,
+		}}}},
+		{Role: RoleAssistant, Parts: Parts{&Text{Text: "ok"}}},
+	}
+	out := NormalizeForWire(in)
+
+	if v := checkWire(out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire left an unanswerable tool_result wire-invalid: %s", violationStrings(v))
+	}
+	if v := checkNoDataLossAllowingDemotion(in, out); len(v) != 0 {
+		t.Fatalf("demotion mishandled the mixed blob shape: %s", violationStrings(v))
+	}
+
+	var foundImage, foundPDFAsPart bool
+	var rendered strings.Builder
+	for _, m := range out {
+		rendered.WriteString(m.Parts.Text())
+		rendered.WriteByte('\n')
+		for _, p := range m.Parts {
+			b, ok := p.(*Blob)
+			if !ok {
+				continue
+			}
+			if b.MediaType == img.MediaType && string(b.Data) == string(img.Data) {
+				foundImage = true
+			}
+			if b.MediaType == pdf.MediaType {
+				foundPDFAsPart = true
+			}
+		}
+	}
+	if !foundImage {
+		t.Fatalf("build-safe image Blob did not survive as a real Part: %+v", out)
+	}
+	if foundPDFAsPart {
+		t.Fatalf("non-build-safe application/pdf Blob survived as a raw Part instead of being note-flattened: %+v", out)
+	}
+	if !strings.Contains(rendered.String(), "application/pdf") {
+		t.Fatalf("note-flattened Blob's media type is not findable in the output text: %s", rendered.String())
+	}
+}
+
+// TestNormalizeForWireAssistantRunBlobHoistedOutOfAssistantMessage is the
+// regression test for PR #108 round 5's finding on line 370: a demoted
+// result's build-safe Blob must NEVER be left inside a RoleAssistant wire
+// block. provider/openaicompat's transcodeAssistantMessage rejects any
+// Blob outright, and even where a transcoder's own code has no such check
+// (anthropic's transcodeBlob is role-agnostic), the Anthropic Messages API
+// itself rejects an image block in an assistant turn. A ToolResult sitting
+// inside a RoleAssistant message (invariant 2's tool_result half,
+// message/wire_oracle_test.go) is unconditionally demoted; its label Text
+// stays in place, but any surviving Blob must be hoisted into a NEW,
+// separate RoleUser message.
+//
+// Two ToolResults, not one, are needed to reach this shape: a SINGLE
+// ToolResult sitting alone in an assistant run is instead force-relocated
+// (still a real ToolResult, never demoted) by NormalizeForWire's own
+// earlier pass (the "still sitting unclaimed in the pool" loop) into the
+// following run before demoteWireInvalidToolResults ever runs -- so the
+// assistant branch's demotion never even sees it. TWO real results
+// sharing one assistant message (both with no ToolCall anywhere, itself
+// off-label -- see properties_test.go's generator comment) hit
+// computeRelocationBarrier: forcing the FIRST past the SECOND would
+// reorder them, which relocation refuses (see NormalizeForWire's own
+// "Relocation safety" doc comment) -- so A stays exactly where it is,
+// still inside the RoleAssistant message, and demoteWireInvalidToolResults
+// is what finally repairs it.
+func TestNormalizeForWireAssistantRunBlobHoistedOutOfAssistantMessage(t *testing.T) {
+	img := &Blob{MediaType: "image/png", Data: []byte{9, 9, 9, 9}}
+	in := []Message{
+		{Role: RoleAssistant, Parts: Parts{
+			&ToolResult{CallID: "A", Content: Parts{&Text{Text: "stuck in assistant"}, img}},
+			&ToolResult{CallID: "B", Content: Parts{&Text{Text: "also stuck"}}},
+		}},
+	}
+	out := NormalizeForWire(in)
+
+	if v := checkWire(out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire left the assistant-run ToolResult wire-invalid: %s", violationStrings(v))
+	}
+	if v := checkNoDataLossAllowingDemotion(in, out); len(v) != 0 {
+		t.Fatalf("demotion dropped or altered real data: %s", violationStrings(v))
+	}
+
+	var foundElsewhere bool
+	for _, m := range out {
+		for _, p := range m.Parts {
+			b, ok := p.(*Blob)
+			if !ok {
+				continue
+			}
+			if m.Role == RoleAssistant {
+				t.Fatalf("a demoted Blob survived inside a RoleAssistant message: %+v", out)
+			}
+			if b.MediaType == img.MediaType && string(b.Data) == string(img.Data) {
+				foundElsewhere = true
+			}
+		}
+	}
+	if !foundElsewhere {
+		t.Fatalf("the hoisted image Blob did not survive anywhere in the output: %+v", out)
+	}
+}
+
+// TestNormalizeForWireAssistantRunBlobHoistLandsAfterTheAnswerRunToo is the
+// regression test for PR #108 round 6's finding: the assistant-run blob
+// hoist (added in round 5 to fix the finding above) placed the hoisted
+// RoleUser blob message immediately after the assistant run's OWN last
+// message -- which is BEFORE the following non-assistant run that answers
+// that assistant's own live tool_calls. On provider/openaicompat (distinct
+// "user" and "tool" wire roles, no folding), that interposed "user" message
+// breaks the tool_calls' required contiguity with their "tool" answers,
+// the same wedge class round 3's fix (hoist after the whole RUN, not one
+// message) already closed for the non-assistant branch -- this is the
+// assistant branch's own version of that same rule.
+//
+// TWO ToolResults are needed in the assistant message to reach the
+// assistant branch at all (see the sibling test above for why one alone
+// gets force-relocated first): A carries the blob and is barrier-blocked
+// from relocating past B (a later real result in the SAME message), so A
+// stays in the assistant message for demoteWireInvalidToolResults to
+// demote. B is NOT barrier-blocked (the next real result, C, has a LATER
+// origin run), so NormalizeForWire's own force-relocation moves B, a real
+// ToolResult, into the answer run ahead of C -- itself harmless (both are
+// "tool"-role there) but necessary bookkeeping this test's assertions
+// below also account for.
+func TestNormalizeForWireAssistantRunBlobHoistLandsAfterTheAnswerRunToo(t *testing.T) {
+	img := &Blob{MediaType: "image/png", Data: []byte{7, 7, 7, 7}}
+	in := []Message{
+		{Role: RoleAssistant, Parts: Parts{
+			toolCallPart("C", "bash", `{}`),
+			&ToolResult{CallID: "A", Content: Parts{&Text{Text: "stuck in assistant"}, img}},
+			&ToolResult{CallID: "B", Content: Parts{&Text{Text: "also stuck"}}},
+		}},
+		{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "C", Content: Parts{&Text{Text: "REAL C OUTPUT"}}}}},
+	}
+	out := NormalizeForWire(in)
+
+	if v := checkWire(out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire left this shape wire-invalid: %s", violationStrings(v))
+	}
+	if v := checkNoDataLossAllowingDemotion(in, out); len(v) != 0 {
+		t.Fatalf("demotion dropped or altered real data: %s", violationStrings(v))
+	}
+
+	// The real answer for C must be the message directly following the
+	// assistant message -- no RoleUser (hoisted blob or demoted-surplus)
+	// message may land between them, mirroring the non-assistant branch's
+	// own "after the whole run" rule.
+	assistantIdx := -1
+	for i, m := range out {
+		if m.Role == RoleAssistant {
+			assistantIdx = i
+			break
+		}
+	}
+	if assistantIdx == -1 || assistantIdx+1 >= len(out) {
+		t.Fatalf("no assistant message (or nothing follows it) in output: %+v", out)
+	}
+	next := out[assistantIdx+1]
+	var foundRealC bool
+	for _, p := range next.Parts {
+		tr, ok := p.(*ToolResult)
+		if ok && tr.CallID == "C" && tr.Content.Text() == "REAL C OUTPUT" {
+			foundRealC = true
+		}
+	}
+	if !foundRealC {
+		t.Fatalf("the message directly after the assistant message must be C's real answer, got: %+v", next)
+	}
+
+	var foundImage bool
+	for _, m := range out {
+		for _, p := range m.Parts {
+			b, ok := p.(*Blob)
+			if !ok {
+				continue
+			}
+			if m.Role == RoleAssistant {
+				t.Fatalf("a demoted Blob survived inside a RoleAssistant message: %+v", out)
+			}
+			if b.MediaType == img.MediaType && string(b.Data) == string(img.Data) {
+				foundImage = true
+			}
+		}
+	}
+	if !foundImage {
+		t.Fatalf("the hoisted image Blob did not survive anywhere in the output: %+v", out)
+	}
+}
+
+// TestNormalizeForWireClaimSkipsUnclaimableHeadOfPool is the regression test
+// for PR #108's finding 2: claimFromPool used to inspect only pool[0], so an
+// unclaimable head entry (a surplus id nothing ever demands) permanently
+// blocked a real, matching answer queued behind it in the pool. Here "B" is
+// deposited before "A" in the same non-assistant run, and nothing anywhere
+// ever demands "B" -- while "A" is later demanded by a ToolCall. Both land
+// in the pool in that order ([B, A]). A claimFromPool that only checks
+// pool[0] sees "B" first, refuses (wrong id), and gives up entirely instead
+// of scanning past it to find "A" -- so the call for "A" gets a fabricated
+// is_error "no result was found" AND the real answer for "A" is left
+// unclaimed (later demoted to plain text by demoteWireInvalidToolResults,
+// since it has no legitimate placement once relocation gave up on it).
+// Wire-valid and lossless either way, which is why this needs its own
+// targeted test rather than relying on the property tests (see the PR
+// review finding for the full trace).
+func TestNormalizeForWireClaimSkipsUnclaimableHeadOfPool(t *testing.T) {
+	in := []Message{
+		{Role: RoleTool, Parts: Parts{
+			&ToolResult{CallID: "B", Content: Parts{&Text{Text: "surplus, never demanded"}}},
+			&ToolResult{CallID: "A", Content: Parts{&Text{Text: "REAL A OUTPUT"}}},
+		}},
+		{Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
+	}
+	out := NormalizeForWire(in)
+
+	if v := checkWire(out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire left the pool head-of-line-blocking shape wire-invalid: %s", violationStrings(v))
+	}
+	if v := checkNoDataLossAllowingDemotion(in, out); len(v) != 0 {
+		t.Fatalf("NormalizeForWire lost or altered real data: %s", violationStrings(v))
+	}
+
+	// The real answer for "A" must survive as an actual ToolResult -- a
+	// genuine, non-error answer to the call -- not be demoted to text while
+	// a synthetic is_error result stands in for it.
+	var foundReal bool
+	for _, m := range out {
+		for _, p := range m.Parts {
+			tr, ok := p.(*ToolResult)
+			if !ok || tr.CallID != "A" {
+				continue
+			}
+			if tr.Content.Text() == SyntheticOrphanResultText {
+				t.Fatalf("NormalizeForWire synthesized a spurious is_error result for A instead of relocating the real one behind B in the pool: %+v", out)
+			}
+			if tr.IsError {
+				t.Fatalf("the real result for A must not be marked is_error: %+v", tr)
+			}
+			if tr.Content.Text() != "REAL A OUTPUT" {
+				t.Fatalf("the real result for A has the wrong content: %+v", tr)
+			}
+			foundReal = true
+		}
+	}
+	if !foundReal {
+		t.Fatalf("no real ToolResult A survived in output: %+v", out)
+	}
+}
+
+// checkNoDataLossAllowingDemotion is checkNoDataLoss's test-side
+// counterpart for NormalizeForWire specifically. It does NOT modify,
+// relax, or reimplement checkNoDataLoss (message/wire_oracle_test.go):
+// toolResultRecords, checkNoDataLoss's own extraction helper, is called
+// here completely unmodified to build both sequences below. What this
+// adds is recognizing ONE additional transformation checkNoDataLoss's own
+// definition of survival ("still a ToolResult, in place, in sequence")
+// cannot see at all: demoteWireInvalidToolResults legitimately rewrites a
+// ToolResult that can never be wire-valid into a Text part — real content
+// preserved, verbatim, just no longer claiming to answer a tool_use. This
+// is intentionally NOT keyed on any specific PREDICTED reason a result
+// might be demoted (an earlier version of this helper tried to predict
+// "zero ToolCalls anywhere" specifically and broke the moment demotion's
+// own scope widened to a second shape neither this helper nor the
+// original fix anticipated — see demoteWireInvalidToolResults's own doc
+// comment for that shape). Instead it walks checkNoDataLoss's own two
+// sequences as a subsequence match: an input record either shows up next,
+// in order, in the output's real-ToolResult sequence (exactly
+// checkNoDataLoss's own criterion, unrelaxed) — or it doesn't, in which
+// case it is required to be individually recoverable as plain text
+// somewhere in the output, using the INPUT's own raw data, never
+// NormalizeForWire's internal formatting choice for the replacement — and
+// its Blob parts, if any, are required to survive as real Blob parts, not
+// merely be mentioned (see looseBlobCounts below and PR #108's finding 1: a
+// Blob-only Content has an empty Text() body, which used to make bodyFound
+// unconditionally true regardless of whether the Blob's bytes survived
+// anywhere at all).
+func checkNoDataLossAllowingDemotion(input, output []Message) []wireViolation {
+	before := toolResultRecords(input, false)
+	rawBefore := rawToolResults(input)
+	after := toolResultRecords(output, true)
+
+	var outputText strings.Builder
+	for _, m := range output {
+		outputText.WriteString(m.Parts.Text())
+		outputText.WriteByte('\n')
+	}
+	rendered := outputText.String()
+	looseBlobPool := looseBlobCounts(output)
+
+	var violations []wireViolation
+	j := 0
+	for i, b := range before {
+		if j < len(after) && after[j] == b {
+			j++
+			continue
+		}
+		tr := rawBefore[i]
+		// The call id may legitimately appear either literally or
+		// %q-quoted (Go's standard safe rendering for a string that can
+		// hold arbitrary, including non-printable, bytes). Neither form
+		// is this checker imposing NormalizeForWire's own exact wording:
+		// it is recognizing that a control byte has more than one safe
+		// textual representation, not hard-coding one.
+		idFound := strings.Contains(rendered, tr.CallID) || strings.Contains(rendered, fmt.Sprintf("%q", tr.CallID))
+		body := tr.Content.Text()
+		// An empty body has no text to search rendered for at all — it is
+		// NOT a free pass independent of idFound (a Blob-only Content, with
+		// no Text part, still names its call id in demoteToolResult's own
+		// label): require idFound to stand in for it instead of always
+		// passing.
+		bodyFound := idFound
+		if body != "" {
+			bodyFound = strings.Contains(rendered, body)
+		}
+		// Blobs split into two survival classes, mirroring demoteToolResult's
+		// own split (see buildSafeBlob, message/wire_normalize.go): a
+		// buildSafeBlob (image/* with Data or URL) must survive
+		// byte-identical as a real, loose Blob part -- unrelaxed from the
+		// check this replaces. Anything else is deliberately note-flattened
+		// (PR #108 round 5: a raw, non-build-safe Blob left as a real part
+		// failed the whole request to BUILD on openai/openaicompat), so
+		// THIS CLASS ONLY is narrowed to require its dropped COUNT be
+		// findable in the rendered note text, never its bytes -- it was
+		// never a candidate to survive as a real part in the first place.
+		blobsFound := true
+		var droppedCount int
+		for _, p := range tr.Content {
+			bl, ok := p.(*Blob)
+			if !ok {
+				continue
+			}
+			if !buildSafeBlob(bl) {
+				droppedCount++
+				continue
+			}
+			k := blobKeyOf(bl)
+			if looseBlobPool[k] > 0 {
+				looseBlobPool[k]--
+			} else {
+				blobsFound = false
+			}
+		}
+		if droppedCount > 0 && !strings.Contains(rendered, strconv.Itoa(droppedCount)) {
+			blobsFound = false
+		}
+		if !idFound || !bodyFound || !blobsFound {
+			violations = append(violations, wireViolation{
+				invariant: "no-data-loss",
+				detail:    fmt.Sprintf("tool_result %q neither survived as a ToolResult in sequence nor was found demoted to text/blobs (call id findable: %v, content findable: %v, blobs findable: %v)", tr.CallID, idFound, bodyFound, blobsFound),
+			})
+		}
+	}
+	if j != len(after) {
+		violations = append(violations, wireViolation{
+			invariant: "no-data-loss",
+			detail:    fmt.Sprintf("output's real ToolResult sequence has %d entr(y/ies) not explained by input's sequence (matched only %d of %d): %+v", len(after)-j, j, len(after), after),
+		})
+	}
+	return violations
+}
+
+// rawToolResults extracts every ToolResult PART (not a snapshot record)
+// from messages, in the exact same encounter order toolResultRecords
+// (message/wire_oracle_test.go) uses, so index i here and index i in
+// toolResultRecords(messages, false) always name the same occurrence.
+func rawToolResults(messages []Message) []*ToolResult {
+	var out []*ToolResult
+	for _, m := range messages {
+		for _, p := range m.Parts {
+			if tr, ok := p.(*ToolResult); ok {
+				out = append(out, tr)
+			}
+		}
+	}
+	return out
+}
+
+// blobKey identifies a Blob by its full byte-exact identity: media type,
+// URL, and inline data. Two Blobs sharing a blobKey are indistinguishable
+// on the wire.
+type blobKey struct {
+	mediaType string
+	url       string
+	data      string
+}
+
+func blobKeyOf(b *Blob) blobKey {
+	return blobKey{mediaType: b.MediaType, url: b.URL, data: string(b.Data)}
+}
+
+// looseBlobCounts multiset-counts every Blob PART sitting directly in a
+// message's Parts list — never one still nested inside a surviving
+// ToolResult's own Content, which toolResultRecords/checkNoDataLoss's
+// sequence match above already accounts for byte-for-byte. This is
+// exactly where demoteToolResult places a demoted result's own Blobs (see
+// its doc comment): loose, adjacent to its label Text, never left behind
+// inside a ToolResult. Keeping the two populations disjoint means a
+// genuinely surviving ToolResult's own Blob can never be double-counted as
+// satisfying a DIFFERENT, demoted result's Blob requirement.
+func looseBlobCounts(messages []Message) map[blobKey]int {
+	counts := make(map[blobKey]int)
+	for _, m := range messages {
+		for _, p := range m.Parts {
+			if b, ok := p.(*Blob); ok {
+				counts[blobKeyOf(b)]++
+			}
+		}
+	}
+	return counts
+}
