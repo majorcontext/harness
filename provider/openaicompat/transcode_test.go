@@ -690,6 +690,62 @@ func TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn(t *t
 	}
 }
 
+// TestTranscodeAssistantRunBlobHoistDoesNotSplitToolCallsFromTheirAnswer is
+// the golden regression test for PR #108 round 6's finding: the
+// assistant-run blob hoist (round 5) placed the hoisted "user"-role wire
+// message immediately after the assistant run's own wire message -- which
+// is BEFORE the "tool"-role wire message(s) answering that SAME assistant
+// message's live tool_calls. This adapter has distinct "user" and "tool"
+// wire roles with no folding, so the interposed "user" message breaks the
+// tool_calls' required contiguity with their "tool" answer -- the same
+// wedge class round 3's fix already closed for the non-assistant branch's
+// own hoist, one branch over. See
+// message/wire_normalize_test.go's
+// TestNormalizeForWireAssistantRunBlobHoistLandsAfterTheAnswerRunToo for the
+// canonical-level account of the shape (why TWO ToolResults, A and B, are
+// needed alongside the live, answered ToolCall C).
+func TestTranscodeAssistantRunBlobHoistDoesNotSplitToolCallsFromTheirAnswer(t *testing.T) {
+	png := tinyPNG(t)
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolCall{CallID: "C", Name: "bash", Arguments: json.RawMessage(`{}`)},
+			&message.ToolResult{CallID: "A", Content: message.Parts{
+				&message.Text{Text: "stuck in assistant"},
+				&message.Blob{MediaType: "image/png", Data: png},
+			}},
+			&message.ToolResult{CallID: "B", Content: message.Parts{&message.Text{Text: "also stuck"}}},
+		}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "C", Content: message.Parts{&message.Text{Text: "REAL C OUTPUT"}}},
+		}},
+	))
+
+	assertToolCallsAnsweredContiguously(t, out)
+
+	wantImageURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+	var foundImage bool
+	for _, m := range out.Messages {
+		if len(m.Content) == 0 {
+			continue
+		}
+		var arr []probeContentPart
+		if err := json.Unmarshal(m.Content, &arr); err != nil {
+			continue
+		}
+		for _, c := range arr {
+			if m.Role == "assistant" {
+				t.Fatalf("a demoted Blob's content landed in an assistant-role message: %+v", m)
+			}
+			if c.Type == "image_url" && c.ImageURL.URL == wantImageURL {
+				foundImage = true
+			}
+		}
+	}
+	if !foundImage {
+		t.Fatalf("the hoisted image did not arrive as a real image_url part anywhere: %+v", out.Messages)
+	}
+}
+
 // TestTranscodeOrphanToolResultDoesNotSplitContiguousToolRun is the golden,
 // wire-level regression test for PR #108's review round 2: a stray
 // (unanswerable) ToolResult sitting in the FIRST of two consecutive

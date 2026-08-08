@@ -285,6 +285,38 @@ type partKey struct{ msgIdx, partIdx int }
 // document order (by message, then by part) as the run is scanned, and
 // runs themselves are processed in document order, so a demoted part from
 // an earlier run is always emitted before one from a later run.
+//
+// # Why an assistant-run Blob hoist must ALSO skip the following answer run
+//
+// The assistant branch's own Blob hoist (see "Why a demoted Text part is
+// never left inside a RoleTool message" above) has this same defect one
+// level up. A first version placed the hoisted RoleUser message right
+// after the assistant run's own msgEnd — but computeTranscodeSpans
+// guarantees runs strictly ALTERNATE assistant/non-assistant, so the run
+// immediately following an assistant run (if any) is exactly the one that
+// answers ITS tool_calls (the "carry" mechanism throughout this file). A
+// RoleUser hoisted message landing there, BEFORE that answer run's own
+// content, is the identical wedge the paragraph above closes, one branch
+// over: on provider/openaicompat a "user"-role wire message interposed
+// between an assistant's tool_calls and their "tool"-role answers breaks
+// the required contiguity — a total request failure, not merely
+// asynchronous, since the request that ships is simply wrong-shaped (PR
+// #108 round 6). anthropic (adjacent same-role merge) and the OpenAI
+// Responses adapter (flat, ungrouped item list) both tolerate it; only
+// openaicompat breaks — see
+// provider/openaicompat/transcode_test.go's
+// TestTranscodeAssistantRunBlobHoistDoesNotSplitToolCallsFromTheirAnswer.
+//
+// The fix mirrors the non-assistant branch's own rule exactly, extended by
+// one run: an assistant run's hoisted Blob message is deferred — carried
+// as pendingBlobHoist — until the FOLLOWING non-assistant run (guaranteed
+// unique and guaranteed to exist unless the assistant run is history's
+// last run, in which case there is nothing to skip past and it is emitted
+// immediately) has finished emitting its own real, kept content. It is
+// flushed there, BEFORE that run's own "-demoted" hoist message if any:
+// the assistant run (ri) precedes the following run (ri+1) in document
+// order, so its hoisted content must precede that run's own, preserving
+// this function's own document-order guarantee above across the deferral.
 func demoteWireInvalidToolResults(messages []Message) []Message {
 	runs := computeTranscodeSpans(messages)
 	msgRun := make([]int, len(messages))
@@ -365,6 +397,16 @@ func demoteWireInvalidToolResults(messages []Message) []Message {
 		return messages
 	}
 	out := make([]Message, 0, len(messages))
+	// pendingBlobHoist/pendingBlobHoistOrigin carry an assistant run's
+	// hoisted Blob message forward across exactly one loop iteration — see
+	// this function's own doc comment, "Why an assistant-run Blob hoist
+	// must ALSO skip the following answer run": computeTranscodeSpans
+	// guarantees runs strictly alternate, so the run immediately following
+	// an assistant run (this loop's very next iteration, if any) is always
+	// the one non-assistant branch below flushes it into, before that
+	// run's own "-demoted" hoist message.
+	var pendingBlobHoist Parts
+	var pendingBlobHoistOrigin int
 	for ri, r := range runs {
 		if r.assistant {
 			// A demoted label Text is already valid right where it sits in
@@ -379,8 +421,11 @@ func demoteWireInvalidToolResults(messages []Message) []Message {
 			// assistant turn; images are user-turn only). So a
 			// buildSafeBlob surviving this demotion is collected across the
 			// WHOLE run, same as the non-assistant branch below, and hoisted
-			// into its own RoleUser message after the run's last message —
-			// never spliced into the run itself.
+			// into its own RoleUser message — never spliced into the run
+			// itself, and never placed immediately after the run's own
+			// msgEnd either: see "Why an assistant-run Blob hoist must ALSO
+			// skip the following answer run" above for why it must be
+			// deferred one further run past that, not merely past this one.
 			var hoistedBlobs Parts
 			for i := r.msgStart; i <= r.msgEnd; i++ {
 				m := messages[i]
@@ -406,11 +451,21 @@ func demoteWireInvalidToolResults(messages []Message) []Message {
 				}
 			}
 			if len(hoistedBlobs) > 0 {
-				out = append(out, Message{
-					ID:    fmt.Sprintf("%s%d-demoted-blobs", wireNormalizePrefix, ri),
-					Role:  RoleUser,
-					Parts: hoistedBlobs,
-				})
+				if ri+1 < len(runs) {
+					// Defer: flushed by the very next iteration's
+					// non-assistant branch below, after ITS own real
+					// content but before ITS own "-demoted" hoist.
+					pendingBlobHoist = hoistedBlobs
+					pendingBlobHoistOrigin = ri
+				} else {
+					// Trailing assistant run: nothing follows to skip
+					// past, so there is nothing to defer past either.
+					out = append(out, Message{
+						ID:    fmt.Sprintf("%s%d-demoted-blobs", wireNormalizePrefix, ri),
+						Role:  RoleUser,
+						Parts: hoistedBlobs,
+					})
+				}
 			}
 			continue
 		}
@@ -460,6 +515,20 @@ func demoteWireInvalidToolResults(messages []Message) []Message {
 				nm.Parts = kept
 				out = append(out, nm)
 			}
+		}
+		// Flush the preceding assistant run's deferred Blob hoist now:
+		// after this run's own real content (preserving tool_calls'
+		// contiguity with their answers), but before this run's OWN
+		// "-demoted" hoist below (the assistant run precedes this one in
+		// document order, so its hoisted content must too — see this
+		// function's own doc comment).
+		if len(pendingBlobHoist) > 0 {
+			out = append(out, Message{
+				ID:    fmt.Sprintf("%s%d-demoted-blobs", wireNormalizePrefix, pendingBlobHoistOrigin),
+				Role:  RoleUser,
+				Parts: pendingBlobHoist,
+			})
+			pendingBlobHoist = nil
 		}
 		if len(demoted) > 0 {
 			out = append(out, Message{
