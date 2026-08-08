@@ -2,8 +2,12 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/message"
@@ -445,6 +449,294 @@ func TestCompactCorruptRangeIsLoadError(t *testing.T) {
 
 	if _, err := LoadSession(cfg, s.ID); err == nil {
 		t.Fatal("LoadSession succeeded on a corrupt compact record range, want an error")
+	}
+}
+
+// nep5292FixtureLines is the exact reproduction journal from NEP-5292: three
+// turns, the first turn's assistant message carrying a tool_call ("A") with
+// no matching tool_result — the orphan message.ResolveOrphanToolCalls
+// repairs at every LoadSession, in memory only. With keepTurns=2 the fold
+// boundary lands exactly on that in-memory-only synthetic message.
+const nep5292FixtureLines = `{"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"task 1"}]}}
+{"type":"message","message":{"id":"msg_2","role":"assistant","parts":[{"type":"tool_call","call_id":"A","name":"bash","arguments":{}}]}}
+{"type":"message","message":{"id":"msg_3","role":"user","parts":[{"type":"text","text":"task 2"}]}}
+{"type":"message","message":{"id":"msg_4","role":"assistant","parts":[{"type":"text","text":"done"}]}}
+{"type":"message","message":{"id":"msg_5","role":"user","parts":[{"type":"text","text":"task 3"}]}}
+{"type":"message","message":{"id":"msg_6","role":"assistant","parts":[{"type":"text","text":"done"}]}}
+`
+
+// writeNEP5292Fixture writes the reproduction journal above under id, with a
+// session header line so it satisfies every other reader's expectations too.
+func writeNEP5292Fixture(t *testing.T, dir, id string) {
+	t.Helper()
+	data := `{"type":"session","id":"` + id + `","created_at":"2025-01-02T03:04:05Z"}
+` + nep5292FixtureLines
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// nep5292RawHistory is the exact message.Message values nep5292FixtureLines
+// encodes, built directly (not by parsing JSON) for tests that need to feed
+// them to spliceCompact without going through LoadSession at all — this is
+// what ANY binary's scan loop, old or new, sees before
+// message.ResolveOrphanToolCalls ever runs.
+func nep5292RawHistory() []message.Message {
+	return []message.Message{
+		{ID: "msg_1", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "task 1"}}},
+		{ID: "msg_2", Role: message.RoleAssistant, Parts: message.Parts{&message.ToolCall{CallID: "A", Name: "bash", Arguments: json.RawMessage("{}")}}},
+		{ID: "msg_3", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "task 2"}}},
+		{ID: "msg_4", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "done"}}},
+		{ID: "msg_5", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "task 3"}}},
+		{ID: "msg_6", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "done"}}},
+	}
+}
+
+// TestCompactNeverJournalsSyntheticOrphanID is the red-first test for Part A
+// of NEP-5292's fix: Session.Compact must never persist a fold boundary ID
+// that names a message.ResolveOrphanToolCalls synthetic repair message —
+// that message exists only in this process's live memory (see
+// engine/store.go's LoadSession, which applies the repair AFTER replay) and
+// is never itself persisted, so a journal record naming one is corrupt on
+// arrival: no future LoadSession will ever find it.
+//
+// It reproduces the exact mechanism from the issue: loading
+// nep5292FixtureLines leaves an orphaned tool_call at msg_2, which
+// LoadSession's ResolveOrphanToolCalls repair turns into a synthetic
+// RoleTool message at live history index 2. A keepTurns=2 compact folds
+// exactly turn 1 (indices 0-2), so the naive fold-end id would be that
+// synthetic message's — this test asserts the FIXED Compact instead
+// journals msg_2 (the nearest real, persisted message before it), and that
+// the result reloads cleanly to the exact same kept history the live
+// process already has.
+func TestCompactNeverJournalsSyntheticOrphanID(t *testing.T) {
+	dir := t.TempDir()
+	id := "ses_5292000000000001"
+	writeNEP5292Fixture(t, dir, id)
+
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}),
+	}}
+	cfg := Config{
+		SessionDir: dir,
+		Providers:  provider.Registry{"test": prov},
+		Model:      message.ModelRef{Provider: "test", Model: "m1"},
+	}
+
+	s, err := LoadSession(cfg, id)
+	if err != nil {
+		t.Fatalf("LoadSession = %v", err)
+	}
+
+	before := s.History()
+	if len(before) != 7 {
+		t.Fatalf("history length = %d, want 7 (6 raw messages + 1 synthetic repair)", len(before))
+	}
+	if !message.IsSyntheticOrphanID(before[2].ID) {
+		t.Fatalf("history[2].ID = %q, want a synthetic orphan-repair id (the mechanism this test guards)", before[2].ID)
+	}
+
+	res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 2})
+	if err != nil {
+		t.Fatalf("Compact = %v", err)
+	}
+	if res.TurnsFolded != 1 {
+		t.Fatalf("TurnsFolded = %d, want 1 (matches the issue's reproduction)", res.TurnsFolded)
+	}
+	if message.IsSyntheticOrphanID(res.LastID) {
+		t.Fatalf("Compact result names a synthetic LastID: %q, want a real, persisted id", res.LastID)
+	}
+	if res.LastID != "msg_2" {
+		t.Errorf("LastID = %q, want %q (the nearest real message before the synthetic one)", res.LastID, "msg_2")
+	}
+	liveAfter := s.History()
+
+	// The journaled record itself must be clean, not merely what
+	// LoadSession happens to recover afterward: read the raw on-disk line
+	// directly, bypassing LoadSession's own heal path entirely.
+	raw, err := os.ReadFile(filepath.Join(dir, id+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	var last struct {
+		Type    string `json:"type"`
+		Compact *struct {
+			FirstID string `json:"first_id"`
+			LastID  string `json:"last_id"`
+		} `json:"compact"`
+	}
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &last); err != nil {
+		t.Fatalf("unmarshal last journal line: %v", err)
+	}
+	if last.Type != recCompact || last.Compact == nil {
+		t.Fatalf("last journal line = %q, want a %q record", lines[len(lines)-1], recCompact)
+	}
+	if message.IsSyntheticOrphanID(last.Compact.LastID) {
+		t.Fatalf("on-disk compact record last_id is synthetic: %q", last.Compact.LastID)
+	}
+
+	// Equivalence (the issue's core claim, verified): the synthetic message
+	// never existed in raw replayed history, so folding it live while
+	// journaling the last real id before it produces IDENTICAL kept
+	// history on a fresh reload.
+	reloaded, err := LoadSession(cfg, id)
+	if err != nil {
+		t.Fatalf("reload after compact: %v", err)
+	}
+	reloadedHistory := reloaded.History()
+	if len(reloadedHistory) != len(liveAfter) {
+		t.Fatalf("reloaded history = %d messages, want %d (live post-compact)", len(reloadedHistory), len(liveAfter))
+	}
+	for i := range liveAfter {
+		if reloadedHistory[i].ID != liveAfter[i].ID ||
+			reloadedHistory[i].Role != liveAfter[i].Role ||
+			reloadedHistory[i].Parts.Text() != liveAfter[i].Parts.Text() {
+			t.Errorf("reloaded history[%d] = %+v, want %+v", i, reloadedHistory[i], liveAfter[i])
+		}
+	}
+}
+
+// TestCompactNewRecordReplaysIdenticallyWithoutHealPath is the version-skew
+// half of NEP-5292's fix: an OLD binary — one with no heal path at all,
+// calling spliceCompact directly and never message.IsSyntheticOrphanID —
+// must still replay a compact record written by the FIXED Compact
+// correctly. This is what makes downgrading to an old binary after this fix
+// safe: Part A never introduces a new record field or record type (the
+// compactRecord shape is untouched), it only changes WHICH real, already-
+// persisted message id LastID names. This test proves that value is always
+// resolvable by the bare, unhealed spliceCompact function — simulating the
+// old binary directly, never through LoadSession's own (new) heal path —
+// and that doing so lands on the exact same kept history the live process
+// already has.
+//
+// The named claim is "an old binary replays the JOURNALED record" — so this
+// test must drive spliceCompact from the bytes persistCompactLocked actually
+// wrote, not from CompactResult. CompactResult is populated independently
+// (compact.go's return statement, not its persistCompactLocked call), so a
+// bug that journals the wrong IDs while still returning the right
+// CompactResult would slip past a version read from res. Read the raw
+// on-disk line directly, the same way TestCompactNeverJournalsSyntheticOrphanID
+// does, and use ITS FirstID/LastID/Summary.
+func TestCompactNewRecordReplaysIdenticallyWithoutHealPath(t *testing.T) {
+	dir := t.TempDir()
+	id := "ses_5292000000000003"
+	writeNEP5292Fixture(t, dir, id)
+
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}),
+	}}
+	cfg := Config{
+		SessionDir: dir,
+		Providers:  provider.Registry{"test": prov},
+		Model:      message.ModelRef{Provider: "test", Model: "m1"},
+	}
+	s, err := LoadSession(cfg, id)
+	if err != nil {
+		t.Fatalf("LoadSession = %v", err)
+	}
+	if _, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 2}); err != nil {
+		t.Fatalf("Compact = %v", err)
+	}
+	liveAfter := s.History()
+
+	// Read the raw on-disk line directly, bypassing both CompactResult and
+	// LoadSession's own heal path entirely — this is the exact record an old
+	// binary would read from disk.
+	raw, err := os.ReadFile(filepath.Join(dir, id+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	var last record
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &last); err != nil {
+		t.Fatalf("unmarshal last journal line: %v", err)
+	}
+	if last.Type != recCompact || last.Compact == nil {
+		t.Fatalf("last journal line = %q, want a %q record", lines[len(lines)-1], recCompact)
+	}
+
+	// The exact old-binary code path: plain spliceCompact against raw
+	// pre-compact history, using the journaled ids/summary verbatim (read
+	// from disk above, not from CompactResult), no heal function ever
+	// called or even in scope.
+	oldSpliced, err := spliceCompact(nep5292RawHistory(), last.Compact.FirstID, last.Compact.LastID, last.Compact.Summary)
+	if err != nil {
+		t.Fatalf("old-binary-equivalent spliceCompact = %v, want success (on-disk LastID must be a real, persisted id an old binary can find)", err)
+	}
+	oldFinal := message.ResolveOrphanToolCalls(oldSpliced)
+
+	if len(oldFinal) != len(liveAfter) {
+		t.Fatalf("old-binary-equivalent history = %d messages, want %d (live post-compact)", len(oldFinal), len(liveAfter))
+	}
+	for i := range liveAfter {
+		if oldFinal[i].ID != liveAfter[i].ID ||
+			oldFinal[i].Role != liveAfter[i].Role ||
+			oldFinal[i].Parts.Text() != liveAfter[i].Parts.Text() {
+			t.Errorf("old-binary-equivalent history[%d] = %+v, want %+v", i, oldFinal[i], liveAfter[i])
+		}
+	}
+}
+
+// TestLoadSessionHealsPhantomSyntheticCompactLastID is the red-first test
+// for Part B of NEP-5292's fix: a journal ALREADY containing a phantom
+// synthetic LastID (written by an unpatched build, before Part A existed)
+// must still load — LoadSession re-derives the fold end from FirstID plus
+// the record's own turns_folded count instead of failing outright. The
+// journal here is written by hand, not produced by Session.Compact, to
+// guarantee it exercises the phantom-id shape rather than whatever the
+// (already fixed) live path would now produce.
+func TestLoadSessionHealsPhantomSyntheticCompactLastID(t *testing.T) {
+	dir := t.TempDir()
+	id := "ses_5292000000000002"
+	data := `{"type":"session","id":"` + id + `","created_at":"2025-01-02T03:04:05Z"}
+` + nep5292FixtureLines +
+		`{"type":"compact","compact":{"first_id":"msg_1","last_id":"synthetic-orphan-tool-result-1-A","turns_folded":1,"summary":{"id":"msg_summary","role":"user","parts":[{"type":"text","text":"[compacted summary of earlier conversation]\n\nthe gist"}]}}}
+`
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := LoadSession(Config{SessionDir: dir}, id)
+	if err != nil {
+		t.Fatalf("LoadSession = %v, want the phantom synthetic last_id healed instead of a hard error", err)
+	}
+	got := s.History()
+	if len(got) != 5 {
+		t.Fatalf("history length = %d, want 5 (summary + 4 kept messages: msg_3..msg_6)", len(got))
+	}
+	if got[0].ID != "msg_summary" {
+		t.Errorf("history[0].ID = %q, want %q (the summary)", got[0].ID, "msg_summary")
+	}
+	if got[0].Role != message.RoleUser {
+		t.Errorf("history[0].Role = %s, want RoleUser", got[0].Role)
+	}
+	wantKeptIDs := []string{"msg_3", "msg_4", "msg_5", "msg_6"}
+	for i, want := range wantKeptIDs {
+		if got[i+1].ID != want {
+			t.Errorf("history[%d].ID = %q, want %q", i+1, got[i+1].ID, want)
+		}
+	}
+}
+
+// TestLoadSessionCompactPhantomLastIDFailsLoudlyWhenUnhealable is the
+// explicit-error half of Part B: if the heal itself is impossible (here,
+// first_id also does not name a real message), LoadSession must still fail
+// loudly — never silently drop history — exactly as an un-healable corrupt
+// range already does (see TestCompactCorruptRangeIsLoadError).
+func TestLoadSessionCompactPhantomLastIDFailsLoudlyWhenUnhealable(t *testing.T) {
+	dir := t.TempDir()
+	id := "ses_5292000000000004"
+	data := `{"type":"session","id":"` + id + `","created_at":"2025-01-02T03:04:05Z"}
+` + nep5292FixtureLines +
+		`{"type":"compact","compact":{"first_id":"msg_does_not_exist","last_id":"synthetic-orphan-tool-result-1-A","turns_folded":1,"summary":{"id":"msg_summary","role":"user","parts":[{"type":"text","text":"x"}]}}}
+`
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadSession(Config{SessionDir: dir}, id); err == nil {
+		t.Fatal("LoadSession succeeded on an unhealable phantom last_id (first_id also missing), want an error")
 	}
 }
 
