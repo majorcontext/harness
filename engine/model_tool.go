@@ -105,9 +105,10 @@ func runModelTool(s *Session, raw json.RawMessage) (message.Parts, error) {
 		}
 		// Validate the provider is configured BEFORE swapping: a set to an
 		// unconfigured provider must change nothing, so an unusable ref never
-		// wedges every later request. s.cfg.Providers.For is exactly the lookup
-		// per-turn provider selection uses (see streamTurn).
-		if _, err := s.cfg.Providers.For(ref); err != nil {
+		// wedges every later request. ModelSupported is the ONE provider-
+		// configured check both this tool and the POST /session/{id}/model
+		// endpoint share, so the two never drift.
+		if !s.ModelSupported(ref) {
 			return nil, fmt.Errorf("model: provider %q is not configured (%s)", ref.Provider, s.modelChoicesHint())
 		}
 		s.SetModel(ref)
