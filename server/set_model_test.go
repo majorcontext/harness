@@ -3,6 +3,8 @@ package server
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/majorcontext/harness/provider"
 )
 
 // countModelJournalRecords returns how many durable "model" records the journal
@@ -103,5 +105,67 @@ func TestSetModelEndpointUnknownSession(t *testing.T) {
 	resp, data := h.do("POST", "/session/ses_01000000000000000000000000/model", map[string]string{"model": "test/m2"})
 	if resp.StatusCode != 404 {
 		t.Fatalf("set unknown-session status %d: %s, want 404", resp.StatusCode, data)
+	}
+}
+
+// countPromptQueuedRecords returns how many durable "prompt.queued" records the
+// journal holds for id — the surplus-direction guard proving a rejected
+// per-request model override leaves NO queued prompt behind.
+func countPromptQueuedRecords(h *harness, id string) int {
+	h.t.Helper()
+	h.srv.mu.Lock()
+	defer h.srv.mu.Unlock()
+	n := 0
+	for _, ev := range h.srv.journal {
+		if ev.SessionID == id && ev.Type == "prompt.queued" {
+			n++
+		}
+	}
+	return n
+}
+
+// TestPromptModelOverrideRejectsUnknownProvider drives the real POST
+// /session/{id}/prompt_async route with a per-request model override naming an
+// unconfigured provider. The named mechanism is the ModelSupported guard on the
+// empty-queue fast path: without it, handlePrompt calls SetModel with the bad
+// ref, which persists a durable "model" record and wedges every later request
+// (the turn fails on Providers.For, and LoadSession replays the bad ref). The
+// guard must reject with 400 BEFORE SetModel runs and before any enqueue, so
+// the request leaves NO orphaned state: model unchanged, zero "model" records,
+// zero "prompt.queued" records, queue depth 0.
+func TestPromptModelOverrideRejectsUnknownProvider(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("ok")}}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "go"}},
+		"model": "ghost/x",
+	})
+	if resp.StatusCode != 400 {
+		t.Fatalf("prompt with unknown-provider override status %d: %s, want 400", resp.StatusCode, data)
+	}
+
+	// The session model is unchanged.
+	_, sdata := h.do("GET", "/session/"+id, nil)
+	var sess struct {
+		Model  string `json:"model"`
+		Queued int    `json:"queued"`
+	}
+	if err := json.Unmarshal(sdata, &sess); err != nil {
+		t.Fatal(err)
+	}
+	if sess.Model != "test/m1" {
+		t.Fatalf("GET /session model = %q after rejected override, want unchanged test/m1", sess.Model)
+	}
+	// No prompt left queued/persisted.
+	if sess.Queued != 0 {
+		t.Fatalf("GET /session queued = %d after rejected override, want 0", sess.Queued)
+	}
+	if n := countModelJournalRecords(h, id); n != 0 {
+		t.Fatalf("durable model records = %d after rejected override, want 0", n)
+	}
+	if n := countPromptQueuedRecords(h, id); n != 0 {
+		t.Fatalf("durable prompt.queued records = %d after rejected override, want 0", n)
 	}
 }

@@ -1150,6 +1150,23 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	// enqueueOrDispatch's identical rule for the same-session-busy branch).
 	// See TestQueuedArrivalDoesNotRetargetSessionModel.
 	if !body.Model.IsZero() {
+		// Reject an unconfigured provider BEFORE SetModel runs — the same
+		// ModelSupported check handleSetModel and the `model` tool use, so all
+		// three SetModel routes validate identically. SetModel would otherwise
+		// persist the durable recModel record for a ref no transcoder can
+		// resolve: the turn fails on Providers.For, and every later request —
+		// including after a LoadSession resume — transcodes against the bad
+		// ref, wedging the session for its whole life. This is the empty-queue
+		// fast path (the queue-non-empty branch above already drops the model
+		// override per the "silently dropped when queued" rule), so nothing is
+		// enqueued yet and no prompt is orphaned on reject: release the run-slot
+		// claim taken by claimForPrompt (mirrors releasePromptClaim's other
+		// nothing-to-run callers) and return, leaving zero durable state behind.
+		if !st.sess.ModelSupported(body.Model) {
+			s.releasePromptClaim(st)
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("provider %q is not configured", body.Model.Provider))
+			return
+		}
 		// SetModel emits EventModelChanged on a real change, which Publish
 		// journals as the durable "model" record (see server/journal.go). No
 		// explicit emitDurable here: that would double-journal one swap.
@@ -2108,14 +2125,12 @@ func (s *Server) handleSetModel(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if body.Model.IsZero() {
-		writeErr(w, http.StatusBadRequest, "model must be a non-empty \"provider/model\" ref")
-		return
-	}
 
 	// Resolve the session, loading a cold one into residency with the same
 	// race handling handleGoalDelete uses (two *engine.Session for one log must
 	// never both be mutated — SetModel persists the durable recModel record).
+	// Resolve BEFORE validating the body so an unknown session is 404, not a
+	// 400 that hides the missing session behind an empty-model complaint.
 	s.mu.Lock()
 	st := s.sessions[id]
 	s.mu.Unlock()
@@ -2134,6 +2149,11 @@ func (s *Server) handleSetModel(w http.ResponseWriter, r *http.Request) {
 			s.evictResidentLocked()
 		}
 		s.mu.Unlock()
+	}
+
+	if body.Model.IsZero() {
+		writeErr(w, http.StatusBadRequest, "model must be a non-empty \"provider/model\" ref")
+		return
 	}
 
 	if !st.sess.ModelSupported(body.Model) {
