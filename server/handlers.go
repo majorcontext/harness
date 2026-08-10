@@ -1150,11 +1150,10 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	// enqueueOrDispatch's identical rule for the same-session-busy branch).
 	// See TestQueuedArrivalDoesNotRetargetSessionModel.
 	if !body.Model.IsZero() {
-		before := st.sess.Model()
+		// SetModel emits EventModelChanged on a real change, which Publish
+		// journals as the durable "model" record (see server/journal.go). No
+		// explicit emitDurable here: that would double-journal one swap.
 		st.sess.SetModel(body.Model)
-		if st.sess.Model() != before {
-			s.emitDurable(Event{Type: evtModel, SessionID: id, Model: body.Model})
-		}
 	}
 
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
@@ -2079,6 +2078,70 @@ func (s *Server) handleGoalDelete(w http.ResponseWriter, r *http.Request) {
 		cancel() // stop the loop; runGoal treats context.Canceled as a clean stop (no-op if the hook above already fired it)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// setModelResponseJSON is the openapi POST /session/{id}/model response shape:
+// the session's model after the swap (unchanged echoes the current model — a
+// same-model set is a durable no-op, see engine.Session.SetModel).
+type setModelResponseJSON struct {
+	Model message.ModelRef `json:"model"`
+}
+
+// handleSetModel swaps a session's MAIN model, decoupled from prompting — a
+// client/dashboard-driven swap that never claims the run slot (SetModel is
+// concurrency-safe, so it applies even while a turn is running; it takes effect
+// on the NEXT request). Validation mirrors the `model` session tool: an empty
+// model is 400, an unconfigured provider is 400 (SetModel would otherwise leave
+// an unusable ref that wedges every later request), and an unknown session is
+// 404. On success SetModel emits EventModelChanged, which Publish journals as
+// the durable "model" record — the SAME single path the tool and per-request
+// override use, so a swap journals exactly once.
+func (s *Server) handleSetModel(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.sessionIDOrNotFound(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Model message.ModelRef `json:"model"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if body.Model.IsZero() {
+		writeErr(w, http.StatusBadRequest, "model must be a non-empty \"provider/model\" ref")
+		return
+	}
+
+	// Resolve the session, loading a cold one into residency with the same
+	// race handling handleGoalDelete uses (two *engine.Session for one log must
+	// never both be mutated — SetModel persists the durable recModel record).
+	s.mu.Lock()
+	st := s.sessions[id]
+	s.mu.Unlock()
+	if st == nil {
+		sess, err := s.opts.LoadSession(id)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, "no such session")
+			return
+		}
+		s.mu.Lock()
+		if ex := s.sessions[id]; ex != nil {
+			st = ex // a resident appeared while we loaded; use the winner
+		} else {
+			st = &sessionState{sess: sess, lastUsed: time.Now()}
+			s.sessions[id] = st
+			s.evictResidentLocked()
+		}
+		s.mu.Unlock()
+	}
+
+	if !st.sess.ModelSupported(body.Model) {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("provider %q is not configured", body.Model.Provider))
+		return
+	}
+	st.sess.SetModel(body.Model)
+	writeJSON(w, http.StatusOK, setModelResponseJSON{Model: st.sess.Model()})
 }
 
 // evictResidentLocked unloads the longest-idle non-busy sessions from memory

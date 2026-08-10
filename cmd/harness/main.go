@@ -505,6 +505,11 @@ func runCmd(args []string) error {
 		// evaluator separately, in runGoal below; this just needs to know
 		// whether one is configured at all).
 		GoalTool: cfg.GoalEvaluatorModel != "",
+		// ModelTool is on by default (config `model_tool`, default true); the
+		// alias map lets a tool-driven `set` resolve an alias like the CLI's
+		// own ResolveModel does.
+		ModelTool:    cfg.ModelToolEnabled(),
+		ModelAliases: cfg.Aliases,
 	}, opts.resume, opts.cont, modelSet)
 	if err != nil {
 		return err
@@ -1064,6 +1069,12 @@ func serveCmd(args []string) error {
 			// itself gates on below, so the tool is never advertised on a
 			// box where POST /goal would just 400.
 			GoalTool: !goalEval.IsZero(),
+			// ModelTool is on by default (config `model_tool`, default true),
+			// so every served box exposes the `model` self-switch tool unless
+			// an operator opts out. ModelAliases mirrors config.Aliases so a
+			// tool-driven `set` resolves an alias like the CLI does.
+			ModelTool:    cfg.ModelToolEnabled(),
+			ModelAliases: cfg.Aliases,
 		}
 	}
 	// monitorPage is a named local (rather than inlining monitor.Page below)
