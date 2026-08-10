@@ -235,16 +235,20 @@ type Options struct {
 	// New() below exactly as before (fail closed) — a caller that forgot
 	// to set a token on what it THINKS is a public/production bind must
 	// get a hard error, not a silently-open server. cmd/harness's serveCmd
-	// is the only place that sets this, and only when it has ALREADY
-	// classified -addr as loopback-only (isLoopbackAddr) — see its own
-	// doc comment for the full reasoning (the token guards network
-	// reachability, and reachability is server-verifiable from the bind
-	// address; loopback is definitionally unreachable from anywhere this
-	// process's own token isn't already implied). server itself performs
-	// no such classification and trusts the caller's judgment completely:
-	// this field says "serve unauthenticated", full stop, regardless of
-	// what address this process is actually bound to — the safety
-	// property lives entirely in cmd/harness deciding WHEN to set it.
+	// is the only place that sets this, via resolveUnauthenticated, on
+	// either of two grounds: -addr classifies as loopback-only
+	// (isLoopbackAddr — see its own doc comment for the full reasoning,
+	// the token guards network reachability and loopback is
+	// server-verifiable proof of that), or the operator passed a SECOND,
+	// separate explicit opt-in (-unauthenticated /
+	// HARNESS_UNAUTHENTICATED) asserting a trusted external gate already
+	// restricts reachability on a non-loopback bind (e.g. a Cloudflare
+	// Access-gated tunnel, or a sandboxed network boundary). server itself
+	// performs no such classification and trusts the caller's judgment
+	// completely: this field says "serve unauthenticated", full stop,
+	// regardless of what address this process is actually bound to — the
+	// safety property lives entirely in cmd/harness deciding WHEN to set
+	// it.
 	Unauthenticated bool
 	// Logger, when non-nil, receives structured turn-lifecycle and
 	// goal-lifecycle log lines: a "turn end" line at every recordTurnEnd

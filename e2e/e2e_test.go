@@ -290,6 +290,13 @@ func cleanEnv(overrides map[string]string) []string {
 		"HARNESS_CONFIG": true, "ANTHROPIC_API_KEY": true,
 		"OPENAI_API_KEY": true, "HTTP_PROXY": true, "HTTPS_PROXY": true,
 		"http_proxy": true, "https_proxy": true,
+		// HARNESS_UNAUTHENTICATED: stripped so a host that happens to
+		// export it can't leak an accidental opt-in into a test that
+		// never intends one (TestServeNonLoopbackNoTokenFailsClosed in
+		// particular, which asserts the fail-closed path). The two
+		// unauthenticated_test.go opt-in tests are the only place that
+		// sets it, via their own overrides below.
+		"HARNESS_UNAUTHENTICATED": true,
 	}
 	var env []string
 	for _, kv := range os.Environ() {
