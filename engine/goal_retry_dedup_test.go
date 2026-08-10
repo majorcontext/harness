@@ -131,6 +131,8 @@ func (h *denyAndEnqueueHooks) Emit(_ []plugin.Event) {}
 
 func (h *denyAndEnqueueHooks) Tools() []plugin.ToolDef { return nil }
 
+func (h *denyAndEnqueueHooks) Plugins() []plugin.Info { return nil }
+
 // TestPursueGoalRetryNeverDropsDeliveredOperatorMessageAfterDeniedTool is the
 // red-first regression test for the MAJOR finding on dropUnansweredDirective:
 // its old enumeration of "what a failed, no-tool-executed attempt could have

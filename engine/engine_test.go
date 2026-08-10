@@ -214,6 +214,8 @@ func (f *fakeHooks) ExecuteTool(_ context.Context, req *plugin.ToolExecuteReques
 
 func (f *fakeHooks) Emit(events []plugin.Event) { f.events = append(f.events, events...) }
 
+func (f *fakeHooks) Plugins() []plugin.Info { return nil }
+
 func (f *fakeHooks) Tools() []plugin.ToolDef {
 	if f.pluginTool == nil {
 		return nil

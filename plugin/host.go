@@ -129,6 +129,73 @@ func (h *Host) Tools() []ToolDef {
 	return defs
 }
 
+// Plugin spawn states reported by Host.Plugins. A plugin process spawns
+// lazily on its first hook dispatch or tool call, so PluginNotSpawned is the
+// normal state for a configured plugin no turn has used yet.
+const (
+	PluginNotSpawned = "not-spawned"
+	PluginRunning    = "running"
+	PluginErrored    = "errored"
+	PluginStopped    = "stopped"
+)
+
+// Info is a read-only snapshot of one configured plugin's registration: its
+// name, current spawn state, the tools it registers, and the hook names it
+// subscribes to. It describes CONFIGURED plugins from the cached manifest, so
+// a plugin that has not spawned yet still appears (state PluginNotSpawned).
+// Tools and Hooks are never nil, so the value serializes to a JSON array,
+// never null.
+type Info struct {
+	Name  string   `json:"name"`
+	State string   `json:"state"`
+	Tools []string `json:"tools"`
+	Hooks []string `json:"hooks"`
+}
+
+// Plugins returns one Info per configured plugin, in Spec order. It reads the
+// cached manifest for each plugin's name, tools, and hooks, and each
+// instance's live spawn state. Nothing is spawned.
+func (h *Host) Plugins() []Info {
+	out := make([]Info, 0, len(h.instances))
+	for _, inst := range h.instances {
+		out = append(out, inst.info())
+	}
+	return out
+}
+
+// info snapshots one instance: manifest name/tools/hooks plus live spawn
+// state read under mu.
+func (inst *instance) info() Info {
+	m := inst.spec.Manifest
+	tools := make([]string, 0, len(m.Tools))
+	for _, t := range m.Tools {
+		tools = append(tools, t.Name)
+	}
+	hooks := make([]string, 0, len(m.Hooks))
+	for _, hk := range m.Hooks {
+		hooks = append(hooks, string(hk))
+	}
+	inst.mu.Lock()
+	state := inst.stateLocked()
+	inst.mu.Unlock()
+	return Info{Name: m.Name, State: state, Tools: tools, Hooks: hooks}
+}
+
+// stateLocked maps the instance's spawn flags to a reported state. Caller
+// holds inst.mu.
+func (inst *instance) stateLocked() string {
+	switch {
+	case inst.stopped:
+		return PluginStopped
+	case !inst.started:
+		return PluginNotSpawned
+	case inst.err != nil:
+		return PluginErrored
+	default:
+		return PluginRunning
+	}
+}
+
 // Close shuts down all running plugin processes.
 func (h *Host) Close() {
 	for _, inst := range h.instances {

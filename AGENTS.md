@@ -650,6 +650,7 @@ Plugins are separate processes (any language; Go SDK provided) speaking a versio
 - **Manifest cache**: `harness plugin install` runs the binary once and caches its manifest (name, protocol version, hooks subscribed, tool definitions) keyed by binary hash. Startup reads cached manifests only — nothing spawns at boot.
 - **Lazy spawn**: a plugin process starts on first hook dispatch or tool call, then stays warm for the session (module-level caches in plugins are expected and fine).
 - Sync hooks chain across plugins in config order — each sees the previous plugin's mutations — and every sync dispatch carries a deadline so a hung plugin can't wedge a session.
+- **Plugin visibility**: `Host.Plugins()` reports every CONFIGURED plugin — name, spawn state (`not-spawned`/`running`/`errored`/`stopped`), registered tools, subscribed hooks — from the cached manifest plus live spawn state. The `session_info` tool (field `plugins`) and `GET /session/{id}` (field `plugins`) both surface it, so a not-yet-spawned plugin still appears. The engine reads it through the `Hooks.Plugins()` interface method, nil-guarded exactly like the other `s.cfg.Hooks` dispatch sites.
 
 ### Hook protocol v1
 

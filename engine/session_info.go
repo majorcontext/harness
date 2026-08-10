@@ -1,9 +1,11 @@
 // Self-inspection: the built-in session_info tool lets the model ask what it is
 // actually running with. It reports the session's identity, current model,
 // cumulative token usage, the exact system-prompt segments assembled for the
-// current turn, the active tool names, and the provenance of injected project
-// instructions and Agent Skills. It takes no arguments and touches no disk or
-// network — it reflects state the engine already holds in memory.
+// current turn, the active tool names, the provenance of injected project
+// instructions and Agent Skills, and the configured plugins (name, spawn
+// state, registered tools, subscribed hooks). It takes no arguments and
+// touches no disk or network — it reflects state the engine already holds in
+// memory.
 
 package engine
 
@@ -13,6 +15,7 @@ import (
 	"sort"
 
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/plugin"
 	"github.com/majorcontext/harness/provider"
 )
 
@@ -32,6 +35,11 @@ type sessionInfoResult struct {
 	Tools        []string       `json:"tools"`
 	Instructions string         `json:"instructions"` // source path, or "none"
 	Skills       []skillInfo    `json:"skills"`
+	// Plugins lists the configured plugins (name, spawn state, registered
+	// tools, subscribed hooks). It reports CONFIGURED plugins, not only
+	// spawned ones — a plugin spawns lazily, so a not-yet-spawned plugin
+	// still appears. Empty (not null) when no plugins are configured.
+	Plugins []plugin.Info `json:"plugins"`
 }
 
 // sessionInfoTool is the built-in self-inspection tool, registered in
@@ -43,7 +51,8 @@ func sessionInfoTool() Tool {
 			Description: "Report this session's own configuration: session id, current model, " +
 				"cumulative token usage, the exact system-prompt segments you received this turn, " +
 				"the active tool names, the provenance of any injected project instructions " +
-				"(AGENTS.md path or \"none\"), and the discovered Agent Skills (names and SKILL.md paths). " +
+				"(AGENTS.md path or \"none\"), the discovered Agent Skills (names and SKILL.md paths), " +
+				"and the configured plugins (name, spawn state, registered tools, subscribed hooks). " +
 				"Takes no arguments.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
 		},
@@ -68,6 +77,10 @@ func (s *Session) sessionInfo(ctx context.Context) sessionInfoResult {
 	}
 	sort.Strings(tools)
 
+	// Plugins is read outside mu: Host.Plugins takes the plugin host's own
+	// locks, matching how tool names are gathered above.
+	plugins := s.Plugins()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	instr := s.instrPath
@@ -90,5 +103,6 @@ func (s *Session) sessionInfo(ctx context.Context) sessionInfoResult {
 		Tools:        tools,
 		Instructions: instr,
 		Skills:       skills,
+		Plugins:      plugins,
 	}
 }
