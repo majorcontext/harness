@@ -76,6 +76,72 @@ func TestIsLoopbackAddr(t *testing.T) {
 	}
 }
 
+// TestResolveUnauthenticated pins resolveUnauthenticated's full decision
+// table (see its own doc comment). This is the exact function serveCmd calls
+// to decide whether to run without a bearer token, so this test covers the
+// production entry point's mechanism directly, not a hand-built copy of it.
+//
+// The two cases proven RED against pre-fix code (no explicit-opt-in
+// parameter existed) are marked below: a non-loopback bind with no token
+// must still fail closed without the opt-in, and the opt-in must never be
+// inferred from an empty token alone.
+func TestResolveUnauthenticated(t *testing.T) {
+	cases := []struct {
+		name     string
+		token    string
+		addr     string
+		explicit bool
+		want     bool
+		wantErr  bool
+	}{
+		{"token set, loopback, no opt-in: token path, unaffected", "tok", "localhost:4096", false, false, false},
+		{"token set, non-loopback, opt-in ALSO set: token still wins", "tok", "0.0.0.0:4096", true, false, false},
+		{"empty token, loopback, no opt-in: unchanged loopback-unauthenticated default", "", "localhost:4096", false, true, false},
+		{"empty token, non-loopback, no opt-in: fails closed (RED-verified)", "", "0.0.0.0:4096", false, false, true},
+		{"empty token, non-loopback, WITH opt-in: explicit opt-in unlocks it", "", "0.0.0.0:4096", true, true, false},
+		{"empty token, loopback, WITH opt-in: opt-in is redundant but harmless", "", "localhost:4096", true, true, false},
+		{"empty token alone (opt-in false) never infers unauthenticated on a bare :port bind", "", ":4096", false, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveUnauthenticated(tc.token, tc.addr, tc.explicit)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("resolveUnauthenticated(%q, %q, %v) error = %v, wantErr %v", tc.token, tc.addr, tc.explicit, err, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Errorf("resolveUnauthenticated(%q, %q, %v) = %v, want %v", tc.token, tc.addr, tc.explicit, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEnvUnauthenticated pins envUnauthenticated's parsing of
+// HARNESS_UNAUTHENTICATED: standard Go bool-string forms enable it, an unset
+// or empty value (and anything unparsable) leaves it off — fail-closed on a
+// malformed value rather than treating it as an accidental opt-in.
+func TestEnvUnauthenticated(t *testing.T) {
+	cases := []struct {
+		val  string
+		want bool
+	}{
+		{"1", true},
+		{"true", true},
+		{"TRUE", true},
+		{"0", false},
+		{"false", false},
+		{"", false},
+		{"yes", false}, // not a strconv.ParseBool form: fails closed
+	}
+	for _, tc := range cases {
+		t.Run(tc.val, func(t *testing.T) {
+			t.Setenv("HARNESS_UNAUTHENTICATED", tc.val)
+			if got := envUnauthenticated(); got != tc.want {
+				t.Errorf("envUnauthenticated() with HARNESS_UNAUTHENTICATED=%q = %v, want %v", tc.val, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestMonitorTerminalHint covers monitorTerminalHint's full decision table
 // (the untestable half — the real os.Stderr.Stat() tty check — is
 // deliberately excluded via the explicit isTTY bool; see stderrIsTerminal's
