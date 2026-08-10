@@ -164,7 +164,7 @@ func (h *Host) Plugins() []Info {
 }
 
 // info snapshots one instance: manifest name/tools/hooks plus live spawn
-// state read under mu.
+// state. The state read never takes inst.mu — see instance.liveState.
 func (inst *instance) info() Info {
 	m := inst.spec.Manifest
 	tools := make([]string, 0, len(m.Tools))
@@ -175,23 +175,41 @@ func (inst *instance) info() Info {
 	for _, hk := range m.Hooks {
 		hooks = append(hooks, string(hk))
 	}
-	inst.mu.Lock()
-	state := inst.stateLocked()
-	inst.mu.Unlock()
-	return Info{Name: m.Name, State: state, Tools: tools, Hooks: hooks}
+	return Info{Name: m.Name, State: inst.liveState(), Tools: tools, Hooks: hooks}
 }
 
-// stateLocked maps the instance's spawn flags to a reported state. Caller
-// holds inst.mu.
-func (inst *instance) stateLocked() string {
-	switch {
-	case inst.stopped:
-		return PluginStopped
-	case !inst.started:
+// liveState reports inst's current spawn state without ever taking inst.mu,
+// so a slow or wedged plugin spawn can never block a concurrent read.
+// start holds inst.mu for the whole, possibly uncancellable dial-plus-
+// handshake (see instance.start's doc comment); Host is a box-scoped
+// singleton shared by every session on the box, so a state read gated on
+// inst.mu would let one session's plugin spawn stall GET /session and the
+// session_info tool for every OTHER session too — exactly what AGENTS.md's
+// "a hung plugin can't wedge a session" rule forbids. start and stop are
+// the only writers of inst.state/inst.liveConn, and they publish with a
+// plain atomic store right after each transition completes, never while
+// holding inst.mu for a reader to wait on.
+func (inst *instance) liveState() string {
+	switch reportedState(inst.state.Load()) {
+	case stateNotSpawned:
 		return PluginNotSpawned
-	case inst.err != nil:
+	case stateStopped:
+		return PluginStopped
+	case stateErrored:
 		return PluginErrored
-	default:
+	default: // stateRunning
+		// A plugin that spawned successfully can still die later (crash,
+		// killed externally). conn.closed is closed both by an explicit
+		// stop and by the read loop's own error path (conn.fail, called
+		// from conn.run when the stream ends) — reusing that existing
+		// signal here needs no new death-detection goroutine.
+		if c := inst.liveConn.Load(); c != nil {
+			select {
+			case <-c.closed:
+				return PluginErrored
+			default:
+			}
+		}
 		return PluginRunning
 	}
 }
@@ -402,6 +420,19 @@ func (h *Host) onError(inst *instance, hook Hook, err error) {
 	}
 }
 
+// reportedState is instance.state's value space: the spawn lifecycle a
+// Host.Plugins read reports, published lock-free (see instance.liveState).
+// The zero value is stateNotSpawned, matching a freshly constructed
+// instance before anything has dispatched to it.
+type reportedState int32
+
+const (
+	stateNotSpawned reportedState = iota
+	stateRunning
+	stateErrored
+	stateStopped
+)
+
 // instance is one plugin process, spawned lazily and kept warm.
 type instance struct {
 	host *Host
@@ -413,6 +444,17 @@ type instance struct {
 	err     error
 	conn    *conn
 	cmd     *exec.Cmd
+
+	// state is inst's reportedState, published with a plain atomic store by
+	// start/stop right after each transition — never while either holds mu
+	// — so instance.liveState (Host.Plugins) can read it without ever
+	// taking mu. See liveState's doc comment for why that matters.
+	state atomic.Int32
+	// liveConn mirrors conn once a spawn succeeds, published by the same
+	// atomic store as state. liveState uses it to notice a POST-spawn
+	// death (conn.closed, closed by conn.fail when the read loop errors)
+	// without taking mu either.
+	liveConn atomic.Pointer[conn]
 
 	// Event delivery: a bounded queue drained by one dedicated sender
 	// goroutine, created on the first Emit for this instance and exited
@@ -520,6 +562,12 @@ func (inst *instance) start(ctx context.Context) (*conn, error) {
 	}
 	inst.started = true
 	inst.err = inst.startLocked(ctx)
+	if inst.err != nil {
+		inst.state.Store(int32(stateErrored))
+	} else {
+		inst.state.Store(int32(stateRunning))
+		inst.liveConn.Store(inst.conn)
+	}
 	return inst.conn, inst.err
 }
 
@@ -604,6 +652,13 @@ func (inst *instance) stop() {
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
 	inst.stopped = true
+	// A never-started instance stays reported not-spawned even after this
+	// call: spawn state outranks the box-wide stopped flag, so a plugin no
+	// turn ever used is never misreported as having run and then stopped.
+	if reportedState(inst.state.Load()) != stateNotSpawned {
+		inst.state.Store(int32(stateStopped))
+	}
+	inst.liveConn.Store(nil)
 	if inst.conn != nil {
 		_ = inst.conn.notify(methodShutdown, struct{}{})
 		_ = inst.conn.close()

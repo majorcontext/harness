@@ -77,8 +77,15 @@ func (s *Session) sessionInfo(ctx context.Context) sessionInfoResult {
 	}
 	sort.Strings(tools)
 
-	// Plugins is read outside mu: Host.Plugins takes the plugin host's own
-	// locks, matching how tool names are gathered above.
+	// Plugins is read outside mu, like tool names above, but for a
+	// different reason. Host.Tools reads a cached manifest and takes no
+	// lock. Host.Plugins also takes no lock: each instance's spawn state
+	// comes from a lock-free atomic snapshot (instance.liveState in
+	// plugin/host.go), never from inst.mu. A plugin spawn holds inst.mu
+	// for the whole dial-plus-handshake, and Host is a box-scoped
+	// singleton shared by every session on the box. A state read gated on
+	// inst.mu would let one session's spawn stall this call for every
+	// other session too.
 	plugins := s.Plugins()
 
 	s.mu.Lock()
