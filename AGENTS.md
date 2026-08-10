@@ -573,6 +573,48 @@ provider's prompt cache prefix stays intact. See
 `docs/design/managed-processes.md` §4 for the exact mechanism and why it
 is safe.
 
+### Model switching
+
+`Session.SetModel` swaps the MAIN session model for later requests. History
+transcodes from scratch every request, so there is no migration step. Three
+routes reach `SetModel`: the built-in `model` session tool, a per-request
+`prompt_async` model override, and `POST /session/{id}/model`.
+
+`SetModel` is the single event choke point. On a real change (never a no-op
+set to the current model) it persists the durable `recModel` resume record
+AND emits `EventModelChanged` (carrying the new model), both while holding
+`s.mu` — the same persist-and-emit-under-`s.mu` shape `RegisterGoal` uses.
+The server's `Publish` maps `EventModelChanged` to the durable `model`
+journal record. Every swap route funnels through this ONE emit, so a swap
+journals exactly once — the handlers never emit `model` themselves. `recModel`
+is the resume record `LoadSession` restores; `EventModelChanged` is the
+observability event. They are separate and both fire on one swap.
+
+The `model` session tool (gated on `Config.ModelTool`) has two actions:
+`status` reports the current model, the configured aliases, and the configured
+provider names; `set {model}` resolves a one-level alias (from
+`Config.ModelAliases`, which mirrors `config.Aliases` — the engine never
+imports config), parses the ref, VALIDATES the provider is configured
+(`s.cfg.Providers.For`), then calls `SetModel`. A `set` to an unconfigured
+provider returns a tool error listing the valid aliases and provider names and
+changes nothing. There is deliberately NO `clear` action — a session always
+has a model. Scope is the MAIN model only; the goal-evaluator and subagent
+models are untouched.
+
+`Config.ModelTool` is on by default. Config key `model_tool` (a `*bool`,
+default true — like `instructions`) lets a host opt OUT; `harness run`,
+`harness serve`, and the server `mkCfg` all set it from
+`config.ModelToolEnabled()`. This differs from `GoalTool`, which opts IN only
+when an evaluator is configured.
+
+`POST /session/{id}/model` is the network counterpart: a client/dashboard swap
+decoupled from prompting, so it never claims the run slot (it applies even
+while a turn is running, taking effect on the next request). It validates a
+non-empty `{model}` and rejects an unconfigured provider (400), an unknown
+session (404), or an empty model (400) — the same validation as the tool — then
+calls `SetModel`. Aliases are not resolved at this endpoint; resolve them
+client-side, as the CLI does.
+
 ### Deliberately absent — do not add
 
 - **No permission system.** Tool calls are never gated. There is no `permission.ask` hook, no approval UI, no pre-flight rule evaluation.

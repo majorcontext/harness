@@ -330,6 +330,14 @@ func (s *Server) Publish(ev engine.Event) {
 			Type: engine.EventToolEnd, SessionID: ev.SessionID,
 			ToolCall: ev.ToolCall, Output: ev.Output, IsError: ev.IsError,
 		})
+	case engine.EventModelChanged:
+		// Every model swap — the `model` tool, a per-request prompt override,
+		// or POST /session/{id}/model — funnels through SetModel's single
+		// EventModelChanged emit, so this ONE case journals the durable
+		// "model" observability record for all three. The handlers no longer
+		// emit evtModel themselves (see handlePrompt), so a swap journals
+		// exactly once, never twice.
+		s.emitDurable(Event{Type: evtModel, SessionID: ev.SessionID, Model: ev.Model})
 	case engine.EventGoalSet, engine.EventGoalUpdated, engine.EventGoalEval, engine.EventGoalStalled, engine.EventGoalAchieved, engine.EventGoalCleared, engine.EventGoalEvalFailed, engine.EventGoalParked:
 		s.publishGoal(ev)
 	case engine.EventPromptQueued, engine.EventPromptDequeued:
