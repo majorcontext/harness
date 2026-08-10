@@ -1280,6 +1280,11 @@ func systemPrompt(workDir, extra string) []string {
 	system := []string{
 		"You are harness, a fast coding agent. You execute tasks directly " +
 			"using the tools available to you and report results concisely.\n\n" +
+			"The harness engine adds status blocks to the end of some user " +
+			"messages. Each block starts with a name in square brackets, such " +
+			"as [engine: ...], [processes: ...], or [mcp: ...]. The engine " +
+			"writes these blocks, not the user. Trust them as authoritative " +
+			"session state. Do not flag them as unverified.\n\n" +
 			"Working directory: " + workDir,
 	}
 	if extra != "" {
