@@ -1250,6 +1250,25 @@ components:
             Which of the three POST /goal outcomes this response represents
             — see startGoal's description for the full contract.
 
+    SetModelRequest:
+      type: object
+      required: [model]
+      properties:
+        model:
+          $ref: "#/components/schemas/ModelRef"
+          description: >
+            The new main model, as a "provider/model" ref. An empty value or an
+            unconfigured provider is 400; aliases are not resolved here (resolve
+            them client-side, as the CLI does).
+
+    SetModelResponse:
+      type: object
+      required: [model]
+      properties:
+        model:
+          $ref: "#/components/schemas/ModelRef"
+          description: The session's model after the swap.
+
     Request:
       type: object
       description: >
@@ -1975,6 +1994,41 @@ paths:
         - $ref: "#/components/parameters/sessionID"
       responses:
         "204": { description: Cleared (or nothing was active). }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /session/{id}/model:
+    post:
+      operationId: setModel
+      summary: Swap a session's main model.
+      description: >
+        Swaps the session's MAIN model for subsequent requests, decoupled from
+        prompting — it never claims the run slot, so it applies even while a
+        turn is running and takes effect on the NEXT request. History
+        transcodes automatically; there is no migration step. The swap is
+        durable (a recModel record restores it on resume) and journals a single
+        "model" event on /event — the same event the `model` session tool and a
+        per-request prompt model override emit. 400 on an empty model or an
+        unconfigured provider; the model is left unchanged in both cases. This
+        is the network counterpart to the `model` session tool.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetModelRequest" }
+      responses:
+        "200":
+          description: The model after the swap (the new model).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SetModelResponse" }
+        "400":
+          description: Empty model, or its provider is not configured.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 

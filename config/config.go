@@ -51,6 +51,12 @@ type Config struct {
 	// There is no default — goal use requires this field to be set. Resolve it
 	// with ResolveModel so aliases apply.
 	GoalEvaluatorModel string `json:"goal_evaluator_model,omitempty"`
+	// ModelTool, when set to false, disables the built-in `model` session tool
+	// (status/set — the model swaps its own MAIN model in-process; see package
+	// engine). A nil value (the field omitted) leaves the tool ENABLED — the
+	// default is on, so a *bool distinguishes "unset" (on) from "false" (off)
+	// across the project-config merge, exactly like Instructions above.
+	ModelTool *bool `json:"model_tool,omitempty"`
 	// Plugins lists the plugin processes to wire into every session's
 	// engine.Config.Hooks (see package plugin). Order matters: sync hooks
 	// chain across plugins in this order, each seeing the previous plugin's
@@ -542,8 +548,8 @@ func Path() string {
 // reflection):
 //
 //   - Model, SessionDir, InstructionsPath, GoalEvaluatorModel, SessionSync: a
-//     non-empty project value overrides the user value. Instructions (*bool):
-//     a non-nil project value overrides.
+//     non-empty project value overrides the user value. Instructions and
+//     ModelTool (*bool): a non-nil project value overrides.
 //   - SkillsDirs: a non-empty project slice replaces the user slice entirely
 //     (arrays override, they do not concatenate); an empty/omitted project
 //     value inherits the user value.
@@ -681,6 +687,9 @@ func merge(base, over *Config) *Config {
 	}
 	if over.GoalEvaluatorModel != "" {
 		out.GoalEvaluatorModel = over.GoalEvaluatorModel
+	}
+	if over.ModelTool != nil {
+		out.ModelTool = over.ModelTool
 	}
 	if over.ContextWindowTokens != 0 {
 		out.ContextWindowTokens = over.ContextWindowTokens
@@ -881,6 +890,16 @@ func (c *Config) ResolveModel(s string) (message.ModelRef, error) {
 		}
 	}
 	return message.ParseModelRef(s)
+}
+
+// ModelToolEnabled reports whether the built-in `model` session tool is on.
+// The default is ON: only an explicit `model_tool: false` disables it. A nil
+// receiver (no config) is on too.
+func (c *Config) ModelToolEnabled() bool {
+	if c == nil || c.ModelTool == nil {
+		return true
+	}
+	return *c.ModelTool
 }
 
 // expandHome expands a leading "~/" (or a lone "~") against $HOME.

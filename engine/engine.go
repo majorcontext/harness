@@ -51,6 +51,16 @@ type Event struct {
 	Usage      *provider.Usage     `json:"usage,omitempty"`
 	StopReason provider.StopReason `json:"stop_reason,omitempty"`
 
+	// Model is carried by EventModelChanged only: the session's new model
+	// after a SetModel call that actually changed it (see SetModel). It is
+	// the ONE engine event a model swap emits, whatever the swap route —
+	// the `model` tool, a per-request prompt override, or POST
+	// /session/{id}/model — so the server journals each swap through a single
+	// path (see server/journal.go's EventModelChanged case). It is distinct
+	// from the durable recModel resume record persistModel writes (store.go),
+	// which restores the model on LoadSession.
+	Model message.ModelRef `json:"model,omitzero"`
+
 	// Goal-loop fields (set on goal.* events; see goal.go and the state
 	// machine documented atop goal.go). GoalCondition is carried by
 	// goal.set and goal.updated (the new condition); GoalReason/GoalMet/GoalTurn by goal.eval; GoalReason/GoalTurn
@@ -139,6 +149,12 @@ const (
 	EventMessage        = "message"
 	EventToolStart      = "tool.start"
 	EventToolEnd        = "tool.end"
+
+	// EventModelChanged fires once per SetModel call that actually changes
+	// the session's model (never on a no-op set to the current model). It
+	// carries the new model in Event.Model and is the single observability
+	// event every model-swap route funnels through (see SetModel).
+	EventModelChanged = "model.changed"
 
 	// Goal-loop events (see goal.go).
 	EventGoalSet      = "goal.set"
@@ -348,6 +364,23 @@ type Config struct {
 	// task (see docs/design/2026-07-19-goal-self-adjust.md) — this field
 	// only gates registration.
 	GoalTool bool
+
+	// ModelTool enables the built-in `model` session tool (status/set — see
+	// model_tool.go), which lets the model itself inspect the current model,
+	// the configured aliases, and the configured provider names, and swap the
+	// MAIN session model in-process via Session.SetModel. There is no clear
+	// action. False (the default zero value) installs no `model` tool; the
+	// server/CLI wiring sets it true by default (config key `model_tool`,
+	// default true) so an operator opts OUT, unlike GoalTool which opts in
+	// only when an evaluator is configured.
+	ModelTool bool
+
+	// ModelAliases maps short alias names ("fast", "smart") to model refs,
+	// mirroring config.Config.Aliases (the engine never imports config). The
+	// `model` tool resolves a one-level alias against this map before parsing
+	// (see runModelTool), so a host that populates it lets the model swap by
+	// alias, not only by full "provider/model" ref. Nil means no aliases.
+	ModelAliases map[string]string
 
 	// Tools are additional built-in tools. The bash tool is always
 	// installed.
@@ -593,6 +626,9 @@ func newSession(cfg Config) *Session {
 	if cfg.GoalTool {
 		s.tools[goalToolName] = goalTool()
 	}
+	if cfg.ModelTool {
+		s.tools[modelToolName] = modelTool()
+	}
 	if mcpConfiguredCount(cfg.MCP) > 0 {
 		s.tools[mcpSessionToolName] = mcpTool()
 	}
@@ -603,7 +639,16 @@ func newSession(cfg Config) *Session {
 }
 
 // SetModel swaps the model for subsequent requests. History transcodes
-// automatically; there is no migration step.
+// automatically; there is no migration step. A no-op set to the current model
+// changes nothing and emits no event.
+//
+// On a real change it persists the durable recModel resume record and emits
+// EventModelChanged (carrying the new model), both while holding s.mu so event
+// order matches log order — the same persist-and-emit-under-s.mu shape
+// RegisterGoal uses. EventModelChanged is the ONE event every swap route
+// (the `model` tool, a per-request prompt override, POST /session/{id}/model)
+// funnels through, so the server journals every swap once via a single path.
+// OnEvent must not call back into this Session.
 func (s *Session) SetModel(ref message.ModelRef) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -612,6 +657,17 @@ func (s *Session) SetModel(ref message.ModelRef) {
 	}
 	s.model = ref
 	s.persistModel(ref)
+	s.emit(Event{Type: EventModelChanged, Model: ref})
+}
+
+// ModelSupported reports whether ref names a configured provider — the same
+// s.cfg.Providers.For check per-turn selection (see streamTurn) and the `model`
+// tool use. It lets POST /session/{id}/model reject a swap to an unconfigured
+// provider before SetModel runs, without the server importing the provider
+// registry.
+func (s *Session) ModelSupported(ref message.ModelRef) bool {
+	_, err := s.cfg.Providers.For(ref)
+	return err == nil
 }
 
 // Model returns the session's current model.

@@ -572,6 +572,57 @@ func TestMergeInstructions(t *testing.T) {
 	})
 }
 
+func TestModelToolConfig(t *testing.T) {
+	t.Run("default on when unset", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.ModelTool != nil {
+			t.Errorf("ModelTool = %v, want nil (unset)", c.ModelTool)
+		}
+		if !c.ModelToolEnabled() {
+			t.Error("ModelToolEnabled() = false with field unset, want true (default on)")
+		}
+	})
+	t.Run("explicit false disables", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model_tool": false}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.ModelTool == nil || *c.ModelTool != false {
+			t.Errorf("ModelTool = %v, want *false", c.ModelTool)
+		}
+		if c.ModelToolEnabled() {
+			t.Error("ModelToolEnabled() = true with model_tool:false, want false")
+		}
+	})
+	t.Run("nil receiver is on", func(t *testing.T) {
+		var c *Config
+		if !c.ModelToolEnabled() {
+			t.Error("(*Config)(nil).ModelToolEnabled() = false, want true")
+		}
+	})
+	t.Run("project false overrides user unset", func(t *testing.T) {
+		falseV := false
+		merged := merge(&Config{}, &Config{ModelTool: &falseV})
+		if merged.ModelTool == nil || *merged.ModelTool != false {
+			t.Errorf("merged ModelTool = %v, want *false", merged.ModelTool)
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		trueV := true
+		merged := merge(&Config{ModelTool: &trueV}, &Config{})
+		if merged.ModelTool == nil || *merged.ModelTool != true {
+			t.Errorf("merged ModelTool = %v, want *true (inherited)", merged.ModelTool)
+		}
+	})
+}
+
 func TestGoalEvaluatorModel(t *testing.T) {
 	t.Run("load", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "config.json")
