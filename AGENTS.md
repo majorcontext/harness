@@ -856,6 +856,25 @@ with no Go-side handler of its own.
     still hard-errors `HARNESS_RUN_TOKEN is required` exactly as before. The
     token guards network reachability, and loopback is a server-verifiable
     proxy for that (unlike, say, `Origin`, which a client controls).
+  - **Unauthenticated on a non-loopback bind is also possible, but ONLY via
+    a SECOND, separate, EXPLICIT opt-in** — the `-unauthenticated` serve
+    flag, or `HARNESS_UNAUTHENTICATED=1` (`envUnauthenticated`, parsed with
+    `strconv.ParseBool`; an unset or unparsable value is false, fail-closed
+    on a malformed setting). `resolveUnauthenticated` (`cmd/harness/main.go`)
+    is the single decision point both serve flags feed: a non-empty token
+    always wins (token path unaffected, any bind); an empty token on a
+    loopback bind is unchanged from above; an empty token on a non-loopback
+    bind needs this opt-in or it still hard-errors exactly as before — the
+    opt-in is never inferred from the empty token alone, only from the flag
+    or env var. This is for a deployment where a trusted external gate
+    already restricts reachability (e.g. a Cloudflare Access-gated tunnel,
+    or a sandboxed network boundary) so the token is redundant with that
+    gate — `server.Options.Unauthenticated` itself is bind-address-agnostic
+    (see its own doc comment); the safety property lives entirely in
+    `cmd/harness` deciding WHEN to set it. Landing this on a non-loopback
+    bind logs a SEPARATE, distinctly worded loud warning ("serving
+    unauthenticated on a non-loopback bind") from the loopback one above, so
+    the two are distinguishable in a log search.
   - **Same-origin auto-connect** (`embeddedConnectPlan`, index.html): opening
     a box's own `/monitor` attempts the connection immediately against
     `location.origin`, using whatever token is available (`#t=` fragment,
