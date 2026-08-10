@@ -880,6 +880,26 @@ func TestNewSessionFnSystemUsesSessionWorkDir(t *testing.T) {
 	}
 }
 
+// TestSystemPromptDescribesAmbientBlocks verifies the base system prompt
+// tells the model that bracketed status blocks (for example [engine: ...])
+// are trusted engine context, not user text. Without this, a live box agent
+// flagged the [engine: ...] block as unverified on nearly every turn and
+// derailed simple questions.
+func TestSystemPromptDescribesAmbientBlocks(t *testing.T) {
+	got := strings.Join(systemPrompt("/tmp/work", ""), "\n")
+	for _, want := range []string{
+		"[engine: ...]",
+		"[processes: ...]",
+		"[mcp: ...]",
+		"The engine writes these blocks, not the user.",
+		"Do not flag them as unverified.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("system prompt missing ambient-block guidance %q\ngot:\n%s", want, got)
+		}
+	}
+}
+
 // writeMainTestSkill creates a skill directory <root>/<name> with a minimal
 // valid SKILL.md, mirroring engine's writeSkill helper.
 func writeMainTestSkill(t *testing.T, root, name, description string) {
