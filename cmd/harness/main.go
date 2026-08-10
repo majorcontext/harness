@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -179,7 +180,7 @@ func usage() {
                                     pursue a goal until an evaluator judges it
                                     met (exit 0 achieved, 3 not achieved)
   harness serve [-addr host:port] [-cors-origin origin] [-no-instructions]
-                [-skills-dir dir ...]
+                [-unauthenticated] [-skills-dir dir ...]
                                     serve the HTTP+SSE session API
   harness plugin probe              re-probe configured plugins and refresh
                                     the manifest cache
@@ -729,6 +730,61 @@ func isLoopbackAddr(addr string) bool {
 	return ip.IsLoopback()
 }
 
+// envUnauthenticated reads HARNESS_UNAUTHENTICATED as a bool via
+// strconv.ParseBool (accepts "1", "t", "T", "TRUE", "true", "True" and their
+// false-form counterparts). An unset value, an empty string, or anything
+// ParseBool rejects (e.g. "yes") is treated as false — fail closed on a
+// malformed value instead of treating it as an accidental opt-in. This is
+// the env-var half of the SAME explicit opt-in the -unauthenticated flag
+// sets; serveCmd ORs the two together before calling resolveUnauthenticated.
+func envUnauthenticated() bool {
+	v, _ := strconv.ParseBool(os.Getenv("HARNESS_UNAUTHENTICATED"))
+	return v
+}
+
+// resolveUnauthenticated is serveCmd's fail-closed decision for whether to
+// run without a bearer token, threaded straight into server.Options.
+// Unauthenticated (see that field's own doc comment for the invariant this
+// upholds: NEVER inferred from an empty token alone — only an explicit
+// opt-in, evaluated here, ever sets it).
+//
+// token is HARNESS_RUN_TOKEN's value (empty when unset). addr is the raw
+// -addr value. explicitUnauthenticated is true only when the operator
+// affirmatively opted in via -unauthenticated or HARNESS_UNAUTHENTICATED
+// (envUnauthenticated) — never derived from token or addr.
+//
+// Decision table:
+//   - A non-empty token: always (false, nil) — the token path is enforced
+//     exactly as before, on any bind, regardless of explicitUnauthenticated.
+//   - An empty token on a loopback bind (isLoopbackAddr): (true, nil) —
+//     unchanged from the pre-existing loopback-unauthenticated default; the
+//     token exists to guard network reachability, and loopback is
+//     server-verifiable proof reachability is already confined to this
+//     machine, so explicitUnauthenticated is not required (though a caller
+//     may still set it; it is simply redundant there).
+//   - An empty token on a non-loopback bind WITH explicitUnauthenticated:
+//     (true, nil) — the new case. The operator is asserting a trusted
+//     external gate already restricts reachability (e.g. a Cloudflare
+//     Access-gated tunnel, or a sandboxed network boundary), so the token is
+//     redundant with that gate. This is opt-in only; it is never inferred.
+//   - An empty token on a non-loopback bind WITHOUT
+//     explicitUnauthenticated: (false, error) — fails closed exactly as
+//     before this change. A caller that forgot to set a token on what it
+//     thinks is a public/production bind must get a hard error, not a
+//     silently-open server.
+func resolveUnauthenticated(token, addr string, explicitUnauthenticated bool) (bool, error) {
+	if token != "" {
+		return false, nil
+	}
+	if isLoopbackAddr(addr) {
+		return true, nil
+	}
+	if explicitUnauthenticated {
+		return true, nil
+	}
+	return false, fmt.Errorf("HARNESS_RUN_TOKEN is required")
+}
+
 // serveURLForAddr derives the URL plugins should use to reach this
 // process's `harness serve` HTTP API from the -addr flag's listen address.
 // A bind-all address isn't reliably dialable as-is from another process on
@@ -815,9 +871,12 @@ func monitorTerminalHint(w io.Writer, monitorEnabled, isTTY bool, addr, token st
 }
 
 // serveCmd starts the HTTP+SSE session API. The run token comes from
-// HARNESS_RUN_TOKEN (required); the listener opens at boot, but nothing here
-// touches network egress, spawns processes, or scans beyond the session dir —
-// provider auth still validates on first message send.
+// HARNESS_RUN_TOKEN, required on any bind unless the operator explicitly
+// opts out via -unauthenticated/HARNESS_UNAUTHENTICATED (non-loopback) or the
+// bind is loopback-only (see resolveUnauthenticated); the listener opens at
+// boot, but nothing here touches network egress, spawns processes, or scans
+// beyond the session dir — provider auth still validates on first message
+// send.
 func serveCmd(args []string) error {
 	// Captured once, at the top of the command, before any flag parsing,
 	// config load, or session create/load — mkCfg below threads this same
@@ -835,6 +894,8 @@ func serveCmd(args []string) error {
 	fs.StringVar(&corsOrigin, "cors-origin", "", "enable browser CORS by echoing this Access-Control-Allow-Origin value (e.g. your inspector origin, or * for dev); empty disables CORS")
 	var noInstructions bool
 	fs.BoolVar(&noInstructions, "no-instructions", false, "disable automatic AGENTS.md injection for sessions served by this instance")
+	var unauthenticatedFlag bool
+	fs.BoolVar(&unauthenticatedFlag, "unauthenticated", false, "run without a bearer token even on a non-loopback bind; only for a deployment where a trusted external gate (e.g. Cloudflare Access, a sandboxed network boundary) already restricts reachability. Ignored when HARNESS_RUN_TOKEN is set. Also settable via HARNESS_UNAUTHENTICATED=1")
 	var skillDirs []string
 	fs.Func("skills-dir", "directory of Agent Skills to advertise (repeatable); overrides config skills_dirs", func(v string) error {
 		skillDirs = append(skillDirs, v)
@@ -844,19 +905,14 @@ func serveCmd(args []string) error {
 		return err
 	}
 	token := os.Getenv("HARNESS_RUN_TOKEN")
-	// unauthenticated is case (b) of the decision table on server.Options.
-	// Unauthenticated's own doc comment: an EMPTY token is accepted only
-	// when -addr classifies as loopback-only (isLoopbackAddr) — any other
-	// empty-token bind (case (c): a bare ":port", "0.0.0.0", "::", any
-	// other routable address) still fails closed exactly as before. A
-	// non-empty token (case (a)) is unaffected either way: works exactly
-	// as today, on any bind, always enforced.
-	unauthenticated := false
-	if token == "" {
-		if !isLoopbackAddr(addr) {
-			return fmt.Errorf("HARNESS_RUN_TOKEN is required")
-		}
-		unauthenticated = true
+	// explicitUnauthenticated is the ONLY input resolveUnauthenticated ever
+	// reads besides token/addr — the flag and its env-var twin, ORed, never
+	// derived from token or addr. See resolveUnauthenticated's own doc
+	// comment for the full decision table.
+	explicitUnauthenticated := unauthenticatedFlag || envUnauthenticated()
+	unauthenticated, err := resolveUnauthenticated(token, addr, explicitUnauthenticated)
+	if err != nil {
+		return err
 	}
 	// Structured logging: JSON to stderr, stdlib log/slog only (no new
 	// dependency). Built early so the config-load summary below (see
@@ -866,14 +922,25 @@ func serveCmd(args []string) error {
 	// future cmd-scoped task).
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	if unauthenticated {
-		// A clear, impossible-to-miss line: this process is about to serve
-		// its full API (not just /health/monitor) with no bearer token
-		// check at all. Loopback-only makes this safe (see
-		// isLoopbackAddr's doc comment), but it is still a deviation from
-		// this binary's normal secure-by-default behavior, worth a
-		// distinct log level (Warn, not Info) even though it is expected
-		// and intentional in the common "just run it locally" case.
-		logger.Warn("serving unauthenticated on loopback", "addr", addr, "reason", "no run token set")
+		if isLoopbackAddr(addr) {
+			// A clear, impossible-to-miss line: this process is about to
+			// serve its full API (not just /health/monitor) with no bearer
+			// token check at all. Loopback-only makes this safe (see
+			// isLoopbackAddr's doc comment), but it is still a deviation
+			// from this binary's normal secure-by-default behavior, worth a
+			// distinct log level (Warn, not Info) even though it is
+			// expected and intentional in the common "just run it locally"
+			// case.
+			logger.Warn("serving unauthenticated on loopback", "addr", addr, "reason", "no run token set")
+		} else {
+			// The non-loopback opt-in case: this process is reachable from
+			// off this machine with no bearer token check at all. Safe only
+			// because the operator explicitly asserted a trusted external
+			// gate already restricts reachability — loud on purpose, since
+			// nothing about the bind address itself proves that here (see
+			// resolveUnauthenticated's own doc comment).
+			logger.Warn("serving unauthenticated on a non-loopback bind", "addr", addr, "reason", "explicit -unauthenticated opt-in trusting an external network gate")
+		}
 	}
 	cfg, err := loadConfigLogged(logger)
 	if err != nil {
