@@ -1217,7 +1217,14 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 		Temperature: params.Temperature,
 		TopP:        params.TopP,
 		MaxTokens:   maxTokens,
-		Effort:      s.Effort(),
+		// Effort is read straight from session state, deliberately NOT routed
+		// through the chat.params hook (v1 scope). The design gives per-model
+		// level gating to the CALLER's own layer (the boxes API validates a
+		// level against the model before POST /session/{id}/thinking), not to a
+		// harness plugin, so a chat.params Effort override buys nothing the box
+		// path uses. Adding Effort to plugin.ChatParams is a clean future
+		// enhancement if a plugin ever needs to rewrite it per request.
+		Effort: s.Effort(),
 	}
 
 	// Record this turn's assembled system for the session_info tool, bump the

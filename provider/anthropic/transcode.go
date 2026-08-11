@@ -170,12 +170,16 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 	// KNOWN LIMITATION (live-gated): enabling thinking mid-session does not
 	// synthesize a leading thinking block for a prior assistant turn that made
 	// tool calls without one. The API can reject a request that continues such a
-	// turn ("thinking blocks expected before tool_use"). In practice the
-	// engine's agentic loop finishes a tool cycle within one turn, so a caller
-	// toggling effort between turns faces a final assistant TEXT turn, not a
-	// dangling tool_use — the risky shape needs an interrupted turn. A robust
-	// fix (synthesize or relocate at transcode time) is deferred pending live
-	// confirmation of the exact reject shape; see the reasoning-effort PR.
+	// turn ("thinking blocks expected before tool_use"). Normally the engine's
+	// agentic loop finishes a tool cycle within one turn, so a caller toggling
+	// effort between turns faces a final assistant TEXT turn, not a dangling
+	// tool_use. The one supported path that DOES leave the risky shape is POST
+	// /session/{id}/abort mid-tool-call: it leaves a partial tool_use plus a
+	// synthetic tool-result and no thinking block, and a following effort-enabled
+	// prompt then continues it. A robust fix (synthesize or relocate at transcode
+	// time) is deferred pending live confirmation of the exact reject shape; the
+	// //go:build live suite should exercise abort-then-enable. See the
+	// reasoning-effort PR.
 	if budget, ok := thinkingBudget(req.Effort); ok {
 		out.Thinking = &apiThinking{Type: "enabled", BudgetTokens: budget}
 		if out.MaxTokens < budget+thinkingCompletionMargin {

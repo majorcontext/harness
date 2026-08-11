@@ -128,6 +128,18 @@ func transcodeRequest(req *provider.Request, family string) (*apiRequest, error)
 	}
 	// A non-off effort level sets the top-level reasoning_effort control;
 	// EffortUnset/EffortOff send nothing (gateway/model default).
+	//
+	// Unlike the anthropic and openai adapters, this one does NOT drop
+	// temperature/top_p or raise a max_tokens floor here. This is a generic
+	// openai-compatible gateway adapter: whether a reasoning model rejects
+	// temperature, and whether reasoning tokens count against max_tokens, is the
+	// GATEWAY's concern, and different openai-compat providers disagree (some
+	// accept temperature with reasoning). The gateway normalizes upstream. Live
+	// probing (2026-08-11) confirmed Bifrost's /chat/completions accepts
+	// reasoning_effort at low/medium/high with a small max_tokens and returns
+	// reasoning without a "max_tokens must exceed budget" error — so no local
+	// adjustment is needed for the deployed route. A future non-normalizing
+	// gateway would need per-provider handling here.
 	if req.Effort.Reasoning() {
 		out.ReasoningEffort = string(req.Effort)
 	}
