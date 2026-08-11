@@ -1224,6 +1224,15 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 		// harness plugin, so a chat.params Effort override buys nothing the box
 		// path uses. Adding Effort to plugin.ChatParams is a clean future
 		// enhancement if a plugin ever needs to rewrite it per request.
+		//
+		// This reads s.Effort() fresh every request (and every tool round, since
+		// runAgenticLoop rebuilds the request per round), so a SetModel swap to a
+		// non-reasoning model while effort stays non-off ships a reasoning
+		// control that model rejects — the SAME caller-gated trigger as the
+		// off-toggle the adapters' downgrade strip handles. The caller therefore
+		// re-validates/clears effort on every MODEL swap, not only before
+		// POST /thinking; the boxes picker does this by clamping the level to the
+		// new model's supported set on switch.
 		Effort: s.Effort(),
 	}
 
