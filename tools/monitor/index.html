@@ -1351,6 +1351,16 @@ function transcriptModel(messages, liveEvents, turnOffset, pendingSends) {
         // site rather than falling out of foldMessage's user-role branch).
         if (pendingRemaining.length) reconcilePendingSend(ev.queue_text || "");
         break;
+      case "turn.restart":
+        // A base-loop retry (engine/prompt_retry.go) re-streams this turn's
+        // partial assistant text/reasoning from scratch after a masked
+        // transient provider error. Drop the open streamed drafts so the
+        // retry rebuilds them, instead of showing the failed attempt's
+        // partial concatenated ahead of the retry's text. Tools are
+        // untouched: turn.restart fires only before any tool call.
+        if (openText) { var oti = draft.indexOf(openText); if (oti !== -1) draft.splice(oti, 1); openText = null; }
+        if (openReasoning) { var ori = draft.indexOf(openReasoning); if (ori !== -1) draft.splice(ori, 1); openReasoning = null; }
+        break;
       case "text.delta":
         if (!openText) { openText = { kind: "assistant", id: null, text: "", streaming: true }; draft.push(openText); }
         openText.text += ev.text || "";

@@ -163,6 +163,19 @@ const (
 	EventToolStart      = "tool.start"
 	EventToolEnd        = "tool.end"
 
+	// EventTurnRestart fires when streamTurnWithRetry (prompt_retry.go) is
+	// about to retry a failed model call whose stream may have already
+	// emitted partial EventTextDelta/EventReasoningDelta content (a mid-text
+	// stream_truncated or server_error). The next attempt re-streams that
+	// content from scratch, so this marker tells a subscriber that renders
+	// deltas incrementally (a TUI or SSE client) to DROP the partial content
+	// it accumulated since the last EventMessage. Without it, the client
+	// renders the failed attempt's partial text immediately followed by the
+	// retry's full text — e.g. "Hello wor" then "Hello world" shown as
+	// "Hello worHello world". It carries no payload beyond SessionID; the
+	// authoritative message still arrives on the turn's final EventMessage.
+	EventTurnRestart = "turn.restart"
+
 	// EventModelChanged fires once per SetModel call that actually changes
 	// the session's model (never on a no-op set to the current model). It
 	// carries the new model in Event.Model and is the single observability
@@ -427,6 +440,24 @@ type Config struct {
 	// any healthy stream's inter-event gap (adapters see provider
 	// keep-alive pings as events). Negative disables the watchdog.
 	StreamIdleTimeout time.Duration
+
+	// PromptRetries is how many ADDITIONAL attempts the base interactive
+	// Prompt loop (runAgenticLoop, see streamTurnWithRetry) makes when a
+	// model call fails with a transient, retryable provider error — an HTTP
+	// 5xx/429/529 or a truncated stream, classified through
+	// provider.AsRetryable, never by matching error text. Zero (the zero
+	// value) DISABLES the retry: the first failure surfaces exactly as it did
+	// before this field existed, which keeps a bare embedder-built
+	// engine.Config unchanged. The config/CLI wiring sets the product default
+	// of 2 (config key `prompt_retries`, config.Config.PromptRetriesValue).
+	//
+	// The budget is deliberately small and short (basePromptRetryDelay: 1s,
+	// then 2s) because an interactive user waits on the turn — it smooths a
+	// one-off blip, NOT the goal loop's ~30min weather tiers
+	// (promptTurnWithRetry, goal.go). A deterministic failure, a
+	// provider.AsPermanent malformed-request shape, or an interruptedTurnError
+	// is never retried regardless of this value — see streamTurnWithRetry.
+	PromptRetries int
 	// ContextWindowTokens is the model's context window size, in tokens.
 	// Zero (the default, a fresh Config's zero value) disables automatic
 	// compaction entirely: the engine has no built-in per-model table, so
@@ -1043,7 +1074,15 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 	defer s.emitStatus("idle")
 
 	for {
-		asst, stop, usage, err := s.streamTurn(ctx)
+		// streamTurnWithRetry is a drop-in for streamTurn that smooths a
+		// one-off retryable provider error (a momentary HTTP 5xx/429/529 or a
+		// truncated stream) with a small, bounded budget (Config.PromptRetries)
+		// so an interactive user never sees a transient blip. It returns the
+		// SAME error shapes streamTurn does on the paths this loop already
+		// handles below — an *interruptedTurnError (whose partial is appended
+		// here), a context.Canceled, or an exhausted/non-retryable failure —
+		// so everything below is unchanged. See its doc comment.
+		asst, stop, usage, err := s.streamTurnWithRetry(ctx)
 		if err != nil {
 			var interrupted *interruptedTurnError
 			if errors.As(err, &interrupted) {

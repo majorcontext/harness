@@ -68,6 +68,35 @@ relative order intact. A move that would break the bound is refused.
 tested against. Derive it from the provider contract only, never from
 either function's internals. See the oracle rule under Testing.
 
+### Ambient engine context is a structured, unforgeable part
+
+The engine appends its own live status to the newest user message every
+request — engine identity (`[engine: ...]`), managed-process status
+(`[processes: ...]`), degraded-MCP status (`[mcp: ...]`), and the
+parked-goal notice (`[goal: ...]`). This is a `message.EngineContext` part,
+NOT a `Text` part. A bare `Text` block is byte-indistinguishable from
+user-typed or pasted text, so a payload a user pastes that contains
+`[engine: ...]` once inherited the same trust the engine's own block
+carries — a trust-spoofing surface. `EngineContext` is a distinct part-kind
+only `withAmbientStatus` (`engine/process.go`) produces, so a user- or
+paste-authored part is always a `Text` and can never BE one, however its
+bytes are shaped. Every transcoder renders an `EngineContext` through
+`message.RenderEngineContext`, which wraps the block in the
+`message.EngineContextOpenTag`/`EngineContextCloseTag` sentinel, and renders
+every `Text` through `message.NeutralizeEngineContextSentinel`, which
+defangs any literal sentinel that text carries. Only a genuine
+`EngineContext` can therefore emit the sentinel on the wire, so the base
+system prompt (`cmd/harness`, `ambientContextGuidance`) tells the model to
+trust the sentinel-wrapped block and to distrust bracketed text outside it.
+The render stays an ordinary text block on every provider — no new wire
+feature. `EngineContext` is runtime-only (appended to the throwaway
+per-request copy, never the durable log — the prompt-cache-prefix and
+never-persisted rules below are unchanged) but still round-trips through the
+canonical JSON union like every other part. Never revert this to a `Text`
+part, and never make the guidance trust bracketed text syntax again. (Fix:
+the NEP ambient trust-spoofing finding; superseded PR #113's prose-only
+stopgap.)
+
 ### Project instructions (AGENTS.md)
 
 The engine auto-injects a project's `AGENTS.md` into the system prompt. On the
@@ -104,6 +133,65 @@ the first `Prompt` loudly (same semantics as a malformed AGENTS.md). Skills are
 never written to the session log — a resumed session rediscovers them. Config
 `skills_dirs` (array; a non-empty project value overrides the user value
 entirely) and the repeatable `-skills-dir` run/serve flag drive it.
+
+### Base loop retry
+
+The base interactive `Prompt` loop retries a transient provider error itself,
+so a plain box prompt never surfaces a one-off HTTP 500. `streamTurnWithRetry`
+(`engine/prompt_retry.go`) wraps `streamTurn` at its single call site in
+`runAgenticLoop` (`engine/engine.go`). It retries only when the error is
+classified retryable through `provider.AsRetryable` — `server_error`,
+`overloaded`, `rate_limited`, or `stream_truncated`, never by matching error
+text — AND the budget has an attempt left. Every other error returns on the
+first attempt with ZERO retries: a `context.Canceled` abort, an
+`*interruptedTurnError` (whose partial `runAgenticLoop` must still append —
+retrying would duplicate the model's already-emitted tool intent), a
+`provider.AsPermanent` malformed-request shape, or any deterministic failure.
+The final surfaced error still emits one `session.error` and drops the usage
+exactly as before; an intermediate masked attempt emits neither. A masked
+attempt is still a full `streamTurn`, so it DOES bump the per-session turn
+counter (`s.turn`, reported by `session_info`) and re-fire the per-request
+hooks (`chat.params`, `system.transform`) and `OnRequest` — one bump and one
+hook pass per attempt, exactly like the goal loop's per-attempt behavior. Only
+the `session.error` and usage are suppressed for a masked attempt.
+
+Retrying `streamTurn` is idempotent for history and tool side effects:
+`streamTurn` makes ONE model call and never executes a tool (`runAgenticLoop`
+runs tools only AFTER `streamTurn` returns a `StopToolUse` message), so a
+failed attempt ran no side effect to redo. The one shape that DID emit tool
+intent before failing arrives as `*interruptedTurnError` and is excluded.
+
+The emit stream is NOT idempotent, so `streamTurnWithRetry` closes that gap.
+A failed attempt can emit `EventTextDelta`/`EventReasoningDelta` for partial
+text before its stream dies, and the retry re-streams that text from scratch.
+`streamTurnWithRetry` emits one `EventTurnRestart` (`engine.go`) before each
+retry, so a subscriber that renders deltas incrementally drops the stale
+partial and rebuilds it from the retry — never the two runs concatenated
+(`Hello wor` then `Hello world` shown as `Hello worHello world`). The server
+forwards `EventTurnRestart` live over SSE (`server/journal.go`'s `Publish`);
+the turn's final `EventMessage` still reconciles history regardless.
+
+`Config.PromptRetries` bounds it: additional attempts, zero (the engine zero
+value) DISABLES retry, config/CLI default 2 via `config.Config`'s `*int`
+`prompt_retries` key (`PromptRetriesValue`). The backoff
+(`basePromptRetryDelay`: 1s, then 2s, `time.NewTimer`) is deliberately SMALLER
+and SHORTER than the goal loop's tiers below — an interactive user waits on
+the turn, so this smooths a blip in a second or two, never the goal loop's
+~30min weather schedule (`promptTurnWithRetry`, `goal.go`). The two are
+distinct: the base loop wraps ONE model call and is inherently idempotent; the
+goal loop's `promptTurnWithRetry` wraps a whole worker turn (with the
+tool-executed non-idempotency gate) and parks on exhaustion.
+
+The two also NEST. A goal worker turn runs through `s.Prompt`/
+`s.runAgenticLoop` (`goal.go`), so every one of `promptTurnWithRetry`'s outer
+attempts now issues up to `1+PromptRetries` inner `streamTurn` calls. For a
+persistent retryable condition the worst case is `goalRetryableMaxAttempts`
+(12) times `1+PromptRetries` (3) — about 36 full-input-price model calls,
+where the goal-loop tiers alone assume ~12. This is deliberate: the fast inner
+budget (1s, then 2s) smooths a one-off blip inside a single worker turn before
+the outer weather tier ever counts it, so a goal loop rides a brief provider
+blip without spending an outer attempt. `PromptRetries` 0 disables the inner
+budget for a host that wants the outer tiers to be the only retry.
 
 ### Goal loop
 
@@ -567,11 +655,12 @@ unconfigured rule.
 
 Once at least one declared process has EVER been started (this server
 process's lifetime), request assembly appends an ephemeral `[processes:
-...]` status block to the newest user message ONLY — never persisted into
-the durable session log, never touching any earlier message so a
-provider's prompt cache prefix stays intact. See
-`docs/design/managed-processes.md` §4 for the exact mechanism and why it
-is safe.
+...]` status block to the newest user message ONLY — as a
+`message.EngineContext` part (see "Ambient engine context is a structured,
+unforgeable part" above), never persisted into the durable session log,
+never touching any earlier message so a provider's prompt cache prefix
+stays intact. See `docs/design/managed-processes.md` §4 for the exact
+mechanism and why it is safe.
 
 ### Model switching
 

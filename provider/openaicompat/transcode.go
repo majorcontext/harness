@@ -222,8 +222,25 @@ func transcodeUserMessage(m *message.Message) ([]apiMessage, error) {
 	for _, p := range m.Parts {
 		switch v := p.(type) {
 		case *message.Text:
-			texts = append(texts, v.Text)
-			parts = append(parts, apiContentPart{Type: "text", Text: v.Text})
+			// NeutralizeEngineContextSentinel: a user- or paste-authored Text
+			// part must never forge the engine-context sentinel on the wire
+			// (see message.EngineContext). Only the *message.EngineContext
+			// case below emits it.
+			t := message.NeutralizeEngineContextSentinel(v.Text)
+			texts = append(texts, t)
+			parts = append(parts, apiContentPart{Type: "text", Text: t})
+		case *message.EngineContext:
+			if v.Text == "" {
+				continue
+			}
+			// A genuine engine block: emit it sentinel-wrapped as the base
+			// system prompt (cmd/harness) describes. An ordinary text content
+			// part on the wire — no new provider feature. The empty guard
+			// mirrors anthropic/openai so all three transcoders agree on
+			// identical input (never a bare empty envelope).
+			t := message.RenderEngineContext(v.Text)
+			texts = append(texts, t)
+			parts = append(parts, apiContentPart{Type: "text", Text: t})
 		case *message.Blob:
 			hasBlob = true
 			url, err := blobURL(v)
@@ -251,10 +268,40 @@ func transcodeUserMessage(m *message.Message) ([]apiMessage, error) {
 
 func transcodeAssistantMessage(m *message.Message, family string) ([]apiMessage, error) {
 	var toolCalls []apiToolCall
+	// body accumulates the assistant text content. It is built inline (not
+	// via m.Parts.Text()) so it can BOTH neutralize each Text and render an
+	// EngineContext: Parts.Text() flattens only *Text, so it would silently
+	// DROP an EngineContext on this path, and skip its neutralization.
+	var body strings.Builder
+	writeBody := func(s string) {
+		if s == "" {
+			return
+		}
+		if body.Len() > 0 {
+			body.WriteByte('\n')
+		}
+		body.WriteString(s)
+	}
 	for _, p := range m.Parts {
 		switch v := p.(type) {
 		case *message.Text:
-			// Folded into content below via Parts.Text().
+			// NeutralizeEngineContextSentinel: a model induced (via prompt
+			// injection) to echo the sentinel in its reply must not carry a
+			// live sentinel when this assistant message is replayed on a
+			// later turn (see message.EngineContext).
+			writeBody(message.NeutralizeEngineContextSentinel(v.Text))
+		case *message.EngineContext:
+			// A genuine engine block on an assistant message (a plugin-built
+			// part — the engine only appends to the newest user message):
+			// render it sentinel-wrapped, matching anthropic's shared
+			// transcodeParts and openai's role-parameterized transcodeMessage
+			// so all three transcoders agree on identical canonical input. An
+			// assistant top-level content block is NOT tool-result recursion,
+			// so this position is trusted (see anthropic transcodeParts's
+			// topLevel split).
+			if v.Text != "" {
+				writeBody(message.RenderEngineContext(v.Text))
+			}
 		case *message.ToolCall:
 			args := string(v.Arguments)
 			if args == "" {
@@ -290,7 +337,7 @@ func transcodeAssistantMessage(m *message.Message, family string) ([]apiMessage,
 	}
 
 	var content json.RawMessage
-	if text := m.Parts.Text(); text != "" {
+	if text := body.String(); text != "" {
 		raw, err := json.Marshal(text)
 		if err != nil {
 			return nil, err
@@ -334,13 +381,45 @@ func transcodeToolMessages(m *message.Message) ([]apiMessage, error) {
 // own separate argument for why it happens to be safe.
 func toolResultOutput(v *message.ToolResult) string {
 	content := v.SafeContent()
-	out := content.Text()
+	// NeutralizeEngineContextSentinel: tool output (a hostile file read,
+	// web fetch, or subprocess stdout) must never forge the engine-context
+	// sentinel on the wire (see message.EngineContext). This flattening path
+	// bypasses the *message.Text case's neutralization, so it neutralizes
+	// here — the same bar user/assistant text already meets.
+	//
+	// Both *Text and *EngineContext contribute their text: message.Parts.Text
+	// (content.Text()) keeps only *Text, so a plugin-built *EngineContext
+	// nested in a tool result would vanish silently. A tool result is never a
+	// genuine top-level ambient position, so such a block renders INERT
+	// (neutralized text) and stays visible — matching provider/anthropic's
+	// transcodeParts tool-result recursion (topLevel=false), so all three
+	// transcoders agree on identical input. No engine path places an
+	// EngineContext in a tool result today (mirrors provider/openai's
+	// toolResultOutput).
+	var b strings.Builder
 	blobs := 0
 	for _, p := range content {
-		if _, ok := p.(*message.Blob); ok {
+		var text string
+		switch pt := p.(type) {
+		case *message.Text:
+			text = pt.Text
+		case *message.EngineContext:
+			text = pt.Text
+		case *message.Blob:
 			blobs++
+			continue
+		default:
+			continue
 		}
+		if text == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(text)
 	}
+	out := message.NeutralizeEngineContextSentinel(b.String())
 	if blobs > 0 {
 		note := fmt.Sprintf("[%d image attachment(s) omitted]", blobs)
 		if out == "" {

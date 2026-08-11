@@ -16,6 +16,8 @@ func writeFile(t *testing.T, path, body string) {
 	}
 }
 
+func intPtr(v int) *int { return &v }
+
 func TestLoadMissingFile(t *testing.T) {
 	c, err := Load(filepath.Join(t.TempDir(), "does-not-exist.json"))
 	if err != nil {
@@ -657,6 +659,73 @@ func TestGoalEvaluatorModel(t *testing.T) {
 		}
 		if ref.String() != "anthropic/claude-opus-4-8" {
 			t.Errorf("ResolveModel(judge) = %q", ref.String())
+		}
+	})
+}
+
+// TestPromptRetries covers the prompt_retries config field: a *int so
+// unset means the product default (PromptRetriesValue -> 2), an explicit 0
+// disables the base-loop retry, and a project value overrides the user layer
+// like ModelTool's *bool does.
+func TestPromptRetries(t *testing.T) {
+	t.Run("unset uses default 2", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.PromptRetries != nil {
+			t.Errorf("PromptRetries = %v, want nil (unset)", c.PromptRetries)
+		}
+		if got := c.PromptRetriesValue(); got != 2 {
+			t.Errorf("PromptRetriesValue = %d, want 2 (default)", got)
+		}
+	})
+	t.Run("explicit zero disables", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"prompt_retries": 0}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.PromptRetries == nil || *c.PromptRetries != 0 {
+			t.Fatalf("PromptRetries = %v, want explicit 0", c.PromptRetries)
+		}
+		if got := c.PromptRetriesValue(); got != 0 {
+			t.Errorf("PromptRetriesValue = %d, want 0 (disabled)", got)
+		}
+	})
+	t.Run("explicit value", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"prompt_retries": 5}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got := c.PromptRetriesValue(); got != 5 {
+			t.Errorf("PromptRetriesValue = %d, want 5", got)
+		}
+	})
+	t.Run("nil receiver uses default", func(t *testing.T) {
+		var c *Config
+		if got := c.PromptRetriesValue(); got != 2 {
+			t.Errorf("nil PromptRetriesValue = %d, want 2", got)
+		}
+	})
+	t.Run("project overrides user", func(t *testing.T) {
+		zero := 0
+		base := &Config{PromptRetries: intPtr(3)}
+		merged := merge(base, &Config{PromptRetries: &zero})
+		if merged.PromptRetries == nil || *merged.PromptRetries != 0 {
+			t.Errorf("merged = %v, want project override 0", merged.PromptRetries)
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{PromptRetries: intPtr(3)}
+		merged := merge(base, &Config{})
+		if merged.PromptRetries == nil || *merged.PromptRetries != 3 {
+			t.Errorf("merged = %v, want inherited 3", merged.PromptRetries)
 		}
 	})
 }

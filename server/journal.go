@@ -334,6 +334,13 @@ func (s *Server) Publish(ev engine.Event) {
 		s.publishLive(Event{Type: engine.EventTextDelta, SessionID: ev.SessionID, Text: ev.Text})
 	case engine.EventReasoningDelta:
 		s.publishLive(Event{Type: engine.EventReasoningDelta, SessionID: ev.SessionID, Text: ev.Text})
+	case engine.EventTurnRestart:
+		// A base-loop retry (engine/prompt_retry.go) is about to re-stream a
+		// turn whose partial text/reasoning deltas already reached this
+		// subscriber. Forward the marker live so an SSE client drops the
+		// stale partial before the retry's deltas arrive — see
+		// engine.EventTurnRestart. Live only (Seq 0); it is never journaled.
+		s.publishLive(Event{Type: engine.EventTurnRestart, SessionID: ev.SessionID})
 	case engine.EventToolStart:
 		s.publishLive(Event{Type: engine.EventToolStart, SessionID: ev.SessionID, ToolCall: ev.ToolCall})
 	case engine.EventToolEnd:
