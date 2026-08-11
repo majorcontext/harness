@@ -80,6 +80,43 @@ func TestNoEffortKeepsSampling(t *testing.T) {
 	}
 }
 
+// TestReasoningStrippedWhenOff: a stored reasoning item (from an earlier
+// reasoning-ON turn) is STRIPPED when the current request sends no reasoning
+// control. Symmetric with the anthropic thinking-block strip: shipping a stored
+// reasoning item while the request omits `reasoning` is rejected, and durable in
+// history it would 400 every later turn (a permanent wedge). With reasoning ON
+// the item is replayed (see TestTranscodeReasoningReplayVerbatim).
+func TestReasoningStrippedWhenOff(t *testing.T) {
+	history := func() []message.Message {
+		return []message.Message{
+			{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+			{Role: message.RoleAssistant, Parts: message.Parts{
+				&message.Reasoning{Text: "hmm", ProviderData: message.ProviderData{
+					Family: json.RawMessage(`{"id":"rs_1","type":"reasoning","encrypted_content":"ENC"}`),
+				}},
+				&message.Text{Text: "answer"},
+			}},
+			{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "again"}}},
+		}
+	}
+	for _, e := range []message.Effort{message.EffortUnset, message.EffortOff} {
+		req := baseRequest(history()...)
+		req.Effort = e
+		out := mustTranscode(t, req)
+		raw, err := json.Marshal(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), `"type":"reasoning"`) || strings.Contains(string(raw), `rs_1`) {
+			t.Errorf("effort %q: wire carries a stored reasoning item, want it stripped with reasoning off:\n%s", e, raw)
+		}
+		// The assistant's visible answer must survive the strip.
+		if !strings.Contains(string(raw), "answer") {
+			t.Errorf("effort %q: assistant text lost with the stripped reasoning", e)
+		}
+	}
+}
+
 // TestEffortOffAndUnsetNoReasoning: EffortOff and EffortUnset send no reasoning
 // control at all (omitempty drops the field).
 func TestEffortOffAndUnsetNoReasoning(t *testing.T) {

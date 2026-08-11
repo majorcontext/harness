@@ -642,6 +642,19 @@ provider-and-model fact the engine cannot know from the ref alone. The adapter
 sends the requested level and the provider is the final judge. A caller that
 must gate levels per model (a dashboard picker) holds its OWN mapping.
 
+**Downgrade strip (both reasoning adapters).** A stored thinking block
+(anthropic) or reasoning item (openai Responses) is replayed ONLY when the
+current request enables reasoning. When the request sends no reasoning control
+(`off`/unset, or a swap to a non-reasoning model), the transcoder strips those
+parts. Reason: a stored block shipped while the request omits the reasoning
+control is rejected, and durable in history it 400s every later turn — a
+permanent wedge. This is a transcode-time destructive drop (throwaway request,
+intact record); a later reasoning-ON turn replays the part from the unchanged
+history. The reverse (ENABLE) direction — turning reasoning ON over a prior
+tool_use that lacks a thinking block — stays a documented limitation, since a
+signed thinking block cannot be synthesized (see `provider/anthropic/
+transcode.go`).
+
 `Session.SetEffort` is the single event choke point, mirroring `SetModel`
 exactly. On a real change (never a no-op set to the current level) it persists
 the durable `recEffort` resume record AND emits `EventEffortChanged`, both under

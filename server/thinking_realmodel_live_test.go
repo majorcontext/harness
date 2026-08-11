@@ -54,6 +54,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
@@ -225,63 +226,137 @@ func TestThinkingRealModelLive(t *testing.T) {
 }
 
 // TestThinkingHighThenOffLive verifies the high->off downgrade does NOT wedge a
-// real Claude session. A high turn produces stored thinking blocks; switching to
-// off and prompting again must still complete — the anthropic adapter strips the
-// stored thinking blocks when the request does not enable thinking, so the API
-// never sees a thinking block with thinking disabled (which would 400 every later
-// turn). Drives the real production path against api.anthropic.com.
+// real session on BOTH reasoning adapters. A high turn stores reasoning
+// (anthropic thinking blocks / openai reasoning items); switching to off and
+// prompting again must still complete — the adapter strips the stored parts when
+// the request enables no reasoning, so the API never sees a reasoning part with
+// reasoning disabled (which would 400 every later turn). Drives the real
+// production path against api.anthropic.com and api.openai.com.
 func TestThinkingHighThenOffLive(t *testing.T) {
 	if os.Getenv("HARNESS_LIVE") == "" {
 		t.Skip("HARNESS_LIVE unset")
 	}
+	cases := []struct {
+		name, keyEnv, model string
+	}{
+		{"anthropic", "ANTHROPIC_API_KEY", "anthropic/" + envOr("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")},
+		{"openai", "OPENAI_API_KEY", "openai/" + envOr("OPENAI_REASON_MODEL", "gpt-5")},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if os.Getenv(c.keyEnv) == "" {
+				t.Skipf("%s unset", c.keyEnv)
+			}
+			h := newRealModelHarness(t)
+			id := h.createSession(c.model)
+			prompt := func(text string) {
+				resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+					"parts": []map[string]string{{"type": "text", "text": text}},
+				})
+				if resp.StatusCode != http.StatusAccepted {
+					t.Fatalf("prompt: %d %s", resp.StatusCode, data)
+				}
+				h.waitIdleLive(id)
+			}
+			// Turn 1: high — stores reasoning on THIS session.
+			if resp, data := h.do("POST", "/session/"+id+"/thinking", map[string]string{"effort": "high"}); resp.StatusCode != http.StatusOK {
+				t.Fatalf("set high: %d %s", resp.StatusCode, data)
+			}
+			prompt("What is 17 times 23? Explain briefly.")
+			if !h.hasReasoning(id) {
+				t.Fatalf("high turn produced no stored reasoning — cannot exercise the downgrade")
+			}
+			// Turn 2 on the SAME session: off — must complete (no wedge).
+			if resp, data := h.do("POST", "/session/"+id+"/thinking", map[string]string{"effort": "off"}); resp.StatusCode != http.StatusOK {
+				t.Fatalf("set off: %d %s", resp.StatusCode, data)
+			}
+			prompt("Now just say the number.")
+			h.srv.mu.Lock()
+			lt := h.srv.lastTurn[id]
+			h.srv.mu.Unlock()
+			if lt == nil || lt.outcome != "completed" {
+				got := "nil"
+				if lt != nil {
+					got = lt.outcome + " " + lt.error
+				}
+				t.Fatalf("%s high->off second turn not completed (got %s) — stored reasoning wedged the session", c.name, got)
+			}
+			fmt.Printf("ROW\thigh->off downgrade\t%s\tsecond-turn=completed (no wedge)\n", c.name)
+		})
+	}
+}
+
+// hasToolCall reports whether id's history holds any assistant tool call yet —
+// the signal that round 1 has emitted its tool_use and is now executing it.
+func (h *harness) hasToolCall(id string) bool {
+	h.srv.mu.Lock()
+	st := h.srv.sessions[id]
+	h.srv.mu.Unlock()
+	if st == nil {
+		return false
+	}
+	for _, m := range st.sess.History() {
+		for _, p := range m.Parts {
+			if _, ok := p.(*message.ToolCall); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TestEnableMidToolRoundLive exercises the ENABLE direction (Finding 1): a plain
+// off->high via POST /thinking WHILE a turn is mid-tool-call. runAgenticLoop
+// rebuilds the request with the fresh effort on the next tool round, so the
+// round-2 request enables thinking over the round-1 tool_use that carries no
+// thinking block. It drives the real production path and REPORTS whether the API
+// tolerates the shape or rejects it (the documented KNOWN LIMITATION). It never
+// hard-fails on a reject — that reject IS the limitation — but it fails if the
+// mid-round injection could not be set up.
+func TestEnableMidToolRoundLive(t *testing.T) {
+	if os.Getenv("HARNESS_LIVE") == "" {
+		t.Skip("HARNESS_LIVE unset")
+	}
 	if os.Getenv("ANTHROPIC_API_KEY") == "" {
-		t.Skip("ANTHROPIC_API_KEY unset — native anthropic path unavailable")
+		t.Skip("ANTHROPIC_API_KEY unset")
 	}
 	model := "anthropic/" + envOr("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 	h := newRealModelHarness(t)
 	id := h.createSession(model)
-	prompt := func(text string) {
-		resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
-			"parts": []map[string]string{{"type": "text", "text": text}},
-		})
-		if resp.StatusCode != http.StatusAccepted {
-			t.Fatalf("prompt: %d %s", resp.StatusCode, data)
-		}
-		h.waitIdleLive(id)
-	}
-
-	// Turn 1: high — produces stored thinking blocks on THIS session.
-	if resp, data := h.do("POST", "/session/"+id+"/thinking", map[string]string{"effort": "high"}); resp.StatusCode != http.StatusOK {
-		t.Fatalf("set high: %d %s", resp.StatusCode, data)
-	}
-	prompt("What is 17 times 23? Explain briefly.")
-	if !h.hasReasoning(id) {
-		t.Fatalf("high turn produced no stored thinking blocks — cannot exercise the downgrade")
-	}
-	// Turn 2 on the SAME session: off — must complete (no wedge from replaying
-	// the stored thinking blocks into a thinking-disabled request).
-	resp, data := h.do("POST", "/session/"+id+"/thinking", map[string]string{"effort": "off"})
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("set off: %d %s", resp.StatusCode, data)
-	}
-	resp, data = h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
-		"parts": []map[string]string{{"type": "text", "text": "Now just say the number."}},
+	// effort starts unset (off). Round 1 runs thinking-off and makes a slow tool
+	// call, opening a window to enable thinking before round 2.
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "Use the bash tool to run exactly: sleep 5; echo TOKEN123 . Then tell me what it printed."}},
 	})
 	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("second prompt: %d %s", resp.StatusCode, data)
+		t.Fatalf("prompt: %d %s", resp.StatusCode, data)
+	}
+	// Wait for round 1's tool_use to land (bash is now sleeping), then enable
+	// thinking so round 2 rebuilds with it.
+	deadline := time.Now().Add(30 * time.Second)
+	for !h.hasToolCall(id) {
+		if time.Now().After(deadline) {
+			t.Skip("model made no tool call — cannot set up the mid-round enable")
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	if resp, data := h.do("POST", "/session/"+id+"/thinking", map[string]string{"effort": "high"}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("set high: %d %s", resp.StatusCode, data)
 	}
 	h.waitIdleLive(id)
 	h.srv.mu.Lock()
 	lt := h.srv.lastTurn[id]
 	h.srv.mu.Unlock()
-	if lt == nil || lt.outcome != "completed" {
-		got := "nil"
-		if lt != nil {
-			got = lt.outcome + " " + lt.error
-		}
-		t.Fatalf("high->off second turn not completed (got %s) — stored thinking blocks wedged the session", got)
+	outcome, errMsg := "nil", ""
+	if lt != nil {
+		outcome, errMsg = lt.outcome, lt.error
 	}
-	fmt.Println("ROW\thigh->off downgrade\tsame-session\tsecond-turn=completed (no wedge)")
+	fmt.Printf("ROW\tenable-mid-tool-round\tanthropic\toutcome=%s\t%s\n", outcome, errMsg)
+	if outcome != "completed" {
+		t.Logf("KNOWN LIMITATION confirmed: enable-mid-tool-round rejected (outcome=%s %s)", outcome, errMsg)
+	} else {
+		t.Logf("enable-mid-tool-round TOLERATED by the API this run (outcome=completed)")
+	}
 }
 
 func envOr(k, def string) string {

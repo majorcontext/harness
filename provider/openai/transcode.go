@@ -151,7 +151,8 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 		Store:           false,
 		Include:         []string{"reasoning.encrypted_content"},
 	}
-	if effort, ok := reasoningEffort(req.Effort); ok {
+	effort, reasoningEnabled := reasoningEffort(req.Effort)
+	if reasoningEnabled {
 		out.Reasoning = &apiReasoning{Effort: effort}
 		// Reasoning models reject an explicit temperature or top_p, and reasoning
 		// tokens count against max_output_tokens — mirror the anthropic adapter:
@@ -188,7 +189,7 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 	messages := imageclamp.Clamp(message.NormalizeForWire(req.Messages), imageLimits)
 	for i := range messages {
 		m := &messages[i]
-		items, err := transcodeMessage(m)
+		items, err := transcodeMessage(m, reasoningEnabled)
 		if err != nil {
 			return nil, fmt.Errorf("openai: message %s: %w", m.ID, err)
 		}
@@ -203,7 +204,9 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 // transcodeMessage expands one canonical message into a sequence of Responses
 // input items. Contiguous text/image parts are grouped into a single message
 // item; tool calls, tool results, and reasoning are each their own item.
-func transcodeMessage(m *message.Message) ([]json.RawMessage, error) {
+// reasoningEnabled reports whether THIS request sends a reasoning control; when
+// false, stored reasoning items are stripped (see the Reasoning case).
+func transcodeMessage(m *message.Message, reasoningEnabled bool) ([]json.RawMessage, error) {
 	role := "user"
 	if m.Role == message.RoleAssistant {
 		role = "assistant"
@@ -285,6 +288,17 @@ func transcodeMessage(m *message.Message) ([]json.RawMessage, error) {
 		case *message.Reasoning:
 			if err := flush(); err != nil {
 				return nil, err
+			}
+			if !reasoningEnabled {
+				// Reasoning is OFF for this request (effort off/unset, or a swap
+				// to a non-reasoning model). A stored reasoning item shipped
+				// while the request omits `reasoning` can be rejected, and being
+				// durable in history would 400 every later turn — a permanent
+				// wedge. Strip it, symmetric with the anthropic thinking-block
+				// strip. A transcode-time throwaway request may drop a part
+				// destructively; a later reasoning-ON turn replays it from the
+				// intact history.
+				continue
 			}
 			raw, ok := v.ProviderData.Get(Family)
 			if !ok {

@@ -28,6 +28,17 @@ func baseRequest(msgs ...message.Message) *provider.Request {
 	}
 }
 
+// reasoningRequest is baseRequest with reasoning ENABLED (Effort high). Stored
+// reasoning items are replayed only when the request sends a reasoning control,
+// so a test that exercises reasoning-item replay/drop must use this — a
+// reasoning-off request strips every Reasoning part before that logic runs (see
+// transcodeMessage).
+func reasoningRequest(msgs ...message.Message) *provider.Request {
+	r := baseRequest(msgs...)
+	r.Effort = message.EffortHigh
+	return r
+}
+
 // probe is a permissive view of a single OpenAI Responses input item, used to
 // inspect transcoded output regardless of the item's concrete shape.
 type probe struct {
@@ -335,7 +346,7 @@ func TestWireCallID(t *testing.T) {
 
 func TestTranscodeReasoningReplayVerbatim(t *testing.T) {
 	rawReasoning := json.RawMessage(`{"id":"rs_1","type":"reasoning","summary":[{"type":"summary_text","text":"hmm"}],"encrypted_content":"ENC"}`)
-	out := mustTranscode(t, baseRequest(
+	out := mustTranscode(t, reasoningRequest(
 		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
 		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
 			&message.Reasoning{Text: "hmm", ProviderData: message.ProviderData{
@@ -361,7 +372,7 @@ func TestTranscodeReasoningReplayVerbatim(t *testing.T) {
 }
 
 func TestTranscodeForeignReasoningDropped(t *testing.T) {
-	out := mustTranscode(t, baseRequest(
+	out := mustTranscode(t, reasoningRequest(
 		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
 		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
 			// Anthropic thinking: no "openai" key, dropped silently.
@@ -412,7 +423,7 @@ func TestTranscodeReasoningEmptyProviderDataMarshal(t *testing.T) {
 		{"empty-string-literal", json.RawMessage("")},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			req := baseRequest(
+			req := reasoningRequest(
 				message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
 				message.Message{Role: message.RoleAssistant, Parts: message.Parts{
 					&message.Reasoning{Text: "hmm", ProviderData: message.ProviderData{

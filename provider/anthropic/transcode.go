@@ -167,19 +167,29 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 	// explicit temperature or top_p while thinking is on, so drop both and bump
 	// max_tokens above the budget when needed.
 	//
-	// KNOWN LIMITATION (live-gated): enabling thinking mid-session does not
-	// synthesize a leading thinking block for a prior assistant turn that made
-	// tool calls without one. The API can reject a request that continues such a
-	// turn ("thinking blocks expected before tool_use"). Normally the engine's
-	// agentic loop finishes a tool cycle within one turn, so a caller toggling
-	// effort between turns faces a final assistant TEXT turn, not a dangling
-	// tool_use. The one supported path that DOES leave the risky shape is POST
-	// /session/{id}/abort mid-tool-call: it leaves a partial tool_use plus a
-	// synthetic tool-result and no thinking block, and a following effort-enabled
-	// prompt then continues it. A robust fix (synthesize or relocate at transcode
-	// time) is deferred pending live confirmation of the exact reject shape; the
-	// //go:build live suite should exercise abort-then-enable. See the
-	// reasoning-effort PR.
+	// KNOWN LIMITATION (live-gated), the ENABLE direction: turning thinking ON
+	// does not synthesize a leading thinking block for a prior assistant turn
+	// that made tool calls without one. The API can reject a request that
+	// continues such a turn ("thinking blocks expected before tool_use"). (The
+	// OFF direction — a stored thinking block replayed with thinking disabled —
+	// IS fixed, by the strip in transcodeParts below.)
+	//
+	// The general trigger is any mid-turn enable, not only abort. runAgenticLoop
+	// rebuilds the request with Effort: s.Effort() FRESH on every tool round
+	// (engine.go), so a plain off->high via POST /session/{id}/thinking while a
+	// turn is mid-tool-call makes the very NEXT round enable thinking over a
+	// tool_use this turn already emitted without one — the identical
+	// thinking-less shape, no abort needed. POST /session/{id}/abort mid-tool-
+	// call is the second trigger (a partial tool_use plus a synthetic tool-
+	// result, no thinking block, continued by a later effort-enabled prompt).
+	// Between turns the risk is absent: the agentic loop finishes a tool cycle
+	// within one turn, so a toggle between turns faces a final assistant TEXT
+	// turn. STATUS: a live enable-mid-tool-round probe
+	// (server/thinking_realmodel_live_test.go, TestEnableMidToolRoundLive) was
+	// TOLERATED by the API on 2026-08-11 — the turn completed, no reject — so
+	// this limitation is theoretical, not confirmed. No fix is warranted unless
+	// that probe later reproduces a reject; the live suite keeps it as the guard.
+	// (The OFF direction, by contrast, DID wedge and is fixed below.)
 	budget, thinkingEnabled := thinkingBudget(req.Effort)
 	if thinkingEnabled {
 		out.Thinking = &apiThinking{Type: "enabled", BudgetTokens: budget}
