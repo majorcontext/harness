@@ -209,9 +209,14 @@ func transcodeUserMessage(m *message.Message) ([]apiMessage, error) {
 			texts = append(texts, t)
 			parts = append(parts, apiContentPart{Type: "text", Text: t})
 		case *message.EngineContext:
+			if v.Text == "" {
+				continue
+			}
 			// A genuine engine block: emit it sentinel-wrapped as the base
 			// system prompt (cmd/harness) describes. An ordinary text content
-			// part on the wire — no new provider feature.
+			// part on the wire — no new provider feature. The empty guard
+			// mirrors anthropic/openai so all three transcoders agree on
+			// identical input (never a bare empty envelope).
 			t := message.RenderEngineContext(v.Text)
 			texts = append(texts, t)
 			parts = append(parts, apiContentPart{Type: "text", Text: t})
@@ -281,7 +286,12 @@ func transcodeAssistantMessage(m *message.Message, family string) ([]apiMessage,
 	}
 
 	var content json.RawMessage
-	if text := m.Parts.Text(); text != "" {
+	// NeutralizeEngineContextSentinel: a model induced (via prompt injection)
+	// to echo the sentinel in its reply must not carry a live sentinel when
+	// that assistant message is replayed on a later turn (see
+	// message.EngineContext). This Parts.Text() flatten bypasses the
+	// *message.Text case's neutralization, so it neutralizes here.
+	if text := message.NeutralizeEngineContextSentinel(m.Parts.Text()); text != "" {
 		raw, err := json.Marshal(text)
 		if err != nil {
 			return nil, err
@@ -325,7 +335,12 @@ func transcodeToolMessages(m *message.Message) ([]apiMessage, error) {
 // own separate argument for why it happens to be safe.
 func toolResultOutput(v *message.ToolResult) string {
 	content := v.SafeContent()
-	out := content.Text()
+	// NeutralizeEngineContextSentinel: tool output (a hostile file read,
+	// web fetch, or subprocess stdout) must never forge the engine-context
+	// sentinel on the wire (see message.EngineContext). This flattening path
+	// bypasses the *message.Text case's neutralization, so it neutralizes
+	// here — the same bar user/assistant text already meets.
+	out := message.NeutralizeEngineContextSentinel(content.Text())
 	blobs := 0
 	for _, p := range content {
 		if _, ok := p.(*message.Blob); ok {

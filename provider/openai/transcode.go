@@ -291,7 +291,12 @@ func transcodeMessage(m *message.Message) ([]json.RawMessage, error) {
 // own separate argument for why it happens to be safe.
 func toolResultOutput(v *message.ToolResult) string {
 	content := v.SafeContent()
-	out := content.Text()
+	// NeutralizeEngineContextSentinel: tool output (a hostile file read,
+	// web fetch, or subprocess stdout) must never forge the engine-context
+	// sentinel on the wire (see message.EngineContext). This flattening path
+	// bypasses the *message.Text case's neutralization, so it neutralizes
+	// here — the same bar user/assistant text already meets.
+	out := message.NeutralizeEngineContextSentinel(content.Text())
 	blobs := 0
 	for _, p := range content {
 		if _, ok := p.(*message.Blob); ok {
