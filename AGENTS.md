@@ -119,7 +119,12 @@ first attempt with ZERO retries: a `context.Canceled` abort, an
 retrying would duplicate the model's already-emitted tool intent), a
 `provider.AsPermanent` malformed-request shape, or any deterministic failure.
 The final surfaced error still emits one `session.error` and drops the usage
-exactly as before; an intermediate masked attempt emits none.
+exactly as before; an intermediate masked attempt emits neither. A masked
+attempt is still a full `streamTurn`, so it DOES bump the per-session turn
+counter (`s.turn`, reported by `session_info`) and re-fire the per-request
+hooks (`chat.params`, `system.transform`) and `OnRequest` — one bump and one
+hook pass per attempt, exactly like the goal loop's per-attempt behavior. Only
+the `session.error` and usage are suppressed for a masked attempt.
 
 Retrying `streamTurn` is idempotent for history and tool side effects:
 `streamTurn` makes ONE model call and never executes a tool (`runAgenticLoop`

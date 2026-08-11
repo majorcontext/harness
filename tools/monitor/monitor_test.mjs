@@ -904,6 +904,23 @@ test("transcriptModel: a live 'message' event supersedes the streaming draft it 
   assert.equal(assistantTexts[0].streaming, undefined);
 });
 
+test("transcriptModel: turn.restart drops the failed attempt's partial so the retry text is not doubled", () => {
+  // A base-loop retry re-streams the assistant text from scratch. The
+  // forwarded turn.restart marker must reset the open draft, else the folded
+  // assistant entry reads "Hello worHello world" instead of "Hello world".
+  const evs = [
+    { type: "session.status", status: "busy" },
+    { type: "text.delta", text: "Hello wor" },
+    { type: "turn.restart" },
+    { type: "text.delta", text: "Hello wor" },
+    { type: "text.delta", text: "ld" },
+  ];
+  const entries = transcriptModel([], evs);
+  const assistant = entries.filter(e => e.kind === "assistant");
+  assert.equal(assistant.length, 1);
+  assert.equal(assistant[0].text, "Hello world");
+});
+
 test("transcriptModel: an operator message arrives live as an operator entry the moment its 'message' event lands", () => {
   const evs = [
     { type: "message", message: { id: "m1", role: "user", created_at: "t", parts: [{ type: "text", text: "go" }] } },

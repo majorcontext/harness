@@ -370,6 +370,48 @@ func sessionsCmd(args []string) error {
 	return nil
 }
 
+// textStreamPrinter renders the plain-text (non -json) engine event stream
+// for `harness run`. It prints assistant text deltas to out as they arrive,
+// tool starts and failures to errW.
+//
+// A byte stream cannot retract already-written bytes, so on EventTurnRestart
+// — a base-loop retry re-streaming this turn's partial text after a masked
+// transient provider error (see engine.EventTurnRestart) — it breaks to a
+// fresh line instead of erasing. That keeps the retry's text off the same
+// line as the failed attempt's stale partial: "Hello wor\nHello world", never
+// the concatenated "Hello worHello world". streamedThis gates the break so an
+// attempt that printed no text (a restart before any delta) adds no blank
+// line; it resets on EventMessage, the boundary of a completed streamTurn.
+type textStreamPrinter struct {
+	out          io.Writer
+	errW         io.Writer
+	printedText  bool // any text printed this run; drives the trailing newline
+	streamedThis bool // text printed since the last reset; drives the break
+}
+
+func (p *textStreamPrinter) handle(ev engine.Event) {
+	switch ev.Type {
+	case engine.EventTextDelta:
+		fmt.Fprint(p.out, ev.Text)
+		p.printedText = true
+		p.streamedThis = true
+	case engine.EventTurnRestart:
+		if p.streamedThis {
+			fmt.Fprintln(p.out)
+			fmt.Fprintln(p.errW, "[re-streaming after a transient provider error]")
+			p.streamedThis = false
+		}
+	case engine.EventMessage:
+		p.streamedThis = false
+	case engine.EventToolStart:
+		fmt.Fprintf(p.errW, "\n[tool %s] %s\n", ev.ToolCall.Name, ev.ToolCall.Arguments)
+	case engine.EventToolEnd:
+		if ev.IsError {
+			fmt.Fprintf(p.errW, "[tool %s failed] %s\n", ev.ToolCall.Name, ev.Output.Text())
+		}
+	}
+}
+
 func runCmd(args []string) error {
 	// Captured once, at the top of the command, before any flag parsing or
 	// session create/load — the ambient engine-identity block's StartedAt
@@ -452,23 +494,13 @@ func runCmd(args []string) error {
 	}()
 
 	enc := json.NewEncoder(os.Stdout)
-	printedText := false
+	printer := &textStreamPrinter{out: os.Stdout, errW: os.Stderr}
 	onEvent := func(ev engine.Event) {
 		if opts.jsonOut {
 			enc.Encode(ev) //nolint:errcheck
 			return
 		}
-		switch ev.Type {
-		case engine.EventTextDelta:
-			fmt.Print(ev.Text)
-			printedText = true
-		case engine.EventToolStart:
-			fmt.Fprintf(os.Stderr, "\n[tool %s] %s\n", ev.ToolCall.Name, ev.ToolCall.Arguments)
-		case engine.EventToolEnd:
-			if ev.IsError {
-				fmt.Fprintf(os.Stderr, "[tool %s failed] %s\n", ev.ToolCall.Name, ev.Output.Text())
-			}
-		}
+		printer.handle(ev)
 	}
 
 	// The plugin host's ClientAPI is the direct engine-backed adapter (see
@@ -529,7 +561,7 @@ func runCmd(args []string) error {
 			return err
 		}
 	}
-	if printedText {
+	if printer.printedText {
 		fmt.Println()
 	}
 	if sesDir != "" {
