@@ -194,3 +194,62 @@ func TestErroredStaysErroredAfterClose(t *testing.T) {
 		t.Errorf("state after Close following a failed spawn = %q, want %q", got, PluginErrored)
 	}
 }
+
+// TestErroredAfterPostSpawnDeathStaysErroredAfterClose proves a third-round
+// review finding: a plugin that spawned successfully and then CRASHED must
+// keep reporting "errored" after a later Host.Close, not "stopped".
+//
+// liveState's running-case computes a post-spawn death LAZILY, by folding
+// conn.closed at read time (see TestPluginsReportsErroredAfterPostSpawnDeath)
+// — inst.state itself stays stateRunning the whole time, since nothing ever
+// writes the death back to it. stop's guard only compares inst.state, so it
+// sees stateRunning and stores stateStopped, masking the crash as a clean
+// shutdown; stop then nils liveConn, so the conn.closed fold in liveState
+// can never fire again after that point either. This is the same
+// clean-shutdown-vs-already-dead distinction
+// TestErroredStaysErroredAfterClose proves for a spawn FAILURE; this proves
+// it for a post-spawn death instead — TestErroredStaysErroredAfterClose
+// never touches the stateRunning branch at all, so it cannot catch this.
+//
+// Red-verify: before the fix, stop unconditionally stored stateStopped for
+// a stateRunning instance, with no check of conn.closed, so this read
+// stopped instead of errored.
+func TestErroredAfterPostSpawnDeathStaysErroredAfterClose(t *testing.T) {
+	hostSide, pluginSide := net.Pipe()
+	spec := Spec{
+		Manifest: Manifest{Name: "flaky3", ProtocolVersion: ProtocolVersion, Hooks: []Hook{HookShellEnv}},
+		dial: func() (io.ReadWriteCloser, error) {
+			go serve(pluginSide, Manifest{Name: "flaky3"}, &Hooks{ //nolint:errcheck
+				ShellEnv: func(_ context.Context, _ *Client, _ *ShellEnvRequest) (*ShellEnvResponse, error) {
+					return &ShellEnvResponse{}, nil
+				},
+			})
+			return hostSide, nil
+		},
+	}
+	h := newTestHost(t, Options{}, spec)
+
+	h.ShellEnv(context.Background(), &ShellEnvRequest{SessionID: "s1", Tool: "bash", Command: "ls"})
+	inst := testInstance(h, "flaky3")
+	c := inst.liveConn.Load()
+	if c == nil {
+		t.Fatal("liveConn not published after a successful spawn")
+	}
+
+	// Simulate the plugin process dying, exactly like
+	// TestPluginsReportsErroredAfterPostSpawnDeath.
+	if err := pluginSide.Close(); err != nil {
+		t.Fatal(err)
+	}
+	<-c.closed // block on the actual death signal, not a sleep or a poll loop
+
+	if got := h.Plugins()[0].State; got != PluginErrored {
+		t.Fatalf("state after the plugin process died = %q, want %q", got, PluginErrored)
+	}
+
+	h.Close()
+
+	if got := h.Plugins()[0].State; got != PluginErrored {
+		t.Errorf("state after Close following a post-spawn death = %q, want %q", got, PluginErrored)
+	}
+}

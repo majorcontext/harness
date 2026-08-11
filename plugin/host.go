@@ -671,8 +671,25 @@ func (inst *instance) stop() {
 	// spawn itself failed stays errored (Close didn't stop anything —
 	// there was nothing running to stop — so relabeling it stopped would
 	// erase the failure this state tracking exists to preserve).
+	//
+	// A running instance can ALSO already be dead: liveState's running
+	// case computes that lazily, by folding conn.closed at read time
+	// (closed both by an explicit stop and by the read loop's own error
+	// path, conn.fail), rather than writing the death back to inst.state.
+	// Check that same signal here, before liveConn is nil'd out below —
+	// once it is, liveState can never fire that fold again — so a crash
+	// that happened before this Close call still lands on stateErrored
+	// instead of being relabeled a clean stateStopped.
 	if reportedState(inst.state.Load()) == stateRunning {
-		inst.state.Store(int32(stateStopped))
+		next := stateStopped
+		if c := inst.liveConn.Load(); c != nil {
+			select {
+			case <-c.closed:
+				next = stateErrored
+			default:
+			}
+		}
+		inst.state.Store(int32(next))
 	}
 	inst.liveConn.Store(nil)
 	if inst.conn != nil {
