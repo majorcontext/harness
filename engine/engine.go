@@ -30,6 +30,10 @@ type Hooks interface {
 	ExecuteTool(ctx context.Context, req *plugin.ToolExecuteRequest) (*plugin.ToolExecuteResponse, error)
 	Emit(events []plugin.Event)
 	Tools() []plugin.ToolDef
+	// Plugins reports the configured plugins — name, spawn state, registered
+	// tools, and subscribed hooks — for the session_info tool and GET
+	// /session. It lists CONFIGURED plugins, not only spawned ones.
+	Plugins() []plugin.Info
 }
 
 // Tool is a built-in (in-process) tool.
@@ -700,6 +704,21 @@ func (s *Session) WorkDir() string {
 // session has no recorded parent. See Config.ParentSession's doc comment.
 func (s *Session) ParentSession() string {
 	return s.cfg.ParentSession
+}
+
+// Plugins returns a snapshot of this session's configured plugins — name,
+// spawn state, registered tools, and subscribed hooks — for the session_info
+// tool and GET /session. A session with no plugin host returns an empty
+// slice, never nil, so the field always serializes to a JSON array.
+func (s *Session) Plugins() []plugin.Info {
+	if s.cfg.Hooks == nil {
+		return []plugin.Info{}
+	}
+	infos := s.cfg.Hooks.Plugins()
+	if infos == nil {
+		return []plugin.Info{}
+	}
+	return infos
 }
 
 // Usage returns cumulative token usage across all turns.

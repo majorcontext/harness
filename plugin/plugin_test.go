@@ -283,6 +283,47 @@ func TestUnsubscribedPluginNeverSpawns(t *testing.T) {
 	}
 }
 
+// TestPluginsReportsManifestAndState verifies Host.Plugins reports every
+// CONFIGURED plugin — from the cached manifest — with its tools and hooks,
+// and that its state tracks the live spawn: "not-spawned" before any dispatch,
+// "running" after the plugin's own hook spawns it.
+func TestPluginsReportsManifestAndState(t *testing.T) {
+	spec := testPlugin(t, "guard", &Hooks{
+		SystemTransform: func(_ context.Context, _ *Client, _ *SystemTransformRequest) (*SystemTransformResponse, error) {
+			return &SystemTransformResponse{Segments: []string{"seg"}}, nil
+		},
+		Tools: []Tool{{
+			Def:     ToolDef{Name: "scan_file", Description: "d", InputSchema: json.RawMessage(`{}`)},
+			Execute: func(context.Context, *Client, json.RawMessage) (message.Parts, error) { return nil, nil },
+		}},
+	})
+	h := newTestHost(t, Options{}, spec)
+
+	infos := h.Plugins()
+	if len(infos) != 1 {
+		t.Fatalf("Plugins() = %+v, want exactly one", infos)
+	}
+	p := infos[0]
+	if p.Name != "guard" {
+		t.Errorf("name = %q, want guard", p.Name)
+	}
+	if p.State != PluginNotSpawned {
+		t.Errorf("state = %q, want %q before any dispatch", p.State, PluginNotSpawned)
+	}
+	if len(p.Tools) != 1 || p.Tools[0] != "scan_file" {
+		t.Errorf("tools = %v, want [scan_file]", p.Tools)
+	}
+	if len(p.Hooks) != 1 || p.Hooks[0] != string(HookSystemTransform) {
+		t.Errorf("hooks = %v, want [system.transform]", p.Hooks)
+	}
+
+	// Its own hook spawns it; the reported state must follow.
+	h.SystemTransform(context.Background(), &SystemTransformRequest{SessionID: "s1"})
+	if got := h.Plugins()[0].State; got != PluginRunning {
+		t.Errorf("state = %q after dispatch, want %q", got, PluginRunning)
+	}
+}
+
 // TestProbeSpecPassesConfig proves finding (2): probing must send the
 // spec's Config in the initialize handshake, exactly as a real spawn does
 // (instance.startLocked), rather than the empty InitializeParams Probe(ctx,
