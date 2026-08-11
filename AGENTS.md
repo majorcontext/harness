@@ -105,6 +105,39 @@ never written to the session log — a resumed session rediscovers them. Config
 `skills_dirs` (array; a non-empty project value overrides the user value
 entirely) and the repeatable `-skills-dir` run/serve flag drive it.
 
+### Base loop retry
+
+The base interactive `Prompt` loop retries a transient provider error itself,
+so a plain box prompt never surfaces a one-off HTTP 500. `streamTurnWithRetry`
+(`engine/prompt_retry.go`) wraps `streamTurn` at its single call site in
+`runAgenticLoop` (`engine/engine.go`). It retries only when the error is
+classified retryable through `provider.AsRetryable` — `server_error`,
+`overloaded`, `rate_limited`, or `stream_truncated`, never by matching error
+text — AND the budget has an attempt left. Every other error returns on the
+first attempt with ZERO retries: a `context.Canceled` abort, an
+`*interruptedTurnError` (whose partial `runAgenticLoop` must still append —
+retrying would duplicate the model's already-emitted tool intent), a
+`provider.AsPermanent` malformed-request shape, or any deterministic failure.
+The final surfaced error still emits one `session.error` and drops the usage
+exactly as before; an intermediate masked attempt emits none.
+
+Retrying `streamTurn` is idempotent by construction: `streamTurn` makes ONE
+model call and never executes a tool (`runAgenticLoop` runs tools only AFTER
+`streamTurn` returns a `StopToolUse` message), so a failed attempt ran no side
+effect to redo. The one shape that DID emit tool intent before failing arrives
+as `*interruptedTurnError` and is excluded.
+
+`Config.PromptRetries` bounds it: additional attempts, zero (the engine zero
+value) DISABLES retry, config/CLI default 2 via `config.Config`'s `*int`
+`prompt_retries` key (`PromptRetriesValue`). The backoff
+(`basePromptRetryDelay`: 1s, then 2s, `time.NewTimer`) is deliberately SMALLER
+and SHORTER than the goal loop's tiers below — an interactive user waits on
+the turn, so this smooths a blip in a second or two, never the goal loop's
+~30min weather schedule (`promptTurnWithRetry`, `goal.go`). The two are
+distinct: the base loop wraps ONE model call and is inherently idempotent; the
+goal loop's `promptTurnWithRetry` wraps a whole worker turn (with the
+tool-executed non-idempotency gate) and parks on exhaustion.
+
 ### Goal loop
 
 `Session.PursueGoal(ctx, condition, GoalOptions)` drives the ordinary `Prompt`

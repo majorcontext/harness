@@ -1,0 +1,112 @@
+package engine
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/provider"
+)
+
+// basePromptRetryBackoffBase and basePromptRetryBackoffCap define the base
+// interactive Prompt loop's retry backoff (see streamTurnWithRetry): attempt
+// 1 waits basePromptRetryBackoffBase (1s), each later attempt doubles it,
+// capped at basePromptRetryBackoffCap. With the default PromptRetries (2)
+// only 1s then 2s are ever used; the cap bounds any future increase so a
+// single wait can never grow unboundedly.
+//
+// This schedule is deliberately far shorter than the goal loop's tiers
+// (goalRetryDelay's 1s/4s and goalRetryableBackoff's 5s→5min weather
+// schedule, goal.go): an interactive user waits on the turn, so the base loop
+// smooths a one-off blip in a second or two rather than riding a long outage.
+const (
+	basePromptRetryBackoffBase = 1 * time.Second
+	basePromptRetryBackoffCap  = 8 * time.Second
+)
+
+// basePromptRetryDelay returns the backoff to wait after the given 1-indexed
+// attempt has failed, before the next attempt runs.
+func basePromptRetryDelay(attempt int) time.Duration {
+	d := basePromptRetryBackoffBase
+	for i := 1; i < attempt; i++ {
+		if d >= basePromptRetryBackoffCap {
+			return basePromptRetryBackoffCap
+		}
+		d *= 2
+	}
+	if d > basePromptRetryBackoffCap {
+		d = basePromptRetryBackoffCap
+	}
+	return d
+}
+
+// waitBasePromptRetryBackoff blocks for basePromptRetryDelay(attempt), or
+// until ctx is done, whichever comes first — a deliberate abort ends the wait
+// immediately. It uses time.NewTimer with an explicit Stop (never
+// time.After) so the timer is released promptly when ctx fires first.
+func waitBasePromptRetryBackoff(ctx context.Context, attempt int) error {
+	t := time.NewTimer(basePromptRetryDelay(attempt))
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// streamTurnWithRetry wraps streamTurn with a small, bounded retry budget for
+// the base interactive Prompt loop, so a one-off retryable provider error (a
+// momentary HTTP 5xx/429/529 or a truncated stream) never surfaces to an
+// interactive user. It has the exact same signature as streamTurn and is a
+// drop-in for the single call site in runAgenticLoop, so that loop's
+// structure — its interruptedTurnError handling, emitSessionError, usage
+// accounting, and queue drain — is unchanged.
+//
+// A retry runs only when the error is classified retryable through
+// provider.AsRetryable (server_error/overloaded/rate_limited/stream_truncated
+// — never by matching error text) AND the budget (s.cfg.PromptRetries
+// additional attempts) has one left. Every other error returns on the first
+// attempt with ZERO retries:
+//
+//   - context.Canceled is a deliberate abort, never provider weather.
+//   - An *interruptedTurnError carries a partial assistant message the caller
+//     must still append to keep history protocol-valid; a silent re-issue
+//     would duplicate the model's already-emitted tool intent, so it is never
+//     retried here (this is why the interrupted check precedes the retryable
+//     one — an interruptedTurnError wraps whatever class the stream died
+//     with, which may itself be retryable).
+//   - A provider.AsPermanent malformed-request shape, or any deterministic
+//     failure, is not retryable, so !retryable returns it immediately —
+//     matching the goal loop's fail-fast branch (promptTurnWithRetry).
+//
+// Retrying streamTurn is inherently idempotent: streamTurn makes ONE model
+// call and never executes a tool (runAgenticLoop runs tools only AFTER
+// streamTurn returns a StopToolUse message), so a failed attempt ran no side
+// effect to redo — even a later model call within the same turn re-issues
+// against unchanged history. The one shape that DID emit tool intent before
+// failing arrives as *interruptedTurnError and is excluded above.
+func (s *Session) streamTurnWithRetry(ctx context.Context) (*message.Message, provider.StopReason, provider.Usage, error) {
+	for attempt := 1; ; attempt++ {
+		asst, stop, usage, err := s.streamTurn(ctx)
+		if err == nil {
+			return asst, stop, usage, nil
+		}
+		if errors.Is(err, context.Canceled) {
+			return nil, "", provider.Usage{}, err
+		}
+		var interrupted *interruptedTurnError
+		if errors.As(err, &interrupted) {
+			return nil, "", provider.Usage{}, err
+		}
+		if _, retryable := provider.AsRetryable(err); !retryable || attempt > s.cfg.PromptRetries {
+			return nil, "", provider.Usage{}, err
+		}
+		if werr := waitBasePromptRetryBackoff(ctx, attempt); werr != nil {
+			// ctx was cancelled during the backoff wait: surface the
+			// cancellation rather than retrying against a dead context.
+			return nil, "", provider.Usage{}, werr
+		}
+	}
+}
