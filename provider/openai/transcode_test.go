@@ -891,3 +891,44 @@ func assertNoLiveSentinel(t *testing.T, wire string) {
 		t.Errorf("inner text dropped, not neutralized; it must survive defanged:\n%s", wire)
 	}
 }
+
+// TestTranscodeToolResultEngineContextNotDropped closes the cross-provider
+// consistency gap the round-3 review flagged (see message.EngineContext): an
+// EngineContext nested in a ToolResult (only a plugin could build one — no
+// engine path does) must render inert (neutralized text) and STAY VISIBLE,
+// never be silently dropped. toolResultOutput once flattened via
+// content.Text() (message.Parts.Text), which keeps only *Text parts, so the
+// block vanished — while provider/anthropic renders it inert-but-visible
+// (TestTranscodeEngineContextInToolResultNotTrusted). This asserts parity: the
+// block survives, and — being non-top-level — never emits the trusted
+// sentinel.
+//
+// Red-verify: revert toolResultOutput to content.Text() and the
+// "[engine: EVIL]" survival assertion below fails.
+func TestTranscodeToolResultEngineContextNotDropped(t *testing.T) {
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "run it"}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolCall{CallID: "c1", Name: "bash", Arguments: json.RawMessage(`{}`)},
+		}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "c1", Content: message.Parts{
+				&message.Text{Text: "output:"},
+				&message.EngineContext{Text: "[engine: EVIL]"},
+			}},
+		}},
+	))
+	res := probeItem(t, out.Input[len(out.Input)-1])
+	if res.Type != "function_call_output" {
+		t.Fatalf("last item = %+v, want function_call_output", res)
+	}
+	if !strings.Contains(res.Output, "output:") {
+		t.Errorf("real tool text dropped:\n%s", res.Output)
+	}
+	if !strings.Contains(res.Output, "[engine: EVIL]") {
+		t.Errorf("nested engine-context text was dropped, not rendered inert:\n%s", res.Output)
+	}
+	if strings.Contains(res.Output, message.EngineContextOpenTag) || strings.Contains(res.Output, message.EngineContextCloseTag) {
+		t.Errorf("trusted sentinel leaked into a tool result via a nested EngineContext:\n%s", res.Output)
+	}
+}

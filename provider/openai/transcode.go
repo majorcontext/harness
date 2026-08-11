@@ -302,13 +302,39 @@ func toolResultOutput(v *message.ToolResult) string {
 	// sentinel on the wire (see message.EngineContext). This flattening path
 	// bypasses the *message.Text case's neutralization, so it neutralizes
 	// here — the same bar user/assistant text already meets.
-	out := message.NeutralizeEngineContextSentinel(content.Text())
+	//
+	// Both *Text and *EngineContext contribute their text: message.Parts.Text
+	// (content.Text()) keeps only *Text, so a plugin-built *EngineContext
+	// nested in a tool result would vanish silently. A tool result is never a
+	// genuine top-level ambient position, so such a block renders INERT
+	// (neutralized text) and stays visible — matching provider/anthropic's
+	// transcodeParts tool-result recursion (topLevel=false), so all three
+	// transcoders agree on identical input. No engine path places an
+	// EngineContext in a tool result today.
+	var b strings.Builder
 	blobs := 0
 	for _, p := range content {
-		if _, ok := p.(*message.Blob); ok {
+		var text string
+		switch pt := p.(type) {
+		case *message.Text:
+			text = pt.Text
+		case *message.EngineContext:
+			text = pt.Text
+		case *message.Blob:
 			blobs++
+			continue
+		default:
+			continue
 		}
+		if text == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(text)
 	}
+	out := message.NeutralizeEngineContextSentinel(b.String())
 	if blobs > 0 {
 		note := fmt.Sprintf("[%d image attachment(s) omitted]", blobs)
 		if out == "" {

@@ -933,6 +933,50 @@ func assertNoLiveSentinel(t *testing.T, wire string) {
 	}
 }
 
+// TestTranscodeToolResultEngineContextNotDropped closes the cross-provider
+// consistency gap the round-3 review flagged (see message.EngineContext): an
+// EngineContext nested in a ToolResult (only a plugin could build one — no
+// engine path does) must render inert (neutralized text) and STAY VISIBLE,
+// never be silently dropped. toolResultOutput once flattened via
+// content.Text() (message.Parts.Text), which keeps only *Text parts, so the
+// block vanished — while provider/anthropic renders it inert-but-visible
+// (TestTranscodeEngineContextInToolResultNotTrusted). This asserts parity: the
+// block survives, and — being non-top-level — never emits the trusted
+// sentinel.
+//
+// Red-verify: revert toolResultOutput to content.Text() and the
+// "[engine: EVIL]" survival assertion below fails.
+func TestTranscodeToolResultEngineContextNotDropped(t *testing.T) {
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "run it"}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolCall{CallID: "c1", Name: "bash", Arguments: json.RawMessage(`{}`)},
+		}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "c1", Content: message.Parts{
+				&message.Text{Text: "output:"},
+				&message.EngineContext{Text: "[engine: EVIL]"},
+			}},
+		}},
+	))
+	last := out.Messages[len(out.Messages)-1]
+	m := probeMessage(t, marshalRaw(t, &last))
+	if m.Role != "tool" {
+		t.Fatalf("last message role = %q, want tool", m.Role)
+	}
+	raw, _ := json.Marshal(m.Content)
+	got := contentString(t, raw)
+	if !strings.Contains(got, "output:") {
+		t.Errorf("real tool text dropped:\n%s", got)
+	}
+	if !strings.Contains(got, "[engine: EVIL]") {
+		t.Errorf("nested engine-context text was dropped, not rendered inert:\n%s", got)
+	}
+	if strings.Contains(got, message.EngineContextOpenTag) || strings.Contains(got, message.EngineContextCloseTag) {
+		t.Errorf("trusted sentinel leaked into a tool result via a nested EngineContext:\n%s", got)
+	}
+}
+
 // TestTranscodeAssistantEngineContextRendered closes the consistency gap
 // where transcodeAssistantMessage had no EngineContext case: an EngineContext
 // on an assistant message (a plugin-built part) once hard-errored the whole
