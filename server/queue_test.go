@@ -587,6 +587,39 @@ func TestDeleteQueueClearsDurably(t *testing.T) {
 // response is "queued", not "started". The queued prompt's own tail then
 // drains "racer" next, uncontested. End state: both run, strictly FIFO
 // (queued, then racer), queue ends empty.
+//
+// One thing about this scenario is inherently racy — genuinely unspecified
+// by any documented invariant, not a bug — and this test must not assert an
+// exact outcome for it: the racer's own prompt_async response reads
+// len(st.sess.QueuedPrompts()) AFTER the just-dequeued "queued" turn's
+// goroutine has already been spawned (`go s.runPrompt(...)`, a non-blocking
+// statement). That spawned goroutine can race ahead far enough to dequeue
+// (and even finish) "racer" too before this response line ever runs, so the
+// reported depth can legitimately read 0 as well as 1 — the same class of
+// race TestQueueClearRaceDuringIdleDispatchIsNotAnError already documents
+// for a sibling code path. Asserting exactly 1 here flakes on nothing but
+// scheduling speed.
+//
+// What IS a real, load-bearing invariant — enforced by
+// Server.freeRunSlotAndEmitIdle's single locked critical section — is the
+// one collectUntilIdle's own doc comment names: "session.status busy for
+// [a] dispatched turn always arrives strictly after [the freeing turn's]
+// idle." Before that fix, runPrompt's tail reset st.running=false and
+// journaled the idle event as two SEPARATE s.mu critical sections; a
+// concurrent claimForPrompt (this test's own racer, retried from
+// maybeDispatchQueued on the ORIGINAL "first" turn's still-unwinding
+// goroutine) could slip into that gap, observe running==false, and win the
+// next dispatch BEFORE the freeing turn's own idle had been journaled. The
+// freeing turn's idle would then land AFTER the entire next turn it was
+// supposed to precede — collapsing collectUntilIdle's per-turn boundary, so
+// the SECOND collectUntilIdle call below (which should stop at "queued"'s
+// own idle) instead over-reads straight through "racer"'s whole turn too,
+// leaving the THIRD call nothing but a stray, mis-ordered idle. This test
+// asserts that boundary directly: queuedEvs must contain "queued"'s own
+// message and must NOT already contain "racer"'s (proving the two turns'
+// idle/busy boundaries never collapsed), and racerEvs — read strictly
+// after — must contain "racer"'s message (proving it was never stranded
+// either).
 func TestPromptQueueRaceWithFreedSlot(t *testing.T) {
 	prov := &queueProv{
 		name:    "test",
@@ -636,8 +669,16 @@ func TestPromptQueueRaceWithFreedSlot(t *testing.T) {
 		if err := json.Unmarshal(data, &rr); err != nil {
 			t.Fatal(err)
 		}
-		if rr.Status != "queued" || rr.Queued != 1 {
-			t.Fatalf("racer prompt response = %+v, want status=queued queued=1 (it wins the freed slot, but the already-queued prompt still goes first — global FIFO)", rr)
+		// Status is deterministic: handlePrompt's idle-with-queue branch
+		// always dequeues the current HEAD ("queued", enqueued well before
+		// "racer" existed) into the slot this request just claimed, so this
+		// request's own text can never be the one dispatched — see the
+		// doc comment above for why Queued's exact depth is NOT asserted.
+		if rr.Status != "queued" {
+			t.Fatalf("racer prompt response = %+v, want status=queued (it wins the freed slot, but the already-queued prompt still goes first — global FIFO)", rr)
+		}
+		if rr.Queued < 0 || rr.Queued > 1 {
+			t.Fatalf("racer prompt response = %+v, want queued depth 0 or 1", rr)
 		}
 	}
 
@@ -646,32 +687,38 @@ func TestPromptQueueRaceWithFreedSlot(t *testing.T) {
 	firstEvs := sse.collectUntilIdle(t)
 	_ = firstEvs // just drains through the first turn's own idle
 
+	hasAssistantText := func(evs []Event, want string) bool {
+		for _, ev := range evs {
+			if ev.Type == "message" && ev.Message != nil && ev.Message.Role == message.RoleAssistant && ev.Message.Parts.Text() == want {
+				return true
+			}
+		}
+		return false
+	}
+
 	// The already-QUEUED prompt's own turn ran first — dispatched into the
 	// slot the racer's request claimed — proving global FIFO held even
 	// though the racer won the claim race and maybeDispatchQueued's own
 	// later claim attempt lost and returned cleanly rather than
-	// double-dispatching.
+	// double-dispatching. Critically, this read must stop exactly at
+	// "queued"'s own idle: if freeRunSlotAndEmitIdle's atomicity ever
+	// regresses, "racer"'s entire turn (busy, message, idle) collapses into
+	// THIS read too — the regression this test exists to catch (see the
+	// doc comment above).
 	queuedEvs := sse.collectUntilIdle(t)
-	var sawQueuedText bool
-	for _, ev := range queuedEvs {
-		if ev.Type == "message" && ev.Message != nil && ev.Message.Role == message.RoleAssistant && ev.Message.Parts.Text() == "queued done" {
-			sawQueuedText = true
-		}
-	}
-	if !sawQueuedText {
+	if !hasAssistantText(queuedEvs, "queued done") {
 		t.Fatalf("queued prompt events = %v, want %q", queuedEvs, "queued done")
+	}
+	if hasAssistantText(queuedEvs, "racer done") {
+		t.Fatalf("queued prompt events = %v, want to NOT already contain %q -- \"queued\"'s own idle must be journaled before \"racer\"'s turn starts, not after it finishes (freeRunSlotAndEmitIdle's atomicity)", queuedEvs, "racer done")
 	}
 
 	// Never stranded: the queued prompt's own tail drains "racer" next,
-	// uncontested.
+	// uncontested. Reading strictly after queuedEvs's own idle boundary (the
+	// assertion above) is what makes this a real, independent check rather
+	// than something the previous read could have smuggled in.
 	racerEvs := sse.collectUntilIdle(t)
-	var sawRacerText bool
-	for _, ev := range racerEvs {
-		if ev.Type == "message" && ev.Message != nil && ev.Message.Role == message.RoleAssistant && ev.Message.Parts.Text() == "racer done" {
-			sawRacerText = true
-		}
-	}
-	if !sawRacerText {
+	if !hasAssistantText(racerEvs, "racer done") {
 		t.Fatalf("racer turn events = %v, want %q", racerEvs, "racer done")
 	}
 
