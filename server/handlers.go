@@ -2222,15 +2222,13 @@ func (s *Server) handleSetThinking(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	effort, err := message.ParseEffort(body.Effort)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
-	}
 
-	// Resolve the session, loading a cold one into residency with the same race
-	// handling handleSetModel uses (two *engine.Session for one log must never
-	// both be mutated — SetEffort persists the durable recEffort record).
+	// Resolve the session FIRST, loading a cold one into residency with the same
+	// race handling handleSetModel uses (two *engine.Session for one log must
+	// never both be mutated — SetEffort persists the durable recEffort record).
+	// Resolve BEFORE validating the effort so an unknown session is 404, not a
+	// 400 that hides the missing session behind an invalid-effort complaint —
+	// exactly the order handleSetModel uses.
 	s.mu.Lock()
 	st := s.sessions[id]
 	s.mu.Unlock()
@@ -2251,6 +2249,11 @@ func (s *Server) handleSetThinking(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 	}
 
+	effort, err := message.ParseEffort(body.Effort)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	st.sess.SetEffort(effort)
 	writeJSON(w, http.StatusOK, setThinkingResponseJSON{Effort: st.sess.Effort()})
 }

@@ -68,6 +68,13 @@ func reasoningEffort(e message.Effort) (string, bool) {
 	return string(e), true
 }
 
+// reasoningMinOutputTokens is the floor transcodeRequest raises
+// max_output_tokens to when reasoning is enabled. Reasoning tokens count
+// against max_output_tokens, so a small cap (the 8192 engine default) can be
+// consumed entirely by reasoning and leave a truncated or empty answer. The
+// floor leaves room for both. A caller that set a larger cap keeps it.
+const reasoningMinOutputTokens = 25000
+
 type apiToolDef struct {
 	Type        string          `json:"type"` // always "function"
 	Name        string          `json:"name"`
@@ -131,6 +138,14 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 	}
 	if effort, ok := reasoningEffort(req.Effort); ok {
 		out.Reasoning = &apiReasoning{Effort: effort}
+		// Reasoning models reject an explicit temperature or top_p, and reasoning
+		// tokens count against max_output_tokens — mirror the anthropic adapter:
+		// drop both sampling controls and raise the output cap above a floor.
+		out.Temperature = nil
+		out.TopP = nil
+		if out.MaxOutputTokens < reasoningMinOutputTokens {
+			out.MaxOutputTokens = reasoningMinOutputTokens
+		}
 	}
 
 	for _, t := range req.Tools {

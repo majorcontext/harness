@@ -166,6 +166,16 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 	// token budget. The API requires max_tokens > budget_tokens and rejects an
 	// explicit temperature or top_p while thinking is on, so drop both and bump
 	// max_tokens above the budget when needed.
+	//
+	// KNOWN LIMITATION (live-gated): enabling thinking mid-session does not
+	// synthesize a leading thinking block for a prior assistant turn that made
+	// tool calls without one. The API can reject a request that continues such a
+	// turn ("thinking blocks expected before tool_use"). In practice the
+	// engine's agentic loop finishes a tool cycle within one turn, so a caller
+	// toggling effort between turns faces a final assistant TEXT turn, not a
+	// dangling tool_use — the risky shape needs an interrupted turn. A robust
+	// fix (synthesize or relocate at transcode time) is deferred pending live
+	// confirmation of the exact reject shape; see the reasoning-effort PR.
 	if budget, ok := thinkingBudget(req.Effort); ok {
 		out.Thinking = &apiThinking{Type: "enabled", BudgetTokens: budget}
 		if out.MaxTokens < budget+thinkingCompletionMargin {

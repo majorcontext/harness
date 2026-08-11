@@ -133,3 +133,16 @@ func TestSetThinkingEndpointUnknownSession(t *testing.T) {
 		t.Fatalf("unknown-session status %d: %s, want 404", resp.StatusCode, data)
 	}
 }
+
+// TestSetThinkingEndpointUnknownSessionWinsOverInvalidLevel: an INVALID level on
+// an UNKNOWN session returns 404, not 400 — the session must resolve before the
+// effort validates (mirrors handleSetModel). Named mechanism: ParseEffort runs
+// AFTER session resolution. Red-verify by moving ParseEffort back above the
+// resolution block; this test then returns 400.
+func TestSetThinkingEndpointUnknownSessionWinsOverInvalidLevel(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	resp, data := h.do("POST", "/session/ses_01000000000000000000000000/thinking", map[string]string{"effort": "xhigh"})
+	if resp.StatusCode != 404 {
+		t.Fatalf("unknown-session + invalid-level status %d: %s, want 404 (session resolves before effort validates)", resp.StatusCode, data)
+	}
+}
