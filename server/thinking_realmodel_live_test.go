@@ -27,16 +27,24 @@
 //
 // RESULTS (2026-08-11, run from this machine through the production path):
 //
-//	openai/gpt-5           minimal/low/medium/high  reasoned=true   (asserted)
-//	openai/gpt-4o-mini     off                      reasoned=false  (asserted)
-//	openrouter/google/gemini-2.5-flash  medium      reasoned=true   (report)
-//	openrouter/anthropic/claude-opus-4.8 medium     reasoned=false  (report) —
-//	  OpenRouter accepted the request but returned no `reasoning` for Claude
-//	  from a plain reasoning_effort; OpenRouter needs a Claude-specific
-//	  reasoning param, which the box does NOT use (the box drives Claude
-//	  through the NATIVE anthropic adapter's thinking budget, not this compat
-//	  path). That native path needs ANTHROPIC_API_KEY or Bifrost reachability
-//	  to verify from this machine — neither is available here.
+//	openai/gpt-5 (native Responses reasoning.effort)
+//	  minimal/low/medium/high  reasoned=true   (asserted)
+//	openai/gpt-4o-mini         off             reasoned=false  (asserted)
+//	anthropic/claude-haiku-4-5 (NATIVE anthropic thinking.budget_tokens —
+//	  the exact path the box uses for Claude, via api.anthropic.com)
+//	  off                      reasoned=false  (asserted)
+//	  minimal/low/medium/high  reasoned=true   (asserted)
+//	openrouter/google/gemini-2.5-flash  medium  reasoned=true  (report)
+//	openrouter/anthropic/claude-opus-4.8 medium reasoned=false (report) —
+//	  OpenRouter returns no `reasoning` for Claude from a plain
+//	  reasoning_effort (it needs a Claude-specific reasoning param the box
+//	  does NOT use); the box drives Claude through the native anthropic path
+//	  above, which IS verified here.
+//	openrouter/deepseek/deepseek-r1-0528 medium  404 on this account (report)
+//
+// All three deployed families — Claude (native anthropic), GPT-5 (native
+// openai), Gemini (openai-compat) — surface reasoning through the real
+// endpoint for their mapped levels; off surfaces none.
 package server
 
 import (
@@ -50,6 +58,7 @@ import (
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
+	"github.com/majorcontext/harness/provider/anthropic"
 	"github.com/majorcontext/harness/provider/openai"
 	"github.com/majorcontext/harness/provider/openaicompat"
 )
@@ -62,6 +71,9 @@ func newRealModelHarness(t *testing.T) *harness {
 	reg := provider.Registry{}
 	if k := os.Getenv("OPENAI_API_KEY"); k != "" {
 		reg["openai"] = &openai.Client{APIKey: k}
+	}
+	if k := os.Getenv("ANTHROPIC_API_KEY"); k != "" {
+		reg["anthropic"] = &anthropic.Client{APIKey: k}
 	}
 	if k := os.Getenv("OPENROUTER_API_KEY"); k != "" {
 		reg["openrouter"] = &openaicompat.Client{Family: "openrouter", APIKey: k, BaseURL: "https://openrouter.ai/api/v1"}
@@ -113,6 +125,8 @@ func (h *harness) providerConfigured(model string) bool {
 	switch ref.Provider {
 	case "openai":
 		return os.Getenv("OPENAI_API_KEY") != ""
+	case "anthropic":
+		return os.Getenv("ANTHROPIC_API_KEY") != ""
 	case "openrouter":
 		return os.Getenv("OPENROUTER_API_KEY") != ""
 	}
@@ -152,6 +166,7 @@ func TestThinkingRealModelLive(t *testing.T) {
 	}
 	reasonModel := envOr("OPENAI_REASON_MODEL", "gpt-5")
 	plainModel := envOr("OPENAI_PLAIN_MODEL", "gpt-4o-mini")
+	claudeModel := envOr("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 
 	type row struct {
 		model  string
@@ -164,6 +179,14 @@ func TestThinkingRealModelLive(t *testing.T) {
 		{"openai/" + reasonModel, "medium", "reason"},
 		{"openai/" + reasonModel, "high", "reason"},
 		{"openai/" + plainModel, "off", "noreason"}, // non-reasoning model, no reasoning param
+		// Native anthropic adapter (api.anthropic.com, thinking.budget_tokens) —
+		// the exact path the box uses for Claude. Thinking surfaces as a
+		// Reasoning part for the non-off levels; off sends no thinking block.
+		{"anthropic/" + claudeModel, "off", "noreason"},
+		{"anthropic/" + claudeModel, "minimal", "reason"},
+		{"anthropic/" + claudeModel, "low", "reason"},
+		{"anthropic/" + claudeModel, "medium", "reason"},
+		{"anthropic/" + claudeModel, "high", "reason"},
 		// OpenRouter reasoning models via the openai-compat adapter (now reads
 		// the `reasoning` field): report actual behavior. A real Claude and a
 		// real Gemini through the production path.
