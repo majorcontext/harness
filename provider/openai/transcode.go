@@ -263,7 +263,13 @@ func transcodeMessage(m *message.Message) ([]json.RawMessage, error) {
 				// canonical format's crossing rule.
 				continue
 			}
-			// Replay the stored raw reasoning item verbatim.
+			// Replay the stored raw reasoning item verbatim. Deliberately NOT
+			// run through NeutralizeEngineContextSentinel (unlike every Text
+			// path): this is an opaque, provider-native reasoning item
+			// (typically encrypted) whose bytes must round-trip unchanged;
+			// rewriting them would corrupt the payload. Reasoning is
+			// model-authored, not attacker-pasted, so it is not a viable
+			// engine-context forge vector.
 			items = append(items, append(json.RawMessage(nil), raw...))
 
 		default:

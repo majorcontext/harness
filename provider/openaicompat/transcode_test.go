@@ -932,3 +932,36 @@ func assertNoLiveSentinel(t *testing.T, wire string) {
 		t.Errorf("inner text dropped, not neutralized; it must survive defanged:\n%s", wire)
 	}
 }
+
+// TestTranscodeAssistantEngineContextRendered closes the consistency gap
+// where transcodeAssistantMessage had no EngineContext case: an EngineContext
+// on an assistant message (a plugin-built part) once hard-errored the whole
+// request at the default branch, and a bare skip would silently DROP it since
+// Parts.Text() flattens only *Text. It must render sentinel-wrapped, matching
+// anthropic and openai, so all three transcoders agree on identical input.
+//
+// Red-verify: delete the *message.EngineContext case in
+// transcodeAssistantMessage — the request then errors ("unsupported part
+// type ... in assistant message") and this test fails.
+func TestTranscodeAssistantEngineContextRendered(t *testing.T) {
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.Text{Text: "reply"},
+			&message.EngineContext{Text: "[engine: REAL]"},
+		}},
+	))
+	last := out.Messages[len(out.Messages)-1]
+	m := probeMessage(t, marshalRaw(t, &last))
+	if m.Role != "assistant" {
+		t.Fatalf("last message role = %q, want assistant", m.Role)
+	}
+	raw, _ := json.Marshal(m.Content)
+	got := contentString(t, raw)
+	if !strings.Contains(got, message.RenderEngineContext("[engine: REAL]")) {
+		t.Errorf("assistant EngineContext not rendered sentinel-wrapped:\n%s", got)
+	}
+	if !strings.Contains(got, "reply") {
+		t.Errorf("assistant Text content dropped:\n%s", got)
+	}
+}

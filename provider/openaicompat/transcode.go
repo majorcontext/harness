@@ -247,10 +247,40 @@ func transcodeUserMessage(m *message.Message) ([]apiMessage, error) {
 
 func transcodeAssistantMessage(m *message.Message, family string) ([]apiMessage, error) {
 	var toolCalls []apiToolCall
+	// body accumulates the assistant text content. It is built inline (not
+	// via m.Parts.Text()) so it can BOTH neutralize each Text and render an
+	// EngineContext: Parts.Text() flattens only *Text, so it would silently
+	// DROP an EngineContext on this path, and skip its neutralization.
+	var body strings.Builder
+	writeBody := func(s string) {
+		if s == "" {
+			return
+		}
+		if body.Len() > 0 {
+			body.WriteByte('\n')
+		}
+		body.WriteString(s)
+	}
 	for _, p := range m.Parts {
 		switch v := p.(type) {
 		case *message.Text:
-			// Folded into content below via Parts.Text().
+			// NeutralizeEngineContextSentinel: a model induced (via prompt
+			// injection) to echo the sentinel in its reply must not carry a
+			// live sentinel when this assistant message is replayed on a
+			// later turn (see message.EngineContext).
+			writeBody(message.NeutralizeEngineContextSentinel(v.Text))
+		case *message.EngineContext:
+			// A genuine engine block on an assistant message (a plugin-built
+			// part — the engine only appends to the newest user message):
+			// render it sentinel-wrapped, matching anthropic's shared
+			// transcodeParts and openai's role-parameterized transcodeMessage
+			// so all three transcoders agree on identical canonical input. An
+			// assistant top-level content block is NOT tool-result recursion,
+			// so this position is trusted (see anthropic transcodeParts's
+			// topLevel split).
+			if v.Text != "" {
+				writeBody(message.RenderEngineContext(v.Text))
+			}
 		case *message.ToolCall:
 			args := string(v.Arguments)
 			if args == "" {
@@ -286,12 +316,7 @@ func transcodeAssistantMessage(m *message.Message, family string) ([]apiMessage,
 	}
 
 	var content json.RawMessage
-	// NeutralizeEngineContextSentinel: a model induced (via prompt injection)
-	// to echo the sentinel in its reply must not carry a live sentinel when
-	// that assistant message is replayed on a later turn (see
-	// message.EngineContext). This Parts.Text() flatten bypasses the
-	// *message.Text case's neutralization, so it neutralizes here.
-	if text := message.NeutralizeEngineContextSentinel(m.Parts.Text()); text != "" {
+	if text := body.String(); text != "" {
 		raw, err := json.Marshal(text)
 		if err != nil {
 			return nil, err
