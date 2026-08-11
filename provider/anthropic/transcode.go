@@ -202,7 +202,21 @@ func transcodeParts(parts message.Parts) ([]apiBlock, error) {
 			if v.Text == "" {
 				continue
 			}
-			blocks = append(blocks, apiBlock{Type: "text", Text: v.Text})
+			// NeutralizeEngineContextSentinel: a user- or paste-authored Text
+			// part must never be able to forge the engine-context sentinel on
+			// the wire (see message.EngineContext). Only the *message.Engine-
+			// Context case below emits it.
+			blocks = append(blocks, apiBlock{Type: "text", Text: message.NeutralizeEngineContextSentinel(v.Text)})
+
+		case *message.EngineContext:
+			if v.Text == "" {
+				continue
+			}
+			// A genuine engine block: emit it sentinel-wrapped so the model
+			// can trust it as engine context, exactly as the base system
+			// prompt (cmd/harness) describes. This is an ordinary text block
+			// on the wire — no new provider feature.
+			blocks = append(blocks, apiBlock{Type: "text", Text: message.RenderEngineContext(v.Text)})
 
 		case *message.Blob:
 			b, err := transcodeBlob(v)

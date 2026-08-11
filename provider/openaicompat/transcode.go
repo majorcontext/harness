@@ -201,8 +201,20 @@ func transcodeUserMessage(m *message.Message) ([]apiMessage, error) {
 	for _, p := range m.Parts {
 		switch v := p.(type) {
 		case *message.Text:
-			texts = append(texts, v.Text)
-			parts = append(parts, apiContentPart{Type: "text", Text: v.Text})
+			// NeutralizeEngineContextSentinel: a user- or paste-authored Text
+			// part must never forge the engine-context sentinel on the wire
+			// (see message.EngineContext). Only the *message.EngineContext
+			// case below emits it.
+			t := message.NeutralizeEngineContextSentinel(v.Text)
+			texts = append(texts, t)
+			parts = append(parts, apiContentPart{Type: "text", Text: t})
+		case *message.EngineContext:
+			// A genuine engine block: emit it sentinel-wrapped as the base
+			// system prompt (cmd/harness) describes. An ordinary text content
+			// part on the wire — no new provider feature.
+			t := message.RenderEngineContext(v.Text)
+			texts = append(texts, t)
+			parts = append(parts, apiContentPart{Type: "text", Text: t})
 		case *message.Blob:
 			hasBlob = true
 			url, err := blobURL(v)

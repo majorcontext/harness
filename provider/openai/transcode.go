@@ -184,7 +184,27 @@ func transcodeMessage(m *message.Message) ([]json.RawMessage, error) {
 			if role == "assistant" {
 				ct = "output_text"
 			}
-			pending.Content = append(pending.Content, apiContentPart{Type: ct, Text: v.Text})
+			// NeutralizeEngineContextSentinel: a user- or paste-authored Text
+			// part must never forge the engine-context sentinel on the wire
+			// (see message.EngineContext). Only the *message.EngineContext
+			// case below emits it.
+			pending.Content = append(pending.Content, apiContentPart{Type: ct, Text: message.NeutralizeEngineContextSentinel(v.Text)})
+
+		case *message.EngineContext:
+			if v.Text == "" {
+				continue
+			}
+			if pending == nil {
+				pending = &apiMessageItem{Type: "message", Role: role}
+			}
+			ct := "input_text"
+			if role == "assistant" {
+				ct = "output_text"
+			}
+			// A genuine engine block: emit it sentinel-wrapped as the base
+			// system prompt (cmd/harness) describes. An ordinary text content
+			// part on the wire — no new provider feature.
+			pending.Content = append(pending.Content, apiContentPart{Type: ct, Text: message.RenderEngineContext(v.Text)})
 
 		case *message.Blob:
 			part, err := transcodeBlob(v)
