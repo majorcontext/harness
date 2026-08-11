@@ -158,6 +158,55 @@ func TestStreamAssembly(t *testing.T) {
 	}
 }
 
+// TestStreamReasoningFieldOpenRouter: some openai-compat gateways (OpenRouter)
+// carry reasoning in a top-level `reasoning` delta field, not `reasoning_content`
+// (DeepSeek/Bifrost). The adapter must surface both as a Reasoning part, or a
+// reasoning model's output is silently lost on that gateway.
+func TestStreamReasoningFieldOpenRouter(t *testing.T) {
+	fixture := strings.Join([]string{
+		sseData(`{"id":"or_1","model":"anthropic/claude-3.7-sonnet","choices":[{"index":0,"delta":{"reasoning":"let me "}}]}`),
+		sseData(`{"id":"or_1","choices":[{"index":0,"delta":{"reasoning":"think"}}]}`),
+		sseData(`{"id":"or_1","choices":[{"index":0,"delta":{"content":"42"}}]}`),
+		sseData(`{"id":"or_1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`),
+		sseDone,
+	}, "")
+	c := testClient(t, "openrouter", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, fixture) //nolint:errcheck
+	})
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:     message.ModelRef{Provider: "openrouter", Model: "anthropic/claude-3.7-sonnet"},
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+		MaxTokens: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	events := collect(t, s)
+
+	var reasoning string
+	var done *provider.Event
+	for i := range events {
+		if events[i].Type == provider.EventReasoningDelta {
+			reasoning += events[i].Text
+		}
+		if events[i].Type == provider.EventDone {
+			done = &events[i]
+		}
+	}
+	if reasoning != "let me think" {
+		t.Errorf("reasoning deltas = %q, want %q", reasoning, "let me think")
+	}
+	if done == nil {
+		t.Fatal("no done event")
+	}
+	rp, ok := done.Message.Parts[0].(*message.Reasoning)
+	if !ok || rp.Text != "let me think" {
+		t.Fatalf("part 0 = %+v, want Reasoning{let me think}", done.Message.Parts[0])
+	}
+}
+
 func TestStreamParallelToolCallsInterleaved(t *testing.T) {
 	fixture := strings.Join([]string{
 		sseData(`{"id":"chatcmpl_2","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"bash","arguments":"{\"a"}}]}}]}`),

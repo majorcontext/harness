@@ -633,7 +633,9 @@ like a model swap, needs no migration step:
   (minimal/low/medium/high). `off`/unset omit the `reasoning` object.
 - `provider/openaicompat` sets the top-level `reasoning_effort` string; a
   gateway (Bifrost) maps it to the upstream provider's own knob. `off`/unset
-  omit it.
+  omit it. It surfaces returned reasoning from EITHER wire field — Bifrost/
+  DeepSeek `reasoning_content` or OpenRouter `reasoning` — as a `Reasoning`
+  part; a gateway sends one field, never both.
 
 `Effort` does NOT police which model accepts which level — that is a
 provider-and-model fact the engine cannot know from the ref alone. The adapter
