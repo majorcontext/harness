@@ -186,9 +186,12 @@ func (inst *instance) info() Info {
 // inst.mu would let one session's plugin spawn stall GET /session and the
 // session_info tool for every OTHER session too — exactly what AGENTS.md's
 // "a hung plugin can't wedge a session" rule forbids. start and stop are
-// the only writers of inst.state/inst.liveConn, and they publish with a
-// plain atomic store right after each transition completes, never while
-// holding inst.mu for a reader to wait on.
+// the only writers of inst.state/inst.liveConn; both happen to hold
+// inst.mu when they store, which is fine, since a plain atomic store never
+// blocks on anything. What must hold is the read side: this function loads
+// the atomics directly and never takes inst.mu itself, so it can never be
+// made to wait on a start that is still holding inst.mu through a slow or
+// wedged spawn.
 func (inst *instance) liveState() string {
 	switch reportedState(inst.state.Load()) {
 	case stateNotSpawned:
@@ -197,7 +200,7 @@ func (inst *instance) liveState() string {
 		return PluginStopped
 	case stateErrored:
 		return PluginErrored
-	default: // stateRunning
+	case stateRunning:
 		// A plugin that spawned successfully can still die later (crash,
 		// killed externally). conn.closed is closed both by an explicit
 		// stop and by the read loop's own error path (conn.fail, called
@@ -211,6 +214,12 @@ func (inst *instance) liveState() string {
 			}
 		}
 		return PluginRunning
+	default:
+		// Unreachable given today's four-value enum. An explicit case
+		// per value (rather than falling through to running by default)
+		// makes a future added-but-unhandled reportedState a visible
+		// omission here instead of a silent "running" misreport.
+		return PluginNotSpawned
 	}
 }
 
@@ -445,15 +454,18 @@ type instance struct {
 	conn    *conn
 	cmd     *exec.Cmd
 
-	// state is inst's reportedState, published with a plain atomic store by
-	// start/stop right after each transition — never while either holds mu
-	// — so instance.liveState (Host.Plugins) can read it without ever
-	// taking mu. See liveState's doc comment for why that matters.
+	// state is inst's reportedState. start and stop are its only writers,
+	// and both happen to hold mu when they store it — that part is
+	// incidental, not required. What matters is the READ side:
+	// instance.liveState (Host.Plugins) loads this atomic directly and
+	// never takes mu, so it can never be blocked by a start that is still
+	// holding mu through a slow or wedged spawn. See liveState's doc
+	// comment for why that matters.
 	state atomic.Int32
 	// liveConn mirrors conn once a spawn succeeds, published by the same
-	// atomic store as state. liveState uses it to notice a POST-spawn
-	// death (conn.closed, closed by conn.fail when the read loop errors)
-	// without taking mu either.
+	// atomic store as state, under the same "writers may hold mu, the
+	// reader never does" rule. liveState uses it to notice a POST-spawn
+	// death (conn.closed, closed by conn.fail when the read loop errors).
 	liveConn atomic.Pointer[conn]
 
 	// Event delivery: a bounded queue drained by one dedicated sender
@@ -652,10 +664,14 @@ func (inst *instance) stop() {
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
 	inst.stopped = true
-	// A never-started instance stays reported not-spawned even after this
-	// call: spawn state outranks the box-wide stopped flag, so a plugin no
-	// turn ever used is never misreported as having run and then stopped.
-	if reportedState(inst.state.Load()) != stateNotSpawned {
+	// Only a plugin that was actually RUNNING transitions to stopped here.
+	// A never-started instance stays not-spawned (spawn state outranks the
+	// box-wide stopped flag: a plugin no turn ever used is never
+	// misreported as having run and then stopped), and a plugin whose
+	// spawn itself failed stays errored (Close didn't stop anything —
+	// there was nothing running to stop — so relabeling it stopped would
+	// erase the failure this state tracking exists to preserve).
+	if reportedState(inst.state.Load()) == stateRunning {
 		inst.state.Store(int32(stateStopped))
 	}
 	inst.liveConn.Store(nil)

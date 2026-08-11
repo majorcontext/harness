@@ -158,3 +158,39 @@ func TestNeverSpawnedStaysNotSpawnedAfterClose(t *testing.T) {
 		t.Errorf("state after Close with no dispatch = %q, want %q", got, PluginNotSpawned)
 	}
 }
+
+// TestErroredStaysErroredAfterClose proves a second-round review finding: a
+// plugin whose spawn itself failed must keep reporting "errored" after
+// Host.Close, not be relabeled "stopped". stop's stopped=true guard has to
+// apply unconditionally (so a later start attempt is refused — see
+// errInstanceStopped), but the REPORTED state is a separate concern: a
+// plugin Close only ever shut down cleanly is "stopped"; a plugin that
+// never came up in the first place stays "errored" — Close didn't stop
+// anything, there was nothing running to stop. Overwriting errored with
+// stopped would erase exactly the failure distinction this PR's state
+// tracking exists to preserve.
+//
+// Red-verify: before the fix, stop's guard only special-cased
+// stateNotSpawned (`!= stateNotSpawned` stores stateStopped for every other
+// value, including stateErrored), so Close relabeled an errored plugin
+// stopped.
+func TestErroredStaysErroredAfterClose(t *testing.T) {
+	spec := Spec{
+		Manifest: Manifest{Name: "broken", ProtocolVersion: ProtocolVersion, Hooks: []Hook{HookShellEnv}},
+		dial: func() (io.ReadWriteCloser, error) {
+			return nil, fmt.Errorf("simulated spawn failure")
+		},
+	}
+	h := newTestHost(t, Options{}, spec)
+
+	h.ShellEnv(context.Background(), &ShellEnvRequest{SessionID: "s1", Tool: "bash", Command: "ls"})
+	if got := h.Plugins()[0].State; got != PluginErrored {
+		t.Fatalf("state after failed spawn = %q, want %q", got, PluginErrored)
+	}
+
+	h.Close()
+
+	if got := h.Plugins()[0].State; got != PluginErrored {
+		t.Errorf("state after Close following a failed spawn = %q, want %q", got, PluginErrored)
+	}
+}
