@@ -1490,8 +1490,8 @@ func (s *Server) releasePromptClaim(st *sessionState) {
 
 // freeRunSlotAndEmitIdle releases a just-completed turn's run-slot claim and
 // journals the session's idle transition in ONE s.mu critical section —
-// shared by runPrompt's and runGoal's tails, the two places a turn frees the
-// slot it held.
+// shared by runPrompt's, runGoal's, and handleCompact's tails, the three
+// places a turn frees the slot it held.
 //
 // This closes a race the two-step version (unlock, THEN emit idle
 // separately) left open: claimForPrompt needs the identical s.mu to read

@@ -677,8 +677,8 @@ func TestPromptQueueRaceWithFreedSlot(t *testing.T) {
 		if rr.Status != "queued" {
 			t.Fatalf("racer prompt response = %+v, want status=queued (it wins the freed slot, but the already-queued prompt still goes first — global FIFO)", rr)
 		}
-		if rr.Queued < 0 || rr.Queued > 1 {
-			t.Fatalf("racer prompt response = %+v, want queued depth 0 or 1", rr)
+		if rr.Queued > 1 {
+			t.Fatalf("racer prompt response = %+v, want queued depth at most 1", rr)
 		}
 	}
 
