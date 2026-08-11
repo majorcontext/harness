@@ -224,6 +224,66 @@ func TestThinkingRealModelLive(t *testing.T) {
 	}
 }
 
+// TestThinkingHighThenOffLive verifies the high->off downgrade does NOT wedge a
+// real Claude session. A high turn produces stored thinking blocks; switching to
+// off and prompting again must still complete — the anthropic adapter strips the
+// stored thinking blocks when the request does not enable thinking, so the API
+// never sees a thinking block with thinking disabled (which would 400 every later
+// turn). Drives the real production path against api.anthropic.com.
+func TestThinkingHighThenOffLive(t *testing.T) {
+	if os.Getenv("HARNESS_LIVE") == "" {
+		t.Skip("HARNESS_LIVE unset")
+	}
+	if os.Getenv("ANTHROPIC_API_KEY") == "" {
+		t.Skip("ANTHROPIC_API_KEY unset — native anthropic path unavailable")
+	}
+	model := "anthropic/" + envOr("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
+	h := newRealModelHarness(t)
+	id := h.createSession(model)
+	prompt := func(text string) {
+		resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+			"parts": []map[string]string{{"type": "text", "text": text}},
+		})
+		if resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("prompt: %d %s", resp.StatusCode, data)
+		}
+		h.waitIdleLive(id)
+	}
+
+	// Turn 1: high — produces stored thinking blocks on THIS session.
+	if resp, data := h.do("POST", "/session/"+id+"/thinking", map[string]string{"effort": "high"}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("set high: %d %s", resp.StatusCode, data)
+	}
+	prompt("What is 17 times 23? Explain briefly.")
+	if !h.hasReasoning(id) {
+		t.Fatalf("high turn produced no stored thinking blocks — cannot exercise the downgrade")
+	}
+	// Turn 2 on the SAME session: off — must complete (no wedge from replaying
+	// the stored thinking blocks into a thinking-disabled request).
+	resp, data := h.do("POST", "/session/"+id+"/thinking", map[string]string{"effort": "off"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("set off: %d %s", resp.StatusCode, data)
+	}
+	resp, data = h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "Now just say the number."}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("second prompt: %d %s", resp.StatusCode, data)
+	}
+	h.waitIdleLive(id)
+	h.srv.mu.Lock()
+	lt := h.srv.lastTurn[id]
+	h.srv.mu.Unlock()
+	if lt == nil || lt.outcome != "completed" {
+		got := "nil"
+		if lt != nil {
+			got = lt.outcome + " " + lt.error
+		}
+		t.Fatalf("high->off second turn not completed (got %s) — stored thinking blocks wedged the session", got)
+	}
+	fmt.Println("ROW\thigh->off downgrade\tsame-session\tsecond-turn=completed (no wedge)")
+}
+
 func envOr(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v

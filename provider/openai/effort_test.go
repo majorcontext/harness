@@ -18,7 +18,7 @@ func TestEffortSetsReasoning(t *testing.T) {
 	// caller MaxTokens 8192 <= every floor, so each is raised to the floor
 	// (minimal's floor IS 8192, so it stays).
 	wantFloor := map[message.Effort]int{
-		message.EffortMinimal: 8192,
+		message.EffortMinimal: 10000,
 		message.EffortLow:     12000,
 		message.EffortMedium:  18000,
 		message.EffortHigh:    25000,

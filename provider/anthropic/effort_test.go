@@ -77,6 +77,54 @@ func TestEffortLargeMaxKept(t *testing.T) {
 	}
 }
 
+// TestThinkingStrippedWhenOff: a stored Reasoning part (from an earlier
+// thinking-ON turn) is STRIPPED when the current request does not enable
+// thinking. Replaying a thinking block with thinking disabled is a permanent
+// wedge (the API 400s it on every later turn). The symmetric opposite of
+// dropping the top-level thinking block. With thinking ON the same part is
+// replayed (see TestTranscodeThinkingReplay).
+func TestThinkingStrippedWhenOff(t *testing.T) {
+	history := func() []message.Message {
+		return []message.Message{
+			{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+			{Role: message.RoleAssistant, Parts: message.Parts{
+				&message.Reasoning{Text: "let me think", ProviderData: message.ProviderData{
+					Family: []byte(`{"signature":"sig123"}`),
+				}},
+				&message.Reasoning{ProviderData: message.ProviderData{
+					Family: []byte(`{"redacted":"opaque"}`),
+				}},
+				&message.Text{Text: "answer"},
+			}},
+			{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "again"}}},
+		}
+	}
+	for _, e := range []message.Effort{message.EffortUnset, message.EffortOff} {
+		req := baseRequest(history()...)
+		req.Effort = e
+		out := mustTranscode(t, req)
+		for _, m := range out.Messages {
+			for _, b := range m.Content {
+				if b.Type == "thinking" || b.Type == "redacted_thinking" {
+					t.Errorf("effort %q: wire carries a %q block, want it stripped with thinking off", e, b.Type)
+				}
+			}
+		}
+		// The assistant turn's visible text must survive the strip.
+		var sawAnswer bool
+		for _, m := range out.Messages {
+			for _, b := range m.Content {
+				if b.Text == "answer" {
+					sawAnswer = true
+				}
+			}
+		}
+		if !sawAnswer {
+			t.Errorf("effort %q: assistant text 'answer' lost along with the stripped thinking", e)
+		}
+	}
+}
+
 // TestEffortOffAndUnsetNoThinking: EffortOff and EffortUnset emit no thinking
 // block and leave temperature/top_p intact.
 func TestEffortOffAndUnsetNoThinking(t *testing.T) {

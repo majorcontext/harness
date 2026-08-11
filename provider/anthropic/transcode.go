@@ -180,7 +180,8 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 	// time) is deferred pending live confirmation of the exact reject shape; the
 	// //go:build live suite should exercise abort-then-enable. See the
 	// reasoning-effort PR.
-	if budget, ok := thinkingBudget(req.Effort); ok {
+	budget, thinkingEnabled := thinkingBudget(req.Effort)
+	if thinkingEnabled {
 		out.Thinking = &apiThinking{Type: "enabled", BudgetTokens: budget}
 		if out.MaxTokens < budget+thinkingCompletionMargin {
 			out.MaxTokens = budget + thinkingCompletionMargin
@@ -228,7 +229,7 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 		if m.Role == message.RoleAssistant {
 			role = "assistant"
 		}
-		blocks, err := transcodeParts(m.Parts)
+		blocks, err := transcodeParts(m.Parts, thinkingEnabled)
 		if err != nil {
 			return nil, fmt.Errorf("anthropic: message %s: %w", m.ID, err)
 		}
@@ -254,7 +255,10 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 	return out, nil
 }
 
-func transcodeParts(parts message.Parts) ([]apiBlock, error) {
+// transcodeParts builds the wire content blocks for one message's parts.
+// thinkingEnabled reports whether THIS request enables extended thinking; when
+// false, stored Reasoning parts are stripped (see the case below).
+func transcodeParts(parts message.Parts, thinkingEnabled bool) ([]apiBlock, error) {
 	var blocks []apiBlock
 	for _, p := range parts {
 		switch v := p.(type) {
@@ -289,7 +293,7 @@ func transcodeParts(parts message.Parts) ([]apiBlock, error) {
 			// LoadSession) is the primary fix, but this is the last stop
 			// before the wire, for a ToolResult built by a producer that
 			// bypasses Normalize entirely — see SafeContent's doc comment.
-			content, err := transcodeParts(v.SafeContent())
+			content, err := transcodeParts(v.SafeContent(), thinkingEnabled)
 			if err != nil {
 				return nil, err
 			}
@@ -309,6 +313,19 @@ func transcodeParts(parts message.Parts) ([]apiBlock, error) {
 			})
 
 		case *message.Reasoning:
+			if !thinkingEnabled {
+				// Thinking is OFF for this request. A stored thinking/
+				// redacted_thinking block sent with thinking disabled is
+				// rejected by the API ("thinking blocks require thinking to be
+				// enabled") — and, once in durable history, it 400s EVERY later
+				// turn, a permanent wedge. This is the symmetric opposite of the
+				// enable-direction limitation. Strip it here: a transcode-time
+				// throwaway request may drop a part destructively (it never
+				// touches the durable record), the same license NormalizeForWire
+				// relies on. A later turn that re-enables thinking replays the
+				// block again from the intact history.
+				continue
+			}
 			raw, ok := v.ProviderData.Get(Family)
 			if !ok {
 				// Another provider's reasoning, or a present-but-empty

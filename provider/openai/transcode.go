@@ -78,7 +78,9 @@ func reasoningEffort(e message.Effort) (string, bool) {
 func reasoningOutputFloor(e message.Effort) int {
 	switch e {
 	case message.EffortMinimal:
-		return 8192
+		// Above the 8192 engine default so even minimal reasoning leaves answer
+		// headroom (a flat-at-default floor would add none).
+		return 10000
 	case message.EffortLow:
 		return 12000
 	case message.EffortMedium:
