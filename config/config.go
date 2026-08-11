@@ -91,6 +91,16 @@ type Config struct {
 	// entirely — see docs/design/context-compaction.md and issue #62 layer
 	// 3. Opt-in: the engine has no built-in per-model table.
 	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
+	// PromptRetries sets engine.Config.PromptRetries: how many ADDITIONAL
+	// attempts the base interactive Prompt loop makes when a model call fails
+	// with a transient, retryable provider error (an HTTP 5xx/429/529 or a
+	// truncated stream). A nil value (the field omitted) leaves the product
+	// default of 2 in place; an explicit 0 disables the retry entirely. A
+	// *int distinguishes "unset" (2) from "0" (off) across the project-config
+	// merge, exactly like ModelTool above. Resolve it with
+	// PromptRetriesValue. It is deliberately small and short — see
+	// engine.Config.PromptRetries and streamTurnWithRetry.
+	PromptRetries *int `json:"prompt_retries,omitempty"`
 	// StreamIdleTimeoutS sets engine.Config.StreamIdleTimeout (in seconds)
 	// for every session this process creates: how long a streamed response
 	// may go without a delta before the engine's idle-stream watchdog aborts
@@ -694,6 +704,9 @@ func merge(base, over *Config) *Config {
 	if over.ContextWindowTokens != 0 {
 		out.ContextWindowTokens = over.ContextWindowTokens
 	}
+	if over.PromptRetries != nil {
+		out.PromptRetries = over.PromptRetries
+	}
 	if over.StreamIdleTimeoutS != 0 {
 		out.StreamIdleTimeoutS = over.StreamIdleTimeoutS
 	}
@@ -890,6 +903,21 @@ func (c *Config) ResolveModel(s string) (message.ModelRef, error) {
 		}
 	}
 	return message.ParseModelRef(s)
+}
+
+// defaultPromptRetries is the product default for the base interactive Prompt
+// loop's retry budget when `prompt_retries` is unset (see PromptRetriesValue
+// and engine.Config.PromptRetries).
+const defaultPromptRetries = 2
+
+// PromptRetriesValue reports the base interactive Prompt loop's retry budget.
+// The default is defaultPromptRetries (2): only an explicit `prompt_retries:
+// 0` disables the retry. A nil receiver (no config) uses the default too.
+func (c *Config) PromptRetriesValue() int {
+	if c == nil || c.PromptRetries == nil {
+		return defaultPromptRetries
+	}
+	return *c.PromptRetries
 }
 
 // ModelToolEnabled reports whether the built-in `model` session tool is on.
