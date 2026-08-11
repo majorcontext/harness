@@ -30,6 +30,7 @@ const (
 	recSession      = "session"
 	recMessage      = "message"
 	recModel        = "model"
+	recEffort       = "effort"
 	recGoalSet      = "goal.set"
 	recGoalUpdated  = "goal.updated"
 	recGoalEval     = "goal.eval"
@@ -88,7 +89,12 @@ type record struct {
 	ParentSession string           `json:"parent_session,omitempty"`
 	Message       *message.Message `json:"message,omitempty"`
 	Model         message.ModelRef `json:"model,omitzero"`
-	Goal          *goalRecord      `json:"goal,omitempty"`
+	// Effort carries the reasoning-effort level on the session header record
+	// (the level at create time) and on a recEffort record (a SetEffort
+	// change). Omitted when EffortUnset, so a legacy log with no effort
+	// restores as EffortUnset (provider default) — unchanged behavior.
+	Effort message.Effort `json:"effort,omitempty"`
+	Goal   *goalRecord    `json:"goal,omitempty"`
 	// Prompt carries a prompt.queued/prompt.dequeued record's payload (see
 	// promptRecord and queue.go). nil on every other record type.
 	Prompt *promptRecord `json:"prompt,omitempty"`
@@ -280,6 +286,22 @@ func (s *Session) persistModel(ref message.ModelRef) {
 		return
 	}
 	if err := s.writeRecord(record{Type: recModel, Model: ref}); err != nil {
+		s.lastPersistErr = err
+	}
+}
+
+// persistEffort appends an effort record to the session log. It mirrors
+// persistModel exactly: a no-op until the log exists (lazy creation), caller
+// holds s.mu.
+func (s *Session) persistEffort(e message.Effort) {
+	if s.cfg.SessionDir == "" || !s.logStarted {
+		return
+	}
+	if err := s.ensureLog(); err != nil {
+		s.lastPersistErr = err
+		return
+	}
+	if err := s.writeRecord(record{Type: recEffort, Effort: e}); err != nil {
 		s.lastPersistErr = err
 	}
 }
@@ -528,7 +550,7 @@ func (s *Session) ensureLog() error {
 		// LoadSession already tolerates.
 		var buf bytes.Buffer
 		for _, rec := range []record{
-			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir, ParentSession: s.cfg.ParentSession},
+			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir, ParentSession: s.cfg.ParentSession, Effort: s.effort},
 			{Type: recModel, Model: s.model},
 		} {
 			b, err := json.Marshal(rec)
@@ -650,6 +672,9 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			if rec.ParentSession != "" {
 				s.cfg.ParentSession = rec.ParentSession
 			}
+			// The effort at create time. Omitted (EffortUnset) on a legacy
+			// header, which restores as the provider default — unchanged.
+			s.effort = rec.Effort
 		case recMessage:
 			if rec.Message == nil {
 				if isLast {
@@ -683,6 +708,8 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			}
 		case recModel:
 			s.model = rec.Model
+		case recEffort:
+			s.effort = rec.Effort
 		case recGoalSet:
 			// An active goal is one set without a later achieved/cleared. The
 			// condition is restored; per Claude Code semantics the run counters

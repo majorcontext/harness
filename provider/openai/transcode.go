@@ -46,6 +46,26 @@ type apiRequest struct {
 	// multi-turn conversations work without server-side response state.
 	Store   bool     `json:"store"`
 	Include []string `json:"include"`
+	// Reasoning carries the reasoning-effort control. Nil sends no control,
+	// so the model runs its own default.
+	Reasoning *apiReasoning `json:"reasoning,omitempty"`
+}
+
+// apiReasoning is the OpenAI Responses reasoning control. Effort is one of
+// minimal, low, medium, high.
+type apiReasoning struct {
+	Effort string `json:"effort,omitempty"`
+}
+
+// reasoningEffort maps a unified effort level to the OpenAI Responses
+// reasoning.effort string. It returns ("", false) for a level that requests no
+// reasoning (EffortUnset, EffortOff), so the caller sends no reasoning control
+// and the model uses its own default.
+func reasoningEffort(e message.Effort) (string, bool) {
+	if !e.Reasoning() {
+		return "", false
+	}
+	return string(e), true
 }
 
 type apiToolDef struct {
@@ -108,6 +128,9 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 		Stream:          true,
 		Store:           false,
 		Include:         []string{"reasoning.encrypted_content"},
+	}
+	if effort, ok := reasoningEffort(req.Effort); ok {
+		out.Reasoning = &apiReasoning{Effort: effort}
 	}
 
 	for _, t := range req.Tools {

@@ -65,6 +65,15 @@ type Event struct {
 	// which restores the model on LoadSession.
 	Model message.ModelRef `json:"model,omitzero"`
 
+	// Effort is carried by EventEffortChanged only: the session's new
+	// reasoning-effort level after a SetEffort call that actually changed it
+	// (see SetEffort). It is the single event an effort swap emits, whatever
+	// the route, so the server journals each swap through one path (see
+	// server/journal.go's EventEffortChanged case). It is distinct from the
+	// durable recEffort resume record persistEffort writes (store.go), which
+	// restores the effort on LoadSession.
+	Effort message.Effort `json:"effort,omitempty"`
+
 	// Goal-loop fields (set on goal.* events; see goal.go and the state
 	// machine documented atop goal.go). GoalCondition is carried by
 	// goal.set and goal.updated (the new condition); GoalReason/GoalMet/GoalTurn by goal.eval; GoalReason/GoalTurn
@@ -160,6 +169,13 @@ const (
 	// event every model-swap route funnels through (see SetModel).
 	EventModelChanged = "model.changed"
 
+	// EventEffortChanged fires once per SetEffort call that actually changes
+	// the session's reasoning-effort level (never on a no-op set to the
+	// current level). It carries the new level in Event.Effort and is the
+	// single observability event every effort-swap route funnels through
+	// (see SetEffort).
+	EventEffortChanged = "effort.changed"
+
 	// Goal-loop events (see goal.go).
 	EventGoalSet      = "goal.set"
 	EventGoalUpdated  = "goal.updated"
@@ -202,6 +218,7 @@ const (
 type Config struct {
 	Providers provider.Registry
 	Model     message.ModelRef // initial model; swap any time with SetModel
+	Effort    message.Effort   // initial reasoning-effort level; swap with SetEffort (zero = provider default)
 	System    []string         // base system prompt segments
 	MaxTokens int              // per-response cap; defaults to 8192
 	WorkDir   string           // working directory for built-in tools
@@ -444,6 +461,7 @@ type Session struct {
 
 	mu        sync.Mutex
 	model     message.ModelRef
+	effort    message.Effort // reasoning-effort level; swap with SetEffort
 	history   []message.Message
 	usage     provider.Usage // cumulative, across every turn (see appendWithUsage)
 	createdAt time.Time
@@ -617,6 +635,7 @@ func newSession(cfg Config) *Session {
 	s := &Session{
 		cfg:               cfg,
 		model:             cfg.Model,
+		effort:            cfg.Effort,
 		tools:             make(map[string]Tool),
 		createdAt:         time.Now().UTC(),
 		promptQueueNextID: 1,
@@ -679,6 +698,35 @@ func (s *Session) Model() message.ModelRef {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.model
+}
+
+// SetEffort swaps the reasoning-effort level for subsequent requests. A no-op
+// set to the current level changes nothing and emits no event. The level rides
+// every request the same way the model does — the adapter maps it to the
+// provider's wire shape at transcode time, so there is no migration step.
+//
+// On a real change it persists the durable recEffort resume record and emits
+// EventEffortChanged (carrying the new level), both while holding s.mu so event
+// order matches log order — the same persist-and-emit-under-s.mu shape SetModel
+// uses. EventEffortChanged is the ONE event every effort-swap route funnels
+// through, so the server journals every swap once via a single path.
+// OnEvent must not call back into this Session.
+func (s *Session) SetEffort(e message.Effort) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if e == s.effort {
+		return
+	}
+	s.effort = e
+	s.persistEffort(e)
+	s.emit(Event{Type: EventEffortChanged, Effort: e})
+}
+
+// Effort returns the session's current reasoning-effort level.
+func (s *Session) Effort() message.Effort {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.effort
 }
 
 // CreatedAt returns when the session was created (or, for a loaded session,
@@ -1169,6 +1217,7 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 		Temperature: params.Temperature,
 		TopP:        params.TopP,
 		MaxTokens:   maxTokens,
+		Effort:      s.Effort(),
 	}
 
 	// Record this turn's assembled system for the session_info tool, bump the

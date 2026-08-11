@@ -29,6 +29,7 @@ type Event struct {
 	Status    string            `json:"status,omitempty"`
 	Message   *message.Message  `json:"message,omitempty"`
 	Model     message.ModelRef  `json:"model,omitzero"`
+	Effort    message.Effort    `json:"effort,omitempty"`
 	Text      string            `json:"text,omitempty"`
 	ToolCall  *message.ToolCall `json:"tool_call,omitempty"`
 	Output    message.Parts     `json:"output,omitempty"`
@@ -161,6 +162,7 @@ const (
 	evtTurnEnd        = "turn.end"
 	evtMessage        = "message"
 	evtModel          = "model"
+	evtEffort         = "effort"
 	evtRequestMeta    = "request.meta"
 	evtGoalSet        = "goal.set"
 	evtGoalUpdated    = "goal.updated"
@@ -338,6 +340,12 @@ func (s *Server) Publish(ev engine.Event) {
 		// emit evtModel themselves (see handlePrompt), so a swap journals
 		// exactly once, never twice.
 		s.emitDurable(Event{Type: evtModel, SessionID: ev.SessionID, Model: ev.Model})
+	case engine.EventEffortChanged:
+		// Every effort swap funnels through SetEffort's single
+		// EventEffortChanged emit, so this ONE case journals the durable
+		// "effort" observability record — the same single-path shape the
+		// EventModelChanged case above uses.
+		s.emitDurable(Event{Type: evtEffort, SessionID: ev.SessionID, Effort: ev.Effort})
 	case engine.EventGoalSet, engine.EventGoalUpdated, engine.EventGoalEval, engine.EventGoalStalled, engine.EventGoalAchieved, engine.EventGoalCleared, engine.EventGoalEvalFailed, engine.EventGoalParked:
 		s.publishGoal(ev)
 	case engine.EventPromptQueued, engine.EventPromptDequeued:

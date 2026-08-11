@@ -615,6 +615,47 @@ session (404), or an empty model (400) — the same validation as the tool — t
 calls `SetModel`. Aliases are not resolved at this endpoint; resolve them
 client-side, as the CLI does.
 
+### Reasoning effort
+
+`message.Effort` is the unified, provider-agnostic reasoning-effort level:
+`off`, `minimal`, `low`, `medium`, `high`, plus the zero value `EffortUnset`
+(empty string) that sends NO control at all. It rides one `provider.Request`
+field (`Request.Effort`), the same way `MaxTokens` does, and each adapter maps
+it to that provider's own wire shape at transcode time — so an effort swap,
+like a model swap, needs no migration step:
+
+- `provider/anthropic` enables extended thinking with a `thinking.budget_tokens`
+  budget (minimal 1024, low 4096, medium 8192, high 16384). The API requires
+  `max_tokens > budget_tokens` and rejects an explicit `temperature`/`top_p`
+  while thinking is on, so `transcodeRequest` bumps `max_tokens` above the
+  budget and drops both. `off`/unset emit no `thinking` block.
+- `provider/openai` (Responses) sets `reasoning.effort` to the level string
+  (minimal/low/medium/high). `off`/unset omit the `reasoning` object.
+- `provider/openaicompat` sets the top-level `reasoning_effort` string; a
+  gateway (Bifrost) maps it to the upstream provider's own knob. `off`/unset
+  omit it.
+
+`Effort` does NOT police which model accepts which level — that is a
+provider-and-model fact the engine cannot know from the ref alone. The adapter
+sends the requested level and the provider is the final judge. A caller that
+must gate levels per model (a dashboard picker) holds its OWN mapping.
+
+`Session.SetEffort` is the single event choke point, mirroring `SetModel`
+exactly. On a real change (never a no-op set to the current level) it persists
+the durable `recEffort` resume record AND emits `EventEffortChanged`, both under
+`s.mu`. The server's `Publish` maps `EventEffortChanged` to the durable `effort`
+journal record. `LoadSession` restores the level: the create-time level rides
+the session header record, and every later `SetEffort` writes a `recEffort`
+record. `Session.Effort()` reads it back.
+
+`POST /session/{id}/thinking` is the network counterpart: a client/dashboard
+swap decoupled from prompting, so it never claims the run slot. It validates the
+`{effort}` value with `message.ParseEffort` (400 on an unknown level), accepts
+an empty string as "clear to provider default", and rejects an unknown session
+(404). Unlike the model endpoint it has NO provider gate (see above). The
+current level is read back on `GET /session/{id}` (`effort`), the same way the
+current model is.
+
 ### Deliberately absent — do not add
 
 - **No permission system.** Tool calls are never gated. There is no `permission.ask` hook, no approval UI, no pre-flight rule evaluation.

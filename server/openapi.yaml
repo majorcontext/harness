@@ -109,6 +109,12 @@ components:
           format: date-time
         model:
           $ref: "#/components/schemas/ModelRef"
+        effort:
+          $ref: "#/components/schemas/Effort"
+          description: >
+            The session's current reasoning-effort level. Absent (or empty)
+            means the provider default (EffortUnset). Set it with POST
+            /session/{id}/thinking.
         status:
           $ref: "#/components/schemas/SessionStatus"
           description: >
@@ -858,6 +864,7 @@ components:
             - turn.end
             - message
             - model
+            - effort
             - request.meta
             - goal.set
             - goal.updated
@@ -1039,6 +1046,9 @@ components:
           $ref: "#/components/schemas/Message"
         model:
           $ref: "#/components/schemas/ModelRef"
+        effort:
+          $ref: "#/components/schemas/Effort"
+          description: The new reasoning-effort level on an "effort" event.
         text:
           type: string
           description: Delta text for text.delta / reasoning.delta.
@@ -1308,6 +1318,32 @@ components:
         model:
           $ref: "#/components/schemas/ModelRef"
           description: The session's model after the swap.
+
+    Effort:
+      type: string
+      description: >
+        A unified reasoning-effort level. "off" disables reasoning where the
+        provider supports it; minimal/low/medium/high request increasing effort.
+        An empty string is EffortUnset (the provider default).
+      enum: ["", "off", "minimal", "low", "medium", "high"]
+
+    SetThinkingRequest:
+      type: object
+      required: [effort]
+      properties:
+        effort:
+          $ref: "#/components/schemas/Effort"
+          description: >
+            The new reasoning-effort level. An empty string clears it to the
+            provider default. An unknown value is 400.
+
+    SetThinkingResponse:
+      type: object
+      required: [effort]
+      properties:
+        effort:
+          $ref: "#/components/schemas/Effort"
+          description: The session's reasoning-effort level after the swap.
 
     Request:
       type: object
@@ -2066,6 +2102,45 @@ paths:
               schema: { $ref: "#/components/schemas/SetModelResponse" }
         "400":
           description: Empty model, or its provider is not configured.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /session/{id}/thinking:
+    post:
+      operationId: setThinking
+      summary: Swap a session's reasoning-effort level.
+      description: >
+        Swaps the session's reasoning-effort level for subsequent requests,
+        decoupled from prompting — it never claims the run slot, so it applies
+        even while a turn is running and takes effect on the NEXT request. The
+        level rides every request; each provider adapter maps it to its own wire
+        shape (Anthropic extended-thinking budget, OpenAI reasoning.effort,
+        openai-compat reasoning_effort). The swap is durable (a recEffort record
+        restores it on resume) and journals a single "effort" event on /event.
+        The valid levels are off, minimal, low, medium, high; an empty string
+        clears the level to the provider default. 400 on an invalid level.
+        Unlike a model swap there is NO provider gate — whether the CURRENT
+        model accepts a level is a provider fact the engine cannot know from the
+        ref; a dashboard that gates levels per model holds its own mapping. The
+        current level is read back on GET /session ("effort").
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetThinkingRequest" }
+      responses:
+        "200":
+          description: The reasoning-effort level after the swap.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SetThinkingResponse" }
+        "400":
+          description: The effort value is not a valid level.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

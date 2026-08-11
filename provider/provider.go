@@ -34,6 +34,12 @@ type Request struct {
 	Temperature *float64
 	TopP        *float64
 	MaxTokens   int
+	// Effort is the unified reasoning-effort level (message.Effort). The
+	// zero value (EffortUnset) sends no reasoning control. Each adapter maps
+	// a non-unset level to its own wire shape; a level the target model
+	// rejects surfaces as a provider error, since the adapter cannot know
+	// per-model support from the ref alone.
+	Effort message.Effort
 }
 
 // StopReason is why the model stopped generating.

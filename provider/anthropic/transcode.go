@@ -42,7 +42,40 @@ type apiRequest struct {
 	Temperature *float64     `json:"temperature,omitempty"`
 	TopP        *float64     `json:"top_p,omitempty"`
 	Stream      bool         `json:"stream"`
+	Thinking    *apiThinking `json:"thinking,omitempty"`
 }
+
+// apiThinking enables Anthropic extended thinking with a token budget. The API
+// requires max_tokens strictly greater than budget_tokens, and rejects an
+// explicit temperature or top_p while thinking is enabled — transcodeRequest
+// enforces both.
+type apiThinking struct {
+	Type         string `json:"type"` // "enabled"
+	BudgetTokens int    `json:"budget_tokens"`
+}
+
+// thinkingBudget maps a unified reasoning-effort level to an Anthropic thinking
+// budget in tokens. It returns (0, false) for a level that requests no
+// reasoning (EffortUnset, EffortOff), so the caller emits no thinking block.
+// 1024 is the Anthropic minimum budget.
+func thinkingBudget(e message.Effort) (int, bool) {
+	switch e {
+	case message.EffortMinimal:
+		return 1024, true
+	case message.EffortLow:
+		return 4096, true
+	case message.EffortMedium:
+		return 8192, true
+	case message.EffortHigh:
+		return 16384, true
+	default:
+		return 0, false
+	}
+}
+
+// thinkingCompletionMargin is the minimum room left for the visible answer
+// above the thinking budget, since the API requires max_tokens > budget_tokens.
+const thinkingCompletionMargin = 4096
 
 type apiMessage struct {
 	Role    string     `json:"role"`
@@ -127,6 +160,19 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 		Temperature: req.Temperature,
 		TopP:        req.TopP,
 		Stream:      true,
+	}
+
+	// Extended thinking: a non-off effort level enables a thinking block with a
+	// token budget. The API requires max_tokens > budget_tokens and rejects an
+	// explicit temperature or top_p while thinking is on, so drop both and bump
+	// max_tokens above the budget when needed.
+	if budget, ok := thinkingBudget(req.Effort); ok {
+		out.Thinking = &apiThinking{Type: "enabled", BudgetTokens: budget}
+		if out.MaxTokens < budget+thinkingCompletionMargin {
+			out.MaxTokens = budget + thinkingCompletionMargin
+		}
+		out.Temperature = nil
+		out.TopP = nil
 	}
 
 	for _, seg := range req.System {
