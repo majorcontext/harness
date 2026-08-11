@@ -114,3 +114,29 @@ func TestLiveEventsTextReasoningToolStartToolEnd(t *testing.T) {
 		t.Errorf("final text.delta = %q", live[5].Text)
 	}
 }
+
+// TestLiveEventTurnRestartForwarded proves Server.Publish forwards the engine
+// EventTurnRestart marker onto the live SSE stream. A base-loop retry
+// (engine/prompt_retry.go) emits it so a client drops the failed attempt's
+// partial deltas before the retry re-streams them. The mapping test drives
+// Publish directly with the exact event the engine emits — a real retry
+// backoff would add a wall-clock wait the SSE harness cannot fake — and
+// asserts the subscriber receives one live (Seq 0) turn.restart.
+//
+// Red-verify: delete the engine.EventTurnRestart case in Server.Publish and
+// the event is dropped (Publish has no default), so want == 0 and this fails.
+func TestLiveEventTurnRestartForwarded(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	id := h.createSession("test/m1")
+
+	sse := h.openSSE("?from=0", "")
+	h.srv.Publish(engine.Event{Type: engine.EventTurnRestart, SessionID: id})
+
+	ev := sse.waitFor(t, engine.EventTurnRestart)
+	if ev.SessionID != id {
+		t.Errorf("turn.restart SessionID = %q, want %q", ev.SessionID, id)
+	}
+	if ev.Seq != 0 {
+		t.Errorf("turn.restart has a seq (%d); it must be live, never durable", ev.Seq)
+	}
+}

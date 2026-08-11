@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"testing/synctest"
 
@@ -86,6 +87,93 @@ func TestPromptRetriesRetryableThenSucceeds(t *testing.T) {
 		}
 		if n := sessionErrorCount(hooks.events); n != 0 {
 			t.Errorf("session.error events = %d, want 0 (the retry masked the blip)", n)
+		}
+	})
+}
+
+// TestPromptRetryEmitsTurnRestartBeforeReStream is the red-first guard for a
+// base-loop retry re-emitting a failed attempt's partial deltas. Attempt 1
+// streams "Hello wor" then dies with a retryable server_error before any tool
+// call; attempt 2 re-streams "Hello wor" + "ld" and finishes. Between the two
+// runs streamTurnWithRetry must emit exactly one EventTurnRestart, so an
+// incremental subscriber clears the stale partial and renders the retry text
+// once — never the two runs concatenated as "Hello worHello world".
+//
+// Red-verify the NAMED mechanism: delete the s.emit(Event{Type:
+// EventTurnRestart}) line in streamTurnWithRetry and this test fails two ways
+// — the restart count is 0, and the reconstructed client buffer reads the
+// doubled "Hello worHello world".
+func TestPromptRetryEmitsTurnRestartBeforeReStream(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		prov := &diesAfterToolCallProvider{
+			name:   "test",
+			dying:  []provider.Event{{Type: provider.EventTextDelta, Text: "Hello wor"}},
+			dieErr: provider.MarkRetryable(io.ErrUnexpectedEOF, provider.RetryableServerError),
+			after: [][]provider.Event{
+				{
+					{Type: provider.EventTextDelta, Text: "Hello wor"},
+					{Type: provider.EventTextDelta, Text: "ld"},
+					{
+						Type:       provider.EventDone,
+						Message:    &message.Message{ID: "m_ok", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "Hello world"}}},
+						StopReason: provider.StopEndTurn,
+					},
+				},
+			},
+		}
+		var got []Event
+		s := NewSession(Config{
+			Providers:     provider.Registry{"test": prov},
+			Model:         message.ModelRef{Provider: "test", Model: "m1"},
+			PromptRetries: 2,
+			OnEvent:       func(ev Event) { got = append(got, ev) },
+		})
+
+		final, err := s.Prompt(context.Background(), "go")
+		if err != nil {
+			t.Fatalf("Prompt err = %v, want nil (the retry masks the blip)", err)
+		}
+		if final == nil || final.Parts.Text() != "Hello world" {
+			t.Fatalf("final = %+v, want %q", final, "Hello world")
+		}
+
+		// Exactly one restart, and it must sit AFTER the first partial delta
+		// (so the subscriber has something to drop) and BEFORE the retry's
+		// re-streamed deltas.
+		restarts, firstDeltaIdx, restartIdx := 0, -1, -1
+		for i, ev := range got {
+			switch ev.Type {
+			case EventTextDelta:
+				if firstDeltaIdx == -1 {
+					firstDeltaIdx = i
+				}
+			case EventTurnRestart:
+				restarts++
+				restartIdx = i
+			}
+		}
+		if restarts != 1 {
+			t.Fatalf("EventTurnRestart count = %d, want exactly 1 before the re-stream", restarts)
+		}
+		if firstDeltaIdx == -1 || firstDeltaIdx >= restartIdx {
+			t.Fatalf("EventTurnRestart at index %d must follow the first text.delta at index %d", restartIdx, firstDeltaIdx)
+		}
+
+		// Model an incremental client: accumulate text deltas, clear the
+		// in-progress buffer on a restart. With the marker it ends at the
+		// single correct text; without it the buffer reads the doubled
+		// "Hello worHello world".
+		var buf strings.Builder
+		for _, ev := range got {
+			switch ev.Type {
+			case EventTextDelta:
+				buf.WriteString(ev.Text)
+			case EventTurnRestart:
+				buf.Reset()
+			}
+		}
+		if buf.String() != "Hello world" {
+			t.Fatalf("client-reconstructed text = %q, want %q (partial deltas not dropped on restart)", buf.String(), "Hello world")
 		}
 	})
 }

@@ -121,11 +121,21 @@ retrying would duplicate the model's already-emitted tool intent), a
 The final surfaced error still emits one `session.error` and drops the usage
 exactly as before; an intermediate masked attempt emits none.
 
-Retrying `streamTurn` is idempotent by construction: `streamTurn` makes ONE
-model call and never executes a tool (`runAgenticLoop` runs tools only AFTER
-`streamTurn` returns a `StopToolUse` message), so a failed attempt ran no side
-effect to redo. The one shape that DID emit tool intent before failing arrives
-as `*interruptedTurnError` and is excluded.
+Retrying `streamTurn` is idempotent for history and tool side effects:
+`streamTurn` makes ONE model call and never executes a tool (`runAgenticLoop`
+runs tools only AFTER `streamTurn` returns a `StopToolUse` message), so a
+failed attempt ran no side effect to redo. The one shape that DID emit tool
+intent before failing arrives as `*interruptedTurnError` and is excluded.
+
+The emit stream is NOT idempotent, so `streamTurnWithRetry` closes that gap.
+A failed attempt can emit `EventTextDelta`/`EventReasoningDelta` for partial
+text before its stream dies, and the retry re-streams that text from scratch.
+`streamTurnWithRetry` emits one `EventTurnRestart` (`engine.go`) before each
+retry, so a subscriber that renders deltas incrementally drops the stale
+partial and rebuilds it from the retry — never the two runs concatenated
+(`Hello wor` then `Hello world` shown as `Hello worHello world`). The server
+forwards `EventTurnRestart` live over SSE (`server/journal.go`'s `Publish`);
+the turn's final `EventMessage` still reconciles history regardless.
 
 `Config.PromptRetries` bounds it: additional attempts, zero (the engine zero
 value) DISABLES retry, config/CLI default 2 via `config.Config`'s `*int`
@@ -137,6 +147,17 @@ the turn, so this smooths a blip in a second or two, never the goal loop's
 distinct: the base loop wraps ONE model call and is inherently idempotent; the
 goal loop's `promptTurnWithRetry` wraps a whole worker turn (with the
 tool-executed non-idempotency gate) and parks on exhaustion.
+
+The two also NEST. A goal worker turn runs through `s.Prompt`/
+`s.runAgenticLoop` (`goal.go`), so every one of `promptTurnWithRetry`'s outer
+attempts now issues up to `1+PromptRetries` inner `streamTurn` calls. For a
+persistent retryable condition the worst case is `goalRetryableMaxAttempts`
+(12) times `1+PromptRetries` (3) — about 36 full-input-price model calls,
+where the goal-loop tiers alone assume ~12. This is deliberate: the fast inner
+budget (1s, then 2s) smooths a one-off blip inside a single worker turn before
+the outer weather tier ever counts it, so a goal loop rides a brief provider
+blip without spending an outer attempt. `PromptRetries` 0 disables the inner
+budget for a host that wants the outer tiers to be the only retry.
 
 ### Goal loop
 

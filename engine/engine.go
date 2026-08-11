@@ -154,6 +154,19 @@ const (
 	EventToolStart      = "tool.start"
 	EventToolEnd        = "tool.end"
 
+	// EventTurnRestart fires when streamTurnWithRetry (prompt_retry.go) is
+	// about to retry a failed model call whose stream may have already
+	// emitted partial EventTextDelta/EventReasoningDelta content (a mid-text
+	// stream_truncated or server_error). The next attempt re-streams that
+	// content from scratch, so this marker tells a subscriber that renders
+	// deltas incrementally (a TUI or SSE client) to DROP the partial content
+	// it accumulated since the last EventMessage. Without it, the client
+	// renders the failed attempt's partial text immediately followed by the
+	// retry's full text — e.g. "Hello wor" then "Hello world" shown as
+	// "Hello worHello world". It carries no payload beyond SessionID; the
+	// authoritative message still arrives on the turn's final EventMessage.
+	EventTurnRestart = "turn.restart"
+
 	// EventModelChanged fires once per SetModel call that actually changes
 	// the session's model (never on a no-op set to the current model). It
 	// carries the new model in Event.Model and is the single observability

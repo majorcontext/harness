@@ -81,12 +81,23 @@ func waitBasePromptRetryBackoff(ctx context.Context, attempt int) error {
 //     failure, is not retryable, so !retryable returns it immediately —
 //     matching the goal loop's fail-fast branch (promptTurnWithRetry).
 //
-// Retrying streamTurn is inherently idempotent: streamTurn makes ONE model
-// call and never executes a tool (runAgenticLoop runs tools only AFTER
-// streamTurn returns a StopToolUse message), so a failed attempt ran no side
-// effect to redo — even a later model call within the same turn re-issues
-// against unchanged history. The one shape that DID emit tool intent before
-// failing arrives as *interruptedTurnError and is excluded above.
+// Retrying streamTurn is idempotent for history and tool side effects:
+// streamTurn makes ONE model call and never executes a tool (runAgenticLoop
+// runs tools only AFTER streamTurn returns a StopToolUse message), so a
+// failed attempt ran no side effect to redo — even a later model call within
+// the same turn re-issues against unchanged history. The one shape that DID
+// emit tool intent before failing arrives as *interruptedTurnError and is
+// excluded above.
+//
+// The EMIT stream is not idempotent, so this closes the gap explicitly. A
+// failed attempt may have already emitted EventTextDelta/EventReasoningDelta
+// for partial content before its stream died (a mid-text stream_truncated or
+// server_error), and the next attempt re-streams that content from scratch.
+// This emits one EventTurnRestart before each retry, so a subscriber that
+// renders deltas incrementally drops the stale partial and rebuilds it from
+// the retry rather than rendering the two runs concatenated — see
+// EventTurnRestart. History still reconciles through the turn's final
+// EventMessage regardless.
 func (s *Session) streamTurnWithRetry(ctx context.Context) (*message.Message, provider.StopReason, provider.Usage, error) {
 	for attempt := 1; ; attempt++ {
 		asst, stop, usage, err := s.streamTurn(ctx)
@@ -103,6 +114,11 @@ func (s *Session) streamTurnWithRetry(ctx context.Context) (*message.Message, pr
 		if _, retryable := provider.AsRetryable(err); !retryable || attempt > s.cfg.PromptRetries {
 			return nil, "", provider.Usage{}, err
 		}
+		// Signal subscribers to drop any partial deltas the failed attempt
+		// emitted before the retry re-streams the same content. A reset on an
+		// attempt that emitted nothing is a harmless no-op — the subscriber's
+		// in-progress buffer is already empty. See EventTurnRestart.
+		s.emit(Event{Type: EventTurnRestart})
 		if werr := waitBasePromptRetryBackoff(ctx, attempt); werr != nil {
 			// ctx was cancelled during the backoff wait: surface the
 			// cancellation rather than retrying against a dead context.
