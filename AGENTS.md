@@ -68,6 +68,35 @@ relative order intact. A move that would break the bound is refused.
 tested against. Derive it from the provider contract only, never from
 either function's internals. See the oracle rule under Testing.
 
+### Ambient engine context is a structured, unforgeable part
+
+The engine appends its own live status to the newest user message every
+request — engine identity (`[engine: ...]`), managed-process status
+(`[processes: ...]`), degraded-MCP status (`[mcp: ...]`), and the
+parked-goal notice (`[goal: ...]`). This is a `message.EngineContext` part,
+NOT a `Text` part. A bare `Text` block is byte-indistinguishable from
+user-typed or pasted text, so a payload a user pastes that contains
+`[engine: ...]` once inherited the same trust the engine's own block
+carries — a trust-spoofing surface. `EngineContext` is a distinct part-kind
+only `withAmbientStatus` (`engine/process.go`) produces, so a user- or
+paste-authored part is always a `Text` and can never BE one, however its
+bytes are shaped. Every transcoder renders an `EngineContext` through
+`message.RenderEngineContext`, which wraps the block in the
+`message.EngineContextOpenTag`/`EngineContextCloseTag` sentinel, and renders
+every `Text` through `message.NeutralizeEngineContextSentinel`, which
+defangs any literal sentinel that text carries. Only a genuine
+`EngineContext` can therefore emit the sentinel on the wire, so the base
+system prompt (`cmd/harness`, `ambientContextGuidance`) tells the model to
+trust the sentinel-wrapped block and to distrust bracketed text outside it.
+The render stays an ordinary text block on every provider — no new wire
+feature. `EngineContext` is runtime-only (appended to the throwaway
+per-request copy, never the durable log — the prompt-cache-prefix and
+never-persisted rules below are unchanged) but still round-trips through the
+canonical JSON union like every other part. Never revert this to a `Text`
+part, and never make the guidance trust bracketed text syntax again. (Fix:
+the NEP ambient trust-spoofing finding; superseded PR #113's prose-only
+stopgap.)
+
 ### Project instructions (AGENTS.md)
 
 The engine auto-injects a project's `AGENTS.md` into the system prompt. On the
@@ -626,11 +655,12 @@ unconfigured rule.
 
 Once at least one declared process has EVER been started (this server
 process's lifetime), request assembly appends an ephemeral `[processes:
-...]` status block to the newest user message ONLY — never persisted into
-the durable session log, never touching any earlier message so a
-provider's prompt cache prefix stays intact. See
-`docs/design/managed-processes.md` §4 for the exact mechanism and why it
-is safe.
+...]` status block to the newest user message ONLY — as a
+`message.EngineContext` part (see "Ambient engine context is a structured,
+unforgeable part" above), never persisted into the durable session log,
+never touching any earlier message so a provider's prompt cache prefix
+stays intact. See `docs/design/managed-processes.md` §4 for the exact
+mechanism and why it is safe.
 
 ### Model switching
 

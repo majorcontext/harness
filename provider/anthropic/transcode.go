@@ -168,7 +168,7 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 		if m.Role == message.RoleAssistant {
 			role = "assistant"
 		}
-		blocks, err := transcodeParts(m.Parts)
+		blocks, err := transcodeParts(m.Parts, true)
 		if err != nil {
 			return nil, fmt.Errorf("anthropic: message %s: %w", m.ID, err)
 		}
@@ -194,7 +194,14 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 	return out, nil
 }
 
-func transcodeParts(parts message.Parts) ([]apiBlock, error) {
+// transcodeParts renders parts to wire blocks. topLevel is true for a
+// message's own parts and false when recursing into a ToolResult's content
+// (see the ToolResult case below). The distinction matters ONLY for
+// *message.EngineContext: the trusted engine-context sentinel is keyed on
+// wire POSITION, not part type alone, so a genuine top-level ambient block is
+// sentinel-wrapped while an EngineContext reached through tool-result
+// recursion is rendered inert. Every other part type ignores topLevel.
+func transcodeParts(parts message.Parts, topLevel bool) ([]apiBlock, error) {
 	var blocks []apiBlock
 	for _, p := range parts {
 		switch v := p.(type) {
@@ -202,7 +209,33 @@ func transcodeParts(parts message.Parts) ([]apiBlock, error) {
 			if v.Text == "" {
 				continue
 			}
-			blocks = append(blocks, apiBlock{Type: "text", Text: v.Text})
+			// NeutralizeEngineContextSentinel: a user- or paste-authored Text
+			// part must never be able to forge the engine-context sentinel on
+			// the wire (see message.EngineContext). Only the *message.Engine-
+			// Context case below emits it.
+			blocks = append(blocks, apiBlock{Type: "text", Text: message.NeutralizeEngineContextSentinel(v.Text)})
+
+		case *message.EngineContext:
+			if v.Text == "" {
+				continue
+			}
+			if !topLevel {
+				// Reached through tool-result recursion (see the ToolResult
+				// case): NOT a genuine top-level ambient position, so it must
+				// never emit the trusted sentinel. A tool that could get an
+				// EngineContext-shaped part into its result would otherwise
+				// inherit the trusted wrapping — the exact forge this change
+				// closes. Render it inert (neutralized text) instead. No
+				// current path places an EngineContext in a tool result; this
+				// is defense against a plugin-built one.
+				blocks = append(blocks, apiBlock{Type: "text", Text: message.NeutralizeEngineContextSentinel(v.Text)})
+				continue
+			}
+			// A genuine top-level engine block: emit it sentinel-wrapped so
+			// the model can trust it as engine context, exactly as the base
+			// system prompt (cmd/harness) describes. This is an ordinary text
+			// block on the wire — no new provider feature.
+			blocks = append(blocks, apiBlock{Type: "text", Text: message.RenderEngineContext(v.Text)})
 
 		case *message.Blob:
 			b, err := transcodeBlob(v)
@@ -229,7 +262,7 @@ func transcodeParts(parts message.Parts) ([]apiBlock, error) {
 			// LoadSession) is the primary fix, but this is the last stop
 			// before the wire, for a ToolResult built by a producer that
 			// bypasses Normalize entirely — see SafeContent's doc comment.
-			content, err := transcodeParts(v.SafeContent())
+			content, err := transcodeParts(v.SafeContent(), false)
 			if err != nil {
 				return nil, err
 			}
@@ -263,6 +296,14 @@ func transcodeParts(parts message.Parts) ([]apiBlock, error) {
 			if data.Redacted != "" {
 				blocks = append(blocks, apiBlock{Type: "redacted_thinking", Data: data.Redacted})
 			} else {
+				// Deliberately NOT run through
+				// NeutralizeEngineContextSentinel (unlike every Text path):
+				// the thinking body is signature-bound (data.Signature is
+				// computed by the API over this exact text), so altering a
+				// byte makes the API reject the replay. Reasoning is
+				// model-authored, not attacker-pasted, so it is not a viable
+				// engine-context forge vector; the sentinel-wrapping trust
+				// this change adds is for genuine EngineContext parts only.
 				thinking := v.Text
 				blocks = append(blocks, apiBlock{Type: "thinking", Thinking: &thinking, Signature: data.Signature})
 			}

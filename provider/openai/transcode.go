@@ -184,7 +184,27 @@ func transcodeMessage(m *message.Message) ([]json.RawMessage, error) {
 			if role == "assistant" {
 				ct = "output_text"
 			}
-			pending.Content = append(pending.Content, apiContentPart{Type: ct, Text: v.Text})
+			// NeutralizeEngineContextSentinel: a user- or paste-authored Text
+			// part must never forge the engine-context sentinel on the wire
+			// (see message.EngineContext). Only the *message.EngineContext
+			// case below emits it.
+			pending.Content = append(pending.Content, apiContentPart{Type: ct, Text: message.NeutralizeEngineContextSentinel(v.Text)})
+
+		case *message.EngineContext:
+			if v.Text == "" {
+				continue
+			}
+			if pending == nil {
+				pending = &apiMessageItem{Type: "message", Role: role}
+			}
+			ct := "input_text"
+			if role == "assistant" {
+				ct = "output_text"
+			}
+			// A genuine engine block: emit it sentinel-wrapped as the base
+			// system prompt (cmd/harness) describes. An ordinary text content
+			// part on the wire — no new provider feature.
+			pending.Content = append(pending.Content, apiContentPart{Type: ct, Text: message.RenderEngineContext(v.Text)})
 
 		case *message.Blob:
 			part, err := transcodeBlob(v)
@@ -243,7 +263,13 @@ func transcodeMessage(m *message.Message) ([]json.RawMessage, error) {
 				// canonical format's crossing rule.
 				continue
 			}
-			// Replay the stored raw reasoning item verbatim.
+			// Replay the stored raw reasoning item verbatim. Deliberately NOT
+			// run through NeutralizeEngineContextSentinel (unlike every Text
+			// path): this is an opaque, provider-native reasoning item
+			// (typically encrypted) whose bytes must round-trip unchanged;
+			// rewriting them would corrupt the payload. Reasoning is
+			// model-authored, not attacker-pasted, so it is not a viable
+			// engine-context forge vector.
 			items = append(items, append(json.RawMessage(nil), raw...))
 
 		default:
@@ -271,13 +297,44 @@ func transcodeMessage(m *message.Message) ([]json.RawMessage, error) {
 // own separate argument for why it happens to be safe.
 func toolResultOutput(v *message.ToolResult) string {
 	content := v.SafeContent()
-	out := content.Text()
+	// NeutralizeEngineContextSentinel: tool output (a hostile file read,
+	// web fetch, or subprocess stdout) must never forge the engine-context
+	// sentinel on the wire (see message.EngineContext). This flattening path
+	// bypasses the *message.Text case's neutralization, so it neutralizes
+	// here — the same bar user/assistant text already meets.
+	//
+	// Both *Text and *EngineContext contribute their text: message.Parts.Text
+	// (content.Text()) keeps only *Text, so a plugin-built *EngineContext
+	// nested in a tool result would vanish silently. A tool result is never a
+	// genuine top-level ambient position, so such a block renders INERT
+	// (neutralized text) and stays visible — matching provider/anthropic's
+	// transcodeParts tool-result recursion (topLevel=false), so all three
+	// transcoders agree on identical input. No engine path places an
+	// EngineContext in a tool result today.
+	var b strings.Builder
 	blobs := 0
 	for _, p := range content {
-		if _, ok := p.(*message.Blob); ok {
+		var text string
+		switch pt := p.(type) {
+		case *message.Text:
+			text = pt.Text
+		case *message.EngineContext:
+			text = pt.Text
+		case *message.Blob:
 			blobs++
+			continue
+		default:
+			continue
 		}
+		if text == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(text)
 	}
+	out := message.NeutralizeEngineContextSentinel(b.String())
 	if blobs > 0 {
 		note := fmt.Sprintf("[%d image attachment(s) omitted]", blobs)
 		if out == "" {

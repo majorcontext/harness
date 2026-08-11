@@ -355,18 +355,27 @@ func formatPorts(ports []int) string {
 	return " :" + strings.Join(strs, ",")
 }
 
-// withAmbientStatus returns messages with seg appended as a new Text part
-// on a CLONE of the newest RoleUser message — never mutating the shared
-// backing Parts slice of the original (which may alias the session's own
-// durable history), and never touching any message but the last user one,
-// so the cached prefix (every earlier message) is untouched. A no-op if
-// messages holds no user message at all.
+// withAmbientStatus returns messages with seg appended as a new
+// *message.EngineContext part on a CLONE of the newest RoleUser message —
+// never mutating the shared backing Parts slice of the original (which may
+// alias the session's own durable history), and never touching any message
+// but the last user one, so the cached prefix (every earlier message) is
+// untouched. A no-op if messages holds no user message at all.
 //
-// Shared by every ambient status segment streamTurn injects (process
-// status here, MCP status in mcp_status.go) — each caller applies it
-// independently, so calling it twice on the same messages slice for two
-// different segments stacks two separate Text parts onto that same newest
-// user message, one per segment.
+// The part is an *EngineContext, NOT a *Text: seg is engine-authored context
+// that the model must be able to trust over user- or paste-authored text,
+// and a distinct part-kind is the only representation a user cannot forge
+// (see message.EngineContext for the full trust-spoofing rationale, and the
+// base system prompt in cmd/harness for the model-facing half). Every
+// transcoder renders an *EngineContext through message.RenderEngineContext,
+// so seg reaches the wire sentinel-wrapped.
+//
+// Shared by every ambient status segment streamTurn injects (process status
+// here, MCP status in mcp_status.go, identity in identity_status.go, parked
+// goal in goal_parked_status.go) — each caller applies it independently, so
+// calling it twice on the same messages slice for two different segments
+// stacks two separate EngineContext parts onto that same newest user message,
+// one per segment.
 func withAmbientStatus(messages []message.Message, seg string) []message.Message {
 	if seg == "" {
 		return messages
@@ -378,7 +387,7 @@ func withAmbientStatus(messages []message.Message, seg string) []message.Message
 		clone := messages[i]
 		parts := make(message.Parts, len(clone.Parts), len(clone.Parts)+1)
 		copy(parts, clone.Parts)
-		parts = append(parts, &message.Text{Text: seg})
+		parts = append(parts, &message.EngineContext{Text: seg})
 		clone.Parts = parts
 		messages[i] = clone
 		return messages

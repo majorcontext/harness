@@ -610,6 +610,11 @@ func marshalPart(p Part) ([]byte, error) {
 			Type PartType `json:"type"`
 			*Reasoning
 		}{PartReasoning, v})
+	case *EngineContext:
+		return json.Marshal(struct {
+			Type PartType `json:"type"`
+			*EngineContext
+		}{PartEngineContext, v})
 	default:
 		return nil, fmt.Errorf("message: cannot marshal part type %T", p)
 	}
@@ -634,6 +639,8 @@ func unmarshalPart(raw json.RawMessage) (Part, error) {
 		p = new(ToolResult)
 	case PartReasoning:
 		p = new(Reasoning)
+	case PartEngineContext:
+		p = new(EngineContext)
 	default:
 		return nil, fmt.Errorf("message: unknown part type %q", head.Type)
 	}
