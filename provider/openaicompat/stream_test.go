@@ -207,6 +207,45 @@ func TestStreamReasoningFieldOpenRouter(t *testing.T) {
 	}
 }
 
+// TestStreamReasoningFieldsMutuallyExclusive: a single chunk carrying BOTH
+// reasoning_content and reasoning must not double-count — reasoning_content
+// wins and the text appears once, not twice.
+func TestStreamReasoningFieldsMutuallyExclusive(t *testing.T) {
+	fixture := strings.Join([]string{
+		sseData(`{"id":"x1","choices":[{"index":0,"delta":{"reasoning_content":"once","reasoning":"once"}}]}`),
+		sseData(`{"id":"x1","choices":[{"index":0,"delta":{"content":"ok"}}]}`),
+		sseData(`{"id":"x1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`),
+		sseDone,
+	}, "")
+	c := testClient(t, "openrouter", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, fixture) //nolint:errcheck
+	})
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:     message.ModelRef{Provider: "openrouter", Model: "m"},
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+		MaxTokens: 1024,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var done *provider.Event
+	for _, ev := range collect(t, s) {
+		if ev.Type == provider.EventDone {
+			e := ev
+			done = &e
+		}
+	}
+	if done == nil {
+		t.Fatal("no done event")
+	}
+	rp, ok := done.Message.Parts[0].(*message.Reasoning)
+	if !ok || rp.Text != "once" {
+		t.Fatalf("part 0 = %+v, want Reasoning{once} (no double-count)", done.Message.Parts[0])
+	}
+}
+
 func TestStreamParallelToolCallsInterleaved(t *testing.T) {
 	fixture := strings.Join([]string{
 		sseData(`{"id":"chatcmpl_2","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"bash","arguments":"{\"a"}}]}}]}`),

@@ -1329,13 +1329,14 @@ components:
 
     SetThinkingRequest:
       type: object
-      required: [effort]
       properties:
         effort:
           $ref: "#/components/schemas/Effort"
           description: >
-            The new reasoning-effort level. An empty string clears it to the
-            provider default. An unknown value is 400.
+            The new reasoning-effort level. An empty string OR an omitted field
+            both clear it to the provider default (EffortUnset). An unknown
+            value is 400. The field is optional precisely because absent and ""
+            are the same clear operation.
 
     SetThinkingResponse:
       type: object

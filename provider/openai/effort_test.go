@@ -14,6 +14,15 @@ import (
 func TestEffortSetsReasoning(t *testing.T) {
 	temp := 0.7
 	topP := 0.9
+	// LITERAL expected floors (an oracle, NOT a call to reasoningOutputFloor):
+	// caller MaxTokens 8192 <= every floor, so each is raised to the floor
+	// (minimal's floor IS 8192, so it stays).
+	wantFloor := map[message.Effort]int{
+		message.EffortMinimal: 8192,
+		message.EffortLow:     12000,
+		message.EffortMedium:  18000,
+		message.EffortHigh:    25000,
+	}
 	for _, e := range []message.Effort{message.EffortMinimal, message.EffortLow, message.EffortMedium, message.EffortHigh} {
 		req := baseRequest(message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}})
 		req.Temperature = &temp
@@ -33,8 +42,8 @@ func TestEffortSetsReasoning(t *testing.T) {
 		if out.TopP != nil {
 			t.Errorf("effort %q: top_p must be dropped with reasoning on", e)
 		}
-		if out.MaxOutputTokens != reasoningMinOutputTokens {
-			t.Errorf("effort %q: max_output_tokens = %d, want %d", e, out.MaxOutputTokens, reasoningMinOutputTokens)
+		if out.MaxOutputTokens != wantFloor[e] {
+			t.Errorf("effort %q: max_output_tokens = %d, want %d", e, out.MaxOutputTokens, wantFloor[e])
 		}
 		raw, err := json.Marshal(out)
 		if err != nil {

@@ -100,6 +100,30 @@ func TestSetThinkingEndpointClearsWithEmpty(t *testing.T) {
 	}
 }
 
+// TestSetThinkingEndpointOmittedFieldClears: an omitted effort field (body {})
+// is treated the same as "" — a clear to the provider default, 200. The openapi
+// SetThinkingRequest makes effort optional for exactly this reason.
+func TestSetThinkingEndpointOmittedFieldClears(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	id := h.createSession("test/m1")
+	h.do("POST", "/session/"+id+"/thinking", map[string]string{"effort": "high"})
+
+	resp, data := h.doRaw("POST", "/session/"+id+"/thinking", `{}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("omitted-effort status %d: %s, want 200 (clear)", resp.StatusCode, data)
+	}
+	_, sdata := h.do("GET", "/session/"+id, nil)
+	var sess struct {
+		Effort string `json:"effort"`
+	}
+	if err := json.Unmarshal(sdata, &sess); err != nil {
+		t.Fatal(err)
+	}
+	if sess.Effort != "" {
+		t.Fatalf("GET /session effort = %q after omitted-field clear, want empty", sess.Effort)
+	}
+}
+
 // TestSetThinkingEndpointRejectsInvalidLevel: an unknown effort value is 400
 // and leaves the level unchanged (no journal record).
 func TestSetThinkingEndpointRejectsInvalidLevel(t *testing.T) {

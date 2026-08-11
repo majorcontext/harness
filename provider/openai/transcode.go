@@ -68,12 +68,25 @@ func reasoningEffort(e message.Effort) (string, bool) {
 	return string(e), true
 }
 
-// reasoningMinOutputTokens is the floor transcodeRequest raises
-// max_output_tokens to when reasoning is enabled. Reasoning tokens count
+// reasoningOutputFloor is the minimum max_output_tokens transcodeRequest
+// raises to when reasoning is enabled at a given level. Reasoning tokens count
 // against max_output_tokens, so a small cap (the 8192 engine default) can be
 // consumed entirely by reasoning and leave a truncated or empty answer. The
-// floor leaves room for both. A caller that set a larger cap keeps it.
-const reasoningMinOutputTokens = 25000
+// floor scales with the level — a low level should not silently triple a
+// caller's deliberately-small cap the way a flat floor would — and a caller
+// that set a LARGER cap always keeps it (the floor only raises, never lowers).
+func reasoningOutputFloor(e message.Effort) int {
+	switch e {
+	case message.EffortMinimal:
+		return 8192
+	case message.EffortLow:
+		return 12000
+	case message.EffortMedium:
+		return 18000
+	default: // high
+		return 25000
+	}
+}
 
 type apiToolDef struct {
 	Type        string          `json:"type"` // always "function"
@@ -143,8 +156,8 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 		// drop both sampling controls and raise the output cap above a floor.
 		out.Temperature = nil
 		out.TopP = nil
-		if out.MaxOutputTokens < reasoningMinOutputTokens {
-			out.MaxOutputTokens = reasoningMinOutputTokens
+		if floor := reasoningOutputFloor(req.Effort); out.MaxOutputTokens < floor {
+			out.MaxOutputTokens = floor
 		}
 	}
 

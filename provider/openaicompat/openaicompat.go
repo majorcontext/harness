@@ -450,12 +450,13 @@ func (s *stream) handle(data []byte) error {
 	}
 	// A gateway carries reasoning in reasoning_content (DeepSeek/Bifrost) or
 	// reasoning (OpenRouter). Surface whichever is present as a Reasoning part.
+	// The two are mutually exclusive (else-if): a gateway that echoed BOTH in one
+	// chunk would otherwise double-count the same reasoning text.
 	if rc := choice.Delta.ReasoningContent; rc != "" {
 		s.haveReasoning = true
 		s.reasoningText.WriteString(rc)
 		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rc})
-	}
-	if rc := choice.Delta.Reasoning; rc != "" {
+	} else if rc := choice.Delta.Reasoning; rc != "" {
 		s.haveReasoning = true
 		s.reasoningText.WriteString(rc)
 		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rc})
