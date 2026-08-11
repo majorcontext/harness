@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/plugin"
 	"github.com/majorcontext/harness/provider"
 )
 
@@ -22,7 +23,8 @@ type decodedSessionInfo struct {
 		Name string `json:"name"`
 		Path string `json:"path"`
 	} `json:"skills"`
-	Usage provider.Usage `json:"usage"`
+	Plugins []plugin.Info  `json:"plugins"`
+	Usage   provider.Usage `json:"usage"`
 }
 
 // callSessionInfo runs a session whose model calls session_info on the first
@@ -116,8 +118,84 @@ func TestSessionInfoNothingInjected(t *testing.T) {
 	if len(info.Skills) != 0 {
 		t.Errorf("skills = %+v, want empty", info.Skills)
 	}
+	// A session with no plugin host reports an empty plugins list, never a
+	// null, and does not panic reading it.
+	if len(info.Plugins) != 0 {
+		t.Errorf("plugins = %+v, want empty", info.Plugins)
+	}
+	if !strings.Contains(rawSessionInfoPlugins(t, info), "[]") {
+		t.Errorf("plugins must serialize as [], got %q", rawSessionInfoPlugins(t, info))
+	}
 	// System still carries the base segment.
 	if len(info.System) != 1 || info.System[0] != "base" {
 		t.Errorf("system = %v, want [base]", info.System)
+	}
+}
+
+// rawSessionInfoPlugins re-marshals just the plugins field so the test can
+// assert the empty case serializes as [] (not null) — the NoToolOutputText /
+// empty-slice trap AGENTS.md warns about.
+func rawSessionInfoPlugins(t *testing.T, info decodedSessionInfo) string {
+	t.Helper()
+	b, err := json.Marshal(info.Plugins)
+	if err != nil {
+		t.Fatalf("marshal plugins: %v", err)
+	}
+	return string(b)
+}
+
+// TestSessionInfoReportsConfiguredPlugins drives the real session_info build
+// function (Session.sessionInfo — the exact call the tool's Run makes) and
+// asserts a configured-but-not-yet-spawned plugin is reported with its name,
+// spawn state, registered tools, and subscribed hooks. It uses a real
+// plugin.Host over an in-process pipe (plugin.NewTestSpec), never a
+// subprocess. It calls sessionInfo directly, without a model turn, so no hook
+// dispatch spawns the plugin — proving the lazy, not-yet-spawned plugin still
+// appears (the primary requirement).
+func TestSessionInfoReportsConfiguredPlugins(t *testing.T) {
+	spec := plugin.NewTestSpec("guard", &plugin.Hooks{
+		ChatParams: func(context.Context, *plugin.Client, *plugin.ChatParamsRequest) (*plugin.ChatParamsResponse, error) {
+			return nil, nil
+		},
+		SystemTransform: func(context.Context, *plugin.Client, *plugin.SystemTransformRequest) (*plugin.SystemTransformResponse, error) {
+			return nil, nil
+		},
+		Tools: []plugin.Tool{{
+			Def: plugin.ToolDef{Name: "scan_file", Description: "d", InputSchema: json.RawMessage(`{}`)},
+			Execute: func(context.Context, *plugin.Client, json.RawMessage) (message.Parts, error) {
+				return nil, nil
+			},
+		}},
+	})
+	host, err := plugin.NewHost(plugin.Options{}, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(host.Close)
+
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": &scriptedProvider{name: "test"}},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+		Hooks:     host,
+	})
+	info := s.sessionInfo(context.Background())
+
+	if len(info.Plugins) != 1 {
+		t.Fatalf("plugins = %+v, want exactly one", info.Plugins)
+	}
+	p := info.Plugins[0]
+	if p.Name != "guard" {
+		t.Errorf("plugin name = %q, want guard", p.Name)
+	}
+	// Lazy spawn: reading session_info must not have spawned the plugin.
+	if p.State != plugin.PluginNotSpawned {
+		t.Errorf("plugin state = %q, want %q", p.State, plugin.PluginNotSpawned)
+	}
+	// Surplus direction: the plugin's tools and hooks are actually listed.
+	if !containsStr(p.Tools, "scan_file") {
+		t.Errorf("plugin tools = %v, want to include scan_file", p.Tools)
+	}
+	if !containsStr(p.Hooks, "chat.params") || !containsStr(p.Hooks, "system.transform") {
+		t.Errorf("plugin hooks = %v, want chat.params and system.transform", p.Hooks)
 	}
 }

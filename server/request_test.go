@@ -308,6 +308,7 @@ func (h *varyingHooks) ExecuteTool(_ context.Context, _ *plugin.ToolExecuteReque
 }
 func (h *varyingHooks) Emit(_ []plugin.Event)   {}
 func (h *varyingHooks) Tools() []plugin.ToolDef { return nil }
+func (h *varyingHooks) Plugins() []plugin.Info  { return nil }
 
 func TestRequestSnapshotEvictedWithSession(t *testing.T) {
 	// Snapshots hold full system copies; eviction must release them

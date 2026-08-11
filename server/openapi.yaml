@@ -99,7 +99,7 @@ components:
 
     Session:
       type: object
-      required: [id, created_at, model, status, state, messages, workdir, usage, last_activity_at, queued]
+      required: [id, created_at, model, status, state, messages, workdir, usage, last_activity_at, plugins, queued]
       properties:
         id:
           type: string
@@ -200,6 +200,17 @@ components:
             When the most recent compaction landed. Absent until the first
             compaction. Together with compaction_count this is what a UI
             uses to show that compaction happened.
+        plugins:
+          type: array
+          items:
+            $ref: "#/components/schemas/PluginInfo"
+          description: >
+            The session's configured plugins — name, spawn state, registered
+            tools, and subscribed hooks. Lists CONFIGURED plugins, not only
+            spawned ones: a plugin spawns lazily on its first hook dispatch or
+            tool call, so a not-yet-spawned plugin still appears (state
+            "not-spawned"). Always present as an array, empty (never null)
+            when no plugins are configured.
         queued:
           type: integer
           description: >
@@ -215,6 +226,35 @@ components:
             session's own prompt.queued/prompt.dequeued log records), but
             never dispatches on its own — the same "boot never auto-runs"
             rule goals follow.
+
+    PluginInfo:
+      type: object
+      description: >
+        One configured plugin's registration: its name, current spawn state,
+        the tools it registers, and the hook names it subscribes to. Describes
+        CONFIGURED plugins from the cached manifest, so a plugin that has not
+        spawned yet still appears.
+      required: [name, state, tools, hooks]
+      properties:
+        name:
+          type: string
+          example: guard
+        state:
+          type: string
+          description: >
+            The plugin process's spawn state. "not-spawned" is normal for a
+            plugin no turn has used yet (lazy spawn).
+          enum: [not-spawned, running, errored, stopped]
+        tools:
+          type: array
+          items:
+            type: string
+          description: Names of the tools this plugin registers. Empty, never null.
+        hooks:
+          type: array
+          items:
+            type: string
+          description: Hook names this plugin subscribes to. Empty, never null.
 
     Usage:
       type: object

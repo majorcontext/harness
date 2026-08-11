@@ -82,6 +82,12 @@ type sessionJSON struct {
 	// replay the compact journal record — see engine/store.go).
 	CompactionCount int       `json:"compaction_count,omitempty"`
 	LastCompactedAt time.Time `json:"last_compacted_at,omitzero"`
+	// Plugins lists the session's configured plugins — name, spawn state,
+	// registered tools, and subscribed hooks (see engine.Session.Plugins).
+	// It reports CONFIGURED plugins, not only spawned ones, since a plugin
+	// spawns lazily. Always present as an array (empty, never null) when no
+	// plugins are configured.
+	Plugins []plugin.Info `json:"plugins"`
 	// Queued is the session's current durable prompt-queue depth (see
 	// docs/plans/2026-07-19-prompt-queue.md): prompts submitted via
 	// prompt_async while the session was busy, waiting for the next natural
@@ -2717,6 +2723,7 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 		ParentSession:   sess.ParentSession(),
 		CompactionCount: sess.CompactionCount(),
 		LastCompactedAt: sess.LastCompactedAt(),
+		Plugins:         sess.Plugins(),
 		Queued:          len(sess.QueuedPrompts()),
 	}
 }
