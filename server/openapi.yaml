@@ -1048,7 +1048,11 @@ components:
           $ref: "#/components/schemas/ModelRef"
         effort:
           $ref: "#/components/schemas/Effort"
-          description: The new reasoning-effort level on an "effort" event.
+          description: >
+            The new reasoning-effort level on an "effort" event. Always present
+            on an "effort" event, even on a clear: an empty string means cleared
+            to the provider default (EffortUnset), never a dropped field. Absent
+            on every other event type.
         text:
           type: string
           description: Delta text for text.delta / reasoning.delta.

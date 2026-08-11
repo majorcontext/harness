@@ -23,18 +23,27 @@ import (
 // records carry a non-zero Seq and are journaled and replayable; live events
 // have no Seq and stream only while connected.
 type Event struct {
-	Type      string            `json:"type"`
-	SessionID string            `json:"session_id"`
-	Seq       int64             `json:"seq,omitempty"`
-	Status    string            `json:"status,omitempty"`
-	Message   *message.Message  `json:"message,omitempty"`
-	Model     message.ModelRef  `json:"model,omitzero"`
-	Effort    message.Effort    `json:"effort,omitempty"`
-	Text      string            `json:"text,omitempty"`
-	ToolCall  *message.ToolCall `json:"tool_call,omitempty"`
-	Output    message.Parts     `json:"output,omitempty"`
-	IsError   bool              `json:"is_error,omitempty"`
-	Error     string            `json:"error,omitempty"`
+	Type      string           `json:"type"`
+	SessionID string           `json:"session_id"`
+	Seq       int64            `json:"seq,omitempty"`
+	Status    string           `json:"status,omitempty"`
+	Message   *message.Message `json:"message,omitempty"`
+	Model     message.ModelRef `json:"model,omitzero"`
+	// Effort is a *message.Effort, not a bare message.Effort with omitempty,
+	// for the same reason QueueLen below is a *int: an "effort" record must
+	// tell "cleared to the provider default" (EffortUnset, an explicit
+	// "effort":"") apart from "this event type never carries an effort level"
+	// (key absent, every other record). A bare string with omitempty cannot —
+	// encoding/json drops an empty string under omitempty regardless of intent.
+	// So Publish's EventEffortChanged case ALWAYS sets it (even on a clear),
+	// and a nil pointer is omitted on every other record. This mirrors the
+	// "model" record, which never clears to empty.
+	Effort   *message.Effort   `json:"effort,omitempty"`
+	Text     string            `json:"text,omitempty"`
+	ToolCall *message.ToolCall `json:"tool_call,omitempty"`
+	Output   message.Parts     `json:"output,omitempty"`
+	IsError  bool              `json:"is_error,omitempty"`
+	Error    string            `json:"error,omitempty"`
 
 	// request.meta fields: a durable, replayable record of the assembled model
 	// request. SystemHash fingerprints the joined system segments; the full
@@ -344,8 +353,11 @@ func (s *Server) Publish(ev engine.Event) {
 		// Every effort swap funnels through SetEffort's single
 		// EventEffortChanged emit, so this ONE case journals the durable
 		// "effort" observability record — the same single-path shape the
-		// EventModelChanged case above uses.
-		s.emitDurable(Event{Type: evtEffort, SessionID: ev.SessionID, Effort: ev.Effort})
+		// EventModelChanged case above uses. Effort is set explicitly (a
+		// pointer) even on a clear to EffortUnset, so the record always
+		// carries the "effort" key — see the Event.Effort field comment.
+		eff := ev.Effort
+		s.emitDurable(Event{Type: evtEffort, SessionID: ev.SessionID, Effort: &eff})
 	case engine.EventGoalSet, engine.EventGoalUpdated, engine.EventGoalEval, engine.EventGoalStalled, engine.EventGoalAchieved, engine.EventGoalCleared, engine.EventGoalEvalFailed, engine.EventGoalParked:
 		s.publishGoal(ev)
 	case engine.EventPromptQueued, engine.EventPromptDequeued:

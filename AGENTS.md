@@ -659,7 +659,12 @@ transcode.go`).
 exactly. On a real change (never a no-op set to the current level) it persists
 the durable `recEffort` resume record AND emits `EventEffortChanged`, both under
 `s.mu`. The server's `Publish` maps `EventEffortChanged` to the durable `effort`
-journal record. `LoadSession` restores the level: the create-time level rides
+journal record. That record ALWAYS carries the `effort` field, even on a clear:
+`server/journal.go`'s `Event.Effort` is a `*message.Effort` (the same
+explicit-zero-vs-absent pattern `QueueLen` uses), so a clear to `EffortUnset`
+renders as an explicit `"effort":""`, never a dropped key — "cleared to the
+provider default" stays byte-distinguishable from a malformed record.
+`LoadSession` restores the level: the create-time level rides
 the session header record, and every later `SetEffort` writes a `recEffort`
 record. `Session.Effort()` reads it back.
 
