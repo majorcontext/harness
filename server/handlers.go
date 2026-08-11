@@ -1488,6 +1488,37 @@ func (s *Server) releasePromptClaim(st *sessionState) {
 	s.wg.Done()
 }
 
+// freeRunSlotAndEmitIdle releases a just-completed turn's run-slot claim and
+// journals the session's idle transition in ONE s.mu critical section —
+// shared by runPrompt's and runGoal's tails, the two places a turn frees the
+// slot it held.
+//
+// This closes a race the two-step version (unlock, THEN emit idle
+// separately) left open: claimForPrompt needs the identical s.mu to read
+// st.running, so a concurrent claimer racing in during the gap between the
+// unlock and the separate emitDurable call could observe running==false and
+// win the freed slot — dispatching its own turn's busy event — BEFORE this
+// turn's own idle had been assigned a seq. That inverts the ordering
+// collectUntilIdle's doc comment guarantees ("session.status busy for the
+// dispatched turn always arrives strictly after this idle") and is exactly
+// what TestPromptQueueRaceWithFreedSlot forces deterministically: a prompt
+// queued behind a turn whose own idle got delayed past the very turn it was
+// supposed to precede. Doing the running=false write and the idle emit
+// under one lock hold makes the race impossible: any other claimForPrompt
+// call blocks on the same mutex until this whole section — running=false
+// AND idle already durably emitted — has completed, so it can never observe
+// one without the other.
+func (s *Server) freeRunSlotAndEmitIdle(id string, st *sessionState) {
+	s.mu.Lock()
+	st.running = false
+	st.cancel = nil
+	st.goalLoop = false
+	st.lastUsed = time.Now()
+	s.evictResidentLocked()
+	s.emitDurableLocked(&Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
+	s.mu.Unlock()
+}
+
 // dispatchQueueHead dequeues the session's queue head (reason "delivered")
 // into the run slot st/ctx already holds — emitting its busy transition and
 // spawning its runPrompt turn — shared by every call site that has JUST
@@ -1533,14 +1564,7 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 		s.emitDurable(Event{Type: evtSessionError, SessionID: id, Error: err.Error()})
 		s.recordTurnEnd(id, turnEndOutcome(err), err)
 	}
-	s.mu.Lock()
-	st.running = false
-	st.cancel = nil
-	st.goalLoop = false
-	st.lastUsed = time.Now()
-	s.evictResidentLocked()
-	s.mu.Unlock()
-	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
+	s.freeRunSlotAndEmitIdle(id, st)
 
 	// Queue beats goal auto-arm (invariant 5): a prompt queued while this
 	// turn ran outranks a goal merely waiting to auto-arm — direct user
@@ -1962,14 +1986,7 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 		s.emitDurable(Event{Type: evtSessionError, SessionID: id, Error: err.Error()})
 		s.recordTurnEnd(id, turnEndOutcome(err), err)
 	}
-	s.mu.Lock()
-	st.running = false
-	st.cancel = nil
-	st.goalLoop = false
-	st.lastUsed = time.Now()
-	s.evictResidentLocked()
-	s.mu.Unlock()
-	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
+	s.freeRunSlotAndEmitIdle(id, st)
 
 	// A prompt queued after the loop's last turn-boundary drain (engine/
 	// goal.go's PursueGoal only drains BETWEEN turns) but before the loop
@@ -2427,14 +2444,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	// handler's tail already relies on.
 	s.syncMessages(id)
 
-	s.mu.Lock()
-	st.running = false
-	st.cancel = nil
-	st.goalLoop = false
-	st.lastUsed = time.Now()
-	s.evictResidentLocked()
-	s.mu.Unlock()
-	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
+	s.freeRunSlotAndEmitIdle(id, st)
 
 	// Same drain-then-auto-arm precedence as runPrompt's tail (invariant 5):
 	// a prompt queued (or a goal armed) while this compact call ran must not
