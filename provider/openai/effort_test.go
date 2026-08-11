@@ -15,8 +15,8 @@ func TestEffortSetsReasoning(t *testing.T) {
 	temp := 0.7
 	topP := 0.9
 	// LITERAL expected floors (an oracle, NOT a call to reasoningOutputFloor):
-	// caller MaxTokens 8192 <= every floor, so each is raised to the floor
-	// (minimal's floor IS 8192, so it stays).
+	// caller MaxTokens 8192 is below every floor, so each level is raised to its
+	// floor (minimal's floor is 10000, the lowest — 8192 is raised to it).
 	wantFloor := map[message.Effort]int{
 		message.EffortMinimal: 10000,
 		message.EffortLow:     12000,

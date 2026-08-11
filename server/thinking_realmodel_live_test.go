@@ -12,11 +12,13 @@
 //     IP-gated, and the openai adapter surfaces reasoning as a message.Reasoning
 //     part (openai.go).
 //   - OPENROUTER_API_KEY -> the openai-compat adapter against openrouter.ai.
-//     REPORT-ONLY: the compat adapter reads only the `reasoning_content` field
-//     (Bifrost/DeepSeek style); OpenRouter emits `reasoning`, so its reasoning
-//     is invisible here. These rows log actual behavior but do not hard-assert,
-//     and they do NOT validate the box's Bifrost-specific per-model mapping
-//     (that needs harness pointed at Bifrost from an allowlisted position).
+//     REPORT-ONLY: the compat adapter surfaces reasoning from EITHER wire field
+//     — Bifrost/DeepSeek `reasoning_content` or OpenRouter `reasoning`
+//     (openaicompat.go) — so OpenRouter's `reasoning` IS visible here (see the
+//     gemini-2.5-flash row below). These rows log actual behavior but do not
+//     hard-assert, and they do NOT validate the box's Bifrost-specific per-model
+//     mapping (that needs harness pointed at Bifrost from an allowlisted
+//     position).
 //
 // Run:
 //
