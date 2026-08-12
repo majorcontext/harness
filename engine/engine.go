@@ -65,6 +65,15 @@ type Event struct {
 	// which restores the model on LoadSession.
 	Model message.ModelRef `json:"model,omitzero"`
 
+	// Effort is carried by EventEffortChanged only: the session's new
+	// reasoning-effort level after a SetEffort call that actually changed it
+	// (see SetEffort). It is the single event an effort swap emits, whatever
+	// the route, so the server journals each swap through one path (see
+	// server/journal.go's EventEffortChanged case). It is distinct from the
+	// durable recEffort resume record persistEffort writes (store.go), which
+	// restores the effort on LoadSession.
+	Effort message.Effort `json:"effort,omitempty"`
+
 	// Goal-loop fields (set on goal.* events; see goal.go and the state
 	// machine documented atop goal.go). GoalCondition is carried by
 	// goal.set and goal.updated (the new condition); GoalReason/GoalMet/GoalTurn by goal.eval; GoalReason/GoalTurn
@@ -173,6 +182,13 @@ const (
 	// event every model-swap route funnels through (see SetModel).
 	EventModelChanged = "model.changed"
 
+	// EventEffortChanged fires once per SetEffort call that actually changes
+	// the session's reasoning-effort level (never on a no-op set to the
+	// current level). It carries the new level in Event.Effort and is the
+	// single observability event every effort-swap route funnels through
+	// (see SetEffort).
+	EventEffortChanged = "effort.changed"
+
 	// Goal-loop events (see goal.go).
 	EventGoalSet      = "goal.set"
 	EventGoalUpdated  = "goal.updated"
@@ -215,6 +231,7 @@ const (
 type Config struct {
 	Providers provider.Registry
 	Model     message.ModelRef // initial model; swap any time with SetModel
+	Effort    message.Effort   // initial reasoning-effort level; swap with SetEffort (zero = provider default)
 	System    []string         // base system prompt segments
 	MaxTokens int              // per-response cap; defaults to 8192
 	WorkDir   string           // working directory for built-in tools
@@ -475,6 +492,7 @@ type Session struct {
 
 	mu        sync.Mutex
 	model     message.ModelRef
+	effort    message.Effort // reasoning-effort level; swap with SetEffort
 	history   []message.Message
 	usage     provider.Usage // cumulative, across every turn (see appendWithUsage)
 	createdAt time.Time
@@ -648,6 +666,7 @@ func newSession(cfg Config) *Session {
 	s := &Session{
 		cfg:               cfg,
 		model:             cfg.Model,
+		effort:            cfg.Effort,
 		tools:             make(map[string]Tool),
 		createdAt:         time.Now().UTC(),
 		promptQueueNextID: 1,
@@ -710,6 +729,35 @@ func (s *Session) Model() message.ModelRef {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.model
+}
+
+// SetEffort swaps the reasoning-effort level for subsequent requests. A no-op
+// set to the current level changes nothing and emits no event. The level rides
+// every request the same way the model does — the adapter maps it to the
+// provider's wire shape at transcode time, so there is no migration step.
+//
+// On a real change it persists the durable recEffort resume record and emits
+// EventEffortChanged (carrying the new level), both while holding s.mu so event
+// order matches log order — the same persist-and-emit-under-s.mu shape SetModel
+// uses. EventEffortChanged is the ONE event every effort-swap route funnels
+// through, so the server journals every swap once via a single path.
+// OnEvent must not call back into this Session.
+func (s *Session) SetEffort(e message.Effort) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if e == s.effort {
+		return
+	}
+	s.effort = e
+	s.persistEffort(e)
+	s.emit(Event{Type: EventEffortChanged, Effort: e})
+}
+
+// Effort returns the session's current reasoning-effort level.
+func (s *Session) Effort() message.Effort {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.effort
 }
 
 // CreatedAt returns when the session was created (or, for a loaded session,
@@ -1208,6 +1256,23 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 		Temperature: params.Temperature,
 		TopP:        params.TopP,
 		MaxTokens:   maxTokens,
+		// Effort is read straight from session state, deliberately NOT routed
+		// through the chat.params hook (v1 scope). The design gives per-model
+		// level gating to the CALLER's own layer (the boxes API validates a
+		// level against the model before POST /session/{id}/thinking), not to a
+		// harness plugin, so a chat.params Effort override buys nothing the box
+		// path uses. Adding Effort to plugin.ChatParams is a clean future
+		// enhancement if a plugin ever needs to rewrite it per request.
+		//
+		// This reads s.Effort() fresh every request (and every tool round, since
+		// runAgenticLoop rebuilds the request per round), so a SetModel swap to a
+		// non-reasoning model while effort stays non-off ships a reasoning
+		// control that model rejects — the SAME caller-gated trigger as the
+		// off-toggle the adapters' downgrade strip handles. The caller therefore
+		// re-validates/clears effort on every MODEL swap, not only before
+		// POST /thinking; the boxes picker does this by clamping the level to the
+		// new model's supported set on switch.
+		Effort: s.Effort(),
 	}
 
 	// Record this turn's assembled system for the session_info tool, bump the

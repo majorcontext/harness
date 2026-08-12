@@ -26,7 +26,11 @@ type sessionJSON struct {
 	ID        string           `json:"id"`
 	CreatedAt time.Time        `json:"created_at"`
 	Model     message.ModelRef `json:"model"`
-	Status    string           `json:"status"`
+	// Effort is the session's current reasoning-effort level (empty =
+	// EffortUnset, the provider default). A dashboard reads it back here after
+	// POST /session/{id}/thinking, the same way it reads Model.
+	Effort message.Effort `json:"effort,omitempty"`
+	Status string         `json:"status"`
 	// State is the unambiguous composite: idle, busy, or goal-running. Kept
 	// alongside Status (never replacing it) for backward compat. Precedence:
 	// goal-running wins whenever a goal is active, REGARDLESS of the momentary
@@ -2187,6 +2191,73 @@ func (s *Server) handleSetModel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, setModelResponseJSON{Model: st.sess.Model()})
 }
 
+// setThinkingResponseJSON is the POST /session/{id}/thinking response shape:
+// the session's reasoning-effort level after the swap (a same-level set is a
+// durable no-op, echoing the current level — see engine.Session.SetEffort).
+type setThinkingResponseJSON struct {
+	Effort message.Effort `json:"effort"`
+}
+
+// handleSetThinking swaps a session's reasoning-effort level, decoupled from
+// prompting — a client/dashboard-driven swap that never claims the run slot
+// (SetEffort is concurrency-safe and takes effect on the NEXT request). It
+// mirrors handleSetModel: an unknown session is 404, an invalid effort value is
+// 400. Unlike a model swap it has no provider-configured gate — effort is a
+// per-request string the adapter maps, and whether the CURRENT model accepts a
+// given level is a provider fact the engine cannot know from the ref alone; a
+// dashboard that must gate per model (the boxes picker) holds its own mapping.
+// An empty string is accepted and clears the level (EffortUnset, provider
+// default) — the caller uses "off" to explicitly disable reasoning where a
+// provider supports it. On success SetEffort emits EventEffortChanged, which
+// Publish journals as the durable "effort" record.
+func (s *Server) handleSetThinking(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.sessionIDOrNotFound(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Effort string `json:"effort"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Resolve the session FIRST, loading a cold one into residency with the same
+	// race handling handleSetModel uses (two *engine.Session for one log must
+	// never both be mutated — SetEffort persists the durable recEffort record).
+	// Resolve BEFORE validating the effort so an unknown session is 404, not a
+	// 400 that hides the missing session behind an invalid-effort complaint —
+	// exactly the order handleSetModel uses.
+	s.mu.Lock()
+	st := s.sessions[id]
+	s.mu.Unlock()
+	if st == nil {
+		sess, err := s.opts.LoadSession(id)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, "no such session")
+			return
+		}
+		s.mu.Lock()
+		if ex := s.sessions[id]; ex != nil {
+			st = ex
+		} else {
+			st = &sessionState{sess: sess, lastUsed: time.Now()}
+			s.sessions[id] = st
+			s.evictResidentLocked()
+		}
+		s.mu.Unlock()
+	}
+
+	effort, err := message.ParseEffort(body.Effort)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	st.sess.SetEffort(effort)
+	writeJSON(w, http.StatusOK, setThinkingResponseJSON{Effort: st.sess.Effort()})
+}
+
 // evictResidentLocked unloads the longest-idle non-busy sessions from memory
 // when the resident count exceeds Options.MaxResident. Busy sessions are never
 // evicted; s.seen is retained so journal idempotency survives the unload (the
@@ -2721,6 +2792,7 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 		ID:              id,
 		CreatedAt:       sess.CreatedAt(),
 		Model:           sess.Model(),
+		Effort:          sess.Effort(),
 		Status:          status,
 		State:           compositeState(status == "busy", goal != nil && goal.Active, forcesIdlePause(goal)),
 		Messages:        len(sess.History()),

@@ -46,6 +46,48 @@ type apiRequest struct {
 	// multi-turn conversations work without server-side response state.
 	Store   bool     `json:"store"`
 	Include []string `json:"include"`
+	// Reasoning carries the reasoning-effort control. Nil sends no control,
+	// so the model runs its own default.
+	Reasoning *apiReasoning `json:"reasoning,omitempty"`
+}
+
+// apiReasoning is the OpenAI Responses reasoning control. Effort is one of
+// minimal, low, medium, high.
+type apiReasoning struct {
+	Effort string `json:"effort,omitempty"`
+}
+
+// reasoningEffort maps a unified effort level to the OpenAI Responses
+// reasoning.effort string. It returns ("", false) for a level that requests no
+// reasoning (EffortUnset, EffortOff), so the caller sends no reasoning control
+// and the model uses its own default.
+func reasoningEffort(e message.Effort) (string, bool) {
+	if !e.Reasoning() {
+		return "", false
+	}
+	return string(e), true
+}
+
+// reasoningOutputFloor is the minimum max_output_tokens transcodeRequest
+// raises to when reasoning is enabled at a given level. Reasoning tokens count
+// against max_output_tokens, so a small cap (the 8192 engine default) can be
+// consumed entirely by reasoning and leave a truncated or empty answer. The
+// floor scales with the level — a low level should not silently triple a
+// caller's deliberately-small cap the way a flat floor would — and a caller
+// that set a LARGER cap always keeps it (the floor only raises, never lowers).
+func reasoningOutputFloor(e message.Effort) int {
+	switch e {
+	case message.EffortMinimal:
+		// Above the 8192 engine default so even minimal reasoning leaves answer
+		// headroom (a flat-at-default floor would add none).
+		return 10000
+	case message.EffortLow:
+		return 12000
+	case message.EffortMedium:
+		return 18000
+	default: // high
+		return 25000
+	}
 }
 
 type apiToolDef struct {
@@ -109,6 +151,43 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 		Store:           false,
 		Include:         []string{"reasoning.encrypted_content"},
 	}
+	effort, reasoningEnabled := reasoningEffort(req.Effort)
+	// stripReasoning is DELIBERATELY asymmetric with reasoningEnabled and with
+	// the anthropic adapter. reasoningEnabled is false for BOTH EffortUnset
+	// (the default of every `harness run`/`serve` session — nothing sets
+	// Config.Effort) and EffortOff, because neither sends a `reasoning`
+	// control. But stored encrypted reasoning items must be STRIPPED only on
+	// an EXPLICIT EffortOff (a genuine "reasoning disabled" intent). An unset
+	// (default) session MUST replay them, exactly as every pre-effort-control
+	// build did: OpenAI reasoning models (gpt-5) reason BY DEFAULT, and the
+	// stored items are REQUIRED for stateless (Store:false) multi-turn tool
+	// use — a stripped item wedges every turn-2+ tool continuation. So
+	// unset != off here. Anthropic's sibling strip can safely key on
+	// !Reasoning() because Claude emits no thinking block without the control;
+	// an OpenAI default turn always carries one. Do NOT re-fold this back into
+	// reasoningEnabled. (Regression: NEP-5272 review of PR #117.)
+	//
+	// One residual the off-only strip cannot enforce: a SetModel swap to a
+	// non-reasoning OpenAI (Responses) model (e.g. gpt-5 -> gpt-4o) while effort
+	// stays EffortUnset still replays the stored items (same Family), exactly as
+	// pre-effort-control builds always did. If that target rejects input
+	// reasoning items it 400s durably. This is the same per-model gating punt
+	// documented for the enable direction — the caller (a dashboard picker)
+	// clears/re-validates effort on a model swap; the Responses API is lenient
+	// about input reasoning items, so this stays a caller-gated, live-gated
+	// deferral, not something this transcoder guesses at from the model ref.
+	stripReasoning := req.Effort == message.EffortOff
+	if reasoningEnabled {
+		out.Reasoning = &apiReasoning{Effort: effort}
+		// Reasoning models reject an explicit temperature or top_p, and reasoning
+		// tokens count against max_output_tokens — mirror the anthropic adapter:
+		// drop both sampling controls and raise the output cap above a floor.
+		out.Temperature = nil
+		out.TopP = nil
+		if floor := reasoningOutputFloor(req.Effort); out.MaxOutputTokens < floor {
+			out.MaxOutputTokens = floor
+		}
+	}
 
 	for _, t := range req.Tools {
 		out.Tools = append(out.Tools, apiToolDef{
@@ -135,7 +214,7 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 	messages := imageclamp.Clamp(message.NormalizeForWire(req.Messages), imageLimits)
 	for i := range messages {
 		m := &messages[i]
-		items, err := transcodeMessage(m)
+		items, err := transcodeMessage(m, stripReasoning)
 		if err != nil {
 			return nil, fmt.Errorf("openai: message %s: %w", m.ID, err)
 		}
@@ -150,7 +229,11 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 // transcodeMessage expands one canonical message into a sequence of Responses
 // input items. Contiguous text/image parts are grouped into a single message
 // item; tool calls, tool results, and reasoning are each their own item.
-func transcodeMessage(m *message.Message) ([]json.RawMessage, error) {
+// stripReasoning reports whether stored reasoning items must be dropped (see
+// the Reasoning case). It is true ONLY for an explicit EffortOff, never for
+// the default EffortUnset — an unset session replays stored reasoning items,
+// which gpt-5 stateless multi-turn tool use requires.
+func transcodeMessage(m *message.Message, stripReasoning bool) ([]json.RawMessage, error) {
 	role := "user"
 	if m.Role == message.RoleAssistant {
 		role = "assistant"
@@ -252,6 +335,19 @@ func transcodeMessage(m *message.Message) ([]json.RawMessage, error) {
 		case *message.Reasoning:
 			if err := flush(); err != nil {
 				return nil, err
+			}
+			if stripReasoning {
+				// Reasoning is EXPLICITLY OFF (EffortOff) for this request. A
+				// stored reasoning item shipped while the request omits
+				// `reasoning` can be rejected, so strip it — symmetric with the
+				// anthropic thinking-block strip. This is NOT reached on the
+				// default EffortUnset: gpt-5 reasons by default and the stored
+				// items are required for stateless multi-turn tool use, so an
+				// unset session replays them (see stripReasoning in
+				// transcodeRequest). A transcode-time throwaway request may drop
+				// a part destructively; a later reasoning-ON turn replays it
+				// from the intact history.
+				continue
 			}
 			raw, ok := v.ProviderData.Get(Family)
 			if !ok {

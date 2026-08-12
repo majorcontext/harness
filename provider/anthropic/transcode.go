@@ -42,7 +42,40 @@ type apiRequest struct {
 	Temperature *float64     `json:"temperature,omitempty"`
 	TopP        *float64     `json:"top_p,omitempty"`
 	Stream      bool         `json:"stream"`
+	Thinking    *apiThinking `json:"thinking,omitempty"`
 }
+
+// apiThinking enables Anthropic extended thinking with a token budget. The API
+// requires max_tokens strictly greater than budget_tokens, and rejects an
+// explicit temperature or top_p while thinking is enabled — transcodeRequest
+// enforces both.
+type apiThinking struct {
+	Type         string `json:"type"` // "enabled"
+	BudgetTokens int    `json:"budget_tokens"`
+}
+
+// thinkingBudget maps a unified reasoning-effort level to an Anthropic thinking
+// budget in tokens. It returns (0, false) for a level that requests no
+// reasoning (EffortUnset, EffortOff), so the caller emits no thinking block.
+// 1024 is the Anthropic minimum budget.
+func thinkingBudget(e message.Effort) (int, bool) {
+	switch e {
+	case message.EffortMinimal:
+		return 1024, true
+	case message.EffortLow:
+		return 4096, true
+	case message.EffortMedium:
+		return 8192, true
+	case message.EffortHigh:
+		return 16384, true
+	default:
+		return 0, false
+	}
+}
+
+// thinkingCompletionMargin is the minimum room left for the visible answer
+// above the thinking budget, since the API requires max_tokens > budget_tokens.
+const thinkingCompletionMargin = 4096
 
 type apiMessage struct {
 	Role    string     `json:"role"`
@@ -129,6 +162,44 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 		Stream:      true,
 	}
 
+	// Extended thinking: a non-off effort level enables a thinking block with a
+	// token budget. The API requires max_tokens > budget_tokens and rejects an
+	// explicit temperature or top_p while thinking is on, so drop both and bump
+	// max_tokens above the budget when needed.
+	//
+	// KNOWN LIMITATION (live-gated), the ENABLE direction: turning thinking ON
+	// does not synthesize a leading thinking block for a prior assistant turn
+	// that made tool calls without one. The API can reject a request that
+	// continues such a turn ("thinking blocks expected before tool_use"). (The
+	// OFF direction — a stored thinking block replayed with thinking disabled —
+	// IS fixed, by the strip in transcodeParts below.)
+	//
+	// The general trigger is any mid-turn enable, not only abort. runAgenticLoop
+	// rebuilds the request with Effort: s.Effort() FRESH on every tool round
+	// (engine.go), so a plain off->high via POST /session/{id}/thinking while a
+	// turn is mid-tool-call makes the very NEXT round enable thinking over a
+	// tool_use this turn already emitted without one — the identical
+	// thinking-less shape, no abort needed. POST /session/{id}/abort mid-tool-
+	// call is the second trigger (a partial tool_use plus a synthetic tool-
+	// result, no thinking block, continued by a later effort-enabled prompt).
+	// Between turns the risk is absent: the agentic loop finishes a tool cycle
+	// within one turn, so a toggle between turns faces a final assistant TEXT
+	// turn. STATUS: a live enable-mid-tool-round probe
+	// (server/thinking_realmodel_live_test.go, TestEnableMidToolRoundLive) was
+	// TOLERATED by the API on 2026-08-11 — the turn completed, no reject — so
+	// this limitation is theoretical, not confirmed. No fix is warranted unless
+	// that probe later reproduces a reject; the live suite keeps it as the guard.
+	// (The OFF direction, by contrast, DID wedge and is fixed below.)
+	budget, thinkingEnabled := thinkingBudget(req.Effort)
+	if thinkingEnabled {
+		out.Thinking = &apiThinking{Type: "enabled", BudgetTokens: budget}
+		if out.MaxTokens < budget+thinkingCompletionMargin {
+			out.MaxTokens = budget + thinkingCompletionMargin
+		}
+		out.Temperature = nil
+		out.TopP = nil
+	}
+
 	for _, seg := range req.System {
 		out.System = append(out.System, apiBlock{Type: "text", Text: seg})
 	}
@@ -168,7 +239,7 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 		if m.Role == message.RoleAssistant {
 			role = "assistant"
 		}
-		blocks, err := transcodeParts(m.Parts, true)
+		blocks, err := transcodeParts(m.Parts, thinkingEnabled, true)
 		if err != nil {
 			return nil, fmt.Errorf("anthropic: message %s: %w", m.ID, err)
 		}
@@ -194,14 +265,16 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 	return out, nil
 }
 
-// transcodeParts renders parts to wire blocks. topLevel is true for a
+// transcodeParts renders parts to wire blocks. thinkingEnabled reports whether
+// THIS request enables extended thinking; when false, stored Reasoning parts
+// are stripped (see the *message.Reasoning case below). topLevel is true for a
 // message's own parts and false when recursing into a ToolResult's content
-// (see the ToolResult case below). The distinction matters ONLY for
-// *message.EngineContext: the trusted engine-context sentinel is keyed on
-// wire POSITION, not part type alone, so a genuine top-level ambient block is
-// sentinel-wrapped while an EngineContext reached through tool-result
-// recursion is rendered inert. Every other part type ignores topLevel.
-func transcodeParts(parts message.Parts, topLevel bool) ([]apiBlock, error) {
+// (see the ToolResult case below). The topLevel distinction matters ONLY for
+// *message.EngineContext: the trusted engine-context sentinel is keyed on wire
+// POSITION, not part type alone, so a genuine top-level ambient block is
+// sentinel-wrapped while an EngineContext reached through tool-result recursion
+// is rendered inert. Every other part type ignores topLevel.
+func transcodeParts(parts message.Parts, thinkingEnabled, topLevel bool) ([]apiBlock, error) {
 	var blocks []apiBlock
 	for _, p := range parts {
 		switch v := p.(type) {
@@ -262,7 +335,7 @@ func transcodeParts(parts message.Parts, topLevel bool) ([]apiBlock, error) {
 			// LoadSession) is the primary fix, but this is the last stop
 			// before the wire, for a ToolResult built by a producer that
 			// bypasses Normalize entirely — see SafeContent's doc comment.
-			content, err := transcodeParts(v.SafeContent(), false)
+			content, err := transcodeParts(v.SafeContent(), thinkingEnabled, false)
 			if err != nil {
 				return nil, err
 			}
@@ -282,6 +355,19 @@ func transcodeParts(parts message.Parts, topLevel bool) ([]apiBlock, error) {
 			})
 
 		case *message.Reasoning:
+			if !thinkingEnabled {
+				// Thinking is OFF for this request. A stored thinking/
+				// redacted_thinking block sent with thinking disabled is
+				// rejected by the API ("thinking blocks require thinking to be
+				// enabled") — and, once in durable history, it 400s EVERY later
+				// turn, a permanent wedge. This is the symmetric opposite of the
+				// enable-direction limitation. Strip it here: a transcode-time
+				// throwaway request may drop a part destructively (it never
+				// touches the durable record), the same license NormalizeForWire
+				// relies on. A later turn that re-enables thinking replays the
+				// block again from the intact history.
+				continue
+			}
 			raw, ok := v.ProviderData.Get(Family)
 			if !ok {
 				// Another provider's reasoning, or a present-but-empty

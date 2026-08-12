@@ -704,6 +704,89 @@ session (404), or an empty model (400) — the same validation as the tool — t
 calls `SetModel`. Aliases are not resolved at this endpoint; resolve them
 client-side, as the CLI does.
 
+### Reasoning effort
+
+`message.Effort` is the unified, provider-agnostic reasoning-effort level:
+`off`, `minimal`, `low`, `medium`, `high`, plus the zero value `EffortUnset`
+(empty string) that sends NO control at all. It rides one `provider.Request`
+field (`Request.Effort`), the same way `MaxTokens` does, and each adapter maps
+it to that provider's own wire shape at transcode time — so an effort swap,
+like a model swap, needs no migration step:
+
+- `provider/anthropic` enables extended thinking with a `thinking.budget_tokens`
+  budget (minimal 1024, low 4096, medium 8192, high 16384). The API requires
+  `max_tokens > budget_tokens` and rejects an explicit `temperature`/`top_p`
+  while thinking is on, so `transcodeRequest` bumps `max_tokens` above the
+  budget and drops both. `off`/unset emit no `thinking` block.
+- `provider/openai` (Responses) sets `reasoning.effort` to the level string
+  (minimal/low/medium/high). `off`/unset omit the `reasoning` object.
+- `provider/openaicompat` sets the top-level `reasoning_effort` string; a
+  gateway (Bifrost) maps it to the upstream provider's own knob. `off`/unset
+  omit it. It surfaces returned reasoning from EITHER wire field — Bifrost/
+  DeepSeek `reasoning_content` or OpenRouter `reasoning` — as a `Reasoning`
+  part; a gateway sends one field, never both.
+
+`Effort` does NOT police which model accepts which level — that is a
+provider-and-model fact the engine cannot know from the ref alone. The adapter
+sends the requested level and the provider is the final judge. A caller that
+must gate levels per model (a dashboard picker) holds its OWN mapping.
+
+**Downgrade strip — DELIBERATELY asymmetric between the two reasoning
+adapters.** A stored thinking block (anthropic) or reasoning item (openai
+Responses) can be a transcode-time destructive drop (throwaway request, intact
+record); a later reasoning-ON turn replays the part from the unchanged history.
+A strip is ever needed because a stored block shipped while the request omits
+the reasoning control can be rejected, and durable in history it 400s every
+later turn — a permanent wedge. But WHEN each adapter strips differs, because
+the two providers default differently:
+
+- `provider/anthropic` strips whenever the request enables no reasoning
+  (`off`/unset, or a swap to a non-reasoning model). This is safe: Claude emits
+  NO thinking block unless the control is sent, so an unset turn carries none
+  to preserve.
+- `provider/openai` (Responses) strips ONLY on an EXPLICIT `off` (a genuine
+  "reasoning disabled" intent), NEVER on `EffortUnset`. OpenAI reasoning models
+  (gpt-5) reason BY DEFAULT, so an unset turn — the default of every `harness
+  run`/`serve` session, since nothing sets `Config.Effort` — still produces
+  encrypted reasoning items, and those items are REQUIRED for stateless
+  (`Store:false`) multi-turn tool use. Stripping them on unset wedged every
+  turn-2+ gpt-5 tool continuation; an unset session now replays them exactly as
+  every pre-effort-control build did (`stripReasoning` in
+  `provider/openai/transcode.go`, gated on `req.Effort == EffortOff`). So
+  `unset != off` here — do NOT re-fold the openai strip back onto
+  `!Reasoning()`. (Regression: NEP-5272 review of PR #117.) One residual the
+  off-only strip cannot enforce: a `SetModel` swap to a NON-reasoning openai
+  model (gpt-5 -> gpt-4o) at unset effort still replays the stored items — the
+  same per-model gating punt the enable direction has, so the caller (a
+  dashboard picker) clears/re-validates effort on a model swap, NOT this
+  transcoder.
+
+The reverse (ENABLE) direction — turning reasoning ON over a prior tool_use
+that lacks a thinking block — stays a documented limitation, since a signed
+thinking block cannot be synthesized (see `provider/anthropic/
+transcode.go`).
+
+`Session.SetEffort` is the single event choke point, mirroring `SetModel`
+exactly. On a real change (never a no-op set to the current level) it persists
+the durable `recEffort` resume record AND emits `EventEffortChanged`, both under
+`s.mu`. The server's `Publish` maps `EventEffortChanged` to the durable `effort`
+journal record. That record ALWAYS carries the `effort` field, even on a clear:
+`server/journal.go`'s `Event.Effort` is a `*message.Effort` (the same
+explicit-zero-vs-absent pattern `QueueLen` uses), so a clear to `EffortUnset`
+renders as an explicit `"effort":""`, never a dropped key — "cleared to the
+provider default" stays byte-distinguishable from a malformed record.
+`LoadSession` restores the level: the create-time level rides
+the session header record, and every later `SetEffort` writes a `recEffort`
+record. `Session.Effort()` reads it back.
+
+`POST /session/{id}/thinking` is the network counterpart: a client/dashboard
+swap decoupled from prompting, so it never claims the run slot. It validates the
+`{effort}` value with `message.ParseEffort` (400 on an unknown level), accepts
+an empty string as "clear to provider default", and rejects an unknown session
+(404). Unlike the model endpoint it has NO provider gate (see above). The
+current level is read back on `GET /session/{id}` (`effort`), the same way the
+current model is.
+
 ### Deliberately absent — do not add
 
 - **No permission system.** Tool calls are never gated. There is no `permission.ask` hook, no approval UI, no pre-flight rule evaluation.
