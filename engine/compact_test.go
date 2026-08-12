@@ -110,6 +110,39 @@ func TestCompactFoldsOldestPrefixKeepsRecentTurns(t *testing.T) {
 	}
 }
 
+// TestCompactSummaryRequestInheritsSessionEffort is the red-first test for
+// issue #124: unlike the goal evaluator (a classifier that pins off), the
+// compaction summarizer benefits from the session's own quality setting, so
+// its request must carry the session's CURRENT effort level (set via
+// SetEffort, read fresh, not the zero value the session started with).
+// Drives the production entry point (Session.Compact -> runCompactionSummary).
+func TestCompactSummaryRequestInheritsSessionEffort(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10}),
+		compactTurn("two", provider.Usage{InputTokens: 10}),
+		compactTurn("three", provider.Usage{InputTokens: 10}),
+		compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 10}),
+	}}
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+	})
+	s.SetEffort(message.EffortMedium)
+	runTurns(t, s, 3)
+
+	if _, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	if n := len(prov.requests); n == 0 {
+		t.Fatal("no requests captured")
+	}
+	summaryReq := prov.requests[len(prov.requests)-1]
+	if summaryReq.Effort != message.EffortMedium {
+		t.Errorf("summarizer request Effort = %q, want %q", summaryReq.Effort, message.EffortMedium)
+	}
+}
+
 // TestCompactSummaryBannerMarksSyntheticOrigin asserts the summary text
 // carries the visible synthesized-and-marked banner, mirroring
 // message.SyntheticOrphanResultText's spirit — a transcript reader can never
