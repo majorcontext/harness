@@ -1273,6 +1273,10 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 		// POST /thinking; the boxes picker does this by clamping the level to the
 		// new model's supported set on switch.
 		Effort: s.Effort(),
+		// SessionKey names this session for an adapter that forwards it as
+		// a routing/cache-affinity hint (see provider.Request.SessionKey
+		// doc comment; openaicompat sends it as the wire "user" field).
+		SessionKey: s.ID,
 	}
 
 	// Record this turn's assembled system for the session_info tool, bump the

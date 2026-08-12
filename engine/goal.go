@@ -2252,6 +2252,9 @@ func (s *Session) runEvaluator(ctx context.Context, condition string, evaluator 
 			Parts: message.Parts{&message.Text{Text: content}},
 		}},
 		MaxTokens: 256,
+		// SessionKey names this session for an adapter that forwards it as
+		// a routing/cache-affinity hint (see provider.Request.SessionKey).
+		SessionKey: s.ID,
 	}
 	// The evaluator's stream gets the same idle watchdog worker turns get
 	// (see armIdleWatchdog): it runs at EVERY goal turn boundary, so a

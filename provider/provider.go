@@ -40,6 +40,11 @@ type Request struct {
 	// rejects surfaces as a provider error, since the adapter cannot know
 	// per-model support from the ref alone.
 	Effort message.Effort
+	// SessionKey is a stable, opaque identifier for the session this
+	// request belongs to. An adapter MAY forward it to the provider as a
+	// routing or cache-affinity hint. It is not a secret and is not
+	// persisted.
+	SessionKey string
 }
 
 // StopReason is why the model stopped generating.
