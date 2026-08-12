@@ -134,6 +134,52 @@ never written to the session log — a resumed session rediscovers them. Config
 `skills_dirs` (array; a non-empty project value overrides the user value
 entirely) and the repeatable `-skills-dir` run/serve flag drive it.
 
+### read_file image support
+
+The built-in `read_file` tool (`engine/filetools.go`) returns an image file
+as real visual content, not mangled text. `sniffImageMediaType` classifies
+the file by its magic bytes (`http.DetectContentType` over at most the
+first 512 bytes) — never by its extension: a `.txt` file that is actually a
+PNG is still recognized as an image, and a `.png` file that is actually
+text stays a text read. This closes the gap where an agent reading a
+screenshot got raw bytes fed to the model as if they were source text.
+
+For a recognized image (`image/png`, `image/jpeg`, `image/gif`,
+`image/webp`), `read_file` returns a `message.ToolResult` whose Content is
+`[Text, Blob]`: a one-line Text summary (format, byte size, and pixel
+dimensions when `image.DecodeConfig` can decode the header cheaply) followed
+by a `message.Blob` carrying the real file bytes. This is the same
+`Text`+`Blob` shape MCP's `mcpContentToParts` already produces
+(`engine/mcp.go`) — read_file is simply a second producer of it — so every
+transcoder's existing Blob handling and the imageclamp dimension/byte-size
+pass (`imageclamp.Clamp`, called from every transcoder's `transcodeRequest`)
+apply to a read_file image exactly as they do to an MCP one, with no new
+wiring. `read_file` never bypasses that clamp: it does not resize, re-encode,
+or otherwise touch pixels itself.
+
+`readFileMaxImageBytes` (20MB) caps the file size `read_file` will read in
+full once an image is detected — separate from and smaller than any
+provider's wire limit, which `imageclamp.Clamp` enforces at transcode time.
+This cap exists only so `read_file` itself never loads an unbounded file
+into memory; an over-cap image returns a plain text error and no Blob. A
+non-image binary file (sniffed as `application/octet-stream` or similar)
+is unaffected by this change and keeps its existing (unbounded) text-read
+behavior.
+
+**Known gap, filed as issue #129, not fixed here**: a transcode-time
+degrade of an image Blob to a text placeholder for a model with no vision
+capability is NOT implemented. No per-model vision-capability signal exists
+anywhere in the codebase to gate it on — the "embedded models.dev catalog"
+this file's own "Architecture" section describes as a design goal is not
+yet built (no such package or embedded data exists today), and
+`provider.Request` carries no capability flag comparable to `Effort` or
+`SessionKey` that a caller could set from one. Forcing this now would mean
+inventing an ad hoc, likely-wrong static model list inside this PR, so it
+is deferred to issue #129 rather than an ugly seam. Until it lands, a
+model with no vision support receives the image Blob exactly as any other
+vision-capable model does, and how it handles that block is between the
+model and its provider.
+
 ### Base loop retry
 
 The base interactive `Prompt` loop retries a transient provider error itself,

@@ -1,12 +1,21 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/gif"  // register GIF decoder for image.DecodeConfig
+	_ "image/jpeg" // register JPEG decoder for image.DecodeConfig
+	_ "image/png"  // register PNG decoder for image.DecodeConfig
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+
+	_ "golang.org/x/image/webp" // register WebP decoder for image.DecodeConfig
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -20,6 +29,51 @@ const (
 	// longer lines are truncated with a trailing ellipsis.
 	readFileMaxLineLen = 2000
 )
+
+// readFileMaxImageBytes bounds the file size read_file will read in full
+// when it detects an image (see sniffImageMediaType). The transcode-time
+// imageclamp pass (imageclamp.Clamp) enforces each provider's own wire
+// size limit; this cap exists only to stop read_file itself from loading
+// an unbounded file into memory before that clamp ever runs. It is a var,
+// not a const, so a test can shrink it instead of writing a real
+// oversized fixture.
+var readFileMaxImageBytes = 20 * 1024 * 1024 // 20MB
+
+// readFileImageMediaTypes lists the image formats read_file recognizes and
+// returns as a message.Blob for the model to see directly. Every other
+// sniffed content type — including any other image/* MIME type
+// http.DetectContentType might report, such as image/bmp — keeps
+// read_file's existing text-reading behavior unchanged.
+var readFileImageMediaTypes = map[string]bool{
+	"image/png":  true,
+	"image/jpeg": true,
+	"image/gif":  true,
+	"image/webp": true,
+}
+
+// sniffImageMediaType classifies the file at path by its magic bytes —
+// never by its extension. It reads at most the first 512 bytes (all
+// http.DetectContentType considers) so a large file is never fully read
+// just to answer this question. A file named ".txt" that actually holds
+// PNG bytes is reported as image/png; a file named ".png" that actually
+// holds plain text is reported as a non-image content type. isImage is
+// true only for a format read_file knows how to hand to the model as a
+// Blob (see readFileImageMediaTypes).
+func sniffImageMediaType(path string) (mediaType string, isImage bool, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", false, err
+	}
+	defer f.Close()
+
+	buf := make([]byte, 512)
+	n, err := f.Read(buf)
+	if n == 0 && err != nil && err != io.EOF {
+		return "", false, err
+	}
+	ct := http.DetectContentType(buf[:n])
+	return ct, readFileImageMediaTypes[ct], nil
+}
 
 // resolvePath resolves a tool path argument against the session working
 // directory. Absolute paths pass through unchanged.
@@ -62,6 +116,25 @@ func readFileTool() Tool {
 			if info.IsDir() {
 				return nil, fmt.Errorf("read_file: %s is a directory", path)
 			}
+
+			if mediaType, isImage, sniffErr := sniffImageMediaType(path); sniffErr == nil && isImage {
+				if info.Size() > int64(readFileMaxImageBytes) {
+					return nil, fmt.Errorf("read_file: %s is a %d-byte %s image, over the %d-byte read_file image limit", path, info.Size(), mediaType, readFileMaxImageBytes)
+				}
+				imgData, err := os.ReadFile(path)
+				if err != nil {
+					return nil, fmt.Errorf("read_file: %w", err)
+				}
+				summary := fmt.Sprintf("%s image, %d bytes", mediaType, len(imgData))
+				if cfg, _, err := image.DecodeConfig(bytes.NewReader(imgData)); err == nil {
+					summary = fmt.Sprintf("%s image, %d bytes, %dx%d pixels", mediaType, len(imgData), cfg.Width, cfg.Height)
+				}
+				return message.Parts{
+					&message.Text{Text: summary},
+					&message.Blob{MediaType: mediaType, Data: imgData},
+				}, nil
+			}
+
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return nil, fmt.Errorf("read_file: %w", err)
