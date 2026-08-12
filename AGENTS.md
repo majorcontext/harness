@@ -1338,6 +1338,21 @@ reviewer drives it to zero. Omitting the model makes a subagent inherit the
 parent's model, so an Opus parent silently runs implementation work on Opus
 — expensive and backwards. Pass the model on every spawn.
 
+### Never end a turn to wait
+
+An agent that ends its turn "waiting" for an external event waits forever.
+No notification arrives for a GitHub workflow run, a spawned reviewer, or
+any out-of-process work. Six agents stalled this way on 2026-08-12 alone.
+
+- Watch a workflow run with `gh run watch <id> --exit-status` in the
+  foreground. Do not poll once and yield.
+- Get a spawned reviewer's verdict by reading its delivered result or by
+  messaging the reviewer directly. Do not stop to "wait for its
+  notification."
+- If you must wait on out-of-cluster state, block inside one shell call
+  (a bounded `until` loop). End your turn only when the task is complete
+  or you are blocked on input only a human can provide.
+
 ## Debugging invariants
 
 Rules learned from production incidents (2026-07-09), written so they apply
