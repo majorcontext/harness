@@ -152,6 +152,21 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 		Include:         []string{"reasoning.encrypted_content"},
 	}
 	effort, reasoningEnabled := reasoningEffort(req.Effort)
+	// stripReasoning is DELIBERATELY asymmetric with reasoningEnabled and with
+	// the anthropic adapter. reasoningEnabled is false for BOTH EffortUnset
+	// (the default of every `harness run`/`serve` session — nothing sets
+	// Config.Effort) and EffortOff, because neither sends a `reasoning`
+	// control. But stored encrypted reasoning items must be STRIPPED only on
+	// an EXPLICIT EffortOff (a genuine "reasoning disabled" intent). An unset
+	// (default) session MUST replay them, exactly as every pre-effort-control
+	// build did: OpenAI reasoning models (gpt-5) reason BY DEFAULT, and the
+	// stored items are REQUIRED for stateless (Store:false) multi-turn tool
+	// use — a stripped item wedges every turn-2+ tool continuation. So
+	// unset != off here. Anthropic's sibling strip can safely key on
+	// !Reasoning() because Claude emits no thinking block without the control;
+	// an OpenAI default turn always carries one. Do NOT re-fold this back into
+	// reasoningEnabled. (Regression: NEP-5272 review of PR #117.)
+	stripReasoning := req.Effort == message.EffortOff
 	if reasoningEnabled {
 		out.Reasoning = &apiReasoning{Effort: effort}
 		// Reasoning models reject an explicit temperature or top_p, and reasoning
@@ -189,7 +204,7 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 	messages := imageclamp.Clamp(message.NormalizeForWire(req.Messages), imageLimits)
 	for i := range messages {
 		m := &messages[i]
-		items, err := transcodeMessage(m, reasoningEnabled)
+		items, err := transcodeMessage(m, stripReasoning)
 		if err != nil {
 			return nil, fmt.Errorf("openai: message %s: %w", m.ID, err)
 		}
@@ -204,9 +219,11 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 // transcodeMessage expands one canonical message into a sequence of Responses
 // input items. Contiguous text/image parts are grouped into a single message
 // item; tool calls, tool results, and reasoning are each their own item.
-// reasoningEnabled reports whether THIS request sends a reasoning control; when
-// false, stored reasoning items are stripped (see the Reasoning case).
-func transcodeMessage(m *message.Message, reasoningEnabled bool) ([]json.RawMessage, error) {
+// stripReasoning reports whether stored reasoning items must be dropped (see
+// the Reasoning case). It is true ONLY for an explicit EffortOff, never for
+// the default EffortUnset — an unset session replays stored reasoning items,
+// which gpt-5 stateless multi-turn tool use requires.
+func transcodeMessage(m *message.Message, stripReasoning bool) ([]json.RawMessage, error) {
 	role := "user"
 	if m.Role == message.RoleAssistant {
 		role = "assistant"
@@ -309,15 +326,17 @@ func transcodeMessage(m *message.Message, reasoningEnabled bool) ([]json.RawMess
 			if err := flush(); err != nil {
 				return nil, err
 			}
-			if !reasoningEnabled {
-				// Reasoning is OFF for this request (effort off/unset, or a swap
-				// to a non-reasoning model). A stored reasoning item shipped
-				// while the request omits `reasoning` can be rejected, and being
-				// durable in history would 400 every later turn — a permanent
-				// wedge. Strip it, symmetric with the anthropic thinking-block
-				// strip. A transcode-time throwaway request may drop a part
-				// destructively; a later reasoning-ON turn replays it from the
-				// intact history.
+			if stripReasoning {
+				// Reasoning is EXPLICITLY OFF (EffortOff) for this request. A
+				// stored reasoning item shipped while the request omits
+				// `reasoning` can be rejected, so strip it — symmetric with the
+				// anthropic thinking-block strip. This is NOT reached on the
+				// default EffortUnset: gpt-5 reasons by default and the stored
+				// items are required for stateless multi-turn tool use, so an
+				// unset session replays them (see stripReasoning in
+				// transcodeRequest). A transcode-time throwaway request may drop
+				// a part destructively; a later reasoning-ON turn replays it
+				// from the intact history.
 				continue
 			}
 			raw, ok := v.ProviderData.Get(Family)

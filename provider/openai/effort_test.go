@@ -81,11 +81,14 @@ func TestNoEffortKeepsSampling(t *testing.T) {
 }
 
 // TestReasoningStrippedWhenOff: a stored reasoning item (from an earlier
-// reasoning-ON turn) is STRIPPED when the current request sends no reasoning
-// control. Symmetric with the anthropic thinking-block strip: shipping a stored
-// reasoning item while the request omits `reasoning` is rejected, and durable in
-// history it would 400 every later turn (a permanent wedge). With reasoning ON
-// the item is replayed (see TestTranscodeReasoningReplayVerbatim).
+// reasoning-ON turn) is STRIPPED only on an EXPLICIT EffortOff, and REPLAYED
+// verbatim on the default EffortUnset. The two are DELIBERATELY asymmetric.
+// gpt-5 reasons by default, so an unset (default) session must keep the stored
+// items its stateless multi-turn tool use requires; only an explicit "reasoning
+// off" intent drops them (symmetric with the anthropic thinking-block strip:
+// shipping a stored item while the request omits `reasoning` is rejected).
+// (Regression: NEP-5272 review of PR #117 — the prior loop asserted stripping
+// on BOTH EffortUnset and EffortOff, codifying the default-session data loss.)
 func TestReasoningStrippedWhenOff(t *testing.T) {
 	history := func() []message.Message {
 		return []message.Message{
@@ -99,21 +102,94 @@ func TestReasoningStrippedWhenOff(t *testing.T) {
 			{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "again"}}},
 		}
 	}
-	for _, e := range []message.Effort{message.EffortUnset, message.EffortOff} {
+
+	// EffortOff: an explicit "reasoning disabled" intent strips the stored item.
+	{
 		req := baseRequest(history()...)
-		req.Effort = e
+		req.Effort = message.EffortOff
 		out := mustTranscode(t, req)
 		raw, err := json.Marshal(out)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if strings.Contains(string(raw), `"type":"reasoning"`) || strings.Contains(string(raw), `rs_1`) {
-			t.Errorf("effort %q: wire carries a stored reasoning item, want it stripped with reasoning off:\n%s", e, raw)
+			t.Errorf("EffortOff: wire carries a stored reasoning item, want it stripped:\n%s", raw)
 		}
-		// The assistant's visible answer must survive the strip.
 		if !strings.Contains(string(raw), "answer") {
-			t.Errorf("effort %q: assistant text lost with the stripped reasoning", e)
+			t.Error("EffortOff: assistant text lost with the stripped reasoning")
 		}
+	}
+
+	// EffortUnset (the default of every harness run/serve session): reasoning is
+	// not disabled, only uncontrolled — gpt-5 reasons by default, so the stored
+	// item MUST be replayed, exactly as every pre-effort-control build did.
+	{
+		req := baseRequest(history()...)
+		req.Effort = message.EffortUnset
+		out := mustTranscode(t, req)
+		raw, err := json.Marshal(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), `"type":"reasoning"`) || !strings.Contains(string(raw), `rs_1`) {
+			t.Errorf("EffortUnset: stored reasoning item dropped, want it replayed (gpt-5 reasons by default):\n%s", raw)
+		}
+		if !strings.Contains(string(raw), "answer") {
+			t.Error("EffortUnset: assistant text lost")
+		}
+	}
+}
+
+// TestReasoningReplayedOnUnsetToolContinuation is the NEP-5272 regression guard
+// for the gpt-5 tool-continuation shape. A multi-turn TOOL continuation at the
+// DEFAULT (EffortUnset) effort — nothing sets req.Effort, exactly as every
+// harness run/serve session — MUST replay the stored encrypted reasoning item.
+// OpenAI reasoning models run Store:false (stateless) and REQUIRE the reasoning
+// item that precedes a function_call to be replayed on the continuation
+// request; dropping it wedges every turn-2+ tool call. Red-verify: with the
+// buggy !reasoningEnabled gate the item is stripped on the default session;
+// with the EffortOff-only strip it is replayed verbatim, before the
+// function_call.
+func TestReasoningReplayedOnUnsetToolContinuation(t *testing.T) {
+	rawReasoning := json.RawMessage(`{"id":"rs_1","type":"reasoning","encrypted_content":"ENC"}`)
+	req := baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "list files"}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.Reasoning{Text: "plan", ProviderData: message.ProviderData{Family: rawReasoning}},
+			&message.ToolCall{CallID: "call_ls", Name: "bash", Arguments: json.RawMessage(`{"command":"ls"}`)},
+		}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "call_ls", Content: message.Parts{&message.Text{Text: "main.go"}}},
+		}},
+	)
+	// DEFAULT effort: req.Effort stays EffortUnset, as a plain harness session.
+	out := mustTranscode(t, req)
+
+	// No reasoning control is sent at unset, but the stored item is replayed.
+	if out.Reasoning != nil {
+		t.Errorf("EffortUnset must send no reasoning control, got %+v", out.Reasoning)
+	}
+	reasoningIdx, callIdx := -1, -1
+	for i, item := range out.Input {
+		switch probeItem(t, item).Type {
+		case "reasoning":
+			reasoningIdx = i
+			if !jsonEqual(t, item, rawReasoning) {
+				t.Errorf("reasoning item not replayed verbatim:\n got %s\nwant %s", item, rawReasoning)
+			}
+		case "function_call":
+			callIdx = i
+		}
+	}
+	if reasoningIdx < 0 {
+		raw, _ := json.Marshal(out)
+		t.Fatalf("stored reasoning item dropped at default effort, want it replayed:\n%s", raw)
+	}
+	if callIdx < 0 {
+		t.Fatal("function_call item missing")
+	}
+	if reasoningIdx > callIdx {
+		t.Errorf("reasoning item at index %d must precede function_call at index %d", reasoningIdx, callIdx)
 	}
 }
 
