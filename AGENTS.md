@@ -202,11 +202,15 @@ condition; after **every** turn an independent, TOOL-LESS evaluator model
 `MaxTokens` 256) is asked to answer `MET: <reason>` / `NOT MET: <reason>`
 (parsed leniently). The evaluator request always pins `message.EffortOff`
 (`runEvaluator`, `engine/goal.go`) — it is a classifier, not a reasoning task,
-and it never inherits the session's own effort level. `EffortOff` suppresses
-reasoning on every adapter (an explicit `"off"` on openaicompat, no thinking
-block on anthropic, a strip on openai Responses), so a gateway model that
-reasons by default cannot burn the evaluator's 256-token budget on reasoning
-before it ever emits a verdict. (Issue #124.) A NOT MET verdict re-prompts
+and it never inherits the session's own effort level. On openaicompat,
+`EffortOff` sends the literal `"off"`; on anthropic, it emits no thinking
+block — both routes now spend none of the evaluator's 256-token budget on
+reasoning. (Issue #124.) The openai Responses route is a known residual:
+`reasoningEffort` (`provider/openai/transcode.go`) omits the `reasoning`
+object for `EffortOff` exactly as it does for `EffortUnset`, and a
+gpt-5-class model reasons by default with no adapter-level way to disable
+it — so an evaluator on that route can still spend its budget on reasoning.
+A NOT MET verdict re-prompts
 with a fixed-template guidance message carrying the reason; MET returns
 `Achieved`. `MaxTurns` (0 = unlimited) bounds it. Evaluation is advisory: a
 retryable-class provider error from the
@@ -814,6 +818,12 @@ summarizer (`runCompactionSummary`, `engine/compact.go`) instead inherits
 writing task that benefits from the session's own quality setting;
 `EffortUnset` stays `EffortUnset` there. Do not fold these two internal
 sites onto one shared rule — one is a classifier, the other is prose.
+Known residual (not addressed by issue #124, filed as a follow-up): a
+non-off session effort can raise the summarizer's effective output cap
+above `compactionMaxTokens` (the anthropic and openai adapters both bump
+the cap for reasoning), and openaicompat applies no cap floor at all, so a
+reasoning-heavy summary can truncate silently — `runCompactionSummary` has
+no `StopReason` guard to catch it.
 
 ### Session affinity (prompt-cache routing hint)
 

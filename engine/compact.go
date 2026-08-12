@@ -330,6 +330,15 @@ func (s *Session) runCompactionSummary(ctx context.Context, model message.ModelR
 		// state, not the value the session started with. EffortUnset stays
 		// EffortUnset here — this only forwards, never overrides. (Issue
 		// #124.)
+		//
+		// Known residual, deliberately not addressed here (see AGENTS.md's
+		// scope-discipline rule): a non-off level lets the anthropic and
+		// openai adapters raise this request's effective output cap above
+		// compactionMaxTokens (anthropic's thinking-budget bump, openai's
+		// reasoningOutputFloor), and openaicompat sends reasoning_effort
+		// with no such floor at all, so a reasoning-heavy summary can be
+		// truncated at compactionMaxTokens with no StopReason guard here to
+		// catch it. Filed as a follow-up rather than expanded in this PR.
 		Effort: s.Effort(),
 	}
 	// The summarizer's stream gets the same idle watchdog worker turns get

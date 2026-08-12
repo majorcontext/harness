@@ -2257,11 +2257,15 @@ func (s *Session) runEvaluator(ctx context.Context, condition string, evaluator 
 		SessionKey: s.ID,
 		// The evaluator is a classifier, not a reasoning task: it always
 		// pins EffortOff, never the session's own level (see AGENTS.md's
-		// "Goal loop" section). Since a7c5cce, EffortOff suppresses
-		// reasoning on every adapter (an explicit "off" on openaicompat, no
-		// thinking block on anthropic, a strip on openai Responses) — so
-		// this keeps the evaluator's MaxTokens 256 budget from being spent
-		// on reasoning before it ever emits MET/NOT MET. (Issue #124.)
+		// "Goal loop" section). Since a7c5cce, EffortOff sends the literal
+		// "off" on openaicompat and no thinking block on anthropic — both
+		// routes now spend none of the evaluator's MaxTokens 256 budget on
+		// reasoning. openai Responses is a known residual: reasoningEffort
+		// omits the reasoning object for EffortOff exactly as it does for
+		// EffortUnset (provider/openai/transcode.go), and a gpt-5-class
+		// model reasons by default with no adapter-level way to disable it
+		// — so an evaluator on that route can still spend its budget on
+		// reasoning. (Issue #124.)
 		Effort: message.EffortOff,
 	}
 	// The evaluator's stream gets the same idle watchdog worker turns get
