@@ -368,7 +368,7 @@ func TestReadFileImageOverCapReturnsTextErrorNoBlob(t *testing.T) {
 }
 
 // TestReadFileImageTruncatedPNGFallsBackToText proves the DecodeConfig gate
-// in readImageIfDetected: a file whose first 8 bytes are a genuine PNG
+// in readPathContent: a file whose first 8 bytes are a genuine PNG
 // signature, but whose body is not a real PNG (a truncated download, a
 // corrupt write), fails image.DecodeConfig and is read as ordinary text
 // instead of shipping a Blob the model cannot use.

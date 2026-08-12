@@ -34,7 +34,7 @@ const (
 // detected image. The transcode-time imageclamp pass (imageclamp.Clamp)
 // enforces each provider's own wire size limit; this cap exists only to
 // stop read_file itself from loading an unbounded file into memory before
-// that clamp ever runs. readImageIfDetected checks this bound against the
+// that clamp ever runs. readPathContent checks this bound against the
 // read itself (an io.LimitReader over the open file handle), never against
 // a separately captured os.Stat size, which a file that grows after the
 // stat could outrun. It is a var, not a const, so a test can shrink it
@@ -76,76 +76,97 @@ func sniffMediaType(r io.Reader) (mediaType string, sniffed []byte, err error) {
 	return http.DetectContentType(buf), buf, nil
 }
 
-// readImageIfDetected opens path once and, if it is a recognized image,
-// returns its full bytes, media type, and pixel dimensions. It reports
-// ok=false — never an error — for a file that is not a recognized image,
-// so the caller falls through to the ordinary text read unchanged.
+// fileContent is the outcome of readPathContent: either a detected image's
+// Blob-ready bytes, or a non-image file's raw bytes for the ordinary text
+// read. Exactly one of ImageData or TextData is populated.
+type fileContent struct {
+	IsImage       bool
+	ImageData     []byte
+	MediaType     string
+	Width, Height int
+	TextData      []byte
+}
+
+// readPathContent opens path exactly once and, on every outcome, reads it
+// exactly once — no second os.Open, no re-read of bytes already
+// classified. Earlier revisions of read_file's image detection opened the
+// file twice (once to sniff, once via os.ReadFile) even on a plain text
+// read, the far more common case; this unifies both outcomes behind one
+// handle.
 //
-// Classification is by magic bytes only (http.DetectContentType), never by
-// the file's extension: a ".txt" that is really a PNG is still recognized;
-// a ".png" that is really text is not. The sniff read uses io.ReadFull, not
-// a single Read, because one read(2) can return short on a pipe or FUSE
-// mount (this repo already treats such mounts as first-class, see config
-// session_sync: "volume") — a short read must never silently misclassify a
-// real image as plain text.
+// Classification is by magic bytes only (http.DetectContentType via
+// sniffMediaType), never by the file's extension: a ".txt" that is really
+// a PNG is still recognized; a ".png" that is really text is not.
+//
+// A recognized image type is read under a bound: readFileMaxImageBytes+1
+// bytes via io.LimitReader over the SAME open handle the sniff used — a
+// cap that binds on bytes actually read, never a pre-read os.Stat size a
+// concurrently growing file could outrun. An over-cap image returns a
+// non-nil error (no partial TextData) so the caller reports a clear error
+// instead of falling through to an unbounded read of a file already known
+// to be an oversized image.
 //
 // The image body must also decode with image.DecodeConfig before this
-// function commits to the image path: a corrupt or truncated file that
+// function commits to the image outcome: a corrupt or truncated file that
 // merely opens with a matching magic-byte prefix (PNG's 8-byte signature,
 // JPEG's SOI marker, WebP's RIFF/WEBP container) fails PNG/JPEG/WebP's own
-// structural header checks and falls back to a plain text read instead of
-// shipping a Blob the model cannot use — cost-free, since the same decode
-// already runs to read the file's pixel dimensions for the Text summary.
-// This gate is NOT airtight for GIF: the GIF87a/GIF89a header has no
-// checksum, so any bytes following a literal "GIF87a"/"GIF89a" prefix
-// still "decode" with fabricated width/height. A real-world text file
-// beginning with those exact six bytes is vanishingly unlikely; this is a
-// documented, accepted residual, not a silent gap.
-//
-// The total read is bounded at readFileMaxImageBytes+1 bytes via
-// io.LimitReader over the SAME open handle the sniff used — one open, one
-// read pass, and a cap that binds on bytes actually read rather than a
-// pre-read os.Stat size a concurrently growing file could outrun. An
-// over-cap image returns a non-nil err (ok=false, no partial data) so the
-// caller reports a clear error instead of falling through to an unbounded
-// read of a file already known to be an oversized image.
-func readImageIfDetected(path string) (data []byte, mediaType string, width, height int, ok bool, err error) {
+// structural header checks. On that failure this reads the true remainder
+// of the file (unbounded, via the same handle) so the text fallback is
+// complete rather than silently cut off at the image cap — reachable only
+// when magic bytes matched an image signature yet the body failed
+// structural validation, so an oversized file in this branch is already
+// known not to be a real image. This gate is NOT airtight for GIF: the
+// GIF87a/GIF89a header has no checksum, so any bytes following a literal
+// "GIF87a"/"GIF89a" prefix still "decode" with fabricated width/height. A
+// real-world text file beginning with those exact six bytes is
+// vanishingly unlikely; this is a documented, accepted residual, not a
+// silent gap.
+func readPathContent(path string) (fileContent, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, "", 0, 0, false, err
+		return fileContent{}, err
 	}
 	defer f.Close()
 
 	mediaType, sniff, err := sniffMediaType(f)
 	if err != nil {
-		return nil, "", 0, 0, false, err
+		return fileContent{}, err
 	}
 	if !readFileImageMediaTypes[mediaType] {
-		return nil, mediaType, 0, 0, false, nil
+		rest, err := io.ReadAll(f)
+		if err != nil {
+			return fileContent{}, err
+		}
+		return fileContent{TextData: append(sniff, rest...)}, nil
 	}
 
 	budget := int64(readFileMaxImageBytes) - int64(len(sniff))
 	if budget < 0 {
 		budget = 0
 	}
-	rest, rerr := io.ReadAll(io.LimitReader(f, budget+1))
-	if rerr != nil {
-		return nil, mediaType, 0, 0, false, rerr
+	capped, err := io.ReadAll(io.LimitReader(f, budget+1))
+	if err != nil {
+		return fileContent{}, err
 	}
-	full := append(sniff, rest...)
+	full := append(sniff, capped...)
 	if len(full) > readFileMaxImageBytes {
-		return nil, mediaType, 0, 0, false, fmt.Errorf("image (%s) exceeds the %d-byte read_file image limit", mediaType, readFileMaxImageBytes)
+		return fileContent{}, fmt.Errorf("image (%s) exceeds the %d-byte read_file image limit", mediaType, readFileMaxImageBytes)
 	}
 
 	cfg, _, derr := image.DecodeConfig(bytes.NewReader(full))
 	if derr != nil {
 		// Sniffed as an image by magic bytes, but the body does not decode
 		// as one (corrupt, truncated, or a false-positive magic-byte
-		// match). Fall through to the ordinary text read rather than
-		// shipping a Blob the model cannot use.
-		return nil, mediaType, 0, 0, false, nil
+		// match). Read the true remainder so the text fallback is
+		// complete, not silently cut off at the image cap; see the doc
+		// comment above for why this is safe.
+		rest, err := io.ReadAll(f)
+		if err != nil {
+			return fileContent{}, err
+		}
+		return fileContent{TextData: append(full, rest...)}, nil
 	}
-	return full, mediaType, cfg.Width, cfg.Height, true, nil
+	return fileContent{IsImage: true, ImageData: full, MediaType: mediaType, Width: cfg.Width, Height: cfg.Height}, nil
 }
 
 // resolvePath resolves a tool path argument against the session working
@@ -190,22 +211,18 @@ func readFileTool() Tool {
 				return nil, fmt.Errorf("read_file: %s is a directory", path)
 			}
 
-			imgData, mediaType, width, height, isImage, imgErr := readImageIfDetected(path)
-			if imgErr != nil {
-				return nil, fmt.Errorf("read_file: %s: %w", path, imgErr)
+			content, err := readPathContent(path)
+			if err != nil {
+				return nil, fmt.Errorf("read_file: %s: %w", path, err)
 			}
-			if isImage {
-				summary := fmt.Sprintf("image (%s), %d bytes, %dx%d pixels", mediaType, len(imgData), width, height)
+			if content.IsImage {
+				summary := fmt.Sprintf("image (%s), %d bytes, %dx%d pixels", content.MediaType, len(content.ImageData), content.Width, content.Height)
 				return message.Parts{
 					&message.Text{Text: summary},
-					&message.Blob{MediaType: mediaType, Data: imgData},
+					&message.Blob{MediaType: content.MediaType, Data: content.ImageData},
 				}, nil
 			}
-
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return nil, fmt.Errorf("read_file: %w", err)
-			}
+			data := content.TextData
 
 			lines := strings.Split(string(data), "\n")
 			// A trailing newline produces one empty trailing element; drop it.

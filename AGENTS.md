@@ -137,21 +137,26 @@ entirely) and the repeatable `-skills-dir` run/serve flag drive it.
 ### read_file image support
 
 The built-in `read_file` tool (`engine/filetools.go`) can return an image
-file as real visual content, not mangled text. `readImageIfDetected`
-classifies the file by its magic bytes (`http.DetectContentType` over at
-most the first 512 bytes) — never by its extension: a `.txt` file that is
-actually a PNG is still recognized as an image, and a `.png` file that is
-actually text stays a text read. On a recognized image (`image/png`,
-`image/jpeg`, `image/gif`, `image/webp`), `read_file` returns a
-`message.ToolResult` whose Content is `[Text, Blob]`: a one-line Text
-summary (format, byte size, and pixel dimensions) followed by a
-`message.Blob` carrying the real file bytes. This is the same `Text`+`Blob`
-shape MCP's `mcpContentToParts` already produces (`engine/mcp.go`) —
-`read_file` is a second producer of it — so every transcoder's existing
-Blob handling and the imageclamp dimension/byte-size pass
-(`imageclamp.Clamp`, called from every transcoder's `transcodeRequest`)
-apply with no new wiring. `read_file` never bypasses that clamp: it does
-not resize, re-encode, or otherwise touch pixels itself.
+file as real visual content, not mangled text. `readPathContent` opens the
+target path exactly once and classifies it by its magic bytes
+(`http.DetectContentType` over at most the first 512 bytes) — never by its
+extension: a `.txt` file that is actually a PNG is still recognized as an
+image, and a `.png` file that is actually text stays a text read. On a
+recognized image (`image/png`, `image/jpeg`, `image/gif`, `image/webp`),
+`read_file` returns a `message.ToolResult` whose Content is `[Text, Blob]`:
+a one-line Text summary (format, byte size, and pixel dimensions) followed
+by a `message.Blob` carrying the real file bytes. This is the same
+`Text`+`Blob` shape MCP's `mcpContentToParts` already produces
+(`engine/mcp.go`) — `read_file` is a second producer of it — so every
+transcoder's existing Blob handling and the imageclamp dimension/byte-size
+pass (`imageclamp.Clamp`, called from every transcoder's
+`transcodeRequest`) apply with no new wiring. `read_file` never bypasses
+that clamp: it does not resize, re-encode, or otherwise touch pixels
+itself. Because `imageclamp.Clamp` runs later, at transcode time, an image
+it downscales or re-encodes can end up described by dimensions or a byte
+size that no longer match the summary `read_file` reported when it read
+the file; this is a known, accepted mismatch, not a defect to fix in
+`read_file` itself.
 
 **Only the Anthropic route puts a tool-result image on the wire.**
 `imageclamp.Limits.RecurseToolResults` is true for `provider/anthropic`
@@ -164,8 +169,7 @@ something this feature introduces, but it means a `read_file` image reaches
 the model as pixels only on the Anthropic route; on the other two the model
 sees only the one-line Text summary.
 
-`readImageIfDetected` opens the file once and applies three guards, in
-order:
+`readPathContent` applies three guards on the image path, in order:
 
 1. The sniff read uses `io.ReadFull`, not a single `Read`, so a short
    `read(2)` — realistic on a pipe or FUSE mount — never misclassifies a
@@ -178,17 +182,20 @@ order:
    exists only so `read_file` itself never loads an unbounded file into
    memory. An over-cap image returns a plain text error and no Blob.
 3. The body must decode with `image.DecodeConfig` before `read_file`
-   commits to the image path. A corrupt or truncated file that merely opens
-   with a matching magic-byte prefix fails this check and falls back to an
-   ordinary text read instead of shipping a Blob the model cannot use. This
-   guard is not airtight for GIF: the `GIF87a`/`GIF89a` header carries no
-   checksum, so text that happens to start with those exact six bytes still
-   "decodes" with fabricated dimensions. A real file colliding with that
-   prefix is vanishingly unlikely; this is a documented, accepted residual.
+   commits to the image outcome. A corrupt or truncated file that merely
+   opens with a matching magic-byte prefix fails this check; `read_file`
+   then reads the true remainder of the file (unbounded, same handle) and
+   returns it as ordinary text instead of shipping a Blob the model cannot
+   use. This guard is not airtight for GIF: the `GIF87a`/`GIF89a` header
+   carries no checksum, so text that happens to start with those exact six
+   bytes still "decodes" with fabricated dimensions. A real file colliding
+   with that prefix is vanishingly unlikely; this is a documented, accepted
+   residual.
 
 A non-image binary file (sniffed as `application/octet-stream` or similar)
-is unaffected by this feature and keeps its existing (unbounded) text-read
-behavior.
+keeps `read_file`'s existing (unbounded) text-read behavior; `readPathContent`
+still reads it exactly once, through the same handle its sniff already
+opened.
 
 **Known gap, filed as issue #129**: a transcode-time degrade of an image
 Blob to a text placeholder for a model with no vision capability is not
