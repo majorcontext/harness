@@ -811,7 +811,8 @@ documents its own affinity hint:
   openaicompat route keeps sending `user` because `user` is the field the
   measured Bifrost/Fireworks path above actually reads. Do not "fix" this
   adapter by swapping in `prompt_cache_key` — that field is specific to
-  OpenAI's own Responses API, not this generic gateway wire, and doing so
+  OpenAI's own API, and the openaicompat adapter targets non-OpenAI
+  backends behind a gateway, whose measured path reads `user`. Swapping it
   would silently drop the measured cache-affinity win.
 - `provider/openai` (Responses API) sets the wire top-level
   `prompt_cache_key` field — the Responses API's own documented routing/
