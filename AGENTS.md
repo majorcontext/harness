@@ -787,6 +787,57 @@ an empty string as "clear to provider default", and rejects an unknown session
 current level is read back on `GET /session/{id}` (`effort`), the same way the
 current model is.
 
+### Session affinity (prompt-cache routing hint)
+
+`provider.Request.SessionKey` carries a stable, opaque session identifier on
+every request the engine builds — one field on the same per-request struct
+`Effort` rides, though unlike `Effort` (set at one call site), the engine
+sets `SessionKey` to `Session.ID` at all three request-build sites:
+`streamTurn` (`engine/engine.go`, the main turn), `runEvaluator`
+(`engine/goal.go`, the goal-loop evaluator), and `runCompactionSummary`
+(`engine/compact.go`, the compaction summarizer). The field itself is never
+persisted; the value it carries (`Session.ID`) already is, as the session's
+own identity.
+
+Two adapters forward it, each to its own field, because each provider
+documents its own affinity hint:
+
+- `provider/openaicompat` sets the wire top-level `user` field. This is a
+  generic chat-completions gateway adapter (fronting Bifrost, OpenRouter,
+  and similar); `user` is the field a Fireworks-style backend behind such a
+  gateway reads for routing. OpenAI itself has deprecated `user` on its own
+  API in favor of `prompt_cache_key`/`safety_identifier` (see the next
+  bullet), but that deprecation is OpenAI's, not the gateway's: the
+  openaicompat route keeps sending `user` because `user` is the field the
+  measured Bifrost/Fireworks path above actually reads. Do not "fix" this
+  adapter by swapping in `prompt_cache_key` — that field is specific to
+  OpenAI's own Responses API, not this generic gateway wire, and doing so
+  would silently drop the measured cache-affinity win.
+- `provider/openai` (Responses API) sets the wire top-level
+  `prompt_cache_key` field — the Responses API's own documented routing/
+  cache-affinity hint, distinct from `user`. OpenAI combines it with the
+  request's prefix hash to raise the chance repeat requests land on the
+  same cache-holding backend.
+
+Both follow the same omit-on-empty rule: a non-empty `SessionKey` sets the
+field; an empty key omits it entirely, never an empty string.
+`provider/anthropic` ignores `SessionKey` — it already uses explicit
+`cache_control` markers, so a routing hint would add nothing; a live probe
+through Bifrost (2026-08-12) confirmed a 41k-token cache write followed by a
+41k-token cache read on the very next turn with no `SessionKey` involved.
+
+The reason `SessionKey` exists at all is measured, not theoretical: Fireworks
+serverless prompt caching is prefix-based, automatic, and PER-REPLICA.
+Without a routing hint, a re-sent request can land on a different replica
+and miss its own prefix cache. A live probe through Bifrost (2026-08-12)
+sent a byte-identical 150k-token prompt twice: with no `user` field, the
+second call still read `cached_tokens=0` at 10.8s time-to-first-token; with
+a stable `user` field, the second call read `cached_tokens=150,300` at 2.8s
+time-to-first-token, through the same gateway. Harness sessions re-send the
+whole history every request (stateless transcoding), so a long session on
+the openaicompat route (a gateway to Fireworks kimi-k3 and similar models)
+pays full prefill on nearly every turn without this hint.
+
 ### Deliberately absent — do not add
 
 - **No permission system.** Tool calls are never gated. There is no `permission.ask` hook, no approval UI, no pre-flight rule evaluation.
