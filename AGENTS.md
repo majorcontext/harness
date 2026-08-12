@@ -721,10 +721,17 @@ like a model swap, needs no migration step:
 - `provider/openai` (Responses) sets `reasoning.effort` to the level string
   (minimal/low/medium/high). `off`/unset omit the `reasoning` object.
 - `provider/openaicompat` sets the top-level `reasoning_effort` string; a
-  gateway (Bifrost) maps it to the upstream provider's own knob. `off`/unset
-  omit it. It surfaces returned reasoning from EITHER wire field — Bifrost/
-  DeepSeek `reasoning_content` or OpenRouter `reasoning` — as a `Reasoning`
-  part; a gateway sends one field, never both.
+  gateway (Bifrost) maps it to the upstream provider's own knob. A non-off
+  level sends the level string; `EffortOff` sends the literal string `"off"`,
+  not an omitted field — several gateway upstreams reason BY DEFAULT when
+  the field is absent, so omitting it cannot express "disabled." Measured
+  (2026-08-12): Fireworks kimi-k3 through Bifrost streamed a full reasoning
+  block (266 chars) with the field absent, and zero reasoning content (0
+  chars, 8 vs 133 completion tokens) with the literal `"off"` sent. Only
+  `EffortUnset` omits the field, leaving the gateway/model default in force.
+  It surfaces returned reasoning from EITHER wire field — Bifrost/DeepSeek
+  `reasoning_content` or OpenRouter `reasoning` — as a `Reasoning` part; a
+  gateway sends one field, never both.
 
 `Effort` does NOT police which model accepts which level — that is a
 provider-and-model fact the engine cannot know from the ref alone. The adapter
