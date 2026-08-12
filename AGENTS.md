@@ -731,17 +731,34 @@ provider-and-model fact the engine cannot know from the ref alone. The adapter
 sends the requested level and the provider is the final judge. A caller that
 must gate levels per model (a dashboard picker) holds its OWN mapping.
 
-**Downgrade strip (both reasoning adapters).** A stored thinking block
-(anthropic) or reasoning item (openai Responses) is replayed ONLY when the
-current request enables reasoning. When the request sends no reasoning control
-(`off`/unset, or a swap to a non-reasoning model), the transcoder strips those
-parts. Reason: a stored block shipped while the request omits the reasoning
-control is rejected, and durable in history it 400s every later turn — a
-permanent wedge. This is a transcode-time destructive drop (throwaway request,
-intact record); a later reasoning-ON turn replays the part from the unchanged
-history. The reverse (ENABLE) direction — turning reasoning ON over a prior
-tool_use that lacks a thinking block — stays a documented limitation, since a
-signed thinking block cannot be synthesized (see `provider/anthropic/
+**Downgrade strip — DELIBERATELY asymmetric between the two reasoning
+adapters.** A stored thinking block (anthropic) or reasoning item (openai
+Responses) can be a transcode-time destructive drop (throwaway request, intact
+record); a later reasoning-ON turn replays the part from the unchanged history.
+A strip is ever needed because a stored block shipped while the request omits
+the reasoning control can be rejected, and durable in history it 400s every
+later turn — a permanent wedge. But WHEN each adapter strips differs, because
+the two providers default differently:
+
+- `provider/anthropic` strips whenever the request enables no reasoning
+  (`off`/unset, or a swap to a non-reasoning model). This is safe: Claude emits
+  NO thinking block unless the control is sent, so an unset turn carries none
+  to preserve.
+- `provider/openai` (Responses) strips ONLY on an EXPLICIT `off` (a genuine
+  "reasoning disabled" intent), NEVER on `EffortUnset`. OpenAI reasoning models
+  (gpt-5) reason BY DEFAULT, so an unset turn — the default of every `harness
+  run`/`serve` session, since nothing sets `Config.Effort` — still produces
+  encrypted reasoning items, and those items are REQUIRED for stateless
+  (`Store:false`) multi-turn tool use. Stripping them on unset wedged every
+  turn-2+ gpt-5 tool continuation; an unset session now replays them exactly as
+  every pre-effort-control build did (`stripReasoning` in
+  `provider/openai/transcode.go`, gated on `req.Effort == EffortOff`). So
+  `unset != off` here — do NOT re-fold the openai strip back onto
+  `!Reasoning()`. (Regression: NEP-5272 review of PR #117.)
+
+The reverse (ENABLE) direction — turning reasoning ON over a prior tool_use
+that lacks a thinking block — stays a documented limitation, since a signed
+thinking block cannot be synthesized (see `provider/anthropic/
 transcode.go`).
 
 `Session.SetEffort` is the single event choke point, mirroring `SetModel`
