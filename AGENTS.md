@@ -805,7 +805,14 @@ documents its own affinity hint:
 - `provider/openaicompat` sets the wire top-level `user` field. This is a
   generic chat-completions gateway adapter (fronting Bifrost, OpenRouter,
   and similar); `user` is the field a Fireworks-style backend behind such a
-  gateway reads for routing.
+  gateway reads for routing. OpenAI itself has deprecated `user` on its own
+  API in favor of `prompt_cache_key`/`safety_identifier` (see the next
+  bullet), but that deprecation is OpenAI's, not the gateway's: the
+  openaicompat route keeps sending `user` because `user` is the field the
+  measured Bifrost/Fireworks path above actually reads. Do not "fix" this
+  adapter by swapping in `prompt_cache_key` — that field is specific to
+  OpenAI's own Responses API, not this generic gateway wire, and doing so
+  would silently drop the measured cache-affinity win.
 - `provider/openai` (Responses API) sets the wire top-level
   `prompt_cache_key` field — the Responses API's own documented routing/
   cache-affinity hint, distinct from `user`. OpenAI combines it with the
