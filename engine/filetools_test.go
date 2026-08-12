@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/plugin"
@@ -232,6 +233,27 @@ func tinyPNG(t *testing.T) []byte {
 		t.Fatalf("png.Encode: %v", err)
 	}
 	return buf.Bytes()
+}
+
+// TestSniffMediaTypeSurvivesShortReads red-verifies the io.ReadFull sniff
+// in sniffMediaType: iotest.OneByteReader wraps the source so every Read
+// call returns exactly one byte, the shape a pipe, a FUSE/network mount, or
+// a signal-interrupted read(2) can produce. A single plain Read against
+// such a source would see only the first byte and misclassify almost every
+// real image; io.ReadFull is what makes classification correct regardless
+// of how many underlying reads it takes.
+func TestSniffMediaTypeSurvivesShortReads(t *testing.T) {
+	data := tinyPNG(t)
+	mediaType, sniff, err := sniffMediaType(iotest.OneByteReader(bytes.NewReader(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mediaType != "image/png" {
+		t.Errorf("mediaType = %q, want image/png", mediaType)
+	}
+	if !bytes.Equal(sniff, data) {
+		t.Errorf("sniffed %d bytes, want all %d source bytes (file is under imageSniffLen)", len(sniff), len(data))
+	}
 }
 
 func TestReadFileImagePNGReturnsTextAndBlob(t *testing.T) {

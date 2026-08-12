@@ -57,6 +57,25 @@ var readFileImageMediaTypes = map[string]bool{
 	"image/webp": true,
 }
 
+// sniffMediaType reads up to imageSniffLen bytes from r via io.ReadFull and
+// classifies them via http.DetectContentType, returning the classification
+// and the sniffed bytes themselves (so a caller reading the rest of the
+// stream does not re-read them). Taking an io.Reader, not a path, is what
+// lets TestSniffMediaTypeSurvivesShortReads drive it with
+// iotest.OneByteReader: a plain single Read against such a source returns
+// one byte per call, so a caller using Read directly would misclassify
+// almost every real image — io.ReadFull is what makes this deterministic
+// against a short-read source (a pipe, a FUSE/network mount, a signal).
+func sniffMediaType(r io.Reader) (mediaType string, sniffed []byte, err error) {
+	buf := make([]byte, imageSniffLen)
+	n, rerr := io.ReadFull(r, buf)
+	if rerr != nil && rerr != io.ErrUnexpectedEOF && rerr != io.EOF {
+		return "", nil, rerr
+	}
+	buf = buf[:n]
+	return http.DetectContentType(buf), buf, nil
+}
+
 // readImageIfDetected opens path once and, if it is a recognized image,
 // returns its full bytes, media type, and pixel dimensions. It reports
 // ok=false — never an error — for a file that is not a recognized image,
@@ -97,13 +116,10 @@ func readImageIfDetected(path string) (data []byte, mediaType string, width, hei
 	}
 	defer f.Close()
 
-	sniff := make([]byte, imageSniffLen)
-	n, rerr := io.ReadFull(f, sniff)
-	if rerr != nil && rerr != io.ErrUnexpectedEOF && rerr != io.EOF {
-		return nil, "", 0, 0, false, rerr
+	mediaType, sniff, err := sniffMediaType(f)
+	if err != nil {
+		return nil, "", 0, 0, false, err
 	}
-	sniff = sniff[:n]
-	mediaType = http.DetectContentType(sniff)
 	if !readFileImageMediaTypes[mediaType] {
 		return nil, mediaType, 0, 0, false, nil
 	}
@@ -145,7 +161,7 @@ func readFileTool() Tool {
 	return Tool{
 		Def: provider.ToolDef{
 			Name:        "read_file",
-			Description: "Read a file and return its content with line numbers (N→ prefixes). A recognized image file (PNG, JPEG, GIF, WebP) is returned as an actual image instead, so use this tool to view a screenshot or picture. Prefer this over shell commands like cat, head, or sed for reading files. Relative paths resolve against the session working directory.",
+			Description: "Read a file and return its content with line numbers (N→ prefixes). A recognized image file (PNG, JPEG, GIF, WebP) is returned as an image where the current provider supports tool-result images. Prefer this over shell commands like cat, head, or sed for reading files. Relative paths resolve against the session working directory.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {

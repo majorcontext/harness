@@ -170,7 +170,7 @@ order:
 1. The sniff read uses `io.ReadFull`, not a single `Read`, so a short
    `read(2)` — realistic on a pipe or FUSE mount — never misclassifies a
    real image as plain text.
-2. The read is bounded at `readFileMaxImageBytes` (20MB) bytes, checked
+2. The read is bounded at `readFileMaxImageBytes` (20MB), checked
    against an `io.LimitReader` over the same open handle, never against a
    separately captured `os.Stat` size a concurrently growing file could
    outrun. This cap is separate from and smaller than any provider's own
