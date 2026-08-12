@@ -790,19 +790,21 @@ current model is.
 ### Session affinity (prompt-cache routing hint)
 
 `provider.Request.SessionKey` carries a stable, opaque session identifier on
-every request the engine builds — the same choke-point pattern `Effort`
-above uses. The engine sets it to `Session.ID` at all three request-build
-sites: `streamTurn` (`engine/engine.go`, the main turn), `runEvaluator`
+every request the engine builds — one field on the same per-request struct
+`Effort` rides, though unlike `Effort` (set at one call site), the engine
+sets `SessionKey` to `Session.ID` at all three request-build sites:
+`streamTurn` (`engine/engine.go`, the main turn), `runEvaluator`
 (`engine/goal.go`, the goal-loop evaluator), and `runCompactionSummary`
-(`engine/compact.go`, the compaction summarizer). It is not a secret and is
-never persisted.
+(`engine/compact.go`, the compaction summarizer). The field itself is never
+persisted; the value it carries (`Session.ID`) already is, as the session's
+own identity.
 
 `provider/openaicompat` is the ONLY adapter that forwards it: a non-empty
 `SessionKey` sets the wire top-level `user` field; an empty key omits the
-field entirely, never an empty string. `provider/anthropic`, `provider/
-openai`, `provider/gemini`, and `provider/bedrock` ignore `SessionKey` for
-now — each has its own caching semantics (anthropic already uses explicit
-cache markers).
+field entirely, never an empty string. `provider/anthropic` and
+`provider/openai` ignore `SessionKey` for now — anthropic already uses
+explicit cache markers, and openai (Responses) has its own store-based
+continuation model.
 
 The reason is measured, not theoretical: Fireworks serverless prompt caching
 is prefix-based, automatic, and PER-REPLICA. Without a routing hint, a
