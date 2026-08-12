@@ -2255,6 +2255,18 @@ func (s *Session) runEvaluator(ctx context.Context, condition string, evaluator 
 		// SessionKey names this session for an adapter that forwards it as
 		// a routing/cache-affinity hint (see provider.Request.SessionKey).
 		SessionKey: s.ID,
+		// The evaluator is a classifier, not a reasoning task: it always
+		// pins EffortOff, never the session's own level (see AGENTS.md's
+		// "Goal loop" section). Since a7c5cce, EffortOff sends the literal
+		// "off" on openaicompat and no thinking block on anthropic — both
+		// routes now spend none of the evaluator's MaxTokens 256 budget on
+		// reasoning. openai Responses is a known residual: reasoningEffort
+		// omits the reasoning object for EffortOff exactly as it does for
+		// EffortUnset (provider/openai/transcode.go), and a gpt-5-class
+		// model reasons by default with no adapter-level way to disable it
+		// — so an evaluator on that route can still spend its budget on
+		// reasoning. (Issue #124.)
+		Effort: message.EffortOff,
 	}
 	// The evaluator's stream gets the same idle watchdog worker turns get
 	// (see armIdleWatchdog): it runs at EVERY goal turn boundary, so a

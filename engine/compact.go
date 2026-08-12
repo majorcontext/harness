@@ -324,6 +324,35 @@ func (s *Session) runCompactionSummary(ctx context.Context, model message.ModelR
 		// SessionKey names this session for an adapter that forwards it as
 		// a routing/cache-affinity hint (see provider.Request.SessionKey).
 		SessionKey: s.ID,
+		// Unlike the goal evaluator (a classifier that always pins
+		// EffortOff — see runEvaluator), the summarizer benefits from the
+		// session's own quality setting: read it fresh from live session
+		// state, not the value the session started with. EffortUnset stays
+		// EffortUnset here — this only forwards, never overrides. (Issue
+		// #124.)
+		//
+		// Known residual, deliberately not addressed here (see AGENTS.md's
+		// scope-discipline rule): a non-off level lets the anthropic and
+		// openai adapters raise this request's effective output cap above
+		// compactionMaxTokens (anthropic's thinking-budget bump, openai's
+		// reasoningOutputFloor — up to ~20480 tokens at EffortHigh, versus
+		// the documented 1024 cap), and openaicompat sends reasoning_effort
+		// with no such floor at all, so a reasoning-heavy summary can be
+		// truncated at compactionMaxTokens with no StopReason guard here to
+		// catch it. A raised cap also delivers less context reduction from
+		// this call, at the layer whose own failure runs to a hard overflow
+		// that clears an active goal. Filed as issue #126 rather than
+		// expanded in this PR.
+		//
+		// Second known residual (issue #127): this call sends the folded
+		// range's real history, which can include assistant messages
+		// carrying ToolCall parts from turns that ran with no thinking
+		// block. A non-off level here enables thinking over that same
+		// history — the documented ENABLE-direction "thinking blocks
+		// expected before tool_use" reject case (see
+		// provider/anthropic/transcode.go), just reached from compaction
+		// instead of a live turn. Also filed rather than expanded here.
+		Effort: s.Effort(),
 	}
 	// The summarizer's stream gets the same idle watchdog worker turns get
 	// (see armIdleWatchdog): maybeAutoCompact runs at the top of every
