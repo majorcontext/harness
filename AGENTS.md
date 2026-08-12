@@ -200,9 +200,16 @@ loop toward a natural-language completion condition. Turn 1 prompts the raw
 condition; after **every** turn an independent, TOOL-LESS evaluator model
 (`GoalOptions.Evaluator`, resolved through the same `Config.Providers` registry,
 `MaxTokens` 256) is asked to answer `MET: <reason>` / `NOT MET: <reason>`
-(parsed leniently). A NOT MET verdict re-prompts with a fixed-template guidance
-message carrying the reason; MET returns `Achieved`. `MaxTurns` (0 = unlimited)
-bounds it. Evaluation is advisory: a retryable-class provider error from the
+(parsed leniently). The evaluator request always pins `message.EffortOff`
+(`runEvaluator`, `engine/goal.go`) — it is a classifier, not a reasoning task,
+and it never inherits the session's own effort level. `EffortOff` suppresses
+reasoning on every adapter (an explicit `"off"` on openaicompat, no thinking
+block on anthropic, a strip on openai Responses), so a gateway model that
+reasons by default cannot burn the evaluator's 256-token budget on reasoning
+before it ever emits a verdict. (Issue #124.) A NOT MET verdict re-prompts
+with a fixed-template guidance message carrying the reason; MET returns
+`Achieved`. `MaxTurns` (0 = unlimited) bounds it. Evaluation is advisory: a
+retryable-class provider error from the
 evaluator call rides the matching in-boundary backoff before the boundary
 counts as failed — the long weather-tier schedule
 (`goalRetryableMaxAttempts`, ~30min) for `overloaded`/`rate_limited`/
@@ -793,6 +800,20 @@ an empty string as "clear to provider default", and rejects an unknown session
 (404). Unlike the model endpoint it has NO provider gate (see above). The
 current level is read back on `GET /session/{id}` (`effort`), the same way the
 current model is.
+
+**Effort at the three request-build sites is NOT uniform, by design.** The
+main turn (`streamTurn`, `engine/engine.go`) sends `s.Effort()` — the
+session's current level, read fresh every request. The two internal
+tool-less calls diverge from that and from each other (issue #124): the
+goal-loop evaluator (`runEvaluator`, `engine/goal.go`) always pins
+`EffortOff` — see "Goal loop" above — because it is a classifier the model
+must answer in one line, and reasoning-by-default gateway models can burn
+its 256-token budget before ever emitting a verdict. The compaction
+summarizer (`runCompactionSummary`, `engine/compact.go`) instead inherits
+`s.Effort()`, the same as the main turn, because summarization is a real
+writing task that benefits from the session's own quality setting;
+`EffortUnset` stays `EffortUnset` there. Do not fold these two internal
+sites onto one shared rule — one is a classifier, the other is prose.
 
 ### Session affinity (prompt-cache routing hint)
 

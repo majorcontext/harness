@@ -323,6 +323,50 @@ func TestPursueGoalAchievedSecondTurn(t *testing.T) {
 	}
 }
 
+// TestPursueGoalEvaluatorRequestPinsEffortOff is the red-first test for
+// issue #124: the evaluator is a classifier, not a reasoning task, so its
+// request must pin message.EffortOff regardless of the session's own
+// effort level — never inherit it, and never leave it at EffortUnset. This
+// drives the production entry point (PursueGoal -> runEvaluator) rather
+// than calling runEvaluator directly, so it proves the wiring a real
+// evaluator call goes through.
+func TestPursueGoalEvaluatorRequestPinsEffortOff(t *testing.T) {
+	prov := &goalProvider{
+		worker: [][]provider.Event{
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "all done"}),
+		},
+		eval: [][]provider.Event{
+			evalTurn("MET: done"),
+		},
+	}
+	s := goalSession(t, prov, t.TempDir())
+	// Give the session a non-off effort level so a bug that inherits it
+	// (instead of pinning off) would be observable.
+	s.SetEffort(message.EffortHigh)
+
+	res, err := s.PursueGoal(context.Background(), "finish it", GoalOptions{Evaluator: evalModel})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Achieved {
+		t.Fatalf("result = %+v, want achieved", res)
+	}
+
+	var evalReqs int
+	for _, rq := range prov.requests {
+		if len(rq.Tools) != 0 {
+			continue // worker request
+		}
+		evalReqs++
+		if rq.Effort != message.EffortOff {
+			t.Errorf("evaluator request Effort = %q, want %q", rq.Effort, message.EffortOff)
+		}
+	}
+	if evalReqs != 1 {
+		t.Fatalf("evaluator requests = %d, want 1", evalReqs)
+	}
+}
+
 // TestPursueGoalWorkerReasoningEmptyProviderData is the round-2 forensic
 // regression guard reconstructed at the goal-loop level: the actual shape
 // the incident logs show (two complete goal-supervised turns, then death

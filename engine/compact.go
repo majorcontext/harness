@@ -324,6 +324,13 @@ func (s *Session) runCompactionSummary(ctx context.Context, model message.ModelR
 		// SessionKey names this session for an adapter that forwards it as
 		// a routing/cache-affinity hint (see provider.Request.SessionKey).
 		SessionKey: s.ID,
+		// Unlike the goal evaluator (a classifier that always pins
+		// EffortOff — see runEvaluator), the summarizer benefits from the
+		// session's own quality setting: read it fresh from live session
+		// state, not the value the session started with. EffortUnset stays
+		// EffortUnset here — this only forwards, never overrides. (Issue
+		// #124.)
+		Effort: s.Effort(),
 	}
 	// The summarizer's stream gets the same idle watchdog worker turns get
 	// (see armIdleWatchdog): maybeAutoCompact runs at the top of every
