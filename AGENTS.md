@@ -1262,6 +1262,23 @@ Rules:
   the binding spec every agent reads first. Four commits once changed the
   goal-loop retry tiers and left this file describing the old ones.
 
+## Subagent model strategy
+
+When you spawn subagents, set the model EXPLICITLY on every spawn — never
+let an implementation agent inherit the parent model by default.
+
+- **Code-writing / implementation / mechanical work uses Sonnet.** Writing
+  code, editing docs, changing config, grep/investigation, watching a
+  deploy — spawn these with the Sonnet model. Sonnet is fast and sufficient.
+- **Review, adversarial verification, and judgment gates use Opus.** The
+  review-to-zero gate and any correctness verdict deserve the stronger
+  model. Spawn review agents with Opus.
+
+The default pattern for a change: a Sonnet agent writes the PR, an Opus
+reviewer drives it to zero. Omitting the model makes a subagent inherit the
+parent's model, so an Opus parent silently runs implementation work on Opus
+— expensive and backwards. Pass the model on every spawn.
+
 ## Debugging invariants
 
 Rules learned from production incidents (2026-07-09), written so they apply
