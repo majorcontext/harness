@@ -1377,6 +1377,25 @@ reviewer drives it to zero. Omitting the model makes a subagent inherit the
 parent's model, so an Opus parent silently runs implementation work on Opus
 — expensive and backwards. Pass the model on every spawn.
 
+## One agent per plan task, not one agent per plan
+
+Dispatch a FRESH implementation agent for each plan task. Do not give one
+agent a whole multi-task plan. A monolithic agent accumulates every task
+and every review round in one context: it compacts repeatedly, drags its
+full history behind every late turn, and burns tokens without adding
+fidelity. (Measured 2026-08-12: two plan-executing agents ran ~700k-800k
+tokens each; per-round fresh reviewers ran ~120k-300k and stayed sharp.)
+
+- Plans are written for a zero-context engineer (exact files, signatures,
+  test code — see the plan format), so a fresh agent per task loses
+  nothing. Give each task-agent the plan file path and its ONE task.
+- Reviewers stay fresh per round, as they already are.
+- Keep one agent across tasks only when the tasks share heavy state that
+  a plan file cannot carry (a live debugging session, an unreproducible
+  environment).
+- Give every dispatch exact file:line pointers instead of letting the
+  agent re-derive repo context by grep.
+
 ## Never end a turn to wait on an external event
 
 An agent that ends its turn "waiting" on an external event can wait
