@@ -1338,6 +1338,24 @@ reviewer drives it to zero. Omitting the model makes a subagent inherit the
 parent's model, so an Opus parent silently runs implementation work on Opus
 — expensive and backwards. Pass the model on every spawn.
 
+## Never end a turn to wait on an external event
+
+An agent that ends its turn "waiting" on an external event can wait
+forever. An external event is any completion signal from outside the
+agent's own tool calls: a GitHub workflow run, a deploy, a remote queue.
+No notification arrives for an external event. Six agents stalled this
+way on 2026-08-12 alone.
+
+- Watch a workflow run with `gh run watch <id> --exit-status` in the
+  foreground. Do not poll once and yield.
+- A spawned subagent (a reviewer) DOES notify on completion — but its
+  reply can misroute when it cannot resolve your address. If a verdict
+  is overdue, message the reviewer and ask; do not keep waiting.
+- To wait on any other external event, use a blocking command in the
+  foreground, or the Monitor tool with an until-loop when the harness
+  blocks foreground sleep. End your turn only when the task is complete
+  or you are blocked on input only a human can provide.
+
 ## Debugging invariants
 
 Rules learned from production incidents (2026-07-09), written so they apply
