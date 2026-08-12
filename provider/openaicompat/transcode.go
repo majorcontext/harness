@@ -43,8 +43,8 @@ type apiRequest struct {
 	Stream        bool              `json:"stream"`
 	StreamOptions *apiStreamOptions `json:"stream_options,omitempty"`
 	// ReasoningEffort is the OpenAI-compatible top-level reasoning control
-	// (one of minimal, low, medium, high). Empty sends no control. A gateway
-	// (Bifrost) maps it to the upstream provider's own thinking knob.
+	// (one of off, minimal, low, medium, high). Empty sends no control. A
+	// gateway (Bifrost) maps it to the upstream provider's own thinking knob.
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	// User is the OpenAI-compatible top-level routing/cache-affinity hint,
 	// set from Request.SessionKey (see AGENTS.md, "Session affinity"
@@ -131,8 +131,15 @@ func transcodeRequest(req *provider.Request, family string) (*apiRequest, error)
 		Stream:        true,
 		StreamOptions: &apiStreamOptions{IncludeUsage: true},
 	}
-	// A non-off effort level sets the top-level reasoning_effort control;
-	// EffortUnset/EffortOff send nothing (gateway/model default).
+	// A non-off effort level sets the top-level reasoning_effort control to
+	// the level string. EffortOff sends the literal "off" (an explicit
+	// disable, not silence): a gateway upstream can default to reasoning ON
+	// when the field is absent, and unset must never send the field at all
+	// (unset means "provider default", not "reasoning off"). Measured
+	// (2026-08-12): Fireworks kimi-k3 through Bifrost streamed a full
+	// reasoning block by default with the field absent; sending the literal
+	// "off" fully suppressed it. EffortUnset omits the field, exactly as
+	// before.
 	//
 	// Unlike the anthropic and openai adapters, this one does NOT drop
 	// temperature/top_p or raise a max_tokens floor here. This is a generic
@@ -145,7 +152,10 @@ func transcodeRequest(req *provider.Request, family string) (*apiRequest, error)
 	// reasoning without a "max_tokens must exceed budget" error — so no local
 	// adjustment is needed for the deployed route. A future non-normalizing
 	// gateway would need per-provider handling here.
-	if req.Effort.Reasoning() {
+	switch {
+	case req.Effort == message.EffortOff:
+		out.ReasoningEffort = "off"
+	case req.Effort.Reasoning():
 		out.ReasoningEffort = string(req.Effort)
 	}
 
