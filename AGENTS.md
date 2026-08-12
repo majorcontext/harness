@@ -818,12 +818,20 @@ summarizer (`runCompactionSummary`, `engine/compact.go`) instead inherits
 writing task that benefits from the session's own quality setting;
 `EffortUnset` stays `EffortUnset` there. Do not fold these two internal
 sites onto one shared rule — one is a classifier, the other is prose.
-Known residual (not addressed by issue #124, filed as a follow-up): a
+Known residual (not addressed by issue #124, filed as issue #126): a
 non-off session effort can raise the summarizer's effective output cap
 above `compactionMaxTokens` (the anthropic and openai adapters both bump
-the cap for reasoning), and openaicompat applies no cap floor at all, so a
+the cap for reasoning — up to ~20480 tokens at `EffortHigh`, versus the
+documented 1024 cap), and openaicompat applies no cap floor at all, so a
 reasoning-heavy summary can truncate silently — `runCompactionSummary` has
-no `StopReason` guard to catch it.
+no `StopReason` guard to catch it. A raised cap also delivers less context
+reduction from this call, at the layer whose own failure runs to a hard
+overflow that clears an active goal. A second, related residual (issue
+#127): the summarizer sends folded history containing `ToolCall` parts
+from turns that ran with no thinking block, and a non-off level here
+enables thinking over that same history — the documented ENABLE-direction
+"thinking blocks expected before tool_use" reject case, just reached from
+compaction instead of a live turn.
 
 ### Session affinity (prompt-cache routing hint)
 

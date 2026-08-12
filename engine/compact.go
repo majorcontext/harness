@@ -335,10 +335,23 @@ func (s *Session) runCompactionSummary(ctx context.Context, model message.ModelR
 		// scope-discipline rule): a non-off level lets the anthropic and
 		// openai adapters raise this request's effective output cap above
 		// compactionMaxTokens (anthropic's thinking-budget bump, openai's
-		// reasoningOutputFloor), and openaicompat sends reasoning_effort
+		// reasoningOutputFloor — up to ~20480 tokens at EffortHigh, versus
+		// the documented 1024 cap), and openaicompat sends reasoning_effort
 		// with no such floor at all, so a reasoning-heavy summary can be
 		// truncated at compactionMaxTokens with no StopReason guard here to
-		// catch it. Filed as a follow-up rather than expanded in this PR.
+		// catch it. A raised cap also delivers less context reduction from
+		// this call, at the layer whose own failure runs to a hard overflow
+		// that clears an active goal. Filed as issue #126 rather than
+		// expanded in this PR.
+		//
+		// Second known residual (issue #127): this call sends the folded
+		// range's real history, which can include assistant messages
+		// carrying ToolCall parts from turns that ran with no thinking
+		// block. A non-off level here enables thinking over that same
+		// history — the documented ENABLE-direction "thinking blocks
+		// expected before tool_use" reject case (see
+		// provider/anthropic/transcode.go), just reached from compaction
+		// instead of a live turn. Also filed rather than expanded here.
 		Effort: s.Effort(),
 	}
 	// The summarizer's stream gets the same idle watchdog worker turns get
