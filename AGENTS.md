@@ -754,7 +754,12 @@ the two providers default differently:
   every pre-effort-control build did (`stripReasoning` in
   `provider/openai/transcode.go`, gated on `req.Effort == EffortOff`). So
   `unset != off` here — do NOT re-fold the openai strip back onto
-  `!Reasoning()`. (Regression: NEP-5272 review of PR #117.)
+  `!Reasoning()`. (Regression: NEP-5272 review of PR #117.) One residual the
+  off-only strip cannot enforce: a `SetModel` swap to a NON-reasoning openai
+  model (gpt-5 -> gpt-4o) at unset effort still replays the stored items — the
+  same per-model gating punt the enable direction has, so the caller (a
+  dashboard picker) clears/re-validates effort on a model swap, NOT this
+  transcoder.
 
 The reverse (ENABLE) direction — turning reasoning ON over a prior tool_use
 that lacks a thinking block — stays a documented limitation, since a signed

@@ -166,6 +166,16 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 	// !Reasoning() because Claude emits no thinking block without the control;
 	// an OpenAI default turn always carries one. Do NOT re-fold this back into
 	// reasoningEnabled. (Regression: NEP-5272 review of PR #117.)
+	//
+	// One residual the off-only strip cannot enforce: a SetModel swap to a
+	// non-reasoning OpenAI (Responses) model (e.g. gpt-5 -> gpt-4o) while effort
+	// stays EffortUnset still replays the stored items (same Family), exactly as
+	// pre-effort-control builds always did. If that target rejects input
+	// reasoning items it 400s durably. This is the same per-model gating punt
+	// documented for the enable direction — the caller (a dashboard picker)
+	// clears/re-validates effort on a model swap; the Responses API is lenient
+	// about input reasoning items, so this stays a caller-gated, live-gated
+	// deferral, not something this transcoder guesses at from the model ref.
 	stripReasoning := req.Effort == message.EffortOff
 	if reasoningEnabled {
 		out.Reasoning = &apiReasoning{Effort: effort}
