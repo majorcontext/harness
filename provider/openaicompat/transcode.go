@@ -46,6 +46,11 @@ type apiRequest struct {
 	// (one of minimal, low, medium, high). Empty sends no control. A gateway
 	// (Bifrost) maps it to the upstream provider's own thinking knob.
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	// User is the OpenAI-compatible top-level routing/cache-affinity hint,
+	// set from Request.SessionKey (see AGENTS.md, "Session affinity"
+	// section, for the Fireworks per-replica prompt-cache evidence). Empty
+	// sends no field.
+	User string `json:"user,omitempty"`
 }
 
 type apiStreamOptions struct {
@@ -142,6 +147,14 @@ func transcodeRequest(req *provider.Request, family string) (*apiRequest, error)
 	// gateway would need per-provider handling here.
 	if req.Effort.Reasoning() {
 		out.ReasoningEffort = string(req.Effort)
+	}
+
+	// SessionKey, when set, becomes the wire "user" field: a stable routing
+	// hint a gateway (Bifrost) or provider (Fireworks) can use to pin a
+	// session's requests to the same backend replica, keeping its
+	// prefix-based prompt cache warm across turns. Empty omits the field.
+	if req.SessionKey != "" {
+		out.User = req.SessionKey
 	}
 
 	for _, t := range req.Tools {

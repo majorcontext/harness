@@ -787,6 +787,35 @@ an empty string as "clear to provider default", and rejects an unknown session
 current level is read back on `GET /session/{id}` (`effort`), the same way the
 current model is.
 
+### Session affinity (prompt-cache routing hint)
+
+`provider.Request.SessionKey` carries a stable, opaque session identifier on
+every request the engine builds — the same choke-point pattern `Effort`
+above uses. The engine sets it to `Session.ID` at all three request-build
+sites: `streamTurn` (`engine/engine.go`, the main turn), `runEvaluator`
+(`engine/goal.go`, the goal-loop evaluator), and `runCompactionSummary`
+(`engine/compact.go`, the compaction summarizer). It is not a secret and is
+never persisted.
+
+`provider/openaicompat` is the ONLY adapter that forwards it: a non-empty
+`SessionKey` sets the wire top-level `user` field; an empty key omits the
+field entirely, never an empty string. `provider/anthropic`, `provider/
+openai`, `provider/gemini`, and `provider/bedrock` ignore `SessionKey` for
+now — each has its own caching semantics (anthropic already uses explicit
+cache markers).
+
+The reason is measured, not theoretical: Fireworks serverless prompt caching
+is prefix-based, automatic, and PER-REPLICA. Without a routing hint, a
+re-sent request can land on a different replica and miss its own prefix
+cache. A live probe through Bifrost (2026-08-12) sent a byte-identical
+150k-token prompt twice: with no `user` field, the second call still read
+`cached_tokens=0` at 10.8s time-to-first-token; with a stable `user` field,
+the second call read `cached_tokens=150,300` at 2.8s time-to-first-token,
+through the same gateway. Harness sessions re-send the whole history every
+request (stateless transcoding), so a long session on the openaicompat route
+(a gateway to Fireworks kimi-k3 and similar models) pays full prefill on
+nearly every turn without this hint.
+
 ### Deliberately absent — do not add
 
 - **No permission system.** Tool calls are never gated. There is no `permission.ask` hook, no approval UI, no pre-flight rule evaluation.

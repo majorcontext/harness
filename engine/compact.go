@@ -321,6 +321,9 @@ func (s *Session) runCompactionSummary(ctx context.Context, model message.ModelR
 		System:    []string{compactionSystemPrompt},
 		Messages:  append([]message.Message(nil), folded...),
 		MaxTokens: compactionMaxTokens,
+		// SessionKey names this session for an adapter that forwards it as
+		// a routing/cache-affinity hint (see provider.Request.SessionKey).
+		SessionKey: s.ID,
 	}
 	// The summarizer's stream gets the same idle watchdog worker turns get
 	// (see armIdleWatchdog): maybeAutoCompact runs at the top of every
