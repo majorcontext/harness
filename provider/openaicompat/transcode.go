@@ -43,8 +43,8 @@ type apiRequest struct {
 	Stream        bool              `json:"stream"`
 	StreamOptions *apiStreamOptions `json:"stream_options,omitempty"`
 	// ReasoningEffort is the OpenAI-compatible top-level reasoning control
-	// (one of minimal, low, medium, high). Empty sends no control. A gateway
-	// (Bifrost) maps it to the upstream provider's own thinking knob.
+	// (one of off, minimal, low, medium, high). Empty sends no control. A
+	// gateway (Bifrost) maps it to the upstream provider's own thinking knob.
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	// User is the OpenAI-compatible top-level routing/cache-affinity hint,
 	// set from Request.SessionKey (see AGENTS.md, "Session affinity"
