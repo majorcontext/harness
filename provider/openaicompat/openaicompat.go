@@ -386,7 +386,11 @@ type wireChunk struct {
 		Delta struct {
 			Content          string `json:"content"`
 			ReasoningContent string `json:"reasoning_content"`
-			ToolCalls        []struct {
+			// Reasoning is OpenRouter's field name for the same data
+			// reasoning_content carries on DeepSeek/Bifrost. A gateway sends
+			// one or the other, never both, so handle both fields.
+			Reasoning string `json:"reasoning"`
+			ToolCalls []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
 				Function struct {
@@ -444,10 +448,18 @@ func (s *stream) handle(data []byte) error {
 		s.text.WriteString(choice.Delta.Content)
 		s.queue = append(s.queue, provider.Event{Type: provider.EventTextDelta, Text: choice.Delta.Content})
 	}
-	if choice.Delta.ReasoningContent != "" {
+	// A gateway carries reasoning in reasoning_content (DeepSeek/Bifrost) or
+	// reasoning (OpenRouter). Surface whichever is present as a Reasoning part.
+	// The two are mutually exclusive (else-if): a gateway that echoed BOTH in one
+	// chunk would otherwise double-count the same reasoning text.
+	if rc := choice.Delta.ReasoningContent; rc != "" {
 		s.haveReasoning = true
-		s.reasoningText.WriteString(choice.Delta.ReasoningContent)
-		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: choice.Delta.ReasoningContent})
+		s.reasoningText.WriteString(rc)
+		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rc})
+	} else if rc := choice.Delta.Reasoning; rc != "" {
+		s.haveReasoning = true
+		s.reasoningText.WriteString(rc)
+		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rc})
 	}
 	for _, tc := range choice.Delta.ToolCalls {
 		if s.toolCalls == nil {

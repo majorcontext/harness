@@ -28,6 +28,17 @@ func baseRequest(msgs ...message.Message) *provider.Request {
 	}
 }
 
+// thinkingRequest is baseRequest with extended thinking ENABLED (Effort high).
+// Stored Reasoning parts are replayed only when thinking is enabled, so a test
+// that exercises the reasoning-block replay/drop logic must use this — a
+// thinking-off request strips every Reasoning part before that logic runs (see
+// transcodeParts).
+func thinkingRequest(msgs ...message.Message) *provider.Request {
+	r := baseRequest(msgs...)
+	r.Effort = message.EffortHigh
+	return r
+}
+
 func TestTranscodeSystemAndCacheControl(t *testing.T) {
 	out := mustTranscode(t, baseRequest(
 		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}},
@@ -49,7 +60,7 @@ func TestTranscodeSystemAndCacheControl(t *testing.T) {
 }
 
 func TestTranscodeForeignReasoningDroppedAndMerged(t *testing.T) {
-	out := mustTranscode(t, baseRequest(
+	out := mustTranscode(t, thinkingRequest(
 		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "first"}}},
 		// Assistant turn whose only content is another provider's
 		// reasoning: transcodes to nothing.
@@ -94,7 +105,7 @@ func TestTranscodeReasoningEmptyProviderDataDropped(t *testing.T) {
 		{"empty-string-literal", json.RawMessage("")},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			req := baseRequest(
+			req := thinkingRequest(
 				message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
 				message.Message{Role: message.RoleAssistant, Parts: message.Parts{
 					&message.Reasoning{Text: "let me think", ProviderData: message.ProviderData{
@@ -121,7 +132,7 @@ func TestTranscodeReasoningEmptyProviderDataDropped(t *testing.T) {
 }
 
 func TestTranscodeThinkingReplay(t *testing.T) {
-	out := mustTranscode(t, baseRequest(
+	out := mustTranscode(t, thinkingRequest(
 		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
 		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
 			&message.Reasoning{Text: "let me think", ProviderData: message.ProviderData{
@@ -163,7 +174,7 @@ func TestTranscodeThinkingReplay(t *testing.T) {
 // unaffected.
 func TestTranscodeOversizedReasoningProviderDataDropped(t *testing.T) {
 	huge := append(append(json.RawMessage(`{"signature":"`), []byte(strings.Repeat("A", 300*1024))...), []byte(`"}`)...)
-	req := baseRequest(
+	req := thinkingRequest(
 		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
 		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
 			&message.Reasoning{Text: "ordinary", ProviderData: message.ProviderData{
@@ -315,7 +326,7 @@ func TestTranscodeEmptyThinkingKeepsField(t *testing.T) {
 	// text is empty; omitempty dropping it causes an invalid_request_error
 	// (found by harness building harness — a replayed empty thinking block
 	// 400ed mid-session).
-	out := mustTranscode(t, baseRequest(
+	out := mustTranscode(t, thinkingRequest(
 		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
 		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
 			&message.Reasoning{Text: "", ProviderData: message.ProviderData{
