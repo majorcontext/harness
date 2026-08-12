@@ -49,6 +49,16 @@ type apiRequest struct {
 	// Reasoning carries the reasoning-effort control. Nil sends no control,
 	// so the model runs its own default.
 	Reasoning *apiReasoning `json:"reasoning,omitempty"`
+	// PromptCacheKey is the Responses API's documented routing/cache-affinity
+	// hint, set from Request.SessionKey (see AGENTS.md, "Session affinity"
+	// section, for the Fireworks/Bifrost measured evidence this mechanism is
+	// modeled on). OpenAI combines it with the prefix hash to raise the
+	// chance repeat requests land on the same cache-holding backend. Empty
+	// sends no field. This is a DIFFERENT field from the openaicompat
+	// adapter's "user": that adapter targets a generic chat-completions
+	// gateway; this one targets the Responses API directly, whose own
+	// affinity hint is prompt_cache_key, not user.
+	PromptCacheKey string `json:"prompt_cache_key,omitempty"`
 }
 
 // apiReasoning is the OpenAI Responses reasoning control. Effort is one of
@@ -150,6 +160,9 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 		Stream:          true,
 		Store:           false,
 		Include:         []string{"reasoning.encrypted_content"},
+	}
+	if req.SessionKey != "" {
+		out.PromptCacheKey = req.SessionKey
 	}
 	effort, reasoningEnabled := reasoningEffort(req.Effort)
 	// stripReasoning is DELIBERATELY asymmetric with reasoningEnabled and with
