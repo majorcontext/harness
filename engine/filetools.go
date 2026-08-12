@@ -30,14 +30,20 @@ const (
 	readFileMaxLineLen = 2000
 )
 
-// readFileMaxImageBytes bounds the file size read_file will read in full
-// when it detects an image (see sniffImageMediaType). The transcode-time
-// imageclamp pass (imageclamp.Clamp) enforces each provider's own wire
-// size limit; this cap exists only to stop read_file itself from loading
-// an unbounded file into memory before that clamp ever runs. It is a var,
-// not a const, so a test can shrink it instead of writing a real
-// oversized fixture.
+// readFileMaxImageBytes bounds the total bytes read_file will read from a
+// detected image. The transcode-time imageclamp pass (imageclamp.Clamp)
+// enforces each provider's own wire size limit; this cap exists only to
+// stop read_file itself from loading an unbounded file into memory before
+// that clamp ever runs. readImageIfDetected checks this bound against the
+// read itself (an io.LimitReader over the open file handle), never against
+// a separately captured os.Stat size, which a file that grows after the
+// stat could outrun. It is a var, not a const, so a test can shrink it
+// instead of writing a real oversized fixture.
 var readFileMaxImageBytes = 20 * 1024 * 1024 // 20MB
+
+// imageSniffLen is how many leading bytes classify a file by magic bytes —
+// the same bound http.DetectContentType itself considers.
+const imageSniffLen = 512
 
 // readFileImageMediaTypes lists the image formats read_file recognizes and
 // returns as a message.Blob for the model to see directly. Every other
@@ -51,28 +57,79 @@ var readFileImageMediaTypes = map[string]bool{
 	"image/webp": true,
 }
 
-// sniffImageMediaType classifies the file at path by its magic bytes —
-// never by its extension. It reads at most the first 512 bytes (all
-// http.DetectContentType considers) so a large file is never fully read
-// just to answer this question. A file named ".txt" that actually holds
-// PNG bytes is reported as image/png; a file named ".png" that actually
-// holds plain text is reported as a non-image content type. isImage is
-// true only for a format read_file knows how to hand to the model as a
-// Blob (see readFileImageMediaTypes).
-func sniffImageMediaType(path string) (mediaType string, isImage bool, err error) {
+// readImageIfDetected opens path once and, if it is a recognized image,
+// returns its full bytes, media type, and pixel dimensions. It reports
+// ok=false — never an error — for a file that is not a recognized image,
+// so the caller falls through to the ordinary text read unchanged.
+//
+// Classification is by magic bytes only (http.DetectContentType), never by
+// the file's extension: a ".txt" that is really a PNG is still recognized;
+// a ".png" that is really text is not. The sniff read uses io.ReadFull, not
+// a single Read, because one read(2) can return short on a pipe or FUSE
+// mount (this repo already treats such mounts as first-class, see config
+// session_sync: "volume") — a short read must never silently misclassify a
+// real image as plain text.
+//
+// The image body must also decode with image.DecodeConfig before this
+// function commits to the image path: a corrupt or truncated file that
+// merely opens with a matching magic-byte prefix (PNG's 8-byte signature,
+// JPEG's SOI marker, WebP's RIFF/WEBP container) fails PNG/JPEG/WebP's own
+// structural header checks and falls back to a plain text read instead of
+// shipping a Blob the model cannot use — cost-free, since the same decode
+// already runs to read the file's pixel dimensions for the Text summary.
+// This gate is NOT airtight for GIF: the GIF87a/GIF89a header has no
+// checksum, so any bytes following a literal "GIF87a"/"GIF89a" prefix
+// still "decode" with fabricated width/height. A real-world text file
+// beginning with those exact six bytes is vanishingly unlikely; this is a
+// documented, accepted residual, not a silent gap.
+//
+// The total read is bounded at readFileMaxImageBytes+1 bytes via
+// io.LimitReader over the SAME open handle the sniff used — one open, one
+// read pass, and a cap that binds on bytes actually read rather than a
+// pre-read os.Stat size a concurrently growing file could outrun. An
+// over-cap image returns a non-nil err (ok=false, no partial data) so the
+// caller reports a clear error instead of falling through to an unbounded
+// read of a file already known to be an oversized image.
+func readImageIfDetected(path string) (data []byte, mediaType string, width, height int, ok bool, err error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", false, err
+		return nil, "", 0, 0, false, err
 	}
 	defer f.Close()
 
-	buf := make([]byte, 512)
-	n, err := f.Read(buf)
-	if n == 0 && err != nil && err != io.EOF {
-		return "", false, err
+	sniff := make([]byte, imageSniffLen)
+	n, rerr := io.ReadFull(f, sniff)
+	if rerr != nil && rerr != io.ErrUnexpectedEOF && rerr != io.EOF {
+		return nil, "", 0, 0, false, rerr
 	}
-	ct := http.DetectContentType(buf[:n])
-	return ct, readFileImageMediaTypes[ct], nil
+	sniff = sniff[:n]
+	mediaType = http.DetectContentType(sniff)
+	if !readFileImageMediaTypes[mediaType] {
+		return nil, mediaType, 0, 0, false, nil
+	}
+
+	budget := int64(readFileMaxImageBytes) - int64(len(sniff))
+	if budget < 0 {
+		budget = 0
+	}
+	rest, rerr := io.ReadAll(io.LimitReader(f, budget+1))
+	if rerr != nil {
+		return nil, mediaType, 0, 0, false, rerr
+	}
+	full := append(sniff, rest...)
+	if len(full) > readFileMaxImageBytes {
+		return nil, mediaType, 0, 0, false, fmt.Errorf("image (%s) exceeds the %d-byte read_file image limit", mediaType, readFileMaxImageBytes)
+	}
+
+	cfg, _, derr := image.DecodeConfig(bytes.NewReader(full))
+	if derr != nil {
+		// Sniffed as an image by magic bytes, but the body does not decode
+		// as one (corrupt, truncated, or a false-positive magic-byte
+		// match). Fall through to the ordinary text read rather than
+		// shipping a Blob the model cannot use.
+		return nil, mediaType, 0, 0, false, nil
+	}
+	return full, mediaType, cfg.Width, cfg.Height, true, nil
 }
 
 // resolvePath resolves a tool path argument against the session working
@@ -88,7 +145,7 @@ func readFileTool() Tool {
 	return Tool{
 		Def: provider.ToolDef{
 			Name:        "read_file",
-			Description: "Read a file and return its content with line numbers (N→ prefixes). Prefer this over shell commands like cat, head, or sed for reading files. Relative paths resolve against the session working directory.",
+			Description: "Read a file and return its content with line numbers (N→ prefixes). A recognized image file (PNG, JPEG, GIF, WebP) is returned as an actual image instead, so use this tool to view a screenshot or picture. Prefer this over shell commands like cat, head, or sed for reading files. Relative paths resolve against the session working directory.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -117,18 +174,12 @@ func readFileTool() Tool {
 				return nil, fmt.Errorf("read_file: %s is a directory", path)
 			}
 
-			if mediaType, isImage, sniffErr := sniffImageMediaType(path); sniffErr == nil && isImage {
-				if info.Size() > int64(readFileMaxImageBytes) {
-					return nil, fmt.Errorf("read_file: %s is a %d-byte %s image, over the %d-byte read_file image limit", path, info.Size(), mediaType, readFileMaxImageBytes)
-				}
-				imgData, err := os.ReadFile(path)
-				if err != nil {
-					return nil, fmt.Errorf("read_file: %w", err)
-				}
-				summary := fmt.Sprintf("%s image, %d bytes", mediaType, len(imgData))
-				if cfg, _, err := image.DecodeConfig(bytes.NewReader(imgData)); err == nil {
-					summary = fmt.Sprintf("%s image, %d bytes, %dx%d pixels", mediaType, len(imgData), cfg.Width, cfg.Height)
-				}
+			imgData, mediaType, width, height, isImage, imgErr := readImageIfDetected(path)
+			if imgErr != nil {
+				return nil, fmt.Errorf("read_file: %s: %w", path, imgErr)
+			}
+			if isImage {
+				summary := fmt.Sprintf("image (%s), %d bytes, %dx%d pixels", mediaType, len(imgData), width, height)
 				return message.Parts{
 					&message.Text{Text: summary},
 					&message.Blob{MediaType: mediaType, Data: imgData},

@@ -296,7 +296,7 @@ func TestReadFileImageExtensionLieTextNamedPNGStaysText(t *testing.T) {
 // TestReadFileImageExtensionLiePNGNamedTxtIsSniffedAsImage is the missing-
 // direction half: a file named .txt that actually holds PNG magic bytes must
 // still be recognized as an image. Extension is a hint only; magic bytes are
-// authoritative (AGENTS.md: "never trust extension alone").
+// authoritative (AGENTS.md: read_file classifies "never by its extension").
 func TestReadFileImageExtensionLiePNGNamedTxtIsSniffedAsImage(t *testing.T) {
 	dir := t.TempDir()
 	data := tinyPNG(t)
@@ -328,15 +328,90 @@ func TestReadFileImageOverCapReturnsTextErrorNoBlob(t *testing.T) {
 	}
 
 	orig := readFileMaxImageBytes
-	readFileMaxImageBytes = len(data) - 1 // force this exact file over cap
+	wantCap := len(data) - 1
+	readFileMaxImageBytes = wantCap // force this exact file over cap
 	t.Cleanup(func() { readFileMaxImageBytes = orig })
 
-	_, err := runToolParts(t, readFileTool(), dir, `{"path":"shot.png"}`)
+	parts, err := runToolParts(t, readFileTool(), dir, `{"path":"shot.png"}`)
 	if err == nil {
 		t.Fatal("want error for over-cap image")
 	}
-	if !strings.Contains(err.Error(), "image") {
-		t.Errorf("error = %q, want it to name the image/limit", err)
+	if parts != nil {
+		t.Errorf("parts = %+v, want nil (no Blob) on an over-cap image error", parts)
+	}
+	wantSubstr := fmt.Sprintf("%d-byte read_file image limit", wantCap)
+	if !strings.Contains(err.Error(), wantSubstr) {
+		t.Errorf("error = %q, want it to contain %q", err, wantSubstr)
+	}
+}
+
+// TestReadFileImageTruncatedPNGFallsBackToText proves the DecodeConfig gate
+// in readImageIfDetected: a file whose first 8 bytes are a genuine PNG
+// signature, but whose body is not a real PNG (a truncated download, a
+// corrupt write), fails image.DecodeConfig and is read as ordinary text
+// instead of shipping a Blob the model cannot use.
+func TestReadFileImageTruncatedPNGFallsBackToText(t *testing.T) {
+	dir := t.TempDir()
+	pngSignature := []byte("\x89PNG\r\n\x1a\n")
+	body := append(pngSignature, []byte("not a real IHDR chunk")...)
+	if err := os.WriteFile(filepath.Join(dir, "broken.png"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	parts, err := runToolParts(t, readFileTool(), dir, `{"path":"broken.png"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 1 {
+		t.Fatalf("parts = %d, want 1 (Text only, no Blob for an undecodable image): %+v", len(parts), parts)
+	}
+	if _, ok := parts[0].(*message.Text); !ok {
+		t.Fatalf("parts[0] = %T, want *message.Text", parts[0])
+	}
+}
+
+// TestReadFileImageToolCallProducesBlobToolResult drives read_file through
+// the SAME production dispatch path a real turn uses — an assistant
+// ToolCall executed by Session.runToolCalls, not a direct Tool.Run call —
+// closing the gap between the engine-level Tool.Run tests above and the
+// transcode-level golden test in provider/anthropic/transcode_test.go,
+// which hand-builds a ToolResult shaped like read_file's output rather than
+// obtaining one from read_file itself (AGENTS.md's "verification drives
+// the production entry point" rule).
+func TestReadFileImageToolCallProducesBlobToolResult(t *testing.T) {
+	dir := t.TempDir()
+	data := tinyPNG(t)
+	if err := os.WriteFile(filepath.Join(dir, "shot.png"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := NewSession(Config{WorkDir: dir})
+	asst := &message.Message{
+		Role: message.RoleAssistant,
+		Parts: message.Parts{
+			&message.ToolCall{CallID: "call1", Name: "read_file", Arguments: json.RawMessage(`{"path":"shot.png"}`)},
+		},
+	}
+
+	results := s.runToolCalls(context.Background(), asst)
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want 1", len(results))
+	}
+	tr, ok := results[0].(*message.ToolResult)
+	if !ok {
+		t.Fatalf("results[0] = %T, want *message.ToolResult", results[0])
+	}
+	if tr.IsError {
+		t.Fatalf("ToolResult.IsError = true, content: %+v", tr.Content)
+	}
+	if len(tr.Content) != 2 {
+		t.Fatalf("ToolResult.Content = %d parts, want 2 (Text, Blob): %+v", len(tr.Content), tr.Content)
+	}
+	blob, ok := tr.Content[1].(*message.Blob)
+	if !ok {
+		t.Fatalf("ToolResult.Content[1] = %T, want *message.Blob", tr.Content[1])
+	}
+	if blob.MediaType != "image/png" || !bytes.Equal(blob.Data, data) {
+		t.Errorf("Blob = %+v, want MediaType image/png and Data matching the source file", blob)
 	}
 }
 

@@ -249,7 +249,7 @@ func TestTranscodeToolCallAndResult(t *testing.T) {
 // TestTranscodeReadFileImageArrivesAsRealWireImageBlock is the read_file
 // counterpart of TestTranscodeToolCallAndResult above: engine/filetools.go's
 // read_file tool now returns exactly this shape for an image file — a Text
-// summary part ("image/png image, N bytes, WxH pixels") followed by a Blob
+// summary part ("image (image/png), N bytes, WxH pixels") followed by a Blob
 // part carrying the real file bytes (engine/filetools_test.go's
 // TestReadFileImagePNGReturnsTextAndBlob proves read_file itself builds this
 // shape from its own production entry point, Tool.Run). This test proves the
@@ -263,7 +263,7 @@ func TestTranscodeToolCallAndResult(t *testing.T) {
 // unrelated wire-format behavior this PR does not change.
 func TestTranscodeReadFileImageArrivesAsRealWireImageBlock(t *testing.T) {
 	png := tinyPNG(t)
-	summary := fmt.Sprintf("image/png image, %d bytes, 2x2 pixels", len(png))
+	summary := fmt.Sprintf("image (image/png), %d bytes, 2x2 pixels", len(png))
 	out := mustTranscode(t, baseRequest(
 		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "read shot.png"}}},
 		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
