@@ -1363,19 +1363,26 @@ Rules:
 ## Subagent model strategy
 
 When you spawn subagents, set the model EXPLICITLY on every spawn — never
-let an implementation agent inherit the parent model by default.
+let an implementation agent inherit the parent model by default. The rule
+is a capability-tier split, not a vendor or model-name rule; it applies to
+whatever frontier family is current.
 
-- **Code-writing / implementation / mechanical work uses Sonnet.** Writing
-  code, editing docs, changing config, grep/investigation, watching a
-  deploy — spawn these with the Sonnet model. Sonnet is fast and sufficient.
-- **Review, adversarial verification, and judgment gates use Opus.** The
-  review-to-zero gate and any correctness verdict deserve the stronger
-  model. Spawn review agents with Opus.
+- **Code-writing / implementation / mechanical work uses the fast
+  mid-tier.** Writing code, editing docs, changing config,
+  grep/investigation, watching a deploy — the tier that is fast, cheap,
+  and sufficient for well-specified work (today: Claude Sonnet; the
+  equivalent tier elsewhere: GPT mini/frontier-fast class, Gemini Flash).
+- **Review, adversarial verification, and judgment gates use the
+  strongest tier.** The review-to-zero gate and any correctness verdict
+  deserve the strongest available model (today: Claude Opus; elsewhere:
+  the full frontier flagship, never a mini/fast variant).
 
-The default pattern for a change: a Sonnet agent writes the PR, an Opus
-reviewer drives it to zero. Omitting the model makes a subagent inherit the
-parent's model, so an Opus parent silently runs implementation work on Opus
-— expensive and backwards. Pass the model on every spawn.
+The default pattern for a change: a mid-tier agent writes the PR, a
+strongest-tier reviewer drives it to zero. Omitting the model makes a
+subagent inherit the parent's model, so a strong parent silently runs
+implementation work at flagship price — expensive and backwards. Pass the
+model on every spawn. When a model family changes, re-map the two tiers
+and keep the split; do not carry a stale model name forward.
 
 ## One agent per plan task, not one agent per plan
 
