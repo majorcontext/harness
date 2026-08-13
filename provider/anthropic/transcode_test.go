@@ -3,6 +3,7 @@ package anthropic
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -242,6 +243,63 @@ func TestTranscodeToolCallAndResult(t *testing.T) {
 	}
 	if len(tr.Content) != 2 || tr.Content[0].Text != "file.go" || tr.Content[1].Source.Type != "base64" {
 		t.Errorf("tool_result content = %+v", tr.Content)
+	}
+}
+
+// TestTranscodeReadFileImageArrivesAsRealWireImageBlock is the read_file
+// counterpart of TestTranscodeToolCallAndResult above: engine/filetools.go's
+// read_file tool now returns exactly this shape for an image file — a Text
+// summary part ("image (image/png), N bytes, WxH pixels") followed by a Blob
+// part carrying the real file bytes (engine/filetools_test.go's
+// TestReadFileImagePNGReturnsTextAndBlob proves read_file itself builds this
+// shape from its own production entry point, Tool.Run). This test proves the
+// OTHER half: that shape, once it reaches a tool_result, transcodes to a
+// real wire "image" content block on the Anthropic route — the only route
+// that recurses into tool-result Blobs at all (Limits.RecurseToolResults;
+// see imageclamp.Limits' doc comment) — with its bytes intact, not a text
+// placeholder or an omission note. openai and openaicompat instead replace a
+// tool-result Blob with a "[N image attachment(s) omitted]" note
+// (toolResultOutput, provider/openai/transcode.go); that is pre-existing,
+// unrelated wire-format behavior this PR does not change.
+func TestTranscodeReadFileImageArrivesAsRealWireImageBlock(t *testing.T) {
+	png := tinyPNG(t)
+	summary := fmt.Sprintf("image (image/png), %d bytes, 2x2 pixels", len(png))
+	out := mustTranscode(t, baseRequest(
+		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "read shot.png"}}},
+		message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolCall{CallID: "toolu_rf", Name: "read_file", Arguments: json.RawMessage(`{"path":"shot.png"}`)},
+		}},
+		message.Message{Role: message.RoleTool, Parts: message.Parts{
+			&message.ToolResult{CallID: "toolu_rf", Content: message.Parts{
+				&message.Text{Text: summary},
+				&message.Blob{MediaType: "image/png", Data: png},
+			}},
+		}},
+	))
+
+	res := out.Messages[2]
+	if res.Role != "user" {
+		t.Fatalf("tool result role = %s", res.Role)
+	}
+	tr := res.Content[0]
+	if tr.Type != "tool_result" || tr.ToolUseID != "toolu_rf" {
+		t.Fatalf("tool_result = %+v", tr)
+	}
+	if len(tr.Content) != 2 {
+		t.Fatalf("tool_result content = %d blocks, want 2 (text, image): %+v", len(tr.Content), tr.Content)
+	}
+	if tr.Content[0].Type != "text" || tr.Content[0].Text != summary {
+		t.Errorf("text block = %+v, want text %q", tr.Content[0], summary)
+	}
+	img := tr.Content[1]
+	if img.Type != "image" {
+		t.Fatalf("second block Type = %q, want %q (a real image block, not a placeholder)", img.Type, "image")
+	}
+	if img.Source == nil || img.Source.Type != "base64" || img.Source.MediaType != "image/png" {
+		t.Fatalf("image Source = %+v", img.Source)
+	}
+	if want := base64.StdEncoding.EncodeToString(png); img.Source.Data != want {
+		t.Errorf("image Source.Data does not round-trip read_file's original bytes")
 	}
 }
 

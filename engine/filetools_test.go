@@ -1,13 +1,17 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/plugin"
@@ -206,6 +210,230 @@ func TestReadFileAbsolutePath(t *testing.T) {
 	}
 	if !strings.Contains(out, "1→hello") {
 		t.Errorf("out = %q", out)
+	}
+}
+
+// runToolParts invokes a built-in tool on a throwaway session rooted at
+// workDir and returns the raw message.Parts, not just the Text()
+// concatenation runTool returns — needed to inspect a returned Blob part.
+func runToolParts(t *testing.T, tool Tool, workDir, args string) (message.Parts, error) {
+	t.Helper()
+	s := NewSession(Config{WorkDir: workDir})
+	return tool.Run(context.Background(), s, json.RawMessage(args))
+}
+
+// tinyPNG builds a real, compliant, tiny PNG — a 2x2 solid image — so image
+// tests exercise genuine image bytes without a committed binary fixture
+// (AGENTS.md's fixture-size lesson from #101: keep test images tiny).
+func tinyPNG(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("png.Encode: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// TestSniffMediaTypeSurvivesShortReads red-verifies the io.ReadFull sniff
+// in sniffMediaType: iotest.OneByteReader wraps the source so every Read
+// call returns exactly one byte, the shape a pipe, a FUSE/network mount, or
+// a signal-interrupted read(2) can produce. A single plain Read against
+// such a source would see only the first byte and misclassify almost every
+// real image; io.ReadFull is what makes classification correct regardless
+// of how many underlying reads it takes.
+func TestSniffMediaTypeSurvivesShortReads(t *testing.T) {
+	data := tinyPNG(t)
+	mediaType, sniff, err := sniffMediaType(iotest.OneByteReader(bytes.NewReader(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mediaType != "image/png" {
+		t.Errorf("mediaType = %q, want image/png", mediaType)
+	}
+	if !bytes.Equal(sniff, data) {
+		t.Errorf("sniffed %d bytes, want all %d source bytes (file is under imageSniffLen)", len(sniff), len(data))
+	}
+}
+
+func TestReadFileImagePNGReturnsTextAndBlob(t *testing.T) {
+	dir := t.TempDir()
+	data := tinyPNG(t)
+	if err := os.WriteFile(filepath.Join(dir, "shot.png"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	parts, err := runToolParts(t, readFileTool(), dir, `{"path":"shot.png"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 2 {
+		t.Fatalf("parts = %d, want 2 (Text, Blob): %+v", len(parts), parts)
+	}
+	text, ok := parts[0].(*message.Text)
+	if !ok {
+		t.Fatalf("parts[0] = %T, want *message.Text", parts[0])
+	}
+	for _, want := range []string{"image/png", fmt.Sprintf("%d bytes", len(data)), "2x2"} {
+		if !strings.Contains(text.Text, want) {
+			t.Errorf("summary %q missing %q", text.Text, want)
+		}
+	}
+	blob, ok := parts[1].(*message.Blob)
+	if !ok {
+		t.Fatalf("parts[1] = %T, want *message.Blob", parts[1])
+	}
+	if blob.MediaType != "image/png" {
+		t.Errorf("MediaType = %q, want image/png", blob.MediaType)
+	}
+	if !bytes.Equal(blob.Data, data) {
+		t.Errorf("Blob.Data does not round-trip the source file bytes")
+	}
+}
+
+// TestReadFileImageExtensionLieTextNamedPNGStaysText is the surplus-direction
+// half of the extension-lies pair: a file NAMED .png that actually holds
+// plain text bytes must NOT be sniffed as an image. Trusting the extension
+// alone would wrongly wrap plain source text in an image Blob.
+func TestReadFileImageExtensionLieTextNamedPNGStaysText(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "notes.png"), "just some text\nsecond line\n")
+
+	parts, err := runToolParts(t, readFileTool(), dir, `{"path":"notes.png"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 1 {
+		t.Fatalf("parts = %d, want 1 (Text only): %+v", len(parts), parts)
+	}
+	text, ok := parts[0].(*message.Text)
+	if !ok {
+		t.Fatalf("parts[0] = %T, want *message.Text", parts[0])
+	}
+	if !strings.Contains(text.Text, "1→just some text") {
+		t.Errorf("out = %q, want ordinary line-numbered text", text.Text)
+	}
+}
+
+// TestReadFileImageExtensionLiePNGNamedTxtIsSniffedAsImage is the missing-
+// direction half: a file named .txt that actually holds PNG magic bytes must
+// still be recognized as an image. Extension is a hint only; magic bytes are
+// authoritative (AGENTS.md: read_file classifies "never by its extension").
+func TestReadFileImageExtensionLiePNGNamedTxtIsSniffedAsImage(t *testing.T) {
+	dir := t.TempDir()
+	data := tinyPNG(t)
+	if err := os.WriteFile(filepath.Join(dir, "disguised.txt"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	parts, err := runToolParts(t, readFileTool(), dir, `{"path":"disguised.txt"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 2 {
+		t.Fatalf("parts = %d, want 2 (Text, Blob): %+v", len(parts), parts)
+	}
+	blob, ok := parts[1].(*message.Blob)
+	if !ok {
+		t.Fatalf("parts[1] = %T, want *message.Blob", parts[1])
+	}
+	if blob.MediaType != "image/png" {
+		t.Errorf("MediaType = %q, want image/png", blob.MediaType)
+	}
+}
+
+func TestReadFileImageOverCapReturnsTextErrorNoBlob(t *testing.T) {
+	dir := t.TempDir()
+	data := tinyPNG(t)
+	if err := os.WriteFile(filepath.Join(dir, "shot.png"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := readFileMaxImageBytes
+	wantCap := len(data) - 1
+	readFileMaxImageBytes = wantCap // force this exact file over cap
+	t.Cleanup(func() { readFileMaxImageBytes = orig })
+
+	parts, err := runToolParts(t, readFileTool(), dir, `{"path":"shot.png"}`)
+	if err == nil {
+		t.Fatal("want error for over-cap image")
+	}
+	if parts != nil {
+		t.Errorf("parts = %+v, want nil (no Blob) on an over-cap image error", parts)
+	}
+	wantSubstr := fmt.Sprintf("%d-byte read_file image limit", wantCap)
+	if !strings.Contains(err.Error(), wantSubstr) {
+		t.Errorf("error = %q, want it to contain %q", err, wantSubstr)
+	}
+}
+
+// TestReadFileImageTruncatedPNGFallsBackToText proves the DecodeConfig gate
+// in readPathContent: a file whose first 8 bytes are a genuine PNG
+// signature, but whose body is not a real PNG (a truncated download, a
+// corrupt write), fails image.DecodeConfig and is read as ordinary text
+// instead of shipping a Blob the model cannot use.
+func TestReadFileImageTruncatedPNGFallsBackToText(t *testing.T) {
+	dir := t.TempDir()
+	pngSignature := []byte("\x89PNG\r\n\x1a\n")
+	body := append(pngSignature, []byte("not a real IHDR chunk")...)
+	if err := os.WriteFile(filepath.Join(dir, "broken.png"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	parts, err := runToolParts(t, readFileTool(), dir, `{"path":"broken.png"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 1 {
+		t.Fatalf("parts = %d, want 1 (Text only, no Blob for an undecodable image): %+v", len(parts), parts)
+	}
+	if _, ok := parts[0].(*message.Text); !ok {
+		t.Fatalf("parts[0] = %T, want *message.Text", parts[0])
+	}
+}
+
+// TestReadFileImageToolCallProducesBlobToolResult drives read_file through
+// the SAME production dispatch path a real turn uses — an assistant
+// ToolCall executed by Session.runToolCalls, not a direct Tool.Run call —
+// closing the gap between the engine-level Tool.Run tests above and the
+// transcode-level golden test in provider/anthropic/transcode_test.go,
+// which hand-builds a ToolResult shaped like read_file's output rather than
+// obtaining one from read_file itself (AGENTS.md's "verification drives
+// the production entry point" rule).
+func TestReadFileImageToolCallProducesBlobToolResult(t *testing.T) {
+	dir := t.TempDir()
+	data := tinyPNG(t)
+	if err := os.WriteFile(filepath.Join(dir, "shot.png"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := NewSession(Config{WorkDir: dir})
+	asst := &message.Message{
+		Role: message.RoleAssistant,
+		Parts: message.Parts{
+			&message.ToolCall{CallID: "call1", Name: "read_file", Arguments: json.RawMessage(`{"path":"shot.png"}`)},
+		},
+	}
+
+	results := s.runToolCalls(context.Background(), asst)
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want 1", len(results))
+	}
+	tr, ok := results[0].(*message.ToolResult)
+	if !ok {
+		t.Fatalf("results[0] = %T, want *message.ToolResult", results[0])
+	}
+	if tr.IsError {
+		t.Fatalf("ToolResult.IsError = true, content: %+v", tr.Content)
+	}
+	if len(tr.Content) != 2 {
+		t.Fatalf("ToolResult.Content = %d parts, want 2 (Text, Blob): %+v", len(tr.Content), tr.Content)
+	}
+	blob, ok := tr.Content[1].(*message.Blob)
+	if !ok {
+		t.Fatalf("ToolResult.Content[1] = %T, want *message.Blob", tr.Content[1])
+	}
+	if blob.MediaType != "image/png" || !bytes.Equal(blob.Data, data) {
+		t.Errorf("Blob = %+v, want MediaType image/png and Data matching the source file", blob)
 	}
 }
 
