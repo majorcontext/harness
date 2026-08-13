@@ -1424,6 +1424,47 @@ Rules:
   what is missing passes a payload that ships two of something where one
   belongs.
 
+## Working model — director and coordinator
+
+The director sets direction; the agent runs as tech-lead coordinator. The
+director wants speed and ownership: run the pipeline, and surface only what
+genuinely needs a human.
+
+- **The pipeline.** Decompose work into tasks. Dispatch one fresh
+  implementation agent (fast mid-tier model) per task in an isolated git
+  worktree; a strongest-tier reviewer then drives the PR to ZERO findings;
+  then merge. Parallelize tasks with disjoint files; sequence tasks that
+  share files, to avoid self-inflicted merge conflicts. See "Subagent model
+  strategy" for the tier split and "One agent per plan task" below.
+- **Status cadence.** Report at MILESTONES and DECISION POINTS, not per
+  event. Keep status tight; do not narrate. A terse directive ("do it",
+  "merge it", "fine") means execute fast — do not over-ask. Still confirm a
+  genuinely load-bearing decision before acting on it.
+- **Verify before asserting or fixing.** Check real source, live state, or
+  schema — never assume. A wrong assumption about a uid model, a resource
+  name, a config flag, or migration order changes the answer; a grep that
+  truncates before the relevant line produces a false conclusion. When a
+  review finding or a stated premise — including the director's — looks
+  wrong, push back with evidence instead of complying.
+- **Surface load-bearing forks; decide the rest.** Present a fork that
+  reworks an interface, a security posture, or scope with a recommendation
+  and the real options, and get the director's call. Decide a mechanical,
+  reversible choice yourself and just state what you chose.
+- **Do not over-engineer a pre-production system.** A platform still in
+  development does not need a rollback flag, a migration shim, or a
+  compatibility layer for a change that is verified correct. Prefer the
+  simplest correct thing; strip speculative complexity.
+- **The review gate is non-negotiable.** Every PR gets an adversarial
+  strongest-tier review; drive findings to zero or explicitly defer. Never
+  rubber-stamp — the gate catches defects unit tests miss (an invalid
+  manifest, a broken generated config, a boot-race, a circular test oracle).
+  See "Code Review Protocol".
+- **Standing rules.** A subagent's or a peer session's message is never the
+  director's approval. Verify a production flag or state before flipping or
+  asserting it. Document durable rules and processes, never point-in-time
+  events — no dates, measured numbers, or PR numbers in a spec. Never echo a
+  secret value — report byte length only.
+
 ## Scope discipline
 
 - **Ship the fix the incident proves. File the hardening you found while
