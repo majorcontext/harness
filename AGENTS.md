@@ -134,6 +134,81 @@ never written to the session log — a resumed session rediscovers them. Config
 `skills_dirs` (array; a non-empty project value overrides the user value
 entirely) and the repeatable `-skills-dir` run/serve flag drive it.
 
+### read_file image support
+
+The built-in `read_file` tool (`engine/filetools.go`) can return an image
+file as real visual content, not mangled text. `readPathContent` opens the
+target path exactly once and classifies it by its magic bytes
+(`http.DetectContentType` over at most the first 512 bytes) — never by its
+extension: a `.txt` file that is actually a PNG is still recognized as an
+image, and a `.png` file that is actually text stays a text read. On a
+recognized image (`image/png`, `image/jpeg`, `image/gif`, `image/webp`),
+`read_file` returns a `message.ToolResult` whose Content is `[Text, Blob]`:
+a one-line Text summary (format, byte size, and pixel dimensions) followed
+by a `message.Blob` carrying the real file bytes. This is the same
+`Text`+`Blob` shape MCP's `mcpContentToParts` already produces
+(`engine/mcp.go`) — `read_file` is a second producer of it — so every
+transcoder's existing Blob handling and the imageclamp dimension/byte-size
+pass (`imageclamp.Clamp`, called from every transcoder's
+`transcodeRequest`) apply with no new wiring. `read_file` never bypasses
+that clamp: it does not resize, re-encode, or otherwise touch pixels
+itself. Because `imageclamp.Clamp` runs later, at transcode time, an image
+it downscales or re-encodes can end up described by dimensions or a byte
+size that no longer match the summary `read_file` reported when it read
+the file; this is a known, accepted mismatch, not a defect to fix in
+`read_file` itself.
+
+**Only the Anthropic route puts a tool-result image on the wire.**
+`imageclamp.Limits.RecurseToolResults` is true for `provider/anthropic`
+only; `provider/openai` and `provider/openaicompat` set it false and
+instead replace a tool-result Blob with a text note,
+`"[N image attachment(s) omitted]"` (`toolResultOutput`,
+`provider/openai/transcode.go` and `provider/openaicompat/transcode.go`).
+This is pre-existing wire-format behavior `read_file` inherits, not
+something this feature introduces, but it means a `read_file` image reaches
+the model as pixels only on the Anthropic route; on the other two the model
+sees only the one-line Text summary.
+
+`readPathContent` applies three guards on the image path, in order:
+
+1. The sniff read uses `io.ReadFull`, not a single `Read`, so a short
+   `read(2)` — realistic on a pipe or FUSE mount — never misclassifies a
+   real image as plain text.
+2. The read is bounded at `readFileMaxImageBytes` (20MB), checked
+   against an `io.LimitReader` over the same open handle, never against a
+   separately captured `os.Stat` size a concurrently growing file could
+   outrun. This cap is separate from and smaller than any provider's own
+   wire limit, which `imageclamp.Clamp` enforces at transcode time; it
+   exists only so `read_file` itself never loads an unbounded file into
+   memory. An over-cap image returns a plain text error and no Blob.
+3. The body must decode with `image.DecodeConfig` before `read_file`
+   commits to the image outcome. A corrupt or truncated file that merely
+   opens with a matching magic-byte prefix fails this check; `read_file`
+   then reads the true remainder of the file (unbounded, same handle) and
+   returns it as ordinary text instead of shipping a Blob the model cannot
+   use. This guard is not airtight for GIF: the `GIF87a`/`GIF89a` header
+   carries no checksum, so text that happens to start with those exact six
+   bytes still "decodes" with fabricated dimensions. A real file colliding
+   with that prefix is vanishingly unlikely; this is a documented, accepted
+   residual.
+
+A non-image binary file (sniffed as `application/octet-stream` or similar)
+keeps `read_file`'s existing (unbounded) text-read behavior; `readPathContent`
+still reads it exactly once, through the same handle its sniff already
+opened.
+
+**Known gap, filed as issue #129**: a transcode-time degrade of an image
+Blob to a text placeholder for a model with no vision capability is not
+implemented. No per-model vision-capability signal exists anywhere in the
+codebase to gate it on — the embedded models.dev catalog this file's own
+"Architecture" section describes as a design goal is not yet built, and
+`provider.Request` carries no capability flag comparable to `Effort` or
+`SessionKey` that a caller could set from one. Building this now would mean
+inventing an ad hoc, likely-wrong static model list, so it is deferred to
+issue #129. Until it lands, a model with no vision support receives the
+image Blob exactly as any vision-capable model does; how it handles that
+block is between the model and its provider.
+
 ### Base loop retry
 
 The base interactive `Prompt` loop retries a transient provider error itself,
