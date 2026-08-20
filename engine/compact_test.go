@@ -110,6 +110,97 @@ func TestCompactFoldsOldestPrefixKeepsRecentTurns(t *testing.T) {
 	}
 }
 
+// TestCompactSummaryRequestAlwaysEndsInUserRole is the red-first test for
+// the 2026-08-19 live incident (session ses_jumpy-pizza, model
+// anthropic/anthropic/claude-fable-5): compacting with keep_turns=20
+// returned `{"error":"[permanent] anthropic: This model does not support
+// assistant message prefill. The conversation must end with a user
+// message. (invalid_request_error, HTTP 400)"}` while keep_turns=8 on the
+// SAME session succeeded. Root cause: foldEnd (Compact's fold range) is the
+// last message before the next KEPT turn's leading RoleUser message —
+// ordinarily that folded turn's own final assistant reply, RoleAssistant —
+// and the old code sent `folded` as req.Messages verbatim, with no trailing
+// message to guarantee the wire request ends in a user turn. This test's
+// two-turn fold reproduces that ordinary shape directly: the fold range's
+// own last message is RoleAssistant (turn 1's scripted reply), which is
+// exactly what a plain-prefix compaction always was, not a rare edge case.
+func TestCompactSummaryRequestAlwaysEndsInUserRole(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10}),
+		compactTurn("two", provider.Usage{InputTokens: 10}),
+		compactSummaryTurn("gist", provider.Usage{InputTokens: 5}),
+	}}
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+	})
+	runTurns(t, s, 2)
+
+	// Sanity: the fold range's own last message really is RoleAssistant —
+	// the reproduction shape. If this ever stops being true the test below
+	// proves nothing about the bug it guards.
+	history := s.History()
+	if history[1].Role != message.RoleAssistant {
+		t.Fatalf("sanity: fold range's last message (history[1]) role = %s, want RoleAssistant", history[1].Role)
+	}
+
+	if _, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	summaryReq := prov.requests[len(prov.requests)-1]
+	if len(summaryReq.Messages) == 0 {
+		t.Fatal("summarization request carried no messages")
+	}
+	last := summaryReq.Messages[len(summaryReq.Messages)-1]
+	if last.Role != message.RoleUser {
+		t.Errorf("summarization request's last message role = %s, want RoleUser (a request ending in RoleAssistant is treated as assistant message prefill, which some models — including the one that hit this live — reject outright)", last.Role)
+	}
+}
+
+// TestCompactionRequestMessagesAlwaysEndsInUser is a focused unit test on
+// compactionRequestMessages itself, covering every role the folded range's
+// own last message can plausibly carry (RoleAssistant — the ordinary
+// completed-turn case; RoleTool — a message.ResolveOrphanToolCalls
+// synthetic repair left by an interrupted tool call, the shape that
+// happened to mask this bug on keep_turns=8 in the live incident; RoleUser
+// — folding a range that is itself already a prior compaction summary):
+// every case must produce a request ending in RoleUser.
+func TestCompactionRequestMessagesAlwaysEndsInUser(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		last message.Role
+	}{
+		{"assistant", message.RoleAssistant},
+		{"tool", message.RoleTool},
+		{"user", message.RoleUser},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			folded := []message.Message{
+				{ID: "msg_1", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "task"}}},
+				{ID: "msg_2", Role: tc.last, Parts: message.Parts{&message.Text{Text: "reply"}}},
+			}
+			out := compactionRequestMessages(folded)
+			if len(out) == 0 {
+				t.Fatal("compactionRequestMessages returned no messages")
+			}
+			if got := out[len(out)-1].Role; got != message.RoleUser {
+				t.Errorf("last message role = %s, want RoleUser", got)
+			}
+			// The folded range itself is preserved verbatim, untouched, as a
+			// prefix — only a trailing message is appended.
+			if len(out) != len(folded)+1 {
+				t.Fatalf("len(out) = %d, want %d (folded + 1 trailing instruction)", len(out), len(folded)+1)
+			}
+			for i := range folded {
+				if out[i].ID != folded[i].ID {
+					t.Errorf("out[%d].ID = %q, want %q (folded range must not be mutated)", i, out[i].ID, folded[i].ID)
+				}
+			}
+		})
+	}
+}
+
 // TestCompactSummaryRequestInheritsSessionEffort is the red-first test for
 // issue #124: unlike the goal evaluator (a classifier that pins off), the
 // compaction summarizer benefits from the session's own quality setting, so
@@ -190,6 +281,9 @@ func TestCompactNoopWhenNotEnoughTurns(t *testing.T) {
 	}
 	if res.TurnsFolded != 0 {
 		t.Errorf("TurnsFolded = %d, want 0", res.TurnsFolded)
+	}
+	if res.SkipReason != SkipReasonNotEnoughTurns {
+		t.Errorf("SkipReason = %q, want %q (review follow-up on PR #136, Finding A/C)", res.SkipReason, SkipReasonNotEnoughTurns)
 	}
 	if len(prov.requests) != 1 {
 		t.Errorf("provider calls = %d, want 1 (only the worker turn — no summarization call)", len(prov.requests))
@@ -332,6 +426,198 @@ func TestCompactFailureNoJournalNoMutation(t *testing.T) {
 	}
 	if len(loaded.History()) != len(before) {
 		t.Errorf("reloaded history = %d messages, want %d (unchanged)", len(loaded.History()), len(before))
+	}
+}
+
+// TestCompactEmptySummarySkipsGracefully is the red-first test for the
+// 2026-08-19 live incident (session ses_jumpy-pizza): a follow-up compact
+// with keep_turns=2 (fold range dominated by a prior compaction summary
+// plus a couple of real turns) returned
+// `{"error":"engine: compaction summary was empty"}` — a summarization
+// call that completed without a transport/stream error, but produced no
+// usable text, was treated identically to a hard failure and surfaced as
+// an HTTP 500 to an operator manually unwedging the session via repeated
+// POST /session/{id}/compact calls. An empty summary must instead be a
+// clean no-op skip: Compact returns no error and the same TurnsFolded==0
+// shape §2's minimum-fold rule already uses for "nothing worth folding" —
+// no history mutation, no journal write — while EventCompactionFailed
+// still fires so the attempt remains visible to anything tailing events.
+func TestCompactEmptySummarySkipsGracefully(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10}),
+		compactTurn("two", provider.Usage{InputTokens: 10}),
+		// The model returns nothing, but the call still cost real,
+		// distinguishable tokens (777/3, chosen to be unmistakable against
+		// the ordinary turns' usage above) — see the usage-accounting
+		// assertion below (review follow-up on PR #136, Finding A).
+		compactSummaryTurn("", provider.Usage{InputTokens: 777, OutputTokens: 3}),
+	}}
+	dir := t.TempDir()
+	var evs []Event
+	s := NewSession(Config{
+		Providers:  provider.Registry{"test": prov},
+		Model:      message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir: dir,
+		OnEvent:    func(ev Event) { evs = append(evs, ev) },
+	})
+	runTurns(t, s, 2)
+	before := s.History()
+	beforeCount := s.CompactionCount()
+	beforeUsage := s.Usage()
+	evs = nil // discard the two ordinary turns' events
+
+	res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
+	if err != nil {
+		t.Fatalf("Compact with an empty summary returned an error, want a graceful skip: %v", err)
+	}
+	if res.TurnsFolded != 0 {
+		t.Errorf("TurnsFolded = %d, want 0", res.TurnsFolded)
+	}
+	if res.SkipReason != SkipReasonSummarizerEmpty {
+		t.Errorf("SkipReason = %q, want %q (review follow-up on PR #136, Finding A/C)", res.SkipReason, SkipReasonSummarizerEmpty)
+	}
+
+	// The empty-summary call still cost real tokens and must not vanish
+	// from Session.Usage() (review follow-up on PR #136, Finding A: this
+	// path used to drop the summarizer call's usage entirely).
+	afterUsage := s.Usage()
+	if got := afterUsage.InputTokens - beforeUsage.InputTokens; got != 777 {
+		t.Errorf("InputTokens delta = %d, want 777 (the empty summarizer call's own usage must still be accounted)", got)
+	}
+	if got := afterUsage.OutputTokens - beforeUsage.OutputTokens; got != 3 {
+		t.Errorf("OutputTokens delta = %d, want 3", got)
+	}
+
+	after := s.History()
+	if len(after) != len(before) {
+		t.Errorf("history mutated on an empty-summary compaction: before=%d after=%d", len(before), len(after))
+	}
+	if got := s.CompactionCount(); got != beforeCount {
+		t.Errorf("CompactionCount = %d, want unchanged at %d", got, beforeCount)
+	}
+
+	var failed int
+	for _, ev := range evs {
+		if ev.Type == EventCompactionFailed {
+			failed++
+		}
+	}
+	if failed != 1 {
+		t.Errorf("EventCompactionFailed count = %d, want 1 (observability preserved even though Compact itself did not error)", failed)
+	}
+
+	// Reload: an empty-summary skip must never be journaled, exactly like
+	// any other aborted compaction (see TestCompactFailureNoJournalNoMutation).
+	loaded, err := LoadSession(s.cfg, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.CompactionCount(); got != 0 {
+		t.Errorf("reloaded CompactionCount = %d, want 0", got)
+	}
+	if len(loaded.History()) != len(before) {
+		t.Errorf("reloaded history = %d messages, want %d (unchanged)", len(loaded.History()), len(before))
+	}
+}
+
+// TestCompactSkipsLoneExistingSummaryRangeWithoutCallingProvider is the
+// red-first test for the cheap defense alongside the empty-summary skip
+// above: a fold range whose ENTIRE content is a single earlier
+// compaction's own summary message (no other turn alongside it) is
+// detected BEFORE ever calling the provider — re-summarizing an
+// already-compressed summary with nothing new to fold in has nothing to
+// gain, the same "nothing worth folding" case §2's minimum-fold rule
+// already covers for too-few-turns. This is the cheap, structural half of
+// the empty-summary incident's root cause (a small keep_turns landing a
+// fold range dominated by a prior summary); the graceful-skip fix above
+// covers every other reason the model might return nothing.
+func TestCompactSkipsLoneExistingSummaryRangeWithoutCallingProvider(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10}),
+		compactTurn("two", provider.Usage{InputTokens: 10}),
+		compactSummaryTurn("gist", provider.Usage{InputTokens: 5}), // folds turn 1 into a summary
+		compactTurn("three", provider.Usage{InputTokens: 10}),
+	}}
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+	})
+	runTurns(t, s, 2)
+	if _, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1}); err != nil {
+		t.Fatalf("first compact: %v", err)
+	}
+	// History is now: [summary, turn2-user, turn2-asst]. Run one more turn
+	// so a second compact has a fold boundary landing exactly on the lone
+	// summary message: starts = [0 (summary), 1 (turn2), 3 (turn3)];
+	// keep_turns=2 folds exactly starts[0:1] = just the summary.
+	if _, err := s.Prompt(context.Background(), "go"); err != nil {
+		t.Fatalf("third turn: %v", err)
+	}
+	requestsBefore := len(prov.requests)
+
+	res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 2})
+	if err != nil {
+		t.Fatalf("second compact: %v", err)
+	}
+	if res.TurnsFolded != 0 {
+		t.Errorf("TurnsFolded = %d, want 0 (lone existing-summary range, nothing to gain)", res.TurnsFolded)
+	}
+	if res.SkipReason != SkipReasonLoneExistingSummary {
+		t.Errorf("SkipReason = %q, want %q (review follow-up on PR #136, Finding A/C)", res.SkipReason, SkipReasonLoneExistingSummary)
+	}
+	if got := len(prov.requests); got != requestsBefore {
+		t.Errorf("provider calls = %d, want %d (no summarization call for a lone existing-summary range)", got, requestsBefore)
+	}
+}
+
+// TestCompactUserMessageStartingWithBannerTextStillFolds is the red-first
+// test for the review follow-up on PR #136, Finding B: isLoneExistingSummary
+// used to match on CompactionSummaryBanner's TEXT alone (RoleUser +
+// strings.HasPrefix), which a user-typed or pasted message can trivially
+// collide with — e.g. pasting a transcript that itself contains an earlier
+// compaction summary. A false match skips that range FOREVER without ever
+// calling the provider; under the automatic trigger the session then never
+// compacts again, the exact exhaustion mode this PR exists to fix, just
+// reached via message content instead of a summarizer bug.
+// isLoneExistingSummary must gate on isCompactionSummaryID's structural ID
+// marker instead, so a genuine user message with real content to fold is
+// never mistaken for a lone existing summary.
+func TestCompactUserMessageStartingWithBannerTextStillFolds(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactSummaryTurn("real gist of the pasted message", provider.Usage{InputTokens: 5}),
+	}}
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+	})
+
+	// A genuine user message — an ordinary "msg_"-prefixed ID, never a
+	// compaction summary's "cmpsum_" one — whose text happens to start with
+	// the exact banner string. Constructed directly (rather than via
+	// runTurns) so the fold range lands on exactly this one message with no
+	// assistant reply beside it: the same single-message-turn shape a real
+	// lone existing summary has, and the only shape isLoneExistingSummary
+	// ever considers (see its len(folded) != 1 guard).
+	s.mu.Lock()
+	s.history = []message.Message{
+		{ID: newID("msg"), Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: CompactionSummaryBanner + "please continue from here"}}},
+		{ID: newID("msg"), Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+		{ID: newID("msg"), Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "reply"}}},
+	}
+	s.mu.Unlock()
+
+	res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
+	if err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	if res.TurnsFolded != 1 {
+		t.Errorf("TurnsFolded = %d, want 1 (a user-authored message that happens to start with the banner must still be folded, not skipped as a lone existing summary)", res.TurnsFolded)
+	}
+	if res.SkipReason != "" {
+		t.Errorf("SkipReason = %q, want empty (a real fold happened)", res.SkipReason)
+	}
+	if got := len(prov.requests); got != 1 {
+		t.Errorf("provider calls = %d, want 1 (the summarizer must actually be called for this range)", got)
 	}
 }
 
@@ -805,6 +1091,49 @@ func TestMaybeAutoCompactTriggersAndHysteresisPreventsThrash(t *testing.T) {
 	}
 	if len(prov.requests) != 8 {
 		t.Fatalf("provider calls = %d, want 8 (6 worker turns + 2 compaction summaries)", len(prov.requests))
+	}
+}
+
+// TestMaybeAutoCompactEmptySummaryLatchesHysteresis is the red-first test
+// for the review follow-up on PR #136, Finding A: the empty-summary no-op
+// costs a full, billed provider call but used to set no hysteresis (only
+// TurnsFolded > 0 latched it). Once auto-compaction is armed, a session
+// whose summarizer returns empty re-issued a full summarization call, at
+// full input price, on EVERY subsequent over-threshold turn, indefinitely —
+// a silent recurring-spend bug, not a free no-op. The fix: latch the churn
+// guard on SkipReasonSummarizerEmpty too, so the second over-threshold turn
+// after an empty-summary skip must NOT issue another summarization call.
+func TestMaybeAutoCompactEmptySummaryLatchesHysteresis(t *testing.T) {
+	over := provider.Usage{InputTokens: 900}
+	under := provider.Usage{InputTokens: 100}
+
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("t1", under),                               // call 1: no lastUsage yet, no auto-compact possible
+		compactTurn("t2", over),                                // call 2: lastUsage(t1)=under, no trigger; lastUsage becomes over
+		compactSummaryTurn("", provider.Usage{InputTokens: 5}), // triggered before call 3 (lastUsage(t2)=over); the model returns nothing
+		compactTurn("t3", over),                                // call 3's own turn; keeps lastUsage over threshold
+		compactTurn("t4", over),                                // call 4's own turn: hysteresis must suppress a second summarization call here
+		compactSummaryTurn("buffer-if-hysteresis-did-not-latch", provider.Usage{InputTokens: 5}), // spare slot: only consumed if the bug re-triggers a second summarizer call before call 4
+	}}
+	s := NewSession(Config{
+		Providers:           provider.Registry{"test": prov},
+		Model:               message.ModelRef{Provider: "test", Model: "m1"},
+		ContextWindowTokens: 1000,
+		CompactionKeepTurns: 1,
+	})
+	runTurns(t, s, 4)
+
+	var summaryCalls int
+	for _, req := range prov.requests {
+		if len(req.System) > 0 && req.System[0] == compactionSystemPrompt {
+			summaryCalls++
+		}
+	}
+	if summaryCalls != 1 {
+		t.Errorf("summarization calls = %d, want 1 (an empty-summary no-op must latch hysteresis so a still-over-threshold turn never re-triggers it — review follow-up on PR #136, Finding A)", summaryCalls)
+	}
+	if got := s.CompactionCount(); got != 0 {
+		t.Errorf("CompactionCount = %d, want 0 (the summarizer never returned anything usable in this test)", got)
 	}
 }
 

@@ -908,6 +908,87 @@ enables thinking over that same history — the documented ENABLE-direction
 "thinking blocks expected before tool_use" reject case, just reached from
 compaction instead of a live turn.
 
+**The summarization request always ends in a trailing `RoleUser` message,
+never the folded range's own last message verbatim** (2026-08-19 incident,
+session `ses_jumpy-pizza`). `foldEnd` (`Session.Compact`) is the last
+message before the next KEPT turn's leading `RoleUser` message — ordinarily
+that folded turn's own final assistant reply, `RoleAssistant` — so sending
+`folded` as `req.Messages` verbatim ordinarily ends the wire request in an
+assistant-role message, which the Anthropic Messages API treats as
+assistant message prefill; some models reject prefill outright (400
+`invalid_request_error`, "This model does not support assistant message
+prefill. The conversation must end with a user message."). `runCompactionSummary`
+builds its request via `compactionRequestMessages`, which appends one
+trailing `RoleUser` instruction message (`compactionInstructionText`) after
+`folded`, unconditionally — never a conditional check on the folded range's
+last role, since a `RoleTool` message (a `message.ResolveOrphanToolCalls`
+synthetic repair, or an ordinary tool result) also wire-transcodes to
+Anthropic's `"user"` role and would otherwise mask the same bug depending on
+where a fold boundary happens to land, exactly as it did live (`keep_turns=8`
+happened to succeed on the same session where `keep_turns=20` failed).
+
+**An empty summary is a graceful no-op, never an error surfaced to the
+caller.** A summarization call that completes without a transport/stream
+error but returns no usable text (`errEmptyCompactionSummary`) is reported
+by `Session.Compact` as the same `TurnsFolded == 0` "nothing worth folding"
+shape the too-few-turns case above already uses — no history mutation, no
+journal write, no error returned — though `EventCompactionFailed` still
+fires so the attempt stays visible to anything tailing events, and the
+call's real usage is still accumulated into cumulative `Usage()` (it was a
+billed call even though it produced nothing — this accumulation is
+live-only, not journaled, since no compact record exists for a skipped
+fold). Before ever calling the provider, `Compact` also skips a fold range
+whose entire content is a single earlier compaction's own summary message
+(`isLoneExistingSummary`): re-summarizing an already-compressed summary with
+nothing new alongside it has nothing to gain, and was the live incident's
+concrete trigger (a small `keep_turns` landed a fold range dominated by a
+prior summary). Do not conflate this with a REAL summarization failure
+(rate limit, transient 5xx, a truncated stream, a range too large to
+summarize) — those still abort with an error, per §2 "Failure handling" in
+`docs/design/context-compaction.md`.
+
+`CompactResult.SkipReason` names WHICH of the three `TurnsFolded == 0`
+shapes occurred (`SkipReasonNotEnoughTurns`, `SkipReasonLoneExistingSummary`,
+`SkipReasonSummarizerEmpty`) — they used to be wire-identical, which hid two
+real defects (review follow-up on PR #136, Findings A/B/C, fixed before
+merge):
+
+- **Hysteresis must latch on `SkipReasonSummarizerEmpty`, never on the two
+  free skip reasons.** `maybeAutoCompact` only armed its churn-guard
+  hysteresis when `TurnsFolded > 0`. A summarizer that always returns empty
+  therefore never latched it: every subsequent over-threshold turn
+  re-triggered a full, billed summarization call, indefinitely, at full
+  input price — the "free" no-op was actually a recurring-spend bug
+  (Finding A). It now also latches when `SkipReason ==
+  SkipReasonSummarizerEmpty`, since that reason DID cost a call; it must
+  still NOT latch on `SkipReasonNotEnoughTurns`/`SkipReasonLoneExisting
+  Summary` — both are free, and latching there would permanently disarm
+  compaction for an over-threshold session that simply lacks enough turns
+  yet, since the guard only clears once `LastUsage()` dips back under
+  threshold.
+- **`isLoneExistingSummary` gates on the summary message's `ID`, never on
+  `CompactionSummaryBanner`'s text.** The banner is a display convention; a
+  user-typed or pasted message that happens to start with the exact banner
+  string is a genuine turn with real content, not a lone existing summary —
+  matching on text alone false-positived on it, skipped it forever without
+  ever calling the provider, and under the automatic trigger the session
+  never compacted again (Finding B). Every compaction summary's `ID` is now
+  minted with the `cmpsum_` prefix (`compactionSummaryIDTag`) instead of the
+  ordinary `msg_` prefix every other message gets, and `isCompactionSummaryID`
+  tests exactly that prefix — a structural, unforgeable marker of
+  compaction origin, the same pattern `message.IsSyntheticOrphanID` already
+  establishes for a different synthetic-message kind. No text-based
+  fallback exists for a summary minted by an earlier pre-fix build of this
+  same PR (still `msg_`-prefixed): the miss is bounded and self-healing —
+  `Compact` just re-summarizes that one old-style range like any other real
+  content, and the fresh summary it produces carries the new ID tag from
+  then on.
+- **The `skip_reason` field on `POST /session/{id}/compact`'s response**
+  (`compactResponseJSON`, `server/handlers.go`) surfaces
+  `CompactResult.SkipReason` directly, `omitempty` (absent on a real fold) —
+  see `docs/design/context-compaction.md` §1 for the wire shape (Finding
+  C).
+
 ### Session affinity (prompt-cache routing hint)
 
 `provider.Request.SessionKey` carries a stable, opaque session identifier on

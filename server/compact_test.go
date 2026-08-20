@@ -165,6 +165,50 @@ func TestCompactEndpointNoopReturns200WithZeroTurnsFolded(t *testing.T) {
 	if out.TurnsFolded != 0 {
 		t.Errorf("turns_folded = %d, want 0 (only 1 turn exists, default keep_turns is 2)", out.TurnsFolded)
 	}
+	if out.SkipReason != "not_enough_turns" {
+		t.Errorf("skip_reason = %q, want %q (review follow-up on PR #136, Finding C)", out.SkipReason, "not_enough_turns")
+	}
+}
+
+// TestCompactEndpointReportsSkipReason is the red-first test for the review
+// follow-up on PR #136, Finding C: POST /session/{id}/compact's response
+// used to collapse three distinct turns_folded==0 situations (nothing to
+// fold, a lone prior summary, and the summarizer running and returning
+// empty) into the identical wire shape, hiding from an operator which one
+// happened — only the last of those actually cost a billed provider call.
+// skip_reason must distinguish them, and must be entirely absent
+// (omitempty) on a real fold.
+func TestCompactEndpointReportsSkipReason(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactAsstTurn("one", provider.Usage{InputTokens: 10}),
+		compactAsstTurn("two", provider.Usage{InputTokens: 10}),
+		compactAsstTurn("SUMMARY", provider.Usage{InputTokens: 5}),
+	}}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+	h.promptAndWaitIdle(id, "go1")
+	h.promptAndWaitIdle(id, "go2")
+
+	// A real fold must carry no skip_reason at all on the wire, not even an
+	// empty string (omitempty).
+	resp, data := h.do("POST", "/session/"+id+"/compact", map[string]any{"keep_turns": 1})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("compact status %d: %s", resp.StatusCode, data)
+	}
+	var out compactResponseJSON
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.TurnsFolded != 1 {
+		t.Fatalf("turns_folded = %d, want 1", out.TurnsFolded)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := raw["skip_reason"]; present {
+		t.Errorf("skip_reason present in response for a real fold: %s (review follow-up on PR #136, Finding C)", data)
+	}
 }
 
 // TestCompactEndpointBusySessionIs409 is the red-first test for the run-slot
