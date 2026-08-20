@@ -87,9 +87,17 @@ type Config struct {
 	Processes map[string]ProcessSpec `json:"processes,omitempty"`
 	// ContextWindowTokens sets engine.Config.ContextWindowTokens for every
 	// session this process creates: the model's context window size, in
-	// tokens. Zero (omitted, the default) disables automatic compaction
-	// entirely — see docs/design/context-compaction.md and issue #62 layer
-	// 3. Opt-in: the engine has no built-in per-model table.
+	// tokens. This is an EXPLICIT OVERRIDE, not the only way compaction gets
+	// armed: when left zero (omitted, the default), the engine derives the
+	// window itself from the session's model, using its own built-in table
+	// (package modelmeta, sourced from models.dev) — see
+	// engine.resolveContextWindow. Automatic compaction is disabled only
+	// when BOTH this is zero AND the model has no usable entry in that
+	// table (an unrecognized provider/model, or one below the engine's
+	// sanity floor). See docs/design/context-compaction.md and issue #62
+	// layer 3, and the jumpy-pizza incident (majorcontext/harness) this
+	// derivation was added to close: ContextWindowTokens was opt-in and set
+	// nowhere on the boxes platform, so compaction never armed on any box.
 	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
 	// PromptRetries sets engine.Config.PromptRetries: how many ADDITIONAL
 	// attempts the base interactive Prompt loop makes when a model call fails
