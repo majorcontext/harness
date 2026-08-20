@@ -183,14 +183,21 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 		// — see bedrockAnthropicContextWindows's doc comment).
 		// Over-reporting here arms compaction above the route's real
 		// limit and re-creates the overflow this package exists to
-		// prevent, so prefer the bedrock table for dotted refs and fall
-		// back to the anthropic table only for families the bedrock
-		// snapshot doesn't list.
-		if suffix, isBedrockStyle := strings.CutPrefix(model, "anthropic."); isBedrockStyle {
-			model = stripBedrockVersionSuffix(suffix)
-			if tokens, ok = bedrockAnthropicContextWindows[model]; ok {
-				return tokens, ok
-			}
+		// prevent.
+		//
+		// stripBedrockAnthropicPrefix (not a bare CutPrefix) so a region
+		// segment ("us."/"eu."/"global.") is tolerated symmetrically with
+		// the amazon-bedrock branch below. Bedrock-served refs consult the
+		// bedrock table EXCLUSIVELY — no first-party fallback: a dotted
+		// family the bedrock snapshot doesn't key resolves as unknown
+		// (compaction stays disabled, the fail-safe direction) rather than
+		// borrowing the first-party window, which would silently un-do the
+		// divergence for any form not keyed exactly (e.g. the undated
+		// "anthropic.claude-sonnet-4-5" borrowing 1M where Bedrock's real
+		// window is 200k).
+		if suffix, isBedrockStyle := stripBedrockAnthropicPrefix(model); isBedrockStyle {
+			tokens, ok = bedrockAnthropicContextWindows[stripBedrockVersionSuffix(suffix)]
+			return tokens, ok
 		}
 		tokens, ok = anthropicContextWindows[stripBedrockVersionSuffix(model)]
 	case "openai":

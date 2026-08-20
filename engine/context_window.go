@@ -64,7 +64,13 @@ func resolveContextWindow(explicitTokens int, model message.ModelRef) (tokens in
 		return 0, contextWindowSourceDisabled
 	}
 	if got < minAutoContextWindowTokens {
-		slog.Warn("engine: ignoring implausible model-derived context window",
+		// INFO, not WARN: the table legitimately keeps some genuinely
+		// small windows (gpt-4's true 8_192), so a below-floor value from
+		// the static snapshot is a known-good model that is simply too
+		// small to auto-arm — not evidence of corruption. Warning here
+		// would page a false "metadata bug" alarm on every session that
+		// starts on or switches to such a model.
+		slog.Info("engine: model-derived context window below auto-compaction floor; compaction disabled",
 			"model", model.String(), "tokens", got, "floor", minAutoContextWindowTokens)
 		return 0, contextWindowSourceDisabled
 	}

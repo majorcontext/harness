@@ -48,8 +48,10 @@ from models.dev's `limit.context` field (bifrost's own `/v1/models` was
 investigated and ruled out — it returns the bare OpenAI listing shape with
 no context-length field at all). Precedence is explicit config >
 model-derived > disabled, and a model-derived value below
-`minAutoContextWindowTokens` (16k) is treated as implausible metadata and
-ignored rather than arming a nonsense threshold. `SetModel` re-runs the same
+`minAutoContextWindowTokens` (16k) leaves compaction disabled rather than
+arming a nonsense threshold — logged at INFO, not WARN, because the table
+legitimately keeps some genuinely small windows (gpt-4's true 8,192), so a
+below-floor value is a known-good-but-small model, not corrupt metadata. `SetModel` re-runs the same
 derivation against the new model unless the session's window was pinned by
 explicit config, so a mid-session model switch keeps the window (and
 therefore whether compaction is armed at all) matched to whichever model is

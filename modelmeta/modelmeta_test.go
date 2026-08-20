@@ -94,6 +94,13 @@ func TestContextWindowBoxesThreeSegmentRefs(t *testing.T) {
 		// normalize away (suffix stripping must not hide inside the
 		// "anthropic." prefix branch).
 		{"anthropic/claude-opus-5-v1:0", 1_000_000},
+		// A region-prefixed mantle ref must still be recognized as
+		// Bedrock-style: the anthropic branch shares
+		// stripBedrockAnthropicPrefix with the amazon-bedrock branch, so
+		// "us."/"eu."/"global." tolerance is symmetric — a bare
+		// CutPrefix("anthropic.") here would miss this ref entirely and
+		// silently disarm compaction.
+		{"anthropic/bedrock_mantle/us.anthropic.claude-opus-5", 1_000_000},
 		// Bare two-segment forms (non-boxes callers) must keep working.
 		{"anthropic/claude-fable-5", 1_000_000},
 		{"anthropic/claude-opus-5", 1_000_000},
@@ -147,6 +154,13 @@ func TestContextWindowUnknown(t *testing.T) {
 		{Provider: "some-unconfigured-provider", Model: "claude-fable-5"},
 		{Provider: "amazon-bedrock", Model: "amazon.titan-text-express-v1"},
 		{Provider: "amazon-bedrock", Model: "us.amazon.titan-text-express-v1"},
+		// A dotted (Bedrock-served) ref whose family the bedrock table
+		// doesn't key MUST resolve unknown, never borrow the first-party
+		// window: claude-sonnet-4-5 is 1M first-party but 200k on Bedrock
+		// (keyed only under its dated form), so a first-party fallback
+		// here would over-report 5x and re-create the overflow class this
+		// package prevents.
+		{Provider: "anthropic", Model: "bedrock_mantle/anthropic.claude-sonnet-4-5"},
 		{},
 	}
 	for _, ref := range cases {
