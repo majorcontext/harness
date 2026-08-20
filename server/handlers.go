@@ -2430,11 +2430,17 @@ func (s *Server) handleQueueDelete(w http.ResponseWriter, r *http.Request) {
 // compactResponseJSON is the openapi POST /session/{id}/compact response
 // shape (docs/design/context-compaction.md §1): turns_folded is 0 (not an
 // error) when there was nothing worth folding — see engine.CompactResult.
+// SkipReason names exactly why (never set on a real fold): the three
+// TurnsFolded==0 shapes are otherwise wire-identical, indistinguishable to
+// an operator polling this endpoint even though only one of them
+// (summarizer_empty) actually cost a billed provider call (review
+// follow-up on PR #136, Finding C).
 type compactResponseJSON struct {
 	TurnsFolded int              `json:"turns_folded"`
 	FirstID     string           `json:"first_id,omitempty"`
 	LastID      string           `json:"last_id,omitempty"`
 	Summary     *message.Message `json:"summary,omitempty"`
+	SkipReason  string           `json:"skip_reason,omitempty"`
 }
 
 // handleCompact is POST /session/{id}/compact (docs/design/context-
@@ -2548,6 +2554,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 		FirstID:     res.FirstID,
 		LastID:      res.LastID,
 		Summary:     res.Summary,
+		SkipReason:  res.SkipReason,
 	})
 }
 

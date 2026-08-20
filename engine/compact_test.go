@@ -282,6 +282,9 @@ func TestCompactNoopWhenNotEnoughTurns(t *testing.T) {
 	if res.TurnsFolded != 0 {
 		t.Errorf("TurnsFolded = %d, want 0", res.TurnsFolded)
 	}
+	if res.SkipReason != SkipReasonNotEnoughTurns {
+		t.Errorf("SkipReason = %q, want %q (review follow-up on PR #136, Finding A/C)", res.SkipReason, SkipReasonNotEnoughTurns)
+	}
 	if len(prov.requests) != 1 {
 		t.Errorf("provider calls = %d, want 1 (only the worker turn — no summarization call)", len(prov.requests))
 	}
@@ -443,7 +446,11 @@ func TestCompactEmptySummarySkipsGracefully(t *testing.T) {
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		compactTurn("one", provider.Usage{InputTokens: 10}),
 		compactTurn("two", provider.Usage{InputTokens: 10}),
-		compactSummaryTurn("", provider.Usage{InputTokens: 5}), // the model returns nothing
+		// The model returns nothing, but the call still cost real,
+		// distinguishable tokens (777/3, chosen to be unmistakable against
+		// the ordinary turns' usage above) — see the usage-accounting
+		// assertion below (review follow-up on PR #136, Finding A).
+		compactSummaryTurn("", provider.Usage{InputTokens: 777, OutputTokens: 3}),
 	}}
 	dir := t.TempDir()
 	var evs []Event
@@ -456,6 +463,7 @@ func TestCompactEmptySummarySkipsGracefully(t *testing.T) {
 	runTurns(t, s, 2)
 	before := s.History()
 	beforeCount := s.CompactionCount()
+	beforeUsage := s.Usage()
 	evs = nil // discard the two ordinary turns' events
 
 	res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
@@ -464,6 +472,20 @@ func TestCompactEmptySummarySkipsGracefully(t *testing.T) {
 	}
 	if res.TurnsFolded != 0 {
 		t.Errorf("TurnsFolded = %d, want 0", res.TurnsFolded)
+	}
+	if res.SkipReason != SkipReasonSummarizerEmpty {
+		t.Errorf("SkipReason = %q, want %q (review follow-up on PR #136, Finding A/C)", res.SkipReason, SkipReasonSummarizerEmpty)
+	}
+
+	// The empty-summary call still cost real tokens and must not vanish
+	// from Session.Usage() (review follow-up on PR #136, Finding A: this
+	// path used to drop the summarizer call's usage entirely).
+	afterUsage := s.Usage()
+	if got := afterUsage.InputTokens - beforeUsage.InputTokens; got != 777 {
+		t.Errorf("InputTokens delta = %d, want 777 (the empty summarizer call's own usage must still be accounted)", got)
+	}
+	if got := afterUsage.OutputTokens - beforeUsage.OutputTokens; got != 3 {
+		t.Errorf("OutputTokens delta = %d, want 3", got)
 	}
 
 	after := s.History()
@@ -540,8 +562,62 @@ func TestCompactSkipsLoneExistingSummaryRangeWithoutCallingProvider(t *testing.T
 	if res.TurnsFolded != 0 {
 		t.Errorf("TurnsFolded = %d, want 0 (lone existing-summary range, nothing to gain)", res.TurnsFolded)
 	}
+	if res.SkipReason != SkipReasonLoneExistingSummary {
+		t.Errorf("SkipReason = %q, want %q (review follow-up on PR #136, Finding A/C)", res.SkipReason, SkipReasonLoneExistingSummary)
+	}
 	if got := len(prov.requests); got != requestsBefore {
 		t.Errorf("provider calls = %d, want %d (no summarization call for a lone existing-summary range)", got, requestsBefore)
+	}
+}
+
+// TestCompactUserMessageStartingWithBannerTextStillFolds is the red-first
+// test for the review follow-up on PR #136, Finding B: isLoneExistingSummary
+// used to match on CompactionSummaryBanner's TEXT alone (RoleUser +
+// strings.HasPrefix), which a user-typed or pasted message can trivially
+// collide with — e.g. pasting a transcript that itself contains an earlier
+// compaction summary. A false match skips that range FOREVER without ever
+// calling the provider; under the automatic trigger the session then never
+// compacts again, the exact exhaustion mode this PR exists to fix, just
+// reached via message content instead of a summarizer bug.
+// isLoneExistingSummary must gate on isCompactionSummaryID's structural ID
+// marker instead, so a genuine user message with real content to fold is
+// never mistaken for a lone existing summary.
+func TestCompactUserMessageStartingWithBannerTextStillFolds(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactSummaryTurn("real gist of the pasted message", provider.Usage{InputTokens: 5}),
+	}}
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+	})
+
+	// A genuine user message — an ordinary "msg_"-prefixed ID, never a
+	// compaction summary's "cmpsum_" one — whose text happens to start with
+	// the exact banner string. Constructed directly (rather than via
+	// runTurns) so the fold range lands on exactly this one message with no
+	// assistant reply beside it: the same single-message-turn shape a real
+	// lone existing summary has, and the only shape isLoneExistingSummary
+	// ever considers (see its len(folded) != 1 guard).
+	s.mu.Lock()
+	s.history = []message.Message{
+		{ID: newID("msg"), Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: CompactionSummaryBanner + "please continue from here"}}},
+		{ID: newID("msg"), Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
+		{ID: newID("msg"), Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "reply"}}},
+	}
+	s.mu.Unlock()
+
+	res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
+	if err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	if res.TurnsFolded != 1 {
+		t.Errorf("TurnsFolded = %d, want 1 (a user-authored message that happens to start with the banner must still be folded, not skipped as a lone existing summary)", res.TurnsFolded)
+	}
+	if res.SkipReason != "" {
+		t.Errorf("SkipReason = %q, want empty (a real fold happened)", res.SkipReason)
+	}
+	if got := len(prov.requests); got != 1 {
+		t.Errorf("provider calls = %d, want 1 (the summarizer must actually be called for this range)", got)
 	}
 }
 
@@ -1015,6 +1091,49 @@ func TestMaybeAutoCompactTriggersAndHysteresisPreventsThrash(t *testing.T) {
 	}
 	if len(prov.requests) != 8 {
 		t.Fatalf("provider calls = %d, want 8 (6 worker turns + 2 compaction summaries)", len(prov.requests))
+	}
+}
+
+// TestMaybeAutoCompactEmptySummaryLatchesHysteresis is the red-first test
+// for the review follow-up on PR #136, Finding A: the empty-summary no-op
+// costs a full, billed provider call but used to set no hysteresis (only
+// TurnsFolded > 0 latched it). Once auto-compaction is armed, a session
+// whose summarizer returns empty re-issued a full summarization call, at
+// full input price, on EVERY subsequent over-threshold turn, indefinitely —
+// a silent recurring-spend bug, not a free no-op. The fix: latch the churn
+// guard on SkipReasonSummarizerEmpty too, so the second over-threshold turn
+// after an empty-summary skip must NOT issue another summarization call.
+func TestMaybeAutoCompactEmptySummaryLatchesHysteresis(t *testing.T) {
+	over := provider.Usage{InputTokens: 900}
+	under := provider.Usage{InputTokens: 100}
+
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("t1", under),                               // call 1: no lastUsage yet, no auto-compact possible
+		compactTurn("t2", over),                                // call 2: lastUsage(t1)=under, no trigger; lastUsage becomes over
+		compactSummaryTurn("", provider.Usage{InputTokens: 5}), // triggered before call 3 (lastUsage(t2)=over); the model returns nothing
+		compactTurn("t3", over),                                // call 3's own turn; keeps lastUsage over threshold
+		compactTurn("t4", over),                                // call 4's own turn: hysteresis must suppress a second summarization call here
+		compactSummaryTurn("buffer-if-hysteresis-did-not-latch", provider.Usage{InputTokens: 5}), // spare slot: only consumed if the bug re-triggers a second summarizer call before call 4
+	}}
+	s := NewSession(Config{
+		Providers:           provider.Registry{"test": prov},
+		Model:               message.ModelRef{Provider: "test", Model: "m1"},
+		ContextWindowTokens: 1000,
+		CompactionKeepTurns: 1,
+	})
+	runTurns(t, s, 4)
+
+	var summaryCalls int
+	for _, req := range prov.requests {
+		if len(req.System) > 0 && req.System[0] == compactionSystemPrompt {
+			summaryCalls++
+		}
+	}
+	if summaryCalls != 1 {
+		t.Errorf("summarization calls = %d, want 1 (an empty-summary no-op must latch hysteresis so a still-over-threshold turn never re-triggers it — review follow-up on PR #136, Finding A)", summaryCalls)
+	}
+	if got := s.CompactionCount(); got != 0 {
+		t.Errorf("CompactionCount = %d, want 0 (the summarizer never returned anything usable in this test)", got)
 	}
 }
 

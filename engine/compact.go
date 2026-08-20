@@ -55,8 +55,53 @@ var errEmptyCompactionSummary = errors.New("compaction summary was empty")
 // CompactionSummaryBanner prefixes every synthesized compaction summary
 // message's text, mirroring message.SyntheticOrphanResultText's spirit: a
 // transcript or GET /session/{id}/message reader can never mistake it for
-// something the human actually typed.
+// something the human actually typed. Display-only — see
+// compactionSummaryIDTag for the structural marker isLoneExistingSummary
+// actually gates on; this banner must never again be used to detect
+// compaction origin (review follow-up on PR #136, Finding B).
 const CompactionSummaryBanner = "[compacted summary of earlier conversation]\n\n"
+
+// compactionSummaryIDTag is the newID prefix minted for every compaction
+// summary message (see Compact below): "cmpsum_<TypeID suffix>", never
+// "msg_" like an ordinary message. isCompactionSummaryID tests exactly this
+// prefix. This exists because CompactionSummaryBanner alone is a display
+// convention, not proof of origin — a user pasting text that happens to
+// start with the literal banner string (e.g. pasting a transcript that
+// itself contains an earlier compaction summary) collided with the old
+// text-only check in isLoneExistingSummary, which then skipped that
+// "summary" forever without ever calling the provider: under the automatic
+// trigger the session never compacts again, the exact exhaustion mode this
+// PR exists to fix, just reached via message content instead of a
+// summarizer bug (review follow-up on PR #136, Finding B).
+const compactionSummaryIDTag = "cmpsum"
+
+// isCompactionSummaryID reports whether id names a message minted by
+// Compact as a synthesized summary (compactionSummaryIDTag's prefix),
+// distinct from message.IsSyntheticOrphanID's own ID-prefix scheme for a
+// different synthetic-message kind.
+//
+// # Backward compatibility
+//
+// A summary compacted by an earlier build of this same not-yet-merged PR
+// (before this ID-scheme fix landed) was minted with a plain "msg_" ID and
+// only the banner text to mark it — indistinguishable, by ID alone, from a
+// genuine user message. This function deliberately does NOT fall back to
+// the banner text to catch that shape: doing so would reopen exactly the
+// false-positive this fix closes. The cost of not falling back is bounded
+// and self-healing, not a permanent regression: isLoneExistingSummary
+// simply misses that one old-style summary once, Compact runs the
+// summarizer against it like any other real content, and the FRESH summary
+// that call produces carries this ID tag — every later compaction touching
+// it recognizes it correctly from then on. And per Finding A above, even
+// the worst case (the summarizer returns empty for that one old-style
+// range) is now bounded to a single extra billed call, not an unbounded
+// loop: SkipReasonSummarizerEmpty latches maybeAutoCompact's hysteresis
+// immediately. This repo is pre-production (see AGENTS.md's "Do not
+// over-engineer a pre-production system"), so no persisted session
+// predates this PR's own compaction feature — there is nothing to migrate.
+func isCompactionSummaryID(id string) bool {
+	return strings.HasPrefix(id, compactionSummaryIDTag+"_")
+}
 
 // compactionSystemPrompt is the dedicated system prompt for the tool-less
 // summarization call (see Session.Compact): concise, information-preserving,
@@ -91,14 +136,44 @@ type CompactOptions struct {
 }
 
 // CompactResult is the outcome of a successful Session.Compact call.
-// TurnsFolded is 0 (not an error) when there was nothing worth folding —
-// fewer than the keep-turns floor's worth of complete turns exist yet.
+// TurnsFolded is 0 (not an error) when there was nothing worth folding;
+// SkipReason then names exactly why (one of the SkipReason* constants
+// below), empty otherwise. Distinguishing the three TurnsFolded==0 shapes
+// matters: not_enough_turns and lone_existing_summary never call the
+// provider (free), while summarizer_empty means the provider WAS called and
+// billed but returned nothing usable — see maybeAutoCompact's hysteresis
+// latch below, and the POST /session/{id}/compact response's skip_reason
+// field (server/handlers.go's compactResponseJSON), both of which key off
+// this field (review follow-up on PR #136, Finding A/C).
 type CompactResult struct {
 	TurnsFolded int
 	FirstID     string
 	LastID      string
 	Summary     *message.Message
+	SkipReason  string
 }
+
+// SkipReason values for CompactResult.SkipReason, set only when
+// TurnsFolded == 0.
+const (
+	// SkipReasonNotEnoughTurns: fewer than the effective keep-turns floor's
+	// worth of complete turns exist yet (§2's minimum-fold rule). The
+	// provider is never called.
+	SkipReasonNotEnoughTurns = "not_enough_turns"
+	// SkipReasonLoneExistingSummary: the entire fold range is a single,
+	// already-compacted summary message with nothing else to reduce (see
+	// isLoneExistingSummary). The provider is never called.
+	SkipReasonLoneExistingSummary = "lone_existing_summary"
+	// SkipReasonSummarizerEmpty: the summarization call ran, completed
+	// without a transport/stream error, and returned no usable text (see
+	// errEmptyCompactionSummary). Unlike the two reasons above, this one
+	// costs a full-input-price provider call — maybeAutoCompact latches its
+	// hysteresis on this reason specifically (never on the free reasons
+	// above), so an over-threshold session whose summarizer keeps returning
+	// empty does not re-issue this call every subsequent turn indefinitely
+	// (review follow-up on PR #136, Finding A).
+	SkipReasonSummarizerEmpty = "summarizer_empty"
+)
 
 // effectiveKeepTurns resolves CompactOptions.KeepTurns/Config.
 // CompactionKeepTurns down to one concrete, floored value.
@@ -133,21 +208,26 @@ func turnBoundaries(history []message.Message) []int {
 // isLoneExistingSummary reports whether a fold range's entire content is
 // nothing but a single, earlier compaction's own summary message: exactly
 // one message (a "turn" with no assistant reply of its own — the design
-// doc's §2 notes a summary "is just another old turn"), whose text carries
-// CompactionSummaryBanner. Re-summarizing that — asking a model to compress
-// an already-compressed artifact with nothing else new alongside it — has
-// nothing left to reduce; it is a real, cheap-to-detect instance of the
-// 2026-08-19 ses_jumpy-pizza incident's empty-summary failure (a small
-// keep_turns landed a fold range dominated by a prior summary), caught
-// BEFORE ever calling the provider rather than after, the same way the
-// not-enough-turns check above short-circuits for the same reason: nothing
-// to gain by folding.
+// doc's §2 notes a summary "is just another old turn"), structurally
+// identified as compaction-origin via isCompactionSummaryID — NOT by
+// matching CompactionSummaryBanner's display text, which a user-typed or
+// pasted message can trivially collide with (review follow-up on PR #136,
+// Finding B; see isCompactionSummaryID's doc comment for the false-positive
+// this replaced and why no text-based fallback is needed). Re-summarizing a
+// real lone summary — asking a model to compress an already-compressed
+// artifact with nothing else new alongside it — has nothing left to
+// reduce; it is a real, cheap-to-detect instance of the 2026-08-19
+// ses_jumpy-pizza incident's empty-summary failure (a small keep_turns
+// landed a fold range dominated by a prior summary), caught BEFORE ever
+// calling the provider rather than after, the same way the not-enough-turns
+// check above short-circuits for the same reason: nothing to gain by
+// folding.
 func isLoneExistingSummary(folded []message.Message) bool {
 	if len(folded) != 1 {
 		return false
 	}
 	m := folded[0]
-	return m.Role == message.RoleUser && strings.HasPrefix(m.Parts.Text(), CompactionSummaryBanner)
+	return m.Role == message.RoleUser && isCompactionSummaryID(m.ID)
 }
 
 // Compact folds a contiguous prefix of whole turns into one synthetic
@@ -187,7 +267,7 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 
 	starts := turnBoundaries(history)
 	if len(starts) <= keepTurns {
-		return CompactResult{}, nil
+		return CompactResult{SkipReason: SkipReasonNotEnoughTurns}, nil
 	}
 	foldTurns := len(starts) - keepTurns
 	foldStart := starts[0]
@@ -195,7 +275,7 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 	foldEnd := foldEndExclusive - 1
 
 	if isLoneExistingSummary(history[foldStart : foldEnd+1]) {
-		return CompactResult{}, nil
+		return CompactResult{SkipReason: SkipReasonLoneExistingSummary}, nil
 	}
 
 	// spliceFirstID/spliceLastID name the fold range as it actually sits in
@@ -278,13 +358,32 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 		// stream, a range too large to summarize) still returns err as
 		// before: those are real failures, not "the model said nothing."
 		if errors.Is(err, errEmptyCompactionSummary) {
-			return CompactResult{}, nil
+			// The call still ran and still cost real tokens even though it
+			// produced nothing usable — accumulate that spend into the
+			// cumulative Usage() the same way a successful fold's summary
+			// call does below (see "Usage accounting" in
+			// docs/design/context-compaction.md), never lastUsage/
+			// haveLastUsage (same rule as the success path: the automatic
+			// trigger reads LastUsage as "how large is the next worker
+			// request," and this small call would mask that). Known
+			// residual: unlike the success path, no compact record is
+			// journaled for a skipped compaction (nothing to splice in), so
+			// this accumulation is live-only and does not survive a reload
+			// — the same one-call-of-slop-on-restart tradeoff the empty-
+			// summary skip already accepts elsewhere.
+			s.mu.Lock()
+			s.usage.InputTokens += usage.InputTokens
+			s.usage.OutputTokens += usage.OutputTokens
+			s.usage.CacheReadTokens += usage.CacheReadTokens
+			s.usage.CacheWriteTokens += usage.CacheWriteTokens
+			s.mu.Unlock()
+			return CompactResult{SkipReason: SkipReasonSummarizerEmpty}, nil
 		}
 		return CompactResult{}, err
 	}
 
 	summary := message.Message{
-		ID:        newID("msg"),
+		ID:        newID(compactionSummaryIDTag),
 		Role:      message.RoleUser,
 		Parts:     message.Parts{&message.Text{Text: CompactionSummaryBanner + summaryText}},
 		CreatedAt: time.Now().UTC(),
@@ -519,7 +618,11 @@ func (s *Session) runCompactionSummary(ctx context.Context, model message.ModelR
 		text = deltas.String()
 	}
 	if strings.TrimSpace(text) == "" {
-		return "", provider.Usage{}, fmt.Errorf("engine: compaction summary was empty: %w", errEmptyCompactionSummary)
+		// usage (not provider.Usage{}) — the call still completed and cost
+		// real tokens even though it returned nothing usable; Compact's
+		// caller accumulates this into cumulative Usage() (see its
+		// errEmptyCompactionSummary branch).
+		return "", usage, fmt.Errorf("engine: compaction summary was empty: %w", errEmptyCompactionSummary)
 	}
 	return text, usage, nil
 }
@@ -734,7 +837,18 @@ func (s *Session) maybeAutoCompact(ctx context.Context) {
 		// Compact. The turn proceeds uncompacted.
 		return
 	}
-	if res.TurnsFolded > 0 {
+	// Latch on a real fold (TurnsFolded > 0) OR on a summarizer_empty skip —
+	// both cost a full-input-price provider call, so both must arm the
+	// churn guard exactly like a successful fold does. NEVER latch on the
+	// two free skip reasons (not_enough_turns, lone_existing_summary): the
+	// churn guard only clears once LastUsage dips below threshold, so
+	// latching it for a free no-op would permanently disarm automatic
+	// compaction for an over-threshold session that simply doesn't have
+	// enough turns yet to fold (review follow-up on PR #136, Finding A —
+	// without this, a summarizer that always returns empty re-issued a full
+	// summarization call, at full input price, on EVERY subsequent
+	// over-threshold turn indefinitely).
+	if res.TurnsFolded > 0 || res.SkipReason == SkipReasonSummarizerEmpty {
 		s.mu.Lock()
 		s.compactHysteresis = true
 		s.mu.Unlock()

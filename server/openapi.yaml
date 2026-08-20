@@ -1272,6 +1272,15 @@ components:
           description: >
             The synthesized summary message that replaced the folded range.
             Absent when turns_folded is 0.
+        skip_reason:
+          type: string
+          enum: [not_enough_turns, lone_existing_summary, summarizer_empty]
+          description: >
+            Present only when turns_folded is 0; absent on a real fold.
+            not_enough_turns and lone_existing_summary are free — the
+            summarization provider is never called. summarizer_empty means
+            the provider WAS called (and billed) but returned no usable
+            text.
 
     GoalRequest:
       type: object
