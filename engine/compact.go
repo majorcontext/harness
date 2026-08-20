@@ -622,7 +622,7 @@ func (s *Session) runCompactionSummary(ctx context.Context, model message.ModelR
 		// real tokens even though it returned nothing usable; Compact's
 		// caller accumulates this into cumulative Usage() (see its
 		// errEmptyCompactionSummary branch).
-		return "", usage, fmt.Errorf("engine: compaction summary was empty: %w", errEmptyCompactionSummary)
+		return "", usage, fmt.Errorf("engine: %w", errEmptyCompactionSummary)
 	}
 	return text, usage, nil
 }
