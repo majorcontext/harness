@@ -458,12 +458,22 @@ type Config struct {
 	// provider.AsPermanent malformed-request shape, or an interruptedTurnError
 	// is never retried regardless of this value — see streamTurnWithRetry.
 	PromptRetries int
-	// ContextWindowTokens is the model's context window size, in tokens.
-	// Zero (the default, a fresh Config's zero value) disables automatic
-	// compaction entirely: the engine has no built-in per-model table, so
-	// this is opt-in. When positive, Prompt checks LastUsage against
-	// ContextWindowTokens * CompactionThreshold at the top of every call
-	// and compacts first if over. See docs/design/context-compaction.md.
+	// ContextWindowTokens is the model's context window size, in tokens, as
+	// an EXPLICIT operator override. A caller passing a positive value here
+	// pins the window for the session's lifetime, immune to a later model
+	// switch (see SetModel). Left zero, newSession derives it instead from
+	// the session's model via modelmeta.ContextWindow (package modelmeta,
+	// context_window.go's resolveContextWindow) — so by the time Prompt
+	// first runs, this field already holds the EFFECTIVE window, not
+	// necessarily what the caller passed in; a caller inspecting it right
+	// after NewSession/LoadSession returns sees the resolved value.
+	// Automatic compaction stays disabled only when no model metadata was
+	// found either (an unrecognized ref, or one below the sanity floor —
+	// see minAutoContextWindowTokens). When positive, Prompt checks
+	// LastUsage against ContextWindowTokens * CompactionThreshold at the top
+	// of every call and compacts first if over. See docs/design/
+	// context-compaction.md and, for the derivation itself,
+	// context_window.go's package doc comment.
 	ContextWindowTokens int
 	// CompactionThreshold is the fraction of ContextWindowTokens at which
 	// automatic compaction triggers. Zero defaults to 0.8, mirroring
@@ -611,6 +621,20 @@ type Session struct {
 	// Guarded by mu.
 	compactHysteresis bool
 
+	// contextWindowExplicit is true when the ORIGINAL Config.ContextWindowTokens
+	// passed to NewSession/LoadSession was already positive — an operator
+	// override. It is set once, at construction, and never changes again for
+	// this session's lifetime: resolveContextWindow's precedence (explicit
+	// config > model-derived > disabled) means an explicit value is pinned
+	// even across a later model switch (see SetModel), so this flag is what
+	// tells SetModel whether it is allowed to re-derive s.cfg.ContextWindowTokens
+	// at all. contextWindowSource mirrors whichever branch resolveContextWindow
+	// took most recently (contextWindowSource{Config,ModelDerived,Disabled}),
+	// carried for the session-start and model-switch INFO log lines
+	// (logContextWindowArmed, context_window.go). Guarded by mu.
+	contextWindowExplicit bool
+	contextWindowSource   string
+
 	// compactCount/lastCompactedAt track how many times this session has
 	// been compacted and when the most recent one landed — durable via the
 	// compact journal record (see store.go), so GET /session can show a UI
@@ -648,6 +672,7 @@ type Session struct {
 func NewSession(cfg Config) *Session {
 	s := newSession(cfg)
 	s.ID = newID("ses")
+	logContextWindowArmed(s.ID, s.model, s.cfg.ContextWindowTokens, s.contextWindowSource, "start")
 	return s
 }
 
@@ -663,13 +688,24 @@ func newSession(cfg Config) *Session {
 	if cfg.BashTimeout <= 0 {
 		cfg.BashTimeout = 2 * time.Minute
 	}
+	// contextWindowExplicit records whether the CALLER set
+	// Config.ContextWindowTokens, captured from the ORIGINAL value before
+	// resolveContextWindow below overwrites it with the effective (possibly
+	// model-derived) window. SetModel later needs this to decide whether a
+	// model switch is ever allowed to touch the field again — see its doc
+	// comment and resolveContextWindow's precedence.
+	contextWindowExplicit := cfg.ContextWindowTokens > 0
+	var contextWindowSource string
+	cfg.ContextWindowTokens, contextWindowSource = resolveContextWindow(cfg.ContextWindowTokens, cfg.Model)
 	s := &Session{
-		cfg:               cfg,
-		model:             cfg.Model,
-		effort:            cfg.Effort,
-		tools:             make(map[string]Tool),
-		createdAt:         time.Now().UTC(),
-		promptQueueNextID: 1,
+		cfg:                   cfg,
+		model:                 cfg.Model,
+		effort:                cfg.Effort,
+		tools:                 make(map[string]Tool),
+		createdAt:             time.Now().UTC(),
+		promptQueueNextID:     1,
+		contextWindowExplicit: contextWindowExplicit,
+		contextWindowSource:   contextWindowSource,
 	}
 	for _, t := range []Tool{bashTool(cfg.BashTimeout, cfg.BashOutputCap), readFileTool(), writeFileTool(), editFileTool(), sessionInfoTool()} {
 		s.tools[t.Def.Name] = t
@@ -703,6 +739,23 @@ func newSession(cfg Config) *Session {
 // (the `model` tool, a per-request prompt override, POST /session/{id}/model)
 // funnels through, so the server journals every swap once via a single path.
 // OnEvent must not call back into this Session.
+//
+// The automatic-compaction context window follows the swap: unless
+// Config.ContextWindowTokens was set explicitly (contextWindowExplicit,
+// pinned forever once true — see newSession), s.cfg.ContextWindowTokens is
+// re-derived from ref via resolveContextWindow, exactly as it was at session
+// start. A session that starts on a model with no metadata (compaction
+// disabled) and switches to one that has it arms compaction from that point
+// on, and the reverse disarms it — but ONLY when the re-derived (tokens,
+// source) pair actually differs from what was already in effect does
+// SetModel update s.cfg.ContextWindowTokens/contextWindowSource, clear
+// compactHysteresis, and emit logContextWindowArmed's fresh INFO line (see
+// that function's doc comment and context_window.go's package doc): a
+// same-window switch (two models sharing the same metadata) is not an
+// operator-facing event, and a window change invalidates the hysteresis
+// churn-guard, which means "folding again won't relieve pressure at the
+// window it latched under" (see compactHysteresis's doc comment) — a claim
+// that no longer holds once the window itself has moved.
 func (s *Session) SetModel(ref message.ModelRef) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -711,6 +764,14 @@ func (s *Session) SetModel(ref message.ModelRef) {
 	}
 	s.model = ref
 	s.persistModel(ref)
+	if !s.contextWindowExplicit {
+		nextTokens, nextSource := resolveContextWindow(0, ref)
+		if nextTokens != s.cfg.ContextWindowTokens || nextSource != s.contextWindowSource {
+			s.cfg.ContextWindowTokens, s.contextWindowSource = nextTokens, nextSource
+			s.compactHysteresis = false
+			logContextWindowArmed(s.ID, ref, nextTokens, nextSource, "model_switch")
+		}
+	}
 	s.emit(Event{Type: EventModelChanged, Model: ref})
 }
 

@@ -914,6 +914,20 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 	// external writer). The repair is re-derived deterministically on every
 	// load; the log itself stays append-only and unmodified.
 	s.history = message.ResolveOrphanToolCalls(s.history)
+	// newSession already resolved s.cfg.ContextWindowTokens/contextWindowSource
+	// once, against cfg.Model — but a recModel record above may have moved
+	// s.model to whatever this session was last switched to, in an earlier
+	// process, before it ever got to write another log line. Re-derive
+	// against the FINAL replayed model so a resumed session's compaction
+	// window matches its actual active model, not the caller's default
+	// (loadSessionFn passes defModel, not the session's own last model — see
+	// cmd/harness/main.go). A no-op when nothing moved it (the common case:
+	// no recModel record, or explicit config), so this never double-logs the
+	// sanity-floor warning for the unchanged case.
+	if !s.contextWindowExplicit && s.model != cfg.Model {
+		s.cfg.ContextWindowTokens, s.contextWindowSource = resolveContextWindow(0, s.model)
+	}
+	logContextWindowArmed(s.ID, s.model, s.cfg.ContextWindowTokens, s.contextWindowSource, "start")
 	return s, nil
 }
 
