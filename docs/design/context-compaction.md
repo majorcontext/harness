@@ -21,8 +21,7 @@ the very top of `Prompt`, after `ensureInstructions`/`ensureSkills` and
 before the turn loop, run on *every* call (bare `prompt_async` and every
 goal-loop worker turn alike, since `PursueGoal` drives everything through
 `Prompt`) — no separate scheduler, no goal.go changes needed. If
-`Config.ContextWindowTokens > 0` (opt-in; a fresh `Config` leaves it zero,
-disabling this entirely — the engine has no built-in per-model table) and
+`Config.ContextWindowTokens > 0` and
 `haveLastUsage && lastUsage.InputTokens >= threshold * ContextWindowTokens`
 (threshold from `Config.CompactionThreshold`, defaulting to 0.8 when zero,
 mirroring `newSession`'s existing zero-fills-a-default pattern for
@@ -34,6 +33,31 @@ answered yet, and the just-arrived message can never be folded into its
 own summary. `Usage()` (cumulative)
 is deliberately NOT the signal — it sums every turn ever run, which is not
 "how large is the next request."
+
+**Where `ContextWindowTokens` comes from (added after the jumpy-pizza
+incident).** This design originally left `ContextWindowTokens` fully
+opt-in — "the engine has no built-in per-model table" — on the theory that
+whatever embeds the engine would set it. In production that theory failed
+silently: the boxes platform set it nowhere, so every box ran with
+automatic compaction permanently disarmed, and a session eventually died
+with a raw `context exhausted` provider error instead of ever compacting.
+`newSession` (`engine/context_window.go`, `resolveContextWindow`) now
+derives it itself when the embedder leaves it zero: package `modelmeta`
+holds a curated table of `provider/model` -> context-window tokens, sourced
+from models.dev's `limit.context` field (bifrost's own `/v1/models` was
+investigated and ruled out — it returns the bare OpenAI listing shape with
+no context-length field at all). Precedence is explicit config >
+model-derived > disabled, and a model-derived value below
+`minAutoContextWindowTokens` (16k) is treated as implausible metadata and
+ignored rather than arming a nonsense threshold. `SetModel` re-runs the same
+derivation against the new model unless the session's window was pinned by
+explicit config, so a mid-session model switch keeps the window (and
+therefore whether compaction is armed at all) matched to whichever model is
+actually running. One INFO log line at session start (and again on any
+switch that changes the effective window) names the resolved window and its
+source (`config`/`model-derived`/`disabled`) — the operator signal that
+would have made jumpy-pizza's disarmed compaction visible well before the
+box died.
 
 **Explicit: `POST /session/{id}/compact`.** Always available regardless of
 threshold — pre-emptive compaction ahead of a known-large tool result,
@@ -268,4 +292,13 @@ fire-and-forget counterpart.
   content), never a corrupt one, since compaction never deletes a log line.
   `Config.ContextWindowTokens` defaulting to zero (disabled) means no
   existing deployment changes behavior by upgrading; the new endpoint,
-  record type, and config fields are all purely additive.
+  record type, and config fields are all purely additive. This no longer
+  holds unconditionally after the model-derivation follow-up above: a
+  deployment whose sessions run a model `modelmeta` recognizes now gets
+  compaction armed where it previously silently wasn't — the intended fix
+  for the jumpy-pizza incident, not a regression, but worth calling out
+  explicitly since it is the one behavior change on an upgrade with no
+  config edit. An explicit `context_window_tokens: 0` is not distinguishable
+  from "unset" (see `config.Config.ContextWindowTokens`'s doc comment) — a
+  deployment that genuinely wants compaction to stay off for a recognized
+  model has no way to say so today; filed as a follow-up, not blocking here.

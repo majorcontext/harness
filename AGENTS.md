@@ -450,6 +450,33 @@ layer keeps functioning instead of going permanently dark on that route,
 which otherwise runs to a hard context overflow that clears (never parks) an
 active goal.
 
+`Config.ContextWindowTokens` — the size that gates automatic compaction at
+all — is resolved by `newSession` (`engine/context_window.go`,
+`resolveContextWindow`), not just read verbatim from whatever the embedder
+passed in. Precedence: an explicit, positive `Config.ContextWindowTokens`
+always wins and is pinned for the session's lifetime (`contextWindowExplicit`
+on `Session`, set once at construction); otherwise the session's MODEL is
+looked up in package `modelmeta` — a curated, static table of
+`provider/model` -> context-window tokens sourced from models.dev's
+`limit.context` field (bifrost's `/v1/models` was investigated first and
+ruled out: it returns the bare OpenAI listing shape with no context-length
+data at all). A model-derived value under `minAutoContextWindowTokens`
+(16k) is treated as bogus metadata and ignored — logged, never armed. An
+unrecognized model (or no metadata at all) leaves compaction disabled,
+identical to the field's original zero-value behavior. `SetModel` re-runs
+the same derivation against the new model whenever the window wasn't
+explicitly pinned, so a mid-session model switch keeps the window matched
+to whichever model is actually running — switching FROM a recognized model
+TO an unrecognized one disarms compaction again, not just leaves the old
+window in place. One INFO log line (`"engine: context window"`) fires at
+session start and on every switch that changes the effective window, naming
+the resolved tokens and source (`config`/`model-derived`/`disabled`) — the
+operator signal for "is compaction armed and why," added after a box
+(`jumpy-pizza`) died with a raw `context exhausted: prompt N tokens > limit
+M` provider error because `ContextWindowTokens` was opt-in and the boxes
+platform set it nowhere. See docs/design/context-compaction.md's "Where
+`ContextWindowTokens` comes from" addendum for the full incident writeup.
+
 On the server, a worker-parked sentinel maps to `session.error` plus a
 distinct `turn.end outcome=worker_parked`, and `goalTracker` folds the
 durable `goal.parked` record into a third `paused` arm (`pause_reason:
