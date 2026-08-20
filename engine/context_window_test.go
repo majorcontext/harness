@@ -1,7 +1,10 @@
 package engine
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/message"
@@ -224,6 +227,107 @@ func TestSetModelNoOpDoesNotRederive(t *testing.T) {
 	s.SetModel(modelUnknown) // no-op: same model
 	if calls != callsAfterCreate {
 		t.Fatalf("SetModel no-op called the lookup %d more time(s), want 0", calls-callsAfterCreate)
+	}
+}
+
+// --- SetModel: the churn-guard must not survive a window change -------------
+
+// TestSetModelClearsStaleHysteresisOnWindowChange is the red-first
+// regression test for Finding 4: compactHysteresis means "folding again
+// won't relieve pressure at the CURRENT window" (see its doc comment in
+// engine.go). SetModel re-derives s.cfg.ContextWindowTokens from the new
+// model but left compactHysteresis untouched, so a switch to a
+// smaller-window model after an automatic fold left the churn guard
+// latched against a window that no longer applies — maybeAutoCompact would
+// then see "over threshold" + "on cooldown" and never compact again while
+// the prompt stayed above the NEW (smaller) threshold.
+//
+// Sequence mirrors TestMaybeAutoCompactTriggersAndHysteresisPreventsThrash's
+// working shape: a "no lastUsage yet" call, then an "under" call to build a
+// 2-turn history without accidentally firing a fold with nothing to fold,
+// then an "over" call that actually triggers the first automatic
+// compaction (latching compactHysteresis). SetModel then switches to a
+// small-window model. A further over-threshold turn must trigger a SECOND
+// automatic compaction — which only happens if the switch cleared the
+// stale guard.
+func TestSetModelClearsStaleHysteresisOnWindowChange(t *testing.T) {
+	modelBig := message.ModelRef{Provider: "test", Model: "big-window"}
+	modelSmall := message.ModelRef{Provider: "test", Model: "small-window"}
+	stubContextWindowLookup(t, map[message.ModelRef]int{
+		modelBig:   100_000, // threshold (default 0.8) = 80_000; both clear minAutoContextWindowTokens's 16_000 floor
+		modelSmall: 20_000,  // threshold (default 0.8) = 16_000
+	})
+
+	under := provider.Usage{InputTokens: 10_000} // under both thresholds
+	over := provider.Usage{InputTokens: 85_000}  // over both thresholds
+
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("t1", under), // call 1: no lastUsage yet, no trigger
+		compactTurn("t2", over),  // call 2: lastUsage(t1)=under, no trigger; history now has 2 turns
+		compactSummaryTurn("gist-1", provider.Usage{InputTokens: 5}), // triggered before call 3 (lastUsage(t2)=85000 >= 80000)
+		compactTurn("t3", over), // call 3's own turn
+		// SetModel(modelSmall) happens here, between calls 3 and 4.
+		compactSummaryTurn("gist-2", provider.Usage{InputTokens: 5}), // must trigger before call 4 IFF hysteresis was cleared
+		compactTurn("t4", over), // call 4's own turn
+	}}
+	s := NewSession(Config{
+		Providers:           provider.Registry{"test": prov},
+		Model:               modelBig,
+		CompactionKeepTurns: 1,
+	})
+
+	runTurns(t, s, 3)
+	if got := s.CompactionCount(); got != 1 {
+		t.Fatalf("CompactionCount after 3 turns = %d, want 1 (first automatic fold)", got)
+	}
+
+	s.SetModel(modelSmall)
+
+	runTurns(t, s, 1)
+	if got := s.CompactionCount(); got != 2 {
+		t.Fatalf("CompactionCount after model switch + 1 more over-threshold turn = %d, want 2 "+
+			"(a stale compactHysteresis from the OLD window suppressed the second fold)", got)
+	}
+	if got := len(prov.requests); got != 6 {
+		t.Fatalf("provider calls = %d, want 6 (4 worker turns + 2 compaction summaries)", got)
+	}
+}
+
+// TestSetModelSameWindowDoesNotLog is the red-first regression test for
+// Finding 5: context_window.go's logContextWindowArmed doc comment (and the
+// AGENTS.md addendum) promise the "model_switch" INFO line fires only when
+// the effective window actually changes, but SetModel logged on every
+// non-no-op model change regardless — two models that happen to share the
+// same modelmeta-derived window still produce a spurious "model_switch"
+// line. Drives the real logger (slog.Default), not a mock, since this is
+// specifically about what SetModel decides to log.
+func TestSetModelSameWindowDoesNotLog(t *testing.T) {
+	modelA := message.ModelRef{Provider: "test", Model: "same-window-a"}
+	modelB := message.ModelRef{Provider: "test", Model: "same-window-b"}
+	stubContextWindowLookup(t, map[message.ModelRef]int{
+		modelA: 500_000,
+		modelB: 500_000, // same tokens AND source (model-derived) as modelA
+	})
+
+	s := NewSession(Config{
+		Model: modelA,
+		Providers: provider.Registry{
+			"test": &scriptedProvider{name: "test"},
+		},
+	})
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	s.SetModel(modelB) // real model change (ref != s.model), but SAME effective window
+
+	if out := buf.String(); strings.Contains(out, "model_switch") {
+		t.Errorf("SetModel(modelB) logged a model_switch line for a same-window switch:\n%s", out)
+	}
+	if s.cfg.ContextWindowTokens != 500_000 {
+		t.Fatalf("cfg.ContextWindowTokens = %d, want 500000 (window value itself is unaffected by log suppression)", s.cfg.ContextWindowTokens)
 	}
 }
 

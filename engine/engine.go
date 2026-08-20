@@ -746,8 +746,16 @@ func newSession(cfg Config) *Session {
 // re-derived from ref via resolveContextWindow, exactly as it was at session
 // start. A session that starts on a model with no metadata (compaction
 // disabled) and switches to one that has it arms compaction from that point
-// on, and the reverse disarms it — either way logContextWindowArmed emits a
-// fresh INFO line so an operator sees the change, not just the model swap.
+// on, and the reverse disarms it — but ONLY when the re-derived (tokens,
+// source) pair actually differs from what was already in effect does
+// SetModel update s.cfg.ContextWindowTokens/contextWindowSource, clear
+// compactHysteresis, and emit logContextWindowArmed's fresh INFO line (see
+// that function's doc comment and context_window.go's package doc): a
+// same-window switch (two models sharing the same metadata) is not an
+// operator-facing event, and a window change invalidates the hysteresis
+// churn-guard, which means "folding again won't relieve pressure at the
+// window it latched under" (see compactHysteresis's doc comment) — a claim
+// that no longer holds once the window itself has moved.
 func (s *Session) SetModel(ref message.ModelRef) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -757,8 +765,12 @@ func (s *Session) SetModel(ref message.ModelRef) {
 	s.model = ref
 	s.persistModel(ref)
 	if !s.contextWindowExplicit {
-		s.cfg.ContextWindowTokens, s.contextWindowSource = resolveContextWindow(0, ref)
-		logContextWindowArmed(s.ID, ref, s.cfg.ContextWindowTokens, s.contextWindowSource, "model_switch")
+		nextTokens, nextSource := resolveContextWindow(0, ref)
+		if nextTokens != s.cfg.ContextWindowTokens || nextSource != s.contextWindowSource {
+			s.cfg.ContextWindowTokens, s.contextWindowSource = nextTokens, nextSource
+			s.compactHysteresis = false
+			logContextWindowArmed(s.ID, ref, nextTokens, nextSource, "model_switch")
+		}
 	}
 	s.emit(Event{Type: EventModelChanged, Model: ref})
 }
