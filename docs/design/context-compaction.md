@@ -97,10 +97,18 @@ another old turn.
 evaluator shape `engine/goal.go` already establishes (`runEvaluator`): a
 request built from exactly the folded range's messages (independently
 transcodable, since a whole-turns range has no dangling tool call at either
-edge) plus a dedicated compaction system prompt asking for a concise,
-information-preserving summary — user intent, decisions and rationale,
-concrete facts a later turn depends on (file paths, commands, values, error
-text), explicitly not tool-call minutiae verbatim. Model: `CompactOptions.
+edge), plus one trailing `RoleUser` instruction message appended
+unconditionally after that range — never sent bare — so the request always
+ends in a user turn regardless of the folded range's own final message
+(ordinarily `RoleAssistant`, the folded turn's final reply: sending the
+range bare, as an earlier version of this call did, ends the wire request
+in an assistant-role message, which the Anthropic Messages API treats as
+assistant message prefill — some models reject prefill outright with a 400
+`invalid_request_error`), plus a dedicated
+compaction system prompt asking for a concise, information-preserving
+summary — user intent, decisions and rationale, concrete facts a later turn
+depends on (file paths, commands, values, error text), explicitly not
+tool-call minutiae verbatim. Model: `CompactOptions.
 Model`, defaulting to the session's *own* current model when unset — unlike
 `GoalOptions.Evaluator` (which must be a genuinely independent judge),
 summarization needs competence, not independence, so defaulting removes a
@@ -135,16 +143,38 @@ session would report the small summarization call as its "last request
 size" and defeat the re-trigger check). Without the field at all, the
 summarization spend would silently vanish from `Usage()` on every reload.
 
-**Failure handling.** If the summarization call errors (rate limit,
-transient 5xx, or the range itself is too large to summarize in one call —
-a real possibility for one giant tool result), compaction aborts cleanly:
-no journal write (§3 below never happens without a summary in hand first),
-no history mutation, an emitted `compaction.failed` event/`OnEvent`, and —
-for the automatic trigger — the turn simply proceeds uncompacted, at the
-same risk layer 1 already classifies and fails fast on if it actually
-overflows. Compaction is a best-effort relief valve, not a load-bearing
-correctness mechanism; failing loud into an existing, already-handled
-failure mode is strictly better than blocking the caller's real turn on it.
+**Failure handling.** If the summarization call errors for a REAL reason
+(rate limit, transient 5xx, a truncated stream, or the range itself is too
+large to summarize in one call — a real possibility for one giant tool
+result), compaction aborts cleanly: no journal write (§3 below never
+happens without a summary in hand first), no history mutation, an emitted
+`compaction.failed` event/`OnEvent`, AND the error propagates to the
+caller — for the automatic trigger, the turn simply proceeds uncompacted,
+at the same risk layer 1 already classifies and fails fast on if it
+actually overflows; for the explicit endpoint, the caller sees the failure.
+Compaction is a best-effort relief valve, not a load-bearing correctness
+mechanism; failing loud into an existing, already-handled failure mode is
+strictly better than blocking the caller's real turn on it.
+
+A call that completes without a transport/stream error but returns no
+usable text — an empty summary — is a DIFFERENT case, not a failure of this
+kind: the model was asked, answered, and had nothing to add. Treating it as
+the same hard-error shape as the above (2026-08-19 incident: `{"error":
+"engine: compaction summary was empty"}` surfaced from an operator's
+otherwise-ordinary `POST /session/{id}/compact` call) puts an operator
+manually folding a large session in the position of treating "the model
+said nothing" as fatal. Compaction instead reports it as the same
+`turns_folded: 0` "nothing worth folding" shape §2's minimum-fold rule
+already uses above — no journal write, no history mutation, no error to
+the caller — while still emitting `compaction.failed`, so the attempt
+remains visible to anything tailing events even though it is not surfaced
+as a caller-visible error. The one cheap, structural case worth catching
+BEFORE ever calling the provider: a fold range whose entire content is a
+single earlier compaction's own summary message (no other turn alongside
+it) has nothing left to reduce — re-summarizing an already-compressed
+summary is exactly the shape that produced the empty-summary incident (a
+small `keep_turns` landing a fold range dominated by a prior summary) — so
+that range is skipped the same way, without a provider call at all.
 
 **Journal shape.** One new record type, alongside `goal.*`:
 

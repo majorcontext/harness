@@ -908,6 +908,42 @@ enables thinking over that same history — the documented ENABLE-direction
 "thinking blocks expected before tool_use" reject case, just reached from
 compaction instead of a live turn.
 
+**The summarization request always ends in a trailing `RoleUser` message,
+never the folded range's own last message verbatim** (2026-08-19 incident,
+session `ses_jumpy-pizza`). `foldEnd` (`Session.Compact`) is the last
+message before the next KEPT turn's leading `RoleUser` message — ordinarily
+that folded turn's own final assistant reply, `RoleAssistant` — so sending
+`folded` as `req.Messages` verbatim ordinarily ends the wire request in an
+assistant-role message, which the Anthropic Messages API treats as
+assistant message prefill; some models reject prefill outright (400
+`invalid_request_error`, "This model does not support assistant message
+prefill. The conversation must end with a user message."). `runCompactionSummary`
+builds its request via `compactionRequestMessages`, which appends one
+trailing `RoleUser` instruction message (`compactionInstructionText`) after
+`folded`, unconditionally — never a conditional check on the folded range's
+last role, since a `RoleTool` message (a `message.ResolveOrphanToolCalls`
+synthetic repair, or an ordinary tool result) also wire-transcodes to
+Anthropic's `"user"` role and would otherwise mask the same bug depending on
+where a fold boundary happens to land, exactly as it did live (`keep_turns=8`
+happened to succeed on the same session where `keep_turns=20` failed).
+
+**An empty summary is a graceful no-op, never an error surfaced to the
+caller.** A summarization call that completes without a transport/stream
+error but returns no usable text (`errEmptyCompactionSummary`) is reported
+by `Session.Compact` as the same `TurnsFolded == 0` "nothing worth folding"
+shape the too-few-turns case above already uses — no history mutation, no
+journal write, no error returned — though `EventCompactionFailed` still
+fires so the attempt stays visible to anything tailing events. Before ever
+calling the provider, `Compact` also skips a fold range whose entire content
+is a single earlier compaction's own summary message
+(`isLoneExistingSummary`): re-summarizing an already-compressed summary with
+nothing new alongside it has nothing to gain, and was the live incident's
+concrete trigger (a small `keep_turns` landed a fold range dominated by a
+prior summary). Do not conflate this with a REAL summarization failure
+(rate limit, transient 5xx, a truncated stream, a range too large to
+summarize) — those still abort with an error, per §2 "Failure handling" in
+`docs/design/context-compaction.md`.
+
 ### Session affinity (prompt-cache routing hint)
 
 `provider.Request.SessionKey` carries a stable, opaque session identifier on
