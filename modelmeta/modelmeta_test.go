@@ -51,6 +51,84 @@ func TestContextWindowBedrockVersionedSuffix(t *testing.T) {
 	}
 }
 
+// TestContextWindowBoxesThreeSegmentRefs is the red-first regression test
+// for the disqualifying finding on PR #135: the boxes platform
+// (meetneptune/boxes internal/api/bifrost_models.go) passes THREE-segment
+// model refs exclusively, e.g. "anthropic/anthropic/claude-fable-5" and
+// "anthropic/bedrock_mantle/anthropic.claude-opus-5". message.ParseModelRef
+// splits on the FIRST slash only, so these refs parse to
+// Provider "anthropic" and a Model that still carries the routing
+// namespace segment ("anthropic/claude-fable-5",
+// "bedrock_mantle/anthropic.claude-opus-5") ahead of the actual model ID —
+// a map lookup keyed on the bare ID (e.g. "claude-fable-5") misses every
+// one of them, so automatic compaction never arms for any box. Empirically
+// verified pre-fix: ContextWindow on "anthropic/anthropic/claude-fable-5"
+// returned tokens=0, ok=false.
+func TestContextWindowBoxesThreeSegmentRefs(t *testing.T) {
+	cases := []struct {
+		refString string
+		want      int
+	}{
+		// Direct vendor route: provider/anthropic/<model-id>.
+		{"anthropic/anthropic/claude-fable-5", 1_000_000},
+		{"anthropic/anthropic/claude-opus-5", 1_000_000},
+		{"anthropic/anthropic/claude-haiku-4-5-20251001", 200_000},
+		// bedrock_mantle route: provider/bedrock_mantle/anthropic.<model-id>,
+		// still under the "anthropic" top-level provider key (see
+		// bifrost_models.go: "both the direct vendor route and
+		// bedrock_mantle" share the native anthropic adapter).
+		{"anthropic/bedrock_mantle/anthropic.claude-fable-5", 1_000_000},
+		{"anthropic/bedrock_mantle/anthropic.claude-opus-5", 1_000_000},
+		// A version-suffixed mantle ID (Finding 3's normalization applied on
+		// top of Finding 1's namespace strip) must land on the same key.
+		{"anthropic/bedrock_mantle/anthropic.claude-opus-5-v1:0", 1_000_000},
+		// Bare two-segment forms (non-boxes callers) must keep working.
+		{"anthropic/claude-fable-5", 1_000_000},
+		{"anthropic/claude-opus-5", 1_000_000},
+	}
+	for _, tt := range cases {
+		ref, err := message.ParseModelRef(tt.refString)
+		if err != nil {
+			t.Fatalf("message.ParseModelRef(%q) error: %v", tt.refString, err)
+		}
+		tokens, ok := ContextWindow(ref)
+		if !ok || tokens != tt.want {
+			t.Errorf("ContextWindow(%q) = %d, %v; want %d, true", tt.refString, tokens, ok, tt.want)
+		}
+	}
+}
+
+// TestContextWindowBedrockVersionSuffixNormalized is the red-first
+// regression test for Finding 3: the bedrock table's keys are internally
+// inconsistent about carrying a trailing "-vN"/"-vN:M" suffix (some
+// entries have it, some don't — see bedrockAnthropicContextWindows), and
+// stripBedrockAnthropicPrefix normalizes region/family but not version.
+// "amazon-bedrock/us.anthropic.claude-opus-4-8-v1:0" must hit the same
+// entry as the bare "claude-opus-4-8" form, and a query for a model whose
+// table entry legitimately carries a version suffix must hit regardless
+// of whether the QUERY itself is suffixed.
+func TestContextWindowBedrockVersionSuffixNormalized(t *testing.T) {
+	cases := []struct {
+		model string
+		want  int
+	}{
+		// claude-opus-4-8's table entry is bare; a suffixed query must still hit.
+		{"us.anthropic.claude-opus-4-8-v1:0", 1_000_000},
+		{"anthropic.claude-opus-4-8-v1:0", 1_000_000},
+		// claude-sonnet-4-5-20250929's real models.dev bedrock ID carries
+		// "-v1:0" (see the table's doc comment); both the exact suffixed
+		// form and a hypothetical bare query must hit the same entry.
+		{"us.anthropic.claude-sonnet-4-5-20250929-v1:0", 200_000},
+		{"us.anthropic.claude-sonnet-4-5-20250929", 200_000},
+	}
+	for _, tt := range cases {
+		tokens, ok := ContextWindow(message.ModelRef{Provider: "amazon-bedrock", Model: tt.model})
+		if !ok || tokens != tt.want {
+			t.Errorf("ContextWindow(amazon-bedrock/%s) = %d, %v; want %d, true", tt.model, tokens, ok, tt.want)
+		}
+	}
+}
+
 func TestContextWindowUnknown(t *testing.T) {
 	cases := []message.ModelRef{
 		{Provider: "anthropic", Model: "claude-nonexistent"},

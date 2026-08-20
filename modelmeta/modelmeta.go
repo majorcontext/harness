@@ -39,6 +39,7 @@
 package modelmeta
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/majorcontext/harness/message"
@@ -119,18 +120,33 @@ var openaiContextWindows = map[string]int{
 // segment already stripped (see stripBedrockAnthropicPrefix) — every region
 // variant of a given model reports the same limit.context in the source
 // catalog, so one entry covers all of them.
+//
+// Every key here is bare: a trailing bedrock version suffix ("-vN" or
+// "-vN:M", e.g. "-v1" or "-v1:0") is stripped before lookup (see
+// stripBedrockVersionSuffix) rather than encoded in the key. models.dev's
+// raw IDs are themselves inconsistent about carrying this suffix — some
+// entries have it (e.g. the source ID behind "claude-sonnet-4-5-20250929"
+// is "claude-sonnet-4-5-20250929-v1:0"), some don't (e.g. "claude-opus-4-8"
+// has no suffixed form at all) — so a table keyed verbatim on the source ID
+// silently misses whichever form (bare vs. suffixed) a caller happens to
+// query with. Verified against https://models.dev/api.json 2026-08-20: the
+// amazon-bedrock claude-sonnet-4-5-20250929-v1:0 entry genuinely reports
+// limit.context == 200_000, distinct from (and NOT a snapshot error next
+// to) the first-party anthropic/claude-sonnet-4-5 entry's 1_000_000 — the
+// two routes report different windows for what is otherwise the same
+// model family, and this table intentionally preserves that divergence.
 var bedrockAnthropicContextWindows = map[string]int{
-	"claude-fable-5":                  1_000_000,
-	"claude-haiku-4-5-20251001-v1:0":  200_000,
-	"claude-opus-4-1-20250805-v1:0":   200_000,
-	"claude-opus-4-5-20251101-v1:0":   200_000,
-	"claude-opus-4-6-v1":              1_000_000,
-	"claude-opus-4-7":                 1_000_000,
-	"claude-opus-4-8":                 1_000_000,
-	"claude-opus-5":                   1_000_000,
-	"claude-sonnet-4-5-20250929-v1:0": 200_000,
-	"claude-sonnet-4-6":               1_000_000,
-	"claude-sonnet-5":                 1_000_000,
+	"claude-fable-5":             1_000_000,
+	"claude-haiku-4-5-20251001":  200_000,
+	"claude-opus-4-1-20250805":   200_000,
+	"claude-opus-4-5-20251101":   200_000,
+	"claude-opus-4-6":            1_000_000,
+	"claude-opus-4-7":            1_000_000,
+	"claude-opus-4-8":            1_000_000,
+	"claude-opus-5":              1_000_000,
+	"claude-sonnet-4-5-20250929": 200_000,
+	"claude-sonnet-4-6":          1_000_000,
+	"claude-sonnet-5":            1_000_000,
 }
 
 // ContextWindow reports ref's advertised context window in tokens, sourced
@@ -140,18 +156,77 @@ var bedrockAnthropicContextWindows = map[string]int{
 // engine.resolveContextWindow: unknown behaves exactly like "no metadata",
 // i.e. automatic compaction stays disabled, matching today's behavior for
 // every model this table doesn't yet know about).
+//
+// ref.Model is normalized before lookup because the boxes platform
+// (meetneptune/boxes internal/api/bifrost_models.go) passes THREE-segment
+// refs exclusively — e.g. "anthropic/anthropic/claude-fable-5" or
+// "anthropic/bedrock_mantle/anthropic.claude-opus-5" — and
+// message.ParseModelRef splits on the FIRST slash only (see ModelRef's doc
+// comment: "the model portion may itself contain slashes"), so ref.Model
+// still carries a Bifrost routing-namespace segment ("anthropic",
+// "bedrock_mantle", "bedrock", ...) ahead of the actual model ID. Without
+// stripping that segment first, EVERY box ref misses this table and
+// automatic compaction never arms on the platform this package exists to
+// serve (see the jumpy-pizza incident cited in this file's package doc).
 func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
+	model := lastPathSegment(ref.Model)
 	switch ref.Provider {
 	case "anthropic":
-		tokens, ok = anthropicContextWindows[ref.Model]
+		// A bedrock/mantle-routed ref's namespace-stripped model still
+		// carries the dotted "anthropic." family segment (Bifrost's raw
+		// bedrock-style ID, e.g. "anthropic.claude-opus-5-v1:0") ahead of
+		// the model ID proper; the direct-vendor form (e.g.
+		// "claude-fable-5") never does. Both routes report the SAME
+		// context window for a given model family in this table (unlike
+		// the amazon-bedrock provider's raw Bedrock IDs below, which can
+		// diverge — see bedrockAnthropicContextWindows's doc comment), so
+		// both land on anthropicContextWindows once normalized.
+		if suffix, ok2 := strings.CutPrefix(model, "anthropic."); ok2 {
+			model = stripBedrockVersionSuffix(suffix)
+		}
+		tokens, ok = anthropicContextWindows[model]
 	case "openai":
-		tokens, ok = openaiContextWindows[ref.Model]
+		if suffix, ok2 := strings.CutPrefix(model, "openai."); ok2 {
+			model = stripBedrockVersionSuffix(suffix)
+		}
+		tokens, ok = openaiContextWindows[model]
 	case "amazon-bedrock":
-		if suffix, isAnthropic := stripBedrockAnthropicPrefix(ref.Model); isAnthropic {
-			tokens, ok = bedrockAnthropicContextWindows[suffix]
+		if suffix, isAnthropic := stripBedrockAnthropicPrefix(model); isAnthropic {
+			tokens, ok = bedrockAnthropicContextWindows[stripBedrockVersionSuffix(suffix)]
 		}
 	}
 	return tokens, ok
+}
+
+// lastPathSegment returns the substring of model after its last '/', or
+// model unchanged if it contains no '/'. message.ModelRef.Model may itself
+// contain slashes (see that type's doc comment), which is exactly what the
+// boxes platform's three-segment refs put there — a Bifrost routing-
+// namespace segment ("anthropic", "bedrock_mantle", "bedrock", ...) ahead
+// of the real model ID. This table is keyed on the bare model ID, so that
+// namespace prefix — whatever it is — must come off before any lookup.
+func lastPathSegment(model string) string {
+	if idx := strings.LastIndexByte(model, '/'); idx >= 0 {
+		return model[idx+1:]
+	}
+	return model
+}
+
+// bedrockVersionSuffixPattern matches a trailing bedrock-style version
+// suffix: "-v" followed by digits, optionally ":" followed by more digits
+// (e.g. "-v1" or "-v1:0"). Anchored to the end of the string so it only
+// ever strips a genuine trailing version marker, never a hyphenated digit
+// that happens to appear elsewhere in a model ID (e.g. "-4-5" in
+// "claude-opus-4-5" has no "v", so it never matches).
+var bedrockVersionSuffixPattern = regexp.MustCompile(`-v\d+(:\d+)?$`)
+
+// stripBedrockVersionSuffix removes a trailing bedrock-style version
+// suffix from model, if present — see bedrockVersionSuffixPattern and
+// bedrockAnthropicContextWindows's doc comment for why the suffix must be
+// normalized away rather than matched literally: models.dev's raw bedrock
+// IDs are themselves inconsistent about carrying it.
+func stripBedrockVersionSuffix(model string) string {
+	return bedrockVersionSuffixPattern.ReplaceAllString(model, "")
 }
 
 // stripBedrockAnthropicPrefix strips an amazon-bedrock model ID's region
