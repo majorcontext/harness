@@ -44,8 +44,15 @@ entirely and drives it manually. Optional JSON body `{"keep_turns": N,
 of 1 (a 400 on 0 or negative) — the most recent turn is never foldable,
 so `s.history` can never collapse to a lone summary the model would have
 to answer with zero real context. Response: `{"turns_folded": N,
-"first_id", "last_id", "summary": {...}}`; `turns_folded: 0` (200, not an
-error) when there is nothing worth folding — see §2's minimum-fold rule.
+"first_id", "last_id", "summary": {...}, "skip_reason": "..."}`;
+`turns_folded: 0` (200, not an error) when there is nothing worth folding —
+see §2's minimum-fold rule. `skip_reason` is present (never on a real fold)
+and names exactly why: `not_enough_turns` and `lone_existing_summary` are
+free — the provider is never called — while `summarizer_empty` means the
+provider WAS called and billed but returned nothing usable (see
+`engine.CompactResult.SkipReason` and its `SkipReason*` constants; review
+follow-up on PR #136, Finding C — a single `turns_folded: 0` used to
+collapse all three distinct situations into one indistinguishable shape).
 
 Both paths funnel through one `Session.Compact(ctx, CompactOptions)` method;
 the automatic path just calls it with defaults before `streamTurn`, and it
@@ -88,7 +95,21 @@ in-memory trigger state; it deliberately does NOT persist — a reload
 re-evaluates from scratch, and the worst post-reload cost is one extra
 summarization attempt). The explicit `/compact` endpoint ignores the flag:
 an operator override is exactly the case where re-folding on demand is
-wanted. A summary message produced by an earlier compaction is an ordinary
+wanted.
+
+The same latch also fires on `SkipReasonSummarizerEmpty` (see "Failure
+handling" below), not just on a real fold: that skip still cost a full
+provider call, and pressure in the KEPT region is not the only way an
+over-threshold turn can keep re-triggering an expensive no-op — a
+summarizer that keeps returning empty text is the other. It deliberately
+does NOT latch on `SkipReasonNotEnoughTurns`/`SkipReasonLoneExistingSummary`
+(the two free skip reasons, never billed): latching there would permanently
+disarm automatic compaction for an over-threshold session that simply
+doesn't have enough turns yet to fold, since the guard only clears once
+`LastUsage()` dips back under threshold (review follow-up on PR #136,
+Finding A).
+
+A summary message produced by an earlier compaction is an ordinary
 `RoleUser` message like any other — it can itself be folded into a *later*
 compaction's range with no special case; a "summary of a summary" is just
 another old turn.
@@ -97,17 +118,31 @@ another old turn.
 evaluator shape `engine/goal.go` already establishes (`runEvaluator`): a
 request built from exactly the folded range's messages (independently
 transcodable, since a whole-turns range has no dangling tool call at either
-edge) plus a dedicated compaction system prompt asking for a concise,
-information-preserving summary — user intent, decisions and rationale,
-concrete facts a later turn depends on (file paths, commands, values, error
-text), explicitly not tool-call minutiae verbatim. Model: `CompactOptions.
+edge), plus one trailing `RoleUser` instruction message appended
+unconditionally after that range — never sent bare — so the request always
+ends in a user turn regardless of the folded range's own final message
+(ordinarily `RoleAssistant`, the folded turn's final reply: sending the
+range bare, as an earlier version of this call did, ends the wire request
+in an assistant-role message, which the Anthropic Messages API treats as
+assistant message prefill — some models reject prefill outright with a 400
+`invalid_request_error`), plus a dedicated
+compaction system prompt asking for a concise, information-preserving
+summary — user intent, decisions and rationale, concrete facts a later turn
+depends on (file paths, commands, values, error text), explicitly not
+tool-call minutiae verbatim. Model: `CompactOptions.
 Model`, defaulting to the session's *own* current model when unset — unlike
 `GoalOptions.Evaluator` (which must be a genuinely independent judge),
 summarization needs competence, not independence, so defaulting removes a
 config burden from the automatic trigger's every-turn check. The resulting
-summary becomes a fresh `RoleUser` message (new `ID`, `CreatedAt` = compaction
-time), its text prefixed with a synthesized-and-visibly-marked banner —
-same spirit as `message.SyntheticOrphanResultText` — so a transcript or
+summary becomes a fresh `RoleUser` message, its `ID` minted with the
+`cmpsum_` prefix (`compactionSummaryIDTag`, `newID`) rather than the
+ordinary `msg_` prefix every other message gets — a STRUCTURAL,
+unforgeable marker of compaction origin that `isLoneExistingSummary` (§2's
+"Failure handling") gates on, distinct from the banner text below, which is
+display-only (review follow-up on PR #136, Finding B). `CreatedAt` =
+compaction time; its text is prefixed with a synthesized-and-visibly-marked
+banner — same spirit as `message.SyntheticOrphanResultText` — so a
+transcript or
 `GET /session/{id}/message` reader can never mistake it for something the
 human actually typed. Note the spliced history then opens with two
 adjacent `RoleUser` messages (summary, then the first kept turn's user
@@ -135,16 +170,52 @@ session would report the small summarization call as its "last request
 size" and defeat the re-trigger check). Without the field at all, the
 summarization spend would silently vanish from `Usage()` on every reload.
 
-**Failure handling.** If the summarization call errors (rate limit,
-transient 5xx, or the range itself is too large to summarize in one call —
-a real possibility for one giant tool result), compaction aborts cleanly:
-no journal write (§3 below never happens without a summary in hand first),
-no history mutation, an emitted `compaction.failed` event/`OnEvent`, and —
-for the automatic trigger — the turn simply proceeds uncompacted, at the
-same risk layer 1 already classifies and fails fast on if it actually
-overflows. Compaction is a best-effort relief valve, not a load-bearing
-correctness mechanism; failing loud into an existing, already-handled
-failure mode is strictly better than blocking the caller's real turn on it.
+**Failure handling.** If the summarization call errors for a REAL reason
+(rate limit, transient 5xx, a truncated stream, or the range itself is too
+large to summarize in one call — a real possibility for one giant tool
+result), compaction aborts cleanly: no journal write (§3 below never
+happens without a summary in hand first), no history mutation, an emitted
+`compaction.failed` event/`OnEvent`, AND the error propagates to the
+caller — for the automatic trigger, the turn simply proceeds uncompacted,
+at the same risk layer 1 already classifies and fails fast on if it
+actually overflows; for the explicit endpoint, the caller sees the failure.
+Compaction is a best-effort relief valve, not a load-bearing correctness
+mechanism; failing loud into an existing, already-handled failure mode is
+strictly better than blocking the caller's real turn on it.
+
+A call that completes without a transport/stream error but returns no
+usable text — an empty summary — is a DIFFERENT case, not a failure of this
+kind: the model was asked, answered, and had nothing to add. Treating it as
+the same hard-error shape as the above (2026-08-19 incident: `{"error":
+"engine: compaction summary was empty"}` surfaced from an operator's
+otherwise-ordinary `POST /session/{id}/compact` call) puts an operator
+manually folding a large session in the position of treating "the model
+said nothing" as fatal. Compaction instead reports it as the same
+`turns_folded: 0` "nothing worth folding" shape §2's minimum-fold rule
+already uses above — no journal write, no history mutation, no error to
+the caller — while still emitting `compaction.failed`, so the attempt
+remains visible to anything tailing events even though it is not surfaced
+as a caller-visible error. This is `SkipReasonSummarizerEmpty`; it is the
+one skip reason that DID cost a billed call, so its usage is still
+accumulated into cumulative `Usage()` even though nothing else about the
+attempt is durable (no journal write, no history mutation) — see "Usage
+accounting" above and `engine.CompactResult.SkipReason`'s doc comment
+(review follow-up on PR #136, Finding A). The one cheap, structural case
+worth catching BEFORE ever calling the provider (`SkipReasonLoneExisting
+Summary`): a fold range whose entire content is a single earlier
+compaction's own summary message (no other turn alongside it) has nothing
+left to reduce — re-summarizing an already-compressed summary is exactly
+the shape that produced the empty-summary incident (a small `keep_turns`
+landing a fold range dominated by a prior summary) — so that range is
+skipped the same way, without a provider call at all. This is detected
+structurally, by the summary message's `cmpsum_`-prefixed `ID` (see "Who
+writes the summary" above), never by matching `CompactionSummaryBanner`'s
+display text — a user-typed or pasted message that happens to start with
+the exact banner string is a genuine turn with real content to fold, not a
+lone existing summary, and matching on text alone treated it as one:
+skipped forever, without ever calling the provider, which under the
+automatic trigger meant the session never compacted again (review
+follow-up on PR #136, Finding B).
 
 **Journal shape.** One new record type, alongside `goal.*`:
 
@@ -157,7 +228,7 @@ failure mode is strictly better than blocking the caller's real turn on it.
     "first_id": "msg_...",
     "last_id": "msg_...",
     "turns_folded": 12,
-    "summary": { "id": "msg_...", "role": "user", "parts": [...], "created_at": "..." }
+    "summary": { "id": "cmpsum_...", "role": "user", "parts": [...], "created_at": "..." }
   }
 }
 ```

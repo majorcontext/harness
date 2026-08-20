@@ -343,20 +343,29 @@ func (m *sessionModel) PromptTurn(t *rapid.T) {
 }
 
 // CompactTurn scripts and drives one Session.Compact call, gated on exactly
-// the precondition Compact itself checks (turnBoundaries(history) > the
-// effective keep-turns floor — see compact.go's Compact and
-// effectiveKeepTurns). This is a precondition GATE on the action, per the
-// plan, not dropping compaction from the machine: without it, Compact's own
-// documented no-op path (TurnsFolded==0, no provider call at all, when too
-// few turns exist yet) would leave the scripted reply appended below
-// stranded at the front of m.prov.turns, silently misdelivered to whatever
-// provider call runs next — a test-harness bookkeeping hazard, not a
-// production bug, that gating here avoids entirely.
+// the preconditions Compact itself checks BEFORE ever calling the provider
+// (turnBoundaries(history) > the effective keep-turns floor — see
+// compact.go's Compact and effectiveKeepTurns — AND the fold range is not a
+// lone earlier-compaction summary with nothing else to reduce, see
+// isLoneExistingSummary). This is a precondition GATE on the action, per the
+// plan, not dropping compaction from the machine: without it, either of
+// Compact's own documented no-op paths (TurnsFolded==0, no provider call at
+// all — too few turns yet, or a fold range that is only a prior summary)
+// would leave the scripted reply appended below stranded at the front of
+// m.prov.turns, silently misdelivered to whatever provider call runs next —
+// a test-harness bookkeeping hazard, not a production bug, that gating here
+// avoids entirely.
 func (m *sessionModel) CompactTurn(t *rapid.T) {
 	history := m.s.History()
 	keep := m.s.effectiveKeepTurns(0)
-	if len(turnBoundaries(history)) <= keep {
+	starts := turnBoundaries(history)
+	if len(starts) <= keep {
 		t.Skip("not enough complete turns to compact")
+	}
+	foldTurns := len(starts) - keep
+	foldEnd := starts[foldTurns] - 1 // mirrors Compact's own foldEndExclusive-1
+	if isLoneExistingSummary(history[starts[0] : foldEnd+1]) {
+		t.Skip("fold range is a lone existing summary; Compact no-ops without calling the provider")
 	}
 	summary := fmt.Sprintf("summary-%d", rapid.IntRange(0, 1<<20).Draw(t, "summary"))
 	usage := drawUsage(t, "compact")
