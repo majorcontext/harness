@@ -82,6 +82,18 @@ func TestContextWindowBoxesThreeSegmentRefs(t *testing.T) {
 		// A version-suffixed mantle ID (Finding 3's normalization applied on
 		// top of Finding 1's namespace strip) must land on the same key.
 		{"anthropic/bedrock_mantle/anthropic.claude-opus-5-v1:0", 1_000_000},
+		// The one family where the two tables DIVERGE (see
+		// bedrockAnthropicContextWindows's doc comment): a mantle-routed
+		// ref is served through Bedrock, so it must honor the Bedrock
+		// window (200k), not the first-party 1M — over-reporting arms
+		// compaction at 800k against a real 200k limit, re-creating the
+		// exact overflow class this package exists to prevent.
+		{"anthropic/bedrock_mantle/anthropic.claude-sonnet-4-5-20250929-v1:0", 200_000},
+		{"anthropic/bedrock_mantle/anthropic.claude-sonnet-4-5-20250929", 200_000},
+		// A version suffix on a NON-dotted direct-vendor ref must also
+		// normalize away (suffix stripping must not hide inside the
+		// "anthropic." prefix branch).
+		{"anthropic/claude-opus-5-v1:0", 1_000_000},
 		// Bare two-segment forms (non-boxes callers) must keep working.
 		{"anthropic/claude-fable-5", 1_000_000},
 		{"anthropic/claude-opus-5", 1_000_000},

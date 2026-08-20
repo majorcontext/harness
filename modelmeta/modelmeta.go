@@ -176,15 +176,23 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 		// carries the dotted "anthropic." family segment (Bifrost's raw
 		// bedrock-style ID, e.g. "anthropic.claude-opus-5-v1:0") ahead of
 		// the model ID proper; the direct-vendor form (e.g.
-		// "claude-fable-5") never does. Both routes report the SAME
-		// context window for a given model family in this table (unlike
-		// the amazon-bedrock provider's raw Bedrock IDs below, which can
-		// diverge — see bedrockAnthropicContextWindows's doc comment), so
-		// both land on anthropicContextWindows once normalized.
-		if suffix, ok2 := strings.CutPrefix(model, "anthropic."); ok2 {
+		// "claude-fable-5") never does. The dotted prefix marks a ref
+		// that is SERVED through Bedrock, so it must honor the Bedrock
+		// window where the two tables diverge (today only
+		// claude-sonnet-4-5-20250929: 200k on Bedrock vs 1M first-party
+		// — see bedrockAnthropicContextWindows's doc comment).
+		// Over-reporting here arms compaction above the route's real
+		// limit and re-creates the overflow this package exists to
+		// prevent, so prefer the bedrock table for dotted refs and fall
+		// back to the anthropic table only for families the bedrock
+		// snapshot doesn't list.
+		if suffix, isBedrockStyle := strings.CutPrefix(model, "anthropic."); isBedrockStyle {
 			model = stripBedrockVersionSuffix(suffix)
+			if tokens, ok = bedrockAnthropicContextWindows[model]; ok {
+				return tokens, ok
+			}
 		}
-		tokens, ok = anthropicContextWindows[model]
+		tokens, ok = anthropicContextWindows[stripBedrockVersionSuffix(model)]
 	case "openai":
 		if suffix, ok2 := strings.CutPrefix(model, "openai."); ok2 {
 			model = stripBedrockVersionSuffix(suffix)
