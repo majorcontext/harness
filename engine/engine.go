@@ -489,6 +489,28 @@ type Config struct {
 	// time Compact runs — unlike GoalOptions.Evaluator, summarization needs
 	// competence, not independence.
 	CompactionModel message.ModelRef
+
+	// ToolResultInlineBytes is the size above which a TEXT tool result is
+	// retained into this session's sidecar store and replaced in history by
+	// a short preview carrying a trh_N handle (see toolresult.go and
+	// docs/plans/2026-08-19-tool-result-handles.md). Zero or negative — the
+	// zero value — DISABLES retention entirely: an embedder building a bare
+	// engine.Config gets exactly the pre-retention behavior, with no sidecar
+	// directory ever created. The config/CLI layer supplies the product
+	// default of 16384 (config key `tool_result_inline_bytes`), the same
+	// split PromptRetries uses.
+	//
+	// Retention additionally requires SessionDir: without one there is
+	// nowhere to durably put the bytes, and a preview naming an unreadable
+	// handle is worse than no preview (see Session.toolResultInlineLimit).
+	ToolResultInlineBytes int
+	// ToolResultRetainedBytes is the per-session ceiling on TOTAL retained
+	// bytes. Once reached, a further oversized result is still previewed but
+	// its remainder is discarded rather than written, and the preview says
+	// so with no handle (see toolResultCapHeader). Zero or negative disables
+	// the ceiling. Config key `tool_result_retained_bytes`, product default
+	// 4194304.
+	ToolResultRetainedBytes int
 }
 
 // Session is one conversation: an in-memory history plus the agent loop.
@@ -664,6 +686,25 @@ type Session struct {
 	// the largest caller-issued seq durably accepted. Monotonic; a seq at or
 	// below it is a duplicate no-op. Rebuilt on replay by LoadSession.
 	enqueueSeq int64
+
+	// toolResults maps a retained tool result's handle (trh_N) to its
+	// metadata (see toolresult.go). Content is NOT held here — the bytes
+	// live in the per-session sidecar file. Rebuilt on resume by
+	// LoadSession's toolresult.retained fold, which is what lets
+	// read_tool_result serve a handle minted by a previous process.
+	// Guarded by mu.
+	toolResults map[string]toolResultMeta
+	// toolResultNextID mints the session-monotonic handle number, starting
+	// at 1 for a fresh session (set in newSession) and advanced by
+	// LoadSession past every handle seen in the log — the counter-survives-
+	// resume requirement, mirroring promptQueueNextID exactly. IDs are
+	// burned on a failed sidecar write and never reused. Guarded by mu.
+	toolResultNextID int64
+	// toolResultBytes is the running total of bytes retained in this
+	// session, checked against Config.ToolResultRetainedBytes. Rebuilt on
+	// resume from the same fold, so the ceiling is a session-lifetime one
+	// rather than a per-process one. Guarded by mu.
+	toolResultBytes int
 }
 
 // NewSession creates a session. Nothing touches the network, spawns
@@ -706,6 +747,8 @@ func newSession(cfg Config) *Session {
 		promptQueueNextID:     1,
 		contextWindowExplicit: contextWindowExplicit,
 		contextWindowSource:   contextWindowSource,
+		toolResultNextID:      1,
+		toolResults:           make(map[string]toolResultMeta),
 	}
 	for _, t := range []Tool{bashTool(cfg.BashTimeout, cfg.BashOutputCap), readFileTool(), writeFileTool(), editFileTool(), sessionInfoTool()} {
 		s.tools[t.Def.Name] = t
@@ -721,6 +764,13 @@ func newSession(cfg Config) *Session {
 	}
 	if mcpConfiguredCount(cfg.MCP) > 0 {
 		s.tools[mcpSessionToolName] = mcpTool()
+	}
+	// read_tool_result is registered only when retention can actually mint a
+	// handle — a positive inline limit AND a SessionDir, the same condition
+	// toolResultInlineLimit resolves. A session that can never produce a
+	// handle must not advertise a tool whose only required argument is one.
+	if s.toolResultInlineLimit() > 0 {
+		s.tools[readToolResultToolName] = readToolResultTool()
 	}
 	for _, t := range cfg.Tools {
 		s.tools[t.Def.Name] = t
@@ -1647,6 +1697,19 @@ func (s *Session) toolDefs(ctx context.Context) []provider.ToolDef {
 
 // runToolCalls executes every tool call in an assistant message, in order,
 // and returns the ToolResult parts.
+//
+// This is retention's single call site (maybeRetainToolResult, see
+// toolresult.go): an oversized TEXT result is swapped for a preview plus a
+// trh_N handle HERE, before the ToolResult is built and long before
+// Session.append, message.NormalizeForWire, or any transcoder sees it. That
+// placement is why tool-result handles need no wire-format change at all —
+// every downstream layer still sees an ordinary ToolResult carrying ordinary
+// Text parts.
+//
+// Retention runs on the post-hook output (runToolCall already applied
+// ToolExecuteAfter), so a plugin that rewrites or enlarges a result has its
+// final bytes measured, not the tool's originals. It is a total no-op when
+// retention is disabled or the result is within the limit.
 func (s *Session) runToolCalls(ctx context.Context, asst *message.Message) message.Parts {
 	var results message.Parts
 	for _, p := range asst.Parts {
@@ -1657,7 +1720,7 @@ func (s *Session) runToolCalls(ctx context.Context, asst *message.Message) messa
 		out, isErr := s.runToolCall(ctx, tc)
 		results = append(results, &message.ToolResult{
 			CallID:  tc.CallID,
-			Content: out,
+			Content: s.maybeRetainToolResult(tc.Name, out),
 			IsError: isErr,
 		})
 	}

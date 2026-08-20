@@ -69,6 +69,14 @@ const (
 	// Session.Compact call, carrying the full summary message inline (not
 	// a separate recMessage) and the summarization call's own Usage.
 	recCompact = "compact"
+	// recToolResultRetained is one retained tool result's durable POINTER
+	// record (see toolresult.go and docs/plans/2026-08-19-tool-result-
+	// handles.md §5): handle, source tool, and size. Deliberately not the
+	// content — the bytes live in the per-session sidecar file, precisely
+	// so LoadSession's full-log replay never pays for them. It is what
+	// makes the trh_N counter, the handle metadata, and the retained-bytes
+	// total survive a process restart.
+	recToolResultRetained = "toolresult.retained"
 )
 
 // record is one line of a session log file.
@@ -119,6 +127,23 @@ type record struct {
 	// Compact carries a recCompact record's payload (see compactRecord).
 	// nil on every other record type.
 	Compact *compactRecord `json:"compact,omitempty"`
+	// ToolResult carries a recToolResultRetained record's payload (see
+	// toolResultRecord). nil on every other record type.
+	ToolResult *toolResultRecord `json:"tool_result,omitempty"`
+}
+
+// toolResultRecord carries the durable payload of a toolresult.retained
+// record (see toolresult.go's writeRetainedToolResult). It is a POINTER
+// record: Handle names the sidecar file holding the actual bytes, and
+// Bytes/Lines are the metadata read_tool_result reports back and the
+// per-session retained-bytes ceiling is accumulated from. Tool is the name
+// of the tool whose result was retained, carried so a resumed session's
+// read_tool_result output can still name its source.
+type toolResultRecord struct {
+	Handle string `json:"handle"`
+	Tool   string `json:"tool,omitempty"`
+	Bytes  int    `json:"bytes,omitempty"`
+	Lines  int    `json:"lines,omitempty"`
 }
 
 // compactRecord carries the durable payload of a "compact" record (see
@@ -335,6 +360,36 @@ func (s *Session) persistPromptQueueLocked(recType string, p promptRecord) {
 		return
 	}
 	if err := s.writeRecord(record{Type: recType, Prompt: &p}); err != nil {
+		s.lastPersistErr = err
+	}
+}
+
+// persistToolResultRetainedLocked appends a toolresult.retained pointer
+// record to the session log (see toolresult.go's writeRetainedToolResult).
+// It forces the log to exist, mirroring persistGoalLocked: a retention can
+// land before any message has been persisted in a session created
+// mid-turn. Best-effort like every other persist path here — a write
+// failure lands in lastPersistErr and never fails the tool call, since the
+// sidecar file is already written and the only cost of a lost record is a
+// handle that a FUTURE process cannot resolve. Caller holds s.mu.
+func (s *Session) persistToolResultRetainedLocked(m toolResultMeta) {
+	if s.cfg.SessionDir == "" {
+		return
+	}
+	if err := s.ensureLog(); err != nil {
+		s.lastPersistErr = err
+		return
+	}
+	rec := record{
+		Type: recToolResultRetained,
+		ToolResult: &toolResultRecord{
+			Handle: m.Handle,
+			Tool:   m.Tool,
+			Bytes:  m.Bytes,
+			Lines:  m.Lines,
+		},
+	}
+	if err := s.writeRecord(rec); err != nil {
 		s.lastPersistErr = err
 	}
 }
@@ -817,6 +872,53 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 						s.promptQueue = append(s.promptQueue[:i], s.promptQueue[i+1:]...)
 						break
 					}
+				}
+			}
+		case recToolResultRetained:
+			// Fold a retained tool result's pointer record (see
+			// toolresult.go and docs/plans/2026-08-19-tool-result-
+			// handles.md §5) back into three pieces of session state:
+			//
+			//   1. toolResultNextID advances past every handle number
+			//      seen — folded or skipped — so a resumed session can
+			//      never mint a handle that already names a sidecar file.
+			//      This is the counter-survives-resume requirement, and it
+			//      advances past SKIPPED records too for exactly the
+			//      reason recPromptQueued advances past burned IDs: a
+			//      number that reached the log may have a file behind it
+			//      whatever the record's other fields say.
+			//   2. toolResults regains the metadata, so read_tool_result
+			//      serves a handle minted by a previous process.
+			//   3. toolResultBytes regains the running total, so
+			//      Config.ToolResultRetainedBytes is a session-lifetime
+			//      ceiling rather than a per-process one.
+			//
+			// A malformed handle (not trh_<positive int>) or a duplicate
+			// handle is SKIPPED, never folded — the same defensive replay
+			// posture recPromptQueued takes. The live path can write
+			// neither: handles are minted from a monotonic counter and
+			// burned on failure, so either shape in a log is corruption,
+			// and folding a duplicate would silently overwrite one
+			// result's metadata with another's while the retained-bytes
+			// total double-counted.
+			if rec.ToolResult != nil {
+				n, valid := parseToolResultHandle(rec.ToolResult.Handle)
+				if valid {
+					if _, dup := s.toolResults[rec.ToolResult.Handle]; dup {
+						valid = false
+					}
+				}
+				if valid {
+					s.toolResults[rec.ToolResult.Handle] = toolResultMeta{
+						Handle: rec.ToolResult.Handle,
+						Tool:   rec.ToolResult.Tool,
+						Bytes:  rec.ToolResult.Bytes,
+						Lines:  rec.ToolResult.Lines,
+					}
+					s.toolResultBytes += rec.ToolResult.Bytes
+				}
+				if n >= s.toolResultNextID {
+					s.toolResultNextID = n + 1
 				}
 			}
 		case recCompact:
