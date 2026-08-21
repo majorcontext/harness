@@ -44,6 +44,17 @@
 // TestMaskSecretsCodeCorpus pins this against realistic Go/Python/JS/TS
 // source snippets, byte-identical.
 //
+// # Round 3: quoted env/YAML values
+//
+// A round-3 review round found `export TOKEN="secretvalue123"` — an
+// UNQUOTED key with a QUOTED value, an extremely common shell/env-dump
+// shape — slipping through entirely unmasked: the env/YAML alternative
+// required its value class immediately after the separator, and the next
+// byte there (`"`) is not in secretValueClass; the JSON alternative
+// requires a QUOTED key, which a bare `TOKEN` lacks. Two more alternatives
+// cover this (double- and single-quoted, spelled out separately — RE2 has
+// no backreferences, so "whichever quote opened" cannot be one pattern).
+//
 // # N6: one combined pattern, one pass
 //
 // The three shapes (env/YAML, quoted-JSON, Bearer) are ONE regexp with
@@ -83,21 +94,31 @@ const secretKeyNames = `secret|token|password|api[_-]?key|access[_-]?key|client[
 // unrelated content.
 const secretValueClass = `[A-Za-z0-9_\-./+=]`
 
-// secretMaskPattern is the ONE combined pattern (N6) covering all three
+// secretMaskPattern is the ONE combined pattern (N6) covering all five
 // recognized shapes, in this alternative order — each is structurally
-// distinct enough (different leading character: a bare key char, a `"`, or
-// literal "Authorization:") that the alternatives never compete for the
-// same match. Capture groups, 1-indexed (see maskSecrets):
+// distinct enough (different leading character/shape: a bare key char, a
+// `"`, literal "Authorization:", or an unquoted key immediately followed by
+// a quote) that the alternatives never compete for the same match. Capture
+// groups, 1-indexed (see maskSecrets):
 //
 //  1. env/YAML key            2. env/YAML separator (`=` or `:` + space)
 //  3. env/YAML value (unused: replaced, never echoed)
 //  4. JSON key (with quotes)  5. JSON separator (`\s*:\s*`)
 //  6. Bearer prefix ("Authorization: Bearer ")
 //  7. Bearer value (unused: replaced, never echoed)
+//  8. quoted-env key (unquoted)   9. quoted-env separator — DOUBLE-quoted value
+// 10. quoted-env key (unquoted)  11. quoted-env separator — SINGLE-quoted value
+//
+// RE2 (Go's regexp package) has no backreferences, so "the same quote
+// character that opened" cannot be expressed as one alternative — groups
+// 8-9 and 10-11 are the double- and single-quote cases spelled out
+// separately instead of one pattern with `(["'])...\1`.
 var secretMaskPattern = regexp.MustCompile(
 	`(?i)(` + secretKeyNames + `)(=|:[ \t]+)(` + secretValueClass + `{8,1000})` +
 		`|("[^"]*(?:` + secretKeyNames + `)[^"]*")(\s*:\s*)"[^"]*"` +
-		`|(Authorization:\s*Bearer\s+)(` + secretValueClass + `{8,1000})`,
+		`|(Authorization:\s*Bearer\s+)(` + secretValueClass + `{8,1000})` +
+		`|(` + secretKeyNames + `)(=|:[ \t]+)"[^"]{0,1000}"` +
+		`|(` + secretKeyNames + `)(=|:[ \t]+)'[^']{0,1000}'`,
 )
 
 // secretCandidateKeywords is the cheap pre-filter's keyword list (N6): the
@@ -184,11 +205,11 @@ func maskSecrets(text string) string {
 // maskSecrets — the whole input) and rebuilds it with every match's value
 // half replaced. FindAllStringSubmatchIndex walks the pattern ONCE (N6);
 // the loop below copies everything BETWEEN matches verbatim and
-// substitutes only key+separator+"***" (or, for the JSON shape,
-// key+separator+`"***"`) for each match. Group indices that did not
-// participate in a given alternative come back -1 (Go's
+// substitutes only key+separator+"***" (quoted to match the matched
+// shape, where the shape was itself quoted) for each match. Group indices
+// that did not participate in a given alternative come back -1 (Go's
 // FindStringSubmatchIndex convention), which is how the switch below tells
-// which of the three shapes matched without re-testing the text.
+// which of the five shapes matched without re-testing the text.
 func maskSecretsSpan(text string) string {
 	matches := secretMaskPattern.FindAllStringSubmatchIndex(text, -1)
 	if matches == nil {
@@ -211,6 +232,14 @@ func maskSecretsSpan(text string) string {
 		case m[12] >= 0: // Bearer: group 6 (prefix) participated
 			b.WriteString(text[m[12]:m[13]])
 			b.WriteString("***")
+		case m[16] >= 0: // quoted-env, double quotes: group 8 (unquoted key) participated
+			b.WriteString(text[m[16]:m[17]])
+			b.WriteString(text[m[18]:m[19]])
+			b.WriteString(`"***"`)
+		case m[20] >= 0: // quoted-env, single quotes: group 10 (unquoted key) participated
+			b.WriteString(text[m[20]:m[21]])
+			b.WriteString(text[m[22]:m[23]])
+			b.WriteString(`'***'`)
 		}
 		last = m[1]
 	}

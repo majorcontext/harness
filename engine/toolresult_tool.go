@@ -246,11 +246,10 @@ const readerAtLineSourceChunk = 64 * 1024
 // point are never read from disk at all.
 type readerAtLineSource struct {
 	r    io.ReaderAt
-	size int64 // total bytes available; ReadAt never asked to read past this
+	size int64 // total bytes CLAIMED to exist (meta.Bytes) — may exceed the real file; see Scan's zero-byte-EOF handling
 	off  int64 // next unread byte offset in the underlying file
 	buf  []byte
 	line string
-	eof  bool
 	err  error
 }
 
@@ -289,6 +288,25 @@ func (l *readerAtLineSource) Scan() bool {
 		n, err := l.r.ReadAt(chunk, l.off)
 		l.off += int64(n)
 		l.buf = append(l.buf, chunk[:n]...)
+		if errors.Is(err, io.EOF) && n == 0 {
+			// The real file is SHORTER than l.size (meta.Bytes) claims — a
+			// volume rollback, or an operator's partial wipe of
+			// toolresults/, the same mismatch class errToolResultFileMissing
+			// already anticipates elsewhere. Without this, l.off never
+			// reaches l.size (io.EOF was excluded from the error check
+			// below on purpose, to tolerate an ordinary short final read),
+			// so the loop above never terminates: IndexByte finds nothing,
+			// l.off >= l.size stays false forever, and ReadAt keeps
+			// returning (0, io.EOF) at the same offset — a 100% CPU
+			// busy-loop that wedges the run slot indefinitely. Treat a
+			// zero-byte EOF read as the TRUE end of data: force the
+			// size-reached branch above to fire on the next iteration by
+			// pinning l.off to l.size, so whatever real bytes made it into
+			// l.buf still surface as a final line (or Scan cleanly returns
+			// false if there were none).
+			l.off = l.size
+			continue
+		}
 		if err != nil && !errors.Is(err, io.EOF) {
 			l.err = err
 			return false
@@ -328,6 +346,7 @@ func readToolResultRange(sc toolResultLineSource, meta toolResultMeta, offset, l
 	line := 0
 	shown := 0
 	byteTrunc := false
+	partialFirstLine := false
 	for sc.Scan() {
 		line++
 		if line < offset {
@@ -351,6 +370,19 @@ func readToolResultRange(sc toolResultLineSource, meta toolResultMeta, offset, l
 					b.WriteString(truncateUTF8(t, room))
 					b.WriteByte('\n')
 					shown++
+					// Round-3 review finding: this line's UNSHOWN remainder
+					// must stay reachable. Reporting "continue with
+					// offset+1" (the ordinary case, below) would silently
+					// skip straight to the NEXT line, abandoning whatever
+					// this line didn't fit — permanently, since every
+					// future read at that name would start from line 2
+					// too. partialFirstLine keeps the continuation offset
+					// UNCHANGED instead: a caller that re-reads at the same
+					// offset with a bigger max_bytes re-scans from byte
+					// zero and genuinely reaches further into this same
+					// line, rather than being told (accurately, but
+					// uselessly) that the rest is just gone.
+					partialFirstLine = true
 				}
 			}
 			byteTrunc = true
@@ -364,6 +396,11 @@ func readToolResultRange(sc toolResultLineSource, meta toolResultMeta, offset, l
 	if shown == 0 {
 		return jsonlessResult(fmt.Sprintf("%s: no lines at offset %d (the retained result has %d lines)",
 			meta.Handle, offset, meta.Lines))
+	}
+	if partialFirstLine {
+		fmt.Fprintf(&b, "[line %d exceeds max_bytes (%d); increase max_bytes and re-read at the same offset=%d to see more of it]\n",
+			offset, maxBytes, offset)
+		return jsonlessResult(b.String())
 	}
 	appendReadNotice(&b, meta, offset+shown, byteTrunc, maxBytes)
 	return jsonlessResult(b.String())
@@ -392,6 +429,7 @@ func readToolResultSearch(sc toolResultLineSource, meta toolResultMeta, needle s
 	line := 0
 	matches := 0
 	byteTrunc := false
+	countCapped := false
 	for sc.Scan() {
 		line++
 		t := sc.Text()
@@ -444,7 +482,12 @@ func readToolResultSearch(sc toolResultLineSource, meta toolResultMeta, needle s
 		b.WriteString(entry)
 		matches++
 		if matches >= readToolResultMaxLimit {
-			byteTrunc = true
+			// Review finding (round 3): this is a MATCH-COUNT stop, not a
+			// byte-budget stop — reusing byteTrunc's notice ("...increase
+			// max_bytes to see more") actively misdirects the model, since
+			// raising max_bytes cannot surface a single additional match
+			// once counting stopped. countCapped gets its own notice below.
+			countCapped = true
 			break
 		}
 	}
@@ -452,7 +495,10 @@ func readToolResultSearch(sc toolResultLineSource, meta toolResultMeta, needle s
 	if matches == 0 && !byteTrunc {
 		return jsonlessResult(fmt.Sprintf("%s: no lines match %q (searched %d lines)", meta.Handle, needle, line))
 	}
-	if byteTrunc {
+	switch {
+	case countCapped:
+		fmt.Fprintf(&b, "[stopped at %d match(es) (the match-count limit); narrow the search to see more — increasing max_bytes will not surface additional matches]\n", matches)
+	case byteTrunc:
 		fmt.Fprintf(&b, "[truncated at %d bytes after %d match(es); narrow the search or increase max_bytes to see more]\n", maxBytes, matches)
 	}
 	return jsonlessResult(b.String())

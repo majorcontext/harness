@@ -3,12 +3,14 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -159,6 +161,50 @@ func TestReadToolResultBoundedByMaxBytes(t *testing.T) {
 	}
 }
 
+// TestReadToolResultPartialFirstLineOffsetIsRecoverable is a round-3 review
+// finding's red test. When the very FIRST shown line alone exceeds
+// max_bytes, only a truncated prefix is emitted (shown=1) — but the
+// original notice reported "continue with offset=offset+1", silently
+// skipping past the UNSHOWN REMAINDER of that same line: it can never be
+// retrieved through range mode at any max_bytes, because every
+// continuation jumps straight to the NEXT line.
+//
+// The fix keeps the continuation offset UNCHANGED in this specific case,
+// so a caller that re-reads at the same offset with a larger max_bytes
+// makes real progress into the same line (each read re-scans from byte
+// zero, so a bigger budget naturally reaches further before truncating
+// again) — genuinely recoverable, not just an honest dead end.
+func TestReadToolResultPartialFirstLineOffsetIsRecoverable(t *testing.T) {
+	longLine := strings.Repeat("Z", 300)
+	text := longLine + "\nshort-line-2\nshort-line-3\n"
+	s, h := retainedSession(t, text)
+
+	small := readResult(t, s, fmt.Sprintf(`{"handle":%q,"offset":1,"max_bytes":%d}`, h, readToolResultMinMaxBytes))
+	if strings.Count(small, "Z") >= len(longLine) {
+		t.Fatalf("test setup: expected byte truncation on the long first line (want a partial Z run):\n%s", small)
+	}
+	if strings.Contains(small, "continue with offset=2") {
+		t.Errorf("notice advances past the truncated line's own unshown remainder to line 2, abandoning it permanently:\n%s", small)
+	}
+
+	// Re-reading at the SAME offset with a bigger budget must show MORE of
+	// line 1 than the first attempt did — proof the remainder is actually
+	// reachable, not just honestly described as lost.
+	bigger := readResult(t, s, fmt.Sprintf(`{"handle":%q,"offset":1,"max_bytes":%d}`, h, readToolResultDefaultMaxBytes))
+	if strings.Count(bigger, "Z") <= strings.Count(small, "Z") {
+		t.Errorf("re-reading offset=1 with a bigger max_bytes did not recover more of the long line: small has %d Z's, bigger has %d",
+			strings.Count(small, "Z"), strings.Count(bigger, "Z"))
+	}
+	// With ample budget, the full line plus the next lines are reachable.
+	full := readResult(t, s, fmt.Sprintf(`{"handle":%q,"offset":1,"max_bytes":%d}`, h, readToolResultMaxMaxBytes))
+	if !strings.Contains(full, longLine) {
+		t.Errorf("with the max max_bytes, the full long line should be recoverable at offset=1:\n%s", full[:min(400, len(full))])
+	}
+	if !strings.Contains(full, "short-line-2") {
+		t.Errorf("with the max max_bytes, subsequent lines should also be reachable:\n%s", full[:min(400, len(full))])
+	}
+}
+
 // TestReadToolResultLimitHardCapped: an absurd limit is clamped to
 // readToolResultMaxLimit rather than reinstating the whole blob.
 func TestReadToolResultLimitHardCapped(t *testing.T) {
@@ -178,6 +224,35 @@ func TestReadToolResultLimitHardCapped(t *testing.T) {
 	got := readResult(t, s, fmt.Sprintf(`{"handle":%q,"limit":1000000,"max_bytes":%d}`, h, readToolResultMaxMaxBytes))
 	if n := strings.Count(got, "line-"); n > readToolResultMaxLimit {
 		t.Errorf("returned %d lines, want <= hard cap %d", n, readToolResultMaxLimit)
+	}
+}
+
+// TestReadToolResultSearchCountCapNoticeDoesNotSuggestMaxBytes is a
+// round-3 review finding's red test. Hitting the MATCH-COUNT cap
+// (readToolResultMaxLimit, 2000) set the same byteTrunc flag a byte-budget
+// stop uses, so the notice always said "...narrow the search or increase
+// max_bytes to see more" — but raising max_bytes cannot surface a single
+// additional match once the count cap fired; the search simply stopped
+// counting. That half of the advice actively misdirects the model's
+// recovery attempt. This constructs 2500 short matching lines with a
+// generous max_bytes (well above what 2000 short entries need), so the
+// COUNT cap — not the byte budget — is what actually stops the search.
+func TestReadToolResultSearchCountCapNoticeDoesNotSuggestMaxBytes(t *testing.T) {
+	var b strings.Builder
+	for i := 1; i <= 2500; i++ {
+		fmt.Fprintf(&b, "hit line %d\n", i)
+	}
+	s, h := retainedSession(t, b.String())
+
+	got := readResult(t, s, fmt.Sprintf(`{"handle":%q,"search":"hit","max_bytes":%d}`, h, readToolResultMaxMaxBytes))
+	if n := strings.Count(got, "hit line"); n != readToolResultMaxLimit {
+		t.Fatalf("test setup: matched %d lines, want exactly the count cap %d (so the byte budget provably didn't bind first)", n, readToolResultMaxLimit)
+	}
+	if strings.Contains(got, "increase max_bytes") {
+		t.Errorf("count-capped search notice suggests increasing max_bytes, which cannot surface more matches:\n%s", got[len(got)-min(200, len(got)):])
+	}
+	if !strings.Contains(got, fmt.Sprintf("%d match", readToolResultMaxLimit)) {
+		t.Errorf("notice does not name the count cap that actually stopped the search:\n%s", got[len(got)-min(200, len(got)):])
 	}
 }
 
@@ -395,6 +470,60 @@ func TestReaderAtLineSourceReadsWholeContentWhenScannedToCompletion(t *testing.T
 	}
 }
 
+// TestReaderAtLineSourceTerminatesWhenFileShorterThanClaimedSize is a
+// round-3 review finding's red test: readerAtLineSource busy-loops FOREVER
+// (100% CPU, wedging the run slot indefinitely) when the underlying file is
+// SHORTER than the size it was constructed with (meta.Bytes) — a volume
+// rollback, or an operator's partial wipe, the exact class of mismatch the
+// surrounding errToolResultFileMissing handling already anticipates
+// elsewhere in this package.
+//
+// Mechanism: once the real data is exhausted, ReadAt returns (0, io.EOF).
+// l.off never advances (n==0), so l.off >= l.size (the FALSE, inflated
+// claim) never becomes true, and io.EOF is excluded from the error check —
+// so l.err never gets set either. Scan spins IndexByte -> ReadAt -> (0,
+// io.EOF) forever.
+//
+// Run with a watchdog: this test must never rely on Scan() returning on its
+// own if the bug is present — a goroutine plus a bounded select is the only
+// way to observe "it never returns" without hanging the test run itself.
+func TestReaderAtLineSourceTerminatesWhenFileShorterThanClaimedSize(t *testing.T) {
+	content := "short content, no trailing newline, no newline anywhere"
+	// Claim far more bytes exist than actually do — simulating meta.Bytes
+	// (from a durable record) outliving a truncated/rolled-back sidecar file.
+	claimedSize := int64(len(content)) + 1_000_000
+
+	src := newReaderAtLineSource(strings.NewReader(content), claimedSize)
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- src.Scan()
+	}()
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Fatalf("Scan() = false, Err() = %v; want true (the short real content should still surface as a final line)", src.Err())
+		}
+		if got := src.Text(); got != content {
+			t.Errorf("Text() = %q, want %q", got, content)
+		}
+		// A second Scan call, past the real EOF, must also terminate
+		// promptly (not resume spinning).
+		done2 := make(chan bool, 1)
+		go func() { done2 <- src.Scan() }()
+		select {
+		case ok2 := <-done2:
+			if ok2 {
+				t.Errorf("second Scan() = true, want false (no more real content)")
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("second Scan() did not return within 2s — busy-loop on the tail call")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Scan() did not return within 2s — busy-loop: the file is shorter than the claimed size, and the loop cannot detect true EOF")
+	}
+}
+
 // TestReadToolResultOutputNeverExceedsMaxBytes is review finding N10's red
 // test. The trailing continuation/truncation notice was appended AFTER the
 // per-line/per-match budget loop decided how much body fit against the
@@ -491,6 +620,33 @@ func TestReadToolResultMissingFile(t *testing.T) {
 	}
 }
 
+// TestReadToolResultNonMissingErrorIsNotReportedAsGone is a round-3 review
+// finding's red test. openRetainedToolResult mapped EVERY os.Open error —
+// not just os.ErrNotExist — to errToolResultFileMissing, so a transient
+// condition (permission denied, EMFILE descriptor exhaustion, a flaky I/O
+// error) got the SAME terminal "no longer on disk ... it cannot be read
+// back" wording as a genuinely deleted file, steering the model away from
+// retrying a read that would succeed once the transient condition clears.
+// Only a true not-exist should get that permanent wording; anything else
+// should fall through to the generic "cannot read handle" error, which
+// carries no false claim of permanence.
+func TestReadToolResultNonMissingErrorIsNotReportedAsGone(t *testing.T) {
+	s, h := retainedSession(t, linesText(10))
+
+	orig := openFileForToolResult
+	simulated := errors.New("permission denied (simulated for this test)")
+	openFileForToolResult = func(name string) (*os.File, error) { return nil, simulated }
+	defer func() { openFileForToolResult = orig }()
+
+	_, err := runReadToolResult(s, json.RawMessage(fmt.Sprintf(`{"handle":%q}`, h)))
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if strings.Contains(err.Error(), "no longer on disk") {
+		t.Errorf("a non-missing-file error was reported with the terminal 'gone' wording: %v", err)
+	}
+}
+
 // TestReadToolResultToolRegisteredOnlyWhenEnabled: the tool's presence
 // tracks the retention gate exactly. A session that can never mint a handle
 // must not advertise a tool whose only required argument is one.
@@ -549,8 +705,13 @@ func TestToolResultRetentionSurvivesVeryLongSingleLine(t *testing.T) {
 	long := strings.Repeat("x", 300*1024) + "\n"
 	s, h := retainedSession(t, long)
 	got := readResult(t, s, fmt.Sprintf(`{"handle":%q,"max_bytes":1024}`, h))
-	if !strings.Contains(got, "truncated") {
-		t.Errorf("expected a byte-truncation notice for a huge single line:\n%s", got[:min(300, len(got))])
+	// A single line this size is exactly the partial-first-line case (round
+	// 3): the notice names the recovery path (increase max_bytes, re-read
+	// at the same offset) rather than the generic "truncated ... continue
+	// with offset=N+1" wording, which would silently abandon this line's
+	// unshown remainder — see TestReadToolResultPartialFirstLineOffsetIsRecoverable.
+	if !strings.Contains(got, "exceeds max_bytes") || !strings.Contains(got, "same offset=1") {
+		t.Errorf("expected the partial-first-line recovery notice for a huge single line:\n%s", got[:min(300, len(got))])
 	}
 }
 

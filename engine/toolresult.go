@@ -112,23 +112,28 @@ func toolResultPreviewHeader(handle, tool string, totalBytes, totalLines, previe
 }
 
 // toolResultCapHeader renders the header used when retention is REFUSED
-// because the per-session retained-bytes ceiling
-// (Config.ToolResultRetainedBytes) is already reached. It deliberately
+// because retaining THIS result would push the per-session retained-bytes
+// total (Config.ToolResultRetainedBytes) over the ceiling. It deliberately
 // carries no handle: nothing was written, so there is nothing to read back,
 // and emitting a handle-shaped token for bytes that do not exist would be
 // worse than saying plainly that they are gone.
 //
-// The wording states the ceiling is EXHAUSTED FOR THIS SESSION, not just
-// for this one call — the ceiling is monotonic (§F3: only ever incremented,
-// nothing in this PR evicts or reclaims it), so a model that reads this
-// header and retries later, or on a smaller result, will hit the exact same
-// wall. Saying "irrecoverably" is deliberate too: with no eviction/GC (out
-// of scope for this PR — filed as a follow-up, see the PR body), the
-// discarded remainder can never be recovered for the life of this session,
-// and a softer word here would misstate that.
+// A round-3 review finding caught an earlier version of this wording
+// overstating permanence in BOTH directions: it claimed "the cap has been
+// reached" (implying accumulation from real retentions, when a single
+// oversized result on a FRESH session — used=0 — refuses just as
+// unconditionally) and "no further tool result will be retained this
+// session" (false: a refusal never increments toolResultBytes — only
+// writeRetainedToolResult does, and that never runs on this path — so a
+// LATER, SMALLER result can still fit under the same ceiling and succeed).
+// TestToolResultCapHeaderDoesNotOverstatePermanence drives that exact
+// contradiction end to end. The wording now says only what is always true:
+// retaining THIS result would exceed the remaining budget, and THIS
+// result's remainder is gone for good — with no claim about what happens
+// next.
 func toolResultCapHeader(tool string, totalBytes, previewBytes int) string {
 	return fmt.Sprintf(
-		"[tool result truncated: tool=%s bytes=%d preview_bytes=%d — retention is exhausted for this session (the per-session retention cap has been reached); the remainder is discarded irrecoverably and no further tool result will be retained this session]",
+		"[tool result truncated: tool=%s bytes=%d preview_bytes=%d — retaining this result would exceed the per-session retention budget; its remainder is discarded irrecoverably, though a smaller result later this session may still be retained]",
 		tool, totalBytes, previewBytes,
 	)
 }
@@ -541,13 +546,27 @@ var errToolResultFileMissing = errors.New("retained tool result file is missing"
 
 // openRetainedToolResult opens one handle's sidecar file, mapping a
 // not-exist error to errToolResultFileMissing.
+// openFileForToolResult is os.Open, indirected only so a test can force a
+// non-missing-file error (permission denied, a transient I/O error) and
+// confirm openRetainedToolResult does not misreport it as a permanent
+// "gone" condition. Never reassigned outside a test.
+var openFileForToolResult = os.Open
+
 func (s *Session) openRetainedToolResult(handle string) (*os.File, error) {
-	f, err := os.Open(s.toolResultPath(handle))
+	f, err := openFileForToolResult(s.toolResultPath(handle))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, errToolResultFileMissing
 	}
 	if err != nil {
-		return nil, errToolResultFileMissing
+		// Anything OTHER than a genuine not-exist — permission denied, a
+		// transient I/O error, EMFILE descriptor exhaustion — is NOT the
+		// same as the file being gone, and must not get the same terminal
+		// "no longer on disk ... it cannot be read back" wording: that
+		// steers the model away from retrying a read that would succeed
+		// once the transient condition clears. Return the raw error; the
+		// caller's generic "cannot read handle %q" fallback (runReadToolResult)
+		// already handles it without carrying an absolute filesystem path.
+		return nil, err
 	}
 	return f, nil
 }

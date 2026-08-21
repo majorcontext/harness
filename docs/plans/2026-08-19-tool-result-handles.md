@@ -95,19 +95,30 @@ The em dash is a literal U+2014. The trailing clause names the tool and the
 handle in the exact call shape the model should use, because that clause is
 the only in-band documentation the model gets at the moment it needs it.
 
-A retention that is **refused** because the per-session retained-bytes cap is
-already reached emits a different, equally fixed line
-(`engine.toolResultCapHeader`) and no handle, since there is nothing to read
-back:
+A retention that is **refused** because retaining it would push the
+per-session retained-bytes total over the ceiling emits a different, equally
+fixed line (`engine.toolResultCapHeader`) and no handle, since there is
+nothing to read back:
 
 ```
-[tool result truncated: tool=bash bytes=123456 preview_bytes=16384 — retention is exhausted for this session (the per-session retention cap has been reached); the remainder is discarded irrecoverably and no further tool result will be retained this session]
+[tool result truncated: tool=bash bytes=123456 preview_bytes=16384 — retaining this result would exceed the per-session retention budget; its remainder is discarded irrecoverably, though a smaller result later this session may still be retained]
 ```
 
-The wording is deliberately blunt (review finding F3(b)): the ceiling is
-**monotonic** — nothing in this feature evicts or reclaims it (see §9,
-below) — so this is not "try again later," it is "for the rest of this
-session." A softer message here would misstate that.
+**Round-3 correction.** An earlier version of this wording (review finding
+F3(b)) said "the per-session retention cap has been reached ... no further
+tool result will be retained this session" — deliberately blunt, on the
+theory that the ceiling is monotonic so this could only get worse. A later
+review round caught that claim as false in both directions: `toolResultBytes`
+is **not** incremented on a refusal (only a successful `writeRetainedToolResult`
+increments it), so (a) the FIRST oversized result on a fresh session
+(`used=0`) refuses unconditionally too, which is not "the cap has been
+reached" by any accumulation, and (b) a LATER, SMALLER result can still fit
+under the same ceiling and succeed — directly contradicting "no further tool
+result will be retained." `TestToolResultCapHeaderDoesNotOverstatePermanence`
+drives that exact contradiction end to end. The wording now says only what is
+always true: retaining THIS result would exceed the remaining budget, and
+THIS result's remainder is gone for good — with no claim about what happens
+next.
 
 ## 3. Configuration
 
@@ -283,6 +294,50 @@ practice and duplicating on-disk bytes for content already durably retained
 under its source handle. `read_tool_result` output IS the recovery path
 *for* retention; it must never re-enter it.
 
+**Round 3: four more fixes.**
+
+- **`readerAtLineSource` could busy-loop forever (CRITICAL).** If the real
+  sidecar file is SHORTER than `meta.Bytes` claims — a volume rollback, an
+  operator's partial wipe of `toolresults/`, exactly the mismatch class the
+  missing-file handling above already anticipates — `ReadAt` at true EOF
+  returns `(0, io.EOF)`. `l.off` never advanced (n==0), `io.EOF` was
+  excluded from the error check on purpose (to tolerate an ordinary short
+  final read), so nothing ever set `l.err` OR advanced `l.off` to the
+  (inflated) claimed size: the loop spun `IndexByte → ReadAt → (0, io.EOF)`
+  forever, 100% CPU, wedging the run slot indefinitely. Fixed: a zero-byte
+  `io.EOF` read is now treated as the true end of data — `l.off` is pinned
+  to `l.size` so the existing size-reached branch fires on the next
+  iteration. `TestReaderAtLineSourceTerminatesWhenFileShorterThanClaimedSize`
+  proves termination with a goroutine-plus-timeout watchdog (the only way to
+  observe "never returns" without hanging the test run itself).
+- **Every `os.Open` error was reported as "no longer on disk".**
+  `openRetainedToolResult` mapped ANY error — not just `os.ErrNotExist` — to
+  the terminal "gone" wording, so a transient permission or I/O error got
+  the same steer-away-from-retrying message a genuinely deleted file gets.
+  Fixed: only a true not-exist gets that wording now; anything else returns
+  the raw error, which the caller's existing generic "cannot read handle"
+  fallback already handles without leaking an absolute path.
+- **A byte-truncated PARTIAL first line made its own remainder permanently
+  unreachable.** When the very first shown line alone exceeds `max_bytes`,
+  only a truncated prefix is emitted — but the notice reported "continue
+  with `offset=offset+1`", silently skipping past whatever this SAME line
+  didn't fit. Every future read at that name would start from the next
+  line too, so the unshown remainder could never be retrieved at ANY
+  `max_bytes`. Fixed: this specific case now keeps the continuation
+  `offset` UNCHANGED and says so explicitly ("increase max_bytes and
+  re-read at the same offset=N") — a caller that does this re-scans from
+  byte zero and genuinely reaches further into the same line, which is
+  real, verified progress, not just a more honest dead end.
+- **The match-count cap's notice wrongly suggested raising `max_bytes`.**
+  Hitting `readToolResultMaxLimit` (2000 matches) set the same flag a
+  byte-budget stop uses, so the notice always said "...narrow the search or
+  increase max_bytes" — but raising `max_bytes` cannot surface a single
+  additional match once counting stopped; the search simply stopped
+  counting, not running out of byte budget. A separate `countCapped` flag
+  now selects a distinct notice ("stopped at N match(es) (the match-count
+  limit); narrow the search — increasing max_bytes will not surface
+  additional matches").
+
 ## 7. What this feature explicitly does not touch
 
 `git diff` for this branch contains **no** changes under `provider/`, and no
@@ -432,6 +487,19 @@ actively destructive, not just incomplete:
   regex scan and measured ~650ms/4.4MB — a documented, accepted residual
   for a rare edge case, not a regression target.
 
+**Round 3: quoted env/YAML values.** `export TOKEN="secretvalue123"` — an
+UNQUOTED key with a QUOTED value, an extremely common shell/env-dump shape —
+slipped through entirely unmasked: the env/YAML alternative required its
+value class immediately after the separator (the next byte there, `"`, is
+not in `secretValueClass`), and the JSON alternative requires a QUOTED key,
+which a bare `TOKEN` lacks. Two more alternatives cover double- and
+single-quoted values now (spelled out separately — RE2 has no
+backreferences, so "whichever quote opened" cannot be one pattern).
+`TestMaskSecretsQuotedEnvValue` covers both quote styles plus quoted-YAML.
+This grew the combined pattern by two alternatives, which measurably slowed
+the F1 pathological single-huge-line case (§6) further — see the updated
+number in the test list below and the PR body.
+
 **Residual risk, explicitly not fully solved.** This is a minimal pattern
 matcher, not a secret scanner: it only catches the shapes listed above, only
 for a fixed key-name list, and has no way to catch a bare token pasted with
@@ -489,6 +557,12 @@ proper secret-detection library) is follow-up work, not this PR.
 | `TestMaskSecretsPerformance` (N6)                             | three input shapes measured against N6's targets; see PR body       |
 | `TestRetainedResultsIndexCapped` (N8)                         | the compaction index lists only the newest 32, names the rest by count |
 | `TestRetainedResultsIndexNotesMissingSidecar` (N9)            | a handle with no sidecar file is annotated, not claimed readable    |
+| `TestReaderAtLineSourceTerminatesWhenFileShorterThanClaimedSize` (round 3, critical) | no busy-loop when the sidecar is shorter than meta.Bytes |
+| `TestReadToolResultNonMissingErrorIsNotReportedAsGone` (round 3) | only a true not-exist gets the terminal "gone" wording          |
+| `TestToolResultCapHeaderDoesNotOverstatePermanence` (round 3) | the cap header never claims permanence the ceiling doesn't have     |
+| `TestReadToolResultPartialFirstLineOffsetIsRecoverable` (round 3) | a byte-truncated first line's remainder is genuinely reachable  |
+| `TestReadToolResultSearchCountCapNoticeDoesNotSuggestMaxBytes` (round 3) | count-cap notice doesn't suggest raising max_bytes        |
+| `TestMaskSecretsQuotedEnvValue` (round 3)                     | `KEY="value"`/`KEY='value'`/quoted-YAML masked                       |
 
 The fake-provider test is the load-bearing one: it drives a real
 `Session.Prompt` with a scripted provider whose first turn calls a tool

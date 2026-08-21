@@ -192,7 +192,7 @@ func TestToolResultPreviewHeaderExactFormat(t *testing.T) {
 	}
 
 	gotCap := toolResultCapHeader("bash", 123456, 16384)
-	wantCap := `[tool result truncated: tool=bash bytes=123456 preview_bytes=16384 — retention is exhausted for this session (the per-session retention cap has been reached); the remainder is discarded irrecoverably and no further tool result will be retained this session]`
+	wantCap := `[tool result truncated: tool=bash bytes=123456 preview_bytes=16384 — retaining this result would exceed the per-session retention budget; its remainder is discarded irrecoverably, though a smaller result later this session may still be retained]`
 	if gotCap != wantCap {
 		t.Errorf("cap header mismatch\n got: %s\nwant: %s", gotCap, wantCap)
 	}
@@ -338,8 +338,8 @@ func TestToolResultRetainedBytesCapRefusesRetention(t *testing.T) {
 		t.Errorf("first result should be retained: %q", first)
 	}
 	second := results[1].Content[0].(*message.Text).Text
-	if !strings.Contains(second, "retention is exhausted for this session") || !strings.Contains(second, "irrecoverably") {
-		t.Errorf("second result should hit the cap with the honest exhausted/irrecoverable wording: %q", second)
+	if !strings.Contains(second, "exceed the per-session retention budget") || !strings.Contains(second, "irrecoverably") {
+		t.Errorf("second result should hit the cap with the honest budget/irrecoverable wording: %q", second)
 	}
 	if strings.Contains(second, "handle=") {
 		t.Errorf("cap header must carry no handle: %q", second)
@@ -349,6 +349,54 @@ func TestToolResultRetainedBytesCapRefusesRetention(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, toolResultsDirName, s.ID, "trh_2.txt")); !os.IsNotExist(err) {
 		t.Errorf("trh_2 sidecar written despite the cap (err=%v)", err)
+	}
+}
+
+// TestToolResultCapHeaderDoesNotOverstatePermanence is a round-3 review
+// finding's red test. toolResultBytes is NOT incremented on a refusal
+// (only writeRetainedToolResult increments it, and that never runs on the
+// cap-refused path), so a later, SMALLER oversized result can still fit
+// under the SAME ceiling and be retained successfully — directly
+// contradicting a header that claims "no further tool result will be
+// retained this session". This drives that exact scenario end to end:
+// fill most of a small cap with one retained result, get refused on a
+// medium one, then successfully retain a small one afterward.
+func TestToolResultCapHeaderDoesNotOverstatePermanence(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{
+		SessionDir:              dir,
+		ToolResultInlineBytes:   10,
+		ToolResultRetainedBytes: 1000,
+	})
+
+	// First: retained, uses ~900 of the 1000-byte budget.
+	if _, err := s.writeRetainedToolResult("bash", strings.Repeat("a", 900)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second: refused. 900 + 150 > 1000.
+	refused := s.maybeRetainToolResult("bash", message.Parts{&message.Text{Text: strings.Repeat("b", 150)}})
+	if len(refused) < 1 {
+		t.Fatal("expected cap-refusal content")
+	}
+	refusedHeader := refused[0].(*message.Text).Text
+	if !strings.Contains(refusedHeader, "tool result truncated") {
+		t.Fatalf("expected the cap-refusal header, got: %q", refusedHeader)
+	}
+	if strings.Contains(refusedHeader, "no further tool result will be retained") {
+		t.Errorf("header claims permanence that is not true — a later smaller result can still be retained:\n%s", refusedHeader)
+	}
+	if strings.Contains(refusedHeader, "cap has been reached") {
+		t.Errorf("header claims the cap was reached via accumulation, which overstates a single oversized result:\n%s", refusedHeader)
+	}
+
+	// Third: SUCCEEDS. 900 + 60 <= 1000 — proving the second call's
+	// refusal was NOT "no further tool result will be retained this
+	// session."
+	third := s.maybeRetainToolResult("bash", message.Parts{&message.Text{Text: strings.Repeat("c", 60)}})
+	thirdHeader := third[0].(*message.Text).Text
+	if !strings.Contains(thirdHeader, "tool result retained") {
+		t.Fatalf("a smaller result after a refusal should still be retained — got: %q", thirdHeader)
 	}
 }
 

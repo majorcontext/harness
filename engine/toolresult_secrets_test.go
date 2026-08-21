@@ -156,6 +156,32 @@ func TestMaskSecretsSpaceYAML(t *testing.T) {
 	}
 }
 
+// TestMaskSecretsQuotedEnvValue is a round-3 review finding's red test:
+// `export TOKEN="secretvalue123"` — an unquoted key with a QUOTED value —
+// is an extremely common shell/env-dump shape, and it slipped through
+// entirely unmasked. The env/YAML alternative required its value class
+// immediately after the separator, but the next byte there is `"` (not in
+// secretValueClass), so it never matched; the JSON alternative requires a
+// QUOTED key, which a bare `TOKEN` lacks. Both shapes miss it.
+func TestMaskSecretsQuotedEnvValue(t *testing.T) {
+	cases := []struct{ name, in, wantMasked, wantValueGone string }{
+		{"double-quoted-equals", `export TOKEN="secretvalue123456"`, `TOKEN="***"`, "secretvalue123456"},
+		{"single-quoted-equals", `export TOKEN='secretvalue123456'`, `TOKEN='***'`, "secretvalue123456"},
+		{"quoted-yaml", "api_key: \"sk-ANTAPI03abcdefghijklmnop\"", `api_key: "***"`, "sk-ANTAPI03abcdefghijklmnop"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := maskSecrets(tc.in)
+			if strings.Contains(got, tc.wantValueGone) {
+				t.Errorf("secret value survived masking: %q -> %q", tc.in, got)
+			}
+			if !strings.Contains(got, tc.wantMasked) {
+				t.Errorf("masked output missing expected shape %q: got %q", tc.wantMasked, got)
+			}
+		})
+	}
+}
+
 // TestMaskSecretsAuthorizationBearer is review finding N3's red test for
 // the Authorization: Bearer <token> header shape.
 func TestMaskSecretsAuthorizationBearer(t *testing.T) {
@@ -326,13 +352,15 @@ func TestMaskSecretsPerformance(t *testing.T) {
 		// reports plainly, from a non-race run).
 		{"no_candidates", buildInput(0), 300 * time.Millisecond},
 		{"sparse_realistic", buildInput(300), 300 * time.Millisecond}, // ~1 secret line per ~300 ordinary lines
-		// 30s, not 2s: this is the one case with no line-level fast-reject
-		// (see maskSecrets's doc comment) and the race detector's
-		// instrumentation overhead on a regex-heavy path is large —
-		// measured ~650ms plain, ~18s under `go test -race`. Still a
-		// ceiling, not a promise: it exists to catch a true hang, not to
-		// hold this documented-slower path to the sparse-case target.
-		{"single_huge_line", "TOKEN=" + strings.Repeat("y", 4_400_000), 30 * time.Second},
+		// 120s, not 2s: this is the one case with no line-level fast-reject
+		// (see maskSecrets's doc comment), the pattern grew two more
+		// alternatives in round 3 (quoted-env values), and the race
+		// detector's instrumentation overhead on a regex-heavy path is
+		// large — measured ~1.8s plain, ~50s under `go test -race` after
+		// round 3 (was ~650ms / ~18s before). Still a ceiling, not a
+		// promise: it exists to catch a true hang, not to hold this
+		// documented-slower path to the sparse-case target.
+		{"single_huge_line", "TOKEN=" + strings.Repeat("y", 4_400_000), 120 * time.Second},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
