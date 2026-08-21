@@ -104,11 +104,17 @@ func TestToolResultRetainedAboveInlineLimit(t *testing.T) {
 		t.Errorf("header missing total bytes %d: %q", len(big), header)
 	}
 	preview := tr.Content[1].(*message.Text).Text
-	if len(preview) > 1024 {
-		t.Errorf("preview len = %d, want <= 1024", len(preview))
+	// F6(a): a plain HasPrefix(big, preview) check is a mutation escape —
+	// it is vacuously true for an EMPTY preview too (every string is a
+	// prefix of "" trivially satisfying HasPrefix in the other direction,
+	// and "" is a prefix of everything), so a regression that silently
+	// zeroed the preview would sail through it. Pin both the exact length
+	// and the exact bytes.
+	if len(preview) != 1024 {
+		t.Fatalf("preview len = %d, want exactly 1024 (the inline limit)", len(preview))
 	}
-	if !strings.HasPrefix(big, preview) {
-		t.Errorf("preview is not a prefix of the original text")
+	if preview != big[:1024] {
+		t.Errorf("preview is not the exact head of the original text")
 	}
 
 	// The sidecar file holds the FULL original bytes, verbatim.
@@ -129,6 +135,50 @@ func TestToolResultRetainedAboveInlineLimit(t *testing.T) {
 	}
 }
 
+// TestReadToolResultOutputIsNeverRetained is review finding F2's red test.
+// read_tool_result's OWN output must be exempt from retention: without the
+// exemption, a read whose returned text exceeds the inline limit — which is
+// the ordinary case, since the documented default max_bytes (16384) sits
+// right at a typical inline limit and the tool's own max (65536) is well
+// above it — mints a NEW handle instead of returning inline. That makes
+// the documented max_bytes ceiling unreachable in practice and doubles the
+// on-disk bytes for content that is already durably retained under its
+// source handle.
+func TestReadToolResultOutputIsNeverRetained(t *testing.T) {
+	dir := t.TempDir()
+	// A retained result big enough that a full-window read_tool_result call
+	// against it returns MORE than the inline limit below.
+	big := linesText(3000)
+
+	s := NewSession(Config{
+		Providers:             provider.Registry{"test": &scriptedProvider{name: "test"}},
+		Model:                 message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir:            dir,
+		ToolResultInlineBytes: 100, // deliberately tiny: read_tool_result's own output will exceed this
+	})
+	handle, err := s.writeRetainedToolResult("bash", big)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before := s.toolResultNextID
+	out := s.maybeRetainToolResult(readToolResultToolName, message.Parts{&message.Text{Text: linesText(500)}})
+	after := s.toolResultNextID
+
+	if after != before {
+		t.Errorf("toolResultNextID advanced from %d to %d — read_tool_result's own output was retained", before, after)
+	}
+	if len(out) != 1 {
+		t.Fatalf("read_tool_result output was rewritten: %d parts, want 1 (untouched): %+v", len(out), out)
+	}
+	if _, ok := s.lookupToolResult(handle); !ok {
+		t.Fatal("the source handle itself should still be registered")
+	}
+	if _, ok := s.lookupToolResult(toolResultHandlePrefix + "2"); ok {
+		t.Error("a second handle was minted from read_tool_result's own output")
+	}
+}
+
 // TestToolResultPreviewHeaderExactFormat pins the documented header, byte
 // for byte (docs/plans/2026-08-19-tool-result-handles.md §2.1). It compares
 // against a hand-written literal, NOT against the same fmt verbs the
@@ -142,7 +192,7 @@ func TestToolResultPreviewHeaderExactFormat(t *testing.T) {
 	}
 
 	gotCap := toolResultCapHeader("bash", 123456, 16384)
-	wantCap := `[tool result truncated: tool=bash bytes=123456 preview_bytes=16384 — retention cap reached for this session, the remainder is discarded]`
+	wantCap := `[tool result truncated: tool=bash bytes=123456 preview_bytes=16384 — retention is exhausted for this session (the per-session retention cap has been reached); the remainder is discarded irrecoverably and no further tool result will be retained this session]`
 	if gotCap != wantCap {
 		t.Errorf("cap header mismatch\n got: %s\nwant: %s", gotCap, wantCap)
 	}
@@ -288,8 +338,8 @@ func TestToolResultRetainedBytesCapRefusesRetention(t *testing.T) {
 		t.Errorf("first result should be retained: %q", first)
 	}
 	second := results[1].Content[0].(*message.Text).Text
-	if !strings.Contains(second, "retention cap reached") {
-		t.Errorf("second result should hit the cap: %q", second)
+	if !strings.Contains(second, "retention is exhausted for this session") || !strings.Contains(second, "irrecoverably") {
+		t.Errorf("second result should hit the cap with the honest exhausted/irrecoverable wording: %q", second)
 	}
 	if strings.Contains(second, "handle=") {
 		t.Errorf("cap header must carry no handle: %q", second)
@@ -299,6 +349,84 @@ func TestToolResultRetainedBytesCapRefusesRetention(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, toolResultsDirName, s.ID, "trh_2.txt")); !os.IsNotExist(err) {
 		t.Errorf("trh_2 sidecar written despite the cap (err=%v)", err)
+	}
+}
+
+// TestToolResultRetainedFileIsMaskedAndPrivate is review finding F4's red
+// test. A retained result routinely contains a command's raw output —
+// including an env dump or a leaked credential in a log line — and the
+// sidecar file must not sit on disk in cleartext, group- and world-
+// readable. This asserts both halves: the obvious secret-shaped line is
+// masked in the bytes actually written to disk, and the file/directory
+// permissions are private (0600/0700).
+func TestToolResultRetainedFileIsMaskedAndPrivate(t *testing.T) {
+	dir := t.TempDir()
+	secretValue := "AKIAABCDEFGHIJKLMNOP"
+	text := "starting build\n" +
+		"AWS_SECRET_ACCESS_KEY=" + secretValue + "\n" +
+		"DB_PASSWORD=hunter2hunter2\n" +
+		"build ok\n"
+
+	prov := oneToolTurnProvider("bigtool")
+	cfg := retainCfg(dir, prov, 10, 0) // tiny inline limit: force retention
+	cfg.Tools = []Tool{bigOutputTool("bigtool", text)}
+
+	s, _ := runOneToolTurn(t, cfg, prov, "bigtool")
+
+	path := filepath.Join(dir, toolResultsDirName, s.ID, "trh_1.txt")
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("sidecar file: %v", err)
+	}
+	onDisk := string(got)
+	if strings.Contains(onDisk, secretValue) {
+		t.Errorf("secret value landed on disk unmasked:\n%s", onDisk)
+	}
+	if strings.Contains(onDisk, "hunter2hunter2") {
+		t.Errorf("password value landed on disk unmasked:\n%s", onDisk)
+	}
+	if !strings.Contains(onDisk, "AWS_SECRET_ACCESS_KEY=***") {
+		t.Errorf("masked key/separator not preserved:\n%s", onDisk)
+	}
+	if !strings.Contains(onDisk, "DB_PASSWORD=***") {
+		t.Errorf("masked key/separator not preserved:\n%s", onDisk)
+	}
+	// Benign lines survive verbatim.
+	if !strings.Contains(onDisk, "starting build") || !strings.Contains(onDisk, "build ok") {
+		t.Errorf("benign lines were altered:\n%s", onDisk)
+	}
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := fi.Mode().Perm(); perm != 0o600 {
+		t.Errorf("sidecar file mode = %o, want 0600", perm)
+	}
+	di, err := os.Stat(filepath.Join(dir, toolResultsDirName, s.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := di.Mode().Perm(); perm != 0o700 {
+		t.Errorf("sidecar directory mode = %o, want 0700", perm)
+	}
+}
+
+// TestMaskSecretsPreservesBenignText: the masker must not touch text that
+// merely mentions a sensitive-sounding word without the key[=:]value shape
+// — over-masking would silently corrupt ordinary output (a sentence
+// containing the word "password", a variable named "token_count").
+func TestMaskSecretsPreservesBenignText(t *testing.T) {
+	in := "the password reset flow sends a token_count of 3\nAPI_KEY=abc123\n"
+	got := maskSecrets(in)
+	if !strings.Contains(got, "the password reset flow sends a token_count of 3") {
+		t.Errorf("benign prose was altered: %q", got)
+	}
+	if !strings.Contains(got, "API_KEY=***") {
+		t.Errorf("key=value shape was not masked: %q", got)
+	}
+	if strings.Contains(got, "abc123") {
+		t.Errorf("secret value survived masking: %q", got)
 	}
 }
 
@@ -389,6 +517,72 @@ func TestToolResultHandleMetadataSurvivesResume(t *testing.T) {
 	}
 	if got := out.Text(); !strings.Contains(got, "line-1") || !strings.Contains(got, "line-3") {
 		t.Errorf("resumed read = %q", got)
+	}
+}
+
+// TestLoadSessionRegistersReadToolResultForExistingHandles is review
+// finding F12's red test. newSession decides whether to register
+// read_tool_result BEFORE LoadSession's record fold populates
+// s.toolResults — against an empty map, every time, regardless of what the
+// log actually holds. A session resumed after tool_result_inline_bytes was
+// set to 0 (retention disabled going forward) can still carry real,
+// replayed handles from before that change. Without this fix, the model
+// sees preview lines naming a trh_N handle and a tool it cannot call:
+// read_tool_result was never registered, so the call fails as an unknown
+// tool rather than the tool's own clean "unknown handle" error.
+func TestLoadSessionRegistersReadToolResultForExistingHandles(t *testing.T) {
+	dir := t.TempDir()
+	big := linesText(3000)
+
+	prov := oneToolTurnProvider("bigtool")
+	cfg := retainCfg(dir, prov, 512, 0)
+	cfg.Tools = []Tool{bigOutputTool("bigtool", big)}
+	s := NewSession(cfg)
+	if _, err := s.Prompt(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.lookupToolResult("trh_1"); !ok {
+		t.Fatal("trh_1 not minted in the first process")
+	}
+
+	// Resume with retention now DISABLED (tool_result_inline_bytes: 0):
+	// newSession's own gate would refuse to register read_tool_result.
+	cfg2 := Config{
+		Providers:             provider.Registry{prov.name: prov},
+		Model:                 message.ModelRef{Provider: prov.name, Model: "m1"},
+		SessionDir:            dir,
+		ToolResultInlineBytes: 0,
+	}
+	s2, err := LoadSession(cfg2, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s2.tools[readToolResultToolName]; !ok {
+		t.Fatal("read_tool_result not registered on a resumed session carrying a replayed handle")
+	}
+	// And it must actually work — not just be present.
+	out, err := runReadToolResult(s2, json.RawMessage(`{"handle":"trh_1","offset":1,"limit":3}`))
+	if err != nil {
+		t.Fatalf("read on a resumed, retention-disabled session: %v", err)
+	}
+	if !strings.Contains(out.Text(), "line-1") {
+		t.Errorf("resumed read = %q", out.Text())
+	}
+
+	// Counterweight: a session with NO replayed handles and retention
+	// disabled must still NOT register the tool — this fix must not
+	// regress the ordinary disabled case into always-on.
+	emptyID := newID("ses")
+	log := `{"type":"session","id":"` + emptyID + `","created_at":"2026-08-19T00:00:00Z"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, emptyID+".jsonl"), []byte(log), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s3, err := LoadSession(Config{SessionDir: dir, ToolResultInlineBytes: 0}, emptyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s3.tools[readToolResultToolName]; ok {
+		t.Error("read_tool_result registered for a resumed session with no replayed handles and retention disabled")
 	}
 }
 

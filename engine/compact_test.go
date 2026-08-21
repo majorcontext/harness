@@ -110,6 +110,97 @@ func TestCompactFoldsOldestPrefixKeepsRecentTurns(t *testing.T) {
 	}
 }
 
+// TestCompactPreservesRetainedResultsIndex is review finding F3(a)'s red
+// test. The retention ceiling (Config.ToolResultRetainedBytes) is monotonic
+// — only ever incremented, nothing evicts or reclaims it — and
+// compactionSystemPrompt forbids the summarizer from transcribing tool
+// output, so a fold that swallows a preview line carrying a trh_N handle
+// leaves that handle ORPHANED: still counted against the ceiling, its
+// sidecar file still on disk, but no longer named anywhere in live history
+// for the model to find. Compact must carry a machine-written index of
+// every still-live handle forward into the summary turn — built
+// deterministically from session state, NOT from the LLM's summary text,
+// which this test's scripted summarizer reply ("SUMMARY", containing no
+// handle at all) proves: the index must appear regardless.
+func TestCompactPreservesRetainedResultsIndex(t *testing.T) {
+	dir := t.TempDir()
+	big := linesText(3000)
+
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn(provider.StopToolUse, toolCall("tc1", "bigtool", `{}`)),
+		compactTurn("turn one done", provider.Usage{InputTokens: 10}),
+		compactTurn("two", provider.Usage{InputTokens: 10}),
+		compactTurn("three", provider.Usage{InputTokens: 10}),
+		compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}), // deliberately never mentions trh_1
+	}}
+	s := NewSession(Config{
+		Providers:             provider.Registry{"test": prov},
+		Model:                 message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir:            dir,
+		ToolResultInlineBytes: 512,
+		Tools:                 []Tool{bigOutputTool("bigtool", big)},
+	})
+	runTurns(t, s, 3) // turn 1 mints trh_1; turns 2 and 3 are ordinary
+
+	if _, ok := s.lookupToolResult("trh_1"); !ok {
+		t.Fatal("trh_1 not minted in turn 1")
+	}
+
+	// Fold turns 1-2, keeping only turn 3 — trh_1's preview line (turn 1)
+	// is swallowed by the fold.
+	res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if res.TurnsFolded != 2 {
+		t.Fatalf("TurnsFolded = %d, want 2", res.TurnsFolded)
+	}
+
+	summaryText := res.Summary.Parts.Text()
+	if !strings.Contains(summaryText, "trh_1") {
+		t.Fatalf("summary message does not carry the retained-results index for trh_1:\n%s", summaryText)
+	}
+	if !strings.Contains(summaryText, "bigtool") {
+		t.Errorf("index missing the source tool name:\n%s", summaryText)
+	}
+	if !strings.Contains(summaryText, fmt.Sprintf("%d", len(big))) {
+		t.Errorf("index missing the byte size:\n%s", summaryText)
+	}
+	if !strings.Contains(summaryText, "line-1") {
+		t.Errorf("index missing a recognizable head excerpt:\n%s", summaryText)
+	}
+	// The whole point: this survives even though the scripted LLM summary
+	// never mentioned it.
+	if strings.Contains("SUMMARY", "trh_1") {
+		t.Fatal("test setup: the scripted summary must not itself mention trh_1")
+	}
+}
+
+// TestCompactRetainedResultsIndexOmittedWhenNoHandles: an ordinary
+// compaction with no retained results at all must not grow a spurious empty
+// index block.
+func TestCompactRetainedResultsIndexOmittedWhenNoHandles(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10}),
+		compactTurn("two", provider.Usage{InputTokens: 10}),
+		compactTurn("three", provider.Usage{InputTokens: 10}),
+		compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}),
+	}}
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+	})
+	runTurns(t, s, 3)
+
+	res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if len(res.Summary.Parts) != 1 {
+		t.Errorf("summary has %d parts, want 1 (no retained-results index when there are no handles): %+v", len(res.Summary.Parts), res.Summary.Parts)
+	}
+}
+
 // TestCompactSummaryRequestAlwaysEndsInUserRole is the red-first test for
 // the 2026-08-19 live incident (session ses_jumpy-pizza, model
 // anthropic/anthropic/claude-fable-5): compacting with keep_turns=20

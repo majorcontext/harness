@@ -180,6 +180,84 @@ func TestReadToolResultLimitHardCapped(t *testing.T) {
 	}
 }
 
+// TestReadToolResultMaxMaxBytesIsPinned pins readToolResultMaxMaxBytes's
+// concrete value (review finding F6(b)), the same way
+// TestReadToolResultLimitHardCapped pins readToolResultMaxLimit: a bare
+// relative assertion ("clamped to SOME max") would keep passing if the
+// constant silently changed, which is exactly the drift this guards against
+// for the documented "max 65536" contract in the tool's own description.
+func TestReadToolResultMaxMaxBytesIsPinned(t *testing.T) {
+	if readToolResultMaxMaxBytes != 65536 {
+		t.Fatalf("readToolResultMaxMaxBytes = %d, want 65536 (the documented hard cap)", readToolResultMaxMaxBytes)
+	}
+	if got := clampInt(99999999, readToolResultDefaultMaxBytes, readToolResultMaxMaxBytes); got != 65536 {
+		t.Errorf("clampInt(99999999) = %d, want 65536", got)
+	}
+}
+
+// TestReadToolResultRejectsMaxBytesBelowFloor: review finding F11. A
+// max_bytes smaller than the fixed preamble every read writes left NO room
+// for any line, and the byte-budget loop reported the same "no lines at
+// offset N" message a genuinely empty result gets — indistinguishable from
+// the real thing. max_bytes=1 must be rejected outright with a clear error
+// naming the floor, not silently misreported as an empty result.
+func TestReadToolResultRejectsMaxBytesBelowFloor(t *testing.T) {
+	s, h := retainedSession(t, linesText(50))
+
+	_, err := runReadToolResult(s, json.RawMessage(fmt.Sprintf(`{"handle":%q,"max_bytes":1}`, h)))
+	if err == nil {
+		t.Fatal("max_bytes=1 accepted, want a clear rejection")
+	}
+	if !strings.Contains(err.Error(), "max_bytes") || !strings.Contains(err.Error(), "1") {
+		t.Errorf("error does not name max_bytes/the floor: %v", err)
+	}
+	// It must NOT be the misleading "no lines" message a genuinely empty
+	// read produces — this result plainly has lines.
+	if strings.Contains(err.Error(), "no lines") {
+		t.Errorf("rejection reused the misleading empty-result wording: %v", err)
+	}
+
+	// Just above the floor must still work normally.
+	if _, err := runReadToolResult(s, json.RawMessage(fmt.Sprintf(`{"handle":%q,"max_bytes":%d}`, h, readToolResultMinMaxBytes))); err != nil {
+		t.Errorf("max_bytes at the floor (%d) rejected: %v", readToolResultMinMaxBytes, err)
+	}
+}
+
+// TestReadToolResultSurvivesOversizedLine is review finding F1's red test:
+// a single line at or beyond readToolResultScanBuf defeats bufio.Scanner
+// entirely (Scan returns false, sc.Err() is bufio.ErrTooLong). Before the
+// fix, range mode reported "no lines at offset 1 (has 1 lines)" and search
+// mode false-negatived on a needle that is plainly present — no max_bytes
+// value recovered anything, on a result whose own preview header told the
+// model it was recoverable via read_tool_result. The fix falls back to a
+// raw io.ReaderAt read with no per-line limit.
+func TestReadToolResultSurvivesOversizedLine(t *testing.T) {
+	// 2 MiB, one line, well beyond readToolResultScanBuf (1 MiB) — with a
+	// findable needle placed past the 1 MiB mark, so a fallback that only
+	// looked at the first MiB would still miss it.
+	needle := "UNIQUE-NEEDLE-31337"
+	pad := 2*1024*1024 - len(needle) - 1
+	big := strings.Repeat("x", 1200*1024) + needle + strings.Repeat("y", pad-1200*1024) + "\n"
+	if len(big) < 2*1024*1024 {
+		t.Fatalf("test setup: big is %d bytes, want >= 2MiB", len(big))
+	}
+
+	s, h := retainedSession(t, big)
+
+	rangeOut := readResult(t, s, fmt.Sprintf(`{"handle":%q,"offset":1,"limit":1}`, h))
+	if strings.Contains(rangeOut, "no lines at offset") {
+		t.Errorf("range read over an oversized line reported no lines:\n%s", rangeOut[:min(300, len(rangeOut))])
+	}
+	if len(rangeOut) == 0 {
+		t.Error("range read over an oversized line returned nothing")
+	}
+
+	searchOut := readResult(t, s, fmt.Sprintf(`{"handle":%q,"search":%q}`, h, needle))
+	if !strings.Contains(searchOut, needle) {
+		t.Errorf("search over an oversized line did not find a needle known to be present:\n%s", searchOut[:min(300, len(searchOut))])
+	}
+}
+
 // TestReadToolResultUnknownHandle: a clean tool error that names the
 // handles this session actually has, turning a dead end into a recoverable
 // mistake.
@@ -370,7 +448,15 @@ func TestParseToolResultHandle(t *testing.T) {
 			t.Errorf("parseToolResultHandle(%q) = %d,%v; want %d,true", in, n, ok, want)
 		}
 	}
-	for _, in := range []string{"", "trh_", "trh_0", "trh_-1", "trh_x", "trh_1x", "bogus", "1", "../trh_1", "trh_1/../.."} {
+	for _, in := range []string{
+		"", "trh_", "trh_0", "trh_-1", "trh_x", "trh_1x", "bogus", "1", "../trh_1", "trh_1/../..",
+		// F13: digits-only, no leading zero, no sign — strconv.ParseInt
+		// alone accepts these as alternate spellings of trh_1, but
+		// writeRetainedToolResult (strconv.FormatInt) never produces
+		// either, so they must not parse as aliases of the canonical
+		// handle.
+		"trh_+1", "trh_01", "trh_007", "trh_+42",
+	} {
 		if _, ok := parseToolResultHandle(in); ok {
 			t.Errorf("parseToolResultHandle(%q) accepted, want rejected", in)
 		}

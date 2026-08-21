@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/majorcontext/harness/message"
@@ -63,6 +64,17 @@ const (
 	// readToolResultKnownHandleList bounds how many known handles an
 	// unknown-handle error lists (see knownToolResultHandles).
 	readToolResultKnownHandleList = 20
+
+	// readToolResultMinMaxBytes is the floor on a caller-supplied max_bytes.
+	// Below it, the fixed preamble every read writes (the "handle (tool=...,
+	// N bytes, N lines) ..." line, plus a truncation/continuation notice)
+	// can itself exceed the budget, leaving zero or negative room for any
+	// line — the byte-budget loop in readToolResultRange then reports "no
+	// lines at offset N" even though the result has plenty, because nothing
+	// EVER fit, not because nothing was there (review finding F11). Rather
+	// than silently produce that misleading message, a request below the
+	// floor is rejected outright with an error naming the floor.
+	readToolResultMinMaxBytes = 256
 )
 
 // readToolResultArgs is the tool's input shape.
@@ -135,6 +147,14 @@ func runReadToolResult(s *Session, raw json.RawMessage) (message.Parts, error) {
 			readToolResultToolName, in.Handle, strings.Join(known, ", "))
 	}
 
+	// A budget below the floor can be entirely consumed by the fixed
+	// preamble every read writes, before a single line of actual content —
+	// see readToolResultMinMaxBytes's doc comment (review finding F11).
+	if in.MaxBytes > 0 && in.MaxBytes < readToolResultMinMaxBytes {
+		return nil, fmt.Errorf("%s: max_bytes %d is below the minimum %d",
+			readToolResultToolName, in.MaxBytes, readToolResultMinMaxBytes)
+	}
+
 	f, err := s.openRetainedToolResult(in.Handle)
 	if err != nil {
 		if errors.Is(err, errToolResultFileMissing) {
@@ -154,10 +174,81 @@ func runReadToolResult(s *Session, raw json.RawMessage) (message.Parts, error) {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), readToolResultScanBuf)
 
-	if in.Search != "" {
-		return readToolResultSearch(sc, meta, in.Search, maxBytes)
+	scan := func(src toolResultLineSource) (message.Parts, error) {
+		if in.Search != "" {
+			return readToolResultSearch(src, meta, in.Search, maxBytes)
+		}
+		return readToolResultRange(src, meta, in.Offset, in.Limit, maxBytes)
 	}
-	return readToolResultRange(sc, meta, in.Offset, in.Limit, maxBytes)
+
+	parts, err := scan(sc)
+	if err == nil && errors.Is(sc.Err(), bufio.ErrTooLong) {
+		// A single line at or beyond readToolResultScanBuf defeats
+		// bufio.Scanner outright (review finding F1): Scan returns false,
+		// sc.Err() is bufio.ErrTooLong, and — because this was never
+		// checked before — the caller saw a plain "no lines"/"no match"
+		// result indistinguishable from a genuinely empty read, on a
+		// result the preview header told the model was recoverable. Retry
+		// once against a raw io.ReaderAt read of the whole file with no
+		// per-line size limit, rather than reporting this retained result
+		// permanently unreadable.
+		lines, ferr := toolResultFallbackLines(f, meta.Bytes)
+		if ferr == nil {
+			parts, err = scan(&sliceLineSource{lines: lines})
+		}
+	}
+	return parts, err
+}
+
+// toolResultLineSource is the line-by-line interface readToolResultRange and
+// readToolResultSearch scan through. *bufio.Scanner satisfies it directly
+// (its Scan/Text/Err methods match exactly); sliceLineSource is the F1
+// fallback source, built from a raw io.ReaderAt read with no per-line size
+// limit.
+type toolResultLineSource interface {
+	Scan() bool
+	Text() string
+	Err() error
+}
+
+// sliceLineSource adapts a pre-split []string to toolResultLineSource.
+type sliceLineSource struct {
+	lines []string
+	i     int
+}
+
+func (l *sliceLineSource) Scan() bool {
+	if l.i >= len(l.lines) {
+		return false
+	}
+	l.i++
+	return true
+}
+func (l *sliceLineSource) Text() string { return l.lines[l.i-1] }
+func (l *sliceLineSource) Err() error   { return nil }
+
+// toolResultFallbackLines reads the retained file's first size bytes via a
+// raw io.ReaderAt read — independent of any *bufio.Scanner's already-
+// advanced internal read position on the same *os.File, which is exactly
+// why ReaderAt (an absolute-offset read) is used here instead of Read/Seek
+// — and splits on '\n' with no per-line length limit. size is meta.Bytes:
+// the ORIGINAL byte length recorded at retention time (see
+// writeRetainedToolResult), which is what the file was written as.
+func toolResultFallbackLines(r io.ReaderAt, size int) ([]string, error) {
+	if size <= 0 {
+		return nil, nil
+	}
+	buf := make([]byte, size)
+	n, err := r.ReadAt(buf, 0)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	text := string(buf[:n])
+	if text == "" {
+		return nil, nil
+	}
+	text = strings.TrimSuffix(text, "\n")
+	return strings.Split(text, "\n"), nil
 }
 
 // clampInt resolves an optional positive-int argument: <= 0 takes def, and
@@ -174,7 +265,7 @@ func clampInt(v, def, max int) int {
 }
 
 // readToolResultRange implements the offset/limit line window.
-func readToolResultRange(sc *bufio.Scanner, meta toolResultMeta, offset, limit, maxBytes int) (message.Parts, error) {
+func readToolResultRange(sc toolResultLineSource, meta toolResultMeta, offset, limit, maxBytes int) (message.Parts, error) {
 	if offset <= 0 {
 		offset = 1
 	}
@@ -233,7 +324,7 @@ func readToolResultRange(sc *bufio.Scanner, meta toolResultMeta, offset, limit, 
 // a line window over a filtered set means something different from a line
 // window over the file, and conflating the two is how a model ends up
 // silently reading the wrong region.
-func readToolResultSearch(sc *bufio.Scanner, meta toolResultMeta, needle string, maxBytes int) (message.Parts, error) {
+func readToolResultSearch(sc toolResultLineSource, meta toolResultMeta, needle string, maxBytes int) (message.Parts, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s (tool=%s, %d bytes, %d lines) lines matching %q:\n",
 		meta.Handle, meta.Tool, meta.Bytes, meta.Lines, needle)

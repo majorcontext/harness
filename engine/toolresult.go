@@ -79,7 +79,18 @@ type toolResultMeta struct {
 	Tool   string
 	Bytes  int
 	Lines  int
+	// Head is the first toolResultIndexHeadBytes bytes of the ORIGINAL
+	// (unmasked-length, though the persisted content is masked — see
+	// writeRetainedToolResult) text, UTF-8-safely truncated. It exists
+	// solely so compaction's retained-results index (compact.go) can name a
+	// handle recognizably without re-opening its sidecar file — see F3.
+	Head string
 }
+
+// toolResultIndexHeadBytes bounds toolResultMeta.Head — "first ~80 chars"
+// per review finding F3(a). A byte bound, not a rune count, for the same
+// reason truncateUTF8 exists: this must never split a multi-byte rune.
+const toolResultIndexHeadBytes = 80
 
 // toolResultPreviewHeader renders the EXACT preview header line documented
 // in docs/plans/2026-08-19-tool-result-handles.md §2.1. It exists as one
@@ -106,9 +117,18 @@ func toolResultPreviewHeader(handle, tool string, totalBytes, totalLines, previe
 // carries no handle: nothing was written, so there is nothing to read back,
 // and emitting a handle-shaped token for bytes that do not exist would be
 // worse than saying plainly that they are gone.
+//
+// The wording states the ceiling is EXHAUSTED FOR THIS SESSION, not just
+// for this one call — the ceiling is monotonic (§F3: only ever incremented,
+// nothing in this PR evicts or reclaims it), so a model that reads this
+// header and retries later, or on a smaller result, will hit the exact same
+// wall. Saying "irrecoverably" is deliberate too: with no eviction/GC (out
+// of scope for this PR — filed as a follow-up, see the PR body), the
+// discarded remainder can never be recovered for the life of this session,
+// and a softer word here would misstate that.
 func toolResultCapHeader(tool string, totalBytes, previewBytes int) string {
 	return fmt.Sprintf(
-		"[tool result truncated: tool=%s bytes=%d preview_bytes=%d — retention cap reached for this session, the remainder is discarded]",
+		"[tool result truncated: tool=%s bytes=%d preview_bytes=%d — retention is exhausted for this session (the per-session retention cap has been reached); the remainder is discarded irrecoverably and no further tool result will be retained this session]",
 		tool, totalBytes, previewBytes,
 	)
 }
@@ -151,10 +171,26 @@ func (s *Session) toolResultPath(handle string) string {
 // filesystem path is built from it — the same defense-in-depth posture
 // ValidSessionID takes for a session id) and by LoadSession's replay fold
 // (skipping a malformed durable record rather than trusting it).
+//
+// The numeric part must be DIGITS ONLY, no leading zero, no sign: the write
+// path (strconv.FormatInt) never produces "trh_+1" or "trh_01", so
+// strconv.ParseInt's looser grammar (which accepts both as spellings of 1)
+// would let those parse as valid handles that are really just alternate,
+// non-canonical spellings of "trh_1" — a false-negative-shaped bug review
+// finding F13 flagged. A caller-supplied handle passes here only if it is
+// byte-for-byte a string writeRetainedToolResult could have minted.
 func parseToolResultHandle(h string) (int64, bool) {
 	rest, ok := strings.CutPrefix(h, toolResultHandlePrefix)
 	if !ok || rest == "" {
 		return 0, false
+	}
+	if rest[0] < '1' || rest[0] > '9' {
+		return 0, false
+	}
+	for i := 1; i < len(rest); i++ {
+		if rest[i] < '0' || rest[i] > '9' {
+			return 0, false
+		}
 	}
 	n, err := strconv.ParseInt(rest, 10, 64)
 	if err != nil || n <= 0 {
@@ -226,6 +262,18 @@ func truncateUTF8(s string, n int) string {
 // (the pre-retention behavior), and the error is recorded in lastPersistErr
 // exactly like every other best-effort persist path in this package.
 func (s *Session) maybeRetainToolResult(tool string, content message.Parts) message.Parts {
+	// read_tool_result's OWN output must never be re-retained. Without this
+	// exemption, a read whose result exceeds the inline limit (trivially
+	// true whenever max_bytes is set above the limit — the tool's own
+	// documented default and cap both routinely are) mints a NEW handle
+	// instead of returning inline, making the documented max_bytes ceiling
+	// unreachable and doubling the on-disk bytes for content that is
+	// already durably retained under its source handle (review finding
+	// F2). read_tool_result output IS the recovery path FOR retention; it
+	// must never re-enter it.
+	if tool == readToolResultToolName {
+		return content
+	}
 	limit := s.toolResultInlineLimit()
 	if limit <= 0 {
 		return content
@@ -292,14 +340,34 @@ func (s *Session) writeRetainedToolResult(tool, text string) (string, error) {
 	handle := toolResultHandlePrefix + strconv.FormatInt(n, 10)
 
 	dir := s.toolResultsDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// 0o700/0o600, not 0o755/0o644: a retained result is arbitrary tool
+	// output, routinely including secrets a command printed (an env dump, a
+	// leaked credential in a log line) — see review finding F4. Neither the
+	// directory nor the file should be group- or world-readable.
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("engine: tool-result retention: %w", err)
 	}
-	if err := os.WriteFile(s.toolResultPath(handle), []byte(text), 0o644); err != nil {
+	// maskSecrets is a best-effort, pattern-based redaction of the OBVIOUS
+	// secret shapes (see toolresult_secrets.go) applied only to what lands
+	// on disk. It is not a substitute for not retaining secrets at all —
+	// see the residual-risk note in the PR body — but it is strictly better
+	// than writing tool output verbatim to a file whose only protection was
+	// (until this fix) mode 0o644 in a 0o755 directory.
+	masked := maskSecrets(text)
+	if err := os.WriteFile(s.toolResultPath(handle), []byte(masked), 0o600); err != nil {
 		return "", fmt.Errorf("engine: tool-result retention: %w", err)
 	}
 
-	meta := toolResultMeta{Handle: handle, Tool: tool, Bytes: len(text), Lines: countLines(text)}
+	meta := toolResultMeta{
+		Handle: handle,
+		Tool:   tool,
+		Bytes:  len(text),
+		Lines:  countLines(text),
+		// Head is cut from the MASKED text, not the original: it survives
+		// into the compaction index (F3), a model-visible surface, and must
+		// carry the same redaction guarantee the sidecar file does.
+		Head: truncateUTF8(masked, toolResultIndexHeadBytes),
+	}
 
 	s.mu.Lock()
 	if s.toolResults == nil {
@@ -344,6 +412,50 @@ func (s *Session) knownToolResultHandles(max int) []string {
 		out = append(out, toolResultHandlePrefix+strconv.FormatInt(n, 10))
 	}
 	return out
+}
+
+// retainedResultsIndexPart builds compaction's deterministic, machine-
+// written index of every currently-live tool-result handle (review finding
+// F3(a)) — one line per handle, sorted ascending by number, naming the
+// handle, its source tool, its byte size, and a short head excerpt so a
+// model skimming the summary can recognize what it is without opening it.
+// Returns nil when there are no handles at all, so an ordinary compaction
+// with nothing retained gains no spurious empty block.
+//
+// Deliberately NOT derived from the LLM's summary text: compactionSystemPrompt
+// forbids the summarizer from transcribing tool output, so it cannot be
+// trusted to carry handles forward on its own, and a prompt-dependent
+// mechanism for something this load-bearing (an orphaned handle stays
+// invisible AND still counted against the monotonic retention ceiling for
+// the rest of the session) is exactly the failure mode this guards against.
+// This index covers every handle the session currently knows about, not
+// only handles minted within the folded range — a handle minted long before
+// the fold is exactly as reachable-only-through-a-preview-line as one
+// minted inside it, and exactly as easy to lose track of once that line is
+// gone.
+func (s *Session) retainedResultsIndexPart() *message.Text {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.toolResults) == 0 {
+		return nil
+	}
+	var nums []int64
+	for h := range s.toolResults {
+		if n, ok := parseToolResultHandle(h); ok {
+			nums = append(nums, n)
+		}
+	}
+	sortInt64s(nums)
+
+	var b strings.Builder
+	b.WriteString("[retained tool results still readable via read_tool_result (this index is machine-generated, not part of the summary above):\n")
+	for _, n := range nums {
+		h := toolResultHandlePrefix + strconv.FormatInt(n, 10)
+		m := s.toolResults[h]
+		fmt.Fprintf(&b, "  %s tool=%s bytes=%d lines=%d head=%q\n", m.Handle, m.Tool, m.Bytes, m.Lines, m.Head)
+	}
+	b.WriteString("]")
+	return &message.Text{Text: b.String()}
 }
 
 // sortInt64s sorts in place, ascending. A tiny insertion sort rather than a

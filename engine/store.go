@@ -144,6 +144,13 @@ type toolResultRecord struct {
 	Tool   string `json:"tool,omitempty"`
 	Bytes  int    `json:"bytes,omitempty"`
 	Lines  int    `json:"lines,omitempty"`
+	// Head carries toolResultMeta.Head (see toolresult.go) so a resumed
+	// session's compaction retained-results index (compact.go, review
+	// finding F3) can still name a handle recognizably without re-opening
+	// its sidecar file. Omitted (empty string) on a record written by an
+	// older binary — a resumed session's index just shows no head text for
+	// that one handle, never an error.
+	Head string `json:"head,omitempty"`
 }
 
 // compactRecord carries the durable payload of a "compact" record (see
@@ -387,6 +394,7 @@ func (s *Session) persistToolResultRetainedLocked(m toolResultMeta) {
 			Tool:   m.Tool,
 			Bytes:  m.Bytes,
 			Lines:  m.Lines,
+			Head:   m.Head,
 		},
 	}
 	if err := s.writeRecord(rec); err != nil {
@@ -914,6 +922,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 						Tool:   rec.ToolResult.Tool,
 						Bytes:  rec.ToolResult.Bytes,
 						Lines:  rec.ToolResult.Lines,
+						Head:   rec.ToolResult.Head,
 					}
 					s.toolResultBytes += rec.ToolResult.Bytes
 				}
@@ -1030,6 +1039,23 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 		s.cfg.ContextWindowTokens, s.contextWindowSource = resolveContextWindow(0, s.model)
 	}
 	logContextWindowArmed(s.ID, s.model, s.cfg.ContextWindowTokens, s.contextWindowSource, "start")
+	// read_tool_result registration (review finding F12): newSession decided
+	// whether to register it BEFORE this fold ran, against an empty
+	// s.toolResults — the only state it could see at that point. A session
+	// resumed after its config set tool_result_inline_bytes:0 (retention
+	// disabled going forward) can still have replayed handles from BEFORE
+	// that change, from history written while it was still enabled. Those
+	// handles are real, their sidecar files are real, and read_tool_result
+	// can still serve them — s.toolResultInlineLimit gates only whether a
+	// NEW handle can be MINTED, never whether an existing one can be READ
+	// (see runReadToolResult, which never calls toolResultInlineLimit at
+	// all). Without this, a resumed session's history is full of handles
+	// the model has every reason to try reading, and every attempt fails
+	// with "unknown tool" — not even the tool's own clean "unknown handle"
+	// error, because the tool was never registered to receive the call.
+	if _, ok := s.tools[readToolResultToolName]; !ok && len(s.toolResults) > 0 {
+		s.tools[readToolResultToolName] = readToolResultTool()
+	}
 	return s, nil
 }
 
