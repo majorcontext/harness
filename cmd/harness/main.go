@@ -532,6 +532,13 @@ func runCmd(args []string) error {
 		PromptRetries:       cfg.PromptRetriesValue(),
 		CompactionThreshold: cfg.CompactionThreshold,
 		CompactionKeepTurns: cfg.CompactionKeepTurns,
+		// Tool-result retention (config keys tool_result_inline_bytes /
+		// tool_result_retained_bytes, product defaults 16384 / 4194304 —
+		// see config.ToolResultInlineBytesValue). An explicit <= 0 inline
+		// value disables retention; so does an unset sesDir, which the
+		// engine checks itself.
+		ToolResultInlineBytes:   cfg.ToolResultInlineBytesValue(),
+		ToolResultRetainedBytes: cfg.ToolResultRetainedBytesValue(),
 		// GoalTool mirrors serveCmd's mkCfg below: the `goal` session tool is
 		// only useful once an evaluator is actually configured to drive a
 		// goal loop against (-goal itself resolves and validates its own
@@ -1097,6 +1104,11 @@ func serveCmd(args []string) error {
 			PromptRetries:       cfg.PromptRetriesValue(),
 			CompactionThreshold: cfg.CompactionThreshold,
 			CompactionKeepTurns: cfg.CompactionKeepTurns,
+			// Tool-result retention, same keys and defaults as runCmd
+			// above (config.ToolResultInlineBytesValue). Every served box
+			// gets it unless an operator sets a non-positive inline value.
+			ToolResultInlineBytes:   cfg.ToolResultInlineBytesValue(),
+			ToolResultRetainedBytes: cfg.ToolResultRetainedBytesValue(),
 			// GoalTool enables the `goal` session tool (status/set/adjust)
 			// whenever an evaluator is configured to drive a goal loop
 			// against — the same condition server.Options.GoalEvaluator

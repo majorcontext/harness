@@ -388,6 +388,16 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 		Parts:     message.Parts{&message.Text{Text: CompactionSummaryBanner + summaryText}},
 		CreatedAt: time.Now().UTC(),
 	}
+	// Append a deterministic, machine-written index of every still-live
+	// tool-result handle, as its OWN part — never folded into summaryText
+	// above. See retainedResultsIndexPart's doc comment (review finding
+	// F3(a)): the LLM summarizer is under compactionSystemPrompt, which
+	// forbids transcribing tool output, so it cannot be relied on to carry
+	// handles forward, and a fold with no index at all orphans every handle
+	// the folded range's preview lines named.
+	if idx := s.retainedResultsIndexPart(); idx != nil {
+		summary.Parts = append(summary.Parts, idx)
+	}
 
 	summary.Normalize()
 
