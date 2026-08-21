@@ -121,11 +121,21 @@ func waitBasePromptRetryBackoff(ctx context.Context, attempt int) error {
 // produces exactly the same "completed, nothing to act on" shape this fix
 // exists to catch. turnHasActionableContent alone is the complete guard for
 // every stop reason.
+//
+// A discarded empty attempt still billed real tokens — the call completed,
+// it just produced nothing actionable — so its usage is folded into
+// cumulative Usage() via accumulateDiscardedTurnUsage (engine.go) before
+// this attempt is ever retried or, on budget exhaustion, surfaced as the
+// terminal error. This runs on EVERY discarded attempt, not only the last
+// one, so a turn that empties out 3 times in a row (initial + 2 retries)
+// still accounts for all 3 billed calls, not just the final one. See that
+// function's doc comment for why lastUsage is deliberately left untouched.
 func (s *Session) streamTurnWithRetry(ctx context.Context) (*message.Message, provider.StopReason, provider.Usage, error) {
 	for attempt := 1; ; attempt++ {
 		asst, stop, usage, err := s.streamTurn(ctx)
 		if err == nil {
 			if !turnHasActionableContent(asst) {
+				s.accumulateDiscardedTurnUsage(usage)
 				err = &emptyTurnError{stop: stop, outputTokens: usage.OutputTokens}
 			} else {
 				return asst, stop, usage, nil

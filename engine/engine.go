@@ -990,6 +990,47 @@ func (s *Session) appendWithUsage(m message.Message, usage *provider.Usage) {
 	s.mu.Unlock()
 }
 
+// accumulateDiscardedTurnUsage folds a billed-but-discarded turn's Usage
+// into cumulative Usage() only — it never touches lastUsage/haveLastUsage.
+// streamTurnWithRetry (prompt_retry.go) calls this for every attempt it
+// discards as an empty turn (see emptyTurnError), whether that attempt is
+// about to be retried or is the final one on budget exhaustion.
+//
+// This mirrors the accounting compact.go's errEmptyCompactionSummary skip
+// path already established for the sibling "the call ran and cost real
+// tokens even though it produced nothing usable" shape (see runCompaction's
+// doc comment and AGENTS.md's "An empty summary is a graceful no-op..."):
+// the call was real, the provider billed it in full (for an empty turn,
+// typically a full input prefill plus the entire max_tokens output
+// ceiling), and no tokens were refunded just because streamTurnWithRetry
+// chose to discard the resulting message. Dropping this usage silently
+// would undercount GET /session by the full cost of every discarded
+// attempt — up to PromptRetries+1 fully-billed calls for one turn.
+//
+// lastUsage is deliberately left untouched, matching the compact.go
+// precedent's own reasoning: maybeAutoCompact reads LastUsage as "how large
+// is the next worker request" to decide whether to trigger, so it must keep
+// reflecting the last REAL (actionable) prompt shape. Letting a discarded
+// empty attempt set it would let a fully-billed max-output turn that
+// produced nothing mask (or, worse, falsely trip) the very compaction
+// signal it has nothing to do with — the harness would be sizing the next
+// request off a turn that was thrown away.
+//
+// Like the compact.go skip path, this accumulation is live-only: there is
+// no message to attach the usage to (the discarded attempt's assistant
+// message is never appended to history — see emptyTurnError's doc
+// comment), so persistMessage never runs for it and the total does not
+// survive a process restart. Known residual, same tradeoff already accepted
+// on the compaction skip path.
+func (s *Session) accumulateDiscardedTurnUsage(usage provider.Usage) {
+	s.mu.Lock()
+	s.usage.InputTokens += usage.InputTokens
+	s.usage.OutputTokens += usage.OutputTokens
+	s.usage.CacheReadTokens += usage.CacheReadTokens
+	s.usage.CacheWriteTokens += usage.CacheWriteTokens
+	s.mu.Unlock()
+}
+
 func (s *Session) emit(ev Event) {
 	ev.SessionID = s.ID
 	if s.cfg.OnEvent != nil {
@@ -1711,6 +1752,15 @@ func turnHasActionableContent(asst *message.Message) bool {
 // error unwrapped: server's turnEndOutcome (server/journal.go) maps every
 // unrecognized error to outcome:"error", which is the correct terminal
 // state — a completed-but-empty turn must never be recorded as success.
+//
+// A discarded attempt still billed real tokens (typically a full input
+// prefill plus the entire max_tokens output ceiling), so streamTurnWithRetry
+// folds its Usage into cumulative Session.Usage() via
+// accumulateDiscardedTurnUsage before synthesizing this error — on every
+// discarded attempt, retried or exhausted alike, never only the last one.
+// See that function's doc comment for the accounting rule (mirrors the
+// #136 empty-compaction-summary precedent) and why lastUsage is
+// deliberately left untouched.
 type emptyTurnError struct {
 	stop         provider.StopReason
 	outputTokens int

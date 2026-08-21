@@ -493,3 +493,126 @@ func TestEmptyTurnRetriesOnStopToolUseWithNoToolCall(t *testing.T) {
 		}
 	})
 }
+
+// emptyMaxTokensTurnUsage builds the same empty (Reasoning-only,
+// StopMaxTokens) turn shape emptyMaxTokensTurn does, but with an explicit
+// usage: a discarded empty attempt bills a full input prefill plus the
+// max_tokens output ceiling, not always the same fixed numbers, so a
+// usage-accounting test needs distinct per-attempt usage to prove real
+// accumulation rather than a coincidental match.
+func emptyMaxTokensTurnUsage(usage provider.Usage) []provider.Event {
+	return []provider.Event{{
+		Type:       provider.EventDone,
+		Message:    &message.Message{ID: "msg_empty", Role: message.RoleAssistant, Parts: message.Parts{&message.Reasoning{Text: "thinking really hard about it"}}},
+		StopReason: provider.StopMaxTokens,
+		Usage:      usage,
+	}}
+}
+
+// TestEmptyTurnDiscardedAttemptsAccumulateUsage is the red-first guard for
+// the discarded-usage defect raised on review: a discarded empty attempt is
+// not a provider failure — the call ran to completion and billed real
+// tokens (a full input prefill plus the max_tokens output ceiling) — so
+// those tokens must still land in cumulative Session.Usage(), exactly like
+// the #136 empty-compaction-summary precedent AGENTS.md documents ("the
+// call's real usage is still accumulated into cumulative Usage() ... it was
+// a billed call even though it produced nothing"). Dropping it silently
+// would undercount GET /session by the full cost of every discarded
+// attempt.
+//
+// Attempts 1 and 2 are empty with distinct usage (so a coincidental match
+// can't hide a bug); attempt 3 succeeds. Session.Usage() after Prompt must
+// equal the SUM of all three attempts' usage. LastUsage() must equal ONLY
+// attempt 3's usage — see accumulateDiscardedTurnUsage's doc comment
+// (engine.go) for why a discarded attempt must never update it.
+//
+// Red-verify: before the fix, streamTurnWithRetry discards attempts 1 and 2
+// without ever touching s.usage — Session.Usage() after Prompt reflects
+// only attempt 3's usage, missing the ~16k billed-but-empty tokens.
+func TestEmptyTurnDiscardedAttemptsAccumulateUsage(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		attempt1Usage := provider.Usage{InputTokens: 1000, OutputTokens: 8192}
+		attempt2Usage := provider.Usage{InputTokens: 1010, OutputTokens: 8192}
+		attempt3Usage := provider.Usage{InputTokens: 1050, OutputTokens: 12}
+		prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+			emptyMaxTokensTurnUsage(attempt1Usage),
+			emptyMaxTokensTurnUsage(attempt2Usage),
+			{{
+				Type:       provider.EventDone,
+				Message:    &message.Message{ID: "msg_ok", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "done"}}},
+				StopReason: provider.StopEndTurn,
+				Usage:      attempt3Usage,
+			}},
+		}}
+		s := NewSession(Config{
+			Providers:     provider.Registry{"test": prov},
+			Model:         message.ModelRef{Provider: "test", Model: "m1"},
+			PromptRetries: 2,
+		})
+
+		final, err := s.Prompt(context.Background(), "go")
+		if err != nil {
+			t.Fatalf("Prompt err = %v, want nil", err)
+		}
+		if final == nil || final.Parts.Text() != "done" {
+			t.Fatalf("final = %+v, want a message with text %q", final, "done")
+		}
+
+		wantUsage := provider.Usage{
+			InputTokens:  attempt1Usage.InputTokens + attempt2Usage.InputTokens + attempt3Usage.InputTokens,
+			OutputTokens: attempt1Usage.OutputTokens + attempt2Usage.OutputTokens + attempt3Usage.OutputTokens,
+		}
+		if got := s.Usage(); got != wantUsage {
+			t.Errorf("Usage() = %+v, want %+v (all three billed attempts, including the two discarded empty ones)", got, wantUsage)
+		}
+
+		last, ok := s.LastUsage()
+		if !ok {
+			t.Fatal("LastUsage not ok")
+		}
+		if last != attempt3Usage {
+			t.Errorf("LastUsage() = %+v, want %+v (only the real successful attempt — a discarded empty attempt must never set it)", last, attempt3Usage)
+		}
+	})
+}
+
+// TestEmptyTurnExhaustedUsageStillAccumulates proves the accumulation
+// happens even when every attempt is empty and Prompt ultimately returns an
+// error: none of the tokens billed across the exhausted retry budget go
+// unaccounted just because the turn never succeeded.
+//
+// Red-verify: before the fix, none of the three discarded attempts ever
+// touch s.usage — Session.Usage() after Prompt is the zero value even
+// though ~24k output tokens (3 * 8192) were actually billed.
+func TestEmptyTurnExhaustedUsageStillAccumulates(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		u1 := provider.Usage{InputTokens: 1000, OutputTokens: 8192}
+		u2 := provider.Usage{InputTokens: 1010, OutputTokens: 8192}
+		u3 := provider.Usage{InputTokens: 1020, OutputTokens: 8192}
+		prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+			emptyMaxTokensTurnUsage(u1),
+			emptyMaxTokensTurnUsage(u2),
+			emptyMaxTokensTurnUsage(u3),
+		}}
+		s := NewSession(Config{
+			Providers:     provider.Registry{"test": prov},
+			Model:         message.ModelRef{Provider: "test", Model: "m1"},
+			PromptRetries: 2,
+		})
+
+		if _, err := s.Prompt(context.Background(), "go"); err == nil {
+			t.Fatal("Prompt err = nil, want the exhausted empty-turn failure to surface")
+		}
+
+		wantUsage := provider.Usage{
+			InputTokens:  u1.InputTokens + u2.InputTokens + u3.InputTokens,
+			OutputTokens: u1.OutputTokens + u2.OutputTokens + u3.OutputTokens,
+		}
+		if got := s.Usage(); got != wantUsage {
+			t.Errorf("Usage() = %+v, want %+v (all three billed attempts present even though Prompt returned an error)", got, wantUsage)
+		}
+		if _, ok := s.LastUsage(); ok {
+			t.Error("LastUsage ok = true, want false (no turn ever completed successfully)")
+		}
+	})
+}
