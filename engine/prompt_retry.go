@@ -98,11 +98,48 @@ func waitBasePromptRetryBackoff(ctx context.Context, attempt int) error {
 // the retry rather than rendering the two runs concatenated — see
 // EventTurnRestart. History still reconciles through the turn's final
 // EventMessage regardless.
+//
+// A COMPLETED turn (streamTurn's err is nil) with no actionable content —
+// per turnHasActionableContent, no non-empty Text and no ToolCall part — is
+// folded into the same bounded retry budget via a synthesized
+// *emptyTurnError, rather than returned as a success. See emptyTurnError's
+// doc comment (engine.go) for the production incident this guards: a
+// provider stream can reach EventDone cleanly while reporting nothing the
+// caller can act on (e.g. thinking alone consumed the entire max_tokens
+// ceiling), and that must never be journaled as a completed turn. This is
+// why the check runs before the `err == nil` early return below, not after
+// it.
+//
+// The check is deliberately NOT gated on `stop != provider.StopToolUse`.
+// For a true tool-use turn that clause is redundant: a genuine tool call
+// always carries a *message.ToolCall part, which turnHasActionableContent
+// already accepts. Gating on it would also leave the identical hole open
+// for StopToolUse itself: provider/openaicompat's mapFinishReason maps the
+// wire finish_reason "tool_calls" to StopToolUse unconditionally, so a
+// proxied provider that reports finish_reason "tool_calls" with an
+// empty/dropped tool_calls array (observed on the bifrost→Fireworks path)
+// produces exactly the same "completed, nothing to act on" shape this fix
+// exists to catch. turnHasActionableContent alone is the complete guard for
+// every stop reason.
+//
+// A discarded empty attempt still billed real tokens — the call completed,
+// it just produced nothing actionable — so its usage is folded into
+// cumulative Usage() via accumulateDiscardedTurnUsage (engine.go) before
+// this attempt is ever retried or, on budget exhaustion, surfaced as the
+// terminal error. This runs on EVERY discarded attempt, not only the last
+// one, so a turn that empties out 3 times in a row (initial + 2 retries)
+// still accounts for all 3 billed calls, not just the final one. See that
+// function's doc comment for why lastUsage is deliberately left untouched.
 func (s *Session) streamTurnWithRetry(ctx context.Context) (*message.Message, provider.StopReason, provider.Usage, error) {
 	for attempt := 1; ; attempt++ {
 		asst, stop, usage, err := s.streamTurn(ctx)
 		if err == nil {
-			return asst, stop, usage, nil
+			if !turnHasActionableContent(asst) {
+				s.accumulateDiscardedTurnUsage(usage)
+				err = &emptyTurnError{stop: stop, outputTokens: usage.OutputTokens}
+			} else {
+				return asst, stop, usage, nil
+			}
 		}
 		if errors.Is(err, context.Canceled) {
 			return nil, "", provider.Usage{}, err
@@ -111,7 +148,17 @@ func (s *Session) streamTurnWithRetry(ctx context.Context) (*message.Message, pr
 		if errors.As(err, &interrupted) {
 			return nil, "", provider.Usage{}, err
 		}
-		if _, retryable := provider.AsRetryable(err); !retryable || attempt > s.cfg.PromptRetries {
+		// An emptyTurnError is synthesized above, never provider-classified,
+		// so it is always eligible for the bounded retry budget below —
+		// provider.AsRetryable only applies to a genuine provider/transport
+		// error.
+		var empty *emptyTurnError
+		if !errors.As(err, &empty) {
+			if _, retryable := provider.AsRetryable(err); !retryable {
+				return nil, "", provider.Usage{}, err
+			}
+		}
+		if attempt > s.cfg.PromptRetries {
 			return nil, "", provider.Usage{}, err
 		}
 		// Signal subscribers to drop any partial deltas the failed attempt
