@@ -230,6 +230,23 @@ hooks (`chat.params`, `system.transform`) and `OnRequest` — one bump and one
 hook pass per attempt, exactly like the goal loop's per-attempt behavior. Only
 the `session.error` and usage are suppressed for a masked attempt.
 
+One class is retry-eligible WITHOUT `provider.AsRetryable`: a completed but
+EMPTY turn (no non-empty text, no tool call — e.g. thinking consumed the
+whole `max_tokens` ceiling; see `emptyTurnError`). Two deliberate deviations
+from the masked-attempt rules above. First, a discarded empty attempt's
+usage IS accumulated into cumulative `Usage()` (it was a fully billed
+completion, unlike a transport failure — same principle as the empty
+compaction summary), while `lastUsage` is left alone. Second, the nesting
+math: an empty turn that survives all `PromptRetries+1` attempts surfaces a
+deterministic error, which goal mode's worker tier retries
+`goalWorkerRetries` more times — worst case `(PromptRetries+1) *
+(goalWorkerRetries+1)` = 9 fully-billed calls — and then STOPS the goal
+with the empty-turn reason. Before this class existed the same turn was a
+silent success and a goal limped on with nothing appended; halting with a
+legible reason is the intended trade. The fail-fast for the deterministic
+`max_tokens`-exhaustion shape (cutting the 9 to 3) is a filed follow-up on
+the PR that introduced this.
+
 Retrying `streamTurn` is idempotent for history and tool side effects:
 `streamTurn` makes ONE model call and never executes a tool (`runAgenticLoop`
 runs tools only AFTER `streamTurn` returns a `StopToolUse` message), so a
