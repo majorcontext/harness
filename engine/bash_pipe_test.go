@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -53,9 +55,75 @@ func setBashWaitDelay(t *testing.T, d time.Duration) {
 }
 
 // pgidAlive reports whether any process in the given process group still
-// exists, via the kill(pgid, 0) existence probe (signal 0 sends nothing).
+// exists AND is not a zombie, via the kill(pgid, 0) existence probe (signal
+// 0 sends nothing) followed by a /proc scan that excludes zombie (state
+// 'Z') members.
+//
+// The existence probe alone is not enough: kill(pgid, 0) succeeds against a
+// zombie (dead, not yet reaped by its parent) exactly as it does against a
+// live process — the process table entry still exists even though nothing
+// in it can hold a pipe open or do anything else. In an ordinary
+// shell/CI runner a background init reaps immediately and invisibly, so
+// this never shows up. But in a container whose PID 1 IS the test binary
+// itself (no reaper), an orphaned grandchild that gets killed stays a
+// zombie forever, and the plain existence probe keeps reporting the group
+// "alive" — defeating tests (waitForGroupDeath above) that assert a
+// process-group kill actually worked.
+//
+// This mechanism is Linux-only by construction (/proc). When /proc can't be
+// read (darwin, or a restricted sandbox), it degrades to the old
+// existence-probe-only behavior rather than misreporting a live group as
+// dead.
 func pgidAlive(pgid int) bool {
-	return syscall.Kill(-pgid, 0) == nil
+	if syscall.Kill(-pgid, 0) != nil {
+		return false
+	}
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return true
+	}
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue // not a pid directory (e.g. "self", "cpuinfo")
+		}
+		state, pgrp, err := readProcStat(pid)
+		if err != nil {
+			continue // exited between ReadDir and stat, or unreadable
+		}
+		if pgrp == pgid && state != 'Z' {
+			return true
+		}
+	}
+	return false
+}
+
+// readProcStat parses /proc/<pid>/stat, returning its process state (field
+// 3, a single character — 'Z' for zombie) and process group id (field 5,
+// aka pgrp). The comm field (field 2) is parenthesized and can itself
+// contain spaces or parens (e.g. a process named "sh (busy)"), so fields
+// are parsed starting from the LAST ')' in the line rather than by naive
+// whitespace splitting from the start.
+func readProcStat(pid int) (state byte, pgrp int, err error) {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return 0, 0, err
+	}
+	line := string(b)
+	i := strings.LastIndexByte(line, ')')
+	if i < 0 || i+1 >= len(line) {
+		return 0, 0, fmt.Errorf("malformed /proc/%d/stat: %q", pid, line)
+	}
+	// Fields after the comm's closing paren: state, ppid, pgrp, ...
+	fields := strings.Fields(line[i+1:])
+	if len(fields) < 3 || len(fields[0]) != 1 {
+		return 0, 0, fmt.Errorf("malformed /proc/%d/stat fields: %q", pid, line)
+	}
+	pgrp, err = strconv.Atoi(fields[2])
+	if err != nil {
+		return 0, 0, fmt.Errorf("malformed /proc/%d/stat pgrp field %q: %w", pid, fields[2], err)
+	}
+	return fields[0][0], pgrp, nil
 }
 
 // waitForFileContent polls (deadline-bound; this observes real, out-of-
@@ -98,6 +166,71 @@ func waitForGroupDeath(t *testing.T, pgid int) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("process group %d still alive after deadline: orphaned grandchild (process-group kill did not work)", pgid)
+}
+
+// TestPgidAliveIgnoresZombies is the pinning test for the zombie bug fixed
+// in pgidAlive (see its doc comment): kill(pgid, 0) reports a process group
+// as alive even when every member is a zombie, which would silently defeat
+// waitForGroupDeath's whole purpose in a container whose PID 1 is the test
+// binary itself (nothing there ever reaps an orphaned grandchild).
+//
+// This must observe a REAL, still-unreaped zombie: it deliberately does NOT
+// call cmd.Wait() before the pgidAlive assertion below. Calling Wait first
+// would reap the child itself, leaving nothing but a fully-gone process to
+// check against — a vacuous test that would still pass even with the fix
+// reverted, because it would never exercise the zombie-skipping code path
+// at all. The zombie is reaped afterward in t.Cleanup so it doesn't leak
+// out of the test run.
+//
+// /proc-based zombie detection is Linux-only by construction; this test is
+// skipped elsewhere rather than faked.
+func TestPgidAliveIgnoresZombies(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("zombie-skipping is /proc-based and Linux-only; nothing to verify on " + runtime.GOOS)
+	}
+
+	cmd := exec.Command("sleep", "60")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start fixture process: %v", err)
+	}
+	pgid := cmd.Process.Pid // Setpgid with Pgid 0: the leader is its own group
+
+	t.Cleanup(func() { _ = cmd.Wait() }) // reap the zombie; don't leak it
+
+	if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil {
+		t.Fatalf("failed to kill fixture process group: %v", err)
+	}
+
+	// Poll (fixture setup, not the mechanism under test — same deadline-
+	// bound cross-process convention as waitForGroupDeath above) until the
+	// kernel actually transitions the process to zombie state; SIGKILL
+	// delivery isn't synchronous. Parsed inline, independent of
+	// readProcStat, so this fixture wait keeps compiling even if pgidAlive's
+	// fix is reverted for red-verification.
+	deadline := time.Now().Add(3 * time.Second)
+	var lastState, lastErr string
+	for {
+		b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pgid))
+		if err != nil {
+			lastErr = err.Error()
+		} else if i := strings.LastIndexByte(string(b), ')'); i >= 0 {
+			if fields := strings.Fields(string(b)[i+1:]); len(fields) > 0 {
+				lastState = fields[0]
+				if lastState == "Z" {
+					break
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("fixture process never reached zombie state (last state %q, last read err %q)", lastState, lastErr)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if pgidAlive(pgid) {
+		t.Fatal("pgidAlive(pgid) = true for a process group whose only member is a zombie, want false")
+	}
 }
 
 func parsePGID(t *testing.T, s string) int {
