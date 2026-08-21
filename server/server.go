@@ -723,7 +723,44 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// An EMPTY {id} segment ("/session//abort") never reaches the mux's
+	// "/session/{id}/..." patterns at all: net/http's ServeMux calls
+	// cleanPath internally, which collapses the doubled slash and issues a
+	// 301 redirect to the cleaned path (e.g. "/session/abort"). Go's
+	// http.Client, following that redirect, converts a POST or DELETE to GET
+	// (net/http's redirect handling for 301/302/303). The request that
+	// actually lands is a GET to a path with no {id} segment at all, hitting
+	// whatever route (if any) happens to share that shape — never the {id}
+	// handler, and never triggering the documented sessionIDOrNotFound 404
+	// contract in handlers.go. The response an empty id gets is therefore an
+	// accident of the routing table, not the contract.
+	//
+	// Answer it here, ahead of the mux, so an empty id is exactly as
+	// not-found as any other id that fails engine.ValidSessionID. Matching
+	// on the RAW path (r.URL.Path, before any cleaning) is deliberate and
+	// mirrors sessionIDOrNotFound's own raw-vs-decoded reasoning: the
+	// redirect this pre-empts is itself driven by the raw path.
+	if isEmptySessionIDPath(r.URL.Path) {
+		writeErr(w, http.StatusNotFound, "no such session")
+		return
+	}
 	s.mux.ServeHTTP(w, r)
+}
+
+// emptySessionIDPrefix is the one path shape isEmptySessionIDPath matches:
+// the "/session/" collection prefix followed immediately by another slash,
+// i.e. an empty {id} segment.
+const emptySessionIDPrefix = "/session//"
+
+// isEmptySessionIDPath reports whether path addresses a session sub-resource
+// with an EMPTY id segment ("/session//", "/session//abort",
+// "/session//a/b"). It deliberately does NOT match "/session/" (the
+// collection with a trailing slash) nor "/session" (the real collection
+// endpoint, which must keep working) — and, because the prefix check
+// includes the trailing slash of "/session/", it also does not match
+// "/sessions//x" (a different, unrelated route).
+func isEmptySessionIDPath(path string) bool {
+	return strings.HasPrefix(path, emptySessionIDPrefix)
 }
 
 // Drain waits for in-flight prompts to finish, then returns. Under s.mu, and
