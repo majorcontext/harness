@@ -59,17 +59,6 @@ const (
 	toolResultsDirName = "toolresults"
 )
 
-// defaultToolResultInlineBytes / defaultToolResultRetainedBytes are the
-// PRODUCT defaults, supplied by the config/CLI layer
-// (config.ToolResultInlineBytesValue), never by engine.Config's zero value.
-// That split is the same one Config.PromptRetries uses and it is
-// load-bearing: an embedder building a bare engine.Config gets today's
-// behavior byte for byte, with no sidecar directory ever created.
-const (
-	defaultToolResultInlineBytes   = 16384
-	defaultToolResultRetainedBytes = 4 * 1024 * 1024
-)
-
 // toolResultMeta is one retained result's metadata, held in memory for the
 // life of the session and rebuilt on resume from the durable
 // toolresult.retained records (see store.go's LoadSession fold). It carries
@@ -143,6 +132,13 @@ func toolResultCapHeader(tool string, totalBytes, previewBytes int) string {
 // unset Config.SessionDir: without a session directory there is nowhere to
 // durably put the bytes, and a preview naming a handle that can never be
 // read is strictly worse than no preview at all.
+//
+// This reads Config.ToolResultInlineBytes as given, with no default
+// substitution — a bare engine.Config's zero value (0) means "disabled",
+// byte for byte, never a silent 16384. The PRODUCT default lives one layer
+// up, in config.Config.ToolResultInlineBytesValue (config/config.go) —
+// the sole authoritative source; round-5 review removed a duplicate,
+// unreferenced copy of that number that had drifted into this file.
 func (s *Session) toolResultInlineLimit() int {
 	if s.cfg.SessionDir == "" {
 		return 0
@@ -285,6 +281,14 @@ func (s *Session) maybeRetainToolResult(tool string, content message.Parts) mess
 	}
 	text, others := splitToolResultParts(content)
 	if len(text) <= limit {
+		// Fast path: skip masking entirely when the ORIGINAL is already
+		// within budget. Masking can only make this MORE true (see below),
+		// never less — this is a pure perf optimization (the overwhelming
+		// majority of tool calls never approach the inline limit at all),
+		// not a scope decision: results that stay inline are not masked
+		// today regardless of this fast path (masking protects what gets
+		// RETAINED — see toolresult_secrets.go's package doc comment for
+		// the documented scope).
 		return content
 	}
 
@@ -301,6 +305,20 @@ func (s *Session) maybeRetainToolResult(tool string, content message.Parts) mess
 	// DISK: a header or read_tool_result advertising the ORIGINAL length
 	// was pointing at a size the file did not have (N2).
 	masked := maskSecrets(text)
+
+	// Round-5 review finding: the RETENTION DECISION must be measured
+	// against the masked length too, not just the header/disk/ceiling
+	// accounting above it. `text` exceeding `limit` only means retention
+	// is being CONSIDERED — masking can shrink it well under `limit` (a
+	// long secret value collapses to "***"), and gating on the pre-mask
+	// size burned a handle and wrote a sidecar file for a result that fit
+	// inline all along once masked, with a "read the rest" header pointing
+	// at nothing left to read. If masking alone already brought it within
+	// budget, return the masked text inline — no handle, no sidecar file.
+	if len(masked) <= limit {
+		return append(message.Parts{&message.Text{Text: masked}}, others...)
+	}
+
 	preview := truncateUTF8(masked, limit)
 
 	// Per-session ceiling check. Refusing is a real outcome, not an error:

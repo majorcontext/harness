@@ -178,6 +178,26 @@ func containsSecretCandidate(s string) bool {
 //     F1 case (one multi-megabyte line with no newlines at all) falls back
 //     to a single expensive full-text scan, same as before this
 //     optimization — a documented residual, not a regression.
+//
+// maskSecretsLineWindow bounds how many lines FORWARD of a candidate line
+// get grouped with it into one span before the real pattern runs (round-5
+// review finding — see maskSecrets's doc comment). Forward-only: every
+// shape that can span a newline (quoted-JSON, Bearer) has its
+// candidate-triggering text — the key's substring, or "authorization" —
+// BEFORE the value in reading order, never after, so a match is never
+// missed by failing to look backward from a candidate line.
+//
+// This is a bounded, documented residual, not a general fix: a key and its
+// value separated by MORE than this many blank/continuation lines (an
+// unusually verbose formatter) is not caught. Widening it trades more
+// worst-case regex work per candidate for a larger catch radius; 3 lines
+// covers ordinary pretty-printers (key line, at most one continuation or
+// blank line, value line) without materially affecting the sparse-input
+// performance case (see TestMaskSecretsPerformance) — the overwhelming
+// majority of lines in ordinary output are still copied at Contains cost,
+// untouched by the regex engine.
+const maskSecretsLineWindow = 3
+
 func maskSecrets(text string) string {
 	if !containsSecretCandidate(text) {
 		return text
@@ -188,17 +208,59 @@ func maskSecrets(text string) string {
 	}
 	var b strings.Builder
 	b.Grow(len(text))
-	for _, line := range lines {
-		if line == "" {
+	for _, group := range groupCandidateLineWindows(lines, maskSecretsLineWindow) {
+		if group == "" {
 			continue
 		}
-		if containsSecretCandidate(line) {
-			b.WriteString(maskSecretsSpan(line))
+		if containsSecretCandidate(group) {
+			b.WriteString(maskSecretsSpan(group))
 		} else {
-			b.WriteString(line)
+			b.WriteString(group)
 		}
 	}
 	return b.String()
+}
+
+// groupCandidateLineWindows merges lines into spans for maskSecrets: a
+// line that is itself a secret-shaped candidate is grouped together with
+// the next `window` lines (so a separator or value that spans forward past
+// this line's own newline is still caught in one regex pass — see
+// maskSecretsLineWindow), and overlapping windows from nearby candidate
+// lines are merged into one larger group rather than processed twice. A
+// line with no candidate anywhere near it is returned as its own
+// single-line group, unchanged — the fast, no-regex path for the
+// overwhelming majority of ordinary output.
+func groupCandidateLineWindows(lines []string, window int) []string {
+	n := len(lines)
+	groups := make([]string, 0, n)
+	i := 0
+	for i < n {
+		if !containsSecretCandidate(lines[i]) {
+			groups = append(groups, lines[i])
+			i++
+			continue
+		}
+		end := i + window + 1
+		if end > n {
+			end = n
+		}
+		// Chain in any LATER candidate line whose own window would extend
+		// past this one, so two nearby secrets merge into a single group
+		// instead of being artificially split at the wrong boundary.
+		for j := i + 1; j < end; j++ {
+			if containsSecretCandidate(lines[j]) {
+				if extended := j + window + 1; extended > end {
+					end = extended
+					if end > n {
+						end = n
+					}
+				}
+			}
+		}
+		groups = append(groups, strings.Join(lines[i:end], ""))
+		i = end
+	}
+	return groups
 }
 
 // maskSecretsSpan runs the actual combined-pattern regex over one span of

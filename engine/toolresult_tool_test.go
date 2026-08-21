@@ -299,6 +299,46 @@ func TestReadToolResultRejectsMaxBytesBelowFloor(t *testing.T) {
 	}
 }
 
+// TestReadToolResultFloorAccountsForLongToolName is a round-5 review
+// finding's red test. The flat 256-byte floor did not account for the
+// ACTUAL preamble a request would produce — for a long MCP-shaped tool
+// name plus large byte/line counts, the preamble alone can exceed
+// bodyMax (floor - the 128-byte notice reserve), reproducing exactly the
+// F11 false-empty class the floor exists to prevent, at a max_bytes value
+// (256) the tool had just accepted as valid.
+func TestReadToolResultFloorAccountsForLongToolName(t *testing.T) {
+	dir := t.TempDir()
+	longTool := "mcp__some_moderately_long_server_name_here__a_fairly_long_tool_name_here_too_yes_indeed"
+	s := NewSession(Config{
+		Providers:             provider.Registry{"test": &scriptedProvider{name: "test"}},
+		Model:                 message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir:            dir,
+		ToolResultInlineBytes: 512,
+	})
+	// Large byte/line counts, matching the reviewer's "large byte/line/
+	// offset/limit numbers" half of the scenario.
+	handle, err := s.writeRetainedToolResult(longTool, strings.Repeat("line-x\n", 123456))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// max_bytes=256 (the flat floor) is accepted by the earlier gate — the
+	// point of this test is what happens AFTER that gate, not the gate
+	// itself.
+	out, err := runReadToolResult(s, json.RawMessage(fmt.Sprintf(`{"handle":%q,"max_bytes":%d}`, handle, readToolResultMinMaxBytes)))
+	if err != nil {
+		// Also acceptable: the floor computation rejects this request
+		// outright (a real error naming the floor), rather than silently
+		// returning a misleading empty result. Either is fine as long as
+		// it's not the false-empty case checked below.
+		return
+	}
+	got := out.Text()
+	if strings.Contains(got, "no lines at offset") {
+		t.Errorf("a long tool name pushed the preamble past bodyMax, reproducing the F11 false-empty class at the accepted floor:\n%s", got)
+	}
+}
+
 // TestReadToolResultSurvivesOversizedLine is review finding F1's red test:
 // a single line at or beyond readToolResultScanBuf defeats bufio.Scanner
 // entirely (Scan returns false, sc.Err() is bufio.ErrTooLong). Before the
@@ -535,7 +575,23 @@ func TestReadToolResultOutputNeverExceedsMaxBytes(t *testing.T) {
 	big := linesText(20000) // long enough to force truncation at every max_bytes tried below
 	s, h := retainedSession(t, big)
 
-	for _, mb := range []int{readToolResultMinMaxBytes, 300, 500, 1000, 4096, 16384} {
+	// The floor is now computed PER REQUEST from the actual preamble
+	// (review finding, round 5) — for this fixture's large byte/line
+	// counts, that floor sits a little above the flat
+	// readToolResultMinMaxBytes constant. Start the sweep at the real
+	// computed floor (search's is the larger of the two modes here) rather
+	// than the flat constant, so this test's smallest value is always
+	// accepted rather than legitimately rejected.
+	meta, ok := s.lookupToolResult(h)
+	if !ok {
+		t.Fatal("handle not registered")
+	}
+	nearFloor := readToolResultFloor(meta, readToolResultArgs{Search: "line-"})
+	if rangeFloor := readToolResultFloor(meta, readToolResultArgs{Offset: 1, Limit: 100000}); rangeFloor > nearFloor {
+		nearFloor = rangeFloor
+	}
+
+	for _, mb := range []int{nearFloor, 300, 500, 1000, 4096, 16384} {
 		t.Run(fmt.Sprintf("range/max_bytes=%d", mb), func(t *testing.T) {
 			out := readResult(t, s, fmt.Sprintf(`{"handle":%q,"offset":1,"limit":100000,"max_bytes":%d}`, h, mb))
 			if len(out) > mb {

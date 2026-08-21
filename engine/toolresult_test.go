@@ -135,6 +135,44 @@ func TestToolResultRetainedAboveInlineLimit(t *testing.T) {
 	}
 }
 
+// TestToolResultGateMeasuresMaskedLength is a round-5 review finding's red
+// test. The retention gate (`len(text) <= limit`) measured the UNMASKED
+// original length, while everything downstream — the preview, meta.Bytes,
+// the retention-ceiling accounting — measures the MASKED length. A result
+// that masks down to well under the limit (a long secret value collapses
+// to "***") still triggered retention on its pre-mask size: a handle got
+// burned and a sidecar file written for content that fit inline all along
+// once masked, with a "read the rest with read_tool_result" header
+// pointing at nothing left to read.
+func TestToolResultGateMeasuresMaskedLength(t *testing.T) {
+	dir := t.TempDir()
+	secretValue := strings.Repeat("x", 300)
+	text := "TOKEN=" + secretValue // 306 bytes pre-mask; masks down to "TOKEN=***" (9 bytes)
+
+	prov := oneToolTurnProvider("bigtool")
+	cfg := retainCfg(dir, prov, 100, 0) // limit=100: pre-mask (306) exceeds it, post-mask (9) doesn't
+	cfg.Tools = []Tool{bigOutputTool("bigtool", text)}
+
+	s, tr := runOneToolTurn(t, cfg, prov, "bigtool")
+
+	if len(tr.Content) != 1 {
+		t.Fatalf("expected the result to stay inline (1 part), got %d: %+v", len(tr.Content), tr.Content)
+	}
+	got := tr.Content[0].(*message.Text).Text
+	if strings.Contains(got, "handle=") {
+		t.Errorf("a handle was burned for a result that fits inline once masked: %q", got)
+	}
+	if !strings.Contains(got, "TOKEN=***") {
+		t.Errorf("masked text was not returned inline: %q", got)
+	}
+	if strings.Contains(got, secretValue) {
+		t.Errorf("secret value leaked unmasked: %q", got)
+	}
+	if _, ok := s.lookupToolResult("trh_1"); ok {
+		t.Error("a handle was registered despite the result fitting inline once masked")
+	}
+}
+
 // TestReadToolResultOutputIsNeverRetained is review finding F2's red test.
 // read_tool_result's OWN output must be exempt from retention: without the
 // exemption, a read whose returned text exceeds the inline limit — which is
@@ -678,4 +716,72 @@ func TestLoadSessionSkipsMalformedRetainedRecord(t *testing.T) {
 	if s.toolResultNextID != 8 {
 		t.Errorf("toolResultNextID = %d, want 8 (past trh_7)", s.toolResultNextID)
 	}
+}
+
+// TestLoadSessionAdvancesNextIDPastHandlesSeenInHistoryText is a round-5
+// review finding's red test for silent handle reuse after resume.
+//
+// toolResultNextID was rebuilt ONLY from toolresult.retained pointer
+// records — but persistToolResultRetainedLocked is best-effort
+// (writeRetainedToolResult still returns the handle successfully even if
+// the pointer-record WRITE fails, landing the error in lastPersistErr).
+// So a crash between "the sidecar file is written and the preview text
+// naming it is durably appended to history" and "the pointer record makes
+// it to the log" leaves a resumed session's toolResultNextID pointing at
+// the SAME number the crashed process already handed to the model in a
+// preview the model trusts. The next retention in the resumed process then
+// silently reuses that handle, overwriting the sidecar file — and
+// read_tool_result serves the NEW content under the name the model
+// believes still describes the OLD content.
+//
+// This constructs exactly that: a message record durably carrying a
+// "handle=trh_7" preview header in its text, with NO corresponding
+// toolresult.retained record for trh_7 anywhere in the log (simulating the
+// lost pointer-record write). Resuming and then retaining a new oversized
+// result must NOT mint trh_7 again.
+func TestLoadSessionAdvancesNextIDPastHandlesSeenInHistoryText(t *testing.T) {
+	dir := t.TempDir()
+	id := "ses_01m0g96daxegnaqwtqe135ah4x"
+	previewHeader := toolResultPreviewHeader("trh_7", "bash", 5000, 100, 500)
+	log := strings.Join([]string{
+		`{"type":"session","id":"` + id + `","created_at":"2026-08-19T00:00:00Z"}`,
+		// A durable message carrying the trh_7 preview header — but NO
+		// toolresult.retained record for trh_7 anywhere in this log: the
+		// pointer-record write is the one that's missing.
+		`{"type":"message","message":{"id":"msg_1","role":"tool","parts":[{"type":"text","text":` + jsonQuote(t, previewHeader) + `}]}}`,
+		// A lower, genuinely-persisted handle, so the ordinary pointer-record
+		// fold path still has something to do (and this test also confirms
+		// it doesn't regress).
+		`{"type":"toolresult.retained","tool_result":{"handle":"trh_2","tool":"bash","bytes":50,"lines":1}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(log), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := LoadSession(Config{SessionDir: dir, ToolResultInlineBytes: 10}, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.toolResultNextID <= 7 {
+		t.Fatalf("toolResultNextID = %d after resume, want > 7 (a trh_7 preview is durably in history)", s.toolResultNextID)
+	}
+
+	handle, err := s.writeRetainedToolResult("bash", "some new content, unrelated to whatever trh_7 used to mean")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handle == "trh_7" {
+		t.Fatalf("resumed session re-minted trh_7 — this SILENTLY OVERWRITES the sidecar file a durable preview in history still names")
+	}
+}
+
+// jsonQuote returns s as a Go/JSON string literal (quotes included), for
+// building raw JSONL fixture lines inline without a separate marshal step.
+func jsonQuote(t *testing.T, s string) string {
+	t.Helper()
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }

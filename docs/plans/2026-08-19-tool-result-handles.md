@@ -71,6 +71,22 @@ see its interleaving flattened. Documented here rather than fixed, since
 fixing it means preserving positional metadata retention has no reason to
 carry otherwise.
 
+**The retention DECISION is gated on the masked length (review finding,
+round 5).** `maybeRetainToolResult` checks `len(text) > limit` against the
+ORIGINAL, pre-mask joined text as a fast-path skip (masking is not free,
+and the overwhelming majority of tool calls never approach the limit at
+all) — but that check alone used to be the WHOLE gate, and masking can
+shrink text substantially (a long secret value collapses to `***`). A
+result that masks down to well under `limit` still triggered retention on
+its pre-mask size: a handle got burned and a sidecar file written for
+content that fit inline once masked, with a "read the rest with
+read_tool_result" header pointing at nothing left to read. Fixed:
+after computing `masked := maskSecrets(text)`, a second check
+(`len(masked) <= limit`) returns the masked text inline — no handle, no
+sidecar file — when masking alone already closed the gap.
+`TestToolResultGateMeasuresMaskedLength` covers it (a 306-byte value that
+masks down to 9 bytes, well under a 100-byte limit).
+
 ### 2.1 The preview header — exact format
 
 The header is one line, produced by exactly one function
@@ -141,6 +157,14 @@ is nowhere to durably put the bytes, and a preview pointing at a handle that
 can never be read is worse than no preview: retention is off in that case,
 whatever the byte limits say.
 
+`config.Config.ToolResultInlineBytesValue`/`ToolResultRetainedBytesValue`
+(`config/config.go`) are the SOLE authoritative source for the `16384`/
+`4194304` defaults above. `engine/toolresult.go` briefly carried its own
+unreferenced duplicate copy of both numbers (`defaultToolResultInlineBytes`/
+`defaultToolResultRetainedBytes`) — dead code with no caller anywhere in
+`engine`, removed in round 5 before it could silently drift from the real
+defaults (Go does not error on an unused package-level const).
+
 ## 4. The sidecar store
 
 ```
@@ -181,11 +205,37 @@ three pieces of session state:
 A record with a malformed handle, or a duplicate handle, is skipped — the same
 defensive replay posture `recPromptQueued` already takes.
 
-The record is a *pointer*, not the content. A crash between writing the
-sidecar file and writing the record degrades to an orphaned file on disk and
-a handle the session never knew about — wasted bytes, never wrong bytes. A
-crash the other way (record written, file lost) degrades to the documented
-missing-file path in §6.
+The record is a *pointer*, not the content. A crash the safe way (record
+written, file lost) degrades to the documented missing-file path in §6.
+
+**Round 5 correction.** This doc previously claimed a crash between writing
+the sidecar file and writing the pointer record "degrades to an orphaned
+file on disk and a handle the session never knew about — wasted bytes,
+never wrong bytes." That understated the real risk: `persistToolResultRetainedLocked`
+is best-effort (a write failure lands in `lastPersistErr`, and
+`writeRetainedToolResult` still returns the handle successfully), and the
+`ToolResult` preview carrying that SAME handle in its text is durable the
+instant `Session.append` succeeds — a STRONGER guarantee than the pointer
+record gets. So the resumed session's `toolResultNextID` fold above (which
+sees ONLY pointer records) could stay pointing at a number a prior process
+already handed to the model in a preview it trusts. The next retention
+would then silently REUSE that handle, overwriting the sidecar file — not
+wasted bytes, but WRONG bytes served under a name the model already
+believes describes something else.
+
+Fixed: `advanceToolResultNextIDFromHistory` (`engine/store.go`), called
+once at the end of `LoadSession`, scans every `*message.Text` part in the
+final replayed history for `trh_N` handle tokens — wherever the canonical
+digits-only form appears, in ANY durable text, not just pointer records —
+and advances `toolResultNextID` past the highest one found. This one text
+scan happens to cover every surface a handle can appear on for free: a
+retained-result preview header, a compaction retained-results index line
+(§8 — its lines are embedded directly in the summary message's text), and
+`read_tool_result`'s own echoed output (its header names the handle it
+read). `TestLoadSessionAdvancesNextIDPastHandlesSeenInHistoryText` proves
+it: a log carrying a `trh_7` preview header with NO corresponding pointer
+record (simulating the lost-record crash) still resumes with
+`toolResultNextID > 7`.
 
 ## 6. `read_tool_result`
 
@@ -207,7 +257,20 @@ read_tool_result(handle, offset?, limit?, search?, max_bytes?)
   whole budget, leaving no room for a single line of content — a request
   under the floor is rejected outright with a clear error naming it, rather
   than silently reusing the same "no lines" wording a genuinely empty read
-  produces.
+  produces. **The floor is COMPUTED per request, not a flat 256 (review
+  finding, round 5).** 256 alone didn't account for the preamble's own
+  length, which grows with the handle, the TOOL NAME (unbounded — an MCP
+  tool name can be long), and the byte/line/offset/limit counts; a
+  sufficiently long tool name plus large counts could exceed the floor's
+  own body budget and reproduce the exact false-empty class F11 fixed, at
+  a `max_bytes` value the gate had just accepted. `readToolResultFloor`
+  (`engine/toolresult_tool.go`) builds the EXACT preamble this specific
+  request's mode (range or search) will produce — mirroring
+  `readToolResultRange`'s/`readToolResultSearch`'s own offset/limit
+  clamping precisely — and floors the result at 256, so the common case (a
+  short handle and tool name) still sees the familiar constant.
+  `TestReadToolResultFloorAccountsForLongToolName` reproduces the false
+  positive with a ~90-character MCP-shaped tool name.
 
 Output is always bounded twice: by the line budget and by `max_bytes`,
 whichever binds first, with an explicit truncation notice when either does.
@@ -500,6 +563,36 @@ This grew the combined pattern by two alternatives, which measurably slowed
 the F1 pathological single-huge-line case (§6) further — see the updated
 number in the test list below and the PR body.
 
+**Round 5: the per-line optimization could bypass masking entirely for
+multi-line secrets.** N6's line splitting was NOT equivalent to a
+whole-text pass, as claimed: in RE2, `[^"]`, `[^']`, and `\s` all match
+`\n`, so the quoted-JSON separator (`\s*:\s*`) and the Bearer prefix's
+whitespace CAN span a newline. A pretty-printed `"api_key":\n
+"secretvalue123"` matches (and is masked) when the pattern runs over the
+WHOLE text, but `strings.SplitAfter` fed the key line and the value line
+to the regex as two INDEPENDENT single-line spans — neither alone
+matches any alternative, so the secret reached disk and the inline
+preview completely unmasked. The two code paths (the F1 single-huge-line
+whole-text fallback vs. the ordinary multi-line per-line path) disagreed
+about which bytes were secret.
+
+Fixed: `groupCandidateLineWindows` (`engine/toolresult_secrets.go`) merges
+a candidate line together with a bounded FORWARD window of the next
+`maskSecretsLineWindow` (3) lines before handing the group to the regex —
+forward-only, because every shape that can span a newline has its
+candidate-triggering text (the key's substring, or "authorization")
+BEFORE the value in reading order. Overlapping windows from nearby
+candidate lines merge into one group. A non-candidate line with no
+candidate anywhere in reach is still copied verbatim at `Contains` cost,
+untouched by the regex engine — the performance win N6 was about is
+preserved for the overwhelming majority of ordinary output.
+`TestMaskSecretsMultilineJSONNotBypassedByLineSplitting` covers both the
+JSON and Bearer newline-spanning shapes. This is a BOUNDED, documented
+residual, not a general fix: a key and its value separated by MORE than 3
+blank/continuation lines (an unusually verbose formatter) is still not
+caught — widening the window trades more worst-case regex work per
+candidate for a larger catch radius.
+
 **Residual risk, explicitly not fully solved.** This is a minimal pattern
 matcher, not a secret scanner: it only catches the shapes listed above, only
 for a fixed key-name list, and has no way to catch a bare token pasted with
@@ -563,6 +656,10 @@ proper secret-detection library) is follow-up work, not this PR.
 | `TestReadToolResultPartialFirstLineOffsetIsRecoverable` (round 3) | a byte-truncated first line's remainder is genuinely reachable  |
 | `TestReadToolResultSearchCountCapNoticeDoesNotSuggestMaxBytes` (round 3) | count-cap notice doesn't suggest raising max_bytes        |
 | `TestMaskSecretsQuotedEnvValue` (round 3)                     | `KEY="value"`/`KEY='value'`/quoted-YAML masked                       |
+| `TestLoadSessionAdvancesNextIDPastHandlesSeenInHistoryText` (round 5) | no silent handle reuse when a pointer record is lost         |
+| `TestMaskSecretsMultilineJSONNotBypassedByLineSplitting` (round 5) | a key/value split across lines by pretty-printing is still masked |
+| `TestToolResultGateMeasuresMaskedLength` (round 5)            | retention triggers on masked length, not the pre-mask original      |
+| `TestReadToolResultFloorAccountsForLongToolName` (round 5)    | the max_bytes floor is computed per request, not a flat guess       |
 
 The fake-provider test is the load-bearing one: it drives a real
 `Session.Prompt` with a scripted provider whose first turn calls a tool

@@ -17,6 +17,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -1039,6 +1040,26 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 		s.cfg.ContextWindowTokens, s.contextWindowSource = resolveContextWindow(0, s.model)
 	}
 	logContextWindowArmed(s.ID, s.model, s.cfg.ContextWindowTokens, s.contextWindowSource, "start")
+	// Review finding (round 5): advance toolResultNextID past every trh_N
+	// handle that appears ANYWHERE in the final replayed history text, not
+	// just the ones the toolresult.retained pointer-record fold above saw.
+	// That fold is best-effort — persistToolResultRetainedLocked can lose a
+	// crash race, landing in lastPersistErr while writeRetainedToolResult
+	// still returns the handle successfully — but the ToolResult message
+	// carrying that SAME handle in its preview text is durable the instant
+	// Session.append succeeds, which is a STRONGER guarantee than the
+	// pointer record gets. Without this second pass, a crash between the
+	// sidecar write and the pointer-record append leaves a resumed
+	// session's counter pointing at a number the crashed process already
+	// handed to the model in a preview it trusts; the next retention then
+	// silently reuses that handle, overwriting the sidecar file the old
+	// preview still names. This one text scan also covers the compaction
+	// retained-results index (its lines are embedded straight into the
+	// summary message's text) and read_tool_result's own echoed output
+	// (its header line names the handle it read) for free — every surface
+	// a handle can appear on is just "text in history" by the time this
+	// runs.
+	advanceToolResultNextIDFromHistory(s)
 	// read_tool_result registration (review finding F12): newSession decided
 	// whether to register it BEFORE this fold ran, against an empty
 	// s.toolResults — the only state it could see at that point. A session
@@ -1057,6 +1078,50 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 		s.tools[readToolResultToolName] = readToolResultTool()
 	}
 	return s, nil
+}
+
+// toolResultHandleInTextPattern matches a canonical trh_N handle token
+// (digits only, no leading zero, no sign — the exact grammar
+// parseToolResultHandle enforces) anywhere inside a larger string, with NO
+// word-boundary anchor. That's deliberate: over-matching (a coincidental
+// "trh_123"-shaped substring in unrelated text) only advances
+// toolResultNextID a little further than strictly necessary, which is
+// harmless — handle numbers are cheap and never reused anyway. Under-
+// matching a genuine handle is the dangerous direction (see
+// advanceToolResultNextIDFromHistory), so this pattern is deliberately
+// permissive rather than precise.
+var toolResultHandleInTextPattern = regexp.MustCompile(`trh_[1-9][0-9]*`)
+
+// advanceToolResultNextIDFromHistory scans every *message.Text part in the
+// final replayed s.history for trh_N handle tokens and advances
+// s.toolResultNextID past the highest one found. See the call site in
+// LoadSession for why this exists (review finding, round 5): the
+// toolresult.retained pointer-record fold is best-effort and can be lost to
+// a crash, while a handle's PREVIEW TEXT reaching history is a strictly
+// stronger durability guarantee (Session.append itself). This single text
+// scan also happens to cover the compaction retained-results index (its
+// lines are embedded directly in the summary message's text) and
+// read_tool_result's own echoed output (its header names the handle it
+// read) — every surface a handle can appear on is just message text by the
+// time this runs, so one scan closes all of them at once.
+func advanceToolResultNextIDFromHistory(s *Session) {
+	var maxSeen int64
+	for _, m := range s.history {
+		for _, p := range m.Parts {
+			t, ok := p.(*message.Text)
+			if !ok {
+				continue
+			}
+			for _, h := range toolResultHandleInTextPattern.FindAllString(t.Text, -1) {
+				if n, ok := parseToolResultHandle(h); ok && n > maxSeen {
+					maxSeen = n
+				}
+			}
+		}
+	}
+	if maxSeen+1 > s.toolResultNextID {
+		s.toolResultNextID = maxSeen + 1
+	}
 }
 
 // scanLog iterates the JSONL records of a session log, decoding each line

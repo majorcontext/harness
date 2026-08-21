@@ -66,15 +66,27 @@ const (
 	// unknown-handle error lists (see knownToolResultHandles).
 	readToolResultKnownHandleList = 20
 
-	// readToolResultMinMaxBytes is the floor on a caller-supplied max_bytes.
-	// Below it, the fixed preamble every read writes (the "handle (tool=...,
-	// N bytes, N lines) ..." line, plus a truncation/continuation notice)
+	// readToolResultMinMaxBytes is the ABSOLUTE floor on a caller-supplied
+	// max_bytes — never below this regardless of request shape. Below it,
+	// the fixed preamble every read writes (the "handle (tool=..., N
+	// bytes, N lines) ..." line, plus a truncation/continuation notice)
 	// can itself exceed the budget, leaving zero or negative room for any
 	// line — the byte-budget loop in readToolResultRange then reports "no
 	// lines at offset N" even though the result has plenty, because nothing
 	// EVER fit, not because nothing was there (review finding F11). Rather
 	// than silently produce that misleading message, a request below the
 	// floor is rejected outright with an error naming the floor.
+	//
+	// This constant alone is NOT sufficient (review finding, round 5): the
+	// actual preamble grows with the handle, the TOOL NAME (unbounded —
+	// an MCP tool name can be long), and the byte/line/offset/limit
+	// counts, so a sufficiently long tool name could exceed this floor's
+	// own body budget and reproduce the exact false-empty class it exists
+	// to prevent, silently, at a max_bytes value the gate had just
+	// accepted. See readToolResultFloor, which computes the REAL floor for
+	// one specific request from its ACTUAL preamble rather than guessing —
+	// this constant is only its lower bound for the common case (a short
+	// handle and tool name).
 	readToolResultMinMaxBytes = 256
 
 	// readToolResultNoticeReserve is subtracted from maxBytes before the
@@ -89,6 +101,13 @@ const (
 	// reserving it up front guarantees body+notice together never exceed
 	// the caller's maxBytes, whether or not a notice ends up being needed.
 	readToolResultNoticeReserve = 128
+
+	// readToolResultMinBodyRoom is the minimum body space a request must
+	// leave AFTER its own preamble and the notice reserve — see
+	// readToolResultFloor. A generous constant, not a tight one: its job
+	// is to guarantee genuine room for actual content, not merely a
+	// non-negative number.
+	readToolResultMinBodyRoom = 64
 )
 
 // readToolResultArgs is the tool's input shape.
@@ -163,10 +182,13 @@ func runReadToolResult(s *Session, raw json.RawMessage) (message.Parts, error) {
 
 	// A budget below the floor can be entirely consumed by the fixed
 	// preamble every read writes, before a single line of actual content —
-	// see readToolResultMinMaxBytes's doc comment (review finding F11).
-	if in.MaxBytes > 0 && in.MaxBytes < readToolResultMinMaxBytes {
-		return nil, fmt.Errorf("%s: max_bytes %d is below the minimum %d",
-			readToolResultToolName, in.MaxBytes, readToolResultMinMaxBytes)
+	// see readToolResultMinMaxBytes's doc comment (review finding F11) and
+	// readToolResultFloor's (round 5: the flat constant alone doesn't
+	// account for a long tool name or large byte/line counts inflating
+	// THIS request's actual preamble past it).
+	if floor := readToolResultFloor(meta, in); in.MaxBytes > 0 && in.MaxBytes < floor {
+		return nil, fmt.Errorf("%s: max_bytes %d is below the minimum %d for this result (handle=%s tool=%q)",
+			readToolResultToolName, in.MaxBytes, floor, meta.Handle, meta.Tool)
 	}
 
 	f, err := s.openRetainedToolResult(in.Handle)
@@ -213,6 +235,38 @@ func runReadToolResult(s *Session, raw json.RawMessage) (message.Parts, error) {
 		parts, err = scan(newReaderAtLineSource(f, int64(meta.Bytes)))
 	}
 	return parts, err
+}
+
+// readToolResultFloor computes the REAL minimum max_bytes for ONE specific
+// request — not a guess (review finding, round 5). It builds the EXACT
+// preamble this request's mode (range or search) will produce, from the
+// real meta and real request fields, and floors it at
+// readToolResultMinMaxBytes so the common case (a short handle and tool
+// name) never rises above the familiar 256.
+//
+// This mirrors readToolResultRange's and readToolResultSearch's own
+// preamble-building fmt.Sprintf calls exactly — offset/limit are clamped
+// the identical way — so the computed floor is precise, not an
+// approximation that could itself be wrong in either direction.
+func readToolResultFloor(meta toolResultMeta, in readToolResultArgs) int {
+	var preamble string
+	if in.Search != "" {
+		preamble = fmt.Sprintf("%s (tool=%s, %d bytes, %d lines) lines matching %q:\n",
+			meta.Handle, meta.Tool, meta.Bytes, meta.Lines, in.Search)
+	} else {
+		offset := in.Offset
+		if offset <= 0 {
+			offset = 1
+		}
+		limit := clampInt(in.Limit, readToolResultDefaultLimit, readToolResultMaxLimit)
+		preamble = fmt.Sprintf("%s (tool=%s, %d bytes, %d lines) lines %d-%d:\n",
+			meta.Handle, meta.Tool, meta.Bytes, meta.Lines, offset, offset+limit-1)
+	}
+	floor := len(preamble) + readToolResultNoticeReserve + readToolResultMinBodyRoom
+	if floor < readToolResultMinMaxBytes {
+		floor = readToolResultMinMaxBytes
+	}
+	return floor
 }
 
 // toolResultLineSource is the line-by-line interface readToolResultRange and

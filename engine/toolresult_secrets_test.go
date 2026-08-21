@@ -94,6 +94,54 @@ func TestMaskSecretsValueClassStopsAtDelimiters(t *testing.T) {
 	}
 }
 
+// TestMaskSecretsMultilineJSONNotBypassedByLineSplitting is a round-5
+// review finding's red test. The per-line optimization (N6) is NOT
+// equivalent to a whole-text pass: in RE2, `[^"]`, `[^']`, and `\s` all
+// match `\n`, so the quoted-JSON separator (`\s*:\s*`) and the Bearer
+// prefix's whitespace CAN span a newline — a pretty-printed
+//
+//	"api_key":
+//	  "secretvalue123456"
+//
+// matches (and is masked) when maskSecretsSpan runs over the WHOLE text,
+// but `strings.SplitAfter` fed the key line and the value line to
+// maskSecretsSpan as two INDEPENDENT spans: neither alone matches any
+// alternative, so the secret reached disk and the inline preview
+// completely unmasked — the two code paths (single-span fallback vs.
+// per-line) disagreed about which bytes are secret.
+func TestMaskSecretsMultilineJSONNotBypassedByLineSplitting(t *testing.T) {
+	cases := []struct {
+		name, in, wantContains, wantValueGone string
+	}{
+		{
+			name:          "key then value on next line",
+			in:            "{\n  \"api_key\":\n  \"secretvalue123456\"\n}\n",
+			wantContains:  `"api_key":`,
+			wantValueGone: "secretvalue123456",
+		},
+		{
+			name:          "bearer prefix then token on next line",
+			in:            "Authorization:\nBearer eyJhbGciOiJIUzI1NiJ9.payloadvalue.sig123456\n",
+			wantContains:  "Authorization:",
+			wantValueGone: "eyJhbGciOiJIUzI1NiJ9.payloadvalue.sig123456",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := maskSecrets(tc.in)
+			if strings.Contains(got, tc.wantValueGone) {
+				t.Errorf("secret value survived masking (line-split bypass): %q -> %q", tc.in, got)
+			}
+			if !strings.Contains(got, tc.wantContains) {
+				t.Errorf("masked output missing expected key text %q: got %q", tc.wantContains, got)
+			}
+			if !strings.Contains(got, "***") {
+				t.Errorf("no masking marker present at all: %q", got)
+			}
+		})
+	}
+}
+
 // TestMaskSecretsQuotedJSON is review finding N3's red test for the
 // quoted-JSON "key": "value" shape, both with and without whitespace
 // around the colon.
@@ -343,15 +391,18 @@ func TestMaskSecretsPerformance(t *testing.T) {
 		input   string
 		ceiling time.Duration
 	}{
-		// 300ms, not the N6 100ms target directly: `go test -race` adds
-		// real instrumentation overhead even on the fast-reject path
-		// (measured ~95ms/4.4MB under -race for sparse_realistic, vs
-		// ~24ms plain) — still comfortably inside an order of magnitude of
-		// the target, and this ceiling exists to catch a regression, not
-		// to re-litigate the N6 number itself (that's what the PR body
+		// 1s, not the N6 100ms target directly: `go test -race` adds real
+		// instrumentation overhead even on the fast-reject path (measured
+		// ~660ms/4.4MB under -race for sparse_realistic after round 5's
+		// candidate-line WINDOW grouping — up from ~95ms/4.4MB before it,
+		// since a candidate line now pulls its forward window into the
+		// regex pass too, not just itself — vs ~66ms plain, up from
+		// ~24-30ms). Still comfortably under an order of magnitude of
+		// headroom, and this ceiling exists to catch a regression, not to
+		// re-litigate the N6 number itself (that's what the PR body
 		// reports plainly, from a non-race run).
-		{"no_candidates", buildInput(0), 300 * time.Millisecond},
-		{"sparse_realistic", buildInput(300), 300 * time.Millisecond}, // ~1 secret line per ~300 ordinary lines
+		{"no_candidates", buildInput(0), 1 * time.Second},
+		{"sparse_realistic", buildInput(300), 1 * time.Second}, // ~1 secret line per ~300 ordinary lines
 		// 120s, not 2s: this is the one case with no line-level fast-reject
 		// (see maskSecrets's doc comment), the pattern grew two more
 		// alternatives in round 3 (quoted-env values), and the race
