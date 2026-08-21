@@ -17,6 +17,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -69,6 +70,14 @@ const (
 	// Session.Compact call, carrying the full summary message inline (not
 	// a separate recMessage) and the summarization call's own Usage.
 	recCompact = "compact"
+	// recToolResultRetained is one retained tool result's durable POINTER
+	// record (see toolresult.go and docs/plans/2026-08-19-tool-result-
+	// handles.md §5): handle, source tool, and size. Deliberately not the
+	// content — the bytes live in the per-session sidecar file, precisely
+	// so LoadSession's full-log replay never pays for them. It is what
+	// makes the trh_N counter, the handle metadata, and the retained-bytes
+	// total survive a process restart.
+	recToolResultRetained = "toolresult.retained"
 )
 
 // record is one line of a session log file.
@@ -119,6 +128,30 @@ type record struct {
 	// Compact carries a recCompact record's payload (see compactRecord).
 	// nil on every other record type.
 	Compact *compactRecord `json:"compact,omitempty"`
+	// ToolResult carries a recToolResultRetained record's payload (see
+	// toolResultRecord). nil on every other record type.
+	ToolResult *toolResultRecord `json:"tool_result,omitempty"`
+}
+
+// toolResultRecord carries the durable payload of a toolresult.retained
+// record (see toolresult.go's writeRetainedToolResult). It is a POINTER
+// record: Handle names the sidecar file holding the actual bytes, and
+// Bytes/Lines are the metadata read_tool_result reports back and the
+// per-session retained-bytes ceiling is accumulated from. Tool is the name
+// of the tool whose result was retained, carried so a resumed session's
+// read_tool_result output can still name its source.
+type toolResultRecord struct {
+	Handle string `json:"handle"`
+	Tool   string `json:"tool,omitempty"`
+	Bytes  int    `json:"bytes,omitempty"`
+	Lines  int    `json:"lines,omitempty"`
+	// Head carries toolResultMeta.Head (see toolresult.go) so a resumed
+	// session's compaction retained-results index (compact.go, review
+	// finding F3) can still name a handle recognizably without re-opening
+	// its sidecar file. Omitted (empty string) on a record written by an
+	// older binary — a resumed session's index just shows no head text for
+	// that one handle, never an error.
+	Head string `json:"head,omitempty"`
 }
 
 // compactRecord carries the durable payload of a "compact" record (see
@@ -335,6 +368,37 @@ func (s *Session) persistPromptQueueLocked(recType string, p promptRecord) {
 		return
 	}
 	if err := s.writeRecord(record{Type: recType, Prompt: &p}); err != nil {
+		s.lastPersistErr = err
+	}
+}
+
+// persistToolResultRetainedLocked appends a toolresult.retained pointer
+// record to the session log (see toolresult.go's writeRetainedToolResult).
+// It forces the log to exist, mirroring persistGoalLocked: a retention can
+// land before any message has been persisted in a session created
+// mid-turn. Best-effort like every other persist path here — a write
+// failure lands in lastPersistErr and never fails the tool call, since the
+// sidecar file is already written and the only cost of a lost record is a
+// handle that a FUTURE process cannot resolve. Caller holds s.mu.
+func (s *Session) persistToolResultRetainedLocked(m toolResultMeta) {
+	if s.cfg.SessionDir == "" {
+		return
+	}
+	if err := s.ensureLog(); err != nil {
+		s.lastPersistErr = err
+		return
+	}
+	rec := record{
+		Type: recToolResultRetained,
+		ToolResult: &toolResultRecord{
+			Handle: m.Handle,
+			Tool:   m.Tool,
+			Bytes:  m.Bytes,
+			Lines:  m.Lines,
+			Head:   m.Head,
+		},
+	}
+	if err := s.writeRecord(rec); err != nil {
 		s.lastPersistErr = err
 	}
 }
@@ -819,6 +883,54 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 					}
 				}
 			}
+		case recToolResultRetained:
+			// Fold a retained tool result's pointer record (see
+			// toolresult.go and docs/plans/2026-08-19-tool-result-
+			// handles.md §5) back into three pieces of session state:
+			//
+			//   1. toolResultNextID advances past every handle number
+			//      seen — folded or skipped — so a resumed session can
+			//      never mint a handle that already names a sidecar file.
+			//      This is the counter-survives-resume requirement, and it
+			//      advances past SKIPPED records too for exactly the
+			//      reason recPromptQueued advances past burned IDs: a
+			//      number that reached the log may have a file behind it
+			//      whatever the record's other fields say.
+			//   2. toolResults regains the metadata, so read_tool_result
+			//      serves a handle minted by a previous process.
+			//   3. toolResultBytes regains the running total, so
+			//      Config.ToolResultRetainedBytes is a session-lifetime
+			//      ceiling rather than a per-process one.
+			//
+			// A malformed handle (not trh_<positive int>) or a duplicate
+			// handle is SKIPPED, never folded — the same defensive replay
+			// posture recPromptQueued takes. The live path can write
+			// neither: handles are minted from a monotonic counter and
+			// burned on failure, so either shape in a log is corruption,
+			// and folding a duplicate would silently overwrite one
+			// result's metadata with another's while the retained-bytes
+			// total double-counted.
+			if rec.ToolResult != nil {
+				n, valid := parseToolResultHandle(rec.ToolResult.Handle)
+				if valid {
+					if _, dup := s.toolResults[rec.ToolResult.Handle]; dup {
+						valid = false
+					}
+				}
+				if valid {
+					s.toolResults[rec.ToolResult.Handle] = toolResultMeta{
+						Handle: rec.ToolResult.Handle,
+						Tool:   rec.ToolResult.Tool,
+						Bytes:  rec.ToolResult.Bytes,
+						Lines:  rec.ToolResult.Lines,
+						Head:   rec.ToolResult.Head,
+					}
+					s.toolResultBytes += rec.ToolResult.Bytes
+				}
+				if n >= s.toolResultNextID {
+					s.toolResultNextID = n + 1
+				}
+			}
 		case recCompact:
 			// See docs/design/context-compaction.md §2 "LoadSession
 			// replay": find FirstID/LastID within s.history accumulated so
@@ -928,7 +1040,88 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 		s.cfg.ContextWindowTokens, s.contextWindowSource = resolveContextWindow(0, s.model)
 	}
 	logContextWindowArmed(s.ID, s.model, s.cfg.ContextWindowTokens, s.contextWindowSource, "start")
+	// Review finding (round 5): advance toolResultNextID past every trh_N
+	// handle that appears ANYWHERE in the final replayed history text, not
+	// just the ones the toolresult.retained pointer-record fold above saw.
+	// That fold is best-effort — persistToolResultRetainedLocked can lose a
+	// crash race, landing in lastPersistErr while writeRetainedToolResult
+	// still returns the handle successfully — but the ToolResult message
+	// carrying that SAME handle in its preview text is durable the instant
+	// Session.append succeeds, which is a STRONGER guarantee than the
+	// pointer record gets. Without this second pass, a crash between the
+	// sidecar write and the pointer-record append leaves a resumed
+	// session's counter pointing at a number the crashed process already
+	// handed to the model in a preview it trusts; the next retention then
+	// silently reuses that handle, overwriting the sidecar file the old
+	// preview still names. This one text scan also covers the compaction
+	// retained-results index (its lines are embedded straight into the
+	// summary message's text) and read_tool_result's own echoed output
+	// (its header line names the handle it read) for free — every surface
+	// a handle can appear on is just "text in history" by the time this
+	// runs.
+	advanceToolResultNextIDFromHistory(s)
+	// read_tool_result registration (review finding F12): newSession decided
+	// whether to register it BEFORE this fold ran, against an empty
+	// s.toolResults — the only state it could see at that point. A session
+	// resumed after its config set tool_result_inline_bytes:0 (retention
+	// disabled going forward) can still have replayed handles from BEFORE
+	// that change, from history written while it was still enabled. Those
+	// handles are real, their sidecar files are real, and read_tool_result
+	// can still serve them — s.toolResultInlineLimit gates only whether a
+	// NEW handle can be MINTED, never whether an existing one can be READ
+	// (see runReadToolResult, which never calls toolResultInlineLimit at
+	// all). Without this, a resumed session's history is full of handles
+	// the model has every reason to try reading, and every attempt fails
+	// with "unknown tool" — not even the tool's own clean "unknown handle"
+	// error, because the tool was never registered to receive the call.
+	if _, ok := s.tools[readToolResultToolName]; !ok && len(s.toolResults) > 0 {
+		s.tools[readToolResultToolName] = readToolResultTool()
+	}
 	return s, nil
+}
+
+// toolResultHandleInTextPattern matches a canonical trh_N handle token
+// (digits only, no leading zero, no sign — the exact grammar
+// parseToolResultHandle enforces) anywhere inside a larger string, with NO
+// word-boundary anchor. That's deliberate: over-matching (a coincidental
+// "trh_123"-shaped substring in unrelated text) only advances
+// toolResultNextID a little further than strictly necessary, which is
+// harmless — handle numbers are cheap and never reused anyway. Under-
+// matching a genuine handle is the dangerous direction (see
+// advanceToolResultNextIDFromHistory), so this pattern is deliberately
+// permissive rather than precise.
+var toolResultHandleInTextPattern = regexp.MustCompile(`trh_[1-9][0-9]*`)
+
+// advanceToolResultNextIDFromHistory scans every *message.Text part in the
+// final replayed s.history for trh_N handle tokens and advances
+// s.toolResultNextID past the highest one found. See the call site in
+// LoadSession for why this exists (review finding, round 5): the
+// toolresult.retained pointer-record fold is best-effort and can be lost to
+// a crash, while a handle's PREVIEW TEXT reaching history is a strictly
+// stronger durability guarantee (Session.append itself). This single text
+// scan also happens to cover the compaction retained-results index (its
+// lines are embedded directly in the summary message's text) and
+// read_tool_result's own echoed output (its header names the handle it
+// read) — every surface a handle can appear on is just message text by the
+// time this runs, so one scan closes all of them at once.
+func advanceToolResultNextIDFromHistory(s *Session) {
+	var maxSeen int64
+	for _, m := range s.history {
+		for _, p := range m.Parts {
+			t, ok := p.(*message.Text)
+			if !ok {
+				continue
+			}
+			for _, h := range toolResultHandleInTextPattern.FindAllString(t.Text, -1) {
+				if n, ok := parseToolResultHandle(h); ok && n > maxSeen {
+					maxSeen = n
+				}
+			}
+		}
+	}
+	if maxSeen+1 > s.toolResultNextID {
+		s.toolResultNextID = maxSeen + 1
+	}
 }
 
 // scanLog iterates the JSONL records of a session log, decoding each line

@@ -110,6 +110,190 @@ func TestCompactFoldsOldestPrefixKeepsRecentTurns(t *testing.T) {
 	}
 }
 
+// TestCompactPreservesRetainedResultsIndex is review finding F3(a)'s red
+// test. The retention ceiling (Config.ToolResultRetainedBytes) is monotonic
+// — only ever incremented, nothing evicts or reclaims it — and
+// compactionSystemPrompt forbids the summarizer from transcribing tool
+// output, so a fold that swallows a preview line carrying a trh_N handle
+// leaves that handle ORPHANED: still counted against the ceiling, its
+// sidecar file still on disk, but no longer named anywhere in live history
+// for the model to find. Compact must carry a machine-written index of
+// every still-live handle forward into the summary turn — built
+// deterministically from session state, NOT from the LLM's summary text,
+// which this test's scripted summarizer reply ("SUMMARY", containing no
+// handle at all) proves: the index must appear regardless.
+func TestCompactPreservesRetainedResultsIndex(t *testing.T) {
+	dir := t.TempDir()
+	big := linesText(3000)
+
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn(provider.StopToolUse, toolCall("tc1", "bigtool", `{}`)),
+		compactTurn("turn one done", provider.Usage{InputTokens: 10}),
+		compactTurn("two", provider.Usage{InputTokens: 10}),
+		compactTurn("three", provider.Usage{InputTokens: 10}),
+		compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}), // deliberately never mentions trh_1
+	}}
+	s := NewSession(Config{
+		Providers:             provider.Registry{"test": prov},
+		Model:                 message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir:            dir,
+		ToolResultInlineBytes: 512,
+		Tools:                 []Tool{bigOutputTool("bigtool", big)},
+	})
+	runTurns(t, s, 3) // turn 1 mints trh_1; turns 2 and 3 are ordinary
+
+	if _, ok := s.lookupToolResult("trh_1"); !ok {
+		t.Fatal("trh_1 not minted in turn 1")
+	}
+
+	// Fold turns 1-2, keeping only turn 3 — trh_1's preview line (turn 1)
+	// is swallowed by the fold.
+	res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if res.TurnsFolded != 2 {
+		t.Fatalf("TurnsFolded = %d, want 2", res.TurnsFolded)
+	}
+
+	summaryText := res.Summary.Parts.Text()
+	if !strings.Contains(summaryText, "trh_1") {
+		t.Fatalf("summary message does not carry the retained-results index for trh_1:\n%s", summaryText)
+	}
+	if !strings.Contains(summaryText, "bigtool") {
+		t.Errorf("index missing the source tool name:\n%s", summaryText)
+	}
+	if !strings.Contains(summaryText, fmt.Sprintf("%d", len(big))) {
+		t.Errorf("index missing the byte size:\n%s", summaryText)
+	}
+	if !strings.Contains(summaryText, "line-1") {
+		t.Errorf("index missing a recognizable head excerpt:\n%s", summaryText)
+	}
+	// The whole point: this survives even though the scripted LLM summary
+	// never mentioned it.
+	if strings.Contains("SUMMARY", "trh_1") {
+		t.Fatal("test setup: the scripted summary must not itself mention trh_1")
+	}
+}
+
+// TestCompactRetainedResultsIndexOmittedWhenNoHandles: an ordinary
+// compaction with no retained results at all must not grow a spurious empty
+// index block.
+func TestCompactRetainedResultsIndexOmittedWhenNoHandles(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10}),
+		compactTurn("two", provider.Usage{InputTokens: 10}),
+		compactTurn("three", provider.Usage{InputTokens: 10}),
+		compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}),
+	}}
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+	})
+	runTurns(t, s, 3)
+
+	res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if len(res.Summary.Parts) != 1 {
+		t.Errorf("summary has %d parts, want 1 (no retained-results index when there are no handles): %+v", len(res.Summary.Parts), res.Summary.Parts)
+	}
+}
+
+// TestRetainedResultsIndexCapped is review finding N8's red test:
+// unbounded, 200 handles measured at roughly 6.9k tokens of index text —
+// with the retention ceiling disabled (Config.ToolResultRetainedBytes <= 0)
+// a long session can mint arbitrarily many. The index must list only the
+// newest retainedResultsIndexMaxHandles and name the rest by COUNT only.
+// Exercised directly against retainedResultsIndexPart (unit-level) rather
+// than through a full multi-turn Compact, since minting 40 handles through
+// real tool-calling turns would be needlessly slow for what is fundamentally
+// a test of one function's list-bounding logic.
+func TestRetainedResultsIndexCapped(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{SessionDir: dir, ToolResultInlineBytes: 64})
+
+	total := retainedResultsIndexMaxHandles + 8
+	for i := 0; i < total; i++ {
+		if _, err := s.writeRetainedToolResult("bash", strings.Repeat("x", 100)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	idx := s.retainedResultsIndexPart()
+	if idx == nil {
+		t.Fatal("index is nil despite retained handles existing")
+	}
+	text := idx.Text
+
+	listed := strings.Count(text, "tool=bash")
+	if listed != retainedResultsIndexMaxHandles {
+		t.Errorf("index lists %d handles, want exactly the cap %d", listed, retainedResultsIndexMaxHandles)
+	}
+	// The newest handles are the ones listed, not the oldest.
+	newest := fmt.Sprintf("trh_%d", total)
+	oldest := "trh_1 "
+	if !strings.Contains(text, newest) {
+		t.Errorf("index does not list the newest handle %s:\n%s", newest, text)
+	}
+	if strings.Contains(text, oldest) {
+		t.Errorf("index lists the OLDEST handle %s — want only the newest %d:\n%s", oldest, retainedResultsIndexMaxHandles, text)
+	}
+	wantOlder := total - retainedResultsIndexMaxHandles
+	if !strings.Contains(text, fmt.Sprintf("...and %d older retained result", wantOlder)) {
+		t.Errorf("index does not name the %d older, unlisted handles by count:\n%s", wantOlder, text)
+	}
+}
+
+// TestRetainedResultsIndexNotesMissingSidecar is review finding N9's red
+// test: the index must not assert "still readable" for a handle whose
+// sidecar file is gone (an operator wiped toolresults/, a volume rolled
+// back) — it must check, not assume.
+func TestRetainedResultsIndexNotesMissingSidecar(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{SessionDir: dir, ToolResultInlineBytes: 64})
+
+	if _, err := s.writeRetainedToolResult("bash", "kept content\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.writeRetainedToolResult("bash", "gone content\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(s.toolResultPath("trh_2")); err != nil {
+		t.Fatal(err)
+	}
+
+	idx := s.retainedResultsIndexPart()
+	if idx == nil {
+		t.Fatal("index is nil")
+	}
+	text := idx.Text
+	lines := strings.Split(text, "\n")
+
+	var line1, line2 string
+	for _, l := range lines {
+		if strings.Contains(l, "trh_1 ") {
+			line1 = l
+		}
+		if strings.Contains(l, "trh_2 ") {
+			line2 = l
+		}
+	}
+	if line1 == "" || line2 == "" {
+		t.Fatalf("both handles must still be listed (metadata is real regardless of file presence):\n%s", text)
+	}
+	if !strings.Contains(line1, "still readable") {
+		t.Errorf("trh_1 (sidecar present) not marked readable: %q", line1)
+	}
+	if strings.Contains(line2, "still readable") {
+		t.Errorf("trh_2 (sidecar REMOVED) incorrectly claimed readable: %q", line2)
+	}
+	if !strings.Contains(line2, "missing") && !strings.Contains(line2, "no longer readable") {
+		t.Errorf("trh_2's missing sidecar is not flagged in the index: %q", line2)
+	}
+}
+
 // TestCompactSummaryRequestAlwaysEndsInUserRole is the red-first test for
 // the 2026-08-19 live incident (session ses_jumpy-pizza, model
 // anthropic/anthropic/claude-fable-5): compacting with keep_turns=20

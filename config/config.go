@@ -120,6 +120,24 @@ type Config struct {
 	// fraction of ContextWindowTokens at which automatic compaction
 	// triggers. Zero (omitted) defaults to 0.8 (see the engine).
 	CompactionThreshold float64 `json:"compaction_threshold,omitempty"`
+	// ToolResultInlineBytes sets engine.Config.ToolResultInlineBytes: the
+	// size above which a TEXT tool result is retained into the session's
+	// sidecar store and replaced in history by a preview carrying a trh_N
+	// handle (see package engine's toolresult.go and
+	// docs/plans/2026-08-19-tool-result-handles.md). Unset (omitted, zero)
+	// takes the product default of 16384 via ToolResultInlineBytesValue;
+	// an EXPLICIT value <= 0 disables retention entirely. It is a *int, not
+	// a plain int, precisely so "unset" (take the default) and "0"
+	// (disable) stay distinguishable across the project-config merge —
+	// the same reason PromptRetries is one.
+	ToolResultInlineBytes *int `json:"tool_result_inline_bytes,omitempty"`
+	// ToolResultRetainedBytes sets engine.Config.ToolResultRetainedBytes:
+	// the per-session ceiling on total retained bytes, beyond which a
+	// further oversized result is previewed but its remainder discarded.
+	// Unset takes the product default of 4194304 via
+	// ToolResultRetainedBytesValue; an explicit value <= 0 disables the
+	// ceiling. A *int for the same unset-versus-zero reason as above.
+	ToolResultRetainedBytes *int `json:"tool_result_retained_bytes,omitempty"`
 	// CompactionKeepTurns sets engine.Config.CompactionKeepTurns: how many
 	// of the most recent turns automatic compaction always keeps verbatim.
 	// Zero (omitted) defaults to 2 (see the engine); the effective value
@@ -724,6 +742,12 @@ func merge(base, over *Config) *Config {
 	if over.CompactionKeepTurns != 0 {
 		out.CompactionKeepTurns = over.CompactionKeepTurns
 	}
+	if over.ToolResultInlineBytes != nil {
+		out.ToolResultInlineBytes = over.ToolResultInlineBytes
+	}
+	if over.ToolResultRetainedBytes != nil {
+		out.ToolResultRetainedBytes = over.ToolResultRetainedBytes
+	}
 	if over.SessionSync != "" {
 		out.SessionSync = over.SessionSync
 	}
@@ -926,6 +950,39 @@ func (c *Config) PromptRetriesValue() int {
 		return defaultPromptRetries
 	}
 	return *c.PromptRetries
+}
+
+// defaultToolResultInlineBytes / defaultToolResultRetainedBytes are the
+// product defaults for the tool-result retention keys (see the
+// ToolResultInlineBytes/ToolResultRetainedBytes fields and package engine's
+// toolresult.go). They live here, not in engine.Config's zero value, so an
+// embedder building a bare engine.Config keeps the pre-retention behavior
+// — the same split defaultPromptRetries uses.
+const (
+	defaultToolResultInlineBytes   = 16384
+	defaultToolResultRetainedBytes = 4 * 1024 * 1024
+)
+
+// ToolResultInlineBytesValue reports the tool-result retention threshold.
+// Unset takes defaultToolResultInlineBytes (16384); an explicit value is
+// returned verbatim, INCLUDING a non-positive one, which the engine reads
+// as "retention disabled".
+func (c *Config) ToolResultInlineBytesValue() int {
+	if c == nil || c.ToolResultInlineBytes == nil {
+		return defaultToolResultInlineBytes
+	}
+	return *c.ToolResultInlineBytes
+}
+
+// ToolResultRetainedBytesValue reports the per-session retained-bytes
+// ceiling. Unset takes defaultToolResultRetainedBytes (4194304); an
+// explicit value is returned verbatim, including a non-positive one, which
+// the engine reads as "no ceiling".
+func (c *Config) ToolResultRetainedBytesValue() int {
+	if c == nil || c.ToolResultRetainedBytes == nil {
+		return defaultToolResultRetainedBytes
+	}
+	return *c.ToolResultRetainedBytes
 }
 
 // ModelToolEnabled reports whether the built-in `model` session tool is on.
