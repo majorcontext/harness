@@ -417,7 +417,7 @@ func TestToolResultRetainedFileIsMaskedAndPrivate(t *testing.T) {
 // — over-masking would silently corrupt ordinary output (a sentence
 // containing the word "password", a variable named "token_count").
 func TestMaskSecretsPreservesBenignText(t *testing.T) {
-	in := "the password reset flow sends a token_count of 3\nAPI_KEY=abc123\n"
+	in := "the password reset flow sends a token_count of 3\nAPI_KEY=abc123def456\n"
 	got := maskSecrets(in)
 	if !strings.Contains(got, "the password reset flow sends a token_count of 3") {
 		t.Errorf("benign prose was altered: %q", got)
@@ -425,7 +425,7 @@ func TestMaskSecretsPreservesBenignText(t *testing.T) {
 	if !strings.Contains(got, "API_KEY=***") {
 		t.Errorf("key=value shape was not masked: %q", got)
 	}
-	if strings.Contains(got, "abc123") {
+	if strings.Contains(got, "abc123def456") {
 		t.Errorf("secret value survived masking: %q", got)
 	}
 }

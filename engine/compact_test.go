@@ -201,6 +201,99 @@ func TestCompactRetainedResultsIndexOmittedWhenNoHandles(t *testing.T) {
 	}
 }
 
+// TestRetainedResultsIndexCapped is review finding N8's red test:
+// unbounded, 200 handles measured at roughly 6.9k tokens of index text —
+// with the retention ceiling disabled (Config.ToolResultRetainedBytes <= 0)
+// a long session can mint arbitrarily many. The index must list only the
+// newest retainedResultsIndexMaxHandles and name the rest by COUNT only.
+// Exercised directly against retainedResultsIndexPart (unit-level) rather
+// than through a full multi-turn Compact, since minting 40 handles through
+// real tool-calling turns would be needlessly slow for what is fundamentally
+// a test of one function's list-bounding logic.
+func TestRetainedResultsIndexCapped(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{SessionDir: dir, ToolResultInlineBytes: 64})
+
+	total := retainedResultsIndexMaxHandles + 8
+	for i := 0; i < total; i++ {
+		if _, err := s.writeRetainedToolResult("bash", strings.Repeat("x", 100)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	idx := s.retainedResultsIndexPart()
+	if idx == nil {
+		t.Fatal("index is nil despite retained handles existing")
+	}
+	text := idx.Text
+
+	listed := strings.Count(text, "tool=bash")
+	if listed != retainedResultsIndexMaxHandles {
+		t.Errorf("index lists %d handles, want exactly the cap %d", listed, retainedResultsIndexMaxHandles)
+	}
+	// The newest handles are the ones listed, not the oldest.
+	newest := fmt.Sprintf("trh_%d", total)
+	oldest := "trh_1 "
+	if !strings.Contains(text, newest) {
+		t.Errorf("index does not list the newest handle %s:\n%s", newest, text)
+	}
+	if strings.Contains(text, oldest) {
+		t.Errorf("index lists the OLDEST handle %s — want only the newest %d:\n%s", oldest, retainedResultsIndexMaxHandles, text)
+	}
+	wantOlder := total - retainedResultsIndexMaxHandles
+	if !strings.Contains(text, fmt.Sprintf("...and %d older retained result", wantOlder)) {
+		t.Errorf("index does not name the %d older, unlisted handles by count:\n%s", wantOlder, text)
+	}
+}
+
+// TestRetainedResultsIndexNotesMissingSidecar is review finding N9's red
+// test: the index must not assert "still readable" for a handle whose
+// sidecar file is gone (an operator wiped toolresults/, a volume rolled
+// back) — it must check, not assume.
+func TestRetainedResultsIndexNotesMissingSidecar(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{SessionDir: dir, ToolResultInlineBytes: 64})
+
+	if _, err := s.writeRetainedToolResult("bash", "kept content\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.writeRetainedToolResult("bash", "gone content\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(s.toolResultPath("trh_2")); err != nil {
+		t.Fatal(err)
+	}
+
+	idx := s.retainedResultsIndexPart()
+	if idx == nil {
+		t.Fatal("index is nil")
+	}
+	text := idx.Text
+	lines := strings.Split(text, "\n")
+
+	var line1, line2 string
+	for _, l := range lines {
+		if strings.Contains(l, "trh_1 ") {
+			line1 = l
+		}
+		if strings.Contains(l, "trh_2 ") {
+			line2 = l
+		}
+	}
+	if line1 == "" || line2 == "" {
+		t.Fatalf("both handles must still be listed (metadata is real regardless of file presence):\n%s", text)
+	}
+	if !strings.Contains(line1, "still readable") {
+		t.Errorf("trh_1 (sidecar present) not marked readable: %q", line1)
+	}
+	if strings.Contains(line2, "still readable") {
+		t.Errorf("trh_2 (sidecar REMOVED) incorrectly claimed readable: %q", line2)
+	}
+	if !strings.Contains(line2, "missing") && !strings.Contains(line2, "no longer readable") {
+		t.Errorf("trh_2's missing sidecar is not flagged in the index: %q", line2)
+	}
+}
+
 // TestCompactSummaryRequestAlwaysEndsInUserRole is the red-first test for
 // the 2026-08-19 live incident (session ses_jumpy-pizza, model
 // anthropic/anthropic/claude-fable-5): compacting with keep_turns=20

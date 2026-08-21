@@ -26,6 +26,7 @@ package engine
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -75,6 +76,19 @@ const (
 	// than silently produce that misleading message, a request below the
 	// floor is rejected outright with an error naming the floor.
 	readToolResultMinMaxBytes = 256
+
+	// readToolResultNoticeReserve is subtracted from maxBytes before the
+	// per-line/per-match budget loop runs, in both range and search modes
+	// (review finding N10). The trailing notice ("[truncated at N bytes;
+	// continue with offset=N]", "[truncated at N bytes after N match(es);
+	// ...]") is built and appended AFTER that loop decides how much body
+	// content fit — if the loop budgeted the body against the FULL
+	// maxBytes, appending the notice on top could push the total past
+	// maxBytes by however long the notice is (~50-80 bytes measured). This
+	// constant is a generous upper bound on any notice this file emits, so
+	// reserving it up front guarantees body+notice together never exceed
+	// the caller's maxBytes, whether or not a notice ends up being needed.
+	readToolResultNoticeReserve = 128
 )
 
 // readToolResultArgs is the tool's input shape.
@@ -189,13 +203,14 @@ func runReadToolResult(s *Session, raw json.RawMessage) (message.Parts, error) {
 		// checked before — the caller saw a plain "no lines"/"no match"
 		// result indistinguishable from a genuinely empty read, on a
 		// result the preview header told the model was recoverable. Retry
-		// once against a raw io.ReaderAt read of the whole file with no
-		// per-line size limit, rather than reporting this retained result
-		// permanently unreadable.
-		lines, ferr := toolResultFallbackLines(f, meta.Bytes)
-		if ferr == nil {
-			parts, err = scan(&sliceLineSource{lines: lines})
-		}
+		// once against readerAtLineSource, a raw io.ReaderAt-based line
+		// source with no per-line size limit (review finding N7: the
+		// FIRST cut of this fallback read the entire file into memory
+		// upfront via make([]byte, meta.Bytes) even for a tiny range
+		// request — readerAtLineSource streams in fixed-size chunks
+		// instead, so a small request against a huge oversized-line file
+		// only ever reads as far as the caller actually scans).
+		parts, err = scan(newReaderAtLineSource(f, int64(meta.Bytes)))
 	}
 	return parts, err
 }
@@ -211,45 +226,77 @@ type toolResultLineSource interface {
 	Err() error
 }
 
-// sliceLineSource adapts a pre-split []string to toolResultLineSource.
-type sliceLineSource struct {
-	lines []string
-	i     int
+// readerAtLineSourceChunk is how many bytes readerAtLineSource reads from
+// the underlying file per ReadAt call, growing its internal buffer only
+// that far ahead of what the caller has actually consumed.
+const readerAtLineSourceChunk = 64 * 1024
+
+// readerAtLineSource is F1's raw-byte fallback line source, streamed via
+// io.ReaderAt in fixed-size chunks rather than loaded into memory all at
+// once (review finding N7: the first cut of this fallback allocated
+// make([]byte, meta.Bytes) — the WHOLE file — even to satisfy a 256-byte
+// range request). It has no per-line size limit at all, unlike
+// bufio.Scanner: that limit is exactly what defeated the scanner in the
+// first place (bufio.ErrTooLong). io.ReaderAt specifically, not Read/Seek:
+// an absolute-offset read is independent of wherever the *bufio.Scanner
+// that failed already left the same *os.File's read cursor.
+//
+// Once the caller's range/search loop breaks (limit reached, byte budget
+// hit, match found), Scan is simply never called again — bytes past that
+// point are never read from disk at all.
+type readerAtLineSource struct {
+	r    io.ReaderAt
+	size int64 // total bytes available; ReadAt never asked to read past this
+	off  int64 // next unread byte offset in the underlying file
+	buf  []byte
+	line string
+	eof  bool
+	err  error
 }
 
-func (l *sliceLineSource) Scan() bool {
-	if l.i >= len(l.lines) {
+func newReaderAtLineSource(r io.ReaderAt, size int64) *readerAtLineSource {
+	return &readerAtLineSource{r: r, size: size}
+}
+
+// Scan advances to the next line, growing the internal buffer by one chunk
+// at a time only when the buffer held so far has no line to give.
+func (l *readerAtLineSource) Scan() bool {
+	if l.err != nil {
 		return false
 	}
-	l.i++
-	return true
+	for {
+		if i := bytes.IndexByte(l.buf, '\n'); i >= 0 {
+			l.line = string(l.buf[:i])
+			l.buf = l.buf[i+1:]
+			return true
+		}
+		if l.off >= l.size {
+			// Nothing left to read from disk. Whatever remains in buf (if
+			// anything) is a final, unterminated line.
+			if len(l.buf) == 0 {
+				return false
+			}
+			l.line = string(l.buf)
+			l.buf = nil
+			l.off = l.size + 1 // ensure the next call returns false, not this same tail again
+			return true
+		}
+		want := readerAtLineSourceChunk
+		if remaining := l.size - l.off; remaining < int64(want) {
+			want = int(remaining)
+		}
+		chunk := make([]byte, want)
+		n, err := l.r.ReadAt(chunk, l.off)
+		l.off += int64(n)
+		l.buf = append(l.buf, chunk[:n]...)
+		if err != nil && !errors.Is(err, io.EOF) {
+			l.err = err
+			return false
+		}
+	}
 }
-func (l *sliceLineSource) Text() string { return l.lines[l.i-1] }
-func (l *sliceLineSource) Err() error   { return nil }
-
-// toolResultFallbackLines reads the retained file's first size bytes via a
-// raw io.ReaderAt read — independent of any *bufio.Scanner's already-
-// advanced internal read position on the same *os.File, which is exactly
-// why ReaderAt (an absolute-offset read) is used here instead of Read/Seek
-// — and splits on '\n' with no per-line length limit. size is meta.Bytes:
-// the ORIGINAL byte length recorded at retention time (see
-// writeRetainedToolResult), which is what the file was written as.
-func toolResultFallbackLines(r io.ReaderAt, size int) ([]string, error) {
-	if size <= 0 {
-		return nil, nil
-	}
-	buf := make([]byte, size)
-	n, err := r.ReadAt(buf, 0)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, err
-	}
-	text := string(buf[:n])
-	if text == "" {
-		return nil, nil
-	}
-	text = strings.TrimSuffix(text, "\n")
-	return strings.Split(text, "\n"), nil
-}
+func (l *readerAtLineSource) Text() string { return l.line }
+func (l *readerAtLineSource) Err() error   { return l.err }
 
 // clampInt resolves an optional positive-int argument: <= 0 takes def, and
 // anything above max is clamped down to max (never rejected — a model that
@@ -264,12 +311,15 @@ func clampInt(v, def, max int) int {
 	return v
 }
 
-// readToolResultRange implements the offset/limit line window.
+// readToolResultRange implements the offset/limit line window. maxBytes is
+// the caller's FULL budget; the trailing notice's reserve (N10) is carved
+// out of it internally so body+notice together never exceed maxBytes.
 func readToolResultRange(sc toolResultLineSource, meta toolResultMeta, offset, limit, maxBytes int) (message.Parts, error) {
 	if offset <= 0 {
 		offset = 1
 	}
 	limit = clampInt(limit, readToolResultDefaultLimit, readToolResultMaxLimit)
+	bodyMax := maxBytes - readToolResultNoticeReserve
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s (tool=%s, %d bytes, %d lines) lines %d-%d:\n",
@@ -287,7 +337,7 @@ func readToolResultRange(sc toolResultLineSource, meta toolResultMeta, offset, l
 			break
 		}
 		t := sc.Text()
-		if b.Len()+len(t)+1 > maxBytes {
+		if b.Len()+len(t)+1 > bodyMax {
 			// A line that does not fit the remaining budget normally ends
 			// the window. But if NOTHING has been shown yet, the very
 			// first line alone is over budget (a minified-JSON or base64
@@ -297,7 +347,7 @@ func readToolResultRange(sc toolResultLineSource, meta toolResultMeta, offset, l
 			// Emit the prefix that does fit instead, UTF-8-safely, and let
 			// the truncation notice below say so.
 			if shown == 0 {
-				if room := maxBytes - b.Len(); room > 0 {
+				if room := bodyMax - b.Len(); room > 0 {
 					b.WriteString(truncateUTF8(t, room))
 					b.WriteByte('\n')
 					shown++
@@ -319,12 +369,22 @@ func readToolResultRange(sc toolResultLineSource, meta toolResultMeta, offset, l
 	return jsonlessResult(b.String())
 }
 
+// stringsContainsForSearch is strings.Contains, indirected only so a test
+// can force "never matches" and confirm the test suite actually catches
+// that (review finding N1's mutation-verification requirement). Never
+// reassigned outside a test.
+var stringsContainsForSearch = strings.Contains
+
 // readToolResultSearch implements literal-substring search. offset/limit are
 // deliberately ignored in this mode (documented in the tool description):
 // a line window over a filtered set means something different from a line
 // window over the file, and conflating the two is how a model ends up
-// silently reading the wrong region.
+// silently reading the wrong region. maxBytes is the caller's FULL budget;
+// see readToolResultRange's doc comment for the notice-reserve accounting
+// (N10), applied identically here.
 func readToolResultSearch(sc toolResultLineSource, meta toolResultMeta, needle string, maxBytes int) (message.Parts, error) {
+	bodyMax := maxBytes - readToolResultNoticeReserve
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s (tool=%s, %d bytes, %d lines) lines matching %q:\n",
 		meta.Handle, meta.Tool, meta.Bytes, meta.Lines, needle)
@@ -335,13 +395,49 @@ func readToolResultSearch(sc toolResultLineSource, meta toolResultMeta, needle s
 	for sc.Scan() {
 		line++
 		t := sc.Text()
-		// strings.Contains, never regexp: literal by contract (see the
-		// package doc comment).
-		if !strings.Contains(t, needle) {
+		// stringsContainsForSearch (== strings.Contains in production),
+		// never regexp: literal by contract (see the package doc comment).
+		// The indirection exists solely so
+		// TestReadToolResultSearchNeverMatchMutant (review finding N1) can
+		// force "never matches" from a test and confirm the test suite
+		// actually notices — the mutation-verification AGENTS.md's
+		// red-verify rule asks for, kept as a standing regression guard
+		// rather than a one-off manual check.
+		if !stringsContainsForSearch(t, needle) {
 			continue
 		}
 		entry := fmt.Sprintf("%d: %s\n", line, t)
-		if b.Len()+len(entry) > maxBytes {
+		if b.Len()+len(entry) > bodyMax {
+			// Review finding N1: the ORIGINAL code dropped a too-large
+			// entry WHOLE and never incremented matches, so a matching
+			// line that alone exceeds the budget reported "0 match(es)" —
+			// a false negative on exactly the retained-result-is-one-
+			// enormous-line case F1 exists for, with unusable advice
+			// ("narrow the search" on a file that IS one line). Fix: if
+			// this is the FIRST thing found, emit a truncated WINDOW
+			// AROUND THE MATCH — not just a prefix of the line, since the
+			// match itself can sit megabytes into a multi-megabyte line,
+			// well past what a from-byte-0 prefix would ever reach —
+			// instead of silently reporting no match at all.
+			if matches == 0 {
+				prefix := fmt.Sprintf("%d: ", line)
+				const ellipsis = "..."
+				reserve := len(prefix) + 1 // +1 for the trailing newline
+				if room := bodyMax - b.Len() - reserve - 2*len(ellipsis); room > 0 {
+					idx := strings.Index(t, needle) // >= 0: strings.Contains already matched above
+					window, truncBefore, truncAfter := extractMatchWindow(t, idx, room)
+					b.WriteString(prefix)
+					if truncBefore {
+						b.WriteString(ellipsis)
+					}
+					b.WriteString(window)
+					if truncAfter {
+						b.WriteString(ellipsis)
+					}
+					b.WriteByte('\n')
+					matches++
+				}
+			}
 			byteTrunc = true
 			break
 		}
@@ -357,9 +453,43 @@ func readToolResultSearch(sc toolResultLineSource, meta toolResultMeta, needle s
 		return jsonlessResult(fmt.Sprintf("%s: no lines match %q (searched %d lines)", meta.Handle, needle, line))
 	}
 	if byteTrunc {
-		fmt.Fprintf(&b, "[truncated at %d bytes after %d match(es); narrow the search to see more]\n", maxBytes, matches)
+		fmt.Fprintf(&b, "[truncated at %d bytes after %d match(es); narrow the search or increase max_bytes to see more]\n", maxBytes, matches)
 	}
 	return jsonlessResult(b.String())
+}
+
+// extractMatchWindow returns a byte-bounded window of t, anchored a small
+// fixed distance BEFORE idx (the needle's byte offset in t) rather than at
+// byte 0 (review finding N1) — a match megabytes into a multi-megabyte
+// single-line result must still be visible, which a from-the-start prefix
+// window cannot guarantee. Both cut points are UTF-8-safe: truncBefore/
+// truncAfter report whether that side was actually cut, so the caller can
+// mark it with "...".
+func extractMatchWindow(t string, idx, budget int) (window string, truncBefore, truncAfter bool) {
+	const contextBefore = 64
+	if idx < 0 {
+		idx = 0
+	}
+	start := idx - contextBefore
+	if start < 0 {
+		start = 0
+	}
+	start = utf8SafeForward(t, start)
+	truncBefore = start > 0
+	rest := t[start:]
+	window = truncateUTF8(rest, budget)
+	truncAfter = len(window) < len(rest)
+	return window, truncBefore, truncAfter
+}
+
+// utf8SafeForward advances n forward past any continuation bytes
+// (0b10xxxxxx) at that cut point, so slicing t[n:] never begins mid-rune —
+// the leading-edge counterpart of truncateUTF8's trailing-edge walk-back.
+func utf8SafeForward(t string, n int) int {
+	for n > 0 && n < len(t) && t[n]&0xC0 == 0x80 {
+		n++
+	}
+	return n
 }
 
 // appendReadNotice writes the trailing continuation/truncation notice for a

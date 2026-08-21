@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -230,11 +231,23 @@ func TestReadToolResultRejectsMaxBytesBelowFloor(t *testing.T) {
 // mode false-negatived on a needle that is plainly present — no max_bytes
 // value recovered anything, on a result whose own preview header told the
 // model it was recoverable via read_tool_result. The fix falls back to a
-// raw io.ReaderAt read with no per-line limit.
+// raw io.ReaderAt-based line source with no per-line limit.
+//
+// The needle sits ~1.2 MiB into the 2 MiB line — deliberately far past both
+// readToolResultScanBuf (1 MiB) AND the default max_bytes (16384): a
+// rescue that only ever showed a prefix from byte 0 of the line (the
+// original round-2 shape review finding N1 caught) could never reach it,
+// only a window ANCHORED AT THE MATCH can.
+//
+// The assertion is on the BODY only — everything after the first "\n" —
+// never the whole output (review finding N1's second half): the header
+// line itself echoes the needle back via `lines matching %q:`, so
+// asserting against the whole string is tautological and passes even if
+// matching is completely broken. TestReadToolResultSearchNeverMatchMutant
+// exercises that escape directly by forcing strings.Contains to report no
+// match, proving THIS test would catch it.
 func TestReadToolResultSurvivesOversizedLine(t *testing.T) {
-	// 2 MiB, one line, well beyond readToolResultScanBuf (1 MiB) — with a
-	// findable needle placed past the 1 MiB mark, so a fallback that only
-	// looked at the first MiB would still miss it.
+	// 2 MiB, one line, well beyond readToolResultScanBuf (1 MiB).
 	needle := "UNIQUE-NEEDLE-31337"
 	pad := 2*1024*1024 - len(needle) - 1
 	big := strings.Repeat("x", 1200*1024) + needle + strings.Repeat("y", pad-1200*1024) + "\n"
@@ -253,8 +266,161 @@ func TestReadToolResultSurvivesOversizedLine(t *testing.T) {
 	}
 
 	searchOut := readResult(t, s, fmt.Sprintf(`{"handle":%q,"search":%q}`, h, needle))
-	if !strings.Contains(searchOut, needle) {
-		t.Errorf("search over an oversized line did not find a needle known to be present:\n%s", searchOut[:min(300, len(searchOut))])
+	body := searchBodyAfterHeader(t, searchOut)
+	if strings.Contains(body, "0 match(es)") {
+		t.Errorf("search over an oversized line false-negatived (0 matches) on a needle known to be present:\n%s", searchOut[:min(300, len(searchOut))])
+	}
+	if !strings.Contains(body, needle) {
+		t.Errorf("search body (after the header line) does not contain the needle:\n%s", body[:min(300, len(body))])
+	}
+}
+
+// searchBodyAfterHeader strips readToolResultSearch's first line (the
+// header, which echoes the search needle back via `lines matching %q:` and
+// so must never be used as evidence a match was actually found — see
+// TestReadToolResultSurvivesOversizedLine's doc comment, review finding
+// N1). The zero-match case is a single line with no header at all (it
+// never got as far as writing one) — treated as its own body, verbatim.
+func searchBodyAfterHeader(t *testing.T, out string) string {
+	t.Helper()
+	i := strings.IndexByte(out, '\n')
+	if i < 0 {
+		return out
+	}
+	return out[i+1:]
+}
+
+// TestReadToolResultSearchNeverMatchMutant is review finding N1's mutation-
+// verification: it forces strings.Contains to report NO match ever (a
+// literal implementation of "search is completely broken"), and confirms
+// TestReadToolResultSurvivesOversizedLine's body-only assertion catches it
+// — proving that assertion is not the tautology the original
+// whole-output-contains-the-needle check was (the header alone would have
+// kept that version green even here).
+func TestReadToolResultSearchNeverMatchMutant(t *testing.T) {
+	orig := stringsContainsForSearch
+	stringsContainsForSearch = func(s, substr string) bool { return false }
+	defer func() { stringsContainsForSearch = orig }()
+
+	s, h := retainedSession(t, linesText(10)+"UNIQUE-MUTANT-NEEDLE\n")
+	out := readResult(t, s, fmt.Sprintf(`{"handle":%q,"search":"UNIQUE-MUTANT-NEEDLE"}`, h))
+	// With matching forced off, the ENTIRE output collapses to the
+	// single-line "no lines match" message — there is no separate header
+	// line at all (readToolResultSearch never gets far enough to write
+	// one; see runReadToolResult/readToolResultSearch). Note that message
+	// necessarily echoes the needle back too (confirming what was
+	// searched), so this deliberately does NOT assert "the needle is
+	// absent" — that would be exactly the same tautology this test exists
+	// to rule out on the OTHER test. It asserts the shape: no
+	// match-with-content, no header line — is produced.
+	if !strings.Contains(out, "no lines match") {
+		t.Fatalf("mutant did not produce the expected no-match output: %q", out)
+	}
+	if strings.Contains(out, "\n") {
+		t.Fatalf("mutant output has extra structure (a header/body split) it should not have: %q", out)
+	}
+}
+
+// countingReaderAt wraps an io.ReaderAt and records the total bytes
+// requested via ReadAt, so a test can assert how much of a file a reader
+// actually touched.
+type countingReaderAt struct {
+	r     io.ReaderAt
+	bytes int64
+}
+
+func (c *countingReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	n, err := c.r.ReadAt(p, off)
+	c.bytes += int64(n)
+	return n, err
+}
+
+// TestReaderAtLineSourceStreamsRatherThanBuffersWholeFile is review finding
+// N7's red test: the FIRST cut of the F1 fallback (toolResultFallbackLines)
+// allocated make([]byte, meta.Bytes) and read the file via ONE ReadAt call
+// — the ENTIRE file into memory — even to satisfy a request for just the
+// first line. This asserts the streaming replacement
+// (readerAtLineSource): reading only the first (short) line of an 8 MiB
+// file touches only a small, bounded number of bytes, nowhere near the
+// file's full size.
+func TestReaderAtLineSourceStreamsRatherThanBuffersWholeFile(t *testing.T) {
+	size := 8 * 1024 * 1024
+	content := "first line\n" + strings.Repeat("x", size-len("first line\n"))
+
+	f := &countingReaderAt{r: strings.NewReader(content)}
+	src := newReaderAtLineSource(f, int64(len(content)))
+
+	if !src.Scan() {
+		t.Fatalf("Scan() = false, want true: %v", src.Err())
+	}
+	if got := src.Text(); got != "first line" {
+		t.Fatalf("Text() = %q, want %q", got, "first line")
+	}
+
+	// Reading exactly one short line must not have pulled anywhere near
+	// the whole 8 MiB file through ReadAt.
+	if f.bytes > 4*readerAtLineSourceChunk {
+		t.Errorf("reading one line touched %d bytes of an %d-byte file — want bounded to a few chunks (%d bytes each), not the whole file",
+			f.bytes, size, readerAtLineSourceChunk)
+	}
+}
+
+// TestReaderAtLineSourceReadsWholeContentWhenScannedToCompletion is the
+// counterweight: when a caller DOES scan every line (e.g. a full range
+// read with a limit that covers the file, or a search that never finds its
+// needle), readerAtLineSource must still return the FULL, correct content
+// — the streaming rewrite must not have traded correctness for boundedness.
+func TestReaderAtLineSourceReadsWholeContentWhenScannedToCompletion(t *testing.T) {
+	var want []string
+	for i := 1; i <= 500; i++ {
+		want = append(want, fmt.Sprintf("line-%d", i))
+	}
+	content := strings.Join(want, "\n") + "\n"
+
+	src := newReaderAtLineSource(strings.NewReader(content), int64(len(content)))
+	var got []string
+	for src.Scan() {
+		got = append(got, src.Text())
+	}
+	if err := src.Err(); err != nil {
+		t.Fatalf("Err() = %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("read %d lines, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("line %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// TestReadToolResultOutputNeverExceedsMaxBytes is review finding N10's red
+// test. The trailing continuation/truncation notice was appended AFTER the
+// per-line/per-match budget loop decided how much body fit against the
+// FULL max_bytes — so body+notice together could exceed max_bytes by
+// however long the notice text was (~50-80 bytes measured). Checked across
+// both modes and a range of max_bytes values, including right at the
+// floor, where the notice reserve is proportionally largest.
+func TestReadToolResultOutputNeverExceedsMaxBytes(t *testing.T) {
+	big := linesText(20000) // long enough to force truncation at every max_bytes tried below
+	s, h := retainedSession(t, big)
+
+	for _, mb := range []int{readToolResultMinMaxBytes, 300, 500, 1000, 4096, 16384} {
+		t.Run(fmt.Sprintf("range/max_bytes=%d", mb), func(t *testing.T) {
+			out := readResult(t, s, fmt.Sprintf(`{"handle":%q,"offset":1,"limit":100000,"max_bytes":%d}`, h, mb))
+			if len(out) > mb {
+				t.Errorf("range output len = %d, want <= max_bytes=%d:\n%s", len(out), mb, out)
+			}
+		})
+		t.Run(fmt.Sprintf("search/max_bytes=%d", mb), func(t *testing.T) {
+			// "line-" matches every line, guaranteeing byte-budget truncation
+			// (never a clean "matches exhausted" finish) at every size tried.
+			out := readResult(t, s, fmt.Sprintf(`{"handle":%q,"search":"line-","max_bytes":%d}`, h, mb))
+			if len(out) > mb {
+				t.Errorf("search output len = %d, want <= max_bytes=%d:\n%s", len(out), mb, out)
+			}
+		})
 	}
 }
 

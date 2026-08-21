@@ -79,11 +79,11 @@ type toolResultMeta struct {
 	Tool   string
 	Bytes  int
 	Lines  int
-	// Head is the first toolResultIndexHeadBytes bytes of the ORIGINAL
-	// (unmasked-length, though the persisted content is masked — see
-	// writeRetainedToolResult) text, UTF-8-safely truncated. It exists
-	// solely so compaction's retained-results index (compact.go) can name a
-	// handle recognizably without re-opening its sidecar file — see F3.
+	// Head is the first toolResultIndexHeadBytes bytes of the MASKED,
+	// on-disk text (see maybeRetainToolResult/writeRetainedToolResult),
+	// UTF-8-safely truncated. It exists solely so compaction's
+	// retained-results index (compact.go) can name a handle recognizably
+	// without re-opening its sidecar file — see F3.
 	Head string
 }
 
@@ -283,25 +283,39 @@ func (s *Session) maybeRetainToolResult(tool string, content message.Parts) mess
 		return content
 	}
 
-	preview := truncateUTF8(text, limit)
+	// Mask exactly ONCE, up front — review findings N2/N5. Everything
+	// downstream (the preview that goes inline to the model, the bytes
+	// written to disk, and the accounting against the retention ceiling)
+	// must agree on the SAME masked text. The first cut of this feature
+	// masked only what writeRetainedToolResult wrote to disk: the PREVIEW
+	// — which goes straight into the provider request, unlike the sidecar
+	// file — was built from the unmasked original, so a secret sitting in
+	// the first `limit` bytes reached the model in cleartext regardless of
+	// masking existing at all. meta.Bytes/Lines are derived from `masked`
+	// too (not the original `text`), because that is what is actually ON
+	// DISK: a header or read_tool_result advertising the ORIGINAL length
+	// was pointing at a size the file did not have (N2).
+	masked := maskSecrets(text)
+	preview := truncateUTF8(masked, limit)
 
 	// Per-session ceiling check. Refusing is a real outcome, not an error:
 	// the model still gets the preview, and the cap header says plainly
 	// that the remainder is gone rather than handing out a handle for
-	// bytes that were never written.
+	// bytes that were never written. Measured against len(masked) — the
+	// ceiling counts what actually lands on disk, same as Bytes above.
 	if cap := s.toolResultRetainedLimit(); cap > 0 {
 		s.mu.Lock()
 		used := s.toolResultBytes
 		s.mu.Unlock()
-		if used+len(text) > cap {
+		if used+len(masked) > cap {
 			return append(message.Parts{
-				&message.Text{Text: toolResultCapHeader(tool, len(text), len(preview))},
+				&message.Text{Text: toolResultCapHeader(tool, len(masked), len(preview))},
 				&message.Text{Text: preview},
 			}, others...)
 		}
 	}
 
-	handle, err := s.writeRetainedToolResult(tool, text)
+	handle, err := s.writeRetainedToolResult(tool, masked)
 	if err != nil {
 		s.mu.Lock()
 		s.lastPersistErr = err
@@ -309,7 +323,7 @@ func (s *Session) maybeRetainToolResult(tool string, content message.Parts) mess
 		return content
 	}
 
-	header := toolResultPreviewHeader(handle, tool, len(text), countLines(text), len(preview))
+	header := toolResultPreviewHeader(handle, tool, len(masked), countLines(masked), len(preview))
 	return append(message.Parts{
 		&message.Text{Text: header},
 		&message.Text{Text: preview},
@@ -319,6 +333,15 @@ func (s *Session) maybeRetainToolResult(tool string, content message.Parts) mess
 // writeRetainedToolResult mints the next handle, writes the sidecar file,
 // records the durable toolresult.retained pointer record, and registers the
 // handle's metadata in memory. It returns the minted handle.
+//
+// text is written to disk EXACTLY as given — this function does not mask
+// it. maybeRetainToolResult (the only real production caller) masks once,
+// up front, and passes the already-masked text down here, so the preview
+// that goes inline to the model and the bytes that land on disk are always
+// masked in agreement (review findings N2/N5; see maybeRetainToolResult's
+// doc comment). A direct test caller that passes raw, unmasked text is
+// exercising the write/persist/resume mechanics only, not masking — that is
+// covered separately by the maybeRetainToolResult-path masking tests.
 //
 // Ordering is file-then-record, deliberately. A crash between the two
 // degrades to an orphaned file on disk plus a handle the session never knew
@@ -347,26 +370,20 @@ func (s *Session) writeRetainedToolResult(tool, text string) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("engine: tool-result retention: %w", err)
 	}
-	// maskSecrets is a best-effort, pattern-based redaction of the OBVIOUS
-	// secret shapes (see toolresult_secrets.go) applied only to what lands
-	// on disk. It is not a substitute for not retaining secrets at all —
-	// see the residual-risk note in the PR body — but it is strictly better
-	// than writing tool output verbatim to a file whose only protection was
-	// (until this fix) mode 0o644 in a 0o755 directory.
-	masked := maskSecrets(text)
-	if err := os.WriteFile(s.toolResultPath(handle), []byte(masked), 0o600); err != nil {
+	if err := os.WriteFile(s.toolResultPath(handle), []byte(text), 0o600); err != nil {
 		return "", fmt.Errorf("engine: tool-result retention: %w", err)
 	}
 
 	meta := toolResultMeta{
 		Handle: handle,
 		Tool:   tool,
-		Bytes:  len(text),
-		Lines:  countLines(text),
-		// Head is cut from the MASKED text, not the original: it survives
-		// into the compaction index (F3), a model-visible surface, and must
-		// carry the same redaction guarantee the sidecar file does.
-		Head: truncateUTF8(masked, toolResultIndexHeadBytes),
+		// Bytes/Lines are measured from `text` AS WRITTEN — the on-disk,
+		// post-mask length (review finding N2). The caller already masked
+		// before reaching here, so this is simply "what's on disk," not a
+		// second masking decision.
+		Bytes: len(text),
+		Lines: countLines(text),
+		Head:  truncateUTF8(text, toolResultIndexHeadBytes),
 	}
 
 	s.mu.Lock()
@@ -414,10 +431,21 @@ func (s *Session) knownToolResultHandles(max int) []string {
 	return out
 }
 
+// retainedResultsIndexMaxHandles bounds how many handles
+// retainedResultsIndexPart lists individually (review finding N8):
+// unbounded, 200 handles measured at roughly 6.9k tokens of summary — with
+// the retention ceiling disabled (Config.ToolResultRetainedBytes <= 0) a
+// long session can mint arbitrarily many, and an index that size defeats
+// the point of compaction, which is to REDUCE what the next request pays
+// for. Only the newest N are listed individually; older ones are named by
+// count only ("...and M older retained results (not listed; still on disk,
+// use read_tool_result with the handle number if known)").
+const retainedResultsIndexMaxHandles = 32
+
 // retainedResultsIndexPart builds compaction's deterministic, machine-
-// written index of every currently-live tool-result handle (review finding
-// F3(a)) — one line per handle, sorted ascending by number, naming the
-// handle, its source tool, its byte size, and a short head excerpt so a
+// written index of the newest still-live tool-result handles (review
+// finding F3(a)) — one line per handle, sorted ascending by number, naming
+// the handle, its source tool, its byte size, and a short head excerpt so a
 // model skimming the summary can recognize what it is without opening it.
 // Returns nil when there are no handles at all, so an ordinary compaction
 // with nothing retained gains no spurious empty block.
@@ -432,27 +460,58 @@ func (s *Session) knownToolResultHandles(max int) []string {
 // only handles minted within the folded range — a handle minted long before
 // the fold is exactly as reachable-only-through-a-preview-line as one
 // minted inside it, and exactly as easy to lose track of once that line is
-// gone.
+// gone. It is bounded to the newest retainedResultsIndexMaxHandles (N8) —
+// the newest, because those are the ones most likely to still matter to the
+// conversation that is about to continue.
+//
+// Each listed handle's sidecar file is stat'd before being described as
+// "readable" (review finding N9): an operator can wipe the toolresults/
+// directory, or a volume can roll back, out from under a live session, and
+// the index must not assert readability it has not checked. A handle whose
+// file is gone is still listed (its metadata is real and its retained-bytes
+// accounting still holds it), just annotated as such.
 func (s *Session) retainedResultsIndexPart() *message.Text {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.toolResults) == 0 {
-		return nil
-	}
 	var nums []int64
 	for h := range s.toolResults {
 		if n, ok := parseToolResultHandle(h); ok {
 			nums = append(nums, n)
 		}
 	}
+	if len(nums) == 0 {
+		s.mu.Unlock()
+		return nil
+	}
 	sortInt64s(nums)
 
-	var b strings.Builder
-	b.WriteString("[retained tool results still readable via read_tool_result (this index is machine-generated, not part of the summary above):\n")
+	older := 0
+	if len(nums) > retainedResultsIndexMaxHandles {
+		older = len(nums) - retainedResultsIndexMaxHandles
+		nums = nums[older:]
+	}
+	type row struct {
+		meta   toolResultMeta
+		handle string
+	}
+	rows := make([]row, 0, len(nums))
 	for _, n := range nums {
 		h := toolResultHandlePrefix + strconv.FormatInt(n, 10)
-		m := s.toolResults[h]
-		fmt.Fprintf(&b, "  %s tool=%s bytes=%d lines=%d head=%q\n", m.Handle, m.Tool, m.Bytes, m.Lines, m.Head)
+		rows = append(rows, row{meta: s.toolResults[h], handle: h})
+	}
+	s.mu.Unlock()
+
+	var b strings.Builder
+	b.WriteString("[retained tool results (this index is machine-generated, not part of the summary above):\n")
+	for _, r := range rows {
+		m := r.meta
+		status := "still readable via read_tool_result"
+		if _, err := os.Stat(s.toolResultPath(r.handle)); err != nil {
+			status = "sidecar file missing, no longer readable"
+		}
+		fmt.Fprintf(&b, "  %s tool=%s bytes=%d lines=%d head=%q (%s)\n", m.Handle, m.Tool, m.Bytes, m.Lines, m.Head, status)
+	}
+	if older > 0 {
+		fmt.Fprintf(&b, "  ...and %d older retained result(s) (not listed; still on disk if their sidecar files survive, addressable by handle number if known)\n", older)
 	}
 	b.WriteString("]")
 	return &message.Text{Text: b.String()}

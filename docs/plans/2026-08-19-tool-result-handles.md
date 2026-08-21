@@ -201,7 +201,14 @@ read_tool_result(handle, offset?, limit?, search?, max_bytes?)
 Output is always bounded twice: by the line budget and by `max_bytes`,
 whichever binds first, with an explicit truncation notice when either does.
 Bounding is the whole point — an unbounded read back into context would defeat
-retention entirely.
+retention entirely. **The notice is now counted INSIDE the budget** (review
+finding N10, round 2): the trailing continuation/truncation notice used to be
+appended AFTER the body was budgeted against the full `max_bytes`, so
+body+notice together could exceed `max_bytes` by however long the notice text
+was (measured ~50-80 bytes). `readToolResultNoticeReserve` (128 bytes,
+generous) is now carved out of the budget BEFORE the per-line/per-match loop
+runs, in both modes, so the two together never exceed the caller's
+`max_bytes`.
 
 **Line normalization (review finding F10, documented, not fixed).** Every
 read is line-oriented: `\r` is stripped from a CRLF-terminated source (Go's
@@ -220,11 +227,38 @@ the internal scan buffer (1 MiB, `readToolResultScanBuf`) defeats
 `bufio.ErrTooLong` — and before this fix that surfaced as a plain "no
 lines"/"no match" result indistinguishable from an empty one, on a result
 whose own preview header told the model it was recoverable. `runReadToolResult`
-now checks `sc.Err()` and, on `ErrTooLong`, retries once against a raw
-`io.ReaderAt` read of the whole file with no per-line limit
-(`toolResultFallbackLines`) — `ReaderAt` specifically because it is an
-absolute-offset read, independent of whatever the failed `bufio.Scanner`
-already consumed from the same `*os.File`'s read cursor.
+now checks `sc.Err()` and, on `ErrTooLong`, retries once against
+`readerAtLineSource`, a raw `io.ReaderAt`-based line source with no per-line
+limit — `ReaderAt` specifically because it is an absolute-offset read,
+independent of whatever the failed `bufio.Scanner` already consumed from the
+same `*os.File`'s read cursor.
+
+Two round-2 fixes to this fallback:
+
+- **Search mode was still half-broken (review finding N1).** The rescue
+  above was originally range-mode only; `readToolResultSearch` still dropped
+  a too-large matching entry WHOLE, reporting "0 match(es)" — a false
+  negative on exactly the retained-result-is-one-enormous-line case F1 is
+  about, with unusable advice ("narrow the search" on a file that IS one
+  line). Search mode now emits a truncated **window around the match**
+  (`extractMatchWindow`) rather than a from-byte-0 prefix: the match can sit
+  megabytes into a multi-megabyte line, well past what a prefix window would
+  ever reach, so the window is anchored a small fixed distance BEFORE the
+  match's byte offset instead. The regression test that first covered this
+  (`TestReadToolResultSurvivesOversizedLine`) was itself tautological — its
+  whole-output assertion passed even with matching completely broken,
+  because the header line echoes the search needle back via `lines matching
+  %q:` regardless of whether anything matched. The assertion now checks only
+  the body AFTER the header line;
+  `TestReadToolResultSearchNeverMatchMutant` forces matching off via a test
+  hook and confirms that split actually catches it.
+- **The fallback buffered the whole file (review finding N7).** The first
+  cut allocated `make([]byte, meta.Bytes)` and read the ENTIRE file in one
+  `ReadAt` call, even to satisfy a 256-byte range request — defeating the
+  memory-bounded design retention exists for. `readerAtLineSource` now
+  streams in fixed 64 KiB chunks, growing its buffer only as far as the
+  caller actually scans; once a range/search loop breaks (limit reached,
+  budget hit, match found), nothing past that point is ever read from disk.
 
 Degradation, both clean and both a normal tool error (never a panic, never a
 partial read):
@@ -294,6 +328,23 @@ turn 1 is exactly as reachable-only-through-a-preview-line as one from the
 turn just folded. Omitted entirely (no empty block) when there are no live
 handles.
 
+**The index is now bounded (review finding N8, round 2).** The first cut
+listed EVERY live handle, unconditionally — with the ceiling disabled
+(`Config.ToolResultRetainedBytes <= 0`) a long session can mint arbitrarily
+many, and 200 handles measured at roughly 6.9k tokens of index text, which
+defeats the point of compaction (reducing what the next request pays for).
+`retainedResultsIndexMaxHandles` (32) caps the list to the NEWEST handles —
+newest, because those are the ones most likely to still matter to the
+conversation about to continue — with a trailing `...and N older retained
+result(s)` count-only line for the rest.
+
+**The index no longer claims readability it hasn't checked (review finding
+N9).** Each listed handle's sidecar file is `os.Stat`'d before being
+described as "still readable via read_tool_result"; a handle whose file is
+gone (an operator wiped `toolresults/`, a volume rolled back) is still
+listed — its metadata is real and it still counts against the ceiling — but
+annotated "sidecar file missing, no longer readable" instead.
+
 **Follow-up, explicitly out of scope for this PR**: no eviction or GC exists
 anywhere in this feature. A long-lived session that retains enough oversized
 results eventually fills `Config.ToolResultRetainedBytes` permanently — the
@@ -317,30 +368,76 @@ A retained result is arbitrary tool output — routinely including secrets a
 command printed (an env dump, a leaked credential in a log line). Review
 finding F4 covered two things:
 
-1. **File permissions.** The sidecar directory and file are now created
-   `0o700`/`0o600` (were `0o755`/`0o644`) — private to the process owner,
-   not group- or world-readable.
+1. **File permissions.** The sidecar directory and file are `0o700`/`0o600`
+   (were `0o755`/`0o644`) — private to the process owner, not group- or
+   world-readable.
 2. **Masking.** `engine/toolresult_secrets.go`'s `maskSecrets` is a
-   best-effort, pattern-based redaction applied to the text before it is
-   written to disk: a case-insensitive `(secret|token|password|api_key|
-   access_key)[=:]\S+` match has its value replaced with `***`, key and
-   separator preserved. This repo had no existing secret-masking utility to
-   reuse.
+   best-effort, pattern-based redaction. This repo had no existing
+   secret-masking utility to reuse.
+
+**Round 2 rewrite (findings N2-N6, N11).** F4's first cut used one pattern
+with an unbounded `\S+` value half. A second review round found this
+actively destructive, not just incomplete:
+
+- **N2 (data loss).** `\S+` is greedy to the next WHITESPACE, not to the
+  next structural delimiter — a single incidental match (`&token=` inside a
+  URL, `token=<huge blob>` on one line with no other whitespace) deleted
+  everything from the match to the next whitespace. Measured 2,097,164 bytes
+  of a 4 MiB single-line retained result destroyed by one masked "value"
+  that was mostly unrelated adjacent content. The value class is now bounded
+  on two independent axes: a character class (`[A-Za-z0-9_\-./+=]`) that
+  excludes exactly the delimiters that matter (`&`, `?`, `,`, `"`, `}`,
+  whitespace, code punctuation), so a match naturally stops at the next real
+  delimiter, AND a length cap (`{8,200}`, `{8,1000}` for a Bearer token) as
+  a second bound. `meta.Bytes`/`Lines`/`Head` are now measured from the
+  MASKED, on-disk text, not the pre-mask original — the first cut reported
+  the original length, so a header or `read_tool_result` could advertise a
+  size the sidecar file did not actually have.
+- **N3 (missed shapes).** Added quoted-JSON (`"token": "..."`,
+  `"api_key":"..."`) and `Authorization: Bearer <token>`, alongside the
+  existing `KEY=value`/`KEY: value` (space-YAML) shape.
+- **N4 (code corruption).** `token:=lexer.Next()` (Go's `:=` short variable
+  declaration) became `token:*** if...` — the old pattern treated the bare
+  `:` ahead of `=lexer.Next()` as a key/value separator. The colon
+  alternative now requires MANDATORY whitespace after it (`:[ \t]+`), never
+  bare `:` — which is what excludes `:=` structurally: nothing in the
+  pattern can start a match where a Go short declaration's `:` is
+  immediately followed by `=` with no space.
+- **N5 (preview unmasked).** The PREVIEW half of a retained result — the
+  bytes that go straight into the provider request, inline — was built from
+  the unmasked original; only what reached disk was masked. A secret
+  sitting within the first `ToolResultInlineBytes` reached the model in
+  cleartext regardless of masking existing at all. `maybeRetainToolResult`
+  now masks exactly ONCE, up front, and derives the preview, the on-disk
+  bytes, `meta.Bytes`/`Lines`/`Head`, and the retention-ceiling accounting
+  all from that one masked value.
+- **N6 (performance).** Three sequential `ReplaceAllString` passes (one per
+  shape) measured SLOWER (556-635ms/4.4MB) than the original single
+  unbounded pattern (352ms/4.4MB) — each pass re-scans the whole string
+  independently. Two changes: (a) the three shapes are now one combined
+  regexp, walked once via `FindAllStringSubmatchIndex` and rebuilt in a
+  single `strings.Builder` pass; (b) `containsSecretCandidate`, a cheap
+  non-regex substring pre-filter, skips the (expensive — RE2's automaton for
+  this pattern, with its unrolled bounded repeats, is measurably slow even
+  on a NO-MATCH scan) regex entirely for text with no candidate keyword at
+  all, applied both to the whole input and per-line (none of the three
+  shapes ever spans a newline, so line-level filtering is exactly
+  equivalent to whole-text — a line with no candidate keyword is copied
+  verbatim at `Contains` cost, never touching the regex engine). Measured on
+  this branch: ~20-25ms/4.4MB for ordinary multi-line output (with or
+  without scattered secrets) — comfortably under the 100ms/4MB target, and
+  a large improvement over the 352ms original baseline. The one case that
+  does NOT benefit from the line-level filter is the F1 pathological
+  single-huge-line-with-no-newlines input; that falls back to one full-text
+  regex scan and measured ~650ms/4.4MB — a documented, accepted residual
+  for a rare edge case, not a regression target.
 
 **Residual risk, explicitly not fully solved.** This is a minimal pattern
-matcher, not a secret scanner: it only catches the `KEY=value` /
-`KEY: value` shape, only for the five listed key-name substrings, and has no
-understanding of structured formats (a secret value nested inside JSON/YAML
-under an unlisted key name is not caught) and no way to catch a bare token
-pasted with no label at all. It also does not touch the **preview** bytes
-(the first `ToolResultInlineBytes` of the joined text) — those are already
-inline in the model's context by construction, independent of retention,
-the same as they always were before this feature existed; only what
-additionally lands on disk is masked. A secret sitting past the inline
-limit is masked on disk but was still visible to the model, transiently,
-in the request that produced it. A real fix (a pluggable/configurable
-masking policy, or integration with a proper secret-detection library) is
-follow-up work, not this PR.
+matcher, not a secret scanner: it only catches the shapes listed above, only
+for a fixed key-name list, and has no way to catch a bare token pasted with
+no label at all, or a secret value nested under an unrecognized key name. A
+real fix (a pluggable/configurable masking policy, or integration with a
+proper secret-detection library) is follow-up work, not this PR.
 
 ## 10. Test list
 
@@ -377,6 +474,21 @@ follow-up work, not this PR.
 | `TestCompactPreservesRetainedResultsIndex` (F3a)             | compaction carries a deterministic handle index forward           |
 | `TestCompactRetainedResultsIndexOmittedWhenNoHandles` (F3a)  | no spurious index block when nothing is retained                  |
 | `TestParseToolResultHandle` (F13)                            | digits-only handle grammar; `trh_+1`/`trh_01` rejected             |
+| `TestReadToolResultSurvivesOversizedLine` (F1/N1)             | oversized-line range AND search both recover; body-only assertion  |
+| `TestReadToolResultSearchNeverMatchMutant` (N1)               | mutation-verification: a forced never-match is caught, not tautological |
+| `TestReaderAtLineSourceStreamsRatherThanBuffersWholeFile` (N7)| the fallback streams in chunks, not one whole-file read            |
+| `TestReaderAtLineSourceReadsWholeContentWhenScannedToCompletion` (N7) | streaming correctness when fully scanned                   |
+| `TestReadToolResultOutputNeverExceedsMaxBytes` (N10)          | body+notice together never exceed `max_bytes`, both modes          |
+| `TestMaskSecretsDoesNotDeleteAdjacentContent` (N2)            | a bounded value match never deletes adjacent unrelated data        |
+| `TestMaskSecretsQuotedJSON` (N3)                              | `"key": "value"` and `"key":"value"`, incl. compound keys           |
+| `TestMaskSecretsSpaceYAML` (N3)                               | `key: value` (space-YAML) masked, surrounding YAML untouched        |
+| `TestMaskSecretsAuthorizationBearer` (N3)                     | `Authorization: Bearer <token>` masked                              |
+| `TestMaskSecretsCodeCorpus` (N4)                              | realistic Go/Python/JS/TS snippets survive byte-identical, incl. `:=` |
+| `TestMaskSecretsPreview` (N5)                                 | the inline preview is masked, not just the sidecar file             |
+| `TestToolResultMetaBytesMatchesOnDiskLength` (N2)             | `meta.Bytes` equals the actual on-disk (post-mask) file length      |
+| `TestMaskSecretsPerformance` (N6)                             | three input shapes measured against N6's targets; see PR body       |
+| `TestRetainedResultsIndexCapped` (N8)                         | the compaction index lists only the newest 32, names the rest by count |
+| `TestRetainedResultsIndexNotesMissingSidecar` (N9)            | a handle with no sidecar file is annotated, not claimed readable    |
 
 The fake-provider test is the load-bearing one: it drives a real
 `Session.Prompt` with a scripted provider whose first turn calls a tool
