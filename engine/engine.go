@@ -1623,6 +1623,68 @@ func (s *Session) appendUnexecutedToolCallResults(asst *message.Message, stop pr
 	s.append(syntheticUnexecutedToolResults(asst, fmt.Sprintf(unexecutedToolCallStopReasonTextFmt, stop)))
 }
 
+// turnHasActionableContent reports whether asst carries content a caller
+// can act on: a *message.Text part with non-empty Text, or a
+// *message.ToolCall part. A message holding only a *message.Reasoning part
+// (or no parts at all) is not actionable, even though the provider reported
+// a clean EventDone — see emptyTurnError's doc comment for why this
+// distinction exists.
+func turnHasActionableContent(asst *message.Message) bool {
+	for _, p := range asst.Parts {
+		switch part := p.(type) {
+		case *message.Text:
+			if part.Text != "" {
+				return true
+			}
+		case *message.ToolCall:
+			return true
+		}
+	}
+	return false
+}
+
+// emptyTurnError is streamTurnWithRetry's synthetic error for a turn that
+// completed — streamTurn returned a nil error, so the provider stream
+// itself never failed — but produced no actionable content per
+// turnHasActionableContent: a stop reason other than StopToolUse (so no
+// tool call is pending execution) alongside an assistant message with no
+// non-empty Text and no ToolCall part.
+//
+// # Incident: box fx-context-limits, session ses_01m0ga6v25f1h902fnmx98zhn3 (2026-08-20)
+//
+// Twice in the same session, sonnet-5's thinking consumed the entire
+// max_tokens ceiling — output_tokens exactly 8192 (4096 EffortLow
+// budget_tokens + 4096 thinkingCompletionMargin) — before emitting any text
+// or tool call. The provider reported stop_reason "max_tokens" for a
+// message that carried only a Reasoning part. Before this type existed,
+// runAgenticLoop's `if stop != provider.StopToolUse { return asst, nil }`
+// (see below) treated this as an ordinary completed turn: no content
+// validation, so the caller got back a message with nothing to show and the
+// server journaled outcome:"completed" (server/handlers.go). The second
+// occurrence was session-terminal — the task died silently with no error
+// anywhere in the record.
+//
+// appendUnexecutedToolCallResults (NEP-5272, above) does not catch this: its
+// hasToolCall guard is a no-op for a message with zero ToolCall parts, which
+// is exactly this shape — that fix closes the orphaned-tool-call hole, not
+// the no-content-at-all hole.
+//
+// streamTurnWithRetry synthesizes this error when the condition above holds
+// and routes it into the same bounded retry budget (Config.PromptRetries)
+// used for a classified-retryable provider error, emitting the same
+// EventTurnRestart before each retry. On budget exhaustion it returns this
+// error unwrapped: server's turnEndOutcome (server/journal.go) maps every
+// unrecognized error to outcome:"error", which is the correct terminal
+// state — a completed-but-empty turn must never be recorded as success.
+type emptyTurnError struct {
+	stop         provider.StopReason
+	outputTokens int
+}
+
+func (e *emptyTurnError) Error() string {
+	return fmt.Sprintf("empty turn: provider reported stop reason %q with output_tokens=%d but produced no text and no tool call", e.stop, e.outputTokens)
+}
+
 // toolDefs merges built-in tools, MCP-provided tools, and plugin-provided
 // ones.
 func (s *Session) toolDefs(ctx context.Context) []provider.ToolDef {

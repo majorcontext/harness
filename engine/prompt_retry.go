@@ -98,11 +98,26 @@ func waitBasePromptRetryBackoff(ctx context.Context, attempt int) error {
 // the retry rather than rendering the two runs concatenated — see
 // EventTurnRestart. History still reconciles through the turn's final
 // EventMessage regardless.
+//
+// A COMPLETED turn (streamTurn's err is nil) with no actionable content —
+// per turnHasActionableContent, no non-empty Text and no ToolCall part,
+// alongside a stop reason other than StopToolUse — is folded into the same
+// bounded retry budget via a synthesized *emptyTurnError, rather than
+// returned as a success. See emptyTurnError's doc comment (engine.go) for
+// the production incident this guards: a provider stream can reach
+// EventDone cleanly while reporting nothing the caller can act on (e.g.
+// thinking alone consumed the entire max_tokens ceiling), and that must
+// never be journaled as a completed turn. This is why the check runs before
+// the `err == nil` early return below, not after it.
 func (s *Session) streamTurnWithRetry(ctx context.Context) (*message.Message, provider.StopReason, provider.Usage, error) {
 	for attempt := 1; ; attempt++ {
 		asst, stop, usage, err := s.streamTurn(ctx)
 		if err == nil {
-			return asst, stop, usage, nil
+			if stop != provider.StopToolUse && !turnHasActionableContent(asst) {
+				err = &emptyTurnError{stop: stop, outputTokens: usage.OutputTokens}
+			} else {
+				return asst, stop, usage, nil
+			}
 		}
 		if errors.Is(err, context.Canceled) {
 			return nil, "", provider.Usage{}, err
@@ -111,7 +126,17 @@ func (s *Session) streamTurnWithRetry(ctx context.Context) (*message.Message, pr
 		if errors.As(err, &interrupted) {
 			return nil, "", provider.Usage{}, err
 		}
-		if _, retryable := provider.AsRetryable(err); !retryable || attempt > s.cfg.PromptRetries {
+		// An emptyTurnError is synthesized above, never provider-classified,
+		// so it is always eligible for the bounded retry budget below —
+		// provider.AsRetryable only applies to a genuine provider/transport
+		// error.
+		var empty *emptyTurnError
+		if !errors.As(err, &empty) {
+			if _, retryable := provider.AsRetryable(err); !retryable {
+				return nil, "", provider.Usage{}, err
+			}
+		}
+		if attempt > s.cfg.PromptRetries {
 			return nil, "", provider.Usage{}, err
 		}
 		// Signal subscribers to drop any partial deltas the failed attempt

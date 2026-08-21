@@ -285,3 +285,147 @@ func TestPromptRetriesZeroDisables(t *testing.T) {
 		t.Errorf("Stream calls = %d, want 1 (PromptRetries=0 disables retry)", prov.calls)
 	}
 }
+
+// emptyMaxTokensTurn builds the provider.Event a completed-but-empty turn
+// reports: production incident box fx-context-limits (session
+// ses_01m0ga6v25f1h902fnmx98zhn3, 2026-08-20) had sonnet-5's thinking
+// consume the entire max_tokens ceiling — output_tokens exactly 8192 (4096
+// EffortLow budget_tokens + 4096 thinkingCompletionMargin) — before emitting
+// any text or tool call, so the assistant message carried only a Reasoning
+// part and the provider reported stop_reason "max_tokens". This is a clean
+// EventDone, not a Stream error: streamTurn returns (asst, stop, usage, nil)
+// exactly like any other completed turn.
+func emptyMaxTokensTurn() []provider.Event {
+	return []provider.Event{{
+		Type:       provider.EventDone,
+		Message:    &message.Message{ID: "msg_empty", Role: message.RoleAssistant, Parts: message.Parts{&message.Reasoning{Text: "thinking really hard about it"}}},
+		StopReason: provider.StopMaxTokens,
+		Usage:      provider.Usage{OutputTokens: 8192},
+	}}
+}
+
+// TestEmptyTurnRetriesThenSucceeds is the red-first guard for the production
+// defect: a completed turn with no actionable content (no Text, no
+// ToolCall — here, Reasoning only) must never be journaled as success.
+// Attempt 1 reports the empty max_tokens shape above; attempt 2 is a normal
+// text turn. streamTurnWithRetry must treat attempt 1 as a retryable
+// failure — same bounded budget and EventTurnRestart signal as a transport
+// error — and the turn must complete with attempt 2's text.
+//
+// Red-verify: before the fix, runAgenticLoop's `if stop != StopToolUse {
+// return asst, nil }` (engine.go) treats attempt 1 as turn-complete with no
+// content validation. Prompt returns attempt 1's Reasoning-only message as
+// final (Parts.Text() == "", not "done"), the provider is called exactly
+// once, and no EventTurnRestart is emitted — every assertion below fails.
+func TestEmptyTurnRetriesThenSucceeds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+			emptyMaxTokensTurn(),
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "done"}),
+		}}
+		var got []Event
+		s := NewSession(Config{
+			Providers:     provider.Registry{"test": prov},
+			Model:         message.ModelRef{Provider: "test", Model: "m1"},
+			PromptRetries: 2,
+			OnEvent:       func(ev Event) { got = append(got, ev) },
+		})
+
+		final, err := s.Prompt(context.Background(), "go")
+		if err != nil {
+			t.Fatalf("Prompt err = %v, want nil (the empty turn must be retried and succeed)", err)
+		}
+		if final == nil || final.Parts.Text() != "done" {
+			t.Fatalf("final = %+v, want a message with text %q", final, "done")
+		}
+		if prov.call != 2 {
+			t.Errorf("Stream calls = %d, want 2 (attempt 1 empty, attempt 2 succeeds)", prov.call)
+		}
+		restarts := 0
+		for _, ev := range got {
+			if ev.Type == EventTurnRestart {
+				restarts++
+			}
+		}
+		if restarts != 1 {
+			t.Errorf("EventTurnRestart count = %d, want exactly 1 between the empty attempt and the retry", restarts)
+		}
+	})
+}
+
+// TestEmptyTurnRetriesExhaustedSurfacesError proves the budget is bounded
+// and the terminal shape is a real failure, not a silently "completed"
+// turn: this reproduces the SECOND, session-terminal occurrence of the
+// production defect, where every attempt came back empty and the task died
+// silently. Every attempt reports the empty max_tokens shape; Prompt must
+// return a non-nil error unwrapping to *emptyTurnError, and history must
+// never contain a zero-actionable-parts assistant message.
+//
+// Red-verify: before the fix, attempt 1 alone is treated as turn-complete
+// (see TestEmptyTurnRetriesThenSucceeds's red-verify note) — Prompt returns
+// nil error, final is the empty message, only 1 Stream call happens, and
+// the empty message IS in history — every assertion below fails.
+func TestEmptyTurnRetriesExhaustedSurfacesError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+			emptyMaxTokensTurn(),
+			emptyMaxTokensTurn(),
+			emptyMaxTokensTurn(),
+		}}
+		s := NewSession(Config{
+			Providers:     provider.Registry{"test": prov},
+			Model:         message.ModelRef{Provider: "test", Model: "m1"},
+			PromptRetries: 2,
+		})
+
+		final, err := s.Prompt(context.Background(), "go")
+		if err == nil {
+			t.Fatal("Prompt err = nil, want the exhausted empty-turn failure to surface")
+		}
+		var emptyErr *emptyTurnError
+		if !errors.As(err, &emptyErr) {
+			t.Fatalf("Prompt err = %v, want it to unwrap to *emptyTurnError", err)
+		}
+		if final != nil {
+			t.Errorf("final = %+v, want nil on exhaustion", final)
+		}
+		// 1 initial attempt + PromptRetries (2) additional = 3 total.
+		if prov.call != 3 {
+			t.Errorf("Stream calls = %d, want 3 (1 + 2 retries)", prov.call)
+		}
+		for _, m := range s.History() {
+			if m.Role != message.RoleAssistant {
+				continue
+			}
+			if !turnHasActionableContent(&m) {
+				t.Errorf("session history contains a zero-actionable-parts assistant message that must never have been appended: %+v", m)
+			}
+		}
+	})
+}
+
+// TestNormalTurnNoEmptyTurnRetry is the existing-behavior guard: an ordinary
+// completed turn with real text and StopEndTurn must complete with zero
+// extra provider calls — the empty-turn check must never fire for a turn
+// that already has actionable content.
+func TestNormalTurnNoEmptyTurnRetry(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "done"}),
+	}}
+	s := NewSession(Config{
+		Providers:     provider.Registry{"test": prov},
+		Model:         message.ModelRef{Provider: "test", Model: "m1"},
+		PromptRetries: 2,
+	})
+
+	final, err := s.Prompt(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Prompt err = %v, want nil", err)
+	}
+	if final == nil || final.Parts.Text() != "done" {
+		t.Fatalf("final = %+v, want a message with text %q", final, "done")
+	}
+	if prov.call != 1 {
+		t.Errorf("Stream calls = %d, want 1 (a normal turn needs no empty-turn retry)", prov.call)
+	}
+}
