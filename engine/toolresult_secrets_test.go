@@ -34,13 +34,15 @@ func TestMaskSecretsDoesNotDeleteAdjacentContent(t *testing.T) {
 		t.Fatalf("adjacent, unrelated content after the secret was NOT preserved (this is the N2 data-loss bug): got suffix %q, want it to end with %q",
 			got[max(0, len(got)-len(after)-20):], after)
 	}
-	// The masked SPAN itself must be small (per the {8,200} cap): the vast
+	// The masked SPAN itself must be small (per the {8,1000} cap — round-3
+	// raised it from 200 so a long SECRET masks more completely; the
+	// character class alone is what protects adjacent content): the vast
 	// majority of the 1 MB run of "A"s must still be present, UNMASKED, in
-	// the output — only the first (up to) 200 of them are inside the
-	// match. (Direct length subtraction is not a safe way to measure this:
-	// with the bulk of the "A" run surviving, len(got) is barely smaller
-	// than len(in), which is exactly the point — so this counts surviving
-	// "A" runs directly instead.)
+	// the output — only the first (up to) 1000 of them are inside the
+	// match. (Direct length subtraction is not a safe measure: with the
+	// bulk of the "A" run surviving, len(got) is barely smaller than
+	// len(in), which is exactly the point — so this counts surviving "A"
+	// runs directly instead.)
 	longestARun := 0
 	current := 0
 	for _, r := range got {
@@ -53,9 +55,42 @@ func TestMaskSecretsDoesNotDeleteAdjacentContent(t *testing.T) {
 			current = 0
 		}
 	}
-	if longestARun < len(secret)-250 {
-		t.Errorf("masking destroyed the bulk of a 1 MB legitimate value: longest surviving run of \"A\" = %d, want close to the original %d (only ~200 chars should ever be inside the match)",
+	if longestARun < len(secret)-1050 {
+		t.Errorf("masking destroyed the bulk of a 1 MB legitimate value: longest surviving run of \"A\" = %d, want close to the original %d (only ~1000 chars should ever be inside the match)",
 			longestARun, len(secret))
+	}
+}
+
+// TestMaskSecretsValueClassStopsAtDelimiters is the round-3 regression
+// guard for the N2 fix's OTHER half: the bounded CHARACTER CLASS, not the
+// length cap. A mutant that reverts secretValueClass to `\S` (keeping the
+// {8,1000} cap) still bleeds across `&`-delimited URL parameters — it eats
+// "SECRETVALUE&Expires=...&Signature=..." as one "value" — while the whole
+// rest of the suite stays green (the adjacent-content test above measures
+// loss in the hundreds of bytes, inside the cap's slack). This test pins
+// the class itself: masking must stop at the first structural delimiter,
+// so the parameters AFTER the secret survive byte-for-byte.
+func TestMaskSecretsValueClassStopsAtDelimiters(t *testing.T) {
+	in := `GET "https://bucket.s3.amazonaws.com/obj?access_key=AKIAEXAMPLE12345&Expires=1735689600&Signature=abcdefghijklmnop" -> 200`
+	got := maskSecrets(in)
+
+	if !strings.Contains(got, "access_key=***") {
+		t.Fatalf("the secret value itself was not masked: %q", got)
+	}
+	if !strings.Contains(got, "&Expires=1735689600&Signature=abcdefghijklmnop") {
+		t.Errorf("masking bled past the value's closing delimiter and destroyed adjacent URL parameters (the \\S-class regression):\n got: %q", got)
+	}
+	// A long secret must be masked IN FULL up to the cap: the env/YAML value
+	// bound is {8,1000} (round-3: raised from 200 so the cap limits how much
+	// of a LONG SECRET is masked far less often, while the character class
+	// alone is what protects adjacent content).
+	longSecret := strings.Repeat("s", 400)
+	gotLong := maskSecrets("token=" + longSecret + " trailing-context")
+	if strings.Contains(gotLong, "ssssssss") {
+		t.Errorf("a 400-char secret value survived masking (want the whole delimiter-free run masked): %q", gotLong[:min(120, len(gotLong))])
+	}
+	if !strings.HasSuffix(gotLong, " trailing-context") {
+		t.Errorf("content beyond the secret's whitespace delimiter was destroyed: %q", gotLong)
 	}
 }
 

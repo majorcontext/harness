@@ -34,7 +34,7 @@
 // excludes exactly the delimiters that matter (`&`, `?`, `,`, `"`, `}`,
 // whitespace, and code punctuation like `(`, `)`, `{`, `;`) so a match
 // naturally stops at the next real delimiter instead of bleeding into
-// adjacent content, AND a length cap ({8,200}, {8,1000} for a Bearer token)
+// adjacent content, AND a length cap ({8,1000})
 // as a second, independent bound. The separator for the KEY=value /
 // KEY: value shape is deliberately `=` (bare) or `:` followed by MANDATORY
 // whitespace (`:\s+`) — never bare `:` alone — which is what excludes `:=`
@@ -95,7 +95,7 @@ const secretValueClass = `[A-Za-z0-9_\-./+=]`
 //  6. Bearer prefix ("Authorization: Bearer ")
 //  7. Bearer value (unused: replaced, never echoed)
 var secretMaskPattern = regexp.MustCompile(
-	`(?i)(` + secretKeyNames + `)(=|:[ \t]+)(` + secretValueClass + `{8,200})` +
+	`(?i)(` + secretKeyNames + `)(=|:[ \t]+)(` + secretValueClass + `{8,1000})` +
 		`|("[^"]*(?:` + secretKeyNames + `)[^"]*")(\s*:\s*)"[^"]*"` +
 		`|(Authorization:\s*Bearer\s+)(` + secretValueClass + `{8,1000})`,
 )
@@ -117,7 +117,7 @@ var secretCandidateKeywords = []string{
 // It exists purely as a fast-reject: measured well over 50x cheaper than
 // even a NO-MATCH run of secretMaskPattern itself over the same bytes (see
 // TestMaskSecretsPerformance and the PR body) — the combined pattern's
-// bounded repeats ({8,200}, {8,1000}) unroll into a large NFA, which Go's
+// bounded repeats ({8,1000}) unroll into a large NFA, which Go's
 // regexp package (RE2: no backtracking, but not free) walks byte-by-byte
 // regardless of whether anything ever matches. A plain substring check
 // skips that walk entirely for content with no candidate keyword at all —
