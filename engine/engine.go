@@ -990,6 +990,47 @@ func (s *Session) appendWithUsage(m message.Message, usage *provider.Usage) {
 	s.mu.Unlock()
 }
 
+// accumulateDiscardedTurnUsage folds a billed-but-discarded turn's Usage
+// into cumulative Usage() only — it never touches lastUsage/haveLastUsage.
+// streamTurnWithRetry (prompt_retry.go) calls this for every attempt it
+// discards as an empty turn (see emptyTurnError), whether that attempt is
+// about to be retried or is the final one on budget exhaustion.
+//
+// This mirrors the accounting compact.go's errEmptyCompactionSummary skip
+// path already established for the sibling "the call ran and cost real
+// tokens even though it produced nothing usable" shape (see runCompaction's
+// doc comment and AGENTS.md's "An empty summary is a graceful no-op..."):
+// the call was real, the provider billed it in full (for an empty turn,
+// typically a full input prefill plus the entire max_tokens output
+// ceiling), and no tokens were refunded just because streamTurnWithRetry
+// chose to discard the resulting message. Dropping this usage silently
+// would undercount GET /session by the full cost of every discarded
+// attempt — up to PromptRetries+1 fully-billed calls for one turn.
+//
+// lastUsage is deliberately left untouched, matching the compact.go
+// precedent's own reasoning: maybeAutoCompact reads LastUsage as "how large
+// is the next worker request" to decide whether to trigger, so it must keep
+// reflecting the last REAL (actionable) prompt shape. Letting a discarded
+// empty attempt set it would let a fully-billed max-output turn that
+// produced nothing mask (or, worse, falsely trip) the very compaction
+// signal it has nothing to do with — the harness would be sizing the next
+// request off a turn that was thrown away.
+//
+// Like the compact.go skip path, this accumulation is live-only: there is
+// no message to attach the usage to (the discarded attempt's assistant
+// message is never appended to history — see emptyTurnError's doc
+// comment), so persistMessage never runs for it and the total does not
+// survive a process restart. Known residual, same tradeoff already accepted
+// on the compaction skip path.
+func (s *Session) accumulateDiscardedTurnUsage(usage provider.Usage) {
+	s.mu.Lock()
+	s.usage.InputTokens += usage.InputTokens
+	s.usage.OutputTokens += usage.OutputTokens
+	s.usage.CacheReadTokens += usage.CacheReadTokens
+	s.usage.CacheWriteTokens += usage.CacheWriteTokens
+	s.mu.Unlock()
+}
+
 func (s *Session) emit(ev Event) {
 	ev.SessionID = s.ID
 	if s.cfg.OnEvent != nil {
@@ -1621,6 +1662,112 @@ func (s *Session) appendUnexecutedToolCallResults(asst *message.Message, stop pr
 		return
 	}
 	s.append(syntheticUnexecutedToolResults(asst, fmt.Sprintf(unexecutedToolCallStopReasonTextFmt, stop)))
+}
+
+// turnHasActionableContent reports whether asst carries content a caller
+// can act on: a *message.Text part with non-empty Text, or a
+// *message.ToolCall part. A message holding only a *message.Reasoning part
+// (or no parts at all) is not actionable, even though the provider reported
+// a clean EventDone — see emptyTurnError's doc comment for why this
+// distinction exists.
+//
+// message.Part has five implementors: Text, ToolCall, Reasoning, Blob, and
+// ToolResult. Blob and ToolResult are deliberately not checked here: no
+// provider adapter emits either on an assistant turn today (a Blob is
+// user/tool-supplied input; a ToolResult only ever appears on a tool-role
+// message) — revisit this switch if a model-generated image (a Blob) ever
+// lands on an assistant message. Whitespace-only Text (e.g. "   ") counts
+// as actionable on purpose — the false-negative-safe direction: treating it
+// as actionable risks the false negative of letting a genuinely degenerate
+// whitespace-only reply through without a retry, which is a real but
+// low-cost miss (the turn still carries whatever the model produced). A
+// stricter "non-blank" definition would risk the opposite, worse mistake —
+// a false positive that misclassifies real-but-sparse output as empty and
+// burns the retry budget (and, at exhaustion, fails the turn outright) on
+// content that never needed a retry.
+func turnHasActionableContent(asst *message.Message) bool {
+	for _, p := range asst.Parts {
+		switch part := p.(type) {
+		case *message.Text:
+			if part.Text != "" {
+				return true
+			}
+		case *message.ToolCall:
+			return true
+		}
+	}
+	return false
+}
+
+// emptyTurnError is streamTurnWithRetry's synthetic error for a turn that
+// completed — streamTurn returned a nil error, so the provider stream
+// itself never failed — but produced no actionable content per
+// turnHasActionableContent: an assistant message with no non-empty Text and
+// no ToolCall part, regardless of stop reason.
+//
+// # Incident: box fx-context-limits, session ses_01m0ga6v25f1h902fnmx98zhn3 (2026-08-20)
+//
+// Twice in the same session, sonnet-5's thinking consumed the entire
+// max_tokens ceiling — output_tokens exactly 8192 (4096 EffortLow
+// budget_tokens + 4096 thinkingCompletionMargin) — before emitting any text
+// or tool call. The provider reported stop_reason "max_tokens" for a
+// message that carried only a Reasoning part. Before this type existed,
+// runAgenticLoop's `if stop != provider.StopToolUse { return asst, nil }`
+// (see above, runAgenticLoop) treated this as an ordinary completed turn:
+// no content validation, so the caller got back a message with nothing to
+// show and the server journaled outcome:"completed" (server/handlers.go).
+// The second occurrence was session-terminal — the task died silently with
+// no error anywhere in the record.
+//
+// The identical hole is reachable through StopToolUse itself, not only a
+// non-tool-use stop reason: provider/openaicompat's mapFinishReason maps
+// the wire finish_reason "tool_calls" to StopToolUse unconditionally, so a
+// proxied provider that reports "tool_calls" with an empty or dropped
+// tool_calls array (observed on the bifrost→Fireworks path) produces the
+// same zero-actionable-parts message under StopToolUse. runAgenticLoop's
+// own `len(results) == 0` branch (see above, runAgenticLoop) already
+// contemplates a StopToolUse turn with no ToolCall parts, but only to avoid
+// looping forever on it — it still returns asst, nil, the same silent
+// "success" this type exists to prevent. That is why
+// turnHasActionableContent is NOT gated on the stop reason (see
+// streamTurnWithRetry's doc comment, prompt_retry.go, for the full
+// reasoning): gating on it would leave this StopToolUse shape uncaught.
+//
+// appendUnexecutedToolCallResults (NEP-5272, above) does not catch either
+// shape: its hasToolCall guard is a no-op for a message with zero ToolCall
+// parts, which both shapes are — that fix closes the orphaned-tool-call
+// hole, not the no-content-at-all hole. The two never double-handle the
+// same message: appendUnexecutedToolCallResults only ever runs on a message
+// streamTurnWithRetry already accepted as actionable (it returned success),
+// so by construction that message either carries a real ToolCall
+// (appendUnexecutedToolCallResults' guard fires, as before) or real Text
+// with no ToolCall (its guard stays a no-op, as before) — a
+// zero-actionable-parts message never reaches runAgenticLoop at all now,
+// successful or not.
+//
+// streamTurnWithRetry synthesizes this error when the condition above holds
+// and routes it into the same bounded retry budget (Config.PromptRetries)
+// used for a classified-retryable provider error, emitting the same
+// EventTurnRestart before each retry. On budget exhaustion it returns this
+// error unwrapped: server's turnEndOutcome (server/journal.go) maps every
+// unrecognized error to outcome:"error", which is the correct terminal
+// state — a completed-but-empty turn must never be recorded as success.
+//
+// A discarded attempt still billed real tokens (typically a full input
+// prefill plus the entire max_tokens output ceiling), so streamTurnWithRetry
+// folds its Usage into cumulative Session.Usage() via
+// accumulateDiscardedTurnUsage before synthesizing this error — on every
+// discarded attempt, retried or exhausted alike, never only the last one.
+// See that function's doc comment for the accounting rule (mirrors the
+// #136 empty-compaction-summary precedent) and why lastUsage is
+// deliberately left untouched.
+type emptyTurnError struct {
+	stop         provider.StopReason
+	outputTokens int
+}
+
+func (e *emptyTurnError) Error() string {
+	return fmt.Sprintf("empty turn: provider reported stop reason %q with output_tokens=%d but produced no text and no tool call", e.stop, e.outputTokens)
 }
 
 // toolDefs merges built-in tools, MCP-provided tools, and plugin-provided

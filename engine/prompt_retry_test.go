@@ -285,3 +285,334 @@ func TestPromptRetriesZeroDisables(t *testing.T) {
 		t.Errorf("Stream calls = %d, want 1 (PromptRetries=0 disables retry)", prov.calls)
 	}
 }
+
+// emptyMaxTokensTurn builds the provider.Event a completed-but-empty turn
+// reports: production incident box fx-context-limits (session
+// ses_01m0ga6v25f1h902fnmx98zhn3, 2026-08-20) had sonnet-5's thinking
+// consume the entire max_tokens ceiling — output_tokens exactly 8192 (4096
+// EffortLow budget_tokens + 4096 thinkingCompletionMargin) — before emitting
+// any text or tool call, so the assistant message carried only a Reasoning
+// part and the provider reported stop_reason "max_tokens". This is a clean
+// EventDone, not a Stream error: streamTurn returns (asst, stop, usage, nil)
+// exactly like any other completed turn.
+func emptyMaxTokensTurn() []provider.Event {
+	return []provider.Event{{
+		Type:       provider.EventDone,
+		Message:    &message.Message{ID: "msg_empty", Role: message.RoleAssistant, Parts: message.Parts{&message.Reasoning{Text: "thinking really hard about it"}}},
+		StopReason: provider.StopMaxTokens,
+		Usage:      provider.Usage{OutputTokens: 8192},
+	}}
+}
+
+// TestEmptyTurnRetriesThenSucceeds is the red-first guard for the production
+// defect: a completed turn with no actionable content (no Text, no
+// ToolCall — here, Reasoning only) must never be journaled as success.
+// Attempt 1 reports the empty max_tokens shape above; attempt 2 is a normal
+// text turn. streamTurnWithRetry must treat attempt 1 as a retryable
+// failure — same bounded budget and EventTurnRestart signal as a transport
+// error — and the turn must complete with attempt 2's text.
+//
+// Red-verify: before the fix, runAgenticLoop's `if stop != StopToolUse {
+// return asst, nil }` (engine.go) treats attempt 1 as turn-complete with no
+// content validation. Prompt returns attempt 1's Reasoning-only message as
+// final (Parts.Text() == "", not "done"), the provider is called exactly
+// once, and no EventTurnRestart is emitted — every assertion below fails.
+func TestEmptyTurnRetriesThenSucceeds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+			emptyMaxTokensTurn(),
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "done"}),
+		}}
+		var got []Event
+		s := NewSession(Config{
+			Providers:     provider.Registry{"test": prov},
+			Model:         message.ModelRef{Provider: "test", Model: "m1"},
+			PromptRetries: 2,
+			OnEvent:       func(ev Event) { got = append(got, ev) },
+		})
+
+		final, err := s.Prompt(context.Background(), "go")
+		if err != nil {
+			t.Fatalf("Prompt err = %v, want nil (the empty turn must be retried and succeed)", err)
+		}
+		if final == nil || final.Parts.Text() != "done" {
+			t.Fatalf("final = %+v, want a message with text %q", final, "done")
+		}
+		if prov.call != 2 {
+			t.Errorf("Stream calls = %d, want 2 (attempt 1 empty, attempt 2 succeeds)", prov.call)
+		}
+		restarts := 0
+		for _, ev := range got {
+			if ev.Type == EventTurnRestart {
+				restarts++
+			}
+		}
+		if restarts != 1 {
+			t.Errorf("EventTurnRestart count = %d, want exactly 1 between the empty attempt and the retry", restarts)
+		}
+	})
+}
+
+// TestEmptyTurnRetriesExhaustedSurfacesError proves the budget is bounded
+// and the terminal shape is a real failure, not a silently "completed"
+// turn: this reproduces the SECOND, session-terminal occurrence of the
+// production defect, where every attempt came back empty and the task died
+// silently. Every attempt reports the empty max_tokens shape; Prompt must
+// return a non-nil error unwrapping to *emptyTurnError, and history must
+// never contain a zero-actionable-parts assistant message.
+//
+// Red-verify: before the fix, attempt 1 alone is treated as turn-complete
+// (see TestEmptyTurnRetriesThenSucceeds's red-verify note) — Prompt returns
+// nil error, final is the empty message, only 1 Stream call happens, and
+// the empty message IS in history — every assertion below fails.
+func TestEmptyTurnRetriesExhaustedSurfacesError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+			emptyMaxTokensTurn(),
+			emptyMaxTokensTurn(),
+			emptyMaxTokensTurn(),
+		}}
+		s := NewSession(Config{
+			Providers:     provider.Registry{"test": prov},
+			Model:         message.ModelRef{Provider: "test", Model: "m1"},
+			PromptRetries: 2,
+		})
+
+		final, err := s.Prompt(context.Background(), "go")
+		if err == nil {
+			t.Fatal("Prompt err = nil, want the exhausted empty-turn failure to surface")
+		}
+		var emptyErr *emptyTurnError
+		if !errors.As(err, &emptyErr) {
+			t.Fatalf("Prompt err = %v, want it to unwrap to *emptyTurnError", err)
+		}
+		if final != nil {
+			t.Errorf("final = %+v, want nil on exhaustion", final)
+		}
+		// 1 initial attempt + PromptRetries (2) additional = 3 total.
+		if prov.call != 3 {
+			t.Errorf("Stream calls = %d, want 3 (1 + 2 retries)", prov.call)
+		}
+		for _, m := range s.History() {
+			if m.Role != message.RoleAssistant {
+				continue
+			}
+			if !turnHasActionableContent(&m) {
+				t.Errorf("session history contains a zero-actionable-parts assistant message that must never have been appended: %+v", m)
+			}
+		}
+	})
+}
+
+// TestNormalTurnNoEmptyTurnRetry is the existing-behavior guard: an ordinary
+// completed turn with real text and StopEndTurn must complete with zero
+// extra provider calls — the empty-turn check must never fire for a turn
+// that already has actionable content.
+func TestNormalTurnNoEmptyTurnRetry(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "done"}),
+	}}
+	s := NewSession(Config{
+		Providers:     provider.Registry{"test": prov},
+		Model:         message.ModelRef{Provider: "test", Model: "m1"},
+		PromptRetries: 2,
+	})
+
+	final, err := s.Prompt(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("Prompt err = %v, want nil", err)
+	}
+	if final == nil || final.Parts.Text() != "done" {
+		t.Fatalf("final = %+v, want a message with text %q", final, "done")
+	}
+	if prov.call != 1 {
+		t.Errorf("Stream calls = %d, want 1 (a normal turn needs no empty-turn retry)", prov.call)
+	}
+}
+
+// TestEmptyTurnRetriesOnStopToolUseWithNoToolCall is the red-first guard for
+// the StopToolUse variant of the same defect: provider/openaicompat's
+// mapFinishReason maps the wire finish_reason "tool_calls" to StopToolUse
+// unconditionally (openaicompat.go), so a proxied provider that reports
+// "tool_calls" with an empty or dropped tool_calls array (observed on the
+// bifrost→Fireworks path) produces a StopToolUse turn whose assistant
+// message carries no ToolCall part at all — here, Reasoning only, same as
+// the max_tokens shape but under the ONE stop reason a naive
+// `stop != provider.StopToolUse` gate would treat as automatically safe.
+// Attempt 1 reports this shape; attempt 2 is a normal text turn.
+// streamTurnWithRetry must retry attempt 1, not treat it as success.
+//
+// Red-verify the NAMED mechanism: with the guard restored to
+// `stop != provider.StopToolUse && !turnHasActionableContent(asst)`
+// (the pre-review shape), attempt 1's stop reason IS StopToolUse, so the
+// condition is false regardless of content and streamTurnWithRetry returns
+// it as success on the first call — runAgenticLoop then finds
+// runToolCalls(ctx, asst) returns zero results (no ToolCall parts) and hits
+// its own defensive `len(results) == 0` branch (engine.go), which also
+// returns asst, nil. Prompt returns attempt 1's Reasoning-only message as
+// final (Parts.Text() == "", not "done"), the provider is called exactly
+// once, and no EventTurnRestart is emitted — every assertion below fails.
+func TestEmptyTurnRetriesOnStopToolUseWithNoToolCall(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		emptyToolUseTurn := []provider.Event{{
+			Type:       provider.EventDone,
+			Message:    &message.Message{ID: "msg_empty_tu", Role: message.RoleAssistant, Parts: message.Parts{&message.Reasoning{Text: "deciding what to call"}}},
+			StopReason: provider.StopToolUse,
+			Usage:      provider.Usage{OutputTokens: 8192},
+		}}
+		prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+			emptyToolUseTurn,
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "done"}),
+		}}
+		var got []Event
+		s := NewSession(Config{
+			Providers:     provider.Registry{"test": prov},
+			Model:         message.ModelRef{Provider: "test", Model: "m1"},
+			PromptRetries: 2,
+			OnEvent:       func(ev Event) { got = append(got, ev) },
+		})
+
+		final, err := s.Prompt(context.Background(), "go")
+		if err != nil {
+			t.Fatalf("Prompt err = %v, want nil (the empty StopToolUse turn must be retried and succeed)", err)
+		}
+		if final == nil || final.Parts.Text() != "done" {
+			t.Fatalf("final = %+v, want a message with text %q", final, "done")
+		}
+		if prov.call != 2 {
+			t.Errorf("Stream calls = %d, want 2 (attempt 1 empty under StopToolUse, attempt 2 succeeds)", prov.call)
+		}
+		restarts := 0
+		for _, ev := range got {
+			if ev.Type == EventTurnRestart {
+				restarts++
+			}
+		}
+		if restarts != 1 {
+			t.Errorf("EventTurnRestart count = %d, want exactly 1 between the empty attempt and the retry", restarts)
+		}
+	})
+}
+
+// emptyMaxTokensTurnUsage builds the same empty (Reasoning-only,
+// StopMaxTokens) turn shape emptyMaxTokensTurn does, but with an explicit
+// usage: a discarded empty attempt bills a full input prefill plus the
+// max_tokens output ceiling, not always the same fixed numbers, so a
+// usage-accounting test needs distinct per-attempt usage to prove real
+// accumulation rather than a coincidental match.
+func emptyMaxTokensTurnUsage(usage provider.Usage) []provider.Event {
+	return []provider.Event{{
+		Type:       provider.EventDone,
+		Message:    &message.Message{ID: "msg_empty", Role: message.RoleAssistant, Parts: message.Parts{&message.Reasoning{Text: "thinking really hard about it"}}},
+		StopReason: provider.StopMaxTokens,
+		Usage:      usage,
+	}}
+}
+
+// TestEmptyTurnDiscardedAttemptsAccumulateUsage is the red-first guard for
+// the discarded-usage defect raised on review: a discarded empty attempt is
+// not a provider failure — the call ran to completion and billed real
+// tokens (a full input prefill plus the max_tokens output ceiling) — so
+// those tokens must still land in cumulative Session.Usage(), exactly like
+// the #136 empty-compaction-summary precedent AGENTS.md documents ("the
+// call's real usage is still accumulated into cumulative Usage() ... it was
+// a billed call even though it produced nothing"). Dropping it silently
+// would undercount GET /session by the full cost of every discarded
+// attempt.
+//
+// Attempts 1 and 2 are empty with distinct usage (so a coincidental match
+// can't hide a bug); attempt 3 succeeds. Session.Usage() after Prompt must
+// equal the SUM of all three attempts' usage. LastUsage() must equal ONLY
+// attempt 3's usage — see accumulateDiscardedTurnUsage's doc comment
+// (engine.go) for why a discarded attempt must never update it.
+//
+// Red-verify: before the fix, streamTurnWithRetry discards attempts 1 and 2
+// without ever touching s.usage — Session.Usage() after Prompt reflects
+// only attempt 3's usage, missing the ~16k billed-but-empty tokens.
+func TestEmptyTurnDiscardedAttemptsAccumulateUsage(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		attempt1Usage := provider.Usage{InputTokens: 1000, OutputTokens: 8192}
+		attempt2Usage := provider.Usage{InputTokens: 1010, OutputTokens: 8192}
+		attempt3Usage := provider.Usage{InputTokens: 1050, OutputTokens: 12}
+		prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+			emptyMaxTokensTurnUsage(attempt1Usage),
+			emptyMaxTokensTurnUsage(attempt2Usage),
+			{{
+				Type:       provider.EventDone,
+				Message:    &message.Message{ID: "msg_ok", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "done"}}},
+				StopReason: provider.StopEndTurn,
+				Usage:      attempt3Usage,
+			}},
+		}}
+		s := NewSession(Config{
+			Providers:     provider.Registry{"test": prov},
+			Model:         message.ModelRef{Provider: "test", Model: "m1"},
+			PromptRetries: 2,
+		})
+
+		final, err := s.Prompt(context.Background(), "go")
+		if err != nil {
+			t.Fatalf("Prompt err = %v, want nil", err)
+		}
+		if final == nil || final.Parts.Text() != "done" {
+			t.Fatalf("final = %+v, want a message with text %q", final, "done")
+		}
+
+		wantUsage := provider.Usage{
+			InputTokens:  attempt1Usage.InputTokens + attempt2Usage.InputTokens + attempt3Usage.InputTokens,
+			OutputTokens: attempt1Usage.OutputTokens + attempt2Usage.OutputTokens + attempt3Usage.OutputTokens,
+		}
+		if got := s.Usage(); got != wantUsage {
+			t.Errorf("Usage() = %+v, want %+v (all three billed attempts, including the two discarded empty ones)", got, wantUsage)
+		}
+
+		last, ok := s.LastUsage()
+		if !ok {
+			t.Fatal("LastUsage not ok")
+		}
+		if last != attempt3Usage {
+			t.Errorf("LastUsage() = %+v, want %+v (only the real successful attempt — a discarded empty attempt must never set it)", last, attempt3Usage)
+		}
+	})
+}
+
+// TestEmptyTurnExhaustedUsageStillAccumulates proves the accumulation
+// happens even when every attempt is empty and Prompt ultimately returns an
+// error: none of the tokens billed across the exhausted retry budget go
+// unaccounted just because the turn never succeeded.
+//
+// Red-verify: before the fix, none of the three discarded attempts ever
+// touch s.usage — Session.Usage() after Prompt is the zero value even
+// though ~24k output tokens (3 * 8192) were actually billed.
+func TestEmptyTurnExhaustedUsageStillAccumulates(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		u1 := provider.Usage{InputTokens: 1000, OutputTokens: 8192}
+		u2 := provider.Usage{InputTokens: 1010, OutputTokens: 8192}
+		u3 := provider.Usage{InputTokens: 1020, OutputTokens: 8192}
+		prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+			emptyMaxTokensTurnUsage(u1),
+			emptyMaxTokensTurnUsage(u2),
+			emptyMaxTokensTurnUsage(u3),
+		}}
+		s := NewSession(Config{
+			Providers:     provider.Registry{"test": prov},
+			Model:         message.ModelRef{Provider: "test", Model: "m1"},
+			PromptRetries: 2,
+		})
+
+		if _, err := s.Prompt(context.Background(), "go"); err == nil {
+			t.Fatal("Prompt err = nil, want the exhausted empty-turn failure to surface")
+		}
+
+		wantUsage := provider.Usage{
+			InputTokens:  u1.InputTokens + u2.InputTokens + u3.InputTokens,
+			OutputTokens: u1.OutputTokens + u2.OutputTokens + u3.OutputTokens,
+		}
+		if got := s.Usage(); got != wantUsage {
+			t.Errorf("Usage() = %+v, want %+v (all three billed attempts present even though Prompt returned an error)", got, wantUsage)
+		}
+		if _, ok := s.LastUsage(); ok {
+			t.Error("LastUsage ok = true, want false (no turn ever completed successfully)")
+		}
+	})
+}
