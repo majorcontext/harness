@@ -429,3 +429,67 @@ func TestNormalTurnNoEmptyTurnRetry(t *testing.T) {
 		t.Errorf("Stream calls = %d, want 1 (a normal turn needs no empty-turn retry)", prov.call)
 	}
 }
+
+// TestEmptyTurnRetriesOnStopToolUseWithNoToolCall is the red-first guard for
+// the StopToolUse variant of the same defect: provider/openaicompat's
+// mapFinishReason maps the wire finish_reason "tool_calls" to StopToolUse
+// unconditionally (openaicompat.go), so a proxied provider that reports
+// "tool_calls" with an empty or dropped tool_calls array (observed on the
+// bifrost→Fireworks path) produces a StopToolUse turn whose assistant
+// message carries no ToolCall part at all — here, Reasoning only, same as
+// the max_tokens shape but under the ONE stop reason a naive
+// `stop != provider.StopToolUse` gate would treat as automatically safe.
+// Attempt 1 reports this shape; attempt 2 is a normal text turn.
+// streamTurnWithRetry must retry attempt 1, not treat it as success.
+//
+// Red-verify the NAMED mechanism: with the guard restored to
+// `stop != provider.StopToolUse && !turnHasActionableContent(asst)`
+// (the pre-review shape), attempt 1's stop reason IS StopToolUse, so the
+// condition is false regardless of content and streamTurnWithRetry returns
+// it as success on the first call — runAgenticLoop then finds
+// runToolCalls(ctx, asst) returns zero results (no ToolCall parts) and hits
+// its own defensive `len(results) == 0` branch (engine.go), which also
+// returns asst, nil. Prompt returns attempt 1's Reasoning-only message as
+// final (Parts.Text() == "", not "done"), the provider is called exactly
+// once, and no EventTurnRestart is emitted — every assertion below fails.
+func TestEmptyTurnRetriesOnStopToolUseWithNoToolCall(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		emptyToolUseTurn := []provider.Event{{
+			Type:       provider.EventDone,
+			Message:    &message.Message{ID: "msg_empty_tu", Role: message.RoleAssistant, Parts: message.Parts{&message.Reasoning{Text: "deciding what to call"}}},
+			StopReason: provider.StopToolUse,
+			Usage:      provider.Usage{OutputTokens: 8192},
+		}}
+		prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+			emptyToolUseTurn,
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "done"}),
+		}}
+		var got []Event
+		s := NewSession(Config{
+			Providers:     provider.Registry{"test": prov},
+			Model:         message.ModelRef{Provider: "test", Model: "m1"},
+			PromptRetries: 2,
+			OnEvent:       func(ev Event) { got = append(got, ev) },
+		})
+
+		final, err := s.Prompt(context.Background(), "go")
+		if err != nil {
+			t.Fatalf("Prompt err = %v, want nil (the empty StopToolUse turn must be retried and succeed)", err)
+		}
+		if final == nil || final.Parts.Text() != "done" {
+			t.Fatalf("final = %+v, want a message with text %q", final, "done")
+		}
+		if prov.call != 2 {
+			t.Errorf("Stream calls = %d, want 2 (attempt 1 empty under StopToolUse, attempt 2 succeeds)", prov.call)
+		}
+		restarts := 0
+		for _, ev := range got {
+			if ev.Type == EventTurnRestart {
+				restarts++
+			}
+		}
+		if restarts != 1 {
+			t.Errorf("EventTurnRestart count = %d, want exactly 1 between the empty attempt and the retry", restarts)
+		}
+	})
+}

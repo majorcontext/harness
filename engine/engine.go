@@ -1629,6 +1629,21 @@ func (s *Session) appendUnexecutedToolCallResults(asst *message.Message, stop pr
 // (or no parts at all) is not actionable, even though the provider reported
 // a clean EventDone — see emptyTurnError's doc comment for why this
 // distinction exists.
+//
+// message.Part has five implementors: Text, ToolCall, Reasoning, Blob, and
+// ToolResult. Blob and ToolResult are deliberately not checked here: no
+// provider adapter emits either on an assistant turn today (a Blob is
+// user/tool-supplied input; a ToolResult only ever appears on a tool-role
+// message) — revisit this switch if a model-generated image (a Blob) ever
+// lands on an assistant message. Whitespace-only Text (e.g. "   ") counts
+// as actionable on purpose — the false-negative-safe direction: treating it
+// as actionable risks the false negative of letting a genuinely degenerate
+// whitespace-only reply through without a retry, which is a real but
+// low-cost miss (the turn still carries whatever the model produced). A
+// stricter "non-blank" definition would risk the opposite, worse mistake —
+// a false positive that misclassifies real-but-sparse output as empty and
+// burns the retry budget (and, at exhaustion, fails the turn outright) on
+// content that never needed a retry.
 func turnHasActionableContent(asst *message.Message) bool {
 	for _, p := range asst.Parts {
 		switch part := p.(type) {
@@ -1646,9 +1661,8 @@ func turnHasActionableContent(asst *message.Message) bool {
 // emptyTurnError is streamTurnWithRetry's synthetic error for a turn that
 // completed — streamTurn returned a nil error, so the provider stream
 // itself never failed — but produced no actionable content per
-// turnHasActionableContent: a stop reason other than StopToolUse (so no
-// tool call is pending execution) alongside an assistant message with no
-// non-empty Text and no ToolCall part.
+// turnHasActionableContent: an assistant message with no non-empty Text and
+// no ToolCall part, regardless of stop reason.
 //
 // # Incident: box fx-context-limits, session ses_01m0ga6v25f1h902fnmx98zhn3 (2026-08-20)
 //
@@ -1658,16 +1672,37 @@ func turnHasActionableContent(asst *message.Message) bool {
 // or tool call. The provider reported stop_reason "max_tokens" for a
 // message that carried only a Reasoning part. Before this type existed,
 // runAgenticLoop's `if stop != provider.StopToolUse { return asst, nil }`
-// (see below) treated this as an ordinary completed turn: no content
-// validation, so the caller got back a message with nothing to show and the
-// server journaled outcome:"completed" (server/handlers.go). The second
-// occurrence was session-terminal — the task died silently with no error
-// anywhere in the record.
+// (see above, runAgenticLoop) treated this as an ordinary completed turn:
+// no content validation, so the caller got back a message with nothing to
+// show and the server journaled outcome:"completed" (server/handlers.go).
+// The second occurrence was session-terminal — the task died silently with
+// no error anywhere in the record.
 //
-// appendUnexecutedToolCallResults (NEP-5272, above) does not catch this: its
-// hasToolCall guard is a no-op for a message with zero ToolCall parts, which
-// is exactly this shape — that fix closes the orphaned-tool-call hole, not
-// the no-content-at-all hole.
+// The identical hole is reachable through StopToolUse itself, not only a
+// non-tool-use stop reason: provider/openaicompat's mapFinishReason maps
+// the wire finish_reason "tool_calls" to StopToolUse unconditionally, so a
+// proxied provider that reports "tool_calls" with an empty or dropped
+// tool_calls array (observed on the bifrost→Fireworks path) produces the
+// same zero-actionable-parts message under StopToolUse. runAgenticLoop's
+// own `len(results) == 0` branch (see above, runAgenticLoop) already
+// contemplates a StopToolUse turn with no ToolCall parts, but only to avoid
+// looping forever on it — it still returns asst, nil, the same silent
+// "success" this type exists to prevent. That is why
+// turnHasActionableContent is NOT gated on the stop reason (see
+// streamTurnWithRetry's doc comment, prompt_retry.go, for the full
+// reasoning): gating on it would leave this StopToolUse shape uncaught.
+//
+// appendUnexecutedToolCallResults (NEP-5272, above) does not catch either
+// shape: its hasToolCall guard is a no-op for a message with zero ToolCall
+// parts, which both shapes are — that fix closes the orphaned-tool-call
+// hole, not the no-content-at-all hole. The two never double-handle the
+// same message: appendUnexecutedToolCallResults only ever runs on a message
+// streamTurnWithRetry already accepted as actionable (it returned success),
+// so by construction that message either carries a real ToolCall
+// (appendUnexecutedToolCallResults' guard fires, as before) or real Text
+// with no ToolCall (its guard stays a no-op, as before) — a
+// zero-actionable-parts message never reaches runAgenticLoop at all now,
+// successful or not.
 //
 // streamTurnWithRetry synthesizes this error when the condition above holds
 // and routes it into the same bounded retry budget (Config.PromptRetries)

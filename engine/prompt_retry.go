@@ -100,20 +100,32 @@ func waitBasePromptRetryBackoff(ctx context.Context, attempt int) error {
 // EventMessage regardless.
 //
 // A COMPLETED turn (streamTurn's err is nil) with no actionable content —
-// per turnHasActionableContent, no non-empty Text and no ToolCall part,
-// alongside a stop reason other than StopToolUse — is folded into the same
-// bounded retry budget via a synthesized *emptyTurnError, rather than
-// returned as a success. See emptyTurnError's doc comment (engine.go) for
-// the production incident this guards: a provider stream can reach
-// EventDone cleanly while reporting nothing the caller can act on (e.g.
-// thinking alone consumed the entire max_tokens ceiling), and that must
-// never be journaled as a completed turn. This is why the check runs before
-// the `err == nil` early return below, not after it.
+// per turnHasActionableContent, no non-empty Text and no ToolCall part — is
+// folded into the same bounded retry budget via a synthesized
+// *emptyTurnError, rather than returned as a success. See emptyTurnError's
+// doc comment (engine.go) for the production incident this guards: a
+// provider stream can reach EventDone cleanly while reporting nothing the
+// caller can act on (e.g. thinking alone consumed the entire max_tokens
+// ceiling), and that must never be journaled as a completed turn. This is
+// why the check runs before the `err == nil` early return below, not after
+// it.
+//
+// The check is deliberately NOT gated on `stop != provider.StopToolUse`.
+// For a true tool-use turn that clause is redundant: a genuine tool call
+// always carries a *message.ToolCall part, which turnHasActionableContent
+// already accepts. Gating on it would also leave the identical hole open
+// for StopToolUse itself: provider/openaicompat's mapFinishReason maps the
+// wire finish_reason "tool_calls" to StopToolUse unconditionally, so a
+// proxied provider that reports finish_reason "tool_calls" with an
+// empty/dropped tool_calls array (observed on the bifrost→Fireworks path)
+// produces exactly the same "completed, nothing to act on" shape this fix
+// exists to catch. turnHasActionableContent alone is the complete guard for
+// every stop reason.
 func (s *Session) streamTurnWithRetry(ctx context.Context) (*message.Message, provider.StopReason, provider.Usage, error) {
 	for attempt := 1; ; attempt++ {
 		asst, stop, usage, err := s.streamTurn(ctx)
 		if err == nil {
-			if stop != provider.StopToolUse && !turnHasActionableContent(asst) {
+			if !turnHasActionableContent(asst) {
 				err = &emptyTurnError{stop: stop, outputTokens: usage.OutputTokens}
 			} else {
 				return asst, stop, usage, nil
