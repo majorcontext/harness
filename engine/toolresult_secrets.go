@@ -107,6 +107,7 @@ const secretValueClass = `[A-Za-z0-9_\-./+=]`
 //  6. Bearer prefix ("Authorization: Bearer ")
 //  7. Bearer value (unused: replaced, never echoed)
 //  8. quoted-env key (unquoted)   9. quoted-env separator — DOUBLE-quoted value
+//
 // 10. quoted-env key (unquoted)  11. quoted-env separator — SINGLE-quoted value
 //
 // RE2 (Go's regexp package) has no backreferences, so "the same quote
