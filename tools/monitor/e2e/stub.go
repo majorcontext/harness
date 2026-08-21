@@ -405,7 +405,16 @@ func Start() (*Stub, error) {
 		ProvStreamError:  &scriptedProvider{name: ProvStreamError, turns: errorTurns("starting the request", StreamErrorText)},
 		ProvReconnectGap: &scriptedProvider{name: ProvReconnectGap, turns: quickTurns(ReconnectGapReply)},
 		ProvLiveCap:      &scriptedProvider{name: ProvLiveCap, turns: capTurns(6)},
-		ProvPendingThink: &scriptedProvider{name: ProvPendingThink, turns: pendingThinkTurns(400*time.Millisecond, PendingThinkReply)},
+		// The delay is real_e2e.mjs's observation window for the "Thinking…"
+		// pending-assistant indicator (Change 2 — see pendingThinkTurns'
+		// doc comment): the turn must stay busy-with-nothing-to-show-yet
+		// long enough for the test to poll and see the indicator before
+		// streaming content arrives and replaces it. At 400ms this was
+		// comparable to the monitor page's own SSE-delivery-plus-render
+		// latency under full-suite CPU contention, so the poll sometimes
+		// landed after content had already streamed in — about a 1-in-4
+		// flake. 1500ms widens the window; no assertion changed.
+		ProvPendingThink: &scriptedProvider{name: ProvPendingThink, turns: pendingThinkTurns(1500*time.Millisecond, PendingThinkReply)},
 	}
 
 	var srv *server.Server
