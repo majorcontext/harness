@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -147,5 +149,95 @@ func TestTruncateTaskResultMarksCut(t *testing.T) {
 	}
 	if len([]rune(out)) > taskNotificationResultCap+len("… [truncated]")+1 {
 		t.Errorf("truncated result too long: %d runes", len([]rune(out)))
+	}
+}
+
+// TestEnqueueTaskNotificationPersistsQueuedRecord and
+// TestCommitTaskNotificationsPersistsDeliveredRecord are the regression
+// tests for two follow-ups from PR #145's architecture review: "child
+// journal records" (a structured, independently-queryable trace of a
+// task's spawn/delivery lifecycle, distinct from the rendered "[tasks:
+// ...]" conversation text) and "notification persistence" (the SAME
+// records double as the durable source LoadSession folds an outstanding,
+// undelivered notification back from — see TestEnqueueTaskNotification-
+// SurvivesReloadUndelivered below for that half).
+func TestEnqueueTaskNotificationPersistsQueuedRecord(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{WorkDir: dir, SessionDir: dir})
+	s.enqueueTaskNotification(taskNotification{ChildID: "ses_child1", Agent: "explore", Status: StatusDone, Result: "found it"})
+
+	data, err := os.ReadFile(filepath.Join(dir, s.ID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	if !strings.Contains(log, `"type":"task.notify_queued"`) || !strings.Contains(log, `"child_id":"ses_child1"`) || !strings.Contains(log, `"found it"`) {
+		t.Fatalf("log missing task.notify_queued record: %s", log)
+	}
+}
+
+func TestCommitTaskNotificationsPersistsDeliveredRecord(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{WorkDir: dir, SessionDir: dir})
+	s.enqueueTaskNotification(taskNotification{ChildID: "ses_child1", Agent: "explore", Status: StatusDone, Result: "found it"})
+	s.checkoutTaskNotificationsSegment()
+	s.commitTaskNotifications()
+
+	data, err := os.ReadFile(filepath.Join(dir, s.ID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	if !strings.Contains(log, `"type":"task.notify_delivered"`) || !strings.Contains(log, `"child_id":"ses_child1"`) {
+		t.Fatalf("log missing task.notify_delivered record: %s", log)
+	}
+}
+
+// TestEnqueueTaskNotificationSurvivesReloadUndelivered is the regression
+// test for "notification persistence": before this fix, Session.
+// taskNotifications was purely in-memory — a child that finished while
+// its parent process crashed or was evicted BEFORE the parent's own next
+// turn checked the notification out left no durable trace that a
+// delivery was owed at all, a silent, permanent drop. Proves a queued-
+// but-never-committed notification survives a fresh LoadSession exactly
+// as if the process had never stopped.
+func TestEnqueueTaskNotificationSurvivesReloadUndelivered(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{WorkDir: dir, SessionDir: dir})
+	want := taskNotification{ChildID: "ses_child1", Agent: "explore", Status: StatusDone, Result: "found it", Usage: provider.Usage{InputTokens: 10, OutputTokens: 5}}
+	s.enqueueTaskNotification(want)
+	// Deliberately never checked out or committed — the process "crashes"
+	// right here, mid-delivery.
+
+	reloaded, err := LoadSession(Config{WorkDir: dir, SessionDir: dir}, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if !reloaded.hasPendingTaskNotifications() {
+		t.Fatal("reloaded session has no pending notification — the undelivered one was lost")
+	}
+	seg := reloaded.checkoutTaskNotificationsSegment()
+	if !strings.Contains(seg, want.ChildID) || !strings.Contains(seg, want.Result) {
+		t.Errorf("reloaded notification content = %q, want it to mention %q and %q", seg, want.ChildID, want.Result)
+	}
+}
+
+// TestEnqueueTaskNotificationDeliveredDoesNotSurviveReload is the
+// companion proof: a notification that WAS actually committed (delivered)
+// before the reload must NOT reappear — the recTaskNotifyDelivered fold
+// must correctly cancel out its matching recTaskNotifyQueued record.
+func TestEnqueueTaskNotificationDeliveredDoesNotSurviveReload(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{WorkDir: dir, SessionDir: dir})
+	s.enqueueTaskNotification(taskNotification{ChildID: "ses_child1", Status: StatusDone, Result: "found it"})
+	s.checkoutTaskNotificationsSegment()
+	s.commitTaskNotifications()
+
+	reloaded, err := LoadSession(Config{WorkDir: dir, SessionDir: dir}, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if reloaded.hasPendingTaskNotifications() {
+		t.Error("delivered notification reappeared after reload")
 	}
 }

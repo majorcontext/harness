@@ -97,21 +97,51 @@ var (
 // triggerResumeLocked — never for a child's own turns.
 //
 // Run(id, text) asks the external scheduler to run a turn on id with text
-// as the prompt. handled reports whether the scheduler recognizes id at
-// all — true even if it did not actually START a turn this instant (e.g.
-// id was already busy with something else the scheduler itself already
-// knows about): in that case that ALREADY-in-flight turn's own next
-// request will pick up the pending notification via the ordinary
-// queue-at-next-turn-boundary path, so no further action is needed here.
-// handled is false only for an id the external scheduler has never heard
-// of (e.g. a nil or not-yet-wired runner); SessionManager then falls back
-// to driving the turn itself, exactly as it did before ExternalRunner
-// existed.
+// as the prompt, and reports one of three outcomes — a live review
+// finding: an earlier revision returned a plain bool, folding two
+// genuinely different cases into a single `true` and leaving a THIRD
+// call (RevertResumeIfStillRunning) as the only thing distinguishing
+// them — nothing in the type system stopped a future ExternalRunner
+// implementation from forgetting that second call for its own refusal
+// cases, and RevertResumeIfStillRunning's own doc comment had to flag
+// this exact gotcha explicitly rather than the compiler enforcing it.
 //
-// The scheduler is responsible for reporting the turn's start and end
-// back via ReportTurnStart/ReportTurnEnd: SessionManager has no other way
-// to learn a delegated turn completed.
-type ExternalRunner func(id, text string) (handled bool)
+//   - RunnerHandled: the scheduler recognizes id and SOME bracketed turn
+//     will eventually settle this resume's commitment — either it just
+//     started one, or id was already busy with something the scheduler
+//     itself already knows about (that already-in-flight turn's own next
+//     request will pick up the pending notification via the ordinary
+//     queue-at-next-turn-boundary path). No further action needed.
+//   - RunnerRefused: the scheduler recognizes id but is refusing this
+//     specific resume attempt right now (e.g. a workdir conflict, or the
+//     scheduler draining) — no bracketed turn will ever settle it.
+//     triggerResumeLocked itself now calls RevertResumeIfStillRunning
+//     centrally for this case (see its own call site below) — an
+//     ExternalRunner implementation no longer needs to remember to call
+//     it itself.
+//   - RunnerUnknown: the scheduler has never heard of id at all (e.g. a
+//     nil or not-yet-wired runner). SessionManager falls back to driving
+//     the turn itself, exactly as it did before ExternalRunner existed.
+//
+// A scheduler that reports RunnerHandled or RunnerRefused is responsible
+// for reporting any turn it actually started back via
+// ReportTurnStart/ReportTurnEnd: SessionManager has no other way to learn
+// a delegated turn completed.
+type RunnerOutcome int
+
+const (
+	// RunnerUnknown is the zero value — deliberately, so a caller that
+	// forgets to set a return value (or an old bool-returning stub caught
+	// by the compiler needing a real migration) fails closed into the
+	// SAFEST case (SessionManager drives the turn itself) rather than
+	// silently behaving like RunnerHandled (drop the resume) or
+	// RunnerRefused (revert it).
+	RunnerUnknown RunnerOutcome = iota
+	RunnerHandled
+	RunnerRefused
+)
+
+type ExternalRunner func(id, text string) RunnerOutcome
 
 // SessionManager owns every session — one root plus its descendant
 // children — spawned as a tree in one harness process. It is the
@@ -1057,6 +1087,19 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 
 	n := m.adoptLocked(child, parent.id, childDepth)
 	n.agentType = opts.AgentType
+	// Durable audit trail: "I spawned this child" — see recTaskSpawned's
+	// own doc comment (store.go) for the follow-up this closes ("child
+	// journal records"). Written on the PARENT's log, symmetric with
+	// commitTaskNotifications' recTaskNotifyDelivered write landing on
+	// the SAME log later, for a single-log audit trail of everything
+	// this session's `task` tool did. parent.session.mu, not m.mu (a
+	// DIFFERENT lock, already safely nested under m.mu elsewhere in this
+	// package — see finalizeTurn's own target.session.enqueueTaskNotification
+	// call, held under m.mu identically): persistTaskSpawnLocked's own
+	// doc comment requires the SESSION's lock, not SessionManager's.
+	parent.session.mu.Lock()
+	parent.session.persistTaskSpawnLocked(child.ID, opts.AgentType)
+	parent.session.mu.Unlock()
 	// Reserve the concurrency slot NOW, synchronously, rather than when the
 	// launched goroutine gets around to running — otherwise two Spawn calls
 	// racing past the check above could both pass it before either
@@ -1424,19 +1467,32 @@ func (m *SessionManager) triggerResumeLocked(node *sessionNode) func() {
 	if node.depth == 0 && m.externalRunner != nil {
 		runner := m.externalRunner
 		return func() {
-			if runner(id, taskResumeTriggerText) {
+			switch runner(id, taskResumeTriggerText) {
+			case RunnerHandled:
 				// The external scheduler now owns this turn and is
 				// responsible for reporting its completion back via
 				// ReportTurnStart/ReportTurnEnd itself (and for deferring
 				// any further resume THAT call returns past its own
 				// run-slot release — see ReportTurnEnd's doc comment).
 				return
+			case RunnerRefused:
+				// The scheduler recognizes id but is refusing this
+				// attempt right now (a live review finding this
+				// centralizes: an earlier revision left every
+				// ExternalRunner implementation responsible for
+				// remembering this call itself — see RunnerOutcome's own
+				// doc comment). No bracketed turn will ever settle the
+				// commitment triggerResumeLocked made above, so undo it
+				// here instead of leaving id stuck StatusRunning forever
+				// with queue-or-resume dead for it.
+				m.RevertResumeIfStillRunning(id)
+				return
 			}
-			// The scheduler doesn't recognize this id at all: fall back
-			// to driving it directly rather than losing the resume. This
-			// call owns the WHOLE turn itself (no server run-slot
-			// involved), so firing any further resume immediately is
-			// safe — no release to race.
+			// RunnerUnknown: the scheduler doesn't recognize this id at
+			// all — fall back to driving it directly rather than losing
+			// the resume. This call owns the WHOLE turn itself (no
+			// server run-slot involved), so firing any further resume
+			// immediately is safe — no release to race.
 			msg, err := s.Prompt(ctx, taskResumeTriggerText)
 			if resume := m.finalizeTurn(id, msg, err); resume != nil {
 				go resume()
@@ -1454,28 +1510,32 @@ func (m *SessionManager) triggerResumeLocked(node *sessionNode) func() {
 // RevertResumeIfStillRunning undoes triggerResumeLocked's speculative
 // commitment for id — status back to StatusIdle (it never actually
 // started a turn) and the depth>0 concurrency reservation released — for
-// an ExternalRunner (resumeSessionForTaskNotification) to call when its
-// own claim attempt fails for a reason that means NO bracketed turn will
-// EVER call ReportTurnEnd to release that commitment on its own: a
-// workdir-held conflict (a DIFFERENT session entirely holds the shared
-// workdir — id itself may not be running anything at all), or a
-// draining server. This is unlike an ORDINARY "busy" refusal, where a
-// different, already-running BRACKETED turn holds the slot and WILL
-// eventually call ReportTurnEnd, correctly picking up the still-pending
-// notification itself (see finalizeTurn's perr == nil &&
-// hasPendingTaskNotifications() re-trigger case) — no revert needed
-// there.
+// a case where NO bracketed turn will EVER call ReportTurnEnd to release
+// that commitment on its own: a workdir-held conflict (a DIFFERENT
+// session entirely holds the shared workdir — id itself may not be
+// running anything at all), or a draining server. This is unlike an
+// ORDINARY "busy" refusal, where a different, already-running BRACKETED
+// turn holds the slot and WILL eventually call ReportTurnEnd, correctly
+// picking up the still-pending notification itself (see finalizeTurn's
+// perr == nil && hasPendingTaskNotifications() re-trigger case) — no
+// revert needed there.
+//
+// Called from exactly one place now: triggerResumeLocked's own closure,
+// centrally, whenever an ExternalRunner reports RunnerRefused — see
+// RunnerOutcome's own doc comment for why this moved here instead of
+// staying each ExternalRunner implementation's own responsibility (a
+// live review finding: the bool-returning predecessor of RunnerOutcome
+// left that call easy to forget in any FUTURE implementation, with
+// nothing but a doc comment enforcing it). Still exported: an
+// ExternalRunner implementation with its own reason to revert speculatively
+// outside the RunnerRefused path it already has may still call this
+// directly, but the ORDINARY refusal path no longer needs to.
 //
 // Reverting (rather than leaving id stuck StatusRunning forever, with
 // nothing left to ever un-stick it and queue-or-resume dead for it) lets
 // a LATER notification — or this same one, still pending — retry once
-// the transient condition clears. The caller must still report this
-// attempt as "handled" to its own ExternalRunner contract despite the
-// revert: the alternative (reporting id as unrecognized) would trigger a
-// raw, slot-bypassing Session.Prompt call in triggerResumeLocked's own
-// fallback — exactly the hazard a workdir-held conflict exists to
-// prevent (two workdir-sharing sessions running concurrently). A live
-// review caught the original stuck-forever gap.
+// the transient condition clears. A live review caught the original
+// stuck-forever gap.
 //
 // Guarded by a status check: a no-op if id is no longer StatusRunning
 // (something else already resolved it in the meantime) or is no longer
