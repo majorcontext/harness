@@ -519,3 +519,98 @@ func TestFinalizeTurnGrandchildNotStrandedWhenParentSettlesRightAfterEnqueue(t *
 	}
 	t.Fatalf("root never resumed with the grandchild's notification; history: %+v", root.History())
 }
+
+// TestReloadedChildWithDanglingTurnNotifiesParent is the regression test
+// for a follow-up finding: "in-flight-children restart semantics." A
+// child whose turn was genuinely IN FLIGHT when the process stopped has
+// no live goroutine left, in a fresh process, to ever call finalizeTurn
+// for it — before this fix it cold-reloaded as StatusIdle, indistinguishable
+// from a child that never received a turn, and its parent waited forever
+// for a notification that could never arrive.
+//
+// Simulates this for real, across a genuine process boundary, not the
+// in-memory NewSession(cfg) shortcut most reload tests use: an actual
+// child session is spawned and its turn allowed to durably append its
+// user-role message (via signaledBlockingProvider's started signal —
+// closed the instant streaming begins, which is strictly AFTER Prompt's
+// own durable append point) before being abandoned mid-flight (the
+// blocked goroutine is never released — matching a real crash, where
+// nothing ever completes that turn). A brand-new SessionManager (mgr2,
+// simulating a fresh process) then reloads the child from disk via
+// LoadSession + AdoptReloaded, with its root independently re-adopted
+// first (AdoptRoot, on a fresh *Session forced to the root's original
+// id — the standard reload-simulation technique this file's other tests
+// already use) so there is a live ancestor to actually deliver to.
+func TestReloadedChildWithDanglingTurnNotifiesParent(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", doneTurn("resumed"))
+	childProv := &signaledBlockingProvider{name: "childprov", started: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() { close(childProv.release) })
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 0, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+
+	childID, err := mgr1.Spawn(SpawnOptions{
+		ParentID: root1.ID, Prompt: "go", Model: modelFor("childprov"), AgentType: AgentGeneralPurpose,
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	<-childProv.started // the child's turn has genuinely begun: its user message is now durably appended
+
+	childSess, ok := mgr1.Session(childID)
+	if !ok {
+		t.Fatal("child not found before simulated crash")
+	}
+	if !childSess.hasUnansweredTurn() {
+		t.Fatal("test setup: child's turn did not leave a dangling user message")
+	}
+
+	// Simulate a fresh process: a brand-new SessionManager, and a
+	// brand-new root *Session object forced to root1's own id (mgr1's
+	// blocked child goroutine is simply abandoned here — nothing in mgr2
+	// or its own tree knows about mgr1 at all, exactly like a real crash
+	// leaves no live goroutine behind in the NEW process).
+	mgr2 := NewSessionManager(context.Background(), 0, 0)
+	root2 := NewSession(rootCfg)
+	root2.ID = root1.ID
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+
+	reloadedChild, err := LoadSession(Config{Providers: reg, SessionDir: dir}, childID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if err := mgr2.AdoptReloaded(reloadedChild); err != nil {
+		t.Fatalf("AdoptReloaded: %v", err)
+	}
+
+	info, ok := mgr2.Info(childID)
+	if !ok {
+		t.Fatal("child not tracked after AdoptReloaded")
+	}
+	if info.Status != StatusFailed {
+		t.Errorf("reloaded dangling child status = %q, want %q", info.Status, StatusFailed)
+	}
+	if !strings.Contains(info.FailReason, "restart") {
+		t.Errorf("reloaded dangling child fail_reason = %q, want it to mention the restart", info.FailReason)
+	}
+
+	// The root (live, idle) must have been actively woken with the
+	// synthetic notification — same delivery path, same observable
+	// signature (the resume-trigger text in history) every other
+	// terminal-outcome notification uses.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, m := range root2.History() {
+			if m.Role == message.RoleUser && m.Parts.Text() == taskResumeTriggerText {
+				return
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("root never resumed with the dangling child's synthetic notification; history: %+v", root2.History())
+}

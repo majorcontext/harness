@@ -1346,6 +1346,100 @@ func TestReapNeverRemovesRootOrNodeWithChildren(t *testing.T) {
 	}
 }
 
+// TestForgetRootRemovesIdleRootWithNoChildren proves ForgetRoot's happy
+// path: a childless, non-running root is removed from m.nodes — the
+// follow-up fix for the leak Reap's own doc comment describes as a
+// deliberate v1 scope cut (a root is never automatically reaped).
+func TestForgetRootRemovesIdleRootWithNoChildren(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(managedConfig("root", scriptedTurns("root", nil)))
+
+	if err := mgr.ForgetRoot(root.ID); err != nil {
+		t.Fatalf("ForgetRoot: %v", err)
+	}
+	if _, ok := mgr.Info(root.ID); ok {
+		t.Error("root still tracked after ForgetRoot")
+	}
+}
+
+// TestForgetRootRejectsRootWithChildren proves ForgetRoot refuses to
+// orphan a live subtree — matches Cancel's own cascade philosophy: tear
+// the subtree down first (via Cancel) if that's really the intent.
+func TestForgetRootRejectsRootWithChildren(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("child", doneTurn("done")),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	if err := mgr.ForgetRoot(root.ID); err == nil {
+		t.Error("ForgetRoot on a root with a live (even if terminal) child: want error, got nil")
+	}
+	if _, ok := mgr.Info(root.ID); !ok {
+		t.Error("root removed despite still having a child")
+	}
+}
+
+// TestForgetRootRejectsBusyRoot proves ForgetRoot refuses a currently
+// running root — an in-flight turn still has a goroutine that will
+// eventually call finalizeTurn expecting to find this node.
+func TestForgetRootRejectsBusyRoot(t *testing.T) {
+	blocker := &blockingProvider{name: "root", release: make(chan struct{})}
+	t.Cleanup(func() { close(blocker.release) })
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(managedConfig("root", blocker))
+
+	mgr.ReportTurnStart(root)
+	go root.Prompt(context.Background(), "go") //nolint:errcheck // released via t.Cleanup
+	waitForStatus(t, mgr, root.ID, StatusRunning, time.Second)
+
+	if err := mgr.ForgetRoot(root.ID); err == nil {
+		t.Error("ForgetRoot on a running root: want error, got nil")
+	}
+	if _, ok := mgr.Info(root.ID); !ok {
+		t.Error("root removed while still running")
+	}
+}
+
+// TestForgetRootRejectsNonRoot proves ForgetRoot is never a substitute
+// for Reap on a child — that is Reap's own job (a terminal, childless
+// leaf) or, for a non-terminal child, nobody's job at all (its own
+// in-flight turn must be protected).
+func TestForgetRootRejectsNonRoot(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("child", doneTurn("done")),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	if err := mgr.ForgetRoot(childID); err == nil {
+		t.Error("ForgetRoot on a non-root child: want error, got nil")
+	}
+	if _, ok := mgr.Info(childID); !ok {
+		t.Error("child removed by ForgetRoot — not its job")
+	}
+}
+
+// TestForgetRootUnknownIDIsError proves ForgetRoot on an id this
+// SessionManager never tracked returns ErrUnknownSession, mirroring
+// Cancel/AbortTurn's own identical contract.
+func TestForgetRootUnknownIDIsError(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	if err := mgr.ForgetRoot("ses_doesnotexist00000000"); !errors.Is(err, ErrUnknownSession) {
+		t.Errorf("ForgetRoot(unknown) = %v, want ErrUnknownSession", err)
+	}
+}
+
 // waitForStatus polls until id reaches want or the timeout elapses.
 func waitForStatus(t *testing.T, mgr *SessionManager, id string, want SessionStatus, timeout time.Duration) {
 	t.Helper()

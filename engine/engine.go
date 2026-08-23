@@ -1038,6 +1038,26 @@ func (s *Session) TaskToolNames() []string {
 	return s.cfg.TaskToolNames
 }
 
+// hasUnansweredTurn reports whether s's persisted history ends on a
+// user-role message with nothing after it — the signature of a turn that
+// was genuinely IN FLIGHT when the process last stopped: Session.Prompt
+// durably appends the user-role message BEFORE ever calling the provider
+// (see runAgenticLoop), so a crash mid-turn leaves exactly this shape on
+// disk. The same signature isSafeToDropDirectiveTail's len==1 case
+// already trusts for a DIFFERENT purpose (goal-loop retry, engine/
+// goal.go) — reused here for restart-recovery detection (see
+// adoptReloadedLocked's own use of this), not duplicated with new
+// heuristics. A false positive is impossible: nothing else in this
+// package ever leaves a trailing lone user message durably on disk
+// outside this exact crash window (every other path either completes
+// the turn, synthesizing a terminal assistant/tool message, or never
+// appends the user message in the first place if it errors before
+// Prompt's own durable-append point).
+func (s *Session) hasUnansweredTurn() bool {
+	h := s.History()
+	return len(h) > 0 && h[len(h)-1].Role == message.RoleUser
+}
+
 // Plugins returns a snapshot of this session's configured plugins — name,
 // spawn state, registered tools, and subscribed hooks — for the session_info
 // tool and GET /session. A session with no plugin host returns an empty

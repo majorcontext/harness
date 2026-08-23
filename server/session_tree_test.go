@@ -1045,6 +1045,42 @@ func TestSessionEndCascadesToChild(t *testing.T) {
 	waitForLineageStatus(t, h, child.ID, "canceled", 2*time.Second)
 }
 
+// TestSessionEndForgetsRootFromSessionManager is the regression test for
+// a follow-up finding: DELETE /session/{id} used to only ever touch
+// server residency (s.sessions), never sessMgr — a root's sessionNode
+// (and the *Session it pins: full message history, ctx) survived in
+// sessMgr's m.nodes for the rest of the PROCESS's life even after its
+// caller explicitly deleted it, since Reap's own documented contract
+// never removes a root automatically. Proves handleEnd's new
+// ForgetRoot call actually closes that leak for the common case: a
+// plain, childless root.
+func TestSessionEndForgetsRootFromSessionManager(t *testing.T) {
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"})
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	if _, ok := h.srv.SessionManager().Info(root.ID); !ok {
+		t.Fatal("test setup: root not tracked by SessionManager before DELETE")
+	}
+
+	resp, data = h.do("DELETE", "/session/"+root.ID, nil)
+	if resp.StatusCode != 204 {
+		t.Fatalf("end status %d: %s", resp.StatusCode, data)
+	}
+
+	if _, ok := h.srv.SessionManager().Info(root.ID); ok {
+		t.Error("root still tracked by SessionManager after DELETE — leaked (Reap never removes a root automatically)")
+	}
+}
+
 // TestSessionSendToBusyChildIs409NotLost is the regression test for a
 // review finding: handleSessionSend's child branch fired
 // SessionManager.Send in a background goroutine and discarded its error
