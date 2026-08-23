@@ -99,13 +99,14 @@ type SessionManager struct {
 // sessionNode is one managed session's lifecycle bookkeeping. Guarded by
 // the owning SessionManager's mu.
 type sessionNode struct {
-	id       string
-	session  *Session
-	parentID string // "" for a root
-	rootID   string // self, for a root
-	depth    int    // 0 for a root
-	status   SessionStatus
-	children []string
+	id        string
+	session   *Session
+	parentID  string // "" for a root
+	rootID    string // self, for a root
+	depth     int    // 0 for a root
+	status    SessionStatus
+	children  []string
+	agentType string // the agent name Spawn was called with; "" for a root
 
 	// ctx/cancel is this node's own lifetime, independent of any caller's
 	// request context: a root's derives from the manager's baseCtx, a
@@ -132,6 +133,7 @@ type SessionNode struct {
 	Depth      int
 	Status     SessionStatus
 	Children   []string
+	AgentType  string
 	Result     string
 	FailReason string
 }
@@ -143,6 +145,7 @@ func (n *sessionNode) snapshot() SessionNode {
 		Depth:      n.depth,
 		Status:     n.status,
 		Children:   append([]string(nil), n.children...),
+		AgentType:  n.agentType,
 		Result:     n.result,
 		FailReason: n.failReason,
 	}
@@ -179,8 +182,12 @@ func NewSessionManager(baseCtx context.Context, maxDepth, maxConcurrent int) *Se
 // compatibility with existing single-session callers that never touch a
 // SessionManager at all, direct Prompt calls.
 func (m *SessionManager) NewRoot(cfg Config) *Session {
+	cfg.SessionManager = m // installs the `task` tool unconditionally — see newSession's doc comment on Config.SessionManager
 	s := NewSession(cfg)
-	m.adopt(s, "", 0)
+	m.mu.Lock()
+	m.adoptLocked(s, "", 0)
+	m.installTaskToolLocked(s, 0)
+	m.mu.Unlock()
 	return s
 }
 
@@ -194,14 +201,14 @@ func (m *SessionManager) AdoptRoot(s *Session) error {
 	if _, exists := m.nodes[s.ID]; exists {
 		return fmt.Errorf("engine: session %s already managed", s.ID)
 	}
+	s.cfg.SessionManager = m
+	// s was built by a plain NewSession/LoadSession call, before
+	// Config.SessionManager was set — newSession's unconditional install
+	// (see its doc comment) never ran for it, so install directly here.
+	s.tools[taskToolName] = taskTool()
 	m.adoptLocked(s, "", 0)
+	m.installTaskToolLocked(s, 0)
 	return nil
-}
-
-func (m *SessionManager) adopt(s *Session, parentID string, depth int) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.adoptLocked(s, parentID, depth)
 }
 
 // adoptLocked registers s as a new node. Callers hold m.mu.
@@ -266,6 +273,17 @@ func (m *SessionManager) TaskToolAllowed(depth int) bool {
 	return depth < m.maxDepth
 }
 
+// installTaskToolLocked enforces TaskToolAllowed on s: newSession already
+// installs the `task` tool unconditionally whenever Config.SessionManager
+// is set (see that field's doc comment) — it has no notion of depth — so
+// this only ever needs to REMOVE it, for a session at or past the depth
+// limit. A no-op for a session below the limit. Called with m.mu held.
+func (m *SessionManager) installTaskToolLocked(s *Session, depth int) {
+	if !m.TaskToolAllowed(depth) {
+		delete(s.tools, taskToolName)
+	}
+}
+
 // SpawnOptions configures a child session created by Spawn.
 type SpawnOptions struct {
 	// ParentID is the spawning session's id. Required; must already be
@@ -289,6 +307,14 @@ type SpawnOptions struct {
 	// applies a read-only preset (Stage 2). Nil inherits the parent's full
 	// tool set unchanged.
 	ToolNames []string
+	// AgentType is the agent name this child was spawned as (e.g.
+	// "general-purpose", "explore", a custom .agents/*.md name) — purely
+	// descriptive: carried on SessionNode.AgentType and in the completion
+	// notification delivered to the parent (taskdelivery.go), never
+	// interpreted by Spawn itself. Empty is fine (Send never sets it; a
+	// direct Spawn caller that isn't the `task` tool may leave it empty
+	// too).
+	AgentType string
 }
 
 // Spawn creates a child of opts.ParentID, registers it under lineage/depth
@@ -333,15 +359,33 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	if opts.SystemAppend != "" {
 		childCfg.System = append(append([]string(nil), childCfg.System...), opts.SystemAppend)
 	}
-	child := NewSession(childCfg)
-	if opts.ToolNames != nil {
-		if err := restrictTools(child, opts.ToolNames); err != nil {
+	child := NewSession(childCfg) // installs `task` unconditionally, since childCfg.SessionManager is inherited from the parent
+	m.installTaskToolLocked(child, childDepth)
+
+	toolNames := opts.ToolNames
+	if toolNames != nil && !m.TaskToolAllowed(childDepth) {
+		// The requesting agent definition asked for "task" explicitly (a
+		// non-leaf custom definition), but this child is at the depth
+		// limit: withheld, exactly like the general-purpose (unrestricted)
+		// case above — never a load-bearing error for hitting a limit that
+		// is expected to bite eventually.
+		filtered := make([]string, 0, len(toolNames))
+		for _, name := range toolNames {
+			if name != taskToolName {
+				filtered = append(filtered, name)
+			}
+		}
+		toolNames = filtered
+	}
+	if toolNames != nil {
+		if err := restrictTools(child, toolNames); err != nil {
 			m.mu.Unlock()
 			return "", err
 		}
 	}
 
 	n := m.adoptLocked(child, parent.id, childDepth)
+	n.agentType = opts.AgentType
 	// Reserve the concurrency slot NOW, synchronously, rather than when the
 	// launched goroutine gets around to running — otherwise two Spawn calls
 	// racing past the check above could both pass it before either
@@ -404,25 +448,81 @@ func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Me
 // concurrency reservation Spawn/Send made for it.
 func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	n, ok := m.nodes[id]
 	if !ok || n.status == StatusCanceled {
 		// Cancel already finalized (or the node was reaped); leave its
 		// recorded terminal state alone.
+		m.mu.Unlock()
 		return
 	}
 	m.decrementRunningLocked(n)
+
+	var notify *taskNotification
 	switch {
 	case n.parentID == "":
 		// Root sessions have no parent to notify and no assignment to
-		// complete — see SessionStatus's doc comment.
+		// complete — see SessionStatus's doc comment. This also covers a
+		// resume turn's own completion (triggerResumeLocked only ever
+		// targets an idle node, and only a root ever reaches idle — see
+		// below), so a resume turn delivering a notification never itself
+		// produces a new one: no cascade up the tree.
 		n.status = StatusIdle
 	case perr != nil:
 		n.status = StatusFailed
 		n.failReason = classifySpawnError(perr)
+		notify = &taskNotification{ChildID: n.id, Status: StatusFailed, FailReason: n.failReason, Usage: n.session.Usage()}
 	default:
 		n.status = StatusDone
 		n.result = msg.Parts.Text()
+		notify = &taskNotification{ChildID: n.id, Status: StatusDone, Result: n.result, Usage: n.session.Usage()}
+	}
+
+	// resume is set (and run AFTER releasing m.mu, below) only when this
+	// completion needs to actively wake an idle parent — see
+	// triggerResumeLocked's doc comment for why claiming the parent's
+	// running slot must happen in THIS same critical section, not in a
+	// separately-locked follow-up call, to avoid two children finishing at
+	// once both observing "idle" and both starting a turn on the same
+	// parent session (which Session.Prompt's own contract forbids).
+	var resume func()
+	if notify != nil {
+		if parent, ok := m.nodes[n.parentID]; ok {
+			notify.Agent = n.agentType
+			parent.session.enqueueTaskNotification(*notify)
+			if parent.status == StatusIdle {
+				resume = m.triggerResumeLocked(parent)
+			}
+		}
+	}
+	m.mu.Unlock()
+
+	if resume != nil {
+		go resume()
+	}
+}
+
+// triggerResumeLocked claims node's running slot (node MUST currently be
+// idle) and returns a function that actually drives the resume turn — the
+// design doc's "engine-initiated resume turn," a new engine capability.
+// Call the returned function AFTER releasing m.mu, in a new goroutine: it
+// blocks on a full Session.Prompt call and must never run under the lock.
+//
+// The claim (status flip + concurrency reservation) happens here,
+// synchronously, for the same reason Spawn reserves its concurrency slot
+// before launching its goroutine: two notifications arriving for the same
+// idle parent in the same locked critical section (finalizeTurn) must
+// result in exactly ONE resume turn, not two concurrent Prompt calls on
+// the same session.
+func (m *SessionManager) triggerResumeLocked(node *sessionNode) func() {
+	node.status = StatusRunning
+	if node.depth > 0 {
+		m.runningByRoot[node.rootID]++
+	}
+	s := node.session
+	ctx := node.ctx
+	return func() {
+		msg, err := s.Prompt(ctx, taskResumeTriggerText)
+		m.finalizeTurn(s.ID, msg, err)
 	}
 }
 
