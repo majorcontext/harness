@@ -190,30 +190,34 @@ func lookupSpawned(s *Server, id string) (*engine.Session, bool) {
 // fallback, a raw Session.Prompt call that bypasses the run-slot
 // entirely — exactly the hazard a workdir-held conflict exists to
 // prevent).
-func (s *Server) runOrQueueText(id, text string) (handled bool) {
+func (s *Server) runOrQueueText(id, text string) engine.RunnerOutcome {
 	st, ctx, _, code, holder := s.claimForPrompt(id)
 	switch {
 	case code == http.StatusNotFound:
-		return false
+		return engine.RunnerUnknown
 	case code == http.StatusConflict && holder != "":
-		s.sessMgr.RevertResumeIfStillRunning(id)
-		return true
+		// A live review finding centralized the revert this case (and
+		// StatusServiceUnavailable below) needs: it now happens inside
+		// engine.SessionManager.triggerResumeLocked's own closure,
+		// unconditionally, whenever this returns RunnerRefused — see
+		// engine.RunnerOutcome's own doc comment. This function no
+		// longer calls RevertResumeIfStillRunning itself.
+		return engine.RunnerRefused
 	case code == http.StatusServiceUnavailable:
-		s.sessMgr.RevertResumeIfStillRunning(id)
-		return true
+		return engine.RunnerRefused
 	case code == http.StatusConflict:
 		// Ordinary busy: a different, already-running bracketed turn
 		// holds the slot and will release the commitment itself on its
 		// own ReportTurnEnd — no revert needed.
-		return true
+		return engine.RunnerHandled
 	}
 	if len(st.sess.QueuedPrompts()) > 0 {
 		s.dispatchQueueHead(id, st, ctx)
-		return true
+		return engine.RunnerHandled
 	}
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 	go s.runPrompt(ctx, id, st, text)
-	return true
+	return engine.RunnerHandled
 }
 
 // sendTextToRoot delivers text to root id through this server's ordinary
@@ -312,7 +316,7 @@ func (s *Server) sendTextToRoot(id, text string) (status string, queuedDepth int
 // ExternalRunner's doc comment for why a root's engine-initiated resume
 // turn must go through this server's OWN run-slot admission rather than
 // SessionManager calling Session.Prompt directly.
-func (s *Server) resumeSessionForTaskNotification(id, text string) bool {
+func (s *Server) resumeSessionForTaskNotification(id, text string) engine.RunnerOutcome {
 	return s.runOrQueueText(id, text)
 }
 

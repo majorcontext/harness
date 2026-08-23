@@ -286,11 +286,11 @@ func TestExternalRunnerConsultedOnlyForRoots(t *testing.T) {
 	mgr := NewSessionManager(context.Background(), 0, 0)
 	var calls []string
 	var mu sync.Mutex
-	mgr.SetExternalRunner(func(id, text string) bool {
+	mgr.SetExternalRunner(func(id, text string) RunnerOutcome {
 		mu.Lock()
 		calls = append(calls, id)
 		mu.Unlock()
-		return false // not handled: let the manager fall back to driving it directly
+		return RunnerUnknown // let the manager fall back to driving it directly
 	})
 
 	root := mgr.NewRoot(managedConfig("root",
@@ -314,6 +314,41 @@ func TestExternalRunnerConsultedOnlyForRoots(t *testing.T) {
 	if len(calls) != 1 || calls[0] != root.ID {
 		t.Errorf("externalRunner calls = %v, want exactly one call for the root %s", calls, root.ID)
 	}
+}
+
+// TestTriggerResumeRevertsCentrallyOnRunnerRefused is the regression test
+// for a follow-up finding ("ExternalRunner tri-state"): the revert
+// RunnerRefused implies now happens inside triggerResumeLocked's own
+// closure, centrally — NOT left to each ExternalRunner implementation to
+// remember. The fake runner installed here returns RunnerRefused and
+// does NOTHING else — no call to RevertResumeIfStillRunning of its own —
+// proving the revert this test asserts on could only have come from
+// SessionManager's own code, not this fake's. Under the OLD bool-typed
+// contract this exact implementation shape (a runner that "handles" a
+// refusal without separately reverting) would have left the root stuck
+// StatusRunning forever.
+func TestTriggerResumeRevertsCentrallyOnRunnerRefused(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	mgr.SetExternalRunner(func(id, text string) RunnerOutcome {
+		return RunnerRefused // deliberately does nothing else
+	})
+
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("child", doneTurn("child done")),
+	))
+
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	// The child's completion notification triggers a resume attempt on
+	// the idle root, which the fake ExternalRunner above refuses. If the
+	// revert did not happen, root would be stuck StatusRunning forever
+	// (queue-or-resume dead for it) — waitForStatus would time out.
+	waitForStatus(t, mgr, root.ID, StatusIdle, time.Second)
 }
 
 // TestReportTurnStartAdoptsUnknownSession proves the fix for reloaded

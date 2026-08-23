@@ -55,6 +55,15 @@ const taskResumeTriggerText = "A background task you started has finished. See t
 func (s *Session) enqueueTaskNotification(n taskNotification) {
 	s.mu.Lock()
 	s.taskNotifications = append(s.taskNotifications, n)
+	// Durable trace of "a delivery is now owed" — see recTaskNotifyQueued's
+	// own doc comment (store.go) for the two follow-ups this closes: a
+	// structured, independently-queryable spawn/delivery journal, and
+	// (paired with commitTaskNotifications' matching recTaskNotifyDelivered
+	// write) surviving a parent-side crash/restart BEFORE this notification
+	// is ever checked out — LoadSession's queued-minus-delivered fold
+	// restores it into s.taskNotifications exactly as if this process had
+	// never stopped.
+	s.persistTaskNotifyLocked(recTaskNotifyQueued, n)
 	s.mu.Unlock()
 }
 
@@ -147,6 +156,14 @@ func (s *Session) checkoutTaskNotificationsSegment() string {
 // commit exists at all.
 func (s *Session) commitTaskNotifications() {
 	s.mu.Lock()
+	// Durable proof of ACTUAL delivery, one record per notification —
+	// see recTaskNotifyDelivered's own doc comment (store.go). Written
+	// before clearing, matching every other persist-then-mutate ordering
+	// in this package (a write failure here lands in s.lastPersistErr,
+	// same as any other persist call, never blocks the in-memory commit).
+	for _, n := range s.taskNotificationsInFlight {
+		s.persistTaskNotifyLocked(recTaskNotifyDelivered, n)
+	}
 	s.taskNotificationsInFlight = nil
 	s.mu.Unlock()
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1437,6 +1438,43 @@ func TestForgetRootUnknownIDIsError(t *testing.T) {
 	mgr := NewSessionManager(context.Background(), 3, 0)
 	if err := mgr.ForgetRoot("ses_doesnotexist00000000"); !errors.Is(err, ErrUnknownSession) {
 		t.Errorf("ForgetRoot(unknown) = %v, want ErrUnknownSession", err)
+	}
+}
+
+// TestSpawnPersistsTaskSpawnedRecord is the regression test for a
+// follow-up finding: "child journal records." Before this fix, a task
+// spawn had no durable, structured, independently-queryable trace of
+// "child X spawned by Y at T" — only the rendered "[tasks: ...]"
+// conversation text once the child eventually delivered. Proves Spawn
+// writes a task.spawned record on the PARENT's own log, immediately, not
+// waiting for delivery.
+func TestSpawnPersistsTaskSpawnedRecord(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	childProv := scriptedTurns("child", doneTurn("done"))
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(Config{Providers: reg, Model: modelFor("root"), SessionDir: dir})
+
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentExplore})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	data, err := os.ReadFile(filepath.Join(dir, root.ID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	if !strings.Contains(log, `"type":"task.spawned"`) {
+		t.Fatalf("parent log missing task.spawned record: %s", log)
+	}
+	if !strings.Contains(log, `"child_id":"`+childID+`"`) {
+		t.Errorf("task.spawned record missing child_id %q: %s", childID, log)
+	}
+	if !strings.Contains(log, `"agent":"`+AgentExplore+`"`) {
+		t.Errorf("task.spawned record missing agent %q: %s", AgentExplore, log)
 	}
 }
 

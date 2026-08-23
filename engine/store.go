@@ -78,6 +78,41 @@ const (
 	// makes the trh_N counter, the handle metadata, and the retained-bytes
 	// total survive a process restart.
 	recToolResultRetained = "toolresult.retained"
+	// recTaskSpawned/recTaskNotifyQueued/recTaskNotifyDelivered are the
+	// subagent-sessions task-delivery records (see session_manager.go's
+	// Spawn and taskdelivery.go), two follow-ups from PR #145's
+	// architecture review landing as one journal mechanism:
+	//
+	//   - "Child journal records": before these existed, a task spawn and
+	//     its eventual delivery were visible ONLY as ordinary conversation
+	//     text (the injected "[tasks: ...]" EngineContext block) — no
+	//     durable, structured, independently-queryable trace of "child X
+	//     spawned by Y at T" or "child X delivered to Y, status=done, at
+	//     T2" existed, distinct from a human/log-reader grepping rendered
+	//     text.
+	//   - "Notification persistence": before these existed, a completed
+	//     child's pending "must still notify parent" signal lived ONLY in
+	//     Session.taskNotifications, an in-memory slice — if the parent
+	//     process crashed or was evicted after the child finished but
+	//     BEFORE the parent's own next turn checked the notification out,
+	//     nothing durable recorded that a delivery was owed at all: a
+	//     silent, permanent drop.
+	//
+	// recTaskSpawned is written once, on the PARENT's log, at Spawn —
+	// pure informational audit trail, never replayed into any live state
+	// (LoadSession's fold is a no-op for it; it exists to be found, not to
+	// change behavior). recTaskNotifyQueued/recTaskNotifyDelivered mirror
+	// recPromptQueued/recPromptDequeued's own queued/dequeued shape
+	// exactly, and DOUBLE as the notification-persistence fix: LoadSession
+	// folds queued-minus-delivered (keyed by ChildID — a child notifies
+	// its parent exactly once terminally) directly back into
+	// Session.taskNotifications, so a pending, undelivered notification
+	// survives a parent-side crash/restart across the exact same reload
+	// path recPromptQueued's own un-matched-record fold already
+	// established for the prompt queue.
+	recTaskSpawned         = "task.spawned"
+	recTaskNotifyQueued    = "task.notify_queued"
+	recTaskNotifyDelivered = "task.notify_delivered"
 )
 
 // record is one line of a session log file.
@@ -149,6 +184,13 @@ type record struct {
 	// Prompt carries a prompt.queued/prompt.dequeued record's payload (see
 	// promptRecord and queue.go). nil on every other record type.
 	Prompt *promptRecord `json:"prompt,omitempty"`
+	// TaskSpawn carries a recTaskSpawned record's payload (see
+	// taskSpawnRecord). nil on every other record type.
+	TaskSpawn *taskSpawnRecord `json:"task_spawn,omitempty"`
+	// TaskNotify carries a recTaskNotifyQueued/recTaskNotifyDelivered
+	// record's payload (see taskNotifyRecord). nil on every other record
+	// type.
+	TaskNotify *taskNotifyRecord `json:"task_notify,omitempty"`
 	// Usage carries the provider's per-turn Usage on the message record for
 	// the assistant message ending a model turn (nil for every other
 	// message: user, tool, or an interrupted partial assistant message —
@@ -284,6 +326,32 @@ type promptRecord struct {
 	Seq int64 `json:"seq,omitempty"`
 }
 
+// taskSpawnRecord is a recTaskSpawned record's payload — see that
+// constant's own doc comment. Pure audit trail: which child, spawned as
+// which agent type.
+type taskSpawnRecord struct {
+	ChildID string `json:"child_id,omitempty"`
+	Agent   string `json:"agent,omitempty"`
+}
+
+// taskNotifyRecord is a recTaskNotifyQueued/recTaskNotifyDelivered
+// record's payload — see those constants' own doc comment. Mirrors
+// taskNotification (engine/taskdelivery.go) field-for-field: the SAME
+// content a live queued notification carries, so LoadSession's fold can
+// reconstruct an outstanding one exactly as it originally arrived (see
+// the recTaskNotifyQueued replay case), and a recTaskNotifyDelivered
+// record is fully self-describing on its own (mirroring promptRecord's
+// identical "Text carried on both record types" reasoning) without
+// cross-referencing the matching queued record earlier in the log.
+type taskNotifyRecord struct {
+	ChildID    string         `json:"child_id,omitempty"`
+	Agent      string         `json:"agent,omitempty"`
+	Status     SessionStatus  `json:"status,omitempty"`
+	Result     string         `json:"result,omitempty"`
+	FailReason string         `json:"fail_reason,omitempty"`
+	Usage      provider.Usage `json:"usage,omitzero"`
+}
+
 // SessionInfo summarizes one persisted session for listings.
 type SessionInfo struct {
 	ID        string
@@ -410,6 +478,41 @@ func (s *Session) persistPromptQueueLocked(recType string, p promptRecord) {
 		return
 	}
 	if err := s.writeRecord(record{Type: recType, Prompt: &p}); err != nil {
+		s.lastPersistErr = err
+	}
+}
+
+// persistTaskSpawnLocked appends a task.spawned record to the session
+// log (see SessionManager.Spawn's own call site) — mirrors
+// persistPromptQueueLocked exactly, on the PARENT's log. Caller holds
+// s.mu.
+func (s *Session) persistTaskSpawnLocked(childID, agent string) {
+	if s.cfg.SessionDir == "" {
+		return
+	}
+	if err := s.ensureLog(); err != nil {
+		s.lastPersistErr = err
+		return
+	}
+	if err := s.writeRecord(record{Type: recTaskSpawned, TaskSpawn: &taskSpawnRecord{ChildID: childID, Agent: agent}}); err != nil {
+		s.lastPersistErr = err
+	}
+}
+
+// persistTaskNotifyLocked appends a task.notify_queued or
+// task.notify_delivered record to the session log (see
+// enqueueTaskNotification/commitTaskNotifications in taskdelivery.go) —
+// mirrors persistPromptQueueLocked exactly. Caller holds s.mu.
+func (s *Session) persistTaskNotifyLocked(recType string, n taskNotification) {
+	if s.cfg.SessionDir == "" {
+		return
+	}
+	if err := s.ensureLog(); err != nil {
+		s.lastPersistErr = err
+		return
+	}
+	rec := taskNotifyRecord{ChildID: n.ChildID, Agent: n.Agent, Status: n.Status, Result: n.Result, FailReason: n.FailReason, Usage: n.Usage}
+	if err := s.writeRecord(record{Type: recType, TaskNotify: &rec}); err != nil {
 		s.lastPersistErr = err
 	}
 }
@@ -960,6 +1063,44 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				for i, p := range s.promptQueue {
 					if p.ID == rec.Prompt.ID {
 						s.promptQueue = append(s.promptQueue[:i], s.promptQueue[i+1:]...)
+						break
+					}
+				}
+			}
+		case recTaskSpawned:
+			// Pure audit trail — see recTaskSpawned's own doc comment.
+			// Deliberately no fold: nothing in this package reads it back
+			// as live state, only as journal content a caller might
+			// separately query the raw log for.
+		case recTaskNotifyQueued:
+			// Fold back into s.taskNotifications exactly as if this
+			// process had never stopped — see recTaskNotifyQueued's own
+			// doc comment (the "notification persistence" follow-up).
+			// Keyed by ChildID, not a synthetic sequence number: a child
+			// notifies its parent exactly once terminally (Session.
+			// enqueueTaskNotification/SessionManager.finalizeTurn's own
+			// design), so ChildID is already a natural unique key — no
+			// duplicate-queued-record case exists on the live write path
+			// to defend against, unlike promptRecord's ID/Seq machinery
+			// above (built for a queue a caller can legitimately enqueue
+			// into many times).
+			if rec.TaskNotify != nil {
+				tn := rec.TaskNotify
+				s.taskNotifications = append(s.taskNotifications, taskNotification{
+					ChildID: tn.ChildID, Agent: tn.Agent, Status: tn.Status,
+					Result: tn.Result, FailReason: tn.FailReason, Usage: tn.Usage,
+				})
+			}
+		case recTaskNotifyDelivered:
+			// Remove the matching queued entry by ChildID — mirrors
+			// recPromptDequeued's identical "remove by key, not position"
+			// reasoning, so the folded set ends up exactly the
+			// undelivered notifications regardless of how queued and
+			// delivered records interleave in the log.
+			if rec.TaskNotify != nil {
+				for i, n := range s.taskNotifications {
+					if n.ChildID == rec.TaskNotify.ChildID {
+						s.taskNotifications = append(s.taskNotifications[:i], s.taskNotifications[i+1:]...)
 						break
 					}
 				}
