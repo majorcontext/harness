@@ -468,6 +468,72 @@ func TestSpawnResponseReportsBusyNotIdle(t *testing.T) {
 	}
 }
 
+// TestAbortDiffersFromCancelTreeOnGrandchildOutcome is the regression
+// test for a review finding: an earlier revision of handleAbort's child
+// fallback called sessMgr.Cancel — the SAME full-subtree cascade
+// cancel_tree uses — making abort indistinguishable from cancel_tree for
+// a child with its own running descendants: every one of them got
+// explicitly marked StatusCanceled. abort is now sessMgr.AbortTurn,
+// which only ever explicitly cancels id itself; an actually-running
+// descendant's turn is STILL interrupted (context derivation makes that
+// unavoidable — a grandchild's ctx is context.WithCancel(child.ctx)) but
+// reaches a DIFFERENT terminal state through the ordinary finalizeTurn
+// path: StatusFailed (failReason "canceled"), not the explicit
+// StatusCanceled a real cancel_tree would give it. This proves both
+// halves of that distinction: the directly-aborted child ends up
+// canceled (clean, matches user intuition), its caught-in-the-crossfire
+// grandchild ends up failed (not canceled) — genuinely different
+// operations, not the same one under two names.
+func TestAbortDiffersFromCancelTreeOnGrandchildOutcome(t *testing.T) {
+	blockerMid := newBlockingProvider("mid")
+	blockerGrand := newBlockingProvider("grand")
+	t.Cleanup(blockerMid.releaseAll)
+	t.Cleanup(blockerGrand.releaseAll)
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, blockerMid, blockerGrand)
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": root.ID, "agent": engine.AgentGeneralPurpose, "prompt": "go", "model": "mid/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn mid status %d: %s", resp.StatusCode, data)
+	}
+	var mid struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &mid)
+	waitForLineageStatus(t, h, mid.ID, "running", 2*time.Second)
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": mid.ID, "agent": engine.AgentGeneralPurpose, "prompt": "go deeper", "model": "grand/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn grand status %d: %s", resp.StatusCode, data)
+	}
+	var grand struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &grand)
+	waitForLineageStatus(t, h, grand.ID, "running", 2*time.Second)
+
+	resp, data = h.do("POST", "/session/"+mid.ID+"/abort", nil)
+	if resp.StatusCode != 204 {
+		t.Fatalf("abort status %d, want 204: %s", resp.StatusCode, data)
+	}
+
+	waitForLineageStatus(t, h, mid.ID, "canceled", 2*time.Second)
+	waitForLineageStatus(t, h, grand.ID, "failed", 2*time.Second)
+}
+
 // TestSessionSendUnknownSessionIs404 proves session.send 404s for an id
 // this server's SessionManager does not track.
 func TestSessionSendUnknownSessionIs404(t *testing.T) {
