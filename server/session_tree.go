@@ -66,6 +66,17 @@ func (s *Server) handleSpawnChild(w http.ResponseWriter, parentID, agent, prompt
 	}
 	spawnModel := def.Model
 	if !model.IsZero() {
+		// Validate the provider is configured BEFORE Spawn, mirroring the
+		// `task` tool's own identical check (runTaskTool) and the `model`
+		// session tool (runModelTool) — a live review finding: an
+		// unconfigured override used to sail through Spawn, consuming a
+		// concurrency slot and a session log, and only fail later at the
+		// child's first turn instead of returning an immediate, clear
+		// error for this caller-supplied mistake.
+		if !parent.ModelSupported(model) {
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("provider %q is not configured", model.Provider))
+			return
+		}
 		spawnModel = model
 	}
 	childID, err := s.sessMgr.Spawn(engine.SpawnOptions{

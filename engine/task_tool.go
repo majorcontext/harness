@@ -95,6 +95,19 @@ func runTaskTool(s *Session, raw json.RawMessage) (message.Parts, error) {
 		if err != nil {
 			return nil, fmt.Errorf("task: invalid model %q: %w", in.Model, err)
 		}
+		// Validate the provider is configured BEFORE Spawn, mirroring the
+		// `model` tool's own identical check (runModelTool) — a live
+		// review finding: ParseModelRef only checks the ref is
+		// well-formed, not that its provider is registered, so an
+		// unconfigured override used to sail through Spawn, consume a
+		// concurrency slot and a session log, and only fail later at the
+		// child's first turn — surfacing to the parent as a delayed
+		// "[tasks: ... failed: ...]" notification instead of the
+		// immediate, synchronous tool error a caller-side mistake like
+		// this deserves.
+		if !s.ModelSupported(ref) {
+			return nil, fmt.Errorf("task: provider %q is not configured (%s)", ref.Provider, s.modelChoicesHint())
+		}
 		model = ref
 	}
 

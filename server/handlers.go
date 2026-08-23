@@ -690,13 +690,6 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.reportCreatePhase(sess.ID, "new_session", time.Since(phaseStart))
-	// Adopt into the SessionManager so `task` is available and this session
-	// is reachable by session.info's lineage extension and session.send —
-	// see Server.sessMgr's doc comment. Errors only on an ID collision
-	// (astronomically unlikely — see engine.newID) or a double-adopt; both
-	// are safe to ignore here rather than fail session creation over a
-	// purely additive capability.
-	_ = s.sessMgr.AdoptRoot(sess)
 	// Report "total" on every return past this point — success or error —
 	// not just the success tail below. Without this, a failure after
 	// new_session (recordWorktreeOwner, Persist) never reports "total", and
@@ -737,6 +730,21 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "cannot create session")
 		return
 	}
+	// Adopt into the SessionManager so `task` is available and this session
+	// is reachable by session.info's lineage extension and session.send —
+	// see Server.sessMgr's doc comment. Deliberately AFTER Persist, not
+	// right after NewSession: AdoptRoot registers a root sessionNode that
+	// Reap NEVER removes (a root is the tree's own address — see Reap's
+	// doc comment), so adopting before the fallible recordWorktreeOwner/
+	// Persist steps above leaked one root node plus its full *Session per
+	// failed create, forever — a live review finding. By the time this
+	// line runs, both fallible steps have already succeeded, so there is
+	// no error path left past this point that could strand it. Errors
+	// only on an ID collision (astronomically unlikely — see
+	// engine.newID) or a double-adopt; both are safe to ignore here
+	// rather than fail session creation over a purely additive
+	// capability.
+	_ = s.sessMgr.AdoptRoot(sess)
 
 	s.timedCreatePhase(sess.ID, "register", func() error { //nolint:errcheck // never errors; see timedCreatePhase's uniform shape
 		s.mu.Lock()

@@ -143,6 +143,16 @@ func globTool() Tool {
 			if err != nil {
 				return nil, fmt.Errorf("glob: invalid pattern %q: %w", in.Pattern, err)
 			}
+			// Stat base up front, mirroring grep's identical check below —
+			// a live review finding: without this, WalkDir's callback
+			// swallows the ROOT path's own lstat error via its blanket
+			// "err != nil: skip it, don't fail the whole search" (correct
+			// for a descendant entry, wrong for the root itself), so a
+			// non-existent or unreadable base silently reported "(no
+			// matches)" instead of surfacing the caller's bad path.
+			if _, err := os.Stat(base); err != nil {
+				return nil, fmt.Errorf("glob: %w", err)
+			}
 
 			type match struct {
 				rel     string
@@ -286,7 +296,7 @@ func grepTool() Tool {
 				if len(data) > maxGrepFileBytes {
 					return nil // too large to safely read whole — skip it
 				}
-				if looksBinary(data) {
+				if looksBinary(data, grepBinarySniffLen) {
 					return nil
 				}
 				for i, line := range strings.Split(string(data), "\n") {
@@ -352,14 +362,31 @@ func grepTool() Tool {
 // tool error.
 var errStopWalk = fmt.Errorf("grep: result cap reached")
 
-// looksBinary reports whether data appears to be non-text content, using
-// the same "contains a NUL byte in the first sniffed chunk" heuristic Git
-// itself uses to classify a file as binary — cheap, and right often enough
-// to keep grep from dumping garbage into a tool result.
-func looksBinary(data []byte) bool {
+// grepBinarySniffLen is how many leading bytes grep's own binary guard
+// scans — deliberately much larger than imageSniffLen (512, tuned for
+// cheap magic-byte media detection elsewhere in this package): a live
+// review finding noted that a 512-byte sniff promises more than it can
+// deliver here specifically, since grep then line-searches the WHOLE file
+// (up to maxGrepFileBytes, 20 MiB) regardless — a file whose first 512
+// bytes are ASCII text but whose body is binary with no early NUL passed
+// the old, narrower check and leaked raw binary bytes into matching
+// "lines". 64 KiB is still cheap against a file already fully read into
+// memory, and catches the realistic case (a text header followed by a
+// binary body) the 512-byte sniff was blind to.
+const grepBinarySniffLen = 64 * 1024
+
+// looksBinary reports whether data appears to be non-text content within
+// its first limit bytes, using the same "contains a NUL byte in the first
+// sniffed chunk" heuristic Git itself uses to classify a file as binary —
+// cheap, and right often enough to keep a caller from dumping garbage into
+// a tool result. limit lets each caller size the sniff to its own
+// tradeoff between thoroughness and cost (see grepBinarySniffLen's doc
+// comment for why grep's own call needs a larger window than the
+// package's other, cheaper magic-byte sniffing).
+func looksBinary(data []byte, limit int) bool {
 	n := len(data)
-	if n > imageSniffLen {
-		n = imageSniffLen
+	if n > limit {
+		n = limit
 	}
 	for _, b := range data[:n] {
 		if b == 0 {
@@ -413,7 +440,20 @@ func lsTool() Tool {
 			if len(all) == 0 {
 				return message.Parts{&message.Text{Text: "(empty directory)"}}, nil
 			}
-			return message.Parts{&message.Text{Text: strings.Join(all, "\n")}}, nil
+			// Cap output at maxSearchResults like glob/grep both already do
+			// — a live review finding: unlike those two, ls had no bound at
+			// all, so a read-only explore/plan subagent listing a huge
+			// directory (node_modules, a data dir, a build-output tree)
+			// flooded the tool result / session context with every entry.
+			truncated := len(all) > maxSearchResults
+			if truncated {
+				all = all[:maxSearchResults]
+			}
+			out := strings.Join(all, "\n")
+			if truncated {
+				out += fmt.Sprintf("\n[truncated: showing %d entries]", maxSearchResults)
+			}
+			return message.Parts{&message.Text{Text: out}}, nil
 		},
 	}
 }
