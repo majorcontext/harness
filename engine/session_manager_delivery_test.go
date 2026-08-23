@@ -539,6 +539,75 @@ func TestReportTurnStartMigrationDoesNotDurablyLoseAStillPendingNotification(t *
 	}
 }
 
+// TestReportTurnStartMigrationDoesNotDoublePersistANewlyRaceEnqueuedNotification
+// is the regression test for a live review finding on
+// enqueueTaskNotificationMigrated's OTHER branch — the append (genuinely
+// new, not a dedup match) case, exercising the "narrower race" the
+// method's own doc comment describes: LoadSession runs OUTSIDE m.mu, so a
+// notification can be durably enqueued onto the evicted OLD object in the
+// gap between that load completing and ReportTurnStart reacquiring the
+// lock — meaning the fold never saw it, so the dedup check does not skip
+// it. But that notification's recTaskNotifyQueued record is ALREADY on
+// the shared log (old.enqueueTaskNotification wrote it durably at the
+// moment it arrived, to the SAME log sess shares) — enqueueTaskNotificationMigrated's
+// append branch used to ALSO persist a fresh recTaskNotifyQueued for it,
+// producing two queued records with no matching delivered one. A later
+// reload's queued-minus-delivered fold nets ONE PHANTOM PENDING COPY,
+// double-delivering the same child completion after a restart. Proves a
+// fresh reload after the migration restores exactly one copy, not two.
+func TestReportTurnStartMigrationDoesNotDoublePersistANewlyRaceEnqueuedNotification(t *testing.T) {
+	dir := t.TempDir()
+	reg := provider.Registry{"root": scriptedTurns("root", nil)}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	old := mgr.NewRoot(rootCfg)
+	// Force the log file to exist before anything is durably written to
+	// it — NewRoot/NewSession never write anything at construction, and
+	// LoadSession requires the file to already exist.
+	if err := old.ensureLog(); err != nil {
+		t.Fatalf("ensureLog: %v", err)
+	}
+
+	// The resume's own LoadSession call happens FIRST here, deliberately
+	// BEFORE anything is enqueued — reproducing the race window: sess's
+	// fold cannot possibly see a notification that does not exist yet.
+	sess, err := LoadSession(Config{Providers: reg, SessionDir: dir}, old.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if sess.hasPendingTaskNotifications() {
+		t.Fatal("test setup: sess should not have restored anything yet")
+	}
+
+	// NOW a background child finishes and enqueues durably onto old —
+	// strictly after sess's own load, exactly the race window
+	// enqueueTaskNotificationMigrated's own doc comment describes.
+	old.enqueueTaskNotification(taskNotification{ChildID: "ses_y", Status: StatusDone, Result: "race"})
+
+	// ReportTurnStart's migration runs: old != sess, so it drains old
+	// (same-log, no persist) and migrates onto sess — the append branch,
+	// since sess's own queue is still empty.
+	mgr.ReportTurnStart(sess)
+	if !sess.hasPendingTaskNotifications() {
+		t.Fatal("test setup: the race-enqueued notification was not migrated onto sess at all")
+	}
+
+	// A fresh reload from the same durable log must restore EXACTLY one
+	// copy — two would mean the append branch durably double-wrote a
+	// record that was already backed on disk by old's own original
+	// enqueue.
+	reloadedAgain, err := LoadSession(Config{Providers: reg, SessionDir: dir}, old.ID)
+	if err != nil {
+		t.Fatalf("LoadSession (after migration): %v", err)
+	}
+	reloadedAgain.mu.Lock()
+	defer reloadedAgain.mu.Unlock()
+	if len(reloadedAgain.taskNotifications) != 1 {
+		t.Errorf("reloadedAgain.taskNotifications = %+v, want exactly 1 — the migration's append branch must not durably double-write a record old's own enqueue already backed on the shared log", reloadedAgain.taskNotifications)
+	}
+}
+
 func TestReportTurnStartAdoptsUnknownSession(t *testing.T) {
 	mgr := NewSessionManager(context.Background(), 0, 0)
 	// A session built directly, NOT through mgr.NewRoot/AdoptRoot —
