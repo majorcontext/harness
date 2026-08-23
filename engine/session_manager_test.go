@@ -1675,6 +1675,80 @@ func TestSpawnBudgetDeltaAccountingAcrossFollowupSend(t *testing.T) {
 	}
 }
 
+// TestSpawnBudgetDeltaAccountingSurvivesReapAndReadopt is the regression
+// test for a live review finding distinct from the one above: THAT test
+// covers two finalizeTurn calls against the SAME sessionNode (a plain
+// Send follow-up, node never destroyed). This one covers a child that is
+// REAPED between its two turns — Reap deletes its sessionNode entirely
+// (usageByRoot survives; only a root-shaped node's usageByRoot entry is
+// ever cleared, see Reap's own doc comment), so the follow-up turn goes
+// through AdoptReloaded, which calls adoptLocked and builds a BRAND NEW
+// sessionNode. Proves that new node's budgetedUsage is seeded from the
+// warm session's own already-cumulative Usage(), not left at zero — the
+// bug this closes would double the first turn's spend into usageByRoot a
+// second time.
+func TestSpawnBudgetDeltaAccountingSurvivesReapAndReadopt(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	mgr.SetMaxTreeTokens(120)
+	childProv := &scriptedProvider{name: "child1", turns: [][]provider.Event{
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "first"}),
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "second"}),
+	}}
+	childProv.turns[0][0].Usage = provider.Usage{InputTokens: 40, OutputTokens: 30} // 70
+	childProv.turns[1][0].Usage = provider.Usage{InputTokens: 10, OutputTokens: 20} // 30 more; cumulative 100
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		childProv,
+		scriptedTurns("child2", nil),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child1")})
+	if err != nil {
+		t.Fatalf("Spawn child1: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	childSess, ok := mgr.Session(childID)
+	if !ok {
+		t.Fatal("child not tracked after its first turn")
+	}
+	if got := childSess.Usage(); got.InputTokens+got.OutputTokens != 70 {
+		t.Fatalf("test setup: child usage after turn 1 = %+v, want 70 total", got)
+	}
+
+	// Reap the now-terminal, childless leaf — usageByRoot[root.ID] stays
+	// at 70 (only a root-shaped node's entry is ever cleared by Reap).
+	if n := mgr.Reap(); n != 1 {
+		t.Fatalf("Reap() = %d, want 1", n)
+	}
+	if _, ok := mgr.Info(childID); ok {
+		t.Fatal("child still tracked after Reap")
+	}
+
+	// Re-adopt the SAME warm *Session object (still carries its own
+	// cumulative Usage()=70 in memory) — the exact shape a real
+	// claimForPrompt cold-reload-then-run, or a direct AdoptReloaded
+	// call, produces for a legitimate follow-up to a reaped child.
+	// Config.TaskParentID survives on the object itself (set once at
+	// Spawn), so no LoadSession/SessionDir round-trip is needed here to
+	// exercise the same adoptLocked construction path.
+	if err := mgr.AdoptReloaded(childSess); err != nil {
+		t.Fatalf("AdoptReloaded: %v", err)
+	}
+	if _, err := mgr.Send(context.Background(), childID, "again"); err != nil {
+		t.Fatalf("Send follow-up: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	// True cumulative total is 100 (70+30) — still under the 120 budget.
+	// If the reaped-then-readopted node's budgetedUsage had started at
+	// zero, this follow-up's finalizeTurn would have added the full 100
+	// on top of the 70 usageByRoot already carried across the reap,
+	// landing at 170 and refusing this Spawn.
+	if _, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child2")}); err != nil {
+		t.Errorf("Spawn at true-total 100/120 budget: want nil error, got %v (budget accounting likely double-counted the reaped child's prior turn)", err)
+	}
+}
+
 // waitForStatus polls until id reaches want or the timeout elapses.
 func waitForStatus(t *testing.T, mgr *SessionManager, id string, want SessionStatus, timeout time.Duration) {
 	t.Helper()

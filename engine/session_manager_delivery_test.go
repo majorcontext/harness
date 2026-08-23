@@ -888,3 +888,101 @@ func TestReloadedChildWithUntrackedParentIsEventuallyReapable(t *testing.T) {
 		t.Error("untracked-parent interrupted child still tracked after Reap")
 	}
 }
+
+// TestReportTurnStartDoesNotFalselyReportChildDeadWhenContinuingIt is the
+// regression test for a live review finding: ReportTurnStart's own
+// adopt-on-first-sight branch used to call adoptReloadedLocked exactly
+// the way AdoptReloaded does — including firing recoverInterruptedTurnLocked
+// for a child with a dangling turn. But ReportTurnStart's very next lines
+// unconditionally set n.status = StatusRunning and n.finalized = false to
+// actually drive a fresh turn on that SAME node — so the old behavior was
+// self-contradicting within one call: mark the child StatusFailed, append
+// a synthetic "lost to restart" message to its own transcript, and
+// durably notify a live ancestor it died, immediately before running it
+// again. Proves ReportTurnStart's cold-reload path leaves no trace of
+// recovery at all (no synthetic message, no ancestor notification) and
+// puts the node straight into StatusRunning — exactly as if the node had
+// already been tracked.
+func TestReportTurnStartDoesNotFalselyReportChildDeadWhenContinuingIt(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", doneTurn("resumed"))
+	childProv := &signaledBlockingProvider{name: "childprov", started: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() { close(childProv.release) })
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 0, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+	childID, err := mgr1.Spawn(SpawnOptions{
+		ParentID: root1.ID, Prompt: "go", Model: modelFor("childprov"), AgentType: AgentGeneralPurpose,
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	<-childProv.started // the child's turn has genuinely begun: its user message is now durably appended
+
+	childSess, ok := mgr1.Session(childID)
+	if !ok {
+		t.Fatal("child not found before simulated crash")
+	}
+	if !childSess.hasUnansweredTurn() {
+		t.Fatal("test setup: child's turn did not leave a dangling user message")
+	}
+
+	// Simulate a fresh process, same technique as
+	// TestReloadedChildWithDanglingTurnNotifiesParent.
+	mgr2 := NewSessionManager(context.Background(), 0, 0)
+	root2 := NewSession(rootCfg)
+	root2.ID = root1.ID
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+
+	reloadedChild, err := LoadSession(Config{Providers: reg, SessionDir: dir}, childID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+
+	// This is the exact shape claimForPrompt's cold-load-then-run path
+	// produces: a session about to be driven by an external scheduler,
+	// bracketed by ReportTurnStart/ReportTurnEnd — NOT a passive
+	// AdoptReloaded call. The node is not yet tracked at all, so this
+	// exercises adoptReloadedLocked's recover=false branch.
+	mgr2.ReportTurnStart(reloadedChild)
+
+	info, ok := mgr2.Info(childID)
+	if !ok {
+		t.Fatal("child not tracked after ReportTurnStart")
+	}
+	if info.Status != StatusRunning {
+		t.Errorf("status after ReportTurnStart = %q, want %q (recovery must not have fired)", info.Status, StatusRunning)
+	}
+	if info.FailReason != "" {
+		t.Errorf("fail_reason after ReportTurnStart = %q, want empty", info.FailReason)
+	}
+	for _, m := range reloadedChild.History() {
+		if m.Role == message.RoleAssistant && m.Parts.Text() == lostToRestartText {
+			t.Errorf("child history contains the synthetic lost-to-restart message even though ReportTurnStart is about to continue this exact turn: %+v", reloadedChild.History())
+		}
+	}
+
+	// Give any wrongly-fired async resume delivery a real window to land,
+	// then confirm the root never saw one — mirrors the settle-window
+	// technique in TestReloadedChildWithDanglingTurnIsIdempotentAcrossReapAndReload,
+	// for the same reason: a false negative here would be a race, not a
+	// pass.
+	time.Sleep(300 * time.Millisecond)
+	for _, m := range root2.History() {
+		if m.Role == message.RoleUser && m.Parts.Text() == taskResumeTriggerText {
+			t.Fatalf("root was falsely notified the child died while ReportTurnStart was about to continue it; history: %+v", root2.History())
+		}
+	}
+
+	// The bracket completes normally: this is a real, legitimate
+	// continuation, not an abandoned turn.
+	doneMsg := &message.Message{ID: "msg_done", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "done"}}}
+	if resume := mgr2.ReportTurnEnd(childID, doneMsg, nil); resume != nil {
+		resume()
+	}
+	waitForStatus(t, mgr2, childID, StatusDone, time.Second)
+}

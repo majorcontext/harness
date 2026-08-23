@@ -290,11 +290,22 @@ func TestSessionCreateWithParentIDUnknownAgentIs400(t *testing.T) {
 // Proves the cold-fallback branch in lineageJSONFor surfaces parent_id
 // and agent_type without requiring any write (a prompt/send call) to
 // force a reload first.
+//
+// Also covers a second, later review finding on the same cold-fallback
+// branch: it used to set Children to []string{} — indistinguishable on
+// the wire from a WARM, genuinely childless node's real empty list. For a
+// MID-TREE parent (this test's child, which itself spawns a grandchild
+// below) that is exactly wrong: the child has a real, live grandchild on
+// disk, but a caller reading "children":[] from a cold GET would
+// reasonably conclude it has none — an affirmatively wrong answer, worse
+// than an honestly omitted one. Proves "children" is omitted entirely on
+// the cold path even though a real child (the grandchild) exists.
 func TestColdChildHasDurableLineage(t *testing.T) {
 	dir := t.TempDir()
 	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("the answer is 42")}}
+	grandchildProv := &scriptedProvider{name: "grandchild", turns: [][]provider.Event{asstTurn("the deeper answer is 43")}}
 	h1 := multiProviderHarnessInDir(t, dir, message.ModelRef{Provider: "root", Model: "m1"}, nil,
-		&scriptedProvider{name: "root"}, childProv)
+		&scriptedProvider{name: "root"}, childProv, grandchildProv)
 
 	resp, data := h1.do("POST", "/session", map[string]string{"model": "root/m1"})
 	if resp.StatusCode != 201 {
@@ -317,6 +328,21 @@ func TestColdChildHasDurableLineage(t *testing.T) {
 	mustUnmarshal(t, data, &child)
 	waitForLineageStatus(t, h1, child.ID, "done", 2*time.Second)
 
+	// Give the child its own grandchild — a real, live subtree the child
+	// (a mid-tree parent from here on) genuinely has, on disk, once h1
+	// itself goes cold below.
+	resp, data = h1.do("POST", "/session", map[string]string{
+		"parent_id": child.ID, "agent": engine.AgentExplore, "prompt": "go deeper", "model": "grandchild/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn grandchild status %d: %s", resp.StatusCode, data)
+	}
+	var grandchild struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &grandchild)
+	waitForLineageStatus(t, h1, grandchild.ID, "done", 2*time.Second)
+
 	// A SECOND, independent harness against the SAME dir: a fresh
 	// SessionManager that has never seen child.ID — the exact "cold"
 	// condition (Reap, or a real process restart) this fix targets.
@@ -324,7 +350,7 @@ func TestColdChildHasDurableLineage(t *testing.T) {
 	// ReportTurnStart's own adopt-on-first-sight reload and mask the bug
 	// this test exists to catch.
 	h2 := multiProviderHarnessInDir(t, dir, message.ModelRef{Provider: "root", Model: "m1"}, nil,
-		&scriptedProvider{name: "root"}, childProv)
+		&scriptedProvider{name: "root"}, childProv, grandchildProv)
 	resp, data = h2.do("GET", "/session/"+child.ID, nil)
 	if resp.StatusCode != 200 {
 		t.Fatalf("cold GET child status %d: %s", resp.StatusCode, data)
@@ -348,6 +374,9 @@ func TestColdChildHasDurableLineage(t *testing.T) {
 	}
 	if _, ok := cold.Lineage["depth"]; ok {
 		t.Errorf("cold lineage.depth = %v, want omitted (no durable source)", cold.Lineage["depth"])
+	}
+	if v, ok := cold.Lineage["children"]; ok {
+		t.Errorf("cold lineage.children = %v, want omitted (no durable source) — the child genuinely has a live grandchild on disk, so an affirmative empty list would be actively wrong, not just unknown", v)
 	}
 }
 
