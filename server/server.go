@@ -657,6 +657,18 @@ func New(opts Options) (*Server, error) {
 		closing:        make(chan struct{}),
 		sessMgr:        sessMgr,
 	}
+	// SetExternalRunner before anything else touches sessMgr: it is what
+	// makes a SessionManager-initiated resume turn on a ROOT session go
+	// through this server's OWN run-slot admission (claimForPrompt) rather
+	// than SessionManager calling Session.Prompt directly — see
+	// ExternalRunner's doc comment (engine/session_manager.go) for why an
+	// unsynchronized second scheduler is a real, reproduced race. s is
+	// already a fully-allocated *Server here (unlike a caller's own outer
+	// variable assigned from New's return value — see
+	// resumeSessionForTaskNotification's doc comment for the exact bug
+	// this ordering avoids), so this method value is safe to hand out
+	// immediately, before New even returns.
+	sessMgr.SetExternalRunner(s.resumeSessionForTaskNotification)
 	if err := s.reconcile(); err != nil {
 		return nil, err
 	}

@@ -1618,7 +1618,21 @@ func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Cont
 // acknowledged receipt.
 func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, text string) {
 	defer s.wg.Done()
-	_, err := st.sess.Prompt(ctx, text)
+	// ReportTurnStart/ReportTurnEnd bracket the ONE choke point every
+	// ordinary (non-goal-loop) turn on a resident session funnels through
+	// — handlePrompt's happy path, dispatchQueueHead, and
+	// runOrQueueText/resumeSessionForTaskNotification (session_tree.go)
+	// all call this function rather than driving Prompt themselves — so
+	// this single bracket is what keeps SessionManager's view of "is this
+	// session running" accurate for a root no matter which of those paths
+	// triggered the turn. Adopts id as a fresh SessionManager root on
+	// first sight if it isn't tracked yet (see ReportTurnStart's doc
+	// comment) — the case a session reloaded after a restart or eviction
+	// hits, closing the "task tool broken after restart" gap a live
+	// review caught.
+	s.sessMgr.ReportTurnStart(st.sess)
+	msg, err := st.sess.Prompt(ctx, text)
+	s.sessMgr.ReportTurnEnd(id, msg, err)
 	s.syncMessages(id) // catch any message not yet journaled
 	switch {
 	case err == nil:
@@ -2028,11 +2042,24 @@ func (s *Server) handleGoalBusy(w http.ResponseWriter, id string, condition stri
 // goal.cleared that is still in flight.
 func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condition string, maxTurns int) {
 	defer s.wg.Done()
+	// See runPrompt's identical bracket for why: this treats the WHOLE
+	// goal loop as one continuous "running" span for SessionManager's
+	// purposes (matching the single busy/idle transition this function
+	// already emits around it below) — a task notification arriving
+	// while a goal loop is active is queued and picked up at the loop's
+	// own next turn boundary automatically, since PursueGoal's underlying
+	// turns go through the identical streamTurn/checkoutTaskNotificationsSegment
+	// path any other turn does. msg is nil for ReportTurnEnd: a root
+	// session's finalizeTurn branch never reads it (see finalizeTurn's
+	// doc comment) — only a CHILD's does, and a child is never resident,
+	// so runGoal never runs for one.
+	s.sessMgr.ReportTurnStart(st.sess)
 	res, err := st.sess.PursueGoal(ctx, condition, engine.GoalOptions{
 		Registered: true,
 		MaxTurns:   maxTurns,
 		Evaluator:  s.opts.GoalEvaluator,
 	})
+	s.sessMgr.ReportTurnEnd(id, nil, err)
 	s.syncMessages(id)
 	switch {
 	case err == nil && res.Achieved:

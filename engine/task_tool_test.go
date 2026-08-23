@@ -233,26 +233,5 @@ func TestTaskDeliveryParentIdleTriggersResumeTurn(t *testing.T) {
 	}
 }
 
-// TestTaskDeliveryQueuedNotificationsDrainExactlyOnce proves the OTHER half
-// of queue-or-resume directly against the primitive streamTurn calls on
-// every model request (drainTaskNotificationsSegment): a session mid-turn
-// never gets an extra resume turn injected — its NEXT streamTurn call
-// (whether that is later in the same tool loop or the next external
-// Prompt/Send) is what picks the notification up, and picks it up exactly
-// once, several notifications combining into one segment.
-func TestTaskDeliveryQueuedNotificationsDrainExactlyOnce(t *testing.T) {
-	s := NewSession(Config{WorkDir: t.TempDir()})
-	s.enqueueTaskNotification(taskNotification{ChildID: "ses_x", Status: StatusDone, Result: "hi"})
-	s.enqueueTaskNotification(taskNotification{ChildID: "ses_y", Status: StatusFailed, FailReason: "boom"})
-
-	seg := s.drainTaskNotificationsSegment()
-	if !strings.Contains(seg, "ses_x") || !strings.Contains(seg, "hi") {
-		t.Errorf("segment missing first notification: %q", seg)
-	}
-	if !strings.Contains(seg, "ses_y") || !strings.Contains(seg, "boom") {
-		t.Errorf("segment missing second notification: %q", seg)
-	}
-	if again := s.drainTaskNotificationsSegment(); again != "" {
-		t.Errorf("second drain = %q, want empty (exactly-once delivery)", again)
-	}
-}
+// Low-level checkout/commit/requeue mechanics are covered in
+// taskdelivery_test.go.
