@@ -14,11 +14,12 @@ import (
 
 // decodedSessionInfo mirrors the JSON the session_info tool emits.
 type decodedSessionInfo struct {
-	SessionID    string   `json:"session_id"`
-	Model        string   `json:"model"`
-	System       []string `json:"system"`
-	Tools        []string `json:"tools"`
-	Instructions string   `json:"instructions"`
+	SessionID    string         `json:"session_id"`
+	Model        string         `json:"model"`
+	Effort       message.Effort `json:"effort"`
+	System       []string       `json:"system"`
+	Tools        []string       `json:"tools"`
+	Instructions string         `json:"instructions"`
 	Skills       []struct {
 		Name string `json:"name"`
 		Path string `json:"path"`
@@ -129,6 +130,88 @@ func TestSessionInfoNothingInjected(t *testing.T) {
 	// System still carries the base segment.
 	if len(info.System) != 1 || info.System[0] != "base" {
 		t.Errorf("system = %v, want [base]", info.System)
+	}
+	// Effort was never set: report it honestly as EffortUnset ("", the
+	// provider default), not omitted and not an invented level.
+	if info.Effort != message.EffortUnset {
+		t.Errorf("effort = %q, want EffortUnset", info.Effort)
+	}
+	if !strings.Contains(rawSessionInfoEffort(t, info), `"effort":""`) {
+		t.Errorf("unset effort must serialize as \"effort\":\"\", got %q", rawSessionInfoEffort(t, info))
+	}
+}
+
+// rawSessionInfoEffort re-marshals just the effort field so the test can
+// assert the unset case appears explicitly as "" rather than being omitted
+// by an omitempty tag — an agent checking session_info must be able to tell
+// "unset" from "the field wasn't reported at all."
+func rawSessionInfoEffort(t *testing.T, info decodedSessionInfo) string {
+	t.Helper()
+	b, err := json.Marshal(struct {
+		Effort message.Effort `json:"effort"`
+	}{info.Effort})
+	if err != nil {
+		t.Fatalf("marshal effort: %v", err)
+	}
+	return string(b)
+}
+
+// TestSessionInfoReportsEffort drives the real session_info build function
+// with a session created at a non-default reasoning-effort level (mirroring
+// the level a session would carry after POST /session/{id}/thinking or a
+// create-time Config.Effort) and asserts the level round-trips through
+// session_info exactly.
+func TestSessionInfoReportsEffort(t *testing.T) {
+	work := t.TempDir()
+	mkdirAll(t, filepath.Join(work, ".git"))
+
+	info := callSessionInfo(t, Config{
+		WorkDir:      work,
+		Instructions: &InstructionsConfig{Disabled: true},
+		SkillsDirs:   []string{},
+		Effort:       message.EffortHigh,
+	})
+
+	if info.Effort != message.EffortHigh {
+		t.Errorf("effort = %q, want %q", info.Effort, message.EffortHigh)
+	}
+}
+
+// TestSessionInfoReportsEffortAfterSetEffort proves session_info reflects a
+// SetEffort swap made after the session was created — the same path
+// handleSetThinking (POST /session/{id}/thinking) drives — not just the
+// create-time Config.Effort.
+func TestSessionInfoReportsEffortAfterSetEffort(t *testing.T) {
+	work := t.TempDir()
+	mkdirAll(t, filepath.Join(work, ".git"))
+
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn(provider.StopToolUse, toolCall("tc1", "session_info", `{}`)),
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "done"}),
+	}}
+	s := NewSession(Config{
+		Providers:    provider.Registry{"test": prov},
+		Model:        message.ModelRef{Provider: "test", Model: "m1"},
+		WorkDir:      work,
+		Instructions: &InstructionsConfig{Disabled: true},
+		SkillsDirs:   []string{},
+	})
+	s.SetEffort(message.EffortLow)
+
+	if _, err := s.Prompt(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	h := s.History()
+	tr, ok := h[2].Parts[0].(*message.ToolResult)
+	if !ok {
+		t.Fatalf("h[2].Parts[0] = %T, want ToolResult", h[2].Parts[0])
+	}
+	var info decodedSessionInfo
+	if err := json.Unmarshal([]byte(tr.Content.Text()), &info); err != nil {
+		t.Fatalf("decoding session_info result %q: %v", tr.Content.Text(), err)
+	}
+	if info.Effort != message.EffortLow {
+		t.Errorf("effort = %q, want %q", info.Effort, message.EffortLow)
 	}
 }
 
