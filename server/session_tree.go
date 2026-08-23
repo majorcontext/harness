@@ -105,22 +105,28 @@ func mustLookupSpawned(s *Server, id string) *engine.Session {
 
 // runOrQueueText claims id's run slot exactly like an ordinary
 // prompt_async would and drives a turn with text — or, if a real prompt
-// is already queued ahead of it, dispatches the queue's own head instead,
-// exactly like handlePrompt's identical branch (see dispatchQueueHead) —
-// so this can NEVER race an ordinary prompt_async request for the same
-// session: both go through the exact same claimForPrompt admission gate,
-// which also means it transparently cold-loads id from disk if it isn't
-// currently resident (evicted, or simply never touched by this process
-// instance — e.g. after a restart), exactly like claimForPrompt's own
-// callers already get for free.
+// is already queued ahead of it, dispatches the queue's own head instead
+// and drops text — exactly like handlePrompt's identical branch (see
+// dispatchQueueHead) — so this can NEVER race an ordinary prompt_async
+// request for the same session: both go through the exact same
+// claimForPrompt admission gate, which also means it transparently
+// cold-loads id from disk if it isn't currently resident (evicted, or
+// simply never touched by this process instance — e.g. after a
+// restart), exactly like claimForPrompt's own callers already get for
+// free.
 //
-// This is BOTH engine.ExternalRunner's implementation
+// This is engine.ExternalRunner's implementation
 // (resumeSessionForTaskNotification, below — SessionManager delegates a
 // root's engine-initiated resume turn here instead of calling
-// Session.Prompt directly, see ExternalRunner's doc comment for why) AND
-// handleSessionSend's root branch: "wake a session with a synthetic
-// trigger" and "deliver a real user message" are the same operation as
-// far as this admission gate is concerned.
+// Session.Prompt directly, see ExternalRunner's doc comment for why),
+// and ONLY that: dropping text on a busy or already-queued root is
+// harmless for a resume trigger (the pending notification stays queued
+// and rides that turn's own next boundary via
+// checkoutTaskNotificationsSegment regardless of what text drove it) but
+// wrong for a real user message, so session.send uses the dedicated
+// sendTextToRoot instead, which never drops text on any admission
+// outcome — see its own doc comment for the two live reviews that caught
+// runOrQueueText being reused for that purpose.
 //
 // handled reports whether id is a session this server knows how to run at
 // all (resident or loadable from disk) — true even when nothing actually
@@ -135,38 +141,97 @@ func (s *Server) runOrQueueText(id, text string) (handled bool) {
 		return code != http.StatusNotFound
 	}
 	if len(st.sess.QueuedPrompts()) > 0 {
-		// Enqueue text durably behind whatever is already queued, then
-		// dispatch the queue's HEAD (not necessarily this call's own
-		// text) into the run slot just claimed — mirrors handlePrompt's
-		// identical idle-with-queue branch (handlers.go, "Global FIFO on
-		// an idle-with-queue session"). Without this, a session.send
-		// landing here with a non-empty queue silently lost its own
-		// text: only the pre-existing head ever ran, and the caller
-		// still got 202 "sent" — a live review caught this. The
-		// resume-trigger caller (resumeSessionForTaskNotification)
-		// doesn't strictly need its synthetic trigger text preserved
-		// (the dispatched head's own turn surfaces the pending
-		// notification via checkoutTaskNotificationsSegment regardless
-		// of what text drove it, and that text already becomes real
-		// turn input via the empty-queue branch below anyway) — so one
-		// unconditional enqueue-then-dispatch here stays correct for
-		// both callers without a caller-specific branch.
-		if _, err := st.sess.EnqueuePrompt(text); err != nil {
-			// Only reachable for empty/whitespace-only text; both
-			// callers already guard against that (handleSessionSend
-			// rejects body.Text=="" before calling here, and
-			// taskResumeTriggerText is a non-empty constant). Fail
-			// closed rather than silently drop, releasing the claim
-			// just taken.
-			s.releasePromptClaim(st)
-			return true
-		}
 		s.dispatchQueueHead(id, st, ctx)
 		return true
 	}
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 	go s.runPrompt(ctx, id, st, text)
 	return true
+}
+
+// sendTextToRoot delivers text to root id through this server's ordinary
+// run-slot admission (claimForPrompt) — the SAME path prompt_async uses
+// — but, unlike runOrQueueText above, NEVER drops text on ANY admission
+// outcome: a real user message must survive exactly like prompt_async's
+// own handlePrompt/enqueueOrDispatch pair guarantees, not just the
+// idle-with-non-empty-queue case runOrQueueText itself now handles. Two
+// live reviews caught runOrQueueText silently dropping session.send text
+// while still reporting 202 "sent": first when the root was idle with an
+// already-non-empty queue (fixed by making runOrQueueText itself durably
+// enqueue), then again — a DIFFERENT gap in the SAME function — when the
+// root was simply BUSY (claimForPrompt's ordinary 409), which
+// runOrQueueText's early `return code != http.StatusNotFound` still
+// drops unconditionally. That drop is CORRECT for
+// resumeSessionForTaskNotification (a dropped synthetic trigger costs
+// nothing — the pending notification stays queued and rides the busy
+// turn's own next boundary via checkoutTaskNotificationsSegment
+// regardless), so runOrQueueText itself is left alone for that caller;
+// session.send gets its own function instead of a caller-specific branch
+// bolted onto the shared one.
+//
+// status is "started" or "queued" — the same two values prompt_async's
+// own status field ever reports — with queuedDepth meaningful only when
+// status is "queued" (mirrors promptAsyncResponse). errCode is 0 on
+// success; otherwise the HTTP status the caller should report instead
+// (404 unknown session, 503 draining, 409 with holder set for a
+// workdir-held conflict, 400 for the practically-unreachable empty-text
+// case handleSessionSend already guards against).
+func (s *Server) sendTextToRoot(id, text string) (status string, queuedDepth int, errCode int, holder string) {
+	st, ctx, _, code, holder := s.claimForPrompt(id)
+	switch {
+	case code == http.StatusNotFound:
+		return "", 0, http.StatusNotFound, ""
+	case code == http.StatusServiceUnavailable:
+		return "", 0, http.StatusServiceUnavailable, ""
+	case code == http.StatusConflict && holder != "":
+		return "", 0, http.StatusConflict, holder
+	case code == http.StatusConflict:
+		// Busy (not a workdir conflict): enqueue durably now, then race
+		// ONE retry — mirrors enqueueOrDispatch (handlers.go) exactly,
+		// closing the gap where the busy occupant's own tail
+		// (runPrompt's maybeDispatchQueued) runs between the failed claim
+		// above and this enqueue.
+		sess := s.residentSession(id)
+		if sess == nil {
+			// Benign race, identical to enqueueOrDispatch's own: the busy
+			// occupant finished and was evicted in the gap. Report
+			// "queued" at depth 0 rather than erroring — a client retry
+			// (or the eventual reload) resolves it against a freshly
+			// idle session; the text itself was never lost because it
+			// was never durably written in this branch either, so there
+			// is nothing to report as sent — treat this exactly like
+			// TestQueueClearRaceDuringDispatchIsNotAnError's shape.
+			return "queued", 0, 0, ""
+		}
+		ourID, err := sess.EnqueuePrompt(text)
+		if err != nil {
+			return "", 0, http.StatusBadRequest, ""
+		}
+		st2, ctx2, _, code2, _ := s.claimForPrompt(id)
+		if code2 != 0 {
+			return "queued", len(sess.QueuedPrompts()), 0, ""
+		}
+		head, ok := s.dispatchQueueHead(id, st2, ctx2)
+		if !ok {
+			return "queued", len(sess.QueuedPrompts()), 0, ""
+		}
+		if head.ID == ourID {
+			return "started", 0, 0, ""
+		}
+		return "queued", len(sess.QueuedPrompts()), 0, ""
+	default: // code == 0: claimed cleanly
+		if len(st.sess.QueuedPrompts()) > 0 {
+			if _, err := st.sess.EnqueuePrompt(text); err != nil {
+				s.releasePromptClaim(st)
+				return "", 0, http.StatusBadRequest, ""
+			}
+			s.dispatchQueueHead(id, st, ctx)
+			return "queued", len(st.sess.QueuedPrompts()), 0, ""
+		}
+		s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
+		go s.runPrompt(ctx, id, st, text)
+		return "started", 0, 0, ""
+	}
 }
 
 // resumeSessionForTaskNotification is this server's engine.ExternalRunner
@@ -197,6 +262,43 @@ func (s *Server) resumeSessionForTaskNotification(id, text string) bool {
 // returns 202 immediately with nothing but the session id — the caller
 // polls session.info (GET /session/{id}) for the outcome, exactly like
 // the `task` tool's own callers do.
+// writeSendToRootResult writes handleSessionSend's HTTP response for a
+// root, given sendTextToRoot's return values. session.send's wire
+// contract reports "sent" (not "started", prompt_async's own vocabulary)
+// for the common case so existing callers built against the original
+// unconditional-202 contract keep working — a caller checking for a
+// truthy status still sees success — but now ALSO reports "queued" with
+// a depth, honestly, exactly like prompt_async already does, rather than
+// claiming "sent" for a message that has not actually run yet.
+func (s *Server) writeSendToRootResult(w http.ResponseWriter, id, status string, queuedDepth, errCode int, holder string) {
+	switch errCode {
+	case 0:
+		// fall through to the success response below
+	case http.StatusConflict:
+		writeErr(w, http.StatusConflict, fmt.Sprintf("workdir busy: held by session %s", holder))
+		return
+	case http.StatusServiceUnavailable:
+		writeErr(w, http.StatusServiceUnavailable, "server shutting down")
+		return
+	case http.StatusBadRequest:
+		// Only reachable for empty/whitespace-only text — handleSessionSend
+		// already rejects body.Text=="" before ever calling sendTextToRoot,
+		// so this is not reachable in practice; fail closed rather than
+		// silently drop.
+		writeErr(w, http.StatusBadRequest, "text is required")
+		return
+	default: // http.StatusNotFound
+		writeErr(w, http.StatusNotFound, "no such session")
+		return
+	}
+	resp := map[string]any{"session_id": id, "status": "sent"}
+	if status == "queued" {
+		resp["status"] = "queued"
+		resp["queued"] = queuedDepth
+	}
+	writeJSON(w, http.StatusAccepted, resp)
+}
+
 func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
@@ -219,33 +321,28 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 		// has had no turn run against it in this process (see
 		// handleSpawnChild's identical fallback: ReportTurnStart's
 		// adopt-on-first-sight only fires once a turn actually runs).
-		// runOrQueueText's own claimForPrompt cold-loads it and
+		// sendTextToRoot's own claimForPrompt cold-loads it and
 		// ReportTurnStart adopts it as part of running the turn; an id
 		// truly unknown to this server (no log on disk either) surfaces as
-		// handled=false from there. A child is never in this situation —
+		// errCode==404 from there. A child is never in this situation —
 		// SessionManager registers it the instant Spawn creates it, so
 		// "not a node" here only ever means "an as-yet-unadopted root" or
 		// "genuinely unknown."
-		if !s.runOrQueueText(id, body.Text) {
-			writeErr(w, http.StatusNotFound, "no such session")
-			return
-		}
-		writeJSON(w, http.StatusAccepted, map[string]string{"session_id": id, "status": "sent"})
+		status, queuedDepth, errCode, holder := s.sendTextToRoot(id, body.Text)
+		s.writeSendToRootResult(w, id, status, queuedDepth, errCode, holder)
 		return
 	}
 	if info.ParentID == "" {
 		// Root: route through the ordinary run-slot admission path — see
-		// runOrQueueText's doc comment for why session.send must never
-		// independently drive Session.Prompt for a root. This also
-		// transparently handles a root evicted from residency and later
-		// reloaded: claimForPrompt's own cold-load path covers it, unlike
-		// an earlier version of this handler that drove a stale
+		// sendTextToRoot's doc comment for why session.send must never
+		// independently drive Session.Prompt for a root, and never
+		// silently drop the caller's text on any admission outcome. This
+		// also transparently handles a root evicted from residency and
+		// later reloaded: claimForPrompt's own cold-load path covers it,
+		// unlike an earlier version of this handler that drove a stale
 		// SessionManager-cached object in that case.
-		if !s.runOrQueueText(id, body.Text) {
-			writeErr(w, http.StatusNotFound, "no such session")
-			return
-		}
-		writeJSON(w, http.StatusAccepted, map[string]string{"session_id": id, "status": "sent"})
+		status, queuedDepth, errCode, holder := s.sendTextToRoot(id, body.Text)
+		s.writeSendToRootResult(w, id, status, queuedDepth, errCode, holder)
 		return
 	}
 	// Child: SessionManager is its sole scheduler, always safe. Unlike a
@@ -253,21 +350,56 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 	// ErrSessionBusy check has nowhere to defer to) — firing Send in a
 	// background goroutine and discarding its error unconditionally, as
 	// an earlier version of this handler did, meant a message sent to an
-	// already-running child was silently dropped while the caller still
-	// got 202 "sent". Refuse up front instead. info was read moments
-	// ago, so there is a small residual race (the child could finish and
-	// go idle in the gap) — the same class of benign, documented race
-	// runOrQueueText/enqueueOrDispatch accept elsewhere in this package —
-	// but this closes the common, reproducible case: a caller sending a
-	// follow-up while a child's turn is visibly still in flight.
-	if info.Status == engine.StatusRunning {
-		writeErr(w, http.StatusConflict, "session is busy with another prompt")
+	// already-running, already-canceled, or at-the-tree's-concurrency-cap
+	// child was silently dropped while the caller still got 202 "sent".
+	// CanSend surfaces all three of Send's real, deterministic admission
+	// errors up front (an earlier revision of this fix only pre-checked
+	// info.Status == StatusRunning, missing ErrConcurrencyLimit and
+	// ErrSessionCanceled entirely — a live review caught this: a
+	// concurrency-cap refusal is not a race, it is Send's ordinary,
+	// expected outcome whenever the tree is already busy elsewhere, and a
+	// canceled child is a permanent, deterministic state, not a fleeting
+	// window). CanSend's own doc comment covers the genuinely small
+	// residual race that remains between this check and the Send call
+	// below.
+	if err := s.sessMgr.CanSend(id); err != nil {
+		if errors.Is(err, engine.ErrUnknownSession) {
+			writeErr(w, http.StatusNotFound, "no such session")
+		} else {
+			// ErrSessionBusy/ErrConcurrencyLimit/ErrSessionCanceled: all
+			// short, fixed, secret-free sentinel strings — safe to
+			// surface directly (see classifySpawnError's doc comment for
+			// the same reasoning on this error set elsewhere).
+			writeErr(w, http.StatusConflict, err.Error())
+		}
+		return
+	}
+	// s.wg.Add must happen inside the SAME s.mu critical section that
+	// observes s.draining==false — the invariant every other s.wg.Add
+	// call site in this package upholds (claimForPrompt, handlers.go),
+	// so that by mutex ordering every Add happens-before Drain sets
+	// draining=true and calls wg.Wait(). A bare, unguarded Add here (an
+	// earlier revision of this branch) could run concurrently with, or
+	// after, wg.Wait() — a WaitGroup misuse that can panic, or let this
+	// goroutine escape the drain wait entirely and keep writing to the
+	// journal after Close, racing shutdown. A live review caught this.
+	s.mu.Lock()
+	if s.draining {
+		s.mu.Unlock()
+		writeErr(w, http.StatusServiceUnavailable, "server shutting down")
 		return
 	}
 	s.wg.Add(1)
+	s.mu.Unlock()
 	go func() {
 		defer s.wg.Done()
-		s.sessMgr.Send(context.Background(), id, body.Text) //nolint:errcheck // async: outcome read back via session.info; ErrSessionBusy is pre-checked above, ErrSessionCanceled/ErrConcurrencyLimit are rare residual races (the child settled or the tree budget was hit in the gap between the check above and this call) not worth blocking the request on
+		// context.Background(), not r.Context(): this handler has already
+		// returned 202 by the time this runs, and a draining server
+		// cannot cancel this specific turn through this path either way
+		// (SessionManager.Send has no notion of the server's own drain
+		// signal) — the same shape sessMgr.Send's other async callers in
+		// this package already accept.
+		s.sessMgr.Send(context.Background(), id, body.Text) //nolint:errcheck // async: outcome read back via session.info; CanSend above already surfaced the deterministic admission errors synchronously, so what remains here is only the genuinely racy window CanSend's own doc comment covers
 	}()
 	writeJSON(w, http.StatusAccepted, map[string]string{"session_id": id, "status": "sent"})
 }
