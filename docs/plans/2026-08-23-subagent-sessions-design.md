@@ -136,6 +136,35 @@ per the existing sentinel rule.
 The notification carries: child session id, agent type, status
 (done/failed), the child's final message text, and usage totals.
 
+**Grandchild delivery — reparent to the nearest live ancestor.** A
+child's own "parent" for delivery purposes is not always its immediate
+spawner: a child that spawned its own grandchild typically finishes ITS
+OWN turn (going `done`) before that grandchild does — the whole point of
+non-blocking execution (decision 2) is that a parent never waits on a
+child it spawned. When the grandchild later completes, its immediate
+parent is already terminal (`done`/`failed`/`canceled`) and has no
+notion of "next turn boundary" or "idle" to resume into. Rather than
+stranding the notification, SessionManager walks up the tree past any
+already-terminal node to the nearest ancestor still in `running` or
+`idle` (queue-or-resume applies there, exactly as if that ancestor were
+the direct parent) — reaching the root in the worst case, since a root
+never goes terminal on its own (only via explicit cancellation). This
+also applies to cancellation: a canceled node's own pending notifications
+are forwarded the same way rather than discarded, so a subtree canceled
+mid-flight never silently drops a result that had already arrived.
+
+The alternative — "wake" the terminal parent back into a running turn
+just to hand it a grandchild's result — was rejected: it would resurrect
+a session the caller (or the parent's own agent) had already treated as
+finished, with no way for anything downstream to distinguish that from a
+genuine new turn on a session still doing work. Reparenting keeps `done`
+a real terminal state for a child while still guaranteeing every
+notification reaches SOME live node in the tree. Live-verified: a
+general-purpose child that spawns an explore grandchild and finishes its
+own turn before the grandchild does gets skipped, and the root — the
+next live ancestor up — receives and correctly acts on the grandchild's
+result instead.
+
 ### Wire / platform API
 
 Three operations, exposed wherever harness already exposes session
