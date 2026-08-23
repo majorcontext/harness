@@ -91,6 +91,116 @@ func managedConfig(model string, providers ...provider.Provider) Config {
 	}
 }
 
+// signaledBlockingProvider is blockingProvider plus a started signal,
+// closed the instant Next is first entered — needed when a test must
+// deterministically wait for a turn to actually be mid-flight (not just
+// "the goroutine driving it has been scheduled") before racing something
+// else against it. Unlike blockingProvider, one instance is single-use
+// (started closes via sync.Once), matching this file's established
+// per-turn-instance convention elsewhere.
+type signaledBlockingProvider struct {
+	name    string
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (p *signaledBlockingProvider) Name() string { return p.name }
+
+func (p *signaledBlockingProvider) Stream(ctx context.Context, _ *provider.Request) (provider.Stream, error) {
+	return &signaledBlockingStream{ctx: ctx, p: p}, nil
+}
+
+type signaledBlockingStream struct {
+	ctx  context.Context
+	p    *signaledBlockingProvider
+	done bool
+}
+
+func (s *signaledBlockingStream) Next() (provider.Event, error) {
+	if s.done {
+		return provider.Event{}, errUnreachableStreamEnd
+	}
+	s.p.once.Do(func() { close(s.p.started) })
+	select {
+	case <-s.p.release:
+		s.done = true
+		msg := &message.Message{ID: "msg_root", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "ok"}}}
+		return provider.Event{Type: provider.EventDone, Message: msg, StopReason: provider.StopEndTurn}, nil
+	case <-s.ctx.Done():
+		return provider.Event{}, s.ctx.Err()
+	}
+}
+
+func (s *signaledBlockingStream) Close() error { return nil }
+
+// TestBareSessionManagerRootNeverRacesConcurrentResumeDuringOwnTurn is
+// the engine-level regression test for a live-review BLOCKER: a
+// SessionManager with no ExternalRunner installed — `harness run`'s bare
+// CLI mode (see cmd/harness/main.go's runCmd/runGoal, which now bracket
+// their own turn-driving calls with ReportTurnStart/ReportTurnEnd for
+// exactly this reason) — must never let a task-spawned child's fast
+// completion trigger a SECOND, CONCURRENT call to Session.Prompt on the
+// same root while the root's OWN turn (the one that spawned the child)
+// is still in flight. Session.Prompt is documented as never safe to call
+// concurrently with itself. An earlier revision of runCmd drove its turn
+// with a bare, unbracketed s.Prompt call, leaving SessionManager's view
+// of the root at StatusIdle for the WHOLE turn — exactly the state
+// triggerResumeLocked's no-ExternalRunner fallback (a direct s.Prompt
+// call, fired automatically the instant the spawning goroutine's own
+// finalizeTurn call returns a non-nil resume) needs to fire. Run under
+// -race: a real concurrent Prompt call trips the race detector on
+// Session.history/Session.turn even if this test's own assertions
+// somehow didn't.
+func TestBareSessionManagerRootNeverRacesConcurrentResumeDuringOwnTurn(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 0, 0) // no ExternalRunner: bare CLI mode
+	rootBlocker := &signaledBlockingProvider{name: "root", started: make(chan struct{}), release: make(chan struct{})}
+	root := mgr.NewRoot(managedConfig("root", rootBlocker, scriptedTurns("child", doneTurn("child done"))))
+
+	mgr.ReportTurnStart(root)
+	turnDone := make(chan struct{})
+	var promptErr error
+	go func() {
+		defer close(turnDone)
+		_, promptErr = root.Prompt(context.Background(), "spawn a child")
+	}()
+	<-rootBlocker.started
+
+	// Mirrors the model calling `task` mid-turn: a child whose own turn
+	// finishes fast, well before root's own turn is released below.
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	// If the bracket is doing its job, root is StatusRunning right now
+	// (ReportTurnStart set it, and nothing has cleared it — root's own
+	// turn is still blocked above), so finalizeTurn(child) only enqueued
+	// a notification — it must NOT have fired triggerResumeLocked, which
+	// would call root.Prompt AGAIN, concurrently with the still-in-flight
+	// call started above.
+	if !root.hasPendingTaskNotifications() {
+		t.Error("child's notification was not enqueued on root — finalizeTurn's delivery path is broken independent of the race this test targets")
+	}
+
+	close(rootBlocker.release)
+	select {
+	case <-turnDone:
+	case <-time.After(time.Second):
+		t.Fatal("root's own turn never completed")
+	}
+	if promptErr != nil {
+		t.Fatalf("root Prompt: %v", promptErr)
+	}
+
+	resume := mgr.ReportTurnEnd(root.ID, nil, nil)
+	if resume == nil {
+		t.Fatal("ReportTurnEnd returned no resume despite a pending notification — the child's result would be stranded")
+	}
+	resume()
+}
+
 func TestSessionManagerNewRootStartsIdle(t *testing.T) {
 	mgr := NewSessionManager(context.Background(), 0, 0)
 	root := mgr.NewRoot(managedConfig("root", scriptedTurns("root", nil)))
@@ -416,6 +526,50 @@ func toolNames(s *Session) []string {
 // becomes reapable itself on a later call — a live review flagged
 // m.nodes growing unbounded on a long-lived process fanning out many
 // `task` children.
+// TestReapCancelsNodeContextBeforeRemoving is the regression test for a
+// review finding: a naturally completed child (finalizeTurn sets
+// Done/Failed — the only path a Reap-eligible leaf reaches without going
+// through Cancel/cancelSubtreeLocked, which is the ONLY place that calls
+// n.cancel()) never has its own context.CancelFunc invoked. Since every
+// child ctx is context.WithCancel(parent.ctx), it registers itself in
+// the parent cancelCtx's internal children map; Reap deleting the node
+// without calling n.cancel() first drops the last Go-level reference to
+// that CancelFunc without ever invoking it, leaking the registration for
+// the rest of the root's lifetime — one leaked cancelCtx per completed
+// task on a long-lived server, silently defeating part of the
+// reclamation Reap exists to provide.
+func TestReapCancelsNodeContextBeforeRemoving(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("child", doneTurn("done")),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	mgr.mu.Lock()
+	childCtx := mgr.nodes[childID].ctx
+	mgr.mu.Unlock()
+	select {
+	case <-childCtx.Done():
+		t.Fatal("child context already done before Reap — test setup invalid")
+	default:
+	}
+
+	if n := mgr.Reap(); n != 1 {
+		t.Fatalf("Reap() = %d, want 1", n)
+	}
+
+	select {
+	case <-childCtx.Done():
+	default:
+		t.Error("child context not canceled by Reap — its CancelFunc registration leaked in the parent's cancelCtx tree")
+	}
+}
+
 func TestReapRemovesTerminalLeavesAndUpdatesParent(t *testing.T) {
 	mgr := NewSessionManager(context.Background(), 0, 0)
 	root := mgr.NewRoot(managedConfig("root",

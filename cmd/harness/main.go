@@ -236,10 +236,6 @@ func runFlags(opts *runOptions) *flag.FlagSet {
 	return fs
 }
 
-// sessionDir resolves where session logs live, in precedence order:
-// -no-save (yields "", persistence disabled) > $HARNESS_SESSION_DIR >
-// configDir (config session_dir) > $HOME/.harness/sessions. Nothing is
-// created here; the engine creates the directory lazily on first write.
 // envInt reads a positive integer from the named environment variable,
 // returning 0 (the caller's "use the default" sentinel — see
 // server.Options.MaxTaskDepth/MaxConcurrentTasks) when the variable is
@@ -258,6 +254,10 @@ func envInt(name string) int {
 	return n
 }
 
+// sessionDir resolves where session logs live, in precedence order:
+// -no-save (yields "", persistence disabled) > $HARNESS_SESSION_DIR >
+// configDir (config session_dir) > $HOME/.harness/sessions. Nothing is
+// created here; the engine creates the directory lazily on first write.
 func sessionDir(noSave bool, configDir string) (string, error) {
 	if noSave {
 		return "", nil
@@ -598,14 +598,27 @@ func runCmd(args []string) error {
 
 	goalNotAchieved := false
 	if opts.goal != "" {
-		res, err := runGoal(ctx, cfg, s, opts)
+		res, err := runGoal(ctx, cfg, s, sessMgr, opts)
 		if err != nil {
 			return err
 		}
 		goalNotAchieved = !res.Achieved
 	} else {
-		if _, err := s.Prompt(ctx, opts.prompt); err != nil {
-			return err
+		// ReportTurnStart/ReportTurnEnd bracket this bare Prompt call —
+		// see runGoal's identical bracket (and its doc comment) for why:
+		// without it, a `task` child that finishes while this Prompt call
+		// is still in flight would find s "idle" from SessionManager's
+		// point of view and fire a concurrent resume turn on the SAME
+		// session this call is still driving. resume is fired
+		// synchronously if non-nil, exactly like runGoal's own tail.
+		sessMgr.ReportTurnStart(s)
+		msg, promptErr := s.Prompt(ctx, opts.prompt)
+		resume := sessMgr.ReportTurnEnd(s.ID, msg, promptErr)
+		if promptErr != nil {
+			return promptErr
+		}
+		if resume != nil {
+			resume()
 		}
 	}
 	if printer.printedText {
@@ -632,7 +645,20 @@ var errGoalNotAchieved = errors.New("goal not achieved")
 
 // runGoal resolves the configured evaluator model and drives PursueGoal to
 // completion, printing the final status to stderr.
-func runGoal(ctx context.Context, cfg *config.Config, s *engine.Session, opts runOptions) (*engine.GoalResult, error) {
+//
+// Brackets the PursueGoal call with sessMgr.ReportTurnStart/ReportTurnEnd
+// — see runCmd's identical bracket around its own bare s.Prompt call for
+// why: `harness run` never installs an engine.ExternalRunner (that only
+// exists for server.Server's own run-slot admission), so without this
+// bracket SessionManager's view of s never leaves StatusIdle for the
+// whole PursueGoal call. A `task` child spawned mid-goal that finishes
+// fast would then find s "idle" and fire a CONCURRENT resume turn via
+// triggerResumeLocked's no-ExternalRunner fallback (a direct s.Prompt
+// call) while THIS PursueGoal call is still driving s — two goroutines
+// calling Session.Prompt/PursueGoal on the same session at once, the
+// exact contract violation ExternalRunner exists to prevent for the
+// server. A live review caught this exact gap in run mode.
+func runGoal(ctx context.Context, cfg *config.Config, s *engine.Session, sessMgr *engine.SessionManager, opts runOptions) (*engine.GoalResult, error) {
 	if cfg.GoalEvaluatorModel == "" {
 		return nil, fmt.Errorf("goal_evaluator_model must be set in config to use -goal")
 	}
@@ -640,10 +666,17 @@ func runGoal(ctx context.Context, cfg *config.Config, s *engine.Session, opts ru
 	if err != nil {
 		return nil, fmt.Errorf("goal_evaluator_model: %w", err)
 	}
+	sessMgr.ReportTurnStart(s)
 	res, err := s.PursueGoal(ctx, opts.goal, engine.GoalOptions{
 		MaxTurns:  opts.goalMaxTurns,
 		Evaluator: evaluator,
 	})
+	// resume: see runCmd's identical variable for why it is fired
+	// synchronously, right here, rather than left unfired — this
+	// process has no HTTP request to keep serving and no run-slot to
+	// release first; ReportTurnEnd only needs to run after PursueGoal
+	// itself has fully returned, which it just did.
+	resume := sessMgr.ReportTurnEnd(s.ID, nil, err)
 	if err != nil {
 		return nil, err
 	}
@@ -651,6 +684,9 @@ func runGoal(ctx context.Context, cfg *config.Config, s *engine.Session, opts ru
 		fmt.Fprintf(os.Stderr, "goal achieved in %d turn(s): %s\n", res.Turns, res.Reason)
 	} else {
 		fmt.Fprintf(os.Stderr, "goal not achieved after %d turn(s): %s\n", res.Turns, res.Reason)
+	}
+	if resume != nil {
+		resume()
 	}
 	return res, nil
 }

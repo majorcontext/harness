@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -286,6 +287,62 @@ func TestSessionSendToRootWithStrandedQueueIsNotLost(t *testing.T) {
 	}
 }
 
+// TestSessionSendToBusyRootIsQueuedNotLost is the regression test for a
+// review finding distinct from TestSessionSendToRootWithStrandedQueueIsNotLost:
+// runOrQueueText's early `return code != http.StatusNotFound` dropped
+// session.send's text unconditionally whenever the root was simply BUSY
+// (an ordinary claimForPrompt 409 — no pre-existing queue involved at
+// all), not just in the already-fixed idle-with-non-empty-queue shape.
+// sendTextToRoot's dedicated busy-path handling (mirroring
+// enqueueOrDispatch) must durably enqueue instead. Also proves
+// session.send's response is now honest about "queued" vs "sent",
+// matching prompt_async's own status vocabulary, rather than always
+// claiming "sent".
+func TestSessionSendToBusyRootIsQueuedNotLost(t *testing.T) {
+	blocker := newBlockingProvider("root")
+	t.Cleanup(blocker.releaseAll)
+	h := newHarness(t, blocker)
+	id := h.createSession("root/m1")
+
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "first"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("first prompt status %d: %s", resp.StatusCode, data)
+	}
+	<-blocker.started
+
+	resp, data = h.do("POST", "/session/"+id+"/send", map[string]string{"text": "while busy"})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("send-while-busy status %d: %s", resp.StatusCode, data)
+	}
+	var sendResp struct {
+		Status string `json:"status"`
+		Queued int    `json:"queued"`
+	}
+	mustUnmarshal(t, data, &sendResp)
+	if sendResp.Status != "queued" || sendResp.Queued != 1 {
+		t.Fatalf("send-while-busy response = %+v, want status=queued queued=1", sendResp)
+	}
+
+	blocker.releaseAll()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		resp, data := h.do("GET", "/session/"+id+"/message", nil)
+		if resp.StatusCode != 200 {
+			t.Fatalf("get messages status %d: %s", resp.StatusCode, data)
+		}
+		if strings.Contains(string(data), "while busy") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("queued send-while-busy text never ran (was it lost?): %s", data)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
 // TestSessionSendUnknownSessionIs404 proves session.send 404s for an id
 // this server's SessionManager does not track.
 func TestSessionSendUnknownSessionIs404(t *testing.T) {
@@ -380,6 +437,72 @@ func TestSessionSendToBusyChildIs409NotLost(t *testing.T) {
 	resp, data = h.do("POST", "/session/"+child.ID+"/send", map[string]string{"text": "follow-up while busy"})
 	if resp.StatusCode != 409 {
 		t.Fatalf("send-to-busy-child status %d, want 409: %s", resp.StatusCode, data)
+	}
+}
+
+// TestSessionSendToDoneChildAtConcurrencyCapIs409NotLost is the
+// regression test for a review finding distinct from
+// TestSessionSendToBusyChildIs409NotLost: an earlier fix pre-checked
+// ONLY info.Status == StatusRunning before firing SessionManager.Send,
+// missing the equally real, equally deterministic ErrConcurrencyLimit
+// case entirely — a DONE child (session.send's own contract explicitly
+// permits messaging one) whose tree has since filled its concurrency cap
+// with OTHER running siblings. That is not a race (info.Status ==
+// StatusRunning would never have caught it, since the target itself
+// isn't running at all): it is Send's ordinary, expected admission
+// failure whenever the tree is already busy elsewhere.
+func TestSessionSendToDoneChildAtConcurrencyCapIs409NotLost(t *testing.T) {
+	blockerB := newBlockingProvider("blockerB")
+	blockerC := newBlockingProvider("blockerC")
+	t.Cleanup(blockerB.releaseAll)
+	t.Cleanup(blockerC.releaseAll)
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"},
+		func(o *Options) { o.SessionManager = engine.NewSessionManager(context.Background(), 0, 2) }, // concurrency cap 2
+		&scriptedProvider{name: "root"},
+		&scriptedProvider{name: "childA", turns: [][]provider.Event{asstTurn("A done")}},
+		blockerB, blockerC)
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": root.ID, "agent": engine.AgentGeneralPurpose, "prompt": "go", "model": "childA/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn childA status %d: %s", resp.StatusCode, data)
+	}
+	var childA struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &childA)
+	waitForLineageStatus(t, h, childA.ID, "done", 2*time.Second)
+
+	for _, model := range []string{"blockerB/m1", "blockerC/m1"} {
+		resp, data := h.do("POST", "/session", map[string]string{
+			"parent_id": root.ID, "agent": engine.AgentGeneralPurpose, "prompt": "go", "model": model,
+		})
+		if resp.StatusCode != 201 {
+			t.Fatalf("spawn %s status %d: %s", model, resp.StatusCode, data)
+		}
+		var child struct {
+			ID string `json:"id"`
+		}
+		mustUnmarshal(t, data, &child)
+		waitForLineageStatus(t, h, child.ID, "running", 2*time.Second)
+	}
+
+	// The tree's concurrency cap (2) is now fully occupied by the two
+	// blocking children. childA is DONE, not running — a status-only
+	// pre-check would wrongly let this through.
+	resp, data = h.do("POST", "/session/"+childA.ID+"/send", map[string]string{"text": "follow-up at cap"})
+	if resp.StatusCode != 409 {
+		t.Fatalf("send-to-done-child-at-cap status %d, want 409: %s", resp.StatusCode, data)
 	}
 }
 

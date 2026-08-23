@@ -405,6 +405,28 @@ func (m *SessionManager) ReportTurnStart(sess *Session) {
 	// the live reloaded session's own checkoutTaskNotificationsSegment
 	// never reads: the result silently vanishes. A live review caught
 	// this exact failure mode.
+	//
+	// Migrate any notification already enqueued on the OLD object before
+	// swapping it out — including, critically, the very notification
+	// that is driving THIS resume: an idle root can be evicted while a
+	// background child is still running (evictResidentLocked only
+	// protects a RUNNING session, and SessionManager's own idea of
+	// "running" is a different bit than the server's resident-eviction
+	// check); the child then finishes, enqueues onto old, and triggers
+	// this resume; the resume cold-loads a FRESH object here BEFORE this
+	// line runs. Without this migration, old's queue — including that
+	// exact notification — is silently orphaned: the fresh object's
+	// checkoutTaskNotificationsSegment renders nothing, the resume turn
+	// runs with no engine context to act on, and finalizeTurn sees no
+	// pending work and settles idle, having "handled" a resume that
+	// delivered nothing. A live review caught this exact failure mode
+	// too, distinct from (and layered on top of) the object-reattachment
+	// fix above.
+	if old := n.session; old != nil && old != sess {
+		for _, notif := range old.drainAllTaskNotifications() {
+			sess.enqueueTaskNotification(notif)
+		}
+	}
 	n.session = sess
 	n.status = StatusRunning
 }
@@ -537,6 +559,20 @@ func (m *SessionManager) Reap() int {
 
 	for _, id := range eligible {
 		n := m.nodes[id]
+		// A canceled node already had its context canceled by
+		// cancelSubtreeLocked; a naturally done/failed node never has —
+		// nothing in that path calls n.cancel(). Every child ctx is
+		// context.WithCancel(parent.ctx), which registers itself in the
+		// parent cancelCtx's internal children map; without this call,
+		// deleting the node here drops the last REFERENCE to n.cancel
+		// without ever invoking it, leaking that registration for the
+		// rest of the root's (or the standalone orphan's, for an
+		// unrecoverable-parent adoption — see adoptReloadedLocked)
+		// lifetime — one leaked cancelCtx per completed task on a
+		// long-lived server, defeating part of the reclamation Reap
+		// exists to provide. Safe unconditionally: the node is already
+		// terminal and its turn long finished, and cancel is idempotent.
+		n.cancel()
 		delete(m.nodes, id)
 		if p, ok := m.nodes[n.parentID]; ok {
 			kept := p.children[:0]
@@ -728,6 +764,43 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 // safe way to drive ANY session (root or child) when no ExternalRunner is
 // set — the ordinary case for a CHILD always, and for a root in bare-
 // engine/CLI usage with no server layered over it.
+// CanSend reports whether a Send(ctx, id, ...) call right now would pass
+// Send's own admission checks, without reserving anything or driving a
+// turn — a cheap, synchronous pre-check for a caller (server's
+// handleSessionSend) that wants to report a real admission failure
+// (ErrSessionBusy/ErrConcurrencyLimit/ErrSessionCanceled/
+// ErrUnknownSession) back to its own caller BEFORE committing to an
+// asynchronous Send it cannot easily surface a failure from without
+// blocking on the whole turn. A small residual race remains between this
+// call and the caller's own subsequent Send: CanSend takes and releases
+// m.mu immediately, so another concurrent Send/Spawn against the SAME id
+// or tree could change the outcome in the gap. That gap is the
+// legitimate "benign race window" this package documents elsewhere
+// (runOrQueueText, enqueueOrDispatch) — CanSend exists to eliminate the
+// FAR more common, entirely non-racy case an earlier revision of
+// handleSessionSend's child branch got wrong: discarding Send's real,
+// deterministic admission error (the target was ALREADY busy/canceled,
+// or the tree was ALREADY at its concurrency cap) behind an
+// unconditional 202 "sent".
+func (m *SessionManager) CanSend(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n, ok := m.nodes[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrUnknownSession, id)
+	}
+	if n.status == StatusCanceled {
+		return ErrSessionCanceled
+	}
+	if n.status == StatusRunning {
+		return ErrSessionBusy
+	}
+	if n.depth > 0 && m.runningByRoot[n.rootID] >= m.maxConcurrent {
+		return ErrConcurrencyLimit
+	}
+	return nil
+}
+
 func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Message, error) {
 	m.mu.Lock()
 	n, ok := m.nodes[id]

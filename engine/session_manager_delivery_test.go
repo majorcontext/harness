@@ -364,6 +364,46 @@ func TestReportTurnStartReattachesReloadedSession(t *testing.T) {
 	}
 }
 
+// TestReportTurnStartMigratesNotificationEnqueuedBeforeReattach is the
+// regression test for a review finding distinct from (and layered on
+// top of) TestReportTurnStartReattachesReloadedSession above: that test
+// only proves a notification enqueued AFTER re-attachment lands on the
+// live object. This proves the harder, more important case — the
+// notification that TRIGGERS the resume in the first place is enqueued
+// BEFORE the cold-loaded object exists at all (an idle root can be
+// evicted from server residency while a background child is still
+// running — evictResidentLocked only protects a session the SERVER
+// considers running, a different bit than SessionManager's own — so the
+// child's completion enqueues onto the about-to-be-orphaned OLD object).
+// An earlier revision of ReportTurnStart's re-attach silently dropped
+// exactly that notification: the fresh object's own queue starts empty,
+// so the resume turn it drives has no engine context to act on at all.
+func TestReportTurnStartMigratesNotificationEnqueuedBeforeReattach(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	first := NewSession(managedConfig("root", scriptedTurns("root", nil)))
+	mgr.ReportTurnStart(first)
+
+	// The notification a background child's completion delivers lands on
+	// the CURRENTLY live object — first — before anything reloads.
+	first.enqueueTaskNotification(taskNotification{ChildID: "ses_x", Status: StatusDone, Result: "hi"})
+	if !first.hasPendingTaskNotifications() {
+		t.Fatal("test setup: notification did not land on first")
+	}
+
+	// Simulate the eviction + cold reload THIS notification's own resume
+	// triggers: a second, independent *Session object, same id.
+	second := NewSession(managedConfig("root", scriptedTurns("root", nil)))
+	second.ID = first.ID
+	mgr.ReportTurnStart(second)
+
+	if first.hasPendingTaskNotifications() {
+		t.Error("notification still stranded on the orphaned first object after re-attach")
+	}
+	if !second.hasPendingTaskNotifications() {
+		t.Error("notification was not migrated onto the live second object — the resume it triggered would have run with no engine context to act on")
+	}
+}
+
 func TestReportTurnStartAdoptsUnknownSession(t *testing.T) {
 	mgr := NewSessionManager(context.Background(), 0, 0)
 	// A session built directly, NOT through mgr.NewRoot/AdoptRoot —
