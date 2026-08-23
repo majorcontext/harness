@@ -35,8 +35,9 @@ type sessionInfoResult struct {
 	// control has been sent, so the provider runs its own default — and is
 	// reported as "" rather than omitted or guessed, the same convention
 	// setThinkingResponseJSON uses for POST /session/{id}/thinking (see
-	// server/handlers.go). Swapped only via Session.SetEffort, the same
-	// choke point handleSetThinking calls.
+	// server/handlers.go). Mid-session it changes only via Session.SetEffort,
+	// the same choke point handleSetThinking calls; the create-time value
+	// comes from Config.Effort and a resumed value from the recEffort record.
 	Effort       message.Effort `json:"effort"`
 	Usage        provider.Usage `json:"usage"`
 	System       []string       `json:"system"`
