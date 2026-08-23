@@ -23,6 +23,19 @@ const defaultHeartbeat = 30 * time.Second
 // live events. Registration and the replay snapshot happen under one lock, so
 // no record can slip through the gap between them — replay covers (from, max]
 // and every later event (seq > max) is delivered live.
+//
+// Registration happens BEFORE the response headers are written and flushed —
+// not after, as an earlier revision had it. Flushing first let a caller who
+// publishes an event immediately upon seeing this connection succeed (a
+// direct, in-process Publish call, or even a fast enough real client) race
+// ahead of s.subs[sub] = struct{}{} below: fanoutLocked's delivery is a
+// non-blocking send with no subscriber to receive it yet, so the event was
+// silently dropped, and a caller waiting on it (e.g. an SSE reader blocked
+// in a channel receive for exactly that event) would hang forever. A live
+// CI run caught this exact hang (TestLiveEventTurnRestartForwarded blocked
+// the full 10-minute go test timeout). Registering first closes the gap
+// entirely: any event published between registration and the header flush
+// now safely queues in sub.ch (buffered 256) instead of being lost.
 func (s *Server) handleEvent(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -31,12 +44,6 @@ func (s *Server) handleEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	from := parseFrom(r)
 	filter := r.URL.Query().Get("session")
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
 
 	sub := &subscriber{ch: make(chan Event, 256), session: filter}
 	s.mu.Lock()
@@ -53,6 +60,21 @@ func (s *Server) handleEvent(w http.ResponseWriter, r *http.Request) {
 		delete(s.subs, sub)
 		s.mu.Unlock()
 	}()
+
+	if s.sseRegisteredRace != nil {
+		// Test-only seam: let a test force a concurrent Publish call to
+		// land deterministically in the (now safe) gap between
+		// registration above and the header flush below, proving an
+		// event published there is queued rather than dropped. Always
+		// nil in production.
+		s.sseRegisteredRace()
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
 
 	interval := s.opts.HeartbeatInterval
 	if interval <= 0 {

@@ -140,3 +140,46 @@ func TestLiveEventTurnRestartForwarded(t *testing.T) {
 		t.Errorf("turn.restart has a seq (%d); it must be live, never durable", ev.Seq)
 	}
 }
+
+// TestHandleEventDeliversEventPublishedBeforeHeadersFlush is the
+// regression test for a real, pre-existing (not introduced by this
+// branch — confirmed via git diff and this exact test's own CI failure
+// history on main before this branch existed) production bug that a
+// live CI hang caught: TestLiveEventTurnRestartForwarded blocked the
+// full 10-minute go test timeout, waiting on an event that had already
+// been published and silently dropped.
+//
+// handleEvent used to write and flush the response headers BEFORE
+// registering its subscriber in s.subs. A caller that published an
+// event immediately upon seeing the connection succeed (this test's own
+// h.srv.Publish call, made directly and synchronously right after
+// openSSE returns — no HTTP round trip involved, since Publish is an
+// in-process call) could race ahead of that registration: fanoutLocked's
+// delivery is a non-blocking send with no subscriber there yet to
+// receive it, so the event vanished, and anything later blocked
+// waiting for it (an SSE reader's channel receive) hung forever. Rare
+// under a fast, idle local run (the server goroutine's own few
+// post-flush instructions almost always win against the client's
+// network round trip) but real and reproducible under CI-runner load
+// (a descheduling pause between flush and registration is far more
+// likely when many parallel -race packages are contending for CPU).
+//
+// This test forces the (now-safe) gap deterministically via
+// sseRegisteredRace, publishing the event from INSIDE the handler
+// itself, between subscriber registration and the header flush —
+// exactly the ordering the fix guarantees — and confirms the event is
+// still delivered rather than dropped.
+func TestHandleEventDeliversEventPublishedBeforeHeadersFlush(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	id := h.createSession("test/m1")
+
+	h.srv.sseRegisteredRace = func() {
+		h.srv.Publish(engine.Event{Type: engine.EventTurnRestart, SessionID: id})
+	}
+
+	sse := h.openSSE("?from=0", "")
+	ev := sse.waitFor(t, engine.EventTurnRestart)
+	if ev.SessionID != id {
+		t.Errorf("turn.restart SessionID = %q, want %q", ev.SessionID, id)
+	}
+}
