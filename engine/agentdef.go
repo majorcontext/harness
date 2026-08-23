@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,22 +103,39 @@ var knownToolNames = map[string]bool{
 	"read_tool_result": true, "task": true,
 }
 
-// ResolveAgentDefs returns every agent type available to a session rooted
-// at workDir: the compiled-in builtinAgentDefs plus whatever
-// LoadAgentDefs(workDir/.agents) discovers, merged. It is the single entry
-// point Stage 3's `task` tool (and Stage 4's session.create) resolve an
-// agent name against.
-func ResolveAgentDefs(workDir string) (map[string]AgentDef, error) {
+// ResolveAgentDefs returns every agent type available to a session: the
+// compiled-in builtinAgentDefs plus whatever LoadAgentDefs discovers
+// across every directory in dirs, merged. It is the single entry point
+// Stage 3's `task` tool (and Stage 4's session.create) resolve an agent
+// name against.
+//
+// A custom definition's name may not collide with a built-in, nor with
+// ANOTHER custom definition — whether that collision is within one dir
+// (LoadAgentDefs' own check) or across two different dirs in dirs (this
+// function's own check, mirroring buildSkillsSegment's identical
+// duplicate-across-dirs handling for Agent Skills — skills.go). Neither
+// case has an obvious "which one wins" answer, unlike a single
+// unparseable file (see LoadAgentDefs' own "frontmatter leniency" doc
+// comment) — both stay hard load errors.
+func ResolveAgentDefs(dirs []string) (map[string]AgentDef, error) {
 	defs := make(map[string]AgentDef, len(builtinAgentDefs))
+	source := make(map[string]string, len(builtinAgentDefs))
 	for name, def := range builtinAgentDefs {
 		defs[name] = def
+		source[name] = "builtin"
 	}
-	custom, err := LoadAgentDefs(agentDefsDir(workDir))
-	if err != nil {
-		return nil, err
-	}
-	for name, def := range custom {
-		defs[name] = def
+	for _, dir := range dirs {
+		custom, err := LoadAgentDefs(dir)
+		if err != nil {
+			return nil, err
+		}
+		for name, def := range custom {
+			if prevSource, dup := source[name]; dup {
+				return nil, fmt.Errorf("engine: agent definition %s: name %q already defined in %s", def.Source, name, prevSource)
+			}
+			defs[name] = def
+			source[name] = def.Source
+		}
 	}
 	return defs, nil
 }
@@ -146,9 +164,28 @@ func (s *Session) AgentDefs() (map[string]AgentDef, error) {
 	defer s.mu.Unlock()
 	if !s.agentDefsLoaded {
 		s.agentDefsLoaded = true
-		s.agentDefs, s.agentDefsErr = ResolveAgentDefs(s.cfg.WorkDir)
+		s.agentDefs, s.agentDefsErr = ResolveAgentDefs(s.agentDefsDirs())
 	}
 	return s.agentDefs, s.agentDefsErr
+}
+
+// agentDefsDirs returns the effective agent-definition directories for
+// the session, resolving Config.AgentDefsDirs' nil/empty/multi-dir
+// contract — see that field's own doc comment. Mirrors skillsDirs'
+// identical nil-means-default resolution exactly, one directory
+// (agentDefsDir(WorkDir)) instead of skillsDirs' conditional-on-existence
+// one: unlike skills, a MISSING .agents dir here is not itself
+// special-cased — LoadAgentDefs already treats os.IsNotExist as "no
+// custom definitions" (nil, nil), so there is no need to pre-check
+// isDir before including it, unlike skillsDirs' defaultSkillsSubdir
+// check (which exists to avoid scanning a directory Agent Skills has no
+// convention for auto-creating). Caller holds s.mu (AgentDefs' own
+// caller already does).
+func (s *Session) agentDefsDirs() []string {
+	if s.cfg.AgentDefsDirs != nil {
+		return s.cfg.AgentDefsDirs
+	}
+	return []string{agentDefsDir(s.cfg.WorkDir)}
 }
 
 // agentDefsDir is where LoadAgentDefs looks for *.md agent definitions —
@@ -166,13 +203,28 @@ func agentDefsDir(workDir string) string {
 // (nil, nil), mirroring skill.Discover's convention for a project with no
 // custom definitions at all.
 //
-// Every *.md file must parse and every tools: entry must name a real tool
-// (knownToolNames) — a definition that fails either check fails discovery
-// for the WHOLE directory, naming the offending file, per the design doc's
-// "unknown tool names in a definition are an error surfaced at load, not
-// spawn." A custom definition's name may not collide with a built-in
-// (general-purpose, explore, plan) or with another custom definition in
-// the same directory — both are load errors too.
+// A single MALFORMED *.md file — bad frontmatter, an unknown tool name,
+// a missing required field (parseAgentDef's own errors, or a bare
+// os.ReadFile failure) — is SKIPPED with a logged warning, not a load
+// error for the whole directory: a live review finding ("frontmatter
+// leniency"). An earlier revision failed the ENTIRE directory on the
+// FIRST bad file (`return nil, err`), and because AgentDefs (this
+// package's sole caller) caches a load failure for the session's whole
+// life, one contributor's single typo in one file broke EVERY custom
+// agent type — not just the broken one — for every `task` call in every
+// session rooted at dir, for as long as that session lived. Skip-and-
+// warn means a typo in agent-b.md costs exactly agent-b, never agent-a
+// or agent-c sitting right next to it.
+//
+// This leniency does NOT extend to cross-file conflicts, which stay hard
+// load errors: a custom definition's name colliding with a built-in
+// (general-purpose, explore, plan), or with ANOTHER custom definition in
+// the same directory. Neither has an obvious "which one wins" answer the
+// way a single unparseable file does (there is nothing to silently
+// prefer between two genuinely different definitions both claiming the
+// same name) — per the design doc's "unknown tool names in a definition
+// are an error surfaced at load, not spawn," these two remain surfaced
+// exactly that way.
 func LoadAgentDefs(dir string) (map[string]AgentDef, error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
@@ -189,11 +241,13 @@ func LoadAgentDefs(dir string) (map[string]AgentDef, error) {
 		path := filepath.Join(dir, e.Name())
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("engine: reading agent definition %s: %w", path, err)
+			slog.Warn("engine: skipping malformed agent definition", "path", path, "error", err)
+			continue
 		}
 		def, err := parseAgentDef(string(data), path)
 		if err != nil {
-			return nil, fmt.Errorf("engine: agent definition %s: %w", path, err)
+			slog.Warn("engine: skipping malformed agent definition", "path", path, "error", err)
+			continue
 		}
 		if _, ok := builtinAgentDefs[def.Name]; ok {
 			return nil, fmt.Errorf("engine: agent definition %s: name %q collides with a built-in agent type", path, def.Name)
