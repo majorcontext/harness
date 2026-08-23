@@ -66,18 +66,27 @@ func (s *Server) handleSpawnChild(w http.ResponseWriter, parentID, agent, prompt
 	}
 	spawnModel := def.Model
 	if !model.IsZero() {
-		// Validate the provider is configured BEFORE Spawn, mirroring the
-		// `task` tool's own identical check (runTaskTool) and the `model`
-		// session tool (runModelTool) — a live review finding: an
-		// unconfigured override used to sail through Spawn, consuming a
-		// concurrency slot and a session log, and only fail later at the
-		// child's first turn instead of returning an immediate, clear
-		// error for this caller-supplied mistake.
-		if !parent.ModelSupported(model) {
-			writeErr(w, http.StatusBadRequest, fmt.Sprintf("provider %q is not configured", model.Provider))
-			return
-		}
 		spawnModel = model
+	}
+	// Validate the provider is configured BEFORE Spawn, mirroring the
+	// `task` tool's own identical check (runTaskTool) and the `model`
+	// session tool (runModelTool) — a live review finding: an unconfigured
+	// override used to sail through Spawn, consuming a concurrency slot
+	// and a session log, and only fail later at the child's first turn
+	// instead of returning an immediate, clear error for this
+	// caller-supplied mistake. Covers BOTH sources of the model, not just
+	// the caller's override: an earlier revision of this fix validated
+	// only model (the request body's override), missing that def.Model —
+	// an agent DEFINITION naming an unconfigured provider — sails through
+	// exactly the same way, a live review finding on the first pass at
+	// this fix. spawnModel.IsZero() (def.Model unset AND no override) is
+	// deliberately exempt: Spawn treats a zero Model as "inherit the
+	// parent's own, already-configured model" (see its own
+	// `if !opts.Model.IsZero()` guard) — never itself a candidate for an
+	// unconfigured provider.
+	if !spawnModel.IsZero() && !parent.ModelSupported(spawnModel) {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("provider %q is not configured", spawnModel.Provider))
+		return
 	}
 	childID, err := s.sessMgr.Spawn(engine.SpawnOptions{
 		ParentID:     parentID,

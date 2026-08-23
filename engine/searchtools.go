@@ -148,8 +148,16 @@ func globTool() Tool {
 			// swallows the ROOT path's own lstat error via its blanket
 			// "err != nil: skip it, don't fail the whole search" (correct
 			// for a descendant entry, wrong for the root itself), so a
-			// non-existent or unreadable base silently reported "(no
-			// matches)" instead of surfacing the caller's bad path.
+			// non-existent base silently reported "(no matches)" instead
+			// of surfacing the caller's bad path. This alone does NOT
+			// catch every unreadable-base case: a directory stat-able (the
+			// process has execute on its PARENT) but not readable (no read
+			// bit on base itself) passes os.Stat here — WalkDir's own
+			// internal ReadDir(base) is what actually fails for that case,
+			// surfacing as p == base with a non-nil err in the callback
+			// below, which is why that callback special-cases p == base
+			// rather than skipping every error uniformly — a second live
+			// review finding on this same fix.
 			if _, err := os.Stat(base); err != nil {
 				return nil, fmt.Errorf("glob: %w", err)
 			}
@@ -162,7 +170,15 @@ func globTool() Tool {
 			walked := 0
 			err = filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
 				if err != nil {
-					return nil // unreadable entry: skip it, don't fail the whole search
+					if p == base {
+						// The root itself failed (e.g. ReadDir(base)
+						// permission-denied for a stat-able-but-unreadable
+						// directory the os.Stat above cannot catch): fail
+						// the whole search rather than silently reporting
+						// "(no matches)".
+						return err
+					}
+					return nil // descendant entry unreadable: skip it, don't fail the whole search
 				}
 				if p != base && d.IsDir() && skippedSearchDirs[d.Name()] {
 					return filepath.SkipDir
@@ -322,7 +338,17 @@ func grepTool() Tool {
 			} else {
 				err = filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
 					if err != nil {
-						return nil
+						if p == base {
+							// The root itself failed (e.g.
+							// ReadDir(base) permission-denied for a
+							// stat-able-but-unreadable directory the
+							// os.Stat above cannot catch — see glob's
+							// identical guard and its own doc comment):
+							// fail the whole search rather than silently
+							// reporting "(no matches)".
+							return err
+						}
+						return nil // descendant entry unreadable: skip it, don't fail the whole search
 					}
 					if p != base && d.IsDir() && skippedSearchDirs[d.Name()] {
 						return filepath.SkipDir

@@ -136,6 +136,38 @@ func TestGlobToolNonExistentBasePathReturnsError(t *testing.T) {
 	}
 }
 
+// TestGlobToolUnreadableBasePathReturnsError is the regression test for a
+// second live review finding on the same fix: os.Stat(base) alone does not
+// catch a directory that IS stat-able (the process has execute on its
+// PARENT) but is NOT readable (no read bit on base itself) — os.Stat
+// succeeds for that case, and it is WalkDir's own internal ReadDir(base)
+// that actually fails, surfacing as p == base with a non-nil err in the
+// walk callback. Skipped when running as root: root bypasses the
+// permission bit this test relies on to make the directory genuinely
+// unreadable, which would make the test pass or fail for the wrong reason
+// depending on platform.
+func TestGlobToolUnreadableBasePathReturnsError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: permission bits are not enforced")
+	}
+	dir := t.TempDir()
+	unreadable := filepath.Join(dir, "locked")
+	if err := os.Mkdir(unreadable, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(unreadable, "main.go"), "package main")
+	if err := os.Chmod(unreadable, 0o311); err != nil { // execute-only: no read bit
+		t.Fatal(err)
+	}
+	defer os.Chmod(unreadable, 0o755) //nolint:errcheck // best-effort so t.TempDir's own cleanup can remove it
+
+	s := NewSession(Config{WorkDir: dir})
+	_, err := globTool().Run(context.Background(), s, json.RawMessage(`{"pattern":"*.go","path":"locked"}`))
+	if err == nil {
+		t.Error("glob against an unreadable base path: want error, got nil")
+	}
+}
+
 func TestGrepToolFindsMatchingLines(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "a.go"), "package main\n\nfunc Foo() {}\n")
@@ -254,6 +286,32 @@ func TestGrepToolSkipsBinaryFileWithTextPrefix(t *testing.T) {
 	}
 	if out != "(no matches)" {
 		t.Errorf("grep should skip a file that is binary past the first 512 bytes, got %q", out)
+	}
+}
+
+// TestGrepToolUnreadableBasePathReturnsError mirrors
+// TestGlobToolUnreadableBasePathReturnsError for grep's identical
+// stat-able-but-unreadable-directory gap (grep's own WalkDir callback had
+// the same blanket error-skip glob's did).
+func TestGrepToolUnreadableBasePathReturnsError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: permission bits are not enforced")
+	}
+	dir := t.TempDir()
+	unreadable := filepath.Join(dir, "locked")
+	if err := os.Mkdir(unreadable, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(unreadable, "a.txt"), "MATCH\n")
+	if err := os.Chmod(unreadable, 0o311); err != nil { // execute-only: no read bit
+		t.Fatal(err)
+	}
+	defer os.Chmod(unreadable, 0o755) //nolint:errcheck // best-effort so t.TempDir's own cleanup can remove it
+
+	s := NewSession(Config{WorkDir: dir})
+	_, err := grepTool().Run(context.Background(), s, json.RawMessage(`{"pattern":"MATCH","path":"locked"}`))
+	if err == nil {
+		t.Error("grep against an unreadable base path: want error, got nil")
 	}
 }
 

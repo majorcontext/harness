@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -219,6 +221,51 @@ func TestSessionCreateWithParentIDUnconfiguredModelIs400(t *testing.T) {
 	mustUnmarshal(t, data, &rootInfo)
 	if len(rootInfo.Lineage.Children) != 0 {
 		t.Errorf("root lineage.children = %v, want none — a child was spawned despite the unconfigured provider", rootInfo.Lineage.Children)
+	}
+}
+
+// TestSessionCreateWithParentIDUnconfiguredDefinitionModelIs400 is the
+// regression test for a second live review finding on the same fix: the
+// first pass at handleSpawnChild's provider validation only covered the
+// REQUEST BODY's model override, missing that def.Model — a custom
+// .agents/*.md definition's own "model:" frontmatter — sails through
+// exactly the same way when the request supplies no override at all.
+func TestSessionCreateWithParentIDUnconfiguredDefinitionModelIs400(t *testing.T) {
+	root := t.TempDir()
+	agentsDir := filepath.Join(root, ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	defContent := "---\n" +
+		"name: custom\n" +
+		"description: A custom agent whose own definition names an unconfigured provider\n" +
+		"model: totally-unconfigured-provider/some-model\n" +
+		"---\n" +
+		"A custom agent.\n"
+	if err := os.WriteFile(filepath.Join(agentsDir, "custom.md"), []byte(defContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := newWorkdirHarness(t, &scriptedProvider{name: "root"}, []string{root})
+
+	resp, data := h.do("POST", "/session", map[string]any{"model": "root/m1", "workdir": root})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var rootSess struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &rootSess)
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": rootSess.ID,
+		"agent":     "custom",
+		"prompt":    "go",
+	})
+	if resp.StatusCode != 400 {
+		t.Fatalf("unconfigured definition model status = %d, want 400: %s", resp.StatusCode, data)
+	}
+	if !strings.Contains(string(data), "totally-unconfigured-provider") {
+		t.Errorf("error body = %s, want it to name the unconfigured provider", data)
 	}
 }
 

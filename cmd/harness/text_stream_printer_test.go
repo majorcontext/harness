@@ -99,6 +99,41 @@ func TestRunOnEventHandlerSerializesConcurrentCallers(t *testing.T) {
 	})
 }
 
+// TestTextStreamPrinterPrintedTextSafeDuringConcurrentHandle is the
+// regression test for a second live review finding on the same fix:
+// newRunOnEventHandler's mutex only serializes calls made THROUGH it, but
+// runCmd's own tail (the trailing-newline check after its top-level Prompt
+// call returns) used to read printer.printedText directly — and a `task`
+// child's own background Prompt goroutine can still be calling handle
+// after the parent's own top-level call has already returned (`task` is
+// explicitly non-blocking; nothing waits for a child to finish first).
+// printer.mu now guards both handle and this read (via PrintedText).
+// Exercises exactly that shape: one goroutine hammering handle while
+// another repeatedly calls PrintedText — go test -race is this test's
+// real assertion.
+func TestTextStreamPrinterPrintedTextSafeDuringConcurrentHandle(t *testing.T) {
+	var out, errW strings.Builder
+	p := &textStreamPrinter{out: &out, errW: &errW}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			p.handle(engine.Event{Type: engine.EventTextDelta, Text: "x"})
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			_ = p.PrintedText()
+		}
+	}()
+	wg.Wait()
+	if !p.PrintedText() {
+		t.Error("PrintedText() = false after handle streamed text, want true")
+	}
+}
+
 // runConcurrentEvents fires a burst of engine.Event values at handler from
 // many goroutines at once, mirroring a real parent-turn-plus-several-
 // children shape closely enough for -race to catch any missing

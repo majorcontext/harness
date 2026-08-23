@@ -95,20 +95,27 @@ func runTaskTool(s *Session, raw json.RawMessage) (message.Parts, error) {
 		if err != nil {
 			return nil, fmt.Errorf("task: invalid model %q: %w", in.Model, err)
 		}
-		// Validate the provider is configured BEFORE Spawn, mirroring the
-		// `model` tool's own identical check (runModelTool) — a live
-		// review finding: ParseModelRef only checks the ref is
-		// well-formed, not that its provider is registered, so an
-		// unconfigured override used to sail through Spawn, consume a
-		// concurrency slot and a session log, and only fail later at the
-		// child's first turn — surfacing to the parent as a delayed
-		// "[tasks: ... failed: ...]" notification instead of the
-		// immediate, synchronous tool error a caller-side mistake like
-		// this deserves.
-		if !s.ModelSupported(ref) {
-			return nil, fmt.Errorf("task: provider %q is not configured (%s)", ref.Provider, s.modelChoicesHint())
-		}
 		model = ref
+	}
+	// Validate the provider is configured BEFORE Spawn, mirroring the
+	// `model` tool's own identical check (runModelTool) — a live review
+	// finding: ParseModelRef only checks the ref is well-formed, not that
+	// its provider is registered, so an unconfigured model used to sail
+	// through Spawn, consume a concurrency slot and a session log, and
+	// only fail later at the child's first turn — surfacing to the parent
+	// as a delayed "[tasks: ... failed: ...]" notification instead of the
+	// immediate, synchronous tool error a caller-side mistake like this
+	// deserves. Covers BOTH sources of model, not just in.Model: an
+	// earlier revision of this fix validated only the caller's override,
+	// missing that def.Model — an agent DEFINITION naming an unconfigured
+	// provider — sails through exactly the same way, a live review
+	// finding on the first pass at this fix. model.IsZero() (def.Model
+	// unset AND no override) is deliberately exempt: Spawn treats a zero
+	// Model as "inherit the parent's own, already-configured model" (see
+	// its own `if !opts.Model.IsZero()` guard) — never itself a candidate
+	// for an unconfigured provider.
+	if !model.IsZero() && !s.ModelSupported(model) {
+		return nil, fmt.Errorf("task: provider %q is not configured (%s)", model.Provider, s.modelChoicesHint())
 	}
 
 	childID, err := m.Spawn(SpawnOptions{

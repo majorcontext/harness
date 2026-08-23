@@ -401,13 +401,28 @@ func sessionsCmd(args []string) error {
 // attempt that printed no text (a restart before any delta) adds no blank
 // line; it resets on EventMessage, the boundary of a completed streamTurn.
 type textStreamPrinter struct {
-	out          io.Writer
-	errW         io.Writer
+	out  io.Writer
+	errW io.Writer
+	// mu guards printedText/streamedThis AND every write to out/errW below —
+	// a live review finding on newRunOnEventHandler's own fix: that mutex
+	// only served the DURATION of one onEvent call, so runCmd's own later,
+	// unsynchronized read of printedText (the trailing-newline check after
+	// the top-level Prompt call returns) still raced a `task` child's
+	// still-running background Prompt goroutine, which can keep calling
+	// handle after the parent's own call has already returned — `task` is
+	// explicitly non-blocking; nothing waits for a child to finish before
+	// the parent's Prompt call returns. Locking here, on the printer
+	// itself, protects every access regardless of which caller (the
+	// shared onEvent callback, or runCmd's own tail) is doing the reading —
+	// see PrintedText's own doc comment for the accessor this enables.
+	mu           sync.Mutex
 	printedText  bool // any text printed this run; drives the trailing newline
 	streamedThis bool // text printed since the last reset; drives the break
 }
 
 func (p *textStreamPrinter) handle(ev engine.Event) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	switch ev.Type {
 	case engine.EventTextDelta:
 		fmt.Fprint(p.out, ev.Text)
@@ -428,6 +443,17 @@ func (p *textStreamPrinter) handle(ev engine.Event) {
 			fmt.Fprintf(p.errW, "[tool %s failed] %s\n", ev.ToolCall.Name, ev.Output.Text())
 		}
 	}
+}
+
+// PrintedText reports whether handle has ever printed streamed text,
+// synchronized against a still-running task child's own handle calls —
+// see p.mu's doc comment. runCmd's own tail (the trailing-newline check
+// after its top-level Prompt call returns) must go through this rather
+// than reading p.printedText directly.
+func (p *textStreamPrinter) PrintedText() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.printedText
 }
 
 // newRunOnEventHandler builds run mode's engine.Config.OnEvent callback,
@@ -649,7 +675,7 @@ func runCmd(args []string) error {
 			resume()
 		}
 	}
-	if printer.printedText {
+	if printer.PrintedText() {
 		fmt.Println()
 	}
 	if sesDir != "" {
