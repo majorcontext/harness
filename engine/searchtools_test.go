@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGlobToRegexp(t *testing.T) {
@@ -67,6 +68,41 @@ func TestGlobToolSkipsGitDir(t *testing.T) {
 	}
 	if !strings.Contains(out, "main.go") {
 		t.Errorf("glob missing main.go: %q", out)
+	}
+}
+
+// TestGlobToolTieBreaksEqualModTimesByPath is the regression test for a
+// review finding: sort.Slice is not stable and glob's modTime sort had
+// no tie-break, so files sharing a modtime (common for files written
+// together — a checkout, a generator run) could appear in either
+// relative order across identical calls. Forces three files to the
+// EXACT same modtime and asserts the listing is alphabetical among them,
+// repeatably.
+func TestGlobToolTieBreaksEqualModTimesByPath(t *testing.T) {
+	dir := t.TempDir()
+	names := []string{"charlie.go", "alpha.go", "bravo.go"}
+	same := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, name := range names {
+		p := filepath.Join(dir, name)
+		writeTestFile(t, p, "package main")
+		if err := os.Chtimes(p, same, same); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err := runTool(t, globTool(), dir, `{"pattern":"*.go"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	want := []string{"alpha.go", "bravo.go", "charlie.go"}
+	if len(lines) != len(want) {
+		t.Fatalf("glob output = %q, want 3 lines", out)
+	}
+	for i, w := range want {
+		if lines[i] != w {
+			t.Errorf("line %d = %q, want %q (equal-modtime files must tie-break alphabetically): %q", i, lines[i], w, out)
+		}
 	}
 }
 

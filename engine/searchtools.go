@@ -183,7 +183,18 @@ func globTool() Tool {
 			if err != nil {
 				return nil, err
 			}
-			sort.Slice(matches, func(i, j int) bool { return matches[i].modTime > matches[j].modTime })
+			// Tie-break on rel: sort.Slice is not stable, and two files
+			// sharing a modtime (common for files written together — a
+			// checkout, a generator run) would otherwise appear in
+			// either relative order across identical calls, and — once
+			// the set exceeds maxSearchResults below — nondeterministically
+			// decide WHICH results get dropped. A live review caught this.
+			sort.Slice(matches, func(i, j int) bool {
+				if matches[i].modTime != matches[j].modTime {
+					return matches[i].modTime > matches[j].modTime
+				}
+				return matches[i].rel < matches[j].rel
+			})
 
 			if len(matches) == 0 {
 				return message.Parts{&message.Text{Text: "(no matches)"}}, nil

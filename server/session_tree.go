@@ -101,7 +101,16 @@ func (s *Server) handleSpawnChild(w http.ResponseWriter, parentID, agent, prompt
 		writeErr(w, http.StatusInternalServerError, "spawned child not found in session tree")
 		return
 	}
-	writeJSON(w, http.StatusCreated, s.buildSession(spawned, "idle"))
+	// "busy", not "idle": Spawn always hands the child work immediately
+	// (see its own doc comment — "a spawned child is handed work
+	// immediately, so it is never idle before running", reserving the
+	// concurrency slot and setting StatusRunning synchronously before
+	// returning). An earlier revision hard-coded "idle" here, producing
+	// a self-inconsistent 201 body: the top-level status/state claimed
+	// idle while the SAME response's own lineage block (sourced from the
+	// live SessionManager node) correctly reported "running" beside it.
+	// A live review caught this.
+	writeJSON(w, http.StatusCreated, s.buildSession(spawned, "busy"))
 }
 
 // lookupSpawned returns the just-Spawned child by id. Spawn only just
@@ -200,17 +209,23 @@ func (s *Server) sendTextToRoot(id, text string) (status string, queuedDepth int
 		// closing the gap where the busy occupant's own tail
 		// (runPrompt's maybeDispatchQueued) runs between the failed claim
 		// above and this enqueue.
+		if s.sendBusyEvictRace != nil {
+			s.sendBusyEvictRace()
+		}
 		sess := s.residentSession(id)
 		if sess == nil {
 			// Benign race, identical to enqueueOrDispatch's own: the busy
-			// occupant finished and was evicted in the gap. Report
-			// "queued" at depth 0 rather than erroring — a client retry
-			// (or the eventual reload) resolves it against a freshly
-			// idle session; the text itself was never lost because it
-			// was never durably written in this branch either, so there
-			// is nothing to report as sent — treat this exactly like
-			// TestQueueClearRaceDuringDispatchIsNotAnError's shape.
-			return "queued", 0, 0, ""
+			// occupant finished and was evicted in the gap. text was
+			// NEVER durably enqueued in this branch (EnqueuePrompt below
+			// never ran) — so this must report a RETRYABLE failure, not
+			// success. An earlier revision of this branch returned
+			// "queued" (errCode 0), which writeSendToRootResult turns
+			// into a 202 the caller has no reason to ever retry —
+			// permanently losing the text while claiming it was
+			// accepted. enqueueOrDispatch's OWN identical race
+			// (handlers.go) returns 409 "session is busy" for exactly
+			// this reason; mirror it. A live review caught this.
+			return "", 0, http.StatusConflict, ""
 		}
 		ourID, err := sess.EnqueuePrompt(text)
 		if err != nil {
@@ -284,7 +299,16 @@ func (s *Server) writeSendToRootResult(w http.ResponseWriter, id, status string,
 	case 0:
 		// fall through to the success response below
 	case http.StatusConflict:
-		writeErr(w, http.StatusConflict, fmt.Sprintf("workdir busy: held by session %s", holder))
+		if holder != "" {
+			writeErr(w, http.StatusConflict, fmt.Sprintf("workdir busy: held by session %s", holder))
+		} else {
+			// The ordinary busy-root case (sendTextToRoot's own
+			// nil-residentSession race, or a workdir-holder-less
+			// StatusConflict from claimForPrompt) — retryable, mirroring
+			// enqueueOrDispatch's identical "session is busy with
+			// another prompt" message for the same shape of race.
+			writeErr(w, http.StatusConflict, "session is busy with another prompt")
+		}
 		return
 	case http.StatusServiceUnavailable:
 		writeErr(w, http.StatusServiceUnavailable, "server shutting down")
