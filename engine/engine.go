@@ -293,6 +293,28 @@ type Config struct {
 	// lineage. See Session.ParentSession.
 	ParentSession string
 
+	// TaskParentID is a COMPLETELY DIFFERENT concept from ParentSession
+	// above, despite both being "a parent pointer": this one is
+	// SessionManager's OWN tree-lineage record, set ONLY by Spawn
+	// (session_manager.go) to the spawning session's id, and consulted
+	// ONLY to reconstruct a child's true depth after SessionManager's
+	// in-memory tree has forgotten it (Reap, or a process restart) —
+	// see SessionManager.adoptReloadedLocked. ParentSession is an
+	// opaque, unvalidated, cross-box-safe provenance pointer a caller
+	// may set to ANY prior session id for ANY reason (see its own doc
+	// comment) — reusing it for tree reconstruction would be both
+	// semantically wrong and unsafe: a session created with
+	// ParentSession pointing at some OTHER, unrelated but currently
+	// SessionManager-tracked session would be silently misattached
+	// under it. TaskParentID has no such ambiguity: it is written by
+	// exactly one code path, read by exactly one code path, and never
+	// surfaced on the wire (session.info's lineage.parent_id comes from
+	// SessionManager's live tree, not this field). Persisted on the
+	// session header record like ParentSession, restored by
+	// LoadSession. Empty means "not a task-tool-spawned child, or
+	// predates this field."
+	TaskParentID string
+
 	Hooks Hooks // optional plugin host
 	// OnEvent is optional; called synchronously, keep it fast. The goal.*
 	// events (see goal.go) are emitted while Session.mu is held so the event
@@ -966,6 +988,14 @@ func (s *Session) WorkDir() string {
 // session has no recorded parent. See Config.ParentSession's doc comment.
 func (s *Session) ParentSession() string {
 	return s.cfg.ParentSession
+}
+
+// TaskParentID returns SessionManager's own tree-lineage pointer
+// (Config.TaskParentID) — see that field's doc comment for why this is a
+// completely different concept from ParentSession above, despite the
+// similar name.
+func (s *Session) TaskParentID() string {
+	return s.cfg.TaskParentID
 }
 
 // Plugins returns a snapshot of this session's configured plugins — name,

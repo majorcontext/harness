@@ -95,9 +95,15 @@ type record struct {
 	// value on load means "nothing to restore" (a legacy header, or a
 	// session created with no lineage) rather than "the caller's Config.
 	// ParentSession should be cleared".
-	ParentSession string           `json:"parent_session,omitempty"`
-	Message       *message.Message `json:"message,omitempty"`
-	Model         message.ModelRef `json:"model,omitzero"`
+	ParentSession string `json:"parent_session,omitempty"`
+	// TaskParentID carries Config.TaskParentID on the session header
+	// record only, same omit/restore rule as ParentSession — but a
+	// COMPLETELY DIFFERENT concept (see Config.TaskParentID's doc
+	// comment): SessionManager's own tree-lineage pointer, never the
+	// opaque provenance pointer ParentSession carries.
+	TaskParentID string           `json:"task_parent_id,omitempty"`
+	Message      *message.Message `json:"message,omitempty"`
+	Model        message.ModelRef `json:"model,omitzero"`
 	// Effort carries the reasoning-effort level on the session header record
 	// (the level at create time) and on a recEffort record (a SetEffort
 	// change). Omitted when EffortUnset, so a legacy log with no effort
@@ -614,7 +620,7 @@ func (s *Session) ensureLog() error {
 		// LoadSession already tolerates.
 		var buf bytes.Buffer
 		for _, rec := range []record{
-			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir, ParentSession: s.cfg.ParentSession, Effort: s.effort},
+			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir, ParentSession: s.cfg.ParentSession, TaskParentID: s.cfg.TaskParentID, Effort: s.effort},
 			{Type: recModel, Model: s.model},
 		} {
 			b, err := json.Marshal(rec)
@@ -735,6 +741,12 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// never "clear the loading Config's ParentSession".
 			if rec.ParentSession != "" {
 				s.cfg.ParentSession = rec.ParentSession
+			}
+			// Same restore rule, but see Config.TaskParentID's doc comment
+			// for why this is a different field entirely from
+			// ParentSession above.
+			if rec.TaskParentID != "" {
+				s.cfg.TaskParentID = rec.TaskParentID
 			}
 			// The effort at create time. Omitted (EffortUnset) on a legacy
 			// header, which restores as the provider default — unchanged.

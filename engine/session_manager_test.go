@@ -448,6 +448,116 @@ func TestReapRemovesTerminalLeavesAndUpdatesParent(t *testing.T) {
 	}
 }
 
+// TestReapThenReloadRestoresTrueDepthNotAFreshRoot is the regression test
+// for a live-reproduced depth-limit bypass: a child reaped as a terminal,
+// childless leaf (the shape a child hits the instant its first turn
+// finishes — session.send's own doc comment explicitly permits a
+// legitimate later follow-up to a done/failed child) must NOT come back
+// as an unrestricted depth-0 root the next time an external scheduler
+// reports a turn starting on it. It must be re-attached at its TRUE
+// depth, with the depth-based `task` tool restriction that implies
+// intact. Depth limit 1 here (mirrors TestTaskToolWithheldAtDepthLimit)
+// makes the bug directly observable via tool presence: the child is
+// spawned at depth 1, correctly WITHOUT `task`; an earlier revision of
+// ReportTurnStart's adopt-on-first-sight always re-adopted an untracked
+// id as a depth-0 root, which — at depth 0 — DOES get `task`, letting a
+// reaped child regain the ability to spawn further children with no
+// depth ceiling at all.
+func TestReapThenReloadRestoresTrueDepthNotAFreshRoot(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 1, 0) // depth limit 1
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("child", doneTurn("done")),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	child, ok := mgr.Session(childID)
+	if !ok {
+		t.Fatal("child not found before reap")
+	}
+	if _, hasTask := child.tools[taskToolName]; hasTask {
+		t.Fatalf("task tool present on depth-1 child before reap (test setup invalid): %v", toolNames(child))
+	}
+
+	if n := mgr.Reap(); n != 1 {
+		t.Fatalf("Reap() = %d, want 1", n)
+	}
+	if _, ok := mgr.Session(childID); ok {
+		t.Fatal("child still tracked after Reap — test setup invalid")
+	}
+
+	// Simulate the legitimate follow-up: an external scheduler (the
+	// server's runPrompt, via claimForPrompt's cold-load path, or a
+	// session.send hitting handleSessionSend's own cold-load-and-adopt
+	// fallback) reports a turn starting on this session, exactly as it
+	// would for any session whose SessionManager node Reap already
+	// removed.
+	mgr.ReportTurnStart(child)
+
+	info, ok := mgr.Info(childID)
+	if !ok {
+		t.Fatal("child not re-adopted by ReportTurnStart")
+	}
+	if info.Depth != 1 {
+		t.Errorf("re-adopted depth = %d, want 1 (true lineage restored via TaskParentID, not reset to a fresh root)", info.Depth)
+	}
+	if info.ParentID != root.ID {
+		t.Errorf("re-adopted parent = %q, want %q", info.ParentID, root.ID)
+	}
+	if _, hasTask := child.tools[taskToolName]; hasTask {
+		t.Errorf("task tool present on reaped-then-reloaded depth-1 child: %v — the live-reproduced depth-limit bypass", toolNames(child))
+	}
+}
+
+// TestReloadedChildWithUnknownParentGetsConservativeDepth proves the
+// OTHER branch of adoptReloadedLocked: when a child's recorded true
+// parent is not tracked by THIS SessionManager either (a fresh process —
+// e.g. `harness run -r <id>` naming a former task-tool child from a
+// previous process, whose tree lived and died with that process), the
+// true depth is unrecoverable, and the safe default is the MOST
+// restrictive one (m.maxDepth, refusing `task` outright) rather than the
+// MOST permissive one (depth 0, unrestricted) an earlier revision used.
+func TestReloadedChildWithUnknownParentGetsConservativeDepth(t *testing.T) {
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root := mgr1.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("child", doneTurn("done")),
+	))
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr1, childID, StatusDone, time.Second)
+	child, ok := mgr1.Session(childID)
+	if !ok {
+		t.Fatal("child not found")
+	}
+
+	// A brand new SessionManager (a different process entirely) has never
+	// heard of child's true parent: its TaskParentID names an id this
+	// manager's tree has no record of at all.
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	mgr2.ReportTurnStart(child)
+
+	info, ok := mgr2.Info(childID)
+	if !ok {
+		t.Fatal("child not adopted by the second manager")
+	}
+	if info.Depth != 3 {
+		t.Errorf("depth = %d, want 3 (the configured max — refused rather than guessed permissively)", info.Depth)
+	}
+	if info.ParentID != "" {
+		t.Errorf("parent = %q, want empty (true parent unrecoverable in this manager)", info.ParentID)
+	}
+	if _, hasTask := child.tools[taskToolName]; hasTask {
+		t.Errorf("task tool present despite unrecoverable depth: %v", toolNames(child))
+	}
+}
+
 // TestReapNeverRemovesRootOrNodeWithChildren proves the two things Reap
 // must never do: remove a root (the tree's own address), or remove a
 // terminal node that still has a live or terminal-but-not-yet-reaped

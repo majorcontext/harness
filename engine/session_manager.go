@@ -258,6 +258,16 @@ func (m *SessionManager) NewRoot(cfg Config) *Session {
 // LoadSession) as a root under lifecycle tracking, without creating
 // anything new. It is an error to adopt a session whose id is already
 // managed by m.
+//
+// Use this ONLY when s is KNOWN to be a genuine root — freshly created
+// with no parent_id (handleCreate's ordinary path), or a bare CLI
+// session at process start. For a session cold-loaded by id where that
+// is NOT known (a caller resolving an arbitrary, possibly-a-child id —
+// see handleSpawnChild's parent lookup fallback), use AdoptReloaded
+// instead: adopting a reaped or restart-forgotten CHILD as a root here
+// would silently discard its true depth and hand it back an unrestricted
+// `task` tool, a live-reproduced depth-limit bypass. See
+// adoptReloadedLocked's doc comment.
 func (m *SessionManager) AdoptRoot(s *Session) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -265,6 +275,22 @@ func (m *SessionManager) AdoptRoot(s *Session) error {
 		return fmt.Errorf("engine: session %s already managed", s.ID)
 	}
 	m.adoptRootLocked(s)
+	return nil
+}
+
+// AdoptReloaded registers an already-constructed session under lifecycle
+// tracking like AdoptRoot, but for a session whose id is resolved from a
+// caller-supplied string rather than known in advance to be a root — see
+// adoptReloadedLocked, which this wraps with the same already-managed
+// guard AdoptRoot uses. It is an error to adopt a session whose id is
+// already managed by m.
+func (m *SessionManager) AdoptReloaded(s *Session) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.nodes[s.ID]; exists {
+		return fmt.Errorf("engine: session %s already managed", s.ID)
+	}
+	m.adoptReloadedLocked(s)
 	return nil
 }
 
@@ -285,19 +311,79 @@ func (m *SessionManager) adoptRootLocked(s *Session) *sessionNode {
 	return n
 }
 
+// adoptReloadedLocked registers s as a node the first time THIS
+// SessionManager sees it via a caller-resolved id — a cold reload after
+// eviction, a process restart, or a legitimate follow-up turn on a child
+// whose own tree entry Reap() already removed (Reap only ever removes a
+// terminal, momentarily-childless LEAF — a shape a child hits the instant
+// its first turn finishes, long before anyone sends it a follow-up;
+// session.send's own doc comment explicitly permits messaging a
+// done/failed child). s.TaskParentID() — SessionManager's OWN durably
+// persisted tree-lineage pointer, set only by Spawn, a COMPLETELY
+// DIFFERENT concept from the unrelated, unvalidated s.ParentSession()
+// (see Config.TaskParentID's doc comment) — is the only signal available
+// to tell a reloaded child apart from a genuine root:
+//
+//   - Empty: s has no recorded task-tree parent — a genuine root, or a
+//     session that predates this field. Adopted as a fresh root (depth
+//     0, task tool installed), identical to adoptRootLocked.
+//
+//   - Non-empty and that parent id is STILL a tracked node: s WAS a
+//     child SessionManager had forgotten. Re-attached at its TRUE depth
+//     (parent's depth + 1) under its true parent, restoring exactly the
+//     lineage Reap or a restart discarded — including the depth-based
+//     `task` tool restriction that lineage implies. An earlier revision
+//     of this method (via adoptRootLocked's own adopt-on-first-sight)
+//     re-adopted a reaped child as a depth-0 ROOT here instead — a
+//     live-reproduced depth-limit bypass: the child regained an
+//     unrestricted `task` tool and used it to spawn further children
+//     with no depth ceiling at all, silently escaping the tree entirely.
+//
+//   - Non-empty but that parent id is NOT tracked (also forgotten, or a
+//     fresh process with no in-memory tree at all — the "task tool
+//     broken after restart" gap ReportTurnStart's adopt-on-first-sight
+//     otherwise closes): the true depth is unrecoverable. Adopted at
+//     m.maxDepth — the one depth value TaskToolAllowed always refuses —
+//     rather than depth 0, which would reopen the exact same bypass with
+//     no way to rule it out. The cost (a legitimately shallow child
+//     loses its own ability to spawn further children after a full
+//     process restart with no surviving tree) is deliberate: refusing an
+//     unverifiable case is always safer than guessing permissively.
+func (m *SessionManager) adoptReloadedLocked(s *Session) *sessionNode {
+	parentID := s.TaskParentID()
+	if parentID == "" {
+		return m.adoptRootLocked(s)
+	}
+	s.cfg.SessionManager = m
+	s.tools[taskToolName] = taskTool()
+	depth := m.maxDepth
+	attachTo := ""
+	if p, ok := m.nodes[parentID]; ok {
+		depth = p.depth + 1
+		attachTo = parentID
+	}
+	n := m.adoptLocked(s, attachTo, depth)
+	m.installTaskToolLocked(s, depth)
+	return n
+}
+
 // ReportTurnStart tells m that an EXTERNAL scheduler (the server's own
 // run-slot machinery) is about to drive a turn on sess — see
 // ExternalRunner's doc comment. If sess is not yet a tracked node at all —
 // a session this process is touching for the first time via a cold reload
 // from disk (claimForPrompt's transparent LoadSession fallback covers a
-// session evicted from residency, or one that predates this process
-// entirely after a restart) — it is adopted as a fresh root here, exactly
-// like AdoptRoot. This is what makes `task` and session.info's lineage
-// keep working for a session resumed after a restart or eviction, not
-// only one created via THIS process's own POST /session (closing the gap
-// a session that already had children before the restart would otherwise
-// hit: task calls failing "parent session no longer tracked" forever
-// after).
+// session evicted from residency, one that predates this process entirely
+// after a restart, or a child SessionManager's own Reap already
+// forgot) — it is adopted here via adoptReloadedLocked, which restores
+// its true depth/parent when recoverable rather than always defaulting to
+// a fresh root (adoptReloadedLocked's own doc comment covers exactly why:
+// a live-reproduced depth-limit bypass an earlier revision of this method
+// had, by always adopting as a root here). This is what makes `task` and
+// session.info's lineage keep working for a session resumed after a
+// restart or eviction, not only one created via THIS process's own POST
+// /session (closing the gap a session that already had children before
+// the restart would otherwise hit: task calls failing "parent session no
+// longer tracked" forever after).
 //
 // A no-op if sess is already tracked and already running (defensive:
 // should not happen if the caller's own admission gate is sound, but
@@ -307,7 +393,7 @@ func (m *SessionManager) ReportTurnStart(sess *Session) {
 	defer m.mu.Unlock()
 	n, ok := m.nodes[sess.ID]
 	if !ok {
-		n = m.adoptRootLocked(sess)
+		n = m.adoptReloadedLocked(sess)
 	}
 	// Always re-attach to the LIVE object, even for an already-tracked
 	// node: the server's residency system (MaxResident) can evict and
@@ -559,6 +645,14 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	// design doc's inheritance rule actually means.
 	childCfg := parent.session.configSnapshot()
 	childCfg.ParentSession = parent.id
+	// TaskParentID is SEPARATE from ParentSession just above — see its
+	// doc comment. This is the durable record adoptReloadedLocked
+	// consults to restore this child's true depth/parent if
+	// SessionManager's in-memory tree ever forgets it (Reap, or a
+	// process restart) before session.send's own "a done/failed CHILD
+	// is eligible for Send" contract lets a legitimate follow-up touch
+	// it again.
+	childCfg.TaskParentID = parent.id
 	if !opts.Model.IsZero() {
 		childCfg.Model = opts.Model
 	}

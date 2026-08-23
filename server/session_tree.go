@@ -40,7 +40,14 @@ func (s *Server) handleSpawnChild(w http.ResponseWriter, parentID, agent, prompt
 			writeErr(w, http.StatusNotFound, "no such parent session")
 			return
 		}
-		_ = s.sessMgr.AdoptRoot(loaded) // ignore "already managed": a concurrent adopt (e.g. ReportTurnStart) may have won the race
+		// AdoptReloaded, not AdoptRoot: parentID is a caller-supplied
+		// string this handler has no independent reason to believe names
+		// a root rather than a child SessionManager's Reap (or a process
+		// restart) had forgotten — using AdoptRoot here would risk the
+		// exact depth-limit bypass AdoptRoot's own doc comment warns
+		// about. "already managed" is ignored: a concurrent adopt (e.g.
+		// ReportTurnStart) may have won the race.
+		_ = s.sessMgr.AdoptReloaded(loaded)
 		parent, ok = s.sessMgr.Session(parentID)
 		if !ok {
 			writeErr(w, http.StatusNotFound, "no such parent session")
