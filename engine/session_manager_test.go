@@ -1373,6 +1373,102 @@ func TestForgetRootRemovesIdleRootWithNoChildren(t *testing.T) {
 	}
 }
 
+// TestForgetRootAlsoCleansUsageAndRunningMaps is the regression test for
+// a live review finding: ForgetRoot deleted only m.nodes[id], leaving a
+// stale m.usageByRoot[id]/m.runningByRoot[id] entry behind — both keyed
+// by root id and written to by every turn anywhere in the tree — for
+// the rest of the process's life, one pair per forgotten root on a
+// long-lived server that creates and deletes many.
+func TestForgetRootAlsoCleansUsageAndRunningMaps(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(managedConfig("root", scriptedTurns("root", nil)))
+	mgr.usageByRoot[root.ID] = provider.Usage{InputTokens: 5}
+	mgr.runningByRoot[root.ID] = 0
+
+	if err := mgr.ForgetRoot(root.ID); err != nil {
+		t.Fatalf("ForgetRoot: %v", err)
+	}
+	if _, ok := mgr.usageByRoot[root.ID]; ok {
+		t.Error("usageByRoot entry still present after ForgetRoot")
+	}
+	if _, ok := mgr.runningByRoot[root.ID]; ok {
+		t.Error("runningByRoot entry still present after ForgetRoot")
+	}
+}
+
+// TestForgetRootThenChildrenReapedEventuallyCollectsRoot is the
+// regression test for a live review finding: a root DELETEd while it
+// still had live children (cascade-canceled by endSubagentLineage, but
+// not yet removed — Reap collects them bottom-up, one generation per
+// call) was refused by ForgetRoot and then NEVER revisited — Reap
+// unconditionally skips every root, so the now-childless root leaked
+// for the rest of the process's life. ForgetRoot's pendingForget flag
+// closes this: once the child is reaped away, a LATER Reap call also
+// collects the root itself.
+func TestForgetRootThenChildrenReapedEventuallyCollectsRoot(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("child", doneTurn("done")),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	// Refused: root still has a (terminal, but not yet reaped) child.
+	if err := mgr.ForgetRoot(root.ID); err == nil {
+		t.Fatal("ForgetRoot on a root with a child: want error, got nil")
+	}
+	if _, ok := mgr.Info(root.ID); !ok {
+		t.Fatal("root removed despite still having a child")
+	}
+
+	// First Reap collects the child (one generation).
+	if n := mgr.Reap(); n != 1 {
+		t.Fatalf("first Reap() = %d, want 1 (the child)", n)
+	}
+	// Second Reap: root is now childless AND pendingForget — must be
+	// collected too, the one exception to "Reap never removes a root".
+	if n := mgr.Reap(); n != 1 {
+		t.Fatalf("second Reap() = %d, want 1 (the now-childless, pendingForget root)", n)
+	}
+	if _, ok := mgr.Info(root.ID); ok {
+		t.Error("root still tracked after its pendingForget'd subtree was fully reaped")
+	}
+}
+
+// TestReapNeverCollectsAnOrdinaryRootEvenWhenChildless proves the
+// pendingForget exception is exactly that — an exception, not a
+// loosening of "Reap never removes a root" for the ordinary case: a
+// ROOT no caller ever asked ForgetRoot to remove stays tracked
+// indefinitely even once childless, exactly like before this fix.
+func TestReapNeverCollectsAnOrdinaryRootEvenWhenChildless(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("child", doneTurn("done")),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	if n := mgr.Reap(); n != 1 {
+		t.Fatalf("Reap() = %d, want 1 (the child)", n)
+	}
+	// root is now childless, but ForgetRoot was never called — must
+	// survive indefinitely, unlike the pendingForget case above.
+	if n := mgr.Reap(); n != 0 {
+		t.Errorf("Reap() removed the root without ForgetRoot ever being called: %d nodes removed", n)
+	}
+	if _, ok := mgr.Info(root.ID); !ok {
+		t.Fatal("ordinary root removed by Reap — must never happen")
+	}
+}
+
 // TestForgetRootRejectsRootWithChildren proves ForgetRoot refuses to
 // orphan a live subtree — matches Cancel's own cascade philosophy: tear
 // the subtree down first (via Cancel) if that's really the intent.

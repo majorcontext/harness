@@ -1076,14 +1076,27 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// Fold back into s.taskNotifications exactly as if this
 			// process had never stopped — see recTaskNotifyQueued's own
 			// doc comment (the "notification persistence" follow-up).
-			// Keyed by ChildID, not a synthetic sequence number: a child
-			// notifies its parent exactly once terminally (Session.
-			// enqueueTaskNotification/SessionManager.finalizeTurn's own
-			// design), so ChildID is already a natural unique key — no
-			// duplicate-queued-record case exists on the live write path
-			// to defend against, unlike promptRecord's ID/Seq machinery
-			// above (built for a queue a caller can legitimately enqueue
-			// into many times).
+			// Keyed by ChildID, not a synthetic sequence number.
+			//
+			// CORRECTION (a live review caught the original version of
+			// this comment overclaiming): a child does NOT always notify
+			// its parent only once — finalizeTurn's own doc comment
+			// states plainly that it "can run more than once for the
+			// same child" (session.send legitimately restarts an
+			// already-done/failed child for a follow-up turn, and its
+			// own completion runs finalizeTurn again), so more than one
+			// recTaskNotifyQueued record for the SAME ChildID genuinely
+			// is reachable on the live write path — not just a
+			// theoretical replay artifact the way promptRecord's ID/Seq
+			// machinery above defends against a torn-fsync retry. This
+			// is still NOT a correctness bug for the fold below: it
+			// removes the FIRST matching ChildID entry per delivered
+			// record, in the same interleaved order finalizeTurn wrote
+			// them, so balanced queued/delivered pairs still converge to
+			// exactly the undelivered set regardless of how many times
+			// the same child appears. It would only become a real bug if
+			// some FUTURE change relied on "at most one queued record
+			// per ChildID" as an invariant — it is not one.
 			if rec.TaskNotify != nil {
 				tn := rec.TaskNotify
 				s.taskNotifications = append(s.taskNotifications, taskNotification{
