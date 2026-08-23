@@ -102,6 +102,39 @@ type sessionJSON struct {
 	// directly from engine.Session.QueuedPrompts(), so it is correct for a
 	// resident session and a freshly reloaded one alike (see buildSession).
 	Queued int `json:"queued"`
+	// Lineage is session.info's extension for the subagent-sessions tree
+	// (docs/plans/2026-08-23-subagent-sessions-design.md): present
+	// whenever this server's SessionManager tracks the session (every
+	// session created or loaded by this process — see handleCreate and
+	// s.opts.LoadSession call sites), nil otherwise (an embedder that opts
+	// out, or — defensively — a session this process has never touched at
+	// all). Deliberately a SEPARATE object from ParentSession above: that
+	// field is an opaque, unvalidated cross-box provenance pointer with no
+	// structural meaning; Lineage.ParentID names a LIVE session in this
+	// process's tree, with enforced depth/concurrency, cascade
+	// cancellation, and completion delivery. The two are unrelated
+	// concepts that happen to share the word "parent."
+	Lineage *lineageJSON `json:"lineage,omitempty"`
+}
+
+// lineageJSON is sessionJSON's subagent-sessions extension, sourced from
+// engine.SessionManager.Info — see sessionJSON.Lineage's doc comment.
+type lineageJSON struct {
+	ParentID string `json:"parent_id,omitempty"`
+	Depth    int    `json:"depth"`
+	// Status is the SessionManager lifecycle state (running/idle/done/
+	// failed/canceled — engine.SessionStatus) — DISTINCT from
+	// sessionJSON's own Status/State fields above, which predate
+	// SessionManager and describe only "is a turn streaming right now" for
+	// THIS process. A done/failed child keeps that status here even once
+	// this process is no longer resident-tracking it any other way.
+	Status    string   `json:"status"`
+	Children  []string `json:"children"`
+	AgentType string   `json:"agent_type,omitempty"`
+	// Result is the final assistant text for a done session; FailReason a
+	// classified (#82-rule) reason for a failed one. Both empty otherwise.
+	Result     string `json:"result,omitempty"`
+	FailReason string `json:"fail_reason,omitempty"`
 }
 
 // usageJSON is the Session/StatusEntry usage sub-object (issue #62 layer 2):
@@ -560,9 +593,24 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		// one continues from (see engine.Config.ParentSession's doc
 		// comment). Optional; validated by validateParentSession below.
 		ParentSession *string `json:"parent_session"`
+		// ParentID, Agent, and Prompt are session.create's "with a parent"
+		// form (design doc, Stage 4): "identical to a task call made from
+		// outside the model." A COMPLETELY DIFFERENT concept from
+		// ParentSession above — see lineageJSON's doc comment — this names
+		// a live session in THIS process's SessionManager tree. When
+		// ParentID is set, every other field in this body is ignored: see
+		// handleSpawnChild, which takes over entirely and shares none of
+		// the workdir/worktree/residency machinery below.
+		ParentID *string `json:"parent_id"`
+		Agent    string  `json:"agent"`
+		Prompt   string  `json:"prompt"`
 	}
 	if err := decodeBody(r, &body); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if body.ParentID != nil && strings.TrimSpace(*body.ParentID) != "" {
+		s.handleSpawnChild(w, *body.ParentID, body.Agent, body.Prompt, body.Model)
 		return
 	}
 	parentSession, err := validateParentSession(body.ParentSession)
@@ -608,6 +656,13 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.reportCreatePhase(sess.ID, "new_session", time.Since(phaseStart))
+	// Adopt into the SessionManager so `task` is available and this session
+	// is reachable by session.info's lineage extension and session.send —
+	// see Server.sessMgr's doc comment. Errors only on an ID collision
+	// (astronomically unlikely — see engine.newID) or a double-adopt; both
+	// are safe to ignore here rather than fail session creation over a
+	// purely additive capability.
+	_ = s.sessMgr.AdoptRoot(sess)
 	// Report "total" on every return past this point — success or error —
 	// not just the success tail below. Without this, a failure after
 	// new_session (recordWorktreeOwner, Persist) never reports "total", and
@@ -2589,11 +2644,32 @@ func (s *Server) lookup(id string) (*engine.Session, string, bool) {
 	if st != nil {
 		return st.sess, statusStr(running), true
 	}
-	sess, err := s.opts.LoadSession(id)
-	if err != nil {
-		return nil, "", false
+	if sess, err := s.opts.LoadSession(id); err == nil {
+		return sess, "idle", true
 	}
-	return sess, "idle", true
+	// Neither resident nor (yet, or ever) readable from disk under this id.
+	// A child SessionManager.Spawn just registered can reach this exact
+	// point before its first Persist call lands — Spawn launches the
+	// child's turn asynchronously (see its doc comment), so a GET racing
+	// immediately after the 201 that created it can beat the write. Fall
+	// back to the live in-memory object SessionManager itself holds, which
+	// is always immediately consistent with lineageJSONFor's own Info(id)
+	// call — this is also the ONLY path that ever resolves a child session
+	// this process's SessionManager tracks but this server's ordinary
+	// residency/disk bookkeeping never independently persisted-and-then-
+	// forgot (ordinary use always persists on first Prompt append, same as
+	// any session — this is purely a startup race window, not a steady-
+	// state gap).
+	if info, ok := s.sessMgr.Info(id); ok {
+		if childSess, ok := s.sessMgr.Session(id); ok {
+			status := "idle"
+			if info.Status == engine.StatusRunning {
+				status = "busy"
+			}
+			return childSess, status, true
+		}
+	}
+	return nil, "", false
 }
 
 // residentSession returns the resident *engine.Session for id, or nil if the
@@ -2814,6 +2890,36 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 		LastCompactedAt: sess.LastCompactedAt(),
 		Plugins:         sess.Plugins(),
 		Queued:          len(sess.QueuedPrompts()),
+		Lineage:         s.lineageJSONFor(id),
+	}
+}
+
+// lineageJSONFor returns id's subagent-sessions lineage, or nil if this
+// server's SessionManager does not track id — see sessionJSON.Lineage's
+// doc comment. Reads sessMgr directly (its own lock, never s.mu — see
+// Server.sessMgr's doc comment), independent of whether sess itself came
+// from s.sessions or a fresh disk load: a child session's log lives in the
+// same SessionDir a plain LoadSession(id) already finds (Spawn's child
+// Config inherits its parent's SessionDir verbatim), so GET /session/{id}
+// already resolves a child with zero other changes — this only adds the
+// tree metadata on top.
+func (s *Server) lineageJSONFor(id string) *lineageJSON {
+	info, ok := s.sessMgr.Info(id)
+	if !ok {
+		return nil
+	}
+	children := info.Children
+	if children == nil {
+		children = []string{}
+	}
+	return &lineageJSON{
+		ParentID:   info.ParentID,
+		Depth:      info.Depth,
+		Status:     string(info.Status),
+		Children:   children,
+		AgentType:  info.AgentType,
+		Result:     info.Result,
+		FailReason: info.FailReason,
 	}
 }
 
