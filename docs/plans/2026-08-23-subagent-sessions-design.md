@@ -96,7 +96,13 @@ only top-level `.md` files are agent definitions), Claude Code-compatible frontm
 
 Loaded once at root-session start (same lifecycle as skills discovery).
 A custom definition whose `tools` list omits `task` is a leaf. Unknown
-tool names in a definition are an error surfaced at load, not spawn.
+tool names in a definition are an error surfaced at load, not spawn —
+that file's own definition is skipped with a logged warning identifying
+it (a later follow-up, "frontmatter leniency": one malformed or
+semantically-invalid `.agents/*.md` file costs only that file's own
+agent type, never every other custom definition in the same directory),
+never silently deferred to a later `task` call's own "unknown agent"
+error at spawn time.
 
 ### The `task` tool (model-facing)
 

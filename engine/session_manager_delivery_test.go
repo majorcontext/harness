@@ -481,9 +481,61 @@ func TestReportTurnStartMigrationDoesNotDoubleDeliverAlongsideDurableFold(t *tes
 	mgr.ReportTurnStart(reloaded)
 
 	reloaded.mu.Lock()
-	defer reloaded.mu.Unlock()
 	if len(reloaded.taskNotifications) != 1 {
-		t.Errorf("reloaded.taskNotifications = %+v, want exactly 1 — the durable fold and the migration must not both deliver the same notification", reloaded.taskNotifications)
+		reloaded.mu.Unlock()
+		t.Fatalf("reloaded.taskNotifications = %+v, want exactly 1 — the durable fold and the migration must not both deliver the same notification", reloaded.taskNotifications)
+	}
+	reloaded.mu.Unlock()
+}
+
+// TestReportTurnStartMigrationDoesNotDurablyLoseAStillPendingNotification
+// is the regression test for a live review finding on the FIX above: the
+// migration's drain must NOT use the newly-persisting
+// drainAllTaskNotifications — old and sess there are two in-memory
+// objects for the SAME durable session id, sharing the SAME log (unlike
+// finalizeTurn/recoverInterruptedTurnLocked's forward-to-a-different-
+// ancestor callers). Persisting recTaskNotifyDelivered there durably
+// cancels the notification's ORIGINAL recTaskNotifyQueued entry on that
+// shared log — and since enqueueTaskNotificationMigrated's own dedup
+// correctly declines to write a compensating fresh queued record for
+// something LoadSession's fold already restored, the log would end up
+// showing a balanced (queued+delivered) notification that is STILL, in
+// fact, only in-memory pending and undelivered. A second eviction before
+// it is ever checked out would then have the NEXT LoadSession fold it as
+// genuinely delivered and silently drop it. Proves a second reload still
+// restores the notification.
+func TestReportTurnStartMigrationDoesNotDurablyLoseAStillPendingNotification(t *testing.T) {
+	dir := t.TempDir()
+	reg := provider.Registry{"root": scriptedTurns("root", nil)}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	old := mgr.NewRoot(rootCfg)
+	old.enqueueTaskNotification(taskNotification{ChildID: "ses_x", Status: StatusDone, Result: "hi"})
+
+	// First eviction + cold reload + reattach — the exact sequence
+	// TestReportTurnStartMigrationDoesNotDoubleDeliverAlongsideDurableFold
+	// already covers for the double-delivery angle; this test cares about
+	// what got left on DISK afterward.
+	reloaded, err := LoadSession(Config{Providers: reg, SessionDir: dir}, old.ID)
+	if err != nil {
+		t.Fatalf("LoadSession (1st): %v", err)
+	}
+	mgr.ReportTurnStart(reloaded)
+
+	// Simulate a SECOND eviction, before this notification was ever
+	// checked out (checkoutTaskNotificationsSegment never ran — no turn
+	// was driven against reloaded in between). A fresh LoadSession from
+	// the same durable log must still restore it: if the migration's own
+	// drain durably wrote a recTaskNotifyDelivered for it (the bug this
+	// test guards against), the notification would now be permanently,
+	// silently gone.
+	reloadedAgain, err := LoadSession(Config{Providers: reg, SessionDir: dir}, old.ID)
+	if err != nil {
+		t.Fatalf("LoadSession (2nd): %v", err)
+	}
+	if !reloadedAgain.hasPendingTaskNotifications() {
+		t.Error("notification silently lost across a second reload — the migration's drain durably (and wrongly) marked it delivered on the shared log")
 	}
 }
 
