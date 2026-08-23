@@ -3096,18 +3096,21 @@ func (s *Server) handleEnd(w http.ResponseWriter, r *http.Request) {
 //
 //  2. Best-effort ForgetRoot: a root's sessionNode (and the *Session it
 //     pins) used to survive in sessMgr's m.nodes for the rest of the
-//     PROCESS's life even after its caller explicitly deleted it here —
-//     see ForgetRoot's own doc comment for why this is a real,
-//     deliberate leak Reap itself will never close. Errors are expected
-//     and silently ignored: id may not be a root at all (a child — never
-//     ForgetRoot's job), may not be sessMgr-tracked at all (a session
-//     that predates this feature), or may still have live children at
-//     the instant this runs (the cascade-cancel above only CANCELS them,
-//     it does not remove them — they stay in m.nodes, canceled, until
-//     Reap's own bottom-up sweep eventually collects them; ForgetRoot
-//     correctly refuses to remove their now-childless parent's address
-//     out from under that still-in-flight cleanup). None of these are
-//     caller-visible failures: DELETE already succeeds either way.
+//     PROCESS's life even after its caller explicitly deleted it here.
+//     Errors are expected and silently ignored: id may not be a root at
+//     all (a child — never ForgetRoot's job), may not be sessMgr-tracked
+//     at all (a session that predates this feature), or may still have
+//     live children at the instant this runs (the cascade-cancel above
+//     only CANCELS them, it does not remove them — they stay in
+//     m.nodes, canceled, until Reap's own bottom-up sweep eventually
+//     collects them). That last case is NOT a dead end: ForgetRoot arms
+//     the node's pendingForget flag on refusal specifically so Reap's
+//     own sweep also collects THIS now-childless root once it gets
+//     there — see pendingForget's own doc comment (session_manager.go)
+//     for the full mechanism; a live review caught the gap where
+//     nothing ever revisited a root refused for exactly this reason.
+//     None of these are caller-visible failures: DELETE already
+//     succeeds either way.
 //
 // Callers must ensure id itself is not concurrently mid-turn before
 // calling this (handleEnd's resident branch checks st.running first; its

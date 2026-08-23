@@ -649,3 +649,242 @@ func TestReloadedChildWithDanglingTurnNotifiesParent(t *testing.T) {
 	}
 	t.Fatalf("root never resumed with the dangling child's synthetic notification; history: %+v", root2.History())
 }
+
+// TestReloadedChildWithDanglingTurnFoldsUsageIntoTreeBudget is the
+// regression test for a live review finding: recoverInterruptedTurnLocked
+// built a "lost to restart" notification carrying Usage but never folded
+// that usage into m.usageByRoot the way finalizeTurn's own three
+// terminal-outcome branches always do — an interrupted child's real spend
+// escaped SetMaxTreeTokens entirely, letting a later Spawn silently
+// exceed the tree budget. Gives the child a REAL completed first turn
+// (real usage), then interrupts a SECOND, follow-up turn (the actual
+// "restart" case) — a single-turn dangling child never accumulates any
+// usage at all in this test harness (the blocking provider stalls before
+// ever returning a Usage-bearing event), so this is the only shape that
+// can actually prove folding happened.
+func TestReloadedChildWithDanglingTurnFoldsUsageIntoTreeBudget(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	childProv1 := scriptedTurns("childprov1", doneTurnWithUsage("first turn done", provider.Usage{InputTokens: 40, OutputTokens: 30})) // 70
+	childProv2 := &signaledBlockingProvider{name: "childprov2", started: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() { close(childProv2.release) })
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv1.Name(): childProv1, childProv2.Name(): childProv2}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 0, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+
+	childID, err := mgr1.Spawn(SpawnOptions{
+		ParentID: root1.ID, Prompt: "go", Model: modelFor("childprov1"), AgentType: AgentGeneralPurpose,
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr1, childID, StatusDone, time.Second)
+	childSess, _ := mgr1.Session(childID)
+	if got := childSess.Usage(); got.InputTokens+got.OutputTokens == 0 {
+		t.Fatal("test setup: child's first turn recorded no usage")
+	}
+
+	// Restart the child on a DIFFERENT (blocking) provider for a
+	// follow-up turn, and let it dangle mid-flight — the actual
+	// "interrupted by restart" shape.
+	childSess.SetModel(modelFor("childprov2"))
+	go mgr1.Send(context.Background(), childID, "follow up") //nolint:errcheck // deliberately abandoned mid-flight
+	<-childProv2.started
+
+	// Simulate a fresh process: a brand-new SessionManager, root
+	// re-adopted first (same technique as TestReloadedChildWithDanglingTurnNotifiesParent).
+	//
+	// root2 gets its OWN "root"-named provider instance (rootProv2), not
+	// rootProv again: childProv1's turn completing above already wakes
+	// root1 for its own async resume on mgr1 (rootProv has zero
+	// scripted turns, so that resume fails immediately) — that goroutine
+	// can still be in flight here. Sharing the exact same
+	// *scriptedProvider object between root1 and root2 would let those
+	// two independent async resumes race on the fixture's own
+	// unsynchronized internal bookkeeping (call count, requests slice);
+	// that's a test-fixture race, not a product one, so the fix is
+	// giving each root its own provider rather than serializing product
+	// code that has no reason to serialize.
+	rootProv2 := scriptedTurns("root", nil)
+	reg2 := provider.Registry{rootProv2.Name(): rootProv2, childProv1.Name(): childProv1, childProv2.Name(): childProv2}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 0, 0)
+	root2 := NewSession(rootCfg2)
+	root2.ID = root1.ID
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+	reloadedChild, err := LoadSession(Config{Providers: reg2, SessionDir: dir}, childID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if err := mgr2.AdoptReloaded(reloadedChild); err != nil {
+		t.Fatalf("AdoptReloaded: %v", err)
+	}
+
+	// recoverInterruptedTurnLocked folds usage synchronously before
+	// AdoptReloaded returns, but delivering its notification can also
+	// wake the root (here immediately failing, since rootProv is
+	// scripted with zero turns) on its own async fireIdleResumeAsync
+	// goroutine — which folds the root's OWN usage delta into the same
+	// map on completion. Read usageByRoot under the manager's lock, like
+	// every production call site does, rather than racing that
+	// goroutine with a bare map index.
+	readUsage := func() provider.Usage {
+		mgr2.mu.Lock()
+		defer mgr2.mu.Unlock()
+		return mgr2.usageByRoot[root1.ID]
+	}
+	if got := readUsage(); got.InputTokens+got.OutputTokens == 0 {
+		t.Error("usageByRoot has no usage folded in after recovering an interrupted child that had a real completed prior turn — the interrupted child's spend escaped the tree budget")
+	}
+}
+
+// TestReloadedChildWithDanglingTurnIsIdempotentAcrossReapAndReload is the
+// regression test for a live review finding: recoverInterruptedTurnLocked
+// never mutated the child's history, so hasUnansweredTurn() stayed true
+// FOREVER — every later re-adoption of the same id (a Reap, then a
+// legitimate follow-up touching it again) re-ran the whole method and
+// re-enqueued a SECOND, duplicate "lost to restart" notification for the
+// SAME child. Proves recovery fires exactly once: reap the recovered
+// child, re-adopt it a second time, and assert the ancestor's message
+// history shows exactly ONE resume-trigger turn, not two.
+func TestReloadedChildWithDanglingTurnIsIdempotentAcrossReapAndReload(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", doneTurn("resumed"))
+	childProv := &signaledBlockingProvider{name: "childprov", started: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() { close(childProv.release) })
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 0, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("childprov"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	<-childProv.started
+
+	mgr2 := NewSessionManager(context.Background(), 0, 0)
+	root2 := NewSession(rootCfg)
+	root2.ID = root1.ID
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+
+	// FIRST reload: recovery fires, delivers, and — critically — closes
+	// the dangling turn in history (see recoverInterruptedTurnLocked's
+	// own doc comment).
+	load := func() *Session {
+		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, childID)
+		if err != nil {
+			t.Fatalf("LoadSession: %v", err)
+		}
+		return s
+	}
+	if err := mgr2.AdoptReloaded(load()); err != nil {
+		t.Fatalf("AdoptReloaded (1st): %v", err)
+	}
+	waitForStatus(t, mgr2, childID, StatusFailed, time.Second)
+
+	// Reap the now-terminal, childless, finalized child, then reload it
+	// a SECOND time — exactly the sequence a real Reap-ticker-plus-later-
+	// follow-up would produce.
+	if n := mgr2.Reap(); n != 1 {
+		t.Fatalf("Reap() = %d, want 1", n)
+	}
+	if err := mgr2.AdoptReloaded(load()); err != nil {
+		t.Fatalf("AdoptReloaded (2nd): %v", err)
+	}
+
+	// Count resume-trigger turns on the root: must be exactly one. Two
+	// would mean the child's dangling turn was "recovered" twice.
+	//
+	// Both deliveries (the real one and, if the fix regresses, the
+	// duplicate) go through the same async fireIdleResumeAsync path, so
+	// a naive "return the instant count reaches 1" loop is a race: it
+	// can win against the duplicate's append and report a false pass.
+	// Wait for the first delivery, then wait out an additional settle
+	// window and take one final count — that window must comfortably
+	// exceed the scheduling delay between the two async deliveries.
+	countTriggers := func() int {
+		count := 0
+		for _, m := range root2.History() {
+			if m.Role == message.RoleUser && m.Parts.Text() == taskResumeTriggerText {
+				count++
+			}
+		}
+		return count
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && countTriggers() == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if countTriggers() == 0 {
+		t.Fatalf("root never resumed at all; history: %+v", root2.History())
+	}
+	time.Sleep(500 * time.Millisecond)
+	if count := countTriggers(); count != 1 {
+		t.Fatalf("root has %d resume-trigger turns, want exactly 1 (recovery ran more than once for the same child): history: %+v", count, root2.History())
+	}
+}
+
+// TestReloadedChildWithUntrackedParentIsEventuallyReapable is the
+// regression test for a live review finding: an interrupted child whose
+// OWN parent could not be found tracked (adoptReloadedLocked's "true
+// depth is unrecoverable" case) ends up with parentID == "" purely as a
+// bookkeeping side effect — indistinguishable from a genuine root to
+// Reap, which skips every parentID == "" node unconditionally. Before
+// this fix such a node leaked as a StatusFailed pseudo-root forever.
+// Proves it is instead collected by Reap, via the same pendingForget
+// mechanism ForgetRoot uses.
+func TestReloadedChildWithUntrackedParentIsEventuallyReapable(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	childProv := &signaledBlockingProvider{name: "childprov", started: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() { close(childProv.release) })
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("childprov"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	<-childProv.started
+
+	// Fresh process, but this time the ROOT is NEVER re-adopted — the
+	// child's own TaskParentID names an id mgr2 has never seen, exactly
+	// the "true depth is unrecoverable" case adoptReloadedLocked's own
+	// doc comment describes.
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	reloadedChild, err := LoadSession(Config{Providers: reg, SessionDir: dir}, childID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if err := mgr2.AdoptReloaded(reloadedChild); err != nil {
+		t.Fatalf("AdoptReloaded: %v", err)
+	}
+
+	info, ok := mgr2.Info(childID)
+	if !ok {
+		t.Fatal("child not tracked after AdoptReloaded")
+	}
+	if info.Status != StatusFailed {
+		t.Fatalf("status = %q, want %q", info.Status, StatusFailed)
+	}
+	if info.ParentID != "" {
+		t.Fatalf("test setup: expected parentID \"\" (untracked-parent case), got %q", info.ParentID)
+	}
+
+	if n := mgr2.Reap(); n != 1 {
+		t.Errorf("Reap() = %d, want 1 (the untracked-parent interrupted child must be collected, not leak as a pseudo-root)", n)
+	}
+	if _, ok := mgr2.Info(childID); ok {
+		t.Error("untracked-parent interrupted child still tracked after Reap")
+	}
+}

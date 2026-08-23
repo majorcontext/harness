@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -296,6 +297,38 @@ type sessionNode struct {
 	// n.session.Usage()-budgetedUsage each time, then updates this to
 	// match.
 	budgetedUsage provider.Usage
+
+	// pendingForget marks a "root-shaped" node (parentID == "") that is
+	// NOT actually a protected root in the sense Reap's own doc comment
+	// means — "the tree's own address" a caller may still want to
+	// reload. It is set in exactly two places, both live review
+	// findings on the first version of ForgetRoot/recoverInterrupted-
+	// TurnLocked:
+	//
+	//  1. ForgetRoot, when called on a genuine root that still has live
+	//     children: Cancel (already run by the caller — see
+	//     endSubagentLineage, server/handlers.go) leaves those children
+	//     in m.nodes, canceled, until Reap's own bottom-up sweep
+	//     collects them one generation at a time; ForgetRoot itself
+	//     correctly refuses to remove their parent's address out from
+	//     under that still-in-flight cleanup. Without this flag, NOTHING
+	//     ever revisits this root once it finally goes childless — Reap
+	//     unconditionally skips every parentID == "" node — leaking it
+	//     for the rest of the process's life despite the caller having
+	//     explicitly asked to forget it.
+	//  2. recoverInterruptedTurnLocked, for an interrupted child whose
+	//     OWN parent could not be found tracked (adoptReloadedLocked's
+	//     "true depth is unrecoverable" case — attachTo == ""): this
+	//     node ends up parentID == "" purely as a bookkeeping side
+	//     effect, not because it is a real root anyone might reload by
+	//     id, and there is provably no live ancestor left to ever
+	//     deliver its notification to (nearestLiveAncestorLocked already
+	//     returned nil). Leaving it un-reapable would leak a Failed
+	//     pseudo-root forever.
+	//
+	// Reap's own eligibility check treats pendingForget as the ONE
+	// exception to "a root is never reaped" — see its doc comment.
+	pendingForget bool
 }
 
 // SessionNode is a read-only snapshot of one managed session's lifecycle
@@ -538,9 +571,90 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	n.status = StatusFailed
 	n.finalized = true
 	n.failReason = "lost to restart: turn was in flight when the process last stopped"
-	notify := taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: n.failReason, Usage: s.Usage()}
+
+	// Close the dangling turn in HISTORY too, not just in this node's own
+	// bookkeeping — two live review findings on the first version of this
+	// method:
+	//
+	//  1. Idempotency: hasUnansweredTurn() reads s's PERSISTED history,
+	//     which this method never used to touch — the trailing user
+	//     message stayed unanswered forever, so EVERY later re-adoption
+	//     of this same id (Reap removes a StatusFailed leaf just like any
+	//     other terminal one, and a legitimate follow-up touching this id
+	//     again re-triggers adoptReloadedLocked) found
+	//     hasUnansweredTurn() STILL true and re-ran this whole method,
+	//     re-enqueueing a SECOND, duplicate "lost to restart"
+	//     notification — and a second recTaskNotifyQueued record — for
+	//     the exact same child. Appending this synthetic, clearly-labeled
+	//     closing message makes hasUnansweredTurn() false from here on,
+	//     so a second call returns at the guard above instead.
+	//  2. Honesty: the transcript itself should show SOMETHING closing
+	//     the turn a reader (or the parent's own model, via the
+	//     notification text) can make sense of, not a conversation that
+	//     silently stops after the last user message with no visible
+	//     explanation.
+	//
+	// Role: RoleAssistant, not RoleTool — this is a genuine INTERRUPTED
+	// MODEL TURN (no tool call to pair a synthetic RoleTool result with,
+	// unlike interruptedToolResults' narrower case), so an assistant-role
+	// message is what actually closes a turn in this transcript's own
+	// vocabulary; the text itself is unambiguous synthetic-marker
+	// language, never presented as if the model actually said it.
+	s.append(message.Message{
+		ID:        newID("msg"),
+		Role:      message.RoleAssistant,
+		Parts:     message.Parts{&message.Text{Text: lostToRestartText}},
+		CreatedAt: time.Now().UTC(),
+	})
+
+	// Fold this child's spend into its root's tree-wide budget total —
+	// see finalizeTurn's own identical delta-accounting block (and
+	// budgetedUsage's own doc comment for why a delta, not the full
+	// cumulative total, is required) for the full reasoning; duplicated
+	// here rather than shared because the two call sites' surrounding
+	// control flow differs enough (this one returns early above on the
+	// common "nothing to recover" case) that factoring out a shared
+	// helper would cost more clarity than it saves for four lines. A
+	// live review finding: an interrupted child's spend used to escape
+	// the tree budget entirely, since only finalizeTurn (never this
+	// method) touched usageByRoot — a child that spent real tokens
+	// before crashing was fully reconstructed here with no accounting
+	// for it, letting a later Spawn silently exceed SetMaxTreeTokens.
+	total := s.Usage()
+	delta := provider.Usage{
+		InputTokens:      total.InputTokens - n.budgetedUsage.InputTokens,
+		OutputTokens:     total.OutputTokens - n.budgetedUsage.OutputTokens,
+		CacheReadTokens:  total.CacheReadTokens - n.budgetedUsage.CacheReadTokens,
+		CacheWriteTokens: total.CacheWriteTokens - n.budgetedUsage.CacheWriteTokens,
+	}
+	n.budgetedUsage = total
+	u := m.usageByRoot[n.rootID]
+	u.InputTokens += delta.InputTokens
+	u.OutputTokens += delta.OutputTokens
+	u.CacheReadTokens += delta.CacheReadTokens
+	u.CacheWriteTokens += delta.CacheWriteTokens
+	m.usageByRoot[n.rootID] = u
+
+	notify := taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: n.failReason, Usage: delta}
 	target := m.nearestLiveAncestorLocked(n)
 	if target == nil {
+		// No live ancestor to deliver to — either every ancestor up to
+		// the root is already terminal (the whole tree is being torn
+		// down), or n.parentID == "" because adoptReloadedLocked could
+		// not find ITS OWN parent tracked (the "true depth is
+		// unrecoverable" case its own doc comment describes) — n now
+		// LOOKS like a root at the tree-bookkeeping level, even though
+		// it durably remembers a real TaskParentID. A live review noted
+		// this second case is a genuine, accepted degraded outcome for
+		// an already-degraded situation (a broken lineage chain AND an
+		// interrupted turn): no ancestor is ever told this child died —
+		// there IS no reachable ancestor to tell — but n itself does not
+		// leak: see Reap's own pendingForget handling, which this method
+		// also arms here so a "root-shaped" node with no real subtree
+		// beneath it (already true: n is a leaf, just adopted) is
+		// collected on the very next Reap() call instead of sitting
+		// forever in m.nodes looking like a protected root.
+		n.pendingForget = true
 		return
 	}
 	target.session.enqueueTaskNotification(notify)
@@ -548,6 +662,13 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 		go m.fireIdleResumeAsync(target.id)
 	}
 }
+
+// lostToRestartText is the synthetic, clearly-labeled assistant-role
+// message recoverInterruptedTurnLocked appends to close a dangling turn
+// in HISTORY — see that method's own doc comment for why this exists at
+// all (idempotency: hasUnansweredTurn() must become false after recovery
+// runs once, or a later re-adoption re-triggers a duplicate delivery).
+const lostToRestartText = "[harness: this turn was interrupted by a process restart and could not complete]"
 
 // fireIdleResumeAsync independently re-acquires m.mu and fires a resume
 // turn for targetID if it is STILL idle by the time this runs — called
@@ -851,7 +972,21 @@ func (m *SessionManager) Reap() int {
 	// generation per call, matching this method's documented contract.
 	var eligible []string
 	for id, n := range m.nodes {
-		if n.parentID == "" || len(n.children) != 0 {
+		if len(n.children) != 0 {
+			continue
+		}
+		// A "root-shaped" node (parentID == "") is normally NEVER
+		// reaped — see this method's own doc comment ("a root is never
+		// removed, since it is the tree's own address") — with exactly
+		// one exception: pendingForget, armed by ForgetRoot (a caller
+		// explicitly asked to forget this root, refused only because it
+		// still had live children at the time) or by
+		// recoverInterruptedTurnLocked (an interrupted child whose own
+		// parent could not be found tracked, provably with no live
+		// ancestor left to ever deliver to) — see pendingForget's own
+		// doc comment for both cases in full. A live review finding:
+		// without this exception, either case leaked the node forever.
+		if n.parentID == "" && !n.pendingForget {
 			continue
 		}
 		// !n.finalized excludes a StatusCanceled leaf whose own
@@ -897,6 +1032,16 @@ func (m *SessionManager) Reap() int {
 			}
 			p.children = kept
 		}
+		if n.parentID == "" {
+			// A pendingForget root-shaped node collected above — mirror
+			// ForgetRoot's own identical cleanup (see its doc comment):
+			// usageByRoot/runningByRoot are keyed by root id and written
+			// to by every turn anywhere in the tree, so deleting only
+			// m.nodes would leave one stale entry in each behind per
+			// collected root, forever.
+			delete(m.usageByRoot, id)
+			delete(m.runningByRoot, id)
+		}
 	}
 	return len(eligible)
 }
@@ -937,14 +1082,47 @@ func (m *SessionManager) ForgetRoot(id string) error {
 	if n.parentID != "" {
 		return fmt.Errorf("engine: %s is not a root", id)
 	}
-	if len(n.children) != 0 {
-		return fmt.Errorf("engine: root %s still has live children", id)
-	}
 	if n.status == StatusRunning {
 		return fmt.Errorf("engine: root %s is busy", id)
 	}
+	if len(n.children) != 0 {
+		// Arm pendingForget so Reap's own bottom-up sweep — which will
+		// eventually collect these still-live (but presumably already
+		// canceled, per endSubagentLineage's own cascade-then-forget
+		// ordering) children one generation at a time — also collects
+		// THIS root, once it finally goes childless, instead of leaking
+		// it forever the moment this call returns. A live review finding:
+		// without this, nothing ever revisited a root ForgetRoot refused
+		// for exactly this reason.
+		//
+		// Also make n itself terminal + finalized HERE, rather than
+		// depending on the caller having ALSO called Cancel first —
+		// endSubagentLineage (this method's only current caller) always
+		// does, but ForgetRoot's own contract should not silently
+		// depend on that: a future direct caller that skips Cancel would
+		// otherwise leave n StatusIdle/finalized=false forever, and
+		// Reap's eligibility switch only ever matches a terminal status
+		// with finalized=true. Confirmed not running just above, so
+		// mirroring cancelOneNodeLocked's identical "nothing left to
+		// settle" reasoning is safe here.
+		if n.status != StatusDone && n.status != StatusFailed && n.status != StatusCanceled {
+			n.status = StatusCanceled
+		}
+		n.finalized = true
+		n.pendingForget = true
+		return fmt.Errorf("engine: root %s still has live children", id)
+	}
 	n.cancel() // see Reap's identical call for why this is required, not optional
 	delete(m.nodes, id)
+	// A live review finding: usageByRoot/runningByRoot are keyed by root
+	// id and written to by every turn anywhere in this root's tree (see
+	// their own doc comments) — deleting only m.nodes left one stale
+	// entry in each behind per forgotten root, forever, on a long-lived
+	// process that creates and deletes many roots. Reap's own removal
+	// loop does the identical cleanup for a pendingForget root it
+	// collects instead of this direct path.
+	delete(m.usageByRoot, id)
+	delete(m.runningByRoot, id)
 	return nil
 }
 
