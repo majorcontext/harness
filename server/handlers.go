@@ -106,9 +106,16 @@ type sessionJSON struct {
 	// (docs/plans/2026-08-23-subagent-sessions-design.md): present
 	// whenever this server's SessionManager tracks the session (every
 	// session created or loaded by this process — see handleCreate and
-	// s.opts.LoadSession call sites), nil otherwise (an embedder that opts
-	// out, or — defensively — a session this process has never touched at
-	// all). Deliberately a SEPARATE object from ParentSession above: that
+	// s.opts.LoadSession call sites), OR — for a child session this
+	// process has NOT (yet, or ever again) adopted, e.g. after a Reap or a
+	// process restart — a durable fallback built directly from the
+	// child's own on-disk Config.TaskParentID/TaskAgentType (see
+	// lineageJSONFor's cold-fallback branch), missing only the fields
+	// with no durable source (Depth, Status, Children, Result,
+	// FailReason — see lineageJSON's own field comments). nil only for a
+	// genuine root or a session with no lineage at all (an embedder that
+	// opts out, or a session predating this feature). Deliberately a
+	// SEPARATE object from ParentSession above: that
 	// field is an opaque, unvalidated cross-box provenance pointer with no
 	// structural meaning; Lineage.ParentID names a LIVE session in this
 	// process's tree, with enforced depth/concurrency, cascade
@@ -121,14 +128,27 @@ type sessionJSON struct {
 // engine.SessionManager.Info — see sessionJSON.Lineage's doc comment.
 type lineageJSON struct {
 	ParentID string `json:"parent_id,omitempty"`
-	Depth    int    `json:"depth"`
+	// Depth is omitempty: a WARM root's real depth 0 and a COLD session's
+	// genuinely UNKNOWN depth (see lineageJSONFor's cold-fallback branch)
+	// would otherwise be indistinguishable on the wire — both print
+	// "depth":0. Since depth 0 only ever occurs for a root, and a root
+	// never has a durable TaskParentID to trigger the cold-fallback
+	// branch in the first place, omitting a zero depth costs nothing for
+	// the warm case (a warm root's depth was always knowably 0; a caller
+	// that cares can infer it from parent_id's absence) while letting the
+	// cold-fallback branch omit it truthfully instead of guessing.
+	Depth int `json:"depth,omitempty"`
 	// Status is the SessionManager lifecycle state (running/idle/done/
 	// failed/canceled — engine.SessionStatus) — DISTINCT from
 	// sessionJSON's own Status/State fields above, which predate
 	// SessionManager and describe only "is a turn streaming right now" for
 	// THIS process. A done/failed child keeps that status here even once
 	// this process is no longer resident-tracking it any other way.
-	Status    string   `json:"status"`
+	// omitempty for the same reason as Depth: the cold-fallback branch
+	// (lineageJSONFor) has no durable source for this SessionManager-only
+	// field and must omit it rather than guess, and "" is not a real
+	// engine.SessionStatus value, so omitting is unambiguous.
+	Status    string   `json:"status,omitempty"`
 	Children  []string `json:"children"`
 	AgentType string   `json:"agent_type,omitempty"`
 	// Result is the final assistant text for a done session; FailReason a
@@ -3013,6 +3033,17 @@ func (s *Server) workdirHolderLocked(id string, st *sessionState) string {
 // worktree out from under an in-flight tool call would corrupt whatever it
 // is mid-writing — abort it first); unknown (not resident, no log on disk)
 // is 404; ending a 'shared' or already-ended session is a plain 204.
+//
+// If id has live subagent-sessions children, they are cascade-canceled
+// (sessMgr.Cancel, the same cascade DELETE .../cancel_tree already uses)
+// before id itself is removed — a live review finding: this used to only
+// ever touch server residency (s.sessions), never sessMgr, so ending a
+// parent with a still-running child silently orphaned it: the child kept
+// running to completion with no one left to ever check out its result
+// (its parent's own row was already gone from s.sessions). Guarded on
+// having children at all, mirroring cancel_tree's own scope, so an
+// ordinary childless DELETE never recolors a session's SessionManager
+// status to "canceled" it wasn't already heading toward.
 func (s *Server) handleEnd(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
@@ -3026,6 +3057,7 @@ func (s *Server) handleEnd(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, "no such session")
 			return
 		}
+		s.cascadeCancelChildrenOf(id)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -3038,10 +3070,34 @@ func (s *Server) handleEnd(w http.ResponseWriter, r *http.Request) {
 	delete(s.sessions, id)
 	delete(s.lastRequest, id)
 	s.mu.Unlock()
+	// id itself is now confirmed idle (the running check above passed) —
+	// safe to cascade-cancel any live children without racing id's own
+	// in-flight turn.
+	s.cascadeCancelChildrenOf(id)
 	if wt != nil {
 		s.teardownWorktree(id, wt)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// cascadeCancelChildrenOf cascade-cancels id's live subagent-sessions
+// subtree (sessMgr.Cancel, the same cascade DELETE .../cancel_tree already
+// uses) — a live review finding on handleEnd: ending a session used to
+// only ever touch server residency (s.sessions), never sessMgr, so
+// deleting a parent (or a non-resident child) with a still-running child
+// of its own silently orphaned it — the orphaned child kept running to
+// completion with no one left to ever check out its result, since its own
+// parent's row was already gone. Guarded on having children at all,
+// mirroring cancel_tree's own scope, so an ordinary DELETE of a plain,
+// childless session never recolors its SessionManager status to
+// "canceled" it wasn't already heading toward. Callers must ensure id
+// itself is not concurrently mid-turn before calling this (handleEnd's
+// resident branch checks st.running first; its non-resident branch has no
+// server-tracked in-flight turn to race in the first place).
+func (s *Server) cascadeCancelChildrenOf(id string) {
+	if info, ok := s.sessMgr.Info(id); ok && len(info.Children) > 0 {
+		_ = s.sessMgr.Cancel(id) // only error is ErrUnknownSession, unreachable: id was just found tracked above
+	}
 }
 
 // teardownWorktree decides a 'worktree'-isolation session's fate at session
@@ -3091,36 +3147,66 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 		LastCompactedAt: sess.LastCompactedAt(),
 		Plugins:         sess.Plugins(),
 		Queued:          len(sess.QueuedPrompts()),
-		Lineage:         s.lineageJSONFor(id),
+		Lineage:         s.lineageJSONFor(id, sess),
 	}
 }
 
-// lineageJSONFor returns id's subagent-sessions lineage, or nil if this
-// server's SessionManager does not track id — see sessionJSON.Lineage's
-// doc comment. Reads sessMgr directly (its own lock, never s.mu — see
-// Server.sessMgr's doc comment), independent of whether sess itself came
-// from s.sessions or a fresh disk load: a child session's log lives in the
-// same SessionDir a plain LoadSession(id) already finds (Spawn's child
-// Config inherits its parent's SessionDir verbatim), so GET /session/{id}
-// already resolves a child with zero other changes — this only adds the
-// tree metadata on top.
-func (s *Server) lineageJSONFor(id string) *lineageJSON {
-	info, ok := s.sessMgr.Info(id)
-	if !ok {
+// lineageJSONFor returns id's subagent-sessions lineage. Reads sessMgr
+// directly (its own lock, never s.mu — see Server.sessMgr's doc comment),
+// independent of whether sess itself came from s.sessions or a fresh disk
+// load: a child session's log lives in the same SessionDir a plain
+// LoadSession(id) already finds (Spawn's child Config inherits its
+// parent's SessionDir verbatim), so GET /session/{id} already resolves a
+// child with zero other changes — this only adds the tree metadata on
+// top.
+//
+// Two sources, in order:
+//
+//  1. sessMgr.Info(id): this process currently tracks id in memory — the
+//     full, precise lineage snapshot (depth, live status, children,
+//     result/fail_reason).
+//
+//  2. A durable cold fallback, built directly from sess's own persisted
+//     Config.TaskParentID()/TaskAgentType() (engine/store.go restores
+//     these on every LoadSession, unconditionally — no SessionManager
+//     adoption needed) — a live review finding: without this, a child
+//     Reaped or never touched since a process restart reported NO
+//     lineage at all on GET /session/{id}, even though its lineage is
+//     fully durable on disk; a caller had no way to learn "this session
+//     has a parent" without first forcing a reload via an unrelated
+//     write (a prompt/send call). Depth, Status, Children, Result, and
+//     FailReason have no durable source (see adoptReloadedLocked's own
+//     doc comment on why depth specifically is unrecoverable without a
+//     live parent chain) and are omitted rather than guessed — see
+//     lineageJSON's own field comments for why that's safe on the wire
+//     (omitempty distinguishes "unknown" from every real zero value).
+//
+// nil only when NEITHER source has anything: a genuine root (empty
+// TaskParentID) or a session predating this feature.
+func (s *Server) lineageJSONFor(id string, sess *engine.Session) *lineageJSON {
+	if info, ok := s.sessMgr.Info(id); ok {
+		children := info.Children
+		if children == nil {
+			children = []string{}
+		}
+		return &lineageJSON{
+			ParentID:   info.ParentID,
+			Depth:      info.Depth,
+			Status:     string(info.Status),
+			Children:   children,
+			AgentType:  info.AgentType,
+			Result:     info.Result,
+			FailReason: info.FailReason,
+		}
+	}
+	parentID := sess.TaskParentID()
+	if parentID == "" {
 		return nil
 	}
-	children := info.Children
-	if children == nil {
-		children = []string{}
-	}
 	return &lineageJSON{
-		ParentID:   info.ParentID,
-		Depth:      info.Depth,
-		Status:     string(info.Status),
-		Children:   children,
-		AgentType:  info.AgentType,
-		Result:     info.Result,
-		FailReason: info.FailReason,
+		ParentID:  parentID,
+		AgentType: sess.TaskAgentType(),
+		Children:  []string{},
 	}
 }
 

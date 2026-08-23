@@ -23,7 +23,20 @@ import (
 // /session directly rather than the SSE journal.
 func multiProviderHarness(t *testing.T, model message.ModelRef, mutate func(*Options), providers ...provider.Provider) *harness {
 	t.Helper()
-	dir := t.TempDir()
+	return multiProviderHarnessInDir(t, t.TempDir(), model, mutate, providers...)
+}
+
+// multiProviderHarnessInDir is multiProviderHarness with an explicit,
+// caller-supplied SessionDir instead of a fresh t.TempDir() per call — so
+// two independent harnesses (two independent *Server, each its own fresh
+// engine.SessionManager) can share the SAME on-disk session storage,
+// simulating a real process restart at the test level: the second
+// harness's SessionManager starts with an EMPTY m.nodes, exactly like a
+// freshly started `harness serve` process would, while the first
+// harness's on-disk state (including anything Persist wrote) is still
+// there for it to cold-load.
+func multiProviderHarnessInDir(t *testing.T, dir string, model message.ModelRef, mutate func(*Options), providers ...provider.Provider) *harness {
+	t.Helper()
 	reg := make(provider.Registry, len(providers))
 	for _, p := range providers {
 		reg[p.Name()] = p
@@ -174,6 +187,79 @@ func TestSessionCreateWithParentIDUnknownAgentIs400(t *testing.T) {
 	})
 	if resp.StatusCode != 400 {
 		t.Fatalf("unknown agent status = %d, want 400: %s", resp.StatusCode, data)
+	}
+}
+
+// TestColdChildHasDurableLineage is the regression test for a follow-up
+// finding: GET /session/{id}'s lineage block used to require this
+// process's SessionManager to have the session adopted in memory
+// (sessMgr.Info succeeding) — a child Reaped, or simply never touched
+// since a fresh process started (simulated here via a SECOND, independent
+// harness sharing the first's on-disk session storage — see
+// multiProviderHarnessInDir), reported NO lineage at all, even though its
+// parent id and agent type are fully durable on disk (Config.
+// TaskParentID/TaskAgentType, restored by LoadSession unconditionally).
+// Proves the cold-fallback branch in lineageJSONFor surfaces parent_id
+// and agent_type without requiring any write (a prompt/send call) to
+// force a reload first.
+func TestColdChildHasDurableLineage(t *testing.T) {
+	dir := t.TempDir()
+	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("the answer is 42")}}
+	h1 := multiProviderHarnessInDir(t, dir, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, childProv)
+
+	resp, data := h1.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h1.do("POST", "/session", map[string]string{
+		"parent_id": root.ID, "agent": engine.AgentExplore, "prompt": "find the answer", "model": "child/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+	var child struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &child)
+	waitForLineageStatus(t, h1, child.ID, "done", 2*time.Second)
+
+	// A SECOND, independent harness against the SAME dir: a fresh
+	// SessionManager that has never seen child.ID — the exact "cold"
+	// condition (Reap, or a real process restart) this fix targets.
+	// Deliberately never sends the child a prompt: that would trigger
+	// ReportTurnStart's own adopt-on-first-sight reload and mask the bug
+	// this test exists to catch.
+	h2 := multiProviderHarnessInDir(t, dir, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, childProv)
+	resp, data = h2.do("GET", "/session/"+child.ID, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("cold GET child status %d: %s", resp.StatusCode, data)
+	}
+	var cold struct {
+		Lineage map[string]any `json:"lineage"`
+	}
+	mustUnmarshal(t, data, &cold)
+	if cold.Lineage == nil {
+		t.Fatal("cold GET has no lineage at all — durable fallback did not fire")
+	}
+	if cold.Lineage["parent_id"] != root.ID {
+		t.Errorf("cold lineage.parent_id = %v, want %q", cold.Lineage["parent_id"], root.ID)
+	}
+	if cold.Lineage["agent_type"] != engine.AgentExplore {
+		t.Errorf("cold lineage.agent_type = %v, want %q", cold.Lineage["agent_type"], engine.AgentExplore)
+	}
+	// Fields with no durable source must be OMITTED, not guessed.
+	if _, ok := cold.Lineage["status"]; ok {
+		t.Errorf("cold lineage.status = %v, want omitted (no durable source)", cold.Lineage["status"])
+	}
+	if _, ok := cold.Lineage["depth"]; ok {
+		t.Errorf("cold lineage.depth = %v, want omitted (no durable source)", cold.Lineage["depth"])
 	}
 }
 
@@ -910,6 +996,53 @@ func TestCancelTreeCascadesToChild(t *testing.T) {
 
 	waitForLineageStatus(t, h, child.ID, "canceled", 2*time.Second)
 	waitForLineageStatus(t, h, root.ID, "canceled", 2*time.Second)
+}
+
+// TestSessionEndCascadesToChild is the regression test for a follow-up
+// finding: plain DELETE /session/{id} (handleEnd) used to only ever touch
+// server residency (s.sessions), never sessMgr, so ending a parent with a
+// still-running child silently orphaned it — the child kept running to
+// completion with no one left to ever check out its result, since its
+// parent's own row was already gone. Mirrors TestCancelTreeCascadesToChild
+// exactly, but drives plain DELETE (not /cancel_tree) — proves handleEnd
+// itself now cascade-cancels live children.
+func TestSessionEndCascadesToChild(t *testing.T) {
+	blocker := newBlockingProvider("blocker")
+	t.Cleanup(blocker.releaseAll)
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, blocker)
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": root.ID,
+		"agent":     engine.AgentGeneralPurpose,
+		"prompt":    "go",
+		"model":     "blocker/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+	var child struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &child)
+
+	waitForLineageStatus(t, h, child.ID, "running", 2*time.Second)
+
+	resp, data = h.do("DELETE", "/session/"+root.ID, nil)
+	if resp.StatusCode != 204 {
+		t.Fatalf("end status %d: %s", resp.StatusCode, data)
+	}
+
+	waitForLineageStatus(t, h, child.ID, "canceled", 2*time.Second)
 }
 
 // TestSessionSendToBusyChildIs409NotLost is the regression test for a
