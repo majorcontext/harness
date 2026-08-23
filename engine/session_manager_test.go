@@ -725,6 +725,109 @@ func TestReloadedChildWithUnresolvableAgentDefFailsClosed(t *testing.T) {
 	}
 }
 
+// TestReloadedChildWithEmptyIntersectionRestrictionStaysEmpty is the
+// regression test for a live review finding on store.go's TaskToolNames
+// persistence: `omitempty` on that field collapsed BOTH "no restriction
+// recorded" (nil) AND a real, deliberate ZERO-tool restriction (a
+// non-nil, len-0 slice — reachable via Spawn's parent-effective-set
+// INTERSECTION whenever a restricted parent's tools and a child
+// definition's tools are disjoint) to the identical omitted-field wire
+// shape. On an ACTUAL reload through the store (not the in-memory
+// NewSession(child.cfg) shortcut most of this file's other reload tests
+// use — that shortcut never touches the JSON marshal/unmarshal this bug
+// lives in), restoreTaskToolRestrictionLocked saw the resulting nil
+// TaskToolNames and fell back to re-resolving TaskAgentType's
+// definition directly — re-granting that definition's OWN tools (here,
+// bash) with NO parent intersection at all: a write/exec tool escaping
+// a restriction the child's restricted parent could never have granted
+// in the first place.
+func TestReloadedChildWithEmptyIntersectionRestrictionStaysEmpty(t *testing.T) {
+	dir := t.TempDir()
+	agentsDir := filepath.Join(dir, ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A definition disjoint from the restricted parent's own tools below
+	// (read_file, task) — the shape that makes Spawn's intersection
+	// produce a non-nil, EMPTY slice rather than a merely-narrowed one.
+	defContent := "---\n" +
+		"name: bash-only\n" +
+		"description: A definition whose only tool the restricted parent never had\n" +
+		"tools: bash\n" +
+		"---\n" +
+		"A bash-only agent.\n"
+	if err := os.WriteFile(filepath.Join(agentsDir, "bash-only.md"), []byte(defContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rootProv := &scriptedProvider{name: "root"}
+	midProv := &scriptedProvider{name: "mid", turns: doneTurn("mid done")}
+	childProv := &scriptedProvider{name: "child", turns: doneTurn("child done")}
+	cfg := Config{
+		Providers:  provider.Registry{rootProv.Name(): rootProv, midProv.Name(): midProv, childProv.Name(): childProv},
+		Model:      modelFor("root"),
+		WorkDir:    dir,
+		SessionDir: dir,
+	}
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(cfg)
+
+	// A restricted, non-leaf parent: read_file and task only — the exact
+	// shape the review named.
+	midID, err := mgr.Spawn(SpawnOptions{
+		ParentID: root.ID, Prompt: "go", Model: modelFor("mid"),
+		AgentType: "custom-read-and-spawn",
+		ToolNames: []string{"read_file", taskToolName},
+	})
+	if err != nil {
+		t.Fatalf("Spawn mid: %v", err)
+	}
+	waitForStatus(t, mgr, midID, StatusDone, time.Second)
+
+	// A child spawned FROM mid, naming the disjoint bash-only definition
+	// — the intersection of mid's {read_file, task} with bash-only's
+	// {bash} is empty, so the child ends up with ZERO tools, and
+	// child.cfg.TaskToolNames is a non-nil, empty slice (session_manager.go's
+	// Spawn: `narrowed := make([]string, 0, ...)`, never touched again
+	// when nothing matches).
+	childID, err := mgr.Spawn(SpawnOptions{
+		ParentID: midID, Prompt: "go", Model: modelFor("child"),
+		AgentType: "bash-only", ToolNames: []string{"bash"},
+	})
+	if err != nil {
+		t.Fatalf("Spawn child: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	child, ok := mgr.Session(childID)
+	if !ok {
+		t.Fatal("child not found before reap")
+	}
+	if len(child.tools) != 0 {
+		t.Fatalf("test setup: child has tools before reap, want none from the disjoint intersection: %v", toolNames(child))
+	}
+
+	if n := mgr.Reap(); n != 1 {
+		t.Fatalf("Reap() = %d, want 1", n)
+	}
+	if _, ok := mgr.Session(childID); ok {
+		t.Fatal("child still tracked after Reap — test setup invalid")
+	}
+
+	// A REAL reload through the store — LoadSession, not the in-memory
+	// NewSession(child.cfg) shortcut other reload tests in this file use
+	// — this is the ONLY way to exercise the JSON marshal/unmarshal round
+	// trip the omitempty bug lived in.
+	reloaded, err := LoadSession(cfg, childID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	mgr.ReportTurnStart(reloaded)
+
+	if got := toolNames(reloaded); len(got) != 0 {
+		t.Errorf("reloaded child has tools = %v, want none — its restricted parent never had bash to grant, and the child's own persisted restriction was zero tools", got)
+	}
+}
+
 // TestReapThenReloadRestoresTrueDepthNotAFreshRoot is the regression test
 // for a live-reproduced depth-limit bypass: a child reaped as a terminal,
 // childless leaf (the shape a child hits the instant its first turn
