@@ -327,7 +327,7 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 
 	childCfg := parent.session.cfg
 	childCfg.ParentSession = parent.id
-	if opts.Model != (message.ModelRef{}) {
+	if !opts.Model.IsZero() {
 		childCfg.Model = opts.Model
 	}
 	if opts.SystemAppend != "" {
