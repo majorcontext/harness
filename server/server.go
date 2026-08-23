@@ -119,6 +119,15 @@ type Options struct {
 	// config (goal_evaluator_model). When zero, goal requests are rejected with
 	// 400 (there is no default evaluator).
 	GoalEvaluator message.ModelRef
+	// MaxTaskDepth and MaxConcurrentTasks configure this server's
+	// engine.SessionManager (subagent sessions: the `task` tool and
+	// session.create's parent_id form — see handleSpawnChild,
+	// handleSessionSend, and the design doc's HARNESS_MAX_TASK_DEPTH /
+	// HARNESS_MAX_CONCURRENT_TASKS config keys, resolved by the caller,
+	// same pattern as GoalEvaluator above). Zero or less uses
+	// engine.DefaultMaxTaskDepth / engine.DefaultMaxConcurrentTasks.
+	MaxTaskDepth       int
+	MaxConcurrentTasks int
 	// CORSOrigin, when non-empty, enables browser CORS support. Its literal
 	// value is echoed in the Access-Control-Allow-Origin header on every
 	// response (including 401s, so a browser can read the error), and "*" is
@@ -413,6 +422,22 @@ type Server struct {
 	// a fixed, predictable path to scan at serve start) or lazily by
 	// worktreeBaseDir under mu.
 	worktreeBase string
+
+	// sessMgr is this process's engine.SessionManager — subagent sessions
+	// (the `task` tool and session.create's parent_id form; see
+	// handleSpawnChild, handleSessionSend). Built once in New from
+	// Options.MaxTaskDepth/MaxConcurrentTasks, never nil (unlike most
+	// optional integrations elsewhere in this package): a session tree with
+	// zero children costs nothing beyond one empty map, so there is no
+	// "disabled" state to gate on. Every root session this server creates
+	// or loads is adopted into it (see handleCreate and s.opts.LoadSession
+	// call sites) so `task` is available on every session by default.
+	//
+	// sessMgr has its OWN mutex, entirely separate from s.mu — no code path
+	// in this package acquires both, so the mu-is-a-leaf-vs-session.mu
+	// lock-ordering invariant documented on s.mu above is unaffected: this
+	// is a third, independent lock, not a fourth level in that hierarchy.
+	sessMgr *engine.SessionManager
 }
 
 // goalTracker is the per-session goal summary surfaced in Session JSON.
@@ -611,6 +636,7 @@ func New(opts Options) (*Server, error) {
 		lastTurn:       make(map[string]*turnOutcome),
 		waiters:        make(map[*waiter]struct{}),
 		closing:        make(chan struct{}),
+		sessMgr:        engine.NewSessionManager(context.Background(), opts.MaxTaskDepth, opts.MaxConcurrentTasks),
 	}
 	if err := s.reconcile(); err != nil {
 		return nil, err
@@ -632,6 +658,17 @@ func New(opts Options) (*Server, error) {
 	}
 	s.routes()
 	return s, nil
+}
+
+// SessionManager returns this server's engine.SessionManager (subagent
+// sessions — the `task` tool, session.create's parent_id form, and
+// session.send/session.info's lineage extension). Exported so cmd/harness
+// can wire Config.SessionManager into every session it builds directly
+// (see serveCmd's mkCfg), rather than relying solely on handleCreate's own
+// AdoptRoot call — see that field's doc comment on Server for why both
+// exist. Never nil.
+func (s *Server) SessionManager() *engine.SessionManager {
+	return s.sessMgr
 }
 
 // worktreeBaseDir returns the directory 'worktree'-isolation sessions create
@@ -679,6 +716,12 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /session/{id}/model", s.auth(s.handleSetModel))
 	mux.HandleFunc("POST /session/{id}/thinking", s.auth(s.handleSetThinking))
 	mux.HandleFunc("POST /session/{id}/abort", s.auth(s.handleAbort))
+	// session.send (design doc, Stage 4): deliver a message to ANY session
+	// this server's SessionManager tracks, root or child — see
+	// handleSessionSend's doc comment for why this is a new route rather
+	// than an extension of prompt_async above.
+	mux.HandleFunc("POST /session/{id}/send", s.auth(s.handleSessionSend))
+	mux.HandleFunc("DELETE /session/{id}/cancel_tree", s.auth(s.handleCancelTree))
 	mux.HandleFunc("GET /event", s.auth(s.handleEvent))
 	mux.HandleFunc("GET /process", s.auth(s.handleProcessList))
 	mux.HandleFunc("POST /process/{name}/start", s.auth(s.handleProcessStart))

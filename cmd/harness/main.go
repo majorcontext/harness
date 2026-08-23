@@ -240,6 +240,24 @@ func runFlags(opts *runOptions) *flag.FlagSet {
 // -no-save (yields "", persistence disabled) > $HARNESS_SESSION_DIR >
 // configDir (config session_dir) > $HOME/.harness/sessions. Nothing is
 // created here; the engine creates the directory lazily on first write.
+// envInt reads a positive integer from the named environment variable,
+// returning 0 (the caller's "use the default" sentinel — see
+// server.Options.MaxTaskDepth/MaxConcurrentTasks) when the variable is
+// unset, empty, non-numeric, or non-positive. Never errors: a malformed
+// value falls back to the default rather than failing serve startup over
+// a tuning knob.
+func envInt(name string) int {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
 func sessionDir(noSave bool, configDir string) (string, error) {
 	if noSave {
 		return "", nil
@@ -510,6 +528,14 @@ func runCmd(args []string) error {
 	var sess *engine.Session
 	lateAPI.Bind(newLazyRunClientAPI(func() *engine.Session { return sess }))
 
+	// sessMgr enables the `task` tool for `harness run` too, not only
+	// `harness serve` — docs/plans/2026-08-23-subagent-sessions-design.md.
+	// A single-shot run's tree lives and dies with this one process; unlike
+	// serveCmd there is no separate wire surface to register children
+	// against, so AdoptRoot below (right after resolveSession) is the only
+	// registration point this mode needs.
+	sessMgr := engine.NewSessionManager(ctx, envInt("HARNESS_MAX_TASK_DEPTH"), envInt("HARNESS_MAX_CONCURRENT_TASKS"))
+
 	s, err := resolveSession(engine.Config{
 		Providers:           registry(cfg),
 		Model:               model,
@@ -548,13 +574,19 @@ func runCmd(args []string) error {
 		// ModelTool is on by default (config `model_tool`, default true); the
 		// alias map lets a tool-driven `set` resolve an alias like the CLI's
 		// own ResolveModel does.
-		ModelTool:    cfg.ModelToolEnabled(),
-		ModelAliases: cfg.Aliases,
+		ModelTool:      cfg.ModelToolEnabled(),
+		ModelAliases:   cfg.Aliases,
+		SessionManager: sessMgr,
 	}, opts.resume, opts.cont, modelSet)
 	if err != nil {
 		return err
 	}
 	sess = s
+	// Register s as sessMgr's root — see sessMgr's own doc comment above.
+	// Errors only on an ID collision (unreachable: s.ID is either freshly
+	// minted or restored from a log neither Options field above already
+	// registered elsewhere in THIS process), safe to ignore.
+	_ = sessMgr.AdoptRoot(s)
 
 	goalNotAchieved := false
 	if opts.goal != "" {
@@ -1092,6 +1124,18 @@ func serveCmd(args []string) error {
 			EngineVersion:       version,
 			StartedAt:           startedAt,
 			OnEvent:             func(ev engine.Event) { srv.Publish(ev) },
+			// SessionManager enables the `task` tool on every served session
+			// (docs/plans/2026-08-23-subagent-sessions-design.md) — the
+			// actual node registration (depth, lineage) happens separately,
+			// in handleCreate, right after NewSession returns (see
+			// AdoptRoot's call site there); wiring it here too means a
+			// session this process merely RELOADS (handleList's cold path,
+			// s.opts.LoadSession) still gets the tool installed, even on a
+			// process restart, though only a session this process itself
+			// created via handleCreate is a registered SessionManager node
+			// (see handleSessionSend's doc comment for the residency/reload
+			// edge this does not yet fully close).
+			SessionManager:      srv.SessionManager(),
 			OnStorePhase:        storePhase,
 			OnStorePhaseStart:   watchdog.startStorePhase,
 			Instructions:        instructionsConfig(cfg, noInstructions),
@@ -1139,6 +1183,17 @@ func serveCmd(args []string) error {
 		GoalEvaluator: goalEval,
 		MCP:           mcpRegistry(mcpMgr),
 		Processes:     processRegistry(procMgr),
+		// MaxTaskDepth/MaxConcurrentTasks configure subagent sessions'
+		// depth and tree-wide concurrency limits (docs/plans/
+		// 2026-08-23-subagent-sessions-design.md) directly from the
+		// design doc's named env vars — read here rather than threaded
+		// through config.Config's file-based schema (out of scope for
+		// this stage; see the implementation PR description). Zero
+		// (unset or unparsable) leaves server.New's own defaults
+		// (engine.DefaultMaxTaskDepth/DefaultMaxConcurrentTasks) in
+		// effect.
+		MaxTaskDepth:       envInt("HARNESS_MAX_TASK_DEPTH"),
+		MaxConcurrentTasks: envInt("HARNESS_MAX_CONCURRENT_TASKS"),
 		// MonitorPage: every `harness serve` box offers its own same-origin
 		// monitor at GET /monitor — no CORS/-cors-origin dance, no
 		// separately hosted copy required (see AGENTS.md's "Session
