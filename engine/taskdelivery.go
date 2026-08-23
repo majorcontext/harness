@@ -69,6 +69,25 @@ func (s *Session) hasPendingTaskNotifications() bool {
 	return len(s.taskNotifications) > 0 || len(s.taskNotificationsInFlight) > 0
 }
 
+// drainAllTaskNotifications unconditionally empties BOTH the pending and
+// in-flight sets and returns everything that was in them, in original
+// order. Unlike checkoutTaskNotificationsSegment's checkout/commit/
+// requeue two-phase handoff (which exists so a notification survives a
+// RETRIED turn), this is for a session that is never going to run
+// another turn of its own at all — SessionManager.finalizeTurn calls it
+// on a CHILD that just went terminal (done/failed/canceled) itself, to
+// forward any notifications ITS OWN children (grandchildren) queued on
+// it, which would otherwise be stranded forever on a node that will
+// never check out its queue again — see finalizeTurn's doc comment.
+func (s *Session) drainAllTaskNotifications() []taskNotification {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	all := append(s.taskNotificationsInFlight, s.taskNotifications...) //nolint:gocritic // deliberately combining, not appending in place — both are cleared immediately below
+	s.taskNotifications = nil
+	s.taskNotificationsInFlight = nil
+	return all
+}
+
 // checkoutTaskNotificationsSegment renders every notification currently
 // pending OR already checked out for the CURRENT in-flight turn attempt,
 // as one ambient status segment in the same shape

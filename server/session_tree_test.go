@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -414,4 +415,97 @@ func TestCancelTreeAbortsRootInFlightTurn(t *testing.T) {
 	// context cancellation) — lineage settles canceled promptly, not only
 	// after rootBlocker is eventually released by this test's own cleanup.
 	waitForLineageStatus(t, h, root.ID, "canceled", 2*time.Second)
+}
+
+// gatedProvider blocks in Stream until proceed is closed (or ctx ends) —
+// unlike blockingProvider, it never signals "started" and is meant to be
+// released explicitly by the test, from a precise point in a scripted
+// sequence, not polled for.
+type gatedProvider struct {
+	name    string
+	proceed chan struct{}
+}
+
+func (p *gatedProvider) Name() string { return p.name }
+
+func (p *gatedProvider) Stream(ctx context.Context, _ *provider.Request) (provider.Stream, error) {
+	select {
+	case <-p.proceed:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return &scriptedStream{events: asstTurn("first turn done")}, nil
+}
+
+// TestSelfResumeDoesNotRaceRunSlotRelease is the server-level regression
+// test for the exact race a live review reproduced: a notification
+// arriving for a root during its own final model call (too late for that
+// turn's own checkout, engine.go's streamTurn) must trigger a self-resume
+// that actually runs, not strand the node at StatusRunning forever
+// because it raced runPrompt's own freeRunSlotAndEmitIdle.
+//
+// The race is reproduced with only real production code paths: the
+// root's OWN turn is held open on a gated provider; while it's blocked
+// (its own checkout has already run), a real child is spawned directly
+// via SessionManager.Spawn (the same primitive the `task` tool and
+// session.create use) and run to completion — enqueuing its notification
+// on the root through the ordinary finalizeTurn path. Only THEN is the
+// root's blocked turn released, so its notification genuinely arrived too
+// late for that turn's own request.
+func TestSelfResumeDoesNotRaceRunSlotRelease(t *testing.T) {
+	gated := &gatedProvider{name: "gated", proceed: make(chan struct{})}
+	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("child done")}}
+	h := multiProviderHarness(t, message.ModelRef{Provider: "gated", Model: "m1"}, nil, gated, childProv)
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "gated/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h.do("POST", "/session/"+root.ID+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "go"}},
+	})
+	if resp.StatusCode != 202 {
+		t.Fatalf("prompt_async status %d: %s", resp.StatusCode, data)
+	}
+	waitForLineageStatus(t, h, root.ID, "running", 2*time.Second)
+
+	childID, err := h.srv.SessionManager().Spawn(engine.SpawnOptions{
+		ParentID: root.ID,
+		Prompt:   "go",
+		Model:    message.ModelRef{Provider: "child", Model: "m1"},
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForLineageStatus(t, h, childID, "done", 2*time.Second)
+
+	// The root's own turn is STILL blocked here — its checkout already
+	// ran before the child even existed, so the notification just
+	// enqueued on it is unambiguously "too late for this turn's own
+	// request." Release it now.
+	close(gated.proceed)
+
+	// If the race is present, the node wedges at "running" forever
+	// (nothing ever calls ReportTurnEnd for the stranded resume attempt).
+	// If fixed, it cycles through the self-resume and settles idle.
+	waitForLineageStatus(t, h, root.ID, "idle", 2*time.Second)
+
+	resp, data = h.do("GET", "/session/"+root.ID+"/message", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("get messages status %d: %s", resp.StatusCode, data)
+	}
+	// The gated provider's scripted reply is the same canned text for
+	// every call, so it never echoes the child's result — the proof of
+	// delivery is the synthetic resume trigger message itself (the
+	// EngineContext part carrying the child's actual result is never
+	// persisted to history by design — see message.EngineContext's doc
+	// comment — so this is the durable signal a resume genuinely ran).
+	if !strings.Contains(string(data), "A background task you started has finished") {
+		t.Errorf("self-resume never ran (node likely wedged at running instead): %s", data)
+	}
 }

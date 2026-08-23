@@ -1128,6 +1128,34 @@ func serveCmd(args []string) error {
 	// the ordering hazard entirely: the manager exists before either mkCfg or
 	// server.New is even called.
 	sessMgr := engine.NewSessionManager(context.Background(), envInt("HARNESS_MAX_TASK_DEPTH"), envInt("HARNESS_MAX_CONCURRENT_TASKS"))
+	// Periodic reaping (engine.SessionManager.Reap) frees a terminal, leaf
+	// (childless) task-spawned session's *Session — message history
+	// included — once it has settled done/failed/canceled; a whole
+	// terminal subtree collapses bottom-up over repeated calls (see
+	// Reap's doc comment). Without this, a long-lived `harness serve`
+	// process fanning out many `task` children pins every one of them in
+	// memory forever, a live review flagged. A root session is NEVER
+	// reaped (it is the tree's own address, addressable indefinitely by
+	// design) — that half of the finding (a root also stays pinned once
+	// adopted, defeating MaxResident eviction for it specifically) is a
+	// deliberate, documented v1 scope cut: fully closing it needs
+	// SessionManager to support a detached/rehydratable node (no live
+	// *Session reference between an eviction and the next reload), which
+	// is a larger design change than this stage's reap-on-a-timer fix —
+	// see the implementation PR description.
+	const sessionReapInterval = 5 * time.Minute
+	reapTicker := time.NewTicker(sessionReapInterval)
+	go func() {
+		defer reapTicker.Stop()
+		for {
+			select {
+			case <-watchdogCtx.Done():
+				return
+			case <-reapTicker.C:
+				sessMgr.Reap()
+			}
+		}
+	}()
 	mkCfg := func(model message.ModelRef) engine.Config {
 		return engine.Config{
 			Providers:     reg,

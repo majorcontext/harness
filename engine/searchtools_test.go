@@ -140,6 +140,36 @@ func TestGrepToolSkipsBinaryFiles(t *testing.T) {
 	}
 }
 
+// TestGrepToolSkipsOversizedFiles proves grep never reads a file over
+// maxGrepFileBytes whole into memory (os.ReadFile has no cap of its own) —
+// a live review flagged this as an OOM risk (a default, no-path search
+// walking into an unexpectedly huge file). The oversized file is skipped
+// entirely (checked via os.Stat before any read); a small file alongside
+// it still matches normally.
+func TestGrepToolSkipsOversizedFiles(t *testing.T) {
+	dir := t.TempDir()
+	huge := make([]byte, maxGrepFileBytes+1)
+	for i := range huge {
+		huge[i] = 'x'
+	}
+	copy(huge, []byte("MATCH\n"))
+	if err := os.WriteFile(filepath.Join(dir, "huge.txt"), huge, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(dir, "small.txt"), "MATCH\n")
+
+	out, err := runTool(t, grepTool(), dir, `{"pattern":"MATCH"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "huge.txt") {
+		t.Errorf("grep read the oversized file: %q", out)
+	}
+	if !strings.Contains(out, "small.txt") {
+		t.Errorf("grep missed the small file: %q", out)
+	}
+}
+
 func TestGrepToolInvalidPattern(t *testing.T) {
 	dir := t.TempDir()
 	s := NewSession(Config{WorkDir: dir})
