@@ -170,10 +170,11 @@ func sortedAgentNames(defs map[string]AgentDef) []string {
 
 // classifyTaskToolError maps a SessionManager.Spawn error into the
 // model-visible tool error. Every SessionManager sentinel
-// (ErrDepthLimit, ErrConcurrencyLimit, ErrSessionCanceled,
-// ErrUnknownSession) is already a short, fixed, secret-free string — safe
-// to surface directly, unlike a raw provider error — so this only adds
-// the "task:" prefix every other error on this surface uses.
+// (ErrDepthLimit, ErrConcurrencyLimit, ErrBudgetExceeded,
+// ErrSessionCanceled, ErrUnknownSession) is already a short, fixed,
+// secret-free string — safe to surface directly, unlike a raw provider
+// error — so this only adds the "task:" prefix every other error on this
+// surface uses.
 //
 // The default case is reached only by restrictTools' "unknown tool %q"
 // error (Spawn's doc comment enumerates every error it can return, and
@@ -193,6 +194,8 @@ func classifyTaskToolError(err error) error {
 		return fmt.Errorf("task: %w", ErrDepthLimit)
 	case errors.Is(err, ErrConcurrencyLimit):
 		return fmt.Errorf("task: %w", ErrConcurrencyLimit)
+	case errors.Is(err, ErrBudgetExceeded):
+		return fmt.Errorf("task: %w", ErrBudgetExceeded)
 	case errors.Is(err, ErrSessionCanceled):
 		return fmt.Errorf("task: %w", ErrSessionCanceled)
 	case errors.Is(err, ErrUnknownSession):

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -164,6 +165,93 @@ func TestSessionCreateWithParentIDSpawnsChild(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("root lineage.children = %v, want to include %q", rootInfo.Lineage.Children, child.ID)
+	}
+}
+
+// TestSessionCreateWithParentIDFiresOnTaskEvent is the regression test
+// for a follow-up finding ("metrics"): handleSpawnChild now reports each
+// spawn outcome to Options.OnTaskEvent — "spawned" on success,
+// "depth_refused"/"concurrency_refused"/"budget_refused" mirroring the
+// matching engine sentinel. Proves both the success case and the
+// depth-refused case (the cheapest of the three limits to trigger in a
+// unit test — a depth-0 SessionManager).
+func TestSessionCreateWithParentIDFiresOnTaskEvent(t *testing.T) {
+	var mu sync.Mutex
+	var events []string
+	onTaskEvent := func(event, parentID, childID string) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, event)
+		if parentID == "" {
+			t.Error("OnTaskEvent called with empty parentID")
+		}
+		if event == "spawned" && childID == "" {
+			t.Error("OnTaskEvent(\"spawned\", ...) called with empty childID")
+		}
+	}
+	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("done")}}
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, func(o *Options) {
+		o.OnTaskEvent = onTaskEvent
+	}, &scriptedProvider{name: "root"}, childProv)
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": root.ID, "agent": engine.AgentExplore, "prompt": "go", "model": "child/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+
+	mu.Lock()
+	got := append([]string(nil), events...)
+	mu.Unlock()
+	if len(got) != 1 || got[0] != "spawned" {
+		t.Errorf("events = %v, want [spawned]", got)
+	}
+}
+
+// TestReportTaskEventClassifiesEachSentinel proves reportTaskEvent's
+// error-to-event-string mapping directly, covering the three refusal
+// cases TestSessionCreateWithParentIDFiresOnTaskEvent's HTTP round trip
+// above does not exercise (each requires a limit genuinely at capacity,
+// awkward to set up over HTTP — this is the same classification logic,
+// tested directly).
+func TestReportTaskEventClassifiesEachSentinel(t *testing.T) {
+	cases := []struct {
+		err  error
+		want string
+	}{
+		{nil, "spawned"},
+		{engine.ErrDepthLimit, "depth_refused"},
+		{engine.ErrConcurrencyLimit, "concurrency_refused"},
+		{engine.ErrBudgetExceeded, "budget_refused"},
+	}
+	for _, tc := range cases {
+		var got string
+		h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, func(o *Options) {
+			o.OnTaskEvent = func(event, parentID, childID string) { got = event }
+		}, &scriptedProvider{name: "root"})
+		h.srv.reportTaskEvent("ses_parent", "ses_child", tc.err)
+		if got != tc.want {
+			t.Errorf("reportTaskEvent(err=%v) event = %q, want %q", tc.err, got, tc.want)
+		}
+	}
+	// ErrUnknownSession and any other unclassified error: no event at all.
+	var called bool
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, func(o *Options) {
+		o.OnTaskEvent = func(event, parentID, childID string) { called = true }
+	}, &scriptedProvider{name: "root"})
+	h.srv.reportTaskEvent("ses_parent", "", engine.ErrUnknownSession)
+	if called {
+		t.Error("reportTaskEvent(ErrUnknownSession) fired OnTaskEvent, want no call")
 	}
 }
 
