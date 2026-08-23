@@ -119,15 +119,30 @@ type Options struct {
 	// config (goal_evaluator_model). When zero, goal requests are rejected with
 	// 400 (there is no default evaluator).
 	GoalEvaluator message.ModelRef
-	// MaxTaskDepth and MaxConcurrentTasks configure this server's
-	// engine.SessionManager (subagent sessions: the `task` tool and
-	// session.create's parent_id form — see handleSpawnChild,
+	// MaxTaskDepth and MaxConcurrentTasks configure the engine.SessionManager
+	// New builds when SessionManager (below) is nil — subagent sessions: the
+	// `task` tool and session.create's parent_id form (see handleSpawnChild,
 	// handleSessionSend, and the design doc's HARNESS_MAX_TASK_DEPTH /
-	// HARNESS_MAX_CONCURRENT_TASKS config keys, resolved by the caller,
-	// same pattern as GoalEvaluator above). Zero or less uses
-	// engine.DefaultMaxTaskDepth / engine.DefaultMaxConcurrentTasks.
+	// HARNESS_MAX_CONCURRENT_TASKS config keys, resolved by the caller, same
+	// pattern as GoalEvaluator above). Zero or less uses
+	// engine.DefaultMaxTaskDepth / engine.DefaultMaxConcurrentTasks. Ignored
+	// when SessionManager is non-nil.
 	MaxTaskDepth       int
 	MaxConcurrentTasks int
+	// SessionManager, when non-nil, is used as-is instead of New building
+	// its own from MaxTaskDepth/MaxConcurrentTasks above. A caller that
+	// also needs to reference the SAME manager from its OWN session-
+	// construction closures (Config.SessionManager — see cmd/harness's
+	// mkCfg) MUST supply it here rather than reading it back via
+	// Server.SessionManager() after New returns: New's own reconcile call
+	// (server.go) loads every resumable session — and therefore invokes
+	// those same closures — BEFORE New returns, so a closure that only
+	// has the *Server (assigned from New's own return value) to read the
+	// manager off would dereference a still-nil pointer on that first,
+	// synchronous load. Supplying it here sidesteps the ordering hazard
+	// entirely: the manager exists as a plain value before New (or even
+	// Options) is ever constructed.
+	SessionManager *engine.SessionManager
 	// CORSOrigin, when non-empty, enables browser CORS support. Its literal
 	// value is echoed in the Access-Control-Allow-Origin header on every
 	// response (including 401s, so a browser can read the error), and "*" is
@@ -624,6 +639,10 @@ func New(opts Options) (*Server, error) {
 	if opts.MaxResident <= 0 {
 		opts.MaxResident = 32
 	}
+	sessMgr := opts.SessionManager
+	if sessMgr == nil {
+		sessMgr = engine.NewSessionManager(context.Background(), opts.MaxTaskDepth, opts.MaxConcurrentTasks)
+	}
 	s := &Server{
 		opts:           opts,
 		subs:           make(map[*subscriber]struct{}),
@@ -636,7 +655,7 @@ func New(opts Options) (*Server, error) {
 		lastTurn:       make(map[string]*turnOutcome),
 		waiters:        make(map[*waiter]struct{}),
 		closing:        make(chan struct{}),
-		sessMgr:        engine.NewSessionManager(context.Background(), opts.MaxTaskDepth, opts.MaxConcurrentTasks),
+		sessMgr:        sessMgr,
 	}
 	if err := s.reconcile(); err != nil {
 		return nil, err
@@ -662,11 +681,17 @@ func New(opts Options) (*Server, error) {
 
 // SessionManager returns this server's engine.SessionManager (subagent
 // sessions — the `task` tool, session.create's parent_id form, and
-// session.send/session.info's lineage extension). Exported so cmd/harness
-// can wire Config.SessionManager into every session it builds directly
-// (see serveCmd's mkCfg), rather than relying solely on handleCreate's own
-// AdoptRoot call — see that field's doc comment on Server for why both
-// exist. Never nil.
+// session.send/session.info's lineage extension). Never nil.
+//
+// A caller that ALSO needs to reference this same manager from its own
+// session-construction closures (Config.SessionManager — see cmd/harness's
+// mkCfg) should NOT do so by calling this method after New returns:
+// New's own reconcile call runs those closures synchronously, before New
+// returns — see Options.SessionManager's doc comment, and supply the
+// manager there instead, built as a plain value before New is ever called.
+// This accessor exists for callers that only need to reach the manager
+// AFTER a *Server already exists (tests, and any other post-construction
+// integration).
 func (s *Server) SessionManager() *engine.SessionManager {
 	return s.sessMgr
 }

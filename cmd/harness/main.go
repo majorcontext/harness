@@ -1113,6 +1113,21 @@ func serveCmd(args []string) error {
 		createPhase.OnCreatePhase(sessionID, phase, elapsed)
 	}
 	var srv *server.Server
+	// sessMgr enables the `task` tool on every served session
+	// (docs/plans/2026-08-23-subagent-sessions-design.md). Built HERE, as a
+	// plain local value, rather than read back later via srv.SessionManager()
+	// — mkCfg's closures already reference srv itself before it's assigned
+	// (see OnEvent just below), which is safe ONLY because Publish is never
+	// invoked until an event actually fires, long after srv is assigned. A
+	// Config FIELD read (srv.SessionManager()) is not that: it evaluates
+	// immediately when mkCfg runs, and mkCfg runs synchronously during
+	// server.New's own reconcile() call — BEFORE server.New returns and
+	// therefore before srv is ever assigned — which panicked on a nil *Server
+	// in practice (a live e2e run against this exact code caught it). Passing
+	// sessMgr into both mkCfg and server.Options.SessionManager below sidesteps
+	// the ordering hazard entirely: the manager exists before either mkCfg or
+	// server.New is even called.
+	sessMgr := engine.NewSessionManager(context.Background(), envInt("HARNESS_MAX_TASK_DEPTH"), envInt("HARNESS_MAX_CONCURRENT_TASKS"))
 	mkCfg := func(model message.ModelRef) engine.Config {
 		return engine.Config{
 			Providers:           reg,
@@ -1124,18 +1139,16 @@ func serveCmd(args []string) error {
 			EngineVersion:       version,
 			StartedAt:           startedAt,
 			OnEvent:             func(ev engine.Event) { srv.Publish(ev) },
-			// SessionManager enables the `task` tool on every served session
-			// (docs/plans/2026-08-23-subagent-sessions-design.md) — the
-			// actual node registration (depth, lineage) happens separately,
-			// in handleCreate, right after NewSession returns (see
-			// AdoptRoot's call site there); wiring it here too means a
+			// The actual node registration (depth, lineage) happens
+			// separately, in handleCreate, right after NewSession returns
+			// (see AdoptRoot's call site there); wiring it here too means a
 			// session this process merely RELOADS (handleList's cold path,
 			// s.opts.LoadSession) still gets the tool installed, even on a
 			// process restart, though only a session this process itself
 			// created via handleCreate is a registered SessionManager node
 			// (see handleSessionSend's doc comment for the residency/reload
 			// edge this does not yet fully close).
-			SessionManager:      srv.SessionManager(),
+			SessionManager:      sessMgr,
 			OnStorePhase:        storePhase,
 			OnStorePhaseStart:   watchdog.startStorePhase,
 			Instructions:        instructionsConfig(cfg, noInstructions),
@@ -1183,17 +1196,15 @@ func serveCmd(args []string) error {
 		GoalEvaluator: goalEval,
 		MCP:           mcpRegistry(mcpMgr),
 		Processes:     processRegistry(procMgr),
-		// MaxTaskDepth/MaxConcurrentTasks configure subagent sessions'
-		// depth and tree-wide concurrency limits (docs/plans/
-		// 2026-08-23-subagent-sessions-design.md) directly from the
-		// design doc's named env vars — read here rather than threaded
-		// through config.Config's file-based schema (out of scope for
-		// this stage; see the implementation PR description). Zero
-		// (unset or unparsable) leaves server.New's own defaults
-		// (engine.DefaultMaxTaskDepth/DefaultMaxConcurrentTasks) in
-		// effect.
-		MaxTaskDepth:       envInt("HARNESS_MAX_TASK_DEPTH"),
-		MaxConcurrentTasks: envInt("HARNESS_MAX_CONCURRENT_TASKS"),
+		// SessionManager: the SAME manager mkCfg's closures already
+		// reference (see sessMgr's doc comment above) — supplying it here
+		// tells server.New to use it as-is rather than build a second,
+		// independent one from MaxTaskDepth/MaxConcurrentTasks (which would
+		// leave every served session's `task` tool talking to a DIFFERENT
+		// manager than the one this server's own wire handlers
+		// (handleSpawnChild, handleSessionSend, buildSession's lineage)
+		// consult).
+		SessionManager: sessMgr,
 		// MonitorPage: every `harness serve` box offers its own same-origin
 		// monitor at GET /monitor — no CORS/-cors-origin dance, no
 		// separately hosted copy required (see AGENTS.md's "Session
