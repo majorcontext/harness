@@ -328,15 +328,26 @@ func (m *SessionManager) ReportTurnStart(sess *Session) {
 // performs for a turn m drove itself, exported for a caller outside this
 // package. A no-op for an id m does not track.
 //
+// The call itself — not just firing the resume it returns — MUST be
+// deferred until after the caller has released its OWN run-slot claim on
+// id (the server's freeRunSlotAndEmitIdle). This finalization is what
+// flips id's node to StatusIdle/StatusDone/StatusFailed, making it
+// visible to every OTHER concurrent goroutine going through this same
+// package (in particular finalizeTurn's nearestLiveAncestorLocked,
+// delivering an unrelated child's completion here). If that visibility
+// arrives before the real slot is free, such a goroutine's own resume
+// attempt sees id idle, races to claim the slot, is refused because it is
+// still held, and — since a refused-but-recognized claim still counts as
+// "handled" — permanently strands the notification with nothing left to
+// retry it. A live CI hang (a test blocked forever on a resume dropped
+// exactly this way) is what caught this. See runPrompt/runGoal
+// (server/handlers.go), which both call this after freeRunSlotAndEmitIdle
+// and fire the returned resume immediately after, in that same tail
+// position maybeDispatchQueued/maybeAutoArmGoal already occupy.
+//
 // Returns a resume func when id's own completion needs to immediately
 // start ANOTHER turn on itself (a notification arrived too late for this
-// turn's own checkout — see finalizeTurn's doc comment). The caller MUST
-// NOT fire it until after releasing its OWN run-slot claim on id (the
-// server's freeRunSlotAndEmitIdle) — firing it any earlier races that
-// release and permanently strands both the notification and id's status
-// at StatusRunning. See runPrompt/runGoal (server/handlers.go), which
-// defer it to their own tail, exactly like they already defer
-// maybeDispatchQueued/maybeAutoArmGoal to that same point.
+// turn's own checkout — see finalizeTurn's doc comment).
 func (m *SessionManager) ReportTurnEnd(id string, msg *message.Message, err error) (resume func()) {
 	return m.finalizeTurn(id, msg, err)
 }
@@ -415,16 +426,31 @@ func (m *SessionManager) Info(id string) (info SessionNode, ok bool) {
 func (m *SessionManager) Reap() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	removed := 0
+
+	// Collect eligible ids from a SNAPSHOT of each node's state first,
+	// before removing anything: Go's map iteration order is randomized
+	// per run, and reaping a leaf in the same pass that also visits its
+	// now-childless parent would let ONE call cascade through more than
+	// one generation depending on which order the runtime happens to
+	// visit them in — non-deterministic behavior a live test run caught
+	// (the exact same tree reaped 1 node on one run, 2 on another). Two
+	// passes over a fixed snapshot make one call always remove exactly
+	// one generation of leaves, regardless of iteration order — repeated
+	// calls still collapse a whole terminal subtree bottom-up, just one
+	// generation per call, matching this method's documented contract.
+	var eligible []string
 	for id, n := range m.nodes {
 		if n.parentID == "" || len(n.children) != 0 {
 			continue
 		}
 		switch n.status {
 		case StatusDone, StatusFailed, StatusCanceled:
-		default:
-			continue
+			eligible = append(eligible, id)
 		}
+	}
+
+	for _, id := range eligible {
+		n := m.nodes[id]
 		delete(m.nodes, id)
 		if p, ok := m.nodes[n.parentID]; ok {
 			kept := p.children[:0]
@@ -435,9 +461,8 @@ func (m *SessionManager) Reap() int {
 			}
 			p.children = kept
 		}
-		removed++
 	}
-	return removed
+	return len(eligible)
 }
 
 // TaskToolAllowed reports whether a session at depth may spawn a child —

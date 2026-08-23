@@ -1632,18 +1632,6 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	// review caught.
 	s.sessMgr.ReportTurnStart(st.sess)
 	msg, err := st.sess.Prompt(ctx, text)
-	// resume is non-nil only when id's OWN completion needs to
-	// immediately start ANOTHER turn on itself (a task notification
-	// arrived too late for this turn's own checkout — see
-	// SessionManager.ReportTurnEnd's doc comment). It is deliberately NOT
-	// fired here: doing so before freeRunSlotAndEmitIdle races that
-	// release itself — the resume's own claimForPrompt would see this
-	// turn's slot still held, refuse, and permanently strand both the
-	// notification and the node at StatusRunning. A live review
-	// reproduced exactly this race. Fired below, after the slot is freed,
-	// in the SAME tail position maybeDispatchQueued/maybeAutoArmGoal
-	// already occupy.
-	resume := s.sessMgr.ReportTurnEnd(id, msg, err)
 	s.syncMessages(id) // catch any message not yet journaled
 	switch {
 	case err == nil:
@@ -1655,6 +1643,30 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 		s.recordTurnEnd(id, turnEndOutcome(err), err)
 	}
 	s.freeRunSlotAndEmitIdle(id, st)
+
+	// ReportTurnEnd runs AFTER freeRunSlotAndEmitIdle, not before: it is
+	// what makes id's node visible to SessionManager as idle/done, and
+	// ANY OTHER goroutine (a different child's own finalizeTurn call,
+	// concurrently, delivering ITS completion notification here via
+	// nearestLiveAncestorLocked) can act on that visibility the moment it
+	// sees it — calling this server's own resumeSessionForTaskNotification,
+	// which claims the run slot via the EXACT SAME claimForPrompt this
+	// handler's own callers used. If SessionManager showed id idle while
+	// the real run slot were STILL held (the ordering an earlier version
+	// of this function used), that concurrent claim would see it busy,
+	// refuse, and — since SessionManager considers a "handled" claim
+	// delivered whether or not it actually started a turn — permanently
+	// strand the notification with nothing left to ever retry it. A live
+	// CI hang (a test blocked forever waiting for a resume that had been
+	// silently dropped this exact way) is what caught this.
+	//
+	// resume (returned, not fired, by ReportTurnEnd) is non-nil only when
+	// id's OWN completion needs to immediately start ANOTHER turn on
+	// itself (a notification arrived too late for THIS turn's own
+	// checkout). Firing it is safe here: the real run slot is already
+	// free (line above), so this call's own resume attempt cannot race
+	// itself.
+	resume := s.sessMgr.ReportTurnEnd(id, msg, err)
 
 	// Queue beats goal auto-arm (invariant 5): a prompt queued while this
 	// turn ran outranks a goal merely waiting to auto-arm — direct user
@@ -2083,9 +2095,6 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 		MaxTurns:   maxTurns,
 		Evaluator:  s.opts.GoalEvaluator,
 	})
-	// resume: see runPrompt's identical variable for why it is captured
-	// here but not fired until after freeRunSlotAndEmitIdle below.
-	resume := s.sessMgr.ReportTurnEnd(id, nil, err)
 	s.syncMessages(id)
 	switch {
 	case err == nil && res.Achieved:
@@ -2105,6 +2114,17 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 		s.recordTurnEnd(id, turnEndOutcome(err), err)
 	}
 	s.freeRunSlotAndEmitIdle(id, st)
+
+	// resume: see runPrompt's identical variable for why ReportTurnEnd is
+	// called here, after freeRunSlotAndEmitIdle, rather than immediately
+	// after PursueGoal returns above — the same claimForPrompt race (a
+	// concurrent notification delivery observing this session idle via
+	// SessionManager while the real run slot is still held, getting
+	// refused, and permanently stranding the notification) applies here
+	// identically. msg is nil: a root session's finalizeTurn branch never
+	// reads it (see finalizeTurn's doc comment) — only a CHILD's does,
+	// and a child is never resident, so runGoal never runs for one.
+	resume := s.sessMgr.ReportTurnEnd(id, nil, err)
 
 	// A prompt queued after the loop's last turn-boundary drain (engine/
 	// goal.go's PursueGoal only drains BETWEEN turns) but before the loop
