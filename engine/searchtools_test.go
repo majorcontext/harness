@@ -141,11 +141,14 @@ func TestGrepToolSkipsBinaryFiles(t *testing.T) {
 }
 
 // TestGrepToolSkipsOversizedFiles proves grep never reads a file over
-// maxGrepFileBytes whole into memory (os.ReadFile has no cap of its own) —
-// a live review flagged this as an OOM risk (a default, no-path search
-// walking into an unexpectedly huge file). The oversized file is skipped
-// entirely (checked via os.Stat before any read); a small file alongside
-// it still matches normally.
+// maxGrepFileBytes whole into memory — a live review flagged this as an
+// OOM risk (a default, no-path search walking into an unexpectedly huge
+// file). The oversized file is skipped entirely, bounded via
+// io.LimitReader(f, maxGrepFileBytes+1) over one open handle (not a
+// separately captured os.Stat size — an earlier revision used exactly
+// that TOCTOU-prone shape, which AGENTS.md's read_file guidance forbids,
+// and a second review round caught it); a small file alongside it still
+// matches normally.
 func TestGrepToolSkipsOversizedFiles(t *testing.T) {
 	dir := t.TempDir()
 	huge := make([]byte, maxGrepFileBytes+1)

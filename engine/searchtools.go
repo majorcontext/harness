@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -43,16 +44,19 @@ const (
 	// unbounded wall-clock time.
 	maxWalkedFiles = 200000
 	// maxGrepFileBytes bounds how large a single file grep will read
-	// before searching it. os.ReadFile loads a whole file into memory
-	// with no cap of its own — read_file guards the equivalent risk with
-	// readFileMaxImageBytes/io.LimitReader; grep needs the identical
-	// guard, since a default (no path) search can walk into an
+	// before searching it. A default (no path) search can walk into an
 	// unexpectedly huge file (a build artifact, a core dump, a database
-	// file) and exhaust process memory reading it whole. A file over the
-	// cap is skipped entirely (checked via os.Stat, before any read) —
-	// grep's job is finding SMALL, textual matches, not partially
-	// searching one giant file, so skipping is the right trade, not a
-	// truncated read.
+	// file) and exhaust process memory reading it whole — the same risk
+	// read_file guards with readFileMaxImageBytes/io.LimitReader; grep's
+	// searchFile enforces this bound the identical way, via
+	// io.LimitReader(f, maxGrepFileBytes+1) over one open handle, never
+	// against a separately captured os.Stat size a concurrently growing
+	// file (a live log, a build artifact still being written) could
+	// outrun between the stat and a later read — the exact TOCTOU shape
+	// AGENTS.md's read_file guidance forbids, and an earlier revision of
+	// this file used. A file over the cap is skipped entirely — grep's
+	// job is finding SMALL, textual matches, not partially searching one
+	// giant file, so skipping is the right trade, not a truncated read.
 	maxGrepFileBytes = 20 * 1024 * 1024
 )
 
@@ -248,12 +252,17 @@ func grepTool() Tool {
 				if includeRe != nil && !includeRe.MatchString(rel) {
 					return nil
 				}
-				if fi, err := os.Stat(path); err != nil || fi.Size() > maxGrepFileBytes {
-					return nil // unreadable, or too large to safely read whole — skip it
-				}
-				data, err := os.ReadFile(path)
+				f, err := os.Open(path)
 				if err != nil {
 					return nil // unreadable file: skip it
+				}
+				data, err := io.ReadAll(io.LimitReader(f, maxGrepFileBytes+1))
+				f.Close()
+				if err != nil {
+					return nil // read error mid-file: skip it
+				}
+				if len(data) > maxGrepFileBytes {
+					return nil // too large to safely read whole — skip it
 				}
 				if looksBinary(data) {
 					return nil

@@ -128,6 +128,32 @@ func (s *Server) runOrQueueText(id, text string) (handled bool) {
 		return code != http.StatusNotFound
 	}
 	if len(st.sess.QueuedPrompts()) > 0 {
+		// Enqueue text durably behind whatever is already queued, then
+		// dispatch the queue's HEAD (not necessarily this call's own
+		// text) into the run slot just claimed — mirrors handlePrompt's
+		// identical idle-with-queue branch (handlers.go, "Global FIFO on
+		// an idle-with-queue session"). Without this, a session.send
+		// landing here with a non-empty queue silently lost its own
+		// text: only the pre-existing head ever ran, and the caller
+		// still got 202 "sent" — a live review caught this. The
+		// resume-trigger caller (resumeSessionForTaskNotification)
+		// doesn't strictly need its synthetic trigger text preserved
+		// (the dispatched head's own turn surfaces the pending
+		// notification via checkoutTaskNotificationsSegment regardless
+		// of what text drove it, and that text already becomes real
+		// turn input via the empty-queue branch below anyway) — so one
+		// unconditional enqueue-then-dispatch here stays correct for
+		// both callers without a caller-specific branch.
+		if _, err := st.sess.EnqueuePrompt(text); err != nil {
+			// Only reachable for empty/whitespace-only text; both
+			// callers already guard against that (handleSessionSend
+			// rejects body.Text=="" before calling here, and
+			// taskResumeTriggerText is a non-empty constant). Fail
+			// closed rather than silently drop, releasing the claim
+			// just taken.
+			s.releasePromptClaim(st)
+			return true
+		}
 		s.dispatchQueueHead(id, st, ctx)
 		return true
 	}
@@ -215,11 +241,26 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusAccepted, map[string]string{"session_id": id, "status": "sent"})
 		return
 	}
-	// Child: SessionManager is its sole scheduler, always safe.
+	// Child: SessionManager is its sole scheduler, always safe. Unlike a
+	// root, a child has no prompt queue (SessionManager.Send's own
+	// ErrSessionBusy check has nowhere to defer to) — firing Send in a
+	// background goroutine and discarding its error unconditionally, as
+	// an earlier version of this handler did, meant a message sent to an
+	// already-running child was silently dropped while the caller still
+	// got 202 "sent". Refuse up front instead. info was read moments
+	// ago, so there is a small residual race (the child could finish and
+	// go idle in the gap) — the same class of benign, documented race
+	// runOrQueueText/enqueueOrDispatch accept elsewhere in this package —
+	// but this closes the common, reproducible case: a caller sending a
+	// follow-up while a child's turn is visibly still in flight.
+	if info.Status == engine.StatusRunning {
+		writeErr(w, http.StatusConflict, "session is busy with another prompt")
+		return
+	}
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		s.sessMgr.Send(context.Background(), id, body.Text) //nolint:errcheck // async: the outcome is read back via session.info's lineage fields, not this call's return
+		s.sessMgr.Send(context.Background(), id, body.Text) //nolint:errcheck // async: outcome read back via session.info; ErrSessionBusy is pre-checked above, ErrSessionCanceled/ErrConcurrencyLimit are rare residual races (the child settled or the tree budget was hit in the gap between the check above and this call) not worth blocking the request on
 	}()
 	writeJSON(w, http.StatusAccepted, map[string]string{"session_id": id, "status": "sent"})
 }
