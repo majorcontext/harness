@@ -333,6 +333,40 @@ func (s *Server) sessionIDOrNotFound(w http.ResponseWriter, r *http.Request) (st
 	return id, true
 }
 
+// rejectManagedChildTurn refuses id if it names a session SessionManager
+// tracks as a CHILD (info.ParentID != "") — see handleSessionSend's own
+// doc comment: SessionManager is a child's SOLE scheduler. The generic
+// per-{id} routes that can drive a turn or persist a durable record
+// directly against whatever *engine.Session claimForPrompt (or an
+// equivalent cold-load) hands them — prompt_async, goal, enqueue,
+// compact, model, thinking — have no notion of that at all. Without this
+// guard, a request against a child's id cold-loads a SECOND, independent
+// *engine.Session for the SAME on-disk log and drives Session.Prompt (or
+// persists a recModel/recEffort record) on it CONCURRENTLY with the
+// child's own Spawn-driven turn on the FIRST object — both appending to
+// the same session log at once, the exact "never call Prompt
+// concurrently with itself" contract violation ExternalRunner exists to
+// prevent for roots, left wide open for children (which get addressable
+// ids from handleSpawnChild's 201 and session.info's lineage). A live
+// review caught this.
+//
+// Returns true (having already written a 409) if id is a managed child
+// and the caller must stop; false — safe to proceed through the ordinary
+// root/untracked path — otherwise. A residual gap: this only protects a
+// child SessionManager has ALREADY adopted into THIS process's tree
+// (Spawn, or a prior session.send/task touching it) — an id that is
+// really a child but has never been adopted here yet (e.g. a fresh
+// process, or one already Reaped) is not caught, the same
+// task-on-reload-adoption boundary this PR's SessionManager.
+// adoptReloadedLocked already documents elsewhere.
+func (s *Server) rejectManagedChildTurn(w http.ResponseWriter, id string) bool {
+	if info, ok := s.sessMgr.Info(id); ok && info.ParentID != "" {
+		writeErr(w, http.StatusConflict, "session is a SessionManager-managed child session; use POST /session/{id}/send instead")
+		return true
+	}
+	return false
+}
+
 // healthJSON is the openapi Health shape. VCSRevision, VCSTime, SessionSync,
 // and StartedAt are always present (never omitted, even empty) so a client
 // never has to special-case "field absent" vs "field empty" — see buildInfo
@@ -1096,6 +1130,9 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if s.rejectManagedChildTurn(w, id) {
+		return
+	}
 	var body struct {
 		Parts []struct {
 			Type string `json:"type"`
@@ -1375,6 +1412,9 @@ type enqueueResponse struct {
 func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
+		return
+	}
+	if s.rejectManagedChildTurn(w, id) {
 		return
 	}
 	var body struct {
@@ -1863,6 +1903,9 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if s.rejectManagedChildTurn(w, id) {
+		return
+	}
 	if s.opts.GoalEvaluator.IsZero() {
 		writeErr(w, http.StatusBadRequest, "goal_evaluator_model is not configured; goals are unavailable")
 		return
@@ -2280,6 +2323,9 @@ func (s *Server) handleSetModel(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if s.rejectManagedChildTurn(w, id) {
+		return
+	}
 	var body struct {
 		Model message.ModelRef `json:"model"`
 	}
@@ -2348,6 +2394,9 @@ type setThinkingResponseJSON struct {
 func (s *Server) handleSetThinking(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
+		return
+	}
+	if s.rejectManagedChildTurn(w, id) {
 		return
 	}
 	var body struct {
@@ -2442,12 +2491,36 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 		cancel = st.cancel
 	}
 	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	// Not a server-resident turn. A managed CHILD's own turn runs on its
+	// SessionManager node.ctx (Spawn/Send), never in s.sessions at all —
+	// st == nil here is the NORMAL, expected shape for a running child,
+	// not evidence there is nothing to abort. Fall back to canceling its
+	// node directly. Deliberately scoped to an ACTUAL child
+	// (info.ParentID != "") — never a root: an idle root reaching this
+	// point genuinely has nothing running (the resident-turn branch
+	// above already covers a running one), and calling sessMgr.Cancel on
+	// it here would mark its lineage StatusCanceled for no reason (a
+	// root's SessionManager node otherwise only transitions via
+	// ReportTurnStart/Cancel/cancel_tree, never a plain per-turn abort)
+	// — the unconditional 204 fallback below is the correct, unchanged
+	// behavior for that case. A live review caught the child gap: an
+	// earlier revision of this handler silently did nothing for a
+	// running child (st == nil, cancel == nil, but the child DOES exist
+	// on disk so the 404 branch below never fired either) — a misleading
+	// 204 while the child ran to completion untouched.
+	if info, ok := s.sessMgr.Info(id); ok && info.ParentID != "" {
+		_ = s.sessMgr.Cancel(id) // errors only on an unknown id — impossible, Info just confirmed it
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if st == nil && !s.sessionOnDisk(id) {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
-	}
-	if cancel != nil {
-		cancel()
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -2597,6 +2670,9 @@ type compactResponseJSON struct {
 func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
+		return
+	}
+	if s.rejectManagedChildTurn(w, id) {
 		return
 	}
 	var body struct {

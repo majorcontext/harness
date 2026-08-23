@@ -428,6 +428,15 @@ type Server struct {
 	// production.
 	queueDeleteRace func()
 
+	// sendBusyEvictRace is a test-only seam: when non-nil,
+	// sendTextToRoot's busy branch (session_tree.go) invokes it right
+	// before its own residentSession(id) call — letting a test force the
+	// busy occupant to finish and be evicted deterministically in that
+	// exact gap (see TestSessionSendToBusyRootEvictedInGapIsRetryable409),
+	// instead of relying on an unobserved goroutine-scheduling coin flip.
+	// Always nil in production.
+	sendBusyEvictRace func()
+
 	// worktreeBase is the directory 'worktree'-isolation sessions create
 	// their per-session git worktrees under (see worktree.go): <SessionDir>/
 	// worktrees when SessionDir is durable, otherwise a process-lifetime

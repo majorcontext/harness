@@ -343,6 +343,131 @@ func TestSessionSendToBusyRootIsQueuedNotLost(t *testing.T) {
 	}
 }
 
+// TestSessionSendToBusyRootEvictedInGapIsRetryable409 is the regression
+// test for a review finding: sendTextToRoot's busy branch, when the busy
+// occupant is evicted from residency in the gap between claimForPrompt's
+// failed claim and residentSession's own lookup, returned "queued"
+// (success) without ever having durably enqueued text — permanently
+// losing it while telling the caller it was accepted (a 202 the caller
+// has no reason to retry). enqueueOrDispatch's own identical race
+// (handlers.go) returns a retryable 409 for exactly this reason; this
+// proves sendTextToRoot now does too.
+func TestSessionSendToBusyRootEvictedInGapIsRetryable409(t *testing.T) {
+	blocker := newBlockingProvider("root")
+	t.Cleanup(blocker.releaseAll)
+	h := newHarness(t, blocker)
+	id := h.createSession("root/m1")
+
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "first"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("first prompt status %d: %s", resp.StatusCode, data)
+	}
+	<-blocker.started
+
+	// Force the exact gap the race lives in: by the time
+	// sendTextToRoot's busy branch calls residentSession, the occupant
+	// is gone from s.sessions — mirrors the real cause (a concurrent
+	// claim evicting it once MaxResident is exceeded) without needing to
+	// orchestrate one, exactly like this package's other *Race test-only
+	// seams (queueDispatchRace, queueDeleteRace).
+	h.srv.sendBusyEvictRace = func() {
+		h.srv.mu.Lock()
+		delete(h.srv.sessions, id)
+		h.srv.mu.Unlock()
+	}
+
+	resp, data = h.do("POST", "/session/"+id+"/send", map[string]string{"text": "while busy, evicted in the gap"})
+	if resp.StatusCode != 409 {
+		t.Fatalf("send status %d, want 409 (retryable): %s", resp.StatusCode, data)
+	}
+}
+
+// TestAbortStopsRunningManagedChild is the regression test for a review
+// finding: POST /session/{childID}/abort was a silent no-op — a running
+// child's turn runs on its SessionManager node.ctx (Spawn), never in
+// s.sessions, so handleAbort's st == nil, cancel == nil, and it fell
+// through to 204 having canceled nothing, misleading a caller into
+// believing the child stopped while it ran to completion untouched.
+// Proves abort now actually stops it.
+func TestAbortStopsRunningManagedChild(t *testing.T) {
+	blocker := newBlockingProvider("blocker")
+	t.Cleanup(blocker.releaseAll)
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, blocker)
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": root.ID, "agent": engine.AgentGeneralPurpose, "prompt": "go", "model": "blocker/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+	var child struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &child)
+
+	waitForLineageStatus(t, h, child.ID, "running", 2*time.Second)
+
+	resp, data = h.do("POST", "/session/"+child.ID+"/abort", nil)
+	if resp.StatusCode != 204 {
+		t.Fatalf("abort status %d, want 204: %s", resp.StatusCode, data)
+	}
+
+	waitForLineageStatus(t, h, child.ID, "canceled", 2*time.Second)
+}
+
+// TestSpawnResponseReportsBusyNotIdle is the regression test for a
+// review finding: the 201 body from session.create's parent_id form
+// hard-coded top-level status/state "idle" even though Spawn always
+// sets the new child StatusRunning before returning (a spawned child is
+// handed work immediately) — self-inconsistent with the SAME response's
+// own lineage block, which correctly reported "running" beside it.
+func TestSpawnResponseReportsBusyNotIdle(t *testing.T) {
+	blocker := newBlockingProvider("blocker")
+	t.Cleanup(blocker.releaseAll)
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, blocker)
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": root.ID, "agent": engine.AgentGeneralPurpose, "prompt": "go", "model": "blocker/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+	var child struct {
+		Status  string         `json:"status"`
+		State   string         `json:"state"`
+		Lineage map[string]any `json:"lineage"`
+	}
+	mustUnmarshal(t, data, &child)
+	if child.Status != "busy" {
+		t.Errorf("top-level status = %q, want %q", child.Status, "busy")
+	}
+	if child.Lineage["status"] != "running" {
+		t.Errorf("lineage.status = %v, want %q", child.Lineage["status"], "running")
+	}
+}
+
 // TestSessionSendUnknownSessionIs404 proves session.send 404s for an id
 // this server's SessionManager does not track.
 func TestSessionSendUnknownSessionIs404(t *testing.T) {
@@ -403,6 +528,63 @@ func TestCancelTreeCascadesToChild(t *testing.T) {
 // to defer to — silently dropping the message while the caller still got
 // 202 "sent". This proves session.send now refuses up front with 409
 // instead.
+// TestGenericTurnRoutesRejectManagedChild is the regression test for a
+// BLOCKER: SessionManager is documented as a child's SOLE scheduler, but
+// the generic per-{id} routes (prompt_async, goal, enqueue, compact,
+// model, thinking) had no notion of that at all — each cold-loads its
+// own *engine.Session for an id not currently server-resident (every
+// SessionManager child, always) and would drive a turn or persist a
+// durable record on it CONCURRENTLY with the child's own Spawn-driven
+// turn on a DIFFERENT object for the SAME on-disk log. Proves each
+// route now refuses a managed child with 409 instead.
+func TestGenericTurnRoutesRejectManagedChild(t *testing.T) {
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("child done")}})
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": root.ID, "agent": engine.AgentGeneralPurpose, "prompt": "go", "model": "child/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+	var child struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &child)
+	waitForLineageStatus(t, h, child.ID, "done", 2*time.Second)
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		body   any
+	}{
+		{"prompt_async", "POST", "/session/" + child.ID + "/prompt_async", map[string]any{"parts": []map[string]string{{"type": "text", "text": "hi"}}}},
+		{"goal", "POST", "/session/" + child.ID + "/goal", map[string]string{"condition": "done"}},
+		{"enqueue", "POST", "/session/" + child.ID + "/enqueue", map[string]any{"parts": []map[string]string{{"type": "text", "text": "hi"}}, "seq": 1}},
+		{"compact", "POST", "/session/" + child.ID + "/compact", map[string]any{}},
+		{"model", "POST", "/session/" + child.ID + "/model", map[string]string{"model": "root/m1"}},
+		{"thinking", "POST", "/session/" + child.ID + "/thinking", map[string]string{"effort": "high"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, data := h.do(tc.method, tc.path, tc.body)
+			if resp.StatusCode != 409 {
+				t.Errorf("%s %s status = %d, want 409: %s", tc.method, tc.path, resp.StatusCode, data)
+			}
+		})
+	}
+}
+
 func TestSessionSendToBusyChildIs409NotLost(t *testing.T) {
 	blocker := newBlockingProvider("blocker")
 	t.Cleanup(blocker.releaseAll)
