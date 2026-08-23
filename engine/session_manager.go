@@ -185,6 +185,27 @@ type sessionNode struct {
 	// string. Both stay empty for a root, and for a child still running.
 	result     string
 	failReason string
+
+	// finalized reports whether n's concurrency-slot bookkeeping is
+	// fully settled: for a depth>0 node, whether decrementRunningLocked
+	// has run (or will never need to, because n was never running at
+	// all when it went terminal). Zero value false is correct for every
+	// freshly running node. Set true by finalizeTurn (which always runs
+	// decrementRunningLocked first) for done/failed/already-canceled,
+	// and directly by cancelSubtreeLocked for a node canceled while NOT
+	// running (idle — no in-flight Prompt call, so nothing will ever
+	// call finalizeTurn for it; there is no slot to wait for). Left
+	// FALSE by cancelSubtreeLocked for a node canceled WHILE running:
+	// its Prompt goroutine is still unwinding and will call finalizeTurn
+	// itself once the canceled context actually returns, which is what
+	// eventually flips this to true. Reap must never remove a
+	// StatusCanceled node with finalized == false: doing so would delete
+	// the node before that eventual finalizeTurn call can find it,
+	// silently leaking its runningByRoot reservation forever (finalizeTurn
+	// is a no-op for an id no longer in m.nodes) — a live review caught
+	// this exact race between a slow-unwinding canceled turn and the
+	// periodic Reap ticker.
+	finalized bool
 }
 
 // SessionNode is a read-only snapshot of one managed session's lifecycle
@@ -428,6 +449,23 @@ func (m *SessionManager) ReportTurnStart(sess *Session) {
 		}
 	}
 	n.session = sess
+	// Balance decrementRunningLocked's unconditional decrement for ANY
+	// depth>0 node: increment runningByRoot here too, on an ACTUAL
+	// transition into running (guarded by n.status != StatusRunning, so
+	// the idempotent already-running no-op case this method documents
+	// above never double-counts), mirroring Spawn/Send's own
+	// reservation. Only depth>0 — a root never counts (see
+	// decrementRunningLocked). Without this, adoptReloadedLocked's
+	// depth>0 re-attach (a former child cold-loaded and driven through
+	// the ordinary resident-session HTTP path — POST
+	// /session/{childID}/prompt_async or /goal — rather than
+	// Spawn/Send) would decrement on completion with no matching
+	// increment, corrupting the tree-wide concurrency count below the
+	// true in-flight total and eventually letting Spawn/Send overrun
+	// maxConcurrent. A live review caught this.
+	if n.depth > 0 && n.status != StatusRunning {
+		m.runningByRoot[n.rootID]++
+	}
 	n.status = StatusRunning
 }
 
@@ -549,6 +587,17 @@ func (m *SessionManager) Reap() int {
 	var eligible []string
 	for id, n := range m.nodes {
 		if n.parentID == "" || len(n.children) != 0 {
+			continue
+		}
+		// !n.finalized excludes a StatusCanceled leaf whose own
+		// finalizeTurn hasn't run yet (a still-unwinding canceled
+		// Prompt goroutine — see sessionNode.finalized's doc comment):
+		// removing it now would delete the node before that eventual
+		// call can find it, permanently leaking its runningByRoot
+		// reservation. done/failed only ever reach this switch already
+		// finalized (finalizeTurn is their sole setter), so this guard
+		// is a no-op for them.
+		if !n.finalized {
 			continue
 		}
 		switch n.status {
@@ -872,6 +921,11 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 	}
 	alreadyCanceled := n.status == StatusCanceled
 	m.decrementRunningLocked(n)
+	// See sessionNode.finalized's doc comment: this call is always the
+	// point n's concurrency-slot bookkeeping (the decrement just above)
+	// is fully settled, regardless of which status branch runs below —
+	// safe for Reap to remove n once this is true.
+	n.finalized = true
 
 	// resume is set here (never fired directly — see below) whenever this
 	// call needs to actively start another turn rather than simply
@@ -943,7 +997,21 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: n.failReason, Usage: n.session.Usage()}
 	default:
 		n.status = StatusDone
-		n.result = msg.Parts.Text()
+		// msg is nil for a caller that never has one to give — an
+		// external scheduler's ReportTurnEnd(id, nil, err) (server's
+		// runGoal and cmd/harness's own runGoal both pass nil
+		// unconditionally, on the assumption documented at each call
+		// site that a child never reaches ReportTurnEnd's root-only
+		// PursueGoal path — an assumption adoptReloadedLocked broke: a
+		// reloaded former child whose true parent is still tracked is
+		// re-attached as a genuine depth>0 node, so a goal call against
+		// its id (POST /session/{id}/goal, cold-loaded) can reach this
+		// exact branch with msg == nil). Treated as an empty result
+		// rather than dereferenced — a live review caught the resulting
+		// nil-pointer panic.
+		if msg != nil {
+			n.result = msg.Parts.Text()
+		}
 		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusDone, Result: n.result, Usage: n.session.Usage()}
 	}
 
@@ -1141,8 +1209,20 @@ func (m *SessionManager) Cancel(id string) error {
 // earlier version of this method, which let the tree-wide concurrency cap
 // be exceeded.
 func (m *SessionManager) cancelSubtreeLocked(n *sessionNode) {
+	// wasRunning, captured before the status overwrite below, decides
+	// sessionNode.finalized for the node this call is about to cancel —
+	// see that field's doc comment. A node canceled while StatusIdle had
+	// no in-flight Prompt call and so no goroutine that will ever call
+	// finalizeTurn for it: nothing is left to settle, safe to reap
+	// immediately. A node canceled while StatusRunning still has one
+	// unwinding; finalizeTurn is what will eventually mark it finalized,
+	// once that goroutine's own canceled Prompt call actually returns.
+	wasRunning := n.status == StatusRunning
 	if n.status != StatusDone && n.status != StatusFailed && n.status != StatusCanceled {
 		n.status = StatusCanceled
+	}
+	if !wasRunning {
+		n.finalized = true
 	}
 	// Canceling the context aborts an in-flight Prompt call driven
 	// DIRECTLY by this package (Spawn's goroutine, Send, or a

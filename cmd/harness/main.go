@@ -1171,7 +1171,18 @@ func serveCmd(args []string) error {
 	// sessMgr into both mkCfg and server.Options.SessionManager below sidesteps
 	// the ordering hazard entirely: the manager exists before either mkCfg or
 	// server.New is even called.
-	sessMgr := engine.NewSessionManager(context.Background(), envInt("HARNESS_MAX_TASK_DEPTH"), envInt("HARNESS_MAX_CONCURRENT_TASKS"))
+	// watchdogCtx (not context.Background()): every node's ctx derives
+	// from this baseCtx (SessionManager.adoptLocked), so a task tree
+	// spawned via Spawn (which launches its own goroutine driving
+	// child.Prompt(n.ctx, ...), untracked by s.wg) is otherwise never
+	// canceled or waited on at shutdown — background()-rooted subtrees
+	// would keep running (burning provider spend, writing session logs)
+	// after the process believes it has drained, unlike the run-slot
+	// goroutines s.wg does wait on. watchdogCtx already cancels on the
+	// same shutdown path the reap ticker below ties itself to, so this
+	// makes a graceful shutdown cascade cancellation into the whole task
+	// tree the same way. A live review caught this gap.
+	sessMgr := engine.NewSessionManager(watchdogCtx, envInt("HARNESS_MAX_TASK_DEPTH"), envInt("HARNESS_MAX_CONCURRENT_TASKS"))
 	// Periodic reaping (engine.SessionManager.Reap) frees a terminal, leaf
 	// (childless) task-spawned session's *Session — message history
 	// included — once it has settled done/failed/canceled; a whole

@@ -62,9 +62,20 @@ const (
 
 // skippedSearchDirs names directories glob/grep never descend into,
 // regardless of pattern — version-control internals are never a match a
-// caller wants and are often enormous.
+// caller wants and are often enormous. .harness is harness's OWN runtime
+// state directory (managed-process logs under .harness/proc/, and, when
+// HARNESS_SESSION_DIR is left at its workdir-relative default, every
+// session's raw append-only transcript) — never a code-search target,
+// and exactly the kind of content a read-only explore/plan subagent's
+// restricted tool set (read_file/glob/grep/ls, deliberately excluding
+// bash and any write tool) is meant to keep out of reach. Without this, a
+// broad grep with no path still walks the whole tree, including
+// .harness — a live review caught this: glob/grep's own no-sandbox trust
+// model (any file WorkDir can reach) doesn't require sweeping harness's
+// own control-plane state to remain useful for finding code.
 var skippedSearchDirs = map[string]bool{
-	".git": true,
+	".git":     true,
+	".harness": true,
 }
 
 // globToRegexp translates a shell-glob-ish pattern into an anchored regexp
