@@ -205,6 +205,48 @@ type SessionManager struct {
 	// each check, mirroring runningByRoot's own incremental-accumulator
 	// shape exactly.
 	usageByRoot map[string]provider.Usage
+	// budgetedByChild is usageByRoot's per-CHILD counterpart: how much of
+	// n.session.Usage() THIS manager has already folded into usageByRoot
+	// for child session id, keyed by id rather than living only on the
+	// sessionNode (see sessionNode.budgetedUsage's own doc comment for
+	// the base problem this solves within one node's lifetime). Needed
+	// because a child's sessionNode does not survive a Reap — but
+	// usageByRoot[rootID] does — so a later same-manager re-adopt of the
+	// SAME child id (adoptLocked builds a brand-new sessionNode) must
+	// still know how much of that child's spend THIS manager already
+	// credited, or its next finalizeTurn would re-add the full amount on
+	// top of what usageByRoot already carries across the reap.
+	//
+	// A live review finding caught this the hard way: an earlier version
+	// seeded sessionNode.budgetedUsage from n.session.Usage() directly at
+	// adoptLocked time instead of tracking credit here — which fixed the
+	// same-manager reap+re-adopt case but broke the DIFFERENT case
+	// TestReloadedChildWithDanglingTurnFoldsUsageIntoTreeBudget covers: a
+	// process restart's brand-new SessionManager (a fresh, empty
+	// usageByRoot) reloading a child whose session.Usage() already
+	// carries substantial history from a PRIOR process. That fresh
+	// manager has credited nothing yet, so session.Usage() is exactly
+	// the right amount to fold in — but seeding budgetedUsage to
+	// session.Usage() unconditionally made recoverInterruptedTurnLocked
+	// compute a zero delta (total - budgetedUsage, both equal to the
+	// same session.Usage() value), silently dropping the child's entire
+	// real spend from the budget instead of double-counting it. Keying
+	// credit on THIS manager's own map, not the session's own portable
+	// cumulative total, is what tells the two cases apart: absent here
+	// (the zero value) correctly means "this manager has never credited
+	// this child," true for both a genuinely fresh child AND a
+	// cross-process reload, and only ever becomes non-zero once
+	// finalizeTurn/recoverInterruptedTurnLocked has actually run under
+	// THIS manager.
+	//
+	// Deliberately never pruned per-child (mirrors usageByRoot/
+	// runningByRoot's own "only ever cleared for a forgotten ROOT"
+	// shape, not a per-child one) — a bounded, modest per-process cost
+	// proportional to total children ever finalized in this process's
+	// life, accepted for the same reason ForgetRoot's own root-level
+	// cleanup was judged sufficient rather than tracking every child
+	// individually.
+	budgetedByChild map[string]provider.Usage
 }
 
 // SetExternalRunner installs runner as described on the ExternalRunner
@@ -296,6 +338,24 @@ type sessionNode struct {
 	// every follow-up. finalizeTurn adds exactly
 	// n.session.Usage()-budgetedUsage each time, then updates this to
 	// match.
+	//
+	// adoptLocked seeds this to n.session.Usage() at construction, NOT
+	// its zero value — a live review finding: usageByRoot[rootID]
+	// SURVIVES a child being reaped (Reap only clears usageByRoot for a
+	// root-shaped node, session_manager.go's own Reap doc comment), but
+	// a reaped-then-re-adopted child (Send-ing a follow-up to a
+	// done/failed child Reap already collected, or a cold LoadSession
+	// reload) always gets a BRAND NEW sessionNode via adoptLocked. If
+	// that new node started at budgetedUsage's zero value while
+	// n.session.Usage() already carries the CUMULATIVE total from the
+	// child's prior life (a warm *Session object's own running total, or
+	// LoadSession's replay-summed total — either way, already-spent
+	// tokens this same child's earlier finalizeTurn call already folded
+	// into usageByRoot once), the next finalizeTurn's delta computation
+	// would re-add that already-counted prior total on top of the
+	// survived usageByRoot entry — double-counting it a second time and
+	// letting a later Spawn hit ErrBudgetExceeded well below the real
+	// SetMaxTreeTokens ceiling.
 	budgetedUsage provider.Usage
 
 	// pendingForget marks a "root-shaped" node (parentID == "") that is
@@ -373,12 +433,13 @@ func NewSessionManager(baseCtx context.Context, maxDepth, maxConcurrent int) *Se
 		maxConcurrent = DefaultMaxConcurrentTasks
 	}
 	return &SessionManager{
-		baseCtx:       baseCtx,
-		maxDepth:      maxDepth,
-		maxConcurrent: maxConcurrent,
-		nodes:         make(map[string]*sessionNode),
-		runningByRoot: make(map[string]int),
-		usageByRoot:   make(map[string]provider.Usage),
+		baseCtx:         baseCtx,
+		maxDepth:        maxDepth,
+		maxConcurrent:   maxConcurrent,
+		nodes:           make(map[string]*sessionNode),
+		runningByRoot:   make(map[string]int),
+		usageByRoot:     make(map[string]provider.Usage),
+		budgetedByChild: make(map[string]provider.Usage),
 	}
 }
 
@@ -435,7 +496,7 @@ func (m *SessionManager) AdoptReloaded(s *Session) error {
 	if _, exists := m.nodes[s.ID]; exists {
 		return fmt.Errorf("engine: session %s already managed", s.ID)
 	}
-	m.adoptReloadedLocked(s)
+	m.adoptReloadedLocked(s, true)
 	return nil
 }
 
@@ -494,7 +555,49 @@ func (m *SessionManager) adoptRootLocked(s *Session) *sessionNode {
 //     loses its own ability to spawn further children after a full
 //     process restart with no surviving tree) is deliberate: refusing an
 //     unverifiable case is always safer than guessing permissively.
-func (m *SessionManager) adoptReloadedLocked(s *Session) *sessionNode {
+//
+// recover gates whether recoverInterruptedTurnLocked runs for a non-root
+// adopt (see that method's own doc comment for what it does). A live
+// review finding: ReportTurnStart's adopt-on-first-sight call is
+// UNCONDITIONALLY followed, a few lines later in that same function, by
+// setting n.status = StatusRunning and n.finalized = false to actually
+// drive a fresh turn — so firing recovery here first is self-
+// contradicting within one call: it would mark the node StatusFailed,
+// append a "lost to restart" message to its own transcript, and (worse)
+// durably notify a live ancestor that this child died, mere moments
+// before that exact child goes on to run — and very possibly finish
+// successfully, or fail for a real, unrelated reason finalizeTurn then
+// reports AGAIN. ReportTurnStart passes recover=false for exactly this
+// reason: it already knows, unconditionally, that it is about to reuse
+// n's current turn, so recovery would never be reporting anything true.
+// AdoptReloaded (the public wrapper used by handleSpawnChild's
+// parent-lookup fallback and cmd/harness's -resume) still passes
+// recover=true, for two different reasons that both avoid this same
+// failure mode:
+//
+//   - cmd/harness -resume: a genuine root (s.TaskParentID() == "") never
+//     reaches recovery at all — the early return above skips straight to
+//     adoptRootLocked. The one case that DOES reach recovery here (s is
+//     a former task-tool child, resumed standalone) can never have a
+//     live tracked ancestor either way: sessMgr is a brand-new, empty
+//     tree for this one-shot run, so nearestLiveAncestorLocked always
+//     returns nil regardless of recover — no false notification is ever
+//     possible, only an honest "this turn really was interrupted"
+//     message appended to the session's own transcript before it
+//     continues, which is simply true.
+//   - handleSpawnChild: the caller isn't driving a fresh turn on the
+//     PARENT at all — Spawn drives the brand-new CHILD it attaches under
+//     that parent, a different node entirely. A live grandparent CAN
+//     genuinely be notified "this parent's last turn was lost" here,
+//     which is not self-contradicting the way ReportTurnStart's case is
+//     (nothing here claims the parent's OWN turn is being resumed) — it
+//     is, however, a little confusing in combination with the healthy
+//     new child Spawn attaches moments later under that "reported dead"
+//     parent. Left as-is, deliberately out of scope for this pass (see
+//     PR #146 review discussion): fixing it needs a design decision
+//     (should Spawn refuse a StatusFailed parent the way it already
+//     refuses StatusCanceled?) this fix does not make.
+func (m *SessionManager) adoptReloadedLocked(s *Session, recover bool) *sessionNode {
 	parentID := s.TaskParentID()
 	if parentID == "" {
 		return m.adoptRootLocked(s)
@@ -516,7 +619,9 @@ func (m *SessionManager) adoptReloadedLocked(s *Session) *sessionNode {
 	n.agentType = s.TaskAgentType()
 	m.installTaskToolLocked(s, depth)
 	m.restoreTaskToolRestrictionLocked(s, depth)
-	m.recoverInterruptedTurnLocked(n, s)
+	if recover {
+		m.recoverInterruptedTurnLocked(n, s)
+	}
 	return n
 }
 
@@ -628,6 +733,7 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 		CacheWriteTokens: total.CacheWriteTokens - n.budgetedUsage.CacheWriteTokens,
 	}
 	n.budgetedUsage = total
+	m.budgetedByChild[n.id] = total
 	u := m.usageByRoot[n.rootID]
 	u.InputTokens += delta.InputTokens
 	u.OutputTokens += delta.OutputTokens
@@ -790,7 +896,13 @@ func (m *SessionManager) ReportTurnStart(sess *Session) {
 	defer m.mu.Unlock()
 	n, ok := m.nodes[sess.ID]
 	if !ok {
-		n = m.adoptReloadedLocked(sess)
+		// recover=false: this function unconditionally sets n.status =
+		// StatusRunning and n.finalized = false a few lines below,
+		// regardless of what recovery would have set — see
+		// adoptReloadedLocked's own doc comment for why firing recovery
+		// here would be self-contradicting (report this exact node dead,
+		// then immediately run it).
+		n = m.adoptReloadedLocked(sess, false)
 	}
 	// Always re-attach to the LIVE object, even for an already-tracked
 	// node: the server's residency system (MaxResident) can evict and
@@ -904,6 +1016,14 @@ func (m *SessionManager) adoptLocked(s *Session, parentID string, depth int) *se
 		status:   StatusIdle,
 		ctx:      ctx,
 		cancel:   cancel,
+		// See budgetedByChild's own doc comment: seeded from THIS
+		// manager's own per-child credit record, not s.Usage() directly —
+		// zero (the map's own zero value) for both a genuinely fresh
+		// session AND a session this manager has never credited before
+		// (a cross-process reload), and the correct already-credited
+		// amount for a same-manager reap+re-adopt, where budgetedByChild
+		// survived the reap even though the sessionNode itself did not.
+		budgetedUsage: m.budgetedByChild[s.ID],
 	}
 	m.nodes[s.ID] = n
 	if parentID != "" {
@@ -1624,6 +1744,7 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 		CacheWriteTokens: total.CacheWriteTokens - n.budgetedUsage.CacheWriteTokens,
 	}
 	n.budgetedUsage = total
+	m.budgetedByChild[n.id] = total
 	u := m.usageByRoot[n.rootID]
 	u.InputTokens += delta.InputTokens
 	u.OutputTokens += delta.OutputTokens
