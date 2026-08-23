@@ -409,6 +409,21 @@ type Config struct {
 	// only when an evaluator is configured.
 	ModelTool bool
 
+	// SessionManager, when non-nil, enables the built-in `task` tool
+	// (task_tool.go): it is the manager this session was created or
+	// adopted through (SessionManager.NewRoot/AdoptRoot/Spawn all set it),
+	// and Run reads it back off Session.cfg to actually spawn a child —
+	// the same "read the dependency off cfg at Run time" shape MCP,
+	// Processes, and GoalTool already use, not a closure captured at tool-
+	// construction time. A session built directly via NewSession/
+	// LoadSession, bypassing SessionManager entirely, leaves this nil and
+	// gets no `task` tool at all — today's existing single-session flow is
+	// completely unaffected. Whether `task` actually ends up registered
+	// (and, for a spawned child, whether it survives an agent definition's
+	// tools: restriction) is decided by SessionManager itself, not by this
+	// field alone — see SessionManager.installTaskToolLocked.
+	SessionManager *SessionManager
+
 	// ModelAliases maps short alias names ("fast", "smart") to model refs,
 	// mirroring config.Config.Aliases (the engine never imports config). The
 	// `model` tool resolves a one-level alias against this map before parsing
@@ -705,6 +720,15 @@ type Session struct {
 	// resume from the same fold, so the ceiling is a session-lifetime one
 	// rather than a per-process one. Guarded by mu.
 	toolResultBytes int
+
+	// taskNotifications is this session's pending queue of child-completion
+	// signals (see taskdelivery.go): SessionManager.finalizeTurn appends to
+	// it from whatever goroutine just finished driving a CHILD's turn,
+	// streamTurn drains it every model call via
+	// drainTaskNotificationsSegment. Nil for a session with no
+	// SessionManager, or one that has never had a child complete. Guarded
+	// by mu.
+	taskNotifications []taskNotification
 }
 
 // NewSession creates a session. Nothing touches the network, spawns
@@ -764,6 +788,15 @@ func newSession(cfg Config) *Session {
 	}
 	if mcpConfiguredCount(cfg.MCP) > 0 {
 		s.tools[mcpSessionToolName] = mcpTool()
+	}
+	// task is registered here unconditionally whenever a SessionManager is
+	// present; SessionManager itself withholds it post-construction for a
+	// session at (or past) the depth limit, and an agent definition's
+	// tools: restriction can remove it too (see installTaskToolLocked and
+	// Spawn in session_manager.go) — newSession has no notion of depth or
+	// agent definitions, so it is not the right place to make either call.
+	if cfg.SessionManager != nil {
+		s.tools[taskToolName] = taskTool()
 	}
 	// read_tool_result is registered only when retention can actually mint a
 	// handle — a positive inline limit AND a SessionDir, the same condition
@@ -1398,6 +1431,13 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 		messages = withAmbientStatus(messages, seg)
 	}
 	if seg := identityStatusSegment(s.cfg.EngineVersion, s.cfg.StartedAt, s.cfg.SessionSync); seg != "" {
+		messages = withAmbientStatus(messages, seg)
+	}
+	// Unlike the four segments above, this one DRAINS s.taskNotifications
+	// as a side effect — see drainTaskNotificationsSegment's doc comment
+	// for why a child-completion notification needs exactly-once delivery
+	// rather than the other four's idempotent recompute-every-turn shape.
+	if seg := s.drainTaskNotificationsSegment(); seg != "" {
 		messages = withAmbientStatus(messages, seg)
 	}
 	req := &provider.Request{
