@@ -132,7 +132,7 @@ func (c *createPhaseLogger) OnCreatePhase(sessionID, phase string, elapsed time.
 // counters-plus-slog shape (a plain field, no new dependency like a
 // Prometheus client — this repo has no metrics library, and adding one
 // just for this is out of scope). Counts are cumulative for the process's
-// life; OnTaskEventCounts (test/diagnostic use — there is no HTTP surface
+// life; Counts() (test/diagnostic use — there is no HTTP surface
 // for these today, matching the "slog-only, not a new wire endpoint"
 // scope this fix chose) returns a snapshot.
 type taskEventLogger struct {

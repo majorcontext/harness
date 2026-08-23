@@ -98,17 +98,33 @@ func (s *Session) enqueueTaskNotification(n taskNotification) {
 // closing the common-case double-delivery: anything the fold already
 // restored is skipped as an exact match; anything genuinely new (the
 // race window, or literally any other divergence) still migrates.
+//
+// NEVER persists — not even on the append (genuinely-new, race-window)
+// branch. A live review finding, caught within minutes of this method's
+// own first version landing: n can only ever reach this method by having
+// first been drained off old (drainAllTaskNotificationsSameLog, this
+// method's own paired sibling — see its doc comment), and old can only
+// ever have HAD n in the first place because old's own earlier
+// enqueueTaskNotification call already durably wrote n's
+// recTaskNotifyQueued record — to THIS SAME shared log, since old and s
+// are two in-memory objects for one durable session id. Writing a SECOND
+// recTaskNotifyQueued for n here, even on the "new" branch, is therefore
+// always a duplicate of a record that's already there: a future reload's
+// queued-minus-delivered fold would net one phantom pending copy of n,
+// double-delivering the same child completion after a restart — the
+// exact durability inversion drainAllTaskNotificationsSameLog's own
+// no-persist-on-drain half exists to prevent, just on the enqueue half
+// instead. The in-memory append is the only work this method ever needs
+// to do.
 func (s *Session) enqueueTaskNotificationMigrated(n taskNotification) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, existing := range s.taskNotifications {
 		if existing == n {
-			s.mu.Unlock()
 			return
 		}
 	}
 	s.taskNotifications = append(s.taskNotifications, n)
-	s.persistTaskNotifyLocked(recTaskNotifyQueued, n)
-	s.mu.Unlock()
 }
 
 // hasPendingTaskNotifications reports whether s has at least one
