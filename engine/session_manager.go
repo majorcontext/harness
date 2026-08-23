@@ -384,8 +384,81 @@ func (m *SessionManager) adoptReloadedLocked(s *Session) *sessionNode {
 		attachTo = parentID
 	}
 	n := m.adoptLocked(s, attachTo, depth)
+	// TaskAgentType survives a reload durably (see its own doc comment)
+	// even though SessionManager's in-memory node.agentType does not —
+	// without this, lineage.agent_type on the wire went blank the moment
+	// a child was reaped and later re-touched, even though it was e.g.
+	// still very much an "explore" child.
+	n.agentType = s.TaskAgentType()
 	m.installTaskToolLocked(s, depth)
+	m.restoreTaskToolRestrictionLocked(s, depth)
 	return n
+}
+
+// restoreTaskToolRestrictionLocked re-applies the tool restriction a
+// reloaded child was originally spawned with — see
+// Config.TaskAgentType/TaskToolNames's own doc comment for why this is
+// necessary at all: LoadSession/newSession reconstruct s.tools from
+// scratch via the unconditional full-registry install, with no memory of
+// whatever restrictTools narrowed it to at spawn time. Called AFTER
+// installTaskToolLocked, so depth-based task-tool removal is already
+// applied and this only ever narrows further, never re-adds task.
+//
+// TaskToolNames present (the common, post-fix case): applied directly
+// and exactly — durable ground truth, no re-derivation, no dependency
+// on whether the named agent definition still exists.
+//
+// TaskToolNames absent but TaskAgentType present (a log written between
+// this field's introduction and TaskParentID's, or otherwise
+// incomplete): best-effort recovery by re-resolving the named
+// definition against the CURRENT agent-def set. If it still resolves,
+// its CURRENT Tools list is applied (may differ narrowly from what was
+// actually used at spawn time if the definition changed since — an
+// accepted residual). If it does NOT resolve (the named .agents/*.md
+// file was deleted or renamed), fail closed: restrict to the empty set
+// — restrictTools([]string{}) cannot itself fail (no names to look
+// up), so this is guaranteed to actually take effect, unlike falling
+// back to some OTHER named tool that might itself be missing from the
+// registry — rather than leaving an ambiguous record unrestricted. A
+// live review named this exact case.
+//
+// Both fields absent: nothing recorded at all (a session predating both
+// fields, or a genuinely unrestricted general-purpose child) — no
+// change, the same already-accepted "legacy record" gap TaskParentID's
+// own doc comment describes.
+func (m *SessionManager) restoreTaskToolRestrictionLocked(s *Session, depth int) {
+	names, restrict := s.TaskToolNames(), s.TaskToolNames() != nil
+	if !restrict && s.TaskAgentType() != "" {
+		resolved := false
+		if defs, err := s.AgentDefs(); err == nil {
+			if def, ok := defs[s.TaskAgentType()]; ok {
+				names, restrict, resolved = def.Tools, def.Tools != nil, true
+			}
+		}
+		if !resolved {
+			names, restrict = []string{}, true
+		}
+	}
+	if !restrict {
+		return
+	}
+	if !m.TaskToolAllowed(depth) {
+		filtered := make([]string, 0, len(names))
+		for _, name := range names {
+			if name != taskToolName {
+				filtered = append(filtered, name)
+			}
+		}
+		names = filtered
+	}
+	// Best-effort: the only failure mode is a requested name no longer
+	// existing in s.tools at all (the registry itself changed shape
+	// since spawn — a tool removed from the build). Nothing a caller
+	// can act on; the full registry installTaskToolLocked already
+	// applied stays in place rather than this call panicking or
+	// aborting the reload over it. The guaranteed-safe fail-closed path
+	// above (names = []string{}) never hits this.
+	_ = restrictTools(s, names)
 }
 
 // ReportTurnStart tells m that an EXTERNAL scheduler (the server's own
@@ -467,6 +540,16 @@ func (m *SessionManager) ReportTurnStart(sess *Session) {
 		m.runningByRoot[n.rootID]++
 	}
 	n.status = StatusRunning
+	// finalized must be cleared on every transition INTO StatusRunning —
+	// not just implicitly left at its zero value for a brand-new node —
+	// because a node reused for a SECOND (or later) turn (a session.send
+	// follow-up to a done/failed child; a reload adopted here) still
+	// carries finalized=true from finishing its PRIOR turn. Left
+	// uncleared, Reap's !n.finalized guard would wrongly treat THIS
+	// turn's still-unsettled concurrency reservation as already safe to
+	// remove — see finalizeTurn/cancelOneNodeLocked's own doc comments
+	// for what finalized actually tracks. A live review caught this.
+	n.finalized = false
 }
 
 // ReportTurnEnd tells m that an external scheduler's turn on id (started
@@ -745,15 +828,66 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 		childCfg.System = append(append([]string(nil), childCfg.System...), opts.SystemAppend)
 	}
 	child := NewSession(childCfg) // installs `task` unconditionally, since childCfg.SessionManager is inherited from the parent
+
+	// Validate opts.ToolNames against the child's OWN full registry —
+	// BEFORE installTaskToolLocked below can remove "task" from it (a
+	// definition may legitimately name "task" explicitly even at the
+	// depth limit; see the depth-filter step further down, which
+	// withholds it without erroring) and BEFORE intersecting against the
+	// parent's effective set further below. An unknown name here is a
+	// genuine agent-definition typo/config mistake (e.g. tools:
+	// read_fiel), which must still surface as a clean Spawn error
+	// exactly like it always did (restrictTools's own validation, moved
+	// earlier): the intersection below would otherwise silently DROP an
+	// unknown name identically to a real but parent-doesn't-have-it
+	// name, masking the mistake entirely instead of erroring on it.
+	for _, name := range opts.ToolNames {
+		if _, ok := child.tools[name]; !ok {
+			m.mu.Unlock()
+			return "", fmt.Errorf("engine: unknown tool %q", name)
+		}
+	}
 	m.installTaskToolLocked(child, childDepth)
 
-	toolNames := opts.ToolNames
-	if toolNames != nil && !m.TaskToolAllowed(childDepth) {
-		// The requesting agent definition asked for "task" explicitly (a
-		// non-leaf custom definition), but this child is at the depth
-		// limit: withheld, exactly like the general-purpose (unrestricted)
-		// case above — never a load-bearing error for hitting a limit that
-		// is expected to bite eventually.
+	// toolNames is the child's EFFECTIVE tool set: the PARENT's own
+	// effective set, intersected with the agent definition's own
+	// restriction (opts.ToolNames — nil means "no ADDITIONAL restriction
+	// beyond whatever the child would otherwise inherit"). Deriving it
+	// from parent.session.tools rather than opts.ToolNames alone closes
+	// a privilege-escalation edge a live review caught: a RESTRICTED
+	// parent (e.g. a custom def with tools: read_file, task — read-only
+	// plus the ability to spawn) spawning a general-purpose child
+	// (opts.ToolNames == nil for that built-in) used to hand that child
+	// the FULL, unrestricted session-default registry — including
+	// bash/write_file the restricted parent itself could never reach.
+	// The spec's own table says general-purpose gets "the parent's full
+	// tool set," not "the session's" — this is what makes that true.
+	parentEffective := make([]string, 0, len(parent.session.tools))
+	for name := range parent.session.tools {
+		parentEffective = append(parentEffective, name)
+	}
+	toolNames := parentEffective
+	if opts.ToolNames != nil {
+		defSet := make(map[string]bool, len(opts.ToolNames))
+		for _, name := range opts.ToolNames {
+			defSet[name] = true
+		}
+		narrowed := make([]string, 0, len(opts.ToolNames))
+		for _, name := range parentEffective {
+			if defSet[name] {
+				narrowed = append(narrowed, name)
+			}
+		}
+		toolNames = narrowed
+	}
+	if !m.TaskToolAllowed(childDepth) {
+		// The computed set above may still include "task" (the parent
+		// itself has it, and the definition didn't explicitly exclude
+		// it), but this child is at the depth limit: withheld
+		// unconditionally, exactly like the general-purpose
+		// (unrestricted) case always did — never a load-bearing error
+		// for hitting a limit that is expected to bite eventually. Depth
+		// is absolute and never overridable by inheritance.
 		filtered := make([]string, 0, len(toolNames))
 		for _, name := range toolNames {
 			if name != taskToolName {
@@ -762,12 +896,26 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 		}
 		toolNames = filtered
 	}
-	if toolNames != nil {
-		if err := restrictTools(child, toolNames); err != nil {
-			m.mu.Unlock()
-			return "", err
-		}
+	if err := restrictTools(child, toolNames); err != nil {
+		m.mu.Unlock()
+		return "", err
 	}
+	// Durable record of the restriction just applied — see
+	// Config.TaskAgentType/TaskToolNames's own doc comment for why: a
+	// reload (adoptReloadedLocked) has nothing else to restore this
+	// child's tool set from once SessionManager's in-memory tree (and
+	// the in-memory tools map restrictTools just narrowed) is forgotten
+	// — Reap, or a process restart — and a legitimate session.send
+	// follow-up touches this child again. child.cfg, not childCfg (the
+	// local NewSession already copied by value): safe to write directly,
+	// unsynchronized — child was JUST constructed above and has not
+	// been exposed to any other goroutine yet (its own Prompt-driving
+	// goroutine launches further below), matching adoptRootLocked's
+	// identical reasoning for mutating a session's cfg/tools before it
+	// is live. The very first Persist call journals this on the header
+	// record.
+	child.cfg.TaskAgentType = opts.AgentType
+	child.cfg.TaskToolNames = toolNames
 
 	n := m.adoptLocked(child, parent.id, childDepth)
 	n.agentType = opts.AgentType
@@ -884,6 +1032,11 @@ func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Me
 		return nil, ErrConcurrencyLimit
 	}
 	n.status = StatusRunning
+	// See ReportTurnStart's identical reset for why: n may be a
+	// done/failed child Send is legitimately restarting for a follow-up
+	// turn, and it still carries finalized=true from finishing its PRIOR
+	// one.
+	n.finalized = false
 	if n.depth > 0 {
 		m.runningByRoot[n.rootID]++
 	}
@@ -1121,6 +1274,9 @@ func (m *SessionManager) nearestLiveAncestorLocked(n *sessionNode) *sessionNode 
 // external scheduler, so this delegation never applies to one.
 func (m *SessionManager) triggerResumeLocked(node *sessionNode) func() {
 	node.status = StatusRunning
+	// See ReportTurnStart's identical reset for why: node may be resuming
+	// from a PRIOR completed turn and still carry finalized=true from it.
+	node.finalized = false
 	if node.depth > 0 {
 		m.runningByRoot[node.rootID]++
 	}
@@ -1155,6 +1311,51 @@ func (m *SessionManager) triggerResumeLocked(node *sessionNode) func() {
 			go resume()
 		}
 	}
+}
+
+// RevertResumeIfStillRunning undoes triggerResumeLocked's speculative
+// commitment for id — status back to StatusIdle (it never actually
+// started a turn) and the depth>0 concurrency reservation released — for
+// an ExternalRunner (resumeSessionForTaskNotification) to call when its
+// own claim attempt fails for a reason that means NO bracketed turn will
+// EVER call ReportTurnEnd to release that commitment on its own: a
+// workdir-held conflict (a DIFFERENT session entirely holds the shared
+// workdir — id itself may not be running anything at all), or a
+// draining server. This is unlike an ORDINARY "busy" refusal, where a
+// different, already-running BRACKETED turn holds the slot and WILL
+// eventually call ReportTurnEnd, correctly picking up the still-pending
+// notification itself (see finalizeTurn's perr == nil &&
+// hasPendingTaskNotifications() re-trigger case) — no revert needed
+// there.
+//
+// Reverting (rather than leaving id stuck StatusRunning forever, with
+// nothing left to ever un-stick it and queue-or-resume dead for it) lets
+// a LATER notification — or this same one, still pending — retry once
+// the transient condition clears. The caller must still report this
+// attempt as "handled" to its own ExternalRunner contract despite the
+// revert: the alternative (reporting id as unrecognized) would trigger a
+// raw, slot-bypassing Session.Prompt call in triggerResumeLocked's own
+// fallback — exactly the hazard a workdir-held conflict exists to
+// prevent (two workdir-sharing sessions running concurrently). A live
+// review caught the original stuck-forever gap.
+//
+// Guarded by a status check: a no-op if id is no longer StatusRunning
+// (something else already resolved it in the meantime) or is no longer
+// tracked at all.
+func (m *SessionManager) RevertResumeIfStillRunning(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n, ok := m.nodes[id]
+	if !ok || n.status != StatusRunning {
+		return
+	}
+	n.status = StatusIdle
+	m.decrementRunningLocked(n)
+	// No goroutine will ever call finalizeTurn for this abandoned
+	// attempt (nothing actually started) — matching cancelOneNodeLocked's
+	// own convention for a node with no in-flight Prompt call, this
+	// slot's bookkeeping is already fully settled right here.
+	n.finalized = true
 }
 
 // decrementRunningLocked releases the concurrency reservation a running
@@ -1229,6 +1430,20 @@ func (m *SessionManager) Cancel(id string) error {
 // id shows id canceled), while a caught-in-the-crossfire descendant's
 // result stays observably distinct from an actual cancel_tree.
 //
+// A no-op — id's own status and context untouched — unless id is
+// CURRENTLY StatusRunning. "abort" means "stop the turn in progress";
+// a done/failed/canceled/idle id has no turn in progress to stop, and
+// canceling its context anyway would be pure collateral damage: id's own
+// ctx is permanent (context.CancelFunc never re-arms), so a later
+// legitimate session.send to it would instantly fail on mergeCancel, and
+// — the same unavoidable descendant-interruption AbortTurn's own doc
+// comment above describes — any of id's OWN still-running descendants
+// (spawned during an EARLIER turn, now outliving it) would be killed as
+// collateral even though id itself has nothing left to abort. A live
+// review reproduced exactly this: aborting an already-done child killed
+// its still-running grandchild, and permanently broke the done child's
+// own later reachability.
+//
 // Returns an error only if id is not tracked at all.
 func (m *SessionManager) AbortTurn(id string) error {
 	m.mu.Lock()
@@ -1236,6 +1451,9 @@ func (m *SessionManager) AbortTurn(id string) error {
 	n, ok := m.nodes[id]
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrUnknownSession, id)
+	}
+	if n.status != StatusRunning {
+		return nil
 	}
 	m.cancelOneNodeLocked(n)
 	return nil

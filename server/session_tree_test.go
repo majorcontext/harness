@@ -435,6 +435,16 @@ func TestAbortStopsRunningManagedChild(t *testing.T) {
 // own lineage block, which correctly reported "running" beside it.
 func TestSpawnResponseReportsBusyNotIdle(t *testing.T) {
 	blocker := newBlockingProvider("blocker")
+	// Released explicitly at the end of the test body below, NOT relied
+	// on solely via t.Cleanup: a child's Prompt call runs on
+	// SessionManager's own node.ctx, entirely independent of the test
+	// server's HTTP connection tracking, so nothing in multiProviderHarness's
+	// own t.Cleanup(ts.Close) would ever wait for it — it can still be
+	// mid-write to its session log file under t.TempDir() when TempDir's
+	// OWN cleanup (also LIFO-ordered, also registered AFTER this one)
+	// tries to remove the directory, intermittently failing with
+	// "directory not empty" under load. A live full-suite run caught
+	// this exact flake.
 	t.Cleanup(blocker.releaseAll)
 	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil,
 		&scriptedProvider{name: "root"}, blocker)
@@ -455,6 +465,7 @@ func TestSpawnResponseReportsBusyNotIdle(t *testing.T) {
 		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
 	}
 	var child struct {
+		ID      string         `json:"id"`
 		Status  string         `json:"status"`
 		State   string         `json:"state"`
 		Lineage map[string]any `json:"lineage"`
@@ -466,6 +477,9 @@ func TestSpawnResponseReportsBusyNotIdle(t *testing.T) {
 	if child.Lineage["status"] != "running" {
 		t.Errorf("lineage.status = %v, want %q", child.Lineage["status"], "running")
 	}
+
+	blocker.releaseAll()
+	waitForLineageStatus(t, h, child.ID, "done", 2*time.Second)
 }
 
 // TestAbortDiffersFromCancelTreeOnGrandchildOutcome is the regression
@@ -534,6 +548,106 @@ func TestAbortDiffersFromCancelTreeOnGrandchildOutcome(t *testing.T) {
 	waitForLineageStatus(t, h, grand.ID, "failed", 2*time.Second)
 }
 
+// TestAbortOfTerminalChildLeavesGrandchildAndSendUntouched is the
+// regression test for a review finding: handleAbort routed to
+// sessMgr.AbortTurn for ANY managed child regardless of its own status.
+// AbortTurn cancels the node's context unconditionally, which (a) is
+// pure collateral damage for a child that has ALREADY finished (its own
+// context has nothing left to interrupt) — the review reproduced this
+// exactly: aborting a done child killed its own still-running grandchild
+// (spawned during an earlier, already-finished turn) — and (b)
+// permanently breaks the done child's own later reachability, since a
+// context.CancelFunc never re-arms: a legitimate follow-up session.send
+// to it would instantly fail with a canceled context via mergeCancel.
+// AbortTurn is now a no-op unless the target is CURRENTLY StatusRunning.
+// This proves both halves: aborting an already-done child leaves its
+// still-running grandchild alone, and the done child itself remains
+// sendable afterward.
+func TestAbortOfTerminalChildLeavesGrandchildAndSendUntouched(t *testing.T) {
+	blockerGrand := newBlockingProvider("grand")
+	t.Cleanup(blockerGrand.releaseAll)
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"},
+		&scriptedProvider{name: "mid", turns: [][]provider.Event{asstTurn("mid done"), asstTurn("mid follow-up done")}},
+		blockerGrand)
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": root.ID, "agent": engine.AgentGeneralPurpose, "prompt": "go", "model": "mid/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn mid status %d: %s", resp.StatusCode, data)
+	}
+	var mid struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &mid)
+	waitForLineageStatus(t, h, mid.ID, "done", 2*time.Second)
+
+	// A grandchild spawned from mid AFTER mid already finished — a real,
+	// legitimate shape (a done parent can still have live descendants;
+	// see cancelSubtreeLocked's own doc comment on that exact point).
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": mid.ID, "agent": engine.AgentGeneralPurpose, "prompt": "go deeper", "model": "grand/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn grand status %d: %s", resp.StatusCode, data)
+	}
+	var grand struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &grand)
+	waitForLineageStatus(t, h, grand.ID, "running", 2*time.Second)
+
+	resp, data = h.do("POST", "/session/"+mid.ID+"/abort", nil)
+	if resp.StatusCode != 204 {
+		t.Fatalf("abort status %d, want 204: %s", resp.StatusCode, data)
+	}
+
+	// mid was never running — must stay exactly as it was.
+	resp, data = h.do("GET", "/session/"+mid.ID, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("get mid status %d: %s", resp.StatusCode, data)
+	}
+	var midInfo struct {
+		Lineage map[string]any `json:"lineage"`
+	}
+	mustUnmarshal(t, data, &midInfo)
+	if midInfo.Lineage["status"] != "done" {
+		t.Errorf("mid lineage.status = %v, want %q (abort of a non-running node must be a no-op)", midInfo.Lineage["status"], "done")
+	}
+
+	// grand must be untouched collateral — still running, not failed or
+	// canceled.
+	time.Sleep(20 * time.Millisecond) // let any wrongful cascade land, if the fix regressed
+	resp, data = h.do("GET", "/session/"+grand.ID, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("get grand status %d: %s", resp.StatusCode, data)
+	}
+	var grandInfo struct {
+		Lineage map[string]any `json:"lineage"`
+	}
+	mustUnmarshal(t, data, &grandInfo)
+	if grandInfo.Lineage["status"] != "running" {
+		t.Errorf("grand lineage.status = %v, want %q (aborting the already-done mid must not touch its running grandchild)", grandInfo.Lineage["status"], "running")
+	}
+
+	// mid must still be sendable — its context was never canceled.
+	resp, data = h.do("POST", "/session/"+mid.ID+"/send", map[string]string{"text": "follow-up"})
+	if resp.StatusCode != 202 {
+		t.Fatalf("send to mid after its own no-op abort status %d, want 202: %s", resp.StatusCode, data)
+	}
+	waitForLineageStatus(t, h, mid.ID, "done", 2*time.Second)
+}
+
 // TestSessionSendUnknownSessionIs404 proves session.send 404s for an id
 // this server's SessionManager does not track.
 func TestSessionSendUnknownSessionIs404(t *testing.T) {
@@ -541,6 +655,124 @@ func TestSessionSendUnknownSessionIs404(t *testing.T) {
 	resp, data := h.do("POST", "/session/ses_doesnotexist00000000/send", map[string]string{"text": "hi"})
 	if resp.StatusCode != 404 {
 		t.Fatalf("status = %d, want 404: %s", resp.StatusCode, data)
+	}
+}
+
+// TestWorkdirHeldResumeRefusalDoesNotPinRootRunning is the regression
+// test for a review finding: triggerResumeLocked flips a root to
+// StatusRunning BEFORE calling its ExternalRunner
+// (resumeSessionForTaskNotification -> runOrQueueText ->
+// claimForPrompt). An earlier revision of runOrQueueText treated ANY
+// non-404 claim failure as handled=true, including a workdir-held 409 —
+// where NO turn is running on the root at all (a DIFFERENT session
+// entirely holds the shared workdir), so nothing would ever call
+// ReportTurnEnd to release that speculative commitment. The root got
+// permanently stuck StatusRunning: queue-or-resume dead for it, its
+// pending notification never delivered, until an unrelated human prompt
+// happened to drain it.
+//
+// Proven end-to-end at the wire level: root A holds the shared (default)
+// workdir busy; a child spawned under idle root B completes and tries to
+// resume B, refused by the workdir conflict. B must return to idle
+// (not get stuck "running") — and once A frees the workdir, a SECOND
+// child's completion must successfully trigger a real resume turn on B
+// (observable as the synthetic resume-trigger user message reaching B's
+// history), proving the first notification's refusal didn't strand
+// queue-or-resume for B permanently.
+func TestWorkdirHeldResumeRefusalDoesNotPinRootRunning(t *testing.T) {
+	blockerA := newBlockingProvider("rootA")
+	t.Cleanup(blockerA.releaseAll)
+	h := multiProviderHarness(t, message.ModelRef{Provider: "rootB", Model: "m1"}, nil,
+		blockerA, &scriptedProvider{name: "rootB"},
+		&scriptedProvider{name: "child1", turns: [][]provider.Event{asstTurn("child1 done")}},
+		&scriptedProvider{name: "child2", turns: [][]provider.Event{asstTurn("child2 done")}})
+
+	// Both default to the process cwd — the same workdir, no explicit
+	// override — exactly TestPromptSameWorkdirBusyRejected's own setup.
+	resp, data := h.do("POST", "/session", map[string]string{"model": "rootA/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root A status %d: %s", resp.StatusCode, data)
+	}
+	var rootA struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &rootA)
+
+	resp, data = h.do("POST", "/session", map[string]string{"model": "rootB/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root B status %d: %s", resp.StatusCode, data)
+	}
+	var rootB struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &rootB)
+
+	// A claims and holds the shared workdir.
+	resp, data = h.do("POST", "/session/"+rootA.ID+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "go"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt A status %d: %s", resp.StatusCode, data)
+	}
+	<-blockerA.started
+
+	// child1, spawned under idle B, completes fast and tries to resume
+	// B — refused by A's workdir hold.
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": rootB.ID, "agent": engine.AgentGeneralPurpose, "prompt": "go", "model": "child1/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child1 status %d: %s", resp.StatusCode, data)
+	}
+	var child1 struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &child1)
+	waitForLineageStatus(t, h, child1.ID, "done", 2*time.Second)
+
+	// B must NOT be stuck "running" — the core assertion.
+	waitForLineageStatus(t, h, rootB.ID, "idle", 2*time.Second)
+
+	const resumeTriggerText = "A background task you started has finished. See the engine context below for its result, and continue accordingly."
+	resp, data = h.do("GET", "/session/"+rootB.ID+"/message", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("get B messages status %d: %s", resp.StatusCode, data)
+	}
+	if strings.Contains(string(data), resumeTriggerText) {
+		t.Fatalf("B ran a resume turn despite the workdir conflict refusing it: %s", data)
+	}
+
+	// Free the workdir; child2's completion must find B idle (thanks to
+	// the fix reverting child1's stuck attempt) and successfully trigger
+	// a real resume turn this time.
+	blockerA.releaseAll()
+	waitForLineageStatus(t, h, rootA.ID, "idle", 2*time.Second) // a root's own status is never "done" — only a child's is
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": rootB.ID, "agent": engine.AgentGeneralPurpose, "prompt": "go", "model": "child2/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child2 status %d: %s", resp.StatusCode, data)
+	}
+	var child2 struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &child2)
+	waitForLineageStatus(t, h, child2.ID, "done", 2*time.Second)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		resp, data := h.do("GET", "/session/"+rootB.ID+"/message", nil)
+		if resp.StatusCode != 200 {
+			t.Fatalf("get B messages status %d: %s", resp.StatusCode, data)
+		}
+		if strings.Contains(string(data), resumeTriggerText) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("B never ran a resume turn once the workdir freed — queue-or-resume stayed dead after the first refusal: %s", data)
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 }
 

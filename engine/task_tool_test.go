@@ -68,6 +68,79 @@ func TestTaskToolLeafDefinitionExcludesTaskEvenBelowLimit(t *testing.T) {
 	}
 }
 
+// TestGrandchildRegistryIsIntersectionNeverWiderThanParent is the
+// regression test for an architecture-review BLOCKER: Spawn derived the
+// child's registry from the SESSION-DEFAULT full set (filtered only by
+// the definition's own opts.ToolNames), never from the PARENT's actual
+// effective registry — a privilege-escalation edge. A custom
+// definition like `tools: read_file, task` (read-only plus the ability
+// to spawn) spawning a general-purpose child (opts.ToolNames == nil for
+// that built-in, meaning "no additional restriction") used to hand that
+// child the FULL default set, bash included — even though the
+// RESTRICTED parent spawning it could never reach bash itself. The
+// spec's own table says general-purpose gets "the parent's full tool
+// set," not "the session's." Proves the grandchild's registry is
+// exactly the intersection: read_file (and task, since depth allows
+// it) — nothing more, in particular never bash/write_file/edit_file.
+func TestGrandchildRegistryIsIntersectionNeverWiderThanParent(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0) // plenty of depth headroom
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("mid", doneTurn("mid done")),
+		scriptedTurns("grand", doneTurn("grand done")),
+	))
+
+	// A custom, non-leaf, read-only-plus-spawn definition — the exact
+	// shape the review named: read_file and task only.
+	midID, err := mgr.Spawn(SpawnOptions{
+		ParentID: root.ID, Prompt: "go", Model: modelFor("mid"),
+		AgentType: "custom-read-and-spawn",
+		ToolNames: []string{"read_file", taskToolName},
+	})
+	if err != nil {
+		t.Fatalf("Spawn mid: %v", err)
+	}
+	waitForStatus(t, mgr, midID, StatusDone, time.Second)
+	mid, _ := mgr.Session(midID)
+	if _, ok := mid.tools["bash"]; ok {
+		t.Fatalf("test setup: mid unexpectedly has bash: %v", toolNames(mid))
+	}
+
+	// A general-purpose grandchild from mid — opts.ToolNames == nil,
+	// exactly like the built-in AgentGeneralPurpose definition
+	// (Tools: nil, "no ADDITIONAL restriction").
+	grandID, err := mgr.Spawn(SpawnOptions{
+		ParentID: midID, Prompt: "go deeper", Model: modelFor("grand"),
+		AgentType: AgentGeneralPurpose,
+	})
+	if err != nil {
+		t.Fatalf("Spawn grand: %v", err)
+	}
+	waitForStatus(t, mgr, grandID, StatusDone, time.Second)
+	grand, _ := mgr.Session(grandID)
+
+	if _, ok := grand.tools["bash"]; ok {
+		t.Errorf("grandchild regained bash despite its restricted parent never having it: %v", toolNames(grand))
+	}
+	if _, ok := grand.tools["write_file"]; ok {
+		t.Errorf("grandchild regained write_file: %v", toolNames(grand))
+	}
+	if _, ok := grand.tools["edit_file"]; ok {
+		t.Errorf("grandchild regained edit_file: %v", toolNames(grand))
+	}
+	if _, ok := grand.tools["read_file"]; !ok {
+		t.Errorf("grandchild missing read_file, want it inherited from mid: %v", toolNames(grand))
+	}
+	// Every tool the grandchild has must ALSO be one mid effectively
+	// had — the intersection property, checked directly rather than by
+	// enumerating individual names.
+	for name := range grand.tools {
+		if _, ok := mid.tools[name]; !ok {
+			t.Errorf("grandchild has %q, which its parent mid did not have — registry is wider than the parent's: %v", name, toolNames(grand))
+		}
+	}
+}
+
 func TestRunTaskToolSpawnsChildAndReturnsImmediately(t *testing.T) {
 	mgr := NewSessionManager(context.Background(), 0, 0)
 	root := mgr.NewRoot(managedConfig("root",
