@@ -192,6 +192,38 @@ func TestRunTaskToolUnknownAgentIsError(t *testing.T) {
 	}
 }
 
+// TestRunTaskToolUnconfiguredModelOverrideIsSynchronousError is the
+// regression test for a live review finding: a `task` call's model
+// override was parsed (ParseModelRef, well-formedness only) but never
+// checked against the configured providers, unlike the `model` session
+// tool's own identical override (runModelTool, ModelSupported). An
+// override naming a provider nothing registers used to sail straight
+// through Spawn — burning a concurrency slot and a session log — and only
+// fail later, at the child's own first turn, surfacing to the caller as a
+// delayed "[tasks: ... failed: ...]" notification instead of an
+// immediate, synchronous tool error — proven here by asserting the error
+// return itself (pre-fix, this call returned nil: Spawn has no provider
+// check of its own, so it always succeeded and only failed much later,
+// asynchronously, inside the child's own first turn).
+func TestRunTaskToolUnconfiguredModelOverrideIsSynchronousError(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns(AgentExplore, doneTurn("found it")),
+	))
+
+	raw, _ := json.Marshal(map[string]string{
+		"agent":  AgentExplore,
+		"prompt": "find the entry point",
+		"model":  "totally-unconfigured-provider/some-model",
+	})
+	if _, err := runTaskTool(root, raw); err == nil {
+		t.Error("runTaskTool with an unconfigured provider override: want error, got nil")
+	} else if !strings.Contains(err.Error(), "totally-unconfigured-provider") {
+		t.Errorf("error = %v, want it to name the unconfigured provider", err)
+	}
+}
+
 func TestRunTaskToolMissingSessionManagerIsError(t *testing.T) {
 	s := NewSession(Config{
 		Providers: provider.Registry{"test": scriptedTurns("test", nil)},

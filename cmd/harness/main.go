@@ -430,6 +430,40 @@ func (p *textStreamPrinter) handle(ev engine.Event) {
 	}
 }
 
+// newRunOnEventHandler builds run mode's engine.Config.OnEvent callback,
+// serializing every call behind a mutex — a live review finding. Enabling
+// sessMgr in runCmd turns on the `task` tool for run mode, and a `task`
+// child's own background Prompt goroutine (SessionManager.Spawn) runs
+// CONCURRENTLY with this command's own top-level Prompt/PursueGoal call —
+// that concurrency is the entire point of the `task` tool's non-blocking
+// contract. Both the parent and the child inherit and call this SAME
+// callback (configSnapshot copies Config.OnEvent by value into every
+// child's Config), and neither *json.Encoder.Encode nor
+// textStreamPrinter.handle (which mutates its own fields and writes
+// os.Stdout/os.Stderr) is safe for concurrent use. Before the `task` tool,
+// run mode had exactly one session and therefore exactly one goroutine
+// ever calling OnEvent; `task` newly exposes it to two (or more, for a
+// grandchild). The ReportTurnStart/ReportTurnEnd bracket around runCmd's
+// top-level Prompt call does NOT cover this — it only stops SessionManager
+// from firing a second concurrent RESUME turn on the parent session; it
+// says nothing about a child's own independent Prompt emitting through
+// this shared callback at the same time. The server path has no
+// equivalent bug: srv.Publish/publishLive route per-SessionID through the
+// SSE journal under its own lock — the CLI's callback had no such guard
+// until now.
+func newRunOnEventHandler(printer *textStreamPrinter, enc *json.Encoder, jsonOut bool) func(engine.Event) {
+	var mu sync.Mutex
+	return func(ev engine.Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		if jsonOut {
+			enc.Encode(ev) //nolint:errcheck
+			return
+		}
+		printer.handle(ev)
+	}
+}
+
 func runCmd(args []string) error {
 	// Captured once, at the top of the command, before any flag parsing or
 	// session create/load — the ambient engine-identity block's StartedAt
@@ -513,13 +547,7 @@ func runCmd(args []string) error {
 
 	enc := json.NewEncoder(os.Stdout)
 	printer := &textStreamPrinter{out: os.Stdout, errW: os.Stderr}
-	onEvent := func(ev engine.Event) {
-		if opts.jsonOut {
-			enc.Encode(ev) //nolint:errcheck
-			return
-		}
-		printer.handle(ev)
-	}
+	onEvent := newRunOnEventHandler(printer, enc, opts.jsonOut)
 
 	// The plugin host's ClientAPI is the direct engine-backed adapter (see
 	// cmd/harness/clientapi.go), late-bound: sess is assigned immediately

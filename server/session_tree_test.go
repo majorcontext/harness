@@ -175,6 +175,53 @@ func TestSessionCreateWithParentIDUnknownAgentIs400(t *testing.T) {
 	}
 }
 
+// TestSessionCreateWithParentIDUnconfiguredModelIs400 is the regression
+// test for a live review finding: handleSpawnChild parsed a model override
+// but never validated its provider was configured, unlike the `task` tool's
+// identical check (runTaskTool) — an override naming a provider nothing
+// registers used to sail through Spawn, consuming a concurrency slot and a
+// session log, only to fail later at the child's own first turn. Proves it
+// is now rejected synchronously, before anything is spawned.
+func TestSessionCreateWithParentIDUnconfiguredModelIs400(t *testing.T) {
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil, &scriptedProvider{name: "root"})
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": root.ID,
+		"agent":     engine.AgentExplore,
+		"prompt":    "go",
+		"model":     "totally-unconfigured-provider/some-model",
+	})
+	if resp.StatusCode != 400 {
+		t.Fatalf("unconfigured provider status = %d, want 400: %s", resp.StatusCode, data)
+	}
+	if !strings.Contains(string(data), "totally-unconfigured-provider") {
+		t.Errorf("error body = %s, want it to name the unconfigured provider", data)
+	}
+
+	// No child should have been spawned: root has no children yet.
+	resp, data = h.do("GET", "/session/"+root.ID, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("get root status %d: %s", resp.StatusCode, data)
+	}
+	var rootInfo struct {
+		Lineage struct {
+			Children []string `json:"children"`
+		} `json:"lineage"`
+	}
+	mustUnmarshal(t, data, &rootInfo)
+	if len(rootInfo.Lineage.Children) != 0 {
+		t.Errorf("root lineage.children = %v, want none — a child was spawned despite the unconfigured provider", rootInfo.Lineage.Children)
+	}
+}
+
 // TestSessionCreateWithParentIDUnknownParentIs404 proves an unknown
 // parent_id is rejected, not silently treated as a fresh root.
 func TestSessionCreateWithParentIDUnknownParentIs404(t *testing.T) {

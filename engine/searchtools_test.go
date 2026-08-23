@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,6 +119,23 @@ func TestGlobToolNoMatches(t *testing.T) {
 	}
 }
 
+// TestGlobToolNonExistentBasePathReturnsError is the regression test for a
+// live review finding: WalkDir's callback swallowed the ROOT path's own
+// lstat error via its blanket "err != nil: skip it, don't fail the whole
+// search" (correct for a descendant entry, wrong for the root itself), so
+// glob("*.go", path="/does/not/exist") used to report "(no matches)" —
+// indistinguishable from a real, existing, Go-file-free directory — instead
+// of surfacing the caller's bad path, exactly like grep and ls both already
+// do for the same input.
+func TestGlobToolNonExistentBasePathReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{WorkDir: dir})
+	_, err := globTool().Run(context.Background(), s, json.RawMessage(`{"pattern":"*.go","path":"does/not/exist"}`))
+	if err == nil {
+		t.Error("glob against a non-existent base path: want error, got nil")
+	}
+}
+
 func TestGrepToolFindsMatchingLines(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "a.go"), "package main\n\nfunc Foo() {}\n")
@@ -209,6 +227,36 @@ func TestGrepToolSkipsOversizedFiles(t *testing.T) {
 	}
 }
 
+// TestGrepToolSkipsBinaryFileWithTextPrefix is the regression test for a
+// live review finding: looksBinary only sniffed the first imageSniffLen
+// (512) bytes, but grep then line-searches the WHOLE file regardless (up
+// to maxGrepFileBytes) — a file whose first 512 bytes are plain ASCII text
+// but whose body turns binary (a NUL well past the old sniff window) used
+// to pass the guard entirely, leaking raw binary bytes into the tool
+// result on any matching "line". The NUL here sits at ~4000 bytes: past
+// the old 512-byte window, comfortably inside the new grepBinarySniffLen
+// (64 KiB) one.
+func TestGrepToolSkipsBinaryFileWithTextPrefix(t *testing.T) {
+	dir := t.TempDir()
+	body := make([]byte, 0, 4100)
+	body = append(body, []byte("MATCH this is a plausible-looking text prefix\n")...)
+	for len(body) < 4000 {
+		body = append(body, 'x')
+	}
+	body = append(body, 0x00) // the binary marker, well past a 512-byte sniff
+	body = append(body, []byte("\nMATCH again after the NUL\n")...)
+	if err := os.WriteFile(filepath.Join(dir, "bin.dat"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runTool(t, grepTool(), dir, `{"pattern":"MATCH"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "(no matches)" {
+		t.Errorf("grep should skip a file that is binary past the first 512 bytes, got %q", out)
+	}
+}
+
 func TestGrepToolInvalidPattern(t *testing.T) {
 	dir := t.TempDir()
 	s := NewSession(Config{WorkDir: dir})
@@ -256,6 +304,31 @@ func TestLsToolRelativePathResolvesAgainstWorkDir(t *testing.T) {
 	}
 	if out != "inner.txt" {
 		t.Errorf("ls sub = %q, want inner.txt", out)
+	}
+}
+
+// TestLsToolCapsHugeDirectoryListing is the regression test for a live
+// review finding: unlike glob/grep, ls had no maxSearchResults bound at
+// all, so a read-only explore/plan subagent listing a huge directory
+// (node_modules, a data dir, a build-output tree) could flood the tool
+// result / session context with every entry, unbounded.
+func TestLsToolCapsHugeDirectoryListing(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < maxSearchResults+50; i++ {
+		writeTestFile(t, filepath.Join(dir, fmt.Sprintf("file-%04d.txt", i)), "x")
+	}
+	out, err := runTool(t, lsTool(), dir, `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(out, "\n")
+	// maxSearchResults entry lines plus the trailing "[truncated: ...]"
+	// marker line.
+	if len(lines) != maxSearchResults+1 {
+		t.Errorf("ls output has %d lines, want %d (%d entries + truncation marker)", len(lines), maxSearchResults+1, maxSearchResults)
+	}
+	if !strings.Contains(out, "[truncated:") {
+		t.Errorf("ls output missing truncation marker (last line: %q)", lines[len(lines)-1])
 	}
 }
 
