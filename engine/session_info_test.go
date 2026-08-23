@@ -14,11 +14,12 @@ import (
 
 // decodedSessionInfo mirrors the JSON the session_info tool emits.
 type decodedSessionInfo struct {
-	SessionID    string   `json:"session_id"`
-	Model        string   `json:"model"`
-	System       []string `json:"system"`
-	Tools        []string `json:"tools"`
-	Instructions string   `json:"instructions"`
+	SessionID    string         `json:"session_id"`
+	Model        string         `json:"model"`
+	Effort       message.Effort `json:"effort"`
+	System       []string       `json:"system"`
+	Tools        []string       `json:"tools"`
+	Instructions string         `json:"instructions"`
 	Skills       []struct {
 		Name string `json:"name"`
 		Path string `json:"path"`
@@ -28,8 +29,12 @@ type decodedSessionInfo struct {
 }
 
 // callSessionInfo runs a session whose model calls session_info on the first
-// turn, then returns the decoded tool result.
-func callSessionInfo(t *testing.T, cfg Config) decodedSessionInfo {
+// turn, then returns the decoded tool result AND the raw JSON text the tool
+// actually emitted — callers that must assert on exact wire shape (a field's
+// presence/absence, an omitempty regression) assert against the raw string,
+// never a re-marshaled stand-in, since a local struct's own tags prove
+// nothing about the production sessionInfoResult's tags.
+func callSessionInfo(t *testing.T, cfg Config) (decodedSessionInfo, string) {
 	t.Helper()
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		asstTurn(provider.StopToolUse, toolCall("tc1", "session_info", `{}`)),
@@ -56,14 +61,15 @@ func callSessionInfo(t *testing.T, cfg Config) decodedSessionInfo {
 	if tr.IsError {
 		t.Fatalf("session_info returned an error: %s", tr.Content.Text())
 	}
+	raw := tr.Content.Text()
 	var info decodedSessionInfo
-	if err := json.Unmarshal([]byte(tr.Content.Text()), &info); err != nil {
-		t.Fatalf("decoding session_info result %q: %v", tr.Content.Text(), err)
+	if err := json.Unmarshal([]byte(raw), &info); err != nil {
+		t.Fatalf("decoding session_info result %q: %v", raw, err)
 	}
 	if info.SessionID != s.ID {
 		t.Errorf("session_id = %q, want %q", info.SessionID, s.ID)
 	}
-	return info
+	return info, raw
 }
 
 func TestSessionInfoReportsInjectedContext(t *testing.T) {
@@ -72,7 +78,7 @@ func TestSessionInfoReportsInjectedContext(t *testing.T) {
 	skills := filepath.Join(work, "skills")
 	writeSkill(t, skills, "demo", "A demo skill")
 
-	info := callSessionInfo(t, Config{WorkDir: work, SkillsDirs: []string{skills}})
+	info, _ := callSessionInfo(t, Config{WorkDir: work, SkillsDirs: []string{skills}})
 
 	if info.Model != "test/m1" {
 		t.Errorf("model = %q, want test/m1", info.Model)
@@ -106,7 +112,7 @@ func TestSessionInfoNothingInjected(t *testing.T) {
 	work := t.TempDir()
 	mkdirAll(t, filepath.Join(work, ".git")) // bound the AGENTS.md walk
 
-	info := callSessionInfo(t, Config{
+	info, raw := callSessionInfo(t, Config{
 		WorkDir:      work,
 		Instructions: &InstructionsConfig{Disabled: true},
 		SkillsDirs:   []string{}, // explicit disable
@@ -129,6 +135,79 @@ func TestSessionInfoNothingInjected(t *testing.T) {
 	// System still carries the base segment.
 	if len(info.System) != 1 || info.System[0] != "base" {
 		t.Errorf("system = %v, want [base]", info.System)
+	}
+	// Effort was never set: report it honestly as EffortUnset ("", the
+	// provider default), not omitted and not an invented level.
+	if info.Effort != message.EffortUnset {
+		t.Errorf("effort = %q, want EffortUnset", info.Effort)
+	}
+	// Assert against the RAW production JSON, not a re-marshaled stand-in: a
+	// local struct's own tag can't catch a future ",omitempty" added to
+	// sessionInfoResult.Effort, since decodedSessionInfo (no omitempty)
+	// would still decode a missing key to "" and mask the regression. The
+	// tool marshals with MarshalIndent, so the key:value separator carries a
+	// space.
+	if !strings.Contains(raw, `"effort": ""`) {
+		t.Errorf("unset effort must serialize as \"effort\": \"\", got %q", raw)
+	}
+}
+
+// TestSessionInfoReportsEffort drives the real session_info build function
+// with a session created at a non-default reasoning-effort level (mirroring
+// the level a session would carry after POST /session/{id}/thinking or a
+// create-time Config.Effort) and asserts the level round-trips through
+// session_info exactly.
+func TestSessionInfoReportsEffort(t *testing.T) {
+	work := t.TempDir()
+	mkdirAll(t, filepath.Join(work, ".git"))
+
+	info, _ := callSessionInfo(t, Config{
+		WorkDir:      work,
+		Instructions: &InstructionsConfig{Disabled: true},
+		SkillsDirs:   []string{},
+		Effort:       message.EffortHigh,
+	})
+
+	if info.Effort != message.EffortHigh {
+		t.Errorf("effort = %q, want %q", info.Effort, message.EffortHigh)
+	}
+}
+
+// TestSessionInfoReportsEffortAfterSetEffort proves session_info reflects a
+// SetEffort swap made after the session was created — the same path
+// handleSetThinking (POST /session/{id}/thinking) drives — not just the
+// create-time Config.Effort.
+func TestSessionInfoReportsEffortAfterSetEffort(t *testing.T) {
+	work := t.TempDir()
+	mkdirAll(t, filepath.Join(work, ".git"))
+
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn(provider.StopToolUse, toolCall("tc1", "session_info", `{}`)),
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "done"}),
+	}}
+	s := NewSession(Config{
+		Providers:    provider.Registry{"test": prov},
+		Model:        message.ModelRef{Provider: "test", Model: "m1"},
+		WorkDir:      work,
+		Instructions: &InstructionsConfig{Disabled: true},
+		SkillsDirs:   []string{},
+	})
+	s.SetEffort(message.EffortLow)
+
+	if _, err := s.Prompt(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	h := s.History()
+	tr, ok := h[2].Parts[0].(*message.ToolResult)
+	if !ok {
+		t.Fatalf("h[2].Parts[0] = %T, want ToolResult", h[2].Parts[0])
+	}
+	var info decodedSessionInfo
+	if err := json.Unmarshal([]byte(tr.Content.Text()), &info); err != nil {
+		t.Fatalf("decoding session_info result %q: %v", tr.Content.Text(), err)
+	}
+	if info.Effort != message.EffortLow {
+		t.Errorf("effort = %q, want %q", info.Effort, message.EffortLow)
 	}
 }
 
