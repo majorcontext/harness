@@ -29,8 +29,12 @@ type decodedSessionInfo struct {
 }
 
 // callSessionInfo runs a session whose model calls session_info on the first
-// turn, then returns the decoded tool result.
-func callSessionInfo(t *testing.T, cfg Config) decodedSessionInfo {
+// turn, then returns the decoded tool result AND the raw JSON text the tool
+// actually emitted — callers that must assert on exact wire shape (a field's
+// presence/absence, an omitempty regression) assert against the raw string,
+// never a re-marshaled stand-in, since a local struct's own tags prove
+// nothing about the production sessionInfoResult's tags.
+func callSessionInfo(t *testing.T, cfg Config) (decodedSessionInfo, string) {
 	t.Helper()
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		asstTurn(provider.StopToolUse, toolCall("tc1", "session_info", `{}`)),
@@ -57,14 +61,15 @@ func callSessionInfo(t *testing.T, cfg Config) decodedSessionInfo {
 	if tr.IsError {
 		t.Fatalf("session_info returned an error: %s", tr.Content.Text())
 	}
+	raw := tr.Content.Text()
 	var info decodedSessionInfo
-	if err := json.Unmarshal([]byte(tr.Content.Text()), &info); err != nil {
-		t.Fatalf("decoding session_info result %q: %v", tr.Content.Text(), err)
+	if err := json.Unmarshal([]byte(raw), &info); err != nil {
+		t.Fatalf("decoding session_info result %q: %v", raw, err)
 	}
 	if info.SessionID != s.ID {
 		t.Errorf("session_id = %q, want %q", info.SessionID, s.ID)
 	}
-	return info
+	return info, raw
 }
 
 func TestSessionInfoReportsInjectedContext(t *testing.T) {
@@ -73,7 +78,7 @@ func TestSessionInfoReportsInjectedContext(t *testing.T) {
 	skills := filepath.Join(work, "skills")
 	writeSkill(t, skills, "demo", "A demo skill")
 
-	info := callSessionInfo(t, Config{WorkDir: work, SkillsDirs: []string{skills}})
+	info, _ := callSessionInfo(t, Config{WorkDir: work, SkillsDirs: []string{skills}})
 
 	if info.Model != "test/m1" {
 		t.Errorf("model = %q, want test/m1", info.Model)
@@ -107,7 +112,7 @@ func TestSessionInfoNothingInjected(t *testing.T) {
 	work := t.TempDir()
 	mkdirAll(t, filepath.Join(work, ".git")) // bound the AGENTS.md walk
 
-	info := callSessionInfo(t, Config{
+	info, raw := callSessionInfo(t, Config{
 		WorkDir:      work,
 		Instructions: &InstructionsConfig{Disabled: true},
 		SkillsDirs:   []string{}, // explicit disable
@@ -136,24 +141,15 @@ func TestSessionInfoNothingInjected(t *testing.T) {
 	if info.Effort != message.EffortUnset {
 		t.Errorf("effort = %q, want EffortUnset", info.Effort)
 	}
-	if !strings.Contains(rawSessionInfoEffort(t, info), `"effort":""`) {
-		t.Errorf("unset effort must serialize as \"effort\":\"\", got %q", rawSessionInfoEffort(t, info))
+	// Assert against the RAW production JSON, not a re-marshaled stand-in: a
+	// local struct's own tag can't catch a future ",omitempty" added to
+	// sessionInfoResult.Effort, since decodedSessionInfo (no omitempty)
+	// would still decode a missing key to "" and mask the regression. The
+	// tool marshals with MarshalIndent, so the key:value separator carries a
+	// space.
+	if !strings.Contains(raw, `"effort": ""`) {
+		t.Errorf("unset effort must serialize as \"effort\": \"\", got %q", raw)
 	}
-}
-
-// rawSessionInfoEffort re-marshals just the effort field so the test can
-// assert the unset case appears explicitly as "" rather than being omitted
-// by an omitempty tag — an agent checking session_info must be able to tell
-// "unset" from "the field wasn't reported at all."
-func rawSessionInfoEffort(t *testing.T, info decodedSessionInfo) string {
-	t.Helper()
-	b, err := json.Marshal(struct {
-		Effort message.Effort `json:"effort"`
-	}{info.Effort})
-	if err != nil {
-		t.Fatalf("marshal effort: %v", err)
-	}
-	return string(b)
 }
 
 // TestSessionInfoReportsEffort drives the real session_info build function
@@ -165,7 +161,7 @@ func TestSessionInfoReportsEffort(t *testing.T) {
 	work := t.TempDir()
 	mkdirAll(t, filepath.Join(work, ".git"))
 
-	info := callSessionInfo(t, Config{
+	info, _ := callSessionInfo(t, Config{
 		WorkDir:      work,
 		Instructions: &InstructionsConfig{Disabled: true},
 		SkillsDirs:   []string{},
