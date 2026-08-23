@@ -532,8 +532,8 @@ func runCmd(args []string) error {
 	// `harness serve` — docs/plans/2026-08-23-subagent-sessions-design.md.
 	// A single-shot run's tree lives and dies with this one process; unlike
 	// serveCmd there is no separate wire surface to register children
-	// against, so AdoptRoot below (right after resolveSession) is the only
-	// registration point this mode needs.
+	// against, so AdoptReloaded below (right after resolveSession) is the
+	// only registration point this mode needs.
 	sessMgr := engine.NewSessionManager(ctx, envInt("HARNESS_MAX_TASK_DEPTH"), envInt("HARNESS_MAX_CONCURRENT_TASKS"))
 
 	s, err := resolveSession(engine.Config{
@@ -582,11 +582,19 @@ func runCmd(args []string) error {
 		return err
 	}
 	sess = s
-	// Register s as sessMgr's root — see sessMgr's own doc comment above.
-	// Errors only on an ID collision (unreachable: s.ID is either freshly
-	// minted or restored from a log neither Options field above already
+	// AdoptReloaded, not AdoptRoot: s.ID may be user-supplied via
+	// -resume/-r and could name a FORMER task-tool child from a previous
+	// process (its own SessionManager tree, hence its own tree lineage,
+	// is gone — this process's sessMgr starts empty) — AdoptRoot would
+	// hand it back an unrestricted `task` tool despite that, the same
+	// depth-limit bypass AdoptRoot's own doc comment warns about.
+	// AdoptReloaded's TaskParentID check correctly falls to the
+	// depth-limit-refused case here (this fresh sessMgr never tracks
+	// that former parent), a strictly safer default. Errors only on an
+	// ID collision (unreachable: s.ID is either freshly minted or
+	// restored from a log neither Options field above already
 	// registered elsewhere in THIS process), safe to ignore.
-	_ = sessMgr.AdoptRoot(s)
+	_ = sessMgr.AdoptReloaded(s)
 
 	goalNotAchieved := false
 	if opts.goal != "" {
