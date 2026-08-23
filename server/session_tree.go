@@ -96,6 +96,7 @@ func (s *Server) handleSpawnChild(w http.ResponseWriter, parentID, agent, prompt
 		ToolNames:    def.Tools,
 		AgentType:    agent,
 	})
+	s.reportTaskEvent(parentID, childID, err)
 	if err != nil {
 		if errors.Is(err, engine.ErrUnknownSession) {
 			writeErr(w, http.StatusNotFound, err.Error())
@@ -131,6 +132,36 @@ func (s *Server) handleSpawnChild(w http.ResponseWriter, parentID, agent, prompt
 	// live SessionManager node) correctly reported "running" beside it.
 	// A live review caught this.
 	writeJSON(w, http.StatusCreated, s.buildSession(spawned, "busy"))
+}
+
+// reportTaskEvent forwards one handleSpawnChild outcome to
+// Options.OnTaskEvent, nil-guarded — see that field's own doc comment
+// for the event vocabulary and scope. spawnErr is the raw error
+// engine.SessionManager.Spawn returned (nil on success); childID is
+// only meaningful when spawnErr is nil (Spawn's own zero-value "" on
+// any failure).
+func (s *Server) reportTaskEvent(parentID, childID string, spawnErr error) {
+	if s.opts.OnTaskEvent == nil {
+		return
+	}
+	event := "spawned"
+	switch {
+	case errors.Is(spawnErr, engine.ErrDepthLimit):
+		event = "depth_refused"
+	case errors.Is(spawnErr, engine.ErrConcurrencyLimit):
+		event = "concurrency_refused"
+	case errors.Is(spawnErr, engine.ErrBudgetExceeded):
+		event = "budget_refused"
+	case spawnErr != nil:
+		// ErrUnknownSession, ErrSessionCanceled, or an unrecognized-tool
+		// restrictTools error — none of these are the three specific
+		// "limit hit" cases the metrics vocabulary above names; not
+		// reported at all rather than inventing a fourth, less useful
+		// bucket for "some other spawn failure" (a caller wanting that
+		// detail already gets it from the HTTP response body itself).
+		return
+	}
+	s.opts.OnTaskEvent(event, parentID, childID)
 }
 
 // lookupSpawned returns the just-Spawned child by id. Spawn only just

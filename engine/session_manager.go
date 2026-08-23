@@ -61,6 +61,17 @@ var (
 	// ErrConcurrencyLimit is returned by Spawn when the parent's tree
 	// already has the manager's maximum number of children running.
 	ErrConcurrencyLimit = errors.New("engine: tree concurrency limit reached")
+	// ErrBudgetExceeded is returned by Spawn when the parent's tree has
+	// already accumulated at least SetMaxTreeTokens' configured budget in
+	// cumulative token usage (input+output, summed across every
+	// completed child in the tree — see usageByRoot) — a follow-up
+	// finding ("per-tree budgets"), mirroring ErrDepthLimit/
+	// ErrConcurrencyLimit's identical shape and Spawn call-site placement
+	// exactly. Unset (SetMaxTreeTokens never called, or called with a
+	// non-positive value) disables the check entirely — this is an
+	// opt-in limit, unlike depth/concurrency, which always have a
+	// product default (DefaultMaxTaskDepth/DefaultMaxConcurrentTasks).
+	ErrBudgetExceeded = errors.New("engine: task tree token budget exceeded")
 	// ErrSessionCanceled is returned by Spawn or Send when the target
 	// session has already been canceled.
 	ErrSessionCanceled = errors.New("engine: session canceled")
@@ -178,6 +189,21 @@ type SessionManager struct {
 	// with no server layered over it) means m drives every turn itself,
 	// root or child, exactly as before ExternalRunner existed.
 	externalRunner ExternalRunner
+
+	// maxTreeTokens is the opt-in per-tree token budget (see
+	// ErrBudgetExceeded's own doc comment) — 0 (the default; SetMaxTreeTokens
+	// never called) disables the check entirely, unlike maxDepth/
+	// maxConcurrent, which always have a positive product default applied
+	// in NewSessionManager.
+	maxTreeTokens int
+	// usageByRoot accumulates cumulative token usage (input+output) per
+	// root session id, summed across every child in that root's tree as
+	// each one completes (see finalizeTurn's three notify-building
+	// branches, the single point every terminal child outcome already
+	// passes through) — never re-derived by re-summing every node on
+	// each check, mirroring runningByRoot's own incremental-accumulator
+	// shape exactly.
+	usageByRoot map[string]provider.Usage
 }
 
 // SetExternalRunner installs runner as described on the ExternalRunner
@@ -187,6 +213,25 @@ func (m *SessionManager) SetExternalRunner(runner ExternalRunner) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.externalRunner = runner
+}
+
+// SetMaxTreeTokens installs n as the opt-in per-tree token budget — see
+// ErrBudgetExceeded's own doc comment. n <= 0 disables the check (the
+// default: never called). Safe to call at any time; takes effect on the
+// next Spawn call. Deliberately a setter, not a NewSessionManager
+// constructor parameter: maxDepth/maxConcurrent are positional
+// constructor args because every caller has ALWAYS had to pick a value
+// for them (or accept the product default) since this type's very first
+// version; threading a new required positional parameter through would
+// break every existing NewSessionManager call site across this repo
+// (dozens, in tests alone) for a feature every one of them is opting
+// OUT of by default. Mirrors SetExternalRunner's identical
+// setter-not-constructor-arg reasoning for the same kind of
+// genuinely-optional, off-by-default capability.
+func (m *SessionManager) SetMaxTreeTokens(n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.maxTreeTokens = n
 }
 
 // sessionNode is one managed session's lifecycle bookkeeping. Guarded by
@@ -236,6 +281,21 @@ type sessionNode struct {
 	// this exact race between a slow-unwinding canceled turn and the
 	// periodic Reap ticker.
 	finalized bool
+
+	// budgetedUsage is the portion of n.session.Usage() (CUMULATIVE
+	// across all of n's turns — see that method's own doc comment)
+	// already folded into its root's usageByRoot total, as of the last
+	// finalizeTurn call for n. Required because a child is NOT
+	// single-turn: session.send can restart an already-done/failed
+	// child for a legitimate follow-up (SessionManager.Send), and
+	// finalizeTurn runs again on ITS completion too — without tracking
+	// what was already counted, each subsequent finalizeTurn call would
+	// re-add n's FULL cumulative usage (not just the new turn's delta),
+	// double- (or triple-, quadruple-...) counting every prior turn on
+	// every follow-up. finalizeTurn adds exactly
+	// n.session.Usage()-budgetedUsage each time, then updates this to
+	// match.
+	budgetedUsage provider.Usage
 }
 
 // SessionNode is a read-only snapshot of one managed session's lifecycle
@@ -285,6 +345,7 @@ func NewSessionManager(baseCtx context.Context, maxDepth, maxConcurrent int) *Se
 		maxConcurrent: maxConcurrent,
 		nodes:         make(map[string]*sessionNode),
 		runningByRoot: make(map[string]int),
+		usageByRoot:   make(map[string]provider.Usage),
 	}
 }
 
@@ -946,13 +1007,18 @@ type SpawnOptions struct {
 // has been launched, carrying the child's id — it never waits for the turn
 // to finish.
 //
-// Depth and concurrency are enforced synchronously, under one lock, before
-// the child is created: a caller at either limit gets ErrDepthLimit or
-// ErrConcurrencyLimit back and no session to clean up, and a race between
-// two Spawn calls at the concurrency limit is resolved by whichever
-// acquires the lock first — the other sees the reservation and fails
-// cleanly, per the design doc's "a race is still answered with an error,
-// not a crash."
+// Depth, concurrency, and (if SetMaxTreeTokens configured one) the
+// per-tree token budget are enforced synchronously, under one lock,
+// before the child is created: a caller at any limit gets ErrDepthLimit,
+// ErrConcurrencyLimit, or ErrBudgetExceeded back and no session to clean
+// up, and a race between two Spawn calls at a limit is resolved by
+// whichever acquires the lock first — the other sees the reservation (or
+// the accumulated usage) and fails cleanly, per the design doc's "a race
+// is still answered with an error, not a crash." Unlike depth/
+// concurrency, the budget check is a SPAWN-TIME gate only — a tree
+// already over budget cannot spawn further children, but nothing here
+// interrupts a turn already in flight when the tree crosses the budget
+// mid-run.
 func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	m.mu.Lock()
 	parent, ok := m.nodes[opts.ParentID]
@@ -972,6 +1038,13 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	if m.runningByRoot[parent.rootID] >= m.maxConcurrent {
 		m.mu.Unlock()
 		return "", ErrConcurrencyLimit
+	}
+	if m.maxTreeTokens > 0 {
+		u := m.usageByRoot[parent.rootID]
+		if u.InputTokens+u.OutputTokens >= m.maxTreeTokens {
+			m.mu.Unlock()
+			return "", ErrBudgetExceeded
+		}
 	}
 
 	// configSnapshot (not a raw parent.session.cfg read) is required here:
@@ -1348,6 +1421,37 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 		}
 		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusDone, Result: n.result, Usage: n.session.Usage()}
 	}
+
+	// Accumulate n's newly-spent usage (this turn's delta, NOT its full
+	// cumulative total — see budgetedUsage's own doc comment for why a
+	// delta is required: n may be a done/failed child Send just
+	// restarted for a follow-up turn, and this is not the first time
+	// finalizeTurn has run for it) into its ROOT's running tree-wide
+	// total — see usageByRoot's own doc comment ("per-tree budgets," a
+	// follow-up finding). Runs regardless of which of the three branches
+	// above fired (including alreadyCanceled: a canceled turn may still
+	// have spent real tokens before cancellation, and those must still
+	// count toward the budget) or whether notify is even non-nil (a
+	// ROOT's own turns spend tokens too, and must count toward ITS
+	// OWN — degenerate, self — tree budget for TestSpawn_BudgetExceeded-
+	// style single-node trees to behave sensibly, though roots have no
+	// Spawn caller to ever check the budget against in the first place
+	// today). Never re-derived by re-summing every node — incremental,
+	// mirroring runningByRoot's own accumulator shape exactly.
+	total := n.session.Usage()
+	delta := provider.Usage{
+		InputTokens:      total.InputTokens - n.budgetedUsage.InputTokens,
+		OutputTokens:     total.OutputTokens - n.budgetedUsage.OutputTokens,
+		CacheReadTokens:  total.CacheReadTokens - n.budgetedUsage.CacheReadTokens,
+		CacheWriteTokens: total.CacheWriteTokens - n.budgetedUsage.CacheWriteTokens,
+	}
+	n.budgetedUsage = total
+	u := m.usageByRoot[n.rootID]
+	u.InputTokens += delta.InputTokens
+	u.OutputTokens += delta.OutputTokens
+	u.CacheReadTokens += delta.CacheReadTokens
+	u.CacheWriteTokens += delta.CacheWriteTokens
+	m.usageByRoot[n.rootID] = u
 
 	// n.parentID != "" here exactly when notify != nil was possible (the
 	// three non-root cases above) — a CHILD that just went terminal

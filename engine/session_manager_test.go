@@ -70,6 +70,16 @@ func doneTurn(text string) [][]provider.Event {
 	return [][]provider.Event{asstTurn(provider.StopEndTurn, &message.Text{Text: text})}
 }
 
+// doneTurnWithUsage is doneTurn plus an explicit Usage on the terminal
+// event — for tests exercising per-tree token budget accounting
+// (SessionManager.SetMaxTreeTokens), where asstTurn's own zero-Usage
+// default is not useful.
+func doneTurnWithUsage(text string, usage provider.Usage) [][]provider.Event {
+	turn := asstTurn(provider.StopEndTurn, &message.Text{Text: text})
+	turn[0].Usage = usage
+	return [][]provider.Event{turn}
+}
+
 // managedConfig builds a Config whose Providers map holds every entry in
 // providers, keyed by each Provider's own Name(). Every provider a test
 // needs — for the root and for every child it plans to spawn with a Model
@@ -1475,6 +1485,97 @@ func TestSpawnPersistsTaskSpawnedRecord(t *testing.T) {
 	}
 	if !strings.Contains(log, `"agent":"`+AgentExplore+`"`) {
 		t.Errorf("task.spawned record missing agent %q: %s", AgentExplore, log)
+	}
+}
+
+// TestSpawnBudgetExceeded is the regression test for a follow-up finding
+// ("per-tree budgets"): Spawn now refuses once its tree's cumulative
+// child token usage reaches the configured SetMaxTreeTokens budget,
+// mirroring ErrDepthLimit/ErrConcurrencyLimit's identical shape.
+func TestSpawnBudgetExceeded(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	mgr.SetMaxTreeTokens(100)
+	child1Prov := scriptedTurns("child1", doneTurnWithUsage("done", provider.Usage{InputTokens: 60, OutputTokens: 50}))
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		child1Prov,
+		scriptedTurns("child2", nil),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child1")})
+	if err != nil {
+		t.Fatalf("Spawn child1: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	// child1 alone spent 110 tokens (60+50), already over the 100-token
+	// budget — a second spawn from the same root must be refused.
+	if _, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child2")}); !errors.Is(err, ErrBudgetExceeded) {
+		t.Errorf("Spawn over budget = %v, want ErrBudgetExceeded", err)
+	}
+}
+
+// TestSpawnBudgetUnsetByDefault proves SetMaxTreeTokens is opt-in: a
+// SessionManager that never calls it enforces no budget at all,
+// regardless of how much usage accumulates.
+func TestSpawnBudgetUnsetByDefault(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("child1", doneTurnWithUsage("done", provider.Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000})),
+		scriptedTurns("child2", nil),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child1")})
+	if err != nil {
+		t.Fatalf("Spawn child1: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	if _, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child2")}); err != nil {
+		t.Errorf("Spawn with no budget configured: want nil error, got %v", err)
+	}
+}
+
+// TestSpawnBudgetDeltaAccountingAcrossFollowupSend is the regression test
+// for a real bug caught before it shipped: n.session.Usage() is
+// CUMULATIVE across all of a session's turns, but finalizeTurn can run
+// MULTIPLE times for the same node (session.send restarting an
+// already-done child for a legitimate follow-up turn). Adding the full
+// cumulative total on every finalizeTurn call, rather than just the
+// NEW turn's delta, would double-count every prior turn on each
+// follow-up. Proves the budget check sees exactly the true total spent
+// (two 50-token turns = 100, not 150 or 200), by spawning a child, then
+// sending it one follow-up, then asserting a THIRD child is refused only
+// once the TRUE cumulative total (not an inflated one) crosses budget.
+func TestSpawnBudgetDeltaAccountingAcrossFollowupSend(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	mgr.SetMaxTreeTokens(120)
+	childProv := &scriptedProvider{name: "child1", turns: [][]provider.Event{
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "first"}),
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "second"}),
+	}}
+	childProv.turns[0][0].Usage = provider.Usage{InputTokens: 30, OutputTokens: 20} // 50
+	childProv.turns[1][0].Usage = provider.Usage{InputTokens: 30, OutputTokens: 20} // 50 more; cumulative 100
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		childProv,
+		scriptedTurns("child2", nil),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child1")})
+	if err != nil {
+		t.Fatalf("Spawn child1: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	if _, err := mgr.Send(context.Background(), childID, "again"); err != nil {
+		t.Fatalf("Send follow-up: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	// True cumulative total is 100 (50+50) — still under the 120 budget.
+	// If finalizeTurn had double-counted (e.g. 50 then 100, landing on
+	// 150 total, or worse 50+150=200), this would already be refused.
+	if _, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child2")}); err != nil {
+		t.Errorf("Spawn at true-total 100/120 budget: want nil error, got %v (budget accounting likely double-counted the follow-up turn)", err)
 	}
 }
 
