@@ -1,11 +1,11 @@
 // Self-inspection: the built-in session_info tool lets the model ask what it is
 // actually running with. It reports the session's identity, current model,
-// cumulative token usage, the exact system-prompt segments assembled for the
-// current turn, the active tool names, the provenance of injected project
-// instructions and Agent Skills, and the configured plugins (name, spawn
-// state, registered tools, subscribed hooks). It takes no arguments and
-// touches no disk or network — it reflects state the engine already holds in
-// memory.
+// reasoning-effort/thinking level, cumulative token usage, the exact
+// system-prompt segments assembled for the current turn, the active tool
+// names, the provenance of injected project instructions and Agent Skills,
+// and the configured plugins (name, spawn state, registered tools, subscribed
+// hooks). It takes no arguments and touches no disk or network — it reflects
+// state the engine already holds in memory.
 
 package engine
 
@@ -28,8 +28,17 @@ type skillInfo struct {
 
 // sessionInfoResult is the JSON payload the session_info tool returns.
 type sessionInfoResult struct {
-	SessionID    string         `json:"session_id"`
-	Model        string         `json:"model"`
+	SessionID string `json:"session_id"`
+	Model     string `json:"model"`
+	// Effort is the session's current reasoning-effort level: "off", "minimal",
+	// "low", "medium", or "high". Empty string is EffortUnset — no reasoning
+	// control has been sent, so the provider runs its own default — and is
+	// reported as "" rather than omitted or guessed, the same convention
+	// setThinkingResponseJSON uses for POST /session/{id}/thinking (see
+	// server/handlers.go). Mid-session it changes only via Session.SetEffort,
+	// the same choke point handleSetThinking calls; the create-time value
+	// comes from Config.Effort and a resumed value from the recEffort record.
+	Effort       message.Effort `json:"effort"`
 	Usage        provider.Usage `json:"usage"`
 	System       []string       `json:"system"`
 	Tools        []string       `json:"tools"`
@@ -49,11 +58,12 @@ func sessionInfoTool() Tool {
 		Def: provider.ToolDef{
 			Name: "session_info",
 			Description: "Report this session's own configuration: session id, current model, " +
-				"cumulative token usage, the exact system-prompt segments you received this turn, " +
-				"the active tool names, the provenance of any injected project instructions " +
-				"(AGENTS.md path or \"none\"), the discovered Agent Skills (names and SKILL.md paths), " +
-				"and the configured plugins (name, spawn state, registered tools, subscribed hooks). " +
-				"Takes no arguments.",
+				"the reasoning-effort/thinking level (\"off\", \"minimal\", \"low\", \"medium\", \"high\", " +
+				"or \"\" if unset — the provider default), cumulative token usage, the exact " +
+				"system-prompt segments you received this turn, the active tool names, the " +
+				"provenance of any injected project instructions (AGENTS.md path or \"none\"), " +
+				"the discovered Agent Skills (names and SKILL.md paths), and the configured plugins " +
+				"(name, spawn state, registered tools, subscribed hooks). Takes no arguments.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
 		},
 		Run: func(ctx context.Context, s *Session, _ json.RawMessage) (message.Parts, error) {
@@ -105,6 +115,7 @@ func (s *Session) sessionInfo(ctx context.Context) sessionInfoResult {
 	return sessionInfoResult{
 		SessionID:    s.ID,
 		Model:        s.model.String(),
+		Effort:       s.effort,
 		Usage:        s.usage,
 		System:       system,
 		Tools:        tools,
