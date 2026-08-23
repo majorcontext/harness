@@ -3,8 +3,15 @@ name: CI
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+  # No branches filter here (deliberately, unlike push above): a stacked
+  # PR's base is another feature branch, not main (e.g. #146 targets
+  # subagent-sessions, not main) — restricting to branches: [main] meant
+  # every stacked PR got claude-review but NEVER a real Test run, silently
+  # relying on whatever the author's local go test -race ./... happened to
+  # say. Every PR, stacked or not, gets this job now; it costs one extra
+  # CI run at retarget time (the PR gets re-triggered against main), which
+  # is cheap next to shipping a stacked branch with no CI coverage at all.
+  pull_request: {}
 
 jobs:
   test:
