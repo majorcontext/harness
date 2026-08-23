@@ -67,6 +67,50 @@ func (s *Session) enqueueTaskNotification(n taskNotification) {
 	s.mu.Unlock()
 }
 
+// enqueueTaskNotificationMigrated is enqueueTaskNotification's sibling for
+// ReportTurnStart's OLD-object-to-fresh-object migration specifically: it
+// skips the append (and the durable write) entirely when an identical
+// notification (taskNotification is a plain comparable struct — no
+// slices, maps, or pointers — so == is a real deep-equality check here)
+// is already sitting in s's pending queue.
+//
+// A live review finding: ReportTurnStart's migration of a stale, evicted
+// object's queue onto a freshly cold-loaded one predates the durable
+// queued-minus-delivered fold LoadSession now performs (see
+// recTaskNotifyQueued's own doc comment in store.go). Once that fold
+// existed, the two mechanisms overlapped for the exact same notification:
+// a background child finishes and enqueues onto the evicted OLD object
+// (durably writing recTaskNotifyQueued); the resume that follows cold-
+// loads a FRESH session, whose own LoadSession call already folds that
+// just-written record in as "copy 1"; ReportTurnStart then runs its
+// migration, draining the SAME notification off the (still populated,
+// never touched since) old object and re-enqueuing it as "copy 2" —
+// checkoutTaskNotificationsSegment then rendered the same child
+// completion to the parent model twice.
+//
+// The migration is still genuinely needed for a narrower race the fold
+// alone cannot cover: LoadSession runs OUTSIDE m.mu (it may hit disk),
+// so something can enqueue onto the OLD object in the gap between that
+// load completing and ReportTurnStart reacquiring the lock to swap
+// n.session — a notification the fresh object's own load could not
+// possibly have seen. Deduping on the notification's own value, not
+// removing the migration outright, is what keeps that race covered while
+// closing the common-case double-delivery: anything the fold already
+// restored is skipped as an exact match; anything genuinely new (the
+// race window, or literally any other divergence) still migrates.
+func (s *Session) enqueueTaskNotificationMigrated(n taskNotification) {
+	s.mu.Lock()
+	for _, existing := range s.taskNotifications {
+		if existing == n {
+			s.mu.Unlock()
+			return
+		}
+	}
+	s.taskNotifications = append(s.taskNotifications, n)
+	s.persistTaskNotifyLocked(recTaskNotifyQueued, n)
+	s.mu.Unlock()
+}
+
 // hasPendingTaskNotifications reports whether s has at least one
 // undelivered notification — pending OR already checked out for an
 // in-flight turn attempt that hasn't yet committed or been requeued.
@@ -94,6 +138,25 @@ func (s *Session) drainAllTaskNotifications() []taskNotification {
 	all := append(s.taskNotificationsInFlight, s.taskNotifications...) //nolint:gocritic // deliberately combining, not appending in place — both are cleared immediately below
 	s.taskNotifications = nil
 	s.taskNotificationsInFlight = nil
+	// Durable proof of delivery, symmetric with commitTaskNotifications'
+	// identical loop — a live review finding: every notification drained
+	// here was originally persisted as recTaskNotifyQueued on THIS
+	// session's own log when it first arrived (a grandchild completing
+	// while this now-terminal child was still tracking it). Forwarding it
+	// to an ancestor (the caller's job, not this method's — see this
+	// method's own doc comment) re-enqueues a FRESH recTaskNotifyQueued
+	// record on the ancestor's log, which is correct — but without this
+	// loop, THIS session's own queued record was never matched by a
+	// delivered one. A later LoadSession of this exact child (e.g. a
+	// session.send re-run of a done/failed child) would fold that
+	// unmatched queued record back in via store.go's queued-minus-
+	// delivered logic, resurrecting a notification the ancestor already
+	// received — the child would re-deliver it to itself, breaking the
+	// queued-minus-delivered durability invariant this whole mechanism
+	// depends on.
+	for _, n := range all {
+		s.persistTaskNotifyLocked(recTaskNotifyDelivered, n)
+	}
 	return all
 }
 
