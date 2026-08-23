@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 )
@@ -260,6 +262,146 @@ func (p *panicAtCallProv) Stream(_ context.Context, _ *provider.Request) (provid
 	ev := p.turns[p.call]
 	p.call++
 	return &scriptedStream{events: ev}, nil
+}
+
+// blockAtCallProv serves scripted turns normally, then blocks on the call
+// at index blockAt until release closes — used to hold a real Compact
+// call's summarization request open deterministically (the tool-less
+// compaction summarization call is always the call right after the
+// ordinary prompt turns that built up foldable history, mirroring
+// panicAtCallProv's own convention above). started closes the instant
+// that blocking call begins.
+type blockAtCallProv struct {
+	name     string
+	mu       sync.Mutex
+	turns    [][]provider.Event
+	call     int
+	blockAt  int
+	started  chan struct{}
+	release  chan struct{}
+	startSet sync.Once
+}
+
+func (p *blockAtCallProv) Name() string { return p.name }
+
+func (p *blockAtCallProv) Stream(ctx context.Context, _ *provider.Request) (provider.Stream, error) {
+	p.mu.Lock()
+	n := p.call
+	p.call++
+	p.mu.Unlock()
+	if n == p.blockAt {
+		p.startSet.Do(func() { close(p.started) })
+		return &blockAtCallStream{ctx: ctx, release: p.release}, nil
+	}
+	return &scriptedStream{events: p.turns[n]}, nil
+}
+
+type blockAtCallStream struct {
+	ctx     context.Context
+	release chan struct{}
+	// done tracks whether the single EventDone has already been
+	// returned. The compaction summarizer's own Next loop
+	// (runCompactionSummary, engine/compact.go) calls Next in a loop
+	// until it sees io.EOF — it does NOT stop merely because it received
+	// an EventDone, unlike the ordinary turn loop other blocking test
+	// streams in this package are built for. Without this flag, a
+	// second call after release closes would take the SAME <-s.release
+	// case again (a closed channel always receives immediately) and
+	// return the identical EventDone forever — an infinite loop, never
+	// reaching io.EOF, hanging the whole request. A live test run caught
+	// this exact hang.
+	done bool
+}
+
+func (s *blockAtCallStream) Next() (provider.Event, error) {
+	if s.done {
+		return provider.Event{}, io.EOF
+	}
+	select {
+	case <-s.ctx.Done():
+		return provider.Event{}, s.ctx.Err()
+	case <-s.release:
+		s.done = true
+		msg := &message.Message{ID: "msg_released", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "released"}}}
+		return provider.Event{Type: provider.EventDone, Message: msg, StopReason: provider.StopEndTurn}, nil
+	}
+}
+
+func (s *blockAtCallStream) Close() error { return nil }
+
+// TestCompactBracketsRunSlotWithSessionManager is the regression test for
+// a review finding: handleCompact claimed the server's own run slot
+// (claimForPrompt) but never reported it to SessionManager at all —
+// unlike runPrompt/runGoal's identical ReportTurnStart/ReportTurnEnd
+// bracket. triggerResumeLocked flips a root to StatusRunning BEFORE
+// calling its ExternalRunner, and runOrQueueText treats a workdir-held
+// or draining refusal as requiring a revert of that commitment — but a
+// task notification arriving while a compact call held the REAL slot,
+// with SessionManager never told about it at all, would see the root
+// StatusIdle (compact's claim was invisible to SessionManager) and try
+// to resume it directly, racing compact's own Session.Compact call on
+// the same session. Proves the bracket is in place: SessionManager's own
+// view of the root is StatusRunning for the WHOLE duration of a compact
+// call, exactly like an ordinary prompt turn.
+func TestCompactBracketsRunSlotWithSessionManager(t *testing.T) {
+	prov := &blockAtCallProv{
+		name: "test",
+		turns: [][]provider.Event{
+			compactAsstTurn("one", provider.Usage{InputTokens: 10}),
+			compactAsstTurn("two", provider.Usage{InputTokens: 10}),
+			compactAsstTurn("three", provider.Usage{InputTokens: 10}),
+		},
+		blockAt: 3, // the compaction summarization call
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	// Released via a plain defer, NOT t.Cleanup: newHarness's own
+	// t.Cleanup(ts.Close) — registered AFTER this one would be — blocks
+	// until every outstanding request on the test server completes, and
+	// Cleanup funcs run in LIFO order. A t.Cleanup registered here would
+	// run AFTER ts.Close already started waiting on this test's own
+	// still-blocked compact request — deadlock. A plain defer, in
+	// contrast, always runs at THIS function's own return (including via
+	// t.Fatal's runtime.Goexit unwind), strictly before ts.Close's own
+	// later t.Cleanup — releasing the request before ts.Close ever waits
+	// on it, on every exit path, not just the successful one.
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(prov.release) })
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+	h.promptAndWaitIdle(id, "go1")
+	h.promptAndWaitIdle(id, "go2")
+	h.promptAndWaitIdle(id, "go3")
+
+	// SessionManager adopts a root the first time ReportTurnStart sees it
+	// (or handleCreate's own AdoptRoot) — confirm the baseline is idle
+	// before compact claims the slot.
+	if info, ok := h.srv.SessionManager().Info(id); !ok || info.Status != engine.StatusIdle {
+		t.Fatalf("test setup: SessionManager view before compact = %+v ok=%v, want tracked and idle", info, ok)
+	}
+
+	compactDone := make(chan struct{})
+	go func() {
+		defer close(compactDone)
+		resp, data := h.do("POST", "/session/"+id+"/compact", map[string]any{"keep_turns": 1})
+		t.Logf("compact response: status=%d body=%s", resp.StatusCode, data)
+	}()
+	select {
+	case <-prov.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("compact's summarization call never started")
+	}
+
+	if info, ok := h.srv.SessionManager().Info(id); !ok || info.Status != engine.StatusRunning {
+		t.Fatalf("SessionManager view while compact is in flight = %+v ok=%v, want tracked and StatusRunning — the bracket is missing", info, ok)
+	}
+
+	releaseOnce.Do(func() { close(prov.release) })
+	select {
+	case <-compactDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("compact never completed after being released")
+	}
 }
 
 // TestCompactPanicReleasesClaim is the regression test for handleCompact's

@@ -95,7 +95,49 @@ type record struct {
 	// value on load means "nothing to restore" (a legacy header, or a
 	// session created with no lineage) rather than "the caller's Config.
 	// ParentSession should be cleared".
-	ParentSession string           `json:"parent_session,omitempty"`
+	ParentSession string `json:"parent_session,omitempty"`
+	// TaskParentID carries Config.TaskParentID on the session header
+	// record only, same omit/restore rule as ParentSession — but a
+	// COMPLETELY DIFFERENT concept (see Config.TaskParentID's doc
+	// comment): SessionManager's own tree-lineage pointer, never the
+	// opaque provenance pointer ParentSession carries.
+	TaskParentID string `json:"task_parent_id,omitempty"`
+	// TaskAgentType/TaskToolNames carry Config.TaskAgentType/TaskToolNames
+	// on the session header record only — see those fields' own doc
+	// comment. Same omit/restore rule as ParentSession/TaskParentID above
+	// for TaskAgentType (a legacy header with no field at all restores
+	// as if this child was never restricted — the SAME already-accepted
+	// gap TaskParentID's own doc comment describes for a session
+	// predating that field).
+	//
+	// TaskToolNames is a *[]string, not a plain []string — deliberately,
+	// to fix a live review finding. omitempty on a plain []string omits
+	// BOTH nil (no restriction recorded — every record type OTHER than a
+	// session header, and a session header for an unrestricted session)
+	// AND a non-nil, LEN-ZERO slice (a real, deliberate zero-tool
+	// restriction — reachable via Spawn's parent-effective-set
+	// INTERSECTION, session_manager.go, whenever a restricted parent's
+	// tool set and a child definition's tools are disjoint) to the
+	// identical omitted-field wire shape. On reload,
+	// restoreTaskToolRestrictionLocked treats an absent TaskToolNames as
+	// "fall back to re-resolving TaskAgentType's definition" — which
+	// re-applies that definition's OWN tools with no parent intersection
+	// at all, over-granting the reloaded child every tool its restricted
+	// parent could never reach. omitempty on a POINTER, by contrast, only
+	// omits a NIL pointer — a non-nil pointer to an empty slice still
+	// marshals as `[]`, round-tripping distinctly from "absent" while an
+	// unset restriction (nil pointer) still omits cleanly on every other
+	// record type exactly as before (an earlier revision of this fix
+	// dropped omitempty entirely instead, which is what a plain []string
+	// would have required — but that put `"task_tool_names":null` on
+	// every single record of every type, breaking two tests asserting
+	// exact log-line shapes; the pointer keeps the field's presence tied
+	// to whether IT specifically was ever set, not the whole record
+	// type). See the write site (Persist) for how a nil Config.
+	// TaskToolNames becomes a nil pointer, and a non-nil one — including
+	// empty — becomes a pointer to it.
+	TaskAgentType string           `json:"task_agent_type,omitempty"`
+	TaskToolNames *[]string        `json:"task_tool_names,omitempty"`
 	Message       *message.Message `json:"message,omitempty"`
 	Model         message.ModelRef `json:"model,omitzero"`
 	// Effort carries the reasoning-effort level on the session header record
@@ -614,7 +656,7 @@ func (s *Session) ensureLog() error {
 		// LoadSession already tolerates.
 		var buf bytes.Buffer
 		for _, rec := range []record{
-			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir, ParentSession: s.cfg.ParentSession, Effort: s.effort},
+			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir, ParentSession: s.cfg.ParentSession, TaskParentID: s.cfg.TaskParentID, TaskAgentType: s.cfg.TaskAgentType, TaskToolNames: taskToolNamesPtr(s.cfg.TaskToolNames), Effort: s.effort},
 			{Type: recModel, Model: s.model},
 		} {
 			b, err := json.Marshal(rec)
@@ -686,6 +728,31 @@ func (s *Session) writeRecord(rec record) error {
 	return err
 }
 
+// taskToolNamesPtr converts a Config.TaskToolNames value into the pointer
+// record.TaskToolNames marshals — see that field's own doc comment for
+// why a pointer, not a plain slice: nil stays nil (omitted on write,
+// exactly like every other unset restriction field), and a non-nil slice
+// — including an empty one, the whole point of this indirection — becomes
+// a pointer to a local copy, so a later mutation of names (there isn't
+// one today, but nothing here should rely on that) can't retroactively
+// change what was already marshaled.
+func taskToolNamesPtr(names []string) *[]string {
+	if names == nil {
+		return nil
+	}
+	// make(…, len(names)), not append([]string(nil), names...): append
+	// with zero elements to append returns its nil starting slice
+	// UNCHANGED (a genuine Go append quirk) — for a non-nil, LEN-ZERO
+	// names (exactly the case this whole indirection exists to preserve
+	// — see this field's own doc comment), that silently collapsed cp
+	// back to nil, marshaling as JSON null and reproducing the identical
+	// bug one layer down. make(...) always returns a non-nil slice, even
+	// at length zero.
+	cp := make([]string, len(names))
+	copy(cp, names)
+	return &cp
+}
+
 // ErrInvalidSessionID is returned (wrapped) by LoadSession when id fails
 // ValidSessionID's two-format rule. It is checked before sessionPath ever
 // builds a filesystem path, so a path-traversal-shaped id (e.g.
@@ -735,6 +802,20 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// never "clear the loading Config's ParentSession".
 			if rec.ParentSession != "" {
 				s.cfg.ParentSession = rec.ParentSession
+			}
+			// Same restore rule, but see Config.TaskParentID's doc comment
+			// for why this is a different field entirely from
+			// ParentSession above.
+			if rec.TaskParentID != "" {
+				s.cfg.TaskParentID = rec.TaskParentID
+			}
+			// Same restore rule again — see Config.TaskAgentType/
+			// TaskToolNames's own doc comment.
+			if rec.TaskAgentType != "" {
+				s.cfg.TaskAgentType = rec.TaskAgentType
+			}
+			if rec.TaskToolNames != nil {
+				s.cfg.TaskToolNames = *rec.TaskToolNames
 			}
 			// The effort at create time. Omitted (EffortUnset) on a legacy
 			// header, which restores as the provider default — unchanged.

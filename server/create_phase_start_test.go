@@ -164,6 +164,64 @@ func TestOnCreatePhaseReportsPersistEndOnFailure(t *testing.T) {
 	}
 }
 
+// TestFailedCreateDoesNotLeakSessionManagerRootNode is the regression test
+// for a live review finding: handleCreate used to call sessMgr.AdoptRoot
+// BEFORE the fallible Persist step, so a create that failed at Persist (the
+// exact scenario TestOnCreatePhaseReportsPersistEndOnFailure above sets up)
+// still left a root sessionNode registered in the SessionManager — and
+// Reap() never removes a root (see its own doc comment: a root is the
+// tree's own address), so that node, and the *Session it pins, leaked for
+// the life of the process. AdoptRoot now runs AFTER Persist succeeds, so a
+// Persist failure must leave the id completely untracked.
+func TestFailedCreateDoesNotLeakSessionManagerRootNode(t *testing.T) {
+	dir := t.TempDir()
+	prov := &scriptedProvider{name: "test"}
+	model := message.ModelRef{Provider: prov.Name(), Model: "m1"}
+	badLogDir := unwritableDir(t)
+
+	var mu sync.Mutex
+	var sessionID string
+	srv := newServer(t, dir, prov, 0, func(o *Options) {
+		o.OnCreatePhaseStart = func(id, phase string) {
+			if phase == "persist" {
+				mu.Lock()
+				sessionID = id
+				mu.Unlock()
+			}
+		}
+		o.NewSession = func(m message.ModelRef, workDir, parentSession string) (*engine.Session, error) {
+			if m.IsZero() {
+				m = model
+			}
+			return engine.NewSession(engine.Config{
+				Providers:     provider.Registry{prov.Name(): prov},
+				Model:         m,
+				SessionDir:    badLogDir,
+				WorkDir:       workDir,
+				ParentSession: parentSession,
+			}), nil
+		}
+	})
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	h := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv, ts: ts}
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "test/m1"})
+	if resp.StatusCode != 500 {
+		t.Fatalf("create status %d, want 500 (Persist should fail): %s", resp.StatusCode, data)
+	}
+
+	mu.Lock()
+	id := sessionID
+	mu.Unlock()
+	if id == "" {
+		t.Fatal("test setup: never observed a persist phase start, cannot check for the leak")
+	}
+	if _, ok := srv.SessionManager().Info(id); ok {
+		t.Errorf("SessionManager still tracks %s after its create failed at Persist — root sessionNode leaked (Reap never removes a root, so this pins the *Session forever)", id)
+	}
+}
+
 // TestDebugGoroutinesRequiresAuth verifies GET /debug/goroutines is behind
 // s.auth like every other route (see routes()) — a diagnostic surface that
 // dumps the full goroutine stack must not be reachable without the run

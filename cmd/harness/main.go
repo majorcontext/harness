@@ -236,6 +236,24 @@ func runFlags(opts *runOptions) *flag.FlagSet {
 	return fs
 }
 
+// envInt reads a positive integer from the named environment variable,
+// returning 0 (the caller's "use the default" sentinel — see
+// server.Options.MaxTaskDepth/MaxConcurrentTasks) when the variable is
+// unset, empty, non-numeric, or non-positive. Never errors: a malformed
+// value falls back to the default rather than failing serve startup over
+// a tuning knob.
+func envInt(name string) int {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
 // sessionDir resolves where session logs live, in precedence order:
 // -no-save (yields "", persistence disabled) > $HARNESS_SESSION_DIR >
 // configDir (config session_dir) > $HOME/.harness/sessions. Nothing is
@@ -383,13 +401,28 @@ func sessionsCmd(args []string) error {
 // attempt that printed no text (a restart before any delta) adds no blank
 // line; it resets on EventMessage, the boundary of a completed streamTurn.
 type textStreamPrinter struct {
-	out          io.Writer
-	errW         io.Writer
+	out  io.Writer
+	errW io.Writer
+	// mu guards printedText/streamedThis AND every write to out/errW below —
+	// a live review finding on newRunOnEventHandler's own fix: that mutex
+	// only served the DURATION of one onEvent call, so runCmd's own later,
+	// unsynchronized read of printedText (the trailing-newline check after
+	// the top-level Prompt call returns) still raced a `task` child's
+	// still-running background Prompt goroutine, which can keep calling
+	// handle after the parent's own call has already returned — `task` is
+	// explicitly non-blocking; nothing waits for a child to finish before
+	// the parent's Prompt call returns. Locking here, on the printer
+	// itself, protects every access regardless of which caller (the
+	// shared onEvent callback, or runCmd's own tail) is doing the reading —
+	// see PrintedText's own doc comment for the accessor this enables.
+	mu           sync.Mutex
 	printedText  bool // any text printed this run; drives the trailing newline
 	streamedThis bool // text printed since the last reset; drives the break
 }
 
 func (p *textStreamPrinter) handle(ev engine.Event) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	switch ev.Type {
 	case engine.EventTextDelta:
 		fmt.Fprint(p.out, ev.Text)
@@ -409,6 +442,51 @@ func (p *textStreamPrinter) handle(ev engine.Event) {
 		if ev.IsError {
 			fmt.Fprintf(p.errW, "[tool %s failed] %s\n", ev.ToolCall.Name, ev.Output.Text())
 		}
+	}
+}
+
+// PrintedText reports whether handle has ever printed streamed text,
+// synchronized against a still-running task child's own handle calls —
+// see p.mu's doc comment. runCmd's own tail (the trailing-newline check
+// after its top-level Prompt call returns) must go through this rather
+// than reading p.printedText directly.
+func (p *textStreamPrinter) PrintedText() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.printedText
+}
+
+// newRunOnEventHandler builds run mode's engine.Config.OnEvent callback,
+// serializing every call behind a mutex — a live review finding. Enabling
+// sessMgr in runCmd turns on the `task` tool for run mode, and a `task`
+// child's own background Prompt goroutine (SessionManager.Spawn) runs
+// CONCURRENTLY with this command's own top-level Prompt/PursueGoal call —
+// that concurrency is the entire point of the `task` tool's non-blocking
+// contract. Both the parent and the child inherit and call this SAME
+// callback (configSnapshot copies Config.OnEvent by value into every
+// child's Config), and neither *json.Encoder.Encode nor
+// textStreamPrinter.handle (which mutates its own fields and writes
+// os.Stdout/os.Stderr) is safe for concurrent use. Before the `task` tool,
+// run mode had exactly one session and therefore exactly one goroutine
+// ever calling OnEvent; `task` newly exposes it to two (or more, for a
+// grandchild). The ReportTurnStart/ReportTurnEnd bracket around runCmd's
+// top-level Prompt call does NOT cover this — it only stops SessionManager
+// from firing a second concurrent RESUME turn on the parent session; it
+// says nothing about a child's own independent Prompt emitting through
+// this shared callback at the same time. The server path has no
+// equivalent bug: srv.Publish/publishLive route per-SessionID through the
+// SSE journal under its own lock — the CLI's callback had no such guard
+// until now.
+func newRunOnEventHandler(printer *textStreamPrinter, enc *json.Encoder, jsonOut bool) func(engine.Event) {
+	var mu sync.Mutex
+	return func(ev engine.Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		if jsonOut {
+			enc.Encode(ev) //nolint:errcheck
+			return
+		}
+		printer.handle(ev)
 	}
 }
 
@@ -495,13 +573,7 @@ func runCmd(args []string) error {
 
 	enc := json.NewEncoder(os.Stdout)
 	printer := &textStreamPrinter{out: os.Stdout, errW: os.Stderr}
-	onEvent := func(ev engine.Event) {
-		if opts.jsonOut {
-			enc.Encode(ev) //nolint:errcheck
-			return
-		}
-		printer.handle(ev)
-	}
+	onEvent := newRunOnEventHandler(printer, enc, opts.jsonOut)
 
 	// The plugin host's ClientAPI is the direct engine-backed adapter (see
 	// cmd/harness/clientapi.go), late-bound: sess is assigned immediately
@@ -509,6 +581,14 @@ func runCmd(args []string) error {
 	// Prompt/PursueGoal call — the earliest point any hook can fire.
 	var sess *engine.Session
 	lateAPI.Bind(newLazyRunClientAPI(func() *engine.Session { return sess }))
+
+	// sessMgr enables the `task` tool for `harness run` too, not only
+	// `harness serve` — docs/plans/2026-08-23-subagent-sessions-design.md.
+	// A single-shot run's tree lives and dies with this one process; unlike
+	// serveCmd there is no separate wire surface to register children
+	// against, so AdoptReloaded below (right after resolveSession) is the
+	// only registration point this mode needs.
+	sessMgr := engine.NewSessionManager(ctx, envInt("HARNESS_MAX_TASK_DEPTH"), envInt("HARNESS_MAX_CONCURRENT_TASKS"))
 
 	s, err := resolveSession(engine.Config{
 		Providers:           registry(cfg),
@@ -548,27 +628,54 @@ func runCmd(args []string) error {
 		// ModelTool is on by default (config `model_tool`, default true); the
 		// alias map lets a tool-driven `set` resolve an alias like the CLI's
 		// own ResolveModel does.
-		ModelTool:    cfg.ModelToolEnabled(),
-		ModelAliases: cfg.Aliases,
+		ModelTool:      cfg.ModelToolEnabled(),
+		ModelAliases:   cfg.Aliases,
+		SessionManager: sessMgr,
 	}, opts.resume, opts.cont, modelSet)
 	if err != nil {
 		return err
 	}
 	sess = s
+	// AdoptReloaded, not AdoptRoot: s.ID may be user-supplied via
+	// -resume/-r and could name a FORMER task-tool child from a previous
+	// process (its own SessionManager tree, hence its own tree lineage,
+	// is gone — this process's sessMgr starts empty) — AdoptRoot would
+	// hand it back an unrestricted `task` tool despite that, the same
+	// depth-limit bypass AdoptRoot's own doc comment warns about.
+	// AdoptReloaded's TaskParentID check correctly falls to the
+	// depth-limit-refused case here (this fresh sessMgr never tracks
+	// that former parent), a strictly safer default. Errors only on an
+	// ID collision (unreachable: s.ID is either freshly minted or
+	// restored from a log neither Options field above already
+	// registered elsewhere in THIS process), safe to ignore.
+	_ = sessMgr.AdoptReloaded(s)
 
 	goalNotAchieved := false
 	if opts.goal != "" {
-		res, err := runGoal(ctx, cfg, s, opts)
+		res, err := runGoal(ctx, cfg, s, sessMgr, opts)
 		if err != nil {
 			return err
 		}
 		goalNotAchieved = !res.Achieved
 	} else {
-		if _, err := s.Prompt(ctx, opts.prompt); err != nil {
-			return err
+		// ReportTurnStart/ReportTurnEnd bracket this bare Prompt call —
+		// see runGoal's identical bracket (and its doc comment) for why:
+		// without it, a `task` child that finishes while this Prompt call
+		// is still in flight would find s "idle" from SessionManager's
+		// point of view and fire a concurrent resume turn on the SAME
+		// session this call is still driving. resume is fired
+		// synchronously if non-nil, exactly like runGoal's own tail.
+		sessMgr.ReportTurnStart(s)
+		msg, promptErr := s.Prompt(ctx, opts.prompt)
+		resume := sessMgr.ReportTurnEnd(s.ID, msg, promptErr)
+		if promptErr != nil {
+			return promptErr
+		}
+		if resume != nil {
+			resume()
 		}
 	}
-	if printer.printedText {
+	if printer.PrintedText() {
 		fmt.Println()
 	}
 	if sesDir != "" {
@@ -592,7 +699,20 @@ var errGoalNotAchieved = errors.New("goal not achieved")
 
 // runGoal resolves the configured evaluator model and drives PursueGoal to
 // completion, printing the final status to stderr.
-func runGoal(ctx context.Context, cfg *config.Config, s *engine.Session, opts runOptions) (*engine.GoalResult, error) {
+//
+// Brackets the PursueGoal call with sessMgr.ReportTurnStart/ReportTurnEnd
+// — see runCmd's identical bracket around its own bare s.Prompt call for
+// why: `harness run` never installs an engine.ExternalRunner (that only
+// exists for server.Server's own run-slot admission), so without this
+// bracket SessionManager's view of s never leaves StatusIdle for the
+// whole PursueGoal call. A `task` child spawned mid-goal that finishes
+// fast would then find s "idle" and fire a CONCURRENT resume turn via
+// triggerResumeLocked's no-ExternalRunner fallback (a direct s.Prompt
+// call) while THIS PursueGoal call is still driving s — two goroutines
+// calling Session.Prompt/PursueGoal on the same session at once, the
+// exact contract violation ExternalRunner exists to prevent for the
+// server. A live review caught this exact gap in run mode.
+func runGoal(ctx context.Context, cfg *config.Config, s *engine.Session, sessMgr *engine.SessionManager, opts runOptions) (*engine.GoalResult, error) {
 	if cfg.GoalEvaluatorModel == "" {
 		return nil, fmt.Errorf("goal_evaluator_model must be set in config to use -goal")
 	}
@@ -600,10 +720,17 @@ func runGoal(ctx context.Context, cfg *config.Config, s *engine.Session, opts ru
 	if err != nil {
 		return nil, fmt.Errorf("goal_evaluator_model: %w", err)
 	}
+	sessMgr.ReportTurnStart(s)
 	res, err := s.PursueGoal(ctx, opts.goal, engine.GoalOptions{
 		MaxTurns:  opts.goalMaxTurns,
 		Evaluator: evaluator,
 	})
+	// resume: see runCmd's identical variable for why it is fired
+	// synchronously, right here, rather than left unfired — this
+	// process has no HTTP request to keep serving and no run-slot to
+	// release first; ReportTurnEnd only needs to run after PursueGoal
+	// itself has fully returned, which it just did.
+	resume := sessMgr.ReportTurnEnd(s.ID, nil, err)
 	if err != nil {
 		return nil, err
 	}
@@ -611,6 +738,9 @@ func runGoal(ctx context.Context, cfg *config.Config, s *engine.Session, opts ru
 		fmt.Fprintf(os.Stderr, "goal achieved in %d turn(s): %s\n", res.Turns, res.Reason)
 	} else {
 		fmt.Fprintf(os.Stderr, "goal not achieved after %d turn(s): %s\n", res.Turns, res.Reason)
+	}
+	if resume != nil {
+		resume()
 	}
 	return res, nil
 }
@@ -1081,17 +1211,81 @@ func serveCmd(args []string) error {
 		createPhase.OnCreatePhase(sessionID, phase, elapsed)
 	}
 	var srv *server.Server
+	// sessMgr enables the `task` tool on every served session
+	// (docs/plans/2026-08-23-subagent-sessions-design.md). Built HERE, as a
+	// plain local value, rather than read back later via srv.SessionManager()
+	// — mkCfg's closures already reference srv itself before it's assigned
+	// (see OnEvent just below), which is safe ONLY because Publish is never
+	// invoked until an event actually fires, long after srv is assigned. A
+	// Config FIELD read (srv.SessionManager()) is not that: it evaluates
+	// immediately when mkCfg runs, and mkCfg runs synchronously during
+	// server.New's own reconcile() call — BEFORE server.New returns and
+	// therefore before srv is ever assigned — which panicked on a nil *Server
+	// in practice (a live e2e run against this exact code caught it). Passing
+	// sessMgr into both mkCfg and server.Options.SessionManager below sidesteps
+	// the ordering hazard entirely: the manager exists before either mkCfg or
+	// server.New is even called.
+	// watchdogCtx (not context.Background()): every node's ctx derives
+	// from this baseCtx (SessionManager.adoptLocked), so a task tree
+	// spawned via Spawn (which launches its own goroutine driving
+	// child.Prompt(n.ctx, ...), untracked by s.wg) is otherwise never
+	// canceled or waited on at shutdown — background()-rooted subtrees
+	// would keep running (burning provider spend, writing session logs)
+	// after the process believes it has drained, unlike the run-slot
+	// goroutines s.wg does wait on. watchdogCtx already cancels on the
+	// same shutdown path the reap ticker below ties itself to, so this
+	// makes a graceful shutdown cascade cancellation into the whole task
+	// tree the same way. A live review caught this gap.
+	sessMgr := engine.NewSessionManager(watchdogCtx, envInt("HARNESS_MAX_TASK_DEPTH"), envInt("HARNESS_MAX_CONCURRENT_TASKS"))
+	// Periodic reaping (engine.SessionManager.Reap) frees a terminal, leaf
+	// (childless) task-spawned session's *Session — message history
+	// included — once it has settled done/failed/canceled; a whole
+	// terminal subtree collapses bottom-up over repeated calls (see
+	// Reap's doc comment). Without this, a long-lived `harness serve`
+	// process fanning out many `task` children pins every one of them in
+	// memory forever, a live review flagged. A root session is NEVER
+	// reaped (it is the tree's own address, addressable indefinitely by
+	// design) — that half of the finding (a root also stays pinned once
+	// adopted, defeating MaxResident eviction for it specifically) is a
+	// deliberate, documented v1 scope cut: fully closing it needs
+	// SessionManager to support a detached/rehydratable node (no live
+	// *Session reference between an eviction and the next reload), which
+	// is a larger design change than this stage's reap-on-a-timer fix —
+	// see the implementation PR description.
+	const sessionReapInterval = 5 * time.Minute
+	reapTicker := time.NewTicker(sessionReapInterval)
+	go func() {
+		defer reapTicker.Stop()
+		for {
+			select {
+			case <-watchdogCtx.Done():
+				return
+			case <-reapTicker.C:
+				sessMgr.Reap()
+			}
+		}
+	}()
 	mkCfg := func(model message.ModelRef) engine.Config {
 		return engine.Config{
-			Providers:           reg,
-			Model:               model,
-			System:              systemPrompt(workDir, ""),
-			WorkDir:             workDir,
-			SessionDir:          sesDir,
-			SessionSync:         cfg.SessionSync,
-			EngineVersion:       version,
-			StartedAt:           startedAt,
-			OnEvent:             func(ev engine.Event) { srv.Publish(ev) },
+			Providers:     reg,
+			Model:         model,
+			System:        systemPrompt(workDir, ""),
+			WorkDir:       workDir,
+			SessionDir:    sesDir,
+			SessionSync:   cfg.SessionSync,
+			EngineVersion: version,
+			StartedAt:     startedAt,
+			OnEvent:       func(ev engine.Event) { srv.Publish(ev) },
+			// The actual node registration (depth, lineage) happens
+			// separately, in handleCreate, right after NewSession returns
+			// (see AdoptRoot's call site there); wiring it here too means a
+			// session this process merely RELOADS (handleList's cold path,
+			// s.opts.LoadSession) still gets the tool installed, even on a
+			// process restart, though only a session this process itself
+			// created via handleCreate is a registered SessionManager node
+			// (see handleSessionSend's doc comment for the residency/reload
+			// edge this does not yet fully close).
+			SessionManager:      sessMgr,
 			OnStorePhase:        storePhase,
 			OnStorePhaseStart:   watchdog.startStorePhase,
 			Instructions:        instructionsConfig(cfg, noInstructions),
@@ -1139,6 +1333,15 @@ func serveCmd(args []string) error {
 		GoalEvaluator: goalEval,
 		MCP:           mcpRegistry(mcpMgr),
 		Processes:     processRegistry(procMgr),
+		// SessionManager: the SAME manager mkCfg's closures already
+		// reference (see sessMgr's doc comment above) — supplying it here
+		// tells server.New to use it as-is rather than build a second,
+		// independent one from MaxTaskDepth/MaxConcurrentTasks (which would
+		// leave every served session's `task` tool talking to a DIFFERENT
+		// manager than the one this server's own wire handlers
+		// (handleSpawnChild, handleSessionSend, buildSession's lineage)
+		// consult).
+		SessionManager: sessMgr,
 		// MonitorPage: every `harness serve` box offers its own same-origin
 		// monitor at GET /monitor — no CORS/-cors-origin dance, no
 		// separately hosted copy required (see AGENTS.md's "Session

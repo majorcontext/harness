@@ -102,6 +102,39 @@ type sessionJSON struct {
 	// directly from engine.Session.QueuedPrompts(), so it is correct for a
 	// resident session and a freshly reloaded one alike (see buildSession).
 	Queued int `json:"queued"`
+	// Lineage is session.info's extension for the subagent-sessions tree
+	// (docs/plans/2026-08-23-subagent-sessions-design.md): present
+	// whenever this server's SessionManager tracks the session (every
+	// session created or loaded by this process — see handleCreate and
+	// s.opts.LoadSession call sites), nil otherwise (an embedder that opts
+	// out, or — defensively — a session this process has never touched at
+	// all). Deliberately a SEPARATE object from ParentSession above: that
+	// field is an opaque, unvalidated cross-box provenance pointer with no
+	// structural meaning; Lineage.ParentID names a LIVE session in this
+	// process's tree, with enforced depth/concurrency, cascade
+	// cancellation, and completion delivery. The two are unrelated
+	// concepts that happen to share the word "parent."
+	Lineage *lineageJSON `json:"lineage,omitempty"`
+}
+
+// lineageJSON is sessionJSON's subagent-sessions extension, sourced from
+// engine.SessionManager.Info — see sessionJSON.Lineage's doc comment.
+type lineageJSON struct {
+	ParentID string `json:"parent_id,omitempty"`
+	Depth    int    `json:"depth"`
+	// Status is the SessionManager lifecycle state (running/idle/done/
+	// failed/canceled — engine.SessionStatus) — DISTINCT from
+	// sessionJSON's own Status/State fields above, which predate
+	// SessionManager and describe only "is a turn streaming right now" for
+	// THIS process. A done/failed child keeps that status here even once
+	// this process is no longer resident-tracking it any other way.
+	Status    string   `json:"status"`
+	Children  []string `json:"children"`
+	AgentType string   `json:"agent_type,omitempty"`
+	// Result is the final assistant text for a done session; FailReason a
+	// classified (#82-rule) reason for a failed one. Both empty otherwise.
+	Result     string `json:"result,omitempty"`
+	FailReason string `json:"fail_reason,omitempty"`
 }
 
 // usageJSON is the Session/StatusEntry usage sub-object (issue #62 layer 2):
@@ -298,6 +331,40 @@ func (s *Server) sessionIDOrNotFound(w http.ResponseWriter, r *http.Request) (st
 		return "", false
 	}
 	return id, true
+}
+
+// rejectManagedChildTurn refuses id if it names a session SessionManager
+// tracks as a CHILD (info.ParentID != "") — see handleSessionSend's own
+// doc comment: SessionManager is a child's SOLE scheduler. The generic
+// per-{id} routes that can drive a turn or persist a durable record
+// directly against whatever *engine.Session claimForPrompt (or an
+// equivalent cold-load) hands them — prompt_async, goal, enqueue,
+// compact, model, thinking — have no notion of that at all. Without this
+// guard, a request against a child's id cold-loads a SECOND, independent
+// *engine.Session for the SAME on-disk log and drives Session.Prompt (or
+// persists a recModel/recEffort record) on it CONCURRENTLY with the
+// child's own Spawn-driven turn on the FIRST object — both appending to
+// the same session log at once, the exact "never call Prompt
+// concurrently with itself" contract violation ExternalRunner exists to
+// prevent for roots, left wide open for children (which get addressable
+// ids from handleSpawnChild's 201 and session.info's lineage). A live
+// review caught this.
+//
+// Returns true (having already written a 409) if id is a managed child
+// and the caller must stop; false — safe to proceed through the ordinary
+// root/untracked path — otherwise. A residual gap: this only protects a
+// child SessionManager has ALREADY adopted into THIS process's tree
+// (Spawn, or a prior session.send/task touching it) — an id that is
+// really a child but has never been adopted here yet (e.g. a fresh
+// process, or one already Reaped) is not caught, the same
+// task-on-reload-adoption boundary this PR's SessionManager.
+// adoptReloadedLocked already documents elsewhere.
+func (s *Server) rejectManagedChildTurn(w http.ResponseWriter, id string) bool {
+	if info, ok := s.sessMgr.Info(id); ok && info.ParentID != "" {
+		writeErr(w, http.StatusConflict, "session is a SessionManager-managed child session; use POST /session/{id}/send instead")
+		return true
+	}
+	return false
 }
 
 // healthJSON is the openapi Health shape. VCSRevision, VCSTime, SessionSync,
@@ -560,9 +627,24 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		// one continues from (see engine.Config.ParentSession's doc
 		// comment). Optional; validated by validateParentSession below.
 		ParentSession *string `json:"parent_session"`
+		// ParentID, Agent, and Prompt are session.create's "with a parent"
+		// form (design doc, Stage 4): "identical to a task call made from
+		// outside the model." A COMPLETELY DIFFERENT concept from
+		// ParentSession above — see lineageJSON's doc comment — this names
+		// a live session in THIS process's SessionManager tree. When
+		// ParentID is set, every other field in this body is ignored: see
+		// handleSpawnChild, which takes over entirely and shares none of
+		// the workdir/worktree/residency machinery below.
+		ParentID *string `json:"parent_id"`
+		Agent    string  `json:"agent"`
+		Prompt   string  `json:"prompt"`
 	}
 	if err := decodeBody(r, &body); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if body.ParentID != nil && strings.TrimSpace(*body.ParentID) != "" {
+		s.handleSpawnChild(w, *body.ParentID, body.Agent, body.Prompt, body.Model)
 		return
 	}
 	parentSession, err := validateParentSession(body.ParentSession)
@@ -648,6 +730,21 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "cannot create session")
 		return
 	}
+	// Adopt into the SessionManager so `task` is available and this session
+	// is reachable by session.info's lineage extension and session.send —
+	// see Server.sessMgr's doc comment. Deliberately AFTER Persist, not
+	// right after NewSession: AdoptRoot registers a root sessionNode that
+	// Reap NEVER removes (a root is the tree's own address — see Reap's
+	// doc comment), so adopting before the fallible recordWorktreeOwner/
+	// Persist steps above leaked one root node plus its full *Session per
+	// failed create, forever — a live review finding. By the time this
+	// line runs, both fallible steps have already succeeded, so there is
+	// no error path left past this point that could strand it. Errors
+	// only on an ID collision (astronomically unlikely — see
+	// engine.newID) or a double-adopt; both are safe to ignore here
+	// rather than fail session creation over a purely additive
+	// capability.
+	_ = s.sessMgr.AdoptRoot(sess)
 
 	s.timedCreatePhase(sess.ID, "register", func() error { //nolint:errcheck // never errors; see timedCreatePhase's uniform shape
 		s.mu.Lock()
@@ -1041,6 +1138,9 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if s.rejectManagedChildTurn(w, id) {
+		return
+	}
 	var body struct {
 		Parts []struct {
 			Type string `json:"type"`
@@ -1322,6 +1422,9 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if s.rejectManagedChildTurn(w, id) {
+		return
+	}
 	var body struct {
 		Parts []struct {
 			Type string `json:"type"`
@@ -1563,7 +1666,20 @@ func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Cont
 // acknowledged receipt.
 func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, text string) {
 	defer s.wg.Done()
-	_, err := st.sess.Prompt(ctx, text)
+	// ReportTurnStart/ReportTurnEnd bracket the ONE choke point every
+	// ordinary (non-goal-loop) turn on a resident session funnels through
+	// — handlePrompt's happy path, dispatchQueueHead, and
+	// runOrQueueText/resumeSessionForTaskNotification (session_tree.go)
+	// all call this function rather than driving Prompt themselves — so
+	// this single bracket is what keeps SessionManager's view of "is this
+	// session running" accurate for a root no matter which of those paths
+	// triggered the turn. Adopts id as a fresh SessionManager root on
+	// first sight if it isn't tracked yet (see ReportTurnStart's doc
+	// comment) — the case a session reloaded after a restart or eviction
+	// hits, closing the "task tool broken after restart" gap a live
+	// review caught.
+	s.sessMgr.ReportTurnStart(st.sess)
+	msg, err := st.sess.Prompt(ctx, text)
 	s.syncMessages(id) // catch any message not yet journaled
 	switch {
 	case err == nil:
@@ -1576,6 +1692,30 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	}
 	s.freeRunSlotAndEmitIdle(id, st)
 
+	// ReportTurnEnd runs AFTER freeRunSlotAndEmitIdle, not before: it is
+	// what makes id's node visible to SessionManager as idle/done, and
+	// ANY OTHER goroutine (a different child's own finalizeTurn call,
+	// concurrently, delivering ITS completion notification here via
+	// nearestLiveAncestorLocked) can act on that visibility the moment it
+	// sees it — calling this server's own resumeSessionForTaskNotification,
+	// which claims the run slot via the EXACT SAME claimForPrompt this
+	// handler's own callers used. If SessionManager showed id idle while
+	// the real run slot were STILL held (the ordering an earlier version
+	// of this function used), that concurrent claim would see it busy,
+	// refuse, and — since SessionManager considers a "handled" claim
+	// delivered whether or not it actually started a turn — permanently
+	// strand the notification with nothing left to ever retry it. A live
+	// CI hang (a test blocked forever waiting for a resume that had been
+	// silently dropped this exact way) is what caught this.
+	//
+	// resume (returned, not fired, by ReportTurnEnd) is non-nil only when
+	// id's OWN completion needs to immediately start ANOTHER turn on
+	// itself (a notification arrived too late for THIS turn's own
+	// checkout). Firing it is safe here: the real run slot is already
+	// free (line above), so this call's own resume attempt cannot race
+	// itself.
+	resume := s.sessMgr.ReportTurnEnd(id, msg, err)
+
 	// Queue beats goal auto-arm (invariant 5): a prompt queued while this
 	// turn ran outranks a goal merely waiting to auto-arm — direct user
 	// input outranks the background objective. maybeDispatchQueued claims
@@ -1586,6 +1726,19 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	// fully drains, one turn at a time, before the goal ever gets a look —
 	// see maybeDispatchQueued's doc comment.
 	if s.maybeDispatchQueued(id, st) {
+		return
+	}
+
+	// A pending task notification for id ITSELF outranks goal auto-arm too
+	// (same reasoning as the queue above: it is picked up harmlessly later
+	// if this loses the race for the freed slot — the notification stays
+	// queued, not lost — so there is no correctness reason to prefer the
+	// goal loop over it). resume's own claim (runOrQueueText) is quick and
+	// non-blocking (it launches its own async runPrompt/dispatch and
+	// returns), so calling it synchronously here, before the
+	// maybeAutoArmGoal fallback, is safe.
+	if resume != nil {
+		resume()
 		return
 	}
 
@@ -1756,6 +1909,9 @@ type goalPostResponse struct {
 func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
+		return
+	}
+	if s.rejectManagedChildTurn(w, id) {
 		return
 	}
 	if s.opts.GoalEvaluator.IsZero() {
@@ -1973,6 +2129,18 @@ func (s *Server) handleGoalBusy(w http.ResponseWriter, id string, condition stri
 // goal.cleared that is still in flight.
 func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condition string, maxTurns int) {
 	defer s.wg.Done()
+	// See runPrompt's identical bracket for why: this treats the WHOLE
+	// goal loop as one continuous "running" span for SessionManager's
+	// purposes (matching the single busy/idle transition this function
+	// already emits around it below) — a task notification arriving
+	// while a goal loop is active is queued and picked up at the loop's
+	// own next turn boundary automatically, since PursueGoal's underlying
+	// turns go through the identical streamTurn/checkoutTaskNotificationsSegment
+	// path any other turn does. msg is nil for ReportTurnEnd: a root
+	// session's finalizeTurn branch never reads it (see finalizeTurn's
+	// doc comment) — only a CHILD's does, and a child is never resident,
+	// so runGoal never runs for one.
+	s.sessMgr.ReportTurnStart(st.sess)
 	res, err := st.sess.PursueGoal(ctx, condition, engine.GoalOptions{
 		Registered: true,
 		MaxTurns:   maxTurns,
@@ -1998,6 +2166,17 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 	}
 	s.freeRunSlotAndEmitIdle(id, st)
 
+	// resume: see runPrompt's identical variable for why ReportTurnEnd is
+	// called here, after freeRunSlotAndEmitIdle, rather than immediately
+	// after PursueGoal returns above — the same claimForPrompt race (a
+	// concurrent notification delivery observing this session idle via
+	// SessionManager while the real run slot is still held, getting
+	// refused, and permanently stranding the notification) applies here
+	// identically. msg is nil: a root session's finalizeTurn branch never
+	// reads it (see finalizeTurn's doc comment) — only a CHILD's does,
+	// and a child is never resident, so runGoal never runs for one.
+	resume := s.sessMgr.ReportTurnEnd(id, nil, err)
+
 	// A prompt queued after the loop's last turn-boundary drain (engine/
 	// goal.go's PursueGoal only drains BETWEEN turns) but before the loop
 	// actually terminated would otherwise sit queued indefinitely once the
@@ -2008,7 +2187,14 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 	// left in, never the "auto-arm is watching for this" state (see
 	// maybeAutoArmGoal's own doc comment for why it is deliberately not
 	// wired in here either).
-	s.maybeDispatchQueued(id, st)
+	if s.maybeDispatchQueued(id, st) {
+		return
+	}
+	// See runPrompt's identical call for why this is safe to call
+	// synchronously here rather than "go resume()".
+	if resume != nil {
+		resume()
+	}
 }
 
 // handleGoalDelete cancels an active goal loop: it clears the goal (journaling
@@ -2145,6 +2331,9 @@ func (s *Server) handleSetModel(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if s.rejectManagedChildTurn(w, id) {
+		return
+	}
 	var body struct {
 		Model message.ModelRef `json:"model"`
 	}
@@ -2213,6 +2402,9 @@ type setThinkingResponseJSON struct {
 func (s *Server) handleSetThinking(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
+		return
+	}
+	if s.rejectManagedChildTurn(w, id) {
 		return
 	}
 	var body struct {
@@ -2307,12 +2499,40 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 		cancel = st.cancel
 	}
 	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	// Not a server-resident turn. A managed CHILD's own turn runs on its
+	// SessionManager node.ctx (Spawn/Send), never in s.sessions at all —
+	// st == nil here is the NORMAL, expected shape for a running child,
+	// not evidence there is nothing to abort. Fall back to
+	// sessMgr.AbortTurn — NOT sessMgr.Cancel (the full cascade
+	// cancel_tree also uses, which an earlier revision of this handler
+	// used here too, making abort indistinguishable from cancel_tree for
+	// a child with descendants) — see AbortTurn's own doc comment for
+	// the authoritative explanation of that distinction. Deliberately
+	// scoped to an ACTUAL child (info.ParentID != "") — never a root: an
+	// idle root reaching this point genuinely has nothing running (the
+	// resident-turn branch above already covers a running one), and
+	// canceling its SessionManager node here would be pointless churn
+	// for a node that otherwise only transitions via ReportTurnStart/
+	// Cancel/cancel_tree — the unconditional 204 fallback below is the
+	// correct, unchanged behavior for that case. A live review caught
+	// the child gap: an earlier revision of this handler silently did
+	// nothing for a running child (st == nil, cancel == nil, but the
+	// child DOES exist on disk so the 404 branch below never fired
+	// either) — a misleading 204 while the child ran to completion
+	// untouched.
+	if info, ok := s.sessMgr.Info(id); ok && info.ParentID != "" {
+		_ = s.sessMgr.AbortTurn(id) // errors only on an unknown id — impossible, Info just confirmed it
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if st == nil && !s.sessionOnDisk(id) {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
-	}
-	if cancel != nil {
-		cancel()
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -2464,6 +2684,9 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if s.rejectManagedChildTurn(w, id) {
+		return
+	}
 	var body struct {
 		KeepTurns *int   `json:"keep_turns"`
 		Model     string `json:"model"`
@@ -2513,6 +2736,23 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	defer s.wg.Done()
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 
+	// ReportTurnStart/ReportTurnEnd bracket this claim exactly like
+	// runPrompt's identical bracket (see its own doc comment for the full
+	// reasoning) — an earlier revision of this handler claimed the run
+	// slot without ever reporting it to SessionManager at all. A live
+	// review caught what that breaks: triggerResumeLocked flips a root
+	// to StatusRunning BEFORE calling its ExternalRunner
+	// (resumeSessionForTaskNotification -> runOrQueueText ->
+	// claimForPrompt), and runOrQueueText treats ANY non-404 claim
+	// failure as handled=true — including THIS handler's own StatusConflict
+	// claim above. Compact silently holding the slot with no bracket meant
+	// a task notification arriving during a compact call saw the root
+	// "handled" by a scheduler that was never actually going to call
+	// ReportTurnEnd for it: the notification was accepted and then never
+	// delivered, permanently — queue-or-resume dead for that root until an
+	// unrelated human prompt happened to drain it.
+	s.sessMgr.ReportTurnStart(st.sess)
+
 	opts := engine.CompactOptions{Model: model}
 	if body.KeepTurns != nil {
 		opts.KeepTurns = *body.KeepTurns
@@ -2529,20 +2769,36 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 
 	s.freeRunSlotAndEmitIdle(id, st)
 
-	// Same drain-then-auto-arm precedence as runPrompt's tail (invariant 5):
-	// a prompt queued (or a goal armed) while this compact call ran must not
-	// sit stranded just because the run slot happened to be released by
-	// compact instead of an ordinary prompt or goal turn — see
-	// maybeDispatchQueued/maybeAutoArmGoal's own doc comments for the full
-	// race analysis, identical here. wg.Done for THIS claim is the deferred
-	// call above, which fires after both checks below (defers run after the
-	// function body's remaining statements), so the WaitGroup never
-	// transiently reads zero between this claim's release and a
+	// ReportTurnEnd runs AFTER freeRunSlotAndEmitIdle — see runPrompt's
+	// identical ordering and its doc comment for why (the real run slot
+	// must be free before SessionManager's view of this root can show
+	// idle/done, or a concurrent resume attempt racing in between would
+	// find the slot still held and permanently strand its notification).
+	// msg is nil: Compact never produces the kind of turn message
+	// ReportTurnEnd's root branch would read (see its own doc comment —
+	// only a CHILD's finalizeTurn branch reads msg, and a child never
+	// reaches this handler at all, rejectManagedChildTurn above already
+	// refused it).
+	resume := s.sessMgr.ReportTurnEnd(id, nil, err)
+
+	// Same drain-then-auto-arm-then-resume precedence as runPrompt's tail
+	// (invariant 5): a prompt queued (or a goal armed) while this compact
+	// call ran must not sit stranded just because the run slot happened to
+	// be released by compact instead of an ordinary prompt or goal turn —
+	// see maybeDispatchQueued/maybeAutoArmGoal's own doc comments for the
+	// full race analysis, identical here. wg.Done for THIS claim is the
+	// deferred call above, which fires after these tail calls (defers fire
+	// after the function body's remaining statements), so the WaitGroup
+	// never transiently reads zero between this claim's release and a
 	// dispatched/auto-armed one's own wg.Add (mirrors runPrompt's
 	// defer-at-function-exit shape) — and, unlike a bare call here, still
-	// fires even if one of these two calls (or Compact above) panics.
+	// fires even if one of these tail calls (or Compact above) panics.
 	if !s.maybeDispatchQueued(id, st) {
-		s.maybeAutoArmGoal(id, st)
+		if resume != nil {
+			resume()
+		} else {
+			s.maybeAutoArmGoal(id, st)
+		}
 	}
 
 	if err != nil {
@@ -2589,11 +2845,32 @@ func (s *Server) lookup(id string) (*engine.Session, string, bool) {
 	if st != nil {
 		return st.sess, statusStr(running), true
 	}
-	sess, err := s.opts.LoadSession(id)
-	if err != nil {
-		return nil, "", false
+	if sess, err := s.opts.LoadSession(id); err == nil {
+		return sess, "idle", true
 	}
-	return sess, "idle", true
+	// Neither resident nor (yet, or ever) readable from disk under this id.
+	// A child SessionManager.Spawn just registered can reach this exact
+	// point before its first Persist call lands — Spawn launches the
+	// child's turn asynchronously (see its doc comment), so a GET racing
+	// immediately after the 201 that created it can beat the write. Fall
+	// back to the live in-memory object SessionManager itself holds, which
+	// is always immediately consistent with lineageJSONFor's own Info(id)
+	// call — this is also the ONLY path that ever resolves a child session
+	// this process's SessionManager tracks but this server's ordinary
+	// residency/disk bookkeeping never independently persisted-and-then-
+	// forgot (ordinary use always persists on first Prompt append, same as
+	// any session — this is purely a startup race window, not a steady-
+	// state gap).
+	if info, ok := s.sessMgr.Info(id); ok {
+		if childSess, ok := s.sessMgr.Session(id); ok {
+			status := "idle"
+			if info.Status == engine.StatusRunning {
+				status = "busy"
+			}
+			return childSess, status, true
+		}
+	}
+	return nil, "", false
 }
 
 // residentSession returns the resident *engine.Session for id, or nil if the
@@ -2814,6 +3091,36 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 		LastCompactedAt: sess.LastCompactedAt(),
 		Plugins:         sess.Plugins(),
 		Queued:          len(sess.QueuedPrompts()),
+		Lineage:         s.lineageJSONFor(id),
+	}
+}
+
+// lineageJSONFor returns id's subagent-sessions lineage, or nil if this
+// server's SessionManager does not track id — see sessionJSON.Lineage's
+// doc comment. Reads sessMgr directly (its own lock, never s.mu — see
+// Server.sessMgr's doc comment), independent of whether sess itself came
+// from s.sessions or a fresh disk load: a child session's log lives in the
+// same SessionDir a plain LoadSession(id) already finds (Spawn's child
+// Config inherits its parent's SessionDir verbatim), so GET /session/{id}
+// already resolves a child with zero other changes — this only adds the
+// tree metadata on top.
+func (s *Server) lineageJSONFor(id string) *lineageJSON {
+	info, ok := s.sessMgr.Info(id)
+	if !ok {
+		return nil
+	}
+	children := info.Children
+	if children == nil {
+		children = []string{}
+	}
+	return &lineageJSON{
+		ParentID:   info.ParentID,
+		Depth:      info.Depth,
+		Status:     string(info.Status),
+		Children:   children,
+		AgentType:  info.AgentType,
+		Result:     info.Result,
+		FailReason: info.FailReason,
 	}
 }
 
