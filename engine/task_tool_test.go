@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -219,6 +220,34 @@ func TestRunTaskToolUnconfiguredModelOverrideIsSynchronousError(t *testing.T) {
 	})
 	if _, err := runTaskTool(root, raw); err == nil {
 		t.Error("runTaskTool with an unconfigured provider override: want error, got nil")
+	} else if !strings.Contains(err.Error(), "totally-unconfigured-provider") {
+		t.Errorf("error = %v, want it to name the unconfigured provider", err)
+	}
+}
+
+// TestRunTaskToolUnconfiguredDefinitionModelIsSynchronousError is the
+// regression test for a second live review finding on the same fix: the
+// first pass only validated in.Model (the caller's OVERRIDE), missing that
+// def.Model — the agent DEFINITION's own configured model, from a
+// .agents/*.md file's "model:" frontmatter — sails through exactly the
+// same way when the caller supplies no override at all.
+func TestRunTaskToolUnconfiguredDefinitionModelIsSynchronousError(t *testing.T) {
+	dir := t.TempDir()
+	writeAgentDef(t, filepath.Join(dir, ".agents"), "custom.md", `---
+name: custom
+description: A custom agent whose own definition names an unconfigured provider
+model: totally-unconfigured-provider/some-model
+---
+A custom agent whose own definition names an unconfigured provider.
+`)
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	cfg := managedConfig("root", scriptedTurns("root", nil))
+	cfg.WorkDir = dir
+	root := mgr.NewRoot(cfg)
+
+	raw, _ := json.Marshal(map[string]string{"agent": "custom", "prompt": "go"})
+	if _, err := runTaskTool(root, raw); err == nil {
+		t.Error("runTaskTool with a definition naming an unconfigured provider: want error, got nil")
 	} else if !strings.Contains(err.Error(), "totally-unconfigured-provider") {
 		t.Errorf("error = %v, want it to name the unconfigured provider", err)
 	}
