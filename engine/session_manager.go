@@ -741,8 +741,38 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	u.CacheWriteTokens += delta.CacheWriteTokens
 	m.usageByRoot[n.rootID] = u
 
-	notify := taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: n.failReason, Usage: delta}
+	// Usage: total (the full cumulative spend), not delta — matching
+	// finalizeTurn's own three notify-building branches exactly (each
+	// sets Usage: n.session.Usage()). delta is the right value to fold
+	// into usageByRoot just above (the tree budget only ever wants the
+	// NOT-yet-credited portion), but the WRONG value to report to the
+	// parent: the parent-facing notification is meant to say how much
+	// this child spent in total, the same number finalizeTurn would
+	// report for any other terminally failed child. A live review
+	// finding: a Send-restarted child interrupted on its follow-up turn
+	// would otherwise under-report its total usage in the parent's
+	// [tasks:] line relative to an ordinarily-failed child.
+	notify := taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: n.failReason, Usage: total}
 	target := m.nearestLiveAncestorLocked(n)
+
+	// n may ALSO have been a parent with its own pending notifications —
+	// a grandchild that completed and was queued on n while n's turn was
+	// still in flight, never checked out before the crash. n is now
+	// StatusFailed/finalized and will never run another turn of its own
+	// (see SessionStatus's doc comment), so without forwarding these they
+	// are stranded on a node that will never read its queue again —
+	// mirrors finalizeTurn's own identical "forward a terminal child's
+	// pending notifications to the same target its own notify uses"
+	// block exactly (drainAllTaskNotifications' own recTaskNotifyDelivered
+	// write keeps this durable across a later reload of n too). A live
+	// review finding: an earlier version of this method delivered only
+	// notify, silently dropping any grandchild results n itself had not
+	// yet forwarded.
+	var forwarded []taskNotification
+	if s.hasPendingTaskNotifications() {
+		forwarded = s.drainAllTaskNotifications()
+	}
+
 	if target == nil {
 		// No live ancestor to deliver to — either every ancestor up to
 		// the root is already terminal (the whole tree is being torn
@@ -759,11 +789,18 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 		// also arms here so a "root-shaped" node with no real subtree
 		// beneath it (already true: n is a leaf, just adopted) is
 		// collected on the very next Reap() call instead of sitting
-		// forever in m.nodes looking like a protected root.
+		// forever in m.nodes looking like a protected root. forwarded is
+		// already drained and durably marked delivered above regardless
+		// (see drainAllTaskNotifications' own doc comment) — dropped
+		// here the same way finalizeTurn drops its own forwarded set
+		// when no live ancestor exists: nothing is listening.
 		n.pendingForget = true
 		return
 	}
 	target.session.enqueueTaskNotification(notify)
+	for _, fn := range forwarded {
+		target.session.enqueueTaskNotification(fn)
+	}
 	if target.status == StatusIdle {
 		go m.fireIdleResumeAsync(target.id)
 	}
@@ -932,8 +969,16 @@ func (m *SessionManager) ReportTurnStart(sess *Session) {
 	// too, distinct from (and layered on top of) the object-reattachment
 	// fix above.
 	if old := n.session; old != nil && old != sess {
+		// enqueueTaskNotificationMigrated, not enqueueTaskNotification —
+		// see that method's own doc comment: sess, freshly cold-loaded,
+		// already restored via LoadSession's own durable queued-minus-
+		// delivered fold anything old could durably have queued BEFORE
+		// that load ran; migrating unconditionally here double-delivered
+		// exactly that overlap. Dedup keeps this loop still correct for
+		// the narrower race it exists to cover (something enqueued on old
+		// in the gap between sess's load and this reattachment).
 		for _, notif := range old.drainAllTaskNotifications() {
-			sess.enqueueTaskNotification(notif)
+			sess.enqueueTaskNotificationMigrated(notif)
 		}
 	}
 	n.session = sess

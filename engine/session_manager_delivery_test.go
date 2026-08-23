@@ -439,6 +439,54 @@ func TestReportTurnStartMigratesNotificationEnqueuedBeforeReattach(t *testing.T)
 	}
 }
 
+// TestReportTurnStartMigrationDoesNotDoubleDeliverAlongsideDurableFold is
+// the regression test for a live review finding: the migration above
+// (old.drainAllTaskNotifications() -> sess.enqueueTaskNotification) and
+// LoadSession's own durable queued-minus-delivered fold (store.go) now
+// overlap for the exact same notification. old durably enqueues (writes
+// recTaskNotifyQueued); a resume cold-loads a fresh session via
+// LoadSession, whose OWN fold already restores that just-written record
+// as "copy 1"; this method's migration then drains the SAME notification
+// off old (never touched since) and re-enqueues it as "copy 2" — the
+// parent model would be told the same child completion twice.
+func TestReportTurnStartMigrationDoesNotDoubleDeliverAlongsideDurableFold(t *testing.T) {
+	dir := t.TempDir()
+	reg := provider.Registry{"root": scriptedTurns("root", nil)}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	old := mgr.NewRoot(rootCfg)
+
+	// A background child finishes: enqueue durably onto old (the
+	// currently tracked, soon-to-be-evicted object) — mirrors
+	// finalizeTurn's own enqueueTaskNotification call exactly, including
+	// its durable recTaskNotifyQueued write.
+	old.enqueueTaskNotification(taskNotification{ChildID: "ses_x", Status: StatusDone, Result: "hi"})
+
+	// Simulate the eviction + cold reload this notification's own resume
+	// triggers: LoadSession reads the SAME durable log old just wrote to
+	// — folding the notification in as "copy 1", exactly like a real
+	// claimForPrompt cold-load would, strictly BEFORE ReportTurnStart
+	// ever runs its migration below.
+	reloaded, err := LoadSession(Config{Providers: reg, SessionDir: dir}, old.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if !reloaded.hasPendingTaskNotifications() {
+		t.Fatal("test setup: LoadSession's own durable fold did not restore the notification")
+	}
+
+	// n.session == old still (unchanged since NewRoot); old != reloaded —
+	// the migration path runs.
+	mgr.ReportTurnStart(reloaded)
+
+	reloaded.mu.Lock()
+	defer reloaded.mu.Unlock()
+	if len(reloaded.taskNotifications) != 1 {
+		t.Errorf("reloaded.taskNotifications = %+v, want exactly 1 — the durable fold and the migration must not both deliver the same notification", reloaded.taskNotifications)
+	}
+}
+
 func TestReportTurnStartAdoptsUnknownSession(t *testing.T) {
 	mgr := NewSessionManager(context.Background(), 0, 0)
 	// A session built directly, NOT through mgr.NewRoot/AdoptRoot —
@@ -985,4 +1033,226 @@ func TestReportTurnStartDoesNotFalselyReportChildDeadWhenContinuingIt(t *testing
 		resume()
 	}
 	waitForStatus(t, mgr2, childID, StatusDone, time.Second)
+}
+
+// TestDrainAllTaskNotificationsPersistsDeliverySoReloadDoesNotResurrectIt
+// is the regression test for a live review finding: finalizeTurn forwards
+// a terminal child's own pending (grandchild) notifications to the
+// nearest live ancestor via drainAllTaskNotifications — a pre-existing
+// mechanism this PR did not change — but drainAllTaskNotifications itself
+// never wrote recTaskNotifyDelivered for what it drained, unlike its
+// sibling commitTaskNotifications. The forwarded notification IS
+// correctly re-enqueued (a fresh recTaskNotifyQueued) on the ancestor's
+// own log, but the CHILD's own log kept an unmatched recTaskNotifyQueued
+// record for it forever. A later LoadSession of that same child (e.g. a
+// session.send re-run of a done/failed child) folded that unmatched
+// record back in as a phantom pending notification — the child would
+// have re-delivered to itself a result its ancestor already received,
+// breaking the queued-minus-delivered durability invariant this whole
+// mechanism depends on.
+func TestDrainAllTaskNotificationsPersistsDeliverySoReloadDoesNotResurrectIt(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", doneTurn("resumed"))
+	midProv := &signaledBlockingProvider{name: "mid", started: make(chan struct{}), release: make(chan struct{})}
+	grandProv := scriptedTurns("grand", doneTurn("grandchild done"))
+	reg := provider.Registry{rootProv.Name(): rootProv, midProv.Name(): midProv, grandProv.Name(): grandProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(rootCfg)
+
+	midID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("mid"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn mid: %v", err)
+	}
+	<-midProv.started // mid is now StatusRunning, blocked mid-turn — its one and only checkoutTaskNotificationsSegment call already happened
+
+	grandID, err := mgr.Spawn(SpawnOptions{ParentID: midID, Prompt: "go deeper", Model: modelFor("grand"), AgentType: AgentExplore})
+	if err != nil {
+		t.Fatalf("Spawn grandchild: %v", err)
+	}
+	waitForStatus(t, mgr, grandID, StatusDone, time.Second)
+
+	// The grandchild's notification lands on mid — the nearest LIVE
+	// ancestor (mid.status == StatusRunning, not Done/Failed/Canceled) —
+	// and sits pending: mid is busy with its own single blocked turn, so
+	// it never checks the queue out again before this test releases it.
+	midSess, ok := mgr.Session(midID)
+	if !ok {
+		t.Fatal("mid not tracked")
+	}
+	if !midSess.hasPendingTaskNotifications() {
+		t.Fatal("test setup: mid does not have the grandchild's notification pending")
+	}
+
+	// Release mid — its own turn completes normally. finalizeTurn forwards
+	// mid's still-pending queue (the grandchild's notification) to root via
+	// drainAllTaskNotifications — the mechanism under test, not the
+	// separate forwarding-destination logic TestGrandchildReparentsToNearestLiveAncestor
+	// already covers.
+	close(midProv.release)
+	waitForStatus(t, mgr, midID, StatusDone, time.Second)
+
+	// Reload mid fresh from disk — the exact shape a later session.send
+	// re-run of this done child produces.
+	reloadedMid, err := LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if reloadedMid.hasPendingTaskNotifications() {
+		t.Errorf("reloaded mid has a resurrected pending notification for the grandchild it already forwarded to root")
+	}
+}
+
+// TestRecoverInterruptedTurnReportsTotalUsageNotDelta is the regression
+// test for a live review finding: recoverInterruptedTurnLocked's notify
+// carried Usage: delta (the not-yet-credited portion, correct for folding
+// into usageByRoot) instead of Usage: total (n.session.Usage(), the full
+// cumulative spend) — every one of finalizeTurn's own three notify-
+// building branches uses the full total. A child recovered on a SECOND
+// interrupted turn, after a FIRST turn's spend was already credited to
+// THIS manager (surviving an intervening Reap via budgetedByChild), would
+// under-report its total usage to the parent relative to an ordinarily
+// failed child.
+func TestRecoverInterruptedTurnReportsTotalUsageNotDelta(t *testing.T) {
+	rootProv := scriptedTurns("root", doneTurn("resumed"))
+	childProv1 := scriptedTurns("childprov1", doneTurnWithUsage("first turn done", provider.Usage{InputTokens: 40, OutputTokens: 30})) // 70
+	childProv2 := &signaledBlockingProvider{name: "childprov2", started: make(chan struct{}), release: make(chan struct{})}
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv1.Name(): childProv1, childProv2.Name(): childProv2}
+	rootCfg := Config{Providers: reg, Model: modelFor("root")}
+
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(rootCfg)
+
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("childprov1"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	childSess, ok := mgr.Session(childID)
+	if !ok {
+		t.Fatal("child not tracked after turn 1")
+	}
+	// budgetedByChild[childID] == 70 now, credited by finalizeTurn — and,
+	// critically, this survives even if the node itself is later removed
+	// (see budgetedByChild's own doc comment).
+
+	// Start a SECOND turn and let it dangle — the actual "interrupted by
+	// restart" shape. Its blocking provider never returns a usage-bearing
+	// event, so s.Usage() stays at exactly 70 throughout — the same value
+	// budgetedByChild already credited. delta would therefore compute to
+	// ZERO here; only total (70) is the value a parent should actually be
+	// told.
+	childSess.SetModel(modelFor("childprov2"))
+	go mgr.Send(context.Background(), childID, "again") //nolint:errcheck // deliberately abandoned mid-flight
+	<-childProv2.started
+
+	// Simulate this same manager forgetting the node (Reap, or — as here,
+	// directly — the same observable state) while budgetedByChild
+	// survives regardless, exactly as it would across a real Reap.
+	mgr.mu.Lock()
+	delete(mgr.nodes, childID)
+	mgr.mu.Unlock()
+
+	if err := mgr.AdoptReloaded(childSess); err != nil {
+		t.Fatalf("AdoptReloaded: %v", err)
+	}
+
+	root.mu.Lock()
+	defer root.mu.Unlock()
+	if len(root.taskNotifications) != 1 {
+		t.Fatalf("root.taskNotifications = %+v, want exactly 1", root.taskNotifications)
+	}
+	got := root.taskNotifications[0].Usage
+	if got.InputTokens+got.OutputTokens != 70 {
+		t.Errorf("recovered notify Usage = %+v, want the full cumulative total (70), not the tree-budget delta (0) — a parent should be told this child's real total spend, matching every finalizeTurn branch", got)
+	}
+}
+
+// TestRecoverInterruptedTurnForwardsGrandchildNotifications is the
+// regression test for a live review finding: recoverInterruptedTurnLocked
+// delivered only its own failure notify, never forwarding any of n's OWN
+// pending notifications (a grandchild that completed and was queued on n
+// while n's turn was still in flight, never checked out before the
+// crash) — unlike finalizeTurn, which forwards a terminal child's pending
+// queue via drainAllTaskNotifications alongside its own notify. Without
+// forwarding, a grandchild's result is silently stranded on a node that
+// will never read its queue again.
+func TestRecoverInterruptedTurnForwardsGrandchildNotifications(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", doneTurn("resumed"))
+	midProv := &signaledBlockingProvider{name: "mid", started: make(chan struct{}), release: make(chan struct{})}
+	grandProv := scriptedTurns("grand", doneTurn("grandchild done"))
+	reg := provider.Registry{rootProv.Name(): rootProv, midProv.Name(): midProv, grandProv.Name(): grandProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+
+	midID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("mid"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn mid: %v", err)
+	}
+	<-midProv.started // mid is now StatusRunning, blocked mid-turn
+
+	grandID, err := mgr1.Spawn(SpawnOptions{ParentID: midID, Prompt: "go deeper", Model: modelFor("grand"), AgentType: AgentExplore})
+	if err != nil {
+		t.Fatalf("Spawn grandchild: %v", err)
+	}
+	waitForStatus(t, mgr1, grandID, StatusDone, time.Second)
+
+	midSess, ok := mgr1.Session(midID)
+	if !ok {
+		t.Fatal("mid not tracked")
+	}
+	if !midSess.hasPendingTaskNotifications() {
+		t.Fatal("test setup: mid does not have the grandchild's notification pending")
+	}
+
+	// Simulate a crash: mid's blocked goroutine is simply abandoned,
+	// never released — nothing in a fresh process knows about it, same
+	// technique as every other dangling-turn test in this file.
+
+	// Fresh process: a brand-new SessionManager, root re-adopted at the
+	// same id.
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	root2 := NewSession(rootCfg)
+	root2.ID = root1.ID
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+
+	reloadedMid, err := LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if !reloadedMid.hasPendingTaskNotifications() {
+		t.Fatal("test setup: reloaded mid did not restore the grandchild's pending notification from its own durable log")
+	}
+
+	if err := mgr2.AdoptReloaded(reloadedMid); err != nil {
+		t.Fatalf("AdoptReloaded: %v", err)
+	}
+
+	root2.mu.Lock()
+	defer root2.mu.Unlock()
+	if len(root2.taskNotifications) != 2 {
+		t.Fatalf("root2.taskNotifications = %+v, want 2 (mid's own failure notify + the forwarded grandchild notify)", root2.taskNotifications)
+	}
+	var sawMidFailure, sawGrandchildDone bool
+	for _, n := range root2.taskNotifications {
+		switch {
+		case n.ChildID == midID && n.Status == StatusFailed:
+			sawMidFailure = true
+		case n.ChildID == grandID && n.Status == StatusDone:
+			sawGrandchildDone = true
+		}
+	}
+	if !sawMidFailure {
+		t.Errorf("root2.taskNotifications missing mid's own failure notify: %+v", root2.taskNotifications)
+	}
+	if !sawGrandchildDone {
+		t.Errorf("root2.taskNotifications missing the forwarded grandchild notification — stranded on the recovered, never-to-run-again mid node: %+v", root2.taskNotifications)
+	}
 }
