@@ -2499,22 +2499,31 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 	// Not a server-resident turn. A managed CHILD's own turn runs on its
 	// SessionManager node.ctx (Spawn/Send), never in s.sessions at all —
 	// st == nil here is the NORMAL, expected shape for a running child,
-	// not evidence there is nothing to abort. Fall back to canceling its
-	// node directly. Deliberately scoped to an ACTUAL child
-	// (info.ParentID != "") — never a root: an idle root reaching this
-	// point genuinely has nothing running (the resident-turn branch
-	// above already covers a running one), and calling sessMgr.Cancel on
-	// it here would mark its lineage StatusCanceled for no reason (a
-	// root's SessionManager node otherwise only transitions via
-	// ReportTurnStart/Cancel/cancel_tree, never a plain per-turn abort)
-	// — the unconditional 204 fallback below is the correct, unchanged
-	// behavior for that case. A live review caught the child gap: an
-	// earlier revision of this handler silently did nothing for a
-	// running child (st == nil, cancel == nil, but the child DOES exist
-	// on disk so the 404 branch below never fired either) — a misleading
-	// 204 while the child ran to completion untouched.
+	// not evidence there is nothing to abort. Fall back to
+	// sessMgr.AbortTurn, which cancels ONLY id's own context — NOT
+	// sessMgr.Cancel (the full cascade cancel_tree also uses), which an
+	// earlier revision of this handler used here: it walks the ENTIRE
+	// subtree and explicitly marks every descendant StatusCanceled,
+	// making abort indistinguishable from cancel_tree for a child. See
+	// AbortTurn's own doc comment for the real (if subtle) distinction
+	// that remains even though an actually-running descendant's turn
+	// still gets interrupted either way (context derivation makes that
+	// part unavoidable) — abort='stop id's own turn', cancel_tree='tear
+	// down the subtree', two different operations. Deliberately scoped
+	// to an ACTUAL child (info.ParentID != "") — never a root: an idle
+	// root reaching this point genuinely has nothing running (the
+	// resident-turn branch above already covers a running one), and
+	// canceling its SessionManager node here would be pointless churn
+	// for a node that otherwise only transitions via ReportTurnStart/
+	// Cancel/cancel_tree — the unconditional 204 fallback below is the
+	// correct, unchanged behavior for that case. A live review caught
+	// the child gap: an earlier revision of this handler silently did
+	// nothing for a running child (st == nil, cancel == nil, but the
+	// child DOES exist on disk so the 404 branch below never fired
+	// either) — a misleading 204 while the child ran to completion
+	// untouched.
 	if info, ok := s.sessMgr.Info(id); ok && info.ParentID != "" {
-		_ = s.sessMgr.Cancel(id) // errors only on an unknown id — impossible, Info just confirmed it
+		_ = s.sessMgr.AbortTurn(id) // errors only on an unknown id — impossible, Info just confirmed it
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}

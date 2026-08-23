@@ -1196,6 +1196,51 @@ func (m *SessionManager) Cancel(id string) error {
 	return nil
 }
 
+// AbortTurn cancels id's OWN turn — via cancelOneNodeLocked, the SAME
+// single-node bookkeeping Cancel/cancel_tree applies to every node it
+// visits — but, UNLIKE Cancel, does NOT recurse into id's children. id
+// itself always ends up StatusCanceled, the same clean, predictable
+// outcome cancel_tree would give it; the two operations differ only in
+// whether anything BEYOND id gets touched.
+//
+// This is the SessionManager-side implementation of the wire's POST
+// /session/{id}/abort for a CHILD: "stop THIS session's turn," a
+// DIFFERENT operation from cancel_tree's "tear down the whole subtree" —
+// a live review caught an earlier revision of handleAbort using Cancel
+// (the full cascade) for a child, making abort indistinguishable from
+// cancel_tree: every descendant got explicitly marked StatusCanceled by
+// cancelSubtreeLocked's tree walk, not just id itself.
+//
+// A real, unavoidable side effect remains: any descendant's context is
+// context.WithCancel(parent.ctx) (see adoptLocked), so canceling id's own
+// ctx here still interrupts an actually-running descendant's Prompt call
+// — Go's context cancellation cascades through the tree regardless of
+// whether SessionManager's own bookkeeping walks it explicitly. The
+// difference from Cancel is in HOW that descendant's outcome gets
+// recorded: cancel_tree marks it StatusCanceled directly, atomically,
+// before anything else observes it (cancelSubtreeLocked's recursion
+// reaches it too); AbortTurn never touches it at all, so it instead
+// reaches StatusFailed (failReason "canceled", via finalizeTurn's
+// ordinary perr != nil path once its own interrupted Prompt call
+// returns) — the natural, individually-finalized consequence of
+// interrupting its ancestor, not a first-class "this subtree was
+// cancelled" outcome. Two genuinely different operations, not the same
+// one under two names: id's own result matches user intuition (aborting
+// id shows id canceled), while a caught-in-the-crossfire descendant's
+// result stays observably distinct from an actual cancel_tree.
+//
+// Returns an error only if id is not tracked at all.
+func (m *SessionManager) AbortTurn(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n, ok := m.nodes[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrUnknownSession, id)
+	}
+	m.cancelOneNodeLocked(n)
+	return nil
+}
+
 // cancelSubtreeLocked marks n and its descendants canceled and cancels
 // each one's context. It deliberately does NOT call decrementRunningLocked
 // for a node it finds running: that node's own in-flight turn is still
@@ -1209,14 +1254,29 @@ func (m *SessionManager) Cancel(id string) error {
 // earlier version of this method, which let the tree-wide concurrency cap
 // be exceeded.
 func (m *SessionManager) cancelSubtreeLocked(n *sessionNode) {
+	m.cancelOneNodeLocked(n)
+	for _, cid := range n.children {
+		if c, ok := m.nodes[cid]; ok {
+			m.cancelSubtreeLocked(c)
+		}
+	}
+}
+
+// cancelOneNodeLocked applies cancelSubtreeLocked's single-node
+// bookkeeping (status/finalized/ctx) to n ALONE, with no recursion into
+// n.children — the shared core cancelSubtreeLocked (Cancel/cancel_tree)
+// and AbortTurn both build on, so id itself always gets the SAME clean,
+// explicit "canceled" outcome regardless of which of those two callers
+// reached it; they differ only in whether n's children are ALSO walked.
+func (m *SessionManager) cancelOneNodeLocked(n *sessionNode) {
 	// wasRunning, captured before the status overwrite below, decides
-	// sessionNode.finalized for the node this call is about to cancel —
-	// see that field's doc comment. A node canceled while StatusIdle had
-	// no in-flight Prompt call and so no goroutine that will ever call
-	// finalizeTurn for it: nothing is left to settle, safe to reap
-	// immediately. A node canceled while StatusRunning still has one
-	// unwinding; finalizeTurn is what will eventually mark it finalized,
-	// once that goroutine's own canceled Prompt call actually returns.
+	// sessionNode.finalized for n — see that field's doc comment. A node
+	// canceled while StatusIdle had no in-flight Prompt call and so no
+	// goroutine that will ever call finalizeTurn for it: nothing is left
+	// to settle, safe to reap immediately. A node canceled while
+	// StatusRunning still has one unwinding; finalizeTurn is what will
+	// eventually mark it finalized, once that goroutine's own canceled
+	// Prompt call actually returns.
 	wasRunning := n.status == StatusRunning
 	if n.status != StatusDone && n.status != StatusFailed && n.status != StatusCanceled {
 		n.status = StatusCanceled
@@ -1231,11 +1291,6 @@ func (m *SessionManager) cancelSubtreeLocked(n *sessionNode) {
 	// turn an ExternalRunner is driving on its own context — see Cancel's
 	// doc comment.
 	n.cancel()
-	for _, cid := range n.children {
-		if c, ok := m.nodes[cid]; ok {
-			m.cancelSubtreeLocked(c)
-		}
-	}
 }
 
 // mergeCancel returns a context canceled when either a or b is done,
