@@ -1265,9 +1265,10 @@ func (m *SessionManager) cancelSubtreeLocked(n *sessionNode) {
 // cancelOneNodeLocked applies cancelSubtreeLocked's single-node
 // bookkeeping (status/finalized/ctx) to n ALONE, with no recursion into
 // n.children — the shared core cancelSubtreeLocked (Cancel/cancel_tree)
-// and AbortTurn both build on, so id itself always gets the SAME clean,
-// explicit "canceled" outcome regardless of which of those two callers
-// reached it; they differ only in whether n's children are ALSO walked.
+// and AbortTurn both build on. See AbortTurn's doc comment for why that
+// distinction (recurse or not) matters and what it does and does not
+// change about a descendant's own outcome — the authoritative
+// explanation; not repeated here.
 func (m *SessionManager) cancelOneNodeLocked(n *sessionNode) {
 	// wasRunning, captured before the status overwrite below, decides
 	// sessionNode.finalized for n — see that field's doc comment. A node
