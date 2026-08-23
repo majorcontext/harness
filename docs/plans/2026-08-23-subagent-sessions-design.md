@@ -35,7 +35,7 @@ implementation:
    itself. (Claude Code's observed model.)
 4. **Presets match Claude Code.** Built-in agent types `general-purpose`
    (full tool set), `explore` (read-only), `plan` (read-only, returns a
-   plan). Custom agent definitions load from `.agents/agents/*.md` with
+   plan). Custom agent definitions load from `.agents/*.md` with
    Claude Code-compatible frontmatter.
 5. **Nesting matches Claude Code.** Children can spawn children by
    default. Depth limit 3 below the root session (configurable); at the
@@ -82,8 +82,9 @@ Built-ins (compiled in):
 | `explore`         | read-only: `read_file`, `glob`, `grep`, `ls` | leaf (no `task`) |
 | `plan`            | read-only set; prompt addition instructs it to return an implementation plan, not edits | leaf |
 
-Custom definitions: `.agents/agents/<name>.md` (sibling of the existing
-`.agents/skills/` convention), Claude Code-compatible frontmatter:
+Custom definitions: `.agents/<name>.md` — loose `.md` files at the top
+of the existing `.agents/` directory (skills stay under `.agents/skills/`;
+only top-level `.md` files are agent definitions), Claude Code-compatible frontmatter:
 
     ---
     name: code-reviewer
@@ -181,7 +182,7 @@ operations (the boxes control plane is the first consumer):
 - SessionManager unit tests: lifecycle transitions, depth/concurrency
   enforcement (including the at-limit race), cascade cancel, notification
   routing (running-parent queue vs idle-parent resume).
-- Agent-definition loading: built-ins, `.agents/agents` parsing, unknown
+- Agent-definition loading: built-ins, `.agents/*.md` parsing, unknown
   tool names error at load, `tools` filtering applied to the child's
   registry, leaf types get no `task`.
 - Delivery integration test: parent idle → engine-initiated resume turn
