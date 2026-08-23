@@ -227,6 +227,65 @@ func TestSessionSendDeliversToRoot(t *testing.T) {
 	}
 }
 
+// TestSessionSendToRootWithStrandedQueueIsNotLost is the regression test
+// for a review finding: runOrQueueText's idle-with-non-empty-queue branch
+// used to dispatch the queue's existing head without ever enqueuing THIS
+// call's own text, silently dropping a session.send message any time the
+// root's durable queue was already non-empty (a restart refold or a
+// drain-gap strand — see TestQueueRestartRefoldNoAutoDispatch, whose
+// direct-EnqueuePrompt technique this test reuses to arrange that state)
+// while the response still claimed 202 "sent". Both turns — the
+// pre-existing head, then this call's own text — must run, in FIFO order,
+// with nothing dropped.
+func TestSessionSendToRootWithStrandedQueueIsNotLost(t *testing.T) {
+	prov := &scriptedProvider{name: "root", turns: [][]provider.Event{
+		asstTurn("head reply"),
+		asstTurn("sent reply"),
+	}}
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil, prov)
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	// Strand a queued prompt on the idle root — the same shape a restart
+	// refold or a drain-gap leaves behind.
+	h.srv.mu.Lock()
+	st := h.srv.sessions[root.ID]
+	h.srv.mu.Unlock()
+	if st == nil {
+		t.Fatal("root not resident right after creation")
+	}
+	if _, err := st.sess.EnqueuePrompt("stranded head"); err != nil {
+		t.Fatalf("EnqueuePrompt: %v", err)
+	}
+
+	resp, data = h.do("POST", "/session/"+root.ID+"/send", map[string]string{"text": "my message"})
+	if resp.StatusCode != 202 {
+		t.Fatalf("send status %d: %s", resp.StatusCode, data)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		resp, data := h.do("GET", "/session/"+root.ID+"/message", nil)
+		if resp.StatusCode != 200 {
+			t.Fatalf("get messages status %d: %s", resp.StatusCode, data)
+		}
+		if strings.Contains(string(data), "head reply") && strings.Contains(string(data), "sent reply") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("both turns never completed (session.send text was lost): %s", data)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
 // TestSessionSendUnknownSessionIs404 proves session.send 404s for an id
 // this server's SessionManager does not track.
 func TestSessionSendUnknownSessionIs404(t *testing.T) {
@@ -277,6 +336,51 @@ func TestCancelTreeCascadesToChild(t *testing.T) {
 
 	waitForLineageStatus(t, h, child.ID, "canceled", 2*time.Second)
 	waitForLineageStatus(t, h, root.ID, "canceled", 2*time.Second)
+}
+
+// TestSessionSendToBusyChildIs409NotLost is the regression test for a
+// review finding: handleSessionSend's child branch fired
+// SessionManager.Send in a background goroutine and discarded its error
+// unconditionally. A child has no prompt queue (unlike a root), so a Send
+// against an already-running child returned ErrSessionBusy with nowhere
+// to defer to — silently dropping the message while the caller still got
+// 202 "sent". This proves session.send now refuses up front with 409
+// instead.
+func TestSessionSendToBusyChildIs409NotLost(t *testing.T) {
+	blocker := newBlockingProvider("blocker")
+	t.Cleanup(blocker.releaseAll)
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, blocker)
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": root.ID,
+		"agent":     engine.AgentGeneralPurpose,
+		"prompt":    "go",
+		"model":     "blocker/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+	var child struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &child)
+
+	waitForLineageStatus(t, h, child.ID, "running", 2*time.Second)
+
+	resp, data = h.do("POST", "/session/"+child.ID+"/send", map[string]string{"text": "follow-up while busy"})
+	if resp.StatusCode != 409 {
+		t.Fatalf("send-to-busy-child status %d, want 409: %s", resp.StatusCode, data)
+	}
 }
 
 // TestConcurrentPromptDuringResumeIsQueuedNotConcurrent is the server-level
