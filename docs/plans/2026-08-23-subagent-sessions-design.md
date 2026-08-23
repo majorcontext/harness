@@ -196,6 +196,50 @@ operations (the boxes control plane is the first consumer):
 - Child session logs persist like any session's, so a child's work is
   inspectable after the fact.
 
+### Process-restart recovery
+
+The four terminal outcomes above (provider failure, tool crash,
+cancellation, natural completion) all have one thing in common: a live
+goroutine — somewhere in `finalizeTurn`'s call chain — is always the one
+that discovers and reports them. A child whose turn was genuinely IN
+FLIGHT when the process crashed or was killed has no such goroutine left
+in the NEW process. Left unhandled, it cold-reloads as `StatusIdle` —
+indistinguishable from a child that never received a turn at all — and
+its parent, if it ever queries or auto-resumes based on that child's
+outcome, waits forever for a notification that can never arrive.
+
+**Detection.** `Session.Prompt` durably appends the user-role message
+BEFORE calling the provider (see `runAgenticLoop`), so a crash mid-turn
+leaves exactly one recognizable signature on disk: the session's history
+ends on a user-role message with nothing after it. `hasUnansweredTurn`
+(engine.go) checks for exactly this — the same signature
+`isSafeToDropDirectiveTail`'s `len==1` case already trusts for a
+different purpose (goal-loop retry).
+
+**Decision: treat it as `failed`, synthetically, on next touch.** A
+dangling child is marked `StatusFailed` (`FailReason`: `"lost to
+restart: turn was in flight when the process last stopped"`) the moment
+`adoptReloadedLocked` reconstructs it, and a synthetic notification is
+delivered to its nearest live ancestor through the EXACT SAME
+`nearestLiveAncestorLocked` + `enqueueTaskNotification` path every other
+terminal outcome uses — never a second-class delivery mechanism. See
+`recoverInterruptedTurnLocked`'s own doc comment (session_manager.go) for
+the full mechanism, including why the resulting resume is fired
+asynchronously rather than threaded back through `AdoptReloaded`/
+`ReportTurnStart`'s public signatures.
+
+**Accepted scope cut: reactive, not proactive.** This only fires when
+something actually reloads the dangling child's own id again (a
+legitimate follow-up `session.send`, `ReportTurnStart`'s
+adopt-on-first-sight, or `handleSpawnChild`'s parent-lookup fallback all
+already reach this path). If nothing ever touches that child's id again,
+its parent still waits forever. Fully closing that requires a proactive
+startup sweep across every session on disk — a durable parent→children
+index does not exist today, and `ListSessions`' cheap header decode
+(`readSessionInfo`) does not currently read `TaskParentID` or the last
+record's type — a larger, separate piece of work, deliberately deferred
+rather than folded into this fix.
+
 ## Non-goals (v1)
 
 - Streaming child transcripts into a UI live (boxes follow-up; the

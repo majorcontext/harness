@@ -392,7 +392,98 @@ func (m *SessionManager) adoptReloadedLocked(s *Session) *sessionNode {
 	n.agentType = s.TaskAgentType()
 	m.installTaskToolLocked(s, depth)
 	m.restoreTaskToolRestrictionLocked(s, depth)
+	m.recoverInterruptedTurnLocked(n, s)
 	return n
+}
+
+// recoverInterruptedTurnLocked closes the "in-flight-children restart
+// semantics" gap — a follow-up finding, decided and documented here (see
+// also docs/plans/2026-08-23-subagent-sessions-design.md's "Process-
+// restart recovery" section): every OTHER terminal outcome a child can
+// reach (provider failure, tool crash, cancellation, natural completion)
+// durably notifies its parent via finalizeTurn — but a child whose turn
+// was genuinely IN FLIGHT when the process crashed or was killed has NO
+// live goroutine left, in the new process, to ever call finalizeTurn for
+// it. Before this fix, such a child cold-reloaded as StatusIdle —
+// indistinguishable from a child that simply never received a turn — and
+// its parent, if it ever queried or auto-resumed based on this child's
+// outcome, waited forever for a notification that could never arrive.
+//
+// Detection: n was just reconstructed by adoptLocked, so its status is
+// still the freshly-adopted default (StatusIdle) — this checks s's own
+// durable signature instead (see hasUnansweredTurn's own doc comment for
+// why a trailing, unanswered user-role message unambiguously means "a
+// turn was started here and never finished").
+//
+// On detection: n is marked StatusFailed and finalized=true directly —
+// nothing is left to settle in THIS process (no in-flight goroutine's
+// own finalizeTurn will ever run for it, unlike a node this process
+// itself is driving), so it is immediately Reap-eligible, exactly
+// mirroring cancelOneNodeLocked's identical `!wasRunning -> finalized =
+// true` reasoning for a node with no live unwinding goroutine. A
+// synthetic notification is built and delivered through the EXACT SAME
+// path finalizeTurn's own cancellation branch uses (nearestLiveAncestorLocked
+// + enqueueTaskNotification), so a live ancestor learns about this
+// exactly as it would learn about any other failed child — never a
+// second-class delivery mechanism. If that ancestor is currently idle,
+// an active resume is fired to wake it — see fireIdleResumeAsync's own
+// doc comment for why that happens asynchronously, outside this
+// (already-locked) call, rather than being threaded back through
+// AdoptReloaded/ReportTurnStart's public signatures.
+//
+// This IS a purely reactive fix: it only ever fires when something
+// ACTUALLY reloads this specific child's id again (a legitimate
+// follow-up session.send, ReportTurnStart's adopt-on-first-sight, or
+// handleSpawnChild's parent-lookup fallback all already reach here). If
+// nothing ever touches the lost child's id again, its parent still waits
+// forever — closing THAT fully requires a proactive startup sweep across
+// every session on disk, deliberately out of scope for this fix (see the
+// design doc section referenced above for why the reactive version is
+// the documented, accepted answer for now).
+func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session) {
+	if !s.hasUnansweredTurn() {
+		return
+	}
+	n.status = StatusFailed
+	n.finalized = true
+	n.failReason = "lost to restart: turn was in flight when the process last stopped"
+	notify := taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: n.failReason, Usage: s.Usage()}
+	target := m.nearestLiveAncestorLocked(n)
+	if target == nil {
+		return
+	}
+	target.session.enqueueTaskNotification(notify)
+	if target.status == StatusIdle {
+		go m.fireIdleResumeAsync(target.id)
+	}
+}
+
+// fireIdleResumeAsync independently re-acquires m.mu and fires a resume
+// turn for targetID if it is STILL idle by the time this runs — called
+// via `go` from recoverInterruptedTurnLocked, deliberately OUTSIDE that
+// call's own already-held lock, rather than threading a resume func()
+// back through AdoptReloaded/ReportTurnStart's public signatures (both
+// currently return nothing; propagating a resume closure through them
+// would touch every one of their several call sites across server/ and
+// cmd/harness, each with its own ordering constraints around exactly
+// when a returned resume is safe to fire — see finalizeTurn's own doc
+// comment on why ONE of ITS callers, runPrompt, has a real ordering
+// requirement the others don't). Re-checking target.status here, under a
+// FRESH lock acquisition, is required, not defensive: scheduling via `go`
+// means arbitrary time may pass before this runs, during which target
+// could have started a turn through any other ordinary path.
+func (m *SessionManager) fireIdleResumeAsync(targetID string) {
+	m.mu.Lock()
+	n, ok := m.nodes[targetID]
+	if !ok || n.status != StatusIdle {
+		m.mu.Unlock()
+		return
+	}
+	resume := m.triggerResumeLocked(n)
+	m.mu.Unlock()
+	if resume != nil {
+		resume()
+	}
 }
 
 // restoreTaskToolRestrictionLocked re-applies the tool restriction a
@@ -717,6 +808,53 @@ func (m *SessionManager) Reap() int {
 		}
 	}
 	return len(eligible)
+}
+
+// ForgetRoot removes id from m.nodes, freeing the *sessionNode it pins —
+// the ONE, explicit, caller-invoked escape hatch for the leak Reap's own
+// doc comment describes as a deliberate v1 scope cut: "a root is never
+// removed, since it is the tree's own address and a caller may still hold
+// (or later reload) its id." That's still true for the AUTOMATIC sweep
+// Reap performs — this does NOT reinterpret Reap's own contract, which
+// stays root-blind — but a caller that has independently decided a root
+// is truly done (its own DELETE /session/{id}, say) has no such ambiguity
+// and needs a way to say so explicitly. Without this, EVERY root a
+// process has ever created accumulates in m.nodes (and the *Session it
+// pins — full message history, ctx) for the process's entire lifetime,
+// even for roots the caller has already deleted at the server-residency
+// layer (see server/handlers.go's handleEnd, which tears down s.sessions
+// but — before this method existed — had nothing to call on sessMgr for
+// the other half of that leak).
+//
+// Refuses (returns an error, removes nothing) rather than guessing safe
+// in three cases: id is not a tracked root at all (ErrUnknownSession, or
+// id names a CHILD — a child is never this method's job, Reap already
+// handles a terminal leaf child and a non-terminal one has its own
+// in-flight turn to protect); id still has live children (removing a
+// root out from under them would orphan the whole subtree with no
+// address left to reach it by — matches Cancel's own cascade philosophy:
+// tear down the subtree first, via Cancel, if that's really the intent);
+// id is currently StatusRunning (an in-flight turn still has a goroutine
+// that will eventually call finalizeTurn expecting to find this node).
+func (m *SessionManager) ForgetRoot(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n, ok := m.nodes[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrUnknownSession, id)
+	}
+	if n.parentID != "" {
+		return fmt.Errorf("engine: %s is not a root", id)
+	}
+	if len(n.children) != 0 {
+		return fmt.Errorf("engine: root %s still has live children", id)
+	}
+	if n.status == StatusRunning {
+		return fmt.Errorf("engine: root %s is busy", id)
+	}
+	n.cancel() // see Reap's identical call for why this is required, not optional
+	delete(m.nodes, id)
+	return nil
 }
 
 // TaskToolAllowed reports whether a session at depth may spawn a child —

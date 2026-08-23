@@ -3057,7 +3057,7 @@ func (s *Server) handleEnd(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, "no such session")
 			return
 		}
-		s.cascadeCancelChildrenOf(id)
+		s.endSubagentLineage(id)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -3073,31 +3073,51 @@ func (s *Server) handleEnd(w http.ResponseWriter, r *http.Request) {
 	// id itself is now confirmed idle (the running check above passed) —
 	// safe to cascade-cancel any live children without racing id's own
 	// in-flight turn.
-	s.cascadeCancelChildrenOf(id)
+	s.endSubagentLineage(id)
 	if wt != nil {
 		s.teardownWorktree(id, wt)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// cascadeCancelChildrenOf cascade-cancels id's live subagent-sessions
-// subtree (sessMgr.Cancel, the same cascade DELETE .../cancel_tree already
-// uses) — a live review finding on handleEnd: ending a session used to
-// only ever touch server residency (s.sessions), never sessMgr, so
-// deleting a parent (or a non-resident child) with a still-running child
-// of its own silently orphaned it — the orphaned child kept running to
-// completion with no one left to ever check out its result, since its own
-// parent's row was already gone. Guarded on having children at all,
-// mirroring cancel_tree's own scope, so an ordinary DELETE of a plain,
-// childless session never recolors its SessionManager status to
-// "canceled" it wasn't already heading toward. Callers must ensure id
-// itself is not concurrently mid-turn before calling this (handleEnd's
-// resident branch checks st.running first; its non-resident branch has no
-// server-tracked in-flight turn to race in the first place).
-func (s *Server) cascadeCancelChildrenOf(id string) {
+// endSubagentLineage settles id's sessMgr-side bookkeeping as part of
+// ending it — two live review findings on handleEnd, both stemming from
+// the same root cause: ending a session used to only ever touch server
+// residency (s.sessions), never sessMgr.
+//
+//  1. Cascade-cancels live children (the same sessMgr.Cancel cascade
+//     DELETE .../cancel_tree already uses): a still-running child of a
+//     deleted parent used to be silently orphaned — left running to
+//     completion with no one left to ever check out its result, since
+//     its parent's own row was already gone. Guarded on having children
+//     at all, mirroring cancel_tree's own scope, so an ordinary DELETE
+//     of a plain, childless session never recolors its SessionManager
+//     status to "canceled" it wasn't already heading toward.
+//
+//  2. Best-effort ForgetRoot: a root's sessionNode (and the *Session it
+//     pins) used to survive in sessMgr's m.nodes for the rest of the
+//     PROCESS's life even after its caller explicitly deleted it here —
+//     see ForgetRoot's own doc comment for why this is a real,
+//     deliberate leak Reap itself will never close. Errors are expected
+//     and silently ignored: id may not be a root at all (a child — never
+//     ForgetRoot's job), may not be sessMgr-tracked at all (a session
+//     that predates this feature), or may still have live children at
+//     the instant this runs (the cascade-cancel above only CANCELS them,
+//     it does not remove them — they stay in m.nodes, canceled, until
+//     Reap's own bottom-up sweep eventually collects them; ForgetRoot
+//     correctly refuses to remove their now-childless parent's address
+//     out from under that still-in-flight cleanup). None of these are
+//     caller-visible failures: DELETE already succeeds either way.
+//
+// Callers must ensure id itself is not concurrently mid-turn before
+// calling this (handleEnd's resident branch checks st.running first; its
+// non-resident branch has no server-tracked in-flight turn to race in
+// the first place).
+func (s *Server) endSubagentLineage(id string) {
 	if info, ok := s.sessMgr.Info(id); ok && len(info.Children) > 0 {
 		_ = s.sessMgr.Cancel(id) // only error is ErrUnknownSession, unreachable: id was just found tracked above
 	}
+	_ = s.sessMgr.ForgetRoot(id)
 }
 
 // teardownWorktree decides a 'worktree'-isolation session's fate at session
