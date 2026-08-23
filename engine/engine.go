@@ -293,6 +293,58 @@ type Config struct {
 	// lineage. See Session.ParentSession.
 	ParentSession string
 
+	// TaskParentID is a COMPLETELY DIFFERENT concept from ParentSession
+	// above, despite both being "a parent pointer": this one is
+	// SessionManager's OWN tree-lineage record, set ONLY by Spawn
+	// (session_manager.go) to the spawning session's id, and consulted
+	// ONLY to reconstruct a child's true depth after SessionManager's
+	// in-memory tree has forgotten it (Reap, or a process restart) —
+	// see SessionManager.adoptReloadedLocked. ParentSession is an
+	// opaque, unvalidated, cross-box-safe provenance pointer a caller
+	// may set to ANY prior session id for ANY reason (see its own doc
+	// comment) — reusing it for tree reconstruction would be both
+	// semantically wrong and unsafe: a session created with
+	// ParentSession pointing at some OTHER, unrelated but currently
+	// SessionManager-tracked session would be silently misattached
+	// under it. TaskParentID has no such ambiguity: it is written by
+	// exactly one code path, read by exactly one code path, and never
+	// surfaced on the wire (session.info's lineage.parent_id comes from
+	// SessionManager's live tree, not this field). Persisted on the
+	// session header record like ParentSession, restored by
+	// LoadSession. Empty means "not a task-tool-spawned child, or
+	// predates this field."
+	TaskParentID string
+
+	// TaskAgentType and TaskToolNames are set ONLY by Spawn, alongside
+	// TaskParentID above, and exist for the SAME reason: SessionManager's
+	// in-memory tree (and the in-memory *Session.tools map restrictTools
+	// narrowed at spawn time) can both be forgotten — Reap, or a process
+	// restart — while the underlying session itself stays perfectly
+	// resumable via a legitimate follow-up (session.send permits
+	// messaging a done/failed child). Without a durable record of what
+	// this child's tool set was ACTUALLY restricted to, a reload
+	// (adoptReloadedLocked) had nothing to restore it from and silently
+	// handed back the full, unrestricted default registry — an explore
+	// or plan child regaining bash/write_file after a reap or restart. A
+	// live review caught this exact escalation.
+	//
+	// TaskAgentType is opts.AgentType verbatim (e.g. "explore") — kept
+	// primarily for lineage.agent_type display surviving a reload, and
+	// as a best-effort re-resolution key if TaskToolNames is ever
+	// missing on an otherwise-named record (a legacy log predating this
+	// field, or one written between the two fields' rollout — see
+	// adoptReloadedLocked). TaskToolNames is the actual RESOLVED name
+	// list restrictTools was called with at spawn time — nil means
+	// "spawned with no restriction beyond whatever it inherited" (a
+	// general-purpose-shaped child), a real durable value, not "missing
+	// data" (a genuinely unrestricted child and a legacy record with no
+	// data at all are, unavoidably, indistinguishable by this field
+	// alone — TaskAgentType is the fallback signal for that case).
+	// adoptReloadedLocked is the ONLY reader; this is never surfaced on
+	// the wire.
+	TaskAgentType string
+	TaskToolNames []string
+
 	Hooks Hooks // optional plugin host
 	// OnEvent is optional; called synchronously, keep it fast. The goal.*
 	// events (see goal.go) are emitted while Session.mu is held so the event
@@ -408,6 +460,21 @@ type Config struct {
 	// default true) so an operator opts OUT, unlike GoalTool which opts in
 	// only when an evaluator is configured.
 	ModelTool bool
+
+	// SessionManager, when non-nil, enables the built-in `task` tool
+	// (task_tool.go): it is the manager this session was created or
+	// adopted through (SessionManager.NewRoot/AdoptRoot/Spawn all set it),
+	// and Run reads it back off Session.cfg to actually spawn a child —
+	// the same "read the dependency off cfg at Run time" shape MCP,
+	// Processes, and GoalTool already use, not a closure captured at tool-
+	// construction time. A session built directly via NewSession/
+	// LoadSession, bypassing SessionManager entirely, leaves this nil and
+	// gets no `task` tool at all — today's existing single-session flow is
+	// completely unaffected. Whether `task` actually ends up registered
+	// (and, for a spawned child, whether it survives an agent definition's
+	// tools: restriction) is decided by SessionManager itself, not by this
+	// field alone — see SessionManager.installTaskToolLocked.
+	SessionManager *SessionManager
 
 	// ModelAliases maps short alias names ("fast", "smart") to model refs,
 	// mirroring config.Config.Aliases (the engine never imports config). The
@@ -705,6 +772,33 @@ type Session struct {
 	// resume from the same fold, so the ceiling is a session-lifetime one
 	// rather than a per-process one. Guarded by mu.
 	toolResultBytes int
+
+	// taskNotifications is this session's pending queue of child-completion
+	// signals not yet checked out for an in-flight turn attempt (see
+	// taskdelivery.go): SessionManager.finalizeTurn appends to it from
+	// whatever goroutine just finished driving a CHILD's turn. streamTurn
+	// moves entries from here into taskNotificationsInFlight every model
+	// call via checkoutTaskNotificationsSegment. Nil for a session with no
+	// SessionManager, or one that has never had a child complete. Guarded
+	// by mu.
+	taskNotifications []taskNotification
+	// taskNotificationsInFlight holds notifications already checked out
+	// for the turn attempt currently in progress — moved back to
+	// taskNotifications (requeueTaskNotifications) if that attempt fails,
+	// or cleared (commitTaskNotifications) once it actually succeeds. See
+	// checkoutTaskNotificationsSegment's doc comment for why this two-
+	// phase handoff exists: a destructive single drain lost a notification
+	// to a retried or discarded attempt. Guarded by mu.
+	taskNotificationsInFlight []taskNotification
+
+	// agentDefsLoaded/agentDefs/agentDefsErr cache AgentDefs' discovery
+	// (agentdef.go), on the SAME load-once-cache-error pattern instrLoaded/
+	// instrSeg/instrErr and skillsLoaded/skillsSeg/skillsErr already use —
+	// but triggered by the `task` tool's first call, not by Prompt (see
+	// AgentDefs' doc comment for why). Guarded by mu.
+	agentDefsLoaded bool
+	agentDefs       map[string]AgentDef
+	agentDefsErr    error
 }
 
 // NewSession creates a session. Nothing touches the network, spawns
@@ -750,7 +844,7 @@ func newSession(cfg Config) *Session {
 		toolResultNextID:      1,
 		toolResults:           make(map[string]toolResultMeta),
 	}
-	for _, t := range []Tool{bashTool(cfg.BashTimeout, cfg.BashOutputCap), readFileTool(), writeFileTool(), editFileTool(), sessionInfoTool()} {
+	for _, t := range []Tool{bashTool(cfg.BashTimeout, cfg.BashOutputCap), readFileTool(), writeFileTool(), editFileTool(), sessionInfoTool(), globTool(), grepTool(), lsTool()} {
 		s.tools[t.Def.Name] = t
 	}
 	if cfg.Processes != nil {
@@ -764,6 +858,15 @@ func newSession(cfg Config) *Session {
 	}
 	if mcpConfiguredCount(cfg.MCP) > 0 {
 		s.tools[mcpSessionToolName] = mcpTool()
+	}
+	// task is registered here unconditionally whenever a SessionManager is
+	// present; SessionManager itself withholds it post-construction for a
+	// session at (or past) the depth limit, and an agent definition's
+	// tools: restriction can remove it too (see installTaskToolLocked and
+	// Spawn in session_manager.go) — newSession has no notion of depth or
+	// agent definitions, so it is not the right place to make either call.
+	if cfg.SessionManager != nil {
+		s.tools[taskToolName] = taskTool()
 	}
 	// read_tool_result is registered only when retention can actually mint a
 	// handle — a positive inline limit AND a SessionDir, the same condition
@@ -842,6 +945,27 @@ func (s *Session) Model() message.ModelRef {
 	return s.model
 }
 
+// configSnapshot returns a copy of s.cfg taken under s.mu, with Model
+// overridden to the session's LIVE current model (s.model — see Model's
+// doc comment: SetModel updates s.model, never s.cfg.Model, which stays
+// pinned to whatever the session's ORIGINAL construction-time model was
+// forever). It exists for SessionManager.Spawn, which needs to build a
+// child's Config from its parent's: reading parent.session.cfg directly,
+// unsynchronized, races SetModel's own writes under s.mu to
+// s.cfg.ContextWindowTokens/contextWindowSource (see SetModel) — caught
+// live by go test -race — and would have inherited the parent's STALE
+// construction-time model besides, contradicting the design doc's
+// "children inherit the parent's ... model" precedence. Every other
+// Config field copies by value as a normal struct copy would; only Model
+// gets the live override.
+func (s *Session) configSnapshot() Config {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cfg := s.cfg
+	cfg.Model = s.model
+	return cfg
+}
+
 // SetEffort swaps the reasoning-effort level for subsequent requests. A no-op
 // set to the current level changes nothing and emits no event. The level rides
 // every request the same way the model does — the adapter maps it to the
@@ -894,6 +1018,24 @@ func (s *Session) WorkDir() string {
 // session has no recorded parent. See Config.ParentSession's doc comment.
 func (s *Session) ParentSession() string {
 	return s.cfg.ParentSession
+}
+
+// TaskParentID returns SessionManager's own tree-lineage pointer
+// (Config.TaskParentID) — see that field's doc comment for why this is a
+// completely different concept from ParentSession above, despite the
+// similar name.
+func (s *Session) TaskParentID() string {
+	return s.cfg.TaskParentID
+}
+
+// TaskAgentType and TaskToolNames return Config.TaskAgentType/TaskToolNames
+// — see those fields' own doc comment.
+func (s *Session) TaskAgentType() string {
+	return s.cfg.TaskAgentType
+}
+
+func (s *Session) TaskToolNames() []string {
+	return s.cfg.TaskToolNames
 }
 
 // Plugins returns a snapshot of this session's configured plugins — name,
@@ -1236,6 +1378,13 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 		// so everything below is unchanged. See its doc comment.
 		asst, stop, usage, err := s.streamTurnWithRetry(ctx)
 		if err != nil {
+			// Whatever this attempt's own streamTurn calls checked out
+			// (checkoutTaskNotificationsSegment, engine.go's streamTurn)
+			// never reached a request that survived — return them to
+			// pending so a LATER turn gets another chance, rather than
+			// losing them the moment this one fails. See
+			// requeueTaskNotifications' doc comment.
+			s.requeueTaskNotifications()
 			var interrupted *interruptedTurnError
 			if errors.As(err, &interrupted) {
 				// The turn died after the model already emitted one or
@@ -1252,6 +1401,13 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 			s.emitSessionError(err)
 			return nil, err
 		}
+		// This attempt succeeded and its result is about to be kept
+		// (appended below) — whatever was checked out for it really was
+		// delivered in the request that produced asst. Commit BEFORE
+		// appending, not after: the notification was already visible to
+		// the MODEL that produced this very response, so it counts as
+		// delivered regardless of what happens to asst next.
+		s.commitTaskNotifications()
 		s.appendWithUsage(*asst, &usage)
 		s.emit(Event{Type: EventMessage, Message: asst, StopReason: stop, Usage: &usage})
 
@@ -1398,6 +1554,15 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 		messages = withAmbientStatus(messages, seg)
 	}
 	if seg := identityStatusSegment(s.cfg.EngineVersion, s.cfg.StartedAt, s.cfg.SessionSync); seg != "" {
+		messages = withAmbientStatus(messages, seg)
+	}
+	// Unlike the four segments above, this one CHECKS OUT pending
+	// notifications rather than idempotently recomputing a status string —
+	// see checkoutTaskNotificationsSegment's doc comment. Committing them
+	// as delivered (or requeuing them on failure) happens one layer up, in
+	// runAgenticLoop, once this WHOLE turn's outcome — including any
+	// retries streamTurnWithRetry runs — is known.
+	if seg := s.checkoutTaskNotificationsSegment(); seg != "" {
 		messages = withAmbientStatus(messages, seg)
 	}
 	req := &provider.Request{
