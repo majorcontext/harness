@@ -437,6 +437,15 @@ type Server struct {
 	// Always nil in production.
 	sendBusyEvictRace func()
 
+	// sseRegisteredRace is a test-only seam: when non-nil, handleEvent
+	// (sse.go) invokes it right after registering its subscriber in
+	// s.subs but before writing the response headers — letting a test
+	// force a concurrent Publish call to land deterministically in that
+	// gap (see TestHandleEventDeliversEventPublishedBeforeHeadersFlush),
+	// proving an event published there is queued rather than dropped.
+	// Always nil in production.
+	sseRegisteredRace func()
+
 	// worktreeBase is the directory 'worktree'-isolation sessions create
 	// their per-session git worktrees under (see worktree.go): <SessionDir>/
 	// worktrees when SessionDir is durable, otherwise a process-lifetime
