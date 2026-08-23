@@ -712,6 +712,233 @@ func TestReloadedChildWithUnknownParentGetsConservativeDepth(t *testing.T) {
 	}
 }
 
+// TestReportTurnEndNilMsgOnReloadedChildDoesNotPanic is the regression
+// test for a review finding: finalizeTurn's default (done) branch
+// unconditionally dereferenced msg (n.result = msg.Parts.Text()).
+// server's runGoal and cmd/harness's own runGoal both call
+// ReportTurnEnd(id, nil, err) unconditionally, documented as safe only
+// because "a child is never resident, so runGoal never runs for one" —
+// an invariant TestReapThenReloadRestoresTrueDepthNotAFreshRoot's own
+// adoptReloadedLocked broke: a reloaded former child whose true parent
+// is STILL tracked is re-attached as a genuine depth>0 node (not a
+// root), so POST /session/{reapedChildID}/goal cold-loading it and
+// calling ReportTurnEnd(id, nil, nil) reaches this exact branch with
+// msg == nil, reproduced here directly.
+func TestReportTurnEndNilMsgOnReloadedChildDoesNotPanic(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("child", doneTurn("done")),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	child, ok := mgr.Session(childID)
+	if !ok {
+		t.Fatal("child not found before reap")
+	}
+
+	if n := mgr.Reap(); n != 1 {
+		t.Fatalf("Reap() = %d, want 1", n)
+	}
+
+	// Re-adopted as a genuine depth>0 child, root still tracked (see
+	// TestReapThenReloadRestoresTrueDepthNotAFreshRoot).
+	mgr.ReportTurnStart(child)
+	info, ok := mgr.Info(childID)
+	if !ok || info.Depth == 0 {
+		t.Fatalf("test setup: child not re-adopted as depth>0, info=%+v ok=%v", info, ok)
+	}
+
+	// Mirrors runGoal's own call shape exactly (server/handlers.go,
+	// cmd/harness/main.go): msg is always nil.
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("ReportTurnEnd(id, nil, nil) panicked: %v", r)
+			}
+		}()
+		mgr.ReportTurnEnd(childID, nil, nil)
+	}()
+
+	info, ok = mgr.Info(childID)
+	if !ok {
+		t.Fatal("child no longer tracked after ReportTurnEnd")
+	}
+	if info.Status != StatusDone {
+		t.Errorf("status = %v, want StatusDone", info.Status)
+	}
+	if info.Result != "" {
+		t.Errorf("result = %q, want empty (msg was nil)", info.Result)
+	}
+}
+
+// TestReportTurnStartBalancesRunningByRootForReloadedChild is the
+// regression test for a review finding: ReportTurnStart marks a
+// depth>0 node StatusRunning without incrementing runningByRoot, but
+// finalizeTurn's decrementRunningLocked decrements it unconditionally
+// for any depth>0 node on completion — an unbalanced decrement that
+// corrupts the tree-wide concurrency count below the true in-flight
+// total, eventually letting Spawn/Send overrun maxConcurrent. Proven via
+// the concurrency cap itself: with maxConcurrent 1, a reloaded child
+// running via ReportTurnStart must occupy the ONE slot exactly like a
+// Spawn-launched child would — a second Spawn attempt while it is
+// "running" must be refused, and allowed again once ReportTurnEnd
+// finalizes it.
+func TestReportTurnStartBalancesRunningByRootForReloadedChild(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 1) // concurrency cap 1
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("child", doneTurn("done")),
+		scriptedTurns("other", doneTurn("other done")),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
+	if err != nil {
+		t.Fatalf("Spawn child: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	child, ok := mgr.Session(childID)
+	if !ok {
+		t.Fatal("child not found before reap")
+	}
+	if n := mgr.Reap(); n != 1 {
+		t.Fatalf("Reap() = %d, want 1", n)
+	}
+
+	mgr.ReportTurnStart(child) // re-adopted as depth>0, running
+
+	if _, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("other")}); !errors.Is(err, ErrConcurrencyLimit) {
+		t.Errorf("Spawn while reloaded child occupies the slot: err = %v, want ErrConcurrencyLimit (runningByRoot was never incremented by ReportTurnStart)", err)
+	}
+
+	// A second ReportTurnStart on the SAME already-running node (mirrors
+	// this method's own documented idempotent no-op case) must not
+	// double-increment — the slot stays occupied by exactly one turn,
+	// not two.
+	mgr.ReportTurnStart(child)
+	if _, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("other")}); !errors.Is(err, ErrConcurrencyLimit) {
+		t.Errorf("Spawn after a second ReportTurnStart: err = %v, want ErrConcurrencyLimit (still just the one slot)", err)
+	}
+
+	resume := mgr.ReportTurnEnd(childID, &message.Message{Parts: message.Parts{&message.Text{Text: "reloaded done"}}}, nil)
+	if resume != nil {
+		resume()
+	}
+
+	otherID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("other")})
+	if err != nil {
+		t.Fatalf("Spawn after ReportTurnEnd released the slot: %v", err)
+	}
+	waitForStatus(t, mgr, otherID, StatusDone, time.Second)
+}
+
+// slowCancelProvider blocks in Next until its context is canceled, THEN
+// keeps blocking a while longer before actually returning — simulating a
+// provider call that is "still unwinding" after cancellation rather than
+// returning instantly, the narrow-but-real window
+// TestReapNeverRemovesACanceledNodeStillUnwinding needs to hold open
+// deterministically. ctxDoneSeen closes the instant Next observes
+// ctx.Done(), letting a test wait for exactly that moment before making
+// any assertion about what Reap does while the goroutine is still
+// "in flight."
+type slowCancelProvider struct {
+	name        string
+	ctxDoneSeen chan struct{}
+	release     chan struct{}
+	once        sync.Once
+}
+
+func (p *slowCancelProvider) Name() string { return p.name }
+
+func (p *slowCancelProvider) Stream(ctx context.Context, _ *provider.Request) (provider.Stream, error) {
+	return &slowCancelStream{ctx: ctx, p: p}, nil
+}
+
+type slowCancelStream struct {
+	ctx context.Context
+	p   *slowCancelProvider
+}
+
+func (s *slowCancelStream) Next() (provider.Event, error) {
+	<-s.ctx.Done()
+	s.p.once.Do(func() { close(s.p.ctxDoneSeen) })
+	<-s.p.release
+	return provider.Event{}, s.ctx.Err()
+}
+
+func (s *slowCancelStream) Close() error { return nil }
+
+// TestReapNeverRemovesACanceledNodeStillUnwinding is the regression test
+// for a review finding: cancelSubtreeLocked sets a RUNNING child
+// StatusCanceled directly but deliberately does NOT decrement
+// runningByRoot — finalizeTurn is the sole decrementer, and that
+// child's Prompt goroutine is still unwinding its now-canceled provider
+// call and will call finalizeTurn itself once that call actually
+// returns. If Reap treats this StatusCanceled leaf as eligible before
+// that happens, it deletes the node out from under the still-running
+// goroutine; when finalizeTurn finally runs, m.nodes[id] is gone,
+// finalizeTurn no-ops (see its own "no-op for an id m does not track"
+// contract), and decrementRunningLocked never runs — permanently
+// leaking that child's runningByRoot reservation. With maxConcurrent 1,
+// a leaked reservation manifests directly: nothing can ever Spawn under
+// this root again.
+func TestReapNeverRemovesACanceledNodeStillUnwinding(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 0, 1) // concurrency cap 1
+	prov := &slowCancelProvider{name: "slow", ctxDoneSeen: make(chan struct{}), release: make(chan struct{})}
+	root := mgr.NewRoot(managedConfig("root", scriptedTurns("root", nil), prov, scriptedTurns("fast", doneTurn("fast done"))))
+
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("slow")})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusRunning, time.Second)
+
+	if err := mgr.Cancel(childID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	select {
+	case <-prov.ctxDoneSeen:
+	case <-time.After(time.Second):
+		t.Fatal("provider never observed cancellation")
+	}
+	// The goroutine has seen cancellation but is deliberately still
+	// blocked in Next (on prov.release) — exactly the "still unwinding"
+	// window. The node's own status is already canceled (set
+	// synchronously by Cancel), but it must not be reapable yet.
+	if info, ok := mgr.Info(childID); !ok || info.Status != StatusCanceled {
+		t.Fatalf("test setup: child info = %+v ok=%v, want tracked and StatusCanceled", info, ok)
+	}
+	if n := mgr.Reap(); n != 0 {
+		t.Fatalf("Reap() = %d while the canceled node's turn is still unwinding, want 0 (it would leak the runningByRoot slot)", n)
+	}
+	if _, ok := mgr.Info(childID); !ok {
+		t.Fatal("Reap removed a not-yet-finalized canceled node")
+	}
+
+	close(prov.release) // let the goroutine's Prompt call actually return, triggering finalizeTurn
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		if n := mgr.Reap(); n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("node never became reapable after its turn finished — finalizeTurn never ran, or never marked it finalized")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	// The slot is free again: a fresh Spawn under the same root, at the
+	// same concurrency cap, must now succeed.
+	otherID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("fast")})
+	if err != nil {
+		t.Fatalf("Spawn after the slot was freed: %v — the reservation leaked", err)
+	}
+	waitForStatus(t, mgr, otherID, StatusDone, time.Second)
+}
+
 // TestReapNeverRemovesRootOrNodeWithChildren proves the two things Reap
 // must never do: remove a root (the tree's own address), or remove a
 // terminal node that still has a live or terminal-but-not-yet-reaped

@@ -88,19 +88,28 @@ func (s *Server) handleSpawnChild(w http.ResponseWriter, parentID, agent, prompt
 		}
 		return
 	}
-	writeJSON(w, http.StatusCreated, s.buildSession(mustLookupSpawned(s, childID), "idle"))
+	spawned, ok := lookupSpawned(s, childID)
+	if !ok {
+		// Unreachable in practice (see lookupSpawned's doc comment), but
+		// a clean 500 here is a far better failure than the zero-value
+		// session summary an earlier revision of this handler fell back
+		// to — buildSession(&engine.Session{}, "idle") on a zero Session
+		// produced a self-inconsistent 201: blank id/model/usage at the
+		// top level next to a fully populated lineage block keyed off
+		// the real childID, a plausible-looking but malformed success
+		// response instead of a clear error. A live review caught this.
+		writeErr(w, http.StatusInternalServerError, "spawned child not found in session tree")
+		return
+	}
+	writeJSON(w, http.StatusCreated, s.buildSession(spawned, "idle"))
 }
 
-// mustLookupSpawned returns the just-Spawned child by id. Spawn only just
-// registered it under s.sessMgr, so this cannot fail in practice; a nil
-// fallback (an empty, zero-value session summary) is used defensively
-// instead of panicking a request handler on what would be an internal
-// bookkeeping bug, not a caller error.
-func mustLookupSpawned(s *Server, id string) *engine.Session {
-	if sess, ok := s.sessMgr.Session(id); ok {
-		return sess
-	}
-	return &engine.Session{} // unreachable in practice; see doc comment
+// lookupSpawned returns the just-Spawned child by id. Spawn only just
+// registered it under s.sessMgr, so ok is false only on an internal
+// bookkeeping bug, never a caller error — see handleSpawnChild's own
+// handling of that case.
+func lookupSpawned(s *Server, id string) (*engine.Session, bool) {
+	return s.sessMgr.Session(id)
 }
 
 // runOrQueueText claims id's run slot exactly like an ordinary
