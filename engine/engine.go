@@ -750,7 +750,7 @@ func newSession(cfg Config) *Session {
 		toolResultNextID:      1,
 		toolResults:           make(map[string]toolResultMeta),
 	}
-	for _, t := range []Tool{bashTool(cfg.BashTimeout, cfg.BashOutputCap), readFileTool(), writeFileTool(), editFileTool(), sessionInfoTool()} {
+	for _, t := range []Tool{bashTool(cfg.BashTimeout, cfg.BashOutputCap), readFileTool(), writeFileTool(), editFileTool(), sessionInfoTool(), globTool(), grepTool(), lsTool()} {
 		s.tools[t.Def.Name] = t
 	}
 	if cfg.Processes != nil {
