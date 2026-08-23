@@ -153,10 +153,39 @@ func lookupSpawned(s *Server, id string) (*engine.Session, bool) {
 // notification via the ordinary queue-at-next-turn-boundary path
 // (checkoutTaskNotificationsSegment, engine.go), so no further action is
 // needed here either way.
+//
+// A caller's ExternalRunner contract (triggerResumeLocked,
+// session_manager.go) has ALREADY flipped id's SessionManager status to
+// StatusRunning before calling this — a speculative commitment that only
+// a bracketed turn's own eventual ReportTurnEnd releases. That holds for
+// the ordinary-busy case below (a DIFFERENT, already-running bracketed
+// turn holds the slot and will release it), but NOT for a workdir-held
+// conflict or a draining server: neither means a turn is running on id
+// AT ALL, so nothing would ever release that commitment on its own,
+// permanently stranding id "running" with queue-or-resume dead for it. A
+// live review caught this. Both cases call sessMgr.RevertResumeIfStillRunning
+// to undo it — see that method's own doc comment for why this still
+// reports handled=true rather than false (false would trigger
+// triggerResumeLocked's OWN "scheduler doesn't recognize this id"
+// fallback, a raw Session.Prompt call that bypasses the run-slot
+// entirely — exactly the hazard a workdir-held conflict exists to
+// prevent).
 func (s *Server) runOrQueueText(id, text string) (handled bool) {
-	st, ctx, _, code, _ := s.claimForPrompt(id)
-	if code != 0 {
-		return code != http.StatusNotFound
+	st, ctx, _, code, holder := s.claimForPrompt(id)
+	switch {
+	case code == http.StatusNotFound:
+		return false
+	case code == http.StatusConflict && holder != "":
+		s.sessMgr.RevertResumeIfStillRunning(id)
+		return true
+	case code == http.StatusServiceUnavailable:
+		s.sessMgr.RevertResumeIfStillRunning(id)
+		return true
+	case code == http.StatusConflict:
+		// Ordinary busy: a different, already-running bracketed turn
+		// holds the slot and will release the commitment itself on its
+		// own ReportTurnEnd — no revert needed.
+		return true
 	}
 	if len(st.sess.QueuedPrompts()) > 0 {
 		s.dispatchQueueHead(id, st, ctx)

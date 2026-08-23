@@ -101,9 +101,21 @@ type record struct {
 	// COMPLETELY DIFFERENT concept (see Config.TaskParentID's doc
 	// comment): SessionManager's own tree-lineage pointer, never the
 	// opaque provenance pointer ParentSession carries.
-	TaskParentID string           `json:"task_parent_id,omitempty"`
-	Message      *message.Message `json:"message,omitempty"`
-	Model        message.ModelRef `json:"model,omitzero"`
+	TaskParentID string `json:"task_parent_id,omitempty"`
+	// TaskAgentType/TaskToolNames carry Config.TaskAgentType/TaskToolNames
+	// on the session header record only — see those fields' own doc
+	// comment. Same omit/restore rule: omitted (TaskAgentType) or absent
+	// (TaskToolNames, via omitempty — nil and an empty slice are
+	// indistinguishable after a round trip, accepted as a low-risk
+	// simplification: no real agent definition resolves to literally
+	// zero tools) when empty, and a legacy header restores as if this
+	// child was never restricted (the SAME already-accepted gap
+	// TaskParentID's own doc comment describes for a session predating
+	// that field).
+	TaskAgentType string           `json:"task_agent_type,omitempty"`
+	TaskToolNames []string         `json:"task_tool_names,omitempty"`
+	Message       *message.Message `json:"message,omitempty"`
+	Model         message.ModelRef `json:"model,omitzero"`
 	// Effort carries the reasoning-effort level on the session header record
 	// (the level at create time) and on a recEffort record (a SetEffort
 	// change). Omitted when EffortUnset, so a legacy log with no effort
@@ -620,7 +632,7 @@ func (s *Session) ensureLog() error {
 		// LoadSession already tolerates.
 		var buf bytes.Buffer
 		for _, rec := range []record{
-			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir, ParentSession: s.cfg.ParentSession, TaskParentID: s.cfg.TaskParentID, Effort: s.effort},
+			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir, ParentSession: s.cfg.ParentSession, TaskParentID: s.cfg.TaskParentID, TaskAgentType: s.cfg.TaskAgentType, TaskToolNames: s.cfg.TaskToolNames, Effort: s.effort},
 			{Type: recModel, Model: s.model},
 		} {
 			b, err := json.Marshal(rec)
@@ -747,6 +759,14 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// ParentSession above.
 			if rec.TaskParentID != "" {
 				s.cfg.TaskParentID = rec.TaskParentID
+			}
+			// Same restore rule again — see Config.TaskAgentType/
+			// TaskToolNames's own doc comment.
+			if rec.TaskAgentType != "" {
+				s.cfg.TaskAgentType = rec.TaskAgentType
+			}
+			if rec.TaskToolNames != nil {
+				s.cfg.TaskToolNames = rec.TaskToolNames
 			}
 			// The effort at create time. Omitted (EffortUnset) on a legacy
 			// header, which restores as the provider default — unchanged.

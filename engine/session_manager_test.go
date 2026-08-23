@@ -602,6 +602,129 @@ func TestReapRemovesTerminalLeavesAndUpdatesParent(t *testing.T) {
 	}
 }
 
+// TestReapThenReloadRestoresToolRestriction is the regression test for an
+// architecture-review BLOCKER: Spawn only ever narrowed the child's
+// IN-MEMORY tools map via restrictTools — nothing persisted the agent
+// name or resolved tool list, so a reload (Reap, or a process restart)
+// followed by a legitimate session.send follow-up reconstructed the
+// child via LoadSession's own unconditional FULL default registry, with
+// no memory of the restriction at all: an explore child regained
+// bash/write_file under its own read-only identity. Proves a reaped
+// explore child's read-only set survives a reload exactly.
+func TestReapThenReloadRestoresToolRestriction(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("child", doneTurn("done")),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{
+		ParentID: root.ID, Prompt: "go", Model: modelFor("child"),
+		AgentType: AgentExplore, ToolNames: readOnlyTools,
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	child, ok := mgr.Session(childID)
+	if !ok {
+		t.Fatal("child not found before reap")
+	}
+	if _, ok := child.tools["bash"]; ok {
+		t.Fatalf("test setup: explore child has bash before reap: %v", toolNames(child))
+	}
+
+	if n := mgr.Reap(); n != 1 {
+		t.Fatalf("Reap() = %d, want 1", n)
+	}
+	if _, ok := mgr.Session(childID); ok {
+		t.Fatal("child still tracked after Reap — test setup invalid")
+	}
+
+	// A REAL reload — a fresh *Session built from the SAME persisted
+	// cfg (TaskParentID/TaskAgentType/TaskToolNames included), exactly
+	// as LoadSession would reconstruct it — not the same in-memory
+	// object, which would trivially keep its already-narrowed tools map
+	// regardless of whether the restore logic under test does anything
+	// at all. NewSession always installs the FULL default registry
+	// unconditionally; only adoptReloadedLocked's own restore logic can
+	// narrow it back down from here.
+	reloaded := NewSession(child.cfg)
+	reloaded.ID = child.ID
+	if _, ok := reloaded.tools["bash"]; !ok {
+		t.Fatal("test setup: fresh reload object unexpectedly missing bash — NewSession's own full-default-registry behavior changed")
+	}
+
+	// Legitimate follow-up on the reaped, done child (session.send's own
+	// contract) — mirrors what runPrompt/handleSessionSend's cold-load
+	// path does.
+	mgr.ReportTurnStart(reloaded)
+
+	if _, ok := reloaded.tools["bash"]; ok {
+		t.Errorf("reloaded explore child regained bash: %v — the tool restriction did not survive the reload", toolNames(reloaded))
+	}
+	if _, ok := reloaded.tools["write_file"]; ok {
+		t.Errorf("reloaded explore child regained write_file: %v", toolNames(reloaded))
+	}
+	for _, want := range readOnlyTools {
+		if _, ok := reloaded.tools[want]; !ok {
+			t.Errorf("reloaded explore child missing %q, want it retained (readOnlyTools): %v", want, toolNames(reloaded))
+		}
+	}
+
+	info, ok := mgr.Info(childID)
+	if !ok {
+		t.Fatal("child not re-adopted")
+	}
+	if info.AgentType != AgentExplore {
+		t.Errorf("lineage.agent_type = %q after reload, want %q — a live review flagged this going blank after a reap", info.AgentType, AgentExplore)
+	}
+}
+
+// TestReloadedChildWithUnresolvableAgentDefFailsClosed is the regression
+// test for the SAME architecture-review blocker's "fail closed" clause:
+// a legacy or otherwise-incomplete record (TaskAgentType recorded, but
+// TaskToolNames missing — a log written between the two fields'
+// rollout, since Spawn now always sets both together going forward) for
+// an agent name that no longer resolves to any current definition (the
+// custom .agents/*.md file was deleted, or renamed) must not fall back
+// to the FULL unrestricted registry — the exact escalation this whole
+// fix exists to close. It must restrict to nothing at all instead.
+func TestReloadedChildWithUnresolvableAgentDefFailsClosed(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("child", doneTurn("done")),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	child, ok := mgr.Session(childID)
+	if !ok {
+		t.Fatal("child not found")
+	}
+	if len(child.tools) == 0 {
+		t.Fatal("test setup: child has no tools at all before simulating the incomplete record")
+	}
+
+	// Simulate the incomplete-record shape directly: an agent name WAS
+	// recorded, but (unlike anything Spawn produces today) no resolved
+	// tool list was — the only way TaskToolNames legitimately ends up
+	// nil while TaskAgentType is set.
+	child.cfg.TaskAgentType = "explore-deleted-by-the-time-this-reloads"
+	child.cfg.TaskToolNames = nil
+
+	if n := mgr.Reap(); n != 1 {
+		t.Fatalf("Reap() = %d, want 1", n)
+	}
+	mgr.ReportTurnStart(child)
+
+	if len(child.tools) != 0 {
+		t.Errorf("reloaded child with an unresolvable agent def has tools = %v, want none (fail closed)", toolNames(child))
+	}
+}
+
 // TestReapThenReloadRestoresTrueDepthNotAFreshRoot is the regression test
 // for a live-reproduced depth-limit bypass: a child reaped as a terminal,
 // childless leaf (the shape a child hits the instant its first turn
@@ -869,6 +992,133 @@ func (s *slowCancelStream) Next() (provider.Event, error) {
 }
 
 func (s *slowCancelStream) Close() error { return nil }
+
+// twoTurnSlowCancelProvider answers its FIRST Stream call with an
+// ordinary, immediate done event, then behaves exactly like
+// slowCancelProvider (blocks until ctx.Done(), then keeps blocking on
+// release before actually returning) for every call after that —
+// letting a test put a child through a real first turn to completion,
+// then restart it (Send) for a second turn it can hold open
+// deterministically.
+type twoTurnSlowCancelProvider struct {
+	name      string
+	firstDone string
+	// slow is a single, persistent *slowCancelProvider reused (by
+	// pointer, never copied) for every call after the first — a
+	// sync.Once must never be copied by value (go vet's copylocks:
+	// sync.Once embeds sync.noCopy), so this is constructed once, here,
+	// rather than freshly per call.
+	slow *slowCancelProvider
+	call int
+	mu   sync.Mutex
+}
+
+func newTwoTurnSlowCancelProvider(name, firstDone string) *twoTurnSlowCancelProvider {
+	return &twoTurnSlowCancelProvider{
+		name:      name,
+		firstDone: firstDone,
+		slow:      &slowCancelProvider{name: name, ctxDoneSeen: make(chan struct{}), release: make(chan struct{})},
+	}
+}
+
+func (p *twoTurnSlowCancelProvider) Name() string { return p.name }
+
+func (p *twoTurnSlowCancelProvider) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
+	p.mu.Lock()
+	n := p.call
+	p.call++
+	p.mu.Unlock()
+	if n == 0 {
+		msg := &message.Message{ID: "msg_first", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: p.firstDone}}}
+		// scriptedStream is engine_test.go's own (same package) — reused
+		// directly for this first-call reply rather than duplicated.
+		return &scriptedStream{events: []provider.Event{{Type: provider.EventDone, Message: msg, StopReason: provider.StopEndTurn}}}, nil
+	}
+	return p.slow.Stream(ctx, req)
+}
+
+// TestReapDoesNotLeakConcurrencySlotAcrossSendThenAbort is the
+// regression test for a review finding: sessionNode.finalized is set
+// true once a child's first turn completes, but nothing ever clears it
+// back to false when that SAME child is legitimately restarted for a
+// SECOND turn (Send — a done/failed child is eligible for a follow-up
+// message, per session.send's own contract). cancelOneNodeLocked only
+// sets finalized `if !wasRunning`, so aborting that second turn WHILE it
+// is running leaves the stale true from the FIRST turn's completion in
+// place. Reap's `!n.finalized` guard then wrongly treats the SECOND
+// turn's still-unsettled concurrency reservation as already safe to
+// remove: it deletes the node mid-unwind, and the eventual finalizeTurn
+// call for that second turn finds the node gone and never decrements —
+// runningByRoot stuck inflated forever, wire-reachable via
+// session.send -> abort -> the periodic reap ticker.
+//
+// Proven end-to-end with maxConcurrent 1: after the leak, a fresh Spawn
+// under the same root must fail with ErrConcurrencyLimit despite
+// NOTHING actually running — the smoking gun. This test asserts the
+// opposite: the slot is correctly freed and the fresh Spawn succeeds.
+func TestReapDoesNotLeakConcurrencySlotAcrossSendThenAbort(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 0, 1) // concurrency cap 1
+	prov := newTwoTurnSlowCancelProvider("child", "first turn done")
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		prov,
+		scriptedTurns("other", doneTurn("other done")),
+	))
+
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	// Restart the same, now-done child for a legitimate follow-up turn —
+	// exactly what session.send permits.
+	sendDone := make(chan struct{})
+	go func() {
+		defer close(sendDone)
+		mgr.Send(context.Background(), childID, "follow-up") //nolint:errcheck // expected to return a context-canceled error once aborted below
+	}()
+	select {
+	case <-prov.slow.ctxDoneSeen:
+		t.Fatal("second turn reported ctx.Done() before it was ever started — test setup invalid")
+	case <-time.After(50 * time.Millisecond):
+	}
+	waitForStatus(t, mgr, childID, StatusRunning, time.Second)
+
+	if err := mgr.AbortTurn(childID); err != nil {
+		t.Fatalf("AbortTurn: %v", err)
+	}
+	select {
+	case <-prov.slow.ctxDoneSeen:
+	case <-time.After(time.Second):
+		t.Fatal("second turn's provider never observed the abort")
+	}
+
+	// Still unwinding (blocked on prov.slow.release) — must not be reapable yet.
+	if n := mgr.Reap(); n != 0 {
+		t.Fatalf("Reap() = %d while the second turn is still unwinding, want 0", n)
+	}
+
+	close(prov.slow.release)
+	<-sendDone
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		if n := mgr.Reap(); n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("node never became reapable after its second turn finished")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	otherID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("other")})
+	if err != nil {
+		t.Fatalf("Spawn after the slot should have been freed: %v — the reservation leaked across the Send-then-abort cycle", err)
+	}
+	waitForStatus(t, mgr, otherID, StatusDone, time.Second)
+}
 
 // TestReapNeverRemovesACanceledNodeStillUnwinding is the regression test
 // for a review finding: cancelSubtreeLocked sets a RUNNING child

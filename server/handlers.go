@@ -2728,6 +2728,23 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	defer s.wg.Done()
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 
+	// ReportTurnStart/ReportTurnEnd bracket this claim exactly like
+	// runPrompt's identical bracket (see its own doc comment for the full
+	// reasoning) — an earlier revision of this handler claimed the run
+	// slot without ever reporting it to SessionManager at all. A live
+	// review caught what that breaks: triggerResumeLocked flips a root
+	// to StatusRunning BEFORE calling its ExternalRunner
+	// (resumeSessionForTaskNotification -> runOrQueueText ->
+	// claimForPrompt), and runOrQueueText treats ANY non-404 claim
+	// failure as handled=true — including THIS handler's own StatusConflict
+	// claim above. Compact silently holding the slot with no bracket meant
+	// a task notification arriving during a compact call saw the root
+	// "handled" by a scheduler that was never actually going to call
+	// ReportTurnEnd for it: the notification was accepted and then never
+	// delivered, permanently — queue-or-resume dead for that root until an
+	// unrelated human prompt happened to drain it.
+	s.sessMgr.ReportTurnStart(st.sess)
+
 	opts := engine.CompactOptions{Model: model}
 	if body.KeepTurns != nil {
 		opts.KeepTurns = *body.KeepTurns
@@ -2744,20 +2761,36 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 
 	s.freeRunSlotAndEmitIdle(id, st)
 
-	// Same drain-then-auto-arm precedence as runPrompt's tail (invariant 5):
-	// a prompt queued (or a goal armed) while this compact call ran must not
-	// sit stranded just because the run slot happened to be released by
-	// compact instead of an ordinary prompt or goal turn — see
-	// maybeDispatchQueued/maybeAutoArmGoal's own doc comments for the full
-	// race analysis, identical here. wg.Done for THIS claim is the deferred
-	// call above, which fires after both checks below (defers run after the
-	// function body's remaining statements), so the WaitGroup never
-	// transiently reads zero between this claim's release and a
+	// ReportTurnEnd runs AFTER freeRunSlotAndEmitIdle — see runPrompt's
+	// identical ordering and its doc comment for why (the real run slot
+	// must be free before SessionManager's view of this root can show
+	// idle/done, or a concurrent resume attempt racing in between would
+	// find the slot still held and permanently strand its notification).
+	// msg is nil: Compact never produces the kind of turn message
+	// ReportTurnEnd's root branch would read (see its own doc comment —
+	// only a CHILD's finalizeTurn branch reads msg, and a child never
+	// reaches this handler at all, rejectManagedChildTurn above already
+	// refused it).
+	resume := s.sessMgr.ReportTurnEnd(id, nil, err)
+
+	// Same drain-then-auto-arm-then-resume precedence as runPrompt's tail
+	// (invariant 5): a prompt queued (or a goal armed) while this compact
+	// call ran must not sit stranded just because the run slot happened to
+	// be released by compact instead of an ordinary prompt or goal turn —
+	// see maybeDispatchQueued/maybeAutoArmGoal's own doc comments for the
+	// full race analysis, identical here. wg.Done for THIS claim is the
+	// deferred call above, which fires after these tail calls (defers fire
+	// after the function body's remaining statements), so the WaitGroup
+	// never transiently reads zero between this claim's release and a
 	// dispatched/auto-armed one's own wg.Add (mirrors runPrompt's
 	// defer-at-function-exit shape) — and, unlike a bare call here, still
-	// fires even if one of these two calls (or Compact above) panics.
+	// fires even if one of these tail calls (or Compact above) panics.
 	if !s.maybeDispatchQueued(id, st) {
-		s.maybeAutoArmGoal(id, st)
+		if resume != nil {
+			resume()
+		} else {
+			s.maybeAutoArmGoal(id, st)
+		}
 	}
 
 	if err != nil {

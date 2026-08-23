@@ -315,6 +315,36 @@ type Config struct {
 	// predates this field."
 	TaskParentID string
 
+	// TaskAgentType and TaskToolNames are set ONLY by Spawn, alongside
+	// TaskParentID above, and exist for the SAME reason: SessionManager's
+	// in-memory tree (and the in-memory *Session.tools map restrictTools
+	// narrowed at spawn time) can both be forgotten — Reap, or a process
+	// restart — while the underlying session itself stays perfectly
+	// resumable via a legitimate follow-up (session.send permits
+	// messaging a done/failed child). Without a durable record of what
+	// this child's tool set was ACTUALLY restricted to, a reload
+	// (adoptReloadedLocked) had nothing to restore it from and silently
+	// handed back the full, unrestricted default registry — an explore
+	// or plan child regaining bash/write_file after a reap or restart. A
+	// live review caught this exact escalation.
+	//
+	// TaskAgentType is opts.AgentType verbatim (e.g. "explore") — kept
+	// primarily for lineage.agent_type display surviving a reload, and
+	// as a best-effort re-resolution key if TaskToolNames is ever
+	// missing on an otherwise-named record (a legacy log predating this
+	// field, or one written between the two fields' rollout — see
+	// adoptReloadedLocked). TaskToolNames is the actual RESOLVED name
+	// list restrictTools was called with at spawn time — nil means
+	// "spawned with no restriction beyond whatever it inherited" (a
+	// general-purpose-shaped child), a real durable value, not "missing
+	// data" (a genuinely unrestricted child and a legacy record with no
+	// data at all are, unavoidably, indistinguishable by this field
+	// alone — TaskAgentType is the fallback signal for that case).
+	// adoptReloadedLocked is the ONLY reader; this is never surfaced on
+	// the wire.
+	TaskAgentType string
+	TaskToolNames []string
+
 	Hooks Hooks // optional plugin host
 	// OnEvent is optional; called synchronously, keep it fast. The goal.*
 	// events (see goal.go) are emitted while Session.mu is held so the event
@@ -996,6 +1026,16 @@ func (s *Session) ParentSession() string {
 // similar name.
 func (s *Session) TaskParentID() string {
 	return s.cfg.TaskParentID
+}
+
+// TaskAgentType and TaskToolNames return Config.TaskAgentType/TaskToolNames
+// — see those fields' own doc comment.
+func (s *Session) TaskAgentType() string {
+	return s.cfg.TaskAgentType
+}
+
+func (s *Session) TaskToolNames() []string {
+	return s.cfg.TaskToolNames
 }
 
 // Plugins returns a snapshot of this session's configured plugins — name,
