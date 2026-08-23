@@ -1632,7 +1632,18 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	// review caught.
 	s.sessMgr.ReportTurnStart(st.sess)
 	msg, err := st.sess.Prompt(ctx, text)
-	s.sessMgr.ReportTurnEnd(id, msg, err)
+	// resume is non-nil only when id's OWN completion needs to
+	// immediately start ANOTHER turn on itself (a task notification
+	// arrived too late for this turn's own checkout — see
+	// SessionManager.ReportTurnEnd's doc comment). It is deliberately NOT
+	// fired here: doing so before freeRunSlotAndEmitIdle races that
+	// release itself — the resume's own claimForPrompt would see this
+	// turn's slot still held, refuse, and permanently strand both the
+	// notification and the node at StatusRunning. A live review
+	// reproduced exactly this race. Fired below, after the slot is freed,
+	// in the SAME tail position maybeDispatchQueued/maybeAutoArmGoal
+	// already occupy.
+	resume := s.sessMgr.ReportTurnEnd(id, msg, err)
 	s.syncMessages(id) // catch any message not yet journaled
 	switch {
 	case err == nil:
@@ -1655,6 +1666,19 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	// fully drains, one turn at a time, before the goal ever gets a look —
 	// see maybeDispatchQueued's doc comment.
 	if s.maybeDispatchQueued(id, st) {
+		return
+	}
+
+	// A pending task notification for id ITSELF outranks goal auto-arm too
+	// (same reasoning as the queue above: it is picked up harmlessly later
+	// if this loses the race for the freed slot — the notification stays
+	// queued, not lost — so there is no correctness reason to prefer the
+	// goal loop over it). resume's own claim (runOrQueueText) is quick and
+	// non-blocking (it launches its own async runPrompt/dispatch and
+	// returns), so calling it synchronously here, before the
+	// maybeAutoArmGoal fallback, is safe.
+	if resume != nil {
+		resume()
 		return
 	}
 
@@ -2059,7 +2083,9 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 		MaxTurns:   maxTurns,
 		Evaluator:  s.opts.GoalEvaluator,
 	})
-	s.sessMgr.ReportTurnEnd(id, nil, err)
+	// resume: see runPrompt's identical variable for why it is captured
+	// here but not fired until after freeRunSlotAndEmitIdle below.
+	resume := s.sessMgr.ReportTurnEnd(id, nil, err)
 	s.syncMessages(id)
 	switch {
 	case err == nil && res.Achieved:
@@ -2090,7 +2116,14 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 	// left in, never the "auto-arm is watching for this" state (see
 	// maybeAutoArmGoal's own doc comment for why it is deliberately not
 	// wired in here either).
-	s.maybeDispatchQueued(id, st)
+	if s.maybeDispatchQueued(id, st) {
+		return
+	}
+	// See runPrompt's identical call for why this is safe to call
+	// synchronously here rather than "go resume()".
+	if resume != nil {
+		resume()
+	}
 }
 
 // handleGoalDelete cancels an active goal loop: it clears the goal (journaling

@@ -42,6 +42,18 @@ const (
 	// backstop against an accidental repo-root sweep of a huge tree taking
 	// unbounded wall-clock time.
 	maxWalkedFiles = 200000
+	// maxGrepFileBytes bounds how large a single file grep will read
+	// before searching it. os.ReadFile loads a whole file into memory
+	// with no cap of its own — read_file guards the equivalent risk with
+	// readFileMaxImageBytes/io.LimitReader; grep needs the identical
+	// guard, since a default (no path) search can walk into an
+	// unexpectedly huge file (a build artifact, a core dump, a database
+	// file) and exhaust process memory reading it whole. A file over the
+	// cap is skipped entirely (checked via os.Stat, before any read) —
+	// grep's job is finding SMALL, textual matches, not partially
+	// searching one giant file, so skipping is the right trade, not a
+	// truncated read.
+	maxGrepFileBytes = 20 * 1024 * 1024
 )
 
 // skippedSearchDirs names directories glob/grep never descend into,
@@ -235,6 +247,9 @@ func grepTool() Tool {
 			searchFile := func(path, rel string) error {
 				if includeRe != nil && !includeRe.MatchString(rel) {
 					return nil
+				}
+				if fi, err := os.Stat(path); err != nil || fi.Size() > maxGrepFileBytes {
+					return nil // unreadable, or too large to safely read whole — skip it
 				}
 				data, err := os.ReadFile(path)
 				if err != nil {

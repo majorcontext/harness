@@ -322,6 +322,48 @@ func TestExternalRunnerConsultedOnlyForRoots(t *testing.T) {
 // than silently no-op'ing — the gap that left `task` permanently broken
 // ("parent session no longer tracked") on a session revived by a cold
 // disk reload in an earlier version of this package.
+// TestReportTurnStartReattachesReloadedSession proves ReportTurnStart
+// updates n.session on EVERY call, not only when first adopting an
+// unknown id — the case a session evicted from residency and later
+// reloaded into a NEW *engine.Session object (same id) hits. Without
+// this, a background child completing in the gap enqueues its
+// notification onto the OLD, now-orphaned object, which the live
+// reloaded session's own checkout never reads: the result silently
+// vanishes. A live review caught this exact failure mode.
+func TestReportTurnStartReattachesReloadedSession(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	first := NewSession(managedConfig("root", scriptedTurns("root", nil)))
+	mgr.ReportTurnStart(first)
+	if got, _ := mgr.Session(first.ID); got != first {
+		t.Fatal("did not attach to the first session on initial adopt")
+	}
+
+	// Simulate an eviction + cold reload: a SECOND, independent *Session
+	// object built fresh (as engine.LoadSession would), forced to the
+	// SAME id.
+	second := NewSession(managedConfig("root", scriptedTurns("root", nil)))
+	second.ID = first.ID
+
+	mgr.ReportTurnStart(second)
+	got, ok := mgr.Session(first.ID)
+	if !ok {
+		t.Fatal("session no longer tracked after re-sighting")
+	}
+	if got != second {
+		t.Error("ReportTurnStart did not re-attach to the newly reloaded session object — a notification enqueued now would land on the orphaned first object")
+	}
+
+	// A notification enqueued after re-attachment must land on the LIVE
+	// (second) object, not the orphaned first one.
+	got.enqueueTaskNotification(taskNotification{ChildID: "ses_x", Status: StatusDone, Result: "hi"})
+	if first.hasPendingTaskNotifications() {
+		t.Error("notification landed on the orphaned first session object")
+	}
+	if !second.hasPendingTaskNotifications() {
+		t.Error("notification did not land on the live second session object")
+	}
+}
+
 func TestReportTurnStartAdoptsUnknownSession(t *testing.T) {
 	mgr := NewSessionManager(context.Background(), 0, 0)
 	// A session built directly, NOT through mgr.NewRoot/AdoptRoot —
@@ -379,4 +421,61 @@ func (p *lateArrivalProvider) Name() string { return p.name }
 func (p *lateArrivalProvider) Stream(_ context.Context, _ *provider.Request) (provider.Stream, error) {
 	p.root.enqueueTaskNotification(taskNotification{ChildID: "ses_late", Status: StatusDone, Result: "late arrival"})
 	return &scriptedStream{events: asstTurn(provider.StopEndTurn, &message.Text{Text: "first turn done"})}, nil
+}
+
+// TestFinalizeTurnGrandchildNotStrandedWhenParentSettlesRightAfterEnqueue
+// proves finding #5 is fully closed: SessionManager's own mutex serializes
+// a child's finalizeTurn call against its grandchild's, so there is no
+// interleaving where a grandchild's notification can be enqueued onto a
+// child that has ALREADY been marked done and forgotten. This reproduces
+// the failure sequence the review described directly: the grandchild
+// completes and enqueues onto the child WHILE the child's own turn is
+// still in flight, so the child's own finalizeTurn call (which runs
+// strictly afterward) is the one that must notice and forward it.
+func TestFinalizeTurnGrandchildNotStrandedWhenParentSettlesRightAfterEnqueue(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	release := make(chan struct{})
+	childBlocker := &blockingProvider{name: "childblock", release: release}
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", doneTurn("root resumed")),
+		childBlocker,
+		scriptedTurns("grand", doneTurn("grandchild result")),
+	))
+
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("childblock"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn child: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusRunning, time.Second)
+
+	// The grandchild is spawned and runs to completion WHILE the child's
+	// own turn is still blocked — its notification lands on the child
+	// well before the child's own finalizeTurn runs.
+	grandID, err := mgr.Spawn(SpawnOptions{ParentID: childID, Prompt: "go deeper", Model: modelFor("grand"), AgentType: AgentExplore})
+	if err != nil {
+		t.Fatalf("Spawn grandchild: %v", err)
+	}
+	waitForStatus(t, mgr, grandID, StatusDone, time.Second)
+
+	child, _ := mgr.Session(childID)
+	if !child.hasPendingTaskNotifications() {
+		t.Fatal("test setup: grandchild notification not yet enqueued on child")
+	}
+
+	// Now let the child's OWN turn finish — its finalizeTurn call must
+	// forward the already-pending grandchild notification to the root
+	// rather than dropping it once it settles done.
+	close(release)
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, m := range root.History() {
+			if m.Role == message.RoleUser && m.Parts.Text() == taskResumeTriggerText {
+				return
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("root never resumed with the grandchild's notification; history: %+v", root.History())
 }

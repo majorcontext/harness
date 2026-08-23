@@ -309,6 +309,17 @@ func (m *SessionManager) ReportTurnStart(sess *Session) {
 	if !ok {
 		n = m.adoptRootLocked(sess)
 	}
+	// Always re-attach to the LIVE object, even for an already-tracked
+	// node: the server's residency system (MaxResident) can evict and
+	// later reload a root into a NEW *engine.Session with the same id
+	// (s.opts.LoadSession, claimForPrompt's cold-load path) — if this
+	// only ran on first sight, the node would keep pointing at the OLD,
+	// evicted object forever. A background child completing in the gap
+	// would then enqueue its notification onto that dead object, which
+	// the live reloaded session's own checkoutTaskNotificationsSegment
+	// never reads: the result silently vanishes. A live review caught
+	// this exact failure mode.
+	n.session = sess
 	n.status = StatusRunning
 }
 
@@ -316,8 +327,18 @@ func (m *SessionManager) ReportTurnStart(sess *Session) {
 // via ReportTurnStart) just finished — the same finalization finalizeTurn
 // performs for a turn m drove itself, exported for a caller outside this
 // package. A no-op for an id m does not track.
-func (m *SessionManager) ReportTurnEnd(id string, msg *message.Message, err error) {
-	m.finalizeTurn(id, msg, err)
+//
+// Returns a resume func when id's own completion needs to immediately
+// start ANOTHER turn on itself (a notification arrived too late for this
+// turn's own checkout — see finalizeTurn's doc comment). The caller MUST
+// NOT fire it until after releasing its OWN run-slot claim on id (the
+// server's freeRunSlotAndEmitIdle) — firing it any earlier races that
+// release and permanently strands both the notification and id's status
+// at StatusRunning. See runPrompt/runGoal (server/handlers.go), which
+// defer it to their own tail, exactly like they already defer
+// maybeDispatchQueued/maybeAutoArmGoal to that same point.
+func (m *SessionManager) ReportTurnEnd(id string, msg *message.Message, err error) (resume func()) {
+	return m.finalizeTurn(id, msg, err)
 }
 
 // adoptLocked registers s as a new node. Callers hold m.mu.
@@ -559,7 +580,9 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 
 	go func() {
 		msg, perr := child.Prompt(n.ctx, opts.Prompt)
-		m.finalizeTurn(child.ID, msg, perr)
+		if resume := m.finalizeTurn(child.ID, msg, perr); resume != nil {
+			go resume()
+		}
 	}()
 
 	return child.ID, nil
@@ -630,7 +653,9 @@ func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Me
 	runCtx, stop := mergeCancel(ctx, nodeCtx)
 	defer stop()
 	msg, err := s.Prompt(runCtx, text)
-	m.finalizeTurn(id, msg, err)
+	if resume := m.finalizeTurn(id, msg, err); resume != nil {
+		go resume()
+	}
 	return msg, err
 }
 
@@ -646,17 +671,17 @@ func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Me
 // decrement for a running node it cancels, precisely so this remains the
 // SOLE decrementer and a cancel racing a natural completion can never
 // double-decrement (see cancelSubtreeLocked's doc comment).
-func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr error) {
+func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr error) (resume func()) {
 	m.mu.Lock()
 	n, ok := m.nodes[id]
 	if !ok {
 		m.mu.Unlock()
-		return
+		return nil
 	}
 	alreadyCanceled := n.status == StatusCanceled
 	m.decrementRunningLocked(n)
 
-	// resume is set (and run AFTER releasing m.mu, below) whenever THIS
+	// resume is set here (never fired directly — see below) whenever this
 	// call needs to actively start another turn rather than simply
 	// settling n idle or terminal — either because n itself (a root) has
 	// pending work that arrived too late for its own last checkout (see
@@ -665,7 +690,6 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 	// run slot happens synchronously, in whichever branch sets this, for
 	// the same reason Spawn reserves its concurrency slot before
 	// launching its goroutine — see triggerResumeLocked's doc comment.
-	var resume func()
 	var notify *taskNotification
 	switch {
 	case n.parentID == "":
@@ -731,9 +755,29 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusDone, Result: n.result, Usage: n.session.Usage()}
 	}
 
-	if notify != nil {
+	// n.parentID != "" here exactly when notify != nil was possible (the
+	// three non-root cases above) — a CHILD that just went terminal
+	// itself (done/failed/canceled) will never run another turn of its
+	// own (see SessionStatus's doc comment), so if it was ALSO a parent
+	// with its own pending notifications (from grandchildren that
+	// completed too late for it to ever check out itself), those would
+	// be stranded forever on a node that will never read its queue again
+	// — forward them to the SAME nearest-live-ancestor target its own
+	// completion notification uses, rather than dropping them. A live
+	// review caught this exact gap.
+	var forwarded []taskNotification
+	if n.parentID != "" && n.session.hasPendingTaskNotifications() {
+		forwarded = n.session.drainAllTaskNotifications()
+	}
+
+	if notify != nil || len(forwarded) > 0 {
 		if target := m.nearestLiveAncestorLocked(n); target != nil {
-			target.session.enqueueTaskNotification(*notify)
+			if notify != nil {
+				target.session.enqueueTaskNotification(*notify)
+			}
+			for _, fn := range forwarded {
+				target.session.enqueueTaskNotification(fn)
+			}
 			if target.status == StatusIdle {
 				resume = m.triggerResumeLocked(target)
 			}
@@ -743,14 +787,25 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 		// No live ancestor at all (nil): every ancestor up to and
 		// including the root is already done/failed/canceled — the whole
 		// tree is being torn down (or was already fully settled) and
-		// there is nowhere left to deliver this notification. Dropped,
+		// there is nowhere left to deliver these notifications. Dropped,
 		// not an error: nothing is listening.
 	}
 	m.mu.Unlock()
 
-	if resume != nil {
-		go resume()
-	}
+	// Deliberately returned, never fired here (no "go resume()"): the
+	// SERVER's ReportTurnEnd caller (runPrompt) must defer firing a
+	// SELF-resume (the root case above, waking id itself) until AFTER
+	// its own freeRunSlotAndEmitIdle call — firing it any earlier races
+	// that slot release: resumeSessionForTaskNotification's own
+	// claimForPrompt would see the OLD turn's slot still held, refuse,
+	// and permanently strand both the notification and the node at
+	// StatusRunning (nothing else would ever call ReportTurnEnd for a
+	// resume attempt that never actually started). A live review
+	// reproduced this race. Every OTHER caller of finalizeTurn (Spawn's
+	// goroutine, Send, triggerResumeLocked's own returned closures) has
+	// no such ordering constraint and fires the returned func immediately
+	// in its own new goroutine.
+	return resume
 }
 
 // nearestLiveAncestorLocked walks n's ancestor chain, starting at its
@@ -818,18 +873,27 @@ func (m *SessionManager) triggerResumeLocked(node *sessionNode) func() {
 			if runner(id, taskResumeTriggerText) {
 				// The external scheduler now owns this turn and is
 				// responsible for reporting its completion back via
-				// ReportTurnStart/ReportTurnEnd itself.
+				// ReportTurnStart/ReportTurnEnd itself (and for deferring
+				// any further resume THAT call returns past its own
+				// run-slot release — see ReportTurnEnd's doc comment).
 				return
 			}
 			// The scheduler doesn't recognize this id at all: fall back
-			// to driving it directly rather than losing the resume.
+			// to driving it directly rather than losing the resume. This
+			// call owns the WHOLE turn itself (no server run-slot
+			// involved), so firing any further resume immediately is
+			// safe — no release to race.
 			msg, err := s.Prompt(ctx, taskResumeTriggerText)
-			m.finalizeTurn(id, msg, err)
+			if resume := m.finalizeTurn(id, msg, err); resume != nil {
+				go resume()
+			}
 		}
 	}
 	return func() {
 		msg, err := s.Prompt(ctx, taskResumeTriggerText)
-		m.finalizeTurn(id, msg, err)
+		if resume := m.finalizeTurn(id, msg, err); resume != nil {
+			go resume()
+		}
 	}
 }
 
