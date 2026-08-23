@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -140,7 +142,29 @@ body
 	}
 }
 
+// captureSlog redirects the default slog logger to an in-memory buffer for
+// the duration of the test, restoring the previous default via
+// t.Cleanup — mirrors context_window_test.go's identical pattern.
+func captureSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+// TestLoadAgentDefsUnknownToolIsLoadError is the regression test for a
+// follow-up finding ("frontmatter leniency"): a single malformed *.md
+// file used to abort discovery for the WHOLE directory (`return nil,
+// err`) — and because AgentDefs caches a load failure for the session's
+// entire life, one contributor's typo in ONE file broke EVERY custom
+// agent type for every task call in every session rooted there. A
+// malformed file is now skipped (with a logged warning), not a load
+// error — proves both halves: the bad file is absent from the result,
+// and loading continues rather than failing outright.
 func TestLoadAgentDefsUnknownToolIsLoadError(t *testing.T) {
+	buf := captureSlog(t)
 	dir := t.TempDir()
 	writeAgentDef(t, dir, "bad.md", `---
 name: bad
@@ -149,22 +173,35 @@ tools: read_file, teleport
 ---
 body
 `)
-	if _, err := LoadAgentDefs(dir); err == nil {
-		t.Error("LoadAgentDefs with unknown tool: want error, got nil")
-	} else if !strings.Contains(err.Error(), "teleport") {
-		t.Errorf("error = %v, want it to name the unknown tool", err)
+	defs, err := LoadAgentDefs(dir)
+	if err != nil {
+		t.Fatalf("LoadAgentDefs with unknown tool: want nil error (skip-and-warn), got %v", err)
+	}
+	if _, ok := defs["bad"]; ok {
+		t.Error("malformed def \"bad\" present in result, want skipped")
+	}
+	if !strings.Contains(buf.String(), "teleport") {
+		t.Errorf("no warning logged naming the unknown tool: %s", buf.String())
 	}
 }
 
 func TestLoadAgentDefsMissingNameIsLoadError(t *testing.T) {
+	buf := captureSlog(t)
 	dir := t.TempDir()
 	writeAgentDef(t, dir, "bad.md", `---
 description: No name given
 ---
 body
 `)
-	if _, err := LoadAgentDefs(dir); err == nil {
-		t.Error("LoadAgentDefs with missing name: want error, got nil")
+	defs, err := LoadAgentDefs(dir)
+	if err != nil {
+		t.Fatalf("LoadAgentDefs with missing name: want nil error (skip-and-warn), got %v", err)
+	}
+	if len(defs) != 0 {
+		t.Errorf("defs = %v, want empty (the only file present was skipped)", defs)
+	}
+	if !strings.Contains(buf.String(), "skipping malformed agent definition") {
+		t.Errorf("no skip warning logged: %s", buf.String())
 	}
 }
 
@@ -201,6 +238,7 @@ body
 }
 
 func TestLoadAgentDefsUnknownFrontmatterKeyIsLoadError(t *testing.T) {
+	buf := captureSlog(t)
 	dir := t.TempDir()
 	writeAgentDef(t, dir, "bad.md", `---
 name: bad
@@ -209,16 +247,62 @@ color: blue
 ---
 body
 `)
-	if _, err := LoadAgentDefs(dir); err == nil {
-		t.Error("LoadAgentDefs with unknown frontmatter key: want error, got nil")
+	defs, err := LoadAgentDefs(dir)
+	if err != nil {
+		t.Fatalf("LoadAgentDefs with unknown frontmatter key: want nil error (skip-and-warn), got %v", err)
+	}
+	if _, ok := defs["bad"]; ok {
+		t.Error("malformed def \"bad\" present in result, want skipped")
+	}
+	if !strings.Contains(buf.String(), "color") {
+		t.Errorf("no warning logged naming the unknown key: %s", buf.String())
 	}
 }
 
 func TestLoadAgentDefsMissingDelimiterIsLoadError(t *testing.T) {
+	buf := captureSlog(t)
 	dir := t.TempDir()
 	writeAgentDef(t, dir, "bad.md", "not frontmatter at all\n")
-	if _, err := LoadAgentDefs(dir); err == nil {
-		t.Error("LoadAgentDefs with no frontmatter: want error, got nil")
+	defs, err := LoadAgentDefs(dir)
+	if err != nil {
+		t.Fatalf("LoadAgentDefs with no frontmatter: want nil error (skip-and-warn), got %v", err)
+	}
+	if len(defs) != 0 {
+		t.Errorf("defs = %v, want empty (the only file present was skipped)", defs)
+	}
+	if !strings.Contains(buf.String(), "skipping malformed agent definition") {
+		t.Errorf("no skip warning logged: %s", buf.String())
+	}
+}
+
+// TestLoadAgentDefsSkipsMalformedFileAndLoadsRest proves the OTHER half
+// of the fix: a malformed file does not just fail to load itself, it
+// must not prevent a GOOD file sitting right next to it from loading —
+// the exact scope-of-damage this fix narrows from "the whole directory"
+// to "just the one broken file."
+func TestLoadAgentDefsSkipsMalformedFileAndLoadsRest(t *testing.T) {
+	buf := captureSlog(t)
+	dir := t.TempDir()
+	writeAgentDef(t, dir, "good.md", `---
+name: good
+description: A perfectly valid definition
+---
+body
+`)
+	writeAgentDef(t, dir, "bad.md", "not frontmatter at all\n")
+
+	defs, err := LoadAgentDefs(dir)
+	if err != nil {
+		t.Fatalf("LoadAgentDefs: %v", err)
+	}
+	if _, ok := defs["good"]; !ok {
+		t.Errorf("valid def \"good\" missing from result: %v", defs)
+	}
+	if _, ok := defs["bad"]; ok {
+		t.Error("malformed def \"bad\" present in result, want skipped")
+	}
+	if !strings.Contains(buf.String(), "bad.md") {
+		t.Errorf("no warning logged naming the skipped file: %s", buf.String())
 	}
 }
 
@@ -230,7 +314,7 @@ description: A custom one
 ---
 body
 `)
-	defs, err := ResolveAgentDefs(root)
+	defs, err := ResolveAgentDefs([]string{agentDefsDir(root)})
 	if err != nil {
 		t.Fatalf("ResolveAgentDefs: %v", err)
 	}
@@ -238,5 +322,58 @@ body
 		if _, ok := defs[name]; !ok {
 			t.Errorf("ResolveAgentDefs missing %q: %v", name, defs)
 		}
+	}
+}
+
+// TestResolveAgentDefsMergesAcrossDirs and
+// TestResolveAgentDefsDuplicateNameAcrossDirsIsError are the regression
+// tests for a follow-up finding ("def search path"): ResolveAgentDefs
+// used to accept exactly one directory (implicitly, via a single workDir
+// string), mirroring SkillsDirs' own multi-directory contract now that
+// Config.AgentDefsDirs exists.
+func TestResolveAgentDefsMergesAcrossDirs(t *testing.T) {
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+	writeAgentDef(t, dirA, "from-a.md", `---
+name: from-a
+description: Defined in dir A
+---
+body
+`)
+	writeAgentDef(t, dirB, "from-b.md", `---
+name: from-b
+description: Defined in dir B
+---
+body
+`)
+	defs, err := ResolveAgentDefs([]string{dirA, dirB})
+	if err != nil {
+		t.Fatalf("ResolveAgentDefs: %v", err)
+	}
+	if _, ok := defs["from-a"]; !ok {
+		t.Errorf("missing from-a: %v", defs)
+	}
+	if _, ok := defs["from-b"]; !ok {
+		t.Errorf("missing from-b: %v", defs)
+	}
+}
+
+func TestResolveAgentDefsDuplicateNameAcrossDirsIsError(t *testing.T) {
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+	writeAgentDef(t, dirA, "a.md", `---
+name: dup
+description: First, in dir A
+---
+body
+`)
+	writeAgentDef(t, dirB, "b.md", `---
+name: dup
+description: Second, in dir B
+---
+body
+`)
+	if _, err := ResolveAgentDefs([]string{dirA, dirB}); err == nil {
+		t.Error("ResolveAgentDefs with the same name defined in two dirs: want error, got nil")
 	}
 }

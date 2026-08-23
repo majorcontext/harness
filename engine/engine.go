@@ -416,6 +416,20 @@ type Config struct {
 	// See skills.go.
 	SkillsDirs []string
 
+	// AgentDefsDirs are the directories scanned for custom `task`-tool
+	// agent definitions (*.md files — see agentdef.go's LoadAgentDefs),
+	// mirroring SkillsDirs' own nil/empty/multi-dir contract exactly: a
+	// nil value is the default (use <WorkDir>/.agents — LoadAgentDefs's
+	// existing single-location behavior, unchanged for every caller that
+	// never sets this field), an explicit empty (non-nil) slice disables
+	// custom agent definitions entirely, and a multi-entry slice merges
+	// every directory's definitions, with a duplicate NAME across two
+	// directories treated as a load error exactly like a duplicate name
+	// within one directory already is (see ResolveAgentDefs) — there is
+	// no "which one wins" answer for two genuinely different definitions
+	// claiming the same name, project-local or otherwise.
+	AgentDefsDirs []string
+
 	// MCP is the MCP client integration this session's tools draw from: its
 	// Tools() are merged into the request's tool list (namespaced
 	// mcp__<server>__<tool>) and a call to one of them routes through

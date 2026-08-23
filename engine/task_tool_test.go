@@ -20,6 +20,33 @@ func TestTaskToolRegisteredOnRootUnderDepthLimit(t *testing.T) {
 	}
 }
 
+// TestTaskToolDescriptionPointsAtRosterDiscovery is the regression test
+// for a follow-up finding ("roster in tool description"): the tool's
+// static Description and agent property no longer only name the three
+// built-ins — they also explicitly tell the model how to discover this
+// project's FULL current roster (built-ins plus any custom .agents/*.md
+// types) at call time, via the "unknown agent" error's own
+// sortedAgentNames listing (see TestRunTaskToolUnknownAgentIsError).
+func TestTaskToolDescriptionPointsAtRosterDiscovery(t *testing.T) {
+	def := taskTool().Def
+	if !strings.Contains(def.Description, "error") {
+		t.Errorf("Description does not mention the error-based roster discovery mechanism: %q", def.Description)
+	}
+	var schema struct {
+		Properties struct {
+			Agent struct {
+				Description string `json:"description"`
+			} `json:"agent"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(def.InputSchema, &schema); err != nil {
+		t.Fatalf("unmarshal InputSchema: %v", err)
+	}
+	if !strings.Contains(schema.Properties.Agent.Description, "roster") {
+		t.Errorf("agent property description does not mention the roster: %q", schema.Properties.Agent.Description)
+	}
+}
+
 func TestTaskToolAbsentWithoutSessionManager(t *testing.T) {
 	s := NewSession(Config{WorkDir: t.TempDir()})
 	if _, ok := s.tools[taskToolName]; ok {
