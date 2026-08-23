@@ -204,27 +204,39 @@ func agentDefsDir(workDir string) string {
 // custom definitions at all.
 //
 // A single MALFORMED *.md file — bad frontmatter, an unknown tool name,
-// a missing required field (parseAgentDef's own errors, or a bare
-// os.ReadFile failure) — is SKIPPED with a logged warning, not a load
-// error for the whole directory: a live review finding ("frontmatter
-// leniency"). An earlier revision failed the ENTIRE directory on the
-// FIRST bad file (`return nil, err`), and because AgentDefs (this
-// package's sole caller) caches a load failure for the session's whole
-// life, one contributor's single typo in one file broke EVERY custom
-// agent type — not just the broken one — for every `task` call in every
-// session rooted at dir, for as long as that session lived. Skip-and-
-// warn means a typo in agent-b.md costs exactly agent-b, never agent-a
-// or agent-c sitting right next to it.
+// an invalid model string, a missing required field (parseAgentDef's own
+// errors, or a bare os.ReadFile failure) — is SKIPPED with a logged
+// warning, not a load error for the whole directory: a live review
+// finding ("frontmatter leniency"). An earlier revision failed the
+// ENTIRE directory on the FIRST bad file (`return nil, err`), and
+// because AgentDefs (this package's sole caller) caches a load failure
+// for the session's whole life, one contributor's single typo in one
+// file broke EVERY custom agent type — not just the broken one — for
+// every `task` call in every session rooted at dir, for as long as that
+// session lived. Skip-and-warn means a typo in agent-b.md costs exactly
+// agent-b, never agent-a or agent-c sitting right next to it.
+//
+// This DOES cover the design doc's "unknown tool names in a definition
+// are an error surfaced at load, not spawn" — a later review finding
+// caught an earlier version of THIS comment quoting that rule to justify
+// a completely different case below (cross-file conflicts), leaving the
+// unknown-tool-name case itself looking like it had silently stopped
+// being surfaced at load at all. It has not: an unknown tool name is
+// still caught and reported the moment this function runs (parseAgentDef
+// returns it as an error here, this function turns that into a
+// slog.Warn identifying the exact file and reason), never deferred to a
+// `task` call's own "unknown agent %q" at spawn time. What changed is
+// only the BLAST RADIUS one bad file has on every OTHER file in the same
+// directory, not whether the file's own error is surfaced, or when.
 //
 // This leniency does NOT extend to cross-file conflicts, which stay hard
 // load errors: a custom definition's name colliding with a built-in
 // (general-purpose, explore, plan), or with ANOTHER custom definition in
 // the same directory. Neither has an obvious "which one wins" answer the
-// way a single unparseable file does (there is nothing to silently
+// way a single unparseable file does — there is nothing to silently
 // prefer between two genuinely different definitions both claiming the
-// same name) — per the design doc's "unknown tool names in a definition
-// are an error surfaced at load, not spawn," these two remain surfaced
-// exactly that way.
+// same name, so these two fail the WHOLE directory's load, unlike every
+// single-file error above.
 func LoadAgentDefs(dir string) (map[string]AgentDef, error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {

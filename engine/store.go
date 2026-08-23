@@ -503,6 +503,38 @@ func (s *Session) persistTaskSpawnLocked(childID, agent string) {
 // task.notify_delivered record to the session log (see
 // enqueueTaskNotification/commitTaskNotifications in taskdelivery.go) —
 // mirrors persistPromptQueueLocked exactly. Caller holds s.mu.
+//
+// A live review finding, deliberately NOT fixed in this pass: unlike
+// persistPromptQueueLocked's own callers (EnqueuePrompt, an ordinary
+// Session API never invoked while SessionManager's own m.mu is held),
+// every caller of THIS method that matters for tree delivery —
+// finalizeTurn, recoverInterruptedTurnLocked, and ReportTurnStart's
+// migration — runs with m.mu held for the call's whole duration. m.mu is
+// the SINGLE lock guarding every session in the tree (Info/Reap/Spawn/
+// Send/finalize all take it), so this synchronous disk write (ensureLog's
+// MkdirAll/OpenFile/Stat on a cold log, then writeRecord's append) runs
+// INSIDE that global critical section — a slow or contended disk on one
+// session's notification could stall Info/Reap/Spawn/finalize for every
+// OTHER session in the process, in tension with AGENTS.md's "a hung
+// component can't wedge other sessions."
+//
+// Moving this I/O outside m.mu is a real fix, not a quick one: the
+// in-memory queue mutation and the durable write currently happen
+// atomically together (both under s.mu, itself called from within m.mu),
+// which is exactly what makes the queued-minus-delivered durability
+// guarantee this whole mechanism depends on airtight — deferring the
+// write to after m.mu.Unlock() opens a window where the in-memory state
+// is already visible but the crash-recovery record backing it is not yet
+// written, reopening a narrower version of the exact gap this feature was
+// built to close. Getting both properties (bounded lock hold time AND no
+// durability window) needs real design work — a write-ahead ordering, or
+// moving these calls off m.mu's critical section entirely — deliberately
+// left as a follow-up rather than rushed under this round's own review
+// cycle. Session log writes are local-disk appends in every deployment
+// this codebase currently targets, not network-backed, and ensureLog's
+// MkdirAll/OpenFile/Stat cost is paid once per session (a warm log's
+// steady-state cost is a single local Write) — bounding, but not
+// eliminating, the exposure in the meantime.
 func (s *Session) persistTaskNotifyLocked(recType string, n taskNotification) {
 	if s.cfg.SessionDir == "" {
 		return

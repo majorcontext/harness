@@ -969,15 +969,29 @@ func (m *SessionManager) ReportTurnStart(sess *Session) {
 	// too, distinct from (and layered on top of) the object-reattachment
 	// fix above.
 	if old := n.session; old != nil && old != sess {
+		// drainAllTaskNotificationsSameLog, not drainAllTaskNotifications
+		// — old and sess are two in-memory objects for the SAME durable
+		// session id, sharing the SAME log, unlike finalizeTurn/
+		// recoverInterruptedTurnLocked's forward-to-a-DIFFERENT-ancestor
+		// callers. A live review finding: the persisting variant durably
+		// cancels the notification's original recTaskNotifyQueued entry
+		// on that shared log, while enqueueTaskNotificationMigrated's own
+		// dedup (see its doc comment) correctly declines to write a
+		// compensating fresh queued record for something already
+		// restored by LoadSession's fold — silently losing the
+		// notification durably if sess is evicted again before it is
+		// ever checked out. See drainAllTaskNotificationsSameLog's own
+		// doc comment for the full reasoning.
+		//
 		// enqueueTaskNotificationMigrated, not enqueueTaskNotification —
-		// see that method's own doc comment: sess, freshly cold-loaded,
-		// already restored via LoadSession's own durable queued-minus-
-		// delivered fold anything old could durably have queued BEFORE
-		// that load ran; migrating unconditionally here double-delivered
-		// exactly that overlap. Dedup keeps this loop still correct for
-		// the narrower race it exists to cover (something enqueued on old
-		// in the gap between sess's load and this reattachment).
-		for _, notif := range old.drainAllTaskNotifications() {
+		// sess, freshly cold-loaded, already restored via LoadSession's
+		// own durable queued-minus-delivered fold anything old could
+		// durably have queued BEFORE that load ran; migrating
+		// unconditionally here double-delivered exactly that overlap.
+		// Dedup keeps this loop still correct for the narrower race it
+		// exists to cover (something enqueued on old in the gap between
+		// sess's load and this reattachment).
+		for _, notif := range old.drainAllTaskNotificationsSameLog() {
 			sess.enqueueTaskNotificationMigrated(notif)
 		}
 	}
