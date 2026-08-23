@@ -1068,8 +1068,16 @@ func (s *Session) TaskToolNames() []string {
 // appends the user message in the first place if it errors before
 // Prompt's own durable-append point).
 func (s *Session) hasUnansweredTurn() bool {
-	h := s.History()
-	return len(h) > 0 && h[len(h)-1].Role == message.RoleUser
+	// s.mu directly, reading the last element in place — not s.History(),
+	// which does a full append([]message.Message(nil), s.history...) copy
+	// of the entire transcript just to read one field. A live review
+	// finding: this runs on every cold adopt/restart-recovery path
+	// (adoptReloadedLocked -> recoverInterruptedTurnLocked, and
+	// ReportTurnStart's adopt-on-first-sight), where the O(n) allocation
+	// cost is pure waste for a long-lived session's transcript.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.history) > 0 && s.history[len(s.history)-1].Role == message.RoleUser
 }
 
 // Plugins returns a snapshot of this session's configured plugins — name,
