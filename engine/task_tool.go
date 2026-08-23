@@ -80,7 +80,7 @@ func runTaskTool(s *Session, raw json.RawMessage) (message.Parts, error) {
 		return nil, fmt.Errorf("task: this session has no session manager")
 	}
 
-	defs, err := ResolveAgentDefs(s.cfg.WorkDir)
+	defs, err := s.AgentDefs()
 	if err != nil {
 		return nil, fmt.Errorf("task: loading agent definitions: %w", err)
 	}
@@ -132,10 +132,20 @@ func sortedAgentNames(defs map[string]AgentDef) []string {
 // (ErrDepthLimit, ErrConcurrencyLimit, ErrSessionCanceled,
 // ErrUnknownSession) is already a short, fixed, secret-free string — safe
 // to surface directly, unlike a raw provider error — so this only adds
-// the "task:" prefix every other error on this surface uses; an
-// unrecognized error (defensive: Spawn's own doc comment enumerates every
-// error it returns) falls back to a generic message rather than leaking
-// whatever it is verbatim.
+// the "task:" prefix every other error on this surface uses.
+//
+// The default case is reached only by restrictTools' "unknown tool %q"
+// error (Spawn's doc comment enumerates every error it can return, and
+// this is the one sentinel-less shape): also safe to surface directly — it
+// carries nothing but a tool name from the agent definition's own tools:
+// list, never provider/request data — and doing so is what actually
+// diagnoses the real cause. A definition can legitimately name a real,
+// known tool (agentdef.go's knownToolNames, checked at LOAD time) that
+// simply isn't REGISTERED on this particular session (e.g. `mcp` on a box
+// with no MCP servers configured) — restrictTools can only discover that
+// mismatch at spawn time, and flattening its message to a generic
+// "could not spawn" (an earlier version of this function did) left no way
+// to tell that case apart from a depth/concurrency limit.
 func classifyTaskToolError(err error) error {
 	switch {
 	case errors.Is(err, ErrDepthLimit):
@@ -147,6 +157,6 @@ func classifyTaskToolError(err error) error {
 	case errors.Is(err, ErrUnknownSession):
 		return fmt.Errorf("task: parent session no longer tracked")
 	default:
-		return errors.New("task: could not spawn child session")
+		return fmt.Errorf("task: cannot spawn: %w", err)
 	}
 }

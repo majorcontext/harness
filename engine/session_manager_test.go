@@ -410,6 +410,98 @@ func toolNames(s *Session) []string {
 	return names
 }
 
+// TestReapRemovesTerminalLeavesAndUpdatesParent proves Reap frees a
+// terminal, childless node's *Session and cleans its id out of the
+// parent's Children list, and that a parent left childless by reaping
+// becomes reapable itself on a later call — a live review flagged
+// m.nodes growing unbounded on a long-lived process fanning out many
+// `task` children.
+func TestReapRemovesTerminalLeavesAndUpdatesParent(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("child", doneTurn("done")),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	if n := mgr.Reap(); n != 1 {
+		t.Fatalf("Reap() = %d, want 1", n)
+	}
+	if _, ok := mgr.Info(childID); ok {
+		t.Error("child still tracked after Reap")
+	}
+	rootInfo, ok := mgr.Info(root.ID)
+	if !ok {
+		t.Fatal("root no longer tracked (roots must never be reaped)")
+	}
+	if len(rootInfo.Children) != 0 {
+		t.Errorf("root Children = %v, want empty after reaping its only child", rootInfo.Children)
+	}
+
+	// A second Reap with nothing new terminal is a no-op.
+	if n := mgr.Reap(); n != 0 {
+		t.Errorf("second Reap() = %d, want 0", n)
+	}
+}
+
+// TestReapNeverRemovesRootOrNodeWithChildren proves the two things Reap
+// must never do: remove a root (the tree's own address), or remove a
+// terminal node that still has a live or terminal-but-not-yet-reaped
+// child.
+func TestReapNeverRemovesRootOrNodeWithChildren(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("mid", doneTurn("mid done")),
+		scriptedTurns("grand", doneTurn("grand done")),
+	))
+
+	midID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("mid")})
+	if err != nil {
+		t.Fatalf("Spawn mid: %v", err)
+	}
+	waitForStatus(t, mgr, midID, StatusDone, time.Second)
+	grandID, err := mgr.Spawn(SpawnOptions{ParentID: midID, Prompt: "go", Model: modelFor("grand")})
+	if err != nil {
+		t.Fatalf("Spawn grand: %v", err)
+	}
+	waitForStatus(t, mgr, grandID, StatusDone, time.Second)
+
+	// mid is terminal (done) but has a child (grand) — must survive a
+	// Reap that only removes grand (the actual leaf).
+	if n := mgr.Reap(); n != 1 {
+		t.Fatalf("Reap() = %d, want 1 (only the grandchild leaf)", n)
+	}
+	if _, ok := mgr.Info(midID); !ok {
+		t.Error("mid removed while it still had a child — must survive until childless")
+	}
+	if _, ok := mgr.Info(grandID); ok {
+		t.Error("grand still tracked after Reap")
+	}
+
+	// mid is now childless AND terminal — reapable on the next call.
+	if n := mgr.Reap(); n != 1 {
+		t.Fatalf("second Reap() = %d, want 1 (mid, now a childless leaf)", n)
+	}
+	if _, ok := mgr.Info(midID); ok {
+		t.Error("mid still tracked after becoming a childless leaf")
+	}
+
+	// The root itself is now a childless leaf too (its only child, mid,
+	// was just reaped) — but a root is never reaped regardless, since it
+	// is the tree's own address.
+	if n := mgr.Reap(); n != 0 {
+		t.Errorf("Reap() removed the root: %d nodes removed", n)
+	}
+	if _, ok := mgr.Info(root.ID); !ok {
+		t.Fatal("root removed by Reap — must never happen")
+	}
+}
+
 // waitForStatus polls until id reaches want or the timeout elapses.
 func waitForStatus(t *testing.T, mgr *SessionManager, id string, want SessionStatus, timeout time.Duration) {
 	t.Helper()

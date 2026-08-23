@@ -122,6 +122,35 @@ func ResolveAgentDefs(workDir string) (map[string]AgentDef, error) {
 	return defs, nil
 }
 
+// AgentDefs returns s's available agent definitions — built-ins plus its
+// WorkDir's .agents/*.md — discovering them exactly once and caching the
+// result (or a load failure) for the session's life. Mirrors
+// ensureInstructions/ensureSkills' load-once-cache-error pattern
+// (instructions.go, skills.go), but triggered lazily from the FIRST call
+// here (the `task` tool's own first invocation, or a wire-level
+// session.create with a parent — see task_tool.go and
+// server/session_tree.go's handleSpawnChild) rather than from Prompt: a
+// malformed .agents/*.md should only ever break SPAWNING a child, never
+// every prompt in a session that never uses `task` at all.
+//
+// This is also what makes the design doc's "unknown tool names in a
+// definition are an error surfaced at load, not spawn" true in practice —
+// "load" here means the session's first task-shaped call, not
+// construction: caching here is what stops a definition being re-read and
+// re-parsed from disk on every single spawn, which is what an earlier,
+// uncached version of this call site did (a live review finding: a parent
+// fanning out many children re-parsed the same .agents/*.md files on every
+// one).
+func (s *Session) AgentDefs() (map[string]AgentDef, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.agentDefsLoaded {
+		s.agentDefsLoaded = true
+		s.agentDefs, s.agentDefsErr = ResolveAgentDefs(s.cfg.WorkDir)
+	}
+	return s.agentDefs, s.agentDefsErr
+}
+
 // agentDefsDir is where LoadAgentDefs looks for *.md agent definitions —
 // the top level of workDir's .agents directory. Its skills/ subdirectory
 // (Agent Skills, see skills.go's defaultSkillsSubdir) is never descended

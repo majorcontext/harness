@@ -1130,15 +1130,15 @@ func serveCmd(args []string) error {
 	sessMgr := engine.NewSessionManager(context.Background(), envInt("HARNESS_MAX_TASK_DEPTH"), envInt("HARNESS_MAX_CONCURRENT_TASKS"))
 	mkCfg := func(model message.ModelRef) engine.Config {
 		return engine.Config{
-			Providers:           reg,
-			Model:               model,
-			System:              systemPrompt(workDir, ""),
-			WorkDir:             workDir,
-			SessionDir:          sesDir,
-			SessionSync:         cfg.SessionSync,
-			EngineVersion:       version,
-			StartedAt:           startedAt,
-			OnEvent:             func(ev engine.Event) { srv.Publish(ev) },
+			Providers:     reg,
+			Model:         model,
+			System:        systemPrompt(workDir, ""),
+			WorkDir:       workDir,
+			SessionDir:    sesDir,
+			SessionSync:   cfg.SessionSync,
+			EngineVersion: version,
+			StartedAt:     startedAt,
+			OnEvent:       func(ev engine.Event) { srv.Publish(ev) },
 			// The actual node registration (depth, lineage) happens
 			// separately, in handleCreate, right after NewSession returns
 			// (see AdoptRoot's call site there); wiring it here too means a

@@ -722,13 +722,31 @@ type Session struct {
 	toolResultBytes int
 
 	// taskNotifications is this session's pending queue of child-completion
-	// signals (see taskdelivery.go): SessionManager.finalizeTurn appends to
-	// it from whatever goroutine just finished driving a CHILD's turn,
-	// streamTurn drains it every model call via
-	// drainTaskNotificationsSegment. Nil for a session with no
+	// signals not yet checked out for an in-flight turn attempt (see
+	// taskdelivery.go): SessionManager.finalizeTurn appends to it from
+	// whatever goroutine just finished driving a CHILD's turn. streamTurn
+	// moves entries from here into taskNotificationsInFlight every model
+	// call via checkoutTaskNotificationsSegment. Nil for a session with no
 	// SessionManager, or one that has never had a child complete. Guarded
 	// by mu.
 	taskNotifications []taskNotification
+	// taskNotificationsInFlight holds notifications already checked out
+	// for the turn attempt currently in progress — moved back to
+	// taskNotifications (requeueTaskNotifications) if that attempt fails,
+	// or cleared (commitTaskNotifications) once it actually succeeds. See
+	// checkoutTaskNotificationsSegment's doc comment for why this two-
+	// phase handoff exists: a destructive single drain lost a notification
+	// to a retried or discarded attempt. Guarded by mu.
+	taskNotificationsInFlight []taskNotification
+
+	// agentDefsLoaded/agentDefs/agentDefsErr cache AgentDefs' discovery
+	// (agentdef.go), on the SAME load-once-cache-error pattern instrLoaded/
+	// instrSeg/instrErr and skillsLoaded/skillsSeg/skillsErr already use —
+	// but triggered by the `task` tool's first call, not by Prompt (see
+	// AgentDefs' doc comment for why). Guarded by mu.
+	agentDefsLoaded bool
+	agentDefs       map[string]AgentDef
+	agentDefsErr    error
 }
 
 // NewSession creates a session. Nothing touches the network, spawns
@@ -873,6 +891,27 @@ func (s *Session) Model() message.ModelRef {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.model
+}
+
+// configSnapshot returns a copy of s.cfg taken under s.mu, with Model
+// overridden to the session's LIVE current model (s.model — see Model's
+// doc comment: SetModel updates s.model, never s.cfg.Model, which stays
+// pinned to whatever the session's ORIGINAL construction-time model was
+// forever). It exists for SessionManager.Spawn, which needs to build a
+// child's Config from its parent's: reading parent.session.cfg directly,
+// unsynchronized, races SetModel's own writes under s.mu to
+// s.cfg.ContextWindowTokens/contextWindowSource (see SetModel) — caught
+// live by go test -race — and would have inherited the parent's STALE
+// construction-time model besides, contradicting the design doc's
+// "children inherit the parent's ... model" precedence. Every other
+// Config field copies by value as a normal struct copy would; only Model
+// gets the live override.
+func (s *Session) configSnapshot() Config {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cfg := s.cfg
+	cfg.Model = s.model
+	return cfg
 }
 
 // SetEffort swaps the reasoning-effort level for subsequent requests. A no-op
@@ -1269,6 +1308,13 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 		// so everything below is unchanged. See its doc comment.
 		asst, stop, usage, err := s.streamTurnWithRetry(ctx)
 		if err != nil {
+			// Whatever this attempt's own streamTurn calls checked out
+			// (checkoutTaskNotificationsSegment, engine.go's streamTurn)
+			// never reached a request that survived — return them to
+			// pending so a LATER turn gets another chance, rather than
+			// losing them the moment this one fails. See
+			// requeueTaskNotifications' doc comment.
+			s.requeueTaskNotifications()
 			var interrupted *interruptedTurnError
 			if errors.As(err, &interrupted) {
 				// The turn died after the model already emitted one or
@@ -1285,6 +1331,13 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 			s.emitSessionError(err)
 			return nil, err
 		}
+		// This attempt succeeded and its result is about to be kept
+		// (appended below) — whatever was checked out for it really was
+		// delivered in the request that produced asst. Commit BEFORE
+		// appending, not after: the notification was already visible to
+		// the MODEL that produced this very response, so it counts as
+		// delivered regardless of what happens to asst next.
+		s.commitTaskNotifications()
 		s.appendWithUsage(*asst, &usage)
 		s.emit(Event{Type: EventMessage, Message: asst, StopReason: stop, Usage: &usage})
 
@@ -1433,11 +1486,13 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 	if seg := identityStatusSegment(s.cfg.EngineVersion, s.cfg.StartedAt, s.cfg.SessionSync); seg != "" {
 		messages = withAmbientStatus(messages, seg)
 	}
-	// Unlike the four segments above, this one DRAINS s.taskNotifications
-	// as a side effect — see drainTaskNotificationsSegment's doc comment
-	// for why a child-completion notification needs exactly-once delivery
-	// rather than the other four's idempotent recompute-every-turn shape.
-	if seg := s.drainTaskNotificationsSegment(); seg != "" {
+	// Unlike the four segments above, this one CHECKS OUT pending
+	// notifications rather than idempotently recomputing a status string —
+	// see checkoutTaskNotificationsSegment's doc comment. Committing them
+	// as delivered (or requeuing them on failure) happens one layer up, in
+	// runAgenticLoop, once this WHOLE turn's outcome — including any
+	// retries streamTurnWithRetry runs — is known.
+	if seg := s.checkoutTaskNotificationsSegment(); seg != "" {
 		messages = withAmbientStatus(messages, seg)
 	}
 	req := &provider.Request{

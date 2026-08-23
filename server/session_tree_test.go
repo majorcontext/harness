@@ -277,3 +277,141 @@ func TestCancelTreeCascadesToChild(t *testing.T) {
 	waitForLineageStatus(t, h, child.ID, "canceled", 2*time.Second)
 	waitForLineageStatus(t, h, root.ID, "canceled", 2*time.Second)
 }
+
+// TestConcurrentPromptDuringResumeIsQueuedNotConcurrent is the server-level
+// regression test for the original BLOCKER: an engine-initiated resume
+// turn on a root and an ordinary POST /session/{id}/prompt_async request
+// arriving while it's in flight must never both drive Session.Prompt at
+// once. Before ExternalRunner/ReportTurnStart existed, a resume turn
+// SessionManager drove directly left the root's node (and this server's
+// own view via a stale read) inconsistent, and a concurrent prompt_async
+// could claim the run slot and start a second, overlapping Prompt call —
+// reproduced live with -race. Now both go through the exact same
+// claimForPrompt admission gate, so the second request must be queued
+// (202 "queued"), never started concurrently.
+func TestConcurrentPromptDuringResumeIsQueuedNotConcurrent(t *testing.T) {
+	// The initial prompt runs on a plain, non-blocking provider; the
+	// engine-initiated resume later needs a BLOCKING one so this test can
+	// observe it in flight and fire a real concurrent prompt_async against
+	// it. Switching the session's PERSISTED model between the two (via
+	// POST /session/{id}/model, below) — rather than a per-request model
+	// override on the initial prompt, which itself persists via SetModel
+	// (see handlePrompt) and would leave the resume ALSO targeting the
+	// non-blocking provider — is what makes the resume actually land on
+	// resumeBlocker.
+	startProv := &scriptedProvider{name: "start", turns: [][]provider.Event{asstTurn("started")}}
+	resumeBlocker := newBlockingProvider("resumeblock")
+	t.Cleanup(resumeBlocker.releaseAll)
+	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("child done")}}
+	h := multiProviderHarness(t, message.ModelRef{Provider: "start", Model: "m1"}, nil, startProv, resumeBlocker, childProv)
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "start/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	// First, an ordinary prompt on the plain "start" provider establishes
+	// real history and settles the root idle.
+	resp, data = h.do("POST", "/session/"+root.ID+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "start"}},
+	})
+	if resp.StatusCode != 202 {
+		t.Fatalf("initial prompt_async status %d: %s", resp.StatusCode, data)
+	}
+	waitForLineageStatus(t, h, root.ID, "idle", 2*time.Second)
+
+	// Now switch the session's PERSISTED model to the blocking provider —
+	// the resume, triggered later by the child's completion, uses
+	// whatever the session's current model is at that time.
+	resp, data = h.do("POST", "/session/"+root.ID+"/model", map[string]string{"model": "resumeblock/m1"})
+	if resp.StatusCode != 200 {
+		t.Fatalf("set model status %d: %s", resp.StatusCode, data)
+	}
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": root.ID,
+		"agent":     engine.AgentGeneralPurpose,
+		"prompt":    "go",
+		"model":     "child/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+
+	// The child completes fast (one scripted turn) and triggers an
+	// engine-initiated resume on the now-idle root (its default model,
+	// resumeblock), which claims the run slot and blocks.
+	<-resumeBlocker.started
+	waitForLineageStatus(t, h, root.ID, "running", 2*time.Second)
+
+	// Now fire a REAL ordinary prompt while the resume is in flight.
+	resp, data = h.do("POST", "/session/"+root.ID+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "concurrent prompt"}},
+	})
+	if resp.StatusCode != 202 {
+		t.Fatalf("concurrent prompt_async status %d: %s", resp.StatusCode, data)
+	}
+	var body struct {
+		Status string `json:"status"`
+	}
+	mustUnmarshal(t, data, &body)
+	if body.Status != "queued" {
+		t.Fatalf("concurrent prompt_async status field = %q, want %q (never a second concurrent turn)", body.Status, "queued")
+	}
+
+	resumeBlocker.releaseAll()
+	// The queued prompt must eventually run too (not lost) — the session
+	// keeps cycling and its message count grows past the resume alone.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, data := h.do("GET", "/session/"+root.ID+"/message", nil)
+		if resp.StatusCode == 200 && strings.Contains(string(data), "concurrent prompt") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("queued prompt never appears to have been delivered")
+}
+
+// TestCancelTreeAbortsRootInFlightTurn proves cancel_tree stops a ROOT's
+// in-flight turn, not merely marks it canceled while the turn keeps
+// running underneath — a live review finding: SessionManager.Cancel only
+// ever cancels node.ctx, which a server-driven root turn (claimForPrompt/
+// runPrompt) does not use.
+func TestCancelTreeAbortsRootInFlightTurn(t *testing.T) {
+	rootBlocker := newBlockingProvider("rootblock")
+	t.Cleanup(rootBlocker.releaseAll)
+	h := multiProviderHarness(t, message.ModelRef{Provider: "rootblock", Model: "m1"}, nil, rootBlocker)
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "rootblock/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h.do("POST", "/session/"+root.ID+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "go"}},
+	})
+	if resp.StatusCode != 202 {
+		t.Fatalf("prompt_async status %d: %s", resp.StatusCode, data)
+	}
+	<-rootBlocker.started
+	waitForLineageStatus(t, h, root.ID, "running", 2*time.Second)
+
+	resp, data = h.do("DELETE", "/session/"+root.ID+"/cancel_tree", nil)
+	if resp.StatusCode != 204 {
+		t.Fatalf("cancel_tree status %d: %s", resp.StatusCode, data)
+	}
+
+	// The turn must actually stop (the blocked provider call unblocks via
+	// context cancellation) — lineage settles canceled promptly, not only
+	// after rootBlocker is eventually released by this test's own cleanup.
+	waitForLineageStatus(t, h, root.ID, "canceled", 2*time.Second)
+}

@@ -64,7 +64,54 @@ var (
 	// ErrSessionCanceled is returned by Spawn or Send when the target
 	// session has already been canceled.
 	ErrSessionCanceled = errors.New("engine: session canceled")
+	// ErrSessionBusy is returned by Send when session id already has a
+	// turn in flight. Session.Prompt must never be called concurrently
+	// with itself (see the Session type's doc comment); Send is the one
+	// SessionManager entry point a caller might plausibly invoke twice
+	// concurrently for the same id (two overlapping session.send calls),
+	// so it must refuse the second rather than starting a second
+	// concurrent Prompt loop.
+	ErrSessionBusy = errors.New("engine: session is already running a turn")
 )
+
+// ExternalRunner lets an outside scheduler — the server's own run-slot
+// machinery (claimForPrompt/runPrompt in package server) — drive a ROOT
+// session's resume turn instead of SessionManager calling Session.Prompt
+// directly. Installed via NewSessionManager's caller setting the field
+// directly is not possible (unexported); use SetExternalRunner.
+//
+// # Why this exists
+//
+// A root session created through a SessionManager in `harness serve` is
+// ALSO independently driven by ordinary POST /session/{id}/prompt_async
+// requests, through the server's own admission gate, entirely outside
+// this package. If SessionManager ALSO called Session.Prompt directly to
+// deliver a child's completion notification to an idle root, the two
+// schedulers could race: an ordinary prompt and a SessionManager-
+// initiated resume both starting a turn on the SAME session at once,
+// violating Session.Prompt's "not concurrently with itself" contract —
+// exactly the class of bug a live -race run against an early version of
+// this package caught. A CHILD session never has this problem: it is
+// never resident-tracked by anything but its SessionManager. So
+// ExternalRunner is consulted ONLY for depth-0 (root) nodes — see
+// triggerResumeLocked — never for a child's own turns.
+//
+// Run(id, text) asks the external scheduler to run a turn on id with text
+// as the prompt. handled reports whether the scheduler recognizes id at
+// all — true even if it did not actually START a turn this instant (e.g.
+// id was already busy with something else the scheduler itself already
+// knows about): in that case that ALREADY-in-flight turn's own next
+// request will pick up the pending notification via the ordinary
+// queue-at-next-turn-boundary path, so no further action is needed here.
+// handled is false only for an id the external scheduler has never heard
+// of (e.g. a nil or not-yet-wired runner); SessionManager then falls back
+// to driving the turn itself, exactly as it did before ExternalRunner
+// existed.
+//
+// The scheduler is responsible for reporting the turn's start and end
+// back via ReportTurnStart/ReportTurnEnd: SessionManager has no other way
+// to learn a delegated turn completed.
+type ExternalRunner func(id, text string) (handled bool)
 
 // SessionManager owns every session — one root plus its descendant
 // children — spawned as a tree in one harness process. It is the
@@ -94,6 +141,22 @@ type SessionManager struct {
 	// atomically under mu at spawn time, so a race at the limit is answered
 	// with ErrConcurrencyLimit, never a lost-update overrun.
 	runningByRoot map[string]int
+
+	// externalRunner, when set, drives a ROOT's resume turn instead of m
+	// calling Session.Prompt directly — see ExternalRunner's doc comment.
+	// Nil (the default, and always for a bare-engine/CLI SessionManager
+	// with no server layered over it) means m drives every turn itself,
+	// root or child, exactly as before ExternalRunner existed.
+	externalRunner ExternalRunner
+}
+
+// SetExternalRunner installs runner as described on the ExternalRunner
+// type — nil restores the default (m drives every turn itself). Safe to
+// call at any time; takes effect on the next resume decision.
+func (m *SessionManager) SetExternalRunner(runner ExternalRunner) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.externalRunner = runner
 }
 
 // sessionNode is one managed session's lifecycle bookkeeping. Guarded by
@@ -201,14 +264,60 @@ func (m *SessionManager) AdoptRoot(s *Session) error {
 	if _, exists := m.nodes[s.ID]; exists {
 		return fmt.Errorf("engine: session %s already managed", s.ID)
 	}
-	s.cfg.SessionManager = m
-	// s was built by a plain NewSession/LoadSession call, before
-	// Config.SessionManager was set — newSession's unconditional install
-	// (see its doc comment) never ran for it, so install directly here.
-	s.tools[taskToolName] = taskTool()
-	m.adoptLocked(s, "", 0)
-	m.installTaskToolLocked(s, 0)
+	m.adoptRootLocked(s)
 	return nil
+}
+
+// adoptRootLocked registers s as a fresh root node, installing the `task`
+// tool directly if s was built before Config.SessionManager was set (a
+// plain NewSession/LoadSession call, so newSession's own unconditional
+// install — see that field's doc comment — never ran). Safe to call only
+// when s has not yet been exposed to any concurrent user: both of this
+// method's callers (AdoptRoot, and ReportTurnStart's adopt-on-first-sight)
+// mutate s.tools/s.cfg here BEFORE the caller's own Session.Prompt call
+// begins — sequential with respect to that call, in the same goroutine,
+// never concurrent with it. Callers hold m.mu.
+func (m *SessionManager) adoptRootLocked(s *Session) *sessionNode {
+	s.cfg.SessionManager = m
+	s.tools[taskToolName] = taskTool()
+	n := m.adoptLocked(s, "", 0)
+	m.installTaskToolLocked(s, 0)
+	return n
+}
+
+// ReportTurnStart tells m that an EXTERNAL scheduler (the server's own
+// run-slot machinery) is about to drive a turn on sess — see
+// ExternalRunner's doc comment. If sess is not yet a tracked node at all —
+// a session this process is touching for the first time via a cold reload
+// from disk (claimForPrompt's transparent LoadSession fallback covers a
+// session evicted from residency, or one that predates this process
+// entirely after a restart) — it is adopted as a fresh root here, exactly
+// like AdoptRoot. This is what makes `task` and session.info's lineage
+// keep working for a session resumed after a restart or eviction, not
+// only one created via THIS process's own POST /session (closing the gap
+// a session that already had children before the restart would otherwise
+// hit: task calls failing "parent session no longer tracked" forever
+// after).
+//
+// A no-op if sess is already tracked and already running (defensive:
+// should not happen if the caller's own admission gate is sound, but
+// idempotent rather than corrupting the concurrency count either way).
+func (m *SessionManager) ReportTurnStart(sess *Session) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n, ok := m.nodes[sess.ID]
+	if !ok {
+		n = m.adoptRootLocked(sess)
+	}
+	n.status = StatusRunning
+}
+
+// ReportTurnEnd tells m that an external scheduler's turn on id (started
+// via ReportTurnStart) just finished — the same finalization finalizeTurn
+// performs for a turn m drove itself, exported for a caller outside this
+// package. A no-op for an id m does not track.
+func (m *SessionManager) ReportTurnEnd(id string, msg *message.Message, err error) {
+	m.finalizeTurn(id, msg, err)
 }
 
 // adoptLocked registers s as a new node. Callers hold m.mu.
@@ -262,6 +371,52 @@ func (m *SessionManager) Info(id string) (info SessionNode, ok bool) {
 		return SessionNode{}, false
 	}
 	return n.snapshot(), true
+}
+
+// Reap removes every LEAF (no children) node whose status is terminal
+// (done, failed, canceled) and which has a parent — a root is never
+// removed, since it is the tree's own address and a caller may still hold
+// (or later reload) its id. Freeing a terminal child's node frees the
+// *Session it was pinning in memory, message history included.
+//
+// This package never reaps automatically: m.nodes otherwise grows
+// unbounded on a long-lived process that fans out many `task` children
+// (a live review finding), each one pinned forever even once its result
+// has long since been delivered and read — but this package has no way
+// to know how long a caller wants a settled child's result to stay
+// reachable via Info/session.info, so it leaves that retention policy
+// entirely to the caller: call Reap periodically (e.g. "N minutes after
+// terminal") on whatever schedule fits. Removing a leaf also drops its id
+// from its parent's Children list, so a parent that has ALREADY had every
+// child reaped becomes a leaf itself on the next call, letting a whole
+// terminal subtree collapse bottom-up over repeated calls. Returns the
+// number of nodes removed.
+func (m *SessionManager) Reap() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	removed := 0
+	for id, n := range m.nodes {
+		if n.parentID == "" || len(n.children) != 0 {
+			continue
+		}
+		switch n.status {
+		case StatusDone, StatusFailed, StatusCanceled:
+		default:
+			continue
+		}
+		delete(m.nodes, id)
+		if p, ok := m.nodes[n.parentID]; ok {
+			kept := p.children[:0]
+			for _, cid := range p.children {
+				if cid != id {
+					kept = append(kept, cid)
+				}
+			}
+			p.children = kept
+		}
+		removed++
+	}
+	return removed
 }
 
 // TaskToolAllowed reports whether a session at depth may spawn a child —
@@ -351,7 +506,12 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 		return "", ErrConcurrencyLimit
 	}
 
-	childCfg := parent.session.cfg
+	// configSnapshot (not a raw parent.session.cfg read) is required here:
+	// see its doc comment — an unsynchronized cfg read races SetModel's
+	// writes under the parent's own lock, and would silently inherit the
+	// parent's STALE construction-time model rather than the live one the
+	// design doc's inheritance rule actually means.
+	childCfg := parent.session.configSnapshot()
 	childCfg.ParentSession = parent.id
 	if !opts.Model.IsZero() {
 		childCfg.Model = opts.Model
@@ -415,6 +575,17 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 // The turn is bounded by whichever of ctx or id's own cascade-cancel
 // lifetime ends first, so a Cancel call on an ancestor interrupts an
 // in-flight Send exactly like it interrupts a Spawn-launched goroutine.
+//
+// Send does NOT consult ExternalRunner: it always drives id's turn
+// directly. For a root session under a SessionManager whose
+// ExternalRunner is set (harness serve), the caller should route a
+// send through that external scheduler's own admission path instead
+// (see server.Server's handleSessionSend, which does exactly this) —
+// calling Send for such a root would compete with the external
+// scheduler's own turns on the same session. Send remains the correct,
+// safe way to drive ANY session (root or child) when no ExternalRunner is
+// set — the ordinary case for a CHILD always, and for a root in bare-
+// engine/CLI usage with no server layered over it.
 func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Message, error) {
 	m.mu.Lock()
 	n, ok := m.nodes[id]
@@ -426,11 +597,31 @@ func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Me
 		m.mu.Unlock()
 		return nil, ErrSessionCanceled
 	}
-	if n.status != StatusRunning {
-		n.status = StatusRunning
-		if n.depth > 0 {
-			m.runningByRoot[n.rootID]++
-		}
+	if n.status == StatusRunning {
+		// Refuse rather than proceed: Session.Prompt must never be called
+		// concurrently with itself, and this is the one SessionManager
+		// entry point a caller might plausibly invoke twice at once for
+		// the same id (see ErrSessionBusy's doc comment) — a bug a live
+		// -race run against an earlier version of this method caught,
+		// where this check was missing and a second concurrent Send
+		// fell through to a second concurrent Prompt call.
+		m.mu.Unlock()
+		return nil, ErrSessionBusy
+	}
+	if n.depth > 0 && m.runningByRoot[n.rootID] >= m.maxConcurrent {
+		// A done/failed CHILD is eligible for Send (a legitimate follow-up
+		// message — see the design doc's session.send), and Send must
+		// enforce the SAME tree-wide concurrency budget Spawn does: without
+		// this check, enough concurrent session.send calls against
+		// already-settled children could push runningByRoot above
+		// maxConcurrent, the same overrun Spawn's own check exists to
+		// prevent.
+		m.mu.Unlock()
+		return nil, ErrConcurrencyLimit
+	}
+	n.status = StatusRunning
+	if n.depth > 0 {
+		m.runningByRoot[n.rootID]++
 	}
 	s := n.session
 	nodeCtx := n.ctx
@@ -444,55 +635,116 @@ func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Me
 }
 
 // finalizeTurn records the outcome of one turn just run via Prompt (Spawn's
-// launched goroutine or Send's synchronous call) and decrements the
-// concurrency reservation Spawn/Send made for it.
+// launched goroutine, Send's synchronous call, triggerResumeLocked's
+// goroutine, or an external scheduler's ReportTurnEnd) and decrements the
+// concurrency reservation whichever of those made for it. Every call to
+// finalizeTurn corresponds to EXACTLY one prior status->running transition
+// (Spawn/Send/triggerResumeLocked all reserve synchronously before
+// launching the turn; ReportTurnStart is a no-op decrement source since a
+// root never counts toward runningByRoot regardless — see
+// decrementRunningLocked) — cancelSubtreeLocked deliberately does NOT
+// decrement for a running node it cancels, precisely so this remains the
+// SOLE decrementer and a cancel racing a natural completion can never
+// double-decrement (see cancelSubtreeLocked's doc comment).
 func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr error) {
 	m.mu.Lock()
 	n, ok := m.nodes[id]
-	if !ok || n.status == StatusCanceled {
-		// Cancel already finalized (or the node was reaped); leave its
-		// recorded terminal state alone.
+	if !ok {
 		m.mu.Unlock()
 		return
 	}
+	alreadyCanceled := n.status == StatusCanceled
 	m.decrementRunningLocked(n)
 
+	// resume is set (and run AFTER releasing m.mu, below) whenever THIS
+	// call needs to actively start another turn rather than simply
+	// settling n idle or terminal — either because n itself (a root) has
+	// pending work that arrived too late for its own last checkout (see
+	// the root case below), or because n's completion needs to wake an
+	// ancestor (set further down, after notify is built). Claiming the
+	// run slot happens synchronously, in whichever branch sets this, for
+	// the same reason Spawn reserves its concurrency slot before
+	// launching its goroutine — see triggerResumeLocked's doc comment.
+	var resume func()
 	var notify *taskNotification
 	switch {
 	case n.parentID == "":
 		// Root sessions have no parent to notify and no assignment to
-		// complete — see SessionStatus's doc comment. This also covers a
-		// resume turn's own completion (triggerResumeLocked only ever
-		// targets an idle node, and only a root ever reaches idle — see
-		// below), so a resume turn delivering a notification never itself
-		// produces a new one: no cascade up the tree.
-		n.status = StatusIdle
+		// complete — see SessionStatus's doc comment. A root already
+		// marked canceled (Cancel() raced ahead of this call) STAYS
+		// canceled regardless of how the in-flight turn actually
+		// concluded — cancellation is not undone by a benign race with
+		// natural completion.
+		switch {
+		case alreadyCanceled:
+			// stays canceled
+		case perr == nil && n.session.hasPendingTaskNotifications():
+			// A notification for n arrived AFTER n's own last
+			// checkoutTaskNotificationsSegment call (inside its
+			// just-finished, SUCCESSFUL turn) but before this
+			// finalizeTurn call — a sibling child completing during n's
+			// final model call, say. Re-trigger immediately instead of
+			// settling idle and stranding it there with nothing left to
+			// wake it: an idle session only ever gets woken by a NEW
+			// notification arriving (finalizeTurn's ancestor-delivery
+			// branch below), and this one already arrived, so nothing
+			// else will ever trigger this resume if we don't do it right
+			// here.
+			//
+			// Gated on perr == nil deliberately: on a FAILED turn,
+			// requeueTaskNotifications (runAgenticLoop, engine.go) just
+			// put whatever THIS attempt itself couldn't deliver back into
+			// pending — checking pending here too, unconditionally, would
+			// see that requeued entry and immediately retrigger another
+			// attempt against the very provider call that just failed,
+			// forever, on any persistent failure (a real hang an early
+			// version of this fix produced under test). A failed turn's
+			// root simply goes idle, same as always; the requeued
+			// notification waits for the NEXT legitimate trigger — a real
+			// Send, or another child's completion finding this root idle
+			// through the ordinary ancestor-delivery path below.
+			resume = m.triggerResumeLocked(n)
+		default:
+			n.status = StatusIdle
+		}
+	case alreadyCanceled:
+		// Cancel() already set the terminal node status directly (see
+		// cancelSubtreeLocked); still build a notification so the parent
+		// learns the cancellation happened — the design doc lists
+		// cancellation among a child's terminal outcomes a parent must be
+		// told about ("A child that errors terminally (...cancellation)
+		// delivers a failed notification"), never silently swallowed. The
+		// reason is a fixed "canceled" (not classifySpawnError(perr)):
+		// perr may even be nil here (the turn could have raced to a
+		// genuine success in the same instant Cancel() marked it
+		// canceled), and the node's OWN status already carries the
+		// distinct StatusCanceled value — this FailReason is only ever
+		// read from the notification text, never compared against status.
+		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: "canceled", Usage: n.session.Usage()}
 	case perr != nil:
 		n.status = StatusFailed
 		n.failReason = classifySpawnError(perr)
-		notify = &taskNotification{ChildID: n.id, Status: StatusFailed, FailReason: n.failReason, Usage: n.session.Usage()}
+		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: n.failReason, Usage: n.session.Usage()}
 	default:
 		n.status = StatusDone
 		n.result = msg.Parts.Text()
-		notify = &taskNotification{ChildID: n.id, Status: StatusDone, Result: n.result, Usage: n.session.Usage()}
+		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusDone, Result: n.result, Usage: n.session.Usage()}
 	}
 
-	// resume is set (and run AFTER releasing m.mu, below) only when this
-	// completion needs to actively wake an idle parent — see
-	// triggerResumeLocked's doc comment for why claiming the parent's
-	// running slot must happen in THIS same critical section, not in a
-	// separately-locked follow-up call, to avoid two children finishing at
-	// once both observing "idle" and both starting a turn on the same
-	// parent session (which Session.Prompt's own contract forbids).
-	var resume func()
 	if notify != nil {
-		if parent, ok := m.nodes[n.parentID]; ok {
-			notify.Agent = n.agentType
-			parent.session.enqueueTaskNotification(*notify)
-			if parent.status == StatusIdle {
-				resume = m.triggerResumeLocked(parent)
+		if target := m.nearestLiveAncestorLocked(n); target != nil {
+			target.session.enqueueTaskNotification(*notify)
+			if target.status == StatusIdle {
+				resume = m.triggerResumeLocked(target)
 			}
+			// target.status == StatusRunning: queued, picked up at
+			// target's own next turn boundary — no action needed here.
 		}
+		// No live ancestor at all (nil): every ancestor up to and
+		// including the root is already done/failed/canceled — the whole
+		// tree is being torn down (or was already fully settled) and
+		// there is nowhere left to deliver this notification. Dropped,
+		// not an error: nothing is listening.
 	}
 	m.mu.Unlock()
 
@@ -501,18 +753,57 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 	}
 }
 
+// nearestLiveAncestorLocked walks n's ancestor chain, starting at its
+// direct parent, and returns the first one that is NOT done, failed, or
+// canceled — i.e. still able to receive and eventually act on a
+// notification (running or idle). Returns nil if every ancestor up to and
+// including the root is terminal.
+//
+// This is what makes nesting past one level actually deliver (design
+// doc's locked decision #5, generalized): a child settles done/failed
+// after its own unit of work and never runs again on its own initiative
+// (see SessionStatus's doc comment) — so a GRANDCHILD's completion,
+// arriving after its direct parent has already gone done/failed, is
+// reparented to the nearest ancestor that can still act on it, rather
+// than being enqueued onto a node that will never read its queue again
+// (silently dropping the result — the bug this closes). Called with m.mu
+// held.
+func (m *SessionManager) nearestLiveAncestorLocked(n *sessionNode) *sessionNode {
+	id := n.parentID
+	for id != "" {
+		p, ok := m.nodes[id]
+		if !ok {
+			return nil
+		}
+		switch p.status {
+		case StatusDone, StatusFailed, StatusCanceled:
+			id = p.parentID
+			continue
+		default:
+			return p
+		}
+	}
+	return nil
+}
+
 // triggerResumeLocked claims node's running slot (node MUST currently be
 // idle) and returns a function that actually drives the resume turn — the
 // design doc's "engine-initiated resume turn," a new engine capability.
-// Call the returned function AFTER releasing m.mu, in a new goroutine: it
-// blocks on a full Session.Prompt call and must never run under the lock.
+// Call the returned function AFTER releasing m.mu, in a new goroutine.
 //
 // The claim (status flip + concurrency reservation) happens here,
 // synchronously, for the same reason Spawn reserves its concurrency slot
 // before launching its goroutine: two notifications arriving for the same
-// idle parent in the same locked critical section (finalizeTurn) must
+// idle target in the same locked critical section (finalizeTurn) must
 // result in exactly ONE resume turn, not two concurrent Prompt calls on
 // the same session.
+//
+// For a depth-0 (root) node with an ExternalRunner set, the returned
+// function delegates to it instead of calling Session.Prompt directly —
+// see ExternalRunner's doc comment for why: a root can ALSO be driven by
+// an entirely separate scheduler (the server's ordinary prompt_async
+// path), and calling Prompt here too would race it. A child never has an
+// external scheduler, so this delegation never applies to one.
 func (m *SessionManager) triggerResumeLocked(node *sessionNode) func() {
 	node.status = StatusRunning
 	if node.depth > 0 {
@@ -520,12 +811,32 @@ func (m *SessionManager) triggerResumeLocked(node *sessionNode) func() {
 	}
 	s := node.session
 	ctx := node.ctx
+	id := node.id
+	if node.depth == 0 && m.externalRunner != nil {
+		runner := m.externalRunner
+		return func() {
+			if runner(id, taskResumeTriggerText) {
+				// The external scheduler now owns this turn and is
+				// responsible for reporting its completion back via
+				// ReportTurnStart/ReportTurnEnd itself.
+				return
+			}
+			// The scheduler doesn't recognize this id at all: fall back
+			// to driving it directly rather than losing the resume.
+			msg, err := s.Prompt(ctx, taskResumeTriggerText)
+			m.finalizeTurn(id, msg, err)
+		}
+	}
 	return func() {
 		msg, err := s.Prompt(ctx, taskResumeTriggerText)
-		m.finalizeTurn(s.ID, msg, err)
+		m.finalizeTurn(id, msg, err)
 	}
 }
 
+// decrementRunningLocked releases the concurrency reservation a running
+// node holds. A depth-0 (root) node never counted toward runningByRoot in
+// the first place (only DESCENDANTS count — see runningByRoot's doc
+// comment), so this is a no-op for one; safe to call unconditionally.
 func (m *SessionManager) decrementRunningLocked(n *sessionNode) {
 	if n.depth == 0 {
 		return
@@ -543,6 +854,13 @@ func (m *SessionManager) decrementRunningLocked(n *sessionNode) {
 // running independently of its parent's own turn outcome (a parent can go
 // done while a task it spawned is still in flight), so a done or failed
 // parent can still have live descendants that need tearing down.
+//
+// For a ROOT session driven by an external scheduler (harness serve), this
+// only cancels node.ctx — which an external-scheduler-driven turn does NOT
+// use for its actual Session.Prompt call (see ExternalRunner's doc
+// comment: that turn runs on the scheduler's OWN context). Aborting such a
+// turn requires the external scheduler's own abort path too; see
+// server.Server's handleCancelTree, which calls both.
 func (m *SessionManager) Cancel(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -554,17 +872,28 @@ func (m *SessionManager) Cancel(id string) error {
 	return nil
 }
 
+// cancelSubtreeLocked marks n and its descendants canceled and cancels
+// each one's context. It deliberately does NOT call decrementRunningLocked
+// for a node it finds running: that node's own in-flight turn is still
+// live (a goroutine somewhere is blocked in Session.Prompt, or about to
+// be handed to one) and WILL eventually call finalizeTurn once it
+// actually returns — finalizeTurn is the sole decrementer for that
+// reservation (see its own doc comment). Decrementing here too, for a
+// node whose finalizeTurn call hasn't happened yet, would double-release
+// the same slot the moment that call finally lands — exactly the
+// "corollary" double-decrement a live -race/logic review caught in an
+// earlier version of this method, which let the tree-wide concurrency cap
+// be exceeded.
 func (m *SessionManager) cancelSubtreeLocked(n *sessionNode) {
-	switch n.status {
-	case StatusDone, StatusFailed, StatusCanceled:
-		// Leave the recorded terminal outcome alone.
-	default:
-		m.decrementRunningLocked(n)
+	if n.status != StatusDone && n.status != StatusFailed && n.status != StatusCanceled {
 		n.status = StatusCanceled
 	}
-	// Canceling the context aborts an in-flight Prompt call (Spawn's
-	// goroutine or a concurrent Send) regardless of this node's status —
-	// always safe, and a no-op if already canceled.
+	// Canceling the context aborts an in-flight Prompt call driven
+	// DIRECTLY by this package (Spawn's goroutine, Send, or a
+	// SessionManager-driven resume) regardless of this node's status —
+	// always safe, and a no-op if already canceled. It does NOT abort a
+	// turn an ExternalRunner is driving on its own context — see Cancel's
+	// doc comment.
 	n.cancel()
 	for _, cid := range n.children {
 		if c, ok := m.nodes[cid]; ok {
