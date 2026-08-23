@@ -370,39 +370,68 @@ func TestToolResultMetaBytesMatchesOnDiskLength(t *testing.T) {
 // The original (\S+-based) masker measured 352ms over 4.4 MB (one
 // unbounded pattern, one pass). See the PR body for what was actually
 // measured on this branch for each shape below.
-func TestMaskSecretsPerformance(t *testing.T) {
-	buildInput := func(secretEvery int) string {
-		var b strings.Builder
-		line := "some ordinary log line with a bit of prose in it, id=" + strings.Repeat("x", 20) + "\n"
-		secretLine := "AWS_SECRET_ACCESS_KEY=AKIAABCDEFGHIJKLMNOPQRSTUVWXYZ1234\n"
-		n := 0
-		for b.Len() < 4_400_000 {
-			b.WriteString(line)
-			n++
-			if secretEvery > 0 && n%secretEvery == 0 {
-				b.WriteString(secretLine)
-			}
+// maskSecretsPerfInput builds one performance test corpus: ~4.4MB of
+// ordinary log lines with a "secret" line inserted every secretEvery lines
+// (0 disables insertion entirely — the no-candidate-lines fast-reject
+// case). Shared between TestMaskSecretsPerformance and
+// BenchmarkMaskSecrets so both measure the identical corpora.
+func maskSecretsPerfInput(secretEvery int) string {
+	var b strings.Builder
+	line := "some ordinary log line with a bit of prose in it, id=" + strings.Repeat("x", 20) + "\n"
+	secretLine := "AWS_SECRET_ACCESS_KEY=AKIAABCDEFGHIJKLMNOPQRSTUVWXYZ1234\n"
+	n := 0
+	for b.Len() < 4_400_000 {
+		b.WriteString(line)
+		n++
+		if secretEvery > 0 && n%secretEvery == 0 {
+			b.WriteString(secretLine)
 		}
-		return b.String()
 	}
+	return b.String()
+}
 
+// TestMaskSecretsPerformance is a coarse regression GUARD, not a precise
+// timing assertion — see BenchmarkMaskSecrets below for the actual
+// perf-tracking tool (run with `go test -bench MaskSecrets -run ^$`,
+// outside -race, for numbers worth comparing across commits).
+//
+// The ceilings here were tightened once, to catch a real regression
+// early, and that tight 1s ceiling on sparse_realistic became a
+// standing CI flake: it failed on CI three separate times
+// (https://github.com/majorcontext/harness/actions/runs/32659723380/job/97243923949,
+// https://github.com/majorcontext/harness/actions/runs/32660777608/job/97246510121,
+// and one earlier failure predating this PR's branch, on main's own CI
+// history) at 1.02-1.06s — a hair over the ceiling — while never once
+// failing across 9+ isolated local runs (both `-count=N` repeats and a
+// dedicated same-machine A/B against origin/main), which consistently
+// measured 0.62-0.66s. The pattern is exactly what CPU contention from
+// OTHER packages/goroutines running concurrently in the same `go test
+// ./...` invocation looks like — this test's own timing is sound, the
+// ABSOLUTE ceiling was just too tight to survive a loaded CI runner. No
+// same-process relative baseline was used instead (e.g. comparing
+// against no_candidates): the fast-reject path no_candidates takes is
+// cheap enough (~20ms, dominated by a trivial per-line scan, not the
+// regex engine) that it stays fast even under the exact contention that
+// slows sparse_realistic down — a ratio against it would not track the
+// same load signal at all. Ceilings below are instead sized as roughly
+// 10x the documented worst-case-under-load baseline: generous enough to
+// absorb realistic CI noise, but still tight enough to catch an actual
+// order-of-magnitude algorithmic regression (a real hang, or a change
+// that reintroduces the O(n²) shape earlier rounds fixed).
+func TestMaskSecretsPerformance(t *testing.T) {
 	cases := []struct {
 		name    string
 		input   string
 		ceiling time.Duration
 	}{
-		// 1s, not the N6 100ms target directly: `go test -race` adds real
-		// instrumentation overhead even on the fast-reject path (measured
-		// ~660ms/4.4MB under -race for sparse_realistic after round 5's
-		// candidate-line WINDOW grouping — up from ~95ms/4.4MB before it,
-		// since a candidate line now pulls its forward window into the
-		// regex pass too, not just itself — vs ~66ms plain, up from
-		// ~24-30ms). Still comfortably under an order of magnitude of
-		// headroom, and this ceiling exists to catch a regression, not to
-		// re-litigate the N6 number itself (that's what the PR body
-		// reports plainly, from a non-race run).
-		{"no_candidates", buildInput(0), 1 * time.Second},
-		{"sparse_realistic", buildInput(300), 1 * time.Second}, // ~1 secret line per ~300 ordinary lines
+		// Never observed above ~20ms (the fast-reject path barely touches
+		// the regex engine at all) — 1s is already >>10x its worst
+		// observed cost, so it's left as-is.
+		{"no_candidates", maskSecretsPerfInput(0), 1 * time.Second},
+		// Documented worst-case-under-load: 1.06s (see the three CI runs
+		// cited in this function's doc comment). 10s is ~10x that, and
+		// ~15x the clean-isolation baseline (~0.66s).
+		{"sparse_realistic", maskSecretsPerfInput(300), 10 * time.Second}, // ~1 secret line per ~300 ordinary lines
 		// 120s, not 2s: this is the one case with no line-level fast-reject
 		// (see maskSecrets's doc comment), the pattern grew two more
 		// alternatives in round 3 (quoted-env values), and the race
@@ -425,6 +454,33 @@ func TestMaskSecretsPerformance(t *testing.T) {
 			}
 			if len(out) == 0 {
 				t.Fatal("masked output is empty")
+			}
+		})
+	}
+}
+
+// BenchmarkMaskSecrets is the actual perf-tracking tool for maskSecrets —
+// run it explicitly (`go test ./engine/ -bench MaskSecrets -run ^$`,
+// outside -race, whose instrumentation overhead swamps the real cost) to
+// compare timings across commits. TestMaskSecretsPerformance above is
+// deliberately a much coarser guard against an egregious regression, not
+// a substitute for this: see its own doc comment for why a tight absolute
+// ceiling on the same measurement was a standing CI flake.
+func BenchmarkMaskSecrets(b *testing.B) {
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"no_candidates", maskSecretsPerfInput(0)},
+		{"sparse_realistic", maskSecretsPerfInput(300)},
+		{"single_huge_line", "TOKEN=" + strings.Repeat("y", 4_400_000)},
+	}
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			b.SetBytes(int64(len(tc.input)))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				maskSecrets(tc.input)
 			}
 		})
 	}
