@@ -763,11 +763,31 @@ func (m *SessionManager) adoptReloadedLocked(s *Session, recover bool) *sessionN
 	parentID := s.TaskParentID()
 	s.cfg.SessionManager = m
 	s.tools[taskToolName] = taskTool()
+	// depth's default is the REFUSAL sentinel (m.maxDepth, the one value
+	// TaskToolAllowed always refuses — see this method's own doc comment
+	// for why an unrecoverable depth must never guess permissively), used
+	// only when neither of the two better sources below applies. Preferred,
+	// in order:
+	//   1. The parent IS currently tracked: depth = p.depth + 1, the true
+	//      live-tree depth (unaffected by this fix).
+	//   2. The parent is NOT tracked, but s durably recorded its own
+	//      TaskDepth at spawn time (see Config.TaskDepth's own doc
+	//      comment): use that real, durable depth instead of guessing the
+	//      sentinel. Closes a live-audited bug: a direct child (true depth
+	//      1) whose parent was not tracked at reload time reported
+	//      lineage.depth 3 (== DefaultMaxTaskDepth), indistinguishable from
+	//      a session genuinely refused at the limit. TaskDepth() is 0 only
+	//      for a legacy session predating this field (a real depth is
+	//      always >= 1 here, since s.hasTaskParent() is true) — in which
+	//      case the sentinel fallback below still applies, exactly as it
+	//      did before this field existed.
 	depth := m.maxDepth
 	attachTo := ""
 	if p, ok := m.nodes[parentID]; ok {
 		depth = p.depth + 1
 		attachTo = parentID
+	} else if d := s.TaskDepth(); d > 0 {
+		depth = d
 	}
 	n := m.adoptLocked(s, attachTo, depth)
 	// TaskAgentType survives a reload durably (see its own doc comment)
@@ -2342,6 +2362,12 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	// is eligible for Send" contract lets a legitimate follow-up touch
 	// it again.
 	childCfg.TaskParentID = parent.id
+	// Durable depth record — see Config.TaskDepth's own doc comment for why
+	// this exists: without it, adoptReloadedLocked's "true depth is
+	// unrecoverable" fallback (parent not currently tracked) had nothing
+	// but m.maxDepth, a REFUSAL sentinel indistinguishable on the wire from
+	// a session genuinely at that depth.
+	childCfg.TaskDepth = childDepth
 	if !opts.Model.IsZero() {
 		childCfg.Model = opts.Model
 	}

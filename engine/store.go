@@ -217,10 +217,17 @@ type record struct {
 	// type). See the write site (Persist) for how a nil Config.
 	// TaskToolNames becomes a nil pointer, and a non-nil one — including
 	// empty — becomes a pointer to it.
-	TaskAgentType string           `json:"task_agent_type,omitempty"`
-	TaskToolNames *[]string        `json:"task_tool_names,omitempty"`
-	Message       *message.Message `json:"message,omitempty"`
-	Model         message.ModelRef `json:"model,omitzero"`
+	TaskAgentType string    `json:"task_agent_type,omitempty"`
+	TaskToolNames *[]string `json:"task_tool_names,omitempty"`
+	// TaskDepth carries Config.TaskDepth on the session header record
+	// only — see that field's own doc comment. Same omit/restore rule as
+	// TaskAgentType above: omitted (zero value) for a legacy header
+	// predating this field, in which case LoadSession leaves Config's own
+	// TaskDepth (also 0 — no caller ever pre-populates it) untouched
+	// rather than claiming a false "depth 0".
+	TaskDepth int              `json:"task_depth,omitempty"`
+	Message   *message.Message `json:"message,omitempty"`
+	Model     message.ModelRef `json:"model,omitzero"`
 	// Effort carries the reasoning-effort level on the session header record
 	// (the level at create time) and on a recEffort record (a SetEffort
 	// change). Omitted when EffortUnset, so a legacy log with no effort
@@ -846,7 +853,7 @@ func (s *Session) ensureLog() error {
 		// LoadSession already tolerates.
 		var buf bytes.Buffer
 		for _, rec := range []record{
-			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir, ParentSession: s.cfg.ParentSession, TaskParentID: s.cfg.TaskParentID, TaskAgentType: s.cfg.TaskAgentType, TaskToolNames: taskToolNamesPtr(s.cfg.TaskToolNames), Effort: s.effort},
+			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir, ParentSession: s.cfg.ParentSession, TaskParentID: s.cfg.TaskParentID, TaskAgentType: s.cfg.TaskAgentType, TaskToolNames: taskToolNamesPtr(s.cfg.TaskToolNames), TaskDepth: s.cfg.TaskDepth, Effort: s.effort},
 			{Type: recModel, Model: s.model},
 		} {
 			b, err := json.Marshal(rec)
@@ -1006,6 +1013,15 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			}
 			if rec.TaskToolNames != nil {
 				s.cfg.TaskToolNames = *rec.TaskToolNames
+			}
+			// Same restore rule again — see Config.TaskDepth's own doc
+			// comment. 0 means "legacy header, nothing to restore" (a real
+			// depth is always >= 1), so the loading Config's own TaskDepth
+			// (never pre-populated by any caller) is left at its zero
+			// value — adoptReloadedLocked's existing m.maxDepth fallback
+			// then applies exactly as it did before this field existed.
+			if rec.TaskDepth > 0 {
+				s.cfg.TaskDepth = rec.TaskDepth
 			}
 			// The effort at create time. Omitted (EffortUnset) on a legacy
 			// header, which restores as the provider default — unchanged.

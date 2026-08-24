@@ -292,30 +292,19 @@ func TestSessionCreateWithParentIDUnknownAgentIs400(t *testing.T) {
 // force a reload first.
 //
 // Also covers two later review findings on the same cold-fallback branch,
-// both about Children specifically:
-//
-//   - It used to set Children to []string{} — indistinguishable on the
-//     wire from a WARM, genuinely childless node's real empty list. For a
-//     MID-TREE parent (this test's child, which itself spawns a
-//     grandchild below) that is exactly wrong: the child has a real,
-//     live grandchild on disk, but a caller reading "children":[] from a
-//     cold GET would reasonably conclude it has none — an affirmatively
-//     wrong answer, worse than an honestly unknown one.
-//   - The fix for THAT (giving Children omitempty, so the cold branch
-//     could leave it nil and have it vanish from the wire) went one step
-//     too far: omitempty collapses nil and a genuinely empty non-nil
-//     slice to the same "absent" wire shape, so a WARM, truly childless
-//     node ALSO started omitting the field — indistinguishable from this
-//     cold branch's own "unknown." Children now has NO omitempty
-//     instead: the cold branch's nil serializes as an explicit
-//     "children":null (present, but honestly unknown — distinct from
-//     both "known: zero" and "known: non-zero"), while the warm branch
-//     (lineageJSONFor) normalizes nil to []string{} so a real empty list
-//     still reads "children":[].
-//
-// Proves "children" is present as JSON null on the cold path — neither
-// omitted nor an affirmative empty list — even though a real child (the
-// grandchild) exists.
+// both concluding "no durable source" for Depth and Children when there
+// actually IS one — Config.TaskDepth and Session.SpawnedChildIDs(),
+// exactly as durable and unconditional as TaskParentID/TaskAgentType
+// above, both restored by LoadSession without any SessionManager adoption
+// needed. An earlier revision of this fix left Depth omitted and Children
+// an honest-but-needlessly-conservative JSON null on the cold path,
+// reasoning neither was recoverable without a live parent chain — true for
+// Depth only until Config.TaskDepth started recording the real value at
+// Spawn time, and never actually true for Children, which the cold
+// branch's own already-loaded sess had the complete durable answer for
+// the whole time. This test proves BOTH are now the real, durably-known
+// values on the cold path: depth 1 (child is root's direct child) and
+// children [grandchild.ID] (child's own SpawnedChildIDs), not "unknown".
 func TestColdChildHasDurableLineage(t *testing.T) {
 	dir := t.TempDir()
 	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("the answer is 42")}}
@@ -384,25 +373,30 @@ func TestColdChildHasDurableLineage(t *testing.T) {
 	if cold.Lineage["agent_type"] != engine.AgentExplore {
 		t.Errorf("cold lineage.agent_type = %v, want %q", cold.Lineage["agent_type"], engine.AgentExplore)
 	}
-	// Fields with no durable source must be OMITTED, not guessed.
+	// Status still has no durable source at all and must stay omitted.
 	if _, ok := cold.Lineage["status"]; ok {
 		t.Errorf("cold lineage.status = %v, want omitted (no durable source)", cold.Lineage["status"])
 	}
-	if _, ok := cold.Lineage["depth"]; ok {
-		t.Errorf("cold lineage.depth = %v, want omitted (no durable source)", cold.Lineage["depth"])
+	// Depth and Children, unlike Status, DO have a durable source — Config.
+	// TaskDepth and Session.SpawnedChildIDs(), both restored by LoadSession
+	// unconditionally, no SessionManager adoption needed (see
+	// lineageJSONFor's own doc comment) — so the cold path now reports the
+	// real values instead of guessing "unknown". child is root's direct
+	// child, so its true depth is 1.
+	if cold.Lineage["depth"] != float64(1) {
+		t.Errorf("cold lineage.depth = %v, want 1 (durable TaskDepth)", cold.Lineage["depth"])
 	}
 	// children has no omitempty (see its own doc comment, handlers.go) —
-	// present but explicitly null on the cold path, not omitted and not
-	// an affirmative []. The child genuinely has a live grandchild on
-	// disk, so an affirmative empty list would be actively wrong, not
-	// just unknown — and simply omitting the key again would reopen the
-	// exact warm/cold ambiguity the field's own fix exists to close.
-	v, ok := cold.Lineage["children"]
+	// present, and now the REAL durable list (SpawnedChildIDs), not an
+	// affirmative-but-wrong [] and not a null "unknown" that was never
+	// actually true: the child's own persisted log already durably records
+	// which children IT spawned, cold or warm alike.
+	got, ok := cold.Lineage["children"].([]any)
 	if !ok {
-		t.Error("cold lineage.children key missing entirely, want present as JSON null")
+		t.Fatalf("cold lineage.children = %v (%T), want a one-element array", cold.Lineage["children"], cold.Lineage["children"])
 	}
-	if v != nil {
-		t.Errorf("cold lineage.children = %v, want null (unknown) — the child genuinely has a live grandchild on disk, so an affirmative list would be actively wrong", v)
+	if len(got) != 1 || got[0] != grandchild.ID {
+		t.Errorf("cold lineage.children = %v, want [%q]", got, grandchild.ID)
 	}
 }
 

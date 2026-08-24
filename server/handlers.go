@@ -128,15 +128,21 @@ type sessionJSON struct {
 // engine.SessionManager.Info — see sessionJSON.Lineage's doc comment.
 type lineageJSON struct {
 	ParentID string `json:"parent_id,omitempty"`
-	// Depth is omitempty: a WARM root's real depth 0 and a COLD session's
-	// genuinely UNKNOWN depth (see lineageJSONFor's cold-fallback branch)
-	// would otherwise be indistinguishable on the wire — both print
-	// "depth":0. Since depth 0 only ever occurs for a root, and a root
-	// never has a durable TaskParentID to trigger the cold-fallback
+	// Depth is omitempty: a WARM root's real depth 0 and a session whose
+	// true depth is genuinely UNKNOWN (a legacy child predating
+	// Config.TaskDepth, cold or warm — see lineageJSONFor's Depth
+	// paragraph) would otherwise be indistinguishable on the wire — both
+	// print "depth":0. Since depth 0 only ever occurs for a root, and a
+	// root never has a durable TaskParentID to trigger the cold-fallback
 	// branch in the first place, omitting a zero depth costs nothing for
 	// the warm case (a warm root's depth was always knowably 0; a caller
-	// that cares can infer it from parent_id's absence) while letting the
-	// cold-fallback branch omit it truthfully instead of guessing.
+	// that cares can infer it from parent_id's absence) while letting an
+	// unknown depth omit it truthfully instead of guessing. For a child
+	// with a durably recorded TaskDepth (every child spawned since that
+	// field shipped), THIS is the value reported — cold or warm alike,
+	// never the live-tree-derived m.maxDepth refusal sentinel a reload
+	// with no currently-tracked parent used to substitute (see
+	// lineageJSONFor's Depth paragraph for the incident this closes).
 	Depth int `json:"depth,omitempty"`
 	// Status is the SessionManager lifecycle state (running/idle/done/
 	// failed/canceled — engine.SessionStatus) — DISTINCT from
@@ -153,26 +159,30 @@ type lineageJSON struct {
 	// AgentType/Result/FailReason just above and below — a live review
 	// finding on an earlier revision's fix: giving it omitempty (to stop
 	// the cold-fallback branch's old []string{} from lying "zero
-	// children" — see lineageJSONFor's own doc comment for that
-	// incident) went one step too far, since a Go slice's omitempty
+	// children") went one step too far, since a Go slice's omitempty
 	// collapses nil AND a genuinely empty non-nil slice to the exact
 	// same "field absent" wire shape. That made a WARM, truly childless
-	// node ALSO omit the field — indistinguishable from the cold-
-	// fallback branch's own honest "unknown," the very ambiguity
-	// omitempty was supposed to close. A caller polling the same session
-	// as it transitions between these states (or between different
-	// process/lineage-tracking states) would see the field flicker
-	// between present and absent with no way to tell "known: zero" from
-	// "don't know" from the flicker alone.
+	// node ALSO omit the field, indistinguishable from "unknown" — the
+	// very ambiguity omitempty was supposed to close. A caller polling
+	// the same session as it transitions between these states would see
+	// the field flicker between present and absent with no way to tell
+	// "known: zero" from "don't know" from the flicker alone.
 	//
-	// The fix: no omitempty, and lineageJSONFor guarantees a NON-nil
-	// (possibly empty) slice on its warm branch, leaving it nil ONLY on
-	// the cold-fallback branch. That gives three distinct, stable wire
-	// shapes instead of two ambiguous ones: `"children":null` (cold,
-	// genuinely unknown), `"children":[]` (warm, known zero),
-	// `"children":["..."]` (warm, known non-zero) — the field is always
-	// present, so a consumer never has to distinguish "absent because
-	// unknown" from "absent because empty" again.
+	// The fix: no omitempty, and lineageJSONFor's childIDsUnion helper
+	// guarantees a non-nil (possibly empty) slice on BOTH its warm and
+	// cold-fallback branches — see that helper's own doc comment. Unlike
+	// Depth, Children has no "genuinely unknown" wire state to distinguish
+	// at all: sess.SpawnedChildIDs() (engine/store.go restores it on
+	// every LoadSession, unconditionally, exactly like TaskParentID/
+	// TaskAgentType) is a real, complete, durable answer to "which
+	// children did this session ever spawn" whether or not SessionManager
+	// currently tracks it — a live audit finding on an EARLIER version of
+	// this fix: the cold-fallback branch used to report Children as nil
+	// ("unknown") even though SpawnedChildIDs had the real answer sitting
+	// right there in sess's own already-loaded Config. So this field now
+	// has exactly two wire shapes: `"children":[]` (known: zero, live or
+	// durably spawned) and `"children":["..."]` (known: non-zero) — never
+	// null.
 	Children  []string `json:"children"`
 	AgentType string   `json:"agent_type,omitempty"`
 	// Result is the final assistant text for a done session; FailReason a
@@ -3370,45 +3380,67 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 // Two sources, in order:
 //
 //  1. sessMgr.Info(id): this process currently tracks id in memory — the
-//     full, precise lineage snapshot (depth, live status, children,
-//     result/fail_reason).
+//     full, precise lineage snapshot (live status, result/fail_reason),
+//     PLUS Depth and Children, each reconciled against sess's own durable
+//     record below rather than trusted from the live snapshot alone (see
+//     their own paragraphs).
 //
 //  2. A durable cold fallback, built directly from sess's own persisted
-//     Config.TaskParentID()/TaskAgentType() (engine/store.go restores
-//     these on every LoadSession, unconditionally — no SessionManager
-//     adoption needed) — a live review finding: without this, a child
-//     Reaped or never touched since a process restart reported NO
-//     lineage at all on GET /session/{id}, even though its lineage is
-//     fully durable on disk; a caller had no way to learn "this session
-//     has a parent" without first forcing a reload via an unrelated
-//     write (a prompt/send call). Depth, Status, Children, Result, and
-//     FailReason have no durable source (see adoptReloadedLocked's own
-//     doc comment on why depth specifically is unrecoverable without a
-//     live parent chain) and are omitted rather than guessed — see
+//     Config.TaskParentID()/TaskAgentType()/TaskDepth()/SpawnedChildIDs()
+//     (engine/store.go restores these on every LoadSession, unconditionally
+//     — no SessionManager adoption needed) — a live review finding:
+//     without this, a child Reaped or never touched since a process
+//     restart reported NO lineage at all on GET /session/{id}, even though
+//     its lineage is fully durable on disk; a caller had no way to learn
+//     "this session has a parent" without first forcing a reload via an
+//     unrelated write (a prompt/send call). Status/Result/FailReason still
+//     have no durable source and are omitted rather than guessed — see
 //     lineageJSON's own field comments for why that's safe on the wire
 //     (omitempty distinguishes "unknown" from every real zero value).
+//
+// Depth: info.Depth (branch 1) is trusted ONLY when it came from a live
+// parent chain — adoptReloadedLocked substitutes m.maxDepth, a deliberate
+// REFUSAL SENTINEL, whenever id's own parent was not currently tracked at
+// adopt time, and that sentinel is indistinguishable from a session
+// genuinely AT that depth (a live audit caught a direct child, true depth
+// 1, reporting lineage.depth 3 == DefaultMaxTaskDepth this exact way).
+// sess.TaskDepth() — the durable value Spawn itself recorded, never
+// re-derived from the live tree — is the one source neither branch here
+// can get wrong, so it is preferred whenever it is present (> 0; a legacy
+// session predating Config.TaskDepth reports 0, in which case info.Depth
+// from branch 1 is the best remaining answer, and the cold branch 2 omits
+// Depth entirely rather than report a false 0 — the SAME "unknown, not
+// zero" rule Children below and every other field in this function
+// already follows).
+//
+// Children: sessionNode.children (branch 1's info.Children) is the LIVE
+// in-memory tree only — Reap() explicitly drops a settled leaf from its
+// parent's Children list once reaped (see Reap's own doc comment: "Removing
+// a leaf also drops its id from its parent's Children list"), while
+// sess.SpawnedChildIDs() is the durable, append-only, NEVER-shrinking
+// record of every child this session ever spawned (persisted at spawn
+// time, unconditionally — see persistTaskSpawnLocked). A live audit
+// caught exactly this gap: a parent whose only child had already settled
+// and been reaped reported "children":[] even though SpawnedChildIDs()
+// still listed it. childIDsUnion merges the two (live tree first, in its
+// own order, then any durable-only stragglers in spawn order) so a caller
+// always sees every child this session ever spawned, live or long since
+// reaped — never only whichever half of the bookkeeping happens to still
+// be resident.
 //
 // nil only when NEITHER source has anything: a genuine root (empty
 // TaskParentID) or a session predating this feature.
 func (s *Server) lineageJSONFor(id string, sess *engine.Session) *lineageJSON {
 	if info, ok := s.sessMgr.Info(id); ok {
-		// Normalized to a non-nil slice here — Children has no omitempty
-		// (see its own doc comment), so this warm branch is the one place
-		// that must guarantee "known: zero children" actually serializes
-		// as "children":[] rather than "children":null: info.Children
-		// (sessionNode.snapshot, session_manager.go) is nil for a
-		// genuinely childless node, since it is built via
-		// append([]string(nil), n.children...), which returns nil
-		// unchanged when n.children is empty.
-		children := info.Children
-		if children == nil {
-			children = []string{}
+		depth := info.Depth
+		if d := sess.TaskDepth(); d > 0 {
+			depth = d
 		}
 		return &lineageJSON{
 			ParentID:   info.ParentID,
-			Depth:      info.Depth,
+			Depth:      depth,
 			Status:     string(info.Status),
-			Children:   children,
+			Children:   childIDsUnion(info.Children, sess.SpawnedChildIDs()),
 			AgentType:  info.AgentType,
 			Result:     info.Result,
 			FailReason: info.FailReason,
@@ -3418,16 +3450,40 @@ func (s *Server) lineageJSONFor(id string, sess *engine.Session) *lineageJSON {
 	if parentID == "" {
 		return nil
 	}
-	// Children deliberately left nil (not []string{}) — see Children's own
-	// doc comment: this cold branch has no durable source for the child
-	// list (only the WARM sessMgr.Info branch above ever knows it), so a
-	// nil Children here — the field's one remaining "genuinely unknown"
-	// signal, serializing as "children":null — is the honest answer, not
-	// an affirmative (and possibly wrong) "zero children" one.
 	return &lineageJSON{
 		ParentID:  parentID,
+		Depth:     sess.TaskDepth(),
 		AgentType: sess.TaskAgentType(),
+		Children:  childIDsUnion(nil, sess.SpawnedChildIDs()),
 	}
+}
+
+// childIDsUnion merges live (the current in-memory tree's child list) with
+// durable (Config-persisted SpawnedChildIDs, spawn order, never shrinks —
+// see Session.SpawnedChildIDs' own doc comment) into ONE de-duplicated
+// list — live entries first in their own order, then any durable-only
+// stragglers (a settled, already-Reaped child; see Reap's own doc comment
+// on why a reaped leaf drops out of its parent's live Children) appended in
+// spawn order. Always returns a non-nil slice (never omitted — see
+// lineageJSON.Children's own doc comment on why that field has no
+// omitempty): "children":[] means "known: zero children now, and none ever
+// durably spawned either," never "unknown."
+func childIDsUnion(live, durable []string) []string {
+	out := make([]string, 0, len(live)+len(durable))
+	seen := make(map[string]bool, len(live)+len(durable))
+	for _, id := range live {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	for _, id := range durable {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // lastTurnJSONLocked builds the Session.last_turn / StatusEntry.last_turn

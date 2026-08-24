@@ -20,7 +20,7 @@ func TestSetEffortRidesRequest(t *testing.T) {
 		Providers: provider.Registry{"test": prov},
 		Model:     message.ModelRef{Provider: "test", Model: "m1"},
 	}
-	cfg.OnRequest = func(_ int, req *provider.Request) { gotEffort = req.Effort }
+	cfg.OnRequest = func(_ string, _ int, req *provider.Request) { gotEffort = req.Effort }
 	s := NewSession(cfg)
 
 	s.SetEffort(message.EffortHigh)

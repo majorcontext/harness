@@ -55,7 +55,7 @@ func TestOnRequestFiresPerTurnWithAssembledSystem(t *testing.T) {
 		WorkDir:    work,
 		SkillsDirs: []string{skills},
 		Hooks:      hooks,
-		OnRequest:  func(turn int, req *provider.Request) { seen = append(seen, snapshotRequest(turn, req)) },
+		OnRequest:  func(_ string, turn int, req *provider.Request) { seen = append(seen, snapshotRequest(turn, req)) },
 	})
 	if _, err := s.Prompt(context.Background(), "go"); err != nil {
 		t.Fatal(err)
@@ -99,7 +99,7 @@ func TestOnRequestIncludesToolsAndHistory(t *testing.T) {
 		Providers: provider.Registry{"test": prov},
 		Model:     message.ModelRef{Provider: "test", Model: "m1"},
 		System:    []string{"base"},
-		OnRequest: func(turn int, req *provider.Request) { seen = append(seen, snapshotRequest(turn, req)) },
+		OnRequest: func(_ string, turn int, req *provider.Request) { seen = append(seen, snapshotRequest(turn, req)) },
 	})
 	if _, err := s.Prompt(context.Background(), "go"); err != nil {
 		t.Fatal(err)
@@ -156,7 +156,7 @@ func TestOnRequestTurnCountsAcrossPrompts(t *testing.T) {
 		Providers: provider.Registry{"test": prov},
 		Model:     message.ModelRef{Provider: "test", Model: "m1"},
 		System:    []string{"base"},
-		OnRequest: func(turn int, _ *provider.Request) { turns = append(turns, turn) },
+		OnRequest: func(_ string, turn int, _ *provider.Request) { turns = append(turns, turn) },
 	})
 	if _, err := s.Prompt(context.Background(), "first"); err != nil {
 		t.Fatal(err)

@@ -44,11 +44,16 @@ func newRequestHarness(t *testing.T, prov provider.Provider, mutate ...func(*eng
 		return cfg
 	}
 	wire := func(cfg engine.Config, build func(engine.Config) (*engine.Session, error)) (*engine.Session, error) {
-		var sess *engine.Session
-		cfg.OnRequest = func(turn int, req *provider.Request) { srv.OnRequest(sess.ID, turn, req) }
-		var err error
-		sess, err = build(cfg)
-		return sess, err
+		// Direct assignment, not a per-construction closure: srv.OnRequest
+		// already takes the firing session's own id as its first
+		// parameter (engine.Config.OnRequest's own signature — see its doc
+		// comment for why a closure over a locally captured session
+		// variable is exactly the bug a live audit caught: it survives,
+		// unchanged, into every child SessionManager.Spawn ever builds
+		// from this Config, misattributing every one of that child's own
+		// request.meta records to whichever session first built it).
+		cfg.OnRequest = srv.OnRequest
+		return build(cfg)
 	}
 	opts := Options{
 		SessionDir:        dir,

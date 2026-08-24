@@ -1516,10 +1516,23 @@ func newSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.M
 		cfg.SkillsDirs = skillsDirs(appCfg, flagDirs, sessionWorkDir)
 		cfg.AgentDefsDirs = agentDefsDirs(appCfg, agentDefFlagDirs, sessionWorkDir)
 		cfg.ParentSession = parentSession
-		var sess *engine.Session
-		cfg.OnRequest = func(turn int, req *provider.Request) { onRequest(sess.ID, turn, req) }
-		sess = engine.NewSession(cfg)
-		return sess, nil
+		// onRequest already has engine.Config.OnRequest's own signature
+		// (sessionID, turn, req) — the FIRING session's own id, supplied by
+		// the engine at the call site (see Config.OnRequest's doc comment),
+		// so this can be wired directly with no per-construction closure.
+		// An EARLIER version of this wiring built a closure over a locally
+		// declared `sess` variable instead (`func(turn int, req) {
+		// onRequest(sess.ID, turn, req) }`) — which configSnapshot
+		// (session_manager.go) then copied BY VALUE into every child
+		// SessionManager.Spawn ever builds from a session using this
+		// Config, permanently misattributing every one of that child's own
+		// request.meta records to THIS session's id instead of its own
+		// (a live audit caught it: a spawned child's request.meta never
+		// appeared under its own id in the shared journal at all). Wiring
+		// the plain, session-agnostic onRequest func value directly closes
+		// that regardless of how many Spawn generations later it is read.
+		cfg.OnRequest = onRequest
+		return engine.NewSession(cfg), nil
 	}
 }
 
@@ -1536,11 +1549,12 @@ func newSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.M
 func loadSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.ModelRef, appCfg *config.Config, flagDirs []string, agentDefFlagDirs []string, onRequest func(id string, turn int, req *provider.Request)) func(string) (*engine.Session, error) {
 	return func(id string) (*engine.Session, error) {
 		cfg := mkCfg(defModel)
+		// onRequest is wired directly, not via a per-construction closure —
+		// see newSessionFn's identical fix and its own doc comment for the
+		// misattribution bug this avoids.
 		wire := func(c engine.Config) (*engine.Session, error) {
-			var sess *engine.Session
-			c.OnRequest = func(turn int, req *provider.Request) { onRequest(sess.ID, turn, req) }
-			sess, err := engine.LoadSession(c, id)
-			return sess, err
+			c.OnRequest = onRequest
+			return engine.LoadSession(c, id)
 		}
 		sess, err := wire(cfg)
 		if err != nil {
