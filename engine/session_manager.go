@@ -889,35 +889,57 @@ func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
 			n.status = StatusFailed
 			n.failReason = committed.FailReason
 		}
-	case len(s.SpawnedChildIDs()) > 0:
+	case len(s.SpawnedChildIDs()) > 0 || len(s.History()) > 0:
 		// No committed outcome, but s has definitely already run a turn
-		// (see this method's own doc comment for the proof) — the
-		// legacy case, not the genuinely-fresh one. Before giving up and
-		// durably marking it an unreconstructable failure, check s's own
-		// trailing history for unambiguous evidence of a genuine,
-		// natural success — settledSuccessResult (engine.go), the SAME
-		// step-2 fallback recoverInterruptedTurnLocked's own crash-window
-		// table already uses for the identical "nothing was ever
-		// committed for this turn" gap. A live review finding: a legacy
-		// node that plainly succeeded (its own last message is a real
-		// assistant answer, no dangling tool call) must never be
-		// rewritten to StatusFailed just because the newer
-		// committedOutcome mechanism postdates it — that is exactly the
-		// "successful child durably rewritten as failed" class of bug
-		// the analogous :835 fix (nodeStatusForOutcome's Canceled case)
-		// already closed for the OTHER direction, and a fail_reason
-		// claiming "cannot be reconstructed" would be a straightforward
-		// lie the instant the log actually reconstructs it.
+		// — the legacy case, not the genuinely-fresh one. Proven by
+		// EITHER signal: a non-empty SpawnedChildIDs (Spawn/the task
+		// tool is only ever callable from WITHIN a turn), or — a live
+		// review finding this OR-clause itself closes — non-empty
+		// History, needed because the FIRST signal alone only proves
+		// "definitely not fresh" for a node that happened to spawn
+		// something; a legacy CHILDLESS node that ran a real turn and
+		// simply never called task leaves SpawnedChildIDs empty too,
+		// which — before this fix — fell all the way through to the
+		// default case below and was left at adoptLocked's bare
+		// StatusIdle forever: not just a wrong status, but a real leak,
+		// since Reap only ever collects a FINALIZED, terminal node
+		// (StatusDone/Failed/Canceled) — an idle node is never
+		// Reap-eligible, so a swept legacy childless settled node used
+		// to pin itself in m.nodes permanently, reporting idle forever
+		// for a turn that had already long since ended. Every node that
+		// spawned anything also necessarily has non-empty History (a
+		// turn must already be in progress, with at least a user
+		// message and the assistant's own tool call already appended,
+		// before Spawn can ever run) — so this OR-clause's second arm is
+		// a strict superset of the first; the first is kept explicit
+		// anyway as the stronger, more specific proof for a reader.
+		//
+		// Before giving up and durably marking it an unreconstructable
+		// failure, check s's own trailing history for unambiguous
+		// evidence of a genuine, natural success — settledSuccessResult
+		// (engine.go), the SAME step-2 fallback
+		// recoverInterruptedTurnLocked's own crash-window table already
+		// uses for the identical "nothing was ever committed for this
+		// turn" gap. A live review finding: a legacy node that plainly
+		// succeeded (its own last message is a real assistant answer, no
+		// dangling tool call) must never be rewritten to StatusFailed
+		// just because the newer committedOutcome mechanism postdates
+		// it — that is exactly the "successful child durably rewritten
+		// as failed" class of bug the analogous :835 fix
+		// (nodeStatusForOutcome's Canceled case) already closed for the
+		// OTHER direction, and a fail_reason claiming "cannot be
+		// reconstructed" would be a straightforward lie the instant the
+		// log actually reconstructs it.
 		//
 		// Only a node whose history genuinely does NOT end in an
-		// unambiguous natural success (no history at all, a trailing
-		// tool call still awaiting its result, a non-assistant trailing
-		// message) falls through to the honest unknown-outcome failure
-		// below — marked terminal specifically so
-		// nearestLiveAncestorLocked walks past it like any other
-		// terminal node instead of treating it as a live delivery
-		// target (and so delivery elsewhere never mistakes it for an
-		// idle node worth an async resume).
+		// unambiguous natural success (a trailing tool call still
+		// awaiting its result, a non-assistant trailing message) falls
+		// through to the honest unknown-outcome failure below — marked
+		// terminal specifically so nearestLiveAncestorLocked walks past
+		// it like any other terminal node instead of treating it as a
+		// live delivery target (and so delivery elsewhere never mistakes
+		// it for an idle node worth an async resume), AND so Reap can
+		// finally collect it, closing the leak described above.
 		n.finalized = true
 		if result, ok := s.settledSuccessResult(); ok {
 			n.status = StatusDone
@@ -927,12 +949,14 @@ func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
 			n.failReason = unknownLegacyOutcomeFailReason
 		}
 	default:
-		// Nothing proves this node ever ran a turn at all — genuinely
-		// fresh, and adoptLocked's StatusIdle default is already the
-		// honest answer. Falls through to the usage fold below
-		// regardless (idempotent and safe even if s.Usage() is zero, as
-		// it will be here) rather than returning early, so this switch
-		// stays the ONLY branch point in this method.
+		// Both signals empty: nothing proves this node ever ran a turn
+		// at all — genuinely fresh, and adoptLocked's StatusIdle default
+		// is already the honest answer (correctly NOT Reap-eligible: a
+		// node about to run its first turn must stay pinned). Falls
+		// through to the usage fold below regardless (idempotent and
+		// safe even if s.Usage() is zero, as it will be here) rather
+		// than returning early, so this switch stays the ONLY branch
+		// point in this method.
 	}
 	// Fold this child's already-spent tokens into its root's tree-wide
 	// budget total too — the exact same delta-accounting
@@ -1572,11 +1596,21 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	// message is what actually closes a turn in this transcript's own
 	// vocabulary; the text itself is unambiguous synthetic-marker
 	// language, never presented as if the model actually said it.
-	if notify.Status != StatusDone && !s.hasTrailingLostToRestartMarker() {
+	//
+	// closingText picks canceledInterruptedText over the generic
+	// lostToRestartText when notify.Canceled — see that const's own doc
+	// comment: this turn's real cause was cancellation, and the closer
+	// must say so, not attribute it to the restart that merely
+	// interrupted recording that fact.
+	closingText := lostToRestartText
+	if notify.Canceled {
+		closingText = canceledInterruptedText
+	}
+	if notify.Status != StatusDone && !s.hasTrailingSyntheticCloser() {
 		closing := s.appendMemoryOnly(message.Message{
 			ID:        newID("msg"),
 			Role:      message.RoleAssistant,
-			Parts:     message.Parts{&message.Text{Text: lostToRestartText}},
+			Parts:     message.Parts{&message.Text{Text: closingText}},
 			CreatedAt: time.Now().UTC(),
 		})
 		m.deferPersist(func() { s.persistAppendedMessage(closing) })
@@ -1606,8 +1640,24 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 // message recoverInterruptedTurnLocked appends to close a dangling turn
 // in HISTORY for readability — see that method's own doc comment.
 // Idempotency (recovery must not re-fire for the same settled turn) is
-// markTurnSettled's job, not this message's.
+// markTurnSettled's job, not this message's. Used for every interrupted
+// turn EXCEPT the one canceledInterruptedText covers — see that const's
+// own doc comment for why that one case needs different wording.
 const lostToRestartText = "[harness: this turn was interrupted by a process restart and could not complete]"
+
+// canceledInterruptedText is recoverInterruptedTurnLocked's OTHER
+// synthetic closer — used instead of lostToRestartText specifically when
+// notify.Canceled is true (see that field's own doc comment,
+// taskdelivery.go): the turn was explicitly Cancel()ed, and ONLY the
+// bookkeeping that records that — commitOutcomeLocked's own durable
+// write, delivery to the ancestor, markTurnSettled — was what the
+// process restart actually interrupted; the turn itself was not
+// "interrupted by a process restart," it was deliberately stopped. A
+// live review finding: lostToRestartText's wording, applied
+// unconditionally, durably recorded a false cause in the transcript for
+// this one case — cancellation demoted to a mere side-effect of a
+// restart that had nothing to do with why the turn actually ended.
+const canceledInterruptedText = "[harness: this turn was canceled; the process restarted before that could be fully recorded]"
 
 // unknownLegacyOutcomeFailReason is restoreKnownStatusLocked's own
 // fail_reason for a node it can prove already ran a turn (a non-empty
@@ -1633,6 +1683,26 @@ const unknownLegacyOutcomeFailReason = "outcome not recorded: this turn complete
 // produce this exact string verbatim as its entire response.
 func isLostToRestartMarker(m message.Message) bool {
 	return m.Role == message.RoleAssistant && m.Parts.Text() == lostToRestartText
+}
+
+// isCanceledInterruptedMarker is isLostToRestartMarker's counterpart for
+// canceledInterruptedText — see that const's own doc comment for why a
+// canceled-then-crashed turn gets different closing wording. Same
+// content-based matching rationale as isLostToRestartMarker.
+func isCanceledInterruptedMarker(m message.Message) bool {
+	return m.Role == message.RoleAssistant && m.Parts.Text() == canceledInterruptedText
+}
+
+// isRecoverySyntheticCloser reports whether m is EITHER of
+// recoverInterruptedTurnLocked's own synthetic closing messages — never a
+// genuine new turn's own real message. Every consumer that needs "is this
+// recovery's own synthetic annotation, whichever kind" (the closing-append
+// idempotency guard below, the recMessage fold's committedOutcome-
+// invalidation exception in store.go, Session.hasTrailingSyntheticCloser)
+// calls this ONE function, not either individual check, so a future third
+// closer variant only needs to be added here once.
+func isRecoverySyntheticCloser(m message.Message) bool {
+	return isLostToRestartMarker(m) || isCanceledInterruptedMarker(m)
 }
 
 // fireIdleResumeAsync independently re-acquires m.mu and fires a resume

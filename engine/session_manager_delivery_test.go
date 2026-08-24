@@ -161,6 +161,89 @@ func TestReAdoptedCanceledChildRestoresStatusCanceledNotFailed(t *testing.T) {
 	}
 }
 
+// TestRecoverInterruptedTurnUsesCanceledClosingTextForACanceledChild is
+// the regression test for a live review finding: recoverInterruptedTurnLocked's
+// synthetic transcript closer unconditionally used lostToRestartText —
+// "this turn was interrupted by a process restart and could not
+// complete" — even for a turn whose committed outcome shows it was
+// explicitly Cancel()ed (Canceled: true) before the crash landed. That
+// wording durably records a false cause: the turn's real end was
+// cancellation; the restart only interrupted RECORDING that fact (see
+// canceledInterruptedText's own doc comment). Fixed by picking
+// canceledInterruptedText instead whenever notify.Canceled.
+//
+// Simulates "a canceled child, then a crash before settling" directly:
+// spawns and abandons a genuinely mid-turn child (so hasUnfinalizedTurn()
+// reads true on reload, exactly like every other crash-recovery test in
+// this file), then — rather than trying to interrupt a live process
+// mid-flush, which nothing in this package exposes a hook for — injects
+// the durable state a real Cancel()-then-finalizeTurn(alreadyCanceled)
+// call would already have committed before ITS OWN crash: a
+// committedOutcome with Canceled: true, with turnUnsettled left exactly
+// as the abandoned turn already leaves it (still true, since nothing
+// here ever settles it).
+func TestRecoverInterruptedTurnUsesCanceledClosingTextForACanceledChild(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	childProv := &signaledBlockingProvider{name: "child", started: make(chan struct{}), release: make(chan struct{})}
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentExplore})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	<-childProv.started // genuinely mid-turn — abandoned, never released, simulating the crash
+
+	rootProv2 := scriptedTurns("root", nil)
+	childProv2 := scriptedTurns("child", nil)
+	reg2 := provider.Registry{rootProv2.Name(): rootProv2, childProv2.Name(): childProv2}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	root2, err := LoadSession(rootCfg2, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root: %v", err)
+	}
+	reloadedChild, err := LoadSession(Config{Providers: reg2, SessionDir: dir}, childID)
+	if err != nil {
+		t.Fatalf("LoadSession child: %v", err)
+	}
+	if !reloadedChild.hasUnfinalizedTurn() {
+		t.Fatal("test setup: reloaded child already reads as settled")
+	}
+
+	canceled := taskNotification{ChildID: childID, Agent: AgentExplore, Status: StatusFailed, FailReason: "canceled", Canceled: true}
+	reloadedChild.commitTurnOutcome(canceled)
+	reloadedChild.persistCommittedTurnOutcome(canceled)
+
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+	mgr2.mu.Lock()
+	mgr2.adoptReloadedLocked(reloadedChild, true)
+	mgr2.unlockAndFlushPersist()
+
+	hist := reloadedChild.History()
+	if len(hist) == 0 {
+		t.Fatal("recovery appended no closing message")
+	}
+	last := hist[len(hist)-1]
+	if last.Parts.Text() != canceledInterruptedText {
+		t.Errorf("closing message = %q, want the canceled-specific closer %q — a canceled-then-crashed turn must not claim it was merely interrupted by a restart", last.Parts.Text(), canceledInterruptedText)
+	}
+	if strings.Contains(last.Parts.Text(), "process restart and could not complete") {
+		t.Errorf("closing message = %q, still using the generic restart wording for a turn whose real cause was cancellation", last.Parts.Text())
+	}
+
+	info, ok := mgr2.Info(childID)
+	if !ok || info.Status != StatusCanceled {
+		t.Errorf("child info = %+v, want StatusCanceled", info)
+	}
+}
+
 // TestGrandchildReparentsToNearestLiveAncestor proves nesting past one
 // level actually delivers: a grandchild's completion, arriving after its
 // direct parent has already settled done, is reparented to the nearest
@@ -2691,7 +2774,7 @@ func TestRecoveryCrashBetweenClosingMessageAndSettleDoesNotMisreportSuccess(t *t
 	if !reloadedChildAgain.hasUnfinalizedTurn() {
 		t.Fatal("test setup: reloaded child already reads as settled — the simulated crash truncation did not work")
 	}
-	if !reloadedChildAgain.hasTrailingLostToRestartMarker() {
+	if !reloadedChildAgain.hasTrailingSyntheticCloser() {
 		t.Fatal("test setup: reloaded child's trailing message is not the synthetic closing marker — first recovery attempt's own append did not survive the reload")
 	}
 
@@ -3373,6 +3456,99 @@ func TestAdoptRootRestoresLegacySettledChildAsUnknownFailureWhenLogCannotReconst
 	}
 	if midInfo.Status != StatusFailed || midInfo.FailReason != unknownLegacyOutcomeFailReason {
 		t.Errorf("mid info = %+v, want StatusFailed with the honest unknown-outcome fail_reason — mid's own log genuinely cannot reconstruct a result, and must not be misreported as done", midInfo)
+	}
+}
+
+// TestAdoptRootRestoresLegacyChildlessSettledChildAsTerminalNotIdle is
+// the regression test for a live review finding on
+// restoreKnownStatusLocked's own default branch: a legacy node (no
+// committedOutcome) that never spawned anything has an EMPTY
+// SpawnedChildIDs — before this fix, that alone was (wrongly) treated as
+// proof of "genuinely fresh, never run," landing it in the default
+// branch and leaving it at adoptLocked's bare StatusIdle forever. That
+// is not just a wrong status: Reap only ever collects a FINALIZED,
+// terminal node (StatusDone/Failed/Canceled) — an idle node is never
+// Reap-eligible — so a swept legacy CHILDLESS settled node used to pin
+// itself in m.nodes permanently, reporting idle for a turn that had
+// already long since ended. Fixed by also checking non-empty History
+// (proof of "definitely not fresh" that does not depend on having
+// spawned anything).
+//
+// Asserts BOTH halves explicitly: the restored status/result is correct
+// (StatusDone, the real answer — this child's log DOES reconstruct a
+// success, exercising the same settledSuccessResult path the sibling
+// legacy tests cover), AND the node is now actually Reap-eligible —
+// calling Reap() immediately after AdoptRoot collects it.
+func TestAdoptRootRestoresLegacyChildlessSettledChildAsTerminalNotIdle(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	childProv := scriptedTurns("child", doneTurn("child done"))
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr1, childID, StatusDone, time.Second)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, childID)
+		if err != nil {
+			t.Fatalf("LoadSession (settle poll): %v", err)
+		}
+		if !s.hasUnfinalizedTurn() {
+			if len(s.SpawnedChildIDs()) != 0 {
+				t.Fatal("test setup: child unexpectedly has spawned children — this test needs the CHILDLESS legacy case specifically")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("test setup: child's settled marker never landed durably")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Simulate legacy: strip the committed-outcome record. child never
+	// spawned anything, so this exercises the OR-clause's SECOND arm
+	// (non-empty History), not the SpawnedChildIDs one the sibling tests
+	// already cover.
+	stripRecordType(t, sessionPath(dir, childID), recTaskOutcomeCommitted)
+
+	rootProv2 := scriptedTurns("root", nil)
+	childProv2 := scriptedTurns("child", nil)
+	reg2 := provider.Registry{rootProv2.Name(): rootProv2, childProv2.Name(): childProv2}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	root2, err := LoadSession(rootCfg2, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root: %v", err)
+	}
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+
+	childInfo, ok := mgr2.Info(childID)
+	if !ok {
+		t.Fatal("child not tracked after AdoptRoot")
+	}
+	if childInfo.Status == StatusIdle {
+		t.Fatalf("child.Status = %q, want a terminal status — a legacy childless settled node left idle is never Reap-eligible and leaks in memory forever", childInfo.Status)
+	}
+	if childInfo.Status != StatusDone || childInfo.Result != "child done" {
+		t.Errorf("child info = %+v, want StatusDone with the real reconstructed result", childInfo)
+	}
+
+	reaped := mgr2.Reap()
+	if reaped != 1 {
+		t.Fatalf("Reap() collected %d node(s) after restoring a legacy childless settled child, want exactly 1", reaped)
+	}
+	if _, ok := mgr2.Info(childID); ok {
+		t.Error("child still tracked after Reap — should have been collected as a finalized, terminal, childless leaf")
 	}
 }
 
