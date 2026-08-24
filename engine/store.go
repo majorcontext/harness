@@ -113,6 +113,23 @@ const (
 	recTaskSpawned         = "task.spawned"
 	recTaskNotifyQueued    = "task.notify_queued"
 	recTaskNotifyDelivered = "task.notify_delivered"
+	// recChildTurnSettled is a pure marker record (no payload — see
+	// recGoalCleared/recGoalAchieved's identical shape), written by
+	// SessionManager.finalizeTurn for a non-root node on EVERY terminal
+	// outcome (success, ordinary provider error, cancellation) — see
+	// Session.turnUnsettled's own doc comment for the durability problem
+	// this closes: recoverInterruptedTurnLocked's restart-recovery gate
+	// used to infer "was this turn genuinely interrupted" from the
+	// TRAILING MESSAGE's own role, a heuristic a live review proved
+	// unreliable in both directions (a genuine mid-tool-loop crash can
+	// leave a trailing role the ORIGINAL heuristic missed; a properly
+	// SETTLED ordinary failure can leave the SAME trailing shape a crash
+	// would, since runAgenticLoop's plain-error path appends nothing at
+	// all). This record instead marks the fact directly: finalizeTurn
+	// running to completion for a node IS the authoritative "this turn's
+	// outcome is settled" signal, independent of whatever trailing
+	// message shape resulted.
+	recChildTurnSettled = "child_turn.settled"
 )
 
 // record is one line of a session log file.
@@ -986,6 +1003,13 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				s.lastUsage = *rec.Usage
 				s.haveLastUsage = true
 			}
+			// Every message append means a turn has started (or is still
+			// in progress) without yet being finalized — see
+			// Session.turnUnsettled's own doc comment. Mirrors
+			// appendWithUsage's own identical live-path write.
+			s.turnUnsettled = true
+		case recChildTurnSettled:
+			s.turnUnsettled = false
 		case recModel:
 			s.model = rec.Model
 		case recEffort:

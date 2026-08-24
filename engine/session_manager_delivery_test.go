@@ -789,7 +789,7 @@ func TestReloadedChildWithDanglingTurnNotifiesParent(t *testing.T) {
 	if !ok {
 		t.Fatal("child not found before simulated crash")
 	}
-	if !childSess.hasUnansweredTurn() {
+	if !childSess.hasUnfinalizedTurn() {
 		t.Fatal("test setup: child's turn did not leave a dangling user message")
 	}
 
@@ -950,8 +950,11 @@ func TestReloadedChildWithDanglingTurnFoldsUsageIntoTreeBudget(t *testing.T) {
 
 // TestReloadedChildWithDanglingTurnIsIdempotentAcrossReapAndReload is the
 // regression test for a live review finding: recoverInterruptedTurnLocked
-// never mutated the child's history, so hasUnansweredTurn() stayed true
-// FOREVER — every later re-adoption of the same id (a Reap, then a
+// never mutated the child's history, so the dangling-turn signal (now
+// hasUnfinalizedTurn()/turnUnsettled — see their own doc comments;
+// originally a trailing-message-role heuristic named hasUnansweredTurn,
+// since replaced) stayed true FOREVER — every later re-adoption of the
+// same id (a Reap, then a
 // legitimate follow-up touching it again) re-ran the whole method and
 // re-enqueued a SECOND, duplicate "lost to restart" notification for the
 // SAME child. Proves recovery fires exactly once: reap the recovered
@@ -1130,7 +1133,7 @@ func TestReportTurnStartDoesNotFalselyReportChildDeadWhenContinuingIt(t *testing
 	if !ok {
 		t.Fatal("child not found before simulated crash")
 	}
-	if !childSess.hasUnansweredTurn() {
+	if !childSess.hasUnfinalizedTurn() {
 		t.Fatal("test setup: child's turn did not leave a dangling user message")
 	}
 
@@ -1493,9 +1496,8 @@ func TestRecoverInterruptedTurnForwardsGrandchildNotifications(t *testing.T) {
 
 // TestRecoverInterruptedTurnSurvivesACrashBetweenDeliveryAndHistoryClose is
 // the regression test for a live review finding: recoverInterruptedTurnLocked
-// used to durably close the interrupted child's history (making
-// hasUnansweredTurn() false forever, so this method never runs again for
-// this id) BEFORE delivering its failure notification to the ancestor. A
+// used to durably close the interrupted child's history and mark it
+// settled BEFORE delivering its failure notification to the ancestor. A
 // crash landing between those two durable writes permanently lost the
 // notification — the child's own log already looked "recovered," so no
 // later re-adoption would ever retry, but the ancestor's log never got
@@ -1505,13 +1507,13 @@ func TestRecoverInterruptedTurnForwardsGrandchildNotifications(t *testing.T) {
 // Simulates that exact crash: drives recovery manually, then executes
 // ONLY the first queued deferred-persist thunk (the notification
 // delivery) — never any later ones, including the closing-message
-// persist — mimicking a process death right after that first durable
-// write lands. Proves: (1) the ancestor's log durably has the
-// notification despite the "crash," and (2) the child's own log still
-// shows the dangling turn unclosed, so a later restart's
-// hasUnansweredTurn() is still true and recovery can genuinely retry —
-// the fix this test exists to prove, replacing what used to be silent,
-// permanent loss.
+// persist and the recChildTurnSettled marker write — mimicking a process
+// death right after that first durable write lands. Proves: (1) the
+// ancestor's log durably has the notification despite the "crash," and
+// (2) the child's own log still shows the turn unfinalized
+// (hasUnfinalizedTurn()/turnUnsettled — see their own doc comments), so
+// a later restart can genuinely retry — the fix this test exists to
+// prove, replacing what used to be silent, permanent loss.
 func TestRecoverInterruptedTurnSurvivesACrashBetweenDeliveryAndHistoryClose(t *testing.T) {
 	dir := t.TempDir()
 	rootProv := scriptedTurns("root", nil)
@@ -1585,7 +1587,7 @@ func TestRecoverInterruptedTurnSurvivesACrashBetweenDeliveryAndHistoryClose(t *t
 	if err != nil {
 		t.Fatalf("LoadSession child (after simulated crash): %v", err)
 	}
-	if !reloadedChildAgain.hasUnansweredTurn() {
+	if !reloadedChildAgain.hasUnfinalizedTurn() {
 		t.Error("the child's history was already closed even though the simulated crash landed before that specific write — a real restart could never retry recovery for this child again")
 	}
 
@@ -1605,55 +1607,116 @@ func TestRecoverInterruptedTurnSurvivesACrashBetweenDeliveryAndHistoryClose(t *t
 	time.Sleep(300 * time.Millisecond)
 }
 
-// TestHasUnansweredTurnDetectsTrailingToolResult and
-// TestHasUnansweredTurnDetectsTrailingUnresolvedToolCall are the
-// regression tests for a live review finding: hasUnansweredTurn checked
-// only for a trailing RoleUser message, missing two OTHER crash windows
-// runAgenticLoop's own append order can leave on disk — trailing RoleTool
-// (crashed after appending tool results, before the next assistant
-// response) and a trailing RoleAssistant message carrying an unresolved
-// ToolCall part (crashed WHILE runToolCalls was still executing, before
-// any result was ever appended). Both left an interrupted child
-// undetected: recoverInterruptedTurnLocked never fired, the child
-// reloaded as StatusIdle indistinguishable from one that never received
-// a turn, and its parent waited forever — the same "waits forever" gap
-// the whole restart-recovery feature exists to close, just for shapes
-// the original RoleUser-only heuristic did not cover. A child doing real
-// multi-step tool work is arguably the MORE likely interruption point
-// than the brief window right after a fresh user message.
-func TestHasUnansweredTurnDetectsTrailingToolResult(t *testing.T) {
-	s := NewSession(managedConfig("test", scriptedTurns("test", nil)))
-	s.append(message.Message{ID: "u1", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}})
-	s.append(message.Message{ID: "a1", Role: message.RoleAssistant, Parts: message.Parts{
-		&message.Text{Text: "running"},
-		toolCall("tc1", "bash", `{"command":"echo hi"}`),
-	}})
-	s.append(message.Message{ID: "t1", Role: message.RoleTool, Parts: message.Parts{
-		&message.ToolResult{CallID: "tc1", Content: message.Parts{&message.Text{Text: "hi"}}},
-	}})
-	if !s.hasUnansweredTurn() {
-		t.Error("hasUnansweredTurn() = false, want true for a trailing RoleTool message (crashed mid-tool-loop, after the tool result landed but before the next assistant response)")
+// TestHasUnfinalizedTurnIgnoresTrailingMessageShape is the regression
+// test replacing an earlier, unreliable trailing-message-role heuristic
+// (hasUnansweredTurn, since removed) that a live review proved wrong in
+// BOTH directions: it MISSED a genuine mid-tool-loop crash (a trailing
+// RoleTool or unresolved-ToolCall shape the original RoleUser-only check
+// never examined), and — once widened to also check those — it then
+// MISFIRED on an already-SETTLED ordinary failure, since several
+// legitimate, fully-settled paths (a plain provider error appending
+// nothing at all; appendUnexecutedToolCallResults/interruptedToolResults
+// synthesizing a trailing RoleTool on an otherwise-done turn) leave the
+// exact same trailing shapes a genuine crash would.
+//
+// turnUnsettled/hasUnfinalizedTurn (engine.go) sidestep trailing-shape
+// guessing entirely: true from the moment ANY message is appended,
+// regardless of role, false only once markTurnSettled explicitly runs.
+// Proves this directly: three different trailing shapes (mid-tool-loop
+// RoleTool, unresolved-ToolCall RoleAssistant, and a bare RoleUser) are
+// ALL detected as unfinalized until markTurnSettled runs, at which point
+// ALL of them settle — the mechanism cares only about
+// append-vs-markTurnSettled ordering, never message role.
+func TestHasUnfinalizedTurnIgnoresTrailingMessageShape(t *testing.T) {
+	cases := []struct {
+		name    string
+		history func(s *Session)
+	}{
+		{"trailing RoleUser", func(s *Session) {
+			s.append(message.Message{ID: "u1", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}})
+		}},
+		{"trailing RoleTool (mid-tool-loop crash shape)", func(s *Session) {
+			s.append(message.Message{ID: "u1", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}})
+			s.append(message.Message{ID: "a1", Role: message.RoleAssistant, Parts: message.Parts{
+				&message.Text{Text: "running"},
+				toolCall("tc1", "bash", `{"command":"echo hi"}`),
+			}})
+			s.append(message.Message{ID: "t1", Role: message.RoleTool, Parts: message.Parts{
+				&message.ToolResult{CallID: "tc1", Content: message.Parts{&message.Text{Text: "hi"}}},
+			}})
+		}},
+		{"trailing unresolved ToolCall", func(s *Session) {
+			s.append(message.Message{ID: "u1", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}})
+			s.append(message.Message{ID: "a1", Role: message.RoleAssistant, Parts: message.Parts{
+				&message.Text{Text: "running"},
+				toolCall("tc1", "bash", `{"command":"echo hi"}`),
+			}})
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewSession(managedConfig("test", scriptedTurns("test", nil)))
+			if s.hasUnfinalizedTurn() {
+				t.Fatal("a fresh session with no history must not report an unfinalized turn")
+			}
+			tc.history(s)
+			if !s.hasUnfinalizedTurn() {
+				t.Errorf("hasUnfinalizedTurn() = false after appending (%s), want true — no markTurnSettled call has happened yet", tc.name)
+			}
+			s.markTurnSettled()
+			if s.hasUnfinalizedTurn() {
+				t.Errorf("hasUnfinalizedTurn() = true after markTurnSettled(), want false — trailing shape (%s) must not matter once explicitly settled", tc.name)
+			}
+		})
 	}
 }
 
-func TestHasUnansweredTurnDetectsTrailingUnresolvedToolCall(t *testing.T) {
-	s := NewSession(managedConfig("test", scriptedTurns("test", nil)))
-	s.append(message.Message{ID: "u1", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}})
-	s.append(message.Message{ID: "a1", Role: message.RoleAssistant, Parts: message.Parts{
-		&message.Text{Text: "running"},
-		toolCall("tc1", "bash", `{"command":"echo hi"}`),
-	}})
-	if !s.hasUnansweredTurn() {
-		t.Error("hasUnansweredTurn() = false, want true for a trailing assistant message with an unresolved ToolCall (crashed WHILE the tool was still executing, before any result was appended)")
+// TestHasUnfinalizedTurnSurvivesReloadForBothPolarities proves the
+// durable side of turnUnsettled/markTurnSettled: recChildTurnSettled's
+// own fold in LoadSession (store.go) correctly restores BOTH "still
+// dangling" (no settled marker was ever durably written — the genuine
+// crash case) and "properly settled" (the marker WAS durably written)
+// across a reload, matching the in-memory behavior exactly.
+func TestHasUnfinalizedTurnSurvivesReloadForBothPolarities(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{Providers: provider.Registry{"test": scriptedTurns("test", nil)}, Model: modelFor("test"), SessionDir: dir}
+
+	danglingID := func() string {
+		s := NewSession(cfg)
+		s.append(message.Message{ID: "u1", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}})
+		return s.ID
+	}()
+	reloadedDangling, err := LoadSession(cfg, danglingID)
+	if err != nil {
+		t.Fatalf("LoadSession (dangling): %v", err)
+	}
+	if !reloadedDangling.hasUnfinalizedTurn() {
+		t.Error("reloaded session lost its unfinalized-turn state — no recChildTurnSettled record was ever written, so this must still read true")
+	}
+
+	settledID := func() string {
+		s := NewSession(cfg)
+		s.append(message.Message{ID: "u1", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}})
+		s.markTurnSettled()
+		s.persistTurnSettled()
+		return s.ID
+	}()
+	reloadedSettled, err := LoadSession(cfg, settledID)
+	if err != nil {
+		t.Fatalf("LoadSession (settled): %v", err)
+	}
+	if reloadedSettled.hasUnfinalizedTurn() {
+		t.Error("reloaded session reports an unfinalized turn despite a durably-written recChildTurnSettled record")
 	}
 }
 
 // TestRecoverInterruptedTurnFiresForChildCrashedMidToolLoop is the
 // integration-level companion to the two unit tests above: proves
-// recoverInterruptedTurnLocked actually fires (not just hasUnansweredTurn
+// recoverInterruptedTurnLocked actually fires (not just hasUnfinalizedTurn
 // in isolation) for a child whose durable history ends on a RoleTool
-// message, and correctly does NOT fire for one whose last turn genuinely
-// completed (trailing assistant message, no unresolved tool_use).
+// message. See TestRecoverInterruptedTurnDoesNotRefireForASettledFailure
+// below for the equally important negative case: recovery must NOT fire
+// for a child whose last turn already reached finalizeTurn.
 func TestRecoverInterruptedTurnFiresForChildCrashedMidToolLoop(t *testing.T) {
 	dir := t.TempDir()
 	reg := provider.Registry{"root": scriptedTurns("root", doneTurn("resumed")), "child": scriptedTurns("child", nil)}
@@ -1684,7 +1747,7 @@ func TestRecoverInterruptedTurnFiresForChildCrashedMidToolLoop(t *testing.T) {
 	childSess.append(message.Message{ID: "t2", Role: message.RoleTool, Parts: message.Parts{
 		&message.ToolResult{CallID: "tc2", Content: message.Parts{&message.Text{Text: "hi"}}},
 	}})
-	if !childSess.hasUnansweredTurn() {
+	if !childSess.hasUnfinalizedTurn() {
 		t.Fatal("test setup: manually appended history does not end on the trailing-RoleTool shape")
 	}
 
@@ -1711,7 +1774,7 @@ func TestRecoverInterruptedTurnFiresForChildCrashedMidToolLoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSession: %v", err)
 	}
-	if !reloadedChild.hasUnansweredTurn() {
+	if !reloadedChild.hasUnfinalizedTurn() {
 		t.Fatal("test setup: reloaded child lost the trailing-RoleTool shape across LoadSession")
 	}
 	if err := mgr2.AdoptReloaded(reloadedChild); err != nil {
@@ -1727,5 +1790,101 @@ func TestRecoverInterruptedTurnFiresForChildCrashedMidToolLoop(t *testing.T) {
 	}
 	if !strings.Contains(info.FailReason, "restart") {
 		t.Errorf("fail_reason = %q, want it to mention the restart", info.FailReason)
+	}
+}
+
+// TestRecoverInterruptedTurnDoesNotRefireForASettledFailure is the
+// regression test for a live review finding: a child's ORDINARY,
+// PROPERLY-SETTLED provider-error failure — finalizeTurn ran to
+// completion, marked it StatusFailed, and durably delivered its
+// notification to the ancestor — used to be indistinguishable from a
+// genuine crash by the trailing-message-role heuristic
+// recoverInterruptedTurnLocked's guard relied on: runAgenticLoop's plain
+// (non-interruptedTurnError) provider-error path appends nothing at all,
+// leaving history ending on the bare RoleUser directive, byte-identical
+// to what a real crash leaves. A LATER cold reload of this
+// ALREADY-SETTLED child (handleSpawnChild cold-loading a reaped/restart-
+// forgotten parent to attach a new child under it, or cmd -resume) would
+// then misfire recovery: re-marking an already-correctly-failed child
+// StatusFailed with a FALSE "lost to restart" reason, and enqueuing a
+// SECOND, duplicate StatusFailed notification to an ancestor that
+// already durably has the first, correct one.
+//
+// turnUnsettled/markTurnSettled (engine.go) close this: finalizeTurn
+// marks the turn settled REGARDLESS of outcome or trailing message
+// shape, so a properly-settled failure reads hasUnfinalizedTurn()=false
+// both in memory and after a reload — recovery's guard at the top of
+// recoverInterruptedTurnLocked correctly declines to run at all.
+func TestRecoverInterruptedTurnDoesNotRefireForASettledFailure(t *testing.T) {
+	dir := t.TempDir()
+	reg := provider.Registry{"root": scriptedTurns("root", nil), "child": scriptedTurns("child", nil)} // zero turns for both — child's own Spawn turn fails immediately
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 0, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr1, childID, StatusFailed, time.Second)
+
+	childSess, ok := mgr1.Session(childID)
+	if !ok {
+		t.Fatal("child not tracked")
+	}
+	// finalizeTurn's own status/turnUnsettled updates both happen
+	// synchronously under m.mu, in the SAME critical section
+	// waitForStatus's own Info() call observes StatusFailed in — so this
+	// in-memory check is reliable immediately, unlike the DURABLE write
+	// below (deferred, and not guaranteed to have landed yet).
+	if childSess.hasUnfinalizedTurn() {
+		t.Fatal("test setup: child's OWN finalizeTurn call should have already marked this turn settled")
+	}
+
+	// root2 gets its OWN provider instance — same shared-object race
+	// avoidance as the sibling test above.
+	reg2 := provider.Registry{"root": scriptedTurns("root", nil), "child": scriptedTurns("child", nil)}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 0, 0)
+	root2 := NewSession(rootCfg2)
+	root2.ID = root1.ID
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+
+	// finalizeTurn's own persistTurnSettled write is deferred (runs
+	// after m.mu releases, see unlockAndFlushPersist's own doc comment)
+	// — poll the reload rather than assume it has already landed by the
+	// time waitForStatus above returned.
+	deadline := time.Now().Add(2 * time.Second)
+	var reloadedChild *Session
+	for {
+		reloadedChild, err = LoadSession(Config{Providers: reg2, SessionDir: dir}, childID)
+		if err != nil {
+			t.Fatalf("LoadSession: %v", err)
+		}
+		if !reloadedChild.hasUnfinalizedTurn() || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if reloadedChild.hasUnfinalizedTurn() {
+		t.Fatal("test setup: reloaded child's settled marker never landed durably")
+	}
+
+	if err := mgr2.AdoptReloaded(reloadedChild); err != nil {
+		t.Fatalf("AdoptReloaded: %v", err)
+	}
+
+	root2.mu.Lock()
+	notifCount := len(root2.taskNotifications)
+	root2.mu.Unlock()
+	if notifCount != 0 {
+		t.Errorf("root2.taskNotifications = %d entries, want 0 — recovery must not re-deliver a duplicate notification for an already-settled child", notifCount)
+	}
+	if info, ok := mgr2.Info(childID); ok && strings.Contains(info.FailReason, "restart") {
+		t.Errorf("fail_reason = %q, want it to NOT be re-labeled as a restart loss for a child that failed for an ordinary, already-settled reason", info.FailReason)
 	}
 }

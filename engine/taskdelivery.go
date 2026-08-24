@@ -90,12 +90,12 @@ func (s *Session) enqueueTaskNotificationMemoryOnly(n taskNotification) {
 // present, but unlike that method it reports whether it actually added
 // anything, so the caller knows whether persistQueuedTaskNotification
 // needs to run at all for n. A live review finding: recovery used to
-// durably close a child's own history (making a retry structurally
-// impossible — hasUnansweredTurn() becomes false forever) BEFORE
+// durably mark its own turn settled (making a retry structurally
+// impossible — hasUnfinalizedTurn() becomes false forever) BEFORE
 // delivering its failure notification to the ancestor; a crash in
 // between permanently lost the notification with no way to ever retry.
 // Reordering so delivery happens first means a crash in THAT gap now
-// causes a genuine retry (hasUnansweredTurn() stays true) instead of
+// causes a genuine retry (hasUnfinalizedTurn() stays true) instead of
 // silent loss — but a retry recomputes and re-attempts the SAME
 // delivery, which must not re-persist (or re-render to the parent
 // model) a notification already durably queued from the earlier,
