@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -245,12 +246,43 @@ func TestIdentityStatusSegmentChildSharesParentEngineStartTime(t *testing.T) {
 	}}
 	reg := provider.Registry{"root": rootProv, "child": childProv}
 
+	// childDone closes the instant the child's own assistant reply is
+	// appended — a real synchronization edge, not a guessed deadline.
+	// OnEvent is set on the ROOT's Config here and inherited verbatim by
+	// the child's own Config (SessionManager.Spawn's childCfg derivation
+	// copies parent.session.configSnapshot() wholesale, OnEvent included —
+	// the same inheritance this test is ABOUT), so one callback observes
+	// both sessions' EventMessage emits. The root's own Prompt call below
+	// runs to completion (and so emits its own, first, assistant
+	// EventMessage) synchronously, BEFORE Spawn is ever called — so the
+	// second assistant EventMessage this callback ever sees can only be
+	// the child's, with no session-id filtering needed and no race window
+	// where an event could fire before anything is listening (OnEvent is
+	// part of Config from construction, armed before either session's
+	// first turn starts).
+	var mu sync.Mutex
+	assistantMsgs := 0
+	childDone := make(chan struct{})
+	onEvent := func(ev Event) {
+		if ev.Type != EventMessage || ev.Message == nil || ev.Message.Role != message.RoleAssistant {
+			return
+		}
+		mu.Lock()
+		assistantMsgs++
+		n := assistantMsgs
+		mu.Unlock()
+		if n == 2 {
+			close(childDone)
+		}
+	}
+
 	mgr := NewSessionManager(context.Background(), 0, 0)
 	root := mgr.NewRoot(Config{
 		Providers:     reg,
 		Model:         modelFor("root"),
 		EngineVersion: "1.2.3",
 		StartedAt:     started,
+		OnEvent:       onEvent,
 	})
 	if _, err := root.Prompt(context.Background(), "hi"); err != nil {
 		t.Fatalf("root Prompt: %v", err)
@@ -261,27 +293,16 @@ func TestIdentityStatusSegmentChildSharesParentEngineStartTime(t *testing.T) {
 		t.Fatalf("root ambient block = %q, want %q", rootLast, wantClause)
 	}
 
-	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
-	if err != nil {
+	if _, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")}); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	childSess, _ := mgr.Session(childID)
-	// Poll childSess.History() (Session-mutex-protected), NOT childProv.requests
-	// directly — Spawn drives the child's turn on its own goroutine, and
-	// childProv.requests is written by THAT goroutine with no lock of its
-	// own (scriptedProvider.Stream, engine_test.go). Waiting for the
-	// child's own completed reply (2 messages: user, assistant) to show up
-	// through the properly-locked History() call establishes a real
-	// happens-before edge back to the request scriptedProvider.Stream
-	// recorded earlier in that same goroutine, which is what makes reading
-	// childProv.requests below safe.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && len(childSess.History()) < 2 {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if len(childSess.History()) < 2 {
-		t.Fatal("child never completed its turn")
-	}
+
+	// Block directly on childDone — no timeout wrapper. AGENTS.md: block
+	// directly on channels for expected events and let the test binary
+	// timeout catch a genuine hang, rather than a guessed deadline that
+	// can flake under a loaded runner.
+	<-childDone
+
 	if len(childProv.requests) == 0 {
 		t.Fatal("child never made a request")
 	}
