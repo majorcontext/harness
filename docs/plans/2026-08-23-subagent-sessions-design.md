@@ -163,12 +163,24 @@ mechanism:
 - **send** (`session_id`, `prompt`) delivers a message to a descendant —
   `SessionManager.SendToDescendant`. A RUNNING descendant gets the
   message appended to its own durable prompt queue
-  (`Session.EnqueuePrompt`) rather than being refused: the exact
-  mid-turn tool-call-boundary drain (`engine.go`'s Prompt loop) that
-  already delivers a root's own queued prompt, reused here rather than
-  rejecting a busy child — mirroring how the wire's `session.send`
-  queues a busy root instead of dropping the message
-  (`server/session_tree.go`'s `sendTextToRoot`). A SETTLED (idle/done/
+  (`Session.EnqueuePrompt`) rather than being refused — mirroring how
+  the wire's `session.send` queues a busy root instead of dropping the
+  message (`server/session_tree.go`'s `sendTextToRoot`). Delivery itself
+  takes one of two paths: the mid-turn tool-call-boundary drain
+  (`engine.go`'s Prompt loop, the same one that already delivers a
+  root's own queued prompt) if a tool-call boundary arrives before the
+  descendant's current turn ends, or — since a child, unlike a root, has
+  no external residency layer to pick the queue back up once `Prompt`
+  returns — `drainQueueAndPrompt` (`session_manager.go`), which the two
+  places that drive a child's own turn (`Spawn`'s launched goroutine,
+  and `Send` for a child target) now call: it re-checks the queue once a
+  turn ends and launches another if anything is still waiting, mirroring
+  the server's own post-turn tail dispatch for a root
+  (`maybeDispatchQueued`). A live review finding on this fix's first
+  pass: relying on the mid-turn drain alone stranded a message that
+  arrived after a descendant's last tool-call boundary — its turn simply
+  ended, taking the descendant straight to done/failed with the message
+  still sitting, undelivered, forever. A SETTLED (idle/done/
   failed) descendant is restarted with the message as a fresh turn —
   existing `Send` semantics, unchanged — but launched asynchronously
   (a goroutine, mirroring `Spawn`'s own launched goroutine) rather than
@@ -437,11 +449,14 @@ work, deliberately deferred rather than folded into this fix.
 - `task` verbs (cancel/status/send): lineage validation (self, an
   unrelated tree, and a non-direct-spawner ancestor two hops up all
   handled correctly), cancel's cascade and its status-preserving no-op on
-  an already-terminal target, status's usage/lineage accuracy, send's two
-  paths (a running descendant's message delivered at the next tool-call
-  boundary; a settled descendant's re-run launched without blocking the
-  caller), and the bare-spawn backward-compatibility case (arguments with
-  no `action` field at all).
+  an already-terminal target (read back race-free, inside the same
+  locked operation that performed the cancellation), status's
+  usage/lineage accuracy, send's two paths (a running descendant's
+  message delivered at the next mid-turn tool-call boundary, AND — the
+  case with no such boundary coming — via `drainQueueAndPrompt`'s
+  post-turn pickup; a settled descendant's re-run launched without
+  blocking the caller), and the bare-spawn backward-compatibility case
+  (arguments with no `action` field at all).
 
 ## Rollout
 

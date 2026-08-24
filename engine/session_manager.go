@@ -2667,13 +2667,59 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	m.unlockAndFlushPersist()
 
 	go func() {
-		msg, perr := child.Prompt(n.ctx, opts.Prompt)
+		msg, perr := drainQueueAndPrompt(n.ctx, child, opts.Prompt)
 		if resume := m.finalizeTurn(child.ID, msg, perr); resume != nil {
 			go resume()
 		}
 	}()
 
 	return child.ID, nil
+}
+
+// drainQueueAndPrompt runs one Prompt call on s with text, then — for as
+// long as s's durable prompt queue is non-empty once that call returns —
+// dequeues the next entry (FIFO, one at a time, mirroring the server's
+// own post-turn tail dispatch for a root: dispatchQueueHead,
+// server/handlers.go) and runs ANOTHER Prompt call with it, repeating
+// until the queue is empty. Returns the LAST Prompt call's own (msg, err)
+// — the pair the caller's finalizeTurn call should be given, exactly as
+// if that had been the only call made.
+//
+// This is the CHILD-side counterpart to a root's post-turn tail dispatch
+// (maybeDispatchQueued, called from runPrompt's own tail once the run
+// slot frees): engine.go's Prompt loop only drains the queue AT A
+// MID-TURN TOOL-CALL BOUNDARY (DequeueAllPrompts, right after a tool
+// result is appended, before the next provider request in the SAME
+// turn) — a turn that ends with no further tool-call boundary (its
+// final provider response has a non-tool-use stop reason) never reaches
+// that drain at all, by that code path's own design (see
+// operatorMessagesBlock's doc comment, queue.go). A ROOT session
+// tolerates this because the SERVER'S OWN residency layer picks the
+// queue back up the instant Prompt returns, as a brand-new turn
+// (maybeDispatchQueued). A CHILD, driven directly by Spawn's launched
+// goroutine or by Send, has no such external tail — without this,
+// SendToDescendant's promise to the model ("queued for delivery at the
+// descendant's next turn boundary") would be broken exactly whenever a
+// message lands after the child's last mid-turn drain point: the child
+// settles done/failed with the message still sitting, undelivered, in
+// its own promptQueue, and nothing would ever look at it again — a live
+// review finding on this fix's first pass (the original version relied
+// on the mid-turn drain alone).
+//
+// Runs regardless of the prior call's own outcome — including a failed
+// one — mirroring maybeDispatchQueued's own unconditional tail-dispatch
+// (it fires whether the just-finished turn errored or not): a queued
+// follow-up deserves its own attempt rather than being silently
+// abandoned because an unrelated earlier turn on the same child failed.
+func drainQueueAndPrompt(ctx context.Context, s *Session, text string) (*message.Message, error) {
+	msg, err := s.Prompt(ctx, text)
+	for {
+		next, ok := s.DequeuePrompt("delivered")
+		if !ok {
+			return msg, err
+		}
+		msg, err = s.Prompt(ctx, next.Text)
+	}
 }
 
 // Send delivers text to session id as its next turn and blocks until that
@@ -2779,11 +2825,27 @@ func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Me
 	}
 	s := n.session
 	nodeCtx := n.ctx
+	// isChild gates drainQueueAndPrompt to CHILDREN only — see its own
+	// doc comment for why a child needs it (no external tail dispatch).
+	// A ROOT keeps its original single-Prompt-call behavior unchanged: in
+	// bare-CLI/engine usage with no server layered over it (the only case
+	// Send ever drives a root's turn directly — see this method's own doc
+	// comment), a root's residency/queue semantics are this package's
+	// existing, separately-tested contract, and this fix's scope is
+	// specifically the child-send gap a live review found — not a
+	// behavior change for roots nothing asked for.
+	isChild := n.depth > 0
 	m.mu.Unlock()
 
 	runCtx, stop := mergeCancel(ctx, nodeCtx)
 	defer stop()
-	msg, err := s.Prompt(runCtx, text)
+	var msg *message.Message
+	var err error
+	if isChild {
+		msg, err = drainQueueAndPrompt(runCtx, s, text)
+	} else {
+		msg, err = s.Prompt(runCtx, text)
+	}
 	if resume := m.finalizeTurn(id, msg, err); resume != nil {
 		go resume()
 	}
@@ -2846,23 +2908,37 @@ func (m *SessionManager) isDescendantLocked(ancestorID, targetID string) bool {
 // always a genuine child, always driven directly by this package, and
 // Cancel alone is always sufficient.
 //
+// Returns targetID's resulting status (StatusCanceled for the ordinary
+// case; whatever terminal status it already carried if canceling an
+// already-done/failed descendant was a no-op — see cancelOneNodeLocked's
+// own doc comment) read back BEFORE releasing m.mu, in the SAME locked
+// operation that performed the cancellation — not via a separate later
+// Info(targetID) call. A live review finding on this fix's first pass:
+// a done/failed/canceled LEAF is Reap-eligible the instant it is
+// finalized (Reap's own doc comment), so a caller's periodic Reap sweep
+// could collect targetID in the gap between this method returning and a
+// separate follow-up read, turning "no such session" into an incorrect
+// answer for a cancel call that had just, in fact, succeeded. Reading
+// the outcome inside the same critical section that produced it closes
+// that gap by construction rather than papering over it with a guess.
+//
 // Returns ErrUnknownSession if either id is not tracked, ErrNotDescendant
 // if targetID is not callerID's descendant.
-func (m *SessionManager) CancelDescendant(callerID, targetID string) error {
+func (m *SessionManager) CancelDescendant(callerID, targetID string) (SessionStatus, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.nodes[callerID]; !ok {
-		return fmt.Errorf("%w: %s", ErrUnknownSession, callerID)
+		return "", fmt.Errorf("%w: %s", ErrUnknownSession, callerID)
 	}
 	n, ok := m.nodes[targetID]
 	if !ok {
-		return fmt.Errorf("%w: %s", ErrUnknownSession, targetID)
+		return "", fmt.Errorf("%w: %s", ErrUnknownSession, targetID)
 	}
 	if !m.isDescendantLocked(callerID, targetID) {
-		return fmt.Errorf("%w: %s", ErrNotDescendant, targetID)
+		return "", fmt.Errorf("%w: %s", ErrNotDescendant, targetID)
 	}
 	m.cancelSubtreeLocked(n)
-	return nil
+	return n.status, nil
 }
 
 // DescendantInfo returns targetID's lifecycle snapshot (status, lineage,
@@ -2903,14 +2979,24 @@ func (m *SessionManager) DescendantInfo(callerID, targetID string) (SessionNode,
 // implementation of the same idea:
 //
 //   - A RUNNING target gets text appended to its own durable prompt
-//     queue (Session.EnqueuePrompt) instead of being refused — the exact
-//     machinery engine.go's Prompt loop already drains at the target's
-//     next tool-call boundary (the "OPERATOR MESSAGES" injection), the
-//     SAME mechanism a root's own queued prompt rides. This is the
-//     design doc's explicit choice: "reuse the existing prompt-queue
-//     machinery rather than rejecting busy children, mirroring how roots
-//     queue prompts" — no new delivery path, just the same one a second
-//     kind of caller can now reach. queued is true on this path.
+//     queue (Session.EnqueuePrompt) instead of being refused — reusing
+//     the existing prompt-queue machinery per the design doc's explicit
+//     choice ("reuse the existing prompt-queue machinery rather than
+//     rejecting busy children, mirroring how roots queue prompts"), not
+//     a brand-new queue. Delivery itself takes one of two paths: the
+//     target's own mid-turn tool-call-boundary drain (engine.go's Prompt
+//     loop, the "OPERATOR MESSAGES" injection) if one arrives before the
+//     current turn ends, or — if it does not, since a child (unlike a
+//     root) has no external residency layer to pick the queue back up
+//     once Prompt returns — drainQueueAndPrompt (below), called from
+//     both of the places that drive a child's own turn (Spawn's launched
+//     goroutine, and Send itself for a child target). A live review
+//     finding on this fix's first pass: relying on the mid-turn drain
+//     ALONE stranded a message enqueued after a target's last tool-call
+//     boundary — its turn would simply end, taking the child straight to
+//     done/failed with the message still sitting, undelivered, in its
+//     own promptQueue forever. drainQueueAndPrompt closes that gap.
+//     queued is true on this path.
 //   - A settled (idle/done/failed) target is restarted with text as its
 //     next turn — existing Send semantics, unchanged — but launched in a
 //     goroutine rather than called synchronously: Send blocks until the
@@ -2926,9 +3012,19 @@ func (m *SessionManager) DescendantInfo(callerID, targetID string) (SessionNode,
 //     concurrency cap, is refused synchronously and deterministically —
 //     mirroring CanSend's own pre-Send admission checks (used by
 //     handleSessionSend for the identical reason: a caller-visible error
-//     up front, not a silently dropped launch) — rather than only ever
-//     failing later, invisibly, inside the fired-and-forgotten
-//     goroutine.
+//     up front, not a silently dropped launch) — for the common,
+//     non-racy case. A genuinely small window remains between this
+//     check (taken and released under m.mu here) and the fired
+//     goroutine's own Send call actually re-acquiring it: a concurrent
+//     Send/Spawn/Cancel against the same target in that gap can still
+//     make Send's OWN re-validation refuse (ErrSessionBusy/
+//     ErrSessionCanceled/ErrConcurrencyLimit), which the fired goroutine
+//     discards — this call has already returned queued: false by then.
+//     Accepted, not closed: CanSend's own doc comment documents the
+//     IDENTICAL residual race for handleSessionSend's child branch
+//     (server/session_tree.go), which this mirrors rather than
+//     introduces — a live review finding on this fix's first pass, whose
+//     doc comment had overclaimed the race fully eliminated.
 //
 // Returns ErrUnknownSession if either id is not tracked, ErrNotDescendant
 // if targetID is not callerID's descendant, ErrSessionCanceled if

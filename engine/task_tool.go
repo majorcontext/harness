@@ -93,11 +93,14 @@ type taskStatusResult struct {
 
 // taskSendResult is the send action's return. Queued distinguishes the
 // two paths SendToDescendant can take: true means text was appended to a
-// still-running descendant's own prompt queue, for delivery at its next
-// tool-call boundary; false means a settled descendant was just
-// relaunched with text as a fresh turn (existing Send semantics) — either
-// way the actual outcome arrives later via the ordinary completion-
-// notification path, never synchronously from this call.
+// still-running descendant's own prompt queue — delivered at its next
+// mid-turn tool-call boundary if one comes first, or as the start of a
+// fresh follow-up turn once its current one ends otherwise (see
+// drainQueueAndPrompt, session_manager.go); false means a settled
+// descendant was relaunched with text as a fresh turn directly (existing
+// Send semantics) — either way the actual outcome arrives later via the
+// ordinary completion-notification path, never synchronously from this
+// call.
 type taskSendResult struct {
 	SessionID string `json:"session_id"`
 	Queued    bool   `json:"queued"`
@@ -273,15 +276,19 @@ func runTaskCancel(s *Session, in taskToolArgs) (message.Parts, error) {
 	if m == nil {
 		return nil, fmt.Errorf("task: this session has no session manager")
 	}
-	if err := m.CancelDescendant(s.ID, in.SessionID); err != nil {
+	// status is targetID's REAL resulting status, read by CancelDescendant
+	// itself inside the same locked operation that performed the
+	// cancellation — never assumed StatusCanceled (canceling an
+	// already-terminal done/failed descendant is a no-op on its own
+	// status) and never re-derived from a separate later read, which
+	// could race a caller's own periodic Reap sweep collecting an
+	// already-terminal leaf in the gap — see CancelDescendant's own doc
+	// comment for the live review finding this closes.
+	status, err := m.CancelDescendant(s.ID, in.SessionID)
+	if err != nil {
 		return nil, classifyTaskVerbError(err, in.SessionID)
 	}
-	// Re-read rather than assume StatusCanceled: canceling an
-	// already-terminal (done/failed) descendant is a no-op on its own
-	// status — see CancelDescendant's own doc comment — and the caller
-	// deserves the real outcome, not an invented one.
-	info, _ := m.Info(in.SessionID)
-	return jsonResult(taskCancelResult{SessionID: in.SessionID, Status: string(info.Status)})
+	return jsonResult(taskCancelResult{SessionID: in.SessionID, Status: string(status)})
 }
 
 // runTaskStatus implements the status action: a descendant's live
@@ -337,7 +344,14 @@ func runTaskSend(s *Session, in taskToolArgs) (message.Parts, error) {
 	if err != nil {
 		return nil, classifyTaskVerbError(err, in.SessionID)
 	}
-	note := "the descendant had already finished, so this relaunched it with your message as a fresh turn; the outcome will arrive later as engine context — no need to poll or wait for it"
+	// "was not actively running," not "had already finished": the
+	// non-queued branch also covers a StatusIdle target (adopted but
+	// never yet run, or resumed to idle) — SendToDescendant's else branch
+	// fires for anything that isn't StatusRunning/StatusCanceled, not
+	// only done/failed — and telling the model a session "finished" when
+	// it never ran a turn at all could mislead its follow-up reasoning. A
+	// live review finding.
+	note := "the descendant was not actively running, so this started it with your message as a fresh turn; the outcome will arrive later as engine context — no need to poll or wait for it"
 	if queued {
 		note = "queued for delivery at the descendant's next turn boundary — no need to poll or wait for it"
 	}
@@ -402,6 +416,14 @@ func classifyTaskToolError(err error) error {
 // targetID itself in the two cases that name it: it is caller-supplied
 // input, never provider/request data, and naming it is what actually
 // tells the caller which session_id was rejected and why.
+//
+// ErrUnknownSession is always attributed to targetID here, even though
+// CancelDescendant/DescendantInfo/SendToDescendant can technically return
+// it for either id. The caller-unknown case is unreachable in practice:
+// s (the session running this very tool call) is definitionally
+// StatusRunning for the duration of its own Run function, and Reap only
+// ever removes a TERMINAL leaf node — s cannot have been forgotten out
+// from under its own in-flight call.
 func classifyTaskVerbError(err error, targetID string) error {
 	switch {
 	case errors.Is(err, ErrUnknownSession):

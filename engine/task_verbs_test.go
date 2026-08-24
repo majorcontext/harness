@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -36,6 +37,54 @@ func (p *blockAfterFirstProvider) Stream(ctx context.Context, _ *provider.Reques
 	}
 	return &blockingStream{ctx: ctx, release: p.release}, nil
 }
+
+// blockFirstThenScriptedProvider blocks on its FIRST call (started closes
+// the instant that call is genuinely in flight — no tool call, nothing
+// else in progress) until release, then delivers a plain StopEndTurn
+// answer with NO tool calls at all: the turn ends via engine.go's early
+// return, never reaching the mid-turn tool-call-boundary drain. Every
+// call after the first is scripted from turns and its request recorded,
+// exactly like scriptedProvider — used to prove drainQueueAndPrompt
+// (session_manager.go) picks a message back up and launches a genuinely
+// SECOND turn when the mid-turn drain never had a chance to.
+type blockFirstThenScriptedProvider struct {
+	name     string
+	release  chan struct{}
+	started  chan struct{}
+	once     sync.Once
+	call     int
+	turns    [][]provider.Event // served starting from the SECOND call
+	requests []*provider.Request
+}
+
+func (p *blockFirstThenScriptedProvider) Name() string { return p.name }
+
+func (p *blockFirstThenScriptedProvider) Stream(_ context.Context, req *provider.Request) (provider.Stream, error) {
+	p.requests = append(p.requests, req)
+	p.call++
+	if p.call == 1 {
+		return &blockFirstStream{p: p}, nil
+	}
+	return &scriptedStream{events: p.turns[p.call-2]}, nil
+}
+
+type blockFirstStream struct {
+	p    *blockFirstThenScriptedProvider
+	done bool
+}
+
+func (s *blockFirstStream) Next() (provider.Event, error) {
+	if s.done {
+		return provider.Event{}, errUnreachableStreamEnd
+	}
+	s.p.once.Do(func() { close(s.p.started) })
+	<-s.p.release
+	s.done = true
+	msg := &message.Message{ID: "msg_first", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "first done"}}}
+	return provider.Event{Type: provider.EventDone, Message: msg, StopReason: provider.StopEndTurn}, nil
+}
+
+func (s *blockFirstStream) Close() error { return nil }
 
 // --- HasHistoryOrSpawnedChildren -------------------------------------
 
@@ -74,7 +123,7 @@ func TestHasHistoryOrSpawnedChildrenTrueForSpawnedChildAlone(t *testing.T) {
 func TestCancelDescendantRejectsSelf(t *testing.T) {
 	mgr := NewSessionManager(context.Background(), 0, 0)
 	root := mgr.NewRoot(managedConfig("root", scriptedTurns("root", nil)))
-	if err := mgr.CancelDescendant(root.ID, root.ID); !errors.Is(err, ErrNotDescendant) {
+	if _, err := mgr.CancelDescendant(root.ID, root.ID); !errors.Is(err, ErrNotDescendant) {
 		t.Errorf("CancelDescendant(root, root): err = %v, want ErrNotDescendant", err)
 	}
 }
@@ -92,7 +141,7 @@ func TestCancelDescendantRejectsUnrelatedSession(t *testing.T) {
 	}
 	waitForStatus(t, mgr, childID, StatusRunning, time.Second)
 
-	if err := mgr.CancelDescendant(otherRoot.ID, childID); !errors.Is(err, ErrNotDescendant) {
+	if _, err := mgr.CancelDescendant(otherRoot.ID, childID); !errors.Is(err, ErrNotDescendant) {
 		t.Errorf("CancelDescendant from an unrelated root: err = %v, want ErrNotDescendant", err)
 	}
 	// The refused call must not have touched anything.
@@ -131,7 +180,7 @@ func TestCancelDescendantCascadesSubtree(t *testing.T) {
 	}
 	waitForStatus(t, mgr, grandID, StatusDone, time.Second)
 
-	if err := mgr.CancelDescendant(root.ID, childID); err != nil {
+	if _, err := mgr.CancelDescendant(root.ID, childID); err != nil {
 		t.Fatalf("CancelDescendant(root, child): %v", err)
 	}
 	waitForStatus(t, mgr, childID, StatusCanceled, time.Second)
@@ -163,7 +212,7 @@ func TestCancelDescendantAllowsTransitiveAncestor(t *testing.T) {
 	}
 	waitForStatus(t, mgr, grandID, StatusRunning, time.Second)
 
-	if err := mgr.CancelDescendant(root.ID, grandID); err != nil {
+	if _, err := mgr.CancelDescendant(root.ID, grandID); err != nil {
 		t.Fatalf("CancelDescendant(root, grand): %v", err)
 	}
 	waitForStatus(t, mgr, grandID, StatusCanceled, time.Second)
@@ -172,7 +221,7 @@ func TestCancelDescendantAllowsTransitiveAncestor(t *testing.T) {
 func TestCancelDescendantUnknownSessionIsError(t *testing.T) {
 	mgr := NewSessionManager(context.Background(), 0, 0)
 	root := mgr.NewRoot(managedConfig("root", scriptedTurns("root", nil)))
-	if err := mgr.CancelDescendant(root.ID, "not-a-real-session"); !errors.Is(err, ErrUnknownSession) {
+	if _, err := mgr.CancelDescendant(root.ID, "not-a-real-session"); !errors.Is(err, ErrUnknownSession) {
 		t.Errorf("CancelDescendant on an unknown target: err = %v, want ErrUnknownSession", err)
 	}
 }
@@ -281,6 +330,67 @@ func TestSendToDescendantRunningQueuesAndDeliversAtBoundary(t *testing.T) {
 	}
 	if !strings.Contains(text, "operator says hi mid-turn") {
 		t.Errorf("second request's trailing message = %q, want the queued text", text)
+	}
+}
+
+// TestSendToDescendantRunningWithoutToolBoundaryStillDelivers is the
+// regression test for a live review finding on this fix's first pass: a
+// message enqueued to a running child whose CURRENT (and only remaining)
+// provider call ends the turn with no further tool-call boundary — the
+// common shape of "the model is mid-generation of its final answer, no
+// tool call in flight" — used to strand forever in the child's own
+// promptQueue, since a child, unlike a root, has no external residency
+// layer to pick the queue back up once Prompt returns. drainQueueAndPrompt
+// (session_manager.go) closes this: the child's turn-driving goroutine
+// notices the queue is still non-empty after its first Prompt call
+// returns and launches a SECOND turn with the queued text, before ever
+// calling finalizeTurn.
+func TestSendToDescendantRunningWithoutToolBoundaryStillDelivers(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{})
+	childProv := &blockFirstThenScriptedProvider{
+		name:    "child",
+		release: release,
+		started: started,
+		turns:   [][]provider.Event{asstTurn(provider.StopEndTurn, &message.Text{Text: "second done"})},
+	}
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	root := mgr.NewRoot(managedConfig("root", scriptedTurns("root", nil), childProv))
+
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	<-started // the child's first (and, in this turn, ONLY) provider call is genuinely in flight — no tool call anywhere in progress
+
+	queued, err := mgr.SendToDescendant(root.ID, childID, "please also cover Y")
+	if err != nil {
+		t.Fatalf("SendToDescendant: %v", err)
+	}
+	if !queued {
+		t.Error("SendToDescendant on a running child: queued = false, want true")
+	}
+
+	close(release) // the first turn ends with StopEndTurn and no tool calls — the mid-turn drain point is never reached at all
+
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	if len(childProv.requests) != 2 {
+		t.Fatalf("child provider requests = %d, want 2 (drainQueueAndPrompt must launch a second turn, not strand the message)", len(childProv.requests))
+	}
+	second := childProv.requests[1]
+	lastText := second.Messages[len(second.Messages)-1].Parts.Text()
+	if lastText != "please also cover Y" {
+		t.Errorf("second turn's trailing message = %q, want the queued text delivered verbatim", lastText)
+	}
+
+	node, ok := mgr.Info(childID)
+	if !ok {
+		t.Fatal("Info after done: not found")
+	}
+	if node.Result != "second done" {
+		t.Errorf("Result = %q, want %q (the SECOND turn's own answer, proving the queued message's turn is what actually settled the child)", node.Result, "second done")
 	}
 }
 
