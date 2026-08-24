@@ -181,11 +181,25 @@ func (s *Session) EnqueuePromptDurable(text string, seq int64) (id int64, duplic
 // emit shape. ok is false when the queue is empty: a clean no-op, nothing
 // persisted or emitted.
 //
+// remaining is len(s.promptQueue) immediately after the dequeue above,
+// computed under the SAME s.mu hold as the dequeue itself — the caller's
+// one atomic answer to "how many are left," rather than a second,
+// separately-locked QueuedPrompts() call. A live review finding: a
+// caller that dequeued here and THEN called QueuedPrompts() as a
+// follow-up reintroduced a narrower version of the exact
+// dispatchQueueHead race that PR fixed (server/handlers.go) — a
+// DIFFERENT dequeue (a concurrent DELETE /session/{id}/queue, another
+// dispatch) can interleave in the gap between the two separately-locked
+// calls, same as re-reading QueuedPrompts() after spawning runPrompt
+// could observe a queue already drained further than this exact call
+// left it. Returning it as part of this same locked operation removes
+// that gap entirely.
+//
 // reason is one of "delivered" (idle dispatch, Task 3), "injected" (goal-
 // turn-boundary interjection, Task 2), or "cleared" (DELETE
 // /session/{id}/queue, Task 3) — this package does not validate the value,
 // it is simply carried through to the record and event.
-func (s *Session) DequeuePrompt(reason string) (p QueuedPrompt, ok bool) {
+func (s *Session) DequeuePrompt(reason string) (p QueuedPrompt, remaining int, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.dequeueLocked(reason)
@@ -195,18 +209,19 @@ func (s *Session) DequeuePrompt(reason string) (p QueuedPrompt, ok bool) {
 // by the caller — used directly by dequeueAllLocked below so a full-queue
 // drain journals every record within one critical section, atomically with
 // respect to a concurrent EnqueuePrompt.
-func (s *Session) dequeueLocked(reason string) (QueuedPrompt, bool) {
+func (s *Session) dequeueLocked(reason string) (QueuedPrompt, int, bool) {
 	if len(s.promptQueue) == 0 {
-		return QueuedPrompt{}, false
+		return QueuedPrompt{}, 0, false
 	}
 	p := s.promptQueue[0]
 	s.promptQueue = s.promptQueue[1:]
 	s.persistPromptQueueLocked(recPromptDequeued, promptRecord{ID: p.ID, Text: p.Text, Reason: reason})
+	remaining := len(s.promptQueue)
 	// Emit while still holding s.mu (see EnqueuePrompt above): keeps event
 	// order matching log order. OnEvent must not call back into this
 	// Session — that would deadlock on s.mu, held here.
-	s.emit(Event{Type: EventPromptDequeued, QueueID: p.ID, QueueText: p.Text, QueueReason: reason, QueueLen: len(s.promptQueue)})
-	return p, true
+	s.emit(Event{Type: EventPromptDequeued, QueueID: p.ID, QueueText: p.Text, QueueReason: reason, QueueLen: remaining})
+	return p, remaining, true
 }
 
 // dequeueAllLocked drains the entire queue in FIFO order, journaling one
@@ -221,7 +236,7 @@ func (s *Session) dequeueLocked(reason string) (QueuedPrompt, bool) {
 func (s *Session) dequeueAllLocked(reason string) []QueuedPrompt {
 	var drained []QueuedPrompt
 	for {
-		p, ok := s.dequeueLocked(reason)
+		p, _, ok := s.dequeueLocked(reason)
 		if !ok {
 			break
 		}

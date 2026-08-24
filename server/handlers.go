@@ -1721,16 +1721,26 @@ func (s *Server) freeRunSlotAndEmitIdle(id string, st *sessionState) {
 // mutex-protected, so there is no data race — it is a pure ordering
 // assumption ("the item I just dispatched is still running, so anything
 // behind it in the queue is untouched") that nothing here actually
-// enforces. Snapshotting the depth before the spawn removes the race
-// entirely: nothing else can touch this session's queue between the
-// dequeue above and this line.
+// enforces.
+//
+// remaining comes straight from DequeuePrompt's own return value —
+// engine.Session's answer to "how many are left," computed under the
+// SAME s.mu hold as the dequeue itself (engine/queue.go) — never a
+// separate, follow-up QueuedPrompts() call here. A live review finding
+// on an earlier version of this fix: a second, separately-locked read
+// reintroduced a NARROWER version of the exact race this method exists
+// to close — a different dequeue (a concurrent DELETE
+// /session/{id}/queue, another dispatch) can interleave in the gap
+// between the two separately-locked calls, same class of gap as the
+// goroutine-spawn race above, just smaller. Taking the count directly
+// from the dequeue's own atomic result removes that gap entirely: there
+// is no second lock acquisition left to race.
 func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Context) (head engine.QueuedPrompt, remaining int, ok bool) {
-	head, ok = st.sess.DequeuePrompt("delivered")
+	head, remaining, ok = st.sess.DequeuePrompt("delivered")
 	if !ok {
 		s.releasePromptClaim(st)
 		return head, 0, false
 	}
-	remaining = len(st.sess.QueuedPrompts())
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 	go s.runPrompt(ctx, id, st, head.Text)
 	if s.dispatchQueueHeadRace != nil {

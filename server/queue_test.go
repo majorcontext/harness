@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -741,6 +740,16 @@ type orderCaptureProv struct {
 	order   []string
 	replies []string
 	call    int
+	// calls, when non-nil, receives a value at the START of every Stream
+	// call, before this provider does anything else — a channel-based
+	// synchronization point a test can block on to know a specific call
+	// has begun, instead of a guessed time.Sleep (AGENTS.md's testing
+	// rule: "No raw time.Sleep for synchronization — ever"). Must be
+	// buffered with enough capacity for every call a test expects, since
+	// nothing ever drains it if a test chooses not to receive from it —
+	// nil is a safe no-op (every send is skipped) for callers that don't
+	// need this.
+	calls chan struct{}
 }
 
 func (p *orderCaptureProv) Name() string { return p.name }
@@ -748,6 +757,9 @@ func (p *orderCaptureProv) Name() string { return p.name }
 func (p *orderCaptureProv) Stream(_ context.Context, req *provider.Request) (provider.Stream, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.calls != nil {
+		p.calls <- struct{}{}
+	}
 	var text string
 	for i := len(req.Messages) - 1; i >= 0; i-- {
 		if req.Messages[i].Role == message.RoleUser {
@@ -886,19 +898,24 @@ func TestIdlePromptWithQueueGoesFIFO(t *testing.T) {
 // enforced.
 //
 // Forces the race deterministically via dispatchQueueHeadRace (test-only
-// seam, server.go) instead of relying on scheduling luck: the hook sleeps
-// long enough for the dispatched turn — and any chained dispatch behind
-// it — to fully run to completion before dispatchQueueHead returns to its
-// caller, reproducing the exact window an unlucky real scheduling
-// decision opened in CI, on every single run. Asserts the response's own
-// Queued count is unaffected by how far the race actually got to run,
-// proving the fix (dispatchQueueHead's own remaining return value,
-// snapshotted synchronously immediately after the dequeue, before the
-// goroutine is ever spawned) closes the window structurally rather than
-// merely making it rarer.
+// seam, server.go) instead of relying on scheduling luck: the hook blocks
+// on orderCaptureProv's own calls channel until the dispatched turn's
+// Stream call AND its own chained dispatch's Stream call have both
+// actually started — channel-based, not a guessed time.Sleep (AGENTS.md's
+// testing rule: "No raw time.Sleep for synchronization — ever"). By the
+// time a dispatched item's own Stream call starts, dispatchQueueHead has
+// already dequeued it (dequeue always precedes the goroutine spawn that
+// eventually calls Stream) — sufficient to reproduce the exact window an
+// unlucky real scheduling decision opened in CI, deterministically, on
+// every single run. Asserts the response's own Queued count is unaffected
+// by that race window having been forced open, proving the fix
+// (dispatchQueueHead's own remaining return value, snapshotted atomically
+// with the dequeue itself, before the goroutine is ever spawned) closes it
+// structurally rather than merely making it rarer.
 func TestIdlePromptWithQueueDispatchDoesNotRaceQueuedCountInResponse(t *testing.T) {
 	dir := t.TempDir()
-	prov := &orderCaptureProv{name: "test", replies: []string{"r1", "r2", "r3"}}
+	calls := make(chan struct{}, 3)
+	prov := &orderCaptureProv{name: "test", replies: []string{"r1", "r2", "r3"}, calls: calls}
 	srv1 := newServer(t, dir, prov, 0)
 	ts1 := httptest.NewServer(srv1)
 	h1 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv1, ts: ts1}
@@ -924,12 +941,18 @@ func TestIdlePromptWithQueueDispatchDoesNotRaceQueuedCountInResponse(t *testing.
 	ts1.Close()
 
 	srv2 := newServer(t, dir, prov, 0)
+	var raceOnce sync.Once
 	srv2.dispatchQueueHeadRace = func() {
-		// Long enough for the scripted (instant) provider's own turns to
-		// run to completion end to end, however many chain behind this
-		// one — the exact window dispatchQueueHead's remaining return
-		// value must be immune to.
-		time.Sleep(50 * time.Millisecond)
+		// dispatchQueueHead is called three times in this test's own
+		// flow (this POST's own dispatch of q1, then q1's own tail
+		// chain-dispatching q2, then possibly q2's own tail
+		// chain-dispatching "third") — only the FIRST call is this
+		// POST handler's own, the one whose response the assertion
+		// below checks; block only there.
+		raceOnce.Do(func() {
+			<-calls // q1's own Stream call has started (already dequeued)
+			<-calls // q2's own Stream call has started (already dequeued)
+		})
 	}
 	ts2 := httptest.NewServer(srv2)
 	t.Cleanup(ts2.Close)
