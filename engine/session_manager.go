@@ -748,16 +748,23 @@ func (m *SessionManager) adoptReloadedLocked(s *Session, recover bool) *sessionN
 // until finalizeTurn — or this very method — explicitly marks it
 // settled, regardless of what trailing message shape resulted).
 //
-// On detection: n is marked StatusFailed and finalized=true directly —
-// nothing is left to settle in THIS process (no in-flight goroutine's
-// own finalizeTurn will ever run for it, unlike a node this process
-// itself is driving), so it is immediately Reap-eligible, exactly
-// mirroring cancelOneNodeLocked's identical `!wasRunning -> finalized =
-// true` reasoning for a node with no live unwinding goroutine. A
-// synthetic notification is built and delivered through the EXACT SAME
-// path finalizeTurn's own cancellation branch uses (nearestLiveAncestorLocked
+// On detection: finalized=true directly, always — nothing is left to
+// settle in THIS process (no in-flight goroutine's own finalizeTurn will
+// ever run for it, unlike a node this process itself is driving), so it
+// is immediately Reap-eligible, exactly mirroring cancelOneNodeLocked's
+// identical `!wasRunning -> finalized = true` reasoning for a node with
+// no live unwinding goroutine. n.status is USUALLY set StatusFailed — but
+// see settledSuccessResult's own doc comment (engine.go) for the one
+// unambiguous case this reports StatusDone instead, with the child's real
+// result: a crash can strike after a turn genuinely finished but before
+// finalizeTurn's own bookkeeping durably landed, and reporting that as a
+// failure would be a false, permanent misstatement to the parent, judged
+// by a live review as worse than the notification simply being late. A
+// notification — synthetic FAILED or reconstructed DONE, whichever this
+// turned out to be — is built and delivered through the EXACT SAME path
+// finalizeTurn's own cancellation branch uses (nearestLiveAncestorLocked
 // + enqueueTaskNotification), so a live ancestor learns about this
-// exactly as it would learn about any other failed child — never a
+// exactly as it would learn about any other terminal child — never a
 // second-class delivery mechanism. If that ancestor is currently idle,
 // an active resume is fired to wake it — see fireIdleResumeAsync's own
 // doc comment for why that happens asynchronously, outside this
@@ -777,9 +784,20 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	if !s.hasUnfinalizedTurn() {
 		return
 	}
-	n.status = StatusFailed
+	// Before assuming the worst, check whether this turn actually reached
+	// a natural, unambiguous end — see settledSuccessResult's own doc
+	// comment (engine.go) for the exact shape it detects and why, and for
+	// the residual narrower case it deliberately does not. settledResult/
+	// settledOK are read again below, once, when notify is built.
+	settledResult, settledOK := s.settledSuccessResult()
 	n.finalized = true
-	n.failReason = "lost to restart: turn was in flight when the process last stopped"
+	if settledOK {
+		n.status = StatusDone
+		n.result = settledResult
+	} else {
+		n.status = StatusFailed
+		n.failReason = "lost to restart: turn was in flight when the process last stopped"
+	}
 
 	// Fold this child's spend into its root's tree-wide budget total —
 	// see finalizeTurn's own identical delta-accounting block (and
@@ -832,7 +850,12 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	// finding: a Send-restarted child interrupted on its follow-up turn
 	// would otherwise under-report its total usage in the parent's
 	// [tasks:] line relative to an ordinarily-failed child.
-	notify := taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: n.failReason, Usage: total}
+	var notify taskNotification
+	if settledOK {
+		notify = taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusDone, Result: settledResult, Usage: total}
+	} else {
+		notify = taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: n.failReason, Usage: total}
+	}
 	target := m.nearestLiveAncestorLocked(n)
 
 	// n may ALSO have been a parent with its own pending notifications —
@@ -881,6 +904,7 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	// repeat is recognized and skipped, both in memory and in what gets
 	// durably persisted below.
 	var toPersist []taskNotification
+	var delivered []taskNotification
 	if target != nil {
 		if target.session.enqueueTaskNotificationMemoryOnlyDeduped(notify) {
 			toPersist = append(toPersist, notify)
@@ -889,6 +913,20 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 			if target.session.enqueueTaskNotificationMemoryOnlyDeduped(fn) {
 				toPersist = append(toPersist, fn)
 			}
+		}
+		// forwarded is only genuinely "delivered" when there was a live
+		// target to hand it to — see the else branch below, mirroring
+		// finalizeTurn's own identical target!=nil gating around its
+		// sibling persistDeliveredTaskNotifications call exactly. A live
+		// review finding on an earlier version of this method: it called
+		// persistDeliveredTaskNotifications(forwarded) unconditionally,
+		// so a target==nil crash-window run (see below) durably marked a
+		// GRANDCHILD's notification as recTaskNotifyDelivered even though
+		// it was never actually enqueued anywhere — silently and durably
+		// LYING that undelivered work was delivered, permanently hiding
+		// the drop from anyone auditing the journal afterward.
+		if len(forwarded) > 0 {
+			delivered = forwarded
 		}
 	} else {
 		// No live ancestor to deliver to — either every ancestor up to
@@ -931,8 +969,8 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 			}
 		})
 	}
-	if len(forwarded) > 0 {
-		m.deferPersist(func() { s.persistDeliveredTaskNotifications(forwarded) })
+	if len(delivered) > 0 {
+		m.deferPersist(func() { s.persistDeliveredTaskNotifications(delivered) })
 	}
 
 	// Close the dangling turn in HISTORY too — readability only now, NOT
@@ -948,19 +986,28 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	// existed): idempotency is now markTurnSettled's job below, not
 	// this append's.
 	//
+	// Skipped entirely when settledOK: the turn was NOT actually
+	// interrupted — s's own trailing message already IS the real,
+	// natural close of this turn (see settledSuccessResult's doc
+	// comment) — appending a synthetic "this turn was interrupted"
+	// message after a genuine final answer would corrupt an otherwise-
+	// clean transcript with a flatly false claim.
+	//
 	// Role: RoleAssistant, not RoleTool — this is a genuine INTERRUPTED
 	// MODEL TURN (no tool call to pair a synthetic RoleTool result with,
 	// unlike interruptedToolResults' narrower case), so an assistant-role
 	// message is what actually closes a turn in this transcript's own
 	// vocabulary; the text itself is unambiguous synthetic-marker
 	// language, never presented as if the model actually said it.
-	closing := s.appendMemoryOnly(message.Message{
-		ID:        newID("msg"),
-		Role:      message.RoleAssistant,
-		Parts:     message.Parts{&message.Text{Text: lostToRestartText}},
-		CreatedAt: time.Now().UTC(),
-	})
-	m.deferPersist(func() { s.persistAppendedMessage(closing) })
+	if !settledOK {
+		closing := s.appendMemoryOnly(message.Message{
+			ID:        newID("msg"),
+			Role:      message.RoleAssistant,
+			Parts:     message.Parts{&message.Text{Text: lostToRestartText}},
+			CreatedAt: time.Now().UTC(),
+		})
+		m.deferPersist(func() { s.persistAppendedMessage(closing) })
+	}
 
 	// Mark this turn settled — the actual idempotency mechanism now (see
 	// turnUnsettled's own doc comment, engine.go): a LATER, unrelated

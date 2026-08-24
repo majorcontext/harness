@@ -1148,6 +1148,69 @@ func (s *Session) persistTurnSettled() {
 	s.mu.Unlock()
 }
 
+// settledSuccessResult reports whether s's own trailing history message is
+// an unambiguous, natural completion of its last turn — narrowly used by
+// SessionManager.recoverInterruptedTurnLocked to tell a genuine mid-turn
+// crash apart from a crash that struck AFTER the turn actually finished but
+// BEFORE finalizeTurn's own bookkeeping (the parent-facing notification,
+// then the child_turn.settled marker — see hasUnfinalizedTurn's own doc
+// comment) durably landed: the "notify->settled window" a live review named
+// directly. Before this existed, recoverInterruptedTurnLocked always
+// reported a StatusFailed "lost to restart" notification for ANY detected
+// crash, including this one — telling a parent its successful child failed,
+// which the review judged worse than a lost notification (a lost
+// notification is at least honestly absent; a false failure actively
+// misinforms, permanently, since nothing else will ever correct it).
+//
+// Deliberately narrow, and NOT a revival of the deleted hasUnansweredTurn's
+// own broad "was this turn interrupted at all" gate — that heuristic was
+// proven unreliable in BOTH directions (see turnUnsettled's own doc
+// comment) precisely because it tried to answer that broad question from
+// trailing shape alone. hasUnfinalizedTurn already answers the broad
+// question reliably today; this helper only answers a narrower one — GIVEN
+// that recovery is correctly firing, did this specific turn actually reach
+// a natural end? — for exactly one unambiguous shape: a trailing
+// RoleAssistant message carrying no ToolCall part. By construction (see
+// runAgenticLoop, engine.go: the `if stop != provider.StopToolUse` and
+// `len(results) == 0` branches are the ONLY paths that return a final
+// asst without looping again, and both call appendUnexecutedToolCallResults
+// immediately afterward, which is a no-op unless asst itself carries a
+// ToolCall part), a trailing assistant message with no ToolCall part is not
+// a probabilistic guess at "probably done" — it IS the exact shape
+// runAgenticLoop produces on its one and only natural-return path when the
+// model's own response requested no further action, whatever crashed
+// afterward.
+//
+// Narrower than the full space of natural completions on purpose: the rarer
+// NEP-5272 "wedge" shape (a non-StopToolUse stop reported ALONGSIDE
+// ToolCall parts — see unexecutedToolCallStopReasonTextFmt's own doc
+// comment) also completes naturally, but leaves a trailing SYNTHETIC
+// RoleTool closer instead, one step removed from asst. That shape is
+// deliberately NOT detected here: distinguishing a synthetic closer from a
+// genuine, still-pending tool result would require pattern-matching
+// synthesized text content, itself a heuristic this fix does not want to
+// add another one of. A crash in that narrower window still falls back to
+// the safe, honest "lost to restart" report below — never a false success,
+// only a residual, explicitly accepted case of what this fix does not
+// claim to cover.
+func (s *Session) settledSuccessResult() (result string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.history) == 0 {
+		return "", false
+	}
+	last := s.history[len(s.history)-1]
+	if last.Role != message.RoleAssistant {
+		return "", false
+	}
+	for _, p := range last.Parts {
+		if _, isToolCall := p.(*message.ToolCall); isToolCall {
+			return "", false
+		}
+	}
+	return last.Parts.Text(), true
+}
+
 // Plugins returns a snapshot of this session's configured plugins — name,
 // spawn state, registered tools, and subscribed hooks — for the session_info
 // tool and GET /session. A session with no plugin host returns an empty

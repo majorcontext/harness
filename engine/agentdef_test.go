@@ -190,6 +190,41 @@ body
 	}
 }
 
+// TestLoadAgentDefsSemanticErrorTakesPrecedenceOverUnknownKey is the
+// regression test for a live review finding on parseAgentDef's own
+// ordering: an earlier version of its frontmatter-parsing loop returned
+// errUnknownFrontmatterKey (the ONE lenient error class — see its own doc
+// comment) the INSTANT it hit an unknown key, before ever reaching the
+// tools:/model: semantic validation that only runs once the full
+// frontmatter block has been collected. A file with BOTH a stray unknown
+// key AND a genuine semantic mistake (here, an unknown tool name) — with
+// the unknown key's line coming first in the file — reported only the
+// lenient error, silently discarding the hard one LoadAgentDefs actually
+// needed to fail the whole directory's load for: leniency is for unknown
+// KEYS only, and must never suppress the report of a co-occurring
+// semantic mistake.
+func TestLoadAgentDefsSemanticErrorTakesPrecedenceOverUnknownKey(t *testing.T) {
+	dir := t.TempDir()
+	writeAgentDef(t, dir, "bad.md", `---
+name: bad
+description: has both a bogus key and a bad tool name
+color: blue
+tools: read_file, teleport
+---
+body
+`)
+	defs, err := LoadAgentDefs(dir)
+	if err == nil {
+		t.Fatalf("LoadAgentDefs with an unknown key AND an unknown tool: want a load error, got defs=%v nil error", defs)
+	}
+	if !strings.Contains(err.Error(), "teleport") {
+		t.Errorf("error does not name the unknown tool (the unknown key error won instead): %v", err)
+	}
+	if defs != nil {
+		t.Errorf("defs = %v, want nil on a load error", defs)
+	}
+}
+
 // TestLoadAgentDefsMissingNameIsLoadError: a missing required field is a
 // structural authoring mistake, not the ONE lenient "unknown frontmatter
 // key" case — hard load error for the whole directory.

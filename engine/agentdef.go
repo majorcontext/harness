@@ -325,6 +325,21 @@ func parseAgentDef(doc, path string) (AgentDef, error) {
 	}
 
 	fields := make(map[string]string)
+	// unknownKeyErr is recorded, not returned immediately, the moment an
+	// unknown key is seen — see its own use below (after every other
+	// check in this function has had a chance to run) for why: an
+	// earlier version of this loop returned this error the INSTANT it
+	// hit an unknown key, which meant a file with BOTH a stray unknown
+	// key AND a genuine semantic mistake (an unknown tool name, an
+	// invalid model string — validated below, only once the full fields
+	// map is assembled) reported only the lenient one, whichever line
+	// happened to come first in the file — silently hiding the hard
+	// error LoadAgentDefs actually needed to fail the whole directory
+	// load for. A live review caught this: leniency is for unknown KEYS
+	// only, and must never suppress the REPORT of a co-occurring semantic
+	// mistake, even if it does still win when it is the ONLY problem the
+	// file has (see the final check at the bottom of this function).
+	var unknownKeyErr error
 	for _, line := range lines[1:closeIdx] {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
@@ -337,13 +352,10 @@ func parseAgentDef(doc, path string) (AgentDef, error) {
 		key = strings.TrimSpace(key)
 		value = unquoteAgentDefValue(strings.TrimSpace(value))
 		if !agentDefKnownKeys[key] {
-			// Wrapped with errUnknownFrontmatterKey — the ONE error class
-			// LoadAgentDefs treats leniently (skip this file, warn, keep
-			// going). See that sentinel's own doc comment for why every
-			// OTHER error parseAgentDef can return, including the two
-			// right below (unknown tool, invalid model), is a hard load
-			// error for the whole directory instead.
-			return AgentDef{}, fmt.Errorf("%w: %q", errUnknownFrontmatterKey, key)
+			if unknownKeyErr == nil {
+				unknownKeyErr = fmt.Errorf("%w: %q", errUnknownFrontmatterKey, key)
+			}
+			continue
 		}
 		if _, dup := fields[key]; dup {
 			return AgentDef{}, fmt.Errorf("duplicate frontmatter key %q", key)
@@ -390,6 +402,15 @@ func parseAgentDef(doc, path string) (AgentDef, error) {
 			return AgentDef{}, fmt.Errorf("invalid model %q: %w", raw, err)
 		}
 		def.Model = ref
+	}
+	// Checked LAST, only once every hard-error class above (missing
+	// name/description, unknown tool, invalid model) has had its chance
+	// to fire — see unknownKeyErr's own comment above for why: this is
+	// what actually makes leniency lose to a co-occurring semantic
+	// mistake instead of silently masking it, while still winning (as
+	// before) when it is the file's only problem.
+	if unknownKeyErr != nil {
+		return AgentDef{}, unknownKeyErr
 	}
 	return def, nil
 }

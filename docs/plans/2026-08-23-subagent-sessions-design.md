@@ -242,17 +242,34 @@ log record — regardless of what outcome resulted or what trailing
 message shape it left. Only a genuine crash, the process dying before
 either of those ever runs, leaves this true on the next reload.
 
-**Decision: treat it as `failed`, synthetically, on next touch.** A
-dangling child is marked `StatusFailed` (`FailReason`: `"lost to
-restart: turn was in flight when the process last stopped"`) the moment
-`adoptReloadedLocked` reconstructs it, and a synthetic notification is
-delivered to its nearest live ancestor through the EXACT SAME
-`nearestLiveAncestorLocked` + `enqueueTaskNotification` path every other
-terminal outcome uses — never a second-class delivery mechanism. See
-`recoverInterruptedTurnLocked`'s own doc comment (session_manager.go) for
-the full mechanism, including why the resulting resume is fired
-asynchronously rather than threaded back through `AdoptReloaded`/
-`ReportTurnStart`'s public signatures.
+**Decision: treat it as `failed`, synthetically, on next touch — unless
+the turn actually finished.** A dangling child is normally marked
+`StatusFailed` (`FailReason`: `"lost to restart: turn was in flight when
+the process last stopped"`) the moment `adoptReloadedLocked` reconstructs
+it, and a synthetic notification is delivered to its nearest live
+ancestor through the EXACT SAME `nearestLiveAncestorLocked` +
+`enqueueTaskNotification` path every other terminal outcome uses — never
+a second-class delivery mechanism. One narrow exception: if the child's
+own trailing history message is an unambiguous natural completion (a
+plain final assistant answer, no pending tool call —
+`Session.settledSuccessResult`, engine.go), the crash struck AFTER the
+turn genuinely finished but BEFORE `finalizeTurn`'s own bookkeeping
+durably landed (the "notify→settled window"). Reporting that as a
+failure would be a false, permanent misstatement to the parent — worse
+than a merely-late notification, since nothing else would ever correct
+it — so recovery reconstructs a `StatusDone` notification with the
+child's real result instead. See `recoverInterruptedTurnLocked`'s own doc
+comment (session_manager.go) for the full mechanism, including why the
+resulting resume is fired asynchronously rather than threaded back
+through `AdoptReloaded`/`ReportTurnStart`'s public signatures, and
+`settledSuccessResult`'s own doc comment for exactly which trailing shape
+this covers and which rarer one (a synthetic tool-result closer one step
+removed from the real answer) it deliberately does not.
+
+A forwarded grandchild notification (see above) is only ever durably
+marked delivered when there was a live ancestor to actually hand it to —
+when there is none, it is dropped exactly like `finalizeTurn`'s own
+identical case, never recorded as delivered work that was, in fact, lost.
 
 **Accepted scope cut: reactive, not proactive.** This only fires when
 something actually reloads the dangling child's own id again (a
