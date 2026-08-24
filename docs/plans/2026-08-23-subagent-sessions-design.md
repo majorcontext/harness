@@ -111,9 +111,20 @@ errUnknownFrontmatterKey doc comment for the full reasoning.
 ### The `task` tool (model-facing)
 
 One built-in tool, registered on any session whose depth is below the
-limit and whose agent definition includes it:
+limit and whose agent definition includes it. `action` selects the
+operation and defaults to `"spawn"` — the tool's original, pre-verbs
+argument shape (`agent`/`prompt`/`model`, no `action` field at all) is
+unchanged and keeps working:
 
-    task(agent: string, prompt: string, model?: string) -> {session_id}
+    task(action?: "spawn"|"cancel"|"status"|"send", agent?: string,
+         prompt?: string, model?: string, session_id?: string) -> {...}
+
+One tool, action-based, rather than four separate tools — inspired by
+fx's consolidated subagent tool, and following this codebase's own
+precedent for a multi-operation session tool (`goal_tool.go`,
+`mcp_tool.go`) rather than inventing a new shape.
+
+**spawn** (the original behavior, unchanged):
 
 - Returns immediately after the child session is created and its first
   turn is enqueued. The result contains the child session id and a
@@ -123,6 +134,50 @@ limit and whose agent definition includes it:
   a crash), tree concurrency cap reached.
 - Optional `model` overrides the definition's model, which overrides the
   parent's.
+
+**cancel**, **status**, and **send** are ancestor-gated: `session_id`
+must be a descendant of the calling session — spawned by it directly, or
+by one of its own descendants, transitively. Anything else (an unrelated
+session, a sibling's subtree, `session_id` naming the caller itself)
+fails cleanly with the same error a genuinely unknown id would, rather
+than leaking which sessions exist elsewhere in the tree. All three build
+directly on `SessionManager` primitives that already existed for this
+feature's Stage 1/3 delivery machinery — no new scheduling or storage
+mechanism:
+
+- **cancel** (`session_id`) stops a descendant's entire subtree —
+  `SessionManager.CancelDescendant`, which routes to `Cancel`/
+  `cancelSubtreeLocked` (cascade cancellation), not `AbortTurn`.
+  "Stop this delegation" means the whole subtree the descendant may
+  itself have fanned out, not merely its own current turn — `AbortTurn`
+  deliberately leaves a target's own children running (see its own doc
+  comment), the opposite of what a caller canceling a child it spawned
+  wants. Returns the descendant's real resulting status: canceling an
+  already-done/failed descendant is a no-op on its recorded outcome,
+  reported honestly rather than claimed as a fresh cancellation.
+- **status** (`session_id`) reports a descendant's live status, lineage
+  (parent id, depth, children), and cumulative token usage —
+  `SessionManager.DescendantInfo`, the engine-level counterpart to the
+  wire's `session.info` payload, scoped to what a spawning ancestor may
+  inspect.
+- **send** (`session_id`, `prompt`) delivers a message to a descendant —
+  `SessionManager.SendToDescendant`. A RUNNING descendant gets the
+  message appended to its own durable prompt queue
+  (`Session.EnqueuePrompt`) rather than being refused: the exact
+  mid-turn tool-call-boundary drain (`engine.go`'s Prompt loop) that
+  already delivers a root's own queued prompt, reused here rather than
+  rejecting a busy child — mirroring how the wire's `session.send`
+  queues a busy root instead of dropping the message
+  (`server/session_tree.go`'s `sendTextToRoot`). A SETTLED (idle/done/
+  failed) descendant is restarted with the message as a fresh turn —
+  existing `Send` semantics, unchanged — but launched asynchronously
+  (a goroutine, mirroring `Spawn`'s own launched goroutine) rather than
+  called inline, since `Send` blocks for the whole re-run turn and this
+  tool's non-blocking contract must not grow an exception. Either way
+  the outcome arrives later via the ordinary completion-notification
+  path, never synchronously from the tool call. A canceled target, or
+  one that would push the tree over its concurrency cap, is refused
+  synchronously instead.
 
 ### Completion delivery (queue-or-resume)
 
@@ -379,6 +434,14 @@ work, deliberately deferred rather than folded into this fix.
   result, chains a second spawn from the resume turn.
 - Wire tests: `session.create/send/info` including create-with-parent
   equivalence to `task`.
+- `task` verbs (cancel/status/send): lineage validation (self, an
+  unrelated tree, and a non-direct-spawner ancestor two hops up all
+  handled correctly), cancel's cascade and its status-preserving no-op on
+  an already-terminal target, status's usage/lineage accuracy, send's two
+  paths (a running descendant's message delivered at the next tool-call
+  boundary; a settled descendant's re-run launched without blocking the
+  caller), and the bare-spawn backward-compatibility case (arguments with
+  no `action` field at all).
 
 ## Rollout
 

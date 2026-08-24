@@ -1170,6 +1170,20 @@ func (s *Session) SpawnedChildIDs() []string {
 	return append([]string(nil), s.spawnedChildIDs...)
 }
 
+// HasHistoryOrSpawnedChildren reports whether s has any message history
+// or has ever spawned a child, without allocating either full copy the
+// way History()/SpawnedChildIDs() do — restoreKnownStatusLocked's own
+// non-emptiness check (session_manager.go) needs only this boolean, not
+// either slice's actual contents, and previously paid for two full
+// slice copies (append([]T(nil), ...)) just to compare their lengths
+// against zero and discard the result. A declined-thread follow-up from
+// the subagent-sessions review.
+func (s *Session) HasHistoryOrSpawnedChildren() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.history) > 0 || len(s.spawnedChildIDs) > 0
+}
+
 // recordSpawnedChildLocked appends childID to s.spawnedChildIDs — the
 // live-path counterpart to LoadSession's own recTaskSpawned fold (see
 // spawnedChildIDs' own doc comment), called once from
