@@ -1732,8 +1732,9 @@ be able to understand the problem, the approach, and what to scrutinize
 before opening a single file. A one-line PR body on a multi-file change
 is a defect.
 
-`Fixes #N` / `Updates #N` trailers when an issue exists. Never any
-AI-attribution trailers (see the repo rule). Squash merges inherit the PR
+`Fixes #N` / `Updates #N` trailers when an issue exists. Never include
+AI-attribution lines (`Co-Authored-By` for agents, session links,
+"Generated with" footers) in commits or PR bodies. Squash merges inherit the PR
 title as subject — write PR titles to the same standard as commit
 subjects.
 
