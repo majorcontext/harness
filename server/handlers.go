@@ -2415,6 +2415,14 @@ func (s *Server) handleGoalDelete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Same guard as every other mutating per-{id} route (prompt_async, goal,
+	// enqueue, compact, model, thinking): without it, the cold-load below
+	// builds a SECOND *engine.Session over a live managed child's log and
+	// journals goal.cleared on it concurrently with the child's own
+	// Spawn-driven turn — see rejectManagedChildTurn's doc comment.
+	if s.rejectManagedChildTurn(w, id) {
+		return
+	}
 	s.mu.Lock()
 	st := s.sessions[id]
 	s.mu.Unlock()
@@ -2807,6 +2815,14 @@ func (s *Server) handleQueueGet(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleQueueDelete(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
+		return
+	}
+	// Same guard as every other mutating per-{id} route: without it, the
+	// cold-load below builds a SECOND *engine.Session over a live managed
+	// child's log and persists prompt.dequeued records on it concurrently
+	// with the child's own Spawn-driven turn — see rejectManagedChildTurn's
+	// doc comment.
+	if s.rejectManagedChildTurn(w, id) {
 		return
 	}
 	s.mu.Lock()
@@ -3422,11 +3438,11 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 // time, unconditionally — see persistTaskSpawnLocked). A live audit
 // caught exactly this gap: a parent whose only child had already settled
 // and been reaped reported "children":[] even though SpawnedChildIDs()
-// still listed it. childIDsUnion merges the two (live tree first, in its
-// own order, then any durable-only stragglers in spawn order) so a caller
-// always sees every child this session ever spawned, live or long since
-// reaped — never only whichever half of the bookkeeping happens to still
-// be resident.
+// still listed it. childIDsUnion merges the two (durable first, in spawn
+// order — see its own doc comment for why durable-first, not live-first,
+// is what preserves spawn order overall) so a caller always sees every
+// child this session ever spawned, live or long since reaped — never only
+// whichever half of the bookkeeping happens to still be resident.
 //
 // nil only when NEITHER source has anything: a genuine root (empty
 // TaskParentID) or a session predating this feature.
@@ -3461,23 +3477,33 @@ func (s *Server) lineageJSONFor(id string, sess *engine.Session) *lineageJSON {
 // childIDsUnion merges live (the current in-memory tree's child list) with
 // durable (Config-persisted SpawnedChildIDs, spawn order, never shrinks —
 // see Session.SpawnedChildIDs' own doc comment) into ONE de-duplicated
-// list — live entries first in their own order, then any durable-only
-// stragglers (a settled, already-Reaped child; see Reap's own doc comment
-// on why a reaped leaf drops out of its parent's live Children) appended in
-// spawn order. Always returns a non-nil slice (never omitted — see
-// lineageJSON.Children's own doc comment on why that field has no
-// omitempty): "children":[] means "known: zero children now, and none ever
-// durably spawned either," never "unknown."
+// list. Durable entries come first, in spawn order. Live-only entries (a
+// legacy parent whose log predates task.spawned records) follow, in their
+// own order. Durable-first is what preserves spawn order overall: the live
+// list is always a spawn-order subsequence of durable (adoptLocked appends
+// at spawn; Reap's filter keeps survivor order), so live-first would
+// reorder siblings the moment an elder child settles and is Reaped while a
+// younger one still runs ([B, A] instead of [A, B]). Always returns a
+// non-nil slice (never omitted — see lineageJSON.Children's own doc
+// comment on why that field has no omitempty): "children":[] means "known:
+// zero children now, and none ever durably spawned either," never
+// "unknown."
 func childIDsUnion(live, durable []string) []string {
+	if len(durable) == 0 {
+		// Common case (childless session, or legacy live-only): live alone.
+		// Live cannot contain duplicates — adoptLocked appends a child id
+		// at most once — so no dedup map is needed here.
+		return append(make([]string, 0, len(live)), live...)
+	}
 	out := make([]string, 0, len(live)+len(durable))
 	seen := make(map[string]bool, len(live)+len(durable))
-	for _, id := range live {
+	for _, id := range durable {
 		if !seen[id] {
 			seen[id] = true
 			out = append(out, id)
 		}
 	}
-	for _, id := range durable {
+	for _, id := range live {
 		if !seen[id] {
 			seen[id] = true
 			out = append(out, id)

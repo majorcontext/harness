@@ -313,6 +313,51 @@ type SessionManager struct {
 	// exists to handle correctly, rather than relying on incidental
 	// goroutine-scheduling luck.
 	testSweepUnlockedHook func()
+
+	// testFlushDoneHook, if non-nil, is called by unlockAndFlushPersist
+	// immediately after every one of its queued durable-write thunks has
+	// actually run (see that method's own doc comment for the unlock-
+	// THEN-flush ordering this exists to let a test observe) — a
+	// test-only synchronization seam, nil in production, mirroring
+	// testSweepUnlockedHook's identical shape just above.
+	//
+	// Exists because a status transition becoming visible to another
+	// goroutine (via Info/Session, which only need m.mu) is NOT proof
+	// that an associated durable write queued in the SAME critical
+	// section — a forwarded task notification's persistQueuedTaskNotification,
+	// notably — has completed: m.mu is released BEFORE the queued thunks
+	// run (see unlockAndFlushPersist's own doc comment for why that
+	// order, not the reverse, is required), so there is a real window
+	// where a concurrent Info() poll observes e.g. StatusDone while the
+	// notification it implies was delivered is still only in memory on
+	// the target ancestor, not yet on disk. A live test (TestRecoverInterrupted
+	// TurnForwardsGrandchildNotifications) polling status as a durability
+	// proxy hit exactly this window under load — reworked to block on
+	// this hook and re-check the real on-disk condition instead of
+	// inferring it from status.
+	testFlushDoneHook func()
+
+	// testResumeClaimedHook, if non-nil, is called by fireIdleResumeAsync
+	// with targetID the INSTANT it claims that target's run slot (right
+	// after triggerResumeLocked returns, still under m.mu) — a test-only
+	// synchronization seam, nil in production, mirroring
+	// testFlushDoneHook's identical shape just above.
+	//
+	// Exists because "target's pending notifications read back as a
+	// stable count with nothing in flight" is NOT by itself proof that a
+	// triggered active resume has run to completion — it is equally true
+	// the INSTANT after delivery, before fireIdleResumeAsync's spawned
+	// goroutine has even been scheduled to run at all. Both states are
+	// observationally identical (same count, same StatusIdle) from
+	// outside; only the transition THROUGH StatusRunning in between
+	// distinguishes "not yet started" from "already finished". A test
+	// that cannot reliably observe that transition (the goroutine may run
+	// to completion before the poller's own next scheduler slice) has no
+	// way to tell them apart by polling status/counts alone — this hook
+	// gives it an explicit, unmissable signal for "the resume has
+	// definitely been claimed", so a subsequent wait for the SAME
+	// target's status to read Idle again is then unambiguous.
+	testResumeClaimedHook func(targetID string)
 }
 
 // deferPersist queues fn to run once m.mu is released via
@@ -355,12 +400,28 @@ func (m *SessionManager) deferPersist(fn func()) {
 // cheap: an empty-slice no-op) to use as the standard unlock helper on
 // any SessionManager method, whether or not that specific call path
 // happens to queue anything.
+//
+// Observability caveat this unlock-then-flush order creates: m.mu releases
+// BEFORE the thunks run, so a status/state change this same critical
+// section already applied to m.nodes (e.g. finalizeTurn setting a child
+// StatusDone) becomes visible to any OTHER goroutine's Info()/Session()
+// call strictly BEFORE the durable write(s) that same critical section
+// queued — a forwarded task notification's persistQueuedTaskNotification,
+// notably — have actually landed on disk. A caller must never treat a
+// status transition as proof that an associated durable write has
+// completed; only that it has been memory-committed and QUEUED to run,
+// in order, on this same goroutine, momentarily. testFlushDoneHook (see
+// its own doc comment) is the test-only seam for a caller that genuinely
+// needs to wait for the flush itself, not just the status.
 func (m *SessionManager) unlockAndFlushPersist() {
 	pending := m.pendingPersist
 	m.pendingPersist = nil
 	m.mu.Unlock()
 	for _, fn := range pending {
 		fn()
+	}
+	if m.testFlushDoneHook != nil {
+		m.testFlushDoneHook()
 	}
 }
 
@@ -1747,6 +1808,9 @@ func (m *SessionManager) fireIdleResumeAsync(targetID string) {
 		return
 	}
 	resume := m.triggerResumeLocked(n)
+	if m.testResumeClaimedHook != nil {
+		m.testResumeClaimedHook(targetID)
+	}
 	m.unlockAndFlushPersist()
 	if resume != nil {
 		resume()
@@ -2033,13 +2097,13 @@ func (m *SessionManager) Info(id string) (info SessionNode, ok bool) {
 }
 
 // SessionAndInfo is Session and Info's combined form: both the managed
-// *Session and its lifecycle snapshot, for a caller that needs both and
-// would otherwise call Session then Info separately — two m.mu
+// *Session and its lifecycle snapshot, under ONE m.mu hold. A caller that
+// needs both would otherwise call Session then Info separately — two m.mu
 // acquisitions, and (a live review finding on Server.lookup, the first
-// caller) a correct-today-by-coincidence TOCTOU: nothing currently reaps a
-// node between two such calls (Reap only removes terminal leaves, so a
-// RUNNING child's status can never flip to "gone" in that gap), but that
-// reasoning has to be re-verified by every future two-call caller rather
+// caller) a correct-today-by-coincidence TOCTOU. Nothing currently reaps a
+// node between two such calls: Reap only removes terminal leaves, so a
+// RUNNING child's status can never flip to "gone" in that gap. But that
+// reasoning had to be re-verified by every future two-call caller rather
 // than being structurally impossible. One lock hold here removes the gap
 // entirely, for this and any future caller.
 func (m *SessionManager) SessionAndInfo(id string) (sess *Session, info SessionNode, ok bool) {

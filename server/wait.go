@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/majorcontext/harness/engine"
 )
 
 // waiter is one in-flight GET /session/{id}/wait long-poll, registered in
@@ -189,14 +191,29 @@ func (waitTimeoutError) Error() string { return "timeout_s must be a positive in
 // "Boot never auto-dispatches a resumed queue... it sits there until the
 // next natural drain trigger") — loadJournal never sets queueDrainPending,
 // so that case is unaffected here and still returns idle immediately.
+//
+// running also falls back to SessionManager's live status when neither
+// queueDrainPending nor residency has anything: a Spawn-driven child is
+// never a key in s.sessions (Spawn drives its turn directly, never through
+// claimForPrompt — see resolveSessForSync's doc comment for the identical
+// reasoning on the journaling path). Without it, a mid-turn child reads
+// running=false here and until=idle returns a false "idle" immediately.
+// sessMgr.Info is consulted OUTSIDE s.mu: server.mu stays a leaf lock (see
+// syncMessages' lock-ordering note), and no established order exists
+// between server.mu and SessionManager.mu to rely on.
 func (s *Server) waitSnapshot(id string) (string, *goalJSON) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	running := s.queueDrainPending[id]
 	if st := s.sessions[id]; st != nil {
 		running = running || st.running
 	}
 	goal := goalJSONFrom(s.goalState[id])
+	s.mu.Unlock()
+	if !running {
+		if info, ok := s.sessMgr.Info(id); ok && info.Status == engine.StatusRunning {
+			running = true
+		}
+	}
 	return compositeState(running, goal != nil && goal.Active, forcesIdlePause(goal)), goal
 }
 

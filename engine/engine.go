@@ -345,25 +345,26 @@ type Config struct {
 	TaskAgentType string
 	TaskToolNames []string
 
-	// TaskDepth is the child's tree depth (root's own children are depth 1,
-	// their children depth 2, ...), set ONLY by Spawn, alongside
-	// TaskParentID/TaskAgentType/TaskToolNames above and durably persisted
-	// the same way — see adoptReloadedLocked's own doc comment for why this
-	// exists: SessionManager derives a LIVE node's depth as parent.depth+1
-	// at adopt time, but when a reload finds this child's OWN parent NOT
-	// currently tracked (Reap, or a process restart that hasn't touched the
-	// parent again yet), there was previously no durable fallback at all —
-	// adoptReloadedLocked substituted m.maxDepth, a deliberate "refuse
-	// further spawning" REFUSAL SENTINEL, indistinguishable on the wire
-	// from a session genuinely AT that depth (a live audit caught a direct
-	// child, true depth 1, reporting lineage.depth 3 — DefaultMaxTaskDepth
-	// — this exact collision). 0 means "not recorded" (every real child's
-	// depth is >= 1; only this durably-blank case and a genuine root, which
-	// never reaches the code that reads this field at all, are ever 0) —
-	// the same "legacy header, restores to the Go zero value" rule
-	// TaskAgentType's own doc comment already establishes, so an
-	// already-recorded session predating this field degrades to the OLD
-	// sentinel-fallback behavior rather than reporting a false 0.
+	// TaskDepth is the child's tree depth: a root's own children are depth
+	// 1, their children depth 2, and so on. It is set ONLY by Spawn,
+	// alongside TaskParentID/TaskAgentType/TaskToolNames above, and durably
+	// persisted the same way. See adoptReloadedLocked's own doc comment for
+	// why this exists. SessionManager derives a LIVE node's depth as
+	// parent.depth+1 at adopt time. But when a reload finds this child's
+	// OWN parent NOT currently tracked (Reap, or a process restart that
+	// hasn't touched the parent again yet), there was previously no durable
+	// fallback at all. adoptReloadedLocked substituted m.maxDepth — a
+	// deliberate "refuse further spawning" REFUSAL SENTINEL,
+	// indistinguishable on the wire from a session genuinely AT that depth.
+	// A live audit caught this exact collision: a direct child, true depth
+	// 1, reported lineage.depth 3 (DefaultMaxTaskDepth). 0 means "not
+	// recorded". Every real child's depth is >= 1; only the durably-blank
+	// case and a genuine root (which never reaches the code that reads this
+	// field at all) are ever 0. This is the same "legacy header, restores
+	// to the Go zero value" rule TaskAgentType's own doc comment already
+	// establishes, so an already-recorded session predating this field
+	// degrades to the OLD sentinel-fallback behavior rather than reporting
+	// a false 0.
 	TaskDepth int
 
 	Hooks Hooks // optional plugin host

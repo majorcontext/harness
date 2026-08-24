@@ -27,9 +27,10 @@ import (
 //
 // The fix (childIDsUnion, server/handlers.go's lineageJSONFor): merge the
 // live tree's Children with the parent's own already-loaded
-// SpawnedChildIDs(), live entries first, so the wire list is complete
-// (every child ever spawned, live or long since reaped) rather than
-// whichever half of the bookkeeping happens to still be resident.
+// SpawnedChildIDs(), durable entries first (spawn order — see
+// childIDsUnion's own doc comment), so the wire list is complete (every
+// child ever spawned, live or long since reaped) rather than whichever
+// half of the bookkeeping happens to still be resident.
 //
 // Driven entirely inside a synctest bubble (no real listener, no sleeps):
 // spawn a child via the `task` tool, let it settle, Reap it (dropping it
@@ -126,4 +127,41 @@ func TestLineageChildrenSurvivesReapViaDurableUnion(t *testing.T) {
 			t.Errorf("lineage.children after Reap = %v, want [%q] (from durable SpawnedChildIDs, not the emptied live tree)", got.Lineage.Children, childID)
 		}
 	})
+}
+
+// TestChildIDsUnionPreservesSpawnOrder pins childIDsUnion's ordering
+// contract directly. The live tree's child list is always a spawn-order
+// subsequence of the durable SpawnedChildIDs list (adoptLocked appends at
+// spawn; Reap's filter keeps survivor order), so the union must range
+// durable first. A live-first merge reorders siblings the moment an elder
+// child settles and is Reaped while a younger one still runs: live=[B],
+// durable=[A,B] came out [B, A] instead of [A, B].
+func TestChildIDsUnionPreservesSpawnOrder(t *testing.T) {
+	cases := []struct {
+		name          string
+		live, durable []string
+		want          []string
+	}{
+		{"elder reaped, younger live", []string{"B"}, []string{"A", "B"}, []string{"A", "B"}},
+		{"all reaped", nil, []string{"A", "B"}, []string{"A", "B"}},
+		{"all live, legacy no durable", []string{"A", "B"}, nil, []string{"A", "B"}},
+		{"no children", nil, nil, []string{}},
+		{"legacy live-only straggler", []string{"A", "C"}, []string{"A", "B"}, []string{"A", "B", "C"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := childIDsUnion(tc.live, tc.durable)
+			if got == nil {
+				t.Fatal("childIDsUnion returned nil, want a non-nil slice (wire contract: \"children\":[] never null)")
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("childIDsUnion(%v, %v) = %v, want %v", tc.live, tc.durable, got, tc.want)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Fatalf("childIDsUnion(%v, %v) = %v, want %v", tc.live, tc.durable, got, tc.want)
+				}
+			}
+		})
+	}
 }
