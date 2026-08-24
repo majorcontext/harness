@@ -205,6 +205,11 @@ type SessionManager struct {
 	maxConcurrent int
 	nodes         map[string]*sessionNode
 
+	// changed is closed and replaced on every m.mu release once
+	// watchChanges is set, waking Changed observers. See Changed.
+	changed      chan struct{}
+	watchChanges bool
+
 	// runningByRoot counts, per root session id, how many of that root's
 	// DESCENDANTS (never the root itself) currently have status running —
 	// the tree-wide concurrency budget the design doc requires ("counted
@@ -321,6 +326,51 @@ type SessionManager struct {
 // m.mu is released, from unlockAndFlushPersist's own goroutine, never
 // concurrently with anything else queued in the SAME flush — see that
 // method's own doc comment for why queue order is preserved).
+// Changed returns a channel that closes the next time any node's
+// observable state settles — a status transition, a finalized flag, or a
+// node entering or leaving the tree. A caller re-reads the state it cares
+// about (Info, Reap, List) after the channel closes, and blocks on a fresh
+// Changed if that state has not settled the way it wants yet.
+//
+// It is the observation seam for "wait until this node's status settles".
+// Every such transition runs markChangedLocked under m.mu before the lock
+// is released, so a waiter that arms Changed BEFORE its own read can never
+// miss one: either the read already sees the new state, or the wakeup is
+// still pending. Waking on a transition the waiter does not care about is
+// harmless, because its own re-read is the authority, never the wakeup.
+//
+// Without it the only way to observe a settle from outside is to sample
+// Info on an interval and guess how long to sleep between samples. That is
+// a guessed deadline: it flakes under load, and it turns a real hang into
+// a slow pass. Notification costs one bool test per transition until the
+// first Changed call arms it, and nothing at all before that.
+func (m *SessionManager) Changed() <-chan struct{} {
+	m.mu.Lock()
+	defer m.mu.Unlock() // deliberately NOT markChangedLocked: arming an
+	// observer is not a state change, and self-waking every waiter here
+	// would turn the wait into a spin.
+	m.watchChanges = true
+	if m.changed == nil {
+		m.changed = make(chan struct{})
+	}
+	return m.changed
+}
+
+// markChangedLocked wakes every Changed observer. Call it under m.mu,
+// immediately after a node's status, finalized flag, or membership in
+// m.nodes changes — never on a pure read, which would make a waiter's own
+// re-read wake itself in a loop.
+//
+// It is a no-op until some caller has actually called Changed, so a
+// production process — which never observes this seam — allocates nothing.
+func (m *SessionManager) markChangedLocked() {
+	if !m.watchChanges || m.changed == nil {
+		return
+	}
+	close(m.changed)
+	m.changed = make(chan struct{})
+}
+
 func (m *SessionManager) deferPersist(fn func()) {
 	m.pendingPersist = append(m.pendingPersist, fn)
 }
@@ -871,6 +921,7 @@ func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
 	switch {
 	case ok:
 		n.finalized = true
+		m.markChangedLocked()
 		switch nodeStatusForOutcome(committed) {
 		case StatusCanceled:
 			// Mirrors cancelOneNodeLocked's own live-path bookkeeping
@@ -882,11 +933,14 @@ func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
 			// PARENT-facing notification) into n.failReason here would
 			// invent a value a live cancellation never actually sets.
 			n.status = StatusCanceled
+			m.markChangedLocked()
 		case StatusDone:
 			n.status = StatusDone
+			m.markChangedLocked()
 			n.result = committed.Result
 		default:
 			n.status = StatusFailed
+			m.markChangedLocked()
 			n.failReason = committed.FailReason
 		}
 	case len(s.SpawnedChildIDs()) > 0 || len(s.History()) > 0:
@@ -941,11 +995,14 @@ func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
 		// it for an idle node worth an async resume), AND so Reap can
 		// finally collect it, closing the leak described above.
 		n.finalized = true
+		m.markChangedLocked()
 		if result, ok := s.settledSuccessResult(); ok {
 			n.status = StatusDone
+			m.markChangedLocked()
 			n.result = result
 		} else {
 			n.status = StatusFailed
+			m.markChangedLocked()
 			n.failReason = unknownLegacyOutcomeFailReason
 		}
 	default:
@@ -1329,6 +1386,7 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 		return
 	}
 	n.finalized = true
+	m.markChangedLocked()
 
 	// Fold this child's spend into its root's tree-wide budget total —
 	// see finalizeTurn's own identical delta-accounting block (and
@@ -1428,11 +1486,14 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	switch nodeStatusForOutcome(notify) {
 	case StatusCanceled:
 		n.status = StatusCanceled // n.result/n.failReason left untouched — mirrors cancelOneNodeLocked's own live bookkeeping.
+		m.markChangedLocked()
 	case StatusDone:
 		n.status = StatusDone
+		m.markChangedLocked()
 		n.result = notify.Result
 	default:
 		n.status = StatusFailed
+		m.markChangedLocked()
 		n.failReason = notify.FailReason
 	}
 
@@ -1910,6 +1971,7 @@ func (m *SessionManager) ReportTurnStart(sess *Session) {
 		m.runningByRoot[n.rootID]++
 	}
 	n.status = StatusRunning
+	m.markChangedLocked()
 	// finalized must be cleared on every transition INTO StatusRunning —
 	// not just implicitly left at its zero value for a brand-new node —
 	// because a node reused for a SECOND (or later) turn (a session.send
@@ -1920,6 +1982,7 @@ func (m *SessionManager) ReportTurnStart(sess *Session) {
 	// remove — see finalizeTurn/cancelOneNodeLocked's own doc comments
 	// for what finalized actually tracks. A live review caught this.
 	n.finalized = false
+	m.markChangedLocked()
 }
 
 // ReportTurnEnd tells m that an external scheduler's turn on id (started
@@ -1981,6 +2044,7 @@ func (m *SessionManager) adoptLocked(s *Session, parentID string, depth int) *se
 		budgetedUsage: m.budgetedByChild[s.ID],
 	}
 	m.nodes[s.ID] = n
+	m.markChangedLocked()
 	if parentID != "" {
 		if p, ok := m.nodes[parentID]; ok {
 			p.children = append(p.children, s.ID)
@@ -2118,6 +2182,7 @@ func (m *SessionManager) Reap() int {
 		// terminal and its turn long finished, and cancel is idempotent.
 		n.cancel()
 		delete(m.nodes, id)
+		m.markChangedLocked()
 		if p, ok := m.nodes[n.parentID]; ok {
 			kept := p.children[:0]
 			for _, cid := range p.children {
@@ -2202,13 +2267,16 @@ func (m *SessionManager) ForgetRoot(id string) error {
 		// settle" reasoning is safe here.
 		if n.status != StatusDone && n.status != StatusFailed && n.status != StatusCanceled {
 			n.status = StatusCanceled
+			m.markChangedLocked()
 		}
 		n.finalized = true
+		m.markChangedLocked()
 		n.pendingForget = true
 		return fmt.Errorf("engine: root %s still has live children", id)
 	}
 	n.cancel() // see Reap's identical call for why this is required, not optional
 	delete(m.nodes, id)
+	m.markChangedLocked()
 	// A live review finding: usageByRoot/runningByRoot are keyed by root
 	// id and written to by every turn anywhere in this root's tree (see
 	// their own doc comments) — deleting only m.nodes left one stale
@@ -2481,6 +2549,7 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	// running: skip straight to running instead of the idle adoptLocked
 	// sets by default.
 	n.status = StatusRunning
+	m.markChangedLocked()
 	m.runningByRoot[parent.rootID]++
 	m.unlockAndFlushPersist()
 
@@ -2586,11 +2655,13 @@ func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Me
 		return nil, ErrConcurrencyLimit
 	}
 	n.status = StatusRunning
+	m.markChangedLocked()
 	// See ReportTurnStart's identical reset for why: n may be a
 	// done/failed child Send is legitimately restarting for a follow-up
 	// turn, and it still carries finalized=true from finishing its PRIOR
 	// one.
 	n.finalized = false
+	m.markChangedLocked()
 	if n.depth > 0 {
 		m.runningByRoot[n.rootID]++
 	}
@@ -2633,6 +2704,7 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 	// is fully settled, regardless of which status branch runs below —
 	// safe for Reap to remove n once this is true.
 	n.finalized = true
+	m.markChangedLocked()
 
 	// resume is set here (never fired directly — see below) whenever this
 	// call needs to actively start another turn rather than simply
@@ -2683,6 +2755,7 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 			resume = m.triggerResumeLocked(n)
 		default:
 			n.status = StatusIdle
+			m.markChangedLocked()
 		}
 	case alreadyCanceled:
 		// Cancel() already set the terminal node status directly (see
@@ -2707,10 +2780,12 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: "canceled", Canceled: true, Usage: n.session.Usage()}
 	case perr != nil:
 		n.status = StatusFailed
+		m.markChangedLocked()
 		n.failReason = classifySpawnError(perr)
 		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: n.failReason, Usage: n.session.Usage()}
 	default:
 		n.status = StatusDone
+		m.markChangedLocked()
 		// msg is nil for a caller that never has one to give — an
 		// external scheduler's ReportTurnEnd(id, nil, err) (server's
 		// runGoal and cmd/harness's own runGoal both pass nil
@@ -2940,9 +3015,11 @@ func (m *SessionManager) nearestLiveAncestorLocked(n *sessionNode) *sessionNode 
 // external scheduler, so this delegation never applies to one.
 func (m *SessionManager) triggerResumeLocked(node *sessionNode) func() {
 	node.status = StatusRunning
+	m.markChangedLocked()
 	// See ReportTurnStart's identical reset for why: node may be resuming
 	// from a PRIOR completed turn and still carry finalized=true from it.
 	node.finalized = false
+	m.markChangedLocked()
 	if node.depth > 0 {
 		m.runningByRoot[node.rootID]++
 	}
@@ -3033,12 +3110,14 @@ func (m *SessionManager) RevertResumeIfStillRunning(id string) {
 		return
 	}
 	n.status = StatusIdle
+	m.markChangedLocked()
 	m.decrementRunningLocked(n)
 	// No goroutine will ever call finalizeTurn for this abandoned
 	// attempt (nothing actually started) — matching cancelOneNodeLocked's
 	// own convention for a node with no in-flight Prompt call, this
 	// slot's bookkeeping is already fully settled right here.
 	n.finalized = true
+	m.markChangedLocked()
 }
 
 // decrementRunningLocked releases the concurrency reservation a running
@@ -3182,9 +3261,11 @@ func (m *SessionManager) cancelOneNodeLocked(n *sessionNode) {
 	wasRunning := n.status == StatusRunning
 	if n.status != StatusDone && n.status != StatusFailed && n.status != StatusCanceled {
 		n.status = StatusCanceled
+		m.markChangedLocked()
 	}
 	if !wasRunning {
 		n.finalized = true
+		m.markChangedLocked()
 	}
 	// Canceling the context aborts an in-flight Prompt call driven
 	// DIRECTLY by this package (Spawn's goroutine, Send, or a

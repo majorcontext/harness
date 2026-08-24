@@ -54,6 +54,36 @@ function installPopoverPolyfill(w) {
   };
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// waitFor polls `fn` until it returns a truthy value, throwing with `label`
+// if `timeoutMs` elapses first. Every wait in this file goes through it.
+//
+// A fixed `await sleep(N)` followed by a hard assertion is a guessed
+// deadline: it encodes "a real HTTP round trip plus a real render finishes
+// in N ms", which is false on a loaded machine. That exact shape made this
+// test flaky — a 300ms sleep before the health-dot assertion failed under
+// CPU pressure because the real /health round trip had not landed yet.
+// Poll the CONDITION instead, with a timeout far above any real latency:
+// the fast path stays fast (25ms granularity), and a slow machine waits
+// longer instead of failing.
+async function waitFor(fn, { timeoutMs = 15000, intervalMs = 25, label = "condition" } = {}) {
+  const start = Date.now();
+  for (;;) {
+    const v = await fn();
+    if (v) return v;
+    if (Date.now() - start > timeoutMs) throw new Error("timed out waiting for: " + label);
+    await sleep(intervalMs);
+  }
+}
+
+// replyTextNode returns the rendered durable-message text node for the
+// scripted provider's Nth reply ("reply number N"), or null.
+function replyTextNode(doc, n) {
+  const texts = [...doc.querySelectorAll("#timeline .tl-messages .msg .text")];
+  return texts.find((node) => node.textContent.includes("reply number " + n)) || null;
+}
+
 async function main() {
   // ---- 0. The hub server must be serving the EXACT committed file (proves
   // this isn't drifted/stale wiring — the production `harness hub` binary
@@ -96,9 +126,10 @@ async function main() {
   console.error("PASS: real page, synchronous skeleton on load, no empty-state flash");
 
   // ---- 3. Real health/session poll lands; dot turns healthy. ----
-  await new Promise((r) => setTimeout(r, 300));
-  const dot = doc.querySelector(".dot");
-  assert.ok(dot.classList.contains("on"), "dot should be healthy after the real /health poll: " + dot.className);
+  const dot = await waitFor(() => {
+    const d = doc.querySelector(".dot");
+    return d && d.classList.contains("on") ? d : null;
+  }, { label: "the real /health poll to resolve and turn the dot healthy" });
   // vcs_revision comes from Go's build-info VCS stamping, which only embeds
   // when the module's working tree is clean at build time (go help
   // buildmode's -buildvcs). That's an artifact of running this check from a
@@ -116,9 +147,7 @@ async function main() {
   const buttons = [...doc.querySelectorAll(".box-actions button")];
   const newSessionBtn = buttons.find((b) => b.textContent.includes("New session"));
   newSessionBtn.click();
-  await new Promise((r) => setTimeout(r, 300));
-  const sessRow = doc.querySelector(".sess");
-  assert.ok(sessRow, "a real session row should appear");
+  await waitFor(() => doc.querySelector(".sess"), { label: "a real session row to appear after the real create round trip" });
   assert.strictEqual(doc.querySelector(".box-card"), cardBeforeSessionCreate, "box card DOM node must survive a real session being added");
   console.error("PASS: real session created, box card DOM node stable");
 
@@ -131,30 +160,25 @@ async function main() {
   promptBox.value = "hello";
   sendBtn.click();
 
-  let reasoningDetails = null;
-  for (let i = 0; i < 60 && !reasoningDetails; i++) {
-    await new Promise((r) => setTimeout(r, 150));
-    reasoningDetails = doc.querySelector("#timeline .tl-messages details.reason");
-  }
-  assert.ok(reasoningDetails, "a real reasoning block should render in the durable message");
+  // Wait for BOTH halves of the durable message — the reasoning block and
+  // the reply text. They can land in separate renders, so a wait on the
+  // reasoning block alone leaves the text assertion racing the next render.
+  const reasoningDetails = await waitFor(() => {
+    const r = doc.querySelector("#timeline .tl-messages details.reason");
+    const texts = [...doc.querySelectorAll("#timeline .tl-messages .msg .text")];
+    return r && texts.some((n) => /reply number \d+/.test(n.textContent)) ? r : null;
+  }, { label: "the real first turn's reasoning block and reply text to render" });
   const firstMsgTexts = [...doc.querySelectorAll("#timeline .tl-messages .msg .text")];
   const firstMsgText = firstMsgTexts.find((n) => /reply number \d+/.test(n.textContent));
-  assert.ok(firstMsgText, "the real scripted provider's first reply should render among: " + firstMsgTexts.map((n) => n.textContent).join(" | "));
   const firstReplyNum = firstMsgText.textContent.match(/reply number (\d+)/)[1];
   reasoningDetails.open = true;
   console.error("PASS: real turn " + firstReplyNum + " rendered (reasoning block + text), expanded it");
 
-  for (let i = 0; i < 60 && sendBtn.disabled; i++) await new Promise((r) => setTimeout(r, 100));
+  await waitFor(() => !sendBtn.disabled, { label: "the composer to re-enable after the first real turn" });
   promptBox.value = "again";
   sendBtn.click();
-  let secondMsg = null;
   const secondReplyNum = String(Number(firstReplyNum) + 1);
-  for (let i = 0; i < 60 && !secondMsg; i++) {
-    await new Promise((r) => setTimeout(r, 150));
-    const texts = [...doc.querySelectorAll("#timeline .tl-messages .msg .text")];
-    secondMsg = texts.find((n) => n.textContent.includes("reply number " + secondReplyNum));
-  }
-  assert.ok(secondMsg, "a real second reply (number " + secondReplyNum + ") should render");
+  await waitFor(() => replyTextNode(doc, secondReplyNum), { label: "a real second reply (number " + secondReplyNum + ") to render" });
   const reasoningDetailsAfter = doc.querySelector("#timeline .tl-messages details.reason");
   assert.strictEqual(reasoningDetailsAfter, reasoningDetails, "the first message's reasoning node must be the SAME DOM node after a second real turn (keyed append-only, not a rebuild)");
   assert.equal(reasoningDetailsAfter.open, true, "the first message's expanded reasoning block must survive a second real server-driven render");
@@ -166,17 +190,35 @@ async function main() {
   Object.defineProperty(tl, "scrollHeight", { value: 2000, configurable: true });
   Object.defineProperty(tl, "clientHeight", { value: 100, configurable: true });
   tl.scrollTop = 0;
-  // jsdom does not synthesize a "scroll" event from a plain property write
-  // the way a real browser's layout engine does (there is no real layout
-  // here at all) — dispatch one explicitly so the page's own scroll
-  // listener (index.html's renderTimeline) sees the "user scrolled up"
-  // signal exactly as it would from a real user action, and flips
+  // jsdom does not synthesize "wheel"/"scroll" events from a plain property
+  // write the way a real browser's input and layout pipeline does (there is
+  // no real layout here at all) — dispatch both explicitly, so the page's
+  // own listeners (index.html's renderTimeline) see the "user scrolled up"
+  // signal exactly as they would from a real user action, and flip
   // tlDom.stick accordingly.
+  //
+  // The wheel-up event is load-bearing, not decoration. renderTimeline's
+  // "scroll" listener deliberately IGNORES a scroll event that arrives
+  // within 120ms of its own programmatic pin (tlDom.lastAuto), to stop a
+  // late-delivered scroll from releasing stick mid-replay. A scroll-only
+  // dispatch therefore races that product-defined window: it releases
+  // stick when the preceding turn's render happened to be more than 120ms
+  // ago, and is silently swallowed when it was not — the test then asserts
+  // pinned-tail behavior that the page was never told to enter. A wheel-up
+  // is the same listener block's unambiguous, unguarded user-intent path,
+  // so dispatching it makes the release deterministic instead of dependent
+  // on how fast the machine ran the previous turn.
+  tl.dispatchEvent(new w.WheelEvent("wheel", { deltaY: -120 }));
   tl.dispatchEvent(new w.Event("scroll"));
-  for (let i = 0; i < 60 && sendBtn.disabled; i++) await new Promise((r) => setTimeout(r, 100));
+  await waitFor(() => !sendBtn.disabled, { label: "the composer to re-enable after the second real turn" });
   promptBox.value = "third";
   sendBtn.click();
-  await new Promise((r) => setTimeout(r, 800));
+  // Wait for the third reply to actually RENDER before checking scrollTop.
+  // A fixed sleep here was vacuous as well as flaky: if no render had
+  // happened yet, scrollTop was trivially still 0 and the assertion passed
+  // without ever exercising the pinned-tail behavior it names.
+  const thirdReplyNum = String(Number(firstReplyNum) + 2);
+  await waitFor(() => replyTextNode(doc, thirdReplyNum), { label: "a real third reply (number " + thirdReplyNum + ") to render" });
   assert.equal(tl.scrollTop, 0, "a scrolled-up viewport must not be moved by a real subsequent render");
   console.error("PASS: scrolled-up position survives real new messages");
 

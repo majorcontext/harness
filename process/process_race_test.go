@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/majorcontext/harness/internal/testpoll"
 )
 
 // TestStartConcurrentSpawnsExactlyOnce encodes the PR#71 review finding:
@@ -52,24 +54,22 @@ func TestStartConcurrentSpawnsExactlyOnce(t *testing.T) {
 			t.Errorf("racer %d saw pid %d, racer 0 saw %d — more than one process spawned", i, pids[i], pids[0])
 		}
 	}
-	// And exactly one real OS process ran: one marker line, allowing a
-	// bounded wait for the winner's shell to have written it.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
+	// And exactly one real OS process ran: one marker line. The marker is
+	// written by a real child shell, so this waits through testpoll, the
+	// shared cross-process poll helper (see that package's doc comment).
+	markerCount := func() int {
 		b, _ := os.ReadFile(marker)
-		n := len(strings.Fields(string(b)))
-		if n == 1 && time.Now().Add(4*time.Second).After(deadline) {
-			break // one marker, and we've given a grace window for a straggler
-		}
-		if n > 1 {
-			t.Fatalf("%d processes spawned, want exactly 1", n)
-		}
-		if time.Now().After(deadline) {
-			if n == 0 {
-				t.Fatal("no process spawned at all")
-			}
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+		return len(strings.Fields(string(b)))
+	}
+	testpoll.Until(t, 5*time.Second, "no process spawned at all (the marker file stayed empty)", func() bool {
+		return markerCount() >= 1
+	})
+	// A second racer that wrongly spawned would append its own marker line
+	// shortly after the winner's. Give that straggler a bounded window to
+	// appear, then assert the count is still exactly one. testpoll.UntilNoT
+	// reports false when the condition never held, which is the PASSING
+	// outcome here — this waits for a violation, not for success.
+	if testpoll.UntilNoT(time.Second, func() bool { return markerCount() > 1 }) {
+		t.Fatalf("%d processes spawned, want exactly 1", markerCount())
 	}
 }

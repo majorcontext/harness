@@ -71,6 +71,11 @@ const (
 // failure with errors.Is, without parsing error text.
 var ErrUnknownProcess = errors.New("process: unknown process")
 
+// ErrNotStarted is wrapped into the error Done returns for a name that is
+// declared but has never been started, so a caller can distinguish "there
+// is no OS process to wait for" from "no such process" with errors.Is.
+var ErrNotStarted = errors.New("process: process not started")
+
 // defaultReadyTimeout is Def.ReadyTimeout's fallback when unset (<= 0),
 // mirroring engine.MCPManager's ConnectTimeout default pattern.
 const defaultReadyTimeout = 60 * time.Second
@@ -247,6 +252,22 @@ type Manager struct {
 	procs map[string]*managedProcess
 
 	everStarted atomicBool
+
+	// onReadyProbeFailed, when non-nil, fires after every
+	// ready_port/ready_http probe attempt this Manager makes that reported
+	// "not ready". It is nil in production, so a probe cycle costs one nil
+	// compare. Set it before the first Start and never after: spawn hands
+	// it to the probe goroutine, so a later write would race that read.
+	//
+	// It is the synchronization seam for "Start is genuinely blocked on
+	// the ready gate". A test that opens the target listener only after
+	// the gate has really failed at least once needs to know when that
+	// happened. Sampling Status until it reads StateStarting is both
+	// weaker (spawn sets StateStarting before any probe runs, so a sample
+	// can pass with zero probe attempts made) and unsynchronized (it must
+	// guess a sleep between samples). Same category of seam as
+	// SessionManager.testSweepUnlockedHook.
+	onReadyProbeFailed func()
 }
 
 // NewManager builds a Manager for the given definitions, resolving
@@ -375,6 +396,32 @@ func (m *Manager) Status(name string) (Status, error) {
 		return Status{Name: name, Log: m.logPath(name), Ports: append([]int(nil), def.Ports...)}, nil
 	}
 	return p.snapshot(), nil
+}
+
+// Done returns a channel that is closed once name's OS process has exited
+// AND its terminal state is recorded, so a receive from it is followed by a
+// Status call that already reports StateExited or StateStopped — never a
+// stale StateRunning. It is the synchronization seam for "wait until this
+// managed process is really gone": process death is detected by the waiter
+// goroutine managedProcess.wait starts (nothing polls for it), so a caller
+// blocks on that goroutine's own completion signal instead of sampling
+// Status on an interval and guessing how long to sleep between samples.
+//
+// A name that is declared but never started has no OS process to wait for,
+// so Done reports ErrNotStarted rather than a channel that never closes. An
+// unknown name reports ErrUnknownProcess.
+func (m *Manager) Done(name string) (<-chan struct{}, error) {
+	m.mu.Lock()
+	_, declared := m.defs[name]
+	p := m.procs[name]
+	m.mu.Unlock()
+	if !declared {
+		return nil, fmt.Errorf("%w %q", ErrUnknownProcess, name)
+	}
+	if p == nil {
+		return nil, fmt.Errorf("%w %q", ErrNotStarted, name)
+	}
+	return p.doneCh, nil
 }
 
 // Logs returns the last tail lines of name's log file (empty if the file
@@ -618,10 +665,10 @@ func (m *Manager) spawn(name string, def Def) (*managedProcess, error) {
 	switch {
 	case def.ReadyPort != 0:
 		addr := fmt.Sprintf("127.0.0.1:%d", def.ReadyPort)
-		go pollReady(p.doneCh, readyPollInterval, func() bool { return checkPort(addr) }, p.markReady)
+		go pollReady(p.doneCh, readyPollInterval, func() bool { return checkPort(addr) }, p.markReady, m.onReadyProbeFailed)
 	case def.ReadyHTTP != "":
 		target := def.ReadyHTTP
-		go pollReady(p.doneCh, readyPollInterval, func() bool { return checkHTTP(target) }, p.markReady)
+		go pollReady(p.doneCh, readyPollInterval, func() bool { return checkHTTP(target) }, p.markReady, m.onReadyProbeFailed)
 	}
 
 	return p, nil

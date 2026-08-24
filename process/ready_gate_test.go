@@ -41,6 +41,7 @@ func TestStartWithReadyPort_BlocksUntilPortOpen(t *testing.T) {
 	defer cancel()
 	t.Cleanup(func() { m.Stop(context.Background(), "dev") })
 
+	probed := waitForReadyProbeFailure(t, m)
 	done := make(chan Status, 1)
 	errc := make(chan error, 1)
 	go func() {
@@ -52,11 +53,11 @@ func TestStartWithReadyPort_BlocksUntilPortOpen(t *testing.T) {
 		done <- st
 	}()
 
-	// Confirm Start is genuinely blocked (real out-of-process spawn plus
-	// at least one failed poll attempt) before opening the listener —
-	// deadline-bound poll over observable state, this file's sanctioned
-	// pattern for a real-subprocess boundary (see the package doc).
-	waitForState(t, m, "dev", StateStarting, 3*time.Second)
+	// Confirm Start is genuinely blocked before opening the listener: block
+	// on the ready gate's own "a probe ran and reported not ready" signal,
+	// which proves the gate is really engaged (a Status sample reading
+	// StateStarting would not — spawn sets that before any probe runs).
+	<-probed
 
 	select {
 	case st := <-done:
@@ -151,6 +152,7 @@ func TestStartWithReadyHTTP_BlocksUntilServing(t *testing.T) {
 	defer cancel()
 	t.Cleanup(func() { m.Stop(context.Background(), "dev") })
 
+	probed := waitForReadyProbeFailure(t, m)
 	done := make(chan Status, 1)
 	errc := make(chan error, 1)
 	go func() {
@@ -162,7 +164,7 @@ func TestStartWithReadyHTTP_BlocksUntilServing(t *testing.T) {
 		done <- st
 	}()
 
-	waitForState(t, m, "dev", StateStarting, 3*time.Second)
+	<-probed
 	select {
 	case st := <-done:
 		t.Fatalf("Start returned %+v before anything was serving", st)

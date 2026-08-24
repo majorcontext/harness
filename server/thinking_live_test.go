@@ -27,6 +27,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -35,6 +36,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/engine"
+	"github.com/majorcontext/harness/internal/testpoll"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 	"github.com/majorcontext/harness/provider/anthropic"
@@ -104,23 +106,21 @@ func newLiveHarness(t *testing.T, base string) *harness {
 	return &harness{t: t, dir: dir, token: liveToken, srv: srv, ts: ts}
 }
 
-// waitIdle polls GET /session until status is idle or the deadline passes. Live
-// e2e may observe out-of-process state via a bounded poll loop (AGENTS.md).
+// waitIdleLive waits until GET /session reports idle. The turn it waits
+// for is a real call to a remote model over the network, so the state it
+// observes is genuinely out of this process and no in-process channel can
+// report it: this goes through testpoll, the shared cross-process poll
+// helper (see that package's doc comment).
 func (h *harness) waitIdleLive(id string) {
 	h.t.Helper()
-	deadline := time.Now().Add(90 * time.Second)
-	for time.Now().Before(deadline) {
+	testpoll.Until(h.t, 90*time.Second, fmt.Sprintf("session %s never went idle", id), func() bool {
 		_, data := h.do("GET", "/session/"+id, nil)
 		var s struct {
 			Status string `json:"status"`
 		}
 		_ = json.Unmarshal(data, &s)
-		if s.Status == "idle" {
-			return
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	h.t.Fatalf("session %s never went idle", id)
+		return s.Status == "idle"
+	})
 }
 
 // hasReasoning reports whether any returned message carries a Reasoning part —

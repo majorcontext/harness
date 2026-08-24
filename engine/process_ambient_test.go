@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/process"
@@ -162,7 +161,7 @@ func TestAmbientProcessStatusReflectsExitedState(t *testing.T) {
 	if _, err := mgr.Start(ctx, "db"); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	waitForState(t, mgr, "db", process.StateExited, 3*time.Second)
+	waitForExit(t, mgr, "db")
 
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		asstTurn(provider.StopEndTurn, &message.Text{Text: "done"}),
@@ -224,23 +223,18 @@ func TestAmbientProcessStatusNeverPersisted(t *testing.T) {
 	}
 }
 
-func waitForState(t *testing.T, m *process.Manager, name string, want process.State, deadline time.Duration) process.Status {
+// waitForExit blocks on process.Manager.Done — the waiter goroutine's own
+// completion signal — until name's OS process is gone and its terminal
+// state is recorded. Manager.Done closes strictly after that state is
+// written, so a Status read afterwards can never see a stale StateRunning,
+// and nothing here has to guess a sleep between samples.
+func waitForExit(t *testing.T, m *process.Manager, name string) {
 	t.Helper()
-	end := time.Now().Add(deadline)
-	var last process.Status
-	for time.Now().Before(end) {
-		st, err := m.Status(name)
-		if err != nil {
-			t.Fatalf("Status: %v", err)
-		}
-		last = st
-		if st.State == want {
-			return st
-		}
-		time.Sleep(2 * time.Millisecond)
+	done, err := m.Done(name)
+	if err != nil {
+		t.Fatalf("Done(%q): %v", name, err)
 	}
-	t.Fatalf("process %q did not reach state %q within %s (last: %+v)", name, want, deadline, last)
-	return last
+	<-done
 }
 
 // TestAmbientBlockIsEngineContextPart drives the production Prompt entry

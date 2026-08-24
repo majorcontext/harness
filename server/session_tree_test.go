@@ -74,10 +74,23 @@ func multiProviderHarnessInDir(t *testing.T, dir string, model message.ModelRef,
 	return &harness{t: t, dir: dir, token: "secret-run-token", srv: srv, ts: ts}
 }
 
+// waitForLineageStatus blocks until id's lineage.status, read over the
+// wire from GET /session/{id}, reads want.
+//
+// The assertion still goes through the production HTTP surface, but the
+// wait between reads blocks on engine.SessionManager.Changed — the
+// manager's own "a node's state settled" signal, which is where
+// lineage.status comes from. Nothing samples on an interval, so nothing
+// guesses how long a transition takes; timeout is a failure bound only.
+// Changed is armed BEFORE each read, so a transition landing between the
+// read and the wait is still delivered.
 func waitForLineageStatus(t *testing.T, h *harness, id, want string, timeout time.Duration) map[string]any {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	mgr := h.srv.SessionManager()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	for {
+		changed := mgr.Changed()
 		resp, data := h.do("GET", "/session/"+id, nil)
 		if resp.StatusCode != 200 {
 			t.Fatalf("GET /session/%s status %d: %s", id, resp.StatusCode, data)
@@ -92,10 +105,48 @@ func waitForLineageStatus(t *testing.T, h *harness, id, want string, timeout tim
 		if got.Lineage["status"] == want {
 			return got.Lineage
 		}
-		if time.Now().After(deadline) {
+		select {
+		case <-changed:
+		case <-timer.C:
 			t.Fatalf("GET /session/%s: lineage.status = %v after %s, want %q", id, got.Lineage["status"], timeout, want)
 		}
-		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// waitForMessageText blocks on the session's real SSE stream until a
+// durable message event whose text contains want arrives. The caller opens
+// the stream BEFORE the action that should produce the message, so no event
+// can be missed between the action and the wait.
+//
+// This is the right wait whenever the turn that produces the message is
+// started by the engine itself, asynchronously — a task-completion resume,
+// for instance. GET /session/{id}/wait?until=idle cannot serve there: the
+// session is still idle at the moment the caller starts waiting, so the
+// long-poll returns at once, before the resume turn it means to wait for
+// has even claimed the run slot.
+func waitForMessageText(t *testing.T, stream *sseStream, want string, timeout time.Duration) {
+	t.Helper()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		var it sseItem
+		select {
+		case v, ok := <-stream.items:
+			if !ok {
+				t.Fatalf("sse stream closed before a message containing %q arrived", want)
+			}
+			it = v
+		case <-timer.C:
+			t.Fatalf("no message containing %q arrived within %s", want, timeout)
+		}
+		if it.heartbeat || it.ev.Type != "message" || it.ev.Message == nil {
+			continue
+		}
+		for _, part := range it.ev.Message.Parts {
+			if txt, ok := part.(*message.Text); ok && strings.Contains(txt.Text, want) {
+				return
+			}
+		}
 	}
 }
 
@@ -576,26 +627,25 @@ func TestSessionSendDeliversToRoot(t *testing.T) {
 		t.Fatalf("send status %d: %s", resp.StatusCode, data)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		resp, data := h.do("GET", "/session/"+root.ID+"/message", nil)
-		if resp.StatusCode != 200 {
-			t.Fatalf("get messages status %d: %s", resp.StatusCode, data)
-		}
-		if len(data) > 2 && string(data) != "[]" && strings.Contains(string(data), "hello back") {
-			// A session.send delivery is a genuine operator-authored
-			// message, never the engine's own synthetic resume trigger —
-			// it must not carry origin:engine (see sendTextToRoot's own
-			// doc comment and message.Message.Origin's).
-			if strings.Contains(string(data), `"origin":"engine"`) {
-				t.Errorf("session.send message wrongly carries origin:engine: %s", data)
-			}
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("session never received the reply: %s", data)
-		}
-		time.Sleep(2 * time.Millisecond)
+	// POST /send claims the run slot synchronously before it answers 202,
+	// so the session already reads busy here: waiting for idle through the
+	// production long-poll cannot return on a pre-turn idle. It also
+	// covers the queue drain (waitSnapshot folds in queueDrainPending), so
+	// idle here means every turn this send caused has finished.
+	h.waitIdle(root.ID)
+	resp, data = h.do("GET", "/session/"+root.ID+"/message", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("get messages status %d: %s", resp.StatusCode, data)
+	}
+	if !strings.Contains(string(data), "hello back") {
+		t.Fatalf("session never received the reply: %s", data)
+	}
+	// A session.send delivery is a genuine operator-authored message,
+	// never the engine's own synthetic resume trigger — it must not carry
+	// origin:engine (see sendTextToRoot's own doc comment and
+	// message.Message.Origin's).
+	if strings.Contains(string(data), `"origin":"engine"`) {
+		t.Errorf("session.send message wrongly carries origin:engine: %s", data)
 	}
 }
 
@@ -642,19 +692,16 @@ func TestSessionSendToRootWithStrandedQueueIsNotLost(t *testing.T) {
 		t.Fatalf("send status %d: %s", resp.StatusCode, data)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		resp, data := h.do("GET", "/session/"+root.ID+"/message", nil)
-		if resp.StatusCode != 200 {
-			t.Fatalf("get messages status %d: %s", resp.StatusCode, data)
-		}
-		if strings.Contains(string(data), "head reply") && strings.Contains(string(data), "sent reply") {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("both turns never completed (session.send text was lost): %s", data)
-		}
-		time.Sleep(2 * time.Millisecond)
+	// until=idle spans BOTH turns: waitSnapshot folds in
+	// queueDrainPending, so the head turn's own idle does not wake this
+	// wait while the sent text is still queued behind it.
+	h.waitIdle(root.ID)
+	resp, data = h.do("GET", "/session/"+root.ID+"/message", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("get messages status %d: %s", resp.StatusCode, data)
+	}
+	if !strings.Contains(string(data), "head reply") || !strings.Contains(string(data), "sent reply") {
+		t.Fatalf("both turns never completed (session.send text was lost): %s", data)
 	}
 }
 
@@ -698,19 +745,13 @@ func TestSessionSendToBusyRootIsQueuedNotLost(t *testing.T) {
 
 	blocker.releaseAll()
 
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		resp, data := h.do("GET", "/session/"+id+"/message", nil)
-		if resp.StatusCode != 200 {
-			t.Fatalf("get messages status %d: %s", resp.StatusCode, data)
-		}
-		if strings.Contains(string(data), "while busy") {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("queued send-while-busy text never ran (was it lost?): %s", data)
-		}
-		time.Sleep(2 * time.Millisecond)
+	h.waitIdle(id)
+	resp, data = h.do("GET", "/session/"+id+"/message", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("get messages status %d: %s", resp.StatusCode, data)
+	}
+	if !strings.Contains(string(data), "while busy") {
+		t.Fatalf("queued send-while-busy text never ran (was it lost?): %s", data)
 	}
 }
 
@@ -996,9 +1037,26 @@ func TestAbortOfTerminalChildLeavesGrandchildAndSendUntouched(t *testing.T) {
 		t.Errorf("mid lineage.status = %v, want %q (abort of a non-running node must be a no-op)", midInfo.Lineage["status"], "done")
 	}
 
+	// mid must still be sendable — its context was never canceled.
+	resp, data = h.do("POST", "/session/"+mid.ID+"/send", map[string]string{"text": "follow-up"})
+	if resp.StatusCode != 202 {
+		t.Fatalf("send to mid after its own no-op abort status %d, want 202: %s", resp.StatusCode, data)
+	}
+	waitForLineageStatus(t, h, mid.ID, "done", 2*time.Second)
+
 	// grand must be untouched collateral — still running, not failed or
 	// canceled.
-	time.Sleep(20 * time.Millisecond) // let any wrongful cascade land, if the fix regressed
+	//
+	// The completed follow-up turn just above is this check's ordering
+	// barrier, and it is the reason no settling delay is needed here. A
+	// wrongful cascade would cancel grand's context inside the abort call
+	// itself; grand's provider selects on that context (blockingStream),
+	// so grand's turn would then end and its status leave "running". The
+	// follow-up turn is a whole real turn — admitted, run, and finalized
+	// through the same SessionManager lock — after the abort returned, so
+	// a cascade that had really fired has long since landed by the time
+	// this reads grand's status. A fixed sleep here bought strictly less
+	// ordering than one completed turn, and bought it by guessing.
 	resp, data = h.do("GET", "/session/"+grand.ID, nil)
 	if resp.StatusCode != 200 {
 		t.Fatalf("get grand status %d: %s", resp.StatusCode, data)
@@ -1010,13 +1068,6 @@ func TestAbortOfTerminalChildLeavesGrandchildAndSendUntouched(t *testing.T) {
 	if grandInfo.Lineage["status"] != "running" {
 		t.Errorf("grand lineage.status = %v, want %q (aborting the already-done mid must not touch its running grandchild)", grandInfo.Lineage["status"], "running")
 	}
-
-	// mid must still be sendable — its context was never canceled.
-	resp, data = h.do("POST", "/session/"+mid.ID+"/send", map[string]string{"text": "follow-up"})
-	if resp.StatusCode != 202 {
-		t.Fatalf("send to mid after its own no-op abort status %d, want 202: %s", resp.StatusCode, data)
-	}
-	waitForLineageStatus(t, h, mid.ID, "done", 2*time.Second)
 }
 
 // TestSessionSendUnknownSessionIs404 proves session.send 404s for an id
@@ -1105,6 +1156,9 @@ func TestWorkdirHeldResumeRefusalDoesNotPinRootRunning(t *testing.T) {
 	waitForLineageStatus(t, h, rootB.ID, "idle", 2*time.Second)
 
 	const resumeTriggerText = "A background task you started has finished. See the engine context below for its result, and continue accordingly."
+	// Opened before child2 exists, so the resume turn's message event
+	// cannot be missed between the spawn and the wait at the end.
+	streamB := h.openSSE("?session="+rootB.ID, "")
 	resp, data = h.do("GET", "/session/"+rootB.ID+"/message", nil)
 	if resp.StatusCode != 200 {
 		t.Fatalf("get B messages status %d: %s", resp.StatusCode, data)
@@ -1131,20 +1185,11 @@ func TestWorkdirHeldResumeRefusalDoesNotPinRootRunning(t *testing.T) {
 	mustUnmarshal(t, data, &child2)
 	waitForLineageStatus(t, h, child2.ID, "done", 2*time.Second)
 
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		resp, data := h.do("GET", "/session/"+rootB.ID+"/message", nil)
-		if resp.StatusCode != 200 {
-			t.Fatalf("get B messages status %d: %s", resp.StatusCode, data)
-		}
-		if strings.Contains(string(data), resumeTriggerText) {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("B never ran a resume turn once the workdir freed — queue-or-resume stayed dead after the first refusal: %s", data)
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
+	// B's resume turn is started by the engine, asynchronously, once
+	// child2 completes — B is still idle at this instant, so an
+	// until=idle wait would return immediately and prove nothing. Block on
+	// B's own SSE stream instead, opened before child2 was ever spawned.
+	waitForMessageText(t, streamB, resumeTriggerText, 5*time.Second)
 }
 
 // TestCancelTreeCascadesToChild proves DELETE /session/{id}/cancel_tree
@@ -1526,17 +1571,19 @@ func TestConcurrentPromptDuringResumeIsQueuedNotConcurrent(t *testing.T) {
 	}
 
 	resumeBlocker.releaseAll()
-	// The queued prompt must eventually run too (not lost) — the session
-	// keeps cycling and its message count grows past the resume alone.
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, data := h.do("GET", "/session/"+root.ID+"/message", nil)
-		if resp.StatusCode == 200 && strings.Contains(string(data), "concurrent prompt") {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	// The queued prompt must run too, not be lost. until=idle spans the
+	// in-flight resume turn AND the queue drain behind it (waitSnapshot
+	// folds in queueDrainPending), so idle here means the session has
+	// stopped cycling — the one moment at which "the queued prompt never
+	// ran" is a real verdict rather than a guess about elapsed time.
+	h.waitIdle(root.ID)
+	resp, data = h.do("GET", "/session/"+root.ID+"/message", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("get messages status %d: %s", resp.StatusCode, data)
 	}
-	t.Fatal("queued prompt never appears to have been delivered")
+	if !strings.Contains(string(data), "concurrent prompt") {
+		t.Fatalf("queued prompt never appears to have been delivered: %s", data)
+	}
 }
 
 // TestCancelTreeAbortsRootInFlightTurn proves cancel_tree stops a ROOT's

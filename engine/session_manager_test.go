@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -64,6 +65,28 @@ func modelFor(p string) message.ModelRef {
 // turns in order, one per call.
 func scriptedTurns(name string, turns [][]provider.Event) provider.Provider {
 	return &scriptedProvider{name: name, turns: turns}
+}
+
+// streamSignalProvider behaves exactly like scriptedTurns(name, nil) — a
+// provider with no scripted turn, whose every Stream call fails at once —
+// except that it also reports each call on streamed. It is the
+// synchronization seam for "this session's turn has really started": a
+// turn reaches Stream strictly after SessionManager.ReportTurnStart has
+// marked the node StatusRunning, so a receive from streamed proves the
+// node is past that transition without sampling its status.
+type streamSignalProvider struct {
+	name     string
+	streamed chan struct{}
+}
+
+func (p *streamSignalProvider) Name() string { return p.name }
+
+func (p *streamSignalProvider) Stream(context.Context, *provider.Request) (provider.Stream, error) {
+	select {
+	case p.streamed <- struct{}{}:
+	default:
+	}
+	return nil, io.ErrUnexpectedEOF
 }
 
 // doneTurn is a one-shot scripted turn ending with text.
@@ -1245,16 +1268,7 @@ func TestReapDoesNotLeakConcurrencySlotAcrossSendThenAbort(t *testing.T) {
 	close(prov.slow.release)
 	<-sendDone
 
-	deadline := time.Now().Add(time.Second)
-	for {
-		if n := mgr.Reap(); n == 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("node never became reapable after its second turn finished")
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
+	waitForReap(t, mgr, 1, time.Second, "node never became reapable after its second turn finished")
 
 	otherID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("other")})
 	if err != nil {
@@ -1312,16 +1326,7 @@ func TestReapNeverRemovesACanceledNodeStillUnwinding(t *testing.T) {
 
 	close(prov.release) // let the goroutine's Prompt call actually return, triggering finalizeTurn
 
-	deadline := time.Now().Add(time.Second)
-	for {
-		if n := mgr.Reap(); n == 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("node never became reapable after its turn finished — finalizeTurn never ran, or never marked it finalized")
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
+	waitForReap(t, mgr, 1, time.Second, "node never became reapable after its turn finished — finalizeTurn never ran, or never marked it finalized")
 
 	// The slot is free again: a fresh Spawn under the same root, at the
 	// same concurrency cap, must now succeed.
@@ -1436,8 +1441,12 @@ func TestForgetRootAlsoCleansUsageAndRunningMaps(t *testing.T) {
 // collects the root itself.
 func TestForgetRootThenChildrenReapedEventuallyCollectsRoot(t *testing.T) {
 	mgr := NewSessionManager(context.Background(), 3, 0)
+	// rootStreamed reports the exact instant root's downstream resume turn
+	// reaches the provider — see the wait below for why that instant is
+	// what this test needs.
+	rootStreamed := make(chan struct{}, 1)
 	root := mgr.NewRoot(managedConfig("root",
-		scriptedTurns("root", nil),
+		&streamSignalProvider{name: "root", streamed: rootStreamed},
 		scriptedTurns("child", doneTurn("done")),
 	))
 	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
@@ -1445,23 +1454,27 @@ func TestForgetRootThenChildrenReapedEventuallyCollectsRoot(t *testing.T) {
 		t.Fatalf("Spawn: %v", err)
 	}
 	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
 	// The child's own completion also delivers a notification to root
-	// (idle at that point) and fires an active resume — waitForStatus
-	// above only confirms the CHILD's own status, not that root's
-	// downstream resume (rootProv has zero scripted turns, so it fails
-	// fast) has settled back out of StatusRunning. ForgetRoot's own
-	// StatusRunning check runs BEFORE its children check, so racing that
-	// transient Running window here can make it take the "busy" refusal
-	// path instead of the "has children" one — which is the ONE path
-	// that arms pendingForget, so the test's later second Reap() would
-	// then wrongly find nothing to collect. A status-based wait is
-	// itself racy here (root reads StatusIdle at the very first poll,
-	// before the resume goroutine has even started — a false "already
-	// settled" signal); a flat settle sleep avoids racing that
-	// goroutine's own scheduling entirely. A live -race/timing flake
-	// caught under repeated stress runs (pre-existing, unrelated to this
-	// session's own changes).
-	time.Sleep(100 * time.Millisecond)
+	// (idle at that point) and fires an active resume. The wait above only
+	// confirms the CHILD's status, not that root's own resume turn has
+	// settled back out of StatusRunning. ForgetRoot checks StatusRunning
+	// BEFORE it checks for children, so racing that transient Running
+	// window makes ForgetRoot take the "busy" refusal path instead of the
+	// "has children" one — and the children path is the ONE path that arms
+	// pendingForget, so the second Reap below would then wrongly find
+	// nothing to collect.
+	//
+	// Waiting for root to read StatusIdle is not enough on its own: root
+	// IS idle until the resume goroutine starts, so a lone status wait
+	// returns on that pre-resume idle and proves nothing. Wait for the two
+	// halves in order instead. First block until root's resume turn has
+	// really reached the provider, which happens strictly after
+	// ReportTurnStart set root StatusRunning; the status wait that follows
+	// therefore cannot observe the pre-resume idle, only the settle after
+	// the turn (root's provider has no scripted turn, so it fails at once).
+	<-rootStreamed
+	waitForStatus(t, mgr, root.ID, StatusIdle, time.Second)
 
 	// Refused: root still has a (terminal, but not yet reaped) child.
 	if err := mgr.ForgetRoot(root.ID); err == nil {
@@ -1830,22 +1843,56 @@ func TestSpawnBudgetDeltaAccountingSurvivesReapAndReadopt(t *testing.T) {
 	}
 }
 
-// waitForStatus polls until id reaches want or the timeout elapses.
+// waitForStatus blocks until id reaches want, or fails the test once
+// timeout elapses.
+//
+// It blocks on SessionManager.Changed — the manager's own "a node's state
+// settled" signal — and never samples on an interval, so nothing here
+// guesses how long a transition takes. Changed is armed BEFORE each Info
+// read, so a transition that lands between the read and the wait is still
+// delivered. timeout is a failure bound only: the happy path returns on
+// the very transition that satisfies it.
 func waitForStatus(t *testing.T, mgr *SessionManager, id string, want SessionStatus, timeout time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	var last SessionStatus
 	for {
+		changed := mgr.Changed()
 		info, ok := mgr.Info(id)
 		if !ok {
 			t.Fatalf("Info(%s): not found", id)
 		}
-		if info.Status == want {
+		last = info.Status
+		if last == want {
 			return
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("Info(%s).Status = %s after %s, want %s", id, info.Status, timeout, want)
+		select {
+		case <-changed:
+		case <-timer.C:
+			t.Fatalf("Info(%s).Status = %s after %s, want %s", id, last, timeout, want)
 		}
-		time.Sleep(time.Millisecond)
+	}
+}
+
+// waitForReap blocks until a Reap call collects want nodes, or fails the
+// test once timeout elapses. Same Changed-driven, sample-free shape as
+// waitForStatus: a node becomes reapable only once finalizeTurn has marked
+// it finalized, which is itself a state settle Changed reports.
+func waitForReap(t *testing.T, mgr *SessionManager, want int, timeout time.Duration, msg string) {
+	t.Helper()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		changed := mgr.Changed()
+		if n := mgr.Reap(); n == want {
+			return
+		}
+		select {
+		case <-changed:
+		case <-timer.C:
+			t.Fatalf("%s (no Reap collected %d node(s) within %s)", msg, want, timeout)
+		}
 	}
 }
 

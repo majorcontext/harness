@@ -1503,11 +1503,26 @@ Rules:
   invariants down in the brief/design before implementation** and test
   against them. Deriving the design from review findings one round at a time
   took four rounds on a recent PR.
-- **Exception — cross-process e2e** (`e2e/` only): tests driving a real
-  subprocess may observe out-of-process state with deadline-bounded poll
-  loops, because no in-process channel can cross an OS process boundary.
-  Intervals stay tight, deadlines explicit; anything observable in-process
-  still uses channels or synctest.
+- **Exception — cross-process observation** (`e2e/`, and the packages whose
+  own subprocess machinery is under test: `process/`, `engine/bash_pipe_test.go`,
+  the `live`-tagged tests that call a real remote model): a test may observe
+  out-of-process state with deadline-bounded poll loops, because no
+  in-process channel crosses an OS process boundary. Every such wait goes
+  through `internal/testpoll` — never an inline sleep loop. Its timeout is a
+  FAILURE bound, never a synchronization delay: the happy path returns on
+  the first successful check. Anything observable in-process still uses
+  channels or synctest.
+- **In-process state gets a seam, never a poll loop.** A wait on a manager's
+  status, a server's session state, or a queue depth blocks on a signal.
+  Three production seams exist for exactly this, and a new wait extends one
+  rather than sampling: `engine.SessionManager.Changed` (a node's status,
+  finalized flag, or tree membership settled — arm it BEFORE the read, so a
+  transition landing between read and wait is still delivered),
+  `process.Manager.Done` (a managed OS process exited and its terminal state
+  is recorded), and `GET /session/{id}/wait?until=idle` (the production
+  long-poll, which also spans a queue drain). Sampling one of these on an
+  interval is a guessed deadline: it flakes under load, and it turns a real
+  hang into a slow pass.
 - **`time.Sleep` is banned in test code. Absolute — not "for
   synchronization," not "just 10ms," not behind a helper. There are exactly
   two sanctioned time mechanisms in tests: a `testing/synctest` bubble, or
@@ -1515,15 +1530,23 @@ Rules:
   and cannot run in a bubble, the fix is to add the seam to the production
   code, not to sleep in the test. Reviewers treat any `time.Sleep` in a
   test diff as an automatic blocker; do not push one expecting discussion.
-  The single carve-out is `e2e/` cross-process polling (the exception bullet above), and only
-  through its deadline-bounded poll helper — never a bare sleep loop
+  The single carve-out is cross-process observation (the exception bullet
+  above), and only through `internal/testpoll` — never a bare sleep loop
   written inline. To simulate a hung component, block on a channel closed
   in `t.Cleanup`; in a bubble the hang deterministically outlasts any
   timeout with zero wall-clock cost, and the cleanup release lets the
   goroutine exit before bubble end.
 - **No guessed deadlines.** Block directly on channels for expected events
   and let the test binary timeout catch hangs; don't wrap waits in short
-  arbitrary `time.After` failsafes that flake under load.
+  arbitrary `time.After` failsafes that flake under load. The rule binds the
+  Node/jsdom end-to-end scripts too (`tools/hub/e2e/real_e2e.mjs`,
+  `tools/monitor/e2e/real_e2e.mjs`): each waits on a CONDITION through its
+  own `waitFor` helper, never `await sleep(N)` followed by an assertion. A
+  fixed sleep before an assertion fails two ways at once — it flakes when
+  the real round trip runs long, and it passes VACUOUSLY when the state it
+  checks is trivially still the pre-action value. A wait for the state a
+  negative assertion needs (the render that must not move the viewport)
+  makes the assertion mean what its message claims.
 - Always run with `-race`; CI runs `go test -race ./...`.
 - `t.Helper()` in every test helper; `t.Cleanup` over `defer` in helpers so
   cleanup composes.

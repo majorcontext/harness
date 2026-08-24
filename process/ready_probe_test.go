@@ -30,7 +30,7 @@ func TestPollReady_WaitsForCheckThenMatches(t *testing.T) {
 		stop := make(chan struct{})
 		defer close(stop)
 
-		go pollReady(stop, 250*time.Millisecond, check, func() { close(matched) })
+		go pollReady(stop, 250*time.Millisecond, check, func() { close(matched) }, nil)
 
 		// Let the goroutine make its first (immediate) attempt and settle
 		// into its poll-interval wait — every goroutine in the bubble
@@ -67,7 +67,7 @@ func TestPollReady_StopsOnStopChannel(t *testing.T) {
 		stop := make(chan struct{})
 		done := make(chan struct{})
 		go func() {
-			pollReady(stop, 250*time.Millisecond, check, onMatch)
+			pollReady(stop, 250*time.Millisecond, check, onMatch, nil)
 			close(done)
 		}()
 		synctest.Wait()

@@ -20,25 +20,44 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/majorcontext/harness/internal/testpoll"
 )
 
-func waitForState(t *testing.T, m *Manager, name string, want State, deadline time.Duration) Status {
+// waitForExit blocks on Manager.Done — the waiter goroutine's own
+// completion signal — until name's OS process is gone and its terminal
+// state is recorded, then returns that status. Manager.Done closes strictly
+// after managedProcess.wait writes the terminal state, so the Status read
+// below can never observe a stale StateRunning. Nothing here samples on an
+// interval, so nothing has to guess how long to wait between samples.
+func waitForExit(t *testing.T, m *Manager, name string) Status {
 	t.Helper()
-	end := time.Now().Add(deadline)
-	var last Status
-	for time.Now().Before(end) {
-		st, err := m.Status(name)
-		if err != nil {
-			t.Fatalf("Status: %v", err)
-		}
-		last = st
-		if st.State == want {
-			return st
-		}
-		time.Sleep(2 * time.Millisecond)
+	done, err := m.Done(name)
+	if err != nil {
+		t.Fatalf("Done(%q): %v", name, err)
 	}
-	t.Fatalf("process %q did not reach state %q within %s (last status: %+v)", name, want, deadline, last)
-	return last
+	<-done
+	st, err := m.Status(name)
+	if err != nil {
+		t.Fatalf("Status(%q): %v", name, err)
+	}
+	return st
+}
+
+// waitForReadyProbeFailure arms m's onReadyProbeFailed seam and returns a
+// channel that receives once the ready_port/ready_http gate has really made
+// — and failed — at least one probe attempt. Call it before m.Start; see
+// Manager.onReadyProbeFailed for why a Status sample is not a substitute.
+func waitForReadyProbeFailure(t *testing.T, m *Manager) <-chan struct{} {
+	t.Helper()
+	probed := make(chan struct{}, 1)
+	m.onReadyProbeFailed = func() {
+		select {
+		case probed <- struct{}{}:
+		default:
+		}
+	}
+	return probed
 }
 
 func TestStartNoReadyRegex_ReadyImmediately(t *testing.T) {
@@ -167,7 +186,7 @@ func TestProcessDeathDetected(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	st := waitForState(t, m, "dev", StateExited, 3*time.Second)
+	st := waitForExit(t, m, "dev")
 	if !st.HasExitCode || st.ExitCode != 7 {
 		t.Errorf("exit status = %+v, want code 7", st)
 	}
@@ -248,22 +267,19 @@ func TestLogsTail(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Poll until the log file has all 10 lines (deadline-bound, real
-	// out-of-process I/O — no in-process channel signals "the child has
-	// flushed its writes").
-	deadline := time.Now().Add(3 * time.Second)
+	// Wait until the log file has all 10 lines. This is real
+	// out-of-process I/O: no in-process channel reports "the child has
+	// flushed its writes", so it goes through testpoll, the shared
+	// cross-process poll helper (see that package's doc comment).
 	var content string
-	for time.Now().Before(deadline) {
+	testpoll.Until(t, 3*time.Second, "the child never flushed 10 log lines", func() bool {
 		c, _, err := m.Logs("dev", 100)
 		if err != nil {
-			t.Fatalf("Logs: %v", err)
+			return false
 		}
 		content = c
-		if strings.Count(content, "\n")+1 >= 10 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+		return strings.Count(content, "\n")+1 >= 10
+	})
 
 	tail, st, err := m.Logs("dev", 3)
 	if err != nil {
