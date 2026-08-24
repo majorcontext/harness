@@ -77,6 +77,14 @@ func (s *Server) handleWait(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.waiters[wt] = struct{}{}
 	s.mu.Unlock()
+	if s.waitRegisteredRace != nil {
+		// Test-only seam — see its own doc comment (server.go). Fires
+		// right after registration, before the immediate condition
+		// check below — lets a test confirm this waiter is actually in
+		// Server.waiters (so a later notifyWaitersLocked wake will
+		// reach it) before triggering whatever wake it means to race.
+		s.waitRegisteredRace()
+	}
 	defer func() {
 		s.mu.Lock()
 		delete(s.waiters, wt)
@@ -152,13 +160,41 @@ func (waitTimeoutError) Error() string { return "timeout_s must be a positive in
 // waitSnapshot resolves the current composite state and goal summary for a
 // session from the same source Session JSON uses (Server.goalState, this
 // process's live tracker), so /wait's response agrees with GET
-// /session/{id}.
+// /session/{id} — with one deliberate difference: it also folds in
+// Server.queueDrainPending, treating it exactly like st.running for this
+// method's own purposes only.
+//
+// Why: freeRunSlotAndEmitIdle (handlers.go) always durably emits "idle" at
+// the end of a turn, queue or no queue — collectUntilIdle (server_test.go)
+// and every test built on it depend on that ordering, so the event is never
+// suppressed. That means a GET /session/{id}/wait?until=idle waiter woken by
+// it can genuinely observe running=false with the queue still non-empty, in
+// the brief window before maybeDispatchQueued (called right after, same
+// tail) redispatches the head — a live, reproduced CI failure
+// (TestQueueLenExplicitOnEmptyingDequeue) caught exactly this. queueDrainPending
+// is true for precisely that window (set by freeRunSlotAndEmitIdle, cleared
+// by maybeDispatchQueued's own clearQueueDrainPending once it resolves), so
+// folding it in here closes the gap without changing what GET /session/{id}
+// itself reports (its State field is deliberately untouched — idle-with-
+// queue stays "idle" there, matching TestIdlePromptWithQueueGoesFIFO).
+//
+// This also avoids two earlier, rejected approaches: reading queue depth via
+// engine.Session.QueuedPrompts() directly here needs sess's OWN separate
+// lock, which — acquired while s.mu was released to sidestep the resulting
+// lock-order-inversion deadlock (dequeueLocked takes the two locks in the
+// OPPOSITE order) — made the running/queued reads non-atomic, a narrower
+// version of the same false-idle. And gating naively on queue depth alone
+// (empty or not) is simply wrong: a session resumed after a restart with a
+// non-empty queue and nothing running is genuinely idle right now (AGENTS.md:
+// "Boot never auto-dispatches a resumed queue... it sits there until the
+// next natural drain trigger") — loadJournal never sets queueDrainPending,
+// so that case is unaffected here and still returns idle immediately.
 func (s *Server) waitSnapshot(id string) (string, *goalJSON) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var running bool
+	running := s.queueDrainPending[id]
 	if st := s.sessions[id]; st != nil {
-		running = st.running
+		running = running || st.running
 	}
 	goal := goalJSONFrom(s.goalState[id])
 	return compositeState(running, goal != nil && goal.Active, forcesIdlePause(goal)), goal

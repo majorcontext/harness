@@ -394,6 +394,68 @@ type Server struct {
 	// the same information.
 	lastTurn map[string]*turnOutcome
 
+	// queueDrainPending marks, per session, that freeRunSlotAndEmitIdle is
+	// about to hand off to (or has just handed off to) this same tail's
+	// own maybeDispatchQueued call — set unconditionally, every time,
+	// under the SAME s.mu hold that already emits this session's "idle"
+	// transition, and cleared by maybeDispatchQueued's own deferred
+	// clearQueueDrainPending call once it resolves the redispatch attempt
+	// one way or another (dispatched, lost the claim race, or found the
+	// queue already empty). All three of freeRunSlotAndEmitIdle's callers
+	// (runPrompt, runGoal, handleCompact) call maybeDispatchQueued
+	// unconditionally later in the SAME tail, so the flag's lifetime is
+	// always this same short, self-resolving window — never a permanent
+	// leak.
+	//
+	// Set unconditionally — not gated on "is the queue actually
+	// non-empty" — deliberately: an earlier version checked a
+	// server-side queueDepth cache here to avoid a cross-lock call into
+	// engine.Session's own lock (QueuedPrompts() needs sess's OWN
+	// separate mutex; dequeueLocked, engine/queue.go, takes the two locks
+	// in the OPPOSITE order — session lock held, then server lock via its
+	// own emit chain — so holding s.mu across that call would be a
+	// lock-order-inversion deadlock). But that cache is populated by a
+	// SEPARATE event path (publishQueue -> emitDurableLocked) that can
+	// still be in flight — holding the engine session lock, queue already
+	// non-empty, blocked trying to acquire s.mu to record the update — at
+	// the exact instant freeRunSlotAndEmitIdle reads it here, so the
+	// cache can read stale-empty while a real enqueue is genuinely
+	// in-flight right behind it: a live review finding, the same false-idle
+	// class this whole fix exists to close, just triggered by an enqueue
+	// racing turn-end instead of a queue that was already non-empty. Since
+	// maybeDispatchQueued's own clearQueueDrainPending resolves this
+	// unconditionally moments later regardless (a genuinely empty queue
+	// just clears it again immediately, waking any waiter to re-observe
+	// idle — one extra, negligible wake), setting the flag unconditionally
+	// removes the dependence on any cache's freshness entirely, closing
+	// the window structurally rather than chasing another lagging read.
+	//
+	// This exists because the "idle" event freeRunSlotAndEmitIdle emits
+	// is NOT suppressed or delayed for this case — collectUntilIdle
+	// (server_test.go) and every test built on it depend on an idle
+	// transition always firing at the end of a turn, queue or no queue,
+	// with any redispatch's own busy strictly after it. So a waiter can
+	// genuinely observe "running=false, queue non-empty" for the brief
+	// window between that idle emit and maybeDispatchQueued's own re-claim
+	// — a live, reproduced CI failure
+	// (TestQueueLenExplicitOnEmptyingDequeue) caught exactly this: a GET
+	// /session/{id}/wait?until=idle waiter woken by the idle event
+	// returned before the queue's own next item had even been dequeued.
+	//
+	// queueDrainPending is what lets waitSnapshot (wait.go) tell this
+	// transient, self-resolving window apart from a session resumed after
+	// a restart with a non-empty queue and nothing running — AGENTS.md:
+	// "Boot never auto-dispatches a resumed queue... it sits there until
+	// the next natural drain trigger." That case has no pending drain
+	// trigger at all (freeRunSlotAndEmitIdle, the only setter, never runs
+	// for it — loadJournal replay never calls it) and is genuinely idle
+	// right now; gating naively on queue depth alone (an earlier version
+	// of this fix did) made it block for the full until=idle timeout
+	// instead of returning immediately — a live review
+	// finding. queueDrainPending, set only by the live post-turn tail that
+	// is actually about to redispatch, avoids that regression.
+	queueDrainPending map[string]bool
+
 	// waiters holds every in-flight GET /session/{id}/wait long-poll,
 	// registered for the duration of the request. notifyWaitersLocked (see
 	// journal.go) wakes matching waiters after every durable event so a
@@ -464,6 +526,32 @@ type Server struct {
 	// entitled to report. See dispatchQueueHead's own doc comment for
 	// the fix. Always nil in production.
 	dispatchQueueHeadRace func()
+
+	// postIdleEmitRace is a test-only seam: when non-nil, runPrompt's own
+	// tail (handlers.go) invokes it right after freeRunSlotAndEmitIdle
+	// returns — after the durable "idle" transition has been emitted and
+	// Server.queueDrainPending set (if the queue was non-empty; see its
+	// own doc comment) — but BEFORE maybeDispatchQueued gets a chance to
+	// resolve that redispatch and clear the flag. Lets a test hold
+	// runPrompt's own tail deterministically in that exact window,
+	// instead of relying on an unobserved goroutine-scheduling coin flip,
+	// to confirm a waiter woken by the idle event does NOT observe
+	// "idle" while queueDrainPending is still set. The window a live,
+	// reproduced CI failure hit (TestQueueLenExplicitOnEmptyingDequeue: a
+	// waiter woken by the transient not-running-but-still-queued idle
+	// observed it and returned BEFORE the queue's own next item had even
+	// been dequeued yet). See
+	// TestWaitUntilIdleDoesNotWakeEarlyOnQueuedFollowUp. Always nil in
+	// production.
+	postIdleEmitRace func()
+
+	// waitRegisteredRace is a test-only seam: when non-nil, handleWait
+	// (wait.go) invokes it right after registering its waiter in
+	// Server.waiters, before its own immediate condition check — lets a
+	// test confirm a waiter is actually parked and reachable by a later
+	// notifyWaitersLocked wake before triggering whatever wake it means
+	// to race. Always nil in production.
+	waitRegisteredRace func()
 
 	// sendBusyEvictRace is a test-only seam: when non-nil,
 	// sendTextToRoot's busy branch (session_tree.go) invokes it right
@@ -699,18 +787,19 @@ func New(opts Options) (*Server, error) {
 		sessMgr = engine.NewSessionManager(context.Background(), opts.MaxTaskDepth, opts.MaxConcurrentTasks)
 	}
 	s := &Server{
-		opts:           opts,
-		subs:           make(map[*subscriber]struct{}),
-		seen:           make(map[string]map[string]bool),
-		sessions:       make(map[string]*sessionState),
-		lastRequest:    make(map[string]*requestSnapshot),
-		lastReqHash:    make(map[string]string),
-		lastPersistErr: make(map[string]string),
-		goalState:      make(map[string]*goalTracker),
-		lastTurn:       make(map[string]*turnOutcome),
-		waiters:        make(map[*waiter]struct{}),
-		closing:        make(chan struct{}),
-		sessMgr:        sessMgr,
+		opts:              opts,
+		subs:              make(map[*subscriber]struct{}),
+		seen:              make(map[string]map[string]bool),
+		sessions:          make(map[string]*sessionState),
+		lastRequest:       make(map[string]*requestSnapshot),
+		lastReqHash:       make(map[string]string),
+		lastPersistErr:    make(map[string]string),
+		goalState:         make(map[string]*goalTracker),
+		lastTurn:          make(map[string]*turnOutcome),
+		queueDrainPending: make(map[string]bool),
+		waiters:           make(map[*waiter]struct{}),
+		closing:           make(chan struct{}),
+		sessMgr:           sessMgr,
 	}
 	// SetExternalRunner before anything else touches sessMgr: it is what
 	// makes a SessionManager-initiated resume turn on a ROOT session go

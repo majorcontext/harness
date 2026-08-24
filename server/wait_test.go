@@ -789,3 +789,102 @@ func TestWaitDisconnectDoesNotLeakWaiter(t *testing.T) {
 		t.Errorf("DELETE goal = %d, want 204", resp.StatusCode)
 	}
 }
+
+// TestWaitUntilIdleReturnsImmediatelyForBootResumedQueue is the regression
+// guard for a live review finding on the fix in
+// TestWaitUntilIdleDoesNotWakeEarlyOnQueuedFollowUp (queue_test.go): gating
+// until=idle naively on "is the queue non-empty" is wrong for a session
+// resumed after a restart with a prompt still durably queued and nothing
+// running — AGENTS.md: "Boot never auto-dispatches a resumed queue... it
+// sits there until the next natural drain trigger (an idle prompt, the next
+// tool-call boundary inside a running turn, or a goal loop's next turn
+// boundary)." That session has no pending drain trigger at all and is
+// genuinely idle right now; the earlier, rejected version of this fix made
+// GET /session/{id}/wait?until=idle block for the full timeout instead of
+// returning immediately.
+//
+// Reproduces a genuine restart, the same technique
+// TestRestartRecoveryEngagesWithoutTouchingCrashedChildDirectly uses: h1's
+// occupying turn is left blocked forever (simulating "kill -9 1" — never
+// released, never closed) with a second prompt durably queued behind it,
+// then h2 is a fully independent server built over the same on-disk
+// session dir (simulating the restart). h2 never runs a turn for this
+// session at all, so if the fix were wrong, nothing would ever resolve the
+// false-busy reading — the wait would block for its full timeout and still
+// come back wrong, not just late.
+func TestWaitUntilIdleReturnsImmediatelyForBootResumedQueue(t *testing.T) {
+	dir := t.TempDir()
+
+	// newHarnessDir (not multiProviderHarnessInDir): its NewSession/LoadSession
+	// closures wire engine.Config.OnEvent to srv.Publish (see newServer,
+	// server_test.go) — required for engine/queue.go's own
+	// EventPromptQueued to ever reach the durable server-level journal this
+	// test depends on. multiProviderHarnessInDir's closures deliberately
+	// leave OnEvent unwired (fine for the lineage/SessionManager tests it
+	// otherwise serves) and so never journal prompt.queued at all.
+	prov1 := newBlockingProvider("test")
+	h1 := newHarnessDir(t, dir, prov1)
+	id := h1.createSession("test/m1")
+
+	resp, data := h1.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "first"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("first prompt status %d: %s", resp.StatusCode, data)
+	}
+	<-prov1.started // "first" is now genuinely mid-turn, blocked — never released below
+
+	resp, data = h1.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "second"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("second prompt status %d: %s", resp.StatusCode, data)
+	}
+	var qr promptAsyncResponse
+	if err := json.Unmarshal(data, &qr); err != nil {
+		t.Fatal(err)
+	}
+	if qr.Status != "queued" || qr.Queued != 1 {
+		t.Fatalf("second prompt response = %+v, want status=queued queued=1", qr)
+	}
+
+	// Simulate "kill -9 1": h1 is abandoned here, never closed cleanly,
+	// "first" never released. h2 is a fully independent server (its own
+	// SessionManager, its own provider instance) sharing only the on-disk
+	// session dir — this session's own queueDrainPending never existed in
+	// h2's process; loadJournal never sets it (see Server.queueDrainPending's
+	// own doc comment).
+	prov2 := newBlockingProvider("test")
+	h2 := newHarnessDir(t, dir, prov2)
+
+	// Direct, deterministic assertion on the exact mechanism at stake —
+	// the same technique TestWaitUntilIdleDoesNotWakeEarlyOnQueuedFollowUp
+	// uses — rather than inferring correctness from HTTP response latency,
+	// which synctest's fake-time fast-forwarding would make indistinguishable
+	// from a real immediate return anyway.
+	if state, _ := h2.srv.waitSnapshot(id); state != "idle" {
+		t.Fatalf("waitSnapshot after restart = %q, want idle (a resumed queue has no pending drain trigger)", state)
+	}
+
+	resp, data = h2.do("GET", "/session/"+id+"/wait?until=idle&timeout_s=1", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("wait until=idle status %d: %s", resp.StatusCode, data)
+	}
+	var wr waitJSON
+	if err := json.Unmarshal(data, &wr); err != nil {
+		t.Fatal(err)
+	}
+	if wr.State != "idle" {
+		t.Errorf("wait until=idle state = %q, want idle", wr.State)
+	}
+
+	// GET /session/{id}'s own State field is deliberately untouched by this
+	// whole fix (idle-with-queue stays "idle" there too, matching
+	// TestIdlePromptWithQueueGoesFIFO) — reconfirm both endpoints agree and
+	// the queue itself is still genuinely non-empty (nothing silently
+	// dropped it).
+	sess := h2.getSessionJSON(id)
+	if sess.State != "idle" || sess.Queued != 1 {
+		t.Errorf("GET session after restart = state=%q queued=%d, want state=idle queued=1", sess.State, sess.Queued)
+	}
+}

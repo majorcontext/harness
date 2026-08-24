@@ -596,8 +596,8 @@ func (s *Server) publishGoal(ev engine.Event) {
 }
 
 // publishQueue journals a durable prompt.queued/prompt.dequeued record (see
-// engine/queue.go). Unlike publishGoal, there is deliberately no per-session
-// in-memory tracker folded here: GET /session's queued count reads
+// engine/queue.go). There is deliberately no per-session tracker folded
+// here, unlike publishGoal: GET /session's queued count still reads
 // engine.Session.QueuedPrompts() directly (see buildSession), which is
 // authoritative for both a live resident session (its own promptQueue slice,
 // mutex-guarded) and a freshly LoadSession-replayed one (folded from the same
@@ -607,8 +607,11 @@ func (s *Server) publishGoal(ev engine.Event) {
 // construction — there is only one source of truth to ever drift from,
 // unlike goalState (which exists because Session JSON needs server-derived
 // presentation, e.g. the paused view, that the engine does not itself track).
-// This function's only job is to make the events visible on the durable
-// journal/SSE stream for observability and replay.
+// GET /session/{id}/wait's until=idle condition does not read queue depth
+// either (see Server.queueDrainPending's own doc comment for why not, and
+// what it reads instead). This function's own job is unchanged: make the
+// events visible on the durable journal/SSE stream for observability and
+// replay.
 func (s *Server) publishQueue(ev engine.Event) {
 	queueLen := ev.QueueLen
 	s.emitDurable(Event{
