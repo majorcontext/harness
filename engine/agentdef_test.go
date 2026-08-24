@@ -429,3 +429,42 @@ body
 		t.Error("ResolveAgentDefs with the same name defined in two dirs: want error, got nil")
 	}
 }
+
+// TestResolveAgentDefsDuplicateDirIsNotACollision is the regression test
+// for a live review finding: the SAME directory listed twice in dirs
+// (Config.AgentDefsDirs built up from more than one source, or simply a
+// caller-supplied duplicate) used to get loaded twice, and every name it
+// defined then collided with ITSELF on the second pass — the
+// duplicate-name-across-dirs check exists to catch a genuine conflict
+// between two DIFFERENT directories, not a directory tripping over its
+// own earlier pass. That false positive is a hard load error, killing
+// every custom agent type for the whole session. dirs is deduped on
+// filepath.Clean before the loop now, so a literal repeat, and the
+// trivial "./" / trailing-slash variants Clean already normalizes, no
+// longer trigger it.
+func TestResolveAgentDefsDuplicateDirIsNotACollision(t *testing.T) {
+	dir := t.TempDir()
+	writeAgentDef(t, dir, "solo.md", `---
+name: solo
+description: Defined once, but the directory is listed twice
+---
+body
+`)
+	defs, err := ResolveAgentDefs([]string{dir, dir})
+	if err != nil {
+		t.Fatalf("ResolveAgentDefs with a duplicated dir entry: %v", err)
+	}
+	if _, ok := defs["solo"]; !ok {
+		t.Errorf("missing solo: %v", defs)
+	}
+
+	// The trivial path-string variant Clean normalizes away, not just a
+	// byte-identical repeat.
+	defs, err = ResolveAgentDefs([]string{dir, dir + "/"})
+	if err != nil {
+		t.Fatalf("ResolveAgentDefs with a trailing-slash duplicate: %v", err)
+	}
+	if _, ok := defs["solo"]; !ok {
+		t.Errorf("missing solo: %v", defs)
+	}
+}

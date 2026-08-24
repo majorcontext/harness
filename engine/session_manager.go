@@ -1153,7 +1153,17 @@ func (m *SessionManager) restoreTaskToolRestrictionLocked(s *Session, depth int)
 // idempotent rather than corrupting the concurrency count either way).
 func (m *SessionManager) ReportTurnStart(sess *Session) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	// unlockAndFlushPersist, not a plain m.mu.Unlock() — see that
+	// method's own doc comment for the full convention every entry
+	// point in this file that MIGHT queue a durable write via
+	// m.deferPersist must follow. adoptReloadedLocked below is called
+	// with recover=false, so recoverInterruptedTurnLocked (the only
+	// deferPersist source currently reachable from it) never actually
+	// runs on this path today — but a plain Unlock() here is a silent-
+	// drop trap for any future change that adds one, the same class of
+	// finding a live review already caught and fixed for
+	// fireIdleResumeAsync.
+	defer m.unlockAndFlushPersist()
 	n, ok := m.nodes[sess.ID]
 	if !ok {
 		// recover=false: this function unconditionally sets n.status =

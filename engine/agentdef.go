@@ -125,7 +125,30 @@ func ResolveAgentDefs(dirs []string) (map[string]AgentDef, error) {
 		defs[name] = def
 		source[name] = "builtin"
 	}
+	// Deduped on filepath.Clean(dir) before ever calling LoadAgentDefs —
+	// a live review finding: without this, the SAME directory appearing
+	// twice in dirs (Config.AgentDefsDirs built up from more than one
+	// source, or simply a caller-supplied duplicate) got loaded twice,
+	// and every single name it defined then collided with ITSELF on the
+	// second pass — the cross-dir duplicate-name check just below exists
+	// to catch a genuine conflict between two DIFFERENT directories, not
+	// a directory tripping over its own earlier pass, and a false
+	// positive here is a hard load error that kills every custom agent
+	// type for the whole session, not a harmless no-op. Clean, not a raw
+	// string compare, so the common trivial variants (a trailing
+	// slash, a redundant "./") still dedupe; deliberately NOT
+	// symlink/absolute-path resolution (filepath.Abs or EvalSymlinks) —
+	// dirs may legitimately not exist yet (LoadAgentDefs' own "missing
+	// dir is not an error" contract), and erroring or doing I/O here
+	// just to normalize a path this function does not otherwise need
+	// resolved would trade one edge case for a worse one.
+	seen := make(map[string]bool, len(dirs))
 	for _, dir := range dirs {
+		clean := filepath.Clean(dir)
+		if seen[clean] {
+			continue
+		}
+		seen[clean] = true
 		custom, err := LoadAgentDefs(dir)
 		if err != nil {
 			return nil, err
