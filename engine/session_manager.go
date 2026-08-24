@@ -301,6 +301,18 @@ type SessionManager struct {
 	// it closes. Guarded by m.mu itself (only ever appended to or
 	// drained while m.mu is held); never read or written any other way.
 	pendingPersist []func()
+
+	// testSweepUnlockedHook, if non-nil, is called by
+	// recoverCrashedChildrenLocked exactly once m.mu has been released
+	// for its own disk-bound LoadSession replay (see that method's own
+	// doc comment) — a test-only synchronization seam, nil in
+	// production, mirroring server.Server's own identical
+	// queueDispatchRace hook. Lets a test deterministically land a
+	// concurrent operation (another adoption, a Reap, a Send) inside the
+	// exact window this method's own revalidation-on-reacquire logic
+	// exists to handle correctly, rather than relying on incidental
+	// goroutine-scheduling luck.
+	testSweepUnlockedHook func()
 }
 
 // deferPersist queues fn to run once m.mu is released via
@@ -914,15 +926,81 @@ func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
 // persisted per-child "already confirmed settled" watermark, so a
 // long-done subtree can be skipped without loading it) is a real
 // follow-up, deliberately out of scope here.
+//
+// # Not actually held throughout, despite the name
+//
+// A live review finding: an earlier version of this method ran every
+// LoadSession call (real disk reads — open, stat, read, JSON-decode a
+// whole log) while m.mu — the single lock guarding every session in the
+// tree, taken by Info/Reap/Spawn/Send/finalize alike — was held, exactly
+// the class of problem deferPersist/unlockAndFlushPersist already closed
+// for durable WRITES on this same set of call paths (see that
+// mechanism's own doc comment). A slow or contended disk while recovering
+// a large crashed subtree could stall every OTHER session in the process
+// for the whole sweep.
+//
+// This method now releases m.mu itself partway through — snapshotting
+// which of n's spawned children are not yet tracked while STILL holding
+// the lock (cheap: no I/O, just a map/slice scan), unlocking, running
+// every LoadSession call OUTSIDE the lock, then re-acquiring before
+// integrating any result. Safe for every caller to keep treating this as
+// an ordinary *Locked method (called with m.mu held, returns with m.mu
+// held again) — but the tree is NOT frozen for the method's own
+// duration, so integration must explicitly revalidate against whatever
+// ran in the gap:
+//
+//   - n itself may no longer be the live node for its id (reaped, in the
+//     one shape that is possible for an already-terminal, already-
+//     finalized node a concurrent Reap() call could legitimately collect
+//     while unlocked). Checked once, up front: if n is no longer live,
+//     the WHOLE integration is abandoned — attaching a recovered child
+//     under a node that has left the tree makes no sense, and whatever
+//     concurrent path removed it is authoritative.
+//   - Each individual candidate child may have been adopted by someone
+//     else in the meantime — another ancestor's own concurrent sweep
+//     sharing this same child (a grandchild reachable from two different
+//     surviving ancestors after a partial reload), an explicit
+//     AdoptReloaded/ReportTurnStart racing this one, or simply a second
+//     concurrent touch of the same ancestor. Checked again, per child,
+//     right before adopting it: if it is now tracked, this method skips
+//     it rather than adopting a second time — adoptLocked has no dedup
+//     of its own (a double-adopt would corrupt m.nodes/runningByRoot
+//     bookkeeping), and whichever path won the race is treated as
+//     authoritative for that child, exactly like the n-itself case
+//     above.
+//
+// Neither race is a correctness gap this method needs to CLOSE, only one
+// it must not make worse: the loser of either race simply does less work
+// this time around — the winner's own adoption already recovers (or
+// otherwise correctly establishes) the child in question, and a FUTURE
+// ancestor touch would rediscover anything this specific race genuinely
+// caused to be skipped, the same reactive guarantee the whole feature
+// already rests on.
 func (m *SessionManager) recoverCrashedChildrenLocked(n *sessionNode) {
+	// Step 1 (locked): snapshot which spawned children are not yet
+	// tracked. No I/O — cheap enough to do without releasing m.mu.
+	var candidates []string
 	for _, childID := range n.session.SpawnedChildIDs() {
-		if _, tracked := m.nodes[childID]; tracked {
-			// Already live in this process — either never forgotten, or
-			// already adopted (possibly by an earlier iteration of this
-			// same sweep, recursively, for a grandchild). Nothing to do.
-			continue
+		if _, tracked := m.nodes[childID]; !tracked {
+			candidates = append(candidates, childID)
 		}
-		childSess, err := LoadSession(Config{Providers: n.session.cfg.Providers, SessionDir: n.session.cfg.SessionDir}, childID)
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	cfg := Config{Providers: n.session.cfg.Providers, SessionDir: n.session.cfg.SessionDir}
+	nID := n.id
+
+	// Step 2 (unlocked): the actual disk-bound replay.
+	m.mu.Unlock()
+	if m.testSweepUnlockedHook != nil {
+		// Test-only synchronization seam — see its own doc comment
+		// (nil, so a no-op, in production).
+		m.testSweepUnlockedHook()
+	}
+	loaded := make(map[string]*Session, len(candidates))
+	for _, childID := range candidates {
+		childSess, err := LoadSession(cfg, childID)
 		if err != nil {
 			// Most commonly: this child never survived its own FIRST
 			// message append (see store.go's package doc comment —
@@ -930,8 +1008,26 @@ func (m *SessionManager) recoverCrashedChildrenLocked(n *sessionNode) {
 			// early has no log file at all to load) — an even narrower
 			// crash window than this sweep targets, with genuinely
 			// nothing durable to recover from. Any other LoadSession
-			// failure is equally unrecoverable here: skip this one child
-			// rather than aborting the whole sweep over it.
+			// failure is equally unrecoverable here: skip this one
+			// child rather than aborting the whole sweep over it.
+			continue
+		}
+		loaded[childID] = childSess
+	}
+	m.mu.Lock()
+
+	// Step 3 (locked again): integrate, revalidating against whatever
+	// ran while unlocked — see this method's own doc comment for the
+	// exact race semantics decided here.
+	if m.nodes[nID] != n {
+		return
+	}
+	for _, childID := range candidates {
+		childSess, ok := loaded[childID]
+		if !ok {
+			continue
+		}
+		if _, tracked := m.nodes[childID]; tracked {
 			continue
 		}
 		// Adopted unconditionally — NOT gated on childSess.hasUnfinalizedTurn()

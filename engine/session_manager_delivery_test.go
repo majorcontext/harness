@@ -3109,3 +3109,166 @@ func TestAdoptRootRecoversCrashedGrandchildTwoLevelsDeep(t *testing.T) {
 		t.Errorf("root2.taskNotifications missing the grandchild's forwarded lost-to-restart notification, reparented past its own terminal parent (mid): %+v", root2.taskNotifications)
 	}
 }
+
+// TestRecoverCrashedChildrenLockedSkipsConcurrentlyAdoptedChild is the
+// regression test for a live review finding: recoverCrashedChildrenLocked
+// used to run its own disk-bound LoadSession replay while m.mu — the
+// single lock guarding every session in the tree — was held, the same
+// class of problem deferPersist/unlockAndFlushPersist already closed for
+// durable WRITES on this same set of call paths. The fix releases m.mu
+// for the replay and re-acquires before integrating any result — which
+// means the tree is genuinely NOT frozen for the sweep's own duration,
+// and a concurrent adoption of the SAME child (another ancestor's own
+// sweep sharing it, or an explicit AdoptReloaded racing this one) can
+// land in that exact gap.
+//
+// Uses SessionManager.testSweepUnlockedHook (test-only, nil in
+// production) to inject a synchronous "concurrent" AdoptReloaded call —
+// on a SEPARATE load of the SAME crashed child — into the precise window
+// recoverCrashedChildrenLocked has released m.mu, deterministically
+// rather than relying on incidental goroutine-scheduling luck. Proves:
+// the child ends up tracked and correctly recovered EXACTLY once (the
+// concurrent path's own adoption wins; the sweep's own revalidation-on-
+// reacquire finds it already tracked and skips its own redundant
+// adopt), with exactly one notification delivered to the root — never a
+// double-registration or a duplicate notification.
+func TestRecoverCrashedChildrenLockedSkipsConcurrentlyAdoptedChild(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	childProv := &signaledBlockingProvider{name: "child", started: make(chan struct{}), release: make(chan struct{})}
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	<-childProv.started // child now genuinely mid-turn, blocked — simulate "kill -9 1" by simply abandoning it
+
+	// Fresh process: root2 gets its OWN provider instances — same
+	// shared-object race avoidance as every other test in this file.
+	rootProv2 := scriptedTurns("root", nil)
+	childProv2 := scriptedTurns("child", nil)
+	reg2 := provider.Registry{rootProv2.Name(): rootProv2, childProv2.Name(): childProv2}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	root2, err := LoadSession(rootCfg2, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root: %v", err)
+	}
+
+	// The injected "concurrent" adoption: a SEPARATE LoadSession of the
+	// SAME crashed child, adopted directly, synchronously, from inside
+	// the hook — root2 is already tracked by this point (adoptRootLocked
+	// registers it before ever calling recoverCrashedChildrenLocked), so
+	// nearestLiveAncestorLocked can already find it as a real delivery
+	// target, exactly as it would for any other concurrent adopter.
+	var concurrentErr error
+	var hookRan bool
+	var winnerNode *sessionNode
+	mgr2.testSweepUnlockedHook = func() {
+		hookRan = true
+		mgr2.testSweepUnlockedHook = nil // fire exactly once
+		concurrentChild, err := LoadSession(rootCfg2, childID)
+		if err != nil {
+			concurrentErr = err
+			return
+		}
+		concurrentErr = mgr2.AdoptReloaded(concurrentChild)
+		// Captured under m.mu (AdoptReloaded's own critical section has
+		// already released it by the time this line runs, but nothing
+		// else can be touching m.nodes[childID] between that release and
+		// this read — the sweep itself is still mid-unlock, and this
+		// hook is its only caller) — the node object the CONCURRENT path
+		// actually installed, to compare against whatever is there once
+		// the sweep's own (correctly skipped, or incorrectly clobbering)
+		// integration finishes below.
+		mgr2.mu.Lock()
+		winnerNode = mgr2.nodes[childID]
+		mgr2.mu.Unlock()
+	}
+
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+	if !hookRan {
+		t.Fatal("test setup: testSweepUnlockedHook never fired — recoverCrashedChildrenLocked did not release m.mu for its own replay")
+	}
+	if concurrentErr != nil {
+		t.Fatalf("concurrent AdoptReloaded: %v", concurrentErr)
+	}
+	if winnerNode == nil {
+		t.Fatal("test setup: concurrent AdoptReloaded did not register a node for childID")
+	}
+
+	// The crux of the fix: the sweep's OWN revalidation-on-reacquire must
+	// find childID already tracked and skip its own redundant adopt —
+	// proven by NODE IDENTITY, not just observable status (which a
+	// naive double-adopt would ALSO end up reporting correctly, via the
+	// very durability/idempotency this whole mechanism already provides
+	// — see recoverCrashedChildrenLocked's own doc comment on the race
+	// semantics). A double-adopt here is still real harm even when
+	// status/notifications end up looking fine: adoptLocked builds a
+	// FRESH context.WithCancel(parentCtx) and unconditionally overwrites
+	// m.nodes[childID] with the new node, silently discarding the
+	// winner's own node — including its own cancel func, whose
+	// registration in parentCtx's internal children map would then leak
+	// for the parent's whole remaining lifetime (see Reap's own doc
+	// comment on this exact leak class) — without this test's own
+	// pointer-identity check, that leak would pass completely silently.
+	mgr2.mu.Lock()
+	gotNode := mgr2.nodes[childID]
+	mgr2.mu.Unlock()
+	if gotNode != winnerNode {
+		t.Fatalf("mgr2.nodes[childID] = %p after AdoptRoot returned, want the SAME node the concurrent AdoptReloaded call (%p) installed — the sweep's own revalidation-on-reacquire failed to skip its own redundant, clobbering adopt", gotNode, winnerNode)
+	}
+
+	// Exactly one adoption won the race — the child is tracked exactly
+	// once, correctly recovered (via whichever path actually won; either
+	// is a correct outcome, see recoverCrashedChildrenLocked's own doc
+	// comment on the race semantics), never left half-adopted or
+	// double-registered.
+	info, ok := mgr2.Info(childID)
+	if !ok {
+		t.Fatal("child not tracked after the race")
+	}
+	if info.Status != StatusFailed || !strings.Contains(info.FailReason, "restart") {
+		t.Errorf("child info = %+v, want StatusFailed with a restart-loss fail_reason", info)
+	}
+
+	// root2 is genuinely idle when the winning adoption delivers to it,
+	// so this can trigger a real active resume racing this test's own
+	// read — poll rather than read once, same pattern as every other
+	// test in this file exercising this exact race.
+	countAll := func() int {
+		root2.mu.Lock()
+		defer root2.mu.Unlock()
+		return len(root2.taskNotifications) + len(root2.taskNotificationsInFlight)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && countAll() != 1 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		root2.mu.Lock()
+		n := len(root2.taskNotifications)
+		root2.mu.Unlock()
+		if n == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	root2.mu.Lock()
+	defer root2.mu.Unlock()
+	if len(root2.taskNotifications) != 1 {
+		t.Fatalf("root2.taskNotifications = %+v (in-flight: %+v), want exactly 1 — a second entry would mean BOTH the concurrent adopter and the sweep's own (stale) result delivered a notification for the same child", root2.taskNotifications, root2.taskNotificationsInFlight)
+	}
+	if got := root2.taskNotifications[0]; got.ChildID != childID || got.Status != StatusFailed {
+		t.Errorf("root2.taskNotifications[0] = %+v, want ChildID=%q Status=%q", got, childID, StatusFailed)
+	}
+}
