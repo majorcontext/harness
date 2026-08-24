@@ -1508,10 +1508,19 @@ Rules:
   loops, because no in-process channel can cross an OS process boundary.
   Intervals stay tight, deadlines explicit; anything observable in-process
   still uses channels or synctest.
-- **No raw `time.Sleep` for synchronization — ever, bubble or not.** To
-  simulate a hung component, block on a channel closed in `t.Cleanup`; in a
-  bubble the hang deterministically outlasts any timeout with zero wall-clock
-  cost, and the cleanup release lets the goroutine exit before bubble end.
+- **`time.Sleep` is banned in test code. Absolute — not "for
+  synchronization," not "just 10ms," not behind a helper. There are exactly
+  two sanctioned time mechanisms in tests: a `testing/synctest` bubble, or
+  an injected fake clock/timer seam.** If code under test reads real time
+  and cannot run in a bubble, the fix is to add the seam to the production
+  code, not to sleep in the test. Reviewers treat any `time.Sleep` in a
+  test diff as an automatic blocker; do not push one expecting discussion.
+  The single carve-out is `e2e/` cross-process polling (below), and only
+  through its deadline-bounded poll helper — never a bare sleep loop
+  written inline. To simulate a hung component, block on a channel closed
+  in `t.Cleanup`; in a bubble the hang deterministically outlasts any
+  timeout with zero wall-clock cost, and the cleanup release lets the
+  goroutine exit before bubble end.
 - **No guessed deadlines.** Block directly on channels for expected events
   and let the test binary timeout catch hangs; don't wrap waits in short
   arbitrary `time.After` failsafes that flake under load.
