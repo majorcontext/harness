@@ -291,15 +291,31 @@ func TestSessionCreateWithParentIDUnknownAgentIs400(t *testing.T) {
 // and agent_type without requiring any write (a prompt/send call) to
 // force a reload first.
 //
-// Also covers a second, later review finding on the same cold-fallback
-// branch: it used to set Children to []string{} — indistinguishable on
-// the wire from a WARM, genuinely childless node's real empty list. For a
-// MID-TREE parent (this test's child, which itself spawns a grandchild
-// below) that is exactly wrong: the child has a real, live grandchild on
-// disk, but a caller reading "children":[] from a cold GET would
-// reasonably conclude it has none — an affirmatively wrong answer, worse
-// than an honestly omitted one. Proves "children" is omitted entirely on
-// the cold path even though a real child (the grandchild) exists.
+// Also covers two later review findings on the same cold-fallback branch,
+// both about Children specifically:
+//
+//   - It used to set Children to []string{} — indistinguishable on the
+//     wire from a WARM, genuinely childless node's real empty list. For a
+//     MID-TREE parent (this test's child, which itself spawns a
+//     grandchild below) that is exactly wrong: the child has a real,
+//     live grandchild on disk, but a caller reading "children":[] from a
+//     cold GET would reasonably conclude it has none — an affirmatively
+//     wrong answer, worse than an honestly unknown one.
+//   - The fix for THAT (giving Children omitempty, so the cold branch
+//     could leave it nil and have it vanish from the wire) went one step
+//     too far: omitempty collapses nil and a genuinely empty non-nil
+//     slice to the same "absent" wire shape, so a WARM, truly childless
+//     node ALSO started omitting the field — indistinguishable from this
+//     cold branch's own "unknown." Children now has NO omitempty
+//     instead: the cold branch's nil serializes as an explicit
+//     "children":null (present, but honestly unknown — distinct from
+//     both "known: zero" and "known: non-zero"), while the warm branch
+//     (lineageJSONFor) normalizes nil to []string{} so a real empty list
+//     still reads "children":[].
+//
+// Proves "children" is present as JSON null on the cold path — neither
+// omitted nor an affirmative empty list — even though a real child (the
+// grandchild) exists.
 func TestColdChildHasDurableLineage(t *testing.T) {
 	dir := t.TempDir()
 	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("the answer is 42")}}
@@ -375,8 +391,59 @@ func TestColdChildHasDurableLineage(t *testing.T) {
 	if _, ok := cold.Lineage["depth"]; ok {
 		t.Errorf("cold lineage.depth = %v, want omitted (no durable source)", cold.Lineage["depth"])
 	}
-	if v, ok := cold.Lineage["children"]; ok {
-		t.Errorf("cold lineage.children = %v, want omitted (no durable source) — the child genuinely has a live grandchild on disk, so an affirmative empty list would be actively wrong, not just unknown", v)
+	// children has no omitempty (see its own doc comment, handlers.go) —
+	// present but explicitly null on the cold path, not omitted and not
+	// an affirmative []. The child genuinely has a live grandchild on
+	// disk, so an affirmative empty list would be actively wrong, not
+	// just unknown — and simply omitting the key again would reopen the
+	// exact warm/cold ambiguity the field's own fix exists to close.
+	v, ok := cold.Lineage["children"]
+	if !ok {
+		t.Error("cold lineage.children key missing entirely, want present as JSON null")
+	}
+	if v != nil {
+		t.Errorf("cold lineage.children = %v, want null (unknown) — the child genuinely has a live grandchild on disk, so an affirmative list would be actively wrong", v)
+	}
+}
+
+// TestWarmChildlessLineageHasExplicitEmptyChildren is the regression test
+// for the OTHER half of Children's own fix (see TestColdChildHasDurableLineage's
+// doc comment for the full history): a WARM, genuinely childless node
+// must serialize "children":[] — present and explicitly empty, never
+// omitted (which would be indistinguishable from the cold-fallback
+// branch's own honest "unknown" null) and never simply absent from the
+// map. Uses a plain root with no children spawned: sessMgr.Info succeeds
+// for a root exactly like it does for a child, so lineageJSONFor's warm
+// branch is exercised the same way.
+func TestWarmChildlessLineageHasExplicitEmptyChildren(t *testing.T) {
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil, &scriptedProvider{name: "root"})
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h.do("GET", "/session/"+root.ID, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("get root status %d: %s", resp.StatusCode, data)
+	}
+	var got struct {
+		Lineage map[string]any `json:"lineage"`
+	}
+	mustUnmarshal(t, data, &got)
+	v, ok := got.Lineage["children"]
+	if !ok {
+		t.Fatal("warm childless lineage.children key missing entirely, want present as []")
+	}
+	list, isList := v.([]any)
+	if !isList {
+		t.Fatalf("warm childless lineage.children = %#v (type %T), want an empty JSON array, not null or omitted", v, v)
+	}
+	if len(list) != 0 {
+		t.Errorf("warm childless lineage.children = %v, want empty", list)
 	}
 }
 

@@ -521,37 +521,39 @@ func (s *Session) persistTaskSpawnLocked(childID, agent string) {
 // enqueueTaskNotification/commitTaskNotifications in taskdelivery.go) —
 // mirrors persistPromptQueueLocked exactly. Caller holds s.mu.
 //
-// A live review finding, deliberately NOT fixed in this pass: unlike
-// persistPromptQueueLocked's own callers (EnqueuePrompt, an ordinary
-// Session API never invoked while SessionManager's own m.mu is held),
-// every caller of THIS method that matters for tree delivery —
-// finalizeTurn, recoverInterruptedTurnLocked, and ReportTurnStart's
-// migration — runs with m.mu held for the call's whole duration. m.mu is
-// the SINGLE lock guarding every session in the tree (Info/Reap/Spawn/
-// Send/finalize all take it), so this synchronous disk write (ensureLog's
-// MkdirAll/OpenFile/Stat on a cold log, then writeRecord's append) runs
-// INSIDE that global critical section — a slow or contended disk on one
-// session's notification could stall Info/Reap/Spawn/finalize for every
-// OTHER session in the process, in tension with AGENTS.md's "a hung
-// component can't wedge other sessions."
+// UPDATE: the m.mu-contention finding this comment used to describe here
+// is fixed. It no longer applies to this method's two tree-delivery call
+// sites — finalizeTurn and recoverInterruptedTurnLocked — which used to
+// call this synchronously (via persistQueuedTaskNotification/
+// persistDeliveredTaskNotifications) while SessionManager.mu, the single
+// lock guarding every session in the tree, was held. Both now go through
+// SessionManager.deferPersist/unlockAndFlushPersist instead (see that
+// mechanism's own doc comment, session_manager.go): the in-memory queue
+// mutation still happens under m.mu, exactly as before (preserving the
+// queued-minus-delivered durability guarantee's atomicity with the
+// caller's OTHER in-memory bookkeeping under that same lock), but the
+// actual disk write is queued as a thunk and only runs once m.mu has
+// already been released — closing the "a slow or contended disk on one
+// session's notification stalls Info/Reap/Spawn/finalize for every OTHER
+// session" exposure without reopening a durability window, exactly the
+// "getting both properties" goal this comment used to call out as
+// deliberately deferred future work.
 //
-// Moving this I/O outside m.mu is a real fix, not a quick one: the
-// in-memory queue mutation and the durable write currently happen
-// atomically together (both under s.mu, itself called from within m.mu),
-// which is exactly what makes the queued-minus-delivered durability
-// guarantee this whole mechanism depends on airtight — deferring the
-// write to after m.mu.Unlock() opens a window where the in-memory state
-// is already visible but the crash-recovery record backing it is not yet
-// written, reopening a narrower version of the exact gap this feature was
-// built to close. Getting both properties (bounded lock hold time AND no
-// durability window) needs real design work — a write-ahead ordering, or
-// moving these calls off m.mu's critical section entirely — deliberately
-// left as a follow-up rather than rushed under this round's own review
-// cycle. Session log writes are local-disk appends in every deployment
-// this codebase currently targets, not network-backed, and ensureLog's
-// MkdirAll/OpenFile/Stat cost is paid once per session (a warm log's
-// steady-state cost is a single local Write) — bounding, but not
-// eliminating, the exposure in the meantime.
+// ReportTurnStart's own migration loop was never actually part of this
+// problem in the first place, despite an earlier version of this comment
+// listing it alongside the two callers above: it goes through
+// enqueueTaskNotificationMigrated, which is memory-only and never calls
+// this method at all — the notification's original recTaskNotifyQueued
+// record, from whichever earlier enqueue actually persisted it, already
+// backs it durably.
+//
+// The one remaining caller that DOES still run this synchronously,
+// commitTaskNotifications, was likewise never part of the m.mu problem:
+// it is invoked from a live turn's own per-session code path (streamTurn/
+// runAgenticLoop, engine.go), holding only s.mu — a per-session lock,
+// never SessionManager's tree-wide m.mu — so it was never in a position
+// to stall any OTHER session's Info/Reap/Spawn/finalize call to begin
+// with.
 func (s *Session) persistTaskNotifyLocked(recType string, n taskNotification) {
 	if s.cfg.SessionDir == "" {
 		return
