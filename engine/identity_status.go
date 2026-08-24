@@ -31,7 +31,7 @@ import (
 // identityStatusSegment renders the ambient engine-identity block request
 // assembly appends to the newest user message (see streamTurn):
 //
-//	[engine: harness <version> · session_sync=<mode> · started <UTC RFC3339>]
+//	[engine: harness <version> · session_sync=<mode> · engine started <UTC RFC3339>]
 //
 // sessionSync is rendered as its EFFECTIVE mode, always — "fsync" for the
 // zero value or any value other than SessionSyncVolume, exactly like
@@ -40,12 +40,33 @@ import (
 // self-describing config means an agent should not have to know the
 // default to know what mode it's actually in.
 //
+// startedAt is Config.StartedAt: this SERVING PROCESS's own start time
+// (server.Options.StartedAt's doc comment — "same instant threaded into
+// every session's engine.Config.StartedAt"), not this session's own
+// creation time. Every session in the process — a long-lived root created
+// hours ago, and a child Spawned moments ago via configSnapshot's inherited
+// copy — reports the identical value, by design: this segment answers
+// "which engine build is serving THIS SESSION, since when did IT come up,"
+// the same standing "what's running" question a redeploy or a restart
+// answers identically for every session it now serves, not "when was this
+// particular conversation started." The clause is worded "engine started"
+// (not bare "started") specifically so that shared, process-wide meaning
+// reads unambiguously — a live production case (a freshly Spawned child
+// reporting an "started" timestamp hours before its own creation, flagged
+// as a discrepancy by both the operator and the model reading its own
+// ambient context) showed the unqualified wording was read as "this
+// session started," which is never what this field means. See
+// TestIdentityStatusSegmentChildSharesParentEngineStartTime for the
+// inheritance this documents rather than fixes — a per-session creation
+// timestamp is a genuinely different, not-yet-modeled piece of information,
+// not what this segment ever claimed to report.
+//
 // version and startedAt are each independently optional: an empty version
 // (Config.EngineVersion's zero value — see its doc comment) omits just the
-// "harness <version>" clause, and a zero startedAt omits just the "started
-// ..." clause, so a Config built directly (bypassing cmd/harness, which
-// always sets both) still gets a useful block rather than losing the whole
-// thing to one missing field. The block itself is present whenever at
+// "harness <version>" clause, and a zero startedAt omits just the "engine
+// started ..." clause, so a Config built directly (bypassing cmd/harness,
+// which always sets both) still gets a useful block rather than losing the
+// whole thing to one missing field. The block itself is present whenever at
 // least one of version/startedAt is set; when NEITHER is set — the common
 // case for every existing test and embedder that predates this field, and
 // for a session builder that never threads either one — this renders "",
@@ -62,7 +83,7 @@ func identityStatusSegment(version string, startedAt time.Time, sessionSync stri
 	}
 	clauses = append(clauses, "session_sync="+effectiveSessionSync(sessionSync))
 	if !startedAt.IsZero() {
-		clauses = append(clauses, "started "+startedAt.UTC().Format(time.RFC3339))
+		clauses = append(clauses, "engine started "+startedAt.UTC().Format(time.RFC3339))
 	}
 	return "[engine: " + strings.Join(clauses, " · ") + "]"
 }

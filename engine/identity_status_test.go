@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -63,8 +64,8 @@ func TestAmbientEngineIdentityPresent(t *testing.T) {
 	}
 	// Rendered as UTC RFC3339, not the FixedZone offset used above.
 	want := started.UTC().Format(time.RFC3339)
-	if !strings.Contains(last, "started "+want) {
-		t.Errorf("ambient block = %q, want it to contain %q (UTC)", last, "started "+want)
+	if !strings.Contains(last, "engine started "+want) {
+		t.Errorf("ambient block = %q, want it to contain %q (UTC)", last, "engine started "+want)
 	}
 	if strings.Contains(last, "PDT") {
 		t.Errorf("ambient block = %q, rendered in a non-UTC zone", last)
@@ -136,8 +137,8 @@ func TestAmbientEngineIdentityEmptyVersionOmitsVersionClause(t *testing.T) {
 	if !strings.Contains(last, "session_sync=fsync") {
 		t.Errorf("ambient block = %q, want session_sync still reported", last)
 	}
-	if !strings.Contains(last, "started ") {
-		t.Errorf("ambient block = %q, want the started clause still reported", last)
+	if !strings.Contains(last, "engine started ") {
+		t.Errorf("ambient block = %q, want the engine started clause still reported", last)
 	}
 }
 
@@ -162,7 +163,7 @@ func TestAmbientEngineIdentityZeroStartedAtOmitsStartedClause(t *testing.T) {
 		t.Errorf("ambient block = %q, want the version clause still reported", last)
 	}
 	if strings.Contains(last, "started ") {
-		t.Errorf("ambient block = %q, want no started clause when StartedAt is zero", last)
+		t.Errorf("ambient block = %q, want no engine started clause when StartedAt is zero", last)
 	}
 }
 
@@ -217,5 +218,96 @@ func TestAmbientEngineIdentityNeverPersisted(t *testing.T) {
 func TestIdentityStatusSegmentAbsentWhenBothUnset(t *testing.T) {
 	if got := identityStatusSegment("", time.Time{}, ""); got != "" {
 		t.Fatalf("identityStatusSegment(\"\", zero, \"\") = %q, want \"\"", got)
+	}
+}
+
+// TestIdentityStatusSegmentChildSharesParentEngineStartTime documents (and
+// guards) the deliberate, process-wide value this segment reports —
+// identityStatusSegment's own doc comment for why. SessionManager.Spawn's
+// childCfg is copied wholesale from parent.session.configSnapshot()
+// (session_manager.go), so a freshly Spawned child's own "engine started"
+// clause reports the EXACT SAME process start time as its parent's, even
+// though the child was created much later — never the child's own creation
+// time, a genuinely different, not-yet-modeled fact this segment has never
+// claimed to report. A live production case (a child Spawned ~14 hours
+// after its serving process booted, both the operator and the model
+// reading its own ambient context misreading the shared timestamp as "this
+// session started") is what surfaced the ambiguity; the fix was the
+// clearer "engine started" wording in identityStatusSegment, not changing
+// which value is reported — this test is the regression guard for that
+// distinction staying correct.
+func TestIdentityStatusSegmentChildSharesParentEngineStartTime(t *testing.T) {
+	started := time.Date(2026, 8, 24, 5, 12, 26, 0, time.UTC)
+	rootProv := &scriptedProvider{name: "root", turns: [][]provider.Event{
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "ok"}),
+	}}
+	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "child ok"}),
+	}}
+	reg := provider.Registry{"root": rootProv, "child": childProv}
+
+	// childDone closes the instant the child's own assistant reply is
+	// appended — a real synchronization edge, not a guessed deadline.
+	// OnEvent is set on the ROOT's Config here and inherited verbatim by
+	// the child's own Config (SessionManager.Spawn's childCfg derivation
+	// copies parent.session.configSnapshot() wholesale, OnEvent included —
+	// the same inheritance this test is ABOUT), so one callback observes
+	// both sessions' EventMessage emits. The root's own Prompt call below
+	// runs to completion (and so emits its own, first, assistant
+	// EventMessage) synchronously, BEFORE Spawn is ever called — so the
+	// second assistant EventMessage this callback ever sees can only be
+	// the child's, with no session-id filtering needed and no race window
+	// where an event could fire before anything is listening (OnEvent is
+	// part of Config from construction, armed before either session's
+	// first turn starts).
+	var mu sync.Mutex
+	assistantMsgs := 0
+	childDone := make(chan struct{})
+	onEvent := func(ev Event) {
+		if ev.Type != EventMessage || ev.Message == nil || ev.Message.Role != message.RoleAssistant {
+			return
+		}
+		mu.Lock()
+		assistantMsgs++
+		n := assistantMsgs
+		mu.Unlock()
+		if n == 2 {
+			close(childDone)
+		}
+	}
+
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	root := mgr.NewRoot(Config{
+		Providers:     reg,
+		Model:         modelFor("root"),
+		EngineVersion: "1.2.3",
+		StartedAt:     started,
+		OnEvent:       onEvent,
+	})
+	if _, err := root.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatalf("root Prompt: %v", err)
+	}
+	wantClause := "engine started " + started.UTC().Format(time.RFC3339)
+	rootLast := lastUserText(t, rootProv.requests[0])
+	if !strings.Contains(rootLast, wantClause) {
+		t.Fatalf("root ambient block = %q, want %q", rootLast, wantClause)
+	}
+
+	if _, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	// Block directly on childDone — no timeout wrapper. AGENTS.md: block
+	// directly on channels for expected events and let the test binary
+	// timeout catch a genuine hang, rather than a guessed deadline that
+	// can flake under a loaded runner.
+	<-childDone
+
+	if len(childProv.requests) == 0 {
+		t.Fatal("child never made a request")
+	}
+	childLast := lastUserText(t, childProv.requests[0])
+	if !strings.Contains(childLast, wantClause) {
+		t.Errorf("child ambient block = %q, want the SAME %q as its parent (process-wide, by design)", childLast, wantClause)
 	}
 }

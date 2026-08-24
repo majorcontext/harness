@@ -1332,7 +1332,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 
-	go s.runPrompt(ctx, id, st, text)
+	go s.runPrompt(ctx, id, st, text, "")
 	writeJSON(w, http.StatusAccepted, promptAsyncResponse{Seq: fromSeq, Status: "started"})
 }
 
@@ -1742,7 +1742,15 @@ func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Cont
 		return head, 0, false
 	}
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
-	go s.runPrompt(ctx, id, st, head.Text)
+	// origin "": a dequeued prompt is always someone's real durably-queued
+	// text (an ordinary prompt_async caught behind a busy turn, or a
+	// session.send) — never the engine's own synthetic resume trigger, even
+	// when the DRAIN that reaches here was itself provoked by
+	// runOrQueueText's queue-non-empty branch (session_tree.go): that branch
+	// deliberately dispatches the QUEUE HEAD instead of its own trigger
+	// text, exactly so a real queued message is never displaced by the
+	// resume trigger — see runOrQueueText's own doc comment.
+	go s.runPrompt(ctx, id, st, head.Text, "")
 	if s.dispatchQueueHeadRace != nil {
 		// Test-only seam — see its own doc comment (server.go).
 		s.dispatchQueueHeadRace()
@@ -1758,7 +1766,16 @@ func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Cont
 // with detail. Either way a durable record precedes the idle transition so a
 // disconnected orchestrator learns the outcome on replay; the 202 only
 // acknowledged receipt.
-func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, text string) {
+//
+// origin is forwarded to Session.PromptWithOrigin verbatim (see
+// message.Message.Origin's own doc comment): message.OriginEngine for
+// runOrQueueText's own resume-trigger dispatch (session_tree.go, the ONLY
+// call site that ever passes it), empty for every other caller — an
+// ordinary prompt_async turn (handlePrompt), a dequeued prompt
+// (dispatchQueueHead, whether or not the drain was itself provoked by a
+// resume trigger — see that function's own doc comment), or a session.send
+// delivery (sendTextToRoot).
+func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, text string, origin string) {
 	defer s.wg.Done()
 	// ReportTurnStart/ReportTurnEnd bracket the ONE choke point every
 	// ordinary (non-goal-loop) turn on a resident session funnels through
@@ -1773,7 +1790,7 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	// hits, closing the "task tool broken after restart" gap a live
 	// review caught.
 	s.sessMgr.ReportTurnStart(st.sess)
-	msg, err := st.sess.Prompt(ctx, text)
+	msg, err := st.sess.PromptWithOrigin(ctx, text, origin)
 	s.syncMessages(id) // catch any message not yet journaled
 	switch {
 	case err == nil:
@@ -2544,11 +2561,23 @@ func (s *Server) handleSetThinking(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, setThinkingResponseJSON{Effort: st.sess.Effort()})
 }
 
-// evictResidentLocked unloads the longest-idle non-busy sessions from memory
-// when the resident count exceeds Options.MaxResident. Busy sessions are never
-// evicted; s.seen is retained so journal idempotency survives the unload (the
-// session reloads transparently from disk on its next access). Caller holds
-// s.mu.
+// evictResidentLocked unloads the longest-idle non-busy sessions from
+// s.sessions (this server's OWN residency bookkeeping) when the resident
+// count exceeds Options.MaxResident. Busy sessions are never evicted;
+// s.seen is retained so journal idempotency survives the unload.
+//
+// This frees s.sessions' own entry, but not necessarily the *Session object
+// itself: a root is adopted into sessMgr (AdoptRoot) and never reaped
+// (Reap only removes terminal LEAF children, never a root — see
+// TestReapNeverCollectsAnOrdinaryRootEvenWhenChildless), so sessMgr keeps
+// pinning the live object in memory regardless of this eviction — a
+// pre-existing property of sessMgr's own lifecycle, unrelated to and
+// unchanged by this function. What DOES depend on Server.lookup's ordering
+// (sessMgr checked before a disk reload — see its own doc comment) is which
+// object the NEXT read after eviction actually returns: the live,
+// sessMgr-pinned one, not a fresh LoadSession reread from disk — eviction
+// here narrows only this server's own bookkeeping, never a guarantee that
+// the next access is served cold. Caller holds s.mu.
 func (s *Server) evictResidentLocked() {
 	excess := len(s.sessions) - s.opts.MaxResident
 	if excess <= 0 {
@@ -2928,6 +2957,44 @@ func (s *Server) sessionOnDisk(id string) bool {
 
 // lookup resolves a session for read endpoints: the in-memory session (with
 // live status) if present, else a transparent load from disk (always idle).
+//
+// Order matters, and used to be wrong for every child. A root goes through
+// s.sessions (this server's own residency bookkeeping) first, unchanged. For
+// anything NOT in s.sessions — every child, always, since a child is never
+// registered there — this used to fall straight to s.opts.LoadSession(id), a
+// COLD DISK REREAD, before ever consulting sessMgr (this process's own live,
+// in-memory tracker for anything it is actively running, root or child).
+// That cold read wins near-unconditionally in the steady state: a child's
+// log already exists on disk essentially immediately (Spawn persists on
+// first Prompt append, same as any session), so LoadSession(id) succeeds and
+// returns for the WHOLE remaining lifetime of a long-running child, never
+// once falling through to the sessMgr branch the old code's own doc comment
+// claimed was "the ONLY path that ever resolves a child session this
+// process's SessionManager tracks" — true only in the narrow startup race
+// that comment described, false for every child from then on. That cold
+// reload is not merely wasteful (re-parsing the whole log
+// on every single GET, including the box console's own 2s/2.5s subagent-card
+// poll): LoadSession's scanLog replay runs message.ResolveOrphanToolCalls
+// (store.go) unconditionally — a crash-repair backstop that synthesizes an
+// is_error tool_result for ANY tool_use with no matching result yet, correct
+// for a session that genuinely died mid-turn, WRONG for one simply still
+// running its own in-flight tool call. A live child executing an ordinary
+// long tool call (a subagent's `bash sleep 45`, the case that surfaced this)
+// had every poll of GET /session/{id}/message re-derive a fabricated
+// crashed/errored result for its perfectly healthy in-flight call, rendering
+// it as failed in the console for as long as it kept running — and, since a
+// subagent card's transcript poll only re-fetches while its own lineage
+// status reads "running" (boxes' use-child-transcript.ts), a poll landing
+// during that window right before the child's genuine completion could leave
+// that false error as the last thing ever fetched, with nothing left to
+// self-heal it.
+//
+// The fix: check sessMgr FIRST. Anything it is actively tracking — root or
+// child, running, idle-between-turns, or terminal-but-not-yet-reaped — has
+// its live, authoritative Go object read directly, with no disk round trip
+// and no repair artifacts. Only an id sessMgr has never adopted (or has
+// since forgotten — e.g. this process restarted and the id has not been
+// re-adopted onto a NEW node yet) ever reaches the disk-load fallback below.
 func (s *Server) lookup(id string) (*engine.Session, string, bool) {
 	s.mu.Lock()
 	st := s.sessions[id]
@@ -2939,30 +3006,15 @@ func (s *Server) lookup(id string) (*engine.Session, string, bool) {
 	if st != nil {
 		return st.sess, statusStr(running), true
 	}
+	if childSess, info, ok := s.sessMgr.SessionAndInfo(id); ok {
+		status := "idle"
+		if info.Status == engine.StatusRunning {
+			status = "busy"
+		}
+		return childSess, status, true
+	}
 	if sess, err := s.opts.LoadSession(id); err == nil {
 		return sess, "idle", true
-	}
-	// Neither resident nor (yet, or ever) readable from disk under this id.
-	// A child SessionManager.Spawn just registered can reach this exact
-	// point before its first Persist call lands — Spawn launches the
-	// child's turn asynchronously (see its doc comment), so a GET racing
-	// immediately after the 201 that created it can beat the write. Fall
-	// back to the live in-memory object SessionManager itself holds, which
-	// is always immediately consistent with lineageJSONFor's own Info(id)
-	// call — this is also the ONLY path that ever resolves a child session
-	// this process's SessionManager tracks but this server's ordinary
-	// residency/disk bookkeeping never independently persisted-and-then-
-	// forgot (ordinary use always persists on first Prompt append, same as
-	// any session — this is purely a startup race window, not a steady-
-	// state gap).
-	if info, ok := s.sessMgr.Info(id); ok {
-		if childSess, ok := s.sessMgr.Session(id); ok {
-			status := "idle"
-			if info.Status == engine.StatusRunning {
-				status = "busy"
-			}
-			return childSess, status, true
-		}
 	}
 	return nil, "", false
 }
