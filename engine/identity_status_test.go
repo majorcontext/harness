@@ -63,8 +63,8 @@ func TestAmbientEngineIdentityPresent(t *testing.T) {
 	}
 	// Rendered as UTC RFC3339, not the FixedZone offset used above.
 	want := started.UTC().Format(time.RFC3339)
-	if !strings.Contains(last, "started "+want) {
-		t.Errorf("ambient block = %q, want it to contain %q (UTC)", last, "started "+want)
+	if !strings.Contains(last, "engine started "+want) {
+		t.Errorf("ambient block = %q, want it to contain %q (UTC)", last, "engine started "+want)
 	}
 	if strings.Contains(last, "PDT") {
 		t.Errorf("ambient block = %q, rendered in a non-UTC zone", last)
@@ -136,8 +136,8 @@ func TestAmbientEngineIdentityEmptyVersionOmitsVersionClause(t *testing.T) {
 	if !strings.Contains(last, "session_sync=fsync") {
 		t.Errorf("ambient block = %q, want session_sync still reported", last)
 	}
-	if !strings.Contains(last, "started ") {
-		t.Errorf("ambient block = %q, want the started clause still reported", last)
+	if !strings.Contains(last, "engine started ") {
+		t.Errorf("ambient block = %q, want the engine started clause still reported", last)
 	}
 }
 
@@ -162,7 +162,7 @@ func TestAmbientEngineIdentityZeroStartedAtOmitsStartedClause(t *testing.T) {
 		t.Errorf("ambient block = %q, want the version clause still reported", last)
 	}
 	if strings.Contains(last, "started ") {
-		t.Errorf("ambient block = %q, want no started clause when StartedAt is zero", last)
+		t.Errorf("ambient block = %q, want no engine started clause when StartedAt is zero", last)
 	}
 }
 
@@ -217,5 +217,76 @@ func TestAmbientEngineIdentityNeverPersisted(t *testing.T) {
 func TestIdentityStatusSegmentAbsentWhenBothUnset(t *testing.T) {
 	if got := identityStatusSegment("", time.Time{}, ""); got != "" {
 		t.Fatalf("identityStatusSegment(\"\", zero, \"\") = %q, want \"\"", got)
+	}
+}
+
+// TestIdentityStatusSegmentChildSharesParentEngineStartTime documents (and
+// guards) the deliberate, process-wide value this segment reports —
+// identityStatusSegment's own doc comment for why. SessionManager.Spawn's
+// childCfg is copied wholesale from parent.session.configSnapshot()
+// (session_manager.go), so a freshly Spawned child's own "engine started"
+// clause reports the EXACT SAME process start time as its parent's, even
+// though the child was created much later — never the child's own creation
+// time, a genuinely different, not-yet-modeled fact this segment has never
+// claimed to report. A live production case (a child Spawned ~14 hours
+// after its serving process booted, both the operator and the model
+// reading its own ambient context misreading the shared timestamp as "this
+// session started") is what surfaced the ambiguity; the fix was the
+// clearer "engine started" wording in identityStatusSegment, not changing
+// which value is reported — this test is the regression guard for that
+// distinction staying correct.
+func TestIdentityStatusSegmentChildSharesParentEngineStartTime(t *testing.T) {
+	started := time.Date(2026, 8, 24, 5, 12, 26, 0, time.UTC)
+	rootProv := &scriptedProvider{name: "root", turns: [][]provider.Event{
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "ok"}),
+	}}
+	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "child ok"}),
+	}}
+	reg := provider.Registry{"root": rootProv, "child": childProv}
+
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	root := mgr.NewRoot(Config{
+		Providers:     reg,
+		Model:         modelFor("root"),
+		EngineVersion: "1.2.3",
+		StartedAt:     started,
+	})
+	if _, err := root.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatalf("root Prompt: %v", err)
+	}
+	wantClause := "engine started " + started.UTC().Format(time.RFC3339)
+	rootLast := lastUserText(t, rootProv.requests[0])
+	if !strings.Contains(rootLast, wantClause) {
+		t.Fatalf("root ambient block = %q, want %q", rootLast, wantClause)
+	}
+
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	childSess, _ := mgr.Session(childID)
+	// Poll childSess.History() (Session-mutex-protected), NOT childProv.requests
+	// directly — Spawn drives the child's turn on its own goroutine, and
+	// childProv.requests is written by THAT goroutine with no lock of its
+	// own (scriptedProvider.Stream, engine_test.go). Waiting for the
+	// child's own completed reply (2 messages: user, assistant) to show up
+	// through the properly-locked History() call establishes a real
+	// happens-before edge back to the request scriptedProvider.Stream
+	// recorded earlier in that same goroutine, which is what makes reading
+	// childProv.requests below safe.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && len(childSess.History()) < 2 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(childSess.History()) < 2 {
+		t.Fatal("child never completed its turn")
+	}
+	if len(childProv.requests) == 0 {
+		t.Fatal("child never made a request")
+	}
+	childLast := lastUserText(t, childProv.requests[0])
+	if !strings.Contains(childLast, wantClause) {
+		t.Errorf("child ambient block = %q, want the SAME %q as its parent (process-wide, by design)", childLast, wantClause)
 	}
 }
