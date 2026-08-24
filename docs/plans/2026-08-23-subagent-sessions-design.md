@@ -205,6 +205,15 @@ operations (the boxes control plane is the first consumer):
   finalizes.
 - Child session logs persist like any session's, so a child's work is
   inspectable after the fact.
+- Token budget (opt-in, follow-up): `SetMaxTreeTokens` refuses `Spawn`
+  once a tree's cumulative usage (all four `provider.Usage` fields —
+  input, output, cache read, cache write) reaches the configured
+  ceiling. The budget is process-memory only, like the rest of
+  `SessionManager`'s own tree state — it resets to zero on every
+  process restart, so a tree that spends most of a large budget across
+  children later `Reap`ed (and never touched again) under-enforces the
+  operator's real ceiling after a respawn; a durable, cross-restart
+  budget is a separate piece of design work this PR does not attempt.
 
 ### Process-restart recovery
 
@@ -218,13 +227,20 @@ indistinguishable from a child that never received a turn at all — and
 its parent, if it ever queries or auto-resumes based on that child's
 outcome, waits forever for a notification that can never arrive.
 
-**Detection.** `Session.Prompt` durably appends the user-role message
-BEFORE calling the provider (see `runAgenticLoop`), so a crash mid-turn
-leaves exactly one recognizable signature on disk: the session's history
-ends on a user-role message with nothing after it. `hasUnansweredTurn`
-(engine.go) checks for exactly this — the same signature
-`isSafeToDropDirectiveTail`'s `len==1` case already trusts for a
-different purpose (goal-loop retry).
+**Detection.** An earlier revision inferred "was this turn interrupted"
+from the trailing message's own role in history (the session's last
+message being user-role and nothing after it). A live review proved that
+heuristic unreliable in both directions — several legitimate, fully-
+settled paths (an ordinary provider error appending nothing at all; two
+different synthetic tool-result closers) leave trailing shapes
+indistinguishable from a genuine crash. Detection is now explicit
+instead: `Session.turnUnsettled`/`hasUnfinalizedTurn` (engine.go) is true
+from the moment any message is appended until `SessionManager.finalizeTurn`
+(or `recoverInterruptedTurnLocked` itself) explicitly marks the turn
+settled via `markTurnSettled`, durably backed by a `child_turn.settled`
+log record — regardless of what outcome resulted or what trailing
+message shape it left. Only a genuine crash, the process dying before
+either of those ever runs, leaves this true on the next reload.
 
 **Decision: treat it as `failed`, synthetically, on next touch.** A
 dangling child is marked `StatusFailed` (`FailReason`: `"lost to

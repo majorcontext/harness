@@ -226,13 +226,30 @@ type SessionManager struct {
 	// maxConcurrent, which always have a positive product default applied
 	// in NewSessionManager.
 	maxTreeTokens int
-	// usageByRoot accumulates cumulative token usage (input+output) per
-	// root session id, summed across every child in that root's tree as
-	// each one completes (see finalizeTurn's three notify-building
-	// branches, the single point every terminal child outcome already
-	// passes through) — never re-derived by re-summing every node on
-	// each check, mirroring runningByRoot's own incremental-accumulator
-	// shape exactly.
+	// usageByRoot accumulates cumulative token usage (all four
+	// provider.Usage fields — see treeTokenTotal) per root session id,
+	// summed across every child in that root's tree as each one
+	// completes (see finalizeTurn's three notify-building branches, the
+	// single point every terminal child outcome already passes through)
+	// — never re-derived by re-summing every node on each check,
+	// mirroring runningByRoot's own incremental-accumulator shape
+	// exactly.
+	//
+	// Deliberately PROCESS-MEMORY ONLY, never persisted — a live review
+	// note, not a bug: SetMaxTreeTokens is a per-process budget by
+	// design (this whole map, like runningByRoot, is rebuilt from
+	// scratch on every process start), so a tree that spends most of a
+	// large budget across children that are later Reaped, then restarts,
+	// comes back with an empty usageByRoot — those reaped-and-never-
+	// touched-again children contribute nothing, and Spawn's own
+	// treeTokenTotal(u) >= m.maxTreeTokens gate under-enforces the
+	// operator's real ceiling after a respawn/restart. Out of scope for
+	// v1: the whole tree is process-memory (see this struct's own
+	// design), and restart semantics already deliver a lost-to-restart
+	// notification for any child genuinely interrupted by the crash — a
+	// durable, cross-restart budget would need its own design (a
+	// separate durable counter, reconciled against Reap/eviction) this
+	// PR does not attempt.
 	usageByRoot map[string]provider.Usage
 	// budgetedByChild is usageByRoot's per-CHILD counterpart: how much of
 	// n.session.Usage() THIS manager has already folded into usageByRoot
@@ -726,9 +743,10 @@ func (m *SessionManager) adoptReloadedLocked(s *Session, recover bool) *sessionN
 //
 // Detection: n was just reconstructed by adoptLocked, so its status is
 // still the freshly-adopted default (StatusIdle) — this checks s's own
-// durable signature instead (see hasUnansweredTurn's own doc comment for
-// why a trailing, unanswered user-role message unambiguously means "a
-// turn was started here and never finished").
+// durable signature instead (see turnUnsettled's own doc comment,
+// engine.go, for the full mechanism: true from the moment a turn starts
+// until finalizeTurn — or this very method — explicitly marks it
+// settled, regardless of what trailing message shape resulted).
 //
 // On detection: n is marked StatusFailed and finalized=true directly —
 // nothing is left to settle in THIS process (no in-flight goroutine's
@@ -756,7 +774,7 @@ func (m *SessionManager) adoptReloadedLocked(s *Session, recover bool) *sessionN
 // design doc section referenced above for why the reactive version is
 // the documented, accepted answer for now).
 func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session) {
-	if !s.hasUnansweredTurn() {
+	if !s.hasUnfinalizedTurn() {
 		return
 	}
 	n.status = StatusFailed
@@ -833,31 +851,31 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 		forwarded = s.drainAllTaskNotifications() // memory-only — see its own doc comment
 	}
 
-	// DELIVER FIRST, close the dangling turn in HISTORY LAST — a live
-	// review finding on an earlier version of this method, which did the
-	// opposite: appended the closing message (below) BEFORE delivering
-	// notify/forwarded to target. hasUnansweredTurn() reads s's PERSISTED
-	// history and becomes false the instant that append durably lands —
-	// which is exactly what makes a SECOND call to this method for the
-	// same n a safe no-op (the guard at the top returns immediately) once
-	// recovery has genuinely finished. But that same idempotency guard is
-	// what turned a crash INSIDE this method into total, silent loss: if
-	// the process died after the append but before target's own durable
-	// write, the next restart's hasUnansweredTurn() already reads false —
-	// recovery never re-fires, and no recTaskNotifyQueued was ever
-	// written on target's log. The parent waits forever for a
-	// notification a crash ate in transit — precisely the "waits
-	// forever" outcome this whole reactive-recovery feature exists to
-	// close, reachable through its own narrow crash window.
+	// DELIVER FIRST, mark the turn settled LAST — a live review finding
+	// on an earlier version of this method, which did the opposite: the
+	// idempotency mechanism at the time (appending a closing message to
+	// history, before turnUnsettled/markTurnSettled existed) ran BEFORE
+	// delivering notify/forwarded to target. That earlier idempotency
+	// signal became false the instant its append durably landed — which
+	// is what made a SECOND call to this method for the same n a safe
+	// no-op (the guard at the top returns immediately) once recovery had
+	// genuinely finished. But the SAME guard is what turned a crash
+	// INSIDE this method into total, silent loss: if the process died
+	// after that append but before target's own durable write, the next
+	// restart's idempotency check already read "settled" — recovery
+	// never re-fired, and no recTaskNotifyQueued was ever written on
+	// target's log. The parent waits forever for a notification a crash
+	// ate in transit — precisely the "waits forever" outcome this whole
+	// reactive-recovery feature exists to close, reachable through its
+	// own narrow crash window.
 	//
 	// Reordering so delivery happens first turns that same crash window
-	// into a safe RETRY instead of a loss: if the process dies before the
-	// closing append below, hasUnansweredTurn() is STILL true on the next
-	// restart, and this method runs again for the same child. A naive
-	// retry would recompute the identical notify/forwarded values (s's
-	// history has not changed, since the closing append that would
-	// change it never landed) and re-deliver them — a duplicate, not a
-	// loss, but still wrong. enqueueTaskNotificationMemoryOnlyDeduped
+	// into a safe RETRY instead of a loss: if the process dies before
+	// markTurnSettled runs (see below), hasUnfinalizedTurn() is STILL
+	// true on the next restart, and this method runs again for the same
+	// child. A naive retry would recompute the identical notify/forwarded
+	// values (s's history has not changed) and re-deliver them — a
+	// duplicate, not a loss, but still wrong. enqueueTaskNotificationMemoryOnlyDeduped
 	// (taskNotification is a plain comparable struct, so == is a real
 	// deep-equality check) makes the retry idempotent instead: an exact
 	// repeat is recognized and skipped, both in memory and in what gets
@@ -917,42 +935,18 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 		m.deferPersist(func() { s.persistDeliveredTaskNotifications(forwarded) })
 	}
 
-	// Close the dangling turn in HISTORY too, not just in this node's own
-	// bookkeeping — its DURABLE write queued LAST, after the delivery
-	// thunks above, via the exact same m.deferPersist queue, not called
-	// synchronously via a plain s.append. This is load-bearing for the
-	// crash-window ordering the whole reorder above exists for: if this
-	// append were still synchronous (as an earlier version of this
-	// method had it), its durable write would land on disk WHILE m.mu is
-	// still held — strictly BEFORE unlockAndFlushPersist's own deferred
-	// notify/forwarded writes even get a chance to run — silently
-	// re-introducing the exact "closing message durable before delivery
-	// durable" ordering the reorder was built to fix, just via a
-	// different mechanism (item 4's own I/O-outside-m.mu change) instead
-	// of the original bug. appendMemoryOnly/persistAppendedMessage (see
-	// their own doc comments) let this append share m.deferPersist's
-	// single FIFO queue with the delivery thunks queued just above, so
-	// the actual disk-write ORDER — not just the source-code order — is
-	// preserved: notify/forwarded land on disk before the closing
-	// message does, regardless of where in this locked call each step
-	// runs relative to m.mu itself.
-	//
-	// Two live review findings on this append, both orthogonal to the
-	// ordering fix:
-	//
-	//  1. Idempotency: appending this closing message makes
-	//     hasUnansweredTurn() false from here on, so a LATER, unrelated
-	//     re-adoption of this same id (Reap removes a StatusFailed leaf
-	//     just like any other terminal one, and a legitimate follow-up
-	//     touching this id again re-triggers adoptReloadedLocked) finds
-	//     the guard at the top of this method already true and returns
-	//     immediately, instead of re-running this whole method and
-	//     re-enqueueing a duplicate notification.
-	//  2. Honesty: the transcript itself should show SOMETHING closing
-	//     the turn a reader (or the parent's own model, via the
-	//     notification text) can make sense of, not a conversation that
-	//     silently stops after the last user message with no visible
-	//     explanation.
+	// Close the dangling turn in HISTORY too — readability only now, NOT
+	// idempotency (see below): the transcript should show SOMETHING
+	// closing the turn a reader (or the parent's own model, via the
+	// notification text) can make sense of, not a conversation that
+	// silently stops after the last user message with no visible
+	// explanation. Its own durable write is queued via m.deferPersist,
+	// same as everything else in this method, so it never runs
+	// synchronously under m.mu — but its ORDER relative to the delivery
+	// thunks above no longer matters for correctness (unlike an earlier
+	// version of this method, before turnUnsettled/markTurnSettled
+	// existed): idempotency is now markTurnSettled's job below, not
+	// this append's.
 	//
 	// Role: RoleAssistant, not RoleTool — this is a genuine INTERRUPTED
 	// MODEL TURN (no tool call to pair a synthetic RoleTool result with,
@@ -968,6 +962,21 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	})
 	m.deferPersist(func() { s.persistAppendedMessage(closing) })
 
+	// Mark this turn settled — the actual idempotency mechanism now (see
+	// turnUnsettled's own doc comment, engine.go): a LATER, unrelated
+	// re-adoption of this same id (Reap removes a StatusFailed leaf just
+	// like any other terminal one, and a legitimate follow-up touching
+	// this id again re-triggers adoptReloadedLocked) finds
+	// hasUnfinalizedTurn() already false and returns at the guard above
+	// instead of re-running this whole method and re-enqueueing a
+	// duplicate notification. Called AFTER the closing append above (in
+	// BOTH the in-memory call order and this method's own deferPersist
+	// queue order) — appendMemoryOnly also sets turnUnsettled=true on
+	// its own append, so this call's turnUnsettled=false must run
+	// strictly after it to be the value that actually sticks.
+	s.markTurnSettled()
+	m.deferPersist(func() { s.persistTurnSettled() })
+
 	if target != nil && target.status == StatusIdle {
 		go m.fireIdleResumeAsync(target.id)
 	}
@@ -975,9 +984,9 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 
 // lostToRestartText is the synthetic, clearly-labeled assistant-role
 // message recoverInterruptedTurnLocked appends to close a dangling turn
-// in HISTORY — see that method's own doc comment for why this exists at
-// all (idempotency: hasUnansweredTurn() must become false after recovery
-// runs once, or a later re-adoption re-triggers a duplicate delivery).
+// in HISTORY for readability — see that method's own doc comment.
+// Idempotency (recovery must not re-fire for the same settled turn) is
+// markTurnSettled's job, not this message's.
 const lostToRestartText = "[harness: this turn was interrupted by a process restart and could not complete]"
 
 // fireIdleResumeAsync independently re-acquires m.mu and fires a resume
@@ -998,11 +1007,11 @@ func (m *SessionManager) fireIdleResumeAsync(targetID string) {
 	m.mu.Lock()
 	n, ok := m.nodes[targetID]
 	if !ok || n.status != StatusIdle {
-		m.mu.Unlock()
+		m.unlockAndFlushPersist()
 		return
 	}
 	resume := m.triggerResumeLocked(n)
-	m.mu.Unlock()
+	m.unlockAndFlushPersist()
 	if resume != nil {
 		resume()
 	}
@@ -2040,6 +2049,26 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 		// tree is being torn down (or was already fully settled) and
 		// there is nowhere left to deliver these notifications. Dropped,
 		// not an error: nothing is listening.
+	}
+	// Mark this turn settled — see turnUnsettled's own doc comment
+	// (engine.go) for the full reasoning: this is what lets
+	// recoverInterruptedTurnLocked tell an ordinary, properly-finalized
+	// outcome (this call reaching this point at all) apart from a
+	// genuine crash, instead of the unreliable trailing-message-role
+	// heuristic a live review found broken in both directions. Only
+	// meaningful for a non-root node — a root is never a
+	// recoverInterruptedTurnLocked candidate (adoptReloadedLocked's own
+	// early return). Queued via deferPersist AFTER the delivery thunks
+	// above, deliberately: a crash between "notify delivered" and "this
+	// child's own turn marked settled" must still leave the child
+	// looking unsettled on the next reload (a safe, if redundant, retry
+	// of recovery for something already delivered — the SAME crash-
+	// window discipline recoverInterruptedTurnLocked's own reorder
+	// established, applied here too for the ordinary-completion path).
+	if n.parentID != "" {
+		n.session.markTurnSettled()
+		childSess := n.session
+		m.deferPersist(func() { childSess.persistTurnSettled() })
 	}
 	m.unlockAndFlushPersist()
 

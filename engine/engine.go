@@ -619,6 +619,49 @@ type Session struct {
 	lastUsage     provider.Usage
 	haveLastUsage bool
 
+	// turnUnsettled is SessionManager.recoverInterruptedTurnLocked's
+	// restart-recovery signal, replacing an earlier, unreliable
+	// heuristic (hasUnansweredTurn, since removed) that tried to infer
+	// "was this turn genuinely interrupted" from the trailing message's
+	// own role. A live review proved that heuristic wrong in both
+	// directions: it MISSED a genuine mid-tool-loop crash (a trailing
+	// RoleTool/unresolved-ToolCall shape it never checked), and — once
+	// widened to check those too — it then MISFIRED on an already-
+	// SETTLED ordinary failure, since runAgenticLoop's plain (non-
+	// interruptedTurnError) provider-error path appends nothing at all,
+	// leaving the exact same trailing-RoleUser shape a genuine crash
+	// would. Worse, several LEGITIMATE, fully-settled completion paths
+	// (appendUnexecutedToolCallResults, interruptedToolResults) ALSO
+	// leave a trailing RoleTool message — indistinguishable, by role
+	// alone, from a genuine mid-tool-loop crash.
+	//
+	// This field sidesteps trailing-shape guessing entirely: true from
+	// the moment ANY message is appended (appendWithUsage, the single
+	// ingest choke point every append goes through — user, assistant, or
+	// tool alike) until SessionManager.finalizeTurn runs to completion
+	// for this node and explicitly marks it settled (markTurnSettled,
+	// durably backed by the recChildTurnSettled record — see its own
+	// doc comment in store.go) — REGARDLESS of what that turn's outcome
+	// was (success, an ordinary failure that appends nothing, a
+	// cancellation) or what trailing message shape resulted. finalizeTurn
+	// running to completion IS the authoritative "this turn's outcome is
+	// settled" signal; only a genuine crash — the process dying before
+	// finalizeTurn ever gets to run — leaves this true on the next
+	// reload, which is exactly the one case restart-recovery exists to
+	// detect.
+	//
+	// Deliberately per-SESSION, not per-turn-attempt: a session only
+	// ever has ONE turn in flight at a time (SessionManager's own
+	// StatusRunning gating), so a simple bool — set true on ANY new
+	// append, false only by finalizeTurn's own marker — is sufficient;
+	// no sequence numbers or per-attempt bookkeeping needed. Only ever
+	// meaningful for a non-root node (finalizeTurn only writes the
+	// marker for one — see its own doc comment); recovery itself is
+	// never invoked for a root (adoptReloadedLocked's own early return),
+	// so an unmarked root session's turnUnsettled value is simply never
+	// consulted.
+	turnUnsettled bool
+
 	logFile        *os.File // session log; nil until first write (see store.go)
 	logStarted     bool     // the log file exists on disk
 	lastPersistErr error
@@ -1052,75 +1095,57 @@ func (s *Session) TaskToolNames() []string {
 	return s.cfg.TaskToolNames
 }
 
-// hasUnansweredTurn reports whether s's persisted history ends on a
-// message shape that can only mean a turn was genuinely IN FLIGHT when
-// the process last stopped — restart-recovery detection (see
-// adoptReloadedLocked's own use of this).
+// hasUnfinalizedTurn reports whether s has a turn that started (any
+// message got appended) without SessionManager.finalizeTurn ever running
+// to completion for it — restart-recovery detection (see
+// recoverInterruptedTurnLocked's own use of this and turnUnsettled's own
+// doc comment for the full reasoning and the trailing-message-role
+// heuristic this replaces).
 //
-// Three trailing shapes, all crash windows runAgenticLoop's own append
-// order can leave on disk, none reachable any other way:
-//
-//   - RoleUser: Session.Prompt durably appends the user-role message
-//     BEFORE ever calling the provider, so a crash before any response
-//     at all leaves exactly this. The same signature
-//     isSafeToDropDirectiveTail's len==1 case already trusts for a
-//     DIFFERENT purpose (goal-loop retry, engine/goal.go) — reused here,
-//     not duplicated with new heuristics.
-//   - RoleTool: runAgenticLoop appends an assistant tool_use message,
-//     runs the tools, appends their RoleTool results, THEN loops back to
-//     call the provider again for the next assistant response. A crash
-//     after the tool results land but before that next call completes
-//     leaves RoleTool trailing — a live review finding: the original
-//     RoleUser-only check missed this shape entirely, so a child crashed
-//     mid-tool-loop (arguably the MOST likely interruption point for a
-//     child doing real multi-step work, far more than the brief window
-//     right after a fresh user message) silently reloaded as StatusIdle,
-//     indistinguishable from a child that never received a turn at all —
-//     recovery never fired, and its parent waited forever.
-//   - RoleAssistant carrying at least one ToolCall part: the narrower
-//     crash window one step earlier in that same sequence — the
-//     assistant's tool_use message durably landed, but the process died
-//     WHILE runToolCalls was still executing, before any RoleTool result
-//     was ever appended. appendUnexecutedToolCallResults (this file)
-//     closes the same shape for the ordinary in-process case (a provider
-//     reporting a non-tool_use stop reason alongside tool_use blocks),
-//     but only runs synchronously within the SAME turn — it never gets a
-//     chance to run if the crash happens first.
-//
-// A false positive is impossible for any of the three: nothing else in
-// this package ever leaves a trailing lone user message, a trailing tool
-// result, or a trailing unresolved tool_use assistant message durably on
-// disk outside these exact crash windows — every other path either
-// completes the turn (a final assistant message with a non-tool_use stop
-// reason), synthesizes a closing tool/assistant message
-// (appendUnexecutedToolCallResults, or this method's own caller,
-// recoverInterruptedTurnLocked), or never appends the user message in the
-// first place if it errors before Prompt's own durable-append point.
-func (s *Session) hasUnansweredTurn() bool {
-	// s.mu directly, reading the last element in place — not s.History(),
-	// which does a full append([]message.Message(nil), s.history...) copy
-	// of the entire transcript just to read one field. A live review
-	// finding: this runs on every cold adopt/restart-recovery path
-	// (adoptReloadedLocked -> recoverInterruptedTurnLocked, and
-	// ReportTurnStart's adopt-on-first-sight), where the O(n) allocation
-	// cost is pure waste for a long-lived session's transcript.
+// A false positive really is impossible now, unlike the heuristic this
+// replaced: turnUnsettled is set true by every append (appendWithUsage/
+// appendMemoryOnly, the two ingest choke points every append in this
+// package goes through) and false ONLY by markTurnSettled, called
+// exclusively from SessionManager.finalizeTurn (for an ordinary
+// completion) or recoverInterruptedTurnLocked itself (once it has
+// finished recovering this exact turn) — both of which are, by
+// definition, the turn reaching a genuinely settled outcome. The ONLY
+// way this reads true on a fresh reload is a crash before either of
+// those ever got to run.
+func (s *Session) hasUnfinalizedTurn() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.history) == 0 {
-		return false
-	}
-	last := s.history[len(s.history)-1]
-	switch last.Role {
-	case message.RoleUser, message.RoleTool:
-		return true
-	case message.RoleAssistant:
-		for _, p := range last.Parts {
-			if _, ok := p.(*message.ToolCall); ok {
-				return true
-			}
+	return s.turnUnsettled
+}
+
+// markTurnSettled clears turnUnsettled and durably records that this
+// session's most recent turn attempt reached a settled outcome — see
+// turnUnsettled's own doc comment and recChildTurnSettled's doc comment
+// (store.go) for the full reasoning. The in-memory clear happens here,
+// synchronously; the durable write is the caller's own responsibility
+// (SessionManager.finalizeTurn/recoverInterruptedTurnLocked both run
+// under m.mu and defer the actual persistTurnSettled call via
+// SessionManager.deferPersist, mirroring every other durable write those
+// methods make — see unlockAndFlushPersist's own doc comment for why).
+func (s *Session) markTurnSettled() {
+	s.mu.Lock()
+	s.turnUnsettled = false
+	s.mu.Unlock()
+}
+
+// persistTurnSettled durably writes the recChildTurnSettled marker —
+// markTurnSettled's deferred counterpart, run after m.mu has been
+// released (see that method's own doc comment).
+func (s *Session) persistTurnSettled() {
+	s.mu.Lock()
+	if s.cfg.SessionDir != "" {
+		if err := s.ensureLog(); err != nil {
+			s.lastPersistErr = err
+		} else if err := s.writeRecord(record{Type: recChildTurnSettled}); err != nil {
+			s.lastPersistErr = err
 		}
 	}
-	return false
+	s.mu.Unlock()
 }
 
 // Plugins returns a snapshot of this session's configured plugins — name,
@@ -1244,6 +1269,9 @@ func (s *Session) appendWithUsage(m message.Message, usage *provider.Usage) {
 	}
 	s.mu.Lock()
 	s.history = append(s.history, m)
+	// See turnUnsettled's own doc comment: any append means a turn has
+	// started (or is still in progress) without yet being finalized.
+	s.turnUnsettled = true
 	if usage != nil {
 		s.usage.InputTokens += usage.InputTokens
 		s.usage.OutputTokens += usage.OutputTokens
@@ -1283,6 +1311,11 @@ func (s *Session) appendMemoryOnly(m message.Message) message.Message {
 	}
 	s.mu.Lock()
 	s.history = append(s.history, m)
+	// See turnUnsettled's own doc comment — same as appendWithUsage.
+	// recoverInterruptedTurnLocked's own closing-message append (this
+	// method's one caller) relies on calling markTurnSettled AFTER this,
+	// not before, so that call's turnUnsettled=false is what wins.
+	s.turnUnsettled = true
 	s.mu.Unlock()
 	return m
 }
