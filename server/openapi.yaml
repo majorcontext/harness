@@ -1233,6 +1233,176 @@ components:
             already delivered via a preceding `message` event
             (history.compacted).
 
+    JournalResponse:
+      type: object
+      description: GET /session/{id}/journal's body — one page, oldest first.
+      required: [session_id, records]
+      properties:
+        session_id:
+          type: string
+        records:
+          type: array
+          items: { $ref: "#/components/schemas/JournalRecord" }
+        next_cursor:
+          type: integer
+          description: >
+            The `seq` to pass as the next request's `from` to continue
+            paging. Present even on a non-truncated page (harmlessly
+            re-requesting it just returns an empty page next).
+        has_more:
+          type: boolean
+          description: True only when `limit` actually truncated this page.
+
+    JournalRecord:
+      type: object
+      description: |
+        One record from the session's own durable log — a curated,
+        sanitized projection, never the raw internal wire format. Only the
+        fields relevant to `type` are populated. A client MUST tolerate a
+        `type` it does not recognize.
+      required: [seq, type]
+      properties:
+        seq:
+          type: integer
+          description: >
+            1-based position in the log — stable across reloads (the log is
+            append-only), and usable as a pagination cursor.
+        type:
+          type: string
+          enum:
+            - session
+            - message
+            - model
+            - effort
+            - goal.set
+            - goal.updated
+            - goal.eval
+            - goal.stalled
+            - goal.eval_failed
+            - goal.achieved
+            - goal.cleared
+            - goal.parked
+            - prompt.queued
+            - prompt.dequeued
+            - compact
+            - toolresult.retained
+            - task.spawned
+            - task.notify_queued
+            - task.notify_delivered
+            - child_turn.settled
+            - task.outcome_committed
+        created_at:
+          type: string
+          format: date-time
+          description: >
+            Present on `session`, `compact`, and `message` records only —
+            no other record type carries its own timestamp.
+        workdir:
+          type: string
+          description: "? `session` only."
+        parent_session:
+          type: string
+          description: "? `session` only."
+        task_parent_id:
+          type: string
+          description: "? `session` only."
+        task_agent_type:
+          type: string
+          description: "? `session` only."
+        message_id:
+          type: string
+          description: "? `message` only. Identity only — never content."
+        message_role:
+          type: string
+          description: "? `message` only."
+        recovery_marker:
+          type: boolean
+          description: >
+            ? `message` only. True when this message is one of
+            recoverInterruptedTurnLocked's own synthetic restart/cancel
+            closers — the durable trace of a restart-recovery event.
+        model:
+          $ref: "#/components/schemas/ModelRef"
+        effort:
+          type: string
+        goal_condition:
+          type: string
+          description: "? goal.* records."
+        goal_reason:
+          type: string
+          description: "? goal.* records. Sanitized."
+        goal_met:
+          type: boolean
+          description: "? goal.eval."
+        goal_turn:
+          type: integer
+          description: "? goal.eval."
+        goal_turns:
+          type: integer
+          description: "? goal.achieved."
+        goal_attempt:
+          type: integer
+          description: "? goal.stalled."
+        goal_attempts:
+          type: integer
+          description: "? goal.parked."
+        goal_retryable:
+          type: boolean
+          description: "? goal.stalled, goal.parked."
+        goal_retryable_class:
+          type: string
+          description: "? goal.stalled, goal.parked."
+        goal_waiting:
+          type: boolean
+          description: "? goal.stalled."
+        goal_eval_failures:
+          type: integer
+          description: "? goal.eval_failed."
+        prompt_id:
+          type: integer
+          description: "? prompt.queued, prompt.dequeued."
+        prompt_reason:
+          type: string
+          description: "? prompt.dequeued: delivered, injected, or cleared."
+        prompt_seq:
+          type: integer
+          description: "? a durably-enqueued prompt.queued."
+        child_id:
+          type: string
+          description: >
+            ? task.spawned, task.notify_queued, task.notify_delivered,
+            task.outcome_committed.
+        agent:
+          type: string
+          description: "? same records as child_id."
+        task_status:
+          type: string
+          description: "? task.notify_queued, task.notify_delivered, task.outcome_committed."
+        task_fail_reason:
+          type: string
+          description: "? same records as task_status. Sanitized."
+        task_canceled:
+          type: boolean
+          description: "? same records as task_status."
+        compact_first_id:
+          type: string
+          description: "? compact."
+        compact_last_id:
+          type: string
+          description: "? compact."
+        compact_turns_folded:
+          type: integer
+          description: "? compact."
+        tool_result_handle:
+          type: string
+          description: "? toolresult.retained."
+        tool_result_tool:
+          type: string
+          description: "? toolresult.retained."
+        tool_result_bytes:
+          type: integer
+          description: "? toolresult.retained."
+
     CompactRequest:
       type: object
       description: >
@@ -1686,6 +1856,47 @@ paths:
                   oneOf:
                     - $ref: "#/components/schemas/Message"
                     - $ref: "#/components/schemas/MessagePlaceholder"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /session/{id}/journal:
+    get:
+      operationId: getJournal
+      summary: The session's own durable engine log, read-only (debugging).
+      description: >
+        A curated, sanitized projection of the session's on-disk record
+        history — recovery markers (a message recognizable as
+        recoverInterruptedTurnLocked's own synthetic restart/cancel closer),
+        the subagent task-notification checkout/commit/requeue trail
+        (task.spawned, task.notify_queued/delivered, task.outcome_committed,
+        child_turn.settled), goal trace records, and every other durable
+        record type this process writes — the internals a restart/recovery
+        debugging session otherwise needs direct pod-exec access to a box's
+        session file to see. Message records never carry full content (see
+        GET /session/{id}/message for that); every field that can carry a
+        raw provider/tool error string is sanitized the same way
+        session.error events are. Oldest first, paginated: `from` (an
+        exclusive lower bound on `seq`, mirroring GET /event's own replay
+        cursor) and `limit` (default 200, max 1000) page through a long log.
+        A session this process has never heard of is 404; an existing
+        session with no durable records yet (never persisted) answers 200
+        with an empty page, never a 404.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+        - name: from
+          in: query
+          schema: { type: integer }
+          description: Exclusive lower bound on `seq`; 0 (or absent) starts from the beginning.
+        - name: limit
+          in: query
+          schema: { type: integer }
+          description: Page size; defaults to 200, clamped to at most 1000.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JournalResponse" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
