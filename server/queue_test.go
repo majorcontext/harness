@@ -740,6 +740,16 @@ type orderCaptureProv struct {
 	order   []string
 	replies []string
 	call    int
+	// calls, when non-nil, receives a value at the START of every Stream
+	// call, before this provider does anything else — a channel-based
+	// synchronization point a test can block on to know a specific call
+	// has begun, instead of a guessed time.Sleep (AGENTS.md's testing
+	// rule: "No raw time.Sleep for synchronization — ever"). Must be
+	// buffered with enough capacity for every call a test expects, since
+	// nothing ever drains it if a test chooses not to receive from it —
+	// nil is a safe no-op (every send is skipped) for callers that don't
+	// need this.
+	calls chan struct{}
 }
 
 func (p *orderCaptureProv) Name() string { return p.name }
@@ -747,6 +757,9 @@ func (p *orderCaptureProv) Name() string { return p.name }
 func (p *orderCaptureProv) Stream(_ context.Context, req *provider.Request) (provider.Stream, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.calls != nil {
+		p.calls <- struct{}{}
+	}
 	var text string
 	for i := len(req.Messages) - 1; i >= 0; i-- {
 		if req.Messages[i].Role == message.RoleUser {
@@ -859,6 +872,109 @@ func TestIdlePromptWithQueueGoesFIFO(t *testing.T) {
 	finalSess := h2.getSessionJSON(id)
 	if finalSess.Queued != 0 {
 		t.Errorf("queued after full drain = %d, want 0", finalSess.Queued)
+	}
+}
+
+// TestIdlePromptWithQueueDispatchDoesNotRaceQueuedCountInResponse is the
+// regression test for a live, intermittent CI failure
+// (TestIdlePromptWithQueueGoesFIFO itself, seen twice: once during the
+// subagent-sessions PR series, once on main — both times as a fast, 0.02s
+// assertion mismatch, never a timeout, and never caught despite 5,700+
+// combined local -race iterations across every GOMAXPROCS/concurrency/GC-
+// pressure combination tried).
+//
+// Root cause: dispatchQueueHead spawns the dispatched head's own runPrompt
+// turn in a goroutine and returns immediately — nothing waits for it. With
+// a fast enough provider (a scripted test double, or simply an unlucky
+// real one), that goroutine can run the ENTIRE turn to completion — and,
+// via its own tail's maybeDispatchQueued, dispatch (and itself complete)
+// the NEXT queued item too — before the calling goroutine's own next
+// statement ever runs. Every caller used to compute its response's queued
+// depth by re-reading QueuedPrompts() AFTER dispatchQueueHead returned,
+// racing that goroutine. Not a data race — every access is correctly
+// mutex-protected, which is exactly why -race never caught it — a pure
+// ordering assumption ("the item I just dispatched is still running, so
+// the queue behind it is untouched") nothing in the code actually
+// enforced.
+//
+// Forces the race deterministically via dispatchQueueHeadRace (test-only
+// seam, server.go) instead of relying on scheduling luck: the hook blocks
+// on orderCaptureProv's own calls channel until the dispatched turn's
+// Stream call AND its own chained dispatch's Stream call have both
+// actually started — channel-based, not a guessed time.Sleep (AGENTS.md's
+// testing rule: "No raw time.Sleep for synchronization — ever"). By the
+// time a dispatched item's own Stream call starts, dispatchQueueHead has
+// already dequeued it (dequeue always precedes the goroutine spawn that
+// eventually calls Stream) — sufficient to reproduce the exact window an
+// unlucky real scheduling decision opened in CI, deterministically, on
+// every single run. Asserts the response's own Queued count is unaffected
+// by that race window having been forced open, proving the fix
+// (dispatchQueueHead's own remaining return value, snapshotted atomically
+// with the dequeue itself, before the goroutine is ever spawned) closes it
+// structurally rather than merely making it rarer.
+func TestIdlePromptWithQueueDispatchDoesNotRaceQueuedCountInResponse(t *testing.T) {
+	dir := t.TempDir()
+	calls := make(chan struct{}, 3)
+	prov := &orderCaptureProv{name: "test", replies: []string{"r1", "r2", "r3"}, calls: calls}
+	srv1 := newServer(t, dir, prov, 0)
+	ts1 := httptest.NewServer(srv1)
+	h1 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv1, ts: ts1}
+
+	id := h1.createSession("test/m1")
+
+	srv1.mu.Lock()
+	st := srv1.sessions[id]
+	srv1.mu.Unlock()
+	if st == nil {
+		t.Fatal("session not resident right after creation")
+	}
+	if _, err := st.sess.EnqueuePrompt("q1"); err != nil {
+		t.Fatalf("EnqueuePrompt q1: %v", err)
+	}
+	if _, err := st.sess.EnqueuePrompt("q2"); err != nil {
+		t.Fatalf("EnqueuePrompt q2: %v", err)
+	}
+
+	if err := srv1.Close(); err != nil {
+		t.Fatalf("closing first server: %v", err)
+	}
+	ts1.Close()
+
+	srv2 := newServer(t, dir, prov, 0)
+	var raceOnce sync.Once
+	srv2.dispatchQueueHeadRace = func() {
+		// dispatchQueueHead is called three times in this test's own
+		// flow (this POST's own dispatch of q1, then q1's own tail
+		// chain-dispatching q2, then possibly q2's own tail
+		// chain-dispatching "third") — only the FIRST call is this
+		// POST handler's own, the one whose response the assertion
+		// below checks; block only there.
+		raceOnce.Do(func() {
+			<-calls // q1's own Stream call has started (already dequeued)
+			<-calls // q2's own Stream call has started (already dequeued)
+		})
+	}
+	ts2 := httptest.NewServer(srv2)
+	t.Cleanup(ts2.Close)
+	h2 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv2, ts: ts2}
+
+	sess := h2.getSessionJSON(id)
+	if sess.Queued != 2 {
+		t.Fatalf("queued after restart = %d, want 2", sess.Queued)
+	}
+
+	resp, data := h2.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "third"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt status %d: %s", resp.StatusCode, data)
+	}
+	var qr promptAsyncResponse
+	if err := json.Unmarshal(data, &qr); err != nil {
+		t.Fatal(err)
+	}
+	if qr.Status != "queued" || qr.Queued != 2 {
+		t.Fatalf("response = %+v, want status=queued queued=2 (the two restart-refolded prompts still ahead of this one, regardless of how far the dispatched turn raced ahead before this response was built)", qr)
 	}
 }
 

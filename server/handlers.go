@@ -1259,7 +1259,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 			// production.
 			s.queueDispatchRace()
 		}
-		head, ok := s.dispatchQueueHead(id, st, ctx)
+		head, remaining, ok := s.dispatchQueueHead(id, st, ctx)
 		if !ok {
 			// Benign race, not a bug: a concurrent DELETE /session/{id}/queue
 			// (safe to call regardless of run-slot state — see its own doc
@@ -1287,7 +1287,10 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		}
 		resp := promptAsyncResponse{Seq: fromSeq, Status: status}
 		if status == "queued" {
-			resp.Queued = len(st.sess.QueuedPrompts())
+			// remaining, not a fresh QueuedPrompts() re-read — see
+			// dispatchQueueHead's own doc comment for the race that used
+			// to live here.
+			resp.Queued = remaining
 		}
 		writeJSON(w, http.StatusAccepted, resp)
 		return
@@ -1404,7 +1407,7 @@ func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string
 		})
 		return
 	}
-	head, ok := s.dispatchQueueHead(id, st, ctx)
+	head, remaining, ok := s.dispatchQueueHead(id, st, ctx)
 	if !ok {
 		// Benign race, not a bug: a concurrent DELETE /session/{id}/queue
 		// cleared the ENTIRE queue — including the prompt this call's own
@@ -1431,7 +1434,10 @@ func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string
 	}
 	resp := promptAsyncResponse{Seq: s.currentSeq(), Status: status}
 	if status == "queued" {
-		resp.Queued = len(sess.QueuedPrompts())
+		// remaining, not a fresh QueuedPrompts() re-read — see
+		// dispatchQueueHead's own doc comment for the race that used to
+		// live here.
+		resp.Queued = remaining
 	}
 	writeJSON(w, http.StatusAccepted, resp)
 }
@@ -1560,7 +1566,7 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "enqueue not durable: "+err.Error())
 		return
 	}
-	head, ok := s.dispatchQueueHead(id, st, ctx)
+	head, remaining, ok := s.dispatchQueueHead(id, st, ctx)
 	if !ok {
 		// Concurrent DELETE /session/{id}/queue cleared everything in the
 		// gap — same benign race as handlePrompt's idle-with-queue branch;
@@ -1575,7 +1581,10 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	if head.ID == ourID {
 		resp.Status = "started"
 	} else {
-		resp.Queued = len(st.sess.QueuedPrompts())
+		// remaining, not a fresh QueuedPrompts() re-read — see
+		// dispatchQueueHead's own doc comment for the race that used to
+		// live here.
+		resp.Queued = remaining
 	}
 	writeJSON(w, http.StatusAccepted, resp)
 }
@@ -1613,7 +1622,7 @@ func (s *Server) enqueueDurableBusy(w http.ResponseWriter, id string, text strin
 		})
 		return
 	}
-	head, ok := s.dispatchQueueHead(id, st, ctx)
+	head, remaining, ok := s.dispatchQueueHead(id, st, ctx)
 	if !ok {
 		writeJSON(w, http.StatusAccepted, enqueueResponse{
 			Status: "queued", Watermark: sess.EnqueueSeq(), Queued: len(sess.QueuedPrompts()),
@@ -1624,7 +1633,10 @@ func (s *Server) enqueueDurableBusy(w http.ResponseWriter, id string, text strin
 	if head.ID == ourID {
 		resp.Status = "started"
 	} else {
-		resp.Queued = len(sess.QueuedPrompts())
+		// remaining, not a fresh QueuedPrompts() re-read — see
+		// dispatchQueueHead's own doc comment for the race that used to
+		// live here.
+		resp.Queued = remaining
 	}
 	writeJSON(w, http.StatusAccepted, resp)
 }
@@ -1689,15 +1701,53 @@ func (s *Server) freeRunSlotAndEmitIdle(id string, st *sessionState) {
 // the claim just taken is released here (mirrors runPrompt's own tail reset)
 // so the run slot never gets stuck "running" with nothing driving it; the
 // caller only needs to respond, not clean up.
-func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Context) (head engine.QueuedPrompt, ok bool) {
-	head, ok = st.sess.DequeuePrompt("delivered")
+//
+// remaining is st.sess.QueuedPrompts()'s length, snapshotted HERE —
+// synchronously, immediately after the dequeue above, still before
+// runPrompt's own goroutine is spawned — for every caller's own response
+// to use directly, INSTEAD OF re-reading QueuedPrompts() itself after this
+// call returns. A live review finding, root-caused from an intermittent
+// CI failure (TestIdlePromptWithQueueGoesFIFO, reproduced 200+ times
+// locally before finally catching it under real scheduling pressure — see
+// that test's own doc comment): every caller used to compute its response's
+// queued depth by re-reading QueuedPrompts() AFTER this call returned,
+// racing the just-spawned runPrompt goroutine below. That goroutine is
+// handed the run slot and nothing else waits for it — with a fast provider
+// (a scripted test double, or simply an unlucky real one), it can run
+// head's ENTIRE turn to completion and, via its own tail's
+// maybeDispatchQueued, dispatch (and itself run to completion) the NEXT
+// queued item too, before the calling goroutine's own next statement ever
+// executes. -race never catches this: every field access is correctly
+// mutex-protected, so there is no data race — it is a pure ordering
+// assumption ("the item I just dispatched is still running, so anything
+// behind it in the queue is untouched") that nothing here actually
+// enforces.
+//
+// remaining comes straight from DequeuePrompt's own return value —
+// engine.Session's answer to "how many are left," computed under the
+// SAME s.mu hold as the dequeue itself (engine/queue.go) — never a
+// separate, follow-up QueuedPrompts() call here. A live review finding
+// on an earlier version of this fix: a second, separately-locked read
+// reintroduced a NARROWER version of the exact race this method exists
+// to close — a different dequeue (a concurrent DELETE
+// /session/{id}/queue, another dispatch) can interleave in the gap
+// between the two separately-locked calls, same class of gap as the
+// goroutine-spawn race above, just smaller. Taking the count directly
+// from the dequeue's own atomic result removes that gap entirely: there
+// is no second lock acquisition left to race.
+func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Context) (head engine.QueuedPrompt, remaining int, ok bool) {
+	head, remaining, ok = st.sess.DequeuePrompt("delivered")
 	if !ok {
 		s.releasePromptClaim(st)
-		return head, false
+		return head, 0, false
 	}
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 	go s.runPrompt(ctx, id, st, head.Text)
-	return head, true
+	if s.dispatchQueueHeadRace != nil {
+		// Test-only seam — see its own doc comment (server.go).
+		s.dispatchQueueHeadRace()
+	}
+	return head, remaining, true
 }
 
 // runPrompt drives one Prompt to completion, then records the trailing
@@ -1848,7 +1898,7 @@ func (s *Server) maybeDispatchQueued(id string, st *sessionState) bool {
 	// between the len check above and winning this claim: dispatchQueueHead
 	// already released the claim we just took (mirrors runPrompt's own tail
 	// reset) — nothing left to dispatch.
-	_, ok := s.dispatchQueueHead(id, claimedSt, ctx)
+	_, _, ok := s.dispatchQueueHead(id, claimedSt, ctx)
 	return ok
 }
 

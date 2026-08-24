@@ -84,24 +84,30 @@ func TestDequeueFIFOAndJournalsReason(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p1, ok := s.DequeuePrompt("delivered")
+	p1, remaining1, ok := s.DequeuePrompt("delivered")
 	if !ok || p1.ID != id1 || p1.Text != "first" {
 		t.Fatalf("first DequeuePrompt = %+v, %v", p1, ok)
+	}
+	if remaining1 != 1 {
+		t.Errorf("first DequeuePrompt remaining = %d, want 1 (its own atomic count, not a separate QueuedPrompts() read)", remaining1)
 	}
 	if pending := s.QueuedPrompts(); len(pending) != 1 || pending[0].ID != id2 {
 		t.Fatalf("QueuedPrompts after one dequeue = %+v, want only id %d left", pending, id2)
 	}
 
-	p2, ok := s.DequeuePrompt("injected")
+	p2, remaining2, ok := s.DequeuePrompt("injected")
 	if !ok || p2.ID != id2 || p2.Text != "second" {
 		t.Fatalf("second DequeuePrompt = %+v, %v", p2, ok)
+	}
+	if remaining2 != 0 {
+		t.Errorf("second DequeuePrompt remaining = %d, want 0", remaining2)
 	}
 	if pending := s.QueuedPrompts(); len(pending) != 0 {
 		t.Fatalf("QueuedPrompts after draining = %+v, want empty", pending)
 	}
 
 	// Dequeuing an empty queue is a clean no-op: no record, no event.
-	if _, ok := s.DequeuePrompt("delivered"); ok {
+	if _, _, ok := s.DequeuePrompt("delivered"); ok {
 		t.Fatal("DequeuePrompt on an empty queue should report ok=false")
 	}
 
@@ -210,7 +216,7 @@ func TestLoadSessionRefoldsQueue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := s.DequeuePrompt("delivered"); !ok {
+	if _, _, ok := s.DequeuePrompt("delivered"); !ok {
 		t.Fatal("expected a prompt to dequeue")
 	}
 	if err := s.PersistErr(); err != nil {

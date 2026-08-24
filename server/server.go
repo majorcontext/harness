@@ -446,6 +446,25 @@ type Server struct {
 	// production.
 	queueDeleteRace func()
 
+	// dispatchQueueHeadRace is a test-only seam: when non-nil,
+	// dispatchQueueHead invokes it right after spawning the dispatched
+	// head's own runPrompt goroutine, before returning to its caller —
+	// letting a test force that goroutine (and, via its own tail's
+	// maybeDispatchQueued, any chained dispatch of the NEXT queued item)
+	// to run to completion deterministically before this call returns,
+	// instead of relying on an unobserved goroutine-scheduling coin
+	// flip. This is the exact race TestIdlePromptWithQueueGoesFIFO
+	// intermittently hit in CI (reproduced 200+ times locally before
+	// finally catching it under real scheduling pressure): with a fast
+	// enough provider, that goroutine can complete an entire turn — and
+	// the next one behind it — before the calling goroutine's own next
+	// statement runs, so a caller who re-reads QueuedPrompts() AFTER
+	// dispatchQueueHead returns (rather than using its own remaining
+	// return value) sees a queue drained further than the response is
+	// entitled to report. See dispatchQueueHead's own doc comment for
+	// the fix. Always nil in production.
+	dispatchQueueHeadRace func()
+
 	// sendBusyEvictRace is a test-only seam: when non-nil,
 	// sendTextToRoot's busy branch (session_tree.go) invokes it right
 	// before its own residentSession(id) call — letting a test force the

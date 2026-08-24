@@ -319,22 +319,25 @@ func (s *Server) sendTextToRoot(id, text string) (status string, queuedDepth int
 		if code2 != 0 {
 			return "queued", len(sess.QueuedPrompts()), 0, ""
 		}
-		head, ok := s.dispatchQueueHead(id, st2, ctx2)
+		head, remaining, ok := s.dispatchQueueHead(id, st2, ctx2)
 		if !ok {
 			return "queued", len(sess.QueuedPrompts()), 0, ""
 		}
 		if head.ID == ourID {
 			return "started", 0, 0, ""
 		}
-		return "queued", len(sess.QueuedPrompts()), 0, ""
+		// remaining, not a fresh QueuedPrompts() re-read — see
+		// dispatchQueueHead's own doc comment for the race that used to
+		// live here.
+		return "queued", remaining, 0, ""
 	default: // code == 0: claimed cleanly
 		if len(st.sess.QueuedPrompts()) > 0 {
 			if _, err := st.sess.EnqueuePrompt(text); err != nil {
 				s.releasePromptClaim(st)
 				return "", 0, http.StatusBadRequest, ""
 			}
-			s.dispatchQueueHead(id, st, ctx)
-			return "queued", len(st.sess.QueuedPrompts()), 0, ""
+			_, remaining, _ := s.dispatchQueueHead(id, st, ctx)
+			return "queued", remaining, 0, ""
 		}
 		s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 		go s.runPrompt(ctx, id, st, text)
