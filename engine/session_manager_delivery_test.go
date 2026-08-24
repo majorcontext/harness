@@ -73,6 +73,177 @@ func TestCanceledChildNotifiesParent(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 }
 
+// TestReAdoptedCanceledChildRestoresStatusCanceledNotFailed is the
+// regression test for a live review finding: restoreKnownStatusLocked
+// used to restore ANY committed outcome as StatusDone or StatusFailed —
+// collapsing a genuinely CANCELED child (Cancel()/cancel_tree, which
+// marks n.status StatusCanceled directly, atomically, before
+// finalizeTurn ever runs — see cancelOneNodeLocked's own doc comment)
+// into StatusFailed the moment it was re-adopted after a restart,
+// silently rewriting history: a parent or the UI reading this status
+// afterward could no longer distinguish "this child was deliberately
+// stopped" from "this child genuinely failed."
+//
+// Fixed via taskNotification.Canceled (taskdelivery.go) — a distinct,
+// durably-committed signal, set ONLY by finalizeTurn's alreadyCanceled
+// branch, read by nodeStatusForOutcome and applied by
+// restoreKnownStatusLocked (and recoverInterruptedTurnLocked, for the
+// analogous in-flight-crash-of-an-already-canceled-turn case) —
+// deliberately NOT inferred from FailReason=="canceled": classifySpawnError
+// can ALSO produce that exact text for a genuinely FAILED "caught in the
+// crossfire" descendant of an AbortTurn call (cancel_tree's own doc
+// comment covers that distinction) — string-matching FailReason would
+// have wrongly resurrected that case as StatusCanceled too.
+func TestReAdoptedCanceledChildRestoresStatusCanceledNotFailed(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	childProv := &signaledBlockingProvider{name: "child", started: make(chan struct{}), release: make(chan struct{})}
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	<-childProv.started // child now genuinely mid-turn
+
+	if err := mgr1.Cancel(childID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	waitForStatus(t, mgr1, childID, StatusCanceled, 2*time.Second)
+
+	// Wait for finalizeTurn's own alreadyCanceled branch to durably
+	// commit and settle before this test reloads the log fresh below —
+	// same "settle poll" discipline as every other test in this file
+	// exercising a restart.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, childID)
+		if err != nil {
+			t.Fatalf("LoadSession (settle poll): %v", err)
+		}
+		if !s.hasUnfinalizedTurn() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("test setup: child's settled marker never landed durably")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Fresh process: root2 gets its OWN provider instances — same
+	// shared-object race avoidance as every other test in this file.
+	rootProv2 := scriptedTurns("root", nil)
+	childProv2 := scriptedTurns("child", nil)
+	reg2 := provider.Registry{rootProv2.Name(): rootProv2, childProv2.Name(): childProv2}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	root2, err := LoadSession(rootCfg2, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root: %v", err)
+	}
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+
+	childInfo, ok := mgr2.Info(childID)
+	if !ok {
+		t.Fatal("child not tracked after AdoptRoot")
+	}
+	if childInfo.Status != StatusCanceled {
+		t.Errorf("child.Status = %q after restart-recovery re-adoption, want %q — a genuinely canceled child must not be rewritten to failed", childInfo.Status, StatusCanceled)
+	}
+	if childInfo.FailReason != "" {
+		t.Errorf("child.FailReason = %q, want empty — mirrors cancelOneNodeLocked's own live bookkeeping, which never sets it for a canceled node", childInfo.FailReason)
+	}
+}
+
+// TestRecoverInterruptedTurnUsesCanceledClosingTextForACanceledChild is
+// the regression test for a live review finding: recoverInterruptedTurnLocked's
+// synthetic transcript closer unconditionally used lostToRestartText —
+// "this turn was interrupted by a process restart and could not
+// complete" — even for a turn whose committed outcome shows it was
+// explicitly Cancel()ed (Canceled: true) before the crash landed. That
+// wording durably records a false cause: the turn's real end was
+// cancellation; the restart only interrupted RECORDING that fact (see
+// canceledInterruptedText's own doc comment). Fixed by picking
+// canceledInterruptedText instead whenever notify.Canceled.
+//
+// Simulates "a canceled child, then a crash before settling" directly:
+// spawns and abandons a genuinely mid-turn child (so hasUnfinalizedTurn()
+// reads true on reload, exactly like every other crash-recovery test in
+// this file), then — rather than trying to interrupt a live process
+// mid-flush, which nothing in this package exposes a hook for — injects
+// the durable state a real Cancel()-then-finalizeTurn(alreadyCanceled)
+// call would already have committed before ITS OWN crash: a
+// committedOutcome with Canceled: true, with turnUnsettled left exactly
+// as the abandoned turn already leaves it (still true, since nothing
+// here ever settles it).
+func TestRecoverInterruptedTurnUsesCanceledClosingTextForACanceledChild(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	childProv := &signaledBlockingProvider{name: "child", started: make(chan struct{}), release: make(chan struct{})}
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentExplore})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	<-childProv.started // genuinely mid-turn — abandoned, never released, simulating the crash
+
+	rootProv2 := scriptedTurns("root", nil)
+	childProv2 := scriptedTurns("child", nil)
+	reg2 := provider.Registry{rootProv2.Name(): rootProv2, childProv2.Name(): childProv2}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	root2, err := LoadSession(rootCfg2, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root: %v", err)
+	}
+	reloadedChild, err := LoadSession(Config{Providers: reg2, SessionDir: dir}, childID)
+	if err != nil {
+		t.Fatalf("LoadSession child: %v", err)
+	}
+	if !reloadedChild.hasUnfinalizedTurn() {
+		t.Fatal("test setup: reloaded child already reads as settled")
+	}
+
+	canceled := taskNotification{ChildID: childID, Agent: AgentExplore, Status: StatusFailed, FailReason: "canceled", Canceled: true}
+	reloadedChild.commitTurnOutcome(canceled)
+	reloadedChild.persistCommittedTurnOutcome(canceled)
+
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+	mgr2.mu.Lock()
+	mgr2.adoptReloadedLocked(reloadedChild, true)
+	mgr2.unlockAndFlushPersist()
+
+	hist := reloadedChild.History()
+	if len(hist) == 0 {
+		t.Fatal("recovery appended no closing message")
+	}
+	last := hist[len(hist)-1]
+	if last.Parts.Text() != canceledInterruptedText {
+		t.Errorf("closing message = %q, want the canceled-specific closer %q — a canceled-then-crashed turn must not claim it was merely interrupted by a restart", last.Parts.Text(), canceledInterruptedText)
+	}
+	if strings.Contains(last.Parts.Text(), "process restart and could not complete") {
+		t.Errorf("closing message = %q, still using the generic restart wording for a turn whose real cause was cancellation", last.Parts.Text())
+	}
+
+	info, ok := mgr2.Info(childID)
+	if !ok || info.Status != StatusCanceled {
+		t.Errorf("child info = %+v, want StatusCanceled", info)
+	}
+}
+
 // TestGrandchildReparentsToNearestLiveAncestor proves nesting past one
 // level actually delivers: a grandchild's completion, arriving after its
 // direct parent has already settled done, is reparented to the nearest
@@ -2302,9 +2473,17 @@ func TestFinalizeTurnCrashBeforeDeliveryStillDeliversViaRecovery(t *testing.T) {
 	}
 
 	mgr2 := NewSessionManager(context.Background(), 0, 0)
-	if err := mgr2.AdoptRoot(reloadedRoot); err != nil {
-		t.Fatalf("AdoptRoot: %v", err)
-	}
+	// Adopted via the low-level adoptLocked, NOT the public AdoptRoot --
+	// AdoptRoot now also runs recoverCrashedChildrenLocked (a live prod
+	// finding, see that method's own doc comment), which would recover
+	// the crashed child automatically, right here, before this test gets
+	// a chance to drive its own fine-grained, step-by-step simulation of
+	// the exact crash window below. Depth 0, no parentID, matches
+	// adoptRootLocked's own registration exactly, minus the sweep.
+	mgr2.mu.Lock()
+	reloadedRoot.cfg.SessionManager = mgr2
+	mgr2.adoptLocked(reloadedRoot, "", 0)
+	mgr2.mu.Unlock()
 	reloadedChild, err := LoadSession(Config{Providers: reg2, SessionDir: dir}, childID)
 	if err != nil {
 		t.Fatalf("LoadSession child: %v", err)
@@ -2429,9 +2608,17 @@ func TestFinalizeTurnCrashAfterDeliveryReplaysIdenticalFailureNotDivergent(t *te
 	}
 
 	mgr2 := NewSessionManager(context.Background(), 0, 0)
-	if err := mgr2.AdoptRoot(reloadedRoot); err != nil {
-		t.Fatalf("AdoptRoot: %v", err)
-	}
+	// Adopted via the low-level adoptLocked, NOT the public AdoptRoot --
+	// AdoptRoot now also runs recoverCrashedChildrenLocked (a live prod
+	// finding, see that method's own doc comment), which would recover
+	// the crashed child automatically, right here, before this test gets
+	// a chance to drive its own fine-grained, step-by-step simulation of
+	// the exact crash window below. Depth 0, no parentID, matches
+	// adoptRootLocked's own registration exactly, minus the sweep.
+	mgr2.mu.Lock()
+	reloadedRoot.cfg.SessionManager = mgr2
+	mgr2.adoptLocked(reloadedRoot, "", 0)
+	mgr2.mu.Unlock()
 	reloadedChild, err := LoadSession(Config{Providers: reg2, SessionDir: dir}, childID)
 	if err != nil {
 		t.Fatalf("LoadSession child: %v", err)
@@ -2587,7 +2774,7 @@ func TestRecoveryCrashBetweenClosingMessageAndSettleDoesNotMisreportSuccess(t *t
 	if !reloadedChildAgain.hasUnfinalizedTurn() {
 		t.Fatal("test setup: reloaded child already reads as settled — the simulated crash truncation did not work")
 	}
-	if !reloadedChildAgain.hasTrailingLostToRestartMarker() {
+	if !reloadedChildAgain.hasTrailingSyntheticCloser() {
 		t.Fatal("test setup: reloaded child's trailing message is not the synthetic closing marker — first recovery attempt's own append did not survive the reload")
 	}
 
@@ -2753,5 +2940,1429 @@ func TestFinalizeTurnSettlesADurablyParentedButUntrackedNode(t *testing.T) {
 	}
 	if reloadedAgain.hasUnfinalizedTurn() {
 		t.Error("reloadedAgain.hasUnfinalizedTurn() = true — the settled marker never durably landed for this degraded node's turn")
+	}
+}
+
+// TestAdoptRootRecoversCrashedChildNeverTouchedDirectly is the regression
+// test for a live prod finding (a restartPolicy:Always box, harness serve
+// as PID 1, kill -9 mid-child-turn): recoverInterruptedTurnLocked only
+// ever fires reactively, on next touch of the CRASHED child's own id (see
+// its own "purely reactive" doc section) — a caller whose only
+// post-restart traffic touches the ROOT (a read-only transcript/session
+// GET, or a later follow-up turn on the root itself) never independently
+// reloads the crashed child, so that trigger never fires and the root
+// waits forever for a notification that was always detectable the moment
+// the root itself was adopted again.
+//
+// Proves the fix (SessionManager.recoverCrashedChildrenLocked, wired into
+// adoptRootLocked/adoptReloadedLocked): AdoptRoot on the reloaded root —
+// with NO AdoptReloaded/Send/any other call ever touching the crashed
+// child's own id — is enough, by itself, to discover the child (via its
+// durable Session.SpawnedChildIDs fold) and recover it, delivering the
+// lost-to-restart notification to the root.
+func TestAdoptRootRecoversCrashedChildNeverTouchedDirectly(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	childProv := &signaledBlockingProvider{name: "child", started: make(chan struct{}), release: make(chan struct{})}
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	<-childProv.started // child now genuinely mid-turn, blocked — simulate "kill -9 1" by simply abandoning it, never releasing
+
+	// Fresh process: a brand-new SessionManager, sharing only the on-disk
+	// store. root2 gets its OWN provider instances — same shared-object
+	// race avoidance as every other test in this file that adopts a root
+	// into a second manager.
+	rootProv2 := scriptedTurns("root", nil)
+	childProv2 := scriptedTurns("child", nil)
+	reg2 := provider.Registry{rootProv2.Name(): rootProv2, childProv2.Name(): childProv2}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	root2, err := LoadSession(rootCfg2, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root: %v", err)
+	}
+
+	// The ONLY call this test makes against mgr2 at all — no
+	// AdoptReloaded, no Send, nothing ever names childID directly. If
+	// this alone doesn't recover the child, nothing in this test's own
+	// flow ever will.
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+
+	info, ok := mgr2.Info(childID)
+	if !ok {
+		t.Fatal("child not tracked after AdoptRoot — recoverCrashedChildrenLocked did not adopt it")
+	}
+	if info.Status != StatusFailed || !strings.Contains(info.FailReason, "restart") {
+		t.Errorf("child info = %+v, want StatusFailed with a restart-loss fail_reason", info)
+	}
+
+	// root2 is genuinely idle when AdoptRoot's own recoverCrashedChildrenLocked
+	// delivers to it, so this triggers a REAL active resume (go
+	// m.fireIdleResumeAsync) racing this test's own read below — rootProv2's
+	// zero scripted turns make that resume's own Stream() call fail
+	// immediately, requeuing the notification back onto
+	// root2.taskNotifications, but the checkout (into
+	// taskNotificationsInFlight) and requeue both happen on that OTHER
+	// goroutine, asynchronously — same race and same fix as
+	// TestRecoverInterruptedTurnForwardsGrandchildNotifications elsewhere
+	// in this file.
+	countAll := func() int {
+		root2.mu.Lock()
+		defer root2.mu.Unlock()
+		return len(root2.taskNotifications) + len(root2.taskNotificationsInFlight)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && countAll() != 1 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		root2.mu.Lock()
+		n := len(root2.taskNotifications)
+		root2.mu.Unlock()
+		if n == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	root2.mu.Lock()
+	defer root2.mu.Unlock()
+	var matching []taskNotification
+	for _, n := range root2.taskNotifications {
+		if n.ChildID == childID {
+			matching = append(matching, n)
+		}
+	}
+	if len(matching) != 1 {
+		t.Fatalf("root2.taskNotifications for childID = %+v (in-flight: %+v), want exactly 1 — the root must receive the crashed child's lost-to-restart notification purely from being adopted itself, with nothing ever touching the child's own id directly", matching, root2.taskNotificationsInFlight)
+	}
+	if matching[0].Status != StatusFailed {
+		t.Errorf("notification.Status = %q, want %q", matching[0].Status, StatusFailed)
+	}
+}
+
+// TestAdoptRootDoesNotRecoverAnAlreadySettledChild is
+// TestAdoptRootRecoversCrashedChildNeverTouchedDirectly's negative
+// counterpart: a child that finished BEFORE the restart IS still adopted
+// by the sweep (unconditionally — see recoverCrashedChildrenLocked's own
+// doc comment for why a settled intermediate cannot just be skipped, or a
+// crashed GRANDCHILD beneath it would never be discovered), but must NOT
+// be misreported as freshly recovered — no spurious second notification,
+// and its status/result restored accurately (StatusDone, not the bare
+// StatusIdle adoptLocked would otherwise leave uncorrected — see
+// SessionManager.restoreKnownStatusLocked).
+func TestAdoptRootDoesNotRecoverAnAlreadySettledChild(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	childProv := scriptedTurns("child", doneTurn("child done"))
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr1, childID, StatusDone, time.Second)
+
+	// Give finalizeTurn's own deferred settled-marker persist a moment to
+	// land durably before this test reloads the same log fresh below.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, childID)
+		if err != nil {
+			t.Fatalf("LoadSession (settle poll): %v", err)
+		}
+		if !s.hasUnfinalizedTurn() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("test setup: child's settled marker never landed durably")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	rootProv2 := scriptedTurns("root", nil)
+	childProv2 := scriptedTurns("child", nil)
+	reg2 := provider.Registry{rootProv2.Name(): rootProv2, childProv2.Name(): childProv2}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	root2, err := LoadSession(rootCfg2, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root: %v", err)
+	}
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+
+	childInfo, tracked := mgr2.Info(childID)
+	if !tracked {
+		t.Fatal("child not tracked after AdoptRoot — recoverCrashedChildrenLocked must still adopt an already-settled child, to reach any crashed descendant beneath it")
+	}
+	if childInfo.Status != StatusDone || childInfo.Result != "child done" {
+		t.Errorf("child info = %+v, want StatusDone with the real result restored (restoreKnownStatusLocked), not the bare StatusIdle adoptLocked leaves by default", childInfo)
+	}
+	// root2.taskNotifications legitimately has ONE entry here already —
+	// the child's own real, normal StatusDone completion, durably queued
+	// by finalizeTurn during mgr1's run and never checked out (root1
+	// never ran a turn of its own to consume it) — restored by
+	// LoadSession's ordinary queued-minus-delivered fold, nothing to do
+	// with recoverCrashedChildrenLocked. The assertion here is that
+	// there is EXACTLY that one, real notification — not a second,
+	// spurious StatusFailed one the sweep would add if it wrongly
+	// treated this already-settled child as crashed.
+	root2.mu.Lock()
+	defer root2.mu.Unlock()
+	if len(root2.taskNotifications) != 1 {
+		t.Fatalf("root2.taskNotifications = %+v, want exactly 1 (the child's own real, already-queued StatusDone completion) — a second entry would mean the sweep spuriously re-recovered an already-settled child", root2.taskNotifications)
+	}
+	if got := root2.taskNotifications[0]; got.Status != StatusDone || got.ChildID != childID {
+		t.Errorf("root2.taskNotifications[0] = %+v, want the child's real StatusDone completion, unmodified", got)
+	}
+}
+
+// TestAdoptRootRecoversCrashedGrandchildTwoLevelsDeep proves
+// recoverCrashedChildrenLocked's own recursion claim: adopting a ROOT
+// recovers not just its OWN crashed children, but a crashed GRANDCHILD
+// too — mid (root's own child) settled normally and is STILL adopted by
+// the sweep (unconditionally, so a crashed descendant more than one
+// level down can ever be reached at all — see that method's own doc
+// comment), and THAT adoption runs the exact same sweep again for mid's
+// own children, discovering and recovering the crashed grandchild. A
+// single ancestor touch (AdoptRoot on the root, nothing else) converges
+// the whole crashed subtree.
+//
+// The grandchild's own notification lands on the ROOT, not mid: mid is
+// terminal (StatusDone) by the time nearestLiveAncestorLocked walks the
+// grandchild's ancestor chain, so it is correctly skipped in favor of the
+// nearest LIVE ancestor — the same "reparent past a terminal node" rule
+// TestGrandchildReparentsToNearestLiveAncestor covers for the live,
+// no-restart case.
+func TestAdoptRootRecoversCrashedGrandchildTwoLevelsDeep(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	midProv := scriptedTurns("mid", doneTurn("mid done"))
+	grandProv := &signaledBlockingProvider{name: "grand", started: make(chan struct{}), release: make(chan struct{})}
+	reg := provider.Registry{rootProv.Name(): rootProv, midProv.Name(): midProv, grandProv.Name(): grandProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+
+	midID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("mid"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn mid: %v", err)
+	}
+	waitForStatus(t, mgr1, midID, StatusDone, time.Second)
+
+	grandID, err := mgr1.Spawn(SpawnOptions{ParentID: midID, Prompt: "go deeper", Model: modelFor("grand"), AgentType: AgentExplore})
+	if err != nil {
+		t.Fatalf("Spawn grandchild: %v", err)
+	}
+	<-grandProv.started // grandchild now genuinely mid-turn, blocked
+
+	// Give mid's own settled marker a moment to land durably before this
+	// test reloads its log fresh below (same discipline as every other
+	// "poll before reload" test in this file).
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
+		if err != nil {
+			t.Fatalf("LoadSession (settle poll): %v", err)
+		}
+		if !s.hasUnfinalizedTurn() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("test setup: mid's settled marker never landed durably")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Fresh process: root2 gets its OWN provider instances — same
+	// shared-object race avoidance as every other test in this file.
+	rootProv2 := scriptedTurns("root", nil)
+	midProv2 := scriptedTurns("mid", nil)
+	grandProv2 := scriptedTurns("grand", nil)
+	reg2 := provider.Registry{rootProv2.Name(): rootProv2, midProv2.Name(): midProv2, grandProv2.Name(): grandProv2}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	root2, err := LoadSession(rootCfg2, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root: %v", err)
+	}
+
+	// The ONLY call this test makes against mgr2 — no AdoptReloaded, no
+	// Send, nothing ever names midID or grandID directly.
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+
+	midInfo, ok := mgr2.Info(midID)
+	if !ok {
+		t.Fatal("mid not tracked after AdoptRoot")
+	}
+	if midInfo.Status != StatusDone {
+		t.Errorf("mid.Status = %q, want %q — mid itself settled normally and must not be misreported", midInfo.Status, StatusDone)
+	}
+	grandInfo, ok := mgr2.Info(grandID)
+	if !ok {
+		t.Fatal("grandchild not tracked after AdoptRoot — the recursive sweep (mid's own recoverCrashedChildrenLocked) did not discover it")
+	}
+	if grandInfo.Status != StatusFailed || !strings.Contains(grandInfo.FailReason, "restart") {
+		t.Errorf("grandchild info = %+v, want StatusFailed with a restart-loss fail_reason", grandInfo)
+	}
+
+	// root2.taskNotifications ends up with TWO legitimate entries: mid's
+	// own real StatusDone completion (durably queued by finalizeTurn
+	// during mgr1's run and never checked out, restored by LoadSession's
+	// ordinary queued-minus-delivered fold — same as
+	// TestAdoptRootDoesNotRecoverAnAlreadySettledChild's own identical
+	// case), AND the grandchild's forwarded lost-to-restart notification
+	// — mid is TERMINAL (StatusDone), so nearestLiveAncestorLocked walks
+	// past it, reparenting the grandchild's notification to the ROOT.
+	// The root IS genuinely idle when both land, so this can trigger a
+	// real active resume racing this test's own read — poll rather than
+	// read once, same pattern as every other test in this file
+	// exercising this exact race.
+	countAll := func() int {
+		root2.mu.Lock()
+		defer root2.mu.Unlock()
+		return len(root2.taskNotifications) + len(root2.taskNotificationsInFlight)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && countAll() != 2 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		root2.mu.Lock()
+		n := len(root2.taskNotifications)
+		root2.mu.Unlock()
+		if n == 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	root2.mu.Lock()
+	defer root2.mu.Unlock()
+	if len(root2.taskNotifications) != 2 {
+		t.Fatalf("root2.taskNotifications = %+v (in-flight: %+v), want exactly 2 (mid's own real completion, plus the grandchild's forwarded lost-to-restart notification)", root2.taskNotifications, root2.taskNotificationsInFlight)
+	}
+	var sawMidDone, sawGrandFailed bool
+	for _, n := range root2.taskNotifications {
+		switch {
+		case n.ChildID == midID && n.Status == StatusDone:
+			sawMidDone = true
+		case n.ChildID == grandID && n.Status == StatusFailed:
+			sawGrandFailed = true
+		}
+	}
+	if !sawMidDone {
+		t.Errorf("root2.taskNotifications missing mid's own real StatusDone completion: %+v", root2.taskNotifications)
+	}
+	if !sawGrandFailed {
+		t.Errorf("root2.taskNotifications missing the grandchild's forwarded lost-to-restart notification, reparented past its own terminal parent (mid): %+v", root2.taskNotifications)
+	}
+}
+
+// TestAdoptRootRestoresLegacySettledChildAsDoneWhenLogReconstructsSuccess
+// is the regression test for a live review finding on
+// restoreKnownStatusLocked's own legacy fallback (no committedOutcome, but
+// proven via SpawnedChildIDs to have already run a turn): before this fix
+// it unconditionally durably marked such a node StatusFailed with
+// unknownLegacyOutcomeFailReason, even when the node's OWN trailing
+// history unambiguously shows a genuine, natural success — the exact
+// "successful child rewritten as failed" class of bug the Canceled fix
+// closed for the OTHER status, now closed here too by consulting
+// settledSuccessResult (engine.go, the SAME step-2 fallback
+// recoverInterruptedTurnLocked's own crash-window table already uses)
+// before giving up.
+//
+// mid must ALSO have spawned something for the legacy branch to be
+// reached at all (restoreKnownStatusLocked's own default case is for a
+// genuinely fresh, never-run node) — a second child under mid, whose own
+// outcome is irrelevant to this test.
+func TestAdoptRootRestoresLegacySettledChildAsDoneWhenLogReconstructsSuccess(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	midProv := scriptedTurns("mid", doneTurn("mid done"))
+	childProv := scriptedTurns("child", doneTurn("child done"))
+	reg := provider.Registry{rootProv.Name(): rootProv, midProv.Name(): midProv, childProv.Name(): childProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+
+	midID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("mid"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn mid: %v", err)
+	}
+	waitForStatus(t, mgr1, midID, StatusDone, time.Second)
+
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: midID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn child: %v", err)
+	}
+	waitForStatus(t, mgr1, childID, StatusDone, time.Second)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
+		if err != nil {
+			t.Fatalf("LoadSession (settle poll): %v", err)
+		}
+		if !s.hasUnfinalizedTurn() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("test setup: mid's settled marker never landed durably")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	stripRecordType(t, sessionPath(dir, midID), recTaskOutcomeCommitted)
+
+	rootProv2 := scriptedTurns("root", nil)
+	midProv2 := scriptedTurns("mid", nil)
+	childProv2 := scriptedTurns("child", nil)
+	reg2 := provider.Registry{rootProv2.Name(): rootProv2, midProv2.Name(): midProv2, childProv2.Name(): childProv2}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	root2, err := LoadSession(rootCfg2, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root: %v", err)
+	}
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+
+	midInfo, ok := mgr2.Info(midID)
+	if !ok {
+		t.Fatal("mid not tracked after AdoptRoot")
+	}
+	if midInfo.Status != StatusDone {
+		t.Errorf("mid.Status = %q, want %q — mid's own trailing history is an unambiguous clean success and must be reconstructed, not durably marked an unrecoverable failure", midInfo.Status, StatusDone)
+	}
+	if midInfo.Result != "mid done" {
+		t.Errorf("mid.Result = %q, want %q", midInfo.Result, "mid done")
+	}
+	if midInfo.FailReason != "" {
+		t.Errorf("mid.FailReason = %q, want empty for a restored success", midInfo.FailReason)
+	}
+}
+
+// TestAdoptRootRestoresLegacySettledChildAsUnknownFailureWhenLogCannotReconstruct
+// is TestAdoptRootRestoresLegacySettledChildAsDoneWhenLogReconstructsSuccess's
+// counterpart: a legacy node (no committedOutcome, but proven via
+// SpawnedChildIDs to have already run a turn) whose own trailing history
+// does NOT unambiguously show a natural success — here, a dangling tool
+// result (the task tool's own immediate "spawned" acknowledgment) as the
+// very last message, with no further assistant text ever following it —
+// must still fall through to the honest unknown-outcome failure.
+// settledSuccessResult's own check (last message must be RoleAssistant,
+// with no ToolCall part) is what draws this line; consulting it must
+// never turn into "credit any node with a spawned child as done."
+//
+// Drives mid's single scripted turn to call the REAL `task` tool
+// directly (rather than mgr.Spawn), so mid's own history ends in a
+// genuine RoleTool result message and its SpawnedChildIDs is populated
+// by the exact same live path a real model-driven delegation would use —
+// then the scripted provider is exhausted on the loop's next call
+// (no second turn), so mid's own turn ends in perr != nil, matching a
+// real "delegated, then the model call failed" shape.
+func TestAdoptRootRestoresLegacySettledChildAsUnknownFailureWhenLogCannotReconstruct(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	midProv := scriptedTurns("mid", [][]provider.Event{
+		asstTurn(provider.StopToolUse,
+			&message.Text{Text: "delegating"},
+			toolCall("tc1", "task", `{"agent":"general-purpose","prompt":"go","model":"grandkid/m1"}`)),
+		// Deliberately no second turn: the loop's next call (after the
+		// task tool's own RoleTool result is appended) finds the
+		// scripted provider exhausted, ending mid's turn in perr != nil
+		// with a genuine dangling-tool-result trailing message.
+	})
+	grandkidProv := scriptedTurns("grandkid", nil)
+	reg := provider.Registry{rootProv.Name(): rootProv, midProv.Name(): midProv, grandkidProv.Name(): grandkidProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+
+	midID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("mid"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn mid: %v", err)
+	}
+	waitForStatus(t, mgr1, midID, StatusFailed, 2*time.Second)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
+		if err != nil {
+			t.Fatalf("LoadSession (settle poll): %v", err)
+		}
+		if !s.hasUnfinalizedTurn() {
+			if len(s.SpawnedChildIDs()) == 0 {
+				t.Fatal("test setup: mid's own task tool call did not record a spawned child")
+			}
+			if _, ok := s.settledSuccessResult(); ok {
+				t.Fatal("test setup: mid's trailing history unexpectedly looks like a clean success — settledSuccessResult should be false here (last message must be a dangling tool result, not assistant text)")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("test setup: mid's settled marker never landed durably")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	stripRecordType(t, sessionPath(dir, midID), recTaskOutcomeCommitted)
+
+	rootProv2 := scriptedTurns("root", nil)
+	midProv2 := scriptedTurns("mid", nil)
+	grandkidProv2 := scriptedTurns("grandkid", nil)
+	reg2 := provider.Registry{rootProv2.Name(): rootProv2, midProv2.Name(): midProv2, grandkidProv2.Name(): grandkidProv2}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	root2, err := LoadSession(rootCfg2, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root: %v", err)
+	}
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+
+	midInfo, ok := mgr2.Info(midID)
+	if !ok {
+		t.Fatal("mid not tracked after AdoptRoot")
+	}
+	if midInfo.Status != StatusFailed || midInfo.FailReason != unknownLegacyOutcomeFailReason {
+		t.Errorf("mid info = %+v, want StatusFailed with the honest unknown-outcome fail_reason — mid's own log genuinely cannot reconstruct a result, and must not be misreported as done", midInfo)
+	}
+}
+
+// TestAdoptRootRestoresLegacyChildlessSettledChildAsTerminalNotIdle is
+// the regression test for a live review finding on
+// restoreKnownStatusLocked's own default branch: a legacy node (no
+// committedOutcome) that never spawned anything has an EMPTY
+// SpawnedChildIDs — before this fix, that alone was (wrongly) treated as
+// proof of "genuinely fresh, never run," landing it in the default
+// branch and leaving it at adoptLocked's bare StatusIdle forever. That
+// is not just a wrong status: Reap only ever collects a FINALIZED,
+// terminal node (StatusDone/Failed/Canceled) — an idle node is never
+// Reap-eligible — so a swept legacy CHILDLESS settled node used to pin
+// itself in m.nodes permanently, reporting idle for a turn that had
+// already long since ended. Fixed by also checking non-empty History
+// (proof of "definitely not fresh" that does not depend on having
+// spawned anything).
+//
+// Asserts BOTH halves explicitly: the restored status/result is correct
+// (StatusDone, the real answer — this child's log DOES reconstruct a
+// success, exercising the same settledSuccessResult path the sibling
+// legacy tests cover), AND the node is now actually Reap-eligible —
+// calling Reap() immediately after AdoptRoot collects it.
+func TestAdoptRootRestoresLegacyChildlessSettledChildAsTerminalNotIdle(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	childProv := scriptedTurns("child", doneTurn("child done"))
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr1, childID, StatusDone, time.Second)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, childID)
+		if err != nil {
+			t.Fatalf("LoadSession (settle poll): %v", err)
+		}
+		if !s.hasUnfinalizedTurn() {
+			if len(s.SpawnedChildIDs()) != 0 {
+				t.Fatal("test setup: child unexpectedly has spawned children — this test needs the CHILDLESS legacy case specifically")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("test setup: child's settled marker never landed durably")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Simulate legacy: strip the committed-outcome record. child never
+	// spawned anything, so this exercises the OR-clause's SECOND arm
+	// (non-empty History), not the SpawnedChildIDs one the sibling tests
+	// already cover.
+	stripRecordType(t, sessionPath(dir, childID), recTaskOutcomeCommitted)
+
+	rootProv2 := scriptedTurns("root", nil)
+	childProv2 := scriptedTurns("child", nil)
+	reg2 := provider.Registry{rootProv2.Name(): rootProv2, childProv2.Name(): childProv2}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	root2, err := LoadSession(rootCfg2, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root: %v", err)
+	}
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+
+	childInfo, ok := mgr2.Info(childID)
+	if !ok {
+		t.Fatal("child not tracked after AdoptRoot")
+	}
+	if childInfo.Status == StatusIdle {
+		t.Fatalf("child.Status = %q, want a terminal status — a legacy childless settled node left idle is never Reap-eligible and leaks in memory forever", childInfo.Status)
+	}
+	if childInfo.Status != StatusDone || childInfo.Result != "child done" {
+		t.Errorf("child info = %+v, want StatusDone with the real reconstructed result", childInfo)
+	}
+
+	reaped := mgr2.Reap()
+	if reaped != 1 {
+		t.Fatalf("Reap() collected %d node(s) after restoring a legacy childless settled child, want exactly 1", reaped)
+	}
+	if _, ok := mgr2.Info(childID); ok {
+		t.Error("child still tracked after Reap — should have been collected as a finalized, terminal, childless leaf")
+	}
+}
+
+// TestAdoptRootReparentsGrandchildPastSettledIntermediateWithoutCommittedOutcome
+// is the regression test for a live review finding on
+// restoreKnownStatusLocked: a node whose own turn settled cleanly but
+// which has NO committedOutcome recorded (a session that predates the
+// whole committedOutcome mechanism, or one whose commit record was
+// otherwise never durably written) used to fall through
+// restoreKnownStatusLocked's own guard and get left at adoptLocked's bare
+// StatusIdle default, un-finalized — even though it definitely already
+// ran at least one full turn, proven by its own SpawnedChildIDs being
+// non-empty (Spawn is only ever callable from WITHIN a turn, so a node
+// that spawned anything cannot be a genuinely fresh, never-run node).
+// nearestLiveAncestorLocked's own walk treats StatusIdle as "still live"
+// (its only terminal cases are Done/Failed/Canceled), so a crashed
+// GRANDCHILD recovered underneath this exact node was delivered directly
+// onto it instead of reparented past it to the next real live ancestor —
+// and because it looked idle, delivery also fired an async resume
+// (fireIdleResumeAsync) that would have spuriously re-run a real turn on
+// a node that had already finished, purely as a side effect of relaying
+// a notification onward.
+//
+// Simulates the "predates the mechanism" case directly, rather than
+// hand-building a session from scratch: mid completes one genuine turn
+// (spawning a grandchild left crash-blocked) through the ordinary live
+// path, exactly like TestAdoptRootRecoversCrashedGrandchildTwoLevelsDeep,
+// producing a real recTaskOutcomeCommitted record — then this test
+// strips exactly that one record type from mid's own on-disk log before
+// the second process reloads it, leaving every OTHER record (including
+// recTaskSpawned for grandID, and the settled marker) intact, precisely
+// the shape an old, pre-committedOutcome log already has.
+func TestAdoptRootReparentsGrandchildPastSettledIntermediateWithoutCommittedOutcome(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	midProv := scriptedTurns("mid", doneTurn("mid done"))
+	grandProv := &signaledBlockingProvider{name: "grand", started: make(chan struct{}), release: make(chan struct{})}
+	reg := provider.Registry{rootProv.Name(): rootProv, midProv.Name(): midProv, grandProv.Name(): grandProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+
+	midID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("mid"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn mid: %v", err)
+	}
+	waitForStatus(t, mgr1, midID, StatusDone, time.Second)
+
+	grandID, err := mgr1.Spawn(SpawnOptions{ParentID: midID, Prompt: "go deeper", Model: modelFor("grand"), AgentType: AgentExplore})
+	if err != nil {
+		t.Fatalf("Spawn grandchild: %v", err)
+	}
+	<-grandProv.started // grandchild now genuinely mid-turn, blocked
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
+		if err != nil {
+			t.Fatalf("LoadSession (settle poll): %v", err)
+		}
+		if !s.hasUnfinalizedTurn() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("test setup: mid's settled marker never landed durably")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	stripRecordType(t, sessionPath(dir, midID), recTaskOutcomeCommitted)
+
+	// Fresh process, fresh providers — same shared-object race avoidance
+	// as every other test in this file. midProv2 is deliberately given NO
+	// scripted turns: the fix must never need to actually run one against
+	// mid to behave correctly.
+	rootProv2 := scriptedTurns("root", nil)
+	midProv2 := scriptedTurns("mid", nil)
+	grandProv2 := scriptedTurns("grand", nil)
+	reg2 := provider.Registry{rootProv2.Name(): rootProv2, midProv2.Name(): midProv2, grandProv2.Name(): grandProv2}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	root2, err := LoadSession(rootCfg2, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root: %v", err)
+	}
+
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+
+	// Checked immediately, synchronously, right after AdoptRoot returns —
+	// before any async fireIdleResumeAsync goroutine the pre-fix bug
+	// would have fired could possibly run: mid must already be terminal,
+	// never left looking idle/live just because its committed-outcome
+	// record is missing.
+	midInfo, ok := mgr2.Info(midID)
+	if !ok {
+		t.Fatal("mid not tracked after AdoptRoot")
+	}
+	if midInfo.Status == StatusIdle || midInfo.Status == StatusRunning {
+		t.Fatalf("mid.Status = %q immediately after AdoptRoot, want a terminal status — a node proven (via its own SpawnedChildIDs) to have already run a turn must never be left looking live just because its committed outcome record is missing", midInfo.Status)
+	}
+
+	grandInfo, ok := mgr2.Info(grandID)
+	if !ok {
+		t.Fatal("grandchild not tracked after AdoptRoot — the recursive sweep did not discover it")
+	}
+	if grandInfo.Status != StatusFailed || !strings.Contains(grandInfo.FailReason, "restart") {
+		t.Errorf("grandchild info = %+v, want StatusFailed with a restart-loss fail_reason", grandInfo)
+	}
+
+	// The grandchild's forwarded notification must land on ROOT — mid is
+	// not a valid live delivery target here, missing committed outcome or
+	// not.
+	countAll := func() int {
+		root2.mu.Lock()
+		defer root2.mu.Unlock()
+		return len(root2.taskNotifications) + len(root2.taskNotificationsInFlight)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && countAll() != 2 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	// Root is genuinely idle when both notifications land, which can
+	// trigger a real active resume racing this test's own read — a
+	// SECOND poll, on len(root2.taskNotifications) specifically (not
+	// countAll, which stays 2 even once resume checks them out into
+	// taskNotificationsInFlight), same pattern as every other test in
+	// this file exercising this exact race.
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		root2.mu.Lock()
+		n := len(root2.taskNotifications)
+		root2.mu.Unlock()
+		if n == 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	root2.mu.Lock()
+	defer root2.mu.Unlock()
+	if len(root2.taskNotifications) != 2 {
+		t.Fatalf("root2.taskNotifications = %+v (in-flight: %+v), want exactly 2 (mid's own real completion, plus the grandchild's forwarded lost-to-restart notification)", root2.taskNotifications, root2.taskNotificationsInFlight)
+	}
+	var sawGrandFailed bool
+	for _, n := range root2.taskNotifications {
+		if n.ChildID == grandID && n.Status == StatusFailed {
+			sawGrandFailed = true
+		}
+	}
+	if !sawGrandFailed {
+		t.Errorf("root2.taskNotifications missing the grandchild's forwarded lost-to-restart notification, reparented past mid: %+v", root2.taskNotifications)
+	}
+}
+
+// stripRecordType rewrites the session log at path, removing every line
+// whose "type" field equals recType — used to simulate an old log
+// written before some record type existed, without hand-constructing an
+// entire log from scratch.
+func stripRecordType(t *testing.T, path, recType string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("stripRecordType: read %s: %v", path, err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		var probe struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal([]byte(line), &probe); err != nil {
+			t.Fatalf("stripRecordType: unmarshal record: %v", err)
+		}
+		if probe.Type != recType {
+			kept = append(kept, line)
+		}
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(kept, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("stripRecordType: write %s: %v", path, err)
+	}
+}
+
+// TestRecoverCrashedChildrenLockedSurvivesConcurrentReapOfJustAdoptedIntermediate
+// is the trace-verified answer to a live review finding: restoreKnownStatusLocked
+// now marks an already-settled, just-adopted intermediate node BOTH
+// finalized AND terminal — which, unlike before this whole mechanism
+// existed, makes it immediately Reap-eligible (Reap's own guard: only
+// !finalized skips a node; finalized+terminal+childless does not) the
+// instant it is adopted, before its OWN children (a crashed grandchild,
+// say) have finished being recursively discovered and integrated by THIS
+// SAME adoption's own trailing recoverCrashedChildrenLocked call.
+//
+// The race is real: recoverCrashedChildrenLocked's own 3-phase
+// unlock/relock restructure (see its own doc comment) releases m.mu for
+// disk I/O TWICE in a two-level crash — root's own sweep discovering mid
+// first, then mid's own NESTED sweep (triggered from inside
+// adoptReloadedLocked, mid's own adoption, right after
+// restoreKnownStatusLocked marks it finalized+terminal) discovering
+// grandchild. mid is registered into m.nodes and marked finalized+
+// terminal BEFORE that second, nested sweep's own Step 2 unlock — so a
+// concurrent Reap() call landing in that exact window legitimately
+// collects mid (finalized, terminal, and still childless: grandchild is
+// not yet attached as one of mid's children — that only happens once
+// grandchild's own adopt runs, which is exactly what this window is
+// waiting on).
+//
+// But it is not a correctness gap: recoverCrashedChildrenLocked's own
+// existing revalidation-on-reacquire (`if m.nodes[nID] != n { return }`)
+// already anticipates precisely this shape of Reap ("the one shape that
+// is possible for an already-terminal, already-finalized node a
+// concurrent Reap() call could legitimately collect while unlocked" —
+// see that method's own doc comment) and abandons the whole nested
+// integration cleanly, rather than attaching a recovered grandchild
+// under a node that has already left the tree. Nothing is corrupted or
+// silently dropped forever: mid's id stays in root's own
+// SpawnedChildIDs — an append-only durable audit trail Reap never
+// touches — so a LATER restart-driven re-adoption of root (a fresh
+// SessionManager loading the same on-disk session, exactly like every
+// OTHER "next touch" this whole feature already relies on — see
+// recoverCrashedChildrenLocked's own doc comment's "purely reactive"
+// discussion) rediscovers mid, reloads it fresh, and fully recovers the
+// subtree this attempt abandoned.
+//
+// This test proves both halves: the FIRST AdoptRoot call safely
+// abandons (grandchild is never adopted on this attempt, no panic, no
+// corruption of root's own tree), and a SECOND process's AdoptRoot call
+// against the SAME on-disk session fully recovers both mid and
+// grandchild.
+func TestRecoverCrashedChildrenLockedSurvivesConcurrentReapOfJustAdoptedIntermediate(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	midProv := scriptedTurns("mid", doneTurn("mid done"))
+	grandProv := &signaledBlockingProvider{name: "grand", started: make(chan struct{}), release: make(chan struct{})}
+	reg := provider.Registry{rootProv.Name(): rootProv, midProv.Name(): midProv, grandProv.Name(): grandProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+
+	midID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("mid"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn mid: %v", err)
+	}
+	waitForStatus(t, mgr1, midID, StatusDone, time.Second)
+
+	grandID, err := mgr1.Spawn(SpawnOptions{ParentID: midID, Prompt: "go deeper", Model: modelFor("grand"), AgentType: AgentExplore})
+	if err != nil {
+		t.Fatalf("Spawn grandchild: %v", err)
+	}
+	<-grandProv.started // grandchild now genuinely mid-turn, blocked
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
+		if err != nil {
+			t.Fatalf("LoadSession (settle poll): %v", err)
+		}
+		if !s.hasUnfinalizedTurn() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("test setup: mid's settled marker never landed durably")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	rootProv2 := scriptedTurns("root", nil)
+	midProv2 := scriptedTurns("mid", nil)
+	grandProv2 := scriptedTurns("grand", nil)
+	reg2 := provider.Registry{rootProv2.Name(): rootProv2, midProv2.Name(): midProv2, grandProv2.Name(): grandProv2}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	root2, err := LoadSession(rootCfg2, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root: %v", err)
+	}
+
+	// Fires on EVERY recoverCrashedChildrenLocked unlock window — first
+	// root's own (discovering mid), then mid's own NESTED sweep
+	// (discovering grandchild). Only the second firing is where mid is
+	// both tracked and already finalized+terminal; reap it exactly
+	// there, deterministically, rather than relying on incidental
+	// goroutine-scheduling luck for a real concurrent Reap() call to
+	// land in the same window.
+	var hookCalls int
+	var reapedN int
+	mgr2.testSweepUnlockedHook = func() {
+		hookCalls++
+		if hookCalls != 2 {
+			return
+		}
+		mgr2.mu.Lock()
+		midNode, tracked := mgr2.nodes[midID]
+		mgr2.mu.Unlock()
+		if !tracked {
+			t.Errorf("test setup: mid not yet tracked at the second unlock window")
+			return
+		}
+		if !midNode.finalized || midNode.status != StatusDone {
+			t.Errorf("test setup: mid not yet finalized+terminal at the second unlock window: finalized=%v status=%v", midNode.finalized, midNode.status)
+			return
+		}
+		reapedN = mgr2.Reap()
+	}
+
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+	if hookCalls < 2 {
+		t.Fatalf("test setup: testSweepUnlockedHook only fired %d time(s), want 2 (root's own sweep, then mid's own nested sweep)", hookCalls)
+	}
+	if reapedN != 1 {
+		t.Fatalf("test setup: concurrent Reap() collected %d node(s), want exactly 1 (mid)", reapedN)
+	}
+
+	// First attempt: safely abandoned. mid is gone (reaped out from
+	// under the nested sweep integrating it), grandchild was never
+	// adopted, and nothing panicked or corrupted root's own tree.
+	if _, tracked := mgr2.Info(midID); tracked {
+		t.Error("mid still tracked after being concurrently reaped — the nested sweep's own revalidation should have found it gone, not re-added it")
+	}
+	if _, tracked := mgr2.Info(grandID); tracked {
+		t.Error("grandchild WAS adopted despite mid having been reaped out from under the nested sweep that was integrating it — should have abandoned instead")
+	}
+
+	// Second attempt: a genuinely LATER restart-driven re-adoption of
+	// root (a fresh SessionManager, a fresh load of the same on-disk
+	// session) rediscovers mid via root's own durable SpawnedChildIDs
+	// and fully recovers the whole subtree the first attempt abandoned —
+	// the exact reactive, self-healing guarantee the whole feature
+	// already rests on.
+	rootProv3 := scriptedTurns("root", nil)
+	midProv3 := scriptedTurns("mid", nil)
+	grandProv3 := scriptedTurns("grand", nil)
+	reg3 := provider.Registry{rootProv3.Name(): rootProv3, midProv3.Name(): midProv3, grandProv3.Name(): grandProv3}
+	rootCfg3 := Config{Providers: reg3, Model: modelFor("root"), SessionDir: dir}
+
+	mgr3 := NewSessionManager(context.Background(), 3, 0)
+	root3, err := LoadSession(rootCfg3, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root (second attempt): %v", err)
+	}
+	if err := mgr3.AdoptRoot(root3); err != nil {
+		t.Fatalf("AdoptRoot (second attempt): %v", err)
+	}
+	midInfo, ok := mgr3.Info(midID)
+	if !ok || midInfo.Status != StatusDone {
+		t.Fatalf("mid not recovered on second attempt: info=%+v ok=%v", midInfo, ok)
+	}
+	grandInfo, ok := mgr3.Info(grandID)
+	if !ok || grandInfo.Status != StatusFailed || !strings.Contains(grandInfo.FailReason, "restart") {
+		t.Fatalf("grandchild not recovered on second attempt: info=%+v ok=%v", grandInfo, ok)
+	}
+}
+
+// TestRecoverCrashedChildrenLockedRevalidatesNPerLoopIterationNotJustOnce
+// is the regression test for a live review finding on
+// TestRecoverCrashedChildrenLockedSurvivesConcurrentReapOfJustAdoptedIntermediate's
+// own fix: that earlier fix checked "is n (the node this call is
+// integrating candidates FOR) still live" once, before the candidates
+// loop — but adoptReloadedLocked's own recursion (called once PER
+// candidate, for whichever child was just adopted) can release and
+// reacquire m.mu AGAIN, mid-loop, for THAT candidate's own nested sweep.
+// A check only before the loop covers candidate #1 but misses n going
+// stale during candidate #1's own nested call, before candidate #2 is
+// ever reached — silently adopting candidate #2 under a node that has
+// already left the tree.
+//
+// Requires FOUR levels to actually force this shape: root -> mid ->
+// {grandA -> greatgrand, grandB}. mid has TWO not-yet-tracked candidates
+// (grandA, grandB) when its own sweep runs, so its own Step 3 loop has
+// two iterations. grandA is adopted (attached to mid) BEFORE grandA's
+// OWN nested sweep runs for greatgrand — so mid already has ONE child
+// (grandA) and is not yet Reap-eligible itself. grandA's own nested
+// sweep is what actually unlocks m.mu again (to load greatgrand) — and
+// at THAT exact moment, grandA itself is finalized+terminal+childless
+// (greatgrand not attached yet), so it is legitimately Reap-eligible.
+// Reaping grandA there removes it from mid.children too (Reap's own
+// parent-cleanup step), which makes mid ITSELF newly childless and so
+// ALSO legitimately Reap-eligible for a second Reap() call in the same
+// window. By the time mid's own loop reaches candidate #2 (grandB), mid
+// has been concurrently reaped out from under it.
+func TestRecoverCrashedChildrenLockedRevalidatesNPerLoopIterationNotJustOnce(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	midProv := scriptedTurns("mid", doneTurn("mid done"))
+	grandAProv := scriptedTurns("grandA", doneTurn("grandA done"))
+	grandBProv := scriptedTurns("grandB", doneTurn("grandB done"))
+	greatgrandProv := &signaledBlockingProvider{name: "greatgrand", started: make(chan struct{}), release: make(chan struct{})}
+	reg := provider.Registry{
+		rootProv.Name(): rootProv, midProv.Name(): midProv,
+		grandAProv.Name(): grandAProv, grandBProv.Name(): grandBProv,
+		greatgrandProv.Name(): greatgrandProv,
+	}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 5, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+
+	midID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("mid"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn mid: %v", err)
+	}
+	waitForStatus(t, mgr1, midID, StatusDone, time.Second)
+
+	grandAID, err := mgr1.Spawn(SpawnOptions{ParentID: midID, Prompt: "go A", Model: modelFor("grandA"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn grandA: %v", err)
+	}
+	waitForStatus(t, mgr1, grandAID, StatusDone, time.Second)
+
+	greatgrandID, err := mgr1.Spawn(SpawnOptions{ParentID: grandAID, Prompt: "go deeper", Model: modelFor("greatgrand"), AgentType: AgentExplore})
+	if err != nil {
+		t.Fatalf("Spawn greatgrand: %v", err)
+	}
+	<-greatgrandProv.started // greatgrand now genuinely mid-turn, blocked
+
+	grandBID, err := mgr1.Spawn(SpawnOptions{ParentID: midID, Prompt: "go B", Model: modelFor("grandB"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn grandB: %v", err)
+	}
+	waitForStatus(t, mgr1, grandBID, StatusDone, time.Second)
+
+	// Settle-poll every non-blocked node before reloading fresh below —
+	// same discipline as every other test in this file exercising a
+	// restart.
+	for _, id := range []string{midID, grandAID, grandBID} {
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, id)
+			if err != nil {
+				t.Fatalf("LoadSession (settle poll %s): %v", id, err)
+			}
+			if !s.hasUnfinalizedTurn() {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("test setup: %s's settled marker never landed durably", id)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
+	rootProv2 := scriptedTurns("root", nil)
+	midProv2 := scriptedTurns("mid", nil)
+	grandAProv2 := scriptedTurns("grandA", nil)
+	grandBProv2 := scriptedTurns("grandB", nil)
+	greatgrandProv2 := scriptedTurns("greatgrand", nil)
+	reg2 := provider.Registry{
+		rootProv2.Name(): rootProv2, midProv2.Name(): midProv2,
+		grandAProv2.Name(): grandAProv2, grandBProv2.Name(): grandBProv2,
+		greatgrandProv2.Name(): greatgrandProv2,
+	}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 5, 0)
+	root2, err := LoadSession(rootCfg2, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root: %v", err)
+	}
+
+	// Fires on every recoverCrashedChildrenLocked unlock window: (1)
+	// root's own sweep (discovering mid), (2) mid's own nested sweep
+	// (discovering grandA AND grandB together, in ONE Step 2 batch), (3)
+	// grandA's own nested sweep (discovering greatgrand) — this third
+	// firing is the exact window mid already has grandA attached as its
+	// only child, and grandA itself is finalized+terminal+childless.
+	var hookCalls int
+	var reapedGrandA, reapedMid int
+	mgr2.testSweepUnlockedHook = func() {
+		hookCalls++
+		if hookCalls != 3 {
+			return
+		}
+		mgr2.mu.Lock()
+		grandANode, grandATracked := mgr2.nodes[grandAID]
+		midNode, midTracked := mgr2.nodes[midID]
+		mgr2.mu.Unlock()
+		if !grandATracked || !grandANode.finalized || grandANode.status != StatusDone || len(grandANode.children) != 0 {
+			t.Errorf("test setup: grandA not yet finalized+terminal+childless at the third unlock window: tracked=%v node=%+v", grandATracked, grandANode)
+			return
+		}
+		if !midTracked || len(midNode.children) != 1 {
+			t.Errorf("test setup: mid does not yet have exactly grandA as its only child at the third unlock window: tracked=%v node=%+v", midTracked, midNode)
+			return
+		}
+		reapedGrandA = mgr2.Reap() // removes grandA — also drops it from mid.children
+		reapedMid = mgr2.Reap()    // mid is now childless too — removes mid
+	}
+
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+	if hookCalls < 3 {
+		t.Fatalf("test setup: testSweepUnlockedHook only fired %d time(s), want at least 3", hookCalls)
+	}
+	if reapedGrandA != 1 {
+		t.Fatalf("test setup: first concurrent Reap() collected %d node(s), want exactly 1 (grandA)", reapedGrandA)
+	}
+	if reapedMid != 1 {
+		t.Fatalf("test setup: second concurrent Reap() collected %d node(s), want exactly 1 (mid) — mid should have gone childless the instant grandA was reaped", reapedMid)
+	}
+
+	// First attempt: safely abandoned. mid and grandA are gone (reaped),
+	// greatgrand was never adopted (grandA was reaped out from under its
+	// own nested sweep), and — the crux of THIS fix specifically — grandB
+	// must ALSO never have been adopted: mid's own loop must have
+	// re-checked mid's own liveness before processing grandB (its SECOND
+	// candidate) and abandoned rather than attaching grandB under a node
+	// that had already left the tree.
+	if _, tracked := mgr2.Info(midID); tracked {
+		t.Error("mid still tracked after being concurrently reaped")
+	}
+	if _, tracked := mgr2.Info(grandAID); tracked {
+		t.Error("grandA still tracked after being concurrently reaped")
+	}
+	if _, tracked := mgr2.Info(greatgrandID); tracked {
+		t.Error("greatgrand WAS adopted despite grandA having been reaped out from under the nested sweep integrating it")
+	}
+	if _, tracked := mgr2.Info(grandBID); tracked {
+		t.Error("grandB WAS adopted despite mid having been reaped out from under the loop integrating it — the per-iteration revalidation should have caught this and abandoned before processing grandB")
+	}
+
+	// Second attempt: a genuinely LATER restart-driven re-adoption of
+	// root fully recovers the whole subtree the first attempt abandoned.
+	rootProv3 := scriptedTurns("root", nil)
+	midProv3 := scriptedTurns("mid", nil)
+	grandAProv3 := scriptedTurns("grandA", nil)
+	grandBProv3 := scriptedTurns("grandB", nil)
+	greatgrandProv3 := scriptedTurns("greatgrand", nil)
+	reg3 := provider.Registry{
+		rootProv3.Name(): rootProv3, midProv3.Name(): midProv3,
+		grandAProv3.Name(): grandAProv3, grandBProv3.Name(): grandBProv3,
+		greatgrandProv3.Name(): greatgrandProv3,
+	}
+	rootCfg3 := Config{Providers: reg3, Model: modelFor("root"), SessionDir: dir}
+
+	mgr3 := NewSessionManager(context.Background(), 5, 0)
+	root3, err := LoadSession(rootCfg3, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root (second attempt): %v", err)
+	}
+	if err := mgr3.AdoptRoot(root3); err != nil {
+		t.Fatalf("AdoptRoot (second attempt): %v", err)
+	}
+	for id, wantStatus := range map[string]SessionStatus{
+		midID: StatusDone, grandAID: StatusDone, grandBID: StatusDone,
+	} {
+		info, ok := mgr3.Info(id)
+		if !ok || info.Status != wantStatus {
+			t.Errorf("%s not recovered on second attempt: info=%+v ok=%v, want status %q", id, info, ok, wantStatus)
+		}
+	}
+	greatgrandInfo, ok := mgr3.Info(greatgrandID)
+	if !ok || greatgrandInfo.Status != StatusFailed || !strings.Contains(greatgrandInfo.FailReason, "restart") {
+		t.Fatalf("greatgrand not recovered on second attempt: info=%+v ok=%v", greatgrandInfo, ok)
+	}
+}
+
+// TestRecoverCrashedChildrenLockedSkipsConcurrentlyAdoptedChild is the
+// regression test for a live review finding: recoverCrashedChildrenLocked
+// used to run its own disk-bound LoadSession replay while m.mu — the
+// single lock guarding every session in the tree — was held, the same
+// class of problem deferPersist/unlockAndFlushPersist already closed for
+// durable WRITES on this same set of call paths. The fix releases m.mu
+// for the replay and re-acquires before integrating any result — which
+// means the tree is genuinely NOT frozen for the sweep's own duration,
+// and a concurrent adoption of the SAME child (another ancestor's own
+// sweep sharing it, or an explicit AdoptReloaded racing this one) can
+// land in that exact gap.
+//
+// Uses SessionManager.testSweepUnlockedHook (test-only, nil in
+// production) to inject a synchronous "concurrent" AdoptReloaded call —
+// on a SEPARATE load of the SAME crashed child — into the precise window
+// recoverCrashedChildrenLocked has released m.mu, deterministically
+// rather than relying on incidental goroutine-scheduling luck. Proves:
+// the child ends up tracked and correctly recovered EXACTLY once (the
+// concurrent path's own adoption wins; the sweep's own revalidation-on-
+// reacquire finds it already tracked and skips its own redundant
+// adopt), with exactly one notification delivered to the root — never a
+// double-registration or a duplicate notification.
+func TestRecoverCrashedChildrenLockedSkipsConcurrentlyAdoptedChild(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	childProv := &signaledBlockingProvider{name: "child", started: make(chan struct{}), release: make(chan struct{})}
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	<-childProv.started // child now genuinely mid-turn, blocked — simulate "kill -9 1" by simply abandoning it
+
+	// Fresh process: root2 gets its OWN provider instances — same
+	// shared-object race avoidance as every other test in this file.
+	rootProv2 := scriptedTurns("root", nil)
+	childProv2 := scriptedTurns("child", nil)
+	reg2 := provider.Registry{rootProv2.Name(): rootProv2, childProv2.Name(): childProv2}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	root2, err := LoadSession(rootCfg2, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root: %v", err)
+	}
+
+	// The injected "concurrent" adoption: a SEPARATE LoadSession of the
+	// SAME crashed child, adopted directly, synchronously, from inside
+	// the hook — root2 is already tracked by this point (adoptRootLocked
+	// registers it before ever calling recoverCrashedChildrenLocked), so
+	// nearestLiveAncestorLocked can already find it as a real delivery
+	// target, exactly as it would for any other concurrent adopter.
+	var concurrentErr error
+	var hookRan bool
+	var winnerNode *sessionNode
+	mgr2.testSweepUnlockedHook = func() {
+		hookRan = true
+		mgr2.testSweepUnlockedHook = nil // fire exactly once
+		concurrentChild, err := LoadSession(rootCfg2, childID)
+		if err != nil {
+			concurrentErr = err
+			return
+		}
+		concurrentErr = mgr2.AdoptReloaded(concurrentChild)
+		// Captured under m.mu (AdoptReloaded's own critical section has
+		// already released it by the time this line runs, but nothing
+		// else can be touching m.nodes[childID] between that release and
+		// this read — the sweep itself is still mid-unlock, and this
+		// hook is its only caller) — the node object the CONCURRENT path
+		// actually installed, to compare against whatever is there once
+		// the sweep's own (correctly skipped, or incorrectly clobbering)
+		// integration finishes below.
+		mgr2.mu.Lock()
+		winnerNode = mgr2.nodes[childID]
+		mgr2.mu.Unlock()
+	}
+
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+	if !hookRan {
+		t.Fatal("test setup: testSweepUnlockedHook never fired — recoverCrashedChildrenLocked did not release m.mu for its own replay")
+	}
+	if concurrentErr != nil {
+		t.Fatalf("concurrent AdoptReloaded: %v", concurrentErr)
+	}
+	if winnerNode == nil {
+		t.Fatal("test setup: concurrent AdoptReloaded did not register a node for childID")
+	}
+
+	// The crux of the fix: the sweep's OWN revalidation-on-reacquire must
+	// find childID already tracked and skip its own redundant adopt —
+	// proven by NODE IDENTITY, not just observable status (which a
+	// naive double-adopt would ALSO end up reporting correctly, via the
+	// very durability/idempotency this whole mechanism already provides
+	// — see recoverCrashedChildrenLocked's own doc comment on the race
+	// semantics). A double-adopt here is still real harm even when
+	// status/notifications end up looking fine: adoptLocked builds a
+	// FRESH context.WithCancel(parentCtx) and unconditionally overwrites
+	// m.nodes[childID] with the new node, silently discarding the
+	// winner's own node — including its own cancel func, whose
+	// registration in parentCtx's internal children map would then leak
+	// for the parent's whole remaining lifetime (see Reap's own doc
+	// comment on this exact leak class) — without this test's own
+	// pointer-identity check, that leak would pass completely silently.
+	mgr2.mu.Lock()
+	gotNode := mgr2.nodes[childID]
+	mgr2.mu.Unlock()
+	if gotNode != winnerNode {
+		t.Fatalf("mgr2.nodes[childID] = %p after AdoptRoot returned, want the SAME node the concurrent AdoptReloaded call (%p) installed — the sweep's own revalidation-on-reacquire failed to skip its own redundant, clobbering adopt", gotNode, winnerNode)
+	}
+
+	// Exactly one adoption won the race — the child is tracked exactly
+	// once, correctly recovered (via whichever path actually won; either
+	// is a correct outcome, see recoverCrashedChildrenLocked's own doc
+	// comment on the race semantics), never left half-adopted or
+	// double-registered.
+	info, ok := mgr2.Info(childID)
+	if !ok {
+		t.Fatal("child not tracked after the race")
+	}
+	if info.Status != StatusFailed || !strings.Contains(info.FailReason, "restart") {
+		t.Errorf("child info = %+v, want StatusFailed with a restart-loss fail_reason", info)
+	}
+
+	// root2 is genuinely idle when the winning adoption delivers to it,
+	// so this can trigger a real active resume racing this test's own
+	// read — poll rather than read once, same pattern as every other
+	// test in this file exercising this exact race.
+	countAll := func() int {
+		root2.mu.Lock()
+		defer root2.mu.Unlock()
+		return len(root2.taskNotifications) + len(root2.taskNotificationsInFlight)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && countAll() != 1 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		root2.mu.Lock()
+		n := len(root2.taskNotifications)
+		root2.mu.Unlock()
+		if n == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	root2.mu.Lock()
+	defer root2.mu.Unlock()
+	if len(root2.taskNotifications) != 1 {
+		t.Fatalf("root2.taskNotifications = %+v (in-flight: %+v), want exactly 1 — a second entry would mean BOTH the concurrent adopter and the sweep's own (stale) result delivered a notification for the same child", root2.taskNotifications, root2.taskNotificationsInFlight)
+	}
+	if got := root2.taskNotifications[0]; got.ChildID != childID || got.Status != StatusFailed {
+		t.Errorf("root2.taskNotifications[0] = %+v, want ChildID=%q Status=%q", got, childID, StatusFailed)
+	}
+}
+
+// TestRecoverCrashedChildrenLockedInheritsFullConfig is the regression
+// test for a live review adjudication: a child recovered by
+// recoverCrashedChildrenLocked is NOT provably extract-and-discard —
+// unlike a ROOT (where ReportTurnStart's own "always re-attach to the
+// live object" migration replaces n.session with the server's own
+// fully-configured reload on every turn), SessionManager.Send
+// (session.send's own sole scheduler for a child — see
+// server/session_tree.go's handleSessionSend, "Child: SessionManager is
+// its sole scheduler, always safe") reads n.session and calls Prompt on
+// it DIRECTLY, with no reload/re-attach step of any kind. A minimal
+// Config{Providers, SessionDir} reload — this method's own earlier
+// version — would silently strand a recovered child with no WorkDir, no
+// OnEvent (its turn would run invisibly, never reaching the server's own
+// SSE journal), no Hooks/MCP/Processes, the moment a caller sent it a
+// genuinely ordinary session.send follow-up.
+//
+// Proves the fix (configSnapshot(), not a hand-picked field subset):
+// spawns a child under a root configured with a distinctive WorkDir and
+// an OnEvent hook, crashes it mid-turn, recovers it purely via AdoptRoot
+// (this file's own established "never touch the crashed child directly"
+// technique), then drives a REAL session.send-shaped follow-up turn
+// (SessionManager.Send) on the recovered child and checks BOTH that its
+// WorkDir is the inherited one (not empty) AND that its OnEvent hook
+// actually fires for that turn's own events (not silently nil).
+func TestRecoverCrashedChildrenLockedInheritsFullConfig(t *testing.T) {
+	dir := t.TempDir()
+	const wantWorkDir = "/distinctive/inherited/workdir"
+	rootProv := scriptedTurns("root", nil)
+	childProv := &signaledBlockingProvider{name: "child", started: make(chan struct{}), release: make(chan struct{})}
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir, WorkDir: wantWorkDir}
+
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	<-childProv.started // child now genuinely mid-turn, blocked — simulate "kill -9 1" by simply abandoning it
+
+	// Fresh process: root2's own Config carries the SAME WorkDir and a
+	// fresh OnEvent hook — exactly what a real server's own mkCfg
+	// closure supplies on restart (cmd/harness/main.go's serveCmd).
+	rootProv2 := scriptedTurns("root", nil)
+	childProv2 := scriptedTurns("child", doneTurn("follow-up done"))
+	reg2 := provider.Registry{rootProv2.Name(): rootProv2, childProv2.Name(): childProv2}
+	var evMu sync.Mutex
+	var events []Event
+	rootCfg2 := Config{
+		Providers: reg2, Model: modelFor("root"), SessionDir: dir, WorkDir: wantWorkDir,
+		OnEvent: func(ev Event) {
+			evMu.Lock()
+			events = append(events, ev)
+			evMu.Unlock()
+		},
+	}
+
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	root2, err := LoadSession(rootCfg2, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root: %v", err)
+	}
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+
+	childSess, ok := mgr2.Session(childID)
+	if !ok {
+		t.Fatal("child not tracked after AdoptRoot — recoverCrashedChildrenLocked did not adopt it")
+	}
+	if got := childSess.WorkDir(); got != wantWorkDir {
+		t.Errorf("recovered child.WorkDir() = %q, want %q (inherited from the live ancestor via configSnapshot(), not a minimal Config{Providers,SessionDir} reload)", got, wantWorkDir)
+	}
+
+	// The actual proof this finding demanded: session.send's own real
+	// path (SessionManager.Send) reads n.session and drives Prompt on it
+	// DIRECTLY — no reload, no re-attach. If the recovered child's own
+	// OnEvent were still nil (a minimal-Config reload's own silent
+	// failure mode), this turn would run invisibly: no event ever
+	// reaches the server's SSE journal, indistinguishable from a hang to
+	// any client watching it.
+	if _, err := mgr2.Send(context.Background(), childID, "follow up"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	evMu.Lock()
+	n := len(events)
+	evMu.Unlock()
+	if n == 0 {
+		t.Error("recovered child's own follow-up turn emitted zero events — OnEvent was silently nil (not inherited from the live ancestor)")
 	}
 }

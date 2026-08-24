@@ -301,6 +301,18 @@ type SessionManager struct {
 	// it closes. Guarded by m.mu itself (only ever appended to or
 	// drained while m.mu is held); never read or written any other way.
 	pendingPersist []func()
+
+	// testSweepUnlockedHook, if non-nil, is called by
+	// recoverCrashedChildrenLocked exactly once m.mu has been released
+	// for its own disk-bound LoadSession replay (see that method's own
+	// doc comment) — a test-only synchronization seam, nil in
+	// production, mirroring server.Server's own identical
+	// queueDispatchRace hook. Lets a test deterministically land a
+	// concurrent operation (another adoption, a Reap, a Send) inside the
+	// exact window this method's own revalidation-on-reacquire logic
+	// exists to handle correctly, rather than relying on incidental
+	// goroutine-scheduling luck.
+	testSweepUnlockedHook func()
 }
 
 // deferPersist queues fn to run once m.mu is released via
@@ -594,7 +606,20 @@ func (m *SessionManager) NewRoot(cfg Config) *Session {
 // adoptReloadedLocked's doc comment.
 func (m *SessionManager) AdoptRoot(s *Session) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	// unlockAndFlushPersist, not a plain m.mu.Unlock() — see that
+	// method's own doc comment for the convention. adoptRootLocked now
+	// calls recoverCrashedChildrenLocked, which can genuinely queue
+	// deferred persists (recovering a crashed child durably commits its
+	// outcome, delivers, and settles it — all via m.deferPersist) — a
+	// plain Unlock() here would silently drop every one of those writes
+	// for the one caller (handleCreate) that reaches this method. Today
+	// that caller only ever adopts a brand-new, childless session, so
+	// the sweep is a harmless no-op in production as of this writing —
+	// but AdoptRoot is public API, and "safe by coincidence of the one
+	// current caller" is exactly the trap this convention exists to
+	// close before a future caller (or a test) adopts a root that DOES
+	// already have spawned children on disk.
+	defer m.unlockAndFlushPersist()
 	if _, exists := m.nodes[s.ID]; exists {
 		return fmt.Errorf("engine: session %s already managed", s.ID)
 	}
@@ -632,6 +657,11 @@ func (m *SessionManager) adoptRootLocked(s *Session) *sessionNode {
 	s.tools[taskToolName] = taskTool()
 	n := m.adoptLocked(s, "", 0)
 	m.installTaskToolLocked(s, 0)
+	// See recoverCrashedChildrenLocked's own doc comment: a root is the
+	// single most common node ANY caller (a box's own restart, a plain
+	// GET-triggered ReportTurnStart) adopts fresh, so this is the
+	// primary place a crashed subtree actually gets discovered again.
+	m.recoverCrashedChildrenLocked(n)
 	return n
 }
 
@@ -750,8 +780,438 @@ func (m *SessionManager) adoptReloadedLocked(s *Session, recover bool) *sessionN
 	m.restoreTaskToolRestrictionLocked(s, depth)
 	if recover {
 		m.recoverInterruptedTurnLocked(n, s)
+		// Restores n.status/n.result/n.failReason for the case
+		// recoverInterruptedTurnLocked's own guard just above does NOT
+		// handle: s was ALREADY settled before this specific adoption —
+		// see restoreKnownStatusLocked's own doc comment. A no-op,
+		// harmlessly, whenever recoverInterruptedTurnLocked just ran to
+		// completion for a genuine crash instead (committedOutcome is
+		// still whatever IT just set, so restoring from it here is
+		// redundant but correct).
+		//
+		// Gated on recover, deliberately NOT run unconditionally: the
+		// recover=false caller (ReportTurnStart's own adopt-on-first-sight,
+		// self-contradicting-recovery case — see its own doc comment) is
+		// about to drive a FRESH turn on n immediately, and that turn's
+		// own eventual finalizeTurn call does not necessarily overwrite
+		// EVERY field this method would restore (n.result specifically —
+		// finalizeTurn's own nil-msg branch, reachable from
+		// runGoal/ReportTurnEnd(id, nil, err), leaves n.result untouched
+		// rather than clearing it) — a live regression an earlier version
+		// of this change reproduced: a reloaded child's PRIOR turn's real
+		// result leaked into a brand-new turn's own nil-msg completion,
+		// which should have reported empty.
+		m.restoreKnownStatusLocked(n, s)
 	}
+	m.recoverCrashedChildrenLocked(n)
 	return n
+}
+
+// restoreKnownStatusLocked restores n.status (and n.result/n.failReason)
+// from s's own last committed outcome (Session.committedOutcome,
+// engine.go) for a node that is ALREADY settled by the time this specific
+// adoption runs — a live prod finding: adoptLocked always constructs a
+// freshly-adopted node with the bare StatusIdle default (see its own doc
+// comment), and — before this method existed — NOTHING ever corrected
+// that default for an already-settled reload; only recoverInterruptedTurnLocked
+// did, and only for a node it ACTIVELY recovered from a genuine crash.
+// SessionManager.recoverCrashedChildrenLocked's own sweep made this
+// suddenly common instead of rare (it now adopts EVERY spawned child, not
+// only crashed ones, to reach a crashed descendant more than one level
+// down — see its own doc comment) — a wire caller reading Info()/lineage
+// for a long-done child right after its ancestor's own adoption would
+// otherwise see a flatly wrong "idle" status.
+//
+// A no-op in exactly one case now: s still has an unfinalized turn (not
+// this method's job — recoverInterruptedTurnLocked's own guard already
+// covers that, whether or not it actually ran here). "No committed
+// outcome at all" used to be a second no-op case too, on the assumption
+// that meant either "predates this whole mechanism" or "a genuinely
+// fresh node with no terminal turn yet" — both left honestly at
+// adoptLocked's StatusIdle default. A live review finding: those two
+// cases are NOT actually indistinguishable, and conflating them was a
+// real bug. A node with at least one entry in its own SpawnedChildIDs
+// PROVES it already ran a turn (Spawn/the task tool is only ever
+// callable from WITHIN one) — so a settled-but-committed-outcome-less
+// node that HAS spawned children can only be the legacy case, never the
+// genuinely-fresh one. Leaving it at StatusIdle was actively harmful:
+// nearestLiveAncestorLocked's own walk treats StatusIdle as still LIVE
+// (its only terminal cases are Done/Failed/Canceled), so a crashed
+// GRANDCHILD recovered underneath this exact node was delivered directly
+// onto it instead of correctly reparented past it — and delivery to an
+// apparently-idle target also fires fireIdleResumeAsync, spuriously
+// re-running a real turn on a node that had already finished, purely to
+// relay someone else's notification onward. See
+// TestAdoptRootReparentsGrandchildPastSettledIntermediateWithoutCommittedOutcome
+// for the reproduction (a bogus THIRD notification from mid's own
+// spurious re-run, on top of the two legitimate ones). Fixed by treating
+// this sub-case as an honest "unknown outcome" terminal failure instead
+// — enough to make nearestLiveAncestorLocked walk past it like any other
+// terminal node, without falsely claiming a specific result. A node with
+// NO spawned children and no committed outcome is still left at
+// StatusIdle: nothing about it proves it is anything other than
+// genuinely fresh, and nothing downstream (no descendant to reparent
+// past it) depends on its status being corrected.
+//
+// Callers only ever reach this when recover is true (see the one call
+// site, adoptReloadedLocked) — deliberately NOT unconditional: a
+// recover=false caller (ReportTurnStart's own adopt-on-first-sight) is
+// about to drive a FRESH turn on n immediately, and letting this method
+// touch n.result there leaked a PRIOR turn's real result into a brand-new
+// turn's own nil-msg completion (finalizeTurn's nil-msg branch leaves
+// n.result untouched rather than clearing it) — a live regression an
+// earlier version of this change reproduced.
+//
+// Caller holds m.mu.
+func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
+	if s.hasUnfinalizedTurn() {
+		return
+	}
+	committed, ok := s.committedTurnOutcome()
+	switch {
+	case ok:
+		n.finalized = true
+		switch nodeStatusForOutcome(committed) {
+		case StatusCanceled:
+			// Mirrors cancelOneNodeLocked's own live-path bookkeeping
+			// exactly: a canceled node's n.result/n.failReason stay
+			// untouched (empty) — the ONLY thing that ever marked this
+			// outcome canceled, live, was n.status itself. Restoring
+			// committed.FailReason ("canceled", the fixed text
+			// finalizeTurn's alreadyCanceled branch puts in the
+			// PARENT-facing notification) into n.failReason here would
+			// invent a value a live cancellation never actually sets.
+			n.status = StatusCanceled
+		case StatusDone:
+			n.status = StatusDone
+			n.result = committed.Result
+		default:
+			n.status = StatusFailed
+			n.failReason = committed.FailReason
+		}
+	case len(s.SpawnedChildIDs()) > 0 || len(s.History()) > 0:
+		// No committed outcome, but s has definitely already run a turn
+		// — the legacy case, not the genuinely-fresh one. Proven by
+		// EITHER signal: a non-empty SpawnedChildIDs (Spawn/the task
+		// tool is only ever callable from WITHIN a turn), or — a live
+		// review finding this OR-clause itself closes — non-empty
+		// History, needed because the FIRST signal alone only proves
+		// "definitely not fresh" for a node that happened to spawn
+		// something; a legacy CHILDLESS node that ran a real turn and
+		// simply never called task leaves SpawnedChildIDs empty too,
+		// which — before this fix — fell all the way through to the
+		// default case below and was left at adoptLocked's bare
+		// StatusIdle forever: not just a wrong status, but a real leak,
+		// since Reap only ever collects a FINALIZED, terminal node
+		// (StatusDone/Failed/Canceled) — an idle node is never
+		// Reap-eligible, so a swept legacy childless settled node used
+		// to pin itself in m.nodes permanently, reporting idle forever
+		// for a turn that had already long since ended. Every node that
+		// spawned anything also necessarily has non-empty History (a
+		// turn must already be in progress, with at least a user
+		// message and the assistant's own tool call already appended,
+		// before Spawn can ever run) — so this OR-clause's second arm is
+		// a strict superset of the first; the first is kept explicit
+		// anyway as the stronger, more specific proof for a reader.
+		//
+		// Before giving up and durably marking it an unreconstructable
+		// failure, check s's own trailing history for unambiguous
+		// evidence of a genuine, natural success — settledSuccessResult
+		// (engine.go), the SAME step-2 fallback
+		// recoverInterruptedTurnLocked's own crash-window table already
+		// uses for the identical "nothing was ever committed for this
+		// turn" gap. A live review finding: a legacy node that plainly
+		// succeeded (its own last message is a real assistant answer, no
+		// dangling tool call) must never be rewritten to StatusFailed
+		// just because the newer committedOutcome mechanism postdates
+		// it — that is exactly the "successful child durably rewritten
+		// as failed" class of bug the analogous :835 fix
+		// (nodeStatusForOutcome's Canceled case) already closed for the
+		// OTHER direction, and a fail_reason claiming "cannot be
+		// reconstructed" would be a straightforward lie the instant the
+		// log actually reconstructs it.
+		//
+		// Only a node whose history genuinely does NOT end in an
+		// unambiguous natural success (a trailing tool call still
+		// awaiting its result, a non-assistant trailing message) falls
+		// through to the honest unknown-outcome failure below — marked
+		// terminal specifically so nearestLiveAncestorLocked walks past
+		// it like any other terminal node instead of treating it as a
+		// live delivery target (and so delivery elsewhere never mistakes
+		// it for an idle node worth an async resume), AND so Reap can
+		// finally collect it, closing the leak described above.
+		n.finalized = true
+		if result, ok := s.settledSuccessResult(); ok {
+			n.status = StatusDone
+			n.result = result
+		} else {
+			n.status = StatusFailed
+			n.failReason = unknownLegacyOutcomeFailReason
+		}
+	default:
+		// Both signals empty: nothing proves this node ever ran a turn
+		// at all — genuinely fresh, and adoptLocked's StatusIdle default
+		// is already the honest answer (correctly NOT Reap-eligible: a
+		// node about to run its first turn must stay pinned). Falls
+		// through to the usage fold below regardless (idempotent and
+		// safe even if s.Usage() is zero, as it will be here) rather
+		// than returning early, so this switch stays the ONLY branch
+		// point in this method.
+	}
+	// Fold this child's already-spent tokens into its root's tree-wide
+	// budget total too — the exact same delta-accounting
+	// recoverInterruptedTurnLocked/finalizeTurn both do, and for the
+	// identical reason (usageByRoot's own doc comment): without this, a
+	// long-settled child merely ADOPTED here (never actively recovered,
+	// since it was never crashed) would have its real spend silently
+	// excluded from the tree budget forever, letting a later Spawn
+	// exceed SetMaxTreeTokens by exactly this child's own total. Safe to
+	// run every time this method finds a committed outcome, including
+	// redundantly on a later re-adoption of the SAME already-credited
+	// node: n.budgetedUsage/m.budgetedByChild make the delta zero on any
+	// re-run, the same idempotency guarantee those two callers already
+	// rely on.
+	total := s.Usage()
+	delta := provider.Usage{
+		InputTokens:      total.InputTokens - n.budgetedUsage.InputTokens,
+		OutputTokens:     total.OutputTokens - n.budgetedUsage.OutputTokens,
+		CacheReadTokens:  total.CacheReadTokens - n.budgetedUsage.CacheReadTokens,
+		CacheWriteTokens: total.CacheWriteTokens - n.budgetedUsage.CacheWriteTokens,
+	}
+	n.budgetedUsage = total
+	m.budgetedByChild[n.id] = total
+	u := m.usageByRoot[n.rootID]
+	u.InputTokens += delta.InputTokens
+	u.OutputTokens += delta.OutputTokens
+	u.CacheReadTokens += delta.CacheReadTokens
+	u.CacheWriteTokens += delta.CacheWriteTokens
+	m.usageByRoot[n.rootID] = u
+}
+
+// recoverCrashedChildrenLocked sweeps n's own durably-recorded children
+// (Session.SpawnedChildIDs, engine.go) for any whose turn crashed and was
+// never recovered, adopting (and thereby recovering) each one found — a
+// live prod finding: recoverInterruptedTurnLocked only ever fires
+// reactively, on next touch of the CRASHED node's own id (see its own
+// "purely reactive" doc section) — a box whose only post-restart traffic
+// touches an ANCESTOR never independently touches the crashed child's own
+// id, so that trigger never fires. The child's parent then waits forever
+// for a notification that was always detectable the moment this parent
+// itself was adopted again — the exact sequence a live e2e run on a
+// restartPolicy:Always box reproduced: kill -9 mid-child, restart, GET
+// the child (cold lineage renders fine — see lineageJSONFor,
+// server/handlers.go, unaffected by this — and this GET does NOT reach
+// this method either; see below), then the user prompts the root, which
+// still had no independent reason to reload the child and so never
+// receives a lost-to-restart notification for it.
+//
+// NOT triggered by a read-only GET, on the child OR the ancestor:
+// server.Server.lookup (server/handlers.go), the resolver behind every
+// read endpoint (session info, transcript, lineage), returns a resident
+// session or a raw s.opts.LoadSession disk read and never calls
+// AdoptRoot/AdoptReloaded/ReportTurnStart — so viewing a dead box after a
+// restart, on its own, never runs this sweep. What DOES reach it:
+// ReportTurnStart, hit the moment a turn actually RUNS on the ancestor —
+// this is the live e2e sequence's own second half: the boxes console GETs
+// the crashed child first (finds nothing wrong there, cold reads don't
+// adopt), then the user prompts the root, which calls ReportTurnStart,
+// which adopts and sweeps; and any explicit AdoptRoot/AdoptReloaded call
+// (handleCreate's adopt-on-create, handleSpawnChild's parent-lookup
+// fallback). A box that is only ever VIEWED after a restart — never
+// prompted again on any ancestor — never adopts anything and this sweep
+// never runs; the crashed child's notification then sits exactly as
+// stranded as it was before this method existed. That is an accepted,
+// known trigger boundary of this fix, not a gap it silently claims to
+// close.
+//
+// Called every time n is adopted (adoptRootLocked, and this method's own
+// non-root branch above) — n is ALREADY registered in m.nodes by the
+// time this runs, so nearestLiveAncestorLocked can find n itself as the
+// delivery target for anything recovered here. Recurses naturally:
+// adopting a crashed child via adoptReloadedLocked(recover=true) runs
+// THIS SAME sweep for that child's own children too, so a whole crashed
+// subtree converges from one ancestor touch, not just n's immediate
+// children.
+//
+// Cost/scope note: one LoadSession, AND one m.nodes adoption, per spawned
+// child not ALREADY tracked — every child n has EVER spawned, including
+// ones settled long ago, since spawnedChildIDs is an append-only audit
+// trail with no "already confirmed settled" watermark to narrow the
+// sweep, and EVERY child (not only a crashed one) must be adopted for the
+// recursion above to reach a crashed descendant more than one level down
+// — see the loop body's own comment for why a settled intermediate
+// cannot just be skipped. This pins every live descendant in memory
+// until the next Reap() call, on the first ancestor touch after a
+// restart. Accepted for v1 (a session with a large lifetime child count
+// pays a real, one-time-per-process cost the first time it — or an
+// ancestor — is touched after a restart); narrowing this (e.g. a
+// persisted per-child "already confirmed settled" watermark, so a
+// long-done subtree can be skipped without loading it) is a real
+// follow-up, deliberately out of scope here.
+//
+// # Not actually held throughout, despite the name
+//
+// A live review finding: an earlier version of this method ran every
+// LoadSession call (real disk reads — open, stat, read, JSON-decode a
+// whole log) while m.mu — the single lock guarding every session in the
+// tree, taken by Info/Reap/Spawn/Send/finalize alike — was held, exactly
+// the class of problem deferPersist/unlockAndFlushPersist already closed
+// for durable WRITES on this same set of call paths (see that
+// mechanism's own doc comment). A slow or contended disk while recovering
+// a large crashed subtree could stall every OTHER session in the process
+// for the whole sweep.
+//
+// This method now releases m.mu itself partway through — snapshotting
+// which of n's spawned children are not yet tracked while STILL holding
+// the lock (cheap: no I/O, just a map/slice scan), unlocking, running
+// every LoadSession call OUTSIDE the lock, then re-acquiring before
+// integrating any result. Safe for every caller to keep treating this as
+// an ordinary *Locked method (called with m.mu held, returns with m.mu
+// held again) — but the tree is NOT frozen for the method's own
+// duration, so integration must explicitly revalidate against whatever
+// ran in the gap:
+//
+//   - n itself may no longer be the live node for its id (reaped, in the
+//     one shape that is possible for an already-terminal, already-
+//     finalized node a concurrent Reap() call could legitimately collect
+//     while unlocked). Checked at the top of EVERY loop iteration below,
+//     not merely once up front — a live review finding: this method's
+//     own recursion (adoptReloadedLocked, called per candidate, calls
+//     this same method again for the child it just adopted) can release
+//     and reacquire m.mu again, mid-loop, so a check only before the
+//     loop covers candidate #1 but misses n going stale during THAT
+//     nested call, before candidate #2 is reached. Wherever this finds n
+//     stale, the WHOLE remaining integration is abandoned — attaching a
+//     recovered child under a node that has left the tree makes no
+//     sense, and whatever concurrent path removed it is authoritative.
+//   - Each individual candidate child may have been adopted by someone
+//     else in the meantime — another ancestor's own concurrent sweep
+//     sharing this same child (a grandchild reachable from two different
+//     surviving ancestors after a partial reload), an explicit
+//     AdoptReloaded/ReportTurnStart racing this one, or simply a second
+//     concurrent touch of the same ancestor. Checked again, per child,
+//     right before adopting it: if it is now tracked, this method skips
+//     it rather than adopting a second time — adoptLocked has no dedup
+//     of its own (a double-adopt would corrupt m.nodes/runningByRoot
+//     bookkeeping), and whichever path won the race is treated as
+//     authoritative for that child, exactly like the n-itself case
+//     above.
+//
+// Neither race is a correctness gap this method needs to CLOSE, only one
+// it must not make worse: the loser of either race simply does less work
+// this time around — the winner's own adoption already recovers (or
+// otherwise correctly establishes) the child in question, and a FUTURE
+// ancestor touch would rediscover anything this specific race genuinely
+// caused to be skipped, the same reactive guarantee the whole feature
+// already rests on.
+func (m *SessionManager) recoverCrashedChildrenLocked(n *sessionNode) {
+	// Step 1 (locked): snapshot which spawned children are not yet
+	// tracked. No I/O — cheap enough to do without releasing m.mu.
+	var candidates []string
+	for _, childID := range n.session.SpawnedChildIDs() {
+		if _, tracked := m.nodes[childID]; !tracked {
+			candidates = append(candidates, childID)
+		}
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	// configSnapshot (not a hand-picked Config{Providers, SessionDir}
+	// subset an earlier version of this method used), for the SAME
+	// reason Spawn calls it on a live parent when constructing a BRAND
+	// NEW child's own Config: a session reloaded here can go on to
+	// become the LIVE, turn-driving object for its id — SessionManager.Send
+	// (session.send's own sole scheduler for a child, server/session_tree.go's
+	// handleSessionSend) reads n.session and calls Prompt on it DIRECTLY,
+	// with no reload/re-attach step of any kind (unlike a ROOT, where
+	// ReportTurnStart's own "always re-attach to the live object"
+	// migration replaces n.session with the server's own fully-configured
+	// reload on every turn — see that method's doc comment). A minimal
+	// Config{Providers, SessionDir} reload — this method's own earlier
+	// version — would silently strand a recovered child with no WorkDir,
+	// no OnEvent (its turn would run invisibly, never reaching the
+	// server's own SSE journal), no Hooks/MCP/Processes, no Instructions/
+	// SkillsDirs/AgentDefsDirs, the moment a caller sent it a genuinely
+	// ordinary session.send follow-up. configSnapshot() returns n's OWN
+	// full, live Config (safe to read here — see its own doc comment on
+	// why it, not a raw s.cfg read, is required under a concurrent
+	// SetModel) — every field this reload needs that is NOT itself
+	// durably recorded on the child's own log (Model/TaskParentID/
+	// TaskAgentType/TaskToolNames/ParentSession all ARE, and LoadSession's
+	// own replay correctly overrides whatever this snapshot carries for
+	// them with the child's OWN true values) inherited from the live
+	// ancestor currently being adopted, exactly like a freshly-Spawn'd
+	// child already inherits from its live parent.
+	cfg := n.session.configSnapshot()
+	nID := n.id
+
+	// Step 2 (unlocked): the actual disk-bound replay.
+	m.mu.Unlock()
+	if m.testSweepUnlockedHook != nil {
+		// Test-only synchronization seam — see its own doc comment
+		// (nil, so a no-op, in production).
+		m.testSweepUnlockedHook()
+	}
+	loaded := make(map[string]*Session, len(candidates))
+	for _, childID := range candidates {
+		childSess, err := LoadSession(cfg, childID)
+		if err != nil {
+			// Most commonly: this child never survived its own FIRST
+			// message append (see store.go's package doc comment —
+			// nothing touches disk until then, so a child killed THAT
+			// early has no log file at all to load) — an even narrower
+			// crash window than this sweep targets, with genuinely
+			// nothing durable to recover from. Any other LoadSession
+			// failure is equally unrecoverable here: skip this one
+			// child rather than aborting the whole sweep over it.
+			continue
+		}
+		loaded[childID] = childSess
+	}
+	m.mu.Lock()
+
+	// Step 3 (locked again): integrate, revalidating against whatever
+	// ran while unlocked — see this method's own doc comment for the
+	// exact race semantics decided here.
+	//
+	// The n-itself-still-live check is re-run at the TOP OF EVERY
+	// iteration below, not just once before the loop starts — a live
+	// review finding: adoptReloadedLocked's own call (last line of this
+	// loop body) recurses into THIS SAME method for the child it just
+	// adopted, which can release and reacquire m.mu AGAIN, mid-loop. A
+	// single check before the loop only covers candidate #1; n can go
+	// stale (reaped — the one shape this method's own doc comment already
+	// documents as reachable) during THAT nested call, and a check only
+	// before the loop would then let candidate #2 (and any after it) be
+	// adopted as a child of a node that has already left the tree.
+	for _, childID := range candidates {
+		if m.nodes[nID] != n {
+			return
+		}
+		childSess, ok := loaded[childID]
+		if !ok {
+			continue
+		}
+		if _, tracked := m.nodes[childID]; tracked {
+			continue
+		}
+		// Adopted unconditionally — NOT gated on childSess.hasUnfinalizedTurn()
+		// here, deliberately: adoptReloadedLocked's own non-root branch
+		// already re-runs THIS SAME sweep for childSess's own children once
+		// it is registered (that is the recursion this method's own doc
+		// comment describes), so a SETTLED intermediate child must still
+		// be adopted — not just skipped — for a crashed GRANDCHILD beneath
+		// it to ever be discovered at all: nearestLiveAncestorLocked needs
+		// every ancestor between n and a recovered descendant actually
+		// tracked in m.nodes to walk the chain, so a crashed grandchild
+		// under an un-adopted (merely "peeked at") settled child would
+		// wrongly look like it has no live ancestor to deliver to. recover
+		// itself stays true unconditionally too — recoverInterruptedTurnLocked's
+		// own top guard (hasUnfinalizedTurn()) already makes that a safe,
+		// harmless no-op for a settled child, so there is no reason to
+		// duplicate that check here.
+		m.adoptReloadedLocked(childSess, true)
+	}
 }
 
 // recoverInterruptedTurnLocked closes the "in-flight-children restart
@@ -957,10 +1417,21 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	// agree.
 	notify.Usage = total
 
-	if notify.Status == StatusDone {
+	// See nodeStatusForOutcome's own doc comment (taskdelivery.go) — a
+	// replayed committed outcome (the notify = committed branch above)
+	// can legitimately carry Canceled: true (this turn was Cancel()ed,
+	// then crashed before finishing its own delivery/settle sequence
+	// last time), and collapsing that into StatusFailed here would be
+	// the exact same history-rewriting bug restoreKnownStatusLocked had.
+	// The settledSuccessResult/generic-fallback branches above never set
+	// Canceled, so this is a correctly-scoped no-op for both of those.
+	switch nodeStatusForOutcome(notify) {
+	case StatusCanceled:
+		n.status = StatusCanceled // n.result/n.failReason left untouched — mirrors cancelOneNodeLocked's own live bookkeeping.
+	case StatusDone:
 		n.status = StatusDone
 		n.result = notify.Result
-	} else {
+	default:
 		n.status = StatusFailed
 		n.failReason = notify.FailReason
 	}
@@ -1125,11 +1596,21 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	// message is what actually closes a turn in this transcript's own
 	// vocabulary; the text itself is unambiguous synthetic-marker
 	// language, never presented as if the model actually said it.
-	if notify.Status != StatusDone && !s.hasTrailingLostToRestartMarker() {
+	//
+	// closingText picks canceledInterruptedText over the generic
+	// lostToRestartText when notify.Canceled — see that const's own doc
+	// comment: this turn's real cause was cancellation, and the closer
+	// must say so, not attribute it to the restart that merely
+	// interrupted recording that fact.
+	closingText := lostToRestartText
+	if notify.Canceled {
+		closingText = canceledInterruptedText
+	}
+	if notify.Status != StatusDone && !s.hasTrailingSyntheticCloser() {
 		closing := s.appendMemoryOnly(message.Message{
 			ID:        newID("msg"),
 			Role:      message.RoleAssistant,
-			Parts:     message.Parts{&message.Text{Text: lostToRestartText}},
+			Parts:     message.Parts{&message.Text{Text: closingText}},
 			CreatedAt: time.Now().UTC(),
 		})
 		m.deferPersist(func() { s.persistAppendedMessage(closing) })
@@ -1159,8 +1640,36 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 // message recoverInterruptedTurnLocked appends to close a dangling turn
 // in HISTORY for readability — see that method's own doc comment.
 // Idempotency (recovery must not re-fire for the same settled turn) is
-// markTurnSettled's job, not this message's.
+// markTurnSettled's job, not this message's. Used for every interrupted
+// turn EXCEPT the one canceledInterruptedText covers — see that const's
+// own doc comment for why that one case needs different wording.
 const lostToRestartText = "[harness: this turn was interrupted by a process restart and could not complete]"
+
+// canceledInterruptedText is recoverInterruptedTurnLocked's OTHER
+// synthetic closer — used instead of lostToRestartText specifically when
+// notify.Canceled is true (see that field's own doc comment,
+// taskdelivery.go): the turn was explicitly Cancel()ed, and ONLY the
+// bookkeeping that records that — commitOutcomeLocked's own durable
+// write, delivery to the ancestor, markTurnSettled — was what the
+// process restart actually interrupted; the turn itself was not
+// "interrupted by a process restart," it was deliberately stopped. A
+// live review finding: lostToRestartText's wording, applied
+// unconditionally, durably recorded a false cause in the transcript for
+// this one case — cancellation demoted to a mere side-effect of a
+// restart that had nothing to do with why the turn actually ended.
+const canceledInterruptedText = "[harness: this turn was canceled; the process restarted before that could be fully recorded]"
+
+// unknownLegacyOutcomeFailReason is restoreKnownStatusLocked's own
+// fail_reason for a node it can prove already ran a turn (a non-empty
+// SpawnedChildIDs) but has no committedOutcome to restore the real
+// result from — see that method's own doc comment for the full
+// mechanism this closes. Deliberately distinct text from
+// lostToRestartText: this is NOT a crash-in-flight (hasUnfinalizedTurn()
+// is false here — the turn genuinely finished), it is a genuinely
+// missing historical record, and a wire caller or a parent's own model
+// reading this in a [tasks:] line deserves an accurate distinction
+// between the two.
+const unknownLegacyOutcomeFailReason = "outcome not recorded: this turn completed before its result could be durably committed, and its real outcome cannot be reconstructed"
 
 // isLostToRestartMarker reports whether m is recoverInterruptedTurnLocked's
 // own synthetic closing message (RoleAssistant, exactly lostToRestartText,
@@ -1174,6 +1683,26 @@ const lostToRestartText = "[harness: this turn was interrupted by a process rest
 // produce this exact string verbatim as its entire response.
 func isLostToRestartMarker(m message.Message) bool {
 	return m.Role == message.RoleAssistant && m.Parts.Text() == lostToRestartText
+}
+
+// isCanceledInterruptedMarker is isLostToRestartMarker's counterpart for
+// canceledInterruptedText — see that const's own doc comment for why a
+// canceled-then-crashed turn gets different closing wording. Same
+// content-based matching rationale as isLostToRestartMarker.
+func isCanceledInterruptedMarker(m message.Message) bool {
+	return m.Role == message.RoleAssistant && m.Parts.Text() == canceledInterruptedText
+}
+
+// isRecoverySyntheticCloser reports whether m is EITHER of
+// recoverInterruptedTurnLocked's own synthetic closing messages — never a
+// genuine new turn's own real message. Every consumer that needs "is this
+// recovery's own synthetic annotation, whichever kind" (the closing-append
+// idempotency guard below, the recMessage fold's committedOutcome-
+// invalidation exception in store.go, Session.hasTrailingSyntheticCloser)
+// calls this ONE function, not either individual check, so a future third
+// closer variant only needs to be added here once.
+func isRecoverySyntheticCloser(m message.Message) bool {
+	return isLostToRestartMarker(m) || isCanceledInterruptedMarker(m)
 }
 
 // fireIdleResumeAsync independently re-acquires m.mu and fires a resume
@@ -1910,6 +2439,15 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	// acquired later, from unlockAndFlushPersist's own goroutine, after
 	// m.mu has already been released by this method's own caller.
 	parentSess := parent.session
+	// Memory-only update now (synchronously, still under m.mu, before
+	// this method returns) — see spawnedChildIDs' own doc comment
+	// (engine.go) for why this list exists at all
+	// (recoverCrashedChildrenLocked's own "which children did I spawn"
+	// question). Cheap and disk-free, unlike persistTaskSpawnLocked just
+	// below, which is why only THAT call is deferred.
+	parentSess.mu.Lock()
+	parentSess.recordSpawnedChildLocked(child.ID)
+	parentSess.mu.Unlock()
 	m.deferPersist(func() {
 		parentSess.mu.Lock()
 		parentSess.persistTaskSpawnLocked(child.ID, opts.AgentType)
@@ -2137,9 +2675,16 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 		// perr may even be nil here (the turn could have raced to a
 		// genuine success in the same instant Cancel() marked it
 		// canceled), and the node's OWN status already carries the
-		// distinct StatusCanceled value — this FailReason is only ever
-		// read from the notification text, never compared against status.
-		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: "canceled", Usage: n.session.Usage()}
+		// distinct StatusCanceled value — this Status/FailReason pair is
+		// the ordinary PARENT-facing wire shape (queued/rendered exactly
+		// like any other failed child), never itself compared against
+		// status. Canceled: true is the SEPARATE, restore-only signal
+		// (see its own doc comment, taskdelivery.go) that lets a LATER
+		// re-adoption of this same child (restoreKnownStatusLocked)
+		// distinguish this from an ordinary failure and correctly restore
+		// StatusCanceled rather than silently rewriting history to
+		// StatusFailed — a live review finding.
+		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: "canceled", Canceled: true, Usage: n.session.Usage()}
 	case perr != nil:
 		n.status = StatusFailed
 		n.failReason = classifySpawnError(perr)

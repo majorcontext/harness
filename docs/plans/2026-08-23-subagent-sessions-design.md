@@ -314,17 +314,43 @@ through the one `Session.hasTaskParent()` helper, so the two ends of
 this exact crash/degraded-lineage window can no longer disagree about
 which nodes recovery covers.
 
-**Accepted scope cut: reactive, not proactive.** This only fires when
-something actually reloads the dangling child's own id again (a
-legitimate follow-up `session.send`, `ReportTurnStart`'s
-adopt-on-first-sight, or `handleSpawnChild`'s parent-lookup fallback all
-already reach this path). If nothing ever touches that child's id again,
-its parent still waits forever. Fully closing that requires a proactive
-startup sweep across every session on disk — a durable parent→children
-index does not exist today, and `ListSessions`' cheap header decode
-(`readSessionInfo`) does not currently read `TaskParentID` or the last
-record's type — a larger, separate piece of work, deliberately deferred
-rather than folded into this fix.
+**Reactive, but on ANY ancestor touch, not just the crashed child's own
+id.** A live prod e2e run (a restartPolicy:Always box, `harness serve` as
+PID 1, `kill -9 1` mid-child-turn) found the ORIGINAL "reactive, not
+proactive" scope cut too narrow in practice: a caller whose only
+post-restart traffic touches an ANCESTOR (a read-only transcript/session
+GET, or a later follow-up turn on the parent/root itself) never
+independently reloads the crashed CHILD's own id, so
+`recoverInterruptedTurnLocked`'s own reactive trigger never fired — the
+parent waited forever for a notification that was always detectable the
+moment it was touched itself.
+
+`SessionManager.recoverCrashedChildrenLocked` closes this: every
+adoption of a node `n` (`adoptRootLocked`, and `adoptReloadedLocked`'s own
+non-root branch) now also sweeps `n`'s own durably-recorded children
+(`Session.SpawnedChildIDs`, folded from the pre-existing `task.spawned`
+audit record) for any still-unsettled turn, adopting — and thereby
+recovering — each one found. Adoption happens for EVERY spawned child,
+not only crashed ones (a settled intermediate node must still be adopted,
+or a crashed GRANDCHILD beneath it could never be reached — see that
+method's own doc comment), which in turn required
+`SessionManager.restoreKnownStatusLocked` (an already-settled node's
+`n.status`/`n.result`/`n.failReason`, otherwise left at `adoptLocked`'s
+bare `StatusIdle` default forever) and extending `Session.committedOutcome`
+to survive past settling as "the last known terminal outcome," not just
+"the in-flight crash-replay payload."
+
+**Accepted scope cut, narrowed but not eliminated.** This still only
+fires when something actually adopts an ANCESTOR of the crashed child
+(the root, or any live intermediate) — a session tree that NO ONE ever
+touches again, root included, still waits forever. Fully closing that
+requires a proactive startup sweep across every session on disk,
+independent of any caller ever touching any of them — a durable
+parent→children index does not exist today (this fix's own
+`spawnedChildIDs` is PER-SESSION, not a global index), and `ListSessions`'
+cheap header decode (`readSessionInfo`) does not currently read
+`TaskParentID` or the last record's type — a larger, separate piece of
+work, deliberately deferred rather than folded into this fix.
 
 ## Non-goals (v1)
 

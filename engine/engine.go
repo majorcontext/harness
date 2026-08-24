@@ -663,25 +663,58 @@ type Session struct {
 	turnUnsettled bool
 
 	// committedOutcome is the exact taskNotification finalizeTurn (or
-	// recoverInterruptedTurnLocked itself) computed for s's CURRENT
-	// unsettled turn, if that computation has already happened and been
-	// durably committed (recTaskOutcomeCommitted, store.go) — nil until
-	// then, and reset to nil the moment a NEW turn starts (see
-	// appendWithUsage/appendMemoryOnly's own identical turnUnsettled=true
-	// side effect) so it can never leak stale across turns. See
-	// commitTurnOutcome/committedTurnOutcome's own doc comments and the
-	// crash-window table on recoverInterruptedTurnLocked's own doc
-	// comment (session_manager.go) for the full mechanism this exists
-	// for: a live review finding that recovery's OWN reconstruction (from
-	// trailing history shape, or a generic "lost to restart" fallback)
-	// can DIVERGE from what finalizeTurn already computed and durably
-	// delivered before a crash struck INSIDE finalizeTurn's own
-	// deliver-then-settle sequence — producing a duplicate notification
-	// with a DIFFERENT payload than the one the parent may already have
-	// received, worse than either a lost or an honestly-generic one.
-	// committedOutcome closes this by giving recovery the SAME exact
-	// payload to replay, verbatim, instead of a second, independent guess.
+	// recoverInterruptedTurnLocked itself) computed for s's most recent
+	// turn — nil until first computed and durably committed
+	// (recTaskOutcomeCommitted, store.go). Does DOUBLE DUTY, deliberately
+	// surviving past the moment the turn it describes settles:
+	//
+	//   - WHILE that turn is still unsettled (hasUnfinalizedTurn() ==
+	//     true): recovery's own crash-replay payload — see
+	//     commitTurnOutcome/committedTurnOutcome's own doc comments and
+	//     the crash-window table on recoverInterruptedTurnLocked's own
+	//     doc comment (session_manager.go) for the full mechanism this
+	//     closes: a live review finding that recovery's OWN
+	//     reconstruction (from trailing history shape, or a generic
+	//     "lost to restart" fallback) can DIVERGE from what finalizeTurn
+	//     already computed and durably delivered before a crash struck
+	//     INSIDE finalizeTurn's own deliver-then-settle sequence —
+	//     producing a duplicate notification with a DIFFERENT payload
+	//     than the one the parent may already have received.
+	//   - ONCE settled: the last known terminal outcome — see
+	//     SessionManager.restoreKnownStatusLocked, which a LATER
+	//     adoption of this already-settled node (a live prod finding)
+	//     uses to restore n.status/n.result/n.failReason correctly,
+	//     rather than leaving adoptLocked's bare StatusIdle default
+	//     uncorrected forever.
+	//
+	// Reset to nil the moment a NEW turn starts (see appendWithUsage/
+	// appendMemoryOnly's own identical turnUnsettled=true side effect) —
+	// THAT is the correct invalidation point (a genuinely new turn
+	// supersedes whatever the previous one settled as), not "this turn
+	// just settled": markTurnSettled/the recChildTurnSettled fold
+	// deliberately do NOT also clear this, precisely so the second bullet
+	// above has something to read.
 	committedOutcome *taskNotification
+
+	// spawnedChildIDs is every child id this session has ever Spawn'd —
+	// appended to live (Spawn, session_manager.go) and folded back from
+	// the durable recTaskSpawned audit trail on reload (store.go's
+	// LoadSession). Never trimmed or deduplicated: Spawn writes exactly
+	// one recTaskSpawned per child, so a straight append-only list is
+	// already exact.
+	//
+	// Read by SessionManager.recoverCrashedChildrenLocked, which a live
+	// prod finding added: without SOME durable way to answer "which
+	// children did I spawn," a session whose PARENT is the only thing a
+	// box ever touches after a restart (a read-only transcript GET, or a
+	// later follow-up turn on the parent itself — never the crashed
+	// child directly) had no way to discover that one of its children
+	// crashed mid-turn and never got recovered — recoverInterruptedTurnLocked
+	// only ever runs reactively, on next touch of the CRASHED node's own
+	// id (see that method's own doc comment's "purely reactive" section).
+	// spawnedChildIDs is what lets adopting the PARENT also sweep its own
+	// children for exactly this case.
+	spawnedChildIDs []string
 
 	logFile        *os.File // session log; nil until first write (see store.go)
 	logStarted     bool     // the log file exists on disk
@@ -1128,6 +1161,26 @@ func (s *Session) hasTaskParent() bool {
 	return s.TaskParentID() != ""
 }
 
+// SpawnedChildIDs returns every child id s has ever Spawn'd, in Spawn
+// order — see spawnedChildIDs' own doc comment for the durable fold and
+// what reads this back.
+func (s *Session) SpawnedChildIDs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.spawnedChildIDs...)
+}
+
+// recordSpawnedChildLocked appends childID to s.spawnedChildIDs — the
+// live-path counterpart to LoadSession's own recTaskSpawned fold (see
+// spawnedChildIDs' own doc comment), called once from
+// SessionManager.Spawn right alongside its existing persistTaskSpawnLocked
+// call, so SpawnedChildIDs() gives a complete answer whether s has been
+// reloaded or has stayed live in the same process its whole life. Caller
+// holds s.mu.
+func (s *Session) recordSpawnedChildLocked(childID string) {
+	s.spawnedChildIDs = append(s.spawnedChildIDs, childID)
+}
+
 // TaskAgentType and TaskToolNames return Config.TaskAgentType/TaskToolNames
 // — see those fields' own doc comment.
 func (s *Session) TaskAgentType() string {
@@ -1173,12 +1226,18 @@ func (s *Session) hasUnfinalizedTurn() bool {
 func (s *Session) markTurnSettled() {
 	s.mu.Lock()
 	s.turnUnsettled = false
-	// See committedOutcome's own doc comment: nothing consults it once
-	// hasUnfinalizedTurn() reads false (recoverInterruptedTurnLocked's
-	// own guard prevents that) — cleared here, in the SAME critical
-	// section, so a stale value can never outlive the turn it was
-	// computed for.
-	s.committedOutcome = nil
+	// committedOutcome deliberately NOT cleared here — see its own doc
+	// comment for why it now does double duty: recovery's own
+	// crash-replay payload WHILE the turn it describes is still
+	// unsettled, AND (once settled) the last known terminal outcome a
+	// LATER adoption of this already-settled node restores n.status/
+	// n.result/n.failReason from (SessionManager.restoreKnownStatusLocked)
+	// — a live prod finding: adoptLocked's own StatusIdle default was
+	// otherwise never corrected for a node that was already fully
+	// settled BEFORE this specific adoption. appendWithUsage's own
+	// identical field is what actually invalidates a STALE value, the
+	// moment a genuinely NEW turn starts — that is the correct
+	// invalidation point, not "the turn this describes just settled."
 	s.mu.Unlock()
 }
 
@@ -1300,22 +1359,26 @@ func (s *Session) settledSuccessResult() (result string, ok bool) {
 	return last.Parts.Text(), true
 }
 
-// hasTrailingLostToRestartMarker reports whether s's own trailing history
-// message is ALREADY recoverInterruptedTurnLocked's synthetic closing
-// message (see isLostToRestartMarker, session_manager.go) — used to guard
-// against appending a SECOND one on a recovery-of-recovery retry (step 3
-// of the crash-window table on that method's own doc comment): a crash
-// between that append's own durable write and the settled-marker's would
-// otherwise leave the next recovery attempt re-appending the identical
-// synthetic message into history on every retry until the settled marker
-// finally lands.
-func (s *Session) hasTrailingLostToRestartMarker() bool {
+// hasTrailingSyntheticCloser reports whether s's own trailing history
+// message is ALREADY one of recoverInterruptedTurnLocked's own synthetic
+// closing messages (see isRecoverySyntheticCloser, session_manager.go) —
+// used to guard against appending a SECOND one on a recovery-of-recovery
+// retry (step 3 of the crash-window table on that method's own doc
+// comment): a crash between that append's own durable write and the
+// settled-marker's would otherwise leave the next recovery attempt
+// re-appending the identical synthetic message into history on every
+// retry until the settled marker finally lands. Named for "a" synthetic
+// closer, not "the" lost-to-restart one specifically — recovery has two
+// now (see canceledInterruptedText's own doc comment for the other),
+// and this check must recognize whichever one a given turn's own
+// recovery attempt actually appended.
+func (s *Session) hasTrailingSyntheticCloser() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.history) == 0 {
 		return false
 	}
-	return isLostToRestartMarker(s.history[len(s.history)-1])
+	return isRecoverySyntheticCloser(s.history[len(s.history)-1])
 }
 
 // Plugins returns a snapshot of this session's configured plugins — name,
