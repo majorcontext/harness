@@ -5,7 +5,7 @@
 // kept needing pod-exec to see directly — recovery markers
 // (recoverInterruptedTurnLocked's own synthetic closing messages), the
 // task-notification queued/delivered/committed trail, and turn-settlement
-// records. See server/handlers.go's handleJournal for the HTTP surface this
+// records. See server/session_journal.go's handleJournal for the HTTP surface this
 // backs.
 //
 // This is deliberately a SEPARATE, curated type from store.go's own
@@ -31,7 +31,7 @@ import (
 // read-only external consumption. Seq is the record's 1-based position in
 // the log (scanLog's own `line`) — stable across reloads, since the log is
 // append-only and never rewritten, so it doubles as a pagination cursor
-// (see server/handlers.go's handleJournal: `from` filters Seq > from).
+// (see server/session_journal.go's handleJournal: `from` filters Seq > from).
 // Type is one of the recXxx constants in store.go (e.g. "session",
 // "message", "goal.stalled", "task.notify_queued") — a client MUST
 // tolerate a type it does not recognize, same contract as every other
@@ -67,8 +67,17 @@ type JournalRecord struct {
 
 	// Model (Type == recSession or recModel) / effort (Type == recSession or
 	// recEffort).
-	Model  message.ModelRef `json:"model,omitzero"`
-	Effort message.Effort   `json:"effort,omitempty"`
+	Model message.ModelRef `json:"model,omitzero"`
+	// Effort is a *message.Effort, not a bare message.Effort with
+	// omitempty, mirroring server/journal.go's identical Event.Effort field
+	// (see its own doc comment): a recEffort record's SetEffort clear to
+	// the provider default writes Effort == "" — an explicit, meaningful
+	// wire value ("effort":"") — which a bare string with omitempty would
+	// indistinguishably drop, reading identically to a record type that
+	// never carries an effort level at all. projectJournalRecord always
+	// sets a non-nil pointer on recSession/recEffort (even for an empty
+	// value) and leaves it nil on every other record type.
+	Effort *message.Effort `json:"effort,omitempty"`
 
 	// Goal trace (Type is one of recGoalSet/Updated/Eval/Stalled/Achieved/
 	// Cleared/EvalFailed/Parked). GoalReason is sanitized: goal.stalled and
@@ -134,7 +143,7 @@ type JournalRecord struct {
 // created but never prompted/persisted has none (see Session.Persist's own
 // doc comment) — reports (nil, an *os.PathError wrapping fs.ErrNotExist),
 // exactly like os.ReadFile: a caller that already confirmed the session
-// exists some other way (server/handlers.go's handleJournal calls s.lookup
+// exists some other way (server/session_journal.go's handleJournal calls s.lookup
 // first) should treat that as "no records yet" and answer an empty list,
 // not a hard error.
 func LoadJournal(sessionDir, id string) ([]JournalRecord, error) {
@@ -169,7 +178,7 @@ func projectJournalRecord(seq int, rec record) JournalRecord {
 		out.TaskParentID = rec.TaskParentID
 		out.TaskAgentType = rec.TaskAgentType
 		out.Model = rec.Model
-		out.Effort = rec.Effort
+		out.Effort = effortPtr(rec.Effort)
 	case recMessage:
 		if rec.Message != nil {
 			out.MessageID = rec.Message.ID
@@ -180,7 +189,7 @@ func projectJournalRecord(seq int, rec record) JournalRecord {
 	case recModel:
 		out.Model = rec.Model
 	case recEffort:
-		out.Effort = rec.Effort
+		out.Effort = effortPtr(rec.Effort)
 	case recGoalSet, recGoalUpdated, recGoalEval, recGoalStalled, recGoalAchieved, recGoalCleared, recGoalEvalFailed, recGoalParked:
 		if rec.Goal != nil {
 			out.GoalCondition = rec.Goal.Condition
@@ -230,4 +239,13 @@ func projectJournalRecord(seq int, rec record) JournalRecord {
 		// Pure marker, no payload -- see store.go's own doc comment.
 	}
 	return out
+}
+
+// effortPtr returns a non-nil pointer to a local copy of e, always -- even
+// when e is EffortUnset ("") -- so JournalRecord.Effort's own doc comment
+// holds: a cleared effort renders as an explicit "effort":"" wire value,
+// never an omitted key indistinguishable from "this record type never
+// carries an effort level."
+func effortPtr(e message.Effort) *message.Effort {
+	return &e
 }
