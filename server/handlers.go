@@ -1785,6 +1785,14 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 		s.recordTurnEnd(id, turnEndOutcome(err), err)
 	}
 	s.freeRunSlotAndEmitIdle(id, st)
+	if s.postIdleEmitRace != nil {
+		// Test-only seam — see its own doc comment (server.go). Only
+		// wired at this one call site (runPrompt's own tail): the
+		// live-reproduced bug and its regression test are both about
+		// THIS path specifically (a queued follow-up prompt draining
+		// right behind an ordinary prompt turn).
+		s.postIdleEmitRace()
+	}
 
 	// ReportTurnEnd runs AFTER freeRunSlotAndEmitIdle, not before: it is
 	// what makes id's node visible to SessionManager as idle/done, and

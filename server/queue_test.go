@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -275,6 +276,126 @@ func TestQueueLenExplicitOnEmptyingDequeue(t *testing.T) {
 	}
 	if !strings.Contains(string(b), `"queue_len":0`) {
 		t.Fatalf("dequeue event JSON = %s, want an explicit \"queue_len\":0 (queue emptied by this dequeue)", b)
+	}
+}
+
+// TestWaitUntilIdleDoesNotWakeEarlyOnQueuedFollowUp is the regression test
+// for a live, reproduced CI failure (TestQueueLenExplicitOnEmptyingDequeue
+// above, root-caused): freeRunSlotAndEmitIdle (a completed turn's own idle
+// transition) and maybeDispatchQueued (the SAME tail's immediate re-claim
+// of the next queued item, if any — runPrompt, handlers.go) are two
+// SEPARATE steps, not one atomic operation. In between them, the session
+// genuinely reads not-running with its prompt queue still non-empty — and
+// a GET /session/{id}/wait?until=idle waiter, woken by that transient idle
+// event, used to observe it and return immediately, BEFORE the queue's own
+// next item had even been dequeued yet. Not a data race — every access is
+// correctly mutex-protected — a pure semantic gap: until=idle's own
+// condition (waitConditionMet, wait.go) checked composite state alone,
+// never the queue.
+//
+// Fixed by making waitConditionMet's until=idle case also require the
+// queue to be empty — "nothing left to do" is the documented contract, and
+// a non-empty queue on an otherwise-idle session is always about to
+// resume on its own, watched or not.
+//
+// Forces the exact race deterministically via three test-only seams
+// (waitRegisteredRace, postIdleEmitRace, waitWakeCheckedRace — server.go)
+// instead of relying on scheduling luck: waitRegisteredRace confirms the
+// waiter is parked before "first" is released; postIdleEmitRace blocks
+// runPrompt's own tail — after "first"'s idle transition has already
+// woken the waiter, before maybeDispatchQueued gets a chance to touch the
+// queue — until waitWakeCheckedRace confirms that specific wake has been
+// fully evaluated, and asserts (right there, with zero race against the
+// dequeue that is about to happen the instant this returns) that it was
+// NOT satisfied by the transient idle.
+func TestWaitUntilIdleDoesNotWakeEarlyOnQueuedFollowUp(t *testing.T) {
+	prov := &queueProv{
+		name:    "test",
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		turns:   [][]provider.Event{asstTurn("second done")},
+	}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "first"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("first prompt status %d: %s", resp.StatusCode, data)
+	}
+	<-prov.started
+
+	resp, data = h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "second"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("second prompt status %d: %s", resp.StatusCode, data)
+	}
+
+	registered := make(chan struct{})
+	checked := make(chan struct{}, 1)
+	h.srv.waitRegisteredRace = func() {
+		close(registered)
+	}
+	var firstWake sync.Once
+	h.srv.waitWakeCheckedRace = func(met bool) {
+		// Only the FIRST wake this waiter ever receives is the one
+		// postIdleEmitRace (below) is blocking runPrompt's own tail
+		// for — the transient not-running-but-still-queued idle "first"
+		// itself fires, before maybeDispatchQueued has touched the
+		// queue at all. A LATER, legitimate wake (once "second" has
+		// also actually run) is SUPPOSED to satisfy the condition —
+		// asserting on every wake, not just the first, would wrongly
+		// fail on that correct, final one too.
+		firstWake.Do(func() {
+			if met {
+				t.Error("the waiter's until=idle condition was met on the FIRST wake (the transient not-running-but-still-queued idle) — it must not be, until the queue this session's own runPrompt tail is about to drain is actually empty")
+			}
+			close(checked) // broadcast: every postIdleEmitRace call (including "second"'s own, later) unblocks immediately from here on
+		})
+	}
+	h.srv.postIdleEmitRace = func() {
+		<-checked
+	}
+
+	type waitResult struct {
+		wr  waitJSON
+		err error
+	}
+	waitDone := make(chan waitResult, 1)
+	go func() {
+		resp, data := h.do("GET", "/session/"+id+"/wait?until=idle&timeout_s=5", nil)
+		if resp.StatusCode != http.StatusOK {
+			waitDone <- waitResult{err: fmt.Errorf("wait status %d: %s", resp.StatusCode, data)}
+			return
+		}
+		var wr waitJSON
+		if err := json.Unmarshal(data, &wr); err != nil {
+			waitDone <- waitResult{err: err}
+			return
+		}
+		waitDone <- waitResult{wr: wr}
+	}()
+	<-registered // the waiter is parked, reachable by the wake "first" is about to fire
+
+	close(prov.release) // let "first" finish; its own idle transition wakes the waiter
+
+	select {
+	case res := <-waitDone:
+		if res.err != nil {
+			t.Fatal(res.err)
+		}
+		if res.wr.State != "idle" {
+			t.Fatalf("wait returned state = %q, want idle (once genuinely settled — \"second\" must have already run to completion)", res.wr.State)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("wait for idle timed out")
+	}
+
+	final := h.getSessionJSON(id)
+	if final.Queued != 0 {
+		t.Fatalf("final queued = %d, want 0 — \"second\" must have actually run, not merely been reported idle-and-abandoned", final.Queued)
 	}
 }
 
