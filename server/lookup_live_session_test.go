@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +33,15 @@ func newGatedMultiProviderHarness(t *testing.T, entered, release chan struct{}, 
 	for _, p := range providers {
 		reg[p.Name()] = p
 	}
+	// enteredOnce guards close(entered): entered/release are caller-owned,
+	// single-use-by-convention channels for THIS helper's one current
+	// caller (exactly one gate call), but this helper is documented as
+	// reusable (newGatedHarness's multi-provider sibling) — a future test
+	// scripting two gate calls, or a retried tool call, would otherwise hit
+	// "close of closed channel" and panic instead of failing cleanly. Once
+	// makes a second entry a no-op (release still gates it exactly once,
+	// same as today) rather than a panic.
+	var enteredOnce sync.Once
 	gate := engine.Tool{
 		Def: provider.ToolDef{
 			Name:        "gate",
@@ -39,7 +49,7 @@ func newGatedMultiProviderHarness(t *testing.T, entered, release chan struct{}, 
 			InputSchema: json.RawMessage(`{"type":"object"}`),
 		},
 		Run: func(ctx context.Context, s *engine.Session, args json.RawMessage) (message.Parts, error) {
-			close(entered)
+			enteredOnce.Do(func() { close(entered) })
 			select {
 			case <-release:
 			case <-ctx.Done():

@@ -2561,11 +2561,23 @@ func (s *Server) handleSetThinking(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, setThinkingResponseJSON{Effort: st.sess.Effort()})
 }
 
-// evictResidentLocked unloads the longest-idle non-busy sessions from memory
-// when the resident count exceeds Options.MaxResident. Busy sessions are never
-// evicted; s.seen is retained so journal idempotency survives the unload (the
-// session reloads transparently from disk on its next access). Caller holds
-// s.mu.
+// evictResidentLocked unloads the longest-idle non-busy sessions from
+// s.sessions (this server's OWN residency bookkeeping) when the resident
+// count exceeds Options.MaxResident. Busy sessions are never evicted;
+// s.seen is retained so journal idempotency survives the unload.
+//
+// This frees s.sessions' own entry, but not necessarily the *Session object
+// itself: a root is adopted into sessMgr (AdoptRoot) and never reaped
+// (Reap only removes terminal LEAF children, never a root — see
+// TestReapNeverCollectsAnOrdinaryRootEvenWhenChildless), so sessMgr keeps
+// pinning the live object in memory regardless of this eviction — a
+// pre-existing property of sessMgr's own lifecycle, unrelated to and
+// unchanged by this function. What DOES depend on Server.lookup's ordering
+// (sessMgr checked before a disk reload — see its own doc comment) is which
+// object the NEXT read after eviction actually returns: the live,
+// sessMgr-pinned one, not a fresh LoadSession reread from disk — eviction
+// here narrows only this server's own bookkeeping, never a guarantee that
+// the next access is served cold. Caller holds s.mu.
 func (s *Server) evictResidentLocked() {
 	excess := len(s.sessions) - s.opts.MaxResident
 	if excess <= 0 {
