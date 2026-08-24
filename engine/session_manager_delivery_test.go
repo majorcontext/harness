@@ -3198,6 +3198,184 @@ func TestAdoptRootRecoversCrashedGrandchildTwoLevelsDeep(t *testing.T) {
 	}
 }
 
+// TestAdoptRootRestoresLegacySettledChildAsDoneWhenLogReconstructsSuccess
+// is the regression test for a live review finding on
+// restoreKnownStatusLocked's own legacy fallback (no committedOutcome, but
+// proven via SpawnedChildIDs to have already run a turn): before this fix
+// it unconditionally durably marked such a node StatusFailed with
+// unknownLegacyOutcomeFailReason, even when the node's OWN trailing
+// history unambiguously shows a genuine, natural success — the exact
+// "successful child rewritten as failed" class of bug the Canceled fix
+// closed for the OTHER status, now closed here too by consulting
+// settledSuccessResult (engine.go, the SAME step-2 fallback
+// recoverInterruptedTurnLocked's own crash-window table already uses)
+// before giving up.
+//
+// mid must ALSO have spawned something for the legacy branch to be
+// reached at all (restoreKnownStatusLocked's own default case is for a
+// genuinely fresh, never-run node) — a second child under mid, whose own
+// outcome is irrelevant to this test.
+func TestAdoptRootRestoresLegacySettledChildAsDoneWhenLogReconstructsSuccess(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	midProv := scriptedTurns("mid", doneTurn("mid done"))
+	childProv := scriptedTurns("child", doneTurn("child done"))
+	reg := provider.Registry{rootProv.Name(): rootProv, midProv.Name(): midProv, childProv.Name(): childProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+
+	midID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("mid"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn mid: %v", err)
+	}
+	waitForStatus(t, mgr1, midID, StatusDone, time.Second)
+
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: midID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn child: %v", err)
+	}
+	waitForStatus(t, mgr1, childID, StatusDone, time.Second)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
+		if err != nil {
+			t.Fatalf("LoadSession (settle poll): %v", err)
+		}
+		if !s.hasUnfinalizedTurn() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("test setup: mid's settled marker never landed durably")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	stripRecordType(t, sessionPath(dir, midID), recTaskOutcomeCommitted)
+
+	rootProv2 := scriptedTurns("root", nil)
+	midProv2 := scriptedTurns("mid", nil)
+	childProv2 := scriptedTurns("child", nil)
+	reg2 := provider.Registry{rootProv2.Name(): rootProv2, midProv2.Name(): midProv2, childProv2.Name(): childProv2}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	root2, err := LoadSession(rootCfg2, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root: %v", err)
+	}
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+
+	midInfo, ok := mgr2.Info(midID)
+	if !ok {
+		t.Fatal("mid not tracked after AdoptRoot")
+	}
+	if midInfo.Status != StatusDone {
+		t.Errorf("mid.Status = %q, want %q — mid's own trailing history is an unambiguous clean success and must be reconstructed, not durably marked an unrecoverable failure", midInfo.Status, StatusDone)
+	}
+	if midInfo.Result != "mid done" {
+		t.Errorf("mid.Result = %q, want %q", midInfo.Result, "mid done")
+	}
+	if midInfo.FailReason != "" {
+		t.Errorf("mid.FailReason = %q, want empty for a restored success", midInfo.FailReason)
+	}
+}
+
+// TestAdoptRootRestoresLegacySettledChildAsUnknownFailureWhenLogCannotReconstruct
+// is TestAdoptRootRestoresLegacySettledChildAsDoneWhenLogReconstructsSuccess's
+// counterpart: a legacy node (no committedOutcome, but proven via
+// SpawnedChildIDs to have already run a turn) whose own trailing history
+// does NOT unambiguously show a natural success — here, a dangling tool
+// result (the task tool's own immediate "spawned" acknowledgment) as the
+// very last message, with no further assistant text ever following it —
+// must still fall through to the honest unknown-outcome failure.
+// settledSuccessResult's own check (last message must be RoleAssistant,
+// with no ToolCall part) is what draws this line; consulting it must
+// never turn into "credit any node with a spawned child as done."
+//
+// Drives mid's single scripted turn to call the REAL `task` tool
+// directly (rather than mgr.Spawn), so mid's own history ends in a
+// genuine RoleTool result message and its SpawnedChildIDs is populated
+// by the exact same live path a real model-driven delegation would use —
+// then the scripted provider is exhausted on the loop's next call
+// (no second turn), so mid's own turn ends in perr != nil, matching a
+// real "delegated, then the model call failed" shape.
+func TestAdoptRootRestoresLegacySettledChildAsUnknownFailureWhenLogCannotReconstruct(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	midProv := scriptedTurns("mid", [][]provider.Event{
+		asstTurn(provider.StopToolUse,
+			&message.Text{Text: "delegating"},
+			toolCall("tc1", "task", `{"agent":"general-purpose","prompt":"go","model":"grandkid/m1"}`)),
+		// Deliberately no second turn: the loop's next call (after the
+		// task tool's own RoleTool result is appended) finds the
+		// scripted provider exhausted, ending mid's turn in perr != nil
+		// with a genuine dangling-tool-result trailing message.
+	})
+	grandkidProv := scriptedTurns("grandkid", nil)
+	reg := provider.Registry{rootProv.Name(): rootProv, midProv.Name(): midProv, grandkidProv.Name(): grandkidProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+
+	midID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("mid"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn mid: %v", err)
+	}
+	waitForStatus(t, mgr1, midID, StatusFailed, 2*time.Second)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
+		if err != nil {
+			t.Fatalf("LoadSession (settle poll): %v", err)
+		}
+		if !s.hasUnfinalizedTurn() {
+			if len(s.SpawnedChildIDs()) == 0 {
+				t.Fatal("test setup: mid's own task tool call did not record a spawned child")
+			}
+			if _, ok := s.settledSuccessResult(); ok {
+				t.Fatal("test setup: mid's trailing history unexpectedly looks like a clean success — settledSuccessResult should be false here (last message must be a dangling tool result, not assistant text)")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("test setup: mid's settled marker never landed durably")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	stripRecordType(t, sessionPath(dir, midID), recTaskOutcomeCommitted)
+
+	rootProv2 := scriptedTurns("root", nil)
+	midProv2 := scriptedTurns("mid", nil)
+	grandkidProv2 := scriptedTurns("grandkid", nil)
+	reg2 := provider.Registry{rootProv2.Name(): rootProv2, midProv2.Name(): midProv2, grandkidProv2.Name(): grandkidProv2}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	root2, err := LoadSession(rootCfg2, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root: %v", err)
+	}
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+
+	midInfo, ok := mgr2.Info(midID)
+	if !ok {
+		t.Fatal("mid not tracked after AdoptRoot")
+	}
+	if midInfo.Status != StatusFailed || midInfo.FailReason != unknownLegacyOutcomeFailReason {
+		t.Errorf("mid info = %+v, want StatusFailed with the honest unknown-outcome fail_reason — mid's own log genuinely cannot reconstruct a result, and must not be misreported as done", midInfo)
+	}
+}
+
 // TestAdoptRootReparentsGrandchildPastSettledIntermediateWithoutCommittedOutcome
 // is the regression test for a live review finding on
 // restoreKnownStatusLocked: a node whose own turn settled cleanly but
