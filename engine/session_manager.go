@@ -892,15 +892,40 @@ func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
 	case len(s.SpawnedChildIDs()) > 0:
 		// No committed outcome, but s has definitely already run a turn
 		// (see this method's own doc comment for the proof) — the
-		// legacy case, not the genuinely-fresh one. Marked terminal with
-		// an honest "unknown" reason, specifically so
+		// legacy case, not the genuinely-fresh one. Before giving up and
+		// durably marking it an unreconstructable failure, check s's own
+		// trailing history for unambiguous evidence of a genuine,
+		// natural success — settledSuccessResult (engine.go), the SAME
+		// step-2 fallback recoverInterruptedTurnLocked's own crash-window
+		// table already uses for the identical "nothing was ever
+		// committed for this turn" gap. A live review finding: a legacy
+		// node that plainly succeeded (its own last message is a real
+		// assistant answer, no dangling tool call) must never be
+		// rewritten to StatusFailed just because the newer
+		// committedOutcome mechanism postdates it — that is exactly the
+		// "successful child durably rewritten as failed" class of bug
+		// the analogous :835 fix (nodeStatusForOutcome's Canceled case)
+		// already closed for the OTHER direction, and a fail_reason
+		// claiming "cannot be reconstructed" would be a straightforward
+		// lie the instant the log actually reconstructs it.
+		//
+		// Only a node whose history genuinely does NOT end in an
+		// unambiguous natural success (no history at all, a trailing
+		// tool call still awaiting its result, a non-assistant trailing
+		// message) falls through to the honest unknown-outcome failure
+		// below — marked terminal specifically so
 		// nearestLiveAncestorLocked walks past it like any other
 		// terminal node instead of treating it as a live delivery
 		// target (and so delivery elsewhere never mistakes it for an
 		// idle node worth an async resume).
 		n.finalized = true
-		n.status = StatusFailed
-		n.failReason = unknownLegacyOutcomeFailReason
+		if result, ok := s.settledSuccessResult(); ok {
+			n.status = StatusDone
+			n.result = result
+		} else {
+			n.status = StatusFailed
+			n.failReason = unknownLegacyOutcomeFailReason
+		}
 	default:
 		// Nothing proves this node ever ran a turn at all — genuinely
 		// fresh, and adoptLocked's StatusIdle default is already the
