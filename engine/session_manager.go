@@ -822,12 +822,36 @@ func (m *SessionManager) adoptReloadedLocked(s *Session, recover bool) *sessionN
 // for a long-done child right after its ancestor's own adoption would
 // otherwise see a flatly wrong "idle" status.
 //
-// A no-op in two cases: s still has an unfinalized turn (not this
-// method's job — recoverInterruptedTurnLocked's own guard already covers
-// that, whether or not it actually ran here), or s has never had a
-// committed outcome at all (predates this whole mechanism, or is a
-// genuinely fresh node with no terminal turn yet — adoptLocked's
-// StatusIdle default is the honest answer for both).
+// A no-op in exactly one case now: s still has an unfinalized turn (not
+// this method's job — recoverInterruptedTurnLocked's own guard already
+// covers that, whether or not it actually ran here). "No committed
+// outcome at all" used to be a second no-op case too, on the assumption
+// that meant either "predates this whole mechanism" or "a genuinely
+// fresh node with no terminal turn yet" — both left honestly at
+// adoptLocked's StatusIdle default. A live review finding: those two
+// cases are NOT actually indistinguishable, and conflating them was a
+// real bug. A node with at least one entry in its own SpawnedChildIDs
+// PROVES it already ran a turn (Spawn/the task tool is only ever
+// callable from WITHIN one) — so a settled-but-committed-outcome-less
+// node that HAS spawned children can only be the legacy case, never the
+// genuinely-fresh one. Leaving it at StatusIdle was actively harmful:
+// nearestLiveAncestorLocked's own walk treats StatusIdle as still LIVE
+// (its only terminal cases are Done/Failed/Canceled), so a crashed
+// GRANDCHILD recovered underneath this exact node was delivered directly
+// onto it instead of correctly reparented past it — and delivery to an
+// apparently-idle target also fires fireIdleResumeAsync, spuriously
+// re-running a real turn on a node that had already finished, purely to
+// relay someone else's notification onward. See
+// TestAdoptRootReparentsGrandchildPastSettledIntermediateWithoutCommittedOutcome
+// for the reproduction (a bogus THIRD notification from mid's own
+// spurious re-run, on top of the two legitimate ones). Fixed by treating
+// this sub-case as an honest "unknown outcome" terminal failure instead
+// — enough to make nearestLiveAncestorLocked walk past it like any other
+// terminal node, without falsely claiming a specific result. A node with
+// NO spawned children and no committed outcome is still left at
+// StatusIdle: nothing about it proves it is anything other than
+// genuinely fresh, and nothing downstream (no descendant to reparent
+// past it) depends on its status being corrected.
 //
 // Callers only ever reach this when recover is true (see the one call
 // site, adoptReloadedLocked) — deliberately NOT unconditional: a
@@ -844,16 +868,35 @@ func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
 		return
 	}
 	committed, ok := s.committedTurnOutcome()
-	if !ok {
-		return
-	}
-	n.finalized = true
-	if committed.Status == StatusDone {
-		n.status = StatusDone
-		n.result = committed.Result
-	} else {
+	switch {
+	case ok:
+		n.finalized = true
+		if committed.Status == StatusDone {
+			n.status = StatusDone
+			n.result = committed.Result
+		} else {
+			n.status = StatusFailed
+			n.failReason = committed.FailReason
+		}
+	case len(s.SpawnedChildIDs()) > 0:
+		// No committed outcome, but s has definitely already run a turn
+		// (see this method's own doc comment for the proof) — the
+		// legacy case, not the genuinely-fresh one. Marked terminal with
+		// an honest "unknown" reason, specifically so
+		// nearestLiveAncestorLocked walks past it like any other
+		// terminal node instead of treating it as a live delivery
+		// target (and so delivery elsewhere never mistakes it for an
+		// idle node worth an async resume).
+		n.finalized = true
 		n.status = StatusFailed
-		n.failReason = committed.FailReason
+		n.failReason = unknownLegacyOutcomeFailReason
+	default:
+		// Nothing proves this node ever ran a turn at all — genuinely
+		// fresh, and adoptLocked's StatusIdle default is already the
+		// honest answer. Falls through to the usage fold below
+		// regardless (idempotent and safe even if s.Usage() is zero, as
+		// it will be here) rather than returning early, so this switch
+		// stays the ONLY branch point in this method.
 	}
 	// Fold this child's already-spent tokens into its root's tree-wide
 	// budget total too — the exact same delta-accounting
@@ -891,16 +934,35 @@ func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
 // live prod finding: recoverInterruptedTurnLocked only ever fires
 // reactively, on next touch of the CRASHED node's own id (see its own
 // "purely reactive" doc section) — a box whose only post-restart traffic
-// touches an ANCESTOR (a read-only transcript/session GET, or a later
-// follow-up turn on the parent/root itself) never independently touches
-// the crashed child's own id, so that trigger never fires. The child's
-// parent then waits forever for a notification that was always
-// detectable the moment this parent itself was adopted again — the exact
-// sequence a live e2e run on a restartPolicy:Always box reproduced:
-// kill -9 mid-child, restart, GET the child (cold lineage renders fine —
-// see lineageJSONFor, server/handlers.go, unaffected by this), but the
-// root never receives a lost-to-restart notification because nothing
-// ever independently reloads the child.
+// touches an ANCESTOR never independently touches the crashed child's own
+// id, so that trigger never fires. The child's parent then waits forever
+// for a notification that was always detectable the moment this parent
+// itself was adopted again — the exact sequence a live e2e run on a
+// restartPolicy:Always box reproduced: kill -9 mid-child, restart, GET
+// the child (cold lineage renders fine — see lineageJSONFor,
+// server/handlers.go, unaffected by this — and this GET does NOT reach
+// this method either; see below), then the user prompts the root, which
+// still had no independent reason to reload the child and so never
+// receives a lost-to-restart notification for it.
+//
+// NOT triggered by a read-only GET, on the child OR the ancestor:
+// server.Server.lookup (server/handlers.go), the resolver behind every
+// read endpoint (session info, transcript, lineage), returns a resident
+// session or a raw s.opts.LoadSession disk read and never calls
+// AdoptRoot/AdoptReloaded/ReportTurnStart — so viewing a dead box after a
+// restart, on its own, never runs this sweep. What DOES reach it:
+// ReportTurnStart, hit the moment a turn actually RUNS on the ancestor —
+// this is the live e2e sequence's own second half: the boxes console GETs
+// the crashed child first (finds nothing wrong there, cold reads don't
+// adopt), then the user prompts the root, which calls ReportTurnStart,
+// which adopts and sweeps; and any explicit AdoptRoot/AdoptReloaded call
+// (handleCreate's adopt-on-create, handleSpawnChild's parent-lookup
+// fallback). A box that is only ever VIEWED after a restart — never
+// prompted again on any ancestor — never adopts anything and this sweep
+// never runs; the crashed child's notification then sits exactly as
+// stranded as it was before this method existed. That is an accepted,
+// known trigger boundary of this fix, not a gap it silently claims to
+// close.
 //
 // Called every time n is adopted (adoptRootLocked, and this method's own
 // non-root branch above) — n is ALREADY registered in m.nodes by the
@@ -1482,6 +1544,18 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 // Idempotency (recovery must not re-fire for the same settled turn) is
 // markTurnSettled's job, not this message's.
 const lostToRestartText = "[harness: this turn was interrupted by a process restart and could not complete]"
+
+// unknownLegacyOutcomeFailReason is restoreKnownStatusLocked's own
+// fail_reason for a node it can prove already ran a turn (a non-empty
+// SpawnedChildIDs) but has no committedOutcome to restore the real
+// result from — see that method's own doc comment for the full
+// mechanism this closes. Deliberately distinct text from
+// lostToRestartText: this is NOT a crash-in-flight (hasUnfinalizedTurn()
+// is false here — the turn genuinely finished), it is a genuinely
+// missing historical record, and a wire caller or a parent's own model
+// reading this in a [tasks:] line deserves an accurate distinction
+// between the two.
+const unknownLegacyOutcomeFailReason = "outcome not recorded: this turn completed before its result could be durably committed, and its real outcome cannot be reconstructed"
 
 // isLostToRestartMarker reports whether m is recoverInterruptedTurnLocked's
 // own synthetic closing message (RoleAssistant, exactly lostToRestartText,
