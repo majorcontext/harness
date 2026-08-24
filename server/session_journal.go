@@ -25,8 +25,8 @@ const (
 // the Seq to pass as the next request's `from` to continue paging; HasMore
 // is true only when this page was actually truncated by `limit` (mirrors
 // the SSE stream's own `from`-cursor convention, server/sse.go's
-// parseFrom/handleEvent — a Seq is stable and gapless across reloads since
-// the log is append-only, so it doubles as a pagination cursor here too).
+// parseFrom/handleEvent — a Seq is stable across reloads since the log is
+// append-only, so it doubles as a pagination cursor here too).
 type JournalResponse struct {
 	SessionID  string                 `json:"session_id"`
 	Records    []engine.JournalRecord `json:"records"`

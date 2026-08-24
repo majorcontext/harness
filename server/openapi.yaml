@@ -1299,26 +1299,26 @@ components:
             no other record type carries its own timestamp.
         workdir:
           type: string
-          description: "? `session` only."
+          description: Only on `session` records.
         parent_session:
           type: string
-          description: "? `session` only."
+          description: Only on `session` records.
         task_parent_id:
           type: string
-          description: "? `session` only."
+          description: Only on `session` records.
         task_agent_type:
           type: string
-          description: "? `session` only."
+          description: Only on `session` records.
         message_id:
           type: string
-          description: "? `message` only. Identity only — never content."
+          description: Only on `message` records. Identity only — never content.
         message_role:
           type: string
-          description: "? `message` only."
+          description: Only on `message` records.
         recovery_marker:
           type: boolean
           description: >
-            ? `message` only. True when this message is one of
+            Only on `message` records. True when this message is one of
             recoverInterruptedTurnLocked's own synthetic restart/cancel
             closers — the durable trace of a restart-recovery event.
         model:
@@ -1327,81 +1327,81 @@ components:
           type: string
         goal_condition:
           type: string
-          description: "? goal.* records."
+          description: Only on goal.* records.
         goal_reason:
           type: string
-          description: "? goal.* records. Sanitized."
+          description: Only on goal.* records. Sanitized.
         goal_met:
           type: boolean
-          description: "? goal.eval."
+          description: Only on goal.eval.
         goal_turn:
           type: integer
-          description: "? goal.eval."
+          description: Only on goal.eval.
         goal_turns:
           type: integer
-          description: "? goal.achieved."
+          description: Only on goal.achieved.
         goal_attempt:
           type: integer
-          description: "? goal.stalled."
+          description: Only on goal.stalled.
         goal_attempts:
           type: integer
-          description: "? goal.parked."
+          description: Only on goal.parked.
         goal_retryable:
           type: boolean
-          description: "? goal.stalled, goal.parked."
+          description: Only on goal.stalled, goal.parked.
         goal_retryable_class:
           type: string
-          description: "? goal.stalled, goal.parked."
+          description: Only on goal.stalled, goal.parked.
         goal_waiting:
           type: boolean
-          description: "? goal.stalled."
+          description: Only on goal.stalled.
         goal_eval_failures:
           type: integer
-          description: "? goal.eval_failed."
+          description: Only on goal.eval_failed.
         prompt_id:
           type: integer
-          description: "? prompt.queued, prompt.dequeued."
+          description: Only on prompt.queued, prompt.dequeued.
         prompt_reason:
           type: string
-          description: "? prompt.dequeued: delivered, injected, or cleared."
+          description: "Only on prompt.dequeued: delivered, injected, or cleared."
         prompt_seq:
           type: integer
-          description: "? a durably-enqueued prompt.queued."
+          description: Only on a durably-enqueued prompt.queued.
         child_id:
           type: string
           description: >
-            ? task.spawned, task.notify_queued, task.notify_delivered,
+            Only on task.spawned, task.notify_queued, task.notify_delivered,
             task.outcome_committed.
         agent:
           type: string
-          description: "? same records as child_id."
+          description: Only on the same records as child_id.
         task_status:
           type: string
-          description: "? task.notify_queued, task.notify_delivered, task.outcome_committed."
+          description: Only on task.notify_queued, task.notify_delivered, task.outcome_committed.
         task_fail_reason:
           type: string
-          description: "? same records as task_status. Sanitized."
+          description: Only on the same records as task_status. Sanitized.
         task_canceled:
           type: boolean
-          description: "? same records as task_status."
+          description: Only on the same records as task_status.
         compact_first_id:
           type: string
-          description: "? compact."
+          description: Only on compact.
         compact_last_id:
           type: string
-          description: "? compact."
+          description: Only on compact.
         compact_turns_folded:
           type: integer
-          description: "? compact."
+          description: Only on compact.
         tool_result_handle:
           type: string
-          description: "? toolresult.retained."
+          description: Only on toolresult.retained.
         tool_result_tool:
           type: string
-          description: "? toolresult.retained."
+          description: Only on toolresult.retained.
         tool_result_bytes:
           type: integer
-          description: "? toolresult.retained."
+          description: Only on toolresult.retained.
 
     CompactRequest:
       type: object
