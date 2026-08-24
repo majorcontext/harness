@@ -48,13 +48,17 @@ import (
 // Spawn registers synchronously, before the child's turn ever starts —
 // whenever s.sessions has nothing. This test reproduces the exact reported
 // sequence deterministically, entirely inside a synctest bubble (no real
-// listener, no sleeps): create root, evict it from residency by exceeding
-// MaxResident (evictResidentLocked is pure LRU-by-count, not time-based —
-// no fake-time advance needed either), reload it via a fresh prompt_async
-// that spawns a child through the `task` tool, let synctest.Wait() settle
-// every goroutine the bubble owns (root's turn, the tool loop, Spawn's own
-// child-driving goroutine — none of which touch real I/O), then assert the
-// child's own message events actually reached the shared journal.
+// listener, no time.Sleep — see AGENTS.md's test time.Sleep ban): create
+// root, evict it from residency by exceeding MaxResident
+// (evictResidentLocked is pure LRU-by-count, not time-based, so nothing
+// here depends on the bubble's fake clock advancing at all), reload it via
+// a fresh prompt_async that spawns a child through the `task` tool, let
+// synctest.Wait() settle every goroutine the bubble owns (root's turn, the
+// tool loop, Spawn's own child-driving goroutine — none of which touch
+// real NETWORK I/O; SessionDir is a real t.TempDir(), so Persist's disk
+// writes are real but synchronous, settling cleanly under Wait()), then
+// assert the child's own message events actually reached the shared
+// journal.
 func TestChildJournaledAfterParentIdleEvictedAndReloaded(t *testing.T) {
 	dir := t.TempDir()
 	synctest.Test(t, func(t *testing.T) {
@@ -121,21 +125,24 @@ func TestChildJournaledAfterParentIdleEvictedAndReloaded(t *testing.T) {
 
 		rootID := createSessionDirect(t, srv, "root/m1")
 
-		// A synctest bubble's fake clock only advances once every goroutine
-		// in it is durably blocked — two back-to-back time.Now() calls with
-		// nothing blocking in between (root's own handleCreate register
+		// Back-to-back time.Now() calls (root's own handleCreate register
 		// step, immediately followed by blocker's) can read the EXACT SAME
-		// instant, tying st.lastUsed for both. evictResidentLocked's sort
-		// (Before, false on a tie either way) then has no ordering to go
-		// on, and Go's randomized map iteration over s.sessions feeds it in
-		// no fixed order — so which of the two gets evicted becomes
-		// non-deterministic. A single fake-time tick between the two
-		// creates (real cost: none, inside the bubble) makes root's
-		// lastUsed strictly earlier, so eviction below is deterministic —
-		// this is a property of the TEST's timing, not a hidden real-time
-		// dependency in evictResidentLocked itself, which is pure
-		// LRU-by-count and never polls a clock on its own.
-		time.Sleep(time.Millisecond)
+		// instant — a synctest bubble's fake clock only advances once
+		// every goroutine in it is durably blocked, and even under a real
+		// clock two calls this close together can tie on some platforms.
+		// A tie leaves evictResidentLocked's sort (Before, false on a tie
+		// either way) with no ordering to go on, and Go's randomized map
+		// iteration over s.sessions feeds it in no fixed order — so which
+		// of the two gets evicted becomes non-deterministic. Backdating
+		// root's own lastUsed directly (no time.Sleep, no dependency on
+		// the clock advancing at all — see AGENTS.md's test time.Sleep
+		// ban) makes it strictly earlier, so eviction below is
+		// deterministic — a property of the TEST's own bookkeeping, not a
+		// hidden real-time dependency in evictResidentLocked itself, which
+		// is pure LRU-by-count and never polls a clock on its own.
+		srv.mu.Lock()
+		srv.sessions[rootID].lastUsed = srv.sessions[rootID].lastUsed.Add(-time.Minute)
+		srv.mu.Unlock()
 
 		// Push root out of residency deterministically: a second session's
 		// own registration exceeds MaxResident=1, and evictResidentLocked
@@ -164,9 +171,14 @@ func TestChildJournaledAfterParentIdleEvictedAndReloaded(t *testing.T) {
 		// Lets root's turn, the task-tool call, Spawn's own child-driving
 		// goroutine, and the child's turn all run to completion — every one
 		// of them belongs to this bubble (transitively launched from code
-		// running inside it) and touches no real I/O (scripted providers,
-		// no network), so this blocks until all of it has genuinely
-		// settled, deterministically, with zero real wall-clock cost.
+		// running inside it). None of them touch real NETWORK I/O
+		// (scripted providers), so nothing here blocks on anything a
+		// bubble forbids — but SessionDir is a real t.TempDir(), so
+		// Persist's own MkdirAll/OpenFile/append calls ARE real, synchronous
+		// disk writes; they simply complete rather than blocking durably,
+		// so synctest.Wait() still settles cleanly. This blocks until all
+		// of it has genuinely finished, deterministically, with zero real
+		// wall-clock cost.
 		synctest.Wait()
 
 		info, ok := srv.sessMgr.Info(rootID)

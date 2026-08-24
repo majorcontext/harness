@@ -1015,13 +1015,32 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				s.cfg.TaskToolNames = *rec.TaskToolNames
 			}
 			// Same restore rule again — see Config.TaskDepth's own doc
-			// comment. 0 means "legacy header, nothing to restore" (a real
-			// depth is always >= 1), so the loading Config's own TaskDepth
-			// (never pre-populated by any caller) is left at its zero
-			// value — adoptReloadedLocked's existing m.maxDepth fallback
-			// then applies exactly as it did before this field existed.
+			// comment. 0 means "this header genuinely predates the field"
+			// (a real depth is always >= 1) — but unlike ParentSession/
+			// TaskAgentType above, the loading Config's OWN TaskDepth is
+			// NOT always safe to leave untouched on that branch: it is not
+			// guaranteed unpopulated the way this restore rule assumes
+			// elsewhere. SessionManager's crash-recovery sweep
+			// (recoverCrashedChildrenLocked, session_manager.go) calls
+			// LoadSession with a Config built from configSnapshot() of the
+			// PARENT node currently being adopted — which, since
+			// configSnapshot copies Config by value, carries THAT PARENT's
+			// own live TaskDepth. A legacy child (this header predates the
+			// field) loaded under that Config would otherwise silently
+			// inherit its parent's depth instead of correctly falling back
+			// to adoptReloadedLocked's own m.maxDepth refusal sentinel.
+			// Reset to 0 unconditionally whenever s.cfg.TaskParentID is
+			// non-empty (this IS a task-tool child, restored above either
+			// from this record or the loading Config) but this specific
+			// header recorded no depth, so the sentinel fallback always
+			// applies for a genuinely legacy child regardless of what the
+			// loading Config happened to carry in for an unrelated reason.
+			// A genuine root (TaskParentID empty either way) is unaffected
+			// either branch — TaskDepth is never read for one.
 			if rec.TaskDepth > 0 {
 				s.cfg.TaskDepth = rec.TaskDepth
+			} else if s.cfg.TaskParentID != "" {
+				s.cfg.TaskDepth = 0
 			}
 			// The effort at create time. Omitted (EffortUnset) on a legacy
 			// header, which restores as the provider default — unchanged.

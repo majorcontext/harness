@@ -109,9 +109,9 @@ type sessionJSON struct {
 	// s.opts.LoadSession call sites), OR — for a child session this
 	// process has NOT (yet, or ever again) adopted, e.g. after a Reap or a
 	// process restart — a durable fallback built directly from the
-	// child's own on-disk Config.TaskParentID/TaskAgentType (see
-	// lineageJSONFor's cold-fallback branch), missing only the fields
-	// with no durable source (Depth, Status, Children, Result,
+	// child's own on-disk Config.TaskParentID/TaskAgentType/TaskDepth/
+	// SpawnedChildIDs (see lineageJSONFor's cold-fallback branch), missing
+	// only the fields with no durable source at all (Status, Result,
 	// FailReason — see lineageJSON's own field comments). nil only for a
 	// genuine root or a session with no lineage at all (an embedder that
 	// opts out, or a session predating this feature). Deliberately a

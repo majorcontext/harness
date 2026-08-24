@@ -201,6 +201,25 @@ func (waitTimeoutError) Error() string { return "timeout_s must be a positive in
 // sessMgr.Info is consulted OUTSIDE s.mu: server.mu stays a leaf lock (see
 // syncMessages' lock-ordering note), and no established order exists
 // between server.mu and SessionManager.mu to rely on.
+//
+// Known residual, accepted for this fix's scope (a live review finding):
+// a GET /session/{childID}/wait?until=idle waiter can still block until
+// timeout rather than returning promptly the instant a Spawn-driven
+// child's turn actually settles. The child's last EventMessage wakes the
+// waiter (via notifyWaitersLocked) BEFORE SessionManager.finalizeTurn
+// (called from Spawn's own goroutine, after child.Prompt returns) flips
+// its node's status away from StatusRunning — finalizeTurn emits no
+// server-level durable event on the child's own id (recordTurnEnd is
+// server-side glue only runPrompt/runGoal/handleCompact call, all
+// root-only paths; a Spawn-driven child's completion is instead delivered
+// to its PARENT as a task notification). A waiter that loses that race
+// re-parks on wt.ch with nothing left to wake it on the child's own id,
+// and returns only once timeout_s elapses — a promptness regression, not
+// a wrong answer (waitSnapshot itself is correct at any instant it runs).
+// Closing this needs a way for SessionManager to notify server-level
+// waiters when a node it drives settles, independent of the server's own
+// event journal — a genuinely new cross-package notification path, not
+// this fix's residency-blindness bug class. Left as a follow-up.
 func (s *Server) waitSnapshot(id string) (string, *goalJSON) {
 	s.mu.Lock()
 	running := s.queueDrainPending[id]
