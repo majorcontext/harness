@@ -9,8 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -334,29 +334,36 @@ func TestWaitUntilIdleDoesNotWakeEarlyOnQueuedFollowUp(t *testing.T) {
 	}
 
 	registered := make(chan struct{})
-	checked := make(chan struct{}, 1)
 	h.srv.waitRegisteredRace = func() {
 		close(registered)
 	}
-	var firstWake sync.Once
-	h.srv.waitWakeCheckedRace = func(met bool) {
-		// Only the FIRST wake this waiter ever receives is the one
-		// postIdleEmitRace (below) is blocking runPrompt's own tail
-		// for — the transient not-running-but-still-queued idle "first"
-		// itself fires, before maybeDispatchQueued has touched the
-		// queue at all. A LATER, legitimate wake (once "second" has
-		// also actually run) is SUPPOSED to satisfy the condition —
-		// asserting on every wake, not just the first, would wrongly
-		// fail on that correct, final one too.
-		firstWake.Do(func() {
-			if met {
-				t.Error("the waiter's until=idle condition was met on the FIRST wake (the transient not-running-but-still-queued idle) — it must not be, until the queue this session's own runPrompt tail is about to drain is actually empty")
-			}
-			close(checked) // broadcast: every postIdleEmitRace call (including "second"'s own, later) unblocks immediately from here on
-		})
-	}
+	var calls atomic.Int32
 	h.srv.postIdleEmitRace = func() {
-		<-checked
+		// Fires once per completed turn's tail — "first"'s own
+		// completion (call 1), then "second"'s own completion (call 2,
+		// once maybeDispatchQueued below has dispatched it). Only call
+		// 1 lands in the transient window this fix targets: "first"'s
+		// own idle has just been durably emitted (any waiter parked on
+		// this session has already been woken, non-blocking, by
+		// notifyWaitersLocked inside that same call) but
+		// maybeDispatchQueued has not run yet, so the queue still shows
+		// "second" pending. By call 2 the queue is genuinely empty
+		// (dispatchQueueHead's own dequeue already reduced it to 0) and
+		// this same state SHOULD read idle — asserting "not idle" there
+		// too would be a false failure, not a guard.
+		//
+		// Calling waitSnapshot directly here — rather than relying on
+		// the real waiter goroutine's own scheduling to have already
+		// evaluated the wake by this point, which is not guaranteed —
+		// red-verifies the NAMED mechanism deterministically: reverting
+		// the queueDrainPending fold in waitSnapshot (wait.go) makes
+		// this assertion fail on every run, not a probabilistic subset.
+		if calls.Add(1) != 1 {
+			return
+		}
+		if state, _ := h.srv.waitSnapshot(id); state == "idle" {
+			t.Error("waitSnapshot reported idle while \"second\" is still queued and about to be redispatched by this same tail's own maybeDispatchQueued")
+		}
 	}
 
 	type waitResult struct {
@@ -381,16 +388,16 @@ func TestWaitUntilIdleDoesNotWakeEarlyOnQueuedFollowUp(t *testing.T) {
 
 	close(prov.release) // let "first" finish; its own idle transition wakes the waiter
 
-	select {
-	case res := <-waitDone:
-		if res.err != nil {
-			t.Fatal(res.err)
-		}
-		if res.wr.State != "idle" {
-			t.Fatalf("wait returned state = %q, want idle (once genuinely settled — \"second\" must have already run to completion)", res.wr.State)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("wait for idle timed out")
+	// No time.After failsafe here (AGENTS.md: "No guessed deadlines...
+	// let the test binary timeout catch hangs") — a genuine hang is
+	// caught by `go test`'s own timeout, same as everywhere else in this
+	// file.
+	res := <-waitDone
+	if res.err != nil {
+		t.Fatal(res.err)
+	}
+	if res.wr.State != "idle" {
+		t.Fatalf("wait returned state = %q, want idle (once genuinely settled — \"second\" must have already run to completion)", res.wr.State)
 	}
 
 	final := h.getSessionJSON(id)

@@ -1677,6 +1677,15 @@ func (s *Server) releasePromptClaim(st *sessionState) {
 // call blocks on the same mutex until this whole section — running=false
 // AND idle already durably emitted — has completed, so it can never observe
 // one without the other.
+//
+// The idle transition is ALWAYS emitted here, even when the queue is
+// non-empty and about to be redispatched by this same tail's own
+// maybeDispatchQueued call — collectUntilIdle and every test built on it
+// depend on that. What changes when the queue is non-empty is
+// Server.queueDrainPending (its own doc comment): set here, still under
+// this same lock, so waitSnapshot (wait.go) can tell this transient,
+// self-resolving gap apart from a session that is genuinely idle with a
+// queue nobody is about to drain (e.g. resumed after a restart).
 func (s *Server) freeRunSlotAndEmitIdle(id string, st *sessionState) {
 	s.mu.Lock()
 	st.running = false
@@ -1685,6 +1694,9 @@ func (s *Server) freeRunSlotAndEmitIdle(id string, st *sessionState) {
 	st.lastUsed = time.Now()
 	s.evictResidentLocked()
 	s.emitDurableLocked(&Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
+	if s.queueDepth[id] > 0 {
+		s.queueDrainPending[id] = true
+	}
 	s.mu.Unlock()
 }
 
@@ -1892,6 +1904,14 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 // runPrompt. See engine/goal.go's DequeueAllPrompts callsite for the
 // engine-side half of this same equivalence (goal-turn injection).
 func (s *Server) maybeDispatchQueued(id string, st *sessionState) bool {
+	// Resolves whatever freeRunSlotAndEmitIdle's own tail set (see
+	// Server.queueDrainPending's doc comment) — unconditionally and on
+	// every return path, whether this call actually dispatches, loses the
+	// claim race to a concurrent caller, or finds the queue already
+	// drained by a concurrent DELETE /session/{id}/queue. Harmless when
+	// nothing was pending (deleting an absent map key, waking waiters
+	// that will just re-observe the same state).
+	defer s.clearQueueDrainPending(id)
 	if len(st.sess.QueuedPrompts()) == 0 {
 		return false
 	}
@@ -1908,6 +1928,28 @@ func (s *Server) maybeDispatchQueued(id string, st *sessionState) bool {
 	// reset) — nothing left to dispatch.
 	_, _, ok := s.dispatchQueueHead(id, claimedSt, ctx)
 	return ok
+}
+
+// clearQueueDrainPending resolves the transient window freeRunSlotAndEmitIdle
+// opens when it finds the queue non-empty at idle-emit time (see
+// Server.queueDrainPending's own doc comment) — called once, unconditionally,
+// by maybeDispatchQueued's own defer, regardless of how that call resolves.
+//
+// Also wakes any waiter parked on this session directly: clearing the flag
+// alone does not correspond to a new durable event in every case (the "queue
+// turned out already empty" sub-case — a concurrent DELETE
+// /session/{id}/queue landed in the gap between freeRunSlotAndEmitIdle's own
+// check and maybeDispatchQueued's — dispatches nothing and so emits nothing
+// new). Without this, a waiter parked on the earlier idle event's own
+// queueDrainPending-gated non-wake would otherwise sit until its own timeout
+// instead of promptly re-observing the now-genuinely-idle state. Reuses
+// notifyWaitersLocked, already idempotent and non-blocking, rather than
+// inventing a second wake path.
+func (s *Server) clearQueueDrainPending(id string) {
+	s.mu.Lock()
+	delete(s.queueDrainPending, id)
+	s.notifyWaitersLocked(id)
+	s.mu.Unlock()
 }
 
 // maybeAutoArmGoal is called once, at the very tail of runPrompt — never

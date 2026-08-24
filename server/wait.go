@@ -4,8 +4,6 @@ import (
 	"net/http"
 	"strconv"
 	"time"
-
-	"github.com/majorcontext/harness/engine"
 )
 
 // waiter is one in-flight GET /session/{id}/wait long-poll, registered in
@@ -93,7 +91,7 @@ func (s *Server) handleWait(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 	}()
 
-	if state, goal, queued := s.waitSnapshot(id); waitConditionMet(until, state, goal, queued) {
+	if state, goal := s.waitSnapshot(id); waitConditionMet(until, state, goal) {
 		writeJSON(w, http.StatusOK, waitJSON{State: state, Goal: goal})
 		return
 	}
@@ -109,26 +107,16 @@ func (s *Server) handleWait(w http.ResponseWriter, r *http.Request) {
 		case <-s.closing:
 			// Drain has begun: respond with the current best-effort snapshot
 			// rather than hold the connection open past shutdown.
-			state, goal, _ := s.waitSnapshot(id)
+			state, goal := s.waitSnapshot(id)
 			writeJSON(w, http.StatusOK, waitJSON{State: state, Goal: goal})
 			return
 		case <-timer.C:
-			state, goal, _ := s.waitSnapshot(id)
+			state, goal := s.waitSnapshot(id)
 			writeJSON(w, http.StatusOK, waitJSON{State: state, Goal: goal})
 			return
 		case <-wt.ch:
-			state, goal, queued := s.waitSnapshot(id)
-			met := waitConditionMet(until, state, goal, queued)
-			if s.waitWakeCheckedRace != nil {
-				// Test-only seam — see its own doc comment (server.go).
-				// Fires AFTER the condition has been evaluated, carrying
-				// the outcome (met or not) — so a test can deterministically
-				// both confirm this specific wake has been fully processed,
-				// AND assert what it decided, before letting whatever it
-				// was racing proceed.
-				s.waitWakeCheckedRace(met)
-			}
-			if met {
+			state, goal := s.waitSnapshot(id)
+			if waitConditionMet(until, state, goal) {
 				writeJSON(w, http.StatusOK, waitJSON{State: state, Goal: goal})
 				return
 			}
@@ -169,66 +157,55 @@ type waitTimeoutError struct{}
 
 func (waitTimeoutError) Error() string { return "timeout_s must be a positive integer" }
 
-// waitSnapshot resolves the current composite state, goal summary, and
-// prompt-queue depth for a session from the same source Session JSON uses
-// (Server.goalState, this process's live tracker), so /wait's response
-// agrees with GET /session/{id}. queued is read here too — not folded into
-// state itself, which must stay exactly what GET /session/{id} already
-// reports (an idle-with-queue session is documented and tested as State
-// "idle" — see TestIdlePromptWithQueueGoesFIFO) — only waitConditionMet's
-// own until=idle case (below) treats it specially.
+// waitSnapshot resolves the current composite state and goal summary for a
+// session from the same source Session JSON uses (Server.goalState, this
+// process's live tracker), so /wait's response agrees with GET
+// /session/{id} — with one deliberate difference: it also folds in
+// Server.queueDrainPending, treating it exactly like st.running for this
+// method's own purposes only.
 //
-// s.mu is released BEFORE the QueuedPrompts() call, deliberately: that
-// call acquires sess's OWN lock (a DIFFERENT mutex, engine.Session.mu),
-// and dequeueLocked (engine/queue.go) acquires the two in the OPPOSITE
-// order — session.mu held, THEN server.mu (via its own emit -> OnEvent ->
-// Publish -> emitDurable chain, journal.go). Calling QueuedPrompts() while
-// still holding s.mu here would be a textbook lock-order-inversion
-// deadlock the moment the two goroutines interleave — caught immediately
-// (a real hang, not a guess) the first time this fix was tested under
-// -race with any concurrent dispatch in flight. Reading running/sess/goal
-// under one short s.mu hold, THEN releasing before the session-locked
-// call, keeps the two mutexes strictly nested in only one direction
-// system-wide.
-func (s *Server) waitSnapshot(id string) (state string, goal *goalJSON, queued int) {
+// Why: freeRunSlotAndEmitIdle (handlers.go) always durably emits "idle" at
+// the end of a turn, queue or no queue — collectUntilIdle (server_test.go)
+// and every test built on it depend on that ordering, so the event is never
+// suppressed. That means a GET /session/{id}/wait?until=idle waiter woken by
+// it can genuinely observe running=false with the queue still non-empty, in
+// the brief window before maybeDispatchQueued (called right after, same
+// tail) redispatches the head — a live, reproduced CI failure
+// (TestQueueLenExplicitOnEmptyingDequeue) caught exactly this. queueDrainPending
+// is true for precisely that window (set by freeRunSlotAndEmitIdle, cleared
+// by maybeDispatchQueued's own clearQueueDrainPending once it resolves), so
+// folding it in here closes the gap without changing what GET /session/{id}
+// itself reports (its State field is deliberately untouched — idle-with-
+// queue stays "idle" there, matching TestIdlePromptWithQueueGoesFIFO).
+//
+// This also avoids two earlier, rejected approaches: reading queue depth via
+// engine.Session.QueuedPrompts() directly here needs sess's OWN separate
+// lock, which — acquired while s.mu was released to sidestep the resulting
+// lock-order-inversion deadlock (dequeueLocked takes the two locks in the
+// OPPOSITE order) — made the running/queued reads non-atomic, a narrower
+// version of the same false-idle. And gating naively on queue depth alone
+// (empty or not) is simply wrong: a session resumed after a restart with a
+// non-empty queue and nothing running is genuinely idle right now (AGENTS.md:
+// "Boot never auto-dispatches a resumed queue... it sits there until the
+// next natural drain trigger") — loadJournal never sets queueDrainPending,
+// so that case is unaffected here and still returns idle immediately.
+func (s *Server) waitSnapshot(id string) (string, *goalJSON) {
 	s.mu.Lock()
-	var running bool
-	var sess *engine.Session
+	defer s.mu.Unlock()
+	running := s.queueDrainPending[id]
 	if st := s.sessions[id]; st != nil {
-		running = st.running
-		sess = st.sess
+		running = running || st.running
 	}
-	goal = goalJSONFrom(s.goalState[id])
-	s.mu.Unlock()
-	if sess != nil {
-		queued = len(sess.QueuedPrompts())
-	}
-	return compositeState(running, goal != nil && goal.Active, forcesIdlePause(goal)), goal, queued
+	goal := goalJSONFrom(s.goalState[id])
+	return compositeState(running, goal != nil && goal.Active, forcesIdlePause(goal)), goal
 }
 
 // waitConditionMet reports whether the requested `until` condition holds
-// given a freshly computed composite state, goal summary, and queue depth.
-func waitConditionMet(until, state string, goal *goalJSON, queued int) bool {
+// given a freshly computed composite state and goal summary.
+func waitConditionMet(until, state string, goal *goalJSON) bool {
 	switch until {
 	case "idle":
-		// state == "idle" alone is not sufficient: a session reads
-		// not-running with its prompt queue still non-empty during the
-		// real, reproducible gap between freeRunSlotAndEmitIdle's own
-		// idle transition and maybeDispatchQueued's own immediate
-		// re-claim of the queue's next head (runPrompt's tail,
-		// handlers.go — the two are not one atomic operation). A live
-		// review finding, caught via a genuinely reproduced CI failure
-		// (TestQueueLenExplicitOnEmptyingDequeue: a waiter woken by
-		// that transient idle event observed it, and returned, BEFORE
-		// the queue's own next item had even been dequeued yet — a
-		// caller polling GET /session/{id} instead never had this
-		// problem, since a snapshot read has no "woken early" moment to
-		// race). until=idle means "nothing left to do, safe to treat
-		// this session as settled" — a non-empty queue on an otherwise
-		// idle session directly contradicts that: it is already,
-		// unconditionally, about to resume on its own, whether or not
-		// anyone is watching.
-		return state == "idle" && queued == 0
+		return state == "idle"
 	case "goal-done":
 		return goal == nil || !goal.Active
 	default:
