@@ -1703,10 +1703,11 @@ Model: https://go.dev/wiki/CommitMessage. A commit message is documentation
 for a future reader who has none of your context; the diff shows what
 changed, the message must carry everything the diff cannot.
 
-Subject line (Go form): `pkg: what changed`, lowercase after the colon, no
-trailing period, under ~72 chars — e.g. `server: fix false-idle wake
-between back-to-back turns`. Name the primary package; use `engine,server:`
-when a change genuinely spans surfaces.
+Subject line: [Conventional Commits](https://www.conventionalcommits.org/),
+`type(scope): description` (e.g. `fix(server): stop false-idle wake
+between back-to-back turns`) — the repo's existing convention. Lowercase
+description, no trailing period, under ~72 chars; scope names the primary
+package.
 
 Body — required for every non-trivial change, written as prose, wrapped
 ~76 columns, in this shape:
@@ -1775,7 +1776,3 @@ Read and act on every review thread individually — never batch-resolve. One
 explicit resolve command per thread id. A batch operation once resolved
 unread findings.
 
-## Git Commits
-
-- [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): description` (e.g. `feat(plugin): add shell.env hook`).
-- Do not include `Co-Authored-By` lines for AI agents in commit messages.
