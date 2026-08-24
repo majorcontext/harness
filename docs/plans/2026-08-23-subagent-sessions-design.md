@@ -97,12 +97,16 @@ only top-level `.md` files are agent definitions), Claude Code-compatible frontm
 Loaded once at root-session start (same lifecycle as skills discovery).
 A custom definition whose `tools` list omits `task` is a leaf. Unknown
 tool names in a definition are an error surfaced at load, not spawn —
-that file's own definition is skipped with a logged warning identifying
-it (a later follow-up, "frontmatter leniency": one malformed or
-semantically-invalid `.agents/*.md` file costs only that file's own
-agent type, never every other custom definition in the same directory),
 never silently deferred to a later `task` call's own "unknown agent"
-error at spawn time.
+error at spawn time. A malformed or semantically-invalid `.agents/*.md`
+file fails the WHOLE directory's load (a design-owner decision, after a
+narrower "frontmatter leniency" follow-up first tried skip-and-warn for
+every parseAgentDef error alike): the one exception is a stray unknown
+frontmatter KEY (e.g. a typo'd `desc:` in place of `description:`),
+which is judged low-stakes and cosmetic enough to skip just that one
+file with a logged warning instead. An unknown tool name or an invalid
+model string are not that — see engine/agentdef.go's
+errUnknownFrontmatterKey doc comment for the full reasoning.
 
 ### The `task` tool (model-facing)
 

@@ -49,6 +49,21 @@ const (
 	DefaultMaxConcurrentTasks = 20
 )
 
+// treeTokenTotal is the single shared definition of "how many tokens does
+// this tree's usage count as" for SetMaxTreeTokens purposes — all four
+// provider.Usage fields (input, output, cache read, cache write) summed,
+// never just a subset. Used by Spawn's own ErrBudgetExceeded gate (see
+// that error's own doc comment for the live review finding this closes:
+// an earlier gate compared only input+output, silently exempting a
+// cache-heavy tree's largest cost component from its own budget), and
+// exists specifically so the gate and usageByRoot's own accumulation
+// (which already folded all four fields, correctly, before the gate was
+// fixed to match) can never drift apart into two different ideas of
+// "spend" again.
+func treeTokenTotal(u provider.Usage) int {
+	return u.InputTokens + u.OutputTokens + u.CacheReadTokens + u.CacheWriteTokens
+}
+
 var (
 	// ErrUnknownSession is returned by any SessionManager operation given an
 	// id it does not manage.
@@ -64,14 +79,28 @@ var (
 	ErrConcurrencyLimit = errors.New("engine: tree concurrency limit reached")
 	// ErrBudgetExceeded is returned by Spawn when the parent's tree has
 	// already accumulated at least SetMaxTreeTokens' configured budget in
-	// cumulative token usage (input+output, summed across every
-	// completed child in the tree — see usageByRoot) — a follow-up
-	// finding ("per-tree budgets"), mirroring ErrDepthLimit/
+	// cumulative token usage — ALL FOUR provider.Usage fields summed
+	// (input, output, cache read, cache write), matching usageByRoot's
+	// own accumulation exactly (see that field's doc comment) — a
+	// follow-up finding ("per-tree budgets"), mirroring ErrDepthLimit/
 	// ErrConcurrencyLimit's identical shape and Spawn call-site placement
-	// exactly. Unset (SetMaxTreeTokens never called, or called with a
+	// otherwise. Unset (SetMaxTreeTokens never called, or called with a
 	// non-positive value) disables the check entirely — this is an
 	// opt-in limit, unlike depth/concurrency, which always have a
 	// product default (DefaultMaxTaskDepth/DefaultMaxConcurrentTasks).
+	//
+	// A live review finding: an earlier version of this gate compared
+	// only input+output against the budget, while usageByRoot itself
+	// already accumulated all four fields — a cache-heavy tree (the
+	// openaicompat/Fireworks and anthropic routes AGENTS.md calls out,
+	// where a large prompt resent every turn reads mostly from cache)
+	// could keep spawning children well past the operator's real
+	// intended ceiling, because the largest component of its actual
+	// spend was never measured by the gate that is supposed to enforce
+	// it. Bill what costs money: cache read/write tokens are billed too
+	// (typically at a discount versus a fresh input token, never free),
+	// so they count toward the same budget the raw input/output tokens
+	// do.
 	ErrBudgetExceeded = errors.New("engine: task tree token budget exceeded")
 	// ErrSessionCanceled is returned by Spawn or Send when the target
 	// session has already been canceled.
@@ -247,6 +276,63 @@ type SessionManager struct {
 	// cleanup was judged sufficient rather than tracking every child
 	// individually.
 	budgetedByChild map[string]provider.Usage
+
+	// pendingPersist queues durable-write thunks registered via
+	// deferPersist while m.mu is held, drained and run by
+	// unlockAndFlushPersist once m.mu is released — see that method's
+	// own doc comment for the full mechanism and the live review finding
+	// it closes. Guarded by m.mu itself (only ever appended to or
+	// drained while m.mu is held); never read or written any other way.
+	pendingPersist []func()
+}
+
+// deferPersist queues fn to run once m.mu is released via
+// unlockAndFlushPersist — see that method's own doc comment. Caller
+// holds m.mu. fn itself must not touch m or take m.mu (it runs AFTER
+// m.mu is released, from unlockAndFlushPersist's own goroutine, never
+// concurrently with anything else queued in the SAME flush — see that
+// method's own doc comment for why queue order is preserved).
+func (m *SessionManager) deferPersist(fn func()) {
+	m.pendingPersist = append(m.pendingPersist, fn)
+}
+
+// unlockAndFlushPersist is the m.mu.Unlock() every SessionManager entry
+// point that might have queued a durable write via deferPersist must use
+// instead of a plain m.mu.Unlock() — a live review finding: session-log
+// disk writes (task-notification queued/delivered records, the
+// task-spawn audit record) used to run WHILE m.mu — the single lock
+// guarding every session in the tree, taken by Info/Reap/Spawn/Send/
+// finalize alike — was held, on finalizeTurn/Spawn/recoverInterruptedTurnLocked's
+// own hot paths. A slow or contended disk on ONE session's notification
+// could stall every OTHER session's own Info/Reap/Spawn/finalize call in
+// the same process, in tension with AGENTS.md's "a hung component can't
+// wedge other sessions."
+//
+// Drains m.pendingPersist into a local slice while STILL holding m.mu
+// (cheap — moving a few closure pointers, no I/O), unlocks, THEN runs
+// each thunk — so every actual disk write happens entirely outside the
+// critical section, in this SAME goroutine, in the exact order the
+// thunks were queued. Order and non-interleaving are preserved for free:
+// nothing else can drive a second turn (and therefore queue a competing
+// write) against any of the SAME sessions these thunks touch until
+// EACH session's own node bookkeeping — already fully applied to
+// m.nodes before this unlock runs — says it is free to; two DIFFERENT
+// SessionManager entry points queuing writes for the SAME session
+// concurrently is exactly what m.mu already serialized before this
+// change, and still does, for everything except the disk write itself.
+//
+// A plain m.mu.Unlock() on a path that CAN reach deferPersist would
+// silently drop every queued write — always use this instead. Safe (and
+// cheap: an empty-slice no-op) to use as the standard unlock helper on
+// any SessionManager method, whether or not that specific call path
+// happens to queue anything.
+func (m *SessionManager) unlockAndFlushPersist() {
+	pending := m.pendingPersist
+	m.pendingPersist = nil
+	m.mu.Unlock()
+	for _, fn := range pending {
+		fn()
+	}
 }
 
 // SetExternalRunner installs runner as described on the ExternalRunner
@@ -492,7 +578,7 @@ func (m *SessionManager) AdoptRoot(s *Session) error {
 // already managed by m.
 func (m *SessionManager) AdoptReloaded(s *Session) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	defer m.unlockAndFlushPersist()
 	if _, exists := m.nodes[s.ID]; exists {
 		return fmt.Errorf("engine: session %s already managed", s.ID)
 	}
@@ -677,41 +763,6 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	n.finalized = true
 	n.failReason = "lost to restart: turn was in flight when the process last stopped"
 
-	// Close the dangling turn in HISTORY too, not just in this node's own
-	// bookkeeping — two live review findings on the first version of this
-	// method:
-	//
-	//  1. Idempotency: hasUnansweredTurn() reads s's PERSISTED history,
-	//     which this method never used to touch — the trailing user
-	//     message stayed unanswered forever, so EVERY later re-adoption
-	//     of this same id (Reap removes a StatusFailed leaf just like any
-	//     other terminal one, and a legitimate follow-up touching this id
-	//     again re-triggers adoptReloadedLocked) found
-	//     hasUnansweredTurn() STILL true and re-ran this whole method,
-	//     re-enqueueing a SECOND, duplicate "lost to restart"
-	//     notification — and a second recTaskNotifyQueued record — for
-	//     the exact same child. Appending this synthetic, clearly-labeled
-	//     closing message makes hasUnansweredTurn() false from here on,
-	//     so a second call returns at the guard above instead.
-	//  2. Honesty: the transcript itself should show SOMETHING closing
-	//     the turn a reader (or the parent's own model, via the
-	//     notification text) can make sense of, not a conversation that
-	//     silently stops after the last user message with no visible
-	//     explanation.
-	//
-	// Role: RoleAssistant, not RoleTool — this is a genuine INTERRUPTED
-	// MODEL TURN (no tool call to pair a synthetic RoleTool result with,
-	// unlike interruptedToolResults' narrower case), so an assistant-role
-	// message is what actually closes a turn in this transcript's own
-	// vocabulary; the text itself is unambiguous synthetic-marker
-	// language, never presented as if the model actually said it.
-	s.append(message.Message{
-		ID:        newID("msg"),
-		Role:      message.RoleAssistant,
-		Parts:     message.Parts{&message.Text{Text: lostToRestartText}},
-		CreatedAt: time.Now().UTC(),
-	})
-
 	// Fold this child's spend into its root's tree-wide budget total —
 	// see finalizeTurn's own identical delta-accounting block (and
 	// budgetedUsage's own doc comment for why a delta, not the full
@@ -725,6 +776,17 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	// method) touched usageByRoot — a child that spent real tokens
 	// before crashing was fully reconstructed here with no accounting
 	// for it, letting a later Spawn silently exceed SetMaxTreeTokens.
+	//
+	// Safe against this whole method re-running for the same n across a
+	// crash-and-retry (see the delivery-then-close reordering below):
+	// n.budgetedUsage/m.budgetedByChild already provide their own
+	// idempotency independent of retry timing — a genuinely fresh
+	// process's m.budgetedByChild starts empty regardless (so crediting
+	// s's full total, once, in THIS process's own in-memory tracking, is
+	// correct and intended), and a same-process re-adopt (Reap then
+	// re-touch) always seeds n.budgetedUsage from what THIS manager
+	// already credited, making delta zero on the retry. No extra gating
+	// needed here beyond what already existed.
 	total := s.Usage()
 	delta := provider.Usage{
 		InputTokens:      total.InputTokens - n.budgetedUsage.InputTokens,
@@ -763,17 +825,54 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	// are stranded on a node that will never read its queue again —
 	// mirrors finalizeTurn's own identical "forward a terminal child's
 	// pending notifications to the same target its own notify uses"
-	// block exactly (drainAllTaskNotifications' own recTaskNotifyDelivered
-	// write keeps this durable across a later reload of n too). A live
-	// review finding: an earlier version of this method delivered only
-	// notify, silently dropping any grandchild results n itself had not
-	// yet forwarded.
+	// block exactly. A live review finding: an earlier version of this
+	// method delivered only notify, silently dropping any grandchild
+	// results n itself had not yet forwarded.
 	var forwarded []taskNotification
 	if s.hasPendingTaskNotifications() {
-		forwarded = s.drainAllTaskNotifications()
+		forwarded = s.drainAllTaskNotifications() // memory-only — see its own doc comment
 	}
 
-	if target == nil {
+	// DELIVER FIRST, close the dangling turn in HISTORY LAST — a live
+	// review finding on an earlier version of this method, which did the
+	// opposite: appended the closing message (below) BEFORE delivering
+	// notify/forwarded to target. hasUnansweredTurn() reads s's PERSISTED
+	// history and becomes false the instant that append durably lands —
+	// which is exactly what makes a SECOND call to this method for the
+	// same n a safe no-op (the guard at the top returns immediately) once
+	// recovery has genuinely finished. But that same idempotency guard is
+	// what turned a crash INSIDE this method into total, silent loss: if
+	// the process died after the append but before target's own durable
+	// write, the next restart's hasUnansweredTurn() already reads false —
+	// recovery never re-fires, and no recTaskNotifyQueued was ever
+	// written on target's log. The parent waits forever for a
+	// notification a crash ate in transit — precisely the "waits
+	// forever" outcome this whole reactive-recovery feature exists to
+	// close, reachable through its own narrow crash window.
+	//
+	// Reordering so delivery happens first turns that same crash window
+	// into a safe RETRY instead of a loss: if the process dies before the
+	// closing append below, hasUnansweredTurn() is STILL true on the next
+	// restart, and this method runs again for the same child. A naive
+	// retry would recompute the identical notify/forwarded values (s's
+	// history has not changed, since the closing append that would
+	// change it never landed) and re-deliver them — a duplicate, not a
+	// loss, but still wrong. enqueueTaskNotificationMemoryOnlyDeduped
+	// (taskNotification is a plain comparable struct, so == is a real
+	// deep-equality check) makes the retry idempotent instead: an exact
+	// repeat is recognized and skipped, both in memory and in what gets
+	// durably persisted below.
+	var toPersist []taskNotification
+	if target != nil {
+		if target.session.enqueueTaskNotificationMemoryOnlyDeduped(notify) {
+			toPersist = append(toPersist, notify)
+		}
+		for _, fn := range forwarded {
+			if target.session.enqueueTaskNotificationMemoryOnlyDeduped(fn) {
+				toPersist = append(toPersist, fn)
+			}
+		}
+	} else {
 		// No live ancestor to deliver to — either every ancestor up to
 		// the root is already terminal (the whole tree is being torn
 		// down), or n.parentID == "" because adoptReloadedLocked could
@@ -790,18 +889,86 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 		// beneath it (already true: n is a leaf, just adopted) is
 		// collected on the very next Reap() call instead of sitting
 		// forever in m.nodes looking like a protected root. forwarded is
-		// already drained and durably marked delivered above regardless
-		// (see drainAllTaskNotifications' own doc comment) — dropped
-		// here the same way finalizeTurn drops its own forwarded set
-		// when no live ancestor exists: nothing is listening.
+		// simply dropped here the same way finalizeTurn drops its own
+		// forwarded set when no live ancestor exists: nothing is
+		// listening, and there is nothing on target's side to persist.
 		n.pendingForget = true
-		return
 	}
-	target.session.enqueueTaskNotification(notify)
-	for _, fn := range forwarded {
-		target.session.enqueueTaskNotification(fn)
+
+	// Queue the actual durable writes to run AFTER m.mu is released (see
+	// SessionManager.deferPersist/unlockAndFlushPersist's own doc
+	// comment) — a live review finding: this method runs entirely under
+	// m.mu (the single lock guarding every session in the tree), and used
+	// to call target.session.enqueueTaskNotification (which persists
+	// inline) directly, running disk I/O while that global lock was
+	// held. target is captured by this closure, not m.mu — safe to touch
+	// after unlock, since target.session's own s.mu is a DIFFERENT lock
+	// this closure still correctly acquires internally via
+	// persistQueuedTaskNotification.
+	if len(toPersist) > 0 {
+		targetSess := target.session
+		m.deferPersist(func() {
+			for _, tn := range toPersist {
+				targetSess.persistQueuedTaskNotification(tn)
+			}
+		})
 	}
-	if target.status == StatusIdle {
+	if len(forwarded) > 0 {
+		m.deferPersist(func() { s.persistDeliveredTaskNotifications(forwarded) })
+	}
+
+	// Close the dangling turn in HISTORY too, not just in this node's own
+	// bookkeeping — its DURABLE write queued LAST, after the delivery
+	// thunks above, via the exact same m.deferPersist queue, not called
+	// synchronously via a plain s.append. This is load-bearing for the
+	// crash-window ordering the whole reorder above exists for: if this
+	// append were still synchronous (as an earlier version of this
+	// method had it), its durable write would land on disk WHILE m.mu is
+	// still held — strictly BEFORE unlockAndFlushPersist's own deferred
+	// notify/forwarded writes even get a chance to run — silently
+	// re-introducing the exact "closing message durable before delivery
+	// durable" ordering the reorder was built to fix, just via a
+	// different mechanism (item 4's own I/O-outside-m.mu change) instead
+	// of the original bug. appendMemoryOnly/persistAppendedMessage (see
+	// their own doc comments) let this append share m.deferPersist's
+	// single FIFO queue with the delivery thunks queued just above, so
+	// the actual disk-write ORDER — not just the source-code order — is
+	// preserved: notify/forwarded land on disk before the closing
+	// message does, regardless of where in this locked call each step
+	// runs relative to m.mu itself.
+	//
+	// Two live review findings on this append, both orthogonal to the
+	// ordering fix:
+	//
+	//  1. Idempotency: appending this closing message makes
+	//     hasUnansweredTurn() false from here on, so a LATER, unrelated
+	//     re-adoption of this same id (Reap removes a StatusFailed leaf
+	//     just like any other terminal one, and a legitimate follow-up
+	//     touching this id again re-triggers adoptReloadedLocked) finds
+	//     the guard at the top of this method already true and returns
+	//     immediately, instead of re-running this whole method and
+	//     re-enqueueing a duplicate notification.
+	//  2. Honesty: the transcript itself should show SOMETHING closing
+	//     the turn a reader (or the parent's own model, via the
+	//     notification text) can make sense of, not a conversation that
+	//     silently stops after the last user message with no visible
+	//     explanation.
+	//
+	// Role: RoleAssistant, not RoleTool — this is a genuine INTERRUPTED
+	// MODEL TURN (no tool call to pair a synthetic RoleTool result with,
+	// unlike interruptedToolResults' narrower case), so an assistant-role
+	// message is what actually closes a turn in this transcript's own
+	// vocabulary; the text itself is unambiguous synthetic-marker
+	// language, never presented as if the model actually said it.
+	closing := s.appendMemoryOnly(message.Message{
+		ID:        newID("msg"),
+		Role:      message.RoleAssistant,
+		Parts:     message.Parts{&message.Text{Text: lostToRestartText}},
+		CreatedAt: time.Now().UTC(),
+	})
+	m.deferPersist(func() { s.persistAppendedMessage(closing) })
+
+	if target != nil && target.status == StatusIdle {
 		go m.fireIdleResumeAsync(target.id)
 	}
 }
@@ -969,19 +1136,13 @@ func (m *SessionManager) ReportTurnStart(sess *Session) {
 	// too, distinct from (and layered on top of) the object-reattachment
 	// fix above.
 	if old := n.session; old != nil && old != sess {
-		// drainAllTaskNotificationsSameLog, not drainAllTaskNotifications
-		// — old and sess are two in-memory objects for the SAME durable
-		// session id, sharing the SAME log, unlike finalizeTurn/
-		// recoverInterruptedTurnLocked's forward-to-a-DIFFERENT-ancestor
-		// callers. A live review finding: the persisting variant durably
-		// cancels the notification's original recTaskNotifyQueued entry
-		// on that shared log, while enqueueTaskNotificationMigrated's own
-		// dedup (see its doc comment) correctly declines to write a
-		// compensating fresh queued record for something already
-		// restored by LoadSession's fold — silently losing the
-		// notification durably if sess is evicted again before it is
-		// ever checked out. See drainAllTaskNotificationsSameLog's own
-		// doc comment for the full reasoning.
+		// drainAllTaskNotifications is memory-only (see its own doc
+		// comment) — correct here unconditionally, since old and sess
+		// are two in-memory objects for the SAME durable session id,
+		// sharing the SAME log: nothing new ever needs persisting on
+		// this path (the notification's ORIGINAL recTaskNotifyQueued
+		// record, written by old's own earlier enqueue, already backs
+		// it), and no I/O runs under m.mu regardless.
 		//
 		// enqueueTaskNotificationMigrated, not enqueueTaskNotification —
 		// sess, freshly cold-loaded, already restored via LoadSession's
@@ -991,7 +1152,7 @@ func (m *SessionManager) ReportTurnStart(sess *Session) {
 		// Dedup keeps this loop still correct for the narrower race it
 		// exists to cover (something enqueued on old in the gap between
 		// sess's load and this reattachment).
-		for _, notif := range old.drainAllTaskNotificationsSameLog() {
+		for _, notif := range old.drainAllTaskNotifications() {
 			sess.enqueueTaskNotificationMigrated(notif)
 		}
 	}
@@ -1397,8 +1558,15 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 		return "", ErrConcurrencyLimit
 	}
 	if m.maxTreeTokens > 0 {
+		// All four provider.Usage fields, matching usageByRoot's own
+		// accumulation exactly — see ErrBudgetExceeded's own doc comment
+		// for why input+output alone under-measured a cache-heavy tree's
+		// real spend. treeTokenTotal is the single shared definition of
+		// "how many tokens does this tree's usage count as" — used here
+		// AND by usageByRoot's own accumulation, so the gate and the
+		// accumulator can never drift apart again.
 		u := m.usageByRoot[parent.rootID]
-		if u.InputTokens+u.OutputTokens >= m.maxTreeTokens {
+		if treeTokenTotal(u) >= m.maxTreeTokens {
 			m.mu.Unlock()
 			return "", ErrBudgetExceeded
 		}
@@ -1522,14 +1690,25 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	// journal records"). Written on the PARENT's log, symmetric with
 	// commitTaskNotifications' recTaskNotifyDelivered write landing on
 	// the SAME log later, for a single-log audit trail of everything
-	// this session's `task` tool did. parent.session.mu, not m.mu (a
-	// DIFFERENT lock, already safely nested under m.mu elsewhere in this
-	// package — see finalizeTurn's own target.session.enqueueTaskNotification
-	// call, held under m.mu identically): persistTaskSpawnLocked's own
-	// doc comment requires the SESSION's lock, not SessionManager's.
-	parent.session.mu.Lock()
-	parent.session.persistTaskSpawnLocked(child.ID, opts.AgentType)
-	parent.session.mu.Unlock()
+	// this session's `task` tool did.
+	//
+	// Deferred via m.deferPersist, not written inline here — a live
+	// review finding: this whole method runs under m.mu (the single lock
+	// guarding every session in the tree), and persistTaskSpawnLocked
+	// does real disk I/O (ensureLog's MkdirAll/OpenFile/Stat on a cold
+	// log, then writeRecord's append) — see SessionManager.deferPersist/
+	// unlockAndFlushPersist's own doc comment for the full mechanism and
+	// why holding m.mu across it was a problem. parentSess.mu (a
+	// DIFFERENT lock from m.mu) still guards the actual write, exactly
+	// as persistTaskSpawnLocked's own doc comment requires — just
+	// acquired later, from unlockAndFlushPersist's own goroutine, after
+	// m.mu has already been released by this method's own caller.
+	parentSess := parent.session
+	m.deferPersist(func() {
+		parentSess.mu.Lock()
+		parentSess.persistTaskSpawnLocked(child.ID, opts.AgentType)
+		parentSess.mu.Unlock()
+	})
 	// Reserve the concurrency slot NOW, synchronously, rather than when the
 	// launched goroutine gets around to running — otherwise two Spawn calls
 	// racing past the check above could both pass it before either
@@ -1539,7 +1718,7 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	// sets by default.
 	n.status = StatusRunning
 	m.runningByRoot[parent.rootID]++
-	m.mu.Unlock()
+	m.unlockAndFlushPersist()
 
 	go func() {
 		msg, perr := child.Prompt(n.ctx, opts.Prompt)
@@ -1823,16 +2002,32 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 	// review caught this exact gap.
 	var forwarded []taskNotification
 	if n.parentID != "" && n.session.hasPendingTaskNotifications() {
-		forwarded = n.session.drainAllTaskNotifications()
+		forwarded = n.session.drainAllTaskNotifications() // memory-only — see its own doc comment
 	}
 
 	if notify != nil || len(forwarded) > 0 {
 		if target := m.nearestLiveAncestorLocked(n); target != nil {
+			// Memory-only append here, durable write deferred via
+			// m.deferPersist to run AFTER m.mu is released — a live
+			// review finding: this method runs under m.mu (the single
+			// lock guarding every session in the tree), and
+			// enqueueTaskNotification persists inline, running disk I/O
+			// while that global lock was held. See
+			// SessionManager.deferPersist/unlockAndFlushPersist's own
+			// doc comment for the full mechanism.
+			targetSess := target.session
 			if notify != nil {
-				target.session.enqueueTaskNotification(*notify)
+				targetSess.enqueueTaskNotificationMemoryOnly(*notify)
+				nn := *notify
+				m.deferPersist(func() { targetSess.persistQueuedTaskNotification(nn) })
 			}
 			for _, fn := range forwarded {
-				target.session.enqueueTaskNotification(fn)
+				targetSess.enqueueTaskNotificationMemoryOnly(fn)
+				m.deferPersist(func() { targetSess.persistQueuedTaskNotification(fn) })
+			}
+			if len(forwarded) > 0 {
+				sourceSess := n.session
+				m.deferPersist(func() { sourceSess.persistDeliveredTaskNotifications(forwarded) })
 			}
 			if target.status == StatusIdle {
 				resume = m.triggerResumeLocked(target)
@@ -1846,7 +2041,7 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 		// there is nowhere left to deliver these notifications. Dropped,
 		// not an error: nothing is listening.
 	}
-	m.mu.Unlock()
+	m.unlockAndFlushPersist()
 
 	// Deliberately returned, never fired here (no "go resume()"): the
 	// SERVER's ReportTurnEnd caller (runPrompt) must defer firing a

@@ -59,6 +59,16 @@ func TestCanceledChildNotifiesParent(t *testing.T) {
 		t.Fatalf("no engine-initiated resume observed on root; history: %+v", root.History())
 	}
 	close(release)
+	// The canceled child's own goroutine has been blocked on <-release
+	// (blockingProvider's Stream call) since Spawn — releasing it here
+	// unblocks child.Prompt, which finishes and calls finalizeTurn in a
+	// goroutine this test never otherwise waits for. Without settling
+	// before returning, that goroutine can outlive this test and race a
+	// LATER test's freshly allocated provider.Registry map landing at
+	// the same reused memory address — a live -race flake caught under
+	// repeated runs (pre-existing, unrelated to this session's own
+	// changes; surfaced by stress-testing while verifying them).
+	time.Sleep(100 * time.Millisecond)
 }
 
 // TestGrandchildReparentsToNearestLiveAncestor proves nesting past one
@@ -79,6 +89,17 @@ func TestGrandchildReparentsToNearestLiveAncestor(t *testing.T) {
 		t.Fatalf("Spawn mid: %v", err)
 	}
 	waitForStatus(t, mgr, midID, StatusDone, time.Second)
+	// mid's own completion also delivers a notification to root (idle at
+	// that point) and fires an active resume — Config.Providers is
+	// inherited BY REFERENCE across this whole tree (root/mid/grand all
+	// share ONE map), so that resume's own streamTurn call can still be
+	// reading it. waitForStatus above only confirms mid's own status,
+	// not that root's downstream resume has settled — give it a moment
+	// before mutating the shared map below, or root's own concurrent
+	// Registry.For() read can race this test's own write — a live -race
+	// flake caught under repeated stress runs (pre-existing, unrelated
+	// to this session's own changes).
+	time.Sleep(100 * time.Millisecond)
 
 	// Now spawn the grandchild FROM the already-done mid node — legal:
 	// Spawn only checks the parent node's bookkeeping (depth/cancellation),
@@ -808,15 +829,30 @@ func TestReloadedChildWithDanglingTurnNotifiesParent(t *testing.T) {
 	// signature (the resume-trigger text in history) every other
 	// terminal-outcome notification uses.
 	deadline := time.Now().Add(2 * time.Second)
+	found := false
 	for time.Now().Before(deadline) {
 		for _, m := range root2.History() {
 			if m.Role == message.RoleUser && m.Parts.Text() == taskResumeTriggerText {
-				return
+				found = true
 			}
+		}
+		if found {
+			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("root never resumed with the dangling child's synthetic notification; history: %+v", root2.History())
+	if !found {
+		t.Fatalf("root never resumed with the dangling child's synthetic notification; history: %+v", root2.History())
+	}
+	// Wait for the resume TURN itself to fully settle (not just its
+	// trigger message, appended synchronously before the turn even
+	// starts) before this test returns — fireIdleResumeAsync's own
+	// goroutine is otherwise still running (mid Stream() call on
+	// rootProv) when the test function returns, unsynchronized with
+	// whatever the NEXT test does with a freshly allocated object that
+	// can land at the same address — a live-caught -race flake under
+	// repeated runs.
+	waitForStatus(t, mgr2, root1.ID, StatusIdle, 2*time.Second)
 }
 
 // TestReloadedChildWithDanglingTurnFoldsUsageIntoTreeBudget is the
@@ -1214,11 +1250,28 @@ func TestDrainAllTaskNotificationsPersistsDeliverySoReloadDoesNotResurrectIt(t *
 	close(midProv.release)
 	waitForStatus(t, mgr, midID, StatusDone, time.Second)
 
-	// Reload mid fresh from disk — the exact shape a later session.send
-	// re-run of this done child produces.
-	reloadedMid, err := LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
-	if err != nil {
-		t.Fatalf("LoadSession: %v", err)
+	// finalizeTurn's own durable writes (the forwarded notification's
+	// recTaskNotifyQueued on root's log, and — the mechanism under test —
+	// the recTaskNotifyDelivered on mid's own log) are now queued via
+	// deferPersist and run AFTER m.mu releases (see
+	// SessionManager.deferPersist/unlockAndFlushPersist's own doc
+	// comment) — decoupled from n.status becoming visible to another
+	// goroutine's Info() call, which happens earlier, while m.mu is
+	// still held. waitForStatus seeing StatusDone therefore does NOT
+	// guarantee the durable write has landed yet; poll the reload itself
+	// rather than reading it exactly once.
+	deadline := time.Now().Add(2 * time.Second)
+	var reloadedMid *Session
+	for {
+		var err error
+		reloadedMid, err = LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
+		if err != nil {
+			t.Fatalf("LoadSession: %v", err)
+		}
+		if !reloadedMid.hasPendingTaskNotifications() || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	if reloadedMid.hasPendingTaskNotifications() {
 		t.Errorf("reloaded mid has a resurrected pending notification for the grandchild it already forwarded to root")
@@ -1280,12 +1333,29 @@ func TestRecoverInterruptedTurnReportsTotalUsageNotDelta(t *testing.T) {
 		t.Fatalf("AdoptReloaded: %v", err)
 	}
 
+	// root's own turn-1 completion ALSO legitimately delivered an
+	// ordinary "done" notification here (root was idle when childProv1
+	// finished, so finalizeTurn both enqueued it and fired an active
+	// resume) — unrelated to what this test checks, but not guaranteed
+	// to have already been checked out and committed off
+	// root.taskNotifications by the time this assertion runs (that
+	// resume is itself async, racing this goroutine under load). Find
+	// the recovery notification specifically by ChildID+StatusFailed,
+	// rather than asserting the queue's total length — a live -race/
+	// timing flake caught under repeated stress runs.
 	root.mu.Lock()
 	defer root.mu.Unlock()
-	if len(root.taskNotifications) != 1 {
-		t.Fatalf("root.taskNotifications = %+v, want exactly 1", root.taskNotifications)
+	var found *taskNotification
+	for i := range root.taskNotifications {
+		if n := &root.taskNotifications[i]; n.ChildID == childID && n.Status == StatusFailed {
+			found = n
+			break
+		}
 	}
-	got := root.taskNotifications[0].Usage
+	if found == nil {
+		t.Fatalf("root.taskNotifications = %+v, want a StatusFailed recovery notification for %s", root.taskNotifications, childID)
+	}
+	got := found.Usage
 	if got.InputTokens+got.OutputTokens != 70 {
 		t.Errorf("recovered notify Usage = %+v, want the full cumulative total (70), not the tree-budget delta (0) — a parent should be told this child's real total spend, matching every finalizeTurn branch", got)
 	}
@@ -1302,7 +1372,17 @@ func TestRecoverInterruptedTurnReportsTotalUsageNotDelta(t *testing.T) {
 // will never read its queue again.
 func TestRecoverInterruptedTurnForwardsGrandchildNotifications(t *testing.T) {
 	dir := t.TempDir()
-	rootProv := scriptedTurns("root", doneTurn("resumed"))
+	// rootProv has ZERO scripted turns, deliberately: root2 is genuinely
+	// idle when recovery delivers to it, so recoverInterruptedTurnLocked
+	// fires a REAL active resume (go m.fireIdleResumeAsync) — a scripted
+	// turn that could SUCCEED would let that resume checkout-and-commit
+	// the very notifications this test wants to inspect, racing the
+	// test's own read of root2.taskNotifications against that background
+	// goroutine. Zero turns means the resume's own Stream() call fails
+	// immediately, so streamTurn's failure path requeues instead of
+	// committing — the pending notifications this test asserts on
+	// survive regardless of how that race resolves.
+	rootProv := scriptedTurns("root", nil)
 	midProv := &signaledBlockingProvider{name: "mid", started: make(chan struct{}), release: make(chan struct{})}
 	grandProv := scriptedTurns("grand", doneTurn("grandchild done"))
 	reg := provider.Registry{rootProv.Name(): rootProv, midProv.Name(): midProv, grandProv.Name(): grandProv}
@@ -1356,10 +1436,43 @@ func TestRecoverInterruptedTurnForwardsGrandchildNotifications(t *testing.T) {
 		t.Fatalf("AdoptReloaded: %v", err)
 	}
 
+	// root2 is genuinely idle when recovery delivers to it, so this
+	// triggers a REAL active resume (go m.fireIdleResumeAsync) racing
+	// this test's own read — rootProv's zero scripted turns make that
+	// resume's own Stream() call fail immediately, requeuing the
+	// notifications back onto root2.taskNotifications, but the checkout
+	// (into taskNotificationsInFlight) and requeue both happen on that
+	// OTHER goroutine, asynchronously. Poll rather than read once, and
+	// count BOTH sets — pending plus in-flight is the true "delivered to
+	// root2" total regardless of which side of that race is caught mid-
+	// flight.
+	countAll := func() int {
+		root2.mu.Lock()
+		defer root2.mu.Unlock()
+		return len(root2.taskNotifications) + len(root2.taskNotificationsInFlight)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && countAll() != 2 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	// Also give the requeue itself a moment to settle back into
+	// taskNotifications specifically, so the content check below reads a
+	// stable, non-in-flight set.
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		root2.mu.Lock()
+		n := len(root2.taskNotifications)
+		root2.mu.Unlock()
+		if n == 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
 	root2.mu.Lock()
 	defer root2.mu.Unlock()
 	if len(root2.taskNotifications) != 2 {
-		t.Fatalf("root2.taskNotifications = %+v, want 2 (mid's own failure notify + the forwarded grandchild notify)", root2.taskNotifications)
+		t.Fatalf("root2.taskNotifications = %+v (in-flight: %+v), want 2 settled entries (mid's own failure notify + the forwarded grandchild notify)", root2.taskNotifications, root2.taskNotificationsInFlight)
 	}
 	var sawMidFailure, sawGrandchildDone bool
 	for _, n := range root2.taskNotifications {
@@ -1375,5 +1488,244 @@ func TestRecoverInterruptedTurnForwardsGrandchildNotifications(t *testing.T) {
 	}
 	if !sawGrandchildDone {
 		t.Errorf("root2.taskNotifications missing the forwarded grandchild notification — stranded on the recovered, never-to-run-again mid node: %+v", root2.taskNotifications)
+	}
+}
+
+// TestRecoverInterruptedTurnSurvivesACrashBetweenDeliveryAndHistoryClose is
+// the regression test for a live review finding: recoverInterruptedTurnLocked
+// used to durably close the interrupted child's history (making
+// hasUnansweredTurn() false forever, so this method never runs again for
+// this id) BEFORE delivering its failure notification to the ancestor. A
+// crash landing between those two durable writes permanently lost the
+// notification — the child's own log already looked "recovered," so no
+// later re-adoption would ever retry, but the ancestor's log never got
+// the recTaskNotifyQueued record. The parent would wait forever for a
+// notification a crash ate in transit.
+//
+// Simulates that exact crash: drives recovery manually, then executes
+// ONLY the first queued deferred-persist thunk (the notification
+// delivery) — never any later ones, including the closing-message
+// persist — mimicking a process death right after that first durable
+// write lands. Proves: (1) the ancestor's log durably has the
+// notification despite the "crash," and (2) the child's own log still
+// shows the dangling turn unclosed, so a later restart's
+// hasUnansweredTurn() is still true and recovery can genuinely retry —
+// the fix this test exists to prove, replacing what used to be silent,
+// permanent loss.
+func TestRecoverInterruptedTurnSurvivesACrashBetweenDeliveryAndHistoryClose(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	childProv := &signaledBlockingProvider{name: "childprov", started: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() { close(childProv.release) })
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 0, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+	childID, err := mgr1.Spawn(SpawnOptions{
+		ParentID: root1.ID, Prompt: "go", Model: modelFor("childprov"), AgentType: AgentGeneralPurpose,
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	<-childProv.started
+
+	// root2 gets its OWN "root"-named provider instance, not rootProv
+	// again: t.Cleanup releases childProv at the end of this test, which
+	// unblocks mgr1's own still-in-flight child goroutine and lets ITS
+	// finalizeTurn wake root1 (mgr1) too — a SEPARATE, independent async
+	// resume from the one this test triggers on root2 (mgr2) below.
+	// Sharing the exact same *scriptedProvider object between root1 and
+	// root2 would let those two independent async resumes race on the
+	// fixture's own unsynchronized internal state — a live -race flake
+	// caught under repeated runs, same root cause as (and same fix as)
+	// other tests in this file that adopt a root into a second manager.
+	rootProv2 := scriptedTurns("root", nil)
+	reg2 := provider.Registry{rootProv2.Name(): rootProv2, childProv.Name(): childProv}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 0, 0)
+	root2 := NewSession(rootCfg2)
+	root2.ID = root1.ID
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+
+	reloadedChild, err := LoadSession(Config{Providers: reg2, SessionDir: dir}, childID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+
+	// Drive adoption manually (same shape as AdoptReloaded, minus its own
+	// unlockAndFlushPersist) so the queued thunks can be inspected and
+	// only PARTIALLY run below, simulating the crash.
+	mgr2.mu.Lock()
+	mgr2.adoptReloadedLocked(reloadedChild, true)
+	pending := mgr2.pendingPersist
+	mgr2.pendingPersist = nil
+	mgr2.mu.Unlock()
+
+	if len(pending) < 2 {
+		t.Fatalf("recovery queued %d deferred persists, want at least 2 (notification delivery, then the closing-message append)", len(pending))
+	}
+	// Run ONLY the first thunk — the notification delivery — never any
+	// later one. This is the crash: everything after this line simply
+	// never happened, exactly as if the process had died right here.
+	pending[0]()
+
+	reloadedRootAgain, err := LoadSession(Config{Providers: reg, SessionDir: dir}, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root (after simulated crash): %v", err)
+	}
+	if !reloadedRootAgain.hasPendingTaskNotifications() {
+		t.Error("the ancestor's log lost the notification across the simulated crash — recovery must deliver durably before it closes the child's own history, not after")
+	}
+
+	reloadedChildAgain, err := LoadSession(Config{Providers: reg, SessionDir: dir}, childID)
+	if err != nil {
+		t.Fatalf("LoadSession child (after simulated crash): %v", err)
+	}
+	if !reloadedChildAgain.hasUnansweredTurn() {
+		t.Error("the child's history was already closed even though the simulated crash landed before that specific write — a real restart could never retry recovery for this child again")
+	}
+
+	// recoverInterruptedTurnLocked also fired go m.fireIdleResumeAsync
+	// for root2 (idle when adopted) as a side effect, independent of the
+	// deferred-persist truncation this test exercises above. A
+	// status-based wait here is itself racy (root2 can still legitimately
+	// read StatusIdle at the very first poll, before that goroutine has
+	// even acquired m.mu to start — a false "already settled" signal) —
+	// a flat settle sleep, long enough that rootProv's zero-scripted-turn
+	// Stream() call (which fails immediately once the goroutine does
+	// run) has certainly completed by the time this test returns, avoids
+	// racing that goroutine's own timing entirely. Without this, the
+	// goroutine can outlive this test and race a LATER test's freshly
+	// allocated scriptedProvider landing at the same reused memory
+	// address — a live -race flake caught under repeated runs.
+	time.Sleep(300 * time.Millisecond)
+}
+
+// TestHasUnansweredTurnDetectsTrailingToolResult and
+// TestHasUnansweredTurnDetectsTrailingUnresolvedToolCall are the
+// regression tests for a live review finding: hasUnansweredTurn checked
+// only for a trailing RoleUser message, missing two OTHER crash windows
+// runAgenticLoop's own append order can leave on disk — trailing RoleTool
+// (crashed after appending tool results, before the next assistant
+// response) and a trailing RoleAssistant message carrying an unresolved
+// ToolCall part (crashed WHILE runToolCalls was still executing, before
+// any result was ever appended). Both left an interrupted child
+// undetected: recoverInterruptedTurnLocked never fired, the child
+// reloaded as StatusIdle indistinguishable from one that never received
+// a turn, and its parent waited forever — the same "waits forever" gap
+// the whole restart-recovery feature exists to close, just for shapes
+// the original RoleUser-only heuristic did not cover. A child doing real
+// multi-step tool work is arguably the MORE likely interruption point
+// than the brief window right after a fresh user message.
+func TestHasUnansweredTurnDetectsTrailingToolResult(t *testing.T) {
+	s := NewSession(managedConfig("test", scriptedTurns("test", nil)))
+	s.append(message.Message{ID: "u1", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}})
+	s.append(message.Message{ID: "a1", Role: message.RoleAssistant, Parts: message.Parts{
+		&message.Text{Text: "running"},
+		toolCall("tc1", "bash", `{"command":"echo hi"}`),
+	}})
+	s.append(message.Message{ID: "t1", Role: message.RoleTool, Parts: message.Parts{
+		&message.ToolResult{CallID: "tc1", Content: message.Parts{&message.Text{Text: "hi"}}},
+	}})
+	if !s.hasUnansweredTurn() {
+		t.Error("hasUnansweredTurn() = false, want true for a trailing RoleTool message (crashed mid-tool-loop, after the tool result landed but before the next assistant response)")
+	}
+}
+
+func TestHasUnansweredTurnDetectsTrailingUnresolvedToolCall(t *testing.T) {
+	s := NewSession(managedConfig("test", scriptedTurns("test", nil)))
+	s.append(message.Message{ID: "u1", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}})
+	s.append(message.Message{ID: "a1", Role: message.RoleAssistant, Parts: message.Parts{
+		&message.Text{Text: "running"},
+		toolCall("tc1", "bash", `{"command":"echo hi"}`),
+	}})
+	if !s.hasUnansweredTurn() {
+		t.Error("hasUnansweredTurn() = false, want true for a trailing assistant message with an unresolved ToolCall (crashed WHILE the tool was still executing, before any result was appended)")
+	}
+}
+
+// TestRecoverInterruptedTurnFiresForChildCrashedMidToolLoop is the
+// integration-level companion to the two unit tests above: proves
+// recoverInterruptedTurnLocked actually fires (not just hasUnansweredTurn
+// in isolation) for a child whose durable history ends on a RoleTool
+// message, and correctly does NOT fire for one whose last turn genuinely
+// completed (trailing assistant message, no unresolved tool_use).
+func TestRecoverInterruptedTurnFiresForChildCrashedMidToolLoop(t *testing.T) {
+	dir := t.TempDir()
+	reg := provider.Registry{"root": scriptedTurns("root", doneTurn("resumed")), "child": scriptedTurns("child", nil)}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 0, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr1, childID, StatusFailed, time.Second) // scriptedTurns("child", nil) has zero turns, so this Spawn's own turn fails immediately
+
+	childSess, ok := mgr1.Session(childID)
+	if !ok {
+		t.Fatal("child not tracked")
+	}
+	// Manually append the exact "crashed mid-tool-loop" shape onto the
+	// child's own durable log, on top of whatever its own failed Spawn
+	// turn already wrote — simulating a LATER turn (e.g. a session.send
+	// follow-up) that itself got interrupted after appending tool
+	// results but before the process crashed.
+	childSess.append(message.Message{ID: "a2", Role: message.RoleAssistant, Parts: message.Parts{
+		&message.Text{Text: "running"},
+		toolCall("tc2", "bash", `{"command":"echo hi"}`),
+	}})
+	childSess.append(message.Message{ID: "t2", Role: message.RoleTool, Parts: message.Parts{
+		&message.ToolResult{CallID: "tc2", Content: message.Parts{&message.Text{Text: "hi"}}},
+	}})
+	if !childSess.hasUnansweredTurn() {
+		t.Fatal("test setup: manually appended history does not end on the trailing-RoleTool shape")
+	}
+
+	// root2 gets its OWN "root"-named provider instance, not rootCfg's
+	// shared one: childID's own Spawn call above also wakes root1 (mgr1)
+	// with its own failure notification (childID's turn fails
+	// immediately, and root1 was idle) — a SEPARATE, independent async
+	// resume from the one this test triggers on root2 (mgr2) below.
+	// Sharing the exact same *scriptedProvider object between root1 and
+	// root2 would let those two independent async resumes race on the
+	// fixture's own unsynchronized internal state — a live -race flake
+	// caught under repeated runs, same root cause/fix as other tests in
+	// this file that adopt a root into a second manager.
+	reg2 := provider.Registry{"root": scriptedTurns("root", doneTurn("resumed")), "child": scriptedTurns("child", nil)}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 0, 0)
+	root2 := NewSession(rootCfg2)
+	root2.ID = root1.ID
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+	reloadedChild, err := LoadSession(Config{Providers: reg2, SessionDir: dir}, childID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if !reloadedChild.hasUnansweredTurn() {
+		t.Fatal("test setup: reloaded child lost the trailing-RoleTool shape across LoadSession")
+	}
+	if err := mgr2.AdoptReloaded(reloadedChild); err != nil {
+		t.Fatalf("AdoptReloaded: %v", err)
+	}
+
+	info, ok := mgr2.Info(childID)
+	if !ok {
+		t.Fatal("child not tracked after AdoptReloaded")
+	}
+	if info.Status != StatusFailed {
+		t.Errorf("status = %q, want %q — recovery must fire for a child crashed mid-tool-loop, not just one crashed right after its user message", info.Status, StatusFailed)
+	}
+	if !strings.Contains(info.FailReason, "restart") {
+		t.Errorf("fail_reason = %q, want it to mention the restart", info.FailReason)
 	}
 }

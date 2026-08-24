@@ -163,8 +163,13 @@ func captureSlog(t *testing.T) *bytes.Buffer {
 // malformed file is now skipped (with a logged warning), not a load
 // error — proves both halves: the bad file is absent from the result,
 // and loading continues rather than failing outright.
+// TestLoadAgentDefsUnknownToolIsLoadError proves a design-owner decision
+// narrowing "frontmatter leniency"'s scope: an unknown tool name is a
+// SEMANTIC authoring mistake the design doc requires to be "an error
+// surfaced at load, not spawn" — unlike a stray unknown frontmatter key
+// (see TestLoadAgentDefsUnknownFrontmatterKeyIsLenient), it fails the
+// WHOLE directory's load, not just this one file.
 func TestLoadAgentDefsUnknownToolIsLoadError(t *testing.T) {
-	buf := captureSlog(t)
 	dir := t.TempDir()
 	writeAgentDef(t, dir, "bad.md", `---
 name: bad
@@ -174,19 +179,21 @@ tools: read_file, teleport
 body
 `)
 	defs, err := LoadAgentDefs(dir)
-	if err != nil {
-		t.Fatalf("LoadAgentDefs with unknown tool: want nil error (skip-and-warn), got %v", err)
+	if err == nil {
+		t.Fatalf("LoadAgentDefs with unknown tool: want a load error, got defs=%v nil error", defs)
 	}
-	if _, ok := defs["bad"]; ok {
-		t.Error("malformed def \"bad\" present in result, want skipped")
+	if !strings.Contains(err.Error(), "teleport") {
+		t.Errorf("error does not name the unknown tool: %v", err)
 	}
-	if !strings.Contains(buf.String(), "teleport") {
-		t.Errorf("no warning logged naming the unknown tool: %s", buf.String())
+	if defs != nil {
+		t.Errorf("defs = %v, want nil on a load error", defs)
 	}
 }
 
+// TestLoadAgentDefsMissingNameIsLoadError: a missing required field is a
+// structural authoring mistake, not the ONE lenient "unknown frontmatter
+// key" case — hard load error for the whole directory.
 func TestLoadAgentDefsMissingNameIsLoadError(t *testing.T) {
-	buf := captureSlog(t)
 	dir := t.TempDir()
 	writeAgentDef(t, dir, "bad.md", `---
 description: No name given
@@ -194,14 +201,11 @@ description: No name given
 body
 `)
 	defs, err := LoadAgentDefs(dir)
-	if err != nil {
-		t.Fatalf("LoadAgentDefs with missing name: want nil error (skip-and-warn), got %v", err)
+	if err == nil {
+		t.Fatalf("LoadAgentDefs with missing name: want a load error, got defs=%v nil error", defs)
 	}
-	if len(defs) != 0 {
-		t.Errorf("defs = %v, want empty (the only file present was skipped)", defs)
-	}
-	if !strings.Contains(buf.String(), "skipping malformed agent definition") {
-		t.Errorf("no skip warning logged: %s", buf.String())
+	if defs != nil {
+		t.Errorf("defs = %v, want nil on a load error", defs)
 	}
 }
 
@@ -237,7 +241,13 @@ body
 	}
 }
 
-func TestLoadAgentDefsUnknownFrontmatterKeyIsLoadError(t *testing.T) {
+// TestLoadAgentDefsUnknownFrontmatterKeyIsLenient is the ONE remaining
+// leniency case after the design-owner narrowing — see
+// errUnknownFrontmatterKey's own doc comment (agentdef.go) for the full
+// reasoning: a stray typo'd frontmatter key is judged low-stakes and
+// cosmetic enough to skip just this one file with a logged warning,
+// unlike every other parseAgentDef error.
+func TestLoadAgentDefsUnknownFrontmatterKeyIsLenient(t *testing.T) {
 	buf := captureSlog(t)
 	dir := t.TempDir()
 	writeAgentDef(t, dir, "bad.md", `---
@@ -259,27 +269,28 @@ body
 	}
 }
 
+// TestLoadAgentDefsMissingDelimiterIsLoadError: a structural frontmatter
+// problem (no "---" delimiter at all) is not the one lenient case — hard
+// load error for the whole directory, matching the design doc's
+// original, pre-leniency-fix behavior for everything except an unknown
+// frontmatter key.
 func TestLoadAgentDefsMissingDelimiterIsLoadError(t *testing.T) {
-	buf := captureSlog(t)
 	dir := t.TempDir()
 	writeAgentDef(t, dir, "bad.md", "not frontmatter at all\n")
 	defs, err := LoadAgentDefs(dir)
-	if err != nil {
-		t.Fatalf("LoadAgentDefs with no frontmatter: want nil error (skip-and-warn), got %v", err)
+	if err == nil {
+		t.Fatalf("LoadAgentDefs with no frontmatter: want a load error, got defs=%v nil error", defs)
 	}
-	if len(defs) != 0 {
-		t.Errorf("defs = %v, want empty (the only file present was skipped)", defs)
-	}
-	if !strings.Contains(buf.String(), "skipping malformed agent definition") {
-		t.Errorf("no skip warning logged: %s", buf.String())
+	if defs != nil {
+		t.Errorf("defs = %v, want nil on a load error", defs)
 	}
 }
 
-// TestLoadAgentDefsSkipsMalformedFileAndLoadsRest proves the OTHER half
-// of the fix: a malformed file does not just fail to load itself, it
-// must not prevent a GOOD file sitting right next to it from loading —
-// the exact scope-of-damage this fix narrows from "the whole directory"
-// to "just the one broken file."
+// TestLoadAgentDefsSkipsMalformedFileAndLoadsRest proves the leniency
+// case's own scope-of-damage guarantee still holds for the one error
+// class it still covers: a file with an unknown frontmatter key does not
+// just fail to load itself, it must not prevent a GOOD file sitting
+// right next to it from loading.
 func TestLoadAgentDefsSkipsMalformedFileAndLoadsRest(t *testing.T) {
 	buf := captureSlog(t)
 	dir := t.TempDir()
@@ -289,7 +300,13 @@ description: A perfectly valid definition
 ---
 body
 `)
-	writeAgentDef(t, dir, "bad.md", "not frontmatter at all\n")
+	writeAgentDef(t, dir, "bad.md", `---
+name: bad
+description: has a bogus key
+color: blue
+---
+body
+`)
 
 	defs, err := LoadAgentDefs(dir)
 	if err != nil {
