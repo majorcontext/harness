@@ -465,6 +465,41 @@ type Server struct {
 	// the fix. Always nil in production.
 	dispatchQueueHeadRace func()
 
+	// postIdleEmitRace is a test-only seam: when non-nil, runPrompt's own
+	// tail (handlers.go) invokes it right after freeRunSlotAndEmitIdle —
+	// after the durable "idle" transition has been emitted (and any
+	// waiter registered on GET /session/{id}/wait?until=idle has already
+	// been woken by it, non-blocking, via notifyWaitersLocked), but
+	// BEFORE maybeDispatchQueued gets a chance to re-claim the slot for
+	// the next queued prompt, if any. Lets a test force a woken waiter's
+	// own re-check of its condition (waitSnapshot/waitConditionMet,
+	// wait.go) to land deterministically in that exact window, instead
+	// of relying on an unobserved goroutine-scheduling coin flip — the
+	// window a live, reproduced CI failure hit
+	// (TestQueueLenExplicitOnEmptyingDequeue: a waiter woken by the
+	// transient not-running-but-still-queued idle observed it and
+	// returned BEFORE the queue's own next item had even been dequeued
+	// yet). See TestWaitUntilIdleDoesNotWakeEarlyOnQueuedFollowUp. Always
+	// nil in production.
+	postIdleEmitRace func()
+
+	// waitWakeCheckedRace is a test-only seam: when non-nil, handleWait's
+	// own wt.ch case (wait.go) invokes it right after evaluating
+	// waitConditionMet for that wake, carrying the outcome (met or not)
+	// — so a test can deterministically confirm a specific wake has been
+	// fully processed, AND assert what it decided, before letting
+	// whatever it was racing against (postIdleEmitRace above) proceed.
+	// Always nil in production.
+	waitWakeCheckedRace func(met bool)
+
+	// waitRegisteredRace is a test-only seam: when non-nil, handleWait
+	// (wait.go) invokes it right after registering its waiter in
+	// Server.waiters, before its own immediate condition check — lets a
+	// test confirm a waiter is actually parked and reachable by a later
+	// notifyWaitersLocked wake before triggering whatever wake it means
+	// to race. Always nil in production.
+	waitRegisteredRace func()
+
 	// sendBusyEvictRace is a test-only seam: when non-nil,
 	// sendTextToRoot's busy branch (session_tree.go) invokes it right
 	// before its own residentSession(id) call — letting a test force the
