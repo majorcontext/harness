@@ -149,21 +149,31 @@ type lineageJSON struct {
 	// field and must omit it rather than guess, and "" is not a real
 	// engine.SessionStatus value, so omitting is unambiguous.
 	Status string `json:"status,omitempty"`
-	// Children is omitempty for the same reason as Depth/Status just
-	// above, and NOT (as an earlier revision had it) unconditionally
-	// present: a live review finding — the cold-fallback branch
-	// (lineageJSONFor) used to set this to []string{}, which serializes
-	// identically to a WARM, genuinely childless node's real empty list
-	// ("children":[]). That affirmatively told a caller "this parent has
-	// no children" for a session that might have a whole live subtree on
-	// disk (a mid-tree parent reaped, or only seen again after a
-	// restart) — worse than merely omitting unknown data, since it reads
-	// as a confident, wrong answer rather than an honest "don't know."
-	// omitempty trades away distinguishing "known: zero children" from
-	// "unknown" for a warm childless node (both now omit the field) —
-	// the same trade Depth/Status already accept for their own zero
-	// values, in exchange for the cold branch never lying.
-	Children  []string `json:"children,omitempty"`
+	// Children deliberately has NO omitempty, unlike Depth/Status/
+	// AgentType/Result/FailReason just above and below — a live review
+	// finding on an earlier revision's fix: giving it omitempty (to stop
+	// the cold-fallback branch's old []string{} from lying "zero
+	// children" — see lineageJSONFor's own doc comment for that
+	// incident) went one step too far, since a Go slice's omitempty
+	// collapses nil AND a genuinely empty non-nil slice to the exact
+	// same "field absent" wire shape. That made a WARM, truly childless
+	// node ALSO omit the field — indistinguishable from the cold-
+	// fallback branch's own honest "unknown," the very ambiguity
+	// omitempty was supposed to close. A caller polling the same session
+	// as it transitions between these states (or between different
+	// process/lineage-tracking states) would see the field flicker
+	// between present and absent with no way to tell "known: zero" from
+	// "don't know" from the flicker alone.
+	//
+	// The fix: no omitempty, and lineageJSONFor guarantees a NON-nil
+	// (possibly empty) slice on its warm branch, leaving it nil ONLY on
+	// the cold-fallback branch. That gives three distinct, stable wire
+	// shapes instead of two ambiguous ones: `"children":null` (cold,
+	// genuinely unknown), `"children":[]` (warm, known zero),
+	// `"children":["..."]` (warm, known non-zero) — the field is always
+	// present, so a consumer never has to distinguish "absent because
+	// unknown" from "absent because empty" again.
+	Children  []string `json:"children"`
 	AgentType string   `json:"agent_type,omitempty"`
 	// Result is the final assistant text for a done session; FailReason a
 	// classified (#82-rule) reason for a failed one. Both empty otherwise.
@@ -3222,16 +3232,23 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 // TaskParentID) or a session predating this feature.
 func (s *Server) lineageJSONFor(id string, sess *engine.Session) *lineageJSON {
 	if info, ok := s.sessMgr.Info(id); ok {
-		// info.Children is passed straight through, nil or not — Children's
-		// own omitempty already collapses a nil and a len-0 slice to the
-		// same "omitted" wire representation, so the nil-to-[]string{}
-		// normalization an earlier revision had here is no longer
-		// meaningful (see Children's own doc comment).
+		// Normalized to a non-nil slice here — Children has no omitempty
+		// (see its own doc comment), so this warm branch is the one place
+		// that must guarantee "known: zero children" actually serializes
+		// as "children":[] rather than "children":null: info.Children
+		// (sessionNode.snapshot, session_manager.go) is nil for a
+		// genuinely childless node, since it is built via
+		// append([]string(nil), n.children...), which returns nil
+		// unchanged when n.children is empty.
+		children := info.Children
+		if children == nil {
+			children = []string{}
+		}
 		return &lineageJSON{
 			ParentID:   info.ParentID,
 			Depth:      info.Depth,
 			Status:     string(info.Status),
-			Children:   info.Children,
+			Children:   children,
 			AgentType:  info.AgentType,
 			Result:     info.Result,
 			FailReason: info.FailReason,
@@ -3243,9 +3260,10 @@ func (s *Server) lineageJSONFor(id string, sess *engine.Session) *lineageJSON {
 	}
 	// Children deliberately left nil (not []string{}) — see Children's own
 	// doc comment: this cold branch has no durable source for the child
-	// list (only the WARM sessMgr.Info branch above ever knows it), so
-	// omitting the field is the honest "unknown" answer, not an
-	// affirmative (and possibly wrong) "zero children" one.
+	// list (only the WARM sessMgr.Info branch above ever knows it), so a
+	// nil Children here — the field's one remaining "genuinely unknown"
+	// signal, serializing as "children":null — is the honest answer, not
+	// an affirmative (and possibly wrong) "zero children" one.
 	return &lineageJSON{
 		ParentID:  parentID,
 		AgentType: sess.TaskAgentType(),
