@@ -416,6 +416,20 @@ type Config struct {
 	// See skills.go.
 	SkillsDirs []string
 
+	// AgentDefsDirs are the directories scanned for custom `task`-tool
+	// agent definitions (*.md files — see agentdef.go's LoadAgentDefs),
+	// mirroring SkillsDirs' own nil/empty/multi-dir contract exactly: a
+	// nil value is the default (use <WorkDir>/.agents — LoadAgentDefs's
+	// existing single-location behavior, unchanged for every caller that
+	// never sets this field), an explicit empty (non-nil) slice disables
+	// custom agent definitions entirely, and a multi-entry slice merges
+	// every directory's definitions, with a duplicate NAME across two
+	// directories treated as a load error exactly like a duplicate name
+	// within one directory already is (see ResolveAgentDefs) — there is
+	// no "which one wins" answer for two genuinely different definitions
+	// claiming the same name, project-local or otherwise.
+	AgentDefsDirs []string
+
 	// MCP is the MCP client integration this session's tools draw from: its
 	// Tools() are merged into the request's tool list (namespaced
 	// mcp__<server>__<tool>) and a call to one of them routes through
@@ -604,6 +618,70 @@ type Session struct {
 	// before any turn ever ran against it in any process).
 	lastUsage     provider.Usage
 	haveLastUsage bool
+
+	// turnUnsettled is SessionManager.recoverInterruptedTurnLocked's
+	// restart-recovery signal, replacing an earlier, unreliable
+	// heuristic (hasUnansweredTurn, since removed) that tried to infer
+	// "was this turn genuinely interrupted" from the trailing message's
+	// own role. A live review proved that heuristic wrong in both
+	// directions: it MISSED a genuine mid-tool-loop crash (a trailing
+	// RoleTool/unresolved-ToolCall shape it never checked), and — once
+	// widened to check those too — it then MISFIRED on an already-
+	// SETTLED ordinary failure, since runAgenticLoop's plain (non-
+	// interruptedTurnError) provider-error path appends nothing at all,
+	// leaving the exact same trailing-RoleUser shape a genuine crash
+	// would. Worse, several LEGITIMATE, fully-settled completion paths
+	// (appendUnexecutedToolCallResults, interruptedToolResults) ALSO
+	// leave a trailing RoleTool message — indistinguishable, by role
+	// alone, from a genuine mid-tool-loop crash.
+	//
+	// This field sidesteps trailing-shape guessing entirely: true from
+	// the moment ANY message is appended (appendWithUsage, the single
+	// ingest choke point every append goes through — user, assistant, or
+	// tool alike) until SessionManager.finalizeTurn runs to completion
+	// for this node and explicitly marks it settled (markTurnSettled,
+	// durably backed by the recChildTurnSettled record — see its own
+	// doc comment in store.go) — REGARDLESS of what that turn's outcome
+	// was (success, an ordinary failure that appends nothing, a
+	// cancellation) or what trailing message shape resulted. finalizeTurn
+	// running to completion IS the authoritative "this turn's outcome is
+	// settled" signal; only a genuine crash — the process dying before
+	// finalizeTurn ever gets to run — leaves this true on the next
+	// reload, which is exactly the one case restart-recovery exists to
+	// detect.
+	//
+	// Deliberately per-SESSION, not per-turn-attempt: a session only
+	// ever has ONE turn in flight at a time (SessionManager's own
+	// StatusRunning gating), so a simple bool — set true on ANY new
+	// append, false only by finalizeTurn's own marker — is sufficient;
+	// no sequence numbers or per-attempt bookkeeping needed. Only ever
+	// meaningful for a non-root node (finalizeTurn only writes the
+	// marker for one — see its own doc comment); recovery itself is
+	// never invoked for a root (adoptReloadedLocked's own early return),
+	// so an unmarked root session's turnUnsettled value is simply never
+	// consulted.
+	turnUnsettled bool
+
+	// committedOutcome is the exact taskNotification finalizeTurn (or
+	// recoverInterruptedTurnLocked itself) computed for s's CURRENT
+	// unsettled turn, if that computation has already happened and been
+	// durably committed (recTaskOutcomeCommitted, store.go) — nil until
+	// then, and reset to nil the moment a NEW turn starts (see
+	// appendWithUsage/appendMemoryOnly's own identical turnUnsettled=true
+	// side effect) so it can never leak stale across turns. See
+	// commitTurnOutcome/committedTurnOutcome's own doc comments and the
+	// crash-window table on recoverInterruptedTurnLocked's own doc
+	// comment (session_manager.go) for the full mechanism this exists
+	// for: a live review finding that recovery's OWN reconstruction (from
+	// trailing history shape, or a generic "lost to restart" fallback)
+	// can DIVERGE from what finalizeTurn already computed and durably
+	// delivered before a crash struck INSIDE finalizeTurn's own
+	// deliver-then-settle sequence — producing a duplicate notification
+	// with a DIFFERENT payload than the one the parent may already have
+	// received, worse than either a lost or an honestly-generic one.
+	// committedOutcome closes this by giving recovery the SAME exact
+	// payload to replay, verbatim, instead of a second, independent guess.
+	committedOutcome *taskNotification
 
 	logFile        *os.File // session log; nil until first write (see store.go)
 	logStarted     bool     // the log file exists on disk
@@ -1028,6 +1106,28 @@ func (s *Session) TaskParentID() string {
 	return s.cfg.TaskParentID
 }
 
+// hasTaskParent reports whether s is durably a non-root member of the
+// subagent-sessions tree — the ONE predicate SessionManager uses, in
+// exactly two places, to decide "does this node conceptually have a
+// parent": adoptReloadedLocked's own root/non-root branch (which gates
+// whether s is a recovery candidate at all) and finalizeTurn's
+// settled-marker/commit-outcome gate (session_manager.go). Both MUST use
+// this same helper rather than each re-deriving the answer their own way
+// — a live review finding: finalizeTurn used to gate on
+// sessionNode.parentID, the IN-MEMORY tree-structural pointer, instead of
+// this durable one. The two normally agree, but adoptReloadedLocked's own
+// "true depth is unrecoverable" case (its own doc comment) can leave a
+// node's in-memory parentID blank even when it durably DOES have a real
+// TaskParentID — for exactly that node, finalizeTurn's old gate silently
+// skipped marking its turns settled at all, forever: hasUnfinalizedTurn()
+// misread true on every later reload, even for turns that finished
+// completely normally. Deliberately durable (Config.TaskParentID), never
+// the in-memory pointer — see TaskParentID's own doc comment for why the
+// two are distinct concepts in the first place.
+func (s *Session) hasTaskParent() bool {
+	return s.TaskParentID() != ""
+}
+
 // TaskAgentType and TaskToolNames return Config.TaskAgentType/TaskToolNames
 // — see those fields' own doc comment.
 func (s *Session) TaskAgentType() string {
@@ -1036,6 +1136,186 @@ func (s *Session) TaskAgentType() string {
 
 func (s *Session) TaskToolNames() []string {
 	return s.cfg.TaskToolNames
+}
+
+// hasUnfinalizedTurn reports whether s has a turn that started (any
+// message got appended) without SessionManager.finalizeTurn ever running
+// to completion for it — restart-recovery detection (see
+// recoverInterruptedTurnLocked's own use of this and turnUnsettled's own
+// doc comment for the full reasoning and the trailing-message-role
+// heuristic this replaces).
+//
+// A false positive really is impossible now, unlike the heuristic this
+// replaced: turnUnsettled is set true by every append (appendWithUsage/
+// appendMemoryOnly, the two ingest choke points every append in this
+// package goes through) and false ONLY by markTurnSettled, called
+// exclusively from SessionManager.finalizeTurn (for an ordinary
+// completion) or recoverInterruptedTurnLocked itself (once it has
+// finished recovering this exact turn) — both of which are, by
+// definition, the turn reaching a genuinely settled outcome. The ONLY
+// way this reads true on a fresh reload is a crash before either of
+// those ever got to run.
+func (s *Session) hasUnfinalizedTurn() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.turnUnsettled
+}
+
+// markTurnSettled clears turnUnsettled and durably records that this
+// session's most recent turn attempt reached a settled outcome — see
+// turnUnsettled's own doc comment and recChildTurnSettled's doc comment
+// (store.go) for the full reasoning. The in-memory clear happens here,
+// synchronously; the durable write is the caller's own responsibility
+// (SessionManager.finalizeTurn/recoverInterruptedTurnLocked both run
+// under m.mu and defer the actual persistTurnSettled call via
+// SessionManager.deferPersist, mirroring every other durable write those
+// methods make — see unlockAndFlushPersist's own doc comment for why).
+func (s *Session) markTurnSettled() {
+	s.mu.Lock()
+	s.turnUnsettled = false
+	// See committedOutcome's own doc comment: nothing consults it once
+	// hasUnfinalizedTurn() reads false (recoverInterruptedTurnLocked's
+	// own guard prevents that) — cleared here, in the SAME critical
+	// section, so a stale value can never outlive the turn it was
+	// computed for.
+	s.committedOutcome = nil
+	s.mu.Unlock()
+}
+
+// persistTurnSettled durably writes the recChildTurnSettled marker —
+// markTurnSettled's deferred counterpart, run after m.mu has been
+// released (see that method's own doc comment).
+func (s *Session) persistTurnSettled() {
+	s.mu.Lock()
+	if s.cfg.SessionDir != "" {
+		if err := s.ensureLog(); err != nil {
+			s.lastPersistErr = err
+		} else if err := s.writeRecord(record{Type: recChildTurnSettled}); err != nil {
+			s.lastPersistErr = err
+		}
+	}
+	s.mu.Unlock()
+}
+
+// commitTurnOutcome records n, in memory, as the AUTHORITATIVE outcome
+// SessionManager (finalizeTurn or recoverInterruptedTurnLocked itself)
+// computed for s's current, still-unsettled turn — see committedOutcome's
+// own doc comment for the full mechanism and why this exists. The durable
+// write is the caller's own responsibility, deferred via
+// SessionManager.deferPersist exactly like every other durable write
+// those two methods make (see persistCommittedTurnOutcome).
+func (s *Session) commitTurnOutcome(n taskNotification) {
+	s.mu.Lock()
+	nn := n
+	s.committedOutcome = &nn
+	s.mu.Unlock()
+}
+
+// persistCommittedTurnOutcome durably writes n as a recTaskOutcomeCommitted
+// record — commitTurnOutcome's deferred counterpart. Takes n explicitly,
+// the same captured-value convention every other deferPersist thunk in
+// this package uses, rather than re-reading s.committedOutcome at persist
+// time: by the time this runs, a LATER call in the SAME critical section
+// (markTurnSettled, or a subsequent commitTurnOutcome for a retry) may
+// already have overwritten or cleared it in memory, but the value that
+// needs to land on disk is always the one THIS specific call was queued
+// for.
+func (s *Session) persistCommittedTurnOutcome(n taskNotification) {
+	s.mu.Lock()
+	s.persistTaskNotifyLocked(recTaskOutcomeCommitted, n)
+	s.mu.Unlock()
+}
+
+// committedTurnOutcome returns s's currently committed outcome (see
+// committedOutcome's own doc comment), if any.
+func (s *Session) committedTurnOutcome() (taskNotification, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.committedOutcome == nil {
+		return taskNotification{}, false
+	}
+	return *s.committedOutcome, true
+}
+
+// settledSuccessResult reports whether s's own trailing history message is
+// an unambiguous, natural completion of its last turn — narrowly used by
+// SessionManager.recoverInterruptedTurnLocked to tell a genuine mid-turn
+// crash apart from a crash that struck AFTER the turn actually finished but
+// BEFORE finalizeTurn's own bookkeeping (the parent-facing notification,
+// then the child_turn.settled marker — see hasUnfinalizedTurn's own doc
+// comment) durably landed: the "notify->settled window" a live review named
+// directly. Before this existed, recoverInterruptedTurnLocked always
+// reported a StatusFailed "lost to restart" notification for ANY detected
+// crash, including this one — telling a parent its successful child failed,
+// which the review judged worse than a lost notification (a lost
+// notification is at least honestly absent; a false failure actively
+// misinforms, permanently, since nothing else will ever correct it).
+//
+// Deliberately narrow, and NOT a revival of the deleted hasUnansweredTurn's
+// own broad "was this turn interrupted at all" gate — that heuristic was
+// proven unreliable in BOTH directions (see turnUnsettled's own doc
+// comment) precisely because it tried to answer that broad question from
+// trailing shape alone. hasUnfinalizedTurn already answers the broad
+// question reliably today; this helper only answers a narrower one — GIVEN
+// that recovery is correctly firing, did this specific turn actually reach
+// a natural end? — for exactly one unambiguous shape: a trailing
+// RoleAssistant message carrying no ToolCall part. By construction (see
+// runAgenticLoop, engine.go: the `if stop != provider.StopToolUse` and
+// `len(results) == 0` branches are the ONLY paths that return a final
+// asst without looping again, and both call appendUnexecutedToolCallResults
+// immediately afterward, which is a no-op unless asst itself carries a
+// ToolCall part), a trailing assistant message with no ToolCall part is not
+// a probabilistic guess at "probably done" — it IS the exact shape
+// runAgenticLoop produces on its one and only natural-return path when the
+// model's own response requested no further action, whatever crashed
+// afterward.
+//
+// Narrower than the full space of natural completions on purpose: the rarer
+// NEP-5272 "wedge" shape (a non-StopToolUse stop reported ALONGSIDE
+// ToolCall parts — see unexecutedToolCallStopReasonTextFmt's own doc
+// comment) also completes naturally, but leaves a trailing SYNTHETIC
+// RoleTool closer instead, one step removed from asst. That shape is
+// deliberately NOT detected here: distinguishing a synthetic closer from a
+// genuine, still-pending tool result would require pattern-matching
+// synthesized text content, itself a heuristic this fix does not want to
+// add another one of. A crash in that narrower window still falls back to
+// the safe, honest "lost to restart" report below — never a false success,
+// only a residual, explicitly accepted case of what this fix does not
+// claim to cover.
+func (s *Session) settledSuccessResult() (result string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.history) == 0 {
+		return "", false
+	}
+	last := s.history[len(s.history)-1]
+	if last.Role != message.RoleAssistant {
+		return "", false
+	}
+	for _, p := range last.Parts {
+		if _, isToolCall := p.(*message.ToolCall); isToolCall {
+			return "", false
+		}
+	}
+	return last.Parts.Text(), true
+}
+
+// hasTrailingLostToRestartMarker reports whether s's own trailing history
+// message is ALREADY recoverInterruptedTurnLocked's synthetic closing
+// message (see isLostToRestartMarker, session_manager.go) — used to guard
+// against appending a SECOND one on a recovery-of-recovery retry (step 3
+// of the crash-window table on that method's own doc comment): a crash
+// between that append's own durable write and the settled-marker's would
+// otherwise leave the next recovery attempt re-appending the identical
+// synthetic message into history on every retry until the settled marker
+// finally lands.
+func (s *Session) hasTrailingLostToRestartMarker() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.history) == 0 {
+		return false
+	}
+	return isLostToRestartMarker(s.history[len(s.history)-1])
 }
 
 // Plugins returns a snapshot of this session's configured plugins — name,
@@ -1153,23 +1433,24 @@ func (s *Session) append(m message.Message) {
 // into cumulative usage and keeps the last one seen as lastUsage, since the
 // log has no separate cumulative-usage record to replay instead.
 func (s *Session) appendWithUsage(m message.Message, usage *provider.Usage) {
-	// Normalize before this message enters history at all: see
-	// message.Message.Normalize's doc comment. This is the single ingest
-	// choke point every message passes through (user, assistant, and tool
-	// messages alike), so it is the right place to scrub a
-	// present-but-zero-length Reasoning.ProviderData entry before it can
-	// diverge an in-memory history from what LoadSession would reload.
 	m.Normalize()
 	if m.CreatedAt.IsZero() {
-		// Every production provider adapter (anthropic, openaicompat, ...)
-		// already stamps CreatedAt on the assistant message it assembles;
-		// this is a backstop for any caller (a bare Tool, a test fixture, a
-		// future adapter) that doesn't, so LastActivityAt (see engine.go)
-		// never silently reports zero for an otherwise-ordinary message.
 		m.CreatedAt = time.Now().UTC()
 	}
 	s.mu.Lock()
 	s.history = append(s.history, m)
+	// See turnUnsettled's own doc comment: any append means a turn has
+	// started (or is still in progress) without yet being finalized.
+	s.turnUnsettled = true
+	// See committedOutcome's own doc comment: THIS is the "a new turn
+	// started" invalidation point — appendWithUsage is the live turn-
+	// driving append (runAgenticLoop, via Prompt), never
+	// recoverInterruptedTurnLocked's own synthetic closing annotation
+	// (that goes through appendMemoryOnly instead, which deliberately
+	// does NOT clear this — see its own doc comment), so every call here
+	// really does mean whatever outcome was committed for a PRIOR turn
+	// no longer applies.
+	s.committedOutcome = nil
 	if usage != nil {
 		s.usage.InputTokens += usage.InputTokens
 		s.usage.OutputTokens += usage.OutputTokens
@@ -1179,6 +1460,59 @@ func (s *Session) appendWithUsage(m message.Message, usage *provider.Usage) {
 		s.haveLastUsage = true
 	}
 	s.persistMessage(&m, usage)
+	s.mu.Unlock()
+}
+
+// appendMemoryOnly is append's split-in-two sibling for
+// recoverInterruptedTurnLocked specifically — the ONE caller in this
+// package that needs a message append to interleave with
+// SessionManager's own deferred-persist ordering (see
+// SessionManager.deferPersist/unlockAndFlushPersist's own doc comment)
+// instead of persisting synchronously the moment it is called, the way
+// every other append in this package still correctly does. This is
+// deliberately NOT a general split of Session.append/appendWithUsage —
+// every other call site's own ordering requirements are untouched and
+// unexamined by this change; broadening message-append persistence to
+// defer-outside-m.mu generally is a substantially larger change than
+// this one caller's own narrow crash-window requirement, and out of
+// scope here.
+//
+// Normalizes and stamps CreatedAt exactly like appendWithUsage, appends
+// to s.history, but does NOT call persistMessage — returns the
+// normalized message so the caller can pass the IDENTICAL value to
+// persistAppendedMessage later, once m.mu has been released, rather than
+// risk a second Normalize/CreatedAt pass producing a subtly different
+// persisted record than what is already sitting in memory.
+func (s *Session) appendMemoryOnly(m message.Message) message.Message {
+	m.Normalize()
+	if m.CreatedAt.IsZero() {
+		m.CreatedAt = time.Now().UTC()
+	}
+	s.mu.Lock()
+	s.history = append(s.history, m)
+	// See turnUnsettled's own doc comment — same as appendWithUsage.
+	// recoverInterruptedTurnLocked's own closing-message append (this
+	// method's one caller) relies on calling markTurnSettled AFTER this,
+	// not before, so that call's turnUnsettled=false is what wins.
+	s.turnUnsettled = true
+	// Deliberately does NOT clear committedOutcome, unlike
+	// appendWithUsage's own identical-looking line — see committedOutcome's
+	// own doc comment. This method's one caller only ever appends its own
+	// synthetic lostToRestartText closer for the SAME turn recovery is
+	// still in the middle of settling, never a genuinely new turn's real
+	// message — clearing here would erase the very commit a LATER
+	// recovery-of-recovery pass needs to replay verbatim.
+	s.mu.Unlock()
+	return m
+}
+
+// persistAppendedMessage durably writes m — the deferred counterpart to
+// appendMemoryOnly. m must be the EXACT value appendMemoryOnly returned
+// (already normalized and timestamped), not a freshly-built one, so the
+// durable record matches what is already in s.history byte-for-byte.
+func (s *Session) persistAppendedMessage(m message.Message) {
+	s.mu.Lock()
+	s.persistMessage(&m, nil)
 	s.mu.Unlock()
 }
 

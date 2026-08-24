@@ -46,6 +46,11 @@ type Config struct {
 	// <WorkDir>/.agents/skills when it exists. In the project-config merge a
 	// non-empty project value replaces the user value entirely.
 	SkillsDirs []string `json:"skills_dirs,omitempty"`
+	// AgentDefsDirs lists directories scanned for custom `task`-tool agent
+	// definitions (*.md files). A nil (omitted) value leaves the engine
+	// default in place: use <WorkDir>/.agents. Same merge/override contract
+	// as SkillsDirs in every respect (see that field's own doc comment).
+	AgentDefsDirs []string `json:"agent_defs_dirs,omitempty"`
 	// GoalEvaluatorModel names the model ref (or alias) used to evaluate goal
 	// completion for `harness run --goal` and the server's goal endpoints.
 	// There is no default — goal use requires this field to be set. Resolve it
@@ -586,9 +591,9 @@ func Path() string {
 //   - Model, SessionDir, InstructionsPath, GoalEvaluatorModel, SessionSync: a
 //     non-empty project value overrides the user value. Instructions and
 //     ModelTool (*bool): a non-nil project value overrides.
-//   - SkillsDirs: a non-empty project slice replaces the user slice entirely
-//     (arrays override, they do not concatenate); an empty/omitted project
-//     value inherits the user value.
+//   - SkillsDirs, AgentDefsDirs: a non-empty project slice replaces the user
+//     slice entirely (arrays override, they do not concatenate); an
+//     empty/omitted project value inherits the user value.
 //   - Aliases, Providers: maps are merged key by key — project keys are added
 //     and override user keys of the same name. Within a Provider, a non-empty
 //     project field (APIKeyEnv, BaseURL) overrides the user field.
@@ -760,6 +765,13 @@ func merge(base, over *Config) *Config {
 	}
 	if len(src) > 0 {
 		out.SkillsDirs = append([]string(nil), src...)
+	}
+	agentDefsSrc := out.AgentDefsDirs
+	if len(over.AgentDefsDirs) > 0 {
+		agentDefsSrc = over.AgentDefsDirs
+	}
+	if len(agentDefsSrc) > 0 {
+		out.AgentDefsDirs = append([]string(nil), agentDefsSrc...)
 	}
 	if n := len(base.Aliases) + len(over.Aliases); n > 0 {
 		m := make(map[string]string, n)

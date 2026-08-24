@@ -485,6 +485,64 @@ func TestLoadSkillsDirs(t *testing.T) {
 	})
 }
 
+func TestLoadAgentDefsDirs(t *testing.T) {
+	t.Run("array parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"agent_defs_dirs": ["a/agents", "b/agents"]}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if len(c.AgentDefsDirs) != 2 || c.AgentDefsDirs[0] != "a/agents" || c.AgentDefsDirs[1] != "b/agents" {
+			t.Errorf("AgentDefsDirs = %v", c.AgentDefsDirs)
+		}
+	})
+	t.Run("unset leaves nil", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.AgentDefsDirs != nil {
+			t.Errorf("AgentDefsDirs = %v, want nil (unset)", c.AgentDefsDirs)
+		}
+	})
+}
+
+func TestMergeAgentDefsDirs(t *testing.T) {
+	t.Run("non-empty project overrides user entirely", func(t *testing.T) {
+		base := &Config{AgentDefsDirs: []string{"user/a"}}
+		over := &Config{AgentDefsDirs: []string{"proj/x"}}
+		merged := merge(base, over)
+		if len(merged.AgentDefsDirs) != 1 || merged.AgentDefsDirs[0] != "proj/x" {
+			t.Errorf("merged AgentDefsDirs = %v, want [proj/x]", merged.AgentDefsDirs)
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{AgentDefsDirs: []string{"user/a"}}
+		merged := merge(base, &Config{})
+		if len(merged.AgentDefsDirs) != 1 || merged.AgentDefsDirs[0] != "user/a" {
+			t.Errorf("merged AgentDefsDirs = %v, want inherited [user/a]", merged.AgentDefsDirs)
+		}
+	})
+	t.Run("empty project slice inherits user (only non-empty overrides)", func(t *testing.T) {
+		base := &Config{AgentDefsDirs: []string{"user/a"}}
+		merged := merge(base, &Config{AgentDefsDirs: []string{}})
+		if len(merged.AgentDefsDirs) != 1 || merged.AgentDefsDirs[0] != "user/a" {
+			t.Errorf("merged AgentDefsDirs = %v, want inherited [user/a]", merged.AgentDefsDirs)
+		}
+	})
+	t.Run("does not alias base slice", func(t *testing.T) {
+		base := &Config{AgentDefsDirs: []string{"user/a"}}
+		merged := merge(base, &Config{})
+		merged.AgentDefsDirs[0] = "mutated"
+		if base.AgentDefsDirs[0] != "user/a" {
+			t.Errorf("base AgentDefsDirs mutated through merged config: %v", base.AgentDefsDirs)
+		}
+	})
+}
+
 // TestMergeCompactionFields is the red-first test for docs/design/context-
 // compaction.md's config fields: project non-zero values override the user
 // layer, same scalar-override rule as GoalEvaluatorModel.

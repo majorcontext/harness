@@ -564,6 +564,49 @@ func TestSkillsDirs(t *testing.T) {
 	})
 }
 
+// TestAgentDefsDirsExplicitEmptyDisables and TestAgentDefsDirs are the
+// regression tests for a follow-up finding ("def search path"):
+// agentDefsDirs mirrors skillsDirs field-for-field (see
+// TestSkillsDirsExplicitEmptyDisables/TestSkillsDirs above).
+func TestAgentDefsDirsExplicitEmptyDisables(t *testing.T) {
+	got := agentDefsDirs(&config.Config{AgentDefsDirs: []string{}}, nil, "/w")
+	if got == nil {
+		t.Fatal("explicit empty agent_defs_dirs collapsed to nil (re-enables default)")
+	}
+	if len(got) != 0 {
+		t.Fatalf("got %v, want empty", got)
+	}
+	if got := agentDefsDirs(&config.Config{}, nil, "/w"); got != nil {
+		t.Fatalf("absent agent_defs_dirs = %v, want nil", got)
+	}
+}
+
+func TestAgentDefsDirs(t *testing.T) {
+	t.Run("default nil when nothing configured", func(t *testing.T) {
+		if dirs := agentDefsDirs(&config.Config{}, nil, "/work"); dirs != nil {
+			t.Errorf("dirs = %v, want nil (engine default)", dirs)
+		}
+	})
+	t.Run("config dirs resolved against workDir", func(t *testing.T) {
+		dirs := agentDefsDirs(&config.Config{AgentDefsDirs: []string{"a/agents", "/abs/agents"}}, nil, "/work")
+		want := []string{filepath.Join("/work", "a/agents"), "/abs/agents"}
+		if len(dirs) != 2 || dirs[0] != want[0] || dirs[1] != want[1] {
+			t.Errorf("dirs = %v, want %v", dirs, want)
+		}
+	})
+	t.Run("flag overrides config entirely", func(t *testing.T) {
+		dirs := agentDefsDirs(&config.Config{AgentDefsDirs: []string{"cfg/agents"}}, []string{"flag/agents"}, "/work")
+		if len(dirs) != 1 || dirs[0] != filepath.Join("/work", "flag/agents") {
+			t.Errorf("dirs = %v, want flag override", dirs)
+		}
+	})
+	t.Run("nil config is safe", func(t *testing.T) {
+		if dirs := agentDefsDirs(nil, nil, "/work"); dirs != nil {
+			t.Errorf("dirs = %v, want nil", dirs)
+		}
+	})
+}
+
 func TestRegistry(t *testing.T) {
 	t.Run("defaults to ANTHROPIC_API_KEY and empty base url", func(t *testing.T) {
 		t.Setenv("ANTHROPIC_API_KEY", "sk-default")
@@ -859,7 +902,7 @@ func TestNewSessionFnSystemUsesSessionWorkDir(t *testing.T) {
 	var gotReq *provider.Request
 	onRequest := func(_ string, _ int, req *provider.Request) { gotReq = req }
 
-	newSession := newSessionFn(mkCfg, model, &config.Config{SkillsDirs: []string{}}, nil, onRequest)
+	newSession := newSessionFn(mkCfg, model, &config.Config{SkillsDirs: []string{}}, nil, nil, onRequest)
 	sess, err := newSession(message.ModelRef{}, sessionWorkDir, "")
 	if err != nil {
 		t.Fatalf("newSession: %v", err)
@@ -929,7 +972,7 @@ func TestNewSessionFnSkillsUsesSessionWorkDir(t *testing.T) {
 	var gotReq *provider.Request
 	onRequest := func(_ string, _ int, req *provider.Request) { gotReq = req }
 
-	newSession := newSessionFn(mkCfg, model, appCfg, nil, onRequest)
+	newSession := newSessionFn(mkCfg, model, appCfg, nil, nil, onRequest)
 	sess, err := newSession(message.ModelRef{}, sessionWorkDir, "")
 	if err != nil {
 		t.Fatalf("newSession: %v", err)
@@ -996,7 +1039,7 @@ func TestLoadSessionFnSkillsUsesRestoredWorkDir(t *testing.T) {
 	var gotReq *provider.Request
 	onRequest := func(_ string, _ int, req *provider.Request) { gotReq = req }
 
-	loadSession := loadSessionFn(mkCfg, model, appCfg, nil, onRequest)
+	loadSession := loadSessionFn(mkCfg, model, appCfg, nil, nil, onRequest)
 	sess, err := loadSession(orig.ID)
 	if err != nil {
 		t.Fatalf("loadSession: %v", err)
@@ -1063,7 +1106,7 @@ func TestLoadSessionFnSystemUsesRestoredWorkDir(t *testing.T) {
 	var gotReq *provider.Request
 	onRequest := func(_ string, _ int, req *provider.Request) { gotReq = req }
 
-	loadSession := loadSessionFn(mkCfg, model, &config.Config{SkillsDirs: []string{}}, nil, onRequest)
+	loadSession := loadSessionFn(mkCfg, model, &config.Config{SkillsDirs: []string{}}, nil, nil, onRequest)
 	sess, err := loadSession(orig.ID)
 	if err != nil {
 		t.Fatalf("loadSession: %v", err)

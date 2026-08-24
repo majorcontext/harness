@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,22 +104,62 @@ var knownToolNames = map[string]bool{
 	"read_tool_result": true, "task": true,
 }
 
-// ResolveAgentDefs returns every agent type available to a session rooted
-// at workDir: the compiled-in builtinAgentDefs plus whatever
-// LoadAgentDefs(workDir/.agents) discovers, merged. It is the single entry
-// point Stage 3's `task` tool (and Stage 4's session.create) resolve an
-// agent name against.
-func ResolveAgentDefs(workDir string) (map[string]AgentDef, error) {
+// ResolveAgentDefs returns every agent type available to a session: the
+// compiled-in builtinAgentDefs plus whatever LoadAgentDefs discovers
+// across every directory in dirs, merged. It is the single entry point
+// Stage 3's `task` tool (and Stage 4's session.create) resolve an agent
+// name against.
+//
+// A custom definition's name may not collide with a built-in, nor with
+// ANOTHER custom definition — whether that collision is within one dir
+// (LoadAgentDefs' own check) or across two different dirs in dirs (this
+// function's own check, mirroring buildSkillsSegment's identical
+// duplicate-across-dirs handling for Agent Skills — skills.go). Neither
+// case has an obvious "which one wins" answer, unlike a single
+// unparseable file (see LoadAgentDefs' own "frontmatter leniency" doc
+// comment) — both stay hard load errors.
+func ResolveAgentDefs(dirs []string) (map[string]AgentDef, error) {
 	defs := make(map[string]AgentDef, len(builtinAgentDefs))
+	source := make(map[string]string, len(builtinAgentDefs))
 	for name, def := range builtinAgentDefs {
 		defs[name] = def
+		source[name] = "builtin"
 	}
-	custom, err := LoadAgentDefs(agentDefsDir(workDir))
-	if err != nil {
-		return nil, err
-	}
-	for name, def := range custom {
-		defs[name] = def
+	// Deduped on filepath.Clean(dir) before ever calling LoadAgentDefs —
+	// a live review finding: without this, the SAME directory appearing
+	// twice in dirs (Config.AgentDefsDirs built up from more than one
+	// source, or simply a caller-supplied duplicate) got loaded twice,
+	// and every single name it defined then collided with ITSELF on the
+	// second pass — the cross-dir duplicate-name check just below exists
+	// to catch a genuine conflict between two DIFFERENT directories, not
+	// a directory tripping over its own earlier pass, and a false
+	// positive here is a hard load error that kills every custom agent
+	// type for the whole session, not a harmless no-op. Clean, not a raw
+	// string compare, so the common trivial variants (a trailing
+	// slash, a redundant "./") still dedupe; deliberately NOT
+	// symlink/absolute-path resolution (filepath.Abs or EvalSymlinks) —
+	// dirs may legitimately not exist yet (LoadAgentDefs' own "missing
+	// dir is not an error" contract), and erroring or doing I/O here
+	// just to normalize a path this function does not otherwise need
+	// resolved would trade one edge case for a worse one.
+	seen := make(map[string]bool, len(dirs))
+	for _, dir := range dirs {
+		clean := filepath.Clean(dir)
+		if seen[clean] {
+			continue
+		}
+		seen[clean] = true
+		custom, err := LoadAgentDefs(dir)
+		if err != nil {
+			return nil, err
+		}
+		for name, def := range custom {
+			if prevSource, dup := source[name]; dup {
+				return nil, fmt.Errorf("engine: agent definition %s: name %q already defined in %s", def.Source, name, prevSource)
+			}
+			defs[name] = def
+			source[name] = def.Source
+		}
 	}
 	return defs, nil
 }
@@ -146,9 +188,28 @@ func (s *Session) AgentDefs() (map[string]AgentDef, error) {
 	defer s.mu.Unlock()
 	if !s.agentDefsLoaded {
 		s.agentDefsLoaded = true
-		s.agentDefs, s.agentDefsErr = ResolveAgentDefs(s.cfg.WorkDir)
+		s.agentDefs, s.agentDefsErr = ResolveAgentDefs(s.agentDefsDirs())
 	}
 	return s.agentDefs, s.agentDefsErr
+}
+
+// agentDefsDirs returns the effective agent-definition directories for
+// the session, resolving Config.AgentDefsDirs' nil/empty/multi-dir
+// contract — see that field's own doc comment. Mirrors skillsDirs'
+// identical nil-means-default resolution exactly, one directory
+// (agentDefsDir(WorkDir)) instead of skillsDirs' conditional-on-existence
+// one: unlike skills, a MISSING .agents dir here is not itself
+// special-cased — LoadAgentDefs already treats os.IsNotExist as "no
+// custom definitions" (nil, nil), so there is no need to pre-check
+// isDir before including it, unlike skillsDirs' defaultSkillsSubdir
+// check (which exists to avoid scanning a directory Agent Skills has no
+// convention for auto-creating). Caller holds s.mu (AgentDefs' own
+// caller already does).
+func (s *Session) agentDefsDirs() []string {
+	if s.cfg.AgentDefsDirs != nil {
+		return s.cfg.AgentDefsDirs
+	}
+	return []string{agentDefsDir(s.cfg.WorkDir)}
 }
 
 // agentDefsDir is where LoadAgentDefs looks for *.md agent definitions —
@@ -166,13 +227,62 @@ func agentDefsDir(workDir string) string {
 // (nil, nil), mirroring skill.Discover's convention for a project with no
 // custom definitions at all.
 //
-// Every *.md file must parse and every tools: entry must name a real tool
-// (knownToolNames) — a definition that fails either check fails discovery
-// for the WHOLE directory, naming the offending file, per the design doc's
-// "unknown tool names in a definition are an error surfaced at load, not
-// spawn." A custom definition's name may not collide with a built-in
-// (general-purpose, explore, plan) or with another custom definition in
-// the same directory — both are load errors too.
+// errUnknownFrontmatterKey is the ONE parseAgentDef error class
+// LoadAgentDefs treats leniently — skip this one file, log a warning,
+// keep loading the rest of the directory. A design-owner decision on a
+// live review finding ("frontmatter leniency" scope): an earlier
+// revision of this package skipped-and-warned on EVERY parseAgentDef
+// error alike (bad frontmatter delimiters, a missing required field, an
+// unknown tool name, an invalid model string), reasoning that one
+// contributor's single mistake in one file should never break every
+// OTHER custom agent type in the same directory. A later review
+// disagreed for two specific classes: an unknown tool name and an
+// invalid model string are SEMANTIC authoring mistakes the design doc
+// explicitly requires to be "an error surfaced at load, not spawn" — a
+// silently-skipped file means the agent simply does not exist, and a
+// later `task` call naming it fails with a generic "unknown agent %q"
+// that gives no hint the definition was ever written, let alone why it
+// was rejected. An unknown FRONTMATTER KEY (a stray typo'd line, like
+// `desc:` instead of `description:`) is judged a lower-stakes,
+// genuinely cosmetic mistake worth the same one-file-only blast radius
+// the original leniency fix targeted — every OTHER parseAgentDef error
+// (structural frontmatter problems, missing required fields, duplicate
+// keys, unknown tool names, invalid models) is a hard load error for the
+// WHOLE directory once again, matching the design doc's original,
+// pre-leniency-fix behavior for those classes.
+var errUnknownFrontmatterKey = errors.New("unknown frontmatter key")
+
+// LoadAgentDefs discovers custom agent definitions from dir: loose
+// top-level *.md files only (a subdirectory — .agents/skills/ in
+// particular — is never descended into). A missing dir is not an error:
+// (nil, nil), mirroring skill.Discover's convention for a project with no
+// custom definitions at all.
+//
+// Exactly ONE class of per-file error is lenient: an unknown frontmatter
+// KEY (errUnknownFrontmatterKey — see its own doc comment for the full
+// design-owner reasoning) skips just that one file with a logged
+// warning, not a load error for the whole directory. Every OTHER
+// per-file error — a bad frontmatter delimiter, a malformed "key: value"
+// line, a missing required field, a duplicate key, an unknown TOOL name,
+// an invalid MODEL string, or a bare os.ReadFile failure — fails the
+// WHOLE directory's load (`return nil, err`), exactly as the design
+// doc's "unknown tool names in a definition are an error surfaced at
+// load, not spawn" already requires for those two specifically, and as
+// this whole function did for every error class before the (now
+// narrowed) leniency fix existed at all. Because AgentDefs (this
+// package's sole caller) caches a load failure for the session's whole
+// life, this DOES mean one contributor's unknown-tool typo in agent-b.md
+// costs every OTHER custom agent type too, not just agent-b — a
+// deliberate trade-off: silently letting agent-b simply not exist would
+// bury a real authoring mistake behind a generic "unknown agent %q" at
+// spawn time instead of surfacing it, loudly, at load.
+//
+// This same hard-fail treatment already covered cross-file conflicts — a
+// custom definition's name colliding with a built-in (general-purpose,
+// explore, plan), or with ANOTHER custom definition in the same
+// directory. Neither has an obvious "which one wins" answer the way an
+// unknown-key typo does — there is nothing to silently prefer between two
+// genuinely different definitions both claiming the same name.
 func LoadAgentDefs(dir string) (map[string]AgentDef, error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
@@ -193,6 +303,10 @@ func LoadAgentDefs(dir string) (map[string]AgentDef, error) {
 		}
 		def, err := parseAgentDef(string(data), path)
 		if err != nil {
+			if errors.Is(err, errUnknownFrontmatterKey) {
+				slog.Warn("engine: skipping agent definition with an unknown frontmatter key", "path", path, "error", err)
+				continue
+			}
 			return nil, fmt.Errorf("engine: agent definition %s: %w", path, err)
 		}
 		if _, ok := builtinAgentDefs[def.Name]; ok {
@@ -234,6 +348,21 @@ func parseAgentDef(doc, path string) (AgentDef, error) {
 	}
 
 	fields := make(map[string]string)
+	// unknownKeyErr is recorded, not returned immediately, the moment an
+	// unknown key is seen — see its own use below (after every other
+	// check in this function has had a chance to run) for why: an
+	// earlier version of this loop returned this error the INSTANT it
+	// hit an unknown key, which meant a file with BOTH a stray unknown
+	// key AND a genuine semantic mistake (an unknown tool name, an
+	// invalid model string — validated below, only once the full fields
+	// map is assembled) reported only the lenient one, whichever line
+	// happened to come first in the file — silently hiding the hard
+	// error LoadAgentDefs actually needed to fail the whole directory
+	// load for. A live review caught this: leniency is for unknown KEYS
+	// only, and must never suppress the REPORT of a co-occurring semantic
+	// mistake, even if it does still win when it is the ONLY problem the
+	// file has (see the final check at the bottom of this function).
+	var unknownKeyErr error
 	for _, line := range lines[1:closeIdx] {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
@@ -246,7 +375,10 @@ func parseAgentDef(doc, path string) (AgentDef, error) {
 		key = strings.TrimSpace(key)
 		value = unquoteAgentDefValue(strings.TrimSpace(value))
 		if !agentDefKnownKeys[key] {
-			return AgentDef{}, fmt.Errorf("unknown frontmatter key %q", key)
+			if unknownKeyErr == nil {
+				unknownKeyErr = fmt.Errorf("%w: %q", errUnknownFrontmatterKey, key)
+			}
+			continue
 		}
 		if _, dup := fields[key]; dup {
 			return AgentDef{}, fmt.Errorf("duplicate frontmatter key %q", key)
@@ -293,6 +425,15 @@ func parseAgentDef(doc, path string) (AgentDef, error) {
 			return AgentDef{}, fmt.Errorf("invalid model %q: %w", raw, err)
 		}
 		def.Model = ref
+	}
+	// Checked LAST, only once every hard-error class above (missing
+	// name/description, unknown tool, invalid model) has had its chance
+	// to fire — see unknownKeyErr's own comment above for why: this is
+	// what actually makes leniency lose to a co-occurring semantic
+	// mistake instead of silently masking it, while still winning (as
+	// before) when it is the file's only problem.
+	if unknownKeyErr != nil {
+		return AgentDef{}, unknownKeyErr
 	}
 	return def, nil
 }

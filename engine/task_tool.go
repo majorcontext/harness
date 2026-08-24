@@ -30,6 +30,26 @@ type taskToolResult struct {
 	Note      string `json:"note"`
 }
 
+// taskTool's Description/InputSchema are STATIC strings, deliberately —
+// a follow-up finding ("roster in tool description") considered and
+// rejected making them dynamic per-session. taskTool() is constructed
+// once per session at newSession/Spawn time (see taskToolName's own doc
+// comment), strictly BEFORE Session.AgentDefs() is ever resolved — that
+// resolution is lazy, first triggered from inside runTaskTool itself
+// (see AgentDefs' own doc comment on the "startup budget" this
+// preserves: a malformed .agents/*.md should only ever break SPAWNING a
+// child, never every session's construction). Building a real per-session
+// roster into this description would force eager .agents/*.md disk I/O
+// and parsing for EVERY session, whether or not it ever calls `task` at
+// all — a real cost this fix does not accept paying just to make the
+// description marginally more helpful.
+//
+// The chosen, feasible compromise: the description and the agent
+// property's own schema description both explicitly point the model at
+// the mechanism that already IS fully live and per-session-accurate —
+// sortedAgentNames, surfaced in runTaskTool's "unknown agent" error
+// (below) — rather than trying to duplicate that roster here, in a
+// static string that could only ever describe the three built-ins.
 func taskTool() Tool {
 	return Tool{
 		Def: provider.ToolDef{
@@ -38,12 +58,13 @@ func taskTool() Tool {
 				"session id — it does NOT wait for the child to finish, and you do not need to poll for the result. The child's outcome arrives " +
 				"later as engine context on one of your own future turns. agent selects the child's tool set and persona: built-in types are " +
 				"\"general-purpose\" (full tool set, can itself spawn children), \"explore\" (read-only, for fast code search), and \"plan\" " +
-				"(read-only, returns an implementation plan instead of edits) — a project's .agents/*.md files may define more. model optionally " +
-				"overrides which model the child uses.",
+				"(read-only, returns an implementation plan instead of edits) — a project's .agents/*.md files may define more, and this project's " +
+				"current full roster (built-ins plus any custom types) is listed in the error if you call this tool with an agent name it does " +
+				"not recognize. model optionally overrides which model the child uses.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"agent": {"type": "string", "description": "The agent type to spawn: general-purpose, explore, plan, or a custom .agents/*.md definition name"},
+					"agent": {"type": "string", "description": "The agent type to spawn: general-purpose, explore, plan, or a custom .agents/*.md definition name — call with an unrecognized name to see this project's full current roster in the error"},
 					"prompt": {"type": "string", "description": "The task for the child session to perform"},
 					"model": {"type": "string", "description": "Optional model override, as \"provider/model\""}
 				},
@@ -149,10 +170,11 @@ func sortedAgentNames(defs map[string]AgentDef) []string {
 
 // classifyTaskToolError maps a SessionManager.Spawn error into the
 // model-visible tool error. Every SessionManager sentinel
-// (ErrDepthLimit, ErrConcurrencyLimit, ErrSessionCanceled,
-// ErrUnknownSession) is already a short, fixed, secret-free string — safe
-// to surface directly, unlike a raw provider error — so this only adds
-// the "task:" prefix every other error on this surface uses.
+// (ErrDepthLimit, ErrConcurrencyLimit, ErrBudgetExceeded,
+// ErrSessionCanceled, ErrUnknownSession) is already a short, fixed,
+// secret-free string — safe to surface directly, unlike a raw provider
+// error — so this only adds the "task:" prefix every other error on this
+// surface uses.
 //
 // The default case is reached only by restrictTools' "unknown tool %q"
 // error (Spawn's doc comment enumerates every error it can return, and
@@ -172,6 +194,8 @@ func classifyTaskToolError(err error) error {
 		return fmt.Errorf("task: %w", ErrDepthLimit)
 	case errors.Is(err, ErrConcurrencyLimit):
 		return fmt.Errorf("task: %w", ErrConcurrencyLimit)
+	case errors.Is(err, ErrBudgetExceeded):
+		return fmt.Errorf("task: %w", ErrBudgetExceeded)
 	case errors.Is(err, ErrSessionCanceled):
 		return fmt.Errorf("task: %w", ErrSessionCanceled)
 	case errors.Is(err, ErrUnknownSession):

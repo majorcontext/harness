@@ -127,6 +127,53 @@ func (c *createPhaseLogger) OnCreatePhase(sessionID, phase string, elapsed time.
 	c.logger.Info("session create phases", args...)
 }
 
+// taskEventLogger wires server.Options.OnTaskEvent to the serve logger —
+// a follow-up finding ("metrics"), mirroring createPhaseLogger's own
+// counters-plus-slog shape (a plain field, no new dependency like a
+// Prometheus client — this repo has no metrics library, and adding one
+// just for this is out of scope). Counts are cumulative for the process's
+// life; Counts() (test/diagnostic use — there is no HTTP surface
+// for these today, matching the "slog-only, not a new wire endpoint"
+// scope this fix chose) returns a snapshot.
+type taskEventLogger struct {
+	logger *slog.Logger
+
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+func newTaskEventLogger(logger *slog.Logger) *taskEventLogger {
+	return &taskEventLogger{logger: logger, counts: make(map[string]int)}
+}
+
+func (t *taskEventLogger) OnTaskEvent(event, parentID, childID string) {
+	t.mu.Lock()
+	t.counts[event]++
+	n := t.counts[event]
+	t.mu.Unlock()
+	args := []any{"event", event, "parent", parentID, "count", n}
+	if childID != "" {
+		args = append(args, "child", childID)
+	}
+	if event == "spawned" {
+		t.logger.Info("task spawned", args...)
+	} else {
+		t.logger.Warn("task spawn refused", args...)
+	}
+}
+
+// Counts returns a snapshot of cumulative per-event counts. Test/diagnostic
+// use only.
+func (t *taskEventLogger) Counts() map[string]int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make(map[string]int, len(t.counts))
+	for k, v := range t.counts {
+		out[k] = v
+	}
+	return out
+}
+
 var version = "0.1.0-dev"
 
 func main() {
@@ -180,7 +227,7 @@ func usage() {
                                     pursue a goal until an evaluator judges it
                                     met (exit 0 achieved, 3 not achieved)
   harness serve [-addr host:port] [-cors-origin origin] [-no-instructions]
-                [-unauthenticated] [-skills-dir dir ...]
+                [-unauthenticated] [-skills-dir dir ...] [-agent-def-dir dir ...]
                                     serve the HTTP+SSE session API
   harness plugin probe              re-probe configured plugins and refresh
                                     the manifest cache
@@ -206,6 +253,7 @@ type runOptions struct {
 	noSave         bool
 	noInstructions bool
 	skillsDirs     []string
+	agentDefsDirs  []string
 	resume         string
 	cont           bool
 }
@@ -227,6 +275,10 @@ func runFlags(opts *runOptions) *flag.FlagSet {
 	fs.BoolVar(&opts.noInstructions, "no-instructions", false, "do not inject the project's AGENTS.md into the system prompt")
 	fs.Func("skills-dir", "directory of Agent Skills to advertise (repeatable); overrides config skills_dirs; default <workdir>/.agents/skills when present", func(v string) error {
 		opts.skillsDirs = append(opts.skillsDirs, v)
+		return nil
+	})
+	fs.Func("agent-def-dir", "directory of custom task-tool agent definitions to advertise (repeatable); overrides config agent_defs_dirs; default <workdir>/.agents", func(v string) error {
+		opts.agentDefsDirs = append(opts.agentDefsDirs, v)
 		return nil
 	})
 	fs.StringVar(&opts.resume, "r", "", "resume the session with this id")
@@ -589,6 +641,11 @@ func runCmd(args []string) error {
 	// against, so AdoptReloaded below (right after resolveSession) is the
 	// only registration point this mode needs.
 	sessMgr := engine.NewSessionManager(ctx, envInt("HARNESS_MAX_TASK_DEPTH"), envInt("HARNESS_MAX_CONCURRENT_TASKS"))
+	// A follow-up finding ("per-tree budgets"): opt-in only, via
+	// SetMaxTreeTokens rather than a NewSessionManager constructor arg —
+	// see that method's own doc comment for why. 0/unset (envInt's own
+	// zero-value default) disables the check entirely.
+	sessMgr.SetMaxTreeTokens(envInt("HARNESS_MAX_TREE_TOKENS"))
 
 	s, err := resolveSession(engine.Config{
 		Providers:           registry(cfg),
@@ -604,6 +661,7 @@ func runCmd(args []string) error {
 		OnStorePhase:        slowStorePhaseLogger(logger),
 		Instructions:        instructionsConfig(cfg, opts.noInstructions),
 		SkillsDirs:          skillsDirs(cfg, opts.skillsDirs, workDir),
+		AgentDefsDirs:       agentDefsDirs(cfg, opts.agentDefsDirs, workDir),
 		Hooks:               pluginHooks(host),
 		MCP:                 mcpRegistry(mcpMgr),
 		Processes:           processRegistry(procMgr),
@@ -1076,6 +1134,11 @@ func serveCmd(args []string) error {
 		skillDirs = append(skillDirs, v)
 		return nil
 	})
+	var agentDefDirs []string
+	fs.Func("agent-def-dir", "directory of custom task-tool agent definitions to advertise (repeatable); overrides config agent_defs_dirs", func(v string) error {
+		agentDefDirs = append(agentDefDirs, v)
+		return nil
+	})
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -1210,6 +1273,7 @@ func serveCmd(args []string) error {
 		watchdog.doneCreatePhase(sessionID, phase)
 		createPhase.OnCreatePhase(sessionID, phase, elapsed)
 	}
+	taskEvents := newTaskEventLogger(logger)
 	var srv *server.Server
 	// sessMgr enables the `task` tool on every served session
 	// (docs/plans/2026-08-23-subagent-sessions-design.md). Built HERE, as a
@@ -1237,6 +1301,10 @@ func serveCmd(args []string) error {
 	// makes a graceful shutdown cascade cancellation into the whole task
 	// tree the same way. A live review caught this gap.
 	sessMgr := engine.NewSessionManager(watchdogCtx, envInt("HARNESS_MAX_TASK_DEPTH"), envInt("HARNESS_MAX_CONCURRENT_TASKS"))
+	// A follow-up finding ("per-tree budgets") — see runCmd's identical
+	// wiring and its own comment for why this is a setter, not a
+	// constructor arg.
+	sessMgr.SetMaxTreeTokens(envInt("HARNESS_MAX_TREE_TOKENS"))
 	// Periodic reaping (engine.SessionManager.Reap) frees a terminal, leaf
 	// (childless) task-spawned session's *Session — message history
 	// included — once it has settled done/failed/canceled; a whole
@@ -1290,6 +1358,7 @@ func serveCmd(args []string) error {
 			OnStorePhaseStart:   watchdog.startStorePhase,
 			Instructions:        instructionsConfig(cfg, noInstructions),
 			SkillsDirs:          skillsDirs(cfg, skillDirs, workDir),
+			AgentDefsDirs:       agentDefsDirs(cfg, agentDefDirs, workDir),
 			Hooks:               pluginHooks(pluginHost),
 			MCP:                 mcpRegistry(mcpMgr),
 			Processes:           processRegistry(procMgr),
@@ -1365,8 +1434,9 @@ func serveCmd(args []string) error {
 		},
 		OnCreatePhase:      onCreatePhase,
 		OnCreatePhaseStart: watchdog.startCreatePhase,
-		NewSession:         newSessionFn(mkCfg, defModel, cfg, skillDirs, func(id string, turn int, req *provider.Request) { srv.OnRequest(id, turn, req) }),
-		LoadSession:        loadSessionFn(mkCfg, defModel, cfg, skillDirs, func(id string, turn int, req *provider.Request) { srv.OnRequest(id, turn, req) }),
+		OnTaskEvent:        taskEvents.OnTaskEvent,
+		NewSession:         newSessionFn(mkCfg, defModel, cfg, skillDirs, agentDefDirs, func(id string, turn int, req *provider.Request) { srv.OnRequest(id, turn, req) }),
+		LoadSession:        loadSessionFn(mkCfg, defModel, cfg, skillDirs, agentDefDirs, func(id string, turn int, req *provider.Request) { srv.OnRequest(id, turn, req) }),
 	})
 	if err != nil {
 		return err
@@ -1430,7 +1500,7 @@ func serveCmd(args []string) error {
 // wired to the server's request journal, keyed by the session's own ID
 // (assigned by engine.NewSession, so it cannot be captured until after
 // construction).
-func newSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.ModelRef, appCfg *config.Config, flagDirs []string, onRequest func(id string, turn int, req *provider.Request)) func(message.ModelRef, string, string) (*engine.Session, error) {
+func newSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.ModelRef, appCfg *config.Config, flagDirs []string, agentDefFlagDirs []string, onRequest func(id string, turn int, req *provider.Request)) func(message.ModelRef, string, string) (*engine.Session, error) {
 	return func(model message.ModelRef, sessionWorkDir string, parentSession string) (*engine.Session, error) {
 		if model.IsZero() {
 			model = defModel
@@ -1444,6 +1514,7 @@ func newSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.M
 		cfg.WorkDir = sessionWorkDir
 		cfg.System = systemPrompt(sessionWorkDir, "")
 		cfg.SkillsDirs = skillsDirs(appCfg, flagDirs, sessionWorkDir)
+		cfg.AgentDefsDirs = agentDefsDirs(appCfg, agentDefFlagDirs, sessionWorkDir)
 		cfg.ParentSession = parentSession
 		var sess *engine.Session
 		cfg.OnRequest = func(turn int, req *provider.Request) { onRequest(sess.ID, turn, req) }
@@ -1462,7 +1533,7 @@ func newSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.M
 // than whichever directory this process happened to start in. The reload is
 // cheap (a second read of the same on-disk log) and side-effect-free, since
 // LoadSession is a pure rebuild from the journal.
-func loadSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.ModelRef, appCfg *config.Config, flagDirs []string, onRequest func(id string, turn int, req *provider.Request)) func(string) (*engine.Session, error) {
+func loadSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.ModelRef, appCfg *config.Config, flagDirs []string, agentDefFlagDirs []string, onRequest func(id string, turn int, req *provider.Request)) func(string) (*engine.Session, error) {
 	return func(id string) (*engine.Session, error) {
 		cfg := mkCfg(defModel)
 		wire := func(c engine.Config) (*engine.Session, error) {
@@ -1479,6 +1550,7 @@ func loadSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.
 			cfg.WorkDir = wd
 			cfg.System = systemPrompt(wd, "")
 			cfg.SkillsDirs = skillsDirs(appCfg, flagDirs, wd)
+			cfg.AgentDefsDirs = agentDefsDirs(appCfg, agentDefFlagDirs, wd)
 			sess, err = wire(cfg)
 		}
 		return sess, err
@@ -1518,6 +1590,37 @@ func skillsDirs(cfg *config.Config, flagDirs []string, workDir string) []string 
 		// stay a non-nil empty slice; only a truly absent field falls
 		// through to nil (engine default discovery).
 		dirs = cfg.SkillsDirs
+	}
+	if dirs == nil {
+		return nil
+	}
+	if len(dirs) == 0 {
+		return []string{}
+	}
+	out := make([]string, len(dirs))
+	for i, d := range dirs {
+		if filepath.IsAbs(d) {
+			out[i] = d
+		} else {
+			out[i] = filepath.Join(workDir, d)
+		}
+	}
+	return out
+}
+
+// agentDefsDirs resolves the effective custom-agent-definition directories
+// for the engine — a follow-up finding ("def search path"), mirroring
+// skillsDirs above field-for-field: repeatable -agent-def-dir flags override
+// config agent_defs_dirs entirely; otherwise config agent_defs_dirs is used.
+// Relative entries resolve against workDir. When neither is set it returns
+// nil, leaving the engine default in place (use <workDir>/.agents).
+func agentDefsDirs(cfg *config.Config, flagDirs []string, workDir string) []string {
+	dirs := flagDirs
+	if len(dirs) == 0 && cfg != nil && cfg.AgentDefsDirs != nil {
+		// A config file's explicit "agent_defs_dirs": [] is an opt-out and
+		// must stay a non-nil empty slice; only a truly absent field falls
+		// through to nil (engine default discovery).
+		dirs = cfg.AgentDefsDirs
 	}
 	if dirs == nil {
 		return nil
