@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -859,6 +860,98 @@ func TestIdlePromptWithQueueGoesFIFO(t *testing.T) {
 	finalSess := h2.getSessionJSON(id)
 	if finalSess.Queued != 0 {
 		t.Errorf("queued after full drain = %d, want 0", finalSess.Queued)
+	}
+}
+
+// TestIdlePromptWithQueueDispatchDoesNotRaceQueuedCountInResponse is the
+// regression test for a live, intermittent CI failure
+// (TestIdlePromptWithQueueGoesFIFO itself, seen twice: once during the
+// subagent-sessions PR series, once on main — both times as a fast, 0.02s
+// assertion mismatch, never a timeout, and never caught despite 5,700+
+// combined local -race iterations across every GOMAXPROCS/concurrency/GC-
+// pressure combination tried).
+//
+// Root cause: dispatchQueueHead spawns the dispatched head's own runPrompt
+// turn in a goroutine and returns immediately — nothing waits for it. With
+// a fast enough provider (a scripted test double, or simply an unlucky
+// real one), that goroutine can run the ENTIRE turn to completion — and,
+// via its own tail's maybeDispatchQueued, dispatch (and itself complete)
+// the NEXT queued item too — before the calling goroutine's own next
+// statement ever runs. Every caller used to compute its response's queued
+// depth by re-reading QueuedPrompts() AFTER dispatchQueueHead returned,
+// racing that goroutine. Not a data race — every access is correctly
+// mutex-protected, which is exactly why -race never caught it — a pure
+// ordering assumption ("the item I just dispatched is still running, so
+// the queue behind it is untouched") nothing in the code actually
+// enforced.
+//
+// Forces the race deterministically via dispatchQueueHeadRace (test-only
+// seam, server.go) instead of relying on scheduling luck: the hook sleeps
+// long enough for the dispatched turn — and any chained dispatch behind
+// it — to fully run to completion before dispatchQueueHead returns to its
+// caller, reproducing the exact window an unlucky real scheduling
+// decision opened in CI, on every single run. Asserts the response's own
+// Queued count is unaffected by how far the race actually got to run,
+// proving the fix (dispatchQueueHead's own remaining return value,
+// snapshotted synchronously immediately after the dequeue, before the
+// goroutine is ever spawned) closes the window structurally rather than
+// merely making it rarer.
+func TestIdlePromptWithQueueDispatchDoesNotRaceQueuedCountInResponse(t *testing.T) {
+	dir := t.TempDir()
+	prov := &orderCaptureProv{name: "test", replies: []string{"r1", "r2", "r3"}}
+	srv1 := newServer(t, dir, prov, 0)
+	ts1 := httptest.NewServer(srv1)
+	h1 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv1, ts: ts1}
+
+	id := h1.createSession("test/m1")
+
+	srv1.mu.Lock()
+	st := srv1.sessions[id]
+	srv1.mu.Unlock()
+	if st == nil {
+		t.Fatal("session not resident right after creation")
+	}
+	if _, err := st.sess.EnqueuePrompt("q1"); err != nil {
+		t.Fatalf("EnqueuePrompt q1: %v", err)
+	}
+	if _, err := st.sess.EnqueuePrompt("q2"); err != nil {
+		t.Fatalf("EnqueuePrompt q2: %v", err)
+	}
+
+	if err := srv1.Close(); err != nil {
+		t.Fatalf("closing first server: %v", err)
+	}
+	ts1.Close()
+
+	srv2 := newServer(t, dir, prov, 0)
+	srv2.dispatchQueueHeadRace = func() {
+		// Long enough for the scripted (instant) provider's own turns to
+		// run to completion end to end, however many chain behind this
+		// one — the exact window dispatchQueueHead's remaining return
+		// value must be immune to.
+		time.Sleep(50 * time.Millisecond)
+	}
+	ts2 := httptest.NewServer(srv2)
+	t.Cleanup(ts2.Close)
+	h2 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv2, ts: ts2}
+
+	sess := h2.getSessionJSON(id)
+	if sess.Queued != 2 {
+		t.Fatalf("queued after restart = %d, want 2", sess.Queued)
+	}
+
+	resp, data := h2.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "third"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt status %d: %s", resp.StatusCode, data)
+	}
+	var qr promptAsyncResponse
+	if err := json.Unmarshal(data, &qr); err != nil {
+		t.Fatal(err)
+	}
+	if qr.Status != "queued" || qr.Queued != 2 {
+		t.Fatalf("response = %+v, want status=queued queued=2 (the two restart-refolded prompts still ahead of this one, regardless of how far the dispatched turn raced ahead before this response was built)", qr)
 	}
 }
 
