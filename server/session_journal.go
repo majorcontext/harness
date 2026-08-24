@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/majorcontext/harness/engine"
+	"github.com/majorcontext/harness/plugin"
 )
 
 // defaultJournalLimit/maxJournalLimit bound GET /session/{id}/journal's
@@ -58,6 +59,14 @@ func (s *Server) handleJournal(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// s.lookup's own cold-load path (LoadSession: full ReadFile + scanLog +
+	// message replay + orphan repair) is discarded here — engine.LoadJournal
+	// below re-reads and re-parses the SAME file from scratch, and every
+	// subsequent page of a long log re-reads the whole file again
+	// (paginateJournal slices an already-fully-loaded, already-projected
+	// []JournalRecord). This is a debug endpoint, not a hot path, so the
+	// redundant I/O is an accepted tradeoff rather than something worth a
+	// cache or a leaner existence check.
 	if _, _, ok := s.lookup(id); !ok {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
@@ -69,7 +78,13 @@ func (s *Server) handleJournal(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, JournalResponse{SessionID: id, Records: []engine.JournalRecord{}})
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		// Sanitized, matching engine/journal.go's own package-level rule
+		// ("every field that can carry a raw provider/tool error string is
+		// sanitized ... before it ever leaves this package") — this error
+		// originates OUTSIDE that package (a corrupt-log JSON decode error,
+		// or an OS-level ReadFile failure) but the same boundary applies:
+		// nothing written by this handler skips SanitizeSessionError.
+		writeErr(w, http.StatusInternalServerError, plugin.SanitizeSessionError(err.Error()))
 		return
 	}
 

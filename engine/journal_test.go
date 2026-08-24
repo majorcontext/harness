@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -91,7 +92,7 @@ func TestLoadJournal_ProjectsAllRecordTypes(t *testing.T) {
 	session := got[0]
 	if session.Type != recSession || session.WorkDir != "/repo" || session.ParentSession != "ses_parent" ||
 		session.TaskParentID != "ses_taskparent" || session.TaskAgentType != "reviewer" ||
-		session.Model.Model != "m1" || session.Effort != message.Effort("high") || !session.CreatedAt.Equal(createdAt) {
+		session.Model.Model != "m1" || session.Effort == nil || *session.Effort != message.Effort("high") || !session.CreatedAt.Equal(createdAt) {
 		t.Errorf("session header record = %+v", session)
 	}
 
@@ -111,7 +112,7 @@ func TestLoadJournal_ProjectsAllRecordTypes(t *testing.T) {
 	}
 
 	effortRec := got[4]
-	if effortRec.Type != recEffort || effortRec.Effort != message.Effort("low") {
+	if effortRec.Type != recEffort || effortRec.Effort == nil || *effortRec.Effort != message.Effort("low") {
 		t.Errorf("effort record = %+v", effortRec)
 	}
 
@@ -161,6 +162,43 @@ func TestLoadJournal_ProjectsAllRecordTypes(t *testing.T) {
 	toolResultRec := got[12]
 	if toolResultRec.ToolResultHandle != "trh_1" || toolResultRec.ToolResultTool != "bash" || toolResultRec.ToolResultBytes != 4096 {
 		t.Errorf("toolresult.retained record = %+v", toolResultRec)
+	}
+}
+
+// TestLoadJournal_ClearedEffortIsExplicitNotAbsent is JournalRecord.Effort's
+// own load-bearing regression test: a SetEffort clear to the provider
+// default (EffortUnset, "") must render as an explicit, non-nil pointer to
+// "" — distinguishable from every non-effort record type, whose Effort
+// field is nil and so omitted from the wire entirely. A bare
+// message.Effort with omitempty (the bug this pointer indirection fixes)
+// would drop the field in BOTH cases, making them indistinguishable.
+func TestLoadJournal_ClearedEffortIsExplicitNotAbsent(t *testing.T) {
+	dir := t.TempDir()
+	id := newID("ses")
+	writeRawJournal(t, dir, id, []record{
+		{Type: recEffort, Effort: message.Effort("")},
+	})
+
+	got, err := LoadJournal(dir, id)
+	if err != nil {
+		t.Fatalf("LoadJournal: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(got) = %d, want 1", len(got))
+	}
+	if got[0].Effort == nil {
+		t.Fatal("Effort = nil, want a non-nil pointer to \"\" (an explicit clear, not an absent field)")
+	}
+	if *got[0].Effort != message.Effort("") {
+		t.Errorf("*Effort = %q, want \"\"", *got[0].Effort)
+	}
+
+	b, err := json.Marshal(got[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte(`"effort":""`)) {
+		t.Errorf("marshaled record = %s, want an explicit \"effort\":\"\" key", b)
 	}
 }
 
