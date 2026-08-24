@@ -130,6 +130,26 @@ const (
 	// outcome is settled" signal, independent of whatever trailing
 	// message shape resulted.
 	recChildTurnSettled = "child_turn.settled"
+	// recTaskOutcomeCommitted carries the EXACT taskNotification payload
+	// (reusing taskNotifyRecord's shape, via record.TaskNotify — the same
+	// field recTaskNotifyQueued/recTaskNotifyDelivered use) that
+	// finalizeTurn (or recoverInterruptedTurnLocked itself) computed for
+	// a non-root node's current, still-unsettled turn — see
+	// Session.committedOutcome's own doc comment (engine.go) and the
+	// crash-window table on recoverInterruptedTurnLocked's own doc
+	// comment (session_manager.go) for the full mechanism. Written
+	// BEFORE any delivery attempt, so a crash anywhere in the
+	// deliver-then-settle sequence that follows still leaves a later
+	// recovery attempt with the AUTHORITATIVE, already-computed payload
+	// to replay verbatim, instead of reconstructing a possibly-DIFFERENT
+	// one from trailing-history-shape heuristics — the fix for a live
+	// review finding: recovery's own reconstruction could diverge from
+	// what finalizeTurn already computed (and possibly already
+	// delivered) before a crash struck between finalizeTurn's own
+	// persist steps, producing a duplicate notification with a
+	// DIFFERENT payload than the one the parent may already have
+	// received.
+	recTaskOutcomeCommitted = "task.outcome_committed"
 )
 
 // record is one line of a session log file.
@@ -1010,8 +1030,49 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// Session.turnUnsettled's own doc comment. Mirrors
 			// appendWithUsage's own identical live-path write.
 			s.turnUnsettled = true
+			// s.committedOutcome invalidation — mirrors appendWithUsage's
+			// OWN identical clear, with one deliberate exception: a
+			// message recognizable as recoverInterruptedTurnLocked's own
+			// synthetic lostToRestartText closer (isLostToRestartMarker)
+			// is NOT a new turn starting — it is that SAME recovery
+			// attempt annotating the turn it is still in the middle of
+			// settling, appended via appendMemoryOnly (which, live, never
+			// clears committedOutcome either — see that method's own doc
+			// comment). Clearing here regardless would durably erase the
+			// very commit record a LATER recovery-of-recovery pass needs
+			// to replay verbatim — reopening the exact "false DONE"
+			// divergent-duplicate bug a live review found: with the
+			// commit erased, that later pass falls back to
+			// settledSuccessResult(), which then sees THIS closing
+			// message itself (RoleAssistant, plain text, no ToolCall) as
+			// a spurious natural completion.
+			if !isLostToRestartMarker(msg) {
+				s.committedOutcome = nil
+			}
 		case recChildTurnSettled:
 			s.turnUnsettled = false
+			// The commit's job ends here too — see Session.committedOutcome's
+			// own doc comment: nothing consults it once the turn it
+			// describes is confirmed settled (hasUnfinalizedTurn's guard
+			// at the top of recoverInterruptedTurnLocked already prevents
+			// that), and clearing it stops a stale value from outliving
+			// the turn it was ever valid for.
+			s.committedOutcome = nil
+		case recTaskOutcomeCommitted:
+			// See recTaskOutcomeCommitted's own doc comment for the full
+			// mechanism. Last-writer-wins is fine on the rare chance more
+			// than one lands for the same still-unsettled turn (a
+			// recovery-of-recovery re-commit) — every commit for the SAME
+			// turn is, by construction, computed from the SAME unchanged
+			// s.history and so carries identical content.
+			if rec.TaskNotify != nil {
+				tn := rec.TaskNotify
+				oc := taskNotification{
+					ChildID: tn.ChildID, Agent: tn.Agent, Status: tn.Status,
+					Result: tn.Result, FailReason: tn.FailReason, Usage: tn.Usage,
+				}
+				s.committedOutcome = &oc
+			}
 		case recModel:
 			s.model = rec.Model
 		case recEffort:

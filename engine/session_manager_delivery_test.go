@@ -2,7 +2,9 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -1665,13 +1667,17 @@ func TestRecoverInterruptedTurnSurvivesACrashBetweenDeliveryAndHistoryClose(t *t
 	mgr2.pendingPersist = nil
 	mgr2.mu.Unlock()
 
-	if len(pending) < 2 {
-		t.Fatalf("recovery queued %d deferred persists, want at least 2 (notification delivery, then the closing-message append)", len(pending))
+	if len(pending) < 3 {
+		t.Fatalf("recovery queued %d deferred persists, want at least 3 (commit-outcome, then notification delivery, then the closing-message append)", len(pending))
 	}
-	// Run ONLY the first thunk — the notification delivery — never any
-	// later one. This is the crash: everything after this line simply
-	// never happened, exactly as if the process had died right here.
+	// Run ONLY the first TWO thunks — commitOutcomeLocked's own commit
+	// persist (step 1 of the crash-window table on
+	// recoverInterruptedTurnLocked's own doc comment), then the
+	// notification delivery (step 2) — never any later one. This is the
+	// crash: everything after this line simply never happened, exactly
+	// as if the process had died right here.
 	pending[0]()
+	pending[1]()
 
 	reloadedRootAgain, err := LoadSession(Config{Providers: reg, SessionDir: dir}, root1.ID)
 	if err != nil {
@@ -1832,6 +1838,30 @@ func TestRecoverInterruptedTurnFiresForChildCrashedMidToolLoop(t *testing.T) {
 	childSess, ok := mgr1.Session(childID)
 	if !ok {
 		t.Fatal("child not tracked")
+	}
+	// The child's own first (immediately-failing) turn already ran
+	// finalizeTurn, which durably queues its persistTurnSettled() write
+	// via m.deferPersist — that write runs on finalizeTurn's OWN
+	// goroutine, entirely independent of (and racing) this test's own
+	// goroutine below. Wait for it to actually land on disk before this
+	// test appends anything further to the SAME log: otherwise the two
+	// goroutines' writes to childID's log file can interleave out of
+	// order, letting the settled-marker record land AFTER the manual
+	// appends below and falsify the very shape this test means to set
+	// up — a live flake caught under repeated -count runs.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, childID)
+		if err != nil {
+			t.Fatalf("LoadSession (settle poll): %v", err)
+		}
+		if !s.hasUnfinalizedTurn() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("test setup: child's first-turn settled marker never landed durably")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	// Manually append the exact "crashed mid-tool-loop" shape onto the
 	// child's own durable log, on top of whatever its own failed Spawn
@@ -2138,5 +2168,590 @@ func TestRecoverInterruptedTurnDeliversRealResultInsteadOfFalseFailure(t *testin
 	got := root2.taskNotifications[0]
 	if got.Status != StatusDone || got.Result != finalAnswer {
 		t.Errorf("notification = %+v, want Status=%q Result=%q", got, StatusDone, finalAnswer)
+	}
+}
+
+// removeLogRecords removes every matching record from id's own on-disk
+// session log in dir, simulating "the process died before this record
+// ever landed durably" — a more direct, implementation-independent way to
+// manufacture a specific partial-crash durable state than intercepting
+// SessionManager.pendingPersist mid-flush (which only works for a
+// manually-driven method call, not a real finalizeTurn run happening on
+// its own goroutine). Requires each record to be exactly one line ending
+// in a newline, true of every record this package writes (store.go's
+// writeRecord). Matched by TYPE (and, for a task-notify record, by
+// ChildID) rather than by POSITION — root's own log in particular is not
+// guaranteed to end with the record a test wants gone: delivering to an
+// idle root can trigger its own async resume attempt, which may append
+// further records afterward, so "drop the last line" is only reliable
+// for a log nothing else ever touches again (a terminal child's own).
+func removeLogRecords(t *testing.T, dir, id string, match func(record) bool) {
+	t.Helper()
+	path := sessionPath(dir, id)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read log %s: %v", path, err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	var kept []string
+	removed := 0
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		var rec record
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("unmarshal log line %q: %v", line, err)
+		}
+		if match(rec) {
+			removed++
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if removed == 0 {
+		t.Fatalf("removeLogRecords: no matching record found in %s", path)
+	}
+	out := strings.Join(kept, "\n")
+	if len(kept) > 0 {
+		out += "\n"
+	}
+	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+		t.Fatalf("rewrite log %s: %v", path, err)
+	}
+}
+
+// TestFinalizeTurnCrashBeforeDeliveryStillDeliversViaRecovery is the
+// regression test for the crash-window table's step 1 (on
+// recoverInterruptedTurnLocked's own doc comment): a crash landing
+// between finalizeTurn's own commit-outcome persist and its notification-
+// delivery persist. Lets a REAL finalizeTurn run to full, natural
+// completion for a failed child (so the on-disk log is genuinely correct
+// end to end), then removes the trailing records that a real crash at
+// this exact point would have prevented from ever landing — the
+// notification never reaching the ancestor's log, and (necessarily, since
+// it is queued strictly AFTER delivery) the settled marker never reaching
+// the child's own log either. Proves recovery, on a fresh reload,
+// correctly DELIVERS the notification anyway — no loss — using the
+// already-committed record rather than needing to guess.
+func TestFinalizeTurnCrashBeforeDeliveryStillDeliversViaRecovery(t *testing.T) {
+	dir := t.TempDir()
+	reg := provider.Registry{"root": scriptedTurns("root", nil), "child": scriptedTurns("child", nil)} // zero turns for both — child's own Spawn turn fails immediately
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 0, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr1, childID, StatusFailed, time.Second)
+	origInfo, ok := mgr1.Info(childID)
+	if !ok {
+		t.Fatal("child not tracked")
+	}
+	if origInfo.FailReason == "" || strings.Contains(origInfo.FailReason, "restart") {
+		t.Fatalf("test setup: unexpected original fail_reason %q", origInfo.FailReason)
+	}
+
+	// finalizeTurn's own deferred persists are asynchronous relative to
+	// waitForStatus's in-memory read above — poll until the child's log
+	// shows it fully settled (all four steps landed) before manufacturing
+	// the partial-crash state on top of that complete, correct log.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, childID)
+		if err != nil {
+			t.Fatalf("LoadSession (settle poll): %v", err)
+		}
+		if !s.hasUnfinalizedTurn() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("test setup: child's settled marker never landed durably")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Simulate the crash: strip the child's own settled marker (step 4)
+	// and the notification this real run delivered to root's log (step
+	// 2) — both records a crash landing before delivery would have
+	// prevented. The commit record (step 1) stays, exactly as a real
+	// crash at this point would leave it.
+	removeLogRecords(t, dir, childID, func(r record) bool { return r.Type == recChildTurnSettled })
+	removeLogRecords(t, dir, root1.ID, func(r record) bool {
+		return r.Type == recTaskNotifyQueued && r.TaskNotify != nil && r.TaskNotify.ChildID == childID
+	})
+
+	// The reloaded side gets its OWN provider instances, not reg's shared
+	// ones: mgr1's own root1 can independently still be settling/retrying
+	// in the background (it was ALSO idle when the child's real failure
+	// notification arrived) using reg's objects — sharing them with mgr2
+	// below would let those two independent goroutines race on the
+	// fixture's own unsynchronized internal state, a live -race flake
+	// caught under repeated runs, same root cause/fix as every other test
+	// in this file that adopts a root into a second manager.
+	reg2 := provider.Registry{"root": scriptedTurns("root", nil), "child": scriptedTurns("child", nil)}
+	reloadedRoot, err := LoadSession(Config{Providers: reg2, SessionDir: dir}, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root: %v", err)
+	}
+	if reloadedRoot.hasPendingTaskNotifications() {
+		t.Fatal("test setup: root's log still shows the notification after dropping its trailing line")
+	}
+
+	mgr2 := NewSessionManager(context.Background(), 0, 0)
+	if err := mgr2.AdoptRoot(reloadedRoot); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+	reloadedChild, err := LoadSession(Config{Providers: reg2, SessionDir: dir}, childID)
+	if err != nil {
+		t.Fatalf("LoadSession child: %v", err)
+	}
+	if !reloadedChild.hasUnfinalizedTurn() {
+		t.Fatal("test setup: reloaded child does not read as unsettled after dropping its trailing line")
+	}
+	if err := mgr2.AdoptReloaded(reloadedChild); err != nil {
+		t.Fatalf("AdoptReloaded: %v", err)
+	}
+
+	// reloadedRoot is genuinely idle when recovery delivers to it, so this
+	// triggers a REAL active resume (go m.fireIdleResumeAsync) racing
+	// this test's own read below — rootProv's zero scripted turns make
+	// that resume's own Stream() call fail immediately, requeuing the
+	// notification back onto reloadedRoot.taskNotifications, but the
+	// checkout (into taskNotificationsInFlight) and requeue both happen
+	// on that OTHER goroutine, asynchronously — same race and same fix
+	// as TestRecoverInterruptedTurnForwardsGrandchildNotifications.
+	countAll := func() int {
+		reloadedRoot.mu.Lock()
+		defer reloadedRoot.mu.Unlock()
+		return len(reloadedRoot.taskNotifications) + len(reloadedRoot.taskNotificationsInFlight)
+	}
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && countAll() != 1 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		reloadedRoot.mu.Lock()
+		n := len(reloadedRoot.taskNotifications)
+		reloadedRoot.mu.Unlock()
+		if n == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	reloadedRoot.mu.Lock()
+	defer reloadedRoot.mu.Unlock()
+	if len(reloadedRoot.taskNotifications) != 1 {
+		t.Fatalf("root.taskNotifications = %+v (in-flight: %+v), want exactly 1 entry — recovery must deliver, not lose, the notification a crash-before-delivery left uncommitted to the ancestor's log", reloadedRoot.taskNotifications, reloadedRoot.taskNotificationsInFlight)
+	}
+	got := reloadedRoot.taskNotifications[0]
+	if got.ChildID != childID || got.Status != StatusFailed || got.FailReason != origInfo.FailReason {
+		t.Errorf("notification = %+v, want ChildID=%q Status=%q FailReason=%q (the ORIGINAL classified reason)", got, childID, StatusFailed, origInfo.FailReason)
+	}
+}
+
+// TestFinalizeTurnCrashAfterDeliveryReplaysIdenticalFailureNotDivergent is
+// the regression test for the crash-window table's step 2 and the exact
+// live review finding this whole mechanism exists to close: a crash
+// landing between finalizeTurn's own notification-delivery persist and
+// its settled-marker persist. Before committedOutcome existed, recovery
+// reconstructed a FRESH notify from trailing-history shape on a re-adopt
+// — for an ordinary failure (which appends nothing to history), that was
+// ALWAYS the generic "lost to restart" text, never the real classified
+// reason finalizeTurn had already durably delivered. Since the two
+// payloads differ, enqueueTaskNotificationMemoryOnlyDeduped's exact-`==`
+// dedup could not recognize them as the same event: the ancestor ended up
+// told the same child both failed for its real reason AND was
+// "lost to restart" — two different accounts of one failure.
+//
+// Same "let a real finalizeTurn run, then strip only what a crash at
+// this exact point would have prevented" technique as the sibling test
+// above — here only the child's own trailing settled-marker line is
+// dropped; the real, already-delivered notification on root's log is
+// left untouched, exactly as a crash AFTER delivery landed would leave
+// it.
+func TestFinalizeTurnCrashAfterDeliveryReplaysIdenticalFailureNotDivergent(t *testing.T) {
+	dir := t.TempDir()
+	reg := provider.Registry{"root": scriptedTurns("root", nil), "child": scriptedTurns("child", nil)} // zero turns for both — child's own Spawn turn fails immediately
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 0, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr1, childID, StatusFailed, time.Second)
+	origInfo, ok := mgr1.Info(childID)
+	if !ok {
+		t.Fatal("child not tracked")
+	}
+	if origInfo.FailReason == "" || strings.Contains(origInfo.FailReason, "restart") {
+		t.Fatalf("test setup: unexpected original fail_reason %q", origInfo.FailReason)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, childID)
+		if err != nil {
+			t.Fatalf("LoadSession (settle poll): %v", err)
+		}
+		if !s.hasUnfinalizedTurn() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("test setup: child's settled marker never landed durably")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Simulate the crash: strip ONLY the child's own settled marker
+	// (step 4) — the real notification (step 2) already durably landed
+	// on root's log and stays there, exactly as a crash landing AFTER
+	// delivery but before settling would leave it.
+	removeLogRecords(t, dir, childID, func(r record) bool { return r.Type == recChildTurnSettled })
+
+	// The reloaded side gets its OWN provider instances, not reg's shared
+	// ones — same shared-object race avoidance as the sibling test above.
+	reg2 := provider.Registry{"root": scriptedTurns("root", nil), "child": scriptedTurns("child", nil)}
+	reloadedRoot, err := LoadSession(Config{Providers: reg2, SessionDir: dir}, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root: %v", err)
+	}
+	if !reloadedRoot.hasPendingTaskNotifications() {
+		t.Fatal("test setup: root's log lost the real, already-delivered notification")
+	}
+
+	mgr2 := NewSessionManager(context.Background(), 0, 0)
+	if err := mgr2.AdoptRoot(reloadedRoot); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+	reloadedChild, err := LoadSession(Config{Providers: reg2, SessionDir: dir}, childID)
+	if err != nil {
+		t.Fatalf("LoadSession child: %v", err)
+	}
+	if !reloadedChild.hasUnfinalizedTurn() {
+		t.Fatal("test setup: reloaded child does not read as unsettled after dropping its trailing line")
+	}
+	if err := mgr2.AdoptReloaded(reloadedChild); err != nil {
+		t.Fatalf("AdoptReloaded: %v", err)
+	}
+
+	// reloadedRoot is genuinely idle when AdoptReloaded runs, so this can
+	// trigger a REAL active resume (go m.fireIdleResumeAsync) racing this
+	// test's own read below, the same as the sibling test above — poll
+	// rather than read once.
+	countAll := func() int {
+		reloadedRoot.mu.Lock()
+		defer reloadedRoot.mu.Unlock()
+		return len(reloadedRoot.taskNotifications) + len(reloadedRoot.taskNotificationsInFlight)
+	}
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && countAll() != 1 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		reloadedRoot.mu.Lock()
+		n := len(reloadedRoot.taskNotifications)
+		reloadedRoot.mu.Unlock()
+		if n == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	reloadedRoot.mu.Lock()
+	defer reloadedRoot.mu.Unlock()
+	// The crux of the fix: exactly ONE notification for this child, with
+	// the REAL classified reason — never a second, divergent "lost to
+	// restart" entry alongside it.
+	var matching []taskNotification
+	for _, n := range reloadedRoot.taskNotifications {
+		if n.ChildID == childID {
+			matching = append(matching, n)
+		}
+	}
+	if len(matching) != 1 {
+		t.Fatalf("root.taskNotifications for childID = %+v (in-flight: %+v), want exactly 1 — a divergent duplicate means the parent is told the same child both failed for its real reason and was separately \"lost to restart\"", matching, reloadedRoot.taskNotificationsInFlight)
+	}
+	if matching[0].FailReason != origInfo.FailReason {
+		t.Errorf("fail_reason = %q, want the ORIGINAL classified reason %q, not a re-derived generic one", matching[0].FailReason, origInfo.FailReason)
+	}
+	if strings.Contains(matching[0].FailReason, "restart") {
+		t.Errorf("fail_reason = %q, want it to NOT be re-labeled as a restart loss for a child that already durably delivered its real reason", matching[0].FailReason)
+	}
+}
+
+// TestRecoveryCrashBetweenClosingMessageAndSettleDoesNotMisreportSuccess
+// is the regression test for the crash-window table's step 3 and the
+// OTHER divergent-duplicate shape a live review found: a crash landing
+// INSIDE recoverInterruptedTurnLocked's own delivery/settle sequence,
+// between its synthetic lostToRestartText closing-message append and its
+// own settled-marker persist. Before committedOutcome existed, a SECOND
+// recovery attempt would re-run settledSuccessResult(), which — by the
+// time the FIRST attempt's closing message has landed durably — now sees
+// a trailing RoleAssistant message with plain text and no ToolCall part:
+// exactly the shape settledSuccessResult treats as an unambiguous natural
+// completion. It would misread the FIRST attempt's own "this turn was
+// interrupted" marker as a genuine successful answer, and deliver a
+// SECOND, divergent DONE{Result: the marker text} notification alongside
+// the FAILED one already queued.
+//
+// Simulates this directly: drives adoptReloadedLocked(recover=true)
+// manually (the same technique
+// TestRecoverInterruptedTurnSurvivesACrashBetweenDeliveryAndHistoryClose
+// uses), runs every queued thunk EXCEPT the last (the settled-marker
+// persist) to simulate the FIRST recovery attempt crashing right after
+// its own closing-message append landed, then drives recovery a SECOND
+// time on a fresh reload and asserts it replays the IDENTICAL FAILED
+// outcome — never a spurious DONE.
+func TestRecoveryCrashBetweenClosingMessageAndSettleDoesNotMisreportSuccess(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	childProv := &signaledBlockingProvider{name: "child", started: make(chan struct{}), release: make(chan struct{})}
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 0, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	<-childProv.started // mid-turn, genuinely crash-shaped: abandon it, never release
+
+	// First recovery attempt: fresh manager, manually driven so its own
+	// deferred persists can be selectively run.
+	rootProv2 := scriptedTurns("root", nil)
+	reg2 := provider.Registry{rootProv2.Name(): rootProv2, childProv.Name(): childProv}
+	rootCfg2 := Config{Providers: reg2, Model: modelFor("root"), SessionDir: dir}
+
+	mgr2 := NewSessionManager(context.Background(), 0, 0)
+	root2 := NewSession(rootCfg2)
+	root2.ID = root1.ID
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+	reloadedChild, err := LoadSession(Config{Providers: reg2, SessionDir: dir}, childID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+
+	mgr2.mu.Lock()
+	mgr2.adoptReloadedLocked(reloadedChild, true)
+	pending := mgr2.pendingPersist
+	mgr2.pendingPersist = nil
+	mgr2.mu.Unlock()
+	if len(pending) < 4 {
+		t.Fatalf("recovery queued %d deferred persists, want at least 4 (commit, delivery, closing-message, settled-marker)", len(pending))
+	}
+	// Run every thunk EXCEPT the last one (the settled-marker persist) —
+	// the crash lands right after the closing-message append's own
+	// durable write, before this recovery attempt could settle the turn.
+	for _, fn := range pending[:len(pending)-1] {
+		fn()
+	}
+
+	origInfo, ok := mgr2.Info(childID)
+	if !ok {
+		t.Fatal("child not tracked after first recovery attempt")
+	}
+	if origInfo.Status != StatusFailed || !strings.Contains(origInfo.FailReason, "restart") {
+		t.Fatalf("test setup: first recovery attempt status = %+v, want a generic restart failure", origInfo)
+	}
+
+	// Third process: a fresh reload sees the closing message durably in
+	// history, but no settled marker — the exact "step 3" crash-window
+	// state, and the shape that used to fool settledSuccessResult().
+	rootProv3 := scriptedTurns("root", nil)
+	reg3 := provider.Registry{rootProv3.Name(): rootProv3, childProv.Name(): childProv}
+	rootCfg3 := Config{Providers: reg3, Model: modelFor("root"), SessionDir: dir}
+
+	mgr3 := NewSessionManager(context.Background(), 0, 0)
+	root3 := NewSession(rootCfg3)
+	root3.ID = root1.ID
+	if err := mgr3.AdoptRoot(root3); err != nil {
+		t.Fatalf("AdoptRoot (third process): %v", err)
+	}
+	reloadedChildAgain, err := LoadSession(Config{Providers: reg3, SessionDir: dir}, childID)
+	if err != nil {
+		t.Fatalf("LoadSession (third process): %v", err)
+	}
+	if !reloadedChildAgain.hasUnfinalizedTurn() {
+		t.Fatal("test setup: reloaded child already reads as settled — the simulated crash truncation did not work")
+	}
+	if !reloadedChildAgain.hasTrailingLostToRestartMarker() {
+		t.Fatal("test setup: reloaded child's trailing message is not the synthetic closing marker — first recovery attempt's own append did not survive the reload")
+	}
+
+	if err := mgr3.AdoptReloaded(reloadedChildAgain); err != nil {
+		t.Fatalf("AdoptReloaded (third process): %v", err)
+	}
+
+	info, ok := mgr3.Info(childID)
+	if !ok {
+		t.Fatal("child not tracked after second recovery attempt")
+	}
+	if info.Status != StatusFailed {
+		t.Errorf("status = %q, want %q — a second recovery pass must not misread its own synthetic closing message as a genuine successful completion", info.Status, StatusFailed)
+	}
+	if info.Result != "" {
+		t.Errorf("result = %q, want empty — a DONE result here would mean the synthetic \"[harness: interrupted...]\" marker text was mistaken for a real answer", info.Result)
+	}
+	if !strings.Contains(info.FailReason, "restart") {
+		t.Errorf("fail_reason = %q, want it to still mention the restart", info.FailReason)
+	}
+
+	// root3 is genuinely idle when AdoptReloaded runs recovery a second
+	// time, so this can trigger a REAL active resume (go
+	// m.fireIdleResumeAsync) racing this test's own read below, the same
+	// as the sibling tests above — poll rather than read once.
+	countAll := func() int {
+		root3.mu.Lock()
+		defer root3.mu.Unlock()
+		return len(root3.taskNotifications) + len(root3.taskNotificationsInFlight)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && countAll() != 1 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		root3.mu.Lock()
+		n := len(root3.taskNotifications)
+		root3.mu.Unlock()
+		if n == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	root3.mu.Lock()
+	defer root3.mu.Unlock()
+	var matching []taskNotification
+	for _, n := range root3.taskNotifications {
+		if n.ChildID == childID {
+			matching = append(matching, n)
+		}
+	}
+	if len(matching) != 1 {
+		t.Fatalf("root.taskNotifications for childID = %+v (in-flight: %+v), want exactly 1 — a divergent duplicate means the parent is told the same child both failed AND succeeded (with the interrupt marker text as its \"result\")", matching, root3.taskNotificationsInFlight)
+	}
+	if matching[0].Status != StatusFailed {
+		t.Errorf("notification.Status = %q, want %q", matching[0].Status, StatusFailed)
+	}
+}
+
+// TestFinalizeTurnSettlesADurablyParentedButUntrackedNode is the
+// regression test for a live review finding: finalizeTurn's own
+// settled-marker (and, now, commit-outcome) gate used to check the
+// IN-MEMORY sessionNode.parentID, but adoptReloadedLocked's own
+// root/non-root branch — which decides whether a reloaded node is a
+// recovery CANDIDATE at all — checks the DURABLE TaskParentID() instead.
+// The two normally agree, except for adoptReloadedLocked's own "true
+// depth is unrecoverable" case (its own doc comment): a child whose real
+// parent is not tracked in THIS process gets adopted with an in-memory
+// parentID of "" (root-shaped) even though it durably DOES have a real
+// TaskParentID. Gating the settled-marker on the in-memory pointer meant
+// such a node's turns were NEVER marked settled, even on a completely
+// ordinary, successful completion — hasUnfinalizedTurn() stayed true
+// forever, and a LATER re-adoption spuriously ran recovery against a
+// turn that had already finished cleanly (adoptReloadedLocked's own
+// root/non-root branch does NOT treat this node as a root, since it
+// checks the durable field, so recovery genuinely does fire for it).
+//
+// Reproduces the degraded shape directly (same technique as
+// TestRecoverInterruptedTurnDoesNotFalselyMarkForwardedNotificationDelivered
+// earlier in this file): adopt a child alone into a fresh manager that
+// never tracks its parent, drive one MORE ordinary, successful turn on
+// it via Send, and prove the turn actually gets marked settled — both in
+// memory immediately and durably on a THIRD reload.
+func TestFinalizeTurnSettlesADurablyParentedButUntrackedNode(t *testing.T) {
+	dir := t.TempDir()
+	childProv := scriptedTurns("child", doneTurn("first turn done"))
+	reg := provider.Registry{"root": scriptedTurns("root", nil), "child": childProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
+
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr1, childID, StatusDone, time.Second)
+
+	// finalizeTurn's own deferred persists are asynchronous relative to
+	// waitForStatus's in-memory read above — poll until the child's log
+	// shows it fully settled before reloading it into a second manager
+	// below, otherwise the settled marker can land AFTER this test's own
+	// reload, falsely reading as still-unsettled — a live flake caught
+	// under repeated -count runs.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, childID)
+		if err != nil {
+			t.Fatalf("LoadSession (settle poll): %v", err)
+		}
+		if !s.hasUnfinalizedTurn() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("test setup: child's first-turn settled marker never landed durably")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// A fresh manager that never adopts root1 at all — mid's own
+	// parentID is untracked, the exact "true depth is unrecoverable"
+	// degraded shape: adoptReloadedLocked's root/non-root branch (durable
+	// TaskParentID()) still treats it as non-root, but the in-memory node
+	// it builds gets parentID == "".
+	childProv2 := scriptedTurns("child", doneTurn("second turn also done"))
+	reg2 := provider.Registry{"child": childProv2}
+	reloadedChild, err := LoadSession(Config{Providers: reg2, SessionDir: dir}, childID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if reloadedChild.hasUnfinalizedTurn() {
+		t.Fatal("test setup: reloaded child already reads as unsettled before this test even drives a new turn")
+	}
+
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	if err := mgr2.AdoptReloaded(reloadedChild); err != nil {
+		t.Fatalf("AdoptReloaded: %v", err)
+	}
+
+	// Drive ONE MORE ordinary, successful turn on this degraded node —
+	// finalizeTurn's own settled-marker/commit-outcome gate is what is
+	// under test here.
+	if _, err := mgr2.Send(context.Background(), childID, "one more thing"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	childSess, ok := mgr2.Session(childID)
+	if !ok {
+		t.Fatal("child not tracked after Send")
+	}
+	if childSess.hasUnfinalizedTurn() {
+		t.Error("hasUnfinalizedTurn() = true after an ordinary, successful Send turn on a durably-parented-but-untracked node — finalizeTurn's settled-marker gate did not fire for it")
+	}
+
+	// Durable proof, not just in-memory: a THIRD, completely fresh
+	// process reload must ALSO read this turn as settled — otherwise a
+	// later AdoptReloaded(recover=true) would spuriously run recovery
+	// against a turn that actually finished cleanly.
+	reloadedAgain, err := LoadSession(Config{Providers: reg2, SessionDir: dir}, childID)
+	if err != nil {
+		t.Fatalf("second LoadSession: %v", err)
+	}
+	if reloadedAgain.hasUnfinalizedTurn() {
+		t.Error("reloadedAgain.hasUnfinalizedTurn() = true — the settled marker never durably landed for this degraded node's turn")
 	}
 }
