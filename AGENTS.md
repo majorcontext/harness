@@ -1697,6 +1697,47 @@ without knowing the incidents:
   `vcs.revision`/`vcs.time` — check that before hypothesizing that a fix is
   missing from a running process.
 
+## Commit messages and PR descriptions
+
+Model: https://go.dev/wiki/CommitMessage. A commit message is documentation
+for a future reader who has none of your context; the diff shows what
+changed, the message must carry everything the diff cannot.
+
+Subject line: [Conventional Commits](https://www.conventionalcommits.org/),
+`type(scope): description` (e.g. `fix(server): stop false-idle wake
+between back-to-back turns`) — the repo's existing convention. Lowercase
+description, no trailing period, under ~72 chars; scope names the primary
+package.
+
+Body — required for every non-trivial change, written as prose, wrapped
+~76 columns, in this shape:
+
+1. **The problem, as a story a reader can follow.** What was observably
+   wrong, who hits it, how it was found. Not "fix race in waitSnapshot" —
+   say what the caller experienced ("a waiter on until=idle could wake in
+   the gap between a turn marking idle and its tail dispatching the next
+   queued prompt, and read a transcript that was about to change").
+2. **Why this design.** The mechanism chosen and the reasoning — including
+   alternatives considered and rejected, and why. If review or a design
+   fork shaped the outcome, say so ("a suppression design was abandoned
+   because collectUntilIdle depends on unconditional idle emission").
+3. **The semantic change.** What is now true that was not, stated
+   precisely, including deliberate non-changes ("status reporting is
+   unchanged; only the waiter's wake condition tightened").
+4. **Verification when it earns trust:** red-verified counts, live-fire
+   evidence, hammer runs.
+
+PR descriptions follow the same shape at PR granularity: a reviewer must
+be able to understand the problem, the approach, and what to scrutinize
+before opening a single file. A one-line PR body on a multi-file change
+is a defect.
+
+`Fixes #N` / `Updates #N` trailers when an issue exists. Never include
+AI-attribution lines (`Co-Authored-By` for agents, session links,
+"Generated with" footers) in commits or PR bodies. Squash merges inherit the PR
+title as subject — write PR titles to the same standard as commit
+subjects.
+
 ## Writing Style
 
 You MUST use ASD-STE100 Simplified Technical English — the aerospace
@@ -1736,7 +1777,3 @@ Read and act on every review thread individually — never batch-resolve. One
 explicit resolve command per thread id. A batch operation once resolved
 unread findings.
 
-## Git Commits
-
-- [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): description` (e.g. `feat(plugin): add shell.env hook`).
-- Do not include `Co-Authored-By` lines for AI agents in commit messages.
