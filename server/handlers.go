@@ -1681,11 +1681,21 @@ func (s *Server) releasePromptClaim(st *sessionState) {
 // The idle transition is ALWAYS emitted here, even when the queue is
 // non-empty and about to be redispatched by this same tail's own
 // maybeDispatchQueued call — collectUntilIdle and every test built on it
-// depend on that. What changes when the queue is non-empty is
-// Server.queueDrainPending (its own doc comment): set here, still under
-// this same lock, so waitSnapshot (wait.go) can tell this transient,
-// self-resolving gap apart from a session that is genuinely idle with a
-// queue nobody is about to drain (e.g. resumed after a restart).
+// depend on that. Server.queueDrainPending (its own doc comment) is set
+// here, unconditionally, still under this same lock, so waitSnapshot
+// (wait.go) can tell this transient, self-resolving gap apart from a
+// session that is genuinely idle with a queue nobody is about to drain
+// (e.g. resumed after a restart).
+//
+// Unconditional, not gated on "is the queue actually non-empty right
+// now": queueDrainPending's own doc comment covers why in full, but in
+// short, any such gate reads from a source that can itself be stale at
+// this exact instant relative to a concurrent enqueue still landing —
+// this call always follows immediately with maybeDispatchQueued (every
+// caller's own tail), whose deferred clearQueueDrainPending resolves the
+// flag correctly either way, so there is nothing to gain by checking here
+// and a live-reproduced false-idle window to lose by getting the check
+// wrong.
 func (s *Server) freeRunSlotAndEmitIdle(id string, st *sessionState) {
 	s.mu.Lock()
 	st.running = false
@@ -1694,9 +1704,7 @@ func (s *Server) freeRunSlotAndEmitIdle(id string, st *sessionState) {
 	st.lastUsed = time.Now()
 	s.evictResidentLocked()
 	s.emitDurableLocked(&Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
-	if s.queueDepth[id] > 0 {
-		s.queueDrainPending[id] = true
-	}
+	s.queueDrainPending[id] = true
 	s.mu.Unlock()
 }
 

@@ -394,31 +394,41 @@ type Server struct {
 	// the same information.
 	lastTurn map[string]*turnOutcome
 
-	// queueDepth tracks the most recent prompt-queue depth per session, for
-	// this process only (in memory, like goalState/lastTurn) — the QueueLen
-	// carried on the LATEST prompt.queued/prompt.dequeued durable event
-	// this server has processed, live or replayed (see emitDurableLocked
-	// and loadJournal, both journal.go). Exists so freeRunSlotAndEmitIdle
-	// (handlers.go) can check "is anything queued" under the s.mu it
-	// already holds, without calling engine.Session.QueuedPrompts() (which
-	// needs sess's OWN separate lock) — an earlier version did exactly
-	// that and deadlocked: dequeueLocked takes the two locks in the
-	// OPPOSITE order (session lock held, then server lock via its own
-	// emit chain), a lock-order inversion that hangs under any concurrent
-	// dispatch. Since emitDurableLocked already runs entirely under s.mu
-	// for every durable write, updating this map there too costs nothing
-	// extra and keeps it exactly as fresh as the event that triggers each
-	// wake. See queueDrainPending below for what freeRunSlotAndEmitIdle
-	// does with this value.
-	queueDepth map[string]int
-
-	// queueDrainPending marks, per session, that freeRunSlotAndEmitIdle
-	// found the queue non-empty (queueDepth[id] > 0) at the exact moment
-	// it durably emitted this session's "idle" transition — true from
-	// then until maybeDispatchQueued (called unconditionally right after,
-	// in the SAME tail, by all three of freeRunSlotAndEmitIdle's callers:
-	// runPrompt, runGoal, handleCompact) resolves the redispatch attempt
-	// one way or another and clears it via clearQueueDrainPending.
+	// queueDrainPending marks, per session, that freeRunSlotAndEmitIdle is
+	// about to hand off to (or has just handed off to) this same tail's
+	// own maybeDispatchQueued call — set unconditionally, every time,
+	// under the SAME s.mu hold that already emits this session's "idle"
+	// transition, and cleared by maybeDispatchQueued's own deferred
+	// clearQueueDrainPending call once it resolves the redispatch attempt
+	// one way or another (dispatched, lost the claim race, or found the
+	// queue already empty). All three of freeRunSlotAndEmitIdle's callers
+	// (runPrompt, runGoal, handleCompact) call maybeDispatchQueued
+	// unconditionally later in the SAME tail, so the flag's lifetime is
+	// always this same short, self-resolving window — never a permanent
+	// leak.
+	//
+	// Set unconditionally — not gated on "is the queue actually
+	// non-empty" — deliberately: an earlier version checked a
+	// server-side queueDepth cache here to avoid a cross-lock call into
+	// engine.Session's own lock (QueuedPrompts() needs sess's OWN
+	// separate mutex; dequeueLocked, engine/queue.go, takes the two locks
+	// in the OPPOSITE order — session lock held, then server lock via its
+	// own emit chain — so holding s.mu across that call would be a
+	// lock-order-inversion deadlock). But that cache is populated by a
+	// SEPARATE event path (publishQueue -> emitDurableLocked) that can
+	// still be in flight — holding the engine session lock, queue already
+	// non-empty, blocked trying to acquire s.mu to record the update — at
+	// the exact instant freeRunSlotAndEmitIdle reads it here, so the
+	// cache can read stale-empty while a real enqueue is genuinely
+	// in-flight right behind it: a live review finding, the same false-idle
+	// class this whole fix exists to close, just triggered by an enqueue
+	// racing turn-end instead of a queue that was already non-empty. Since
+	// maybeDispatchQueued's own clearQueueDrainPending resolves this
+	// unconditionally moments later regardless (a genuinely empty queue
+	// just clears it again immediately, waking any waiter to re-observe
+	// idle — one extra, negligible wake), setting the flag unconditionally
+	// removes the dependence on any cache's freshness entirely, closing
+	// the window structurally rather than chasing another lagging read.
 	//
 	// This exists because the "idle" event freeRunSlotAndEmitIdle emits
 	// is NOT suppressed or delayed for this case — collectUntilIdle
@@ -437,10 +447,11 @@ type Server struct {
 	// a restart with a non-empty queue and nothing running — AGENTS.md:
 	// "Boot never auto-dispatches a resumed queue... it sits there until
 	// the next natural drain trigger." That case has no pending drain
-	// trigger at all (loadJournal never touches this map) and is
-	// genuinely idle right now; gating naively on queueDepth alone (an
-	// earlier version of this fix did) made it block for the full
-	// until=idle timeout instead of returning immediately — a live review
+	// trigger at all (freeRunSlotAndEmitIdle, the only setter, never runs
+	// for it — loadJournal replay never calls it) and is genuinely idle
+	// right now; gating naively on queue depth alone (an earlier version
+	// of this fix did) made it block for the full until=idle timeout
+	// instead of returning immediately — a live review
 	// finding. queueDrainPending, set only by the live post-turn tail that
 	// is actually about to redispatch, avoids that regression.
 	queueDrainPending map[string]bool
@@ -785,7 +796,6 @@ func New(opts Options) (*Server, error) {
 		lastPersistErr:    make(map[string]string),
 		goalState:         make(map[string]*goalTracker),
 		lastTurn:          make(map[string]*turnOutcome),
-		queueDepth:        make(map[string]int),
 		queueDrainPending: make(map[string]bool),
 		waiters:           make(map[*waiter]struct{}),
 		closing:           make(chan struct{}),

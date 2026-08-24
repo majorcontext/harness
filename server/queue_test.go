@@ -293,21 +293,36 @@ func TestQueueLenExplicitOnEmptyingDequeue(t *testing.T) {
 // condition (waitConditionMet, wait.go) checked composite state alone,
 // never the queue.
 //
-// Fixed by making waitConditionMet's until=idle case also require the
-// queue to be empty — "nothing left to do" is the documented contract, and
-// a non-empty queue on an otherwise-idle session is always about to
-// resume on its own, watched or not.
+// Fixed by Server.queueDrainPending (its own doc comment, server.go):
+// freeRunSlotAndEmitIdle sets it, still under the same s.mu hold that
+// emits the "idle" event, and maybeDispatchQueued's own deferred
+// clearQueueDrainPending resolves it once the redispatch attempt is
+// settled one way or another. waitSnapshot (wait.go) folds it into the
+// composite state it hands GET /session/{id}/wait, alongside st.running,
+// from that same single s.mu-held read — no torn read possible. A
+// boot-resumed session's queue (loadJournal never sets the flag) is
+// deliberately unaffected: see
+// TestWaitUntilIdleReturnsImmediatelyForBootResumedQueue (wait_test.go).
 //
-// Forces the exact race deterministically via three test-only seams
-// (waitRegisteredRace, postIdleEmitRace, waitWakeCheckedRace — server.go)
-// instead of relying on scheduling luck: waitRegisteredRace confirms the
-// waiter is parked before "first" is released; postIdleEmitRace blocks
-// runPrompt's own tail — after "first"'s idle transition has already
-// woken the waiter, before maybeDispatchQueued gets a chance to touch the
-// queue — until waitWakeCheckedRace confirms that specific wake has been
-// fully evaluated, and asserts (right there, with zero race against the
-// dequeue that is about to happen the instant this returns) that it was
-// NOT satisfied by the transient idle.
+// Forces the exact race deterministically via two test-only seams
+// (waitRegisteredRace, postIdleEmitRace — server.go) instead of relying
+// on scheduling luck: waitRegisteredRace confirms the waiter is parked
+// before "first" is released; postIdleEmitRace blocks runPrompt's own
+// tail — after "first"'s idle transition (and queueDrainPending set) has
+// already woken the waiter, before maybeDispatchQueued gets a chance to
+// touch the queue or clear the flag — and, right there, calls
+// waitSnapshot directly and asserts it does NOT read idle. Asserting on
+// waitSnapshot itself, synchronously, in the exact window that matters,
+// rather than inferring the answer from whichever wake a real waiter
+// goroutine happens to process first, is what makes this deterministic:
+// an earlier version of this test gated its assertion on the FIRST wake
+// a real parked waiter received via a third seam (waitWakeCheckedRace,
+// since removed) — but that first wake is often an earlier,
+// correctly-not-met busy wake (the turn's own assistant-message journal,
+// or its turn-end record), which consumed the guard before the transient
+// idle wake under test ever fired. See the commit history for that
+// version's own "failed 4/5" measurement against the exact pre-fix
+// condition it was meant to catch.
 func TestWaitUntilIdleDoesNotWakeEarlyOnQueuedFollowUp(t *testing.T) {
 	prov := &queueProv{
 		name:    "test",
@@ -403,6 +418,87 @@ func TestWaitUntilIdleDoesNotWakeEarlyOnQueuedFollowUp(t *testing.T) {
 	final := h.getSessionJSON(id)
 	if final.Queued != 0 {
 		t.Fatalf("final queued = %d, want 0 — \"second\" must have actually run, not merely been reported idle-and-abandoned", final.Queued)
+	}
+}
+
+// TestFreeRunSlotAndEmitIdleSetsQueueDrainPendingUnconditionally is the
+// regression test for a live review finding on freeRunSlotAndEmitIdle
+// (handlers.go): an earlier version gated Server.queueDrainPending on a
+// separate queueDepth cache (`if s.queueDepth[id] > 0`), populated by a
+// SEPARATE event path (publishQueue -> emitDurableLocked) that can itself
+// still be in flight relative to a concurrent enqueue — that enqueue's own
+// append can land before its own cache update, right as a concurrent turn's
+// own freeRunSlotAndEmitIdle reads the (still stale) cache. That
+// reintroduces the exact false-idle class this whole fix exists to close,
+// just triggered by an enqueue racing turn-end instead of a queue that was
+// already non-empty going in.
+//
+// Fixed by setting queueDrainPending unconditionally, every time,
+// regardless of what any cache says — maybeDispatchQueued's own deferred
+// clearQueueDrainPending resolves it correctly either way (a genuinely
+// empty queue just clears it again immediately, waking any waiter to
+// re-observe idle). queueDepth itself was removed entirely (server.go,
+// journal.go): with nothing left to read it, keeping it around would only
+// be a second, now-pointless source to go stale from.
+//
+// Proven WITHOUT needing to force the exact lock-contention timing the live
+// finding describes: an ordinary, single, never-queued turn's own
+// completion is enough to distinguish the two versions. A queue that
+// really is empty at turn-completion time has an ACCURATE (not stale)
+// cache reading 0 under the OLD design — so the old gated code would
+// correctly (for the wrong reason) never set the flag here, and a waiter
+// parked in freeRunSlotAndEmitIdle's own window would see idle immediately,
+// same as pre-fix. The NEW code sets it regardless, so the SAME waiter
+// briefly sees not-idle in that same window before self-clearing moments
+// later — this test asserts exactly that shape, red-verifying the
+// "unconditional, not gated" mechanism directly rather than the specific
+// race that motivated it.
+func TestFreeRunSlotAndEmitIdleSetsQueueDrainPendingUnconditionally(t *testing.T) {
+	prov := &queueProv{
+		name:    "test",
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "solo"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt status %d: %s", resp.StatusCode, data)
+	}
+	<-prov.started
+
+	checked := make(chan struct{})
+	h.srv.postIdleEmitRace = func() {
+		defer close(checked)
+		// The queue is genuinely, verifiably empty here — nothing was
+		// ever enqueued for this session — so this is not a race window
+		// at all under the OLD gated design: an accurate, non-stale
+		// queueDepth[id]==0 would correctly skip setting the flag. Only
+		// the NEW unconditional design sets it regardless.
+		if n := h.getSessionJSON(id).Queued; n != 0 {
+			t.Fatalf("queue depth = %d, want 0 (this test proves the UNCONDITIONAL set on an ordinary turn, not a real queued item)", n)
+		}
+		if state, _ := h.srv.waitSnapshot(id); state == "idle" {
+			t.Error("waitSnapshot reported idle inside freeRunSlotAndEmitIdle's own window, before maybeDispatchQueued has resolved queueDrainPending — queueDrainPending must be set unconditionally here, not gated on any queue-depth cache")
+		}
+	}
+
+	close(prov.release) // let the solo turn finish
+	<-checked           // the in-window assertion above has run
+
+	resp, data = h.do("GET", "/session/"+id+"/wait?until=idle&timeout_s=5", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("wait status %d: %s", resp.StatusCode, data)
+	}
+	var wr waitJSON
+	if err := json.Unmarshal(data, &wr); err != nil {
+		t.Fatal(err)
+	}
+	if wr.State != "idle" {
+		t.Fatalf("wait state = %q, want idle (queueDrainPending must self-clear once maybeDispatchQueued finds nothing to dispatch)", wr.State)
 	}
 }
 

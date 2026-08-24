@@ -596,8 +596,8 @@ func (s *Server) publishGoal(ev engine.Event) {
 }
 
 // publishQueue journals a durable prompt.queued/prompt.dequeued record (see
-// engine/queue.go). Unlike publishGoal, there is deliberately no per-session
-// PRESENTATION tracker folded here: GET /session's queued count still reads
+// engine/queue.go). There is deliberately no per-session tracker folded
+// here, unlike publishGoal: GET /session's queued count still reads
 // engine.Session.QueuedPrompts() directly (see buildSession), which is
 // authoritative for both a live resident session (its own promptQueue slice,
 // mutex-guarded) and a freshly LoadSession-replayed one (folded from the same
@@ -607,15 +607,11 @@ func (s *Server) publishGoal(ev engine.Event) {
 // construction — there is only one source of truth to ever drift from,
 // unlike goalState (which exists because Session JSON needs server-derived
 // presentation, e.g. the paused view, that the engine does not itself track).
-//
-// The one narrow exception is Server.queueDepth (its own doc comment),
-// folded inside emitDurableLocked below — not here, and not anything either
-// GET /session or GET /session/{id}/wait's until=idle condition reads
-// directly. It exists purely so freeRunSlotAndEmitIdle (handlers.go) can
-// check "is anything queued" under the s.mu it already holds, without a
-// cross-lock call into engine.Session's own lock. This function's own job is
-// otherwise unchanged: make the events visible on the durable journal/SSE
-// stream for observability and replay.
+// GET /session/{id}/wait's until=idle condition does not read queue depth
+// either (see Server.queueDrainPending's own doc comment for why not, and
+// what it reads instead). This function's own job is unchanged: make the
+// events visible on the durable journal/SSE stream for observability and
+// replay.
 func (s *Server) publishQueue(ev engine.Event) {
 	queueLen := ev.QueueLen
 	s.emitDurable(Event{
@@ -834,14 +830,6 @@ func (s *Server) emitDurableLocked(ev *Event) {
 	ev.Seq = s.seq
 	s.writeJournalLocked(*ev)
 	s.journal = append(s.journal, *ev)
-	if ev.QueueLen != nil {
-		// Keeps Server.queueDepth (its own doc comment) exactly as fresh
-		// as the event that is about to wake any waiter below — updated
-		// BEFORE notifyWaitersLocked so a woken waiter's own
-		// waitSnapshot call always sees this event's own queue depth,
-		// never a stale one from before it.
-		s.queueDepth[ev.SessionID] = *ev.QueueLen
-	}
 	s.fanoutLocked(*ev)
 	s.notifyWaitersLocked(ev.SessionID)
 }
@@ -1045,18 +1033,6 @@ func (s *Server) loadJournal(data []byte) {
 		}
 		if ev.Type == evtTurnEnd {
 			s.lastTurn[ev.SessionID] = &turnOutcome{outcome: ev.Outcome, error: ev.Error}
-		}
-		if ev.QueueLen != nil {
-			// Mirrors emitDurableLocked's own identical fold for the live
-			// path (see Server.queueDepth's own doc comment) — without
-			// this, a session restored across a restart with prompts
-			// already queued from a PRIOR process would read
-			// queueDepth as its zero value (0) until this process's own
-			// first live prompt.queued/dequeued event, letting
-			// until=idle wake immediately on a session that is, in
-			// truth, still carrying a non-empty queue from before the
-			// restart.
-			s.queueDepth[ev.SessionID] = *ev.QueueLen
 		}
 		s.foldGoalRecordLocked(ev)
 	}
