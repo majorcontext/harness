@@ -55,6 +55,13 @@ func TestCanceledChildNotifiesParent(t *testing.T) {
 	for _, m := range root.History() {
 		if m.Role == message.RoleUser && m.Parts.Text() == taskResumeTriggerText {
 			found = true
+			// The resume trigger must carry message.OriginEngine — see that
+			// constant's own doc comment — so a client (boxes' console) can
+			// render it as a system notice rather than a human-typed
+			// bubble, never conflating it with a real user message.
+			if m.Origin != message.OriginEngine {
+				t.Errorf("resume trigger message.Origin = %q, want %q", m.Origin, message.OriginEngine)
+			}
 		}
 	}
 	if !found {

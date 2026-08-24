@@ -583,6 +583,13 @@ func TestSessionSendDeliversToRoot(t *testing.T) {
 			t.Fatalf("get messages status %d: %s", resp.StatusCode, data)
 		}
 		if len(data) > 2 && string(data) != "[]" && strings.Contains(string(data), "hello back") {
+			// A session.send delivery is a genuine operator-authored
+			// message, never the engine's own synthetic resume trigger —
+			// it must not carry origin:engine (see sendTextToRoot's own
+			// doc comment and message.Message.Origin's).
+			if strings.Contains(string(data), `"origin":"engine"`) {
+				t.Errorf("session.send message wrongly carries origin:engine: %s", data)
+			}
 			return
 		}
 		if time.Now().After(deadline) {
@@ -1661,5 +1668,15 @@ func TestSelfResumeDoesNotRaceRunSlotRelease(t *testing.T) {
 	// comment — so this is the durable signal a resume genuinely ran).
 	if !strings.Contains(string(data), "A background task you started has finished") {
 		t.Errorf("self-resume never ran (node likely wedged at running instead): %s", data)
+	}
+	// The resume-trigger message must carry "origin":"engine" on the wire —
+	// this is the production path (resumeSessionForTaskNotification's
+	// ExternalRunner, via runOrQueueText's idle-no-queue branch) boxes'
+	// console actually observes, not just the engine-package unit test's
+	// no-ExternalRunner fallback. See message.Message.Origin's own doc
+	// comment: it is what lets the console render this as a system notice
+	// instead of a human-typed bubble.
+	if !strings.Contains(string(data), `"origin":"engine"`) {
+		t.Errorf("resume-trigger message missing origin:engine on the wire: %s", data)
 	}
 }

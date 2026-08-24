@@ -33,6 +33,15 @@ const (
 	RoleTool Role = "tool"
 )
 
+// OriginEngine marks a Message the engine itself authored as a RoleUser
+// turn trigger, with no human behind it — see Message.Origin's own doc
+// comment. Currently set on exactly one message shape:
+// SessionManager.triggerResumeLocked's synthetic resume-turn message (see
+// engine/taskdelivery.go's taskResumeTriggerText), which the "queue-or-resume
+// delivery" design fires to resume an idle parent once a spawned child's
+// notification is ready to deliver.
+const OriginEngine = "engine"
+
 // Message is one entry in a session's history.
 //
 // The system prompt is deliberately not part of history: it is assembled per
@@ -46,6 +55,23 @@ type Message struct {
 	// for user and tool messages.
 	Model     ModelRef  `json:"model,omitzero"`
 	CreatedAt time.Time `json:"created_at,omitzero"`
+	// Origin marks who/what produced this message, beyond Role. Empty (the
+	// default, and every message ever written before this field existed)
+	// means an ordinary source: a real end-user prompt, or a model-produced
+	// assistant/tool message. OriginEngine is the one other value defined
+	// today — see its own doc comment.
+	//
+	// This is presentation metadata only, read by a client (boxes' console)
+	// deciding how to RENDER the message (a system notice vs. a human-typed
+	// bubble) — it must never change how the model itself treats the
+	// message. Role alone still governs that: an OriginEngine message is
+	// still RoleUser, still real history a resumed conversation can refer
+	// back to (see taskResumeTriggerText's own doc comment for why it is a
+	// short, honest, visible message rather than an empty or synthetic-
+	// looking one), and every transcoder sends it to the provider exactly
+	// like any other user message, Origin untouched and untransmitted (no
+	// transcoder reads this field).
+	Origin string `json:"origin,omitempty"`
 }
 
 // Normalize scrubs known encoding/json footguns from m's parts in place. It

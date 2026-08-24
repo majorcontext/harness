@@ -247,7 +247,14 @@ func (s *Server) runOrQueueText(id, text string) engine.RunnerOutcome {
 		return engine.RunnerHandled
 	}
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
-	go s.runPrompt(ctx, id, st, text)
+	// origin message.OriginEngine: text here is ALWAYS taskResumeTriggerText
+	// — runOrQueueText is only ever reached as resumeSessionForTaskNotification,
+	// this server's engine.ExternalRunner, and this is the one branch that
+	// actually dispatches its own trigger text (the queue-non-empty branch
+	// above dispatches the QUEUE HEAD instead — see this function's own doc
+	// comment). Tagging it lets the console render it as a system notice
+	// rather than a human-typed bubble — see message.Message.Origin.
+	go s.runPrompt(ctx, id, st, text, message.OriginEngine)
 	return engine.RunnerHandled
 }
 
@@ -340,7 +347,11 @@ func (s *Server) sendTextToRoot(id, text string) (status string, queuedDepth int
 			return "queued", remaining, 0, ""
 		}
 		s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
-		go s.runPrompt(ctx, id, st, text)
+		// origin "": sendTextToRoot delivers a genuine session.send message
+		// (an MCP send_message_to_box call, or any other operator-authored
+		// text), never the engine's own synthetic resume trigger — that one
+		// goes exclusively through runOrQueueText above.
+		go s.runPrompt(ctx, id, st, text, "")
 		return "started", 0, 0, ""
 	}
 }

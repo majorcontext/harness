@@ -2958,14 +2958,14 @@ func (m *SessionManager) triggerResumeLocked(node *sessionNode) func() {
 			// the resume. This call owns the WHOLE turn itself (no
 			// server run-slot involved), so firing any further resume
 			// immediately is safe — no release to race.
-			msg, err := s.Prompt(ctx, taskResumeTriggerText)
+			msg, err := s.PromptEngineResume(ctx, taskResumeTriggerText)
 			if resume := m.finalizeTurn(id, msg, err); resume != nil {
 				go resume()
 			}
 		}
 	}
 	return func() {
-		msg, err := s.Prompt(ctx, taskResumeTriggerText)
+		msg, err := s.PromptEngineResume(ctx, taskResumeTriggerText)
 		if resume := m.finalizeTurn(id, msg, err); resume != nil {
 			go resume()
 		}
