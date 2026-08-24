@@ -3101,6 +3101,44 @@ func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queu
 	return false, nil
 }
 
+// accumulateUsageLocked folds n's newly-spent usage (this turn's DELTA,
+// not its full cumulative total — see budgetedUsage's own doc comment
+// for why a delta is required: n may be a done/failed child Send just
+// restarted for a follow-up turn, and this is not the first time this
+// has run for it) into its ROOT's running tree-wide total — see
+// usageByRoot's own doc comment ("per-tree budgets," a follow-up
+// finding). Called unconditionally, near the very top of finalizeTurn,
+// BEFORE that method's own re-drive-or-settle decision: it must run
+// exactly once per turn that actually happened, regardless of whether
+// finalizeTurn goes on to settle n terminal, re-drive it (the queued-
+// message race fix — see finalizeTurn's own doc comment), or leave a
+// root idle — a live review finding on this fix's first pass, which ran
+// this accumulation much later, AFTER the re-drive branch's own early
+// return, silently skipping it for however long the re-driven turn
+// takes and letting a concurrent Spawn under-count the tree budget in
+// that window (self-correcting once the re-driven turn's own eventual
+// call reaches this same accumulation with the combined total, but a
+// real, if narrow, gap until then). Never re-derived by re-summing every
+// node — incremental, mirroring runningByRoot's own accumulator shape
+// exactly. Caller holds m.mu.
+func (m *SessionManager) accumulateUsageLocked(n *sessionNode) {
+	total := n.session.Usage()
+	delta := provider.Usage{
+		InputTokens:      total.InputTokens - n.budgetedUsage.InputTokens,
+		OutputTokens:     total.OutputTokens - n.budgetedUsage.OutputTokens,
+		CacheReadTokens:  total.CacheReadTokens - n.budgetedUsage.CacheReadTokens,
+		CacheWriteTokens: total.CacheWriteTokens - n.budgetedUsage.CacheWriteTokens,
+	}
+	n.budgetedUsage = total
+	m.budgetedByChild[n.id] = total
+	u := m.usageByRoot[n.rootID]
+	u.InputTokens += delta.InputTokens
+	u.OutputTokens += delta.OutputTokens
+	u.CacheReadTokens += delta.CacheReadTokens
+	u.CacheWriteTokens += delta.CacheWriteTokens
+	m.usageByRoot[n.rootID] = u
+}
+
 // finalizeTurn records the outcome of one turn just run via Prompt (Spawn's
 // launched goroutine, Send's synchronous call, triggerResumeLocked's
 // goroutine, or an external scheduler's ReportTurnEnd) and decrements the
@@ -3120,6 +3158,20 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 		m.mu.Unlock()
 		return nil
 	}
+
+	// Accumulate n's newly-spent usage BEFORE the re-drive check below —
+	// a live review finding: an earlier version of this call ran only
+	// once, much later (right before the settled-marker persist), which
+	// the re-drive branch's early return skipped entirely. That left
+	// usageByRoot under-counting the just-finished turn's tokens for the
+	// WHOLE duration of the re-driven turn (self-correcting once ITS OWN
+	// eventual finalizeTurn call finally reaches this same accumulation
+	// with the combined total, but a concurrent Spawn checking the tree
+	// budget in that window could be wrongly admitted). See
+	// accumulateUsageLocked's own doc comment for why this is safe to
+	// run unconditionally, every call, regardless of which path below
+	// this ends up taking.
+	m.accumulateUsageLocked(n)
 
 	// A CHILD (depth>0), not already canceled, may have had a message
 	// enqueued to it by a concurrent SendToDescendant call that read
@@ -3272,38 +3324,6 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 	// under this single m.mu hold, so an observer woken here re-reads a
 	// fully settled node. See markChangedLocked's own doc comment.
 	m.markChangedLocked()
-
-	// Accumulate n's newly-spent usage (this turn's delta, NOT its full
-	// cumulative total — see budgetedUsage's own doc comment for why a
-	// delta is required: n may be a done/failed child Send just
-	// restarted for a follow-up turn, and this is not the first time
-	// finalizeTurn has run for it) into its ROOT's running tree-wide
-	// total — see usageByRoot's own doc comment ("per-tree budgets," a
-	// follow-up finding). Runs regardless of which of the three branches
-	// above fired (including alreadyCanceled: a canceled turn may still
-	// have spent real tokens before cancellation, and those must still
-	// count toward the budget) or whether notify is even non-nil (a
-	// ROOT's own turns spend tokens too, and must count toward ITS
-	// OWN — degenerate, self — tree budget for TestSpawn_BudgetExceeded-
-	// style single-node trees to behave sensibly, though roots have no
-	// Spawn caller to ever check the budget against in the first place
-	// today). Never re-derived by re-summing every node — incremental,
-	// mirroring runningByRoot's own accumulator shape exactly.
-	total := n.session.Usage()
-	delta := provider.Usage{
-		InputTokens:      total.InputTokens - n.budgetedUsage.InputTokens,
-		OutputTokens:     total.OutputTokens - n.budgetedUsage.OutputTokens,
-		CacheReadTokens:  total.CacheReadTokens - n.budgetedUsage.CacheReadTokens,
-		CacheWriteTokens: total.CacheWriteTokens - n.budgetedUsage.CacheWriteTokens,
-	}
-	n.budgetedUsage = total
-	m.budgetedByChild[n.id] = total
-	u := m.usageByRoot[n.rootID]
-	u.InputTokens += delta.InputTokens
-	u.OutputTokens += delta.OutputTokens
-	u.CacheReadTokens += delta.CacheReadTokens
-	u.CacheWriteTokens += delta.CacheWriteTokens
-	m.usageByRoot[n.rootID] = u
 
 	// n.parentID != "" here exactly when notify != nil was possible (the
 	// three non-root cases above) — a CHILD that just went terminal

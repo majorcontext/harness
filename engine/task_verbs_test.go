@@ -411,16 +411,23 @@ func TestSendToDescendantSettledRelaunchesAsynchronously(t *testing.T) {
 	}
 	waitForStatus(t, mgr, childID, StatusDone, time.Second)
 
-	start := time.Now()
+	// No wall-clock deadline assertion here (AGENTS.md's "no guessed
+	// deadlines" testing rule — a live review finding on an earlier
+	// version of this test, which asserted elapsed <= 500ms): the
+	// non-blocking property is proven STRUCTURALLY instead.
+	// childProv's second call blocks on release, which stays open until
+	// AFTER this point — if SendToDescendant actually blocked for the
+	// whole re-run turn (the bug this test guards against), this very
+	// call would hang until the test binary's own timeout, a real
+	// failure with no arbitrary threshold to tune or flake under load.
+	// The waitForStatus(StatusRunning) below is the actual proof the
+	// re-run started at all.
 	queued, err := mgr.SendToDescendant(root.ID, childID, "please redo this")
 	if err != nil {
 		t.Fatalf("SendToDescendant: %v", err)
 	}
 	if queued {
 		t.Error("SendToDescendant on a settled child: queued = true, want false (a fresh re-run turn, not an enqueue)")
-	}
-	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
-		t.Errorf("SendToDescendant blocked for %s waiting on the re-run turn (childProv's second call blocks on release, never closed yet) — want it to return immediately, matching Spawn's non-blocking contract", elapsed)
 	}
 
 	waitForStatus(t, mgr, childID, StatusRunning, time.Second)

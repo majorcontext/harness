@@ -364,7 +364,16 @@ func runTaskSend(s *Session, in taskToolArgs) (message.Parts, error) {
 	// re-run actually took, on the off chance it didn't.
 	note := "the descendant was not actively running, so this was dispatched as a fresh turn with your message; check back with task status on this session_id if you want to confirm it actually started"
 	if queued {
-		note = "queued for delivery at the descendant's next turn boundary — no need to poll or wait for it"
+		// Hedged with "unless it is canceled first," not an unconditional
+		// "no need to poll": finalizeTurn's own re-drive re-check (the
+		// mechanism that actually guarantees this delivery) is gated on
+		// the descendant not being StatusCanceled — canceling it after
+		// this call but before its next turn boundary drops the queued
+		// entry along with everything else in its subtree (cancellation's
+		// ordinary "stop, full stop" semantics — see CancelDescendant's
+		// own doc comment), which this note should not paper over. A live
+		// review finding.
+		note = "queued for delivery at the descendant's next turn boundary — no need to poll or wait for it, unless the descendant is canceled first (a canceled descendant drops anything still queued, like the rest of its own state)"
 	}
 	return jsonResult(taskSendResult{SessionID: in.SessionID, Queued: queued, Note: note})
 }
@@ -435,6 +444,22 @@ func classifyTaskToolError(err error) error {
 // StatusRunning for the duration of its own Run function, and Reap only
 // ever removes a TERMINAL leaf node — s cannot have been forgotten out
 // from under its own in-flight call.
+//
+// The ErrSessionBusy case below is currently unreachable too — a review
+// finding: none of the three callers this function serves can produce it
+// synchronously. SendToDescendant deliberately ENQUEUES to a running
+// target rather than refusing it (see its own doc comment), and
+// CancelDescendant/DescendantInfo only ever return ErrUnknownSession/
+// ErrNotDescendant. Send CAN return ErrSessionBusy, but only from
+// SendToDescendant's OWN fire-and-forget goroutine on the settled-restart
+// path, where the error is intentionally discarded, never returned to
+// this function's caller at all (see that goroutine's own comment).
+// Kept anyway, deliberately, as defensive forward-compatibility: it is
+// exactly as safe to surface as every other sentinel here, and dropping
+// it would silently start falling through to the generic default case
+// the moment any future change to these three methods legitimately
+// starts returning it synchronously — a worse failure mode (a vague
+// error) than one extra, currently-dead case today.
 func classifyTaskVerbError(err error, targetID string) error {
 	switch {
 	case errors.Is(err, ErrUnknownSession):
