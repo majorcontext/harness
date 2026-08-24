@@ -21,6 +21,45 @@ type taskNotification struct {
 	Result     string        // the child's final text — set for StatusDone
 	FailReason string        // classified (#82-rule) reason — set for StatusFailed
 	Usage      provider.Usage
+	// Canceled distinguishes a child that was explicitly Cancel()ed from
+	// an ordinarily failed one — deliberately NOT folded into Status
+	// (which stays exactly Done/Failed, unchanged, for every existing
+	// parent-facing consumer: the queued/delivered wire shape, the
+	// [tasks:] rendering, etc.) and NOT inferable from FailReason=="canceled"
+	// either: classifySpawnError (below) also produces that exact string
+	// for a genuinely FAILED turn whose own context was canceled for some
+	// OTHER reason (e.g. an ancestor's context propagating), which is a
+	// real StatusFailed outcome, not a StatusCanceled one — string-matching
+	// FailReason would conflate the two. Set true ONLY by finalizeTurn's
+	// alreadyCanceled branch (n.status was already StatusCanceled,
+	// directly, via cancelSubtreeLocked, before finalizeTurn ever ran).
+	// Read ONLY by SessionManager.restoreKnownStatusLocked and
+	// recoverInterruptedTurnLocked, to restore/set n.status accurately
+	// for a re-adopted or recovered node — a live review finding: without
+	// this, re-adopting an already-canceled child silently rewrote its
+	// history to StatusFailed, indistinguishable from a genuine failure,
+	// the moment restoreKnownStatusLocked's committed.Status (Done/Failed
+	// only) was all that survived to restore from.
+	Canceled bool
+}
+
+// nodeStatusForOutcome maps n (a taskNotification carrying a completed
+// turn's outcome — a committedOutcome being restored, or a freshly-built
+// notify being applied to the node it describes) to the sessionNode
+// status that outcome actually represents — the ONE place this mapping
+// happens, shared by SessionManager.restoreKnownStatusLocked and
+// recoverInterruptedTurnLocked (both used to inline their own copy of
+// the Done/Failed half of this switch, which is what let the Canceled
+// case go unhandled in the first place — see Canceled's own doc comment).
+func nodeStatusForOutcome(n taskNotification) SessionStatus {
+	switch {
+	case n.Canceled:
+		return StatusCanceled
+	case n.Status == StatusDone:
+		return StatusDone
+	default:
+		return StatusFailed
+	}
 }
 
 // taskNotificationResultCap bounds how much of a child's final text a

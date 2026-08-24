@@ -396,6 +396,13 @@ type taskNotifyRecord struct {
 	Result     string         `json:"result,omitempty"`
 	FailReason string         `json:"fail_reason,omitempty"`
 	Usage      provider.Usage `json:"usage,omitzero"`
+	// Canceled mirrors taskNotification.Canceled (see its own doc
+	// comment, taskdelivery.go) — carried on every record type this
+	// struct backs, though only recTaskOutcomeCommitted's own fold below
+	// actually reads it back: that is the one record type
+	// restoreKnownStatusLocked/recoverInterruptedTurnLocked restore a
+	// node's status from.
+	Canceled bool `json:"canceled,omitempty"`
 }
 
 // SessionInfo summarizes one persisted session for listings.
@@ -591,7 +598,7 @@ func (s *Session) persistTaskNotifyLocked(recType string, n taskNotification) {
 		s.lastPersistErr = err
 		return
 	}
-	rec := taskNotifyRecord{ChildID: n.ChildID, Agent: n.Agent, Status: n.Status, Result: n.Result, FailReason: n.FailReason, Usage: n.Usage}
+	rec := taskNotifyRecord{ChildID: n.ChildID, Agent: n.Agent, Status: n.Status, Result: n.Result, FailReason: n.FailReason, Usage: n.Usage, Canceled: n.Canceled}
 	if err := s.writeRecord(record{Type: recType, TaskNotify: &rec}); err != nil {
 		s.lastPersistErr = err
 	}
@@ -1080,6 +1087,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				oc := taskNotification{
 					ChildID: tn.ChildID, Agent: tn.Agent, Status: tn.Status,
 					Result: tn.Result, FailReason: tn.FailReason, Usage: tn.Usage,
+					Canceled: tn.Canceled,
 				}
 				s.committedOutcome = &oc
 			}
@@ -1237,6 +1245,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				s.taskNotifications = append(s.taskNotifications, taskNotification{
 					ChildID: tn.ChildID, Agent: tn.Agent, Status: tn.Status,
 					Result: tn.Result, FailReason: tn.FailReason, Usage: tn.Usage,
+					Canceled: tn.Canceled,
 				})
 			}
 		case recTaskNotifyDelivered:
