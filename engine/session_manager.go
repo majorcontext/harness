@@ -352,6 +352,21 @@ func (m *SessionManager) unlockAndFlushPersist() {
 	}
 }
 
+// commitOutcomeLocked records n as s's authoritative committed turn
+// outcome (in memory, immediately) and queues its durable write to run
+// after m.mu releases — the ONE helper both finalizeTurn and
+// recoverInterruptedTurnLocked call, in exactly the same position in
+// their own deferPersist sequence (BEFORE attempting delivery), so a
+// crash anywhere after this point always leaves a later recovery attempt
+// with the identical payload to replay — see Session.committedOutcome's
+// own doc comment and the crash-window table on
+// recoverInterruptedTurnLocked's own doc comment for the full mechanism.
+// Caller holds m.mu.
+func (m *SessionManager) commitOutcomeLocked(s *Session, n taskNotification) {
+	s.commitTurnOutcome(n)
+	m.deferPersist(func() { s.persistCommittedTurnOutcome(n) })
+}
+
 // SetExternalRunner installs runner as described on the ExternalRunner
 // type — nil restores the default (m drives every turn itself). Safe to
 // call at any time; takes effect on the next resume decision.
@@ -701,10 +716,21 @@ func (m *SessionManager) adoptRootLocked(s *Session) *sessionNode {
 //     (should Spawn refuse a StatusFailed parent the way it already
 //     refuses StatusCanceled?) this fix does not make.
 func (m *SessionManager) adoptReloadedLocked(s *Session, recover bool) *sessionNode {
-	parentID := s.TaskParentID()
-	if parentID == "" {
+	// s.hasTaskParent() — the SAME predicate finalizeTurn's own
+	// settled-marker/commit-outcome gate uses (session_manager.go's
+	// finalizeTurn, and see hasTaskParent's own doc comment) — a live
+	// review finding: an earlier version of finalizeTurn re-derived this
+	// "is s a non-root tree member" question from the in-memory
+	// sessionNode.parentID instead, which disagrees with THIS check for
+	// exactly the "true depth is unrecoverable" case below (a node
+	// adopted here with attachTo=="" despite a non-empty TaskParentID) —
+	// unifying both onto one helper is what makes it impossible for the
+	// two ends of a crash window to disagree about which nodes recovery
+	// covers.
+	if !s.hasTaskParent() {
 		return m.adoptRootLocked(s)
 	}
+	parentID := s.TaskParentID()
 	s.cfg.SessionManager = m
 	s.tools[taskToolName] = taskTool()
 	depth := m.maxDepth
@@ -780,24 +806,69 @@ func (m *SessionManager) adoptReloadedLocked(s *Session, recover bool) *sessionN
 // every session on disk, deliberately out of scope for this fix (see the
 // design doc section referenced above for why the reactive version is
 // the documented, accepted answer for now).
+//
+// # Crash-window inventory
+//
+// A live review found that the earlier "deliver first, mark settled
+// last" reordering above is necessary but NOT sufficient: it stops a
+// notification from being permanently LOST, but a crash landing INSIDE
+// either finalizeTurn's OR this method's OWN deliver-then-settle
+// sequence could still make a LATER recovery attempt reconstruct a
+// DIFFERENT payload than the one already (partially) delivered —
+// producing a DIVERGENT duplicate the exact-`==` dedup
+// (enqueueTaskNotificationMemoryOnlyDeduped) cannot catch, since it only
+// recognizes a byte-identical repeat. Two concrete shapes: a failed
+// turn's real classified reason (finalizeTurn) vs. this method's own
+// generic "lost to restart" reconstruction; and a genuinely-interrupted
+// turn's own synthetic lostToRestartText closer being misread, on a
+// SECOND recovery pass, as a spurious natural completion by
+// settledSuccessResult().
+//
+// commitOutcomeLocked/Session.committedOutcome closes this: both
+// finalizeTurn and this method persist the EXACT computed notify to the
+// child's OWN log, BEFORE attempting delivery — so any later recovery
+// attempt that finds one replays it VERBATIM instead of re-deriving a
+// possibly-different guess. The table below enumerates every crash point
+// across BOTH methods' shared step sequence (steps 1-5 are the terminal-
+// completion path both funnel into: build/commit outcome, deliver,
+// close, settle) and the durable state — and this method's own resulting
+// behavior — a crash at each point leaves behind. "This method" in the
+// last column means whichever of finalizeTurn/recoverInterruptedTurnLocked
+// runs NEXT for this child, reactively, per this function's own doc
+// comment above.
+//
+//	Step | Durable write (child's own log, unless noted)     | hasUnfinalizedTurn | committedOutcome | Next recovery attempt does
+//	-----|-----------------------------------------------------|---------------------|-------------------|---------------------------------------------
+//	  0  | (turn's own messages only — recMessage)              | true                | nil               | reconstruct fresh: settledSuccessResult(),
+//	     |                                                       |                     |                   | else the generic "lost to restart" fallback
+//	     |                                                       |                     |                   | — nothing was ever computed or delivered to
+//	     |                                                       |                     |                   | diverge from, so a fresh guess is safe.
+//	  1  | + recTaskOutcomeCommitted (commitOutcomeLocked)      | true                | SET               | replay the committed notify verbatim.
+//	  2  | + recTaskNotifyQueued (on the ANCESTOR's log)        | true                | SET               | replay the committed notify verbatim — dedup
+//	     |                                                       |                     |                   | recognizes the exact match already queued on
+//	     |                                                       |                     |                   | the ancestor's log; a fresh delivery if step 2
+//	     |                                                       |                     |                   | itself never durably landed.
+//	  3  | + recMessage (the synthetic closing message —       | true                | SET (step 3's own | replay the committed notify verbatim; the
+//	     |   FAILED outcomes only, see isLostToRestartMarker)   |                     | fold does NOT     | closing message is recognized as already
+//	     |                                                       |                     | clear it)         | appended (isLostToRestartMarker) and not
+//	     |                                                       |                     |                   | duplicated.
+//	  4  | + recChildTurnSettled (markTurnSettled)              | false               | nil (cleared)     | never fires again — the guard at the top of
+//	     |                                                       |                     |                   | this method returns immediately.
+//
+// Step 3 only applies to a FAILED outcome (settled successfully-reported
+// turns never append a closing message — see the "Skipped entirely when
+// notify.Status == StatusDone" note below). Every step's own durable
+// write is queued via m.deferPersist and flushed, in this exact order,
+// by unlockAndFlushPersist AFTER m.mu releases — see that mechanism's
+// own doc comment for why the write itself never runs while m.mu is
+// held, and deferPersist's own doc comment for why FIFO queue order is
+// what makes "step N landed before step N+1 could" a meaningful,
+// checkable property in the first place.
 func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session) {
 	if !s.hasUnfinalizedTurn() {
 		return
 	}
-	// Before assuming the worst, check whether this turn actually reached
-	// a natural, unambiguous end — see settledSuccessResult's own doc
-	// comment (engine.go) for the exact shape it detects and why, and for
-	// the residual narrower case it deliberately does not. settledResult/
-	// settledOK are read again below, once, when notify is built.
-	settledResult, settledOK := s.settledSuccessResult()
 	n.finalized = true
-	if settledOK {
-		n.status = StatusDone
-		n.result = settledResult
-	} else {
-		n.status = StatusFailed
-		n.failReason = "lost to restart: turn was in flight when the process last stopped"
-	}
 
 	// Fold this child's spend into its root's tree-wide budget total —
 	// see finalizeTurn's own identical delta-accounting block (and
@@ -839,23 +910,70 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	u.CacheWriteTokens += delta.CacheWriteTokens
 	m.usageByRoot[n.rootID] = u
 
-	// Usage: total (the full cumulative spend), not delta — matching
-	// finalizeTurn's own three notify-building branches exactly (each
-	// sets Usage: n.session.Usage()). delta is the right value to fold
-	// into usageByRoot just above (the tree budget only ever wants the
-	// NOT-yet-credited portion), but the WRONG value to report to the
-	// parent: the parent-facing notification is meant to say how much
-	// this child spent in total, the same number finalizeTurn would
-	// report for any other terminally failed child. A live review
-	// finding: a Send-restarted child interrupted on its follow-up turn
-	// would otherwise under-report its total usage in the parent's
-	// [tasks:] line relative to an ordinarily-failed child.
+	// Reconstruct — or, when possible, REPLAY — this turn's outcome. See
+	// the crash-window table on this method's own doc comment (step 1)
+	// for the full reasoning: a prior finalizeTurn run, or an earlier
+	// call to this very method, may already have computed the exact
+	// outcome for this turn and durably committed it before crashing
+	// somewhere in ITS OWN delivery/settle sequence — replaying that
+	// verbatim, rather than re-deriving a possibly-DIFFERENT guess, is
+	// what makes a retry idempotent-by-content even for a FAILED outcome
+	// (whose real classified reason committedTurnOutcome preserves,
+	// unlike the generic "lost to restart" fallback below) and for the
+	// rarer wedge-shaped SUCCESS settledSuccessResult's own doc comment
+	// describes as a residual gap it does not cover.
+	//
+	// Only when NO committed outcome exists at all (step 0 — nothing was
+	// ever computed for this turn before the crash) does this fall back
+	// to settledSuccessResult()/the generic failure text, exactly as
+	// before.
 	var notify taskNotification
-	if settledOK {
-		notify = taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusDone, Result: settledResult, Usage: total}
+	if committed, ok := s.committedTurnOutcome(); ok {
+		notify = committed
+	} else if settledResult, settledOK := s.settledSuccessResult(); settledOK {
+		notify = taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusDone, Result: settledResult}
 	} else {
-		notify = taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: n.failReason, Usage: total}
+		notify = taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: "lost to restart: turn was in flight when the process last stopped"}
 	}
+	// Usage: always the freshly recomputed total (the full cumulative
+	// spend), not whatever a committed record happened to carry, and not
+	// delta — matching finalizeTurn's own three notify-building branches
+	// exactly (each sets Usage: n.session.Usage()). delta is the right
+	// value to fold into usageByRoot just above (the tree budget only
+	// ever wants the NOT-yet-credited portion), but the WRONG value to
+	// report to the parent: the parent-facing notification is meant to
+	// say how much this child spent in TOTAL, the same number
+	// finalizeTurn would report for any other terminally failed child. A
+	// live review finding: a Send-restarted child interrupted on its
+	// follow-up turn would otherwise under-report its total usage in the
+	// parent's [tasks:] line relative to an ordinarily-failed child.
+	// Recomputing here rather than trusting a committed record's own
+	// Usage field is deliberate, not merely redundant: total is a
+	// deterministic function of s.history, which cannot have changed
+	// between when that record was written and now (this turn is still
+	// unsettled, so nothing new has been appended to it since) — the two
+	// are ALWAYS numerically identical, so always computing fresh keeps
+	// one single source of truth instead of two that merely happen to
+	// agree.
+	notify.Usage = total
+
+	if notify.Status == StatusDone {
+		n.status = StatusDone
+		n.result = notify.Result
+	} else {
+		n.status = StatusFailed
+		n.failReason = notify.FailReason
+	}
+
+	// Commit THIS notify durably BEFORE attempting delivery — mirrors
+	// finalizeTurn's own identical step (SessionManager.commitOutcomeLocked)
+	// exactly, so a crash inside the delivery/settle sequence below
+	// leaves a LATER recovery attempt this same replay guarantee (step 1
+	// of the crash-window table). A harmless, idempotent re-write on the
+	// branch above that already found an existing committed record — by
+	// construction, notify already equals it exactly.
+	m.commitOutcomeLocked(s, notify)
+
 	target := m.nearestLiveAncestorLocked(n)
 
 	// n may ALSO have been a parent with its own pending notifications —
@@ -986,12 +1104,20 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	// existed): idempotency is now markTurnSettled's job below, not
 	// this append's.
 	//
-	// Skipped entirely when settledOK: the turn was NOT actually
-	// interrupted — s's own trailing message already IS the real,
-	// natural close of this turn (see settledSuccessResult's doc
-	// comment) — appending a synthetic "this turn was interrupted"
-	// message after a genuine final answer would corrupt an otherwise-
-	// clean transcript with a flatly false claim.
+	// Skipped entirely when notify.Status == StatusDone: the turn was NOT
+	// actually interrupted — s's own trailing message already IS the
+	// real, natural close of this turn (whether detected fresh via
+	// settledSuccessResult, or replayed from an earlier commit) —
+	// appending a synthetic "this turn was interrupted" message after a
+	// genuine final answer would corrupt an otherwise-clean transcript
+	// with a flatly false claim.
+	//
+	// ALSO skipped when the synthetic closer is already the trailing
+	// message (step 3 of the crash-window table: an earlier call to this
+	// SAME method already appended it and crashed before settling) —
+	// otherwise a recovery-of-recovery retry would append a SECOND
+	// "[harness: this turn was interrupted…]" message into history on
+	// every retry until the settled marker finally lands.
 	//
 	// Role: RoleAssistant, not RoleTool — this is a genuine INTERRUPTED
 	// MODEL TURN (no tool call to pair a synthetic RoleTool result with,
@@ -999,7 +1125,7 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	// message is what actually closes a turn in this transcript's own
 	// vocabulary; the text itself is unambiguous synthetic-marker
 	// language, never presented as if the model actually said it.
-	if !settledOK {
+	if notify.Status != StatusDone && !s.hasTrailingLostToRestartMarker() {
 		closing := s.appendMemoryOnly(message.Message{
 			ID:        newID("msg"),
 			Role:      message.RoleAssistant,
@@ -1035,6 +1161,20 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 // Idempotency (recovery must not re-fire for the same settled turn) is
 // markTurnSettled's job, not this message's.
 const lostToRestartText = "[harness: this turn was interrupted by a process restart and could not complete]"
+
+// isLostToRestartMarker reports whether m is recoverInterruptedTurnLocked's
+// own synthetic closing message (RoleAssistant, exactly lostToRestartText,
+// nothing else) — used to distinguish that ONE specific append from a
+// genuinely new turn's real message, both live (implicitly — see
+// appendMemoryOnly's own doc comment, engine.go) and on replay (see the
+// recMessage fold's use of this, store.go). Content-based rather than a
+// separate durable flag: lostToRestartText is already an established,
+// unambiguous, clearly-labeled synthetic marker elsewhere in this package
+// (see its own doc comment) — a real model turn does not coincidentally
+// produce this exact string verbatim as its entire response.
+func isLostToRestartMarker(m message.Message) bool {
+	return m.Role == message.RoleAssistant && m.Parts.Text() == lostToRestartText
+}
 
 // fireIdleResumeAsync independently re-acquires m.mu and fires a resume
 // turn for targetID if it is STILL idle by the time this runs — called
@@ -2071,6 +2211,26 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 		forwarded = n.session.drainAllTaskNotifications() // memory-only — see its own doc comment
 	}
 
+	// Commit notify BEFORE attempting delivery — see
+	// SessionManager.commitOutcomeLocked's own doc comment and the
+	// crash-window table on recoverInterruptedTurnLocked's own doc
+	// comment for the full mechanism this closes: a live review finding
+	// that a crash landing INSIDE this method's own deliver-then-settle
+	// sequence below (the notify already durably queued on target's log,
+	// but this turn not yet marked settled) let a later recovery attempt
+	// reconstruct a DIFFERENT payload than the one already delivered —
+	// for a failed turn, a generic "lost to restart" instead of the real
+	// classified reason; the ancestor ends up told the same child both
+	// succeeded and failed. Gated on hasTaskParent() (see that method's
+	// own doc comment for why this must be the SAME predicate the
+	// settled-marker gate below uses), not merely `notify != nil`: for a
+	// genuine root, notify is already nil from the switch above, so this
+	// is a no-op either way — the explicit check just keeps this line
+	// visibly consistent with the settled-marker gate right below it.
+	if n.session.hasTaskParent() && notify != nil {
+		m.commitOutcomeLocked(n.session, *notify)
+	}
+
 	if notify != nil || len(forwarded) > 0 {
 		if target := m.nearestLiveAncestorLocked(n); target != nil {
 			// Memory-only append here, durable write deferred via
@@ -2122,7 +2282,24 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 	// of recovery for something already delivered — the SAME crash-
 	// window discipline recoverInterruptedTurnLocked's own reorder
 	// established, applied here too for the ordinary-completion path).
-	if n.parentID != "" {
+	//
+	// Gated on hasTaskParent(), NOT n.parentID != "" — a live review
+	// finding: the in-memory sessionNode.parentID and the durable
+	// TaskParentID() can disagree for a node adoptReloadedLocked attached
+	// with attachTo=="" because its real parent was not tracked (the
+	// "true depth is unrecoverable" case — see that method's own doc
+	// comment), even though it durably DOES have a real TaskParentID.
+	// Gating this on the in-memory pointer meant such a node's turns were
+	// NEVER marked settled, even on a completely ordinary, successful
+	// completion — hasUnfinalizedTurn() stayed true forever, and a LATER
+	// AdoptReloaded(recover=true) for it (adoptReloadedLocked's own
+	// root/non-root branch DOES use TaskParentID(), so it does not treat
+	// this node as a root) spuriously ran recovery against a turn that
+	// had already finished cleanly. hasTaskParent() is the SAME predicate
+	// adoptReloadedLocked's own root/non-root branch uses, so the two
+	// ends of this exact crash/degraded-lineage window can no longer
+	// disagree about which nodes this covers.
+	if n.session.hasTaskParent() {
 		n.session.markTurnSettled()
 		childSess := n.session
 		m.deferPersist(func() { childSess.persistTurnSettled() })

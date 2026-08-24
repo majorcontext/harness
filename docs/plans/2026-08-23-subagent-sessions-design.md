@@ -271,6 +271,49 @@ marked delivered when there was a live ancestor to actually hand it to —
 when there is none, it is dropped exactly like `finalizeTurn`'s own
 identical case, never recorded as delivered work that was, in fact, lost.
 
+**Replay, not re-derive: `committedOutcome` closes the crash-INSIDE-
+finalizeTurn window too.** A deeper live review found that "deliver
+first, mark settled last" is necessary but not sufficient: a crash
+landing INSIDE `finalizeTurn`'s own deliver-then-settle sequence (the
+notify already durably queued on the ancestor's log, but this turn not
+yet marked settled) used to let a later recovery attempt reconstruct a
+DIFFERENT payload than the one already delivered — a generic
+`"lost to restart"` instead of a failed turn's real classified reason, or
+(on a recovery-of-recovery retry) misreading recovery's own synthetic
+closing message as a fresh natural completion. Either way the ancestor
+ends up told two DIFFERENT accounts of the same child's outcome — worse
+than the exact-match dedup (`enqueueTaskNotificationMemoryOnlyDeduped`)
+was ever designed to catch, since it only recognizes a byte-identical
+repeat.
+
+The fix: `SessionManager.commitOutcomeLocked` durably records the EXACT
+computed `taskNotification` (a `task.outcome_committed` record, on the
+child's OWN log) BEFORE either `finalizeTurn` or
+`recoverInterruptedTurnLocked` attempts delivery. A later recovery
+attempt checks for this record FIRST (`Session.committedTurnOutcome`)
+and, when present, replays it VERBATIM instead of re-deriving a guess —
+making the retry idempotent-by-content even across the finalizeTurn→
+recovery handoff, not just recovery-retrying-itself. See
+`recoverInterruptedTurnLocked`'s own doc comment (session_manager.go) for
+the full crash-window table (every step × every crash point × the
+resulting durable state and recovery outcome) this closes.
+
+**One predicate for "does this node have a parent," used everywhere.**
+A related finding: `finalizeTurn`'s settled-marker (and now commit-
+outcome) gate used to check the IN-MEMORY `sessionNode.parentID`, while
+`adoptReloadedLocked`'s own root/non-root branch — which decides whether
+a reloaded node is a recovery CANDIDATE at all — checks the DURABLE
+`Session.TaskParentID()`. The two agree except for
+`adoptReloadedLocked`'s own "true depth is unrecoverable" case (a
+reloaded child whose real parent is not tracked in this process, adopted
+root-shaped despite durably having a real parent): gating on the
+in-memory pointer meant such a node's turns were NEVER marked settled,
+even on an ordinary successful completion, so a later reload spuriously
+ran recovery against an already-clean turn. Both decisions now go
+through the one `Session.hasTaskParent()` helper, so the two ends of
+this exact crash/degraded-lineage window can no longer disagree about
+which nodes recovery covers.
+
 **Accepted scope cut: reactive, not proactive.** This only fires when
 something actually reloads the dangling child's own id again (a
 legitimate follow-up `session.send`, `ReportTurnStart`'s
