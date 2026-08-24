@@ -113,6 +113,17 @@ var (
 	// so it must refuse the second rather than starting a second
 	// concurrent Prompt loop.
 	ErrSessionBusy = errors.New("engine: session is already running a turn")
+	// ErrNotDescendant is returned by CancelDescendant, DescendantInfo, and
+	// SendToDescendant when the named target is not actually a descendant
+	// of the calling session in m's tree — the "only ancestors may act on
+	// their descendants" rule the model-facing `task` tool's cancel/
+	// status/send verbs all share (see isDescendantLocked's own doc
+	// comment for exactly what counts). Deliberately indistinguishable, on
+	// the wire, from "session_id names something entirely unrelated to
+	// you" — an unrelated tree and a sibling's subtree are the same
+	// authorization failure from the caller's point of view, and neither
+	// is a hint worth leaking about the wider tree's shape.
+	ErrNotDescendant = errors.New("engine: target session is not a descendant of the calling session")
 )
 
 // ExternalRunner lets an outside scheduler — the server's own run-slot
@@ -1042,7 +1053,7 @@ func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
 			n.failReason = committed.FailReason
 		}
 		m.markChangedLocked()
-	case len(s.SpawnedChildIDs()) > 0 || len(s.History()) > 0:
+	case s.HasHistoryOrSpawnedChildren():
 		// No committed outcome, but s has definitely already run a turn
 		// — the legacy case, not the genuinely-fresh one. Proven by
 		// EITHER signal: a non-empty SpawnedChildIDs (Spawn/the task
@@ -2777,6 +2788,189 @@ func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Me
 		go resume()
 	}
 	return msg, err
+}
+
+// isDescendantLocked reports whether targetID is a STRICT descendant of
+// ancestorID: ancestorID appears somewhere in targetID's own parent
+// chain, walking m.nodes' live parentID pointers up from targetID.
+// Backs the `task` tool's three ancestor-gated verbs (cancel/status/
+// send — see the design doc's "only ancestors may cancel their
+// descendants," which this generalizes to all three): a spawning session
+// may act on anything it spawned, directly or transitively, and nothing
+// else.
+//
+// ancestorID == targetID is deliberately false — acting on yourself is
+// not this mechanism's job (self-cancel has no established meaning here;
+// self-status already has session_info; self-send is just an ordinary
+// prompt) — and a target whose chain does not reach ancestorID, or
+// breaks on a node this process no longer tracks (Reaped, or never
+// adopted), is false rather than guessed true: an unrelated or
+// unreachable lineage is not proof of descent. Caller holds m.mu.
+func (m *SessionManager) isDescendantLocked(ancestorID, targetID string) bool {
+	if ancestorID == "" || targetID == "" || ancestorID == targetID {
+		return false
+	}
+	n, ok := m.nodes[targetID]
+	if !ok {
+		return false
+	}
+	for n.parentID != "" {
+		if n.parentID == ancestorID {
+			return true
+		}
+		p, ok := m.nodes[n.parentID]
+		if !ok {
+			return false
+		}
+		n = p
+	}
+	return false
+}
+
+// CancelDescendant cancels targetID's entire subtree on callerID's
+// behalf, after confirming callerID is a live ancestor of targetID (see
+// isDescendantLocked) — the SessionManager side of the `task` tool's
+// cancel verb.
+//
+// Routes to Cancel/cancelSubtreeLocked (cascade cancellation), not
+// AbortTurn: "stop this delegation" means the whole subtree targetID may
+// itself have fanned out, not merely targetID's own current turn —
+// AbortTurn's own doc comment is explicit that it deliberately leaves a
+// target's children running, which is the opposite of what a caller
+// asking to cancel a child it spawned wants. See Cancel's doc comment
+// for the one case it does NOT reach on its own — a ROOT's turn driven
+// by an ExternalRunner needs the external scheduler's own abort too
+// (server.Server's handleCancelTree calls both) — which cannot arise
+// here: isDescendantLocked can never return true for a root target
+// (parentID == "" has no ancestor by construction), so targetID is
+// always a genuine child, always driven directly by this package, and
+// Cancel alone is always sufficient.
+//
+// Returns ErrUnknownSession if either id is not tracked, ErrNotDescendant
+// if targetID is not callerID's descendant.
+func (m *SessionManager) CancelDescendant(callerID, targetID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.nodes[callerID]; !ok {
+		return fmt.Errorf("%w: %s", ErrUnknownSession, callerID)
+	}
+	n, ok := m.nodes[targetID]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrUnknownSession, targetID)
+	}
+	if !m.isDescendantLocked(callerID, targetID) {
+		return fmt.Errorf("%w: %s", ErrNotDescendant, targetID)
+	}
+	m.cancelSubtreeLocked(n)
+	return nil
+}
+
+// DescendantInfo returns targetID's lifecycle snapshot (status, lineage,
+// result/fail reason) and cumulative token usage, after confirming
+// callerID is a live ancestor of targetID — the SessionManager side of
+// the `task` tool's status verb, and the engine-level counterpart to the
+// wire's session.info payload (design doc: "status, lineage ..., usage").
+//
+// Usage is read from the live *Session (n.session.Usage(), which takes
+// s.mu internally) while m.mu is still held — nesting m.mu outer, a
+// session's own mu inner, the same order Spawn's parentSess.mu access
+// already establishes for this package — so it reflects targetID's
+// current total, not a stale or partial snapshot.
+//
+// Returns ErrUnknownSession if either id is not tracked, ErrNotDescendant
+// if targetID is not callerID's descendant.
+func (m *SessionManager) DescendantInfo(callerID, targetID string) (SessionNode, provider.Usage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.nodes[callerID]; !ok {
+		return SessionNode{}, provider.Usage{}, fmt.Errorf("%w: %s", ErrUnknownSession, callerID)
+	}
+	n, ok := m.nodes[targetID]
+	if !ok {
+		return SessionNode{}, provider.Usage{}, fmt.Errorf("%w: %s", ErrUnknownSession, targetID)
+	}
+	if !m.isDescendantLocked(callerID, targetID) {
+		return SessionNode{}, provider.Usage{}, fmt.Errorf("%w: %s", ErrNotDescendant, targetID)
+	}
+	return n.snapshot(), n.session.Usage(), nil
+}
+
+// SendToDescendant delivers text to targetID, a live descendant of
+// callerID, after the same ancestry check as CancelDescendant/
+// DescendantInfo — the SessionManager side of the `task` tool's send
+// verb. Mirrors the wire's session.send (server/session_tree.go's
+// handleSessionSend, child branch) rather than duplicating a third
+// implementation of the same idea:
+//
+//   - A RUNNING target gets text appended to its own durable prompt
+//     queue (Session.EnqueuePrompt) instead of being refused — the exact
+//     machinery engine.go's Prompt loop already drains at the target's
+//     next tool-call boundary (the "OPERATOR MESSAGES" injection), the
+//     SAME mechanism a root's own queued prompt rides. This is the
+//     design doc's explicit choice: "reuse the existing prompt-queue
+//     machinery rather than rejecting busy children, mirroring how roots
+//     queue prompts" — no new delivery path, just the same one a second
+//     kind of caller can now reach. queued is true on this path.
+//   - A settled (idle/done/failed) target is restarted with text as its
+//     next turn — existing Send semantics, unchanged — but launched in a
+//     goroutine rather than called synchronously: Send blocks until the
+//     WHOLE re-run turn completes (see its own doc comment), and
+//     SessionManager's one deliberately non-blocking entry point is
+//     Spawn (the "non-blocking execution" locked decision) — calling
+//     Send inline here would make this verb the one exception, blocking
+//     the caller's own tool call for as long as the re-run takes. The
+//     re-run's outcome is not this call's to report: it arrives later
+//     via the ordinary completion-notification path, exactly like a
+//     Spawn'd child's result. queued is false on this path.
+//   - A canceled target, or one that would push the tree over its
+//     concurrency cap, is refused synchronously and deterministically —
+//     mirroring CanSend's own pre-Send admission checks (used by
+//     handleSessionSend for the identical reason: a caller-visible error
+//     up front, not a silently dropped launch) — rather than only ever
+//     failing later, invisibly, inside the fired-and-forgotten
+//     goroutine.
+//
+// Returns ErrUnknownSession if either id is not tracked, ErrNotDescendant
+// if targetID is not callerID's descendant, ErrSessionCanceled if
+// targetID is canceled, or ErrConcurrencyLimit if the tree is already at
+// its running-children cap (settled-target restart path only — a
+// running target's enqueue never touches this budget).
+func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queued bool, err error) {
+	m.mu.Lock()
+	if _, ok := m.nodes[callerID]; !ok {
+		m.mu.Unlock()
+		return false, fmt.Errorf("%w: %s", ErrUnknownSession, callerID)
+	}
+	n, ok := m.nodes[targetID]
+	if !ok {
+		m.mu.Unlock()
+		return false, fmt.Errorf("%w: %s", ErrUnknownSession, targetID)
+	}
+	if !m.isDescendantLocked(callerID, targetID) {
+		m.mu.Unlock()
+		return false, fmt.Errorf("%w: %s", ErrNotDescendant, targetID)
+	}
+	if n.status == StatusRunning {
+		s := n.session
+		m.mu.Unlock()
+		if _, err := s.EnqueuePrompt(text); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if n.status == StatusCanceled {
+		m.mu.Unlock()
+		return false, ErrSessionCanceled
+	}
+	if m.runningByRoot[n.rootID] >= m.maxConcurrent {
+		m.mu.Unlock()
+		return false, ErrConcurrencyLimit
+	}
+	m.mu.Unlock()
+	go func() {
+		_, _ = m.Send(context.Background(), targetID, text) // async re-run: outcome delivered later via the ordinary completion-notification path, mirroring Spawn's own launched goroutine and handleSessionSend's identical child-branch fire-and-forget
+	}()
+	return false, nil
 }
 
 // finalizeTurn records the outcome of one turn just run via Prompt (Spawn's
