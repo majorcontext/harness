@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
@@ -120,13 +121,28 @@ func TestChildJournaledAfterParentIdleEvictedAndReloaded(t *testing.T) {
 
 		rootID := createSessionDirect(t, srv, "root/m1")
 
+		// A synctest bubble's fake clock only advances once every goroutine
+		// in it is durably blocked — two back-to-back time.Now() calls with
+		// nothing blocking in between (root's own handleCreate register
+		// step, immediately followed by blocker's) can read the EXACT SAME
+		// instant, tying st.lastUsed for both. evictResidentLocked's sort
+		// (Before, false on a tie either way) then has no ordering to go
+		// on, and Go's randomized map iteration over s.sessions feeds it in
+		// no fixed order — so which of the two gets evicted becomes
+		// non-deterministic. A single fake-time tick between the two
+		// creates (real cost: none, inside the bubble) makes root's
+		// lastUsed strictly earlier, so eviction below is deterministic —
+		// this is a property of the TEST's timing, not a hidden real-time
+		// dependency in evictResidentLocked itself, which is pure
+		// LRU-by-count and never polls a clock on its own.
+		time.Sleep(time.Millisecond)
+
 		// Push root out of residency deterministically: a second session's
 		// own registration exceeds MaxResident=1, and evictResidentLocked
-		// (pure LRU-by-count, never time-based) evicts the one non-running
-		// resident with the oldest lastUsed — root, since nothing has run
-		// on it yet and it was created first. No sleep, no fake-time
-		// advance: eviction here is a synchronous side effect of the
-		// SECOND create, not a background sweep.
+		// (pure LRU-by-count, never a background sweep) evicts the one
+		// non-running resident with the oldest lastUsed — root, since
+		// nothing has run on it yet and (per the tick above) it was
+		// created strictly first.
 		_ = createSessionDirect(t, srv, "blocker/m1")
 		if srv.residentSession(rootID) != nil {
 			t.Fatal("root still resident after blocker creation — test setup invalid")

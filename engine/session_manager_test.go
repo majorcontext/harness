@@ -1058,6 +1058,52 @@ func TestReloadedChildWithUnknownParentAndNoDurableDepthStaysConservative(t *tes
 	})
 }
 
+// TestTaskDepthHeaderRoundTrip is a review-driven addition, mirroring
+// TestParentSessionLegacyHeaderCompat/TestParentSessionHeaderRoundTrip
+// (parent_session_test.go): proves Config.TaskDepth's own restore rule
+// directly against a REAL on-disk header, not just an in-memory *Session
+// object poked by a live Spawn call — the two prior tests above only
+// exercise TaskDepth() on an object Spawn itself just constructed, never a
+// genuinely reloaded one. A legacy header with no "task_depth" key at all
+// restores TaskDepth() == 0 (the loading Config's own TaskDepth, never
+// pre-populated by any caller, is left untouched); a header that DOES
+// carry it restores the exact persisted value, regardless of what the
+// loading Config supplies.
+func TestTaskDepthHeaderRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+
+	legacyID := "ses_4444444444444446"
+	legacyData := `{"type":"session","id":"ses_4444444444444446","created_at":"2025-01-02T03:04:05Z","task_parent_id":"ses_0000000000000001","task_agent_type":"reviewer"}
+{"type":"model","model":"test/m1"}
+`
+	if err := os.WriteFile(filepath.Join(dir, legacyID+".jsonl"), []byte(legacyData), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{SessionDir: dir, Model: message.ModelRef{Provider: "test", Model: "m1"}}
+	legacy, err := LoadSession(cfg, legacyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := legacy.TaskDepth(); got != 0 {
+		t.Errorf("legacy header (no task_depth key) TaskDepth() = %d, want 0", got)
+	}
+
+	recordedID := "ses_4444444444444447"
+	recordedData := `{"type":"session","id":"ses_4444444444444447","created_at":"2025-01-02T03:04:05Z","task_parent_id":"ses_0000000000000001","task_agent_type":"reviewer","task_depth":2}
+{"type":"model","model":"test/m1"}
+`
+	if err := os.WriteFile(filepath.Join(dir, recordedID+".jsonl"), []byte(recordedData), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	recorded, err := LoadSession(cfg, recordedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := recorded.TaskDepth(); got != 2 {
+		t.Errorf("header with task_depth:2 restored TaskDepth() = %d, want 2", got)
+	}
+}
+
 // TestReportTurnEndNilMsgOnReloadedChildDoesNotPanic is the regression
 // test for a review finding: finalizeTurn's default (done) branch
 // unconditionally dereferenced msg (n.result = msg.Parts.Text()).

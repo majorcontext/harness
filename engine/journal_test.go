@@ -52,7 +52,7 @@ func TestLoadJournal_ProjectsAllRecordTypes(t *testing.T) {
 	createdAt := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 
 	recs := []record{
-		{Type: recSession, ID: id, CreatedAt: createdAt, WorkDir: "/repo", ParentSession: "ses_parent", TaskParentID: "ses_taskparent", TaskAgentType: "reviewer", Model: message.ModelRef{Provider: "anthropic", Model: "m1"}, Effort: message.Effort("high")},
+		{Type: recSession, ID: id, CreatedAt: createdAt, WorkDir: "/repo", ParentSession: "ses_parent", TaskParentID: "ses_taskparent", TaskAgentType: "reviewer", TaskDepth: 2, Model: message.ModelRef{Provider: "anthropic", Model: "m1"}, Effort: message.Effort("high")},
 		{Type: recMessage, Message: &message.Message{ID: "msg_1", Role: message.RoleUser, CreatedAt: createdAt}},
 		{Type: recMessage, Message: &message.Message{ID: "msg_2", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: lostToRestartText}}, CreatedAt: createdAt}},
 		{Type: recModel, Model: message.ModelRef{Provider: "anthropic", Model: "m2"}},
@@ -91,7 +91,7 @@ func TestLoadJournal_ProjectsAllRecordTypes(t *testing.T) {
 
 	session := got[0]
 	if session.Type != recSession || session.WorkDir != "/repo" || session.ParentSession != "ses_parent" ||
-		session.TaskParentID != "ses_taskparent" || session.TaskAgentType != "reviewer" ||
+		session.TaskParentID != "ses_taskparent" || session.TaskAgentType != "reviewer" || session.TaskDepth != 2 ||
 		session.Model.Model != "m1" || session.Effort == nil || *session.Effort != message.Effort("high") || !session.CreatedAt.Equal(createdAt) {
 		t.Errorf("session header record = %+v", session)
 	}

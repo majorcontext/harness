@@ -52,6 +52,15 @@ type JournalRecord struct {
 	ParentSession string `json:"parent_session,omitempty"`
 	TaskParentID  string `json:"task_parent_id,omitempty"`
 	TaskAgentType string `json:"task_agent_type,omitempty"`
+	// TaskDepth mirrors Config.TaskDepth's own doc comment (engine.go): the
+	// child's durable tree depth, recorded by Spawn and restored by
+	// LoadSession the same omit/restore rule as TaskParentID/TaskAgentType
+	// above (0 on a legacy header predating this field — never a real
+	// child's true depth, which is always >= 1). Exposed here so this
+	// debug endpoint can show the exact durable value
+	// server.lineageJSONFor's wire derivation now prefers over the
+	// m.maxDepth refusal sentinel.
+	TaskDepth int `json:"task_depth,omitempty"`
 
 	// Message identity (Type == recMessage) -- never content; see
 	// GET /session/{id}/message for the message's own full parts.
@@ -177,6 +186,7 @@ func projectJournalRecord(seq int, rec record) JournalRecord {
 		out.ParentSession = rec.ParentSession
 		out.TaskParentID = rec.TaskParentID
 		out.TaskAgentType = rec.TaskAgentType
+		out.TaskDepth = rec.TaskDepth
 		out.Model = rec.Model
 		out.Effort = effortPtr(rec.Effort)
 	case recMessage:
