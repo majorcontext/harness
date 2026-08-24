@@ -3272,3 +3272,95 @@ func TestRecoverCrashedChildrenLockedSkipsConcurrentlyAdoptedChild(t *testing.T)
 		t.Errorf("root2.taskNotifications[0] = %+v, want ChildID=%q Status=%q", got, childID, StatusFailed)
 	}
 }
+
+// TestRecoverCrashedChildrenLockedInheritsFullConfig is the regression
+// test for a live review adjudication: a child recovered by
+// recoverCrashedChildrenLocked is NOT provably extract-and-discard —
+// unlike a ROOT (where ReportTurnStart's own "always re-attach to the
+// live object" migration replaces n.session with the server's own
+// fully-configured reload on every turn), SessionManager.Send
+// (session.send's own sole scheduler for a child — see
+// server/session_tree.go's handleSessionSend, "Child: SessionManager is
+// its sole scheduler, always safe") reads n.session and calls Prompt on
+// it DIRECTLY, with no reload/re-attach step of any kind. A minimal
+// Config{Providers, SessionDir} reload — this method's own earlier
+// version — would silently strand a recovered child with no WorkDir, no
+// OnEvent (its turn would run invisibly, never reaching the server's own
+// SSE journal), no Hooks/MCP/Processes, the moment a caller sent it a
+// genuinely ordinary session.send follow-up.
+//
+// Proves the fix (configSnapshot(), not a hand-picked field subset):
+// spawns a child under a root configured with a distinctive WorkDir and
+// an OnEvent hook, crashes it mid-turn, recovers it purely via AdoptRoot
+// (this file's own established "never touch the crashed child directly"
+// technique), then drives a REAL session.send-shaped follow-up turn
+// (SessionManager.Send) on the recovered child and checks BOTH that its
+// WorkDir is the inherited one (not empty) AND that its OnEvent hook
+// actually fires for that turn's own events (not silently nil).
+func TestRecoverCrashedChildrenLockedInheritsFullConfig(t *testing.T) {
+	dir := t.TempDir()
+	const wantWorkDir = "/distinctive/inherited/workdir"
+	rootProv := scriptedTurns("root", nil)
+	childProv := &signaledBlockingProvider{name: "child", started: make(chan struct{}), release: make(chan struct{})}
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
+	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir, WorkDir: wantWorkDir}
+
+	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	root1 := mgr1.NewRoot(rootCfg)
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	<-childProv.started // child now genuinely mid-turn, blocked — simulate "kill -9 1" by simply abandoning it
+
+	// Fresh process: root2's own Config carries the SAME WorkDir and a
+	// fresh OnEvent hook — exactly what a real server's own mkCfg
+	// closure supplies on restart (cmd/harness/main.go's serveCmd).
+	rootProv2 := scriptedTurns("root", nil)
+	childProv2 := scriptedTurns("child", doneTurn("follow-up done"))
+	reg2 := provider.Registry{rootProv2.Name(): rootProv2, childProv2.Name(): childProv2}
+	var evMu sync.Mutex
+	var events []Event
+	rootCfg2 := Config{
+		Providers: reg2, Model: modelFor("root"), SessionDir: dir, WorkDir: wantWorkDir,
+		OnEvent: func(ev Event) {
+			evMu.Lock()
+			events = append(events, ev)
+			evMu.Unlock()
+		},
+	}
+
+	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	root2, err := LoadSession(rootCfg2, root1.ID)
+	if err != nil {
+		t.Fatalf("LoadSession root: %v", err)
+	}
+	if err := mgr2.AdoptRoot(root2); err != nil {
+		t.Fatalf("AdoptRoot: %v", err)
+	}
+
+	childSess, ok := mgr2.Session(childID)
+	if !ok {
+		t.Fatal("child not tracked after AdoptRoot — recoverCrashedChildrenLocked did not adopt it")
+	}
+	if got := childSess.WorkDir(); got != wantWorkDir {
+		t.Errorf("recovered child.WorkDir() = %q, want %q (inherited from the live ancestor via configSnapshot(), not a minimal Config{Providers,SessionDir} reload)", got, wantWorkDir)
+	}
+
+	// The actual proof this finding demanded: session.send's own real
+	// path (SessionManager.Send) reads n.session and drives Prompt on it
+	// DIRECTLY — no reload, no re-attach. If the recovered child's own
+	// OnEvent were still nil (a minimal-Config reload's own silent
+	// failure mode), this turn would run invisibly: no event ever
+	// reaches the server's SSE journal, indistinguishable from a hang to
+	// any client watching it.
+	if _, err := mgr2.Send(context.Background(), childID, "follow up"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	evMu.Lock()
+	n := len(events)
+	evMu.Unlock()
+	if n == 0 {
+		t.Error("recovered child's own follow-up turn emitted zero events — OnEvent was silently nil (not inherited from the live ancestor)")
+	}
+}

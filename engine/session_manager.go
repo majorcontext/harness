@@ -988,7 +988,33 @@ func (m *SessionManager) recoverCrashedChildrenLocked(n *sessionNode) {
 	if len(candidates) == 0 {
 		return
 	}
-	cfg := Config{Providers: n.session.cfg.Providers, SessionDir: n.session.cfg.SessionDir}
+	// configSnapshot (not a hand-picked Config{Providers, SessionDir}
+	// subset an earlier version of this method used), for the SAME
+	// reason Spawn calls it on a live parent when constructing a BRAND
+	// NEW child's own Config: a session reloaded here can go on to
+	// become the LIVE, turn-driving object for its id — SessionManager.Send
+	// (session.send's own sole scheduler for a child, server/session_tree.go's
+	// handleSessionSend) reads n.session and calls Prompt on it DIRECTLY,
+	// with no reload/re-attach step of any kind (unlike a ROOT, where
+	// ReportTurnStart's own "always re-attach to the live object"
+	// migration replaces n.session with the server's own fully-configured
+	// reload on every turn — see that method's doc comment). A minimal
+	// Config{Providers, SessionDir} reload — this method's own earlier
+	// version — would silently strand a recovered child with no WorkDir,
+	// no OnEvent (its turn would run invisibly, never reaching the
+	// server's own SSE journal), no Hooks/MCP/Processes, no Instructions/
+	// SkillsDirs/AgentDefsDirs, the moment a caller sent it a genuinely
+	// ordinary session.send follow-up. configSnapshot() returns n's OWN
+	// full, live Config (safe to read here — see its own doc comment on
+	// why it, not a raw s.cfg read, is required under a concurrent
+	// SetModel) — every field this reload needs that is NOT itself
+	// durably recorded on the child's own log (Model/TaskParentID/
+	// TaskAgentType/TaskToolNames/ParentSession all ARE, and LoadSession's
+	// own replay correctly overrides whatever this snapshot carries for
+	// them with the child's OWN true values) inherited from the live
+	// ancestor currently being adopted, exactly like a freshly-Spawn'd
+	// child already inherits from its live parent.
+	cfg := n.session.configSnapshot()
 	nID := n.id
 
 	// Step 2 (unlocked): the actual disk-bound replay.
