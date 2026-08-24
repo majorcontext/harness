@@ -1048,21 +1048,22 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			s.turnUnsettled = true
 			// s.committedOutcome invalidation — mirrors appendWithUsage's
 			// OWN identical clear, with one deliberate exception: a
-			// message recognizable as recoverInterruptedTurnLocked's own
-			// synthetic lostToRestartText closer (isLostToRestartMarker)
-			// is NOT a new turn starting — it is that SAME recovery
-			// attempt annotating the turn it is still in the middle of
-			// settling, appended via appendMemoryOnly (which, live, never
-			// clears committedOutcome either — see that method's own doc
-			// comment). Clearing here regardless would durably erase the
-			// very commit record a LATER recovery-of-recovery pass needs
-			// to replay verbatim — reopening the exact "false DONE"
-			// divergent-duplicate bug a live review found: with the
-			// commit erased, that later pass falls back to
-			// settledSuccessResult(), which then sees THIS closing
-			// message itself (RoleAssistant, plain text, no ToolCall) as
-			// a spurious natural completion.
-			if !isLostToRestartMarker(msg) {
+			// message recognizable as ONE OF recoverInterruptedTurnLocked's
+			// own synthetic closers (isRecoverySyntheticCloser — there are
+			// two now, lostToRestartText and canceledInterruptedText, see
+			// the latter's own doc comment) is NOT a new turn starting —
+			// it is that SAME recovery attempt annotating the turn it is
+			// still in the middle of settling, appended via
+			// appendMemoryOnly (which, live, never clears committedOutcome
+			// either — see that method's own doc comment). Clearing here
+			// regardless would durably erase the very commit record a
+			// LATER recovery-of-recovery pass needs to replay verbatim —
+			// reopening the exact "false DONE" divergent-duplicate bug a
+			// live review found: with the commit erased, that later pass
+			// falls back to settledSuccessResult(), which then sees THIS
+			// closing message itself (RoleAssistant, plain text, no
+			// ToolCall) as a spurious natural completion.
+			if !isRecoverySyntheticCloser(msg) {
 				s.committedOutcome = nil
 			}
 		case recChildTurnSettled:

@@ -1359,22 +1359,26 @@ func (s *Session) settledSuccessResult() (result string, ok bool) {
 	return last.Parts.Text(), true
 }
 
-// hasTrailingLostToRestartMarker reports whether s's own trailing history
-// message is ALREADY recoverInterruptedTurnLocked's synthetic closing
-// message (see isLostToRestartMarker, session_manager.go) — used to guard
-// against appending a SECOND one on a recovery-of-recovery retry (step 3
-// of the crash-window table on that method's own doc comment): a crash
-// between that append's own durable write and the settled-marker's would
-// otherwise leave the next recovery attempt re-appending the identical
-// synthetic message into history on every retry until the settled marker
-// finally lands.
-func (s *Session) hasTrailingLostToRestartMarker() bool {
+// hasTrailingSyntheticCloser reports whether s's own trailing history
+// message is ALREADY one of recoverInterruptedTurnLocked's own synthetic
+// closing messages (see isRecoverySyntheticCloser, session_manager.go) —
+// used to guard against appending a SECOND one on a recovery-of-recovery
+// retry (step 3 of the crash-window table on that method's own doc
+// comment): a crash between that append's own durable write and the
+// settled-marker's would otherwise leave the next recovery attempt
+// re-appending the identical synthetic message into history on every
+// retry until the settled marker finally lands. Named for "a" synthetic
+// closer, not "the" lost-to-restart one specifically — recovery has two
+// now (see canceledInterruptedText's own doc comment for the other),
+// and this check must recognize whichever one a given turn's own
+// recovery attempt actually appended.
+func (s *Session) hasTrailingSyntheticCloser() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.history) == 0 {
 		return false
 	}
-	return isLostToRestartMarker(s.history[len(s.history)-1])
+	return isRecoverySyntheticCloser(s.history[len(s.history)-1])
 }
 
 // Plugins returns a snapshot of this session's configured plugins — name,
