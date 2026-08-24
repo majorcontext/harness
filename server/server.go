@@ -1,0 +1,1081 @@
+// Package server is the HTTP+SSE surface that `harness serve` exposes inside a
+// sandbox. It is a protocol, not a product: a single external orchestrator
+// drives many harness instances through it (see server/openapi.yaml).
+//
+// The server owns an orchestrator-facing event journal (<SessionDir>/events.jsonl):
+// an append-only log of durable records — session lifecycle, canonical
+// messages, model swaps, status changes — each carrying a global monotonic
+// sequence number. Live deltas (text, reasoning, tool progress) stream between
+// durable records over SSE but are never journaled. A client that reconnects
+// with from=<last seq> replays exactly what it missed.
+//
+// The engine is injected (Options.NewSession / Options.LoadSession) so the
+// server has no opinion on provider wiring; tests use scripted providers.
+package server
+
+import (
+	"context"
+	"crypto/subtle"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/majorcontext/harness/engine"
+	"github.com/majorcontext/harness/message"
+)
+
+// Workdir isolation modes for POST /session's workdir_isolation field (see
+// handleCreate). isolationShared is the default: today's behavior, a session
+// runs its tools directly in the resolved workdir and is subject to the
+// workdir-busy claim in claimForPrompt. isolationWorktree gives the session
+// its own git worktree (see worktree.go) so two sessions never contend for
+// the same tree, structurally rather than by convention.
+const (
+	isolationShared   = "shared"
+	isolationWorktree = "worktree"
+)
+
+// Goal "paused" reasons (see goalTracker.pauseView and GoalSummary.
+// pause_reason): "restart" is a boot-time observation (pauseArmedGoalsAtBoot)
+// that a goal is armed with no loop attached; "worker_failure" (Task 2)
+// is a LIVE observation that a worker turn exit-parked the goal
+// (engine/goal.go's goal.parked, either exhaustion tier) — the loop itself
+// has exited, mirroring the restart case's "no loop attached" shape even
+// though this server never restarted; "provider-backoff" mirrors the
+// existing retryable-backoff park machinery in engine/goal.go (observability
+// only — see goalTracker.pauseView).
+const (
+	pauseReasonRestart         = "restart"
+	pauseReasonWorkerFailure   = "worker_failure"
+	pauseReasonProviderBackoff = "provider-backoff"
+)
+
+// Options configures a Server. RunToken, NewSession, and LoadSession are
+// required.
+type Options struct {
+	// SessionDir is the session log directory. events.jsonl (the durable
+	// journal) lives here alongside the per-session <id>.jsonl logs. Empty
+	// keeps the journal in memory only (no durability).
+	SessionDir string
+	// RunToken authenticates every request except /health, compared in
+	// constant time.
+	RunToken string
+	// Version is reported by /health.
+	Version string
+	// SessionSync is the raw session-durability mode this process's sessions
+	// were configured with (same value threaded into every session's
+	// engine.Config.SessionSync — see cmd/harness's mkCfg), reported by
+	// /health as its EFFECTIVE mode (see effectiveSessionSync in
+	// handlers.go): "fsync" for the zero value or any value other than
+	// "volume". /health is deliberately unauthenticated (see RunToken's doc
+	// comment above) — this is as low-sensitivity as the Version string
+	// already reported there, existing precisely so a canary can
+	// machine-check a box's durability mode with no token and no session.
+	SessionSync string
+	// StartedAt is this server process's start time (same instant threaded
+	// into every session's engine.Config.StartedAt — see cmd/harness's
+	// serveCmd), reported by /health as an RFC3339 UTC timestamp. Zero (the
+	// default, e.g. a test harness that doesn't set it) reports "" rather
+	// than a placeholder. As unauthenticated and low-sensitivity as Version
+	// and SessionSync above.
+	StartedAt time.Time
+	// NewSession creates a fresh engine session for the given model (zero
+	// model = caller's default), workdir (already resolved and validated
+	// by handleCreate against WorkspaceRoots — see resolveWorkDir), and
+	// parentSession (already validated by handleCreate — see
+	// validateParentSession; empty when POST /session omitted it). The
+	// wrapper is expected to wire engine.Config.OnEvent to Server.Publish,
+	// engine.Config.WorkDir to the workDir argument, and
+	// engine.Config.ParentSession to the parentSession argument.
+	NewSession func(model message.ModelRef, workDir string, parentSession string) (*engine.Session, error)
+	// LoadSession resumes an on-disk session by ID, wiring OnEvent the same
+	// way. It returns an error when no log with that ID exists. The
+	// session's workdir is restored from its log header (see
+	// engine.LoadSession), not passed in here.
+	LoadSession func(id string) (*engine.Session, error)
+	// WorkspaceRoots bounds the directories POST /session may accept as an
+	// explicit workdir: the request value must clean-resolve (absolute,
+	// cleaned) to one of these roots or a descendant of one. Empty means the
+	// server process's own working directory is the sole allowed root. A
+	// request that omits workdir always defaults to the process's current
+	// working directory, which is never itself checked against this list.
+	WorkspaceRoots []string
+	// HeartbeatInterval is the SSE keep-alive comment period; 0 defaults to
+	// 30s.
+	HeartbeatInterval time.Duration
+	// MaxResident caps the number of in-memory (resident) sessions. After a
+	// prompt completes, the longest-idle non-busy sessions beyond this cap are
+	// unloaded from memory; they remain listable and promptable via a
+	// transparent reload from disk. 0 defaults to 32.
+	MaxResident int
+	// GoalEvaluator is the model ref used to evaluate goal completion for the
+	// POST /session/{id}/goal endpoint. It is resolved by the caller from
+	// config (goal_evaluator_model). When zero, goal requests are rejected with
+	// 400 (there is no default evaluator).
+	GoalEvaluator message.ModelRef
+	// MaxTaskDepth and MaxConcurrentTasks configure the engine.SessionManager
+	// New builds when SessionManager (below) is nil — subagent sessions: the
+	// `task` tool and session.create's parent_id form (see handleSpawnChild,
+	// handleSessionSend, and the design doc's HARNESS_MAX_TASK_DEPTH /
+	// HARNESS_MAX_CONCURRENT_TASKS config keys, resolved by the caller, same
+	// pattern as GoalEvaluator above). Zero or less uses
+	// engine.DefaultMaxTaskDepth / engine.DefaultMaxConcurrentTasks. Ignored
+	// when SessionManager is non-nil.
+	MaxTaskDepth       int
+	MaxConcurrentTasks int
+	// SessionManager, when non-nil, is used as-is instead of New building
+	// its own from MaxTaskDepth/MaxConcurrentTasks above. A caller that
+	// also needs to reference the SAME manager from its OWN session-
+	// construction closures (Config.SessionManager — see cmd/harness's
+	// mkCfg) MUST supply it here rather than reading it back via
+	// Server.SessionManager() after New returns: New's own reconcile call
+	// (server.go) loads every resumable session — and therefore invokes
+	// those same closures — BEFORE New returns, so a closure that only
+	// has the *Server (assigned from New's own return value) to read the
+	// manager off would dereference a still-nil pointer on that first,
+	// synchronous load. Supplying it here sidesteps the ordering hazard
+	// entirely: the manager exists as a plain value before New (or even
+	// Options) is ever constructed.
+	SessionManager *engine.SessionManager
+	// CORSOrigin, when non-empty, enables browser CORS support. Its literal
+	// value is echoed in the Access-Control-Allow-Origin header on every
+	// response (including 401s, so a browser can read the error), and "*" is
+	// honored as-is. OPTIONS preflight requests to any route are answered 204
+	// without authentication (preflights carry no credentials by spec). Empty
+	// (the default) disables CORS entirely — no CORS headers are emitted.
+	CORSOrigin string
+	// OnError, when non-nil, is invoked for every error that the server would
+	// otherwise swallow: journal marshal/write failures and per-session engine
+	// persist failures (surfaced once per newly-changed error, not on every
+	// poll). Errors are wrapped with context (e.g. "journal write: %w",
+	// "session %s persist: %w"). Nil is safe — every call site nil-guards it.
+	//
+	// It is invoked synchronously and may run with locks held, so the handler
+	// must not call back into either the Server or the Session — doing so
+	// deadlocks. Specifically: the journal-write-failure path calls it while
+	// s.mu is held (see writeJournalLocked); and although the session
+	// persist-error path releases s.mu first (see the lock-ordering comment on
+	// syncMessages), a journal write reached via a goal.* event runs while the
+	// emitting Session's own mutex is held (RegisterGoal/recordGoalEval/
+	// achieveGoal/ClearGoal emit under Session.mu). Logging or forwarding to an
+	// external sink is the intended use.
+	OnError func(context.Context, error)
+	// OnCreatePhase, when non-nil, is invoked once per ENDED phase of
+	// handleCreate — "new_session", "persist", "register" (the in-memory
+	// session-map insert), and "emit_created". Each of "persist", "register",
+	// and "emit_created" is reported via timedCreatePhase (handlers.go), the
+	// shared call shape that guarantees a phase reports its own end — success
+	// OR error alike, with the real elapsed time either way — the instant its
+	// operation returns; "new_session" reports on success only (a failed
+	// NewSession call reports nothing at all, since no session ID exists yet
+	// to key it by). Regardless, a failure in one phase still means every
+	// LATER phase in the list is simply never reported at all, since
+	// handleCreate returns before ever reaching them — e.g. a Persist error
+	// still reports "persist" itself (now, unlike before this doc was
+	// updated) but never reaches "register" or "emit_created". "total"
+	// (elapsed from handler entry to the handler's return) is DIFFERENT: it
+	// is reported via a defer installed the moment a session ID exists, so it
+	// fires on every return path once NewSession has succeeded — success or
+	// error alike — and, because a defer runs only after the statement
+	// before it completes, total always spans past the response write: on
+	// success it includes writeJSON, and on a later failure it includes the
+	// writeErr call. This is deliberate: without it, a caller accumulating
+	// phases by session ID (see cmd/harness/main.go's createPhaseLogger)
+	// would leak an entry per failed create — a saturated storage volume is
+	// precisely what makes Persist fail or stall on every create — and it
+	// also means "total" on a failed create is real diagnostic signal: which
+	// phases ran (and how slowly) before the failure. sessionID is the ID
+	// minted by NewSession, carried on every phase report including
+	// "new_session" itself. Called synchronously; keep it fast, mirroring
+	// OnError's rules above.
+	OnCreatePhase func(sessionID, phase string, elapsed time.Duration)
+	// OnCreatePhaseStart, when non-nil, is invoked immediately before each of
+	// handleCreate's "persist", "register", and "emit_created" phases begins
+	// — the counterpart to OnCreatePhase that makes an in-flight watchdog
+	// possible (see engine.Config.OnStorePhaseStart's doc comment for the
+	// same rationale one layer down: completion-only phase logging is blind
+	// to a phase that never completes). Every Start call is guaranteed
+	// exactly one matching OnCreatePhase end, success or error alike (see
+	// OnCreatePhase's doc comment and timedCreatePhase) — a watchdog can
+	// therefore always clear its in-flight entry once a phase ends, never
+	// left warning forever about a phase that in fact already failed and
+	// returned. "new_session" is deliberately NOT instrumented here:
+	// NewSession touches no disk (see its doc comment in package engine) so
+	// it structurally cannot exhibit the permanently-hung-phase failure mode
+	// this exists to catch, and — more concretely — no session ID exists yet
+	// to key a watchdog entry by until it returns, so a Start call for it
+	// could never be matched back up with its OnCreatePhase completion
+	// (which does carry the real ID). "total" is also not instrumented here,
+	// to avoid double-reporting the same stuck window a currently-running
+	// named phase (persist/register/emit_created) already covers. Called
+	// synchronously; keep it fast, same rules as OnCreatePhase/OnError.
+	OnCreatePhaseStart func(sessionID, phase string)
+	// OnTaskEvent, when non-nil, is invoked once per handleSpawnChild
+	// (session.create's "with a parent" form) outcome — a follow-up
+	// finding ("metrics"), mirroring OnCreatePhase's own callback shape
+	// exactly (a plain func field, not a new dependency like a
+	// Prometheus client — this repo has no metrics library and this
+	// isn't the place to introduce one). event is one of "spawned"
+	// (engine.SessionManager.Spawn succeeded), "depth_refused"
+	// (engine.ErrDepthLimit), "concurrency_refused"
+	// (engine.ErrConcurrencyLimit), or "budget_refused"
+	// (engine.ErrBudgetExceeded) — parentID always set, childID set only
+	// for "spawned" (empty otherwise: no child session was ever
+	// created). Called synchronously from the request goroutine; keep it
+	// fast, same rules as OnCreatePhase/OnError. Does not cover the
+	// `task` TOOL's own spawns (engine/task_tool.go's runTaskTool calls
+	// SessionManager.Spawn directly, entirely inside the engine package,
+	// with no server-layer hook point) — only the wire-level
+	// session.create parent_id form this field's doc comment names.
+	OnTaskEvent func(event, parentID, childID string)
+	// MCP is the MCP client integration shared by every session this server
+	// hosts (see engine.MCPRegistry): it is the same *engine.MCPManager the
+	// NewSession/LoadSession wrapper wires into each session's
+	// engine.Config.MCP, injected here too so ClientAPI.MCPCall (a
+	// plugin-initiated client/mcp.call, which names a server and tool
+	// directly rather than a session) reaches the exact same connected
+	// clients without needing a session lookup. Nil disables MCP entirely
+	// for plugin calls, matching a nil engine.Config.MCP.
+	MCP engine.MCPRegistry
+	// Processes is the managed-process integration shared by every
+	// session this server hosts (see engine.ProcessRegistry): the same
+	// *process.Manager the NewSession/LoadSession wrapper wires into each
+	// session's engine.Config.Processes, injected here too so GET
+	// /process and POST /process/{name}/start|stop|restart can answer
+	// without a session lookup — process state is box-scoped, not
+	// per-session. Nil disables the /process endpoints entirely (they
+	// 404), matching a nil engine.Config.Processes.
+	Processes engine.ProcessRegistry
+	// MonitorPage, when non-nil, is served verbatim at GET /monitor (and
+	// /monitor/) — the single-file board+detail+composer UI documented in
+	// AGENTS.md's "Session monitor" section, letting a box serve its own
+	// copy same-origin instead of requiring a separately hosted one. Nil
+	// (the default) registers no route at all: GET /monitor 404s exactly
+	// as it always has, so an existing deployment that never sets this is
+	// completely unaffected. Deliberately UNAUTHENTICATED, like /health:
+	// the page is public, static, credential-free code (same "byte-for-
+	// byte, no build step" file this package never parses or executes) —
+	// every actual API call it makes still goes through s.auth like any
+	// other client, exactly as when the same file is opened via file:// or
+	// served from an unrelated static host. cmd/harness's serveCmd is the
+	// only place that sets this (via tools/monitor.Page) — server itself
+	// never imports tools/monitor, keeping this package's only coupling to
+	// the page a plain []byte it neither inspects nor depends on the
+	// shape of.
+	MonitorPage []byte
+	// Unauthenticated, when true, serves EVERY route (not just /health and
+	// MonitorPage) without requiring a bearer token — see authorized(),
+	// which returns true unconditionally in this mode. This is a
+	// deliberate, EXPLICIT opt-in, never inferred from RunToken=="" on its
+	// own: an empty RunToken with Unauthenticated left false still fails
+	// New() below exactly as before (fail closed) — a caller that forgot
+	// to set a token on what it THINKS is a public/production bind must
+	// get a hard error, not a silently-open server. cmd/harness's serveCmd
+	// is the only place that sets this, via resolveUnauthenticated, on
+	// either of two grounds: -addr classifies as loopback-only
+	// (isLoopbackAddr — see its own doc comment for the full reasoning,
+	// the token guards network reachability and loopback is
+	// server-verifiable proof of that), or the operator passed a SECOND,
+	// separate explicit opt-in (-unauthenticated /
+	// HARNESS_UNAUTHENTICATED) asserting a trusted external gate already
+	// restricts reachability on a non-loopback bind (e.g. a Cloudflare
+	// Access-gated tunnel, or a sandboxed network boundary). server itself
+	// performs no such classification and trusts the caller's judgment
+	// completely: this field says "serve unauthenticated", full stop,
+	// regardless of what address this process is actually bound to — the
+	// safety property lives entirely in cmd/harness deciding WHEN to set
+	// it.
+	Unauthenticated bool
+	// Logger, when non-nil, receives structured turn-lifecycle and
+	// goal-lifecycle log lines: a "turn end" line at every recordTurnEnd
+	// call (INFO for outcome "completed", WARN otherwise), WARN/INFO lines
+	// at the goal.* durable-record choke point (publishGoal, including a
+	// "goal eval" INFO line once per completed worker turn — the
+	// per-worker-turn heartbeat recordTurnEnd itself cannot provide for a
+	// goal loop, see its doc comment), and the session.error choke point
+	// (emitDurable). Every one of these logging call sites runs AFTER its
+	// own s.mu critical section ends, never inside one — a slow or stalled
+	// Logger sink must never be able to block the server's global mutex.
+	// Nil (the default, e.g. every existing test harness and any caller
+	// that predates this field) disables all of it — every call site here
+	// nil-guards before touching it, so an unset Logger is exactly today's
+	// silent behavior, not a panic.
+	//
+	// This exists because of a field report (2026-08-06): a session ran
+	// 631 messages / 141k output tokens and produced ZERO log lines: an
+	// operator tailing `harness serve`'s stderr could not tell a box
+	// mid-turn from a dead one, because nothing on the turn/goal path ever
+	// logged anything — only boot/config/MCP wiring did. Codex's
+	// equivalent path logs every stream retry via a structured warn!
+	// (turn id, retries, max, delay); this field is the same bar applied
+	// to this server's own durable-record choke points, so an operator
+	// gets a heartbeat for the life of the box, not just at boot.
+	// `harness serve` (cmd/harness/main.go's serveCmd) wires its own
+	// `slog.NewJSONHandler(os.Stderr, nil)` logger in here; a caller
+	// embedding this package (e.g. tests) that wants no such logging
+	// simply leaves this zero.
+	Logger *slog.Logger
+}
+
+// Server implements http.Handler for the harness serve API.
+type Server struct {
+	opts Options
+	mux  *http.ServeMux
+
+	// wg tracks in-flight runPrompt goroutines. They are decoupled from their
+	// HTTP handlers (the 202 returns immediately), so http.Server.Shutdown does
+	// not wait for them; Drain does, via this group.
+	wg sync.WaitGroup
+
+	// closing is closed exactly once, at the top of Drain, to signal that
+	// shutdown has begun. Connected SSE streams select on it and return
+	// promptly so http.Server.Shutdown sees idle connections; disconnected
+	// orchestrators recover the records they miss via replay-from-seq.
+	closing   chan struct{}
+	closeOnce sync.Once
+
+	// mu guards everything below. Lock-ordering invariant: mu is a LEAF with
+	// respect to a session's own mutex — code holding mu must never call a
+	// *engine.Session method that acquires the session's mutex (History,
+	// PersistErr, Persist, RegisterGoal, ClearGoal, ...). The engine emits
+	// goal.* (and other) events while the session's mutex is held (see
+	// engine/goal.go), and those events flow into Publish, which acquires mu:
+	// that is the session.mu -> server.mu order. Acquiring mu -> session.mu
+	// anywhere would form the opposite order and deadlock the two together
+	// (see journal.go's syncMessages and TestGoalEmitVsSyncMessagesNoDeadlock
+	// in lockorder_test.go). Read session state in an unlocked window, then
+	// re-acquire mu only for this server's own bookkeeping.
+	mu       sync.Mutex
+	draining bool                     // set once by Drain; gates prompt admission
+	seq      int64                    // global monotonic durable sequence
+	journal  []Event                  // in-memory durable records, for replay
+	jf       *os.File                 // events.jsonl handle (nil when disabled)
+	lastErr  error                    // most recent journal write failure
+	subs     map[*subscriber]struct{} // connected SSE clients
+	// seen maps session ID -> journaled message IDs; it is authoritative for
+	// journal idempotency (syncMessages skips already-journaled IDs), so it is
+	// never evicted when resident sessions are unloaded for MaxResident. It is
+	// bounded by the number of message IDs, which are small, so retaining it for
+	// unloaded sessions is cheap and keeps replay/reconcile correct.
+	seen     map[string]map[string]bool
+	sessions map[string]*sessionState // in-memory (resident) sessions
+
+	// lastRequest holds the latest fully-assembled model request per session,
+	// in memory only (never persisted): GET /session/{id}/request reads it, and
+	// its absence is the 404 for a session that has not prompted this process.
+	// lastReqHash carries the previous request's system-segment hash per session
+	// so request.meta includes the full system only when it changes.
+	lastRequest map[string]*requestSnapshot
+	lastReqHash map[string]string
+
+	// lastPersistErr tracks, per session, the Error() string of the last
+	// engine persist failure forwarded to Options.OnError, so a repeatedly-
+	// failing persist is reported once rather than on every syncMessages
+	// poll. Never evicted (bounded by session count, mirrors seen).
+	lastPersistErr map[string]string
+
+	// goalState tracks the latest goal summary per session for this process
+	// (in memory only, like lastRequest): condition, active flag, turn count,
+	// and last evaluator reason. It drives the Session JSON goal field and is
+	// updated as goal.* events flow through Publish.
+	goalState map[string]*goalTracker
+
+	// lastTurn tracks the most recent turn.end outcome per session, for this
+	// process only (in memory, like goalState): drives Session.last_turn and
+	// the /session/status last_turn field. Set by recordTurnEnd whenever a
+	// prompt (runPrompt) or a goal worker loop (runGoal) finishes — the
+	// durable turn.end record it also emits is the replayable wire form of
+	// the same information.
+	lastTurn map[string]*turnOutcome
+
+	// waiters holds every in-flight GET /session/{id}/wait long-poll,
+	// registered for the duration of the request. notifyWaitersLocked (see
+	// journal.go) wakes matching waiters after every durable event so a
+	// waiter re-checks its condition instead of the server polling for it.
+	// Caller of any read/write here must hold mu.
+	waiters map[*waiter]struct{}
+
+	// goalDeleteRace is a test-only seam: when non-nil, handleGoalDelete
+	// invokes it after clearing the goal but before its own call to cancel,
+	// passing the loop's cancel func so a test can trigger it early — the
+	// earliest structurally possible point — and ride out the worker's
+	// unwind to completion (an idempotent second call from the handler
+	// follows and is a no-op), forcing the worst-case interleaving
+	// deterministically on every run rather than conditionally (see
+	// TestGoalDeleteClearBeforeIdleRace). Always nil in production.
+	goalDeleteRace func(cancel context.CancelFunc)
+
+	// autoArmRace is a test-only seam: when non-nil, maybeAutoArmGoal invokes
+	// it right before its own claimForPrompt call, letting a test force a
+	// real concurrent prompt_async (or another POST /goal) to race the
+	// auto-arm claim deterministically instead of relying on an unobserved
+	// goroutine-scheduling coin flip (see TestAutoArmRaceWithIncomingPrompt).
+	// Always nil in production.
+	autoArmRace func()
+
+	// queueDispatchRace is a test-only seam mirroring autoArmRace: when
+	// non-nil, enqueueOrDispatch (handlePrompt's same-session-busy branch)
+	// and maybeDispatchQueued invoke it right before their own claimForPrompt
+	// call, letting a test force a real concurrent claim attempt (another
+	// prompt_async, a goal auto-arm, or another maybeDispatchQueued call) to
+	// land deterministically instead of relying on an unobserved
+	// goroutine-scheduling coin flip (see TestPromptQueueRaceWithFreedSlot).
+	// handlePrompt's own idle-with-queue branch invokes it too, right before
+	// its dispatchQueueHead call, so a test can also force a concurrent
+	// DELETE /session/{id}/queue into the narrow gap between that branch's
+	// EnqueuePrompt and its dispatch attempt (see
+	// TestQueueClearRaceDuringIdleDispatchIsNotAnError and
+	// TestQueueClearRaceDuringDispatchIsNotAnError). Always nil in
+	// production.
+	queueDispatchRace func()
+
+	// queueDeleteRace is a test-only seam: when non-nil, handleQueueDelete's
+	// cold path (session not resident) invokes it right after its own
+	// LoadSession call returns but before re-acquiring s.mu to register (or
+	// yield to) a resident — letting a test force a real concurrent claim
+	// (e.g. a prompt_async cold-loading and registering its OWN instance for
+	// the same session) to land deterministically in that exact window,
+	// instead of relying on an unobserved goroutine-scheduling coin flip. See
+	// TestDeleteQueueColdSessionSurvivesResidencyRace. Always nil in
+	// production.
+	queueDeleteRace func()
+
+	// dispatchQueueHeadRace is a test-only seam: when non-nil,
+	// dispatchQueueHead invokes it right after spawning the dispatched
+	// head's own runPrompt goroutine, before returning to its caller —
+	// letting a test force that goroutine (and, via its own tail's
+	// maybeDispatchQueued, any chained dispatch of the NEXT queued item)
+	// to run to completion deterministically before this call returns,
+	// instead of relying on an unobserved goroutine-scheduling coin
+	// flip. This is the exact race TestIdlePromptWithQueueGoesFIFO
+	// intermittently hit in CI (reproduced 200+ times locally before
+	// finally catching it under real scheduling pressure): with a fast
+	// enough provider, that goroutine can complete an entire turn — and
+	// the next one behind it — before the calling goroutine's own next
+	// statement runs, so a caller who re-reads QueuedPrompts() AFTER
+	// dispatchQueueHead returns (rather than using its own remaining
+	// return value) sees a queue drained further than the response is
+	// entitled to report. See dispatchQueueHead's own doc comment for
+	// the fix. Always nil in production.
+	dispatchQueueHeadRace func()
+
+	// sendBusyEvictRace is a test-only seam: when non-nil,
+	// sendTextToRoot's busy branch (session_tree.go) invokes it right
+	// before its own residentSession(id) call — letting a test force the
+	// busy occupant to finish and be evicted deterministically in that
+	// exact gap (see TestSessionSendToBusyRootEvictedInGapIsRetryable409),
+	// instead of relying on an unobserved goroutine-scheduling coin flip.
+	// Always nil in production.
+	sendBusyEvictRace func()
+
+	// sseRegisteredRace is a test-only seam: when non-nil, handleEvent
+	// (sse.go) invokes it right after registering its subscriber in
+	// s.subs but before writing the response headers — letting a test
+	// force a concurrent Publish call to land deterministically in that
+	// gap (see TestHandleEventDeliversEventPublishedBeforeHeadersFlush),
+	// proving an event published there is queued rather than dropped.
+	// Always nil in production.
+	sseRegisteredRace func()
+
+	// worktreeBase is the directory 'worktree'-isolation sessions create
+	// their per-session git worktrees under (see worktree.go): <SessionDir>/
+	// worktrees when SessionDir is durable, otherwise a process-lifetime
+	// temp directory created lazily on first use (a fresh, ephemeral
+	// SessionDir has nothing for a future sweep to recover anyway). Set once
+	// — either eagerly in New when SessionDir is set (so sweepWorktrees has
+	// a fixed, predictable path to scan at serve start) or lazily by
+	// worktreeBaseDir under mu.
+	worktreeBase string
+
+	// sessMgr is this process's engine.SessionManager — subagent sessions
+	// (the `task` tool and session.create's parent_id form; see
+	// handleSpawnChild, handleSessionSend). Built once in New from
+	// Options.MaxTaskDepth/MaxConcurrentTasks, never nil (unlike most
+	// optional integrations elsewhere in this package): a session tree with
+	// zero children costs nothing beyond one empty map, so there is no
+	// "disabled" state to gate on. Every root session this server creates
+	// or loads is adopted into it (see handleCreate and s.opts.LoadSession
+	// call sites) so `task` is available on every session by default.
+	//
+	// sessMgr has its OWN mutex, entirely separate from s.mu — no code path
+	// in this package acquires both, so the mu-is-a-leaf-vs-session.mu
+	// lock-ordering invariant documented on s.mu above is unaffected: this
+	// is a third, independent lock, not a fourth level in that hierarchy.
+	sessMgr *engine.SessionManager
+}
+
+// goalTracker is the per-session goal summary surfaced in Session JSON.
+// attempt is the 1-based worker-turn retry attempt from the most recent
+// goal.stalled record; it is reset to 0 by goal.set/goal.eval/goal.achieved
+// (a stall is non-terminal — see publishGoal — so it never touches active or
+// achieved, only lastReason and attempt).
+//
+// retryable/retryableClass/waiting mirror the same-named goal.stalled
+// fields (see engine/goal.go and GitHub issue #61): retryable and
+// retryableClass are set whenever the most recent stall was classified
+// provider-retryable weather; waiting is true while still inside the
+// retryable budget ("waiting out provider weather") and false once that
+// budget is exhausted (the loop is about to park a turn rather than clear
+// the goal). All three reset the same way attempt does.
+type goalTracker struct {
+	condition      string
+	active         bool
+	achieved       bool
+	turns          int
+	lastReason     string
+	attempt        int
+	retryable      bool
+	retryableClass string
+	waiting        bool
+	// pausedRestart is set by pauseArmedGoalsAtBoot when this process booted
+	// and found the goal armed (active) with no loop ever attached in this
+	// process — the restart half of the "paused" presentation (see
+	// pauseView). Cleared the moment POST /session/{id}/goal re-arms it
+	// (handleGoal). Never set any other way: it is NOT re-derived live from
+	// running/active (see compositeState's doc comment for why that would
+	// be wrong — an ordinary max-turns-exhausted goal in a live process is
+	// not "paused", only one observed unattended at boot is).
+	pausedRestart bool
+	// pausedWorker is set by publishGoal/foldGoalRecordLocked when a
+	// goal.parked record lands (Task 2): a worker turn exhausted
+	// either exhaustion tier and PursueGoal exit-parked instead of clearing
+	// the goal — the worker-failure half of the "paused" presentation (see
+	// pauseView). Unlike pausedRestart (a boot-time-only observation), this
+	// is set LIVE, by the very loop that just parked; unlike waiting/
+	// retryable's provider-backoff pause below, the loop has genuinely
+	// exited (no goroutine is driving this goal at all) until the
+	// activity-driven auto-arm (maybeAutoArmGoal) or an operator's re-POST
+	// starts a fresh one. Reset to false everywhere pausedRestart is reset
+	// (goal.set/goal.achieved/goal.cleared) plus goal.eval and goal.updated
+	// — see publishGoal's per-case doc comments for why those two additional
+	// resets are needed here specifically.
+	pausedWorker bool
+	// evalFailures is the most recent goal.eval_failed record's CONSECUTIVE
+	// failure count (see engine/goal.go's "Round 6" doc section) —
+	// folded straight from the record, so it is idempotent for replay just
+	// like every other field here. Reset to 0 by goal.set/goal.eval/
+	// goal.achieved/goal.cleared/goal.updated, mirroring attempt's own reset
+	// set except that goal.updated resets it too (see publishGoal's
+	// evtGoalUpdated case): the streak is measured against a condition, and
+	// an UpdateGoal is exactly the event that invalidates the evaluator
+	// calls it counted.
+	evalFailures int
+}
+
+// pauseView derives the goal's "paused" wire presentation (see
+// GoalSummary.paused/pause_reason): pausedRestart (set once at boot, cleared
+// on re-arm) takes priority; then pausedWorker (set live by an exit-parked
+// worker turn — the loop has genuinely exited, mirroring the
+// restart case's "nothing is driving this goal" shape even though the
+// server never restarted); otherwise a still-active, still-waiting
+// retryable stall (see engine/goal.go's retryable-backoff park machinery,
+// whose loop IS still alive, merely waiting) reads as paused/
+// provider-backoff — purely derived from the existing retryable/waiting
+// fields, so it clears itself the instant the loop's next goal.eval or
+// goal.stalled record resets waiting, exactly mirroring the self-re-arm
+// behavior that machinery already has (see publishGoal).
+func (g *goalTracker) pauseView() (paused bool, reason string) {
+	switch {
+	case g.pausedRestart:
+		return true, pauseReasonRestart
+	case g.pausedWorker:
+		return true, pauseReasonWorkerFailure
+	case g.active && g.retryable && g.waiting:
+		return true, pauseReasonProviderBackoff
+	default:
+		return false, ""
+	}
+}
+
+// resetGoalPauseLocked clears every pause-fold field pauseView reads from —
+// pausedRestart, pausedWorker, and the retryable-backoff trio
+// (retryable/retryableClass/waiting) — in one place, so a freshly (re)armed,
+// genuinely running loop is never seen wearing a stale paused presentation
+// from before it started. Callers MUST hold s.mu.
+//
+// Two call sites need this, and both mean "a loop is about to actually run
+// against g, right now": handleGoal's re-arm branch (an operator's fresh
+// POST /session/{id}/goal against a paused/idle goal) and maybeAutoArmGoal's
+// successful-claim path (ordinary activity resuming a goal left armed with
+// no loop attached — restart or worker-park). Before this helper existed,
+// each site reset a different subset of these fields by hand; maybeAutoArmGoal
+// resetting only pausedWorker left pausedRestart permanently stuck true when
+// a restart-paused goal was resumed by a plain prompt rather than a fresh
+// POST /goal — see TestAutoArmAfterRestartResetsPausePresentation.
+func resetGoalPauseLocked(g *goalTracker) {
+	if g == nil {
+		return
+	}
+	g.pausedRestart = false
+	g.pausedWorker = false
+	g.retryable = false
+	g.retryableClass = ""
+	g.waiting = false
+}
+
+// turnOutcome is the per-session last-turn summary surfaced on Session JSON
+// (last_turn) and /session/status entries. outcome is "completed" or
+// "error"; error is the sanitized failure detail (empty on completion).
+type turnOutcome struct {
+	outcome string
+	error   string
+}
+
+// sessionState tracks an in-memory session and any in-flight prompt. lastUsed
+// is the time the session was created, loaded, or last finished a prompt; it
+// orders MaxResident eviction (longest-idle first).
+type sessionState struct {
+	sess     *engine.Session
+	running  bool
+	cancel   context.CancelFunc
+	lastUsed time.Time
+	// shareWorkdir opts this session out of the workdir-busy exclusivity rule
+	// in claimForPrompt (see workdir.go): set from POST /session's
+	// share_workdir, in memory only (a reloaded/cold session defaults back to
+	// false, like running/cancel).
+	shareWorkdir bool
+	// isolation is the POST /session workdir_isolation value ("" behaves as
+	// isolationShared), in memory only like shareWorkdir: a reloaded/cold
+	// session defaults back to shared, same limitation the doc comment above
+	// already accepts. isolationWorktree also bypasses the workdir-busy
+	// claim (see workdirHolderLocked) — though since each worktree session
+	// gets its own unique path, it would never collide anyway.
+	isolation string
+	// worktree is non-nil exactly when isolation == isolationWorktree and
+	// worktree creation succeeded; it is the handle handleEnd uses to tear
+	// the worktree down (or keep it and journal why).
+	worktree *worktreeInfo
+	// goalLoop is true exactly when the CURRENT occupant of running/cancel is
+	// a goal loop (a runGoal call), false when it is a plain prompt (or
+	// nothing, its zero value). Set at every site that spawns runGoal while
+	// holding the claim (handleGoal's fresh-start and re-arm paths,
+	// handleGoalBusy's retry-win path, maybeAutoArmGoal) -- always AFTER
+	// claimForPrompt itself has returned, never before -- and reset to false
+	// both at claimForPrompt's own claim site (so the flag is self-contained
+	// and never depends on a previous occupant's tail having run) and
+	// everywhere running/cancel themselves are reset (runPrompt's and
+	// runGoal's tails, handleCompact's tail, and handleGoal's two rollback
+	// branches) -- so it always names the true occupant, never stale from a
+	// previous claim.
+	//
+	// handleGoalDelete reads it to decide whether to cancel: a plain prompt
+	// occupying the run slot while a goal sits merely "armed" (see
+	// handleGoalBusy's 202 "armed" response and maybeAutoArmGoal) must be
+	// left running -- DELETE only clears the goal in that case, exactly like
+	// the boot-time-paused/no-loop-attached case already handled below. See
+	// TestDeleteGoalDuringArmedPromptLeavesPromptRunning.
+	goalLoop bool
+}
+
+// New builds a Server and reconciles its journal against the on-disk session
+// logs (appending any message records lost to a crash between the session-log
+// and journal appends). Reconciliation reads the session directory only — it
+// touches no network and spawns nothing, so it is safe on the startup path.
+func New(opts Options) (*Server, error) {
+	// Unauthenticated is the ONLY way an empty RunToken is accepted — see
+	// its own doc comment: this must never be inferred, only explicitly
+	// opted into by a caller (cmd/harness's serveCmd) that has already
+	// verified the bind address is loopback-only.
+	if opts.RunToken == "" && !opts.Unauthenticated {
+		return nil, errors.New("server: RunToken is required")
+	}
+	if opts.NewSession == nil || opts.LoadSession == nil {
+		return nil, errors.New("server: NewSession and LoadSession are required")
+	}
+	if opts.Version == "" {
+		opts.Version = "0.1.0"
+	}
+	if opts.MaxResident <= 0 {
+		opts.MaxResident = 32
+	}
+	sessMgr := opts.SessionManager
+	if sessMgr == nil {
+		sessMgr = engine.NewSessionManager(context.Background(), opts.MaxTaskDepth, opts.MaxConcurrentTasks)
+	}
+	s := &Server{
+		opts:           opts,
+		subs:           make(map[*subscriber]struct{}),
+		seen:           make(map[string]map[string]bool),
+		sessions:       make(map[string]*sessionState),
+		lastRequest:    make(map[string]*requestSnapshot),
+		lastReqHash:    make(map[string]string),
+		lastPersistErr: make(map[string]string),
+		goalState:      make(map[string]*goalTracker),
+		lastTurn:       make(map[string]*turnOutcome),
+		waiters:        make(map[*waiter]struct{}),
+		closing:        make(chan struct{}),
+		sessMgr:        sessMgr,
+	}
+	// SetExternalRunner before anything else touches sessMgr: it is what
+	// makes a SessionManager-initiated resume turn on a ROOT session go
+	// through this server's OWN run-slot admission (claimForPrompt) rather
+	// than SessionManager calling Session.Prompt directly — see
+	// ExternalRunner's doc comment (engine/session_manager.go) for why an
+	// unsynchronized second scheduler is a real, reproduced race. s is
+	// already a fully-allocated *Server here (unlike a caller's own outer
+	// variable assigned from New's return value — see
+	// resumeSessionForTaskNotification's doc comment for the exact bug
+	// this ordering avoids), so this method value is safe to hand out
+	// immediately, before New even returns.
+	sessMgr.SetExternalRunner(s.resumeSessionForTaskNotification)
+	if err := s.reconcile(); err != nil {
+		return nil, err
+	}
+	// Deliverable 2(a): mark every goal restored active-but-unattended by
+	// reconcile's journal replay as paused/restart, and journal that
+	// observation, before the server is reachable by any client.
+	s.pauseArmedGoalsAtBoot()
+	if opts.SessionDir != "" {
+		// Fixed, predictable path (rather than worktreeBaseDir's lazy
+		// temp-dir fallback) so a crashed predecessor's worktrees — created
+		// under this exact path — are always found here on restart. An
+		// ephemeral (SessionDir == "") server has nothing durable to sweep:
+		// its own worktreeBase is a fresh temp directory every run.
+		s.worktreeBase = filepath.Join(opts.SessionDir, "worktrees")
+		sweepWorktrees(s.worktreeBase, opts.SessionDir, func(sessionID, path string) {
+			s.emitDurable(Event{Type: evtWorktreeKept, SessionID: sessionID, WorktreePath: path})
+		})
+	}
+	s.routes()
+	return s, nil
+}
+
+// SessionManager returns this server's engine.SessionManager (subagent
+// sessions — the `task` tool, session.create's parent_id form, and
+// session.send/session.info's lineage extension). Never nil.
+//
+// A caller that ALSO needs to reference this same manager from its own
+// session-construction closures (Config.SessionManager — see cmd/harness's
+// mkCfg) should NOT do so by calling this method after New returns:
+// New's own reconcile call runs those closures synchronously, before New
+// returns — see Options.SessionManager's doc comment, and supply the
+// manager there instead, built as a plain value before New is ever called.
+// This accessor exists for callers that only need to reach the manager
+// AFTER a *Server already exists (tests, and any other post-construction
+// integration).
+func (s *Server) SessionManager() *engine.SessionManager {
+	return s.sessMgr
+}
+
+// worktreeBaseDir returns the directory 'worktree'-isolation sessions create
+// their per-session git worktrees under, creating it (and its meta
+// subdirectory) on first use. New already sets it eagerly when SessionDir is
+// configured; this lazily falls back to a process-lifetime temp directory
+// otherwise, computed once and reused for every worktree session this
+// process creates.
+func (s *Server) worktreeBaseDir() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.worktreeBase == "" {
+		tmp, err := os.MkdirTemp("", "harness-worktrees-")
+		if err != nil {
+			return "", err
+		}
+		s.worktreeBase = tmp
+	}
+	if err := os.MkdirAll(filepath.Join(s.worktreeBase, "meta"), 0o755); err != nil {
+		return "", err
+	}
+	return s.worktreeBase, nil
+}
+
+func (s *Server) routes() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /session", s.auth(s.handleList))
+	mux.HandleFunc("POST /session", s.auth(s.handleCreate))
+	// A precise pattern outranks the {id} wildcard, so /session/status is not
+	// mistaken for a session named "status".
+	mux.HandleFunc("GET /session/status", s.auth(s.handleStatus))
+	mux.HandleFunc("GET /session/{id}", s.auth(s.handleGet))
+	mux.HandleFunc("DELETE /session/{id}", s.auth(s.handleEnd))
+	mux.HandleFunc("GET /session/{id}/wait", s.auth(s.handleWait))
+	mux.HandleFunc("GET /session/{id}/message", s.auth(s.handleMessages))
+	mux.HandleFunc("GET /session/{id}/request", s.auth(s.handleRequest))
+	mux.HandleFunc("POST /session/{id}/prompt_async", s.auth(s.handlePrompt))
+	mux.HandleFunc("POST /session/{id}/enqueue", s.auth(s.handleEnqueue))
+	mux.HandleFunc("GET /session/{id}/queue", s.auth(s.handleQueueGet))
+	mux.HandleFunc("DELETE /session/{id}/queue", s.auth(s.handleQueueDelete))
+	mux.HandleFunc("POST /session/{id}/compact", s.auth(s.handleCompact))
+	mux.HandleFunc("POST /session/{id}/goal", s.auth(s.handleGoal))
+	mux.HandleFunc("DELETE /session/{id}/goal", s.auth(s.handleGoalDelete))
+	mux.HandleFunc("POST /session/{id}/model", s.auth(s.handleSetModel))
+	mux.HandleFunc("POST /session/{id}/thinking", s.auth(s.handleSetThinking))
+	mux.HandleFunc("POST /session/{id}/abort", s.auth(s.handleAbort))
+	// session.send (design doc, Stage 4): deliver a message to ANY session
+	// this server's SessionManager tracks, root or child — see
+	// handleSessionSend's doc comment for why this is a new route rather
+	// than an extension of prompt_async above.
+	mux.HandleFunc("POST /session/{id}/send", s.auth(s.handleSessionSend))
+	mux.HandleFunc("DELETE /session/{id}/cancel_tree", s.auth(s.handleCancelTree))
+	mux.HandleFunc("GET /event", s.auth(s.handleEvent))
+	mux.HandleFunc("GET /process", s.auth(s.handleProcessList))
+	mux.HandleFunc("POST /process/{name}/start", s.auth(s.handleProcessStart))
+	mux.HandleFunc("POST /process/{name}/stop", s.auth(s.handleProcessStop))
+	mux.HandleFunc("POST /process/{name}/restart", s.auth(s.handleProcessRestart))
+	// /debug/goroutines: an authed HTTP alternative to sending SIGQUIT (see
+	// handleGoroutines's doc comment and cmd/harness/main.go's serveCmd,
+	// which confirms SIGQUIT still produces Go's default all-goroutine dump
+	// since this process only intercepts os.Interrupt/SIGTERM) — for
+	// inspecting a wedged box in environments where signaling/exec-ing into
+	// the process is awkward or unavailable.
+	mux.HandleFunc("GET /debug/goroutines", s.auth(s.handleGoroutines))
+	if s.opts.MonitorPage != nil {
+		mux.HandleFunc("GET /monitor", s.handleMonitor)
+		mux.HandleFunc("GET /monitor/", s.handleMonitor)
+		// Bare root -> the monitor. The {$} anchor matches "/" EXACTLY; a
+		// plain "GET /" would be a catch-all matching every otherwise-
+		// unmatched path, turning the whole API's 404s into redirects. See
+		// handleRoot.
+		mux.HandleFunc("GET /{$}", s.handleRoot)
+	}
+	s.mux = mux
+}
+
+// ServeHTTP implements http.Handler. When CORS is enabled it layers the CORS
+// contract over the mux: the allow-origin/Vary headers on every response and a
+// short-circuited 204 for OPTIONS preflights (which carry no credentials, so
+// they bypass auth entirely).
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.opts.CORSOrigin != "" {
+		h := w.Header()
+		// Echo the configured origin (literal, including "*"). Setting it here,
+		// before the mux runs, means it rides along on every downstream response
+		// — success, 401, 404, or SSE — so a browser can always read the result.
+		h.Set("Access-Control-Allow-Origin", s.opts.CORSOrigin)
+		h.Set("Vary", "Origin")
+		if r.Method == http.MethodOptions {
+			h.Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Last-Event-ID")
+			h.Set("Access-Control-Max-Age", "600")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
+	// An EMPTY {id} segment ("/session//abort") never reaches the mux's
+	// "/session/{id}/..." patterns at all: net/http's ServeMux calls
+	// cleanPath internally, which collapses the doubled slash and issues a
+	// 301 redirect to the cleaned path (e.g. "/session/abort"). Go's
+	// http.Client, following that redirect, converts a POST or DELETE to GET
+	// (net/http's redirect handling for 301/302/303). The request that
+	// actually lands is a GET to a path with no {id} segment at all, hitting
+	// whatever route (if any) happens to share that shape — never the {id}
+	// handler, and never triggering the documented sessionIDOrNotFound 404
+	// contract in handlers.go. The response an empty id gets is therefore an
+	// accident of the routing table, not the contract.
+	//
+	// Answer it here, ahead of the mux, so an empty id is exactly as
+	// not-found as any other id that fails engine.ValidSessionID. Matching
+	// on the RAW path (r.URL.Path, before any cleaning) is deliberate and
+	// mirrors sessionIDOrNotFound's own raw-vs-decoded reasoning: the
+	// redirect this pre-empts is itself driven by the raw path.
+	if isEmptySessionIDPath(r.URL.Path) {
+		writeErr(w, http.StatusNotFound, "no such session")
+		return
+	}
+	s.mux.ServeHTTP(w, r)
+}
+
+// emptySessionIDPrefix is the one path shape isEmptySessionIDPath matches:
+// the "/session/" collection prefix followed immediately by another slash,
+// i.e. an empty {id} segment.
+const emptySessionIDPrefix = "/session//"
+
+// isEmptySessionIDPath reports whether path addresses a session sub-resource
+// with an EMPTY id segment ("/session//", "/session//abort",
+// "/session//a/b"). It deliberately does NOT match "/session/" (the
+// collection with a trailing slash) nor "/session" (the real collection
+// endpoint, which must keep working) — and, because the prefix check
+// includes the trailing slash of "/session/", it also does not match
+// "/sessions//x" (a different, unrelated route).
+func isEmptySessionIDPath(path string) bool {
+	return strings.HasPrefix(path, emptySessionIDPrefix)
+}
+
+// Drain waits for in-flight prompts to finish, then returns. Under s.mu, and
+// before it starts waiting, it sets the draining flag and closes the closing
+// signal (once). Setting draining before wg.Wait is what makes the prompt
+// admission gate correct: a new prompt's wg.Add(1) happens in the same s.mu
+// critical section that checks draining (see claimForPrompt), so by mutex
+// ordering every Add that ever runs either preceded draining=true — and is
+// therefore counted by the Wait below — or observes draining and is rejected
+// with 503. A WaitGroup Add can never race after this Wait begins.
+//
+// Closing the signal ends every connected SSE stream promptly, which lets a
+// concurrently-running http.Server.Shutdown see idle connections and return
+// instead of blocking on a live /event tail for the whole grace budget;
+// disconnected orchestrators recover the trailing records via replay-from-seq.
+//
+// Drain then waits up to ctx's deadline for prompts to complete on their own;
+// if ctx expires while prompts are still running, it cancels their contexts
+// (which journals a durable session.aborted for each) and waits for them to
+// unwind. It must be called before Close so the journal file stays open while
+// the trailing records — the final assistant message and the
+// session.aborted/idle transitions — are written; otherwise those records are
+// lost on shutdown.
+func (s *Server) Drain(ctx context.Context) {
+	s.mu.Lock()
+	s.draining = true
+	s.closeOnce.Do(func() { close(s.closing) })
+	s.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return
+	case <-ctx.Done():
+	}
+	// Grace period expired with prompts still in flight: cancel them so their
+	// runPrompt goroutines observe context.Canceled, journal session.aborted,
+	// and exit. Wait for that to finish so the records land before Close.
+	s.mu.Lock()
+	for _, st := range s.sessions {
+		if st.cancel != nil {
+			st.cancel()
+		}
+	}
+	s.mu.Unlock()
+	s.wg.Wait()
+}
+
+// Shutdown gracefully stops a harness serve instance. It runs the HTTP server's
+// Shutdown and the Server's Drain CONCURRENTLY under one deadline, waits for
+// both, and returns Shutdown's error.
+//
+// The two must overlap, not run in sequence:
+//
+//   - httpSrv.Shutdown closes the listener as its first synchronous action, so
+//     no new request is accepted the instant shutdown begins. It then waits for
+//     open connections to go idle.
+//   - Drain closes the closing signal at entry, which ends connected SSE tails
+//     promptly; that is what lets the concurrent Shutdown see idle connections
+//     and return quickly instead of blocking on a live /event tail for the whole
+//     grace budget. In parallel, Drain gives the detached prompt goroutines
+//     (their 202 already returned; Shutdown does not track them) the full grace
+//     budget to finish before it cancels them and journals their trailing
+//     records.
+//
+// Running them sequentially either way loses: Shutdown-then-Drain would block
+// Shutdown on the SSE tail, and Drain-then-Shutdown would keep the listener open
+// for the whole drain window, admitting new prompts mid-drain (a data-loss bug
+// the draining gate exists to prevent).
+func Shutdown(ctx context.Context, httpSrv *http.Server, srv *Server) error {
+	drained := make(chan struct{})
+	go func() {
+		srv.Drain(ctx)
+		close(drained)
+	}()
+	err := httpSrv.Shutdown(ctx)
+	<-drained
+	return err
+}
+
+// Close releases the journal file, if any.
+func (s *Server) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.jf != nil {
+		return s.jf.Close()
+	}
+	return nil
+}
+
+// auth wraps a handler with constant-time bearer-token authentication.
+func (s *Server) auth(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.authorized(r) {
+			writeErr(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		h(w, r)
+	}
+}
+
+func (s *Server) authorized(r *http.Request) bool {
+	// Unauthenticated mode: every route, unconditionally — see its doc
+	// comment on Options. Checked first so a missing/malformed
+	// Authorization header is never even inspected in this mode.
+	if s.opts.Unauthenticated {
+		return true
+	}
+	const prefix = "Bearer "
+	h := r.Header.Get("Authorization")
+	if !strings.HasPrefix(h, prefix) {
+		return false
+	}
+	tok := h[len(prefix):]
+	return subtle.ConstantTimeCompare([]byte(tok), []byte(s.opts.RunToken)) == 1
+}
+
+// reportError forwards err to Options.OnError, nil-guarded. Safe to call
+// with s.mu held: the callback must not call back into the Server (see the
+// OnError doc comment).
+func (s *Server) reportError(err error) {
+	if s.opts.OnError == nil {
+		return
+	}
+	s.opts.OnError(context.Background(), err)
+}
+
+// logInfo and logWarn forward to Options.Logger, nil-guarded: every call
+// site in journal.go's turn-lifecycle/goal-lifecycle choke points calls
+// these instead of repeating the nil check inline (a nil *slog.Logger
+// panics if a method is called on it directly, so the guard here is load-
+// bearing, not stylistic). Call these AFTER releasing s.mu — every
+// existing call site does (see recordTurnEnd, publishGoal, emitDurable):
+// slog never calls back into the Server, so there is no deadlock, but the
+// Logger sink is arbitrary I/O (a full stderr pipe, a suspended terminal)
+// and a stalled sink must never be able to block the server's global
+// mutex.
+func (s *Server) logInfo(msg string, args ...any) {
+	if s.opts.Logger == nil {
+		return
+	}
+	s.opts.Logger.Info(msg, args...)
+}
+
+func (s *Server) logWarn(msg string, args ...any) {
+	if s.opts.Logger == nil {
+		return
+	}
+	s.opts.Logger.Warn(msg, args...)
+}
+
+// writeJSON marshals v to a buffer BEFORE writing anything to w: the status
+// line and the body must not be allowed to disagree. The previous version
+// wrote the header first and streamed the encoder straight to w, so a
+// mid-encode marshal failure (e.g. a poisoned json.RawMessage deep in a
+// session's history) left a 200 response truncated after however many bytes
+// the encoder had already flushed — indistinguishable, to a client, from a
+// network glitch, and impossible to retry into success. Marshaling first
+// means a failure here is caught before any bytes go out, so it can be
+// reported honestly as a 500 with a real error body instead.
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		// The error body is a fixed, always-marshalable shape (a
+		// map[string]string), so this cannot recurse into the same
+		// failure — the resilience path must not itself fail.
+		eb, _ := json.Marshal(map[string]string{"error": "internal: " + err.Error()})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write(eb)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_, _ = w.Write(b)
+}
+
+func writeErr(w http.ResponseWriter, code int, msg string) {
+	writeJSON(w, code, map[string]string{"error": msg})
+}

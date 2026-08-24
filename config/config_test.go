@@ -1,0 +1,1619 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("writing %s: %v", path, err)
+	}
+}
+
+func intPtr(v int) *int { return &v }
+
+func TestLoadMissingFile(t *testing.T) {
+	c, err := Load(filepath.Join(t.TempDir(), "does-not-exist.json"))
+	if err != nil {
+		t.Fatalf("Load missing file: %v", err)
+	}
+	if c == nil {
+		t.Fatal("Load returned nil config for missing file")
+	}
+	if c.Model != "" || len(c.Aliases) != 0 || c.SessionDir != "" || len(c.Providers) != 0 {
+		t.Errorf("missing file gave non-zero config: %+v", c)
+	}
+}
+
+func TestLoadBasic(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.json")
+	writeFile(t, p, `{
+		"model": "anthropic/claude-fable-5",
+		"aliases": {"fast": "anthropic/claude-haiku-4-5"},
+		"providers": {"anthropic": {"api_key_env": "MY_KEY", "base_url": "http://x"}}
+	}`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Model != "anthropic/claude-fable-5" {
+		t.Errorf("Model = %q", c.Model)
+	}
+	if c.Aliases["fast"] != "anthropic/claude-haiku-4-5" {
+		t.Errorf("alias fast = %q", c.Aliases["fast"])
+	}
+	if c.Providers["anthropic"].APIKeyEnv != "MY_KEY" || c.Providers["anthropic"].BaseURL != "http://x" {
+		t.Errorf("provider anthropic = %+v", c.Providers["anthropic"])
+	}
+}
+
+func TestLoadProviderOpenAICompat(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.json")
+	writeFile(t, p, `{
+		"providers": {
+			"openrouter": {
+				"type": "openai-compat",
+				"base_url": "https://openrouter.ai/api/v1",
+				"api_key_env": "OPENROUTER_API_KEY",
+				"family": "openrouter-quirks",
+				"extra_headers": {"HTTP-Referer": "https://example.com", "X-Title": "harness"}
+			}
+		}
+	}`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	pr, ok := c.Providers["openrouter"]
+	if !ok {
+		t.Fatal("providers.openrouter missing")
+	}
+	if pr.Type != TypeOpenAICompat {
+		t.Errorf("Type = %q, want %q", pr.Type, TypeOpenAICompat)
+	}
+	if pr.BaseURL != "https://openrouter.ai/api/v1" {
+		t.Errorf("BaseURL = %q", pr.BaseURL)
+	}
+	if pr.APIKeyEnv != "OPENROUTER_API_KEY" {
+		t.Errorf("APIKeyEnv = %q", pr.APIKeyEnv)
+	}
+	if pr.Family != "openrouter-quirks" {
+		t.Errorf("Family = %q", pr.Family)
+	}
+	if pr.ExtraHeaders["HTTP-Referer"] != "https://example.com" || pr.ExtraHeaders["X-Title"] != "harness" {
+		t.Errorf("ExtraHeaders = %+v", pr.ExtraHeaders)
+	}
+}
+
+// Provider validation runs once, on the merged config (see mergeAndValidate
+// and LoadProject) — never per file (see Load) — so a single incomplete
+// layer is not itself rejected; only the merged, defaulted result is
+// judged. Tests below exercise validation through mergeAndValidate,
+// merging the config under test against a zero-value override (equivalent
+// to "no project file"), which is exactly what LoadProject does when
+// .harness.json is absent.
+
+func TestLoadProviderUnknownTypeFails(t *testing.T) {
+	c := &Config{Providers: map[string]Provider{
+		"mystery": {Type: "carrier-pigeon", BaseURL: "http://x"},
+	}}
+	_, err := mergeAndValidate(c, &Config{})
+	if err == nil {
+		t.Fatal("mergeAndValidate did not fail on unknown provider type")
+	}
+	if !strings.Contains(err.Error(), "carrier-pigeon") {
+		t.Errorf("error %q does not name the offending type", err)
+	}
+}
+
+// TestLoadProviderEmptyTypeOnUnknownKeyFails guards against the
+// suppress-but-register-nothing bug: an entry with a missing or typo'd
+// type used to silently disable a zero-config default the moment the key
+// was present at all, while never itself registering a client. A partial
+// entry for a key with no built-in default (see nativeDefaultProviders)
+// must still fail loudly, naming the key and the valid types, even though
+// validation now runs post-merge.
+func TestLoadProviderEmptyTypeOnUnknownKeyFails(t *testing.T) {
+	c := &Config{Providers: map[string]Provider{
+		"mycompat": {BaseURL: "http://x"},
+	}}
+	_, err := mergeAndValidate(c, &Config{})
+	if err == nil {
+		t.Fatal("mergeAndValidate did not fail on empty type for unknown providers.mycompat entry")
+	}
+	if !strings.Contains(err.Error(), "mycompat") {
+		t.Errorf("error %q does not name the offending key", err)
+	}
+	if !strings.Contains(err.Error(), TypeOpenAICompat) {
+		t.Errorf("error %q does not list %q as a valid type", err, TypeOpenAICompat)
+	}
+}
+
+// TestLoadProviderEmptyTypeOnNativeKeysOK proves the fix above does not
+// regress the legacy zero-Type override path for the two built-in native
+// adapters cmd/harness's registry wires directly by name.
+func TestLoadProviderEmptyTypeOnNativeKeysOK(t *testing.T) {
+	c := &Config{Providers: map[string]Provider{
+		"anthropic": {APIKeyEnv: "MY_ANTHROPIC_KEY"},
+		"openai":    {APIKeyEnv: "MY_OPENAI_KEY"},
+	}}
+	merged, err := mergeAndValidate(c, &Config{})
+	if err != nil {
+		t.Fatalf("mergeAndValidate: %v", err)
+	}
+	if merged.Providers["anthropic"].APIKeyEnv != "MY_ANTHROPIC_KEY" {
+		t.Errorf("anthropic APIKeyEnv = %q", merged.Providers["anthropic"].APIKeyEnv)
+	}
+	if merged.Providers["openai"].APIKeyEnv != "MY_OPENAI_KEY" {
+		t.Errorf("openai APIKeyEnv = %q", merged.Providers["openai"].APIKeyEnv)
+	}
+}
+
+func TestLoadProviderOpenAICompatMissingBaseURLFails(t *testing.T) {
+	c := &Config{Providers: map[string]Provider{
+		"ollama": {Type: TypeOpenAICompat},
+	}}
+	_, err := mergeAndValidate(c, &Config{})
+	if err == nil {
+		t.Fatal("mergeAndValidate did not fail on missing base_url for openai-compat")
+	}
+	if !strings.Contains(err.Error(), "base_url") {
+		t.Errorf("error %q does not mention base_url", err)
+	}
+}
+
+// TestProviderNativeDefaultKeyOnlyOverride is the key finding of this
+// group: an "openrouter" entry may set only the field it cares about
+// (api_key_env here) and inherit type/base_url from the built-in default
+// (nativeDefaultProviders) — it is a complete, valid entry without ever
+// naming type or base_url itself.
+func TestProviderNativeDefaultKeyOnlyOverride(t *testing.T) {
+	c := &Config{Providers: map[string]Provider{
+		"openrouter": {APIKeyEnv: "MY_OPENROUTER_KEY"},
+	}}
+	merged, err := mergeAndValidate(c, &Config{})
+	if err != nil {
+		t.Fatalf("mergeAndValidate: %v", err)
+	}
+	pr := merged.Providers["openrouter"]
+	if pr.Type != TypeOpenAICompat {
+		t.Errorf("Type = %q, want inherited %q", pr.Type, TypeOpenAICompat)
+	}
+	if pr.BaseURL != nativeDefaultProviders["openrouter"].BaseURL {
+		t.Errorf("BaseURL = %q, want inherited default", pr.BaseURL)
+	}
+	if pr.APIKeyEnv != "MY_OPENROUTER_KEY" {
+		t.Errorf("APIKeyEnv = %q, want the entry's own override", pr.APIKeyEnv)
+	}
+}
+
+// TestEnsureProviderDefaultsIdempotent covers the exported defensive entry
+// point: calling it once on a raw providers map (never merged through
+// LoadProject) yields the same result as mergeAndValidate's own call, and
+// calling it a second time on an already-defaulted map changes nothing —
+// the property that makes it safe for a caller like cmd/harness's
+// registry() to call unconditionally, regardless of how its *Config was
+// built.
+func TestEnsureProviderDefaultsIdempotent(t *testing.T) {
+	providers := map[string]Provider{
+		"openrouter": {APIKeyEnv: "MY_OPENROUTER_KEY"},
+	}
+	EnsureProviderDefaults(providers)
+	pr := providers["openrouter"]
+	if pr.Type != TypeOpenAICompat {
+		t.Errorf("Type = %q, want inherited %q", pr.Type, TypeOpenAICompat)
+	}
+	if pr.BaseURL != nativeDefaultProviders["openrouter"].BaseURL {
+		t.Errorf("BaseURL = %q, want inherited default", pr.BaseURL)
+	}
+	if pr.APIKeyEnv != "MY_OPENROUTER_KEY" {
+		t.Errorf("APIKeyEnv = %q, want preserved override", pr.APIKeyEnv)
+	}
+
+	before := providers["openrouter"]
+	EnsureProviderDefaults(providers)
+	if after := providers["openrouter"]; !reflect.DeepEqual(after, before) {
+		t.Errorf("second call changed the entry: before %+v, after %+v", before, after)
+	}
+}
+
+// TestProviderPartialEntryUnknownKeyFails covers the "partial entry for an
+// unknown key" case explicitly: a key with no built-in default gets no
+// free pass just because another key (openrouter) does.
+func TestProviderPartialEntryUnknownKeyFails(t *testing.T) {
+	c := &Config{Providers: map[string]Provider{
+		"unknown-provider": {APIKeyEnv: "SOME_KEY"},
+	}}
+	_, err := mergeAndValidate(c, &Config{})
+	if err == nil {
+		t.Fatal("mergeAndValidate did not fail on partial entry for an unknown providers key")
+	}
+	if !strings.Contains(err.Error(), "unknown-provider") {
+		t.Errorf("error %q does not name the offending key", err)
+	}
+}
+
+// TestProviderLayeredPartialOverrideMergesThenValidates is the general
+// form of the design fix: a project layer may override just one field of a
+// provider entry that the user layer defines fully — this is only valid
+// because validation now runs on the merged config, not per file (a
+// project-only Load of this fragment would fail: no type, no base_url).
+func TestProviderLayeredPartialOverrideMergesThenValidates(t *testing.T) {
+	base := &Config{Providers: map[string]Provider{
+		"mycompat": {Type: TypeOpenAICompat, BaseURL: "http://user.example", APIKeyEnv: "USER_KEY"},
+	}}
+	over := &Config{Providers: map[string]Provider{
+		"mycompat": {APIKeyEnv: "PROJECT_KEY"},
+	}}
+	merged, err := mergeAndValidate(base, over)
+	if err != nil {
+		t.Fatalf("mergeAndValidate: %v", err)
+	}
+	pr := merged.Providers["mycompat"]
+	if pr.BaseURL != "http://user.example" {
+		t.Errorf("BaseURL = %q, want inherited from base layer", pr.BaseURL)
+	}
+	if pr.APIKeyEnv != "PROJECT_KEY" {
+		t.Errorf("APIKeyEnv = %q, want project override", pr.APIKeyEnv)
+	}
+}
+
+func TestMergeProviderExtraHeaders(t *testing.T) {
+	base := &Config{Providers: map[string]Provider{
+		"openrouter": {Type: TypeOpenAICompat, BaseURL: "http://base", ExtraHeaders: map[string]string{"A": "1"}},
+	}}
+	over := &Config{Providers: map[string]Provider{
+		"openrouter": {ExtraHeaders: map[string]string{"B": "2"}},
+	}}
+	merged := merge(base, over)
+	pr := merged.Providers["openrouter"]
+	if pr.BaseURL != "http://base" {
+		t.Errorf("BaseURL = %q, want http://base (unset override field should not clobber)", pr.BaseURL)
+	}
+	if pr.ExtraHeaders["A"] != "1" || pr.ExtraHeaders["B"] != "2" {
+		t.Errorf("ExtraHeaders = %+v, want merged A and B", pr.ExtraHeaders)
+	}
+	// Mutating the merged map must not alias the base config's map.
+	pr.ExtraHeaders["A"] = "mutated"
+	if base.Providers["openrouter"].ExtraHeaders["A"] != "1" {
+		t.Error("merge aliased the base provider's ExtraHeaders map")
+	}
+}
+
+// TestMergeProviderExtraHeadersBaseOnlyKeyNotAliased covers the seed-loop
+// aliasing bug specifically: a providers key present only in base (over
+// has no entry for it at all, so the field-by-field merge loop never
+// touches it) must still get its own ExtraHeaders map in the merged
+// config, not a reference into base's.
+func TestMergeProviderExtraHeadersBaseOnlyKeyNotAliased(t *testing.T) {
+	base := &Config{Providers: map[string]Provider{
+		"anthropic": {ExtraHeaders: map[string]string{"A": "1"}},
+	}}
+	over := &Config{Providers: map[string]Provider{
+		"openai": {APIKeyEnv: "OTHER_KEY"}, // unrelated key; anthropic is untouched by over
+	}}
+	merged := merge(base, over)
+	merged.Providers["anthropic"].ExtraHeaders["A"] = "mutated"
+	if base.Providers["anthropic"].ExtraHeaders["A"] != "1" {
+		t.Error("merge seed loop aliased the base-only provider's ExtraHeaders map")
+	}
+}
+
+func TestLoadUnknownField(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.json")
+	writeFile(t, p, `{"modle": "typo"}`)
+	_, err := Load(p)
+	if err == nil {
+		t.Fatal("expected error for unknown field")
+	}
+	if !strings.Contains(err.Error(), p) {
+		t.Errorf("error %q does not name path %q", err, p)
+	}
+}
+
+func TestLoadMalformedJSON(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.json")
+	writeFile(t, p, `{not json`)
+	_, err := Load(p)
+	if err == nil {
+		t.Fatal("expected error for malformed JSON")
+	}
+	if !strings.Contains(err.Error(), p) {
+		t.Errorf("error %q does not name path %q", err, p)
+	}
+}
+
+func TestLoadExpandsHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	p := filepath.Join(t.TempDir(), "config.json")
+	writeFile(t, p, `{"session_dir": "~/custom/sessions"}`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := filepath.Join(home, "custom", "sessions")
+	if c.SessionDir != want {
+		t.Errorf("SessionDir = %q, want %q", c.SessionDir, want)
+	}
+}
+
+func TestPath(t *testing.T) {
+	t.Run("HARNESS_CONFIG wins", func(t *testing.T) {
+		t.Setenv("HARNESS_CONFIG", "/etc/harness.json")
+		if got := Path(); got != "/etc/harness.json" {
+			t.Errorf("Path() = %q, want /etc/harness.json", got)
+		}
+	})
+	t.Run("defaults to HOME/.harness/config.json", func(t *testing.T) {
+		t.Setenv("HARNESS_CONFIG", "")
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		want := filepath.Join(home, ".harness", "config.json")
+		if got := Path(); got != want {
+			t.Errorf("Path() = %q, want %q", got, want)
+		}
+	})
+}
+
+func TestResolveModel(t *testing.T) {
+	t.Run("empty falls back to config model", func(t *testing.T) {
+		c := &Config{Model: "anthropic/claude-opus-4-8"}
+		ref, err := c.ResolveModel("")
+		if err != nil {
+			t.Fatalf("ResolveModel: %v", err)
+		}
+		if ref.String() != "anthropic/claude-opus-4-8" {
+			t.Errorf("ref = %q", ref)
+		}
+	})
+	t.Run("empty and no config model falls back to hard default", func(t *testing.T) {
+		c := &Config{}
+		ref, err := c.ResolveModel("")
+		if err != nil {
+			t.Fatalf("ResolveModel: %v", err)
+		}
+		if ref.String() != DefaultModel {
+			t.Errorf("ref = %q, want %q", ref, DefaultModel)
+		}
+	})
+	t.Run("alias resolves one level", func(t *testing.T) {
+		c := &Config{Aliases: map[string]string{"fast": "anthropic/claude-haiku-4-5"}}
+		ref, err := c.ResolveModel("fast")
+		if err != nil {
+			t.Fatalf("ResolveModel: %v", err)
+		}
+		if ref.String() != "anthropic/claude-haiku-4-5" {
+			t.Errorf("ref = %q", ref)
+		}
+	})
+	t.Run("config model may itself be an alias", func(t *testing.T) {
+		c := &Config{Model: "smart", Aliases: map[string]string{"smart": "anthropic/claude-fable-5"}}
+		ref, err := c.ResolveModel("")
+		if err != nil {
+			t.Fatalf("ResolveModel: %v", err)
+		}
+		if ref.String() != "anthropic/claude-fable-5" {
+			t.Errorf("ref = %q", ref)
+		}
+	})
+	t.Run("unknown alias errors", func(t *testing.T) {
+		c := &Config{}
+		if _, err := c.ResolveModel("nope"); err == nil {
+			t.Error("expected error for unknown alias / bare name")
+		}
+	})
+	t.Run("aliases do not recurse", func(t *testing.T) {
+		c := &Config{Aliases: map[string]string{"a": "b", "b": "anthropic/claude-fable-5"}}
+		if _, err := c.ResolveModel("a"); err == nil {
+			t.Error("expected error: alias should resolve one level only, not recurse")
+		}
+	})
+	t.Run("explicit ref passes through", func(t *testing.T) {
+		c := &Config{}
+		ref, err := c.ResolveModel("openai/gpt-5")
+		if err != nil {
+			t.Fatalf("ResolveModel: %v", err)
+		}
+		if ref.String() != "openai/gpt-5" {
+			t.Errorf("ref = %q", ref)
+		}
+	})
+}
+
+func TestLoadInstructionsFields(t *testing.T) {
+	t.Run("instructions false and path", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"instructions": false, "instructions_path": "docs/AGENTS.md"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.Instructions == nil || *c.Instructions != false {
+			t.Errorf("Instructions = %v, want *false", c.Instructions)
+		}
+		if c.InstructionsPath != "docs/AGENTS.md" {
+			t.Errorf("InstructionsPath = %q", c.InstructionsPath)
+		}
+	})
+	t.Run("unset leaves nil", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.Instructions != nil {
+			t.Errorf("Instructions = %v, want nil (unset)", c.Instructions)
+		}
+		if c.InstructionsPath != "" {
+			t.Errorf("InstructionsPath = %q, want empty", c.InstructionsPath)
+		}
+	})
+}
+
+func TestLoadSkillsDirs(t *testing.T) {
+	t.Run("array parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"skills_dirs": ["a/skills", "b/skills"]}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if len(c.SkillsDirs) != 2 || c.SkillsDirs[0] != "a/skills" || c.SkillsDirs[1] != "b/skills" {
+			t.Errorf("SkillsDirs = %v", c.SkillsDirs)
+		}
+	})
+	t.Run("unset leaves nil", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.SkillsDirs != nil {
+			t.Errorf("SkillsDirs = %v, want nil (unset)", c.SkillsDirs)
+		}
+	})
+}
+
+func TestLoadAgentDefsDirs(t *testing.T) {
+	t.Run("array parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"agent_defs_dirs": ["a/agents", "b/agents"]}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if len(c.AgentDefsDirs) != 2 || c.AgentDefsDirs[0] != "a/agents" || c.AgentDefsDirs[1] != "b/agents" {
+			t.Errorf("AgentDefsDirs = %v", c.AgentDefsDirs)
+		}
+	})
+	t.Run("unset leaves nil", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.AgentDefsDirs != nil {
+			t.Errorf("AgentDefsDirs = %v, want nil (unset)", c.AgentDefsDirs)
+		}
+	})
+}
+
+func TestMergeAgentDefsDirs(t *testing.T) {
+	t.Run("non-empty project overrides user entirely", func(t *testing.T) {
+		base := &Config{AgentDefsDirs: []string{"user/a"}}
+		over := &Config{AgentDefsDirs: []string{"proj/x"}}
+		merged := merge(base, over)
+		if len(merged.AgentDefsDirs) != 1 || merged.AgentDefsDirs[0] != "proj/x" {
+			t.Errorf("merged AgentDefsDirs = %v, want [proj/x]", merged.AgentDefsDirs)
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{AgentDefsDirs: []string{"user/a"}}
+		merged := merge(base, &Config{})
+		if len(merged.AgentDefsDirs) != 1 || merged.AgentDefsDirs[0] != "user/a" {
+			t.Errorf("merged AgentDefsDirs = %v, want inherited [user/a]", merged.AgentDefsDirs)
+		}
+	})
+	t.Run("empty project slice inherits user (only non-empty overrides)", func(t *testing.T) {
+		base := &Config{AgentDefsDirs: []string{"user/a"}}
+		merged := merge(base, &Config{AgentDefsDirs: []string{}})
+		if len(merged.AgentDefsDirs) != 1 || merged.AgentDefsDirs[0] != "user/a" {
+			t.Errorf("merged AgentDefsDirs = %v, want inherited [user/a]", merged.AgentDefsDirs)
+		}
+	})
+	t.Run("does not alias base slice", func(t *testing.T) {
+		base := &Config{AgentDefsDirs: []string{"user/a"}}
+		merged := merge(base, &Config{})
+		merged.AgentDefsDirs[0] = "mutated"
+		if base.AgentDefsDirs[0] != "user/a" {
+			t.Errorf("base AgentDefsDirs mutated through merged config: %v", base.AgentDefsDirs)
+		}
+	})
+}
+
+// TestMergeCompactionFields is the red-first test for docs/design/context-
+// compaction.md's config fields: project non-zero values override the user
+// layer, same scalar-override rule as GoalEvaluatorModel.
+func TestMergeCompactionFields(t *testing.T) {
+	base := &Config{ContextWindowTokens: 100000, CompactionThreshold: 0.9, CompactionKeepTurns: 3}
+	t.Run("zero project values inherit the user layer", func(t *testing.T) {
+		got := merge(base, &Config{})
+		if got.ContextWindowTokens != 100000 {
+			t.Errorf("ContextWindowTokens = %d, want inherited 100000", got.ContextWindowTokens)
+		}
+		if got.CompactionThreshold != 0.9 {
+			t.Errorf("CompactionThreshold = %v, want inherited 0.9", got.CompactionThreshold)
+		}
+		if got.CompactionKeepTurns != 3 {
+			t.Errorf("CompactionKeepTurns = %d, want inherited 3", got.CompactionKeepTurns)
+		}
+	})
+	t.Run("non-zero project values override", func(t *testing.T) {
+		got := merge(base, &Config{ContextWindowTokens: 50000, CompactionThreshold: 0.7, CompactionKeepTurns: 1})
+		if got.ContextWindowTokens != 50000 {
+			t.Errorf("ContextWindowTokens = %d, want project override 50000", got.ContextWindowTokens)
+		}
+		if got.CompactionThreshold != 0.7 {
+			t.Errorf("CompactionThreshold = %v, want project override 0.7", got.CompactionThreshold)
+		}
+		if got.CompactionKeepTurns != 1 {
+			t.Errorf("CompactionKeepTurns = %d, want project override 1", got.CompactionKeepTurns)
+		}
+	})
+}
+
+func TestMergeSkillsDirs(t *testing.T) {
+	t.Run("non-empty project overrides user entirely", func(t *testing.T) {
+		base := &Config{SkillsDirs: []string{"user/a", "user/b"}}
+		over := &Config{SkillsDirs: []string{"proj/x"}}
+		merged := merge(base, over)
+		if len(merged.SkillsDirs) != 1 || merged.SkillsDirs[0] != "proj/x" {
+			t.Errorf("merged SkillsDirs = %v, want [proj/x]", merged.SkillsDirs)
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{SkillsDirs: []string{"user/a"}}
+		merged := merge(base, &Config{})
+		if len(merged.SkillsDirs) != 1 || merged.SkillsDirs[0] != "user/a" {
+			t.Errorf("merged SkillsDirs = %v, want inherited [user/a]", merged.SkillsDirs)
+		}
+	})
+	t.Run("empty project slice inherits user (only non-empty overrides)", func(t *testing.T) {
+		base := &Config{SkillsDirs: []string{"user/a"}}
+		merged := merge(base, &Config{SkillsDirs: []string{}})
+		if len(merged.SkillsDirs) != 1 || merged.SkillsDirs[0] != "user/a" {
+			t.Errorf("merged SkillsDirs = %v, want inherited [user/a]", merged.SkillsDirs)
+		}
+	})
+	t.Run("does not alias base slice", func(t *testing.T) {
+		base := &Config{SkillsDirs: []string{"user/a"}}
+		merged := merge(base, &Config{})
+		merged.SkillsDirs[0] = "mutated"
+		if base.SkillsDirs[0] != "user/a" {
+			t.Errorf("base SkillsDirs mutated through merged config: %v", base.SkillsDirs)
+		}
+	})
+}
+
+func TestMergeInstructions(t *testing.T) {
+	trueV, falseV := true, false
+	t.Run("project overrides user", func(t *testing.T) {
+		base := &Config{Instructions: &trueV, InstructionsPath: "user/AGENTS.md"}
+		over := &Config{Instructions: &falseV, InstructionsPath: "proj/AGENTS.md"}
+		merged := merge(base, over)
+		if merged.Instructions == nil || *merged.Instructions != false {
+			t.Errorf("merged Instructions = %v, want *false", merged.Instructions)
+		}
+		if merged.InstructionsPath != "proj/AGENTS.md" {
+			t.Errorf("merged InstructionsPath = %q, want proj/AGENTS.md", merged.InstructionsPath)
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{Instructions: &trueV, InstructionsPath: "user/AGENTS.md"}
+		merged := merge(base, &Config{})
+		if merged.Instructions == nil || *merged.Instructions != true {
+			t.Errorf("merged Instructions = %v, want *true (inherited)", merged.Instructions)
+		}
+		if merged.InstructionsPath != "user/AGENTS.md" {
+			t.Errorf("merged InstructionsPath = %q, want inherited user/AGENTS.md", merged.InstructionsPath)
+		}
+	})
+}
+
+func TestModelToolConfig(t *testing.T) {
+	t.Run("default on when unset", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.ModelTool != nil {
+			t.Errorf("ModelTool = %v, want nil (unset)", c.ModelTool)
+		}
+		if !c.ModelToolEnabled() {
+			t.Error("ModelToolEnabled() = false with field unset, want true (default on)")
+		}
+	})
+	t.Run("explicit false disables", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model_tool": false}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.ModelTool == nil || *c.ModelTool != false {
+			t.Errorf("ModelTool = %v, want *false", c.ModelTool)
+		}
+		if c.ModelToolEnabled() {
+			t.Error("ModelToolEnabled() = true with model_tool:false, want false")
+		}
+	})
+	t.Run("nil receiver is on", func(t *testing.T) {
+		var c *Config
+		if !c.ModelToolEnabled() {
+			t.Error("(*Config)(nil).ModelToolEnabled() = false, want true")
+		}
+	})
+	t.Run("project false overrides user unset", func(t *testing.T) {
+		falseV := false
+		merged := merge(&Config{}, &Config{ModelTool: &falseV})
+		if merged.ModelTool == nil || *merged.ModelTool != false {
+			t.Errorf("merged ModelTool = %v, want *false", merged.ModelTool)
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		trueV := true
+		merged := merge(&Config{ModelTool: &trueV}, &Config{})
+		if merged.ModelTool == nil || *merged.ModelTool != true {
+			t.Errorf("merged ModelTool = %v, want *true (inherited)", merged.ModelTool)
+		}
+	})
+}
+
+func TestGoalEvaluatorModel(t *testing.T) {
+	t.Run("load", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"goal_evaluator_model": "anthropic/claude-opus-4-8"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.GoalEvaluatorModel != "anthropic/claude-opus-4-8" {
+			t.Errorf("GoalEvaluatorModel = %q", c.GoalEvaluatorModel)
+		}
+	})
+	t.Run("project overrides user", func(t *testing.T) {
+		base := &Config{GoalEvaluatorModel: "anthropic/user-model"}
+		merged := merge(base, &Config{GoalEvaluatorModel: "anthropic/proj-model"})
+		if merged.GoalEvaluatorModel != "anthropic/proj-model" {
+			t.Errorf("merged = %q, want proj-model", merged.GoalEvaluatorModel)
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{GoalEvaluatorModel: "anthropic/user-model"}
+		merged := merge(base, &Config{})
+		if merged.GoalEvaluatorModel != "anthropic/user-model" {
+			t.Errorf("merged = %q, want inherited user-model", merged.GoalEvaluatorModel)
+		}
+	})
+	t.Run("resolves through aliases", func(t *testing.T) {
+		c := &Config{Aliases: map[string]string{"judge": "anthropic/claude-opus-4-8"}}
+		ref, err := c.ResolveModel("judge")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ref.String() != "anthropic/claude-opus-4-8" {
+			t.Errorf("ResolveModel(judge) = %q", ref.String())
+		}
+	})
+}
+
+// TestPromptRetries covers the prompt_retries config field: a *int so
+// unset means the product default (PromptRetriesValue -> 2), an explicit 0
+// disables the base-loop retry, and a project value overrides the user layer
+// like ModelTool's *bool does.
+func TestPromptRetries(t *testing.T) {
+	t.Run("unset uses default 2", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.PromptRetries != nil {
+			t.Errorf("PromptRetries = %v, want nil (unset)", c.PromptRetries)
+		}
+		if got := c.PromptRetriesValue(); got != 2 {
+			t.Errorf("PromptRetriesValue = %d, want 2 (default)", got)
+		}
+	})
+	t.Run("explicit zero disables", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"prompt_retries": 0}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.PromptRetries == nil || *c.PromptRetries != 0 {
+			t.Fatalf("PromptRetries = %v, want explicit 0", c.PromptRetries)
+		}
+		if got := c.PromptRetriesValue(); got != 0 {
+			t.Errorf("PromptRetriesValue = %d, want 0 (disabled)", got)
+		}
+	})
+	t.Run("explicit value", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"prompt_retries": 5}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got := c.PromptRetriesValue(); got != 5 {
+			t.Errorf("PromptRetriesValue = %d, want 5", got)
+		}
+	})
+	t.Run("nil receiver uses default", func(t *testing.T) {
+		var c *Config
+		if got := c.PromptRetriesValue(); got != 2 {
+			t.Errorf("nil PromptRetriesValue = %d, want 2", got)
+		}
+	})
+	t.Run("project overrides user", func(t *testing.T) {
+		zero := 0
+		base := &Config{PromptRetries: intPtr(3)}
+		merged := merge(base, &Config{PromptRetries: &zero})
+		if merged.PromptRetries == nil || *merged.PromptRetries != 0 {
+			t.Errorf("merged = %v, want project override 0", merged.PromptRetries)
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{PromptRetries: intPtr(3)}
+		merged := merge(base, &Config{})
+		if merged.PromptRetries == nil || *merged.PromptRetries != 3 {
+			t.Errorf("merged = %v, want inherited 3", merged.PromptRetries)
+		}
+	})
+}
+
+// TestStreamIdleTimeoutS is the red-first test for the stream_idle_timeout_s
+// config field: 0/omitted means "engine default", negative means "disable
+// the watchdog", and project non-zero values override the user layer, same
+// scalar-override rule as GoalEvaluatorModel.
+func TestStreamIdleTimeoutS(t *testing.T) {
+	t.Run("load", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"stream_idle_timeout_s": 120}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.StreamIdleTimeoutS != 120 {
+			t.Errorf("StreamIdleTimeoutS = %d, want 120", c.StreamIdleTimeoutS)
+		}
+	})
+	t.Run("load negative disables watchdog", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"stream_idle_timeout_s": -1}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.StreamIdleTimeoutS != -1 {
+			t.Errorf("StreamIdleTimeoutS = %d, want -1", c.StreamIdleTimeoutS)
+		}
+	})
+	t.Run("unset leaves zero", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.StreamIdleTimeoutS != 0 {
+			t.Errorf("StreamIdleTimeoutS = %d, want 0 (unset)", c.StreamIdleTimeoutS)
+		}
+	})
+	t.Run("project overrides user", func(t *testing.T) {
+		base := &Config{StreamIdleTimeoutS: 60}
+		merged := merge(base, &Config{StreamIdleTimeoutS: 30})
+		if merged.StreamIdleTimeoutS != 30 {
+			t.Errorf("merged = %d, want project override 30", merged.StreamIdleTimeoutS)
+		}
+	})
+	t.Run("project overrides user with negative (disable)", func(t *testing.T) {
+		base := &Config{StreamIdleTimeoutS: 60}
+		merged := merge(base, &Config{StreamIdleTimeoutS: -1})
+		if merged.StreamIdleTimeoutS != -1 {
+			t.Errorf("merged = %d, want project override -1", merged.StreamIdleTimeoutS)
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{StreamIdleTimeoutS: 60}
+		merged := merge(base, &Config{})
+		if merged.StreamIdleTimeoutS != 60 {
+			t.Errorf("merged = %d, want inherited 60", merged.StreamIdleTimeoutS)
+		}
+	})
+}
+
+func TestMergeDoesNotAliasBaseMaps(t *testing.T) {
+	base := &Config{
+		Aliases:   map[string]string{"fast": "anthropic/claude-haiku-4-5"},
+		Providers: map[string]Provider{"anthropic": {APIKeyEnv: "USER_KEY"}},
+	}
+	// An override contributing no map entries must still yield fresh maps.
+	merged := merge(base, &Config{Model: "openai/gpt-5"})
+	merged.Aliases["fast"] = "mutated"
+	merged.Aliases["new"] = "added"
+	merged.Providers["anthropic"] = Provider{APIKeyEnv: "MUTATED"}
+	merged.Providers["openai"] = Provider{APIKeyEnv: "ADDED"}
+
+	if base.Aliases["fast"] != "anthropic/claude-haiku-4-5" {
+		t.Errorf("base alias fast = %q, mutated through merged config", base.Aliases["fast"])
+	}
+	if _, ok := base.Aliases["new"]; ok {
+		t.Error("base aliases gained a key added to the merged config")
+	}
+	if base.Providers["anthropic"].APIKeyEnv != "USER_KEY" {
+		t.Errorf("base provider anthropic = %+v, mutated through merged config", base.Providers["anthropic"])
+	}
+	if _, ok := base.Providers["openai"]; ok {
+		t.Error("base providers gained a key added to the merged config")
+	}
+}
+
+func TestLoadProject(t *testing.T) {
+	t.Run("no project file returns user config", func(t *testing.T) {
+		userPath := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, userPath, `{"model": "anthropic/claude-fable-5"}`)
+		t.Setenv("HARNESS_CONFIG", userPath)
+		c, err := LoadProject(t.TempDir())
+		if err != nil {
+			t.Fatalf("LoadProject: %v", err)
+		}
+		if c.Model != "anthropic/claude-fable-5" {
+			t.Errorf("Model = %q", c.Model)
+		}
+	})
+	t.Run("project non-zero fields override user config", func(t *testing.T) {
+		userPath := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, userPath, `{
+			"model": "anthropic/claude-fable-5",
+			"session_dir": "/user/sessions",
+			"aliases": {"fast": "anthropic/claude-haiku-4-5", "smart": "anthropic/claude-opus-4-8"},
+			"providers": {"anthropic": {"api_key_env": "USER_KEY", "base_url": "http://user"}}
+		}`)
+		t.Setenv("HARNESS_CONFIG", userPath)
+		projDir := t.TempDir()
+		writeFile(t, filepath.Join(projDir, ".harness.json"), `{
+			"model": "openai/gpt-5",
+			"aliases": {"smart": "openai/gpt-5-pro"},
+			"providers": {"anthropic": {"base_url": "http://project"}}
+		}`)
+		c, err := LoadProject(projDir)
+		if err != nil {
+			t.Fatalf("LoadProject: %v", err)
+		}
+		if c.Model != "openai/gpt-5" {
+			t.Errorf("Model = %q, want openai/gpt-5 (project override)", c.Model)
+		}
+		if c.SessionDir != "/user/sessions" {
+			t.Errorf("SessionDir = %q, want /user/sessions (unset in project)", c.SessionDir)
+		}
+		if c.Aliases["fast"] != "anthropic/claude-haiku-4-5" {
+			t.Errorf("alias fast = %q, want inherited from user", c.Aliases["fast"])
+		}
+		if c.Aliases["smart"] != "openai/gpt-5-pro" {
+			t.Errorf("alias smart = %q, want project override", c.Aliases["smart"])
+		}
+		got := c.Providers["anthropic"]
+		if got.APIKeyEnv != "USER_KEY" {
+			t.Errorf("anthropic api_key_env = %q, want inherited USER_KEY", got.APIKeyEnv)
+		}
+		if got.BaseURL != "http://project" {
+			t.Errorf("anthropic base_url = %q, want project override", got.BaseURL)
+		}
+	})
+	// The design fix in full, end to end: neither file's providers.openrouter
+	// entry is complete on its own (the user file has no type/base_url at
+	// all — it relies on the native default — and the project file
+	// overrides only api_key_env), but LoadProject merges the two layers
+	// and the native default, then validates the result.
+	t.Run("layered partial provider override merges then validates", func(t *testing.T) {
+		userPath := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, userPath, `{
+			"providers": {"openrouter": {"api_key_env": "USER_OR_KEY"}}
+		}`)
+		t.Setenv("HARNESS_CONFIG", userPath)
+		projDir := t.TempDir()
+		writeFile(t, filepath.Join(projDir, ".harness.json"), `{
+			"providers": {"openrouter": {"api_key_env": "PROJECT_OR_KEY"}}
+		}`)
+		c, err := LoadProject(projDir)
+		if err != nil {
+			t.Fatalf("LoadProject: %v", err)
+		}
+		pr := c.Providers["openrouter"]
+		if pr.Type != TypeOpenAICompat {
+			t.Errorf("Type = %q, want inherited native default %q", pr.Type, TypeOpenAICompat)
+		}
+		if pr.BaseURL != nativeDefaultProviders["openrouter"].BaseURL {
+			t.Errorf("BaseURL = %q, want inherited native default", pr.BaseURL)
+		}
+		if pr.APIKeyEnv != "PROJECT_OR_KEY" {
+			t.Errorf("APIKeyEnv = %q, want project override", pr.APIKeyEnv)
+		}
+	})
+	// A project-only providers entry naming an unknown key with no type is
+	// still rejected once merged — the native default only applies to
+	// nativeDefaultProviders keys.
+	t.Run("project layer cannot smuggle in an incomplete non-default provider", func(t *testing.T) {
+		userPath := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, userPath, `{"model": "anthropic/claude-fable-5"}`)
+		t.Setenv("HARNESS_CONFIG", userPath)
+		projDir := t.TempDir()
+		writeFile(t, filepath.Join(projDir, ".harness.json"), `{
+			"providers": {"mycompat": {"api_key_env": "PROJECT_KEY"}}
+		}`)
+		_, err := LoadProject(projDir)
+		if err == nil {
+			t.Fatal("LoadProject did not fail on an incomplete non-default provider entry")
+		}
+		if !strings.Contains(err.Error(), "mycompat") {
+			t.Errorf("error %q does not name the offending key", err)
+		}
+	})
+}
+
+// TestLoadProjectWithInfo covers the startup-config-observability
+// contract (see AGENTS.md / docs/design/managed-processes.md): the one
+// piece of information a served/run process needs to log at boot is
+// which config file (if any) it actually loaded, plus how much it
+// declares — this is what tells an operator whose config file was
+// misnamed (and so silently loaded as empty) apart from one who never
+// meant to supply a config at all.
+func TestLoadProjectWithInfo(t *testing.T) {
+	t.Run("project file present: reports its path and merged counts", func(t *testing.T) {
+		userPath := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, userPath, `{"mcp_servers": {"fs": {"command": ["mcp-fs"]}}}`)
+		t.Setenv("HARNESS_CONFIG", userPath)
+		projDir := t.TempDir()
+		projPath := filepath.Join(projDir, ".harness.json")
+		writeFile(t, projPath, `{
+			"processes": {"dev": {"command": ["pnpm", "dev"]}, "db": {"command": ["postgres"]}},
+			"plugins": [{"name": "gh", "command": ["gh-plugin"]}]
+		}`)
+		_, info, err := LoadProjectWithInfo(projDir)
+		if err != nil {
+			t.Fatalf("LoadProjectWithInfo: %v", err)
+		}
+		if info.Path != projPath {
+			t.Errorf("Path = %q, want the project file %q", info.Path, projPath)
+		}
+		if info.Processes != 2 {
+			t.Errorf("Processes = %d, want 2", info.Processes)
+		}
+		if info.MCPServers != 1 {
+			t.Errorf("MCPServers = %d, want 1 (inherited from user config)", info.MCPServers)
+		}
+		if info.Plugins != 1 {
+			t.Errorf("Plugins = %d, want 1", info.Plugins)
+		}
+	})
+	t.Run("no project file, user file present: reports the user path", func(t *testing.T) {
+		userPath := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, userPath, `{"model": "anthropic/claude-fable-5"}`)
+		t.Setenv("HARNESS_CONFIG", userPath)
+		_, info, err := LoadProjectWithInfo(t.TempDir())
+		if err != nil {
+			t.Fatalf("LoadProjectWithInfo: %v", err)
+		}
+		if info.Path != userPath {
+			t.Errorf("Path = %q, want the user config path %q", info.Path, userPath)
+		}
+		if info.Processes != 0 || info.MCPServers != 0 || info.Plugins != 0 {
+			t.Errorf("counts = %+v, want all zero", info)
+		}
+	})
+	t.Run("neither file present: reports no config found", func(t *testing.T) {
+		t.Setenv("HARNESS_CONFIG", filepath.Join(t.TempDir(), "does-not-exist.json"))
+		_, info, err := LoadProjectWithInfo(t.TempDir())
+		if err != nil {
+			t.Fatalf("LoadProjectWithInfo: %v", err)
+		}
+		if info.Path != "" {
+			t.Errorf("Path = %q, want empty (no config file found)", info.Path)
+		}
+		if info.Processes != 0 || info.MCPServers != 0 || info.Plugins != 0 {
+			t.Errorf("counts = %+v, want all zero", info)
+		}
+	})
+}
+
+func TestLoadPlugins(t *testing.T) {
+	t.Run("array parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"plugins": [
+			{"name": "gh", "command": ["gh-plugin"], "env": ["A=1"], "dir": "/tmp"},
+			{"name": "slack", "command": ["slack-plugin", "--flag"], "config": {"channel": "eng"}}
+		]}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if len(c.Plugins) != 2 {
+			t.Fatalf("Plugins = %+v, want 2 entries", c.Plugins)
+		}
+		gh := c.Plugins[0]
+		if gh.Name != "gh" || len(gh.Command) != 1 || gh.Command[0] != "gh-plugin" {
+			t.Errorf("gh plugin = %+v", gh)
+		}
+		if len(gh.Env) != 1 || gh.Env[0] != "A=1" || gh.Dir != "/tmp" {
+			t.Errorf("gh plugin env/dir = %+v", gh)
+		}
+		slack := c.Plugins[1]
+		if slack.Name != "slack" || len(slack.Command) != 2 || slack.Command[1] != "--flag" {
+			t.Errorf("slack plugin = %+v", slack)
+		}
+		if !strings.Contains(string(slack.Config), `"channel"`) || !strings.Contains(string(slack.Config), `"eng"`) {
+			t.Errorf("slack plugin config = %s", slack.Config)
+		}
+	})
+	t.Run("unset leaves nil", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.Plugins != nil {
+			t.Errorf("Plugins = %v, want nil (unset)", c.Plugins)
+		}
+	})
+	t.Run("missing name fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"plugins": [{"command": ["gh-plugin"]}]}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for plugin missing name")
+		}
+		if !strings.Contains(err.Error(), p) {
+			t.Errorf("error %q does not name path %q", err, p)
+		}
+	})
+	t.Run("missing command fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"plugins": [{"name": "gh"}]}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for plugin missing command")
+		}
+	})
+	t.Run("duplicate name fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"plugins": [
+			{"name": "gh", "command": ["a"]},
+			{"name": "gh", "command": ["b"]}
+		]}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for duplicate plugin name")
+		}
+	})
+	t.Run("malformed plugin entry fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"plugins": [{"name": "gh", "command": "not-an-array"}]}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for malformed plugin command")
+		}
+	})
+}
+
+func TestLoadPluginHTTPHeaders(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.json")
+	writeFile(t, p, `{"plugin_http_headers": {"X-Workspace": "acme"}}`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.PluginHTTPHeaders["X-Workspace"] != "acme" {
+		t.Errorf("PluginHTTPHeaders = %v", c.PluginHTTPHeaders)
+	}
+}
+
+func TestMergePlugins(t *testing.T) {
+	t.Run("non-empty project overrides user entirely", func(t *testing.T) {
+		base := &Config{Plugins: []PluginSpec{{Name: "user-plug", Command: []string{"a"}}}}
+		over := &Config{Plugins: []PluginSpec{{Name: "proj-plug", Command: []string{"b"}}}}
+		merged := merge(base, over)
+		if len(merged.Plugins) != 1 || merged.Plugins[0].Name != "proj-plug" {
+			t.Errorf("merged Plugins = %+v, want [proj-plug]", merged.Plugins)
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{Plugins: []PluginSpec{{Name: "user-plug", Command: []string{"a"}}}}
+		merged := merge(base, &Config{})
+		if len(merged.Plugins) != 1 || merged.Plugins[0].Name != "user-plug" {
+			t.Errorf("merged Plugins = %+v, want inherited [user-plug]", merged.Plugins)
+		}
+	})
+}
+
+func TestMergePluginHTTPHeaders(t *testing.T) {
+	base := &Config{PluginHTTPHeaders: map[string]string{"X-A": "1", "X-B": "2"}}
+	over := &Config{PluginHTTPHeaders: map[string]string{"X-B": "override"}}
+	merged := merge(base, over)
+	if merged.PluginHTTPHeaders["X-A"] != "1" || merged.PluginHTTPHeaders["X-B"] != "override" {
+		t.Errorf("merged PluginHTTPHeaders = %v", merged.PluginHTTPHeaders)
+	}
+}
+
+func TestLoadMCPServers(t *testing.T) {
+	t.Run("stdio and http parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {
+			"fs": {"command": ["mcp-fs", "--root", "/tmp"], "env": ["A=1"], "dir": "/tmp"},
+			"weather": {"url": "https://weather.example/mcp", "headers": {"Authorization": "Bearer tok"}}
+		}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if len(c.MCPServers) != 2 {
+			t.Fatalf("MCPServers = %+v, want 2 entries", c.MCPServers)
+		}
+		fs := c.MCPServers["fs"]
+		if len(fs.Command) != 3 || fs.Command[0] != "mcp-fs" {
+			t.Errorf("fs.Command = %+v", fs.Command)
+		}
+		if len(fs.Env) != 1 || fs.Env[0] != "A=1" || fs.Dir != "/tmp" {
+			t.Errorf("fs env/dir = %+v", fs)
+		}
+		weather := c.MCPServers["weather"]
+		if weather.URL != "https://weather.example/mcp" {
+			t.Errorf("weather.URL = %q", weather.URL)
+		}
+		if weather.Headers["Authorization"] != "Bearer tok" {
+			t.Errorf("weather.Headers = %v", weather.Headers)
+		}
+	})
+	t.Run("unset leaves nil", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.MCPServers != nil {
+			t.Errorf("MCPServers = %v, want nil (unset)", c.MCPServers)
+		}
+	})
+	t.Run("neither command nor url fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {"bad": {}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for mcp server with neither command nor url")
+		}
+		if !strings.Contains(err.Error(), "bad") {
+			t.Errorf("error %q does not name the offending key", err)
+		}
+	})
+	t.Run("both command and url fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {"bad": {"command": ["x"], "url": "https://x"}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for mcp server with both command and url")
+		}
+	})
+	t.Run("empty name key fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {"": {"command": ["x"]}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for empty mcp server name")
+		}
+	})
+	t.Run("malformed entry fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {"bad": {"command": "not-an-array"}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for malformed mcp server command")
+		}
+	})
+	// A namespaced tool name is mcp__<server>__<tool>. If a server name may
+	// itself contain "__" or start with "mcp__", the encoding is not
+	// uniquely decodable: server "a__b" tool "c" produces the exact same
+	// namespaced name, mcp__a__b__c, as server "a" tool "b__c" — two
+	// entirely different servers' tools would collide and be
+	// indistinguishable. Reject both shapes at load, loudly, rather than
+	// let two configs silently alias each other's tools.
+	for _, tc := range []struct {
+		name   string
+		server string
+	}{
+		{"double underscore in the middle", "a__b"},
+		{"double underscore at the end", "svc__"},
+		{"double underscore at the start", "__svc"},
+		{"starts with mcp__", "mcp__weather"},
+		{"exactly mcp__", "mcp__"},
+	} {
+		t.Run(tc.name+" fails loudly", func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "config.json")
+			writeFile(t, p, fmt.Sprintf(`{"mcp_servers": {%q: {"command": ["x"]}}}`, tc.server))
+			_, err := Load(p)
+			if err == nil {
+				t.Fatalf("expected error for mcp server name %q (undecodable namespaced tool name)", tc.server)
+			}
+			if !strings.Contains(err.Error(), tc.server) {
+				t.Errorf("error %q does not name the offending key %q", err, tc.server)
+			}
+		})
+	}
+	t.Run("single underscore is fine", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {"my_server": {"command": ["x"]}}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v, want a single underscore to be accepted", err)
+		}
+		if _, ok := c.MCPServers["my_server"]; !ok {
+			t.Errorf("MCPServers = %+v, want my_server present", c.MCPServers)
+		}
+	})
+	// Nit fix: a negative connect_timeout_s cannot possibly be wired
+	// (engine.connectMCPServer's `if timeout <= 0 { timeout =
+	// defaultMCPConnectTimeout }` would silently treat it as "use the
+	// default", masking what the config author actually wrote) — reject it
+	// loudly, naming the server, the same "cannot possibly be wired"
+	// philosophy as validateMCPServers' other checks. 0/absent still means
+	// "use the engine default".
+	t.Run("negative connect_timeout_s fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {"weather": {"url": "https://weather.example/mcp", "connect_timeout_s": -1}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for negative connect_timeout_s")
+		}
+		if !strings.Contains(err.Error(), "weather") {
+			t.Errorf("error %q does not name the offending server", err)
+		}
+	})
+	// Invariant 1: connect_timeout_s round-trips through Load; absent means
+	// zero, which engine.MCPServerConfig.ConnectTimeout (via buildMCPManager,
+	// see cmd/harness/mcp.go) leaves at its own engine-side default.
+	t.Run("connect_timeout_s parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {"weather": {"url": "https://weather.example/mcp", "connect_timeout_s": 5}}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got := c.MCPServers["weather"].ConnectTimeoutS; got != 5 {
+			t.Errorf("weather.ConnectTimeoutS = %d, want 5", got)
+		}
+	})
+	t.Run("connect_timeout_s absent defaults to zero", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"mcp_servers": {"weather": {"url": "https://weather.example/mcp"}}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got := c.MCPServers["weather"].ConnectTimeoutS; got != 0 {
+			t.Errorf("weather.ConnectTimeoutS = %d, want 0 (absent)", got)
+		}
+	})
+}
+
+func TestMergeMCPServers(t *testing.T) {
+	t.Run("keys merge, project entry replaces same-name user entry wholesale", func(t *testing.T) {
+		base := &Config{MCPServers: map[string]MCPServerSpec{
+			"fs": {Command: []string{"user-fs"}},
+			"gh": {URL: "https://user.example/mcp"},
+		}}
+		over := &Config{MCPServers: map[string]MCPServerSpec{
+			"fs": {Command: []string{"proj-fs", "--flag"}, ConnectTimeoutS: 7},
+		}}
+		merged := merge(base, over)
+		if len(merged.MCPServers) != 2 {
+			t.Fatalf("merged MCPServers = %+v, want 2 entries", merged.MCPServers)
+		}
+		if fs := merged.MCPServers["fs"]; len(fs.Command) != 2 || fs.Command[0] != "proj-fs" || fs.ConnectTimeoutS != 7 {
+			t.Errorf("merged fs = %+v, want project's entry (including ConnectTimeoutS)", fs)
+		}
+		if gh := merged.MCPServers["gh"]; gh.URL != "https://user.example/mcp" {
+			t.Errorf("merged gh = %+v, want inherited user entry", gh)
+		}
+		// Mutating the merged map/slices must not alias the inputs.
+		merged.MCPServers["fs"].Command[0] = "mutated"
+		if base.MCPServers["fs"].Command[0] == "mutated" {
+			t.Error("merge aliased base's MCPServers slice")
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{MCPServers: map[string]MCPServerSpec{"fs": {Command: []string{"a"}}}}
+		merged := merge(base, &Config{})
+		if len(merged.MCPServers) != 1 {
+			t.Errorf("merged MCPServers = %+v, want inherited", merged.MCPServers)
+		}
+	})
+}
+
+func TestLoadProcesses(t *testing.T) {
+	t.Run("parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {
+			"dev": {"command": ["pnpm", "dev"], "dir": "apps/app", "env": ["K=V"], "ready_regex": "Ready in .*ms", "ready_timeout_s": 60}
+		}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if len(c.Processes) != 1 {
+			t.Fatalf("Processes = %+v, want 1 entry", c.Processes)
+		}
+		dev := c.Processes["dev"]
+		if len(dev.Command) != 2 || dev.Command[0] != "pnpm" || dev.Command[1] != "dev" {
+			t.Errorf("dev.Command = %+v", dev.Command)
+		}
+		if dev.Dir != "apps/app" {
+			t.Errorf("dev.Dir = %q", dev.Dir)
+		}
+		if len(dev.Env) != 1 || dev.Env[0] != "K=V" {
+			t.Errorf("dev.Env = %+v", dev.Env)
+		}
+		if dev.ReadyRegex != "Ready in .*ms" {
+			t.Errorf("dev.ReadyRegex = %q", dev.ReadyRegex)
+		}
+		if dev.ReadyTimeoutS != 60 {
+			t.Errorf("dev.ReadyTimeoutS = %d", dev.ReadyTimeoutS)
+		}
+	})
+	t.Run("unset leaves nil", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.Processes != nil {
+			t.Errorf("Processes = %v, want nil (unset)", c.Processes)
+		}
+	})
+	t.Run("empty name key fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"": {"command": ["x"]}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for empty process name")
+		}
+	})
+	t.Run("empty command fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": []}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for empty process command")
+		}
+		if !strings.Contains(err.Error(), "dev") {
+			t.Errorf("error %q does not name the offending key", err)
+		}
+	})
+	t.Run("missing command fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"dir": "apps/app"}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for missing process command")
+		}
+	})
+	t.Run("invalid ready_regex fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": ["pnpm", "dev"], "ready_regex": "("}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for invalid ready_regex")
+		}
+		if !strings.Contains(err.Error(), "dev") {
+			t.Errorf("error %q does not name the offending key", err)
+		}
+	})
+	t.Run("malformed entry fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": "not-an-array"}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for malformed process command")
+		}
+	})
+	t.Run("ports parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": ["pnpm", "dev"], "ports": [3000, 3001]}}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		dev := c.Processes["dev"]
+		if len(dev.Ports) != 2 || dev.Ports[0] != 3000 || dev.Ports[1] != 3001 {
+			t.Errorf("dev.Ports = %+v, want [3000 3001]", dev.Ports)
+		}
+	})
+	t.Run("port out of range fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": ["pnpm", "dev"], "ports": [0]}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for out-of-range port")
+		}
+		if !strings.Contains(err.Error(), "dev") {
+			t.Errorf("error %q does not name the offending key", err)
+		}
+	})
+	t.Run("ready_port parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": ["pnpm", "dev"], "ready_port": 3000}}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.Processes["dev"].ReadyPort != 3000 {
+			t.Errorf("dev.ReadyPort = %d, want 3000", c.Processes["dev"].ReadyPort)
+		}
+	})
+	t.Run("ready_http parsed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": ["pnpm", "dev"], "ready_http": "http://localhost:3000/healthz"}}}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.Processes["dev"].ReadyHTTP != "http://localhost:3000/healthz" {
+			t.Errorf("dev.ReadyHTTP = %q", c.Processes["dev"].ReadyHTTP)
+		}
+	})
+	t.Run("invalid ready_http fails loudly", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": ["pnpm", "dev"], "ready_http": "::not a url::"}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for invalid ready_http")
+		}
+		if !strings.Contains(err.Error(), "dev") {
+			t.Errorf("error %q does not name the offending key", err)
+		}
+	})
+	t.Run("ready_regex and ready_port together fails loudly with shared error text", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"processes": {"dev": {"command": ["pnpm", "dev"], "ready_regex": "Ready", "ready_port": 3000}}}`)
+		_, err := Load(p)
+		if err == nil {
+			t.Fatal("expected error for ready_regex+ready_port both set")
+		}
+		if !strings.Contains(err.Error(), "at most one of ready_regex, ready_port, ready_http") {
+			t.Errorf("error %q, want it to name the mutual-exclusivity rule", err)
+		}
+	})
+}
+
+func TestMergeProcesses(t *testing.T) {
+	t.Run("keys merge, project entry replaces same-name user entry wholesale", func(t *testing.T) {
+		base := &Config{Processes: map[string]ProcessSpec{
+			"dev": {Command: []string{"user-dev"}},
+			"db":  {Command: []string{"postgres"}},
+		}}
+		over := &Config{Processes: map[string]ProcessSpec{
+			"dev": {Command: []string{"proj-dev", "--flag"}},
+		}}
+		merged := merge(base, over)
+		if len(merged.Processes) != 2 {
+			t.Fatalf("merged Processes = %+v, want 2 entries", merged.Processes)
+		}
+		if dev := merged.Processes["dev"]; len(dev.Command) != 2 || dev.Command[0] != "proj-dev" {
+			t.Errorf("merged dev = %+v, want project's entry", dev)
+		}
+		if db := merged.Processes["db"]; len(db.Command) != 1 || db.Command[0] != "postgres" {
+			t.Errorf("merged db = %+v, want inherited user entry", db)
+		}
+		// Mutating the merged map/slices must not alias the inputs.
+		merged.Processes["dev"].Command[0] = "mutated"
+		if base.Processes["dev"].Command[0] == "mutated" {
+			t.Error("merge aliased base's Processes slice")
+		}
+	})
+	t.Run("ports slice deep-copied", func(t *testing.T) {
+		base := &Config{Processes: map[string]ProcessSpec{
+			"dev": {Command: []string{"a"}, Ports: []int{3000}},
+		}}
+		merged := merge(base, &Config{})
+		merged.Processes["dev"].Ports[0] = 9999
+		if base.Processes["dev"].Ports[0] == 9999 {
+			t.Error("merge aliased base's Ports slice")
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{Processes: map[string]ProcessSpec{"dev": {Command: []string{"a"}}}}
+		merged := merge(base, &Config{})
+		if len(merged.Processes) != 1 {
+			t.Errorf("merged Processes = %+v, want inherited", merged.Processes)
+		}
+	})
+}
+
+func TestLoadSessionSyncAcceptedValues(t *testing.T) {
+	for _, v := range []string{"", "fsync", "volume"} {
+		t.Run(fmt.Sprintf("%q", v), func(t *testing.T) {
+			dir := t.TempDir()
+			p := filepath.Join(dir, "config.json")
+			body := `{}`
+			if v != "" {
+				body = fmt.Sprintf(`{"session_sync": %q}`, v)
+			}
+			writeFile(t, p, body)
+			c, err := Load(p)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if c.SessionSync != v {
+				t.Errorf("SessionSync = %q, want %q", c.SessionSync, v)
+			}
+		})
+	}
+}
+
+func TestLoadSessionSyncRejectsGarbage(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config.json")
+	writeFile(t, p, `{"session_sync": "volumes"}`)
+	if _, err := Load(p); err == nil {
+		t.Fatal("Load accepted an unrecognized session_sync value")
+	} else if !strings.Contains(err.Error(), "session_sync") {
+		t.Errorf("error %q does not name session_sync", err.Error())
+	}
+}
+
+func TestMergeSessionSync(t *testing.T) {
+	t.Run("empty project inherits user", func(t *testing.T) {
+		base := &Config{SessionSync: "volume"}
+		got := merge(base, &Config{})
+		if got.SessionSync != "volume" {
+			t.Errorf("SessionSync = %q, want inherited %q", got.SessionSync, "volume")
+		}
+	})
+	t.Run("non-empty project overrides", func(t *testing.T) {
+		base := &Config{SessionSync: "volume"}
+		got := merge(base, &Config{SessionSync: "fsync"})
+		if got.SessionSync != "fsync" {
+			t.Errorf("SessionSync = %q, want project override %q", got.SessionSync, "fsync")
+		}
+	})
+}
+
+func TestLoadProjectWithInfoSessionSync(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".harness.json"), `{"session_sync": "volume"}`)
+	t.Setenv("HARNESS_CONFIG", filepath.Join(dir, "does-not-exist.json"))
+	_, info, err := LoadProjectWithInfo(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.SessionSync != "volume" {
+		t.Errorf("LoadInfo.SessionSync = %q, want %q", info.SessionSync, "volume")
+	}
+}

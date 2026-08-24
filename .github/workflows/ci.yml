@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  # No branches filter here (deliberately, unlike push above): a stacked
+  # PR's base is another feature branch, not main (e.g. #146 targets
+  # subagent-sessions, not main) — restricting to branches: [main] meant
+  # every stacked PR got claude-review but NEVER a real Test run, silently
+  # relying on whatever the author's local go test -race ./... happened to
+  # say. Every PR, stacked or not, gets this job now; it costs one extra
+  # CI run at retarget time (the PR gets re-triggered against main), which
+  # is cheap next to shipping a stacked branch with no CI coverage at all.
+  pull_request: {}
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          # Production code is stdlib-only, enforced by the absence of
+          # non-test imports (`go list -deps ./cmd/...` must never contain a
+          # third-party package). Test-only dependencies are allowed;
+          # currently just pgregory.net/rapid, which is why go.sum exists.
+          cache: true
+
+      - run: go build ./...
+
+      - run: go test -race ./...
+
+      - run: go vet ./...
+
+      - run: test -z "$(gofmt -l .)"
+
+      - name: Inspector unit tests
+        # The session inspector is a single build-free HTML file; its pure
+        # helpers (SSE parser + formatters) are unit-tested with node's built-in
+        # test runner. ubuntu-latest ships Node preinstalled, so no
+        # actions/setup-node is needed. The glob (not a bare directory) is
+        # deliberate: `node --test` treats a positional directory path as a file
+        # to execute, not a tree to scan, so the shell expands the glob to the
+        # test file, which the runner then runs directly.
+        run: node --test tools/inspector/*_test.mjs
+
+      - name: Monitor unit tests
+        # tools/monitor is the same pattern as the inspector above: a single
+        # build-free HTML file whose pure helpers (SSE parser, activity
+        # reducer, transcript fold, route codec, formatters) are extracted
+        # from a TESTABLE region and unit-tested with node's built-in test
+        # runner. Same glob-not-directory rationale as the inspector step.
+        run: node --test tools/monitor/*_test.mjs
+
+      - name: Hub unit tests
+        # tools/hub's pure logic has been unit-tested by hub_test.mjs since
+        # its introduction (AGENTS.md's "Development hub" section documents
+        # `node --test tools/hub/*_test.mjs` as the way to run it, and
+        # tools/hub/e2e's own comments assume it runs), but it was never
+        # actually wired into this workflow — a pre-existing gap, closed
+        # here. Same glob-not-directory rationale as the inspector step.
+        run: node --test tools/hub/*_test.mjs
+
+      - name: Startup budget
+        # AGENTS.md: startup speed is a CI-enforced budget. Best-of-5 keeps
+        # shared-runner noise out; the bound is generous versus the ~5ms
+        # local target but still catches any accidental init-time work
+        # (network, config scans, subprocess spawns).
+        run: |
+          go build -o harness ./cmd/harness/
+          ./harness version > /dev/null  # warm page cache
+          best=999999
+          for i in 1 2 3 4 5; do
+            start=$(date +%s%N)
+            ./harness version > /dev/null
+            elapsed=$(( ($(date +%s%N) - start) / 1000000 ))
+            [ "$elapsed" -lt "$best" ] && best=$elapsed
+          done
+          echo "best-of-5 startup: ${best}ms (budget: 50ms)"
+          [ "$best" -le 50 ]

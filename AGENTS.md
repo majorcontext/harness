@@ -1,0 +1,1733 @@
+# AGENTS.md
+
+Instructions for AI coding agents working in this repository.
+
+## Project Overview
+
+Harness is a Go agent harness (in the spirit of pi and opencode) built around four priorities, in order:
+
+1. **Speed** — especially startup speed. `harness --version` under ~5ms, TUI first frame under ~30ms. These are CI-enforced budgets, not aspirations.
+2. **Extensibility** — a language-agnostic plugin protocol with a first-class Go SDK.
+3. **Composability** — headless engine, event streams on stdout, client/server split, MCP in both directions.
+4. **Dynamic model choice** — swap providers/models mid-session or per-subagent with zero migration cost.
+
+## Architecture
+
+The engine is a headless Go library; every frontend (CLI, TUI, server API) is a client.
+
+```
+cmd/harness        thin CLI: flags → engine or client
+engine/            session loop, tool registry, event log
+provider/          one adapter per API family (anthropic, openai-responses, gemini, openai-compat, bedrock)
+message/           canonical message/part types + per-provider transcoders
+plugin/            hook bus, JSON-RPC stdio protocol, plugin SDK
+server/            HTTP+SSE / unix socket exposing the engine
+tui/               a client, nothing more
+```
+
+### Core invariants
+
+- **A session is an append-only log of typed events.** User messages, model deltas, tool calls, results, model switches — all events. UIs, JSON output, and plugins are subscribers to the same stream.
+- **The session log stores the canonical message format, never a provider's.** Every request, the provider adapter transcodes canonical history → provider wire format from scratch (stateless transcoding). Mid-session model swap = next request uses a different transcoder. No migration step.
+- **Provider-specific opaque data (reasoning/thinking blocks, encrypted reasoning items) is stored as provider-tagged attachments** on canonical messages: replayed verbatim to the same provider, dropped when crossing providers. Tool-call IDs are internal; each transcoder maps deterministically to provider-compliant IDs. Prompt-cache markers are injected at transcode time, never stored.
+- **Model refs are `provider/model`** plus user-defined aliases (`fast`, `smart`) from config. The models.dev catalog snapshot is embedded at build time and refreshed async — never on the startup path.
+- **A history repair that runs on live or persisted state is additive-only.** `LoadSession` writes the repaired slice back into live history, so a repair that deletes loses data permanently — not for one request, but for the life of the session. Add synthetic parts; never drop, reorder, or relocate a part another producer wrote. A transcode-time repair MAY be destructive, because it builds one throwaway request and never touches the record. Put every destructive rule on that side of the line. (Incident: a `ResolveOrphanToolCalls` rewrite deleted genuine tool output in three shapes and was reverted; see NEP-5293.) The concrete split is in "Wire normalization" below.
+- **An empty tool result must never serialize as `null`.** The provider reads a null-content `tool_result` as ABSENT and rejects the whole request with "tool_use ids were found without tool_result blocks immediately after" — naming a block that IS in the payload. A tool that produces no output (a `grep` that matches nothing) is enough to wedge a session forever. `message.NoToolOutputText`, `ToolResult.SafeContent`, and `ToolResult.MarshalJSON` hold this line; every transcoder reads through `SafeContent`, never `Content`. (Incident: NEP-5272.)
+
+### Wire normalization
+
+Two functions repair `tool_use`/`tool_result` pairing. They sit on opposite
+sides of the live-versus-transcode line in the invariant above.
+
+`message.ResolveOrphanToolCalls` is the LIVE-path repair. `LoadSession`
+applies it and writes the result back into history, so it stays purely
+additive. It deliberately leaves several shapes wire-invalid. Do not "fix"
+it — that is the whole point of the split.
+
+`message.NormalizeForWire` (`message/wire_normalize.go`) is the
+transcode-only sibling. Every transcoder calls it instead. It builds one
+throwaway request, so it may relocate a part. It must still never delete a
+real `ToolResult`.
+
+`NormalizeForWire` closes four shapes `ResolveOrphanToolCalls` cannot:
+
+1. Two `tool_use` blocks share one call ID in one assistant message.
+2. A `ToolCall` sits in a non-assistant message.
+3. A `ToolResult` precedes its `ToolCall`.
+4. An intervening same-side message separates a `ToolResult` from its
+   `ToolCall`. Every transcoder merges adjacent same-role messages (see
+   `transcodeRequest`'s same-role merge, `provider/anthropic/transcode.go`),
+   so the wire sees RUNS. `ResolveOrphanToolCalls` tests strict
+   `messages[i+1]` and is blind to this.
+
+Relocation is bounded. `computeRelocationBarrier` moves a result no later
+than the origin run of the next real result. That keeps the original
+relative order intact. A move that would break the bound is refused.
+
+`message/wire_oracle_test.go` is the specification both functions are
+tested against. Derive it from the provider contract only, never from
+either function's internals. See the oracle rule under Testing.
+
+### Ambient engine context is a structured, unforgeable part
+
+The engine appends its own live status to the newest user message every
+request — engine identity (`[engine: ...]`), managed-process status
+(`[processes: ...]`), degraded-MCP status (`[mcp: ...]`), and the
+parked-goal notice (`[goal: ...]`). This is a `message.EngineContext` part,
+NOT a `Text` part. A bare `Text` block is byte-indistinguishable from
+user-typed or pasted text, so a payload a user pastes that contains
+`[engine: ...]` once inherited the same trust the engine's own block
+carries — a trust-spoofing surface. `EngineContext` is a distinct part-kind
+only `withAmbientStatus` (`engine/process.go`) produces, so a user- or
+paste-authored part is always a `Text` and can never BE one, however its
+bytes are shaped. Every transcoder renders an `EngineContext` through
+`message.RenderEngineContext`, which wraps the block in the
+`message.EngineContextOpenTag`/`EngineContextCloseTag` sentinel, and renders
+every `Text` through `message.NeutralizeEngineContextSentinel`, which
+defangs any literal sentinel that text carries. Only a genuine
+`EngineContext` can therefore emit the sentinel on the wire, so the base
+system prompt (`cmd/harness`, `ambientContextGuidance`) tells the model to
+trust the sentinel-wrapped block and to distrust bracketed text outside it.
+The render stays an ordinary text block on every provider — no new wire
+feature. `EngineContext` is runtime-only (appended to the throwaway
+per-request copy, never the durable log — the prompt-cache-prefix and
+never-persisted rules below are unchanged) but still round-trips through the
+canonical JSON union like every other part. Never revert this to a `Text`
+part, and never make the guidance trust bracketed text syntax again. (Fix:
+the NEP ambient trust-spoofing finding; superseded PR #113's prose-only
+stopgap.)
+
+### Project instructions (AGENTS.md)
+
+The engine auto-injects a project's `AGENTS.md` into the system prompt. On the
+first `Prompt` of a session (never at `NewSession` — the startup budget rule)
+it walks up from `Config.WorkDir` for `AGENTS.md` (falling back to `AGENT.md`),
+stopping at the git root or filesystem root; the closest file wins, per the
+[agents.md](https://agents.md/) convention. The file is schema-less Markdown —
+no headings are required or parsed. The segment is appended after
+`Config.System` and before hook (`system.transform`) segments, cached for the
+session, and never written to the session log (loaded fresh on resume).
+
+A present-but-unusable file (invalid UTF-8, or empty/whitespace-only) fails the
+first `Prompt` — a project that meant to supply instructions must not run
+silently without them. A missing file is fine. Oversize files are truncated at
+64 KiB with a marker. Disable with `-no-instructions`, config `instructions:
+false`, or point at a specific file with config `instructions_path`.
+
+### Agent Skills
+
+The engine advertises [Agent Skills](https://agentskills.io) in the system
+prompt following the spec's progressive-disclosure model. On the first `Prompt`
+(alongside instructions loading, same load-once-cache-error pattern) it runs
+`skill.Discover` over each configured directory, merges the results sorted by
+name, and injects one system segment **after** the instructions segment and
+before hook (`system.transform`) segments. That segment is stage 1 only: a
+header telling the model it MUST read a skill's `SKILL.md` with the `read_file`
+tool before relying on it, then one line per skill — `name — description (path:
+<abs SKILL.md>)`. Stage 2 (the body) is deferred to that read.
+
+`Config.SkillsDirs` selects the directories: nil (the default) uses
+`<WorkDir>/.agents/skills` when it exists; an explicit empty slice disables
+discovery. A malformed `SKILL.md` or a duplicate skill name across dirs fails
+the first `Prompt` loudly (same semantics as a malformed AGENTS.md). Skills are
+never written to the session log — a resumed session rediscovers them. Config
+`skills_dirs` (array; a non-empty project value overrides the user value
+entirely) and the repeatable `-skills-dir` run/serve flag drive it.
+
+### read_file image support
+
+The built-in `read_file` tool (`engine/filetools.go`) can return an image
+file as real visual content, not mangled text. `readPathContent` opens the
+target path exactly once and classifies it by its magic bytes
+(`http.DetectContentType` over at most the first 512 bytes) — never by its
+extension: a `.txt` file that is actually a PNG is still recognized as an
+image, and a `.png` file that is actually text stays a text read. On a
+recognized image (`image/png`, `image/jpeg`, `image/gif`, `image/webp`),
+`read_file` returns a `message.ToolResult` whose Content is `[Text, Blob]`:
+a one-line Text summary (format, byte size, and pixel dimensions) followed
+by a `message.Blob` carrying the real file bytes. This is the same
+`Text`+`Blob` shape MCP's `mcpContentToParts` already produces
+(`engine/mcp.go`) — `read_file` is a second producer of it — so every
+transcoder's existing Blob handling and the imageclamp dimension/byte-size
+pass (`imageclamp.Clamp`, called from every transcoder's
+`transcodeRequest`) apply with no new wiring. `read_file` never bypasses
+that clamp: it does not resize, re-encode, or otherwise touch pixels
+itself. Because `imageclamp.Clamp` runs later, at transcode time, an image
+it downscales or re-encodes can end up described by dimensions or a byte
+size that no longer match the summary `read_file` reported when it read
+the file; this is a known, accepted mismatch, not a defect to fix in
+`read_file` itself.
+
+**Only the Anthropic route puts a tool-result image on the wire.**
+`imageclamp.Limits.RecurseToolResults` is true for `provider/anthropic`
+only; `provider/openai` and `provider/openaicompat` set it false and
+instead replace a tool-result Blob with a text note,
+`"[N image attachment(s) omitted]"` (`toolResultOutput`,
+`provider/openai/transcode.go` and `provider/openaicompat/transcode.go`).
+This is pre-existing wire-format behavior `read_file` inherits, not
+something this feature introduces, but it means a `read_file` image reaches
+the model as pixels only on the Anthropic route; on the other two the model
+sees only the one-line Text summary.
+
+`readPathContent` applies three guards on the image path, in order:
+
+1. The sniff read uses `io.ReadFull`, not a single `Read`, so a short
+   `read(2)` — realistic on a pipe or FUSE mount — never misclassifies a
+   real image as plain text.
+2. The read is bounded at `readFileMaxImageBytes` (20MB), checked
+   against an `io.LimitReader` over the same open handle, never against a
+   separately captured `os.Stat` size a concurrently growing file could
+   outrun. This cap is separate from and smaller than any provider's own
+   wire limit, which `imageclamp.Clamp` enforces at transcode time; it
+   exists only so `read_file` itself never loads an unbounded file into
+   memory. An over-cap image returns a plain text error and no Blob.
+3. The body must decode with `image.DecodeConfig` before `read_file`
+   commits to the image outcome. A corrupt or truncated file that merely
+   opens with a matching magic-byte prefix fails this check; `read_file`
+   then reads the true remainder of the file (unbounded, same handle) and
+   returns it as ordinary text instead of shipping a Blob the model cannot
+   use. This guard is not airtight for GIF: the `GIF87a`/`GIF89a` header
+   carries no checksum, so text that happens to start with those exact six
+   bytes still "decodes" with fabricated dimensions. A real file colliding
+   with that prefix is vanishingly unlikely; this is a documented, accepted
+   residual.
+
+A non-image binary file (sniffed as `application/octet-stream` or similar)
+keeps `read_file`'s existing (unbounded) text-read behavior; `readPathContent`
+still reads it exactly once, through the same handle its sniff already
+opened.
+
+**Known gap, filed as issue #129**: a transcode-time degrade of an image
+Blob to a text placeholder for a model with no vision capability is not
+implemented. No per-model vision-capability signal exists anywhere in the
+codebase to gate it on — the embedded models.dev catalog this file's own
+"Architecture" section describes as a design goal is not yet built, and
+`provider.Request` carries no capability flag comparable to `Effort` or
+`SessionKey` that a caller could set from one. Building this now would mean
+inventing an ad hoc, likely-wrong static model list, so it is deferred to
+issue #129. Until it lands, a model with no vision support receives the
+image Blob exactly as any vision-capable model does; how it handles that
+block is between the model and its provider.
+
+### Base loop retry
+
+The base interactive `Prompt` loop retries a transient provider error itself,
+so a plain box prompt never surfaces a one-off HTTP 500. `streamTurnWithRetry`
+(`engine/prompt_retry.go`) wraps `streamTurn` at its single call site in
+`runAgenticLoop` (`engine/engine.go`). It retries only when the error is
+classified retryable through `provider.AsRetryable` — `server_error`,
+`overloaded`, `rate_limited`, or `stream_truncated`, never by matching error
+text — AND the budget has an attempt left. Every other error returns on the
+first attempt with ZERO retries: a `context.Canceled` abort, an
+`*interruptedTurnError` (whose partial `runAgenticLoop` must still append —
+retrying would duplicate the model's already-emitted tool intent), a
+`provider.AsPermanent` malformed-request shape, or any deterministic failure.
+The final surfaced error still emits one `session.error` and drops the usage
+exactly as before; an intermediate masked attempt emits neither. A masked
+attempt is still a full `streamTurn`, so it DOES bump the per-session turn
+counter (`s.turn`, reported by `session_info`) and re-fire the per-request
+hooks (`chat.params`, `system.transform`) and `OnRequest` — one bump and one
+hook pass per attempt, exactly like the goal loop's per-attempt behavior. Only
+the `session.error` and usage are suppressed for a masked attempt.
+
+One class is retry-eligible WITHOUT `provider.AsRetryable`: a completed but
+EMPTY turn (no non-empty text, no tool call — e.g. thinking consumed the
+whole `max_tokens` ceiling; see `emptyTurnError`). Two deliberate deviations
+from the masked-attempt rules above. First, a discarded empty attempt's
+usage IS accumulated into cumulative `Usage()` (it was a fully billed
+completion, unlike a transport failure — same principle as the empty
+compaction summary), while `lastUsage` is left alone. Second, the nesting
+math: an empty turn that survives all `PromptRetries+1` attempts surfaces a
+deterministic error, which goal mode's worker tier retries
+`goalWorkerRetries` more times — worst case `(PromptRetries+1) *
+(goalWorkerRetries+1)` = 9 fully-billed calls — and then STOPS the goal
+with the empty-turn reason. Before this class existed the same turn was a
+silent success and a goal limped on with nothing appended; halting with a
+legible reason is the intended trade. The fail-fast for the deterministic
+`max_tokens`-exhaustion shape (cutting the 9 to 3) is a filed follow-up on
+the PR that introduced this.
+
+Retrying `streamTurn` is idempotent for history and tool side effects:
+`streamTurn` makes ONE model call and never executes a tool (`runAgenticLoop`
+runs tools only AFTER `streamTurn` returns a `StopToolUse` message), so a
+failed attempt ran no side effect to redo. The one shape that DID emit tool
+intent before failing arrives as `*interruptedTurnError` and is excluded.
+
+The emit stream is NOT idempotent, so `streamTurnWithRetry` closes that gap.
+A failed attempt can emit `EventTextDelta`/`EventReasoningDelta` for partial
+text before its stream dies, and the retry re-streams that text from scratch.
+`streamTurnWithRetry` emits one `EventTurnRestart` (`engine.go`) before each
+retry, so a subscriber that renders deltas incrementally drops the stale
+partial and rebuilds it from the retry — never the two runs concatenated
+(`Hello wor` then `Hello world` shown as `Hello worHello world`). The server
+forwards `EventTurnRestart` live over SSE (`server/journal.go`'s `Publish`);
+the turn's final `EventMessage` still reconciles history regardless.
+
+`Config.PromptRetries` bounds it: additional attempts, zero (the engine zero
+value) DISABLES retry, config/CLI default 2 via `config.Config`'s `*int`
+`prompt_retries` key (`PromptRetriesValue`). The backoff
+(`basePromptRetryDelay`: 1s, then 2s, `time.NewTimer`) is deliberately SMALLER
+and SHORTER than the goal loop's tiers below — an interactive user waits on
+the turn, so this smooths a blip in a second or two, never the goal loop's
+~30min weather schedule (`promptTurnWithRetry`, `goal.go`). The two are
+distinct: the base loop wraps ONE model call and is inherently idempotent; the
+goal loop's `promptTurnWithRetry` wraps a whole worker turn (with the
+tool-executed non-idempotency gate) and parks on exhaustion.
+
+The two also NEST. A goal worker turn runs through `s.Prompt`/
+`s.runAgenticLoop` (`goal.go`), so every one of `promptTurnWithRetry`'s outer
+attempts now issues up to `1+PromptRetries` inner `streamTurn` calls. For a
+persistent retryable condition the worst case is `goalRetryableMaxAttempts`
+(12) times `1+PromptRetries` (3) — about 36 full-input-price model calls,
+where the goal-loop tiers alone assume ~12. This is deliberate: the fast inner
+budget (1s, then 2s) smooths a one-off blip inside a single worker turn before
+the outer weather tier ever counts it, so a goal loop rides a brief provider
+blip without spending an outer attempt. `PromptRetries` 0 disables the inner
+budget for a host that wants the outer tiers to be the only retry.
+
+### Goal loop
+
+`Session.PursueGoal(ctx, condition, GoalOptions)` drives the ordinary `Prompt`
+loop toward a natural-language completion condition. Turn 1 prompts the raw
+condition; after **every** turn an independent, TOOL-LESS evaluator model
+(`GoalOptions.Evaluator`, resolved through the same `Config.Providers` registry,
+`MaxTokens` 256) is asked to answer `MET: <reason>` / `NOT MET: <reason>`
+(parsed leniently). The evaluator request always pins `message.EffortOff`
+(`runEvaluator`, `engine/goal.go`) — it is a classifier, not a reasoning task,
+and it never inherits the session's own effort level. On openaicompat,
+`EffortOff` sends the literal `"off"`; on anthropic, it emits no thinking
+block — both routes now spend none of the evaluator's 256-token budget on
+reasoning. (Issue #124.) The openai Responses route is a known residual:
+`reasoningEffort` (`provider/openai/transcode.go`) omits the `reasoning`
+object for `EffortOff` exactly as it does for `EffortUnset`, and a
+gpt-5-class model reasons by default with no adapter-level way to disable
+it — so an evaluator on that route can still spend its budget on reasoning.
+A NOT MET verdict re-prompts
+with a fixed-template guidance message carrying the reason; MET returns
+`Achieved`. `MaxTurns` (0 = unlimited) bounds it. Evaluation is advisory: a
+retryable-class provider error from the
+evaluator call rides the matching in-boundary backoff before the boundary
+counts as failed — the long weather-tier schedule
+(`goalRetryableMaxAttempts`, ~30min) for `overloaded`/`rate_limited`/
+`server_error`, or the short stream-truncation tier
+(`goalStreamTruncatedMaxAttempts`, 3 attempts, ~5s) for a stream cut before
+its terminal event — `runEvaluatorWithRetry` mirrors `promptTurnWithRetry`'s
+own per-class split exactly (see below); two unparseable replies in a row
+(the second re-asked with a stricter prompt) or a non-retryable provider
+error also fail the boundary immediately. A failed boundary no longer
+clears the goal — it journals a durable `goal.eval_failed` record (carrying the consecutive
+failure count), substitutes a fixed evaluation-unavailable notice for the next
+turn's guidance in place of the evaluator's text, and `continue`s: the worker
+keeps working. Any later boundary that DOES parse a verdict (MET or NOT MET)
+resets the consecutive count to zero — the horizon is a streak, not a
+lifetime total. Only after `goalEvalFailureLimit` (5) consecutive failed
+boundaries does the loop treat the evaluator as durably broken: it clears the
+goal with a dedicated reason, and the server maps that terminal to a
+`session.error` plus a distinct `turn.end outcome=evaluator_exhausted` — loud
+and machine-distinguishable, since every failure below the horizon is
+deliberately silent apart from the journaled record.
+Durable `goal.set` / `goal.eval` / `goal.eval_failed` / `goal.parked` /
+`goal.achieved` / `goal.cleared` records land in the session log, so
+`LoadSession` restores an active goal (condition only; counters reset) via
+`Session.ActiveGoal()` — resume never auto-runs it, the caller decides. The
+loop also emits `goal.*` engine events so the server journals them. Config
+`goal_evaluator_model` supplies the evaluator for `harness run -goal` and
+`POST /session/{id}/goal`.
+
+A worker-turn error (`s.Prompt` failing) is retried by `promptTurnWithRetry`
+on one of THREE independent budgets, chosen by classification via
+`provider.AsRetryable` — never by matching error text.
+
+One class skips every budget. Before it selects a budget,
+`promptTurnWithRetry` tests `provider.AsPermanent` — its fail-fast check
+(`engine/goal.go`) — and fails fast: a permanent error gets ONE attempt and
+no retry.
+`provider.MarkPermanent` marks a malformed request shape. The anthropic
+adapter applies it to an HTTP 400 `invalid_request_error`, and to the same
+error type mid-stream (`provider/anthropic/anthropic.go:114` and `:484`),
+only after `parseContextOverflow` rules overflow out — the two are disjoint.
+A retry never repairs a malformed request, and each attempt costs a full
+turn at full input price. A permanent error still PARKS, exactly like every
+budget exhaustion; it never clears. `permanent` is threaded through only to
+select a more accurate classified reason and tier name
+(`classifyGoalWorkerError`, `goalWorkerParkedError`), so an operator can
+tell a single-attempt park from `goalWorkerRetries`+1 identical attempts.
+
+A deterministic
+failure (not classified retryable, not permanent) gets `goalWorkerRetries` (2) additional
+attempts on the short schedule (~5s total: 1s, then 4s). A provider error
+classified `overloaded`/`rate_limited`/`server_error` gets a separately
+budgeted `goalRetryableMaxAttempts` (12) backoff (~30min total, jittered, 5s
+doubling to a 5min cap) that never spends the deterministic budget. A
+provider error classified `provider.RetryableStreamTruncated` — a response
+stream that died before its terminal event, with no HTTP status or inline
+error to classify from (see the idle-stream watchdog below) — gets its own
+`goalStreamTruncatedMaxAttempts` (3) budget on the SAME short schedule the
+deterministic tier uses (~5s total): truncation is retryable, but it is not
+weather — waiting longer never raises a stream ceiling, and every retry
+re-prompts a full turn at full input cost — so it must ride neither the fast
+deterministic budget nor the long weather-tier one. Every attempt records a
+`goal.stalled` record regardless of tier, so the loop is never silent.
+Exhausting ANY of the three budgets — or the non-idempotency gate stopping
+retries early once a tool has already executed this attempt — PARKS the goal
+instead of clearing it: `PursueGoal` exits, journals a durable, CLASSIFIED
+`goal.parked` record (never raw provider error text — the same leak rule
+`goal.eval_failed` follows), and returns a distinct `*goalWorkerParkedError`
+sentinel (`engine.IsGoalWorkerParked`) WITHOUT calling `clearGoal` —
+`goalActive` stays true, the condition is untouched, generation-gated exactly
+like `goal.stalled`/`goal.eval_failed` so a park racing a concurrent
+`UpdateGoal` is silently discarded rather than attributed to a condition the
+model never saw. This supersedes both this package's earlier
+deterministic-tier clear and GitHub issue #61's in-loop retryable-tier
+self-re-arming `continue` — the latter pinned the run slot to the parked loop
+for the whole outage; exiting instead frees the slot, so a queued prompt
+dispatches as an ordinary turn during a long outage instead of only ever
+being injected mid-turn into a doomed attempt. Context overflow (issue #62)
+is the one deliberate exception and still clears immediately, never parks:
+no amount of waiting fixes an oversized request, so parking it would just be
+a slower-burning zombie instead of a fix. Parking has no streak horizon
+(unlike the evaluator's 5-boundary terminal above) — every exhaustion parks
+immediately, and `DELETE /session/{id}/goal` remains the only clear path for
+a parked goal.
+
+Each retry re-issues the SAME directive, and `Prompt` appends whatever text
+it gets as a brand-new user message — it has no notion of "this is a retry,
+do not duplicate." Left alone, N failed attempts leave N unanswered copies of
+one directive, and every LATER request pays for all of them. `Prompt`
+persists each copy before the provider call that fails, so the duplicates
+reach the durable log, not just live history.
+
+`promptTurnWithRetry` therefore never appends a second copy for the common
+case. It tracks one `anchorID`, naming the point right before this turn's
+CURRENT, still-unanswered directive — starting as `lastMessageID`, captured
+once before attempt 1 — then dispatches each retry one of three ways
+(`engine/goal.go`, `tailAfterAnchor` shares the anchor-to-tail lookup; see
+docs/design/goal-retry-directive-reuse.md):
+
+- Attempt 1 calls `Prompt`, which appends the directive.
+- A retry whose tail after `anchorID` is EXACTLY the previous attempt's
+  unanswered directive (`directiveReuseEligible`) calls `runAgenticLoop`
+  instead. That runs the turn loop against history as it stands and appends
+  nothing, so the existing message is answered rather than duplicated.
+- Any other tail falls back to `dropUnansweredDirective` plus `Prompt`, then
+  re-anchors: `anchorID` moves to `lastMessageID`, the point right before
+  the fresh directive `Prompt` is about to append. A later attempt's reuse
+  check then measures from that new directive, never from the turn's
+  original start.
+
+`runAgenticLoop` is `Prompt`'s own loop body, split out unchanged
+(`engine/engine.go`). `Prompt` still appends and then calls it, so `Prompt`'s
+observable behavior is identical: same events, same `emitStatus`, same usage
+accounting. Note that `maybeAutoCompact` stays in `Prompt` and does NOT run
+on the reuse path. That is deliberate, and the reason is that history did
+not grow: the reuse path is reachable only when the tail is exactly one
+message, so no new completed turn appeared to fold since attempt 1 already
+ran the check. (`maybeAutoCompact` folds only COMPLETED turns, so it would
+never have folded the unanswered tail directive itself.) One narrow
+residual: history sitting right at the threshold, where appending a
+directive would tip it over, no longer triggers a mid-outage fold. That is
+accepted — the outage that piles up retries is also when the summarizer's
+own provider call fails, and compaction is best-effort anyway.
+
+`dropUnansweredDirective` remains the fallback for the interrupted-turn tail
+(the directive plus a partial assistant message and its synthetic
+tool-result message), and for any tail a denied tool call or delivered mail
+makes undroppable. It anchors on a message ID, never on a history length,
+and `isSafeToDropDirectiveTail` approves only that interrupted-turn shape
+and the bare directive. Any other tail is left untouched — a denied tool's
+result, or an already-delivered "OPERATOR MESSAGES" block, must never be
+discarded. It mutates only live history and can never retract a journaled
+record, which is why the reuse path above, not a retraction, is what keeps
+the log clean. `promptTurnWithRetry`'s re-anchor above bounds an undroppable
+residue's cost to ONE extra duplicate directive for the rest of the turn,
+never one per remaining attempt: re-anchoring past it lets reuse resume on
+the very next attempt instead of re-appending against a tail that can never
+shrink back to a droppable shape again.
+
+An idle provider stream — one that goes silent with no bytes, no
+`EventDone`, no error, ever — is bounded by a per-request idle-stream
+watchdog (`engine/stream_watchdog.go`, `Config.StreamIdleTimeout`, config key
+`stream_idle_timeout_s`): every stream event resets its timer, and on expiry
+it cancels the request's child context and converts the resulting
+cancellation into a classified `provider.RetryableStreamTruncated` error
+instead of an anonymous "context canceled" — this is what feeds the
+stream-truncation tier above. It defaults to 5 minutes (mirroring Codex's
+`stream_idle_timeout_ms`), a negative value disables it, and it guards the
+worker turn, the goal evaluator, and the compaction summarizer's streams
+alike (`armIdleWatchdog` wraps all three, so a silent stream at any of them
+can no longer wedge the session forever while holding the run slot).
+
+Automatic compaction's over-threshold check
+(`maybeAutoCompact`/`estimatePromptTokensFromHistory`, `engine/compact.go`)
+has its own resilience fallback: a provider route that reports all-zero
+input usage on a turn that DID complete is treated as missing data, never as
+"0 tokens, never over" — the check falls back to a crude ~4-bytes-per-token
+estimate walked from the actual session history so the overflow-prevention
+layer keeps functioning instead of going permanently dark on that route,
+which otherwise runs to a hard context overflow that clears (never parks) an
+active goal.
+
+`Config.ContextWindowTokens` — the size that gates automatic compaction at
+all — is resolved by `newSession` (`engine/context_window.go`,
+`resolveContextWindow`), not just read verbatim from whatever the embedder
+passed in. Precedence: an explicit, positive `Config.ContextWindowTokens`
+always wins and is pinned for the session's lifetime (`contextWindowExplicit`
+on `Session`, set once at construction); otherwise the session's MODEL is
+looked up in package `modelmeta` — a curated, static table of
+`provider/model` -> context-window tokens sourced from models.dev's
+`limit.context` field (bifrost's `/v1/models` was investigated first and
+ruled out: it returns the bare OpenAI listing shape with no context-length
+data at all). A model-derived value under `minAutoContextWindowTokens`
+(16k) is treated as bogus metadata and ignored — logged, never armed. An
+unrecognized model (or no metadata at all) leaves compaction disabled,
+identical to the field's original zero-value behavior. `SetModel` re-runs
+the same derivation against the new model whenever the window wasn't
+explicitly pinned, so a mid-session model switch keeps the window matched
+to whichever model is actually running — switching FROM a recognized model
+TO an unrecognized one disarms compaction again, not just leaves the old
+window in place. One INFO log line (`"engine: context window"`) fires at
+session start and on every switch that changes the effective window, naming
+the resolved tokens and source (`config`/`model-derived`/`disabled`) — the
+operator signal for "is compaction armed and why," added after a box
+(`jumpy-pizza`) died with a raw `context exhausted: prompt N tokens > limit
+M` provider error because `ContextWindowTokens` was opt-in and the boxes
+platform set it nowhere. See docs/design/context-compaction.md's "Where
+`ContextWindowTokens` comes from" addendum for the full incident writeup.
+
+On the server, a worker-parked sentinel maps to `session.error` plus a
+distinct `turn.end outcome=worker_parked`, and `goalTracker` folds the
+durable `goal.parked` record into a third `paused` arm (`pause_reason:
+"worker_failure"`, alongside the existing boot-only `"restart"` and live
+`"provider-backoff"`) — `compositeState` forces `idle` for it, and for a
+restart pause, unless a turn is actually running, which reads `busy`: forced
+idle must never mask a live turn (an ordinary prompt, or the resume prompt
+that eventually re-arms the goal, can be streaming while the goal itself
+sits parked), whereas provider-backoff's loop is merely waiting and keeps
+reading `goal-running` regardless of whether a turn happens to be running.
+Resume needs no new machinery: the existing activity-driven
+`maybeAutoArmGoal` re-arms any active goal — parked or not — the next time an
+ordinary prompt turn completes, resetting the `worker_failure` presentation;
+`runGoal`'s own tail deliberately never auto-arms (the same anti-churn
+property that already stops a freshly-parked goal from immediately
+respawning a loop against an empty queue).
+
+`harness serve` can also make this turn/goal lifecycle visible on stderr:
+`server.Options.Logger`, when set (`cmd/harness/main.go` wires a
+`slog.NewJSONHandler(os.Stderr, nil)` logger into it for `serveCmd`), emits a
+structured line at every `recordTurnEnd` call (INFO for outcome "completed",
+WARN otherwise) and at the `goal.*`/`session.error` durable-record choke
+points — a heartbeat for the life of the box instead of logging only at
+boot/config/MCP wiring, matching Codex's own structured stream-retry
+logging. Nil (the default) disables all of it; every call site nil-guards
+first, so an unset Logger is exactly the prior silent behavior.
+
+A worker-parked goal is also surfaced in-session, model-facing:
+`Session.goalParked` (set when a park lands, cleared at every `PursueGoal`
+entry) drives a third ambient status segment — alongside the process and MCP
+segments — appended to the newest user message of any turn that is NOT
+itself one of this loop's own worker turns, naming the classified reason and
+stating the goal resumes automatically. It is runtime-only and never
+persisted; after a process restart, visibility reverts entirely to the
+boot-only `goal.paused`/`pause_reason: "restart"` presentation instead — a
+deliberate, documented asymmetry.
+
+The condition itself is adjustable mid-loop. `Session.UpdateGoal` rewrites an
+active goal's condition, journals a durable `goal.updated` record, and emits
+`EventGoalUpdated` — same lock-and-emit-under-`s.mu` shape as `RegisterGoal`;
+a same-condition update is a silent no-op, updating an inactive goal errors.
+`PursueGoal` takes a per-turn snapshot (condition, a runtime-only generation
+counter, active) instead of closing over the original parameter, so a live
+loop picks up new text at its very next turn boundary — both the worker
+directive and the evaluator call. The generation counter guards stale
+verdicts: if `UpdateGoal` lands while an evaluator call for generation N is
+in flight, a MET (or stalled) verdict for N is discarded on return — no
+`goal.achieved`, no `goal.eval`, the loop just continues against the new
+condition, never a false-positive completion against text the model never
+saw. `ClearGoal` is unaffected — it keys on `goalActive`, not condition
+equality, so it still stops the loop at every point it does today.
+
+A built-in `goal` session tool (gated on `Config.GoalTool`) lets the model
+inspect or drive its own goal in-process: no HTTP round-trip, no run-slot
+claim. `status` reports `{active, condition}`; `set` arms a new goal via
+`RegisterGoal` (errors telling the model to use `adjust` if a goal is already
+active); `adjust` rewrites an active goal's condition via `UpdateGoal`. There
+is deliberately **no `clear` action** — see below.
+
+`Config.GoalTool` is on whenever `goal_evaluator_model` is configured, in
+`harness run` and `harness serve` alike, entirely independent of the `-goal`
+flag — a plain `harness run -p ...` with that config set still registers the
+tool. But what happens after `set`/`adjust` differs by host: `harness serve`
+auto-arms (see `maybeAutoArmGoal` below) — the loop actually starts running
+once the current turn ends. Plain `harness run` (no `-goal`) has no such
+auto-arm step: a tool-driven `set` call registers and journals the goal
+(`goal.active` becomes true) but nothing ever calls `PursueGoal` for it, so
+it never actually starts evaluating — the process runs its one `Prompt` call
+and exits with the goal armed but inert. Only `harness run -goal <condition>`
+itself drives `PursueGoal` to completion.
+
+`POST /session/{id}/goal` on a busy session no longer flatly 409s. A running
+goal loop updates its condition in place (`status: "updated"`, 200 — no
+second loop, no run-slot claim; the loop picks it up at its next turn
+boundary). A plain prompt holding the slot with no goal yet active registers
+the goal (`RegisterGoal` needs no run slot) and then retries the claim once,
+closing the race against that same prompt's own `runPrompt` tail: if the
+retry wins the now-freed slot, the loop spawns immediately and the response
+reports `status: "started"` (202); otherwise the prompt's tail is still
+ahead of us, its own auto-arm check (`maybeAutoArmGoal`) will claim the slot
+and spawn the loop itself once that tail finishes, and the response reports
+`status: "armed"` (202) — either way the loop starts exactly once, never
+zero times, never twice, no further client action needed. This is also how
+the `goal` tool's own `set` action takes effect: arming a goal mid-turn, the
+same auto-arm path starts the loop the instant the current turn ends. A
+workdir held by a genuinely different session still 409s,
+unchanged.
+
+No self-clear is deliberate: a goal-supervised agent must never be able to
+cancel its own supervision from inside a running turn, so the `goal` tool
+has no `clear` action — `DELETE /session/{id}/goal` remains the only clear
+path, and it is operator-only.
+
+The goal loop is a **plan-artifact-free, gate-free** control loop: it is
+`Prompt` plus a read-only evaluator call, with no plan document, no edit/plan
+mode, and no permission gate. It does not violate the no-plan-mode decision
+below.
+
+### Prompt queue
+
+`POST /session/{id}/prompt_async` against a session already busy (another
+prompt, or a running goal loop) no longer 409s — it queues. The prompt is
+enqueued durably (`engine.Session.EnqueuePrompt`, persisting a `prompt.queued`
+record and assigning a session-monotonic ID) synchronously, before any
+response is written — the same enqueue-durable-before-202 shape `RegisterGoal`
+already uses for goals, closing the accept-vs-lose race structurally. The
+response is 202 either way: `status: "started"` when a turn is now running for
+this request's own prompt (an idle claim against an EMPTY queue, or a
+freed-slot retry that happens to win and dispatch this same prompt), or
+`status: "queued"` (carrying the current depth) when it is durably waiting —
+including the idle-claim case where the queue is already non-empty (a
+restart refold, or any other drain gap that ever left a prompt stranded):
+`handlePrompt` enqueues the incoming text behind whatever is already waiting,
+then dispatches the queue's HEAD — not necessarily this request's own text —
+into the run slot it just claimed, so a fresh arrival can never cut the
+line ahead of prompts already queued. The workdir-held-by-another-session 409
+is unchanged — only same-session busy gets queue semantics.
+
+The queue drains FIFO, by queue ID, at every run-slot release, with no
+exceptions: `runPrompt`'s, `runGoal`'s, and `handleCompact`'s tails all call
+`maybeDispatchQueued`, which claims the freed slot, dequeues the head
+(`reason: "delivered"`), and spawns it as a normal prompt turn — whose own
+tail repeats the check, so the whole queue drains one turn at a time before
+anything else gets a look. `handlePrompt`'s own claim-success path (previous
+paragraph) is the one non-tail drain site: an admission-time head-dispatch
+for the idle-with-non-empty-queue case, closing the gap a tail-only drain
+would otherwise leave open between "session goes idle with a queue still
+non-empty" and "the next prompt/goal/compact activity happens to touch it."
+This is also where
+**queue beats goal auto-arm**: `runPrompt`'s and `handleCompact`'s tails call
+`maybeDispatchQueued` *before* `maybeAutoArmGoal` (see above), so a prompt
+sitting in the queue when a turn or a compact call ends is dispatched first —
+direct user input outranks the background objective — and the goal only
+auto-arms once the queue is empty.
+
+**Delivery granularity is per tool-call boundary, not per turn.** Inside
+`Session.Prompt`'s agentic loop (`engine/engine.go`), the instant a
+tool-result message is appended — after the model made one or more tool
+calls and before the next provider request in that SAME turn — the loop
+drains the ENTIRE queue, FIFO, in one locked op (`DequeueAllPrompts
+("injected")`) and appends the drained batch as a single, durable user
+message: the same labeled "OPERATOR MESSAGES" block template
+(`operatorMessagesBlock`, `engine/queue.go`, shared by every drain site so a
+batch renders identically apart from one parameterized word — this
+call site passes `operatorContextTask`, so its header says "continue the
+task", never "continue the goal", even when this drain happens to fire
+inside a goal loop's worker turn; only goal.go's own turn-boundary drain
+below passes `operatorContextGoal`). This only ever
+APPENDS — never rewrites an earlier message — so a provider's prompt-cache
+prefix stays intact, the same principle the managed-processes ephemeral
+status block below relies on, except this message is a REAL, durable
+delivery, not a disposable status line. A turn that ends WITHOUT any tool
+call never reaches this drain point at all (the model's own end-of-turn
+return precedes it), so that path — and anything still queued when it
+happens — is left entirely to the mechanisms below. Because `PursueGoal`'s
+worker turns run through this exact same `Prompt` loop
+(`promptTurnWithRetry`), goal loops inherit tool-call-boundary injection
+automatically, with no separate wiring: a prompt queued while a goal's
+worker turn is mid-tool-call is delivered inside that SAME worker turn —
+matching Claude Code's mid-turn steering granularity — rather than waiting
+for the goal's own turn boundary described next.
+
+`PursueGoal` keeps a second, complementary drain at its own turn boundary:
+at the top of every turn (the same `snapshotGoal` boundary #77's
+condition-update snapshot uses, and before that turn's own tool-call-boundary
+drain above has any chance to run) it drains the *entire* queue, FIFO —
+catching anything still queued from a turn that made no tool calls at all, or
+that arrived in the gap between one turn ending and the next one's snapshot —
+and prepends it to that turn's directive as the same labeled "OPERATOR
+MESSAGES" block (`operatorMessagesBlock`, `operatorContextGoal` — so its
+header says "continue the goal"), ahead of — never replacing — the
+ordinary condition/guidance text. The evaluator's condition string is
+unchanged by this — it is built from the condition alone, never from the
+block or the turn's rendered directive — so goal injection judges only the
+goal there; the evaluator's separate transcript field does render the full
+history, so it does see the block once the worker turn that received it has
+run. Every drained prompt journals its own `prompt.dequeued(injected)` record
+before the turn's directive is even built, so it counts as delivered at that
+point even if the turn's outcome later turns out stale and gets discarded —
+an injected prompt is never re-queued, at either drain site. This means an
+abort (`POST /abort`) or a goal clear (`DELETE /session/{id}/goal`) racing a
+goal turn boundary consumes an entire just-injected batch at once: every
+prompt the boundary drained is already journaled `dequeued(injected)` before
+the worker turn even starts, so a turn that gets cancelled or whose outcome is
+later discarded as stale still loses all of them together — several operator
+messages, not just one — the same exposure class an ordinary in-flight prompt
+already has, just multiplied across the whole drained batch. The two drain
+sites can never double-deliver the same prompt: `DequeueAllPrompts` is one
+atomic, locked pop of the whole queue, so whichever site runs first against a
+given prompt is the only one that ever sees it.
+
+Every enqueue/dequeue is a durable record — `prompt.queued` and
+`prompt.dequeued`, the latter carrying a `reason` of `"delivered"` (idle
+drain), `"injected"` (tool-call-boundary or goal-turn-boundary injection —
+both drain sites share the reason, see above), or `"cleared"` (see below) —
+journaled and emitted (`EventPromptQueued`/`EventPromptDequeued`) under
+`s.mu` in the same critical section, mirroring `RegisterGoal`/`ClearGoal`
+exactly. Dequeue always journals *before* the text enters any turn, so a crash
+between that journal write and the dispatched turn's completion cannot
+double-deliver — the prompt is simply gone from the queue on replay, the same
+exposure any in-flight prompt already has today. **Boot never auto-dispatches
+a resumed queue**: `LoadSession` folds `prompt.queued`/`prompt.dequeued`
+records back into the exact undelivered set, `GET /session`'s `queued` count
+reflects it immediately, and it sits there until the next natural drain
+trigger (an idle prompt, the next tool-call boundary inside a running turn, or
+a goal loop's next turn boundary) — the same settled boot rule goals follow.
+`DELETE /session/{id}/queue` is the one explicit clear surface: it journals
+`prompt.dequeued(cleared)` for every pending item then 204, idempotent on an
+empty queue, and never touches a currently running turn — `POST /abort` is
+unrelated and does not touch the queue either way (it only cancels the
+in-flight turn's context).
+
+Two v1 limits are deliberate, not gaps: **text-only** (queued prompts carry a
+plain string — `QueuedPrompt{ID, Text}` — no attachment machinery, matching
+the plain-prompt contract's `parts` being text-only already), and **a
+per-request `model` override is silently dropped when the prompt is queued**
+— there is no slot in `QueuedPrompt` to carry it through to a future drain, so
+a caller that needs a model swap to take effect must re-issue the request once
+it is confirmed `started`.
+
+`POST /session/{id}/enqueue` (docs/plans/2026-07-21-durable-enqueue.md) is
+`prompt_async`'s durable, idempotent sibling for a caller whose own upstream
+ack rides on this call succeeding — an inbox poller or coordinator relay,
+not an interactive client. `Session.EnqueuePromptDurable` extends
+`EnqueuePrompt` with three properties the plain path deliberately lacks:
+write-ahead durability (the `prompt.queued` record is written and, in the
+default `session_sync: "fsync"` mode, *fsynced* before any in-memory
+mutation or response, so a 2xx is an honest attestation rather than a
+best-effort ack — a write/fsync failure returns 500 "enqueue not durable"
+instead of the swallowed `lastPersistErr` every other persist path uses), a
+caller-issued session-monotonic `seq` deduplicated against a durable
+high-water mark (`Session.EnqueueSeq()`, journaled on the record and
+rebuilt by `LoadSession` — a seq at or below the mark is a clean 200
+`duplicate` no-op, so retries are always safe, including across a process
+restart), and torn-write healing (a burned-but-failed queue ID is never
+reused, and replay folds same-seq records last-writer-wins). Delivery is the
+exact same FIFO/tool-boundary/goal-boundary machinery described above — this
+is a new *acceptance* contract, not a new delivery path: durable means
+accepted into the queue, and delivery-out is still the queue's normal
+at-most-once-per-dequeue machinery, so a crash between dequeue and turn
+completion loses that delivery once rather than redelivering it, exactly
+like any in-flight prompt (`maybeDispatchQueued`'s "No-double-delivery
+equivalence", invariant 7, in server/handlers.go). `GET
+/session/{id}/queue` is the paired reconciliation read: the watermark plus
+the pending queue (FIFO, `seq` present only on durable-enqueue entries), for
+an upstream recovering from its own crash to check what's already inside the
+durability domain instead of re-sending blind. `prompt_async` remains the
+right choice for an interactive client that has no upstream ack to protect —
+it is not going away, and `POST /session/{id}/enqueue` adds no new limits
+beyond what queued prompts already have (text-only, no model override).
+
+The `fsync` in "write-ahead durability" above is itself mode-selectable:
+config's `session_sync` ("fsync", the default, or "volume") gates both this
+durable-enqueue fsync and the one-time session-create directory fsync
+(`ensureLog`'s fresh-file `syncDir` call, store.go) — nothing else changes.
+"volume" is for a session store on a continuously-synced network volume
+whose own commit layer is the documented durability boundary: fsync adds no
+durability there, and some FUSE/9p transports deadlock permanently on it
+(`fsync(dirfd)` especially — a wedge that hangs every later file op on the
+mount, not just the one call). In that mode the write(2) landing out of
+`EnqueuePromptDurable`/`ensureLog` is itself the attestation; the write
+ordering, torn-write healing, and replay/fold logic above are byte-for-byte
+identical in both modes — a volume can still lose an unsynced tail on abrupt
+death exactly like a torn fsync can, and the same last-writer-wins fold
+repairs both. See docs/deploy-modal.md for the recommended setting on Modal
+Volume v2 deployments.
+
+### Managed processes
+
+`config.Config.Processes` (`processes` in JSON) declares named long-lived
+dev/support processes (`pnpm dev`, a local DB) that a `process` session
+tool can start/stop/restart/inspect without an agent reinventing PID
+tracking. `*process.Manager` (package `process`, not `engine`) is a
+box-scoped singleton — built once per harness process and shared across
+every session, exactly like `engine.MCPManager` — with a
+starting/ready/running/exited/stopped state machine, unix process-GROUP
+kill on stop (mirroring `engine/bash_unix.go`'s Setpgid/kill-pgroup/
+WaitDelay pattern), and asynchronous death detection (a waiter goroutine
+flips state to `exited` with no client asking). Logs land at
+`<workDir>/.harness/proc/<name>.log`.
+
+The tool can also `declare`/`undeclare` NEW process definitions at
+runtime (server-lifetime only, never written to `.harness.json`) — see
+`docs/design/managed-processes.md` for the full validation and origin
+(`config` vs `runtime`) rules. `harness serve` always builds a
+`*process.Manager`, even with zero configured processes, so the tool is
+present on every served box; `harness run` keeps the zero-cost-when-
+unconfigured rule.
+
+Once at least one declared process has EVER been started (this server
+process's lifetime), request assembly appends an ephemeral `[processes:
+...]` status block to the newest user message ONLY — as a
+`message.EngineContext` part (see "Ambient engine context is a structured,
+unforgeable part" above), never persisted into the durable session log,
+never touching any earlier message so a provider's prompt cache prefix
+stays intact. See `docs/design/managed-processes.md` §4 for the exact
+mechanism and why it is safe.
+
+### Model switching
+
+`Session.SetModel` swaps the MAIN session model for later requests. History
+transcodes from scratch every request, so there is no migration step. Three
+routes reach `SetModel`: the built-in `model` session tool, a per-request
+`prompt_async` model override, and `POST /session/{id}/model`.
+
+`SetModel` is the single event choke point. On a real change (never a no-op
+set to the current model) it persists the durable `recModel` resume record
+AND emits `EventModelChanged` (carrying the new model), both while holding
+`s.mu` — the same persist-and-emit-under-`s.mu` shape `RegisterGoal` uses.
+The server's `Publish` maps `EventModelChanged` to the durable `model`
+journal record. Every swap route funnels through this ONE emit, so a swap
+journals exactly once — the handlers never emit `model` themselves. `recModel`
+is the resume record `LoadSession` restores; `EventModelChanged` is the
+observability event. They are separate and both fire on one swap.
+
+The `model` session tool (gated on `Config.ModelTool`) has two actions:
+`status` reports the current model, the configured aliases, and the configured
+provider names; `set {model}` resolves a one-level alias (from
+`Config.ModelAliases`, which mirrors `config.Aliases` — the engine never
+imports config), parses the ref, VALIDATES the provider is configured
+(`s.cfg.Providers.For`), then calls `SetModel`. A `set` to an unconfigured
+provider returns a tool error listing the valid aliases and provider names and
+changes nothing. There is deliberately NO `clear` action — a session always
+has a model. Scope is the MAIN model only; the goal-evaluator and subagent
+models are untouched.
+
+`Config.ModelTool` is on by default. Config key `model_tool` (a `*bool`,
+default true — like `instructions`) lets a host opt OUT; `harness run`,
+`harness serve`, and the server `mkCfg` all set it from
+`config.ModelToolEnabled()`. This differs from `GoalTool`, which opts IN only
+when an evaluator is configured.
+
+`POST /session/{id}/model` is the network counterpart: a client/dashboard swap
+decoupled from prompting, so it never claims the run slot (it applies even
+while a turn is running, taking effect on the next request). It validates a
+non-empty `{model}` and rejects an unconfigured provider (400), an unknown
+session (404), or an empty model (400) — the same validation as the tool — then
+calls `SetModel`. Aliases are not resolved at this endpoint; resolve them
+client-side, as the CLI does.
+
+### Reasoning effort
+
+`message.Effort` is the unified, provider-agnostic reasoning-effort level:
+`off`, `minimal`, `low`, `medium`, `high`, plus the zero value `EffortUnset`
+(empty string) that sends NO control at all. It rides one `provider.Request`
+field (`Request.Effort`), the same way `MaxTokens` does, and each adapter maps
+it to that provider's own wire shape at transcode time — so an effort swap,
+like a model swap, needs no migration step:
+
+- `provider/anthropic` enables extended thinking with a `thinking.budget_tokens`
+  budget (minimal 1024, low 4096, medium 8192, high 16384). The API requires
+  `max_tokens > budget_tokens` and rejects an explicit `temperature`/`top_p`
+  while thinking is on, so `transcodeRequest` bumps `max_tokens` above the
+  budget and drops both. `off`/unset emit no `thinking` block.
+- `provider/openai` (Responses) sets `reasoning.effort` to the level string
+  (minimal/low/medium/high). `off`/unset omit the `reasoning` object.
+- `provider/openaicompat` sets the top-level `reasoning_effort` string; a
+  gateway (Bifrost) maps it to the upstream provider's own knob. A non-off
+  level sends the level string; `EffortOff` sends the literal string `"off"`,
+  not an omitted field — several gateway upstreams reason BY DEFAULT when
+  the field is absent, so omitting it cannot express "disabled." Measured
+  (2026-08-12): Fireworks kimi-k3 through Bifrost streamed a full reasoning
+  block (266 chars) with the field absent, and zero reasoning content (0
+  chars, 8 vs 133 completion tokens) with the literal `"off"` sent. Only
+  `EffortUnset` omits the field, leaving the gateway/model default in force.
+  It surfaces returned reasoning from EITHER wire field — Bifrost/DeepSeek
+  `reasoning_content` or OpenRouter `reasoning` — as a `Reasoning` part; a
+  gateway sends one field, never both.
+
+`Effort` does NOT police which model accepts which level — that is a
+provider-and-model fact the engine cannot know from the ref alone. The adapter
+sends the requested level and the provider is the final judge. A caller that
+must gate levels per model (a dashboard picker) holds its OWN mapping.
+
+**Downgrade strip — DELIBERATELY asymmetric between the two reasoning
+adapters.** A stored thinking block (anthropic) or reasoning item (openai
+Responses) can be a transcode-time destructive drop (throwaway request, intact
+record); a later reasoning-ON turn replays the part from the unchanged history.
+A strip is ever needed because a stored block shipped while the request omits
+the reasoning control can be rejected, and durable in history it 400s every
+later turn — a permanent wedge. But WHEN each adapter strips differs, because
+the two providers default differently:
+
+- `provider/anthropic` strips whenever the request enables no reasoning
+  (`off`/unset, or a swap to a non-reasoning model). This is safe: Claude emits
+  NO thinking block unless the control is sent, so an unset turn carries none
+  to preserve.
+- `provider/openai` (Responses) strips ONLY on an EXPLICIT `off` (a genuine
+  "reasoning disabled" intent), NEVER on `EffortUnset`. OpenAI reasoning models
+  (gpt-5) reason BY DEFAULT, so an unset turn — the default of every `harness
+  run`/`serve` session, since nothing sets `Config.Effort` — still produces
+  encrypted reasoning items, and those items are REQUIRED for stateless
+  (`Store:false`) multi-turn tool use. Stripping them on unset wedged every
+  turn-2+ gpt-5 tool continuation; an unset session now replays them exactly as
+  every pre-effort-control build did (`stripReasoning` in
+  `provider/openai/transcode.go`, gated on `req.Effort == EffortOff`). So
+  `unset != off` here — do NOT re-fold the openai strip back onto
+  `!Reasoning()`. (Regression: NEP-5272 review of PR #117.) One residual the
+  off-only strip cannot enforce: a `SetModel` swap to a NON-reasoning openai
+  model (gpt-5 -> gpt-4o) at unset effort still replays the stored items — the
+  same per-model gating punt the enable direction has, so the caller (a
+  dashboard picker) clears/re-validates effort on a model swap, NOT this
+  transcoder.
+
+The reverse (ENABLE) direction — turning reasoning ON over a prior tool_use
+that lacks a thinking block — stays a documented limitation, since a signed
+thinking block cannot be synthesized (see `provider/anthropic/
+transcode.go`).
+
+`Session.SetEffort` is the single event choke point, mirroring `SetModel`
+exactly. On a real change (never a no-op set to the current level) it persists
+the durable `recEffort` resume record AND emits `EventEffortChanged`, both under
+`s.mu`. The server's `Publish` maps `EventEffortChanged` to the durable `effort`
+journal record. That record ALWAYS carries the `effort` field, even on a clear:
+`server/journal.go`'s `Event.Effort` is a `*message.Effort` (the same
+explicit-zero-vs-absent pattern `QueueLen` uses), so a clear to `EffortUnset`
+renders as an explicit `"effort":""`, never a dropped key — "cleared to the
+provider default" stays byte-distinguishable from a malformed record.
+`LoadSession` restores the level: the create-time level rides
+the session header record, and every later `SetEffort` writes a `recEffort`
+record. `Session.Effort()` reads it back.
+
+`POST /session/{id}/thinking` is the network counterpart: a client/dashboard
+swap decoupled from prompting, so it never claims the run slot. It validates the
+`{effort}` value with `message.ParseEffort` (400 on an unknown level), accepts
+an empty string as "clear to provider default", and rejects an unknown session
+(404). Unlike the model endpoint it has NO provider gate (see above). The
+current level is read back on `GET /session/{id}` (`effort`), the same way the
+current model is.
+
+**Effort at the three request-build sites is NOT uniform, by design.** The
+main turn (`streamTurn`, `engine/engine.go`) sends `s.Effort()` — the
+session's current level, read fresh every request. The two internal
+tool-less calls diverge from that and from each other (issue #124): the
+goal-loop evaluator (`runEvaluator`, `engine/goal.go`) always pins
+`EffortOff` — see "Goal loop" above — because it is a classifier the model
+must answer in one line, and reasoning-by-default gateway models can burn
+its 256-token budget before ever emitting a verdict. The compaction
+summarizer (`runCompactionSummary`, `engine/compact.go`) instead inherits
+`s.Effort()`, the same as the main turn, because summarization is a real
+writing task that benefits from the session's own quality setting;
+`EffortUnset` stays `EffortUnset` there. Do not fold these two internal
+sites onto one shared rule — one is a classifier, the other is prose.
+Known residual (not addressed by issue #124, filed as issue #126): a
+non-off session effort can raise the summarizer's effective output cap
+above `compactionMaxTokens` (the anthropic and openai adapters both bump
+the cap for reasoning — up to ~20480 tokens at `EffortHigh`, versus the
+documented 1024 cap), and openaicompat applies no cap floor at all, so a
+reasoning-heavy summary can truncate silently — `runCompactionSummary` has
+no `StopReason` guard to catch it. A raised cap also delivers less context
+reduction from this call, at the layer whose own failure runs to a hard
+overflow that clears an active goal. A second, related residual (issue
+#127): the summarizer sends folded history containing `ToolCall` parts
+from turns that ran with no thinking block, and a non-off level here
+enables thinking over that same history — the documented ENABLE-direction
+"thinking blocks expected before tool_use" reject case, just reached from
+compaction instead of a live turn.
+
+**The summarization request always ends in a trailing `RoleUser` message,
+never the folded range's own last message verbatim** (2026-08-19 incident,
+session `ses_jumpy-pizza`). `foldEnd` (`Session.Compact`) is the last
+message before the next KEPT turn's leading `RoleUser` message — ordinarily
+that folded turn's own final assistant reply, `RoleAssistant` — so sending
+`folded` as `req.Messages` verbatim ordinarily ends the wire request in an
+assistant-role message, which the Anthropic Messages API treats as
+assistant message prefill; some models reject prefill outright (400
+`invalid_request_error`, "This model does not support assistant message
+prefill. The conversation must end with a user message."). `runCompactionSummary`
+builds its request via `compactionRequestMessages`, which appends one
+trailing `RoleUser` instruction message (`compactionInstructionText`) after
+`folded`, unconditionally — never a conditional check on the folded range's
+last role, since a `RoleTool` message (a `message.ResolveOrphanToolCalls`
+synthetic repair, or an ordinary tool result) also wire-transcodes to
+Anthropic's `"user"` role and would otherwise mask the same bug depending on
+where a fold boundary happens to land, exactly as it did live (`keep_turns=8`
+happened to succeed on the same session where `keep_turns=20` failed).
+
+**An empty summary is a graceful no-op, never an error surfaced to the
+caller.** A summarization call that completes without a transport/stream
+error but returns no usable text (`errEmptyCompactionSummary`) is reported
+by `Session.Compact` as the same `TurnsFolded == 0` "nothing worth folding"
+shape the too-few-turns case above already uses — no history mutation, no
+journal write, no error returned — though `EventCompactionFailed` still
+fires so the attempt stays visible to anything tailing events, and the
+call's real usage is still accumulated into cumulative `Usage()` (it was a
+billed call even though it produced nothing — this accumulation is
+live-only, not journaled, since no compact record exists for a skipped
+fold). Before ever calling the provider, `Compact` also skips a fold range
+whose entire content is a single earlier compaction's own summary message
+(`isLoneExistingSummary`): re-summarizing an already-compressed summary with
+nothing new alongside it has nothing to gain, and was the live incident's
+concrete trigger (a small `keep_turns` landed a fold range dominated by a
+prior summary). Do not conflate this with a REAL summarization failure
+(rate limit, transient 5xx, a truncated stream, a range too large to
+summarize) — those still abort with an error, per §2 "Failure handling" in
+`docs/design/context-compaction.md`.
+
+`CompactResult.SkipReason` names WHICH of the three `TurnsFolded == 0`
+shapes occurred (`SkipReasonNotEnoughTurns`, `SkipReasonLoneExistingSummary`,
+`SkipReasonSummarizerEmpty`) — they used to be wire-identical, which hid two
+real defects (review follow-up on PR #136, Findings A/B/C, fixed before
+merge):
+
+- **Hysteresis must latch on `SkipReasonSummarizerEmpty`, never on the two
+  free skip reasons.** `maybeAutoCompact` only armed its churn-guard
+  hysteresis when `TurnsFolded > 0`. A summarizer that always returns empty
+  therefore never latched it: every subsequent over-threshold turn
+  re-triggered a full, billed summarization call, indefinitely, at full
+  input price — the "free" no-op was actually a recurring-spend bug
+  (Finding A). It now also latches when `SkipReason ==
+  SkipReasonSummarizerEmpty`, since that reason DID cost a call; it must
+  still NOT latch on `SkipReasonNotEnoughTurns`/`SkipReasonLoneExisting
+  Summary` — both are free, and latching there would permanently disarm
+  compaction for an over-threshold session that simply lacks enough turns
+  yet, since the guard only clears once `LastUsage()` dips back under
+  threshold.
+- **`isLoneExistingSummary` gates on the summary message's `ID`, never on
+  `CompactionSummaryBanner`'s text.** The banner is a display convention; a
+  user-typed or pasted message that happens to start with the exact banner
+  string is a genuine turn with real content, not a lone existing summary —
+  matching on text alone false-positived on it, skipped it forever without
+  ever calling the provider, and under the automatic trigger the session
+  never compacted again (Finding B). Every compaction summary's `ID` is now
+  minted with the `cmpsum_` prefix (`compactionSummaryIDTag`) instead of the
+  ordinary `msg_` prefix every other message gets, and `isCompactionSummaryID`
+  tests exactly that prefix — a structural, unforgeable marker of
+  compaction origin, the same pattern `message.IsSyntheticOrphanID` already
+  establishes for a different synthetic-message kind. No text-based
+  fallback exists for a summary minted by an earlier pre-fix build of this
+  same PR (still `msg_`-prefixed): the miss is bounded and self-healing —
+  `Compact` just re-summarizes that one old-style range like any other real
+  content, and the fresh summary it produces carries the new ID tag from
+  then on.
+- **The `skip_reason` field on `POST /session/{id}/compact`'s response**
+  (`compactResponseJSON`, `server/handlers.go`) surfaces
+  `CompactResult.SkipReason` directly, `omitempty` (absent on a real fold) —
+  see `docs/design/context-compaction.md` §1 for the wire shape (Finding
+  C).
+
+### Session affinity (prompt-cache routing hint)
+
+`provider.Request.SessionKey` carries a stable, opaque session identifier on
+every request the engine builds — one field on the same per-request struct
+`Effort` rides, though unlike `Effort` (set at one call site), the engine
+sets `SessionKey` to `Session.ID` at all three request-build sites:
+`streamTurn` (`engine/engine.go`, the main turn), `runEvaluator`
+(`engine/goal.go`, the goal-loop evaluator), and `runCompactionSummary`
+(`engine/compact.go`, the compaction summarizer). The field itself is never
+persisted; the value it carries (`Session.ID`) already is, as the session's
+own identity.
+
+Two adapters forward it, each to its own field, because each provider
+documents its own affinity hint:
+
+- `provider/openaicompat` sets the wire top-level `user` field. This is a
+  generic chat-completions gateway adapter (fronting Bifrost, OpenRouter,
+  and similar); `user` is the field a Fireworks-style backend behind such a
+  gateway reads for routing. OpenAI itself has deprecated `user` on its own
+  API in favor of `prompt_cache_key`/`safety_identifier` (see the next
+  bullet), but that deprecation is OpenAI's, not the gateway's: the
+  openaicompat route keeps sending `user` because `user` is the field the
+  measured Bifrost/Fireworks path above actually reads. Do not "fix" this
+  adapter by swapping in `prompt_cache_key` — that field is specific to
+  OpenAI's own API, and the openaicompat adapter targets non-OpenAI
+  backends behind a gateway, whose measured path reads `user`. Swapping it
+  would silently drop the measured cache-affinity win.
+- `provider/openai` (Responses API) sets the wire top-level
+  `prompt_cache_key` field — the Responses API's own documented routing/
+  cache-affinity hint, distinct from `user`. OpenAI combines it with the
+  request's prefix hash to raise the chance repeat requests land on the
+  same cache-holding backend.
+
+Both follow the same omit-on-empty rule: a non-empty `SessionKey` sets the
+field; an empty key omits it entirely, never an empty string.
+`provider/anthropic` ignores `SessionKey` — it already uses explicit
+`cache_control` markers, so a routing hint would add nothing; a live probe
+through Bifrost (2026-08-12) confirmed a 41k-token cache write followed by a
+41k-token cache read on the very next turn with no `SessionKey` involved.
+
+The reason `SessionKey` exists at all is measured, not theoretical: Fireworks
+serverless prompt caching is prefix-based, automatic, and PER-REPLICA.
+Without a routing hint, a re-sent request can land on a different replica
+and miss its own prefix cache. A live probe through Bifrost (2026-08-12)
+sent a byte-identical 150k-token prompt twice: with no `user` field, the
+second call still read `cached_tokens=0` at 10.8s time-to-first-token; with
+a stable `user` field, the second call read `cached_tokens=150,300` at 2.8s
+time-to-first-token, through the same gateway. Harness sessions re-send the
+whole history every request (stateless transcoding), so a long session on
+the openaicompat route (a gateway to Fireworks kimi-k3 and similar models)
+pays full prefill on nearly every turn without this hint.
+
+### Deliberately absent — do not add
+
+- **No permission system.** Tool calls are never gated. There is no `permission.ask` hook, no approval UI, no pre-flight rule evaluation.
+- **No plan mode.** No edit-mode/plan-mode distinction anywhere in the engine. (The goal loop above is not plan mode — it produces no plan artifact and gates nothing.)
+- **No JS runtime and no opencode plugin compatibility shim.** Plugins are native processes.
+- **No auth hooks.** Credential injection happens at the network layer (gatekeeper) in deployed environments.
+
+These are settled decisions. Do not propose or implement them.
+
+## Dispatching goal-supervised sessions
+
+- **Completion conditions must demand world-state evidence, never transcript
+  claims.** Require branch-verified-on-origin (`git fetch && git status -sb`
+  output shown), pasted test output, etc. — not a model's assertion that it
+  did the work. Why: an evaluator once declared files created while the disk
+  was empty.
+- **Push is the durability mechanism.** Commit as soon as the first test file
+  exists; push after every green milestone. Why: lease death and loop death
+  have each destroyed unpushed work.
+- **Write conditions as timeless end-state predicates, never turn-relative
+  phrasing.** The condition string is re-sent verbatim in every guidance
+  message (`goalGuidance` embeds it in full on each NOT MET re-prompt, not
+  just turn 1), so wording like "on the first turn..." or "don't do X yet"
+  keeps re-asserting a stale instruction turn after turn instead of describing
+  the state the evaluator should actually check for. Why: live-run evidence
+  — such phrasing looped 32 turns chasing an instruction that only ever made
+  sense once.
+
+## Plugin System
+
+Plugins are separate processes (any language; Go SDK provided) speaking a versioned JSON-RPC protocol over stdio.
+
+- **Manifest cache**: `harness plugin install` runs the binary once and caches its manifest (name, protocol version, hooks subscribed, tool definitions) keyed by binary hash. Startup reads cached manifests only — nothing spawns at boot.
+- **Lazy spawn**: a plugin process starts on first hook dispatch or tool call, then stays warm for the session (module-level caches in plugins are expected and fine).
+- Sync hooks chain across plugins in config order — each sees the previous plugin's mutations — and every sync dispatch carries a deadline so a hung plugin can't wedge a session.
+- **Plugin visibility**: `Host.Plugins()` reports every CONFIGURED plugin — name, spawn state (`not-spawned`/`running`/`errored`/`stopped`), registered tools, subscribed hooks — from the cached manifest plus live spawn state. The `session_info` tool (field `plugins`) and `GET /session/{id}` (field `plugins`) both surface it, so a not-yet-spawned plugin still appears. The engine reads it through the `Hooks.Plugins()` interface method, nil-guarded exactly like the other `s.cfg.Hooks` dispatch sites. The state read is lock-free (`instance.liveState`, `plugin/host.go`): `instance.start` holds `inst.mu` for the whole dial-plus-handshake, and `Host` is a box-scoped singleton shared by every session on the box, so a read gated on `inst.mu` would let one session's plugin spawn stall `GET /session`/`session_info` for every other session too — the same "a hung plugin can't wedge a session" rule above, applied to a status read instead of a hook dispatch. `errored` also covers a plugin that died AFTER a successful spawn (its connection closed, detected via the existing `conn.closed` signal), not only a failed start.
+
+### Hook protocol v1
+
+| Hook | Mode | Purpose |
+|---|---|---|
+| `event` | async, fire-and-forget | full event stream (batched) |
+| `chat.params` | sync, mutating | model, temperature, etc. per request |
+| `chat.message` | sync, mutating | messages before they enter the log |
+| `system.transform` | sync, additive | append segments to the system prompt (runs after `chat.params`) |
+| `shell.env` | sync, mutating | inject env vars into shell/tool commands |
+| `tool.execute.before` | sync, mutating/blocking | rewrite args or block with `{deny: "message"}` |
+| `tool.execute.after` | sync, mutating | rewrite/annotate tool results |
+
+Plugins may also register **custom tools** (defs in manifest, execution via RPC).
+
+### Plugin client API
+
+Plugins are API clients over the same channel: `Session.Messages`, `MCP.Call`, `Generate` (LLM calls through the harness provider layer — plugins never carry their own API keys), and `plugin.HTTPClient()` (outbound HTTP with harness-configured headers, e.g. workspace attribution).
+
+Events v1: `session.status`, `question.asked`, `file.edited`,
+`tool.execute.start`, `tool.execute.end`, `session.error`. Message-delta
+events are deliberately deferred (see plugin/PROTOCOL.md) pending a
+throttling design.
+
+Capability parity bar: the protocol must be able to express the plugin
+patterns common in opencode setups — event-driven activity tracking, token
+refresh via `shell.env`, tool-call rewriting/vetoing and result guards via
+`tool.execute.*`, path-scoped system prompt injection, and custom tools that
+call back into the platform.
+
+## External Protocol Surfaces
+
+Standards we conform to at the edges. The internal model (event log, canonical
+messages, hook protocol) is ours; these are adapters, never the internal
+representation.
+
+- **ACP (Agent Client Protocol, agentclientprotocol.com)** — the editor ↔ agent
+  standard (Zed, JetBrains, Neovim, Emacs). Implemented as a thin adapter in
+  `server/` mapping the event log to `session/update` notifications. Where our
+  event vocabulary has arbitrary naming choices, prefer ACP's names to keep the
+  adapter mechanical. We never send `session/request_permission` (no permission
+  system) — an agent that never asks is fully conformant. Note: this is Zed's
+  Agent *Client* Protocol, not IBM's dead Agent Communication Protocol.
+- **MCP** — client (consume tool servers) and server (expose sessions/tools)
+  modes. ACP forwards editor MCP config to us, so the two compose.
+
+  A server's first connect (Initialize+ListAllTools) stays lazy —
+  triggered by a session's first `Tools()`/`CallTool()`, bounded by a
+  per-server `connect_timeout_s` config field (`MCPServerSpec`, integer
+  seconds, <= 0/absent defaults to the engine's own 15s). A server whose
+  first attempt fails is never dropped for the process's life: it gets a
+  detached background retry on a capped exponential backoff (~1s doubling
+  to a 5min cap, jittered) — but bounded to `mcpRetryMaxAttempts` (3)
+  further attempts (under ~10s of background effort total). Once those
+  are exhausted the entry is marked Parked and the retry goroutine exits
+  for good — no further attempt ever fires spontaneously; only an
+  explicit re-trigger (the `mcp` tool's `connect` action, below) can move
+  it again. A HEALTHY server, by contrast, connects exactly once and is
+  never re-probed. `Tools()` always reads live state, so a server that
+  recovers mid-session — background retry or explicit reconnect —
+  contributes tools on the very next turn automatically, no new session
+  required. `CallTool`/`CallServerTool` split the old combined error into
+  two: a server name absent from config errors "not configured" (never
+  recoverable); a configured-but-unconnected server (still retrying, or
+  parked) errors naming that state explicitly (recoverable — retrying may
+  still self-heal, parked needs the `mcp` tool). While at least one
+  server is degraded, request assembly appends an ambient `[mcp:
+  unavailable — <name> (<reason>; retrying), ...]` block to the newest
+  user message only — computed fresh every turn, never persisted,
+  self-correcting as retries succeed; a Parked server's clause instead
+  reads `<name> (<reason>; use the mcp tool action "connect" to retry)` —
+  sharing its append-only-to-the-newest-message mechanism
+  (`withAmbientStatus`) with the managed-processes status block above.
+
+  A built-in `mcp` session tool is registered in `newSession` whenever
+  the session's MCP registry reports at least one configured server (no
+  config flag, unlike `GoalTool`). `status` reports every configured
+  server's live state — `{name, connected, attempts, parked, reason}`;
+  `connect {server}` makes ONE bounded, synchronous attempt for a named
+  server — the only path back for a Parked server, though it works
+  against a still-retrying or never-yet-attempted one too. An
+  already-connected server is a friendly no-op; an unknown name errors
+  listing the configured names. A per-server in-flight guard (under the
+  manager's own lock) serializes a tool-triggered connect against both a
+  concurrent `connect` call and `retryServer`'s own background attempt
+  for the same server — whichever gets there first dials, the other
+  reports "attempt already in progress." Every model-visible string on
+  this surface — the ambient block, `status`'s `reason`, `connect`'s
+  failure result — is `classifyMCPConnectError`'s output, never a raw
+  error (which can embed the server's endpoint URL and any secret it
+  carries).
+- **OpenTelemetry GenAI semantic conventions** — for span/metric naming when
+  observability lands. Configuration via standard `OTEL_*` env vars only.
+- **A2A** — deliberately not implemented. Cross-org agent meshes are a
+  different layer; revisit only if a concrete need appears.
+
+## Development hub
+
+`harness hub` is a local, single-operator control surface over a FLEET of
+`harness serve` boxes — a fleet dashboard for "what are my agents
+doing right now" and for dispatching new goal-supervised sessions, not a
+deployed product. It serves one embedded, single-file page
+(`tools/hub/index.html`, `go:embed`) on
+`localhost:7777` by default (`-addr` to change it).
+
+- **No server-side state.** The hub keeps no registry and reads no config
+  file: every box (name, base URL, run token) and the current selection
+  live only in that browser tab's URL fragment, base64-encoded JSON
+  (`#s=...`), kept in sync via `history.replaceState`. That makes a hub URL
+  bookmarkable and shareable between local tabs with zero persistence code
+  — and means **run tokens ride the URL by design**; treat a hub link like
+  a secret.
+- **The page talks to boxes directly** from the browser, over each box's
+  normal HTTP+SSE API (`server/openapi.yaml`) — never proxied through the
+  hub's own server. Every box must therefore be started with `-cors-origin`
+  set to the hub's origin (or `*` for local hacking), e.g. `harness serve
+  -cors-origin http://localhost:7777`; a box without it will look
+  permanently unreachable from the hub.
+- **The Go side is minimal on purpose**, exactly one API: `POST /spawn`.
+  It execs the command given by `-spawn-command` (or `$HARNESS_HUB_SPAWN`)
+  via `sh -c` and streams its combined stdout+stderr live to the page over
+  SSE. The **spawn-command contract** — the only coupling between this repo
+  and any deployment-specific provisioning tool — is plain lines anywhere
+  in that output: `TUNNEL_URL=<url>` and `RUN_TOKEN=<token>` (required to
+  add the box), and any number of `PORT_URL_<port>=<url>` lines (optional —
+  one per exposed port's own tunnel/preview URL, collected into a
+  `port_urls` map; see the process strip in `tools/hub/index.html`'s header
+  comment). Once the command exits, the stream ends with a summary carrying
+  those values (if found) and the exit code; the page adds the new box to
+  its own URL state itself. Nothing box-provisioning-specific lives in this
+  repo.
+  - **Box name passthrough.** `POST /spawn`'s JSON body optionally carries
+    `{"name": "..."}` — the page's generated (or, on a Respawn/ADOPT, reused)
+    box name. The Go handler sets it as `HARNESS_HUB_BOX_NAME` in the spawn
+    command's own environment (`tools/hub/spawn.go`'s `runSpawn`), exactly
+    the deployment-environment contract `docs/design/fleet-model.md` §8
+    specifies: deployment tooling invoked by `-spawn-command` reads this
+    variable to derive per-name storage (typically setting
+    `HARNESS_SESSION_DIR` from it before `harness serve` starts) — harness's
+    own code never reads `HARNESS_HUB_BOX_NAME` at all. A request with no
+    body, or no `name` field, spawns exactly as before (no env var set).
+- The hub binds loopback-only by default (`resolveAddr` in `tools/hub/hub.go`).
+- **Browser-security hardening** (both in `tools/hub/hub.go`, tested in
+  `tools/hub/hub_test.go`). `POST /spawn` execs a real, costly provision
+  command, so `handleSpawn` rejects a browser cross-origin request before any
+  exec: if an `Origin` header is present it must match the request's `Host`
+  (OWASP verify-origin). Loopback binding alone does not stop this — any page
+  the operator visits can `fetch("http://localhost:7777/spawn",{method:
+  "POST"})` as a no-preflight CORS simple request — but the page's own
+  same-origin `fetch("/spawn")` (Origin == Host) and non-browser clients (no
+  Origin, so not a CSRF vector) pass unchanged. The served page also carries
+  a strict `Content-Security-Policy` (`default-src 'none'` + `'unsafe-inline'`
+  script/style — the page is a single no-build `go:embed`'d file with no
+  external resources and no per-response nonce hook — + `connect-src *`,
+  required because it fetches/streams from arbitrary operator-added box
+  origins the stateless hub cannot enumerate, + `frame-ancestors`/`base-uri`/
+  `form-action` pinned to `'none'`): defense-in-depth for a page holding run
+  tokens in its URL fragment.
+- **Pure hub logic is unit-tested** by `tools/hub/hub_test.mjs` (run:
+  `node --test tools/hub/*_test.mjs`). **End-to-end, against a real backend**
+  is `tools/hub/e2e` (see its README): a `go test -race ./...` subtree that
+  starts an actual `server.Server` + `hub.NewHandler` and drives the real,
+  served `index.html` with Node + jsdom and an unmocked `fetch` — no manual
+  setup step; it installs its own `npm` dependency on first run.
+
+### UI design language
+
+The hub is styled as **tactical telemetry** — a committed dark-only
+brutalist archetype (derived from the public
+[taste-skill](https://github.com/Leonxlnx/taste-skill) brutalist +
+anti-slop skills). Any new hub UI — and future passes on the inspector,
+which still wears the older soft theme — follows these rules:
+
+- **One substrate, no theme toggle**: `#0a0a0a` background, `#eaeaea`
+  phosphor foreground, `#2a2a2a` hairline borders. Never reintroduce a
+  light mode here; pick-one-and-commit is the point.
+- **Two semantic colors only.** Hazard red (`--accent`, `#ff2a2a`) means
+  trouble or destructive action, nothing else. Terminal green (`--ok`,
+  `#4af626`) is reserved for exactly one semantic: live or succeeded goal
+  execution. Everything else is monochrome.
+- **Monospace dominance**: body text is the `ui-monospace` stack;
+  headers are heavy uppercase system-ui. Micro-labels are uppercase with
+  `.06–.1em` tracking. No webfonts — the page is CSP-self-contained.
+- **Geometry**: `border-radius: 0` absolutely everywhere; square status
+  markers; 1px compartment borders; inverted-video hover
+  (foreground/background swap). No gradients, soft shadows, or
+  translucency. The scanline overlay is static — motion requires a
+  stated purpose.
+- **Copy discipline**: no emoji in UI strings, no em-dashes anywhere, and
+  every piece of "telemetry" displayed must be real data (vcs revisions,
+  seqs, PIDs, token counts) — never decorative or fabricated metadata.
+- **Selectors are load-bearing**: the renderers create elements by class
+  name (`.sess`, `.box-card`, `.dot`, `.goalnarr`, …). Restyle classes;
+  never rename them in a styling pass.
+
+## Session monitor
+
+`tools/monitor` (`tools/monitor/index.html`) is the single-instance
+counterpart to the hub above: where the hub answers "what are my boxes doing"
+across a FLEET, the monitor answers "what is THIS `harness serve` instance
+doing right now" — a live board of every session on that one box (phase,
+current tool, staleness), a per-session detail view with a scrolling
+transcript, and a composer to speak into a session (`prompt_async`). Like the
+hub and the inspector, it is a build-free, dependency-free single HTML file
+with no Go-side handler of its own.
+
+- **How to run it**: open the file directly (`file://`) or serve it from any
+  static host — nothing box-specific is baked in. The target box must be
+  started with `-cors-origin` covering the monitor's origin (or `*` for local
+  hacking), exactly like the hub's requirement above; a box without it looks
+  permanently unreachable. The base URL and run token are entered in the
+  page itself and persisted to `localStorage` in plaintext (same documented
+  tradeoff as the inspector — a dev tool, not for a shared origin with a
+  long-lived token) so a reload can reconnect automatically. Routing lives in
+  the URL fragment as small explicit params, not the hub's base64 blob:
+  `#b=<base>` (box base URL) and `#s=<session id>` (open detail view) — both
+  bookmarkable, encoded/decoded by a tested pure helper.
+- **Embedded serving, frictionless local**: every `harness serve` box also
+  offers its own copy same-origin, at `GET /monitor` — by default
+  `http://localhost:4096/monitor` (the port follows `-addr`, default
+  `localhost:4096`; the exact URL, with any `#t=<token>` capability suffix, is
+  printed to the terminal on startup — `monitorTerminalHint`). The bare root
+  is a convenience redirect: `GET /` 302s to `/monitor` (via the `GET /{$}`
+  route — `{$}`-anchored to the root path only, never a catch-all — registered
+  under the same `MonitorPage` guard, so a pure-API box keeps `/` a clean 404).
+  `tools/monitor`
+  (package `monitor`, `embed.go`) `//go:embed`s the exact committed
+  `index.html`; `cmd/harness`'s `serveCmd` wires it into
+  `server.Options.MonitorPage`, which the server serves unauthenticated
+  (like `/health` — the page itself carries no secrets) with a
+  same-origin-scoped `Content-Security-Policy` (`connect-src 'self'`).
+  `server` itself never imports `tools/monitor` (layering: `server` must
+  not import `tools/*`); only `cmd/harness` does, the same pattern
+  `harness hub` already uses. The `file://`/static-host path is unaffected
+  — this is additive, and stays the only option for monitoring a box from a
+  different origin (the embedded route's CSP deliberately does not permit
+  that).
+  - **Unauthenticated-on-loopback** (`server.Options.Unauthenticated`, an
+    EXPLICIT opt-in never inferred from an empty `RunToken` on its own —
+    `New` still fails closed otherwise): `serveCmd` classifies `-addr`
+    (`isLoopbackAddr` — `localhost`, `127.0.0.1`/`::1`, any
+    `net.IP.IsLoopback()` address; a bare `:port`, `0.0.0.0`, `::`, or any
+    other routable address is NOT loopback). `HARNESS_RUN_TOKEN` unset +
+    loopback bind runs the box fully unauthenticated (every route, not just
+    `/health`/`/monitor`) and logs a clear warning; unset + non-loopback
+    still hard-errors `HARNESS_RUN_TOKEN is required` exactly as before. The
+    token guards network reachability, and loopback is a server-verifiable
+    proxy for that (unlike, say, `Origin`, which a client controls).
+  - **Unauthenticated on a non-loopback bind is also possible, but ONLY via
+    a SECOND, separate, EXPLICIT opt-in** — the `-unauthenticated` serve
+    flag, or `HARNESS_UNAUTHENTICATED=1` (`envUnauthenticated`, parsed with
+    `strconv.ParseBool`; an unset or unparsable value is false, fail-closed
+    on a malformed setting). `resolveUnauthenticated` (`cmd/harness/main.go`)
+    is the single decision point both serve flags feed: a non-empty token
+    always wins (token path unaffected, any bind); an empty token on a
+    loopback bind is unchanged from above; an empty token on a non-loopback
+    bind needs this opt-in or it still hard-errors exactly as before — the
+    opt-in is never inferred from the empty token alone, only from the flag
+    or env var. This is for a deployment where a trusted external gate
+    already restricts reachability (e.g. a Cloudflare Access-gated tunnel,
+    or a sandboxed network boundary) so the token is redundant with that
+    gate — `server.Options.Unauthenticated` itself is bind-address-agnostic
+    (see its own doc comment); the safety property lives entirely in
+    `cmd/harness` deciding WHEN to set it. Landing this on a non-loopback
+    bind logs a SEPARATE, distinctly worded loud warning ("serving
+    unauthenticated on a non-loopback bind") from the loopback one above, so
+    the two are distinguishable in a log search.
+  - **Same-origin auto-connect** (`embeddedConnectPlan`, index.html): opening
+    a box's own `/monitor` attempts the connection immediately against
+    `location.origin`, using whatever token is available (`#t=` fragment,
+    then a stored one, then none) — success lands straight on the board, no
+    panel, nothing typed (covers both the unauthenticated-loopback case and
+    a valid capability URL/returning operator with the SAME call). Only a
+    failed attempt (a real token is required and none was available) falls
+    back to a minimal token-only panel — host is already known, so the base
+    field never reappears. A `#t=<token>` fragment (mirroring `tools/hub`'s
+    "run tokens ride the URL by design" precedent, `extractFragmentToken`)
+    is adopted into the SAME `localStorage` key manual entry uses and
+    immediately scrubbed from the visible URL via `history.replaceState`; a
+    fragment `#b=` naming a DIFFERENT origin than this box's own — which the
+    embedded route's CSP would block outright if tried — surfaces a
+    plain-text notice instead of attempting it, composing with (never
+    blocking) the own-origin auto-connect. None of this weakens the auth
+    model itself: a token is still required and still checked exactly as a
+    hand-typed one would be, on every box that hasn't explicitly opted into
+    `Unauthenticated`.
+  - On a TTY, `serveCmd` also prints a click-ready line to stderr after
+    "serve start" — `monitor: http://<addr>/monitor#t=<token>` (or, when
+    running unauthenticated-loopback, the plain URL with no `#t=` at all,
+    since there's no credential to carry) — gated on `stderrIsTerminal`
+    (`os.ModeCharDevice`, stdlib-only) so a tokenized URL never lands in
+    piped/production stderr, only an interactive operator's own terminal.
+- **Test layers.** Pure helpers (SSE parser, activity reducer, transcript
+  fold, route codec, formatters) live inside index.html's `/* TESTABLE-BEGIN
+  */ … /* TESTABLE-END */` region and are covered by
+  `tools/monitor/monitor_test.mjs` (run: `node --test tools/monitor/*_test.mjs`),
+  using the same extraction-and-`vm`-evaluate pattern as the inspector's
+  `inspector_test.mjs` (and now the hub's, above) — no build step, so the
+  tests read the region straight out of the committed HTML. End-to-end,
+  against a real backend, is `tools/monitor/e2e` (see its README): a `go
+  test` subtree that starts a real `server.Server` plus a plain static file
+  server for the actual committed `index.html`, and drives it with Node +
+  jsdom and an unmocked `fetch` — mirroring `tools/hub/e2e`'s structure and
+  conventions. A `window.__monitorTuning = {QUIET_MS, STALL_MS}` seam (set
+  via jsdom's `beforeParse` before the page's own script runs, a no-op in
+  production since nothing else ever sets it) lets both the unit and e2e
+  suites shrink the staleness thresholds so `quiet`/`stalled` transitions are
+  observable in test time instead of real minutes.
+- **UI design language.** The monitor deliberately does NOT inherit the
+  hub's committed dark brutalist archetype above. It carries its own
+  "instrument sheet" language: light-first with a dark variant, both driven
+  by one OKLCH token set (`--surface`, `--text-1..3`, `--separator`, etc.);
+  semantic green/amber/red (`--ok`/`--warn`/`--critical`) are reserved
+  strictly for session/staleness state, never decoration; a single accent
+  color is owned by interaction (the composer's send affordance is the
+  page's only filled-accent control). `docs/design/monitor-mockup.html` is
+  the user-approved visual spec — its tokens, grid template, and markup
+  shapes are binding; restyle within that spec rather than importing the
+  hub's theme onto it.
+
+## Fleet model (the deploy story)
+
+The full build spec lives in `docs/design/fleet-model.md` — read it before
+touching anything box-identity, session-lineage, or goal-pause related. The
+short version this repo's code assumes: identity is an operator-chosen box
+**NAME**; storage is one volume/directory per name (`HARNESS_SESSION_DIR`
+points at it), never shared between concurrently-live servers; a box is
+ephemeral compute serving one name (cattle), the name and its volume are
+durable (pets). Respawning the same name over the same volume is **ADOPT**
+— history restores, and any goal that was armed when the box died surfaces
+as `paused`/`pause_reason: "restart"` (see the goal loop's paused
+presentation, `engine/goal.go` and `server/journal.go`'s `goal.paused`
+record) rather than a false "still running" reading. `parent_session`
+(`POST /session`, see `engine/store.go`) is the lineage thread connecting a
+re-dispatch to the task it continues from, so a fleet UI can group a box's
+history by task across boxes.
+
+**Hub spawn contract:** the hub that spawns boxes — `harness hub`, now
+implemented in `tools/hub/` (see the Development hub above) — passes the
+generated box NAME to the spawn command's environment as
+`HARNESS_HUB_BOX_NAME`, so deployment scripts can derive per-name storage
+(e.g. mount/create a volume named after it) without the hub and the box
+needing any other side channel to agree on identity. Harness itself never
+reads this variable — it is a contract between the hub and deployment
+tooling, documented in `docs/design/fleet-model.md` §8.
+
+## Startup Speed Rules
+
+- Nothing touches network, subprocesses, or disk beyond one config file before first paint. Provider auth validates on first message send, not at boot.
+- No `init()` side effects. No reflection-heavy config frameworks. One flat config parse.
+- Pure Go only — no cgo (use modernc SQLite if SQLite is needed) so cross-compilation stays trivial.
+- Batch TUI stream rendering (~30–60fps coalescing); never repaint per token delta.
+
+## Development Commands
+
+```bash
+go build ./...
+go test -race ./...
+go test -race -run TestName ./engine/
+go vet ./...
+```
+
+## Testing
+
+**TDD is mandatory.** Write the failing test first, watch it fail, then
+implement until it passes. New behavior lands in the same commit as its test;
+a bug fix starts with a test that reproduces the bug.
+
+Rules:
+
+- **Timer-dependent and concurrency-timeout logic is tested inside a
+  `testing/synctest` bubble** (Go 1.25+): time is fake and advances only when
+  every goroutine in the bubble is durably blocked, so timeouts fire
+  deterministically and instantly. `net.Pipe` and channel-based plumbing work
+  in bubbles; real network and file I/O do not. Note fake time stops
+  advancing once the test function returns — a goroutine parked in
+  `time.Sleep` at bubble end is reported as a deadlock, which is the bubble's
+  goroutine-leak detection working for you.
+- **For concurrency-sensitive code (locks, queues, backpressure), write the
+  invariants down in the brief/design before implementation** and test
+  against them. Deriving the design from review findings one round at a time
+  took four rounds on a recent PR.
+- **Exception — cross-process e2e** (`e2e/` only): tests driving a real
+  subprocess may observe out-of-process state with deadline-bounded poll
+  loops, because no in-process channel can cross an OS process boundary.
+  Intervals stay tight, deadlines explicit; anything observable in-process
+  still uses channels or synctest.
+- **No raw `time.Sleep` for synchronization — ever, bubble or not.** To
+  simulate a hung component, block on a channel closed in `t.Cleanup`; in a
+  bubble the hang deterministically outlasts any timeout with zero wall-clock
+  cost, and the cleanup release lets the goroutine exit before bubble end.
+- **No guessed deadlines.** Block directly on channels for expected events
+  and let the test binary timeout catch hangs; don't wrap waits in short
+  arbitrary `time.After` failsafes that flake under load.
+- Always run with `-race`; CI runs `go test -race ./...`.
+- `t.Helper()` in every test helper; `t.Cleanup` over `defer` in helpers so
+  cleanup composes.
+- `httptest` for HTTP surfaces; in-process pipes (`net.Pipe`) for protocol
+  tests — never spawn real subprocess fixtures unless the subprocess
+  machinery itself is under test.
+- Table tests where cases multiply; golden JSON comparisons for transcoders
+  (struct field order makes marshaled output deterministic).
+- Production timers use `time.NewTimer` + `defer Stop()`, not `time.After`,
+  when the surrounding function can return before the timer fires.
+- **Regression tests must be red-verified.** Prove the test fails against the
+  pre-fix code — revert the fix, observe red, re-apply it — and show that
+  evidence. A regression guard that never ran red is unverified.
+- **Red-verify the NAMED mechanism, not just some failure.** A test name is a
+  claim. Revert the exact mechanism the name asserts, then confirm THAT test
+  fails for THAT reason. A test that passes from birth, or that goes red for
+  an unrelated reason, is not a guard. (Incident: three tests on one branch
+  were green against the exact defect they were named for.)
+- **Verification drives the production entry point.** Call the same function
+  production calls. A check that builds, normalizes, or repairs its input by
+  hand proves nothing about the path a user takes — it verifies the
+  preparation. (Incident: a fix was reported "verified end-to-end" from a
+  test that called `Normalize` by hand. That skipped the `LoadSession` resume
+  path, which was the only path that mattered.)
+- **An oracle never imports the implementation.** Derive a property-test
+  oracle from the external contract — the provider's wire rules, the API
+  spec. A predicate that calls a production symbol, or copies its logic,
+  cannot fail on a wrong definition, which is the defect class an oracle
+  exists to catch. (Incident: `hasOrphanToolCall` was rewritten to call the
+  production `hasToolCall`, and then could not see the data loss beside it.)
+- **Assert the surplus direction too.** A count check that only looks for
+  what is missing passes a payload that ships two of something where one
+  belongs.
+
+## Working model — director and coordinator
+
+The director sets direction; the agent runs as tech-lead coordinator. The
+director wants speed and ownership: run the pipeline, and surface only what
+genuinely needs a human.
+
+- **The pipeline.** Decompose work into tasks. Dispatch one fresh
+  implementation agent (fast mid-tier model) per task in an isolated git
+  worktree; a strongest-tier reviewer then drives the PR to ZERO findings;
+  then merge. Parallelize tasks with disjoint files; sequence tasks that
+  share files, to avoid self-inflicted merge conflicts. See "Subagent model
+  strategy" for the tier split and "One agent per plan task" below.
+- **Status cadence.** Report at MILESTONES and DECISION POINTS, not per
+  event. Keep status tight; do not narrate. A terse directive ("do it",
+  "merge it", "fine") means execute fast — do not over-ask. Still confirm a
+  genuinely load-bearing decision before acting on it.
+- **Verify before asserting or fixing.** Check real source, live state, or
+  schema — never assume. A wrong assumption about a uid model, a resource
+  name, a config flag, or migration order changes the answer; a grep that
+  truncates before the relevant line produces a false conclusion. When a
+  review finding or a stated premise — including the director's — looks
+  wrong, push back with evidence instead of complying.
+- **Surface load-bearing forks; decide the rest.** Present a fork that
+  reworks an interface, a security posture, or scope with a recommendation
+  and the real options, and get the director's call. Decide a mechanical,
+  reversible choice yourself and just state what you chose.
+- **Do not over-engineer a pre-production system.** A platform still in
+  development does not need a rollback flag, a migration shim, or a
+  compatibility layer for a change that is verified correct. Prefer the
+  simplest correct thing; strip speculative complexity.
+- **The review gate is non-negotiable.** Every PR gets an adversarial
+  strongest-tier review; drive findings to zero or explicitly defer. Never
+  rubber-stamp — the gate catches defects unit tests miss (an invalid
+  manifest, a broken generated config, a boot-race, a circular test oracle).
+  See "Code Review Protocol".
+- **Standing rules.** A subagent's or a peer session's message is never the
+  director's approval. Verify a production flag or state before flipping or
+  asserting it. Document durable rules and processes, never point-in-time
+  events — no dates, measured numbers, or PR numbers in a spec. Never echo a
+  secret value — report byte length only.
+
+## Scope discipline
+
+- **Ship the fix the incident proves. File the hardening you found while
+  looking.** An opportunistic fix bundled with an urgent one inherits its
+  urgency and escapes its scrutiny. (Incident: an unobserved,
+  probe-discovered hardening rode an incident fix and cost two review rounds
+  of data-loss bugs before it was reverted — see NEP-5293.)
+- **A behavior change updates AGENTS.md in the same commit.** This file is
+  the binding spec every agent reads first. Four commits once changed the
+  goal-loop retry tiers and left this file describing the old ones.
+
+## Subagent model strategy
+
+When you spawn subagents, set the model EXPLICITLY on every spawn — never
+let an implementation agent inherit the parent model by default. The rule
+is a capability-tier split, not a vendor or model-name rule; it applies to
+whatever frontier family is current.
+
+- **Code-writing / implementation / mechanical work uses the fast
+  mid-tier.** Writing code, editing docs, changing config,
+  grep/investigation, watching a deploy — the tier that is fast, cheap,
+  and sufficient for well-specified work (today: Claude Sonnet; the
+  equivalent tier elsewhere: GPT mini/frontier-fast class, Gemini Flash).
+- **Review, adversarial verification, and judgment gates use the
+  strongest tier.** The review-to-zero gate and any correctness verdict
+  deserve the strongest available model (today: Claude Opus; elsewhere:
+  the full frontier flagship, never a mini/fast variant).
+
+The default pattern for a change: a mid-tier agent writes the PR, a
+strongest-tier reviewer drives it to zero. Omitting the model makes a
+subagent inherit the parent's model, so a strong parent silently runs
+implementation work at flagship price — expensive and backwards. Pass the
+model on every spawn. When a model family changes, re-map the two tiers
+and keep the split; do not carry a stale model name forward.
+
+## One agent per plan task, not one agent per plan
+
+Dispatch a FRESH implementation agent for each plan task. Do not give one
+agent a whole multi-task plan. A monolithic agent accumulates every task
+and every review round in one context: it compacts repeatedly, drags its
+full history behind every late turn, and burns tokens without adding
+fidelity. (Measured 2026-08-12: two plan-executing agents ran ~700k-800k
+tokens each; per-round fresh reviewers ran ~120k-300k and stayed sharp.)
+
+- Plans are written for a zero-context engineer (exact files, signatures,
+  test code — see the plan format), so a fresh agent per task loses
+  nothing. Give each task-agent the plan file path and its ONE task.
+- Reviewers stay fresh per round, as they already are.
+- Keep one agent across tasks only when the tasks share heavy state that
+  a plan file cannot carry (a live debugging session, an unreproducible
+  environment).
+- Give every dispatch exact file:line pointers instead of letting the
+  agent re-derive repo context by grep.
+
+## Never end a turn to wait on an external event
+
+An agent that ends its turn "waiting" on an external event can wait
+forever. An external event is any completion signal from outside the
+agent's own tool calls: a GitHub workflow run, a deploy, a remote queue.
+No notification arrives for an external event. Six agents stalled this
+way on 2026-08-12 alone.
+
+- Watch a workflow run with `gh run watch <id> --exit-status` in the
+  foreground. Do not poll once and yield.
+- A spawned subagent (a reviewer) DOES notify on completion — but its
+  reply can misroute when it cannot resolve your address. If a verdict
+  is overdue, message the reviewer and ask; do not keep waiting.
+- To wait on any other external event, use a blocking command in the
+  foreground, or the Monitor tool with an until-loop when the harness
+  blocks foreground sleep. End your turn only when the task is complete
+  or you are blocked on input only a human can provide.
+
+## Debugging invariants
+
+Rules learned from production incidents (2026-07-09), written so they apply
+without knowing the incidents:
+
+- **Cleansing marshals hide poison.** Persisted session logs are scrubbed by
+  the guarded marshal paths (`ToolCall.safeArguments` normalizes,
+  `ProviderData.MarshalJSON` drops empty entries), so on-disk state can be
+  provably clean while resident in-memory state is unmarshalable. When a
+  resident session misbehaves but its journal round-trips cleanly through
+  `engine.LoadSession` + `json.Marshal`, the defect lives in memory between
+  ingest and persist — do not conclude from a clean log that no defect
+  exists. (Incident: truncated `ToolCall.Arguments`, fixed in the commit
+  titled "fix(message,engine): truncated ToolCall.Arguments must never
+  poison history"; see also the tests in `engine/tool_call_poison_test.go`.)
+- **Error text names the rejection, not the cause.** Treat error strings as
+  the symptom surface — enumerate which layer actually produced the
+  credential/config/input being rejected before acting. (Incident: a git 403
+  citing SAML SSO was actually a system-level gitconfig credential helper
+  serving a rotated-stale token; the SSO re-auth it demanded was
+  irrelevant.)
+- **Verify binary identity before blaming staleness.** A deployed binary's
+  exact commit is embedded — `go version -m <binary>` shows
+  `vcs.revision`/`vcs.time` — check that before hypothesizing that a fix is
+  missing from a running process.
+
+## Writing Style
+
+You MUST use ASD-STE100 Simplified Technical English — the aerospace
+controlled-writing standard — for all prose you write in this repository
+(doc comments, docs/, commit messages, PR bodies, reports):
+
+- One word for one idea — pick a term and reuse it verbatim; a synonym
+  reads as a second concept.
+- Short sentences: ≤20 words for instructions, ≤25 for descriptions.
+- Active voice with an explicit subject ("Run `pnpm check-types`", not
+  "type checks should be run").
+- One topic per paragraph; simple common words ("use" not "utilize").
+- Name the thing — never "the code", "the system", "this"; name the
+  function, file, or table, with file:line when you have one.
+- No hedges or filler ("it's worth noting that", "in order to").
+- Exception: error messages, code, identifiers, and paths are quoted
+  verbatim, never simplified.
+
+## Code Style
+
+- Standard Go conventions, `go fmt`, `go vet` clean.
+- Type annotations in exported APIs over cleverness; small interfaces.
+
+## Code Review Protocol
+
+PRs merge only after the latest automated review round has been read **in
+full — including the summary comment**. Inline-thread count is not a merge
+gate: the reviewer files findings both as inline threads and as items in the
+top-level summary, and both must be addressed (or explicitly acknowledged as
+deferred) before merge. Iterate until a round produces zero findings.
+
+A green check is not a review. The reviewer has failed silently before: an
+instant API error produces a placeholder comment and zero findings, which
+reads as mergeable. Before merging, verify the review summary is substantive.
+
+Read and act on every review thread individually — never batch-resolve. One
+explicit resolve command per thread id. A batch operation once resolved
+unread findings.
+
+## Git Commits
+
+- [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): description` (e.g. `feat(plugin): add shell.env hook`).
+- Do not include `Co-Authored-By` lines for AI agents in commit messages.

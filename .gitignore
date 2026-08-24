@@ -1,0 +1,13 @@
+/harness
+*.test
+*.out
+.DS_Store
+__pycache__/
+
+# rapid property-test failure seeds are local reproduction artifacts, never
+# committed. The pattern is anchored with **/ because rapid writes these
+# under a package's OWN testdata/rapid/ dir (e.g. message/testdata/rapid/),
+# not only at the repo root -- a bare "testdata/rapid/" only matches the
+# root, since a slash inside a gitignore pattern anchors it to the
+# .gitignore's own directory.
+**/testdata/rapid/

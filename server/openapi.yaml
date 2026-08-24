@@ -1,0 +1,2430 @@
+openapi: 3.1.0
+info:
+  title: Harness Server API
+  version: 0.1.0
+  description: |
+    The HTTP surface `harness serve` exposes inside a sandbox. It is a
+    protocol, not a product: no static assets, no UI — a single external
+    orchestrator drives many harness instances through this API.
+
+    ## Design notes
+
+    - **The session log is the wire contract.** Durable records (messages,
+      model swaps, session lifecycle) carry monotonic sequence numbers and
+      are replayable; live deltas (text, reasoning, tool progress) stream
+      between them and are not persisted. A client that reconnects with
+      `from=<last seq>` reconstructs exactly what it missed.
+    - **Session status is engine truth.** `busy` means a prompt is being
+      processed by the engine — it has nothing to do with whether any client
+      is connected. (This deliberately fixes the opencode `/session/status`
+      footgun where idle-but-usable sessions reported as absent.)
+    - **Sessions outlive the process.** Session logs persist on disk; a
+      prompt to a session that is not in memory transparently resumes it
+      from its log. "Stored session gone after sandbox restart" is not an
+      error mode — orchestrators keep one session ID per task and reuse it.
+    - **Prompting is always asynchronous.** The endpoint keeps opencode's
+      `prompt_async` name so existing orchestration code ports with a URL
+      and auth swap; there is no synchronous variant.
+    - Endpoint naming follows opencode's `/session` shapes where the
+      semantics match, so the internal handlers port mechanically. Everything
+      opencode exposes for its in-box UI (tui, pty, lsp, find, file, config,
+      provider/mcp auth, permissions, share/fork/revert) is deliberately
+      absent: rendering belongs to the orchestrator, credentials belong to
+      gatekeeper, and permissions do not exist by design.
+
+servers:
+  - url: http://localhost:4096
+    description: In-sandbox listener (fronted by the platform's box proxy)
+
+security:
+  - runToken: []
+
+components:
+  securitySchemes:
+    runToken:
+      type: http
+      scheme: bearer
+      description: |
+        The workspace's run token — the same per-sandbox token gatekeeper
+        scopes credentials with. Compared in constant time. The box proxy
+        terminates human/service auth in front of this.
+
+  schemas:
+    Health:
+      type: object
+      required: [version, vcs_revision, vcs_time, session_sync, started_at]
+      properties:
+        version:
+          type: string
+          example: 0.1.0
+        vcs_revision:
+          type: string
+          description: >
+            The running binary's VCS revision (commit hash), from
+            runtime/debug.ReadBuildInfo's "vcs.revision" setting when
+            present (a build from a local VCS checkout), else parsed from
+            the Go module version instead (a `go install pkg@<sha>`-style
+            module-mode install, which embeds no vcs.revision at all) —
+            always present, but "" when build info is unavailable at all
+            (e.g. a `go test` binary) or names no commit (a plain `go
+            build`/`go run`, or an install by tag with no commit-specific
+            timestamp — see vcs_time).
+          example: 1fdc1db1e2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7
+        vcs_time:
+          type: string
+          description: >
+            The commit timestamp corresponding to vcs_revision (RFC 3339),
+            from ReadBuildInfo's "vcs.time" setting or, in the module-mode
+            fallback described under vcs_revision, parsed from a pseudo-
+            version's embedded timestamp. Always present, "" under the same
+            conditions as vcs_revision, and also "" when vcs_revision came
+            from a plain tag (which names no specific commit time).
+          example: "2024-06-01T12:00:00Z"
+        session_sync:
+          type: string
+          enum: [fsync, volume]
+          description: >
+            This process's EFFECTIVE session-durability mode — never the
+            raw, possibly-empty config value — so a caller never has to know
+            the default to know the mode a box is actually running in. See
+            the session_sync config field.
+          example: fsync
+        started_at:
+          type: string
+          description: >
+            This server process's start time (RFC 3339, UTC). Always
+            present, "" only when the serving process never set it (not
+            expected in production; a defensive default).
+          example: "2024-06-01T12:00:00Z"
+
+    Session:
+      type: object
+      required: [id, created_at, model, status, state, messages, workdir, usage, last_activity_at, plugins, queued]
+      properties:
+        id:
+          type: string
+          example: ses_77aa9a7c6f323a7b
+        created_at:
+          type: string
+          format: date-time
+        model:
+          $ref: "#/components/schemas/ModelRef"
+        effort:
+          $ref: "#/components/schemas/Effort"
+          description: >
+            The session's current reasoning-effort level. Absent (or empty)
+            means the provider default (EffortUnset). Set it with POST
+            /session/{id}/thinking.
+        status:
+          $ref: "#/components/schemas/SessionStatus"
+          description: >
+            Kept for backward compat: engine truth for the momentary
+            busy/idle transition around one prompt or goal-loop call. Prefer
+            `state` for anything progress-related — see its description for
+            why `status` alone is ambiguous during a goal loop.
+        state:
+          $ref: "#/components/schemas/SessionState"
+        messages:
+          type: integer
+          description: Count of messages in the session log.
+        seq:
+          type: integer
+          description: Sequence number of the latest durable record.
+        goal:
+          $ref: "#/components/schemas/GoalSummary"
+          description: >
+            The session's goal summary, present only when a goal has been set
+            for this session in the current server process (in-memory, like the
+            /request snapshot). Absent on a freshly reloaded session until a
+            goal runs.
+        workdir:
+          type: string
+          description: >
+            The session's working directory, durable across resume (persisted
+            in the session log header). Defaults to the serve process's
+            current working directory when POST /session omitted workdir.
+          example: /workspace/task-42
+        last_turn:
+          $ref: "#/components/schemas/LastTurn"
+          description: >
+            The outcome of the most recent prompt or goal-worker turn to
+            finish in this process, so a poller can tell "idle because done"
+            from "idle because the turn died" without inferring it from
+            message part shapes. Present only once a turn has finished in
+            this process (like `goal`, absent on a freshly reloaded,
+            never-prompted-here session).
+        usage:
+          $ref: "#/components/schemas/Usage"
+          description: >
+            Cumulative token usage plus message count and (once at least one
+            turn has completed) the most recent turn's input tokens — so an
+            orchestrator can rotate a session BEFORE it hits the provider's
+            context-window cliff, rather than learning about it from a
+            failed prompt (see LastTurn.outcome "context_exhausted" for that
+            failure mode). Always present, resident or not — the engine
+            tracks this for every session, including one reloaded from its
+            log after a restart.
+        last_activity_at:
+          type: string
+          format: date-time
+          description: >
+            The timestamp of the most recently appended message (user,
+            assistant, or tool), or `created_at` if none has been appended
+            yet. Exists so a fleet monitor can read a single absolute
+            liveness signal instead of sampling `seq` twice, a session
+            apart, and diffing to infer whether a session is quietly
+            working or wedged mid-turn — the double-sample approach is slow,
+            racy against a session legitimately paused between polls (e.g.
+            a goal loop's between-turn gap, worker turn done and the
+            evaluator hasn't answered yet), and only ever answers a relative
+            question ("did anything happen"), never an absolute one ("how
+            long has this been quiet"). Always present, resident or not.
+        parent_session:
+          type: string
+          description: >
+            An opaque provenance pointer to the session this one continues
+            from — a re-dispatch after a failed goal, a follow-up fix picked
+            up on a fresh box. Set once at creation (POST /session's
+            parent_session field) and durable across resume/restart, same
+            as `workdir`. It is NOT required to name a session that exists
+            on this server, or anywhere — lineage may cross boxes (see
+            docs/design/fleet-model.md) — so the server never dereferences
+            or validates it beyond a length cap. Absent (omitempty) when the
+            session has no recorded parent, the common case.
+          example: ses_66aa9a7c6f323a7a
+        compaction_count:
+          type: integer
+          description: >
+            How many times this session has been compacted (auto-triggered
+            or via POST /session/{id}/compact) — see docs/design/context-
+            compaction.md. Absent (0) until the first compaction. Survives a
+            restart: the engine replays the compact journal record on load.
+        last_compacted_at:
+          type: string
+          format: date-time
+          description: >
+            When the most recent compaction landed. Absent until the first
+            compaction. Together with compaction_count this is what a UI
+            uses to show that compaction happened.
+        plugins:
+          type: array
+          items:
+            $ref: "#/components/schemas/PluginInfo"
+          description: >
+            The session's configured plugins — name, spawn state, registered
+            tools, and subscribed hooks. Lists CONFIGURED plugins, not only
+            spawned ones: a plugin spawns lazily on its first hook dispatch or
+            tool call, so a not-yet-spawned plugin still appears (state
+            "not-spawned"). Always present as an array, empty (never null)
+            when no plugins are configured.
+        queued:
+          type: integer
+          description: >
+            Current durable prompt-queue depth (docs/plans/2026-07-19-
+            prompt-queue.md): prompts submitted via prompt_async while the
+            session was busy, waiting for the next natural drain trigger —
+            most often a tool-call boundary inside the CURRENTLY RUNNING
+            turn (plain or goal-worker alike), so this can drop to 0 well
+            before that turn ends; otherwise idle dispatch, or a goal loop's
+            own turn-boundary injection (its fallback for a turn with no
+            tool calls at all). Always present — 0 means nothing is waiting,
+            not "never checked". Survives a restart (folded from the
+            session's own prompt.queued/prompt.dequeued log records), but
+            never dispatches on its own — the same "boot never auto-runs"
+            rule goals follow.
+
+    PluginInfo:
+      type: object
+      description: >
+        One configured plugin's registration: its name, current spawn state,
+        the tools it registers, and the hook names it subscribes to. Describes
+        CONFIGURED plugins from the cached manifest, so a plugin that has not
+        spawned yet still appears.
+      required: [name, state, tools, hooks]
+      properties:
+        name:
+          type: string
+          example: guard
+        state:
+          type: string
+          description: >
+            The plugin process's spawn state. "not-spawned" is normal for a
+            plugin no turn has used yet (lazy spawn).
+          enum: [not-spawned, running, errored, stopped]
+        tools:
+          type: array
+          items:
+            type: string
+          description: Names of the tools this plugin registers. Empty, never null.
+        hooks:
+          type: array
+          items:
+            type: string
+          description: Hook names this plugin subscribes to. Empty, never null.
+
+    Usage:
+      type: object
+      description: >
+        Token usage for a session, surfaced on Session.usage and each GET
+        /session/status entry's `usage`.
+      required: [input_tokens, output_tokens, messages]
+      properties:
+        input_tokens:
+          type: integer
+          description: Cumulative input tokens across every completed turn.
+        output_tokens:
+          type: integer
+          description: Cumulative output tokens across every completed turn.
+        cache_read_tokens:
+          type: integer
+          description: Cumulative prompt-cache read tokens, when the provider reports them.
+        cache_write_tokens:
+          type: integer
+          description: Cumulative prompt-cache write tokens, when the provider reports them.
+        messages:
+          type: integer
+          description: |
+            Count of messages in the session log — the same value as
+            Session.messages when the session is idle. Under a running turn
+            the two are read at separate instants and can momentarily
+            diverge; this is a monitoring surface, not a transactional one.
+        last_input_tokens:
+          type: integer
+          description: >
+            Input tokens of the most recent completed turn — the size of
+            the request that just went out, distinct from the cumulative
+            total above. Absent (0) until at least one turn has completed.
+
+    LastTurn:
+      type: object
+      description: >
+        The most recent turn.end record for a session, mirrored on Session
+        and on each GET /session/status entry.
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [completed, error, context_exhausted, max_turns_exceeded, evaluator_exhausted, worker_parked]
+          description: >
+            "completed": the turn (or goal) finished successfully —for a
+            goal, the evaluator returned MET. "error": the turn failed
+            outright (provider error, transcode failure). "context_exhausted":
+            the turn failed on a classified, deterministic prompt/context-
+            window overflow (issue #62) — the assembled request no longer
+            fits the model's input limit, so retrying the identical request
+            would fail identically; distinct from generic "error" so a
+            poller can react to it specifically (e.g. rotate the session)
+            without string-matching `error`. A goal loop fails fast on this
+            (one worker attempt, no retries) rather than exhausting its
+            retry budget the way an ordinary "error" does. "max_turns_exceeded":
+            goal-loop only — GoalOptions.MaxTurns was exhausted without the
+            evaluator ever returning MET; the goal gave up, it did not
+            complete, so it is deliberately never reported as "completed".
+            A goal cleared via DELETE /session/{id}/goal (or a ClearGoal that
+            wins a race against an in-flight worker retry or evaluator call)
+            emits no turn.end at all — see the turn.end Event description.
+            "evaluator_exhausted": goal-loop only (Round 6) — the evaluator
+            itself failed at 5 CONSECUTIVE turn boundaries, a durable,
+            probably-permanent evaluator outage rather than an ordinary
+            worker-turn failure; distinct from generic "error" so a poller
+            can react to it specifically (e.g. alert an operator that the
+            evaluator is broken, rather than just retrying the goal). Every
+            failed boundary BELOW that limit is advisory only — no turn.end
+            at all, the goal stays active and the loop keeps working (see
+            GoalSummary.eval_failures and the goal.eval_failed event). This
+            outcome fires only once, at the terminal — and, UNLIKE the
+            operator-clear case just above, DOES emit turn.end: the
+            terminal always clears the goal first (goal.cleared, with a
+            dedicated reason distinct from an operator clear's), then emits
+            session.error (the terminal must be loud), then this turn.end,
+            in that order. "worker_parked": goal-loop only (Round 7) — a
+            worker turn exit-parked instead of clearing the goal, either
+            because its DETERMINISTIC retry budget was exhausted or because
+            its separately-budgeted RETRYABLE-class backoff was exhausted
+            (see GoalSummary.retryable/waiting) — a durable
+            goal.parked record precedes this (see the goal.parked Event
+            description) and the goal stays fully ACTIVE, unlike
+            "evaluator_exhausted" which always clears it first. Distinct
+            from generic "error" so a poller knows this goal is merely
+            paused (GoalSummary.paused / pause_reason "worker_failure") and
+            will resume automatically the next time this session sees any
+            activity (a plain prompt's own completion re-arms it) — never a
+            reason to give up on the goal the way an operator-facing
+            terminal would be. Session.error is still emitted alongside it
+            (see the goal.parked Event description for the exact order).
+        error:
+          type: string
+          description: >
+            Sanitized failure detail (never credentials or request bodies —
+            see the turn.end Event field) when outcome is "error",
+            "evaluator_exhausted", or "worker_parked". Absent otherwise.
+
+    SessionState:
+      type: string
+      enum: [idle, busy, goal-running]
+      description: >
+        The unambiguous composite state, surfacing both Session.status and
+        Session.goal.active as a single value so an orchestrator never has to
+        combine them itself. Precedence: `goal-running` whenever goal.active
+        is true, REGARDLESS of the momentary `status` value — the server's
+        busy/idle transition brackets the whole goal-loop call (one POST
+        /session/{id}/goal to its achieve/clear), not each worker turn, so
+        `status` alone cannot distinguish "between turns, still working" from
+        "actually idle, waiting for the next prompt". Without this field, a
+        client inferring progress from status=idle plus goal.active hits
+        exactly that ambiguity — and can false-fire a liveness/stall monitor
+        during a goal loop's between-turn gap (worker turn done, evaluator
+        hasn't answered yet). Otherwise `busy` or `idle` mirrors `status`
+        directly. Poll it, or long-poll it via GET /session/{id}/wait.
+
+        Exception: when GoalSummary.pause_reason is "restart" or
+        "worker_failure" (see GoalSummary.paused), this reads `idle` even
+        though goal.active is still true — a goal restored from the journal
+        at boot with no loop attached ("restart"), or one whose worker turn
+        just exit-parked ("worker_failure" — see the goal.parked
+        event), is not progressing on its own, and reporting either
+        "goal-running" forever would be indistinguishable from a live goal
+        (see docs/design/fleet-model.md's ADOPT lifecycle). A
+        "provider-backoff" pause does NOT take this exception: that loop is
+        genuinely running, just waiting out provider weather, so it still
+        reads `goal-running`.
+
+    GoalSummary:
+      type: object
+      description: Per-session goal state surfaced on Session.goal.
+      required: [condition, active, turns]
+      properties:
+        condition:
+          type: string
+          description: The goal's completion condition.
+        active:
+          type: boolean
+          description: >
+            True while the goal is set but neither achieved nor cleared.
+        achieved:
+          type: boolean
+          description: >
+            True when the goal completed by the evaluator confirming its
+            condition (as opposed to being cleared). Lets a client that
+            bootstraps goal state from this record distinguish an achieved
+            goal from a cleared one, since both leave active false.
+        turns:
+          type: integer
+          description: Worker turns taken so far.
+        last_reason:
+          type: string
+          description: >
+            The most recent evaluator reason (eval or achieved), or the most
+            recent worker-turn failure (stalled).
+        attempt:
+          type: integer
+          description: >
+            The 1-based worker-turn retry attempt from the most recent
+            goal.stalled record. Reset to 0 by goal.set, goal.eval, and
+            goal.achieved — a stall is non-terminal (the goal stays active
+            while retrying), so it never changes active or achieved, only
+            last_reason and this field.
+        retryable:
+          type: boolean
+          description: >
+            True when the most recent goal.stalled record's failure was
+            classified provider-retryable — either provider-side weather (an
+            Anthropic 529/overloaded_error, 429, or 5xx — see
+            provider.RetryableError) or a response stream that was cut
+            before its terminal event (provider.RetryableStreamTruncated) —
+            rather than a deterministic failure. Reset the same way attempt
+            is. See docs/goal-loop.md's "Retryable-class backoff" section.
+        retryable_class:
+          type: string
+          description: >
+            The retryable classification of the most recent goal.stalled
+            record (overloaded, rate_limited, server_error, or
+            stream_truncated — the last for a stream cut before its
+            terminal event, with no HTTP status or inline provider error to
+            classify from), present only when retryable is true.
+        waiting:
+          type: boolean
+          description: >
+            True while the goal loop is still within its retryable-class
+            backoff budget ("waiting out provider weather"); false on the
+            final retryable goal.stalled record, which reports that budget
+            exhausted — the loop is about to EXIT-PARK the turn (Round 7:
+            journal a goal.parked record and return, leaving the goal
+            active but with no loop attached — see pause_reason
+            "worker_failure" below) rather than clear the goal or retry
+            further in place. Meaningless (false) when retryable is false.
+        paused:
+          type: boolean
+          description: >
+            True when the goal is active but nothing is currently driving
+            it: this server booted and found the goal armed with no loop
+            ever attached in this process (pause_reason "restart"); a
+            worker turn exhausted either exhaustion tier and exit-parked
+            instead of clearing the goal (pause_reason
+            "worker_failure" — see the goal.parked event; the loop has
+            genuinely exited, not merely paused mid-retry); or the
+            retryable-backoff park machinery is waiting out provider
+            weather (pause_reason "provider-backoff" — mirrors retryable &&
+            waiting above; no behavior change, only this observability).
+            All three clear on re-arm (POST /session/{id}/goal), and
+            "worker_failure" also clears the moment a plain prompt's own
+            completion auto-arms a fresh loop for the goal (see
+            maybeAutoArmGoal); a "provider-backoff" pause similarly clears
+            on its own the moment the loop's retry succeeds. See
+            docs/design/fleet-model.md's ADOPT lifecycle for the restart
+            case's operator story.
+        pause_reason:
+          type: string
+          enum: [restart, worker_failure, provider-backoff]
+          description: Present only when paused is true.
+        eval_failures:
+          type: integer
+          description: >
+            The most recent goal.eval_failed record's CONSECUTIVE failure
+            count (see docs/goal-loop.md): rises by one for each
+            evaluator boundary that fails outright (a non-retryable provider
+            error, an exhausted retryable-class in-boundary retry, or two
+            consecutive unparseable replies) while the goal stays active and
+            the worker keeps working. Reset to 0 by goal.set, goal.eval,
+            goal.achieved, goal.cleared, or goal.updated. Once this reaches
+            5, the goal is cleared and the run's turn.end reports outcome
+            "evaluator_exhausted" — see LastTurn.outcome.
+
+    SessionStatus:
+      type: string
+      enum: [idle, busy]
+      description: >
+        Engine truth: busy while a prompt is being processed, idle
+        otherwise. Independent of client connections. See SessionState for
+        the composite field that additionally folds in goal.active — prefer
+        it over this field alone when inferring whether a session is
+        actually available for a new interaction.
+
+    StatusEntry:
+      type: object
+      description: >
+        One session's entry in the GET /session/status map. The "type" key is
+        deliberately byte-compatible with opencode's /session/status response
+        shape (existing orchestration handlers port without parsing changes);
+        "state" is additive — see SessionState for its precedence rule.
+      required: [type, state, usage]
+      properties:
+        type:
+          $ref: "#/components/schemas/SessionStatus"
+        state:
+          $ref: "#/components/schemas/SessionState"
+        last_turn:
+          $ref: "#/components/schemas/LastTurn"
+          description: Same field, and same presence rule, as Session.last_turn.
+        usage:
+          $ref: "#/components/schemas/Usage"
+          description: >
+            Same field as Session.usage — cheaply derived (no full session
+            load) for a non-resident session, same as `type`/`state` above.
+
+    StatusResponse:
+      type: object
+      description: >
+        GET /session/status's body: every known session ID mapped to its
+        StatusEntry. Unlike opencode's endpoint of the same name, this
+        reflects engine state for every known session, resident or not —
+        it does not depend on any client being connected.
+      additionalProperties:
+        $ref: "#/components/schemas/StatusEntry"
+
+    WaitResponse:
+      type: object
+      description: >
+        The body GET /session/{id}/wait always responds with, 200, whether
+        the requested condition was met or timeout_s elapsed first — the
+        caller tells the two apart by checking state/goal against what it
+        asked for (e.g. state still goal-running after until=goal-done means
+        it timed out; goal.achieved distinguishes an achieved terminal from a
+        cleared one after until=goal-done resolved). A third case exists if
+        the server begins draining/shutdown while the wait is blocked: it
+        also returns 200 early with the current snapshot, which may not
+        satisfy the requested condition — callers distinguish this the same
+        way, by checking state/goal against what they asked for. Same shapes
+        as Session's state and goal fields, deliberately: a client that
+        already renders Session JSON needs no separate parsing path for this
+        endpoint.
+      required: [state]
+      properties:
+        state:
+          $ref: "#/components/schemas/SessionState"
+        goal:
+          $ref: "#/components/schemas/GoalSummary"
+          description: >
+            Present under the same condition as Session.goal (a goal has been
+            set for this session in the current server process). Absent when
+            until=idle resolved with no goal ever set, or when until=goal-done
+            resolved trivially because no goal was ever set.
+
+    ModelRef:
+      type: string
+      description: Compact "provider/model" form, or a config alias.
+      example: anthropic/claude-fable-5
+
+    Message:
+      type: object
+      description: Canonical message (see package message).
+      required: [id, role, parts]
+      properties:
+        id:
+          type: string
+        role:
+          type: string
+          enum: [user, assistant, tool]
+        parts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Part"
+        model:
+          $ref: "#/components/schemas/ModelRef"
+        created_at:
+          type: string
+          format: date-time
+
+    MessagePlaceholder:
+      type: object
+      description: >
+        Substituted by GET /session/{id}/message for any resident message
+        that fails to marshal, so one poisoned message cannot take down the
+        whole transcript endpoint. Carries only enough to identify which
+        message broke and why.
+      required: [id, role, marshal_error]
+      properties:
+        id:
+          type: string
+        role:
+          type: string
+          description: >
+            The message's role, verbatim (string(m.Role) in the handler) —
+            deliberately NOT constrained to the Message.role enum here: this
+            is a degraded-path fallback for a message the server could not
+            even marshal, so it must never itself risk rejecting a value the
+            handler actually produced (e.g. if Role ever gains a new variant
+            before this schema is updated to match).
+        marshal_error:
+          type: string
+          description: The encoding/json error raised while marshaling this message.
+
+    Part:
+      type: object
+      required: [type]
+      discriminator:
+        propertyName: type
+        mapping:
+          text: "#/components/schemas/TextPart"
+          blob: "#/components/schemas/BlobPart"
+          tool_call: "#/components/schemas/ToolCallPart"
+          tool_result: "#/components/schemas/ToolResultPart"
+          reasoning: "#/components/schemas/ReasoningPart"
+      oneOf:
+        - $ref: "#/components/schemas/TextPart"
+        - $ref: "#/components/schemas/BlobPart"
+        - $ref: "#/components/schemas/ToolCallPart"
+        - $ref: "#/components/schemas/ToolResultPart"
+        - $ref: "#/components/schemas/ReasoningPart"
+
+    TextPart:
+      type: object
+      required: [type, text]
+      properties:
+        type: { const: text }
+        text: { type: string }
+
+    BlobPart:
+      type: object
+      required: [type, media_type]
+      # A blob must carry content: inline data or a URL (transcoders reject
+      # blobs with neither).
+      anyOf:
+        - required: [data]
+        - required: [url]
+      properties:
+        type: { const: blob }
+        media_type: { type: string }
+        data: { type: string, contentEncoding: base64 }
+        url: { type: string }
+
+    ToolCallPart:
+      type: object
+      required: [type, call_id, name, arguments]
+      properties:
+        type: { const: tool_call }
+        call_id: { type: string }
+        name: { type: string }
+        arguments: { type: object, additionalProperties: true }
+
+    ToolResultPart:
+      type: object
+      required: [type, call_id, content]
+      properties:
+        type: { const: tool_result }
+        call_id: { type: string }
+        content:
+          type: array
+          description: >
+            Text and Blob parts only, matching the canonical format's
+            documented constraint on ToolResult content.
+          items:
+            oneOf:
+              - $ref: "#/components/schemas/TextPart"
+              - $ref: "#/components/schemas/BlobPart"
+        is_error: { type: boolean }
+
+    ReasoningPart:
+      type: object
+      required: [type]
+      properties:
+        type: { const: reasoning }
+        text: { type: string }
+        provider_data:
+          type: object
+          additionalProperties: true
+
+    PromptAsyncResponse:
+      type: object
+      required: [seq, status]
+      properties:
+        seq:
+          type: integer
+          description: Seq to tail /event from.
+        status:
+          type: string
+          enum: [started, queued]
+          description: >
+            `started`: a turn is now running for THIS request's own prompt.
+            `queued`: this prompt is durably waiting in the FIFO — see
+            `queued` below for the depth. A prompt that was queued and later
+            dispatched does not get a second response; its progress and
+            completion arrive on /event exactly like any other turn.
+        queued:
+          type: integer
+          description: >
+            Current queue depth, including this request's own prompt.
+            Present (and non-zero) only when status is `queued` — with one
+            narrow exception: it reads (and so, absent) 0 on a `queued`
+            response when a concurrent DELETE /session/{id}/queue cleared
+            the entire queue, including this request's own just-enqueued
+            prompt, before it could be dispatched. That is not an error —
+            the prompt was durably accepted and journaled, it simply never
+            ran — so this case is still a 202, never a 500.
+
+    PromptRequest:
+      type: object
+      required: [parts]
+      properties:
+        parts:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/TextPart"
+          description: v1 accepts text parts only.
+        model:
+          $ref: "#/components/schemas/ModelRef"
+          description: >
+            Optional explicit model for this and subsequent turns. Explicit
+            values always win over the session's persisted model (same rule
+            as the CLI -model flag) — but ONLY when this prompt starts
+            running immediately. When the session is busy and this request's
+            prompt is durably queued instead (see prompt_async's 202
+            `status: queued`), the override is silently dropped: `QueuedPrompt`
+            carries text only (docs/plans/2026-07-19-prompt-queue.md's
+            text-only v1 limit), so there is no slot to carry a per-prompt
+            override through to a future drain. Re-issue the request once it
+            is confirmed `started` if the override must take effect.
+
+    EnqueueRequest:
+      type: object
+      required: [parts, seq]
+      properties:
+        parts:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/TextPart"
+          description: v1 accepts text parts only, same as PromptRequest.
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >
+            Caller-issued, session-monotonic idempotency sequence. Must be
+            issued in nondecreasing order for one session; a gap is fine
+            (the watermark simply jumps to it), but an out-of-order FRESH
+            seq is indistinguishable from a duplicate and is silently
+            dropped — see EnqueueResponse's `duplicate` status. No `model`
+            field: a durably-enqueued prompt is subject to the exact same
+            text-only, no-override limit as a queued PromptRequest (see
+            PromptRequest's `model` description) — there is simply no slot
+            to offer one here.
+
+    EnqueueResponse:
+      type: object
+      required: [status, watermark]
+      properties:
+        status:
+          type: string
+          enum: [started, queued, duplicate]
+          description: >
+            `started` (202): a turn is now running for THIS request's own
+            prompt. `queued` (202): durably accepted and waiting in the
+            FIFO — see `queued` below for the depth. `duplicate` (200): seq
+            was at or below the session's watermark when this request
+            landed — a clean idempotent no-op, nothing (re)persisted,
+            emitted, or delivered; safe to treat exactly like the original
+            accept for upstream-ack purposes. A `queued` prompt that is
+            later dispatched gets no second response of its own — its
+            progress and completion arrive on /event exactly like any
+            other turn.
+        watermark:
+          type: integer
+          format: int64
+          description: >
+            The session's durable-enqueue high-water mark (see GET
+            /session/{id}/queue) AFTER this call: this request's own seq on
+            `started`/`queued`, the pre-existing mark on `duplicate`. Only a
+            2xx (`started`/`queued`) response authorizes the caller to ack
+            its own upstream — the prompt.queued record was durably accepted
+            into the session journal before this response was written, per
+            the configured `session_sync` mode: fsynced (default) or
+            delegated to the volume layer's continuous sync (`session_sync:
+            "volume"`; see docs/deploy-modal.md).
+        queued:
+          type: integer
+          description: >
+            Current queue depth, including this request's own prompt.
+            Present (and non-zero) only when status is `queued` — same one
+            narrow exception as PromptAsyncResponse's `queued` field: a
+            concurrent DELETE /session/{id}/queue racing the durable accept
+            can leave it 0/absent even on a `queued` response. That is not
+            an error — the prompt was still durably accepted and journaled,
+            it simply never ran — so this case is still a 202, never a 500.
+
+    QueueGetResponse:
+      type: object
+      required: [watermark, queued]
+      properties:
+        watermark:
+          type: integer
+          format: int64
+          description: >
+            The durable-enqueue high-water mark: the largest seq any POST
+            /session/{id}/enqueue call has durably accepted for this
+            session, live or restored from the journal after a restart
+            (docs/plans/2026-07-21-durable-enqueue.md). 0 if the session has
+            never received a durable enqueue.
+        queued:
+          type: array
+          description: >
+            Every prompt still waiting for delivery, FIFO (oldest first,
+            the same order /event's prompt.dequeued records will drain
+            them in). Always an array, never null, even when empty — no nil
+            check needed. Mixes plain prompt_async-queued entries (no
+            `seq`) and durable-enqueue entries (carrying `seq`): the queue
+            is one FIFO regardless of origin.
+          items:
+            $ref: "#/components/schemas/QueuedItem"
+
+    QueuedItem:
+      type: object
+      required: [id, text]
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Session-monotonic queue ID assigned at enqueue time.
+        text: { type: string }
+        seq:
+          type: integer
+          format: int64
+          description: >
+            The idempotency sequence from POST /session/{id}/enqueue.
+            Omitted on an entry queued via prompt_async's plain,
+            non-attesting path, which carries no seq.
+
+    Event:
+      type: object
+      description: |
+        One server-sent event. Durable records carry `seq` and are
+        replayable; live events have no `seq` and stream only while
+        connected. The SSE `id:` field mirrors `seq` for durable records so
+        `Last-Event-ID` reconnection works with standard clients.
+      required: [type, session_id]
+      properties:
+        type:
+          type: string
+          enum:
+            - session.created
+            - session.status
+            - session.error
+            - session.aborted
+            - turn.end
+            - message
+            - model
+            - effort
+            - request.meta
+            - goal.set
+            - goal.updated
+            - goal.eval
+            - goal.stalled
+            - goal.eval_failed
+            - goal.achieved
+            - goal.cleared
+            - goal.paused
+            - goal.parked
+            - prompt.queued
+            - prompt.dequeued
+            - workdir.worktree_kept
+            - workdir.worktree_removed
+            - history.compacted
+            - compaction.failed
+            - text.delta
+            - reasoning.delta
+            - tool.start
+            - tool.end
+          description: >
+            session.error and session.aborted are durable (journaled with a
+            seq) because prompt_async's 202 acknowledges receipt only, so
+            disconnected orchestrators must see terminal outcomes on replay.
+            session.error reports a prompt that failed outright (provider
+            error, transcode failure); session.aborted confirms an
+            orchestrator-requested abort ended the in-flight prompt. Both
+            are followed by a session.status idle transition.
+            turn.end is durable and carries `outcome` (see LastTurn.outcome
+            for the full enum, including "worker_parked") plus a
+            sanitized `error` detail on failure: it is emitted whenever a
+            prompt (prompt_async) or a goal-worker loop (POST
+            /session/{id}/goal) finishes, mirrored onto Session.last_turn
+            and each /session/status entry's last_turn, so a client can tell
+            "idle because done" from "idle because the turn died" without
+            inferring it from message part shapes. A goal loop that
+            exhausts `max_turns` without the evaluator ever returning MET
+            records "max_turns_exceeded", never "completed" — it gave up, it
+            did not finish. A deliberate abort or clear (POST
+            /session/{id}/abort, DELETE /session/{id}/goal — including a
+            ClearGoal that wins a race against an in-flight worker retry or
+            evaluator call, even without the loop's context being cancelled
+            — or shutdown drain) does not emit turn.end at all —
+            session.aborted (or, for a cleared goal, goal.cleared) already
+            covers that case. A worker-parked goal (Round 7) DOES emit
+            turn.end (outcome "worker_parked") — it is not a clear, see the
+            goal.parked description below.
+            request.meta is a durable record of the model request the engine
+            assembled for one turn: system_hash, system_len, segments (count),
+            tools (names), messages (history count), and the model. The full
+            system segments array is attached (in the `system` field) only when
+            system_hash differs from the session's previous request — the
+            hash-on-change trick keeps unchanged prompts cheap while still
+            making the exact system recoverable from a from=0 replay.
+            goal.set, goal.updated, goal.eval, goal.stalled, goal.eval_failed,
+            goal.achieved, goal.cleared, and goal.parked are the durable
+            records of a goal loop (POST /session/{id}/goal). goal.set carries goal_condition; goal.updated
+            is journaled whenever the condition is rewritten in place — by a
+            re-POST to /goal on an already-running loop, or by the `goal`
+            session tool's `adjust` action — and carries only goal_condition
+            (the new text); a running loop picks it up at its next turn
+            boundary, and a stale evaluator verdict computed against the
+            condition it replaced is discarded rather than journaled (never a
+            goal.eval or goal.achieved for superseded text). goal.eval carries
+            goal_met, goal_reason, and goal_turn for each per-turn evaluator verdict;
+            goal.stalled carries goal_reason, goal_turn, and goal_attempt (the
+            1-based retry attempt) for each failed worker-turn attempt that is
+            still within the retry budget — it is non-terminal, the goal
+            stays active while the loop retries. It also carries
+            goal_retryable/goal_retryable_class/goal_waiting when the failure
+            was classified provider-retryable weather (see GitHub issue #61
+            and docs/goal-loop.md): goal_waiting is true while still inside
+            that separate, much longer retryable backoff budget, and false on
+            the final such record, which reports the budget exhausted — the
+            loop is about to EXIT-PARK the turn (Round 7 — see goal.parked
+            below), not retry further in place, so a retryable exhaustion is
+            never a dead stall requiring an operator re-POST.
+            goal.eval_failed (Round 6) carries goal_reason (the sanitized
+            evaluator error) and goal_eval_failures (the consecutive-failure
+            count, inclusive) for each evaluator boundary that failed
+            outright — a non-retryable provider error, a retryable one whose
+            in-boundary budget was exhausted, or two consecutive unparseable
+            replies even after a stricter re-ask. It is non-terminal below 5
+            consecutive occurrences: the goal stays active and the worker
+            keeps working, with the next turn's guidance replaced by a fixed
+            "evaluator unavailable" notice rather than the raw error or a
+            stale prior verdict. goal.achieved carries goal_reason and
+            goal_turns; goal.cleared marks a goal cancelled via
+            DELETE /session/{id}/goal (empty goal_reason), or the evaluator
+            failing at 5 CONSECUTIVE goal.eval_failed boundaries (goal_reason
+            "goal evaluator failed at 5 consecutive turn boundaries" — see
+            turn.end's "evaluator_exhausted" outcome, which this clear
+            always precedes). A worker turn that fails past either retry
+            budget (deterministic OR retryable-class) is deliberately NOT a
+            goal.cleared any more (superseded by the Round 7 exit-park work) — see goal.parked
+            below.
+            goal.parked (Round 7) is journaled once per exit-parked worker
+            turn — the loop gave up on this turn (either exhaustion tier)
+            WITHOUT clearing the goal, which stays fully active. It carries
+            goal_reason (a CLASSIFIED, provider-detail-free string — see
+            engine/goal.go's classifyGoalWorkerError — distinct from
+            goal.stalled's raw error text, since this record can outlive the
+            request that produced it), goal_attempt (reused from the
+            per-attempt field above, but here holding the TOTAL attempt
+            count for the exhausted turn — by construction the same number
+            the final goal.stalled record for this turn already reported),
+            and goal_retryable/goal_retryable_class (set on a retryable-tier
+            park, empty on a deterministic-tier one, same convention as
+            goal.stalled). It also carries goal_paused=true and
+            goal_pause_reason "worker_failure" (see below) directly on the
+            event, and is immediately followed by session.error, then
+            turn.end (outcome "worker_parked" — see LastTurn.outcome),
+            unlike the evaluator-exhausted terminal, which precedes those
+            with a goal.cleared instead. Resume is entirely activity-driven:
+            the next plain prompt to complete on this session auto-arms a
+            fresh loop for the still-active goal (see GoalSummary.paused);
+            no timer, no operator action required, though DELETE
+            /session/{id}/goal remains available to clear it explicitly.
+            Both goal.stalled (while goal_retryable && goal_waiting), the
+            boot-only goal.paused record, and goal.parked carry goal_paused/
+            goal_pause_reason — the wire form of GoalSummary.paused/
+            pause_reason (see that schema and docs/design/fleet-model.md).
+            goal.paused is journaled once per server boot for every session
+            whose journal shows an active goal but which has no running
+            loop attached in this (freshly started) process — always
+            goal_pause_reason "restart" — so the history reads honestly
+            about why the goal never progressed, instead of a silent gap.
+            It carries goal_condition for convenience. It is NOT emitted for
+            the "provider-backoff" pause, which is a live goal.stalled
+            attribute, not a boot-time observation, nor for the
+            "worker_failure" pause, which is goal.parked's own live event
+            above, not a boot-time observation either.
+            prompt.queued and prompt.dequeued are the durable records of the
+            prompt queue (docs/plans/2026-07-19-prompt-queue.md):
+            prompt.queued fires whenever prompt_async or POST
+            /session/{id}/enqueue (docs/plans/2026-07-21-durable-enqueue.md)
+            durably enqueues a prompt, carrying queue_id, queue_text, the
+            resulting queue_len, and — for a POST /session/{id}/enqueue
+            accept only — queue_seq (see that field). prompt.dequeued fires
+            whenever the
+            head is popped for delivery, carrying the same queue_id/
+            queue_text plus queue_reason — "delivered" (idle-drain
+            dispatch), "injected" (delivered mid-turn as a labeled operator
+            interjection: at a tool-call boundary inside ANY running turn,
+            plain or goal-worker alike — the primary delivery path, matching
+            Claude Code's mid-turn steering granularity — or, as a fallback
+            for a turn that made no tool calls at all, at a goal loop's own
+            next turn boundary; the evaluator prompt itself is unaffected
+            either way), or "cleared" (DELETE /session/{id}/queue) — and
+            queue_len, the depth remaining immediately after. Session.queued
+            mirrors the same count and can drop mid-turn, before the turn
+            itself ends.
+            workdir.worktree_kept and workdir.worktree_removed are durable
+            records of a workdir_isolation="worktree" session's dedicated git
+            worktree being torn down (session end or the serve-start sweep,
+            see createSession/endSession), both carrying `worktree_path`.
+            worktree_kept means the worktree had uncommitted changes or
+            unpushed commits and was left in place — the durable signal an
+            orchestrator relies on to find and finish that work rather than
+            lose it; worktree_removed means it had neither and was deleted.
+            history.compacted is the durable record of a successful
+            compaction (docs/design/context-compaction.md), auto-triggered
+            or via POST /session/{id}/compact: it carries
+            compact_first_id/compact_last_id (the folded range's boundary
+            message ids), compact_turns_folded, and compact_summary_id — the
+            summary message itself always arrives first, as an ordinary
+            `message` event, so this is the reconciliation signal telling a
+            replaying tailer which prefix that summary replaced.
+            compaction.failed is compaction's fire-and-forget failure
+            counterpart (never journaled — a failed compaction never mutates
+            durable state), carrying the failure detail in `error`.
+        session_id: { type: string }
+        seq:
+          type: integer
+          description: Present on durable records only.
+        status:
+          $ref: "#/components/schemas/SessionStatus"
+        message:
+          $ref: "#/components/schemas/Message"
+        model:
+          $ref: "#/components/schemas/ModelRef"
+        effort:
+          $ref: "#/components/schemas/Effort"
+          description: >
+            The new reasoning-effort level on an "effort" event. Always present
+            on an "effort" event, even on a clear: an empty string means cleared
+            to the provider default (EffortUnset), never a dropped field. Absent
+            on every other event type.
+        text:
+          type: string
+          description: Delta text for text.delta / reasoning.delta.
+        tool_call:
+          $ref: "#/components/schemas/ToolCallPart"
+        output:
+          type: array
+          description: Tool output for tool.end — same union as ToolResultPart.content.
+          items:
+            oneOf:
+              - $ref: "#/components/schemas/TextPart"
+              - $ref: "#/components/schemas/BlobPart"
+        is_error: { type: boolean }
+        error:
+          type: string
+          description: >
+            Failure detail for session.error and turn.end (outcome "error")
+            events. Sanitized (never credentials or request bodies) for
+            turn.end; see LastTurn.error.
+        outcome:
+          type: string
+          enum: [completed, error, context_exhausted, max_turns_exceeded, evaluator_exhausted, worker_parked]
+          description: >
+            Turn result for turn.end events — see LastTurn.outcome for the
+            full meaning of each value, including why a goal that exhausts
+            MaxTurns is "max_turns_exceeded" rather than "completed", why a
+            cleared goal emits no turn.end at all, and why an
+            "evaluator_exhausted" terminal (Round 6) is the one clear that
+            DOES emit turn.end (preceded by goal.cleared and session.error,
+            in that order).
+        system_hash:
+          type: string
+          description: SHA-256 of the joined system segments (request.meta).
+        system_len:
+          type: integer
+          description: Byte length of the joined system segments (request.meta).
+        segments:
+          type: integer
+          description: Number of system segments (request.meta).
+        tools:
+          type: array
+          items: { type: string }
+          description: Names of the tools offered this turn (request.meta).
+        messages:
+          type: integer
+          description: Message-history count for the request (request.meta).
+        system:
+          type: array
+          items: { type: string }
+          description: >
+            Full ordered system segments. Present on a request.meta record only
+            when system_hash changed from the session's previous request.
+        goal_condition:
+          type: string
+          description: The goal condition (goal.set, goal.updated, goal.paused).
+        goal_reason:
+          type: string
+          description: >
+            Evaluator reason (goal.eval, goal.achieved), the clear reason
+            (goal.cleared) — empty for an operator-initiated clear, or "goal
+            evaluator failed at 5 consecutive turn boundaries" for the
+            evaluator_exhausted terminal (Round 6) — or a CLASSIFIED,
+            provider-detail-free park reason (goal.parked, Round 7): "worker
+            turn failed repeatedly and did not recover" (deterministic tier)
+            or "provider <class> errors exhausted the retry budget"
+            (retryable tier). A permanently failing worker turn no longer
+            produces a goal.cleared record at all (superseded by the Round 7 exit-park work) —
+            see goal.parked above.
+        goal_met:
+          type: boolean
+          description: Whether the turn met the goal (goal.eval).
+        goal_turn:
+          type: integer
+          description: 1-based turn number for a per-turn verdict (goal.eval).
+        goal_turns:
+          type: integer
+          description: Total turns taken when the goal was achieved (goal.achieved).
+        goal_attempt:
+          type: integer
+          description: >
+            1-based worker-turn retry attempt number (goal.stalled). Reused
+            on goal.parked (Round 7) to carry that turn's TOTAL attempt
+            count instead — by construction the same number the final
+            goal.stalled record for the same turn already reported.
+        goal_retryable:
+          type: boolean
+          description: >
+            True when a goal.stalled record's failure was classified
+            provider-retryable — provider-side weather or a response stream
+            cut before its terminal event (see GoalSummary.retryable and
+            docs/goal-loop.md).
+        goal_retryable_class:
+          type: string
+          description: >
+            The retryable classification (overloaded, rate_limited,
+            server_error, or stream_truncated) of a goal.stalled record,
+            present only when goal_retryable is true.
+        goal_waiting:
+          type: boolean
+          description: >
+            True while a goal.stalled record is still within the retryable
+            backoff budget; false on the final such record, which reports
+            the budget exhausted (see GoalSummary.waiting).
+        goal_eval_failures:
+          type: integer
+          description: >
+            Carried by goal.eval_failed only (Round 6, see GoalSummary.
+            eval_failures): the number of CONSECUTIVE failed evaluator
+            boundaries as of this record, inclusive — reset to zero the
+            moment a later boundary parses a verdict (goal.eval) or the goal
+            otherwise leaves this streak (goal.achieved, goal.cleared,
+            goal.updated). goal.cleared itself never carries a count, even
+            the terminal clear that fires once this reaches 5 — its
+            goal_reason names the limit instead (see that field's
+            description).
+        goal_paused:
+          type: boolean
+          description: >
+            The "paused" presentation (see GoalSummary.paused): true on a
+            goal.paused record (always), a goal.parked record (always,
+            Round 7), and on a goal.stalled record while goal_retryable &&
+            goal_waiting.
+        goal_pause_reason:
+          type: string
+          enum: [restart, worker_failure, provider-backoff]
+          description: Present only when goal_paused is true.
+        queue_id:
+          type: integer
+          description: >
+            Session-monotonic queue ID assigned at enqueue time
+            (prompt.queued, prompt.dequeued).
+        queue_text:
+          type: string
+          description: The queued prompt's text (prompt.queued, prompt.dequeued).
+        queue_reason:
+          type: string
+          enum: [delivered, injected, cleared]
+          description: >
+            Why the prompt was dequeued (prompt.dequeued only): "delivered"
+            (idle-drain dispatch), "injected" (delivered mid-turn at a
+            tool-call boundary — plain or goal-worker turn alike — or, for a
+            turn with no tool calls, at a goal loop's own next turn
+            boundary), or "cleared" (DELETE /session/{id}/queue).
+        queue_len:
+          type: integer
+          description: >
+            Queue depth remaining immediately after this event (prompt.queued,
+            prompt.dequeued). Always present on those two event types, even
+            when the queue is now empty (queue_len: 0) — an emptying
+            prompt.dequeued is explicit on the wire, not indistinguishable
+            from an event type that never carries a queue depth at all.
+            Absent on every other event type.
+        queue_seq:
+          type: integer
+          description: >
+            The caller-issued idempotency sequence (docs/plans/2026-07-21-
+            durable-enqueue.md) on a prompt.queued event emitted by POST
+            /session/{id}/enqueue. Absent/0 on a plain prompt_async-queued
+            entry and on every prompt.dequeued event, regardless of origin.
+        worktree_path:
+          type: string
+          description: >
+            The worktree directory (workdir.worktree_kept /
+            workdir.worktree_removed).
+        compact_first_id:
+          type: string
+          description: The folded range's first message id (history.compacted).
+        compact_last_id:
+          type: string
+          description: The folded range's last message id (history.compacted).
+        compact_turns_folded:
+          type: integer
+          description: Number of whole turns folded (history.compacted).
+        compact_summary_id:
+          type: string
+          description: >
+            The id of the summary message that replaced the folded range —
+            already delivered via a preceding `message` event
+            (history.compacted).
+
+    CompactRequest:
+      type: object
+      description: >
+        Optional body for POST /session/{id}/compact. An absent/empty body
+        uses Config.CompactionKeepTurns/CompactionModel.
+      properties:
+        keep_turns:
+          type: integer
+          description: >
+            Overrides Config.CompactionKeepTurns for this call only. Hard
+            floor of 1 — the most recent turn is never foldable. 0 or
+            negative is a 400, never silently clamped.
+        model:
+          $ref: "#/components/schemas/ModelRef"
+          description: >
+            Overrides the model used for the summarization call. Defaults
+            to the session's own current model.
+
+    CompactResponse:
+      type: object
+      required: [turns_folded]
+      properties:
+        turns_folded:
+          type: integer
+          description: >
+            Number of whole turns folded. 0 (not an error) when there was
+            nothing worth folding — fewer than the effective keep_turns'
+            worth of complete turns exist yet.
+        first_id:
+          type: string
+          description: The folded range's first message id. Absent when turns_folded is 0.
+        last_id:
+          type: string
+          description: The folded range's last message id. Absent when turns_folded is 0.
+        summary:
+          $ref: "#/components/schemas/Message"
+          description: >
+            The synthesized summary message that replaced the folded range.
+            Absent when turns_folded is 0.
+        skip_reason:
+          type: string
+          enum: [not_enough_turns, lone_existing_summary, summarizer_empty]
+          description: >
+            Present only when turns_folded is 0; absent on a real fold.
+            not_enough_turns and lone_existing_summary are free — the
+            summarization provider is never called. summarizer_empty means
+            the provider WAS called (and billed) but returned no usable
+            text.
+
+    GoalRequest:
+      type: object
+      required: [condition]
+      properties:
+        condition:
+          type: string
+          description: The natural-language completion condition to pursue.
+        max_turns:
+          type: integer
+          description: >
+            Maximum worker turns; 0 or omitted means unlimited. Only applies
+            when this call actually starts a loop (response status
+            `started`); ignored entirely for `updated` (an already-running
+            loop keeps whatever budget it started with) and for the loop
+            eventually spawned by auto-arm after an `armed` response (that
+            loop always runs unlimited — see startGoal's description).
+
+    GoalPostResponse:
+      type: object
+      required: [seq, status]
+      properties:
+        seq:
+          type: integer
+          description: Seq to tail /event from.
+        status:
+          type: string
+          enum: [started, armed, updated]
+          description: >
+            Which of the three POST /goal outcomes this response represents
+            — see startGoal's description for the full contract.
+
+    SetModelRequest:
+      type: object
+      required: [model]
+      properties:
+        model:
+          $ref: "#/components/schemas/ModelRef"
+          description: >
+            The new main model, as a "provider/model" ref. An empty value or an
+            unconfigured provider is 400; aliases are not resolved here (resolve
+            them client-side, as the CLI does).
+
+    SetModelResponse:
+      type: object
+      required: [model]
+      properties:
+        model:
+          $ref: "#/components/schemas/ModelRef"
+          description: The session's model after the swap.
+
+    Effort:
+      type: string
+      description: >
+        A unified reasoning-effort level. "off" disables reasoning where the
+        provider supports it; minimal/low/medium/high request increasing effort.
+        An empty string is EffortUnset (the provider default).
+      enum: ["", "off", "minimal", "low", "medium", "high"]
+
+    SetThinkingRequest:
+      type: object
+      properties:
+        effort:
+          $ref: "#/components/schemas/Effort"
+          description: >
+            The new reasoning-effort level. An empty string OR an omitted field
+            both clear it to the provider default (EffortUnset). An unknown
+            value is 400. The field is optional precisely because absent and ""
+            are the same clear operation.
+
+    SetThinkingResponse:
+      type: object
+      required: [effort]
+      properties:
+        effort:
+          $ref: "#/components/schemas/Effort"
+          description: The session's reasoning-effort level after the swap.
+
+    Request:
+      type: object
+      description: >
+        The latest fully-assembled model request for a session, held in memory
+        only (never persisted). GET /session/{id}/request returns it; a session
+        that has not prompted this process is 404.
+      required: [model, system, tools, messages, params]
+      properties:
+        model:
+          $ref: "#/components/schemas/ModelRef"
+        system:
+          type: array
+          items: { type: string }
+          description: Ordered system-prompt segments as sent.
+        tools:
+          type: array
+          items: { type: string }
+          description: Names of the offered tools.
+        messages:
+          type: integer
+          description: Message-history count for the request.
+        params:
+          type: object
+          properties:
+            temperature: { type: number }
+            top_p: { type: number }
+            max_tokens: { type: integer }
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+
+    ProcessStatus:
+      type: object
+      description: >
+        A managed process's point-in-time status (see
+        docs/design/managed-processes.md).
+      required: [name, ready, log]
+      properties:
+        name: { type: string }
+        state:
+          type: string
+          enum: [starting, ready, running, exited, stopped]
+          description: >
+            Empty/omitted for a declared process that has never been
+            started.
+        pid: { type: integer }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+        exit_code:
+          type: integer
+          description: Present once the process has been reaped (exited or stopped).
+        ready: { type: boolean }
+        log:
+          type: string
+          description: Absolute log file path — always populated, even pre-start.
+        note:
+          type: string
+          description: e.g. a ready-gate timeout explanation.
+        ports:
+          type: array
+          items: { type: integer }
+          description: >
+            Declared TCP ports (see ProcessInfo.ports) — pure declarative
+            metadata echoed here for convenience, never a live network
+            probe or enforcement.
+
+    ProcessInfo:
+      type: object
+      description: A declared process's definition (env VALUES never included) plus its live status.
+      required: [name, origin, command, status]
+      properties:
+        name: { type: string }
+        origin:
+          type: string
+          enum: [config, runtime]
+        command:
+          type: array
+          items: { type: string }
+        dir: { type: string }
+        env_names:
+          type: array
+          items: { type: string }
+          description: The "K" half of each configured "K=V" entry — never values.
+        ports:
+          type: array
+          items: { type: integer }
+          description: >
+            TCP ports this process is expected to listen on (1-65535).
+            Pure declarative metadata: harness never allocates, binds to,
+            or enforces these — see docs/design/managed-processes.md.
+        ready_regex: { type: string }
+        ready_port:
+          type: integer
+          description: >
+            When set, start's ready gate blocks until a plain TCP dial to
+            127.0.0.1:<ready_port> succeeds, instead of matching a log
+            line. At most one of ready_regex/ready_port/ready_http is
+            ever set.
+        ready_http:
+          type: string
+          description: >
+            When set, start's ready gate blocks until a GET to this URL
+            returns any non-5xx status. At most one of
+            ready_regex/ready_port/ready_http is ever set.
+        ready_timeout: { type: string }
+        status:
+          $ref: "#/components/schemas/ProcessStatus"
+
+  parameters:
+    sessionID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    processName:
+      name: name
+      in: path
+      required: true
+      schema:
+        type: string
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid run token.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: No session log with that ID.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ProcessNotFound:
+      description: No declared process with that name.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+paths:
+  /health:
+    get:
+      operationId: health
+      summary: Liveness and version.
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+
+  /session:
+    get:
+      operationId: listSessions
+      summary: List sessions (in-memory and persisted).
+      responses:
+        "200":
+          description: All sessions known to this instance's session dir.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Session" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: createSession
+      summary: Create a session.
+      description: >
+        workdir is optional: when given it must clean-resolve (absolute,
+        cleaned — ".." cannot escape by string trickery) to a path equal to,
+        or nested under, one of the server's configured workspace roots;
+        otherwise the request is rejected with 400. Omitted, it defaults to
+        the serve process's own current working directory. workdir is durable
+        — it round-trips through the session log and survives resume.
+        share_workdir opts this session out of the workdir-busy exclusivity
+        rule (see prompt_async's 409): by default, two running sessions may
+        never share a workdir at the same time.
+
+        workdir_isolation selects how this session's tools relate to workdir:
+        "shared" (the default, and the only mode before this field existed)
+        is today's behavior — the session's tools run directly in workdir,
+        subject to the workdir-busy claim above. "worktree" requires workdir
+        to be inside a git repository (otherwise this request is rejected
+        with 400, never silently downgraded to shared); the server creates a
+        dedicated, detached-HEAD git worktree for the session under its
+        session data directory (or a sibling temp directory when no session
+        directory is configured) and the session's tools run there instead —
+        so two "worktree" sessions on the same repo never contend for a
+        workdir and the busy-claim rule never applies to either of them. The
+        worktree is torn down when the session ends (DELETE /session/{id}):
+        removed if it has no uncommitted changes and no unpushed commits,
+        otherwise left in place with a workdir.worktree_kept event journaled
+        naming its path, so work already done there is never destroyed. A
+        sweep at server start reconciles any worktrees a crashed process left
+        behind the same way — but only for sessions that are actually gone:
+        a session whose log is still on disk is still resumable, and its
+        worktree (however clean it looks) is left completely untouched by
+        the sweep so a resumed session's next prompt keeps running in the
+        exact directory it left off in.
+
+        parent_session is optional: when present it must be a non-empty
+        string of at most 128 bytes (400 otherwise). It names no session on
+        this server in particular — the server never dereferences or
+        validates it beyond that length cap. It is an opaque lineage
+        pointer a client sets when re-dispatching after a failed goal or
+        picking up a follow-up fix, so a fleet UI can group a box's history
+        by task (see docs/design/fleet-model.md). Durable across
+        resume/restart, like workdir.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                model: { $ref: "#/components/schemas/ModelRef" }
+                workdir:
+                  type: string
+                  description: >
+                    Optional explicit working directory; see the operation
+                    description for validation and defaulting rules.
+                share_workdir:
+                  type: boolean
+                  description: >
+                    Opt out of the workdir-busy exclusivity rule for this
+                    session (see prompt_async's 409 response).
+                workdir_isolation:
+                  type: string
+                  enum: ["shared", "worktree"]
+                  default: shared
+                  description: >
+                    "shared" (default) or "worktree" — see the operation
+                    description.
+                parent_session:
+                  type: string
+                  maxLength: 128
+                  description: >
+                    Optional lineage pointer; see the operation description.
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "400":
+          description: >
+            workdir does not clean-resolve under an allowed workspace root;
+            workdir_isolation names an unknown mode; workdir_isolation is
+            "worktree" but workdir is not inside a git repository; or
+            parent_session is present but empty or exceeds 128 bytes.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /session/{id}:
+    get:
+      operationId: getSession
+      summary: Session detail.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: endSession
+      summary: End a session.
+      description: >
+        Removes the session from memory. For a workdir_isolation="worktree"
+        session (see createSession), this also tears down its dedicated git
+        worktree: removed when it has no uncommitted changes and no unpushed
+        commits, otherwise left in place and a workdir.worktree_kept event is
+        journaled naming its path — the work is never destroyed. A "shared"
+        session has nothing further to tear down; ending it is equivalent to
+        it simply falling out of the resident set. A busy session (an
+        in-flight prompt or goal) is 409 — abort it first, so a worktree is
+        never ripped out from under a running tool call.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      responses:
+        "204":
+          description: Ended (or already gone from memory; idempotent).
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: The session has an in-flight prompt or goal; abort it first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /session/{id}/message:
+    get:
+      operationId: getMessages
+      summary: Full canonical message history (bootstrap for renderers).
+      description: >
+        Marshals each resident message independently: a single message that
+        fails to marshal (e.g. a Reasoning part carrying an invalid
+        provider-native attachment that ingest-time normalization does not
+        catch) is replaced in the response by a MessagePlaceholder rather
+        than failing the whole request — this endpoint always returns 200
+        with as much of the transcript as is actually renderable, never a
+        500 for one bad message.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  description: >
+                    A Message, or a MessagePlaceholder in place of any
+                    message that failed to marshal.
+                  oneOf:
+                    - $ref: "#/components/schemas/Message"
+                    - $ref: "#/components/schemas/MessagePlaceholder"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /session/{id}/request:
+    get:
+      operationId: getRequest
+      summary: The latest fully-assembled model request (self-inspection).
+      description: >
+        Returns the exact request the process most recently assembled for this
+        session — model, ordered system segments, offered tool names, message
+        count, and sampling params — read from memory only (full requests are
+        never persisted). A session that has not prompted this process is 404,
+        even if its log exists on disk. Pairs with the durable request.meta
+        event and the built-in session_info tool for verifying what reaches the
+        model.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Request" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /session/{id}/prompt_async:
+    post:
+      operationId: promptAsync
+      summary: Deliver a prompt; processing happens in the background.
+      description: |
+        Works on any session with a log, regardless of in-memory state — a
+        session not currently loaded is resumed from disk first. Progress
+        and results arrive on /event.
+
+        A session already busy with another prompt or a running goal loop no
+        longer 409s (see docs/plans/2026-07-19-prompt-queue.md): the prompt
+        is durably enqueued instead (`status: queued`) and delivered as soon
+        as possible, at whichever boundary comes first — a tool-call
+        boundary inside the CURRENTLY RUNNING turn (plain or goal-worker
+        alike: the queue drains there mid-turn, as a labeled operator
+        interjection appended straight into history, matching Claude Code's
+        mid-turn steering granularity), a goal loop's own next turn boundary
+        (the fallback for a turn that made no tool calls at all), or, once
+        no turn is running at all, dispatch as the next idle turn.
+        `DELETE /session/{id}/queue` clears anything still waiting. The
+        workdir-held-by-another-session 409 below is unchanged — only
+        same-session busy gets queue semantics. A `model` override on a
+        request whose prompt ends up queued is silently dropped — see
+        `model` in PromptRequest below.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PromptRequest" }
+      responses:
+        "202":
+          description: >
+            Accepted. `status` is `started` when a turn is now running for
+            THIS request's prompt (an idle session's own claim, or the
+            freed-slot retry dispatching this same prompt), or `queued` when
+            it is durably waiting in the FIFO for a future drain — `queued`
+            then carries the current depth (including this prompt). Either
+            way, `seq` is the seq to tail /event from.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PromptAsyncResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >
+            Another currently-running session holds the same workdir and
+            neither session set share_workdir on creation, and neither
+            session set workdir_isolation="worktree" (the error names the
+            holder session). Same-session busy (another prompt or a running
+            goal loop) no longer reaches this response — see the 202 case.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /session/{id}/enqueue:
+    post:
+      operationId: enqueue
+      summary: Durably, idempotently deliver a prompt (attested 2xx).
+      description: |
+        docs/plans/2026-07-21-durable-enqueue.md's durability primitive: unlike
+        prompt_async, a 2xx from this endpoint is an honest attestation — the
+        prompt.queued record is durably accepted into the session journal
+        BEFORE the response is written, per the configured `session_sync`
+        mode: fsynced (the default) or, in "volume" mode, delegated to a
+        continuously-synced network volume's own commit layer (see
+        docs/deploy-modal.md) — for a caller (an inbox poller, a coordinator
+        relay) whose own upstream ack must ride on this call's success
+        without risk of ghost- or double-delivery. Delivery itself is
+        unchanged prompt-queue machinery (docs/plans/2026-07-19-prompt-
+        queue.md), shared exactly with prompt_async: an idle session
+        dispatches the queue HEAD immediately (not necessarily this
+        request's own prompt), a busy one queues FIFO behind whatever is
+        already waiting, drained at the next tool-call/goal-turn boundary
+        or idle dispatch — see prompt_async's description for the full
+        delivery mechanics. The 2xx attests durable acceptance into the
+        session's prompt queue; it is not an end-to-end delivery receipt —
+        delivery out of the queue shares the same crash semantics as any
+        in-flight prompt.
+
+        `seq` is a caller-issued, session-monotonic idempotency sequence
+        (integer, >= 1). The session tracks a durable high-water mark (see
+        GET /session/{id}/queue's `watermark`); a request whose seq is at or
+        below the mark is a clean 200 `duplicate` no-op — nothing
+        (re)persisted, emitted, or delivered — so retrying an
+        unacknowledged send is always safe. Seqs must be issued in
+        nondecreasing order for one session: a gap is fine (the mark simply
+        jumps to it), but an out-of-order FRESH seq is indistinguishable
+        from a duplicate and is silently dropped.
+
+        A non-2xx/200 response means the record's durability was NOT
+        attested: in particular, 500 means retry with the SAME seq (nothing
+        durable happened, so it is not yet a duplicate); the 409/503 cases
+        below mean no attempt was made either, so the same seq is safe to
+        retry once the condition clears. No `model` override — see
+        `EnqueueRequest`.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EnqueueRequest" }
+      responses:
+        "200":
+          description: >
+            Duplicate: seq was at or below the session's durable-enqueue
+            watermark when this request landed — a clean idempotent no-op.
+            Safe to treat exactly like the original accept for
+            upstream-ack purposes.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnqueueResponse" }
+        "202":
+          description: >
+            Accepted and durable: the prompt.queued record was durably
+            accepted into the session journal before this response was
+            written — fsynced (default `session_sync`) or delegated to the
+            volume layer's continuous sync (`session_sync: "volume"`; see
+            docs/deploy-modal.md). `status` is `started` when a turn is now
+            running for THIS request's own prompt, or `queued` when it is
+            durably waiting in the FIFO for a future drain (see `queued` in
+            EnqueueResponse for the depth).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnqueueResponse" }
+        "400":
+          description: >
+            `parts` is empty, a part's type is not `text`, or `seq` is < 1.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >
+            Either another currently-running session holds the same workdir
+            and neither session set share_workdir on creation, and neither
+            session set workdir_isolation="worktree" (the error names the
+            holder session, same as prompt_async's 409) — or this session is
+            busy and a narrow benign race meant the busy occupant could not
+            be re-resolved to durably enqueue behind it (the window between
+            the failed claim and the retry lookup finding the occupant
+            already gone): the error reads "session is busy with another
+            prompt". Either way nothing was durably accepted, so the SAME
+            seq is safe to retry immediately — idempotency makes the retry
+            free once it lands.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: >
+            The prompt.queued record was not durably accepted — a journal
+            write failure, or (default `session_sync` mode only) an fsync
+            failure — error text prefixed "enqueue not durable: ". No
+            upstream ack is authorized; retry with the SAME seq once the
+            underlying condition clears. A torn on-disk write left by this
+            failure (if any) heals automatically on the next successful
+            retry's replay (last-writer-wins fold,
+            docs/plans/2026-07-21-durable-enqueue.md) — no caller-visible
+            effect, and this healing is identical in "volume" mode, which
+            has no fsync step to fail but can equally lose an unsynced tail
+            on abrupt process death.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Server is shutting down (draining). Retry with the same seq later.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /session/{id}/queue:
+    get:
+      operationId: getPromptQueue
+      summary: Durable-enqueue watermark and the pending prompt queue (reconciliation read).
+      description: >
+        The reconciliation read for docs/plans/2026-07-21-durable-enqueue.md:
+        an upstream recovering from its own crash reads `watermark` to learn
+        which seqs are already inside the durability domain, instead of
+        re-sending blind (re-sending is always safe — see POST
+        /session/{id}/enqueue's duplicate semantics — just wasteful). A
+        resident session answers from live state; a non-resident one from a
+        transient, read-only replay of its journal — both are folds of the
+        exact same on-disk log, so the two can never disagree, and this call
+        never registers a session into residency or takes a run-slot claim.
+        `queued` lists every prompt still waiting for delivery, FIFO (oldest
+        first, the order /event's prompt.dequeued records will drain them
+        in), mixing plain prompt_async-queued entries (no `seq`) and
+        durable-enqueue entries (carrying `seq`) — the queue is one FIFO
+        regardless of origin.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QueueGetResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: clearPromptQueue
+      summary: Drain a session's durable prompt queue.
+      description: >
+        Journals a prompt.dequeued(reason="cleared") record for every prompt
+        currently waiting (docs/plans/2026-07-19-prompt-queue.md), then 204.
+        Idempotent: an already-empty queue is still 204, nothing journaled.
+        A currently RUNNING turn is left completely untouched — this clears
+        only prompts waiting for a future turn; use POST
+        /session/{id}/abort to interrupt the in-flight one. Safe to call
+        whether the session is idle, busy with a prompt, or mid goal-loop.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      responses:
+        "204": { description: Cleared (or the queue was already empty). }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /session/{id}/compact:
+    post:
+      operationId: compactSession
+      summary: Fold the oldest turns of this session's history into one summary.
+      description: >
+        docs/design/context-compaction.md's explicit escape hatch: always
+        available regardless of the automatic threshold (Config.
+        ContextWindowTokens/CompactionThreshold) — pre-emptive compaction
+        ahead of a known-large tool result, operator-triggered cleanup, or a
+        caller that disables the automatic path entirely and drives it
+        manually. Claims the session's single run slot exactly like
+        prompt_async/goal — calling compact itself against an already-busy
+        session is 409 (see below) — then runs synchronously: the response
+        carries the full result, there is no async job to poll. The reverse
+        is asymmetric: claimForPrompt does not distinguish what currently
+        holds the slot, so a prompt_async or goal request that arrives while
+        THIS compact call is running does not 409 either — it durably
+        queues (prompt_async, docs/plans/2026-07-19-prompt-queue.md) or
+        registers/updates-in-place (goal), exactly as it would against a
+        busy prompt or goal loop. A successful, non-empty compaction emits
+        the summary via an ordinary `message` event first, then a durable
+        `history.compacted` event/record (see the Event schema).
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CompactRequest" }
+      responses:
+        "200":
+          description: >
+            OK. turns_folded is 0 (not an error) when there was nothing
+            worth folding yet.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompactResponse" }
+        "400":
+          description: keep_turns is present and <= 0, or model is malformed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >
+            Session is busy with another prompt or goal, OR another
+            currently-running session holds the same workdir and neither
+            session set share_workdir on creation, and neither session set
+            workdir_isolation="worktree" (the error names the holder
+            session).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: The summarization call itself failed; compaction aborted cleanly (no mutation, no journal write).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /session/{id}/goal:
+    post:
+      operationId: startGoal
+      summary: Start, update, or arm a goal loop on a session.
+      description: |
+        Prompts the condition, then after every turn asks an independent,
+        tool-less evaluator model (config goal_evaluator_model) whether it is
+        met, feeding the evaluator's reason back as guidance until met or the
+        turn budget runs out. Progress and the durable goal.* records arrive
+        on /event. 400 when goal_evaluator_model is not configured, or the
+        condition is empty.
+
+        The response's `status` field names which of three things happened,
+        and its HTTP status code varies accordingly:
+
+        - `started` (202): a fresh loop is now running. This covers the
+          ordinary case (the session was idle, no goal was active), resuming
+          a goal left active-but-idle by a boot-time restart pause or by an
+          abort (see DELETE's "cleared" vs an abort, which deliberately
+          leaves the goal active) — with the SAME or a DIFFERENT condition
+          (a different condition updates it in place before resuming) — and
+          the case where a goal POSTed while a plain prompt was busy wins the
+          run slot the instant that prompt finishes.
+        - `updated` (200): a goal loop is ALREADY running on this session;
+          the condition is rewritten in place (a same-condition POST is a
+          silent no-op, still reported as `updated`) and NO new loop starts —
+          the existing loop picks up the new condition at its next turn
+          boundary. No run-slot claim happens for this outcome.
+        - `armed` (202): the run slot is currently held by a plain prompt (not
+          a goal); the goal is registered now, but the loop itself starts
+          automatically once that prompt finishes (auto-arm) — no further
+          client action is needed. The same self-arming path is how the
+          `goal` session tool's `set` action (called by the model itself,
+          mid-turn) begins running: it takes effect after the current turn.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GoalRequest" }
+      responses:
+        "200":
+          description: >
+            Updated in place: a goal loop was already running on this
+            session; its condition was rewritten (or, if unchanged, left
+            as-is) and no second loop was started.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GoalPostResponse" }
+        "202":
+          description: >
+            Accepted: either a fresh (or resumed) loop is now running
+            (`status: started`), or the goal is registered and will start
+            automatically once the run slot frees up (`status: armed`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GoalPostResponse" }
+        "400":
+          description: No evaluator configured, or empty condition.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >
+            Either another currently-running session holds the same workdir
+            and neither session set share_workdir on creation, and neither
+            session set workdir_isolation="worktree" (the error names the
+            holder session) — or a genuinely unclaimable session state (e.g.
+            a concurrent registration lost an internal race). A plain
+            prompt_async while a goal loop runs no longer reaches this
+            response either (docs/plans/2026-07-19-prompt-queue.md): it is
+            durably queued instead (`status: queued` on prompt_async's 202)
+            and dispatched as a labeled operator interjection at the loop's
+            next turn boundary; a second goal POST while a goal loop runs
+            also does NOT 409 — see the 200 case above.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      operationId: clearGoal
+      summary: Cancel the active goal loop, if any.
+      description: >
+        Cancels the goal loop's context (stopping further turns) and journals a
+        durable goal.cleared. Idempotent: a known session with no active goal is
+        still 204 (and journals nothing).
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      responses:
+        "204": { description: Cleared (or nothing was active). }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /session/{id}/model:
+    post:
+      operationId: setModel
+      summary: Swap a session's main model.
+      description: >
+        Swaps the session's MAIN model for subsequent requests, decoupled from
+        prompting — it never claims the run slot, so it applies even while a
+        turn is running and takes effect on the NEXT request. History
+        transcodes automatically; there is no migration step. The swap is
+        durable (a recModel record restores it on resume) and journals a single
+        "model" event on /event — the same event the `model` session tool and a
+        per-request prompt model override emit. 400 on an empty model or an
+        unconfigured provider; the model is left unchanged in both cases. This
+        is the network counterpart to the `model` session tool.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetModelRequest" }
+      responses:
+        "200":
+          description: The model after the swap (the new model).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SetModelResponse" }
+        "400":
+          description: Empty model, or its provider is not configured.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /session/{id}/thinking:
+    post:
+      operationId: setThinking
+      summary: Swap a session's reasoning-effort level.
+      description: >
+        Swaps the session's reasoning-effort level for subsequent requests,
+        decoupled from prompting — it never claims the run slot, so it applies
+        even while a turn is running and takes effect on the NEXT request. The
+        level rides every request; each provider adapter maps it to its own wire
+        shape (Anthropic extended-thinking budget, OpenAI reasoning.effort,
+        openai-compat reasoning_effort). The swap is durable (a recEffort record
+        restores it on resume) and journals a single "effort" event on /event.
+        The valid levels are off, minimal, low, medium, high; an empty string
+        clears the level to the provider default. 400 on an invalid level.
+        Unlike a model swap there is NO provider gate — whether the CURRENT
+        model accepts a level is a provider fact the engine cannot know from the
+        ref; a dashboard that gates levels per model holds its own mapping. The
+        current level is read back on GET /session ("effort").
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetThinkingRequest" }
+      responses:
+        "200":
+          description: The reasoning-effort level after the swap.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SetThinkingResponse" }
+        "400":
+          description: The effort value is not a valid level.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /session/{id}/abort:
+    post:
+      operationId: abortSession
+      summary: Interrupt the in-flight prompt, if any.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      responses:
+        "204": { description: Interrupted (or nothing was running). }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /session/status:
+    get:
+      operationId: sessionStatus
+      summary: Map of session ID to engine-truth status.
+      description: >
+        Unlike opencode's endpoint of the same name, this reflects engine
+        state for every known session — it does not depend on any client
+        being connected.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /session/{id}/wait:
+    get:
+      operationId: waitForSession
+      summary: Long-poll a session's composite state.
+      description: >
+        Returns immediately if the requested condition already holds;
+        otherwise blocks until it holds or `timeout_s` elapses, then responds
+        200 either way with the current {state, goal} — the caller
+        distinguishes "condition met" from "timed out" by checking the
+        returned state/goal against what it asked for (e.g. state still
+        goal-running after requesting until=goal-done means it timed out).
+        Built on the server's existing durable-event fanout: no server-side
+        polling. A disconnect (client goes away before the condition holds)
+        cleanly unregisters the wait with no resource leak.
+
+        `until=idle` waits for state to read idle (not busy, no active
+        goal). `until=goal-done` waits for the goal to become inactive —
+        achieved or cleared, distinguished via goal.achieved in the
+        response — or resolves immediately if the session never had a goal.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+        - name: until
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [idle, goal-done]
+        - name: timeout_s
+          in: query
+          schema:
+            type: integer
+            default: 30
+          description: >
+            Positive integer seconds; defaults to 30 when omitted, capped at
+            300 when larger. Zero or negative is a 400.
+      responses:
+        "200":
+          description: >
+            The condition held (immediately or after blocking), timeout_s
+            elapsed, or the server began draining/shutdown while the wait
+            was blocked — see the summary for how a caller tells these
+            apart (the drain case, like the timeout case, may return a
+            snapshot that does not satisfy the requested condition).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WaitResponse" }
+        "400":
+          description: Invalid `until` or `timeout_s`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /event:
+    get:
+      operationId: events
+      summary: Server-sent event stream with replay.
+      description: |
+        One stream for the whole instance (the hub holds exactly one of
+        these per box). `from` (or the standard `Last-Event-ID` header)
+        replays durable records with seq greater than the given value, in
+        order, then continues with live events. Optional `session` filter
+        restricts to one session.
+      parameters:
+        - name: from
+          in: query
+          schema: { type: integer }
+        - name: session
+          in: query
+          schema: { type: string }
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema: { type: integer }
+          description: >
+            Standard EventSource reconnection header; equivalent to `from`.
+            When both are present, `from` wins.
+      responses:
+        "200":
+          description: text/event-stream of Event objects.
+          content:
+            text/event-stream:
+              schema: { $ref: "#/components/schemas/Event" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /process:
+    get:
+      operationId: listProcesses
+      summary: List every declared managed process with its live status.
+      description: >
+        See docs/design/managed-processes.md. Config- and runtime-declared
+        (via the session `process` tool's `declare` action) processes are
+        both included, distinguished by `origin`. An instance with no
+        processes configured at all still answers 200 with an empty array
+        (this endpoint never 404s).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ProcessInfo" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /process/{name}/start:
+    post:
+      operationId: startProcess
+      summary: Start a managed process (idempotent).
+      description: >
+        Already-active (starting/ready/running) returns the current status
+        unchanged rather than spawning a second process. Blocks until
+        whichever ready gate is configured is satisfied — a ready_regex
+        log-line match, a successful ready_port TCP dial, or a non-5xx
+        ready_http GET (state ready) — or ready_timeout_s elapses (state
+        running, with a timeout note — the process is left running, never
+        killed by the timeout); with no ready gate configured, returns
+        ready immediately on spawn.
+      parameters:
+        - $ref: "#/components/parameters/processName"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProcessStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/ProcessNotFound" }
+
+  /process/{name}/stop:
+    post:
+      operationId: stopProcess
+      summary: Stop a managed process.
+      description: >
+        Unix: SIGKILLs the whole process group. Non-unix: a plain Kill.
+        Either way waits for the process to be reaped and records its
+        exit. A no-op (200, current/zero status) if the process is not
+        currently active.
+      parameters:
+        - $ref: "#/components/parameters/processName"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProcessStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/ProcessNotFound" }
+
+  /process/{name}/restart:
+    post:
+      operationId: restartProcess
+      summary: Stop (if active) and start a managed process fresh.
+      parameters:
+        - $ref: "#/components/parameters/processName"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProcessStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/ProcessNotFound" }
+
+  /debug/goroutines:
+    get:
+      operationId: debugGoroutines
+      summary: Full stack dump of every running goroutine.
+      description: >
+        A diagnostic surface, not a stable API: the response is the exact
+        text Go's runtime/pprof "goroutine" profile produces at debug=2 (the
+        same full-stack-trace format Go's default SIGQUIT handler prints),
+        for inspecting a wedged box over authed HTTP in environments where
+        sending SIGQUIT or exec-ing into the process is awkward or
+        unavailable. Its shape is whatever the Go runtime emits and may
+        change between Go versions; do not parse it programmatically.
+      responses:
+        "200":
+          description: OK — plain-text goroutine dump.
+          content:
+            text/plain:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /:
+    get:
+      operationId: monitorRootRedirect
+      summary: Convenience redirect from the bare root to the monitor UI.
+      description: >
+        Present only when this instance was started with the monitor page
+        embedded (same `MonitorPage` guard as `/monitor` below); a box that
+        omits it 404s here exactly as any other unmatched path. 302-redirects
+        to the canonical `/monitor` so visiting the box's host with no path
+        lands on the monitor. UNAUTHENTICATED like `/monitor` — the redirect
+        carries no secret, and a browser preserves any `#t=<token>` fragment
+        across the 302 (fragments are never sent to the server). Anchored to
+        the root path ONLY (`GET /{$}`), so it never shadows another route's
+        404 — see server/handlers.go's handleRoot.
+      security: []
+      responses:
+        "302":
+          description: >
+            Redirect to /monitor. `Location: /monitor`.
+          headers:
+            Location:
+              schema: { type: string, example: /monitor }
+        "404":
+          description: This instance was not started with the monitor page embedded.
+
+  /monitor:
+    get:
+      operationId: monitorPage
+      summary: The embedded, single-file session monitor UI.
+      description: >
+        Present only when this instance was started with the monitor page
+        embedded (cmd/harness's `serve` always does this; see
+        tools/monitor's AGENTS.md section); a box that omits it 404s here
+        exactly as it always has. Serves tools/monitor/index.html verbatim,
+        byte for byte — the same static, build-free, credential-free page
+        that can also be opened via file:// or hosted separately.
+        UNAUTHENTICATED like /health: the page itself carries no secrets,
+        and every API call it makes is still authenticated normally by the
+        browser entering a run token into the page. A
+        Content-Security-Policy header scopes it to same-origin
+        (connect-src 'self') — see server/handlers.go's
+        monitorContentSecurityPolicy.
+      security: []
+      responses:
+        "200":
+          description: OK — the monitor's index.html.
+          content:
+            text/html:
+              schema: { type: string }
+        "404":
+          description: This instance was not started with the monitor page embedded.
+
+  # Candidate for v1.1, deliberately deferred: GET /session/{id}/diff
+  # (working-tree diff for orchestrator PR-preview rendering). Needs a
+  # position on git ownership inside the engine first.

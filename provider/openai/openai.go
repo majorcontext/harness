@@ -1,0 +1,506 @@
+// Package openai is the provider adapter for the OpenAI Responses API.
+package openai
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"time"
+
+	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/provider"
+)
+
+const defaultBaseURL = "https://api.openai.com"
+
+// Client is a provider.Provider for the OpenAI Responses API. The zero value
+// plus APIKey is usable; nothing touches the network until Stream.
+type Client struct {
+	APIKey     string
+	BaseURL    string       // defaults to https://api.openai.com
+	HTTPClient *http.Client // defaults to http.DefaultClient
+}
+
+func (c *Client) Name() string { return Family }
+
+func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
+	if c.APIKey == "" {
+		return nil, fmt.Errorf("openai: no API key configured (set OPENAI_API_KEY)")
+	}
+	wire, err := transcodeRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(wire)
+	if err != nil {
+		return nil, err
+	}
+
+	base := c.BaseURL
+	if base == "" {
+		base = defaultBaseURL
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/responses", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+
+	hc := c.HTTPClient
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	resp, err := hc.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		return nil, apiError(resp)
+	}
+	return &stream{
+		body:  resp.Body,
+		r:     bufio.NewReader(resp.Body),
+		model: req.Model,
+	}, nil
+}
+
+func apiError(resp *http.Response) error {
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	var body struct {
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	var err error
+	if json.Unmarshal(raw, &body) == nil && body.Error.Message != "" {
+		err = fmt.Errorf("openai: %s (%s, HTTP %d)", body.Error.Message, body.Error.Type, resp.StatusCode)
+	} else {
+		err = fmt.Errorf("openai: HTTP %d", resp.StatusCode)
+	}
+	if class, ok := classifyStatus(resp.StatusCode); ok {
+		return provider.MarkRetryable(err, class)
+	}
+	return err
+}
+
+// classifyStatus classifies an HTTP response status into a
+// provider.RetryableClass (see GitHub issue #79, mirroring provider/
+// anthropic's classifyStatus for issue #61): 429 is a rate limit, any other
+// 5xx is a generic server error — both transient provider weather worth the
+// goal loop's long backoff (engine/goal.go). Every other status (400s,
+// auth) reports ok=false and stays a deterministic, fail-fast error exactly
+// as before. Unlike Anthropic, the Responses API has no dedicated
+// "overloaded" status distinct from a plain 5xx, so there is no analog of
+// RetryableOverloaded here.
+func classifyStatus(status int) (provider.RetryableClass, bool) {
+	switch {
+	case status == http.StatusTooManyRequests:
+		return provider.RetryableRateLimited, true
+	case status >= 500 && status <= 599:
+		return provider.RetryableServerError, true
+	default:
+		return "", false
+	}
+}
+
+// classifyErrorCode classifies the Responses API's mid-stream "response.
+// failed"/"error" event error "code" (see the corresponding case in
+// stream.handle below) — the same two retryable categories as
+// classifyStatus, keyed on the wire code vocabulary instead of an HTTP
+// status because a stream error carries no status code of its own. Mirrors
+// provider/anthropic's classifyErrorType.
+func classifyErrorCode(code string) (provider.RetryableClass, bool) {
+	switch code {
+	case "rate_limit_exceeded":
+		return provider.RetryableRateLimited, true
+	case "server_error":
+		return provider.RetryableServerError, true
+	default:
+		return "", false
+	}
+}
+
+// assembledItem accumulates one output item across SSE events, keyed by the
+// item's output_index.
+type assembledItem struct {
+	kind   string // message | function_call | reasoning
+	text   bytes.Buffer
+	callID string
+	name   string
+	args   json.RawMessage
+	raw    json.RawMessage // reasoning: the entire item JSON, replayed verbatim
+}
+
+// stream implements provider.Stream over the Responses API SSE protocol. It
+// forwards deltas as they arrive and assembles the canonical assistant
+// message, delivered with EventDone on response.completed.
+type stream struct {
+	body  io.Closer
+	r     *bufio.Reader
+	model message.ModelRef
+
+	respID      string
+	items       []*assembledItem
+	usage       provider.Usage
+	hasToolCall bool
+
+	queue []provider.Event
+	done  bool
+}
+
+func (s *stream) Close() error { return s.body.Close() }
+
+func (s *stream) Next() (provider.Event, error) {
+	for {
+		if len(s.queue) > 0 {
+			ev := s.queue[0]
+			s.queue = s.queue[1:]
+			return ev, nil
+		}
+		if s.done {
+			return provider.Event{}, io.EOF
+		}
+		name, data, err := s.readSSE()
+		if err != nil {
+			// Reaching this read at all means response.completed has not
+			// been seen (s.done, checked above, would have returned the
+			// normal end-of-iteration io.EOF) — so any read failure here
+			// is the stream dying mid-response: transient, classified
+			// retryable.
+			return provider.Event{}, provider.MarkStreamTruncated(err)
+		}
+		if err := s.handle(name, data); err != nil {
+			return provider.Event{}, err
+		}
+		if len(s.queue) == 0 && !s.done {
+			// Handled but queued nothing consumer-visible: surface as
+			// activity so idle-watchdog consumers see the wire is alive —
+			// see provider.EventActivity and provider/anthropic's Next.
+			return provider.Event{Type: provider.EventActivity}, nil
+		}
+	}
+}
+
+// readSSE reads one server-sent event: an "event:" line, "data:" lines
+// (concatenated), terminated by a blank line.
+func (s *stream) readSSE() (name string, data []byte, err error) {
+	var buf bytes.Buffer
+	for {
+		line, err := s.r.ReadString('\n')
+		if err != nil {
+			// An event whose blank-line terminator never arrived is
+			// DISCARDED, per the SSE spec — see provider/anthropic's
+			// readSSE for why handing the fragment up dodged truncation
+			// classification.
+			return "", nil, err
+		}
+		line = trimEOL(line)
+		switch {
+		case line == "":
+			if name != "" || buf.Len() > 0 {
+				return name, buf.Bytes(), nil
+			}
+		case line[0] == ':':
+			// Keepalive heartbeat comment — see provider/anthropic's
+			// readSSE: surface it between events so Next emits
+			// EventActivity and idle watchdogs see the wire is alive.
+			if name == "" && buf.Len() == 0 {
+				return "", nil, nil
+			}
+		case len(line) > 6 && line[:6] == "event:":
+			name = trimSpaceLeft(line[6:])
+		case len(line) > 5 && line[:5] == "data:":
+			buf.WriteString(trimSpaceLeft(line[5:]))
+		}
+		// Unknown fields are ignored per the SSE spec.
+	}
+}
+
+func trimEOL(s string) string {
+	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r') {
+		s = s[:len(s)-1]
+	}
+	return s
+}
+
+func trimSpaceLeft(s string) string {
+	for len(s) > 0 && s[0] == ' ' {
+		s = s[1:]
+	}
+	return s
+}
+
+// maxOutputIndex bounds the output_index values itemAt accepts: the slice
+// grows to the index named on the wire, so an unbounded value is an
+// attacker/corruption-controlled allocation. FuzzStreamDecode found
+// output_index 177777777 forcing a ~1.4GB slice (the nightly fuzz worker
+// died of resource exhaustion), and a negative index panicked. Real
+// responses carry at most a few dozen output items; 10000 is generous
+// beyond any legitimate stream.
+const maxOutputIndex = 10000
+
+// itemAt returns the assembled item at output_index idx, growing the slice
+// as needed, or an error for an index no legitimate stream produces.
+func (s *stream) itemAt(idx int) (*assembledItem, error) {
+	if idx < 0 || idx > maxOutputIndex {
+		return nil, fmt.Errorf("openai: output_index %d out of range [0, %d]", idx, maxOutputIndex)
+	}
+	for len(s.items) <= idx {
+		s.items = append(s.items, nil)
+	}
+	if s.items[idx] == nil {
+		s.items[idx] = &assembledItem{}
+	}
+	return s.items[idx], nil
+}
+
+func (s *stream) handle(name string, data []byte) error {
+	switch name {
+	case "response.created":
+		var ev struct {
+			Response struct {
+				ID string `json:"id"`
+			} `json:"response"`
+		}
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return fmt.Errorf("openai: bad response.created: %w", err)
+		}
+		s.respID = ev.Response.ID
+
+	case "response.output_text.delta":
+		var ev struct {
+			OutputIndex int    `json:"output_index"`
+			Delta       string `json:"delta"`
+		}
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return fmt.Errorf("openai: bad response.output_text.delta: %w", err)
+		}
+		it, err := s.itemAt(ev.OutputIndex)
+		if err != nil {
+			return err
+		}
+		if it.kind == "" {
+			it.kind = "message"
+		}
+		it.text.WriteString(ev.Delta)
+		s.queue = append(s.queue, provider.Event{Type: provider.EventTextDelta, Text: ev.Delta})
+
+	case "response.reasoning_summary_text.delta":
+		var ev struct {
+			OutputIndex int    `json:"output_index"`
+			Delta       string `json:"delta"`
+		}
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return fmt.Errorf("openai: bad response.reasoning_summary_text.delta: %w", err)
+		}
+		it, err := s.itemAt(ev.OutputIndex)
+		if err != nil {
+			return err
+		}
+		if it.kind == "" {
+			it.kind = "reasoning"
+		}
+		it.text.WriteString(ev.Delta)
+		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: ev.Delta})
+
+	case "response.output_item.done":
+		var ev struct {
+			OutputIndex int             `json:"output_index"`
+			Item        json.RawMessage `json:"item"`
+		}
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return fmt.Errorf("openai: bad response.output_item.done: %w", err)
+		}
+		var head struct {
+			Type      string `json:"type"`
+			CallID    string `json:"call_id"`
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		}
+		if err := json.Unmarshal(ev.Item, &head); err != nil {
+			return fmt.Errorf("openai: bad output item: %w", err)
+		}
+		it, err := s.itemAt(ev.OutputIndex)
+		if err != nil {
+			return err
+		}
+		switch head.Type {
+		case "function_call":
+			it.kind = "function_call"
+			it.callID = head.CallID
+			it.name = head.Name
+			it.args = argsRaw(head.Arguments)
+			s.hasToolCall = true
+			s.queue = append(s.queue, provider.Event{Type: provider.EventToolCall, ToolCall: it.toolCall()})
+		case "reasoning":
+			it.kind = "reasoning"
+			it.raw = append(json.RawMessage(nil), ev.Item...)
+		case "message":
+			if it.kind == "" {
+				it.kind = "message"
+			}
+		}
+
+	case "response.completed", "response.incomplete":
+		// Both are terminal: response.incomplete is a truncated-but-usable
+		// response whose incomplete_details.reason maps to the stop reason.
+		var ev struct {
+			Response struct {
+				IncompleteDetails struct {
+					Reason string `json:"reason"`
+				} `json:"incomplete_details"`
+				Usage struct {
+					InputTokens        int `json:"input_tokens"`
+					OutputTokens       int `json:"output_tokens"`
+					InputTokensDetails struct {
+						CachedTokens int `json:"cached_tokens"`
+					} `json:"input_tokens_details"`
+				} `json:"usage"`
+			} `json:"response"`
+		}
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return fmt.Errorf("openai: bad %s: %w", name, err)
+		}
+		// The Responses API reports input_tokens INCLUSIVE of the cached
+		// portion (input_tokens_details.cached_tokens is a subset). The
+		// provider.Usage contract wants disjoint components, so report the
+		// uncached remainder; the sum reconstructs the wire total.
+		cached := ev.Response.Usage.InputTokensDetails.CachedTokens
+		uncached := ev.Response.Usage.InputTokens - cached
+		if uncached < 0 {
+			uncached = 0
+		}
+		s.usage.InputTokens = uncached
+		s.usage.OutputTokens = ev.Response.Usage.OutputTokens
+		s.usage.CacheReadTokens = cached
+
+		var stop provider.StopReason
+		switch {
+		case name == "response.incomplete":
+			stop = mapIncompleteReason(ev.Response.IncompleteDetails.Reason)
+		case s.hasToolCall:
+			stop = provider.StopToolUse
+		default:
+			stop = provider.StopEndTurn
+		}
+		s.queue = append(s.queue, provider.Event{
+			Type:       provider.EventDone,
+			Message:    s.assemble(),
+			StopReason: stop,
+			Usage:      s.usage,
+		})
+		s.done = true
+
+	case "response.failed", "error":
+		var ev struct {
+			Message  string `json:"message"`
+			Response struct {
+				Error struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				} `json:"error"`
+			} `json:"response"`
+			Error struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return fmt.Errorf("openai: stream error: %s", data)
+		}
+		switch {
+		case ev.Response.Error.Message != "":
+			err := fmt.Errorf("openai: %s (%s)", ev.Response.Error.Message, ev.Response.Error.Code)
+			if class, ok := classifyErrorCode(ev.Response.Error.Code); ok {
+				return provider.MarkRetryable(err, class)
+			}
+			return err
+		case ev.Error.Message != "":
+			err := fmt.Errorf("openai: %s (%s)", ev.Error.Message, ev.Error.Code)
+			if class, ok := classifyErrorCode(ev.Error.Code); ok {
+				return provider.MarkRetryable(err, class)
+			}
+			return err
+		case ev.Message != "":
+			return fmt.Errorf("openai: %s", ev.Message)
+		default:
+			return fmt.Errorf("openai: stream error: %s", data)
+		}
+	}
+	return nil
+}
+
+// mapIncompleteReason maps response.incomplete_details.reason to a canonical
+// stop reason.
+func mapIncompleteReason(reason string) provider.StopReason {
+	switch reason {
+	case "max_output_tokens":
+		return provider.StopMaxTokens
+	case "content_filter":
+		return provider.StopRefusal
+	default:
+		return provider.StopOther
+	}
+}
+
+func argsRaw(args string) json.RawMessage {
+	if args == "" {
+		return json.RawMessage(`{}`)
+	}
+	return json.RawMessage(args)
+}
+
+func (it *assembledItem) toolCall() *message.ToolCall {
+	args := it.args
+	if len(args) == 0 {
+		args = json.RawMessage(`{}`)
+	}
+	return &message.ToolCall{
+		// The provider's call_id becomes the canonical CallID: it is wire-safe
+		// here by construction, so same-provider replay preserves it and keeps
+		// the prompt cache warm.
+		CallID:    it.callID,
+		Name:      it.name,
+		Arguments: append(json.RawMessage(nil), args...),
+	}
+}
+
+// assemble builds the canonical assistant message from accumulated items.
+func (s *stream) assemble() *message.Message {
+	msg := &message.Message{
+		ID:        s.respID,
+		Role:      message.RoleAssistant,
+		Model:     s.model,
+		CreatedAt: time.Now().UTC(),
+	}
+	for _, it := range s.items {
+		if it == nil {
+			continue
+		}
+		switch it.kind {
+		case "message":
+			if it.text.Len() > 0 {
+				msg.Parts = append(msg.Parts, &message.Text{Text: it.text.String()})
+			}
+		case "reasoning":
+			if len(it.raw) == 0 {
+				continue
+			}
+			msg.Parts = append(msg.Parts, &message.Reasoning{
+				Text:         it.text.String(),
+				ProviderData: message.ProviderData{Family: it.raw},
+			})
+		case "function_call":
+			msg.Parts = append(msg.Parts, it.toolCall())
+		}
+	}
+	return msg
+}

@@ -1,0 +1,3169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>harness monitor</title>
+<!--
+  harness monitor — a single self-contained page answering "what is this
+  instance doing right now": a live board of every session (phase, current
+  tool, staleness), a per-session detail view with a scrolling transcript and
+  a composer, all driven by one `harness serve` instance's HTTP+SSE API. No
+  build step, no external resources: open it from file:// or serve it from
+  any static host. That instance must run with -cors-origin covering this
+  page's origin (or "*" for local hacking). See docs/deploy-modal.md
+  ("Inspecting sessions") and docs/design/monitor-mockup.html (the visual
+  spec this page's tokens, grid template, and markup shapes are drawn from).
+
+  SECURITY: the base URL and run token are persisted in this browser's
+  localStorage in plaintext so a reload can reconnect. Treat this as a dev
+  tool — don't host it on a shared origin with a long-lived token. Tokens are
+  workspace-scoped and rotate with the workspace.
+
+  The pure helpers below (SSE parser, activity reducer, transcript fold,
+  history windowing/adaptation, DOM-key derivation, formatters, route codec)
+  are unit-tested by monitor_test.mjs (run: node --test
+  tools/monitor/*_test.mjs). The board AND the detail view are both live,
+  fed from the SAME connect/stream/poll lifecycle — the detail view filters
+  handleEvent's dispatch by session id rather than opening a second
+  connection. Manual verification covers what the tests can't:
+    1. Start:  HARNESS_RUN_TOKEN=t harness serve -cors-origin '*'
+    2. Open this file, paste the base URL (http://localhost:4096) + token,
+       Connect. -> the identity line fills in from /health, the board lists
+       sessions (active first, newest activity first within each group).
+    3. Drive a prompt against a session -> its row moves through
+       tool/streaming/between phases, elapsed ticks once a second.
+    4. Let a session sit idle for 15s -> quiet; 60s -> stalled (critical).
+    5. Click a session -> the detail view opens ("#b=<base>&s=<id>"),
+       fetches its history (most recent 50 messages; older ones sit behind a
+       "Show N earlier messages" affordance at the top), and renders it as a
+       transcript: operator/assistant entries, tool folds (running open with
+       a ticking elapsed once this page has watched it start; completed
+       collapsed with cmd + elapsed; a fold resolved before this page ever
+       watched it shows no elapsed number rather than a fabricated one).
+       Reload the URL directly (a bookmarked "#s=" deep link) -> connects,
+       then opens straight into the same session. Opening a freshly created,
+       never-prompted session's detail view -> the live chip stays hidden
+       (idle), not a stale/default "tool running". Drive a turn that fails
+       (session.error/turn.end outcome "error") or that you abort mid-turn
+       -> a critical-styled "error" entry (the sanitized failure text, or
+       "turn aborted") lands inline in the transcript at the point it
+       occurred, and the chip drops to idle promptly once session.status
+       goes idle, without waiting on the next 5s poll.
+    6. Send a message from the composer (Enter to send, Shift+Enter for a
+       newline) -> it appears as an operator entry IMMEDIATELY, before the
+       POST even resolves (no perceived network-hop lag), reconciled — not
+       duplicated — once the stream's real `message` event lands (session
+       was idle) or, for a busy session, once `prompt.queued` lands. A
+       non-2xx response or a network failure instead rolls the optimistic
+       entry back and renders the server's own error text inline under the
+       input, in critical color. The input disables only for the POST
+       itself — sending into a busy session queues it rather than blocking
+       on it. Once the turn actually starts running with nothing to show
+       yet (no reasoning, text, tool call, or error), a quiet "Thinking…"
+       indicator appears right where the reply will land, and disappears
+       the instant the first token/tool/error does — a QUEUED send shows
+       only its own operator entry until its turn actually starts; it never
+       shows "Thinking…" prematurely.
+    7. Click the breadcrumb -> back to the board; focus returns to the row
+       that was opened (or the session list if that row is gone).
+    8. Kill `harness serve`, wait -> connection state flips to
+       "reconnecting…" with jittered backoff and the detail view (if open)
+       drops back to the board rather than show increasingly stale data;
+       restart -> it resyncs.
+    9. Enter a wrong run token -> an inline error on the connect panel (the
+       401 comes from /session, not /health, which has no auth).
+   10. Reload the page -> base URL and token (from localStorage) reconnect
+       automatically; a bookmarked "#b=<base>" link prefills the base URL
+       field when nothing is stored yet.
+   11. Toggle OS light/dark theme -> both variants stay legible.
+   12. Navigate away (another site) then browser-Back into this page while
+       it was connected -> if the browser served it from bfcache (the
+       page's own scripts never re-run), the header re-syncs to a real
+       "connected" state rather than sitting frozen on whatever it showed
+       the instant it was frozen, and an open detail view re-checks its
+       history against the board summary rather than showing stale/stuck
+       content.
+-->
+<style>
+  :root {
+    --surface: oklch(0.975 0.005 240);
+    --surface-inset: oklch(0.955 0.006 240);
+    --text-1: oklch(0.22 0.015 250);
+    --text-2: oklch(0.50 0.02 250);
+    --text-3: oklch(0.65 0.015 250);
+    --separator: oklch(0.91 0.008 240);
+    --accent: oklch(0.50 0.10 230);
+    --ok: oklch(0.60 0.14 150);
+    --warn: oklch(0.68 0.12 75);
+    --critical: oklch(0.54 0.19 25);
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --col-dot: 8px; --col-phase: 84px; --col-gap: 12px;
+  }
+  @media (prefers-color-scheme: dark) { :root {
+    --surface: oklch(0.19 0.012 250);
+    --surface-inset: oklch(0.165 0.012 250);
+    --text-1: oklch(0.93 0.005 250);
+    --text-2: oklch(0.66 0.012 250);
+    --text-3: oklch(0.50 0.012 250);
+    --separator: oklch(0.28 0.012 250);
+    --accent: oklch(0.72 0.10 230);
+    --ok: oklch(0.72 0.14 150);
+    --warn: oklch(0.78 0.12 80);
+    --critical: oklch(0.68 0.17 25);
+  } }
+  :root[data-theme="light"] {
+    --surface: oklch(0.975 0.005 240); --surface-inset: oklch(0.955 0.006 240);
+    --text-1: oklch(0.22 0.015 250); --text-2: oklch(0.50 0.02 250);
+    --text-3: oklch(0.65 0.015 250); --separator: oklch(0.91 0.008 240);
+    --accent: oklch(0.50 0.10 230); --ok: oklch(0.60 0.14 150);
+    --warn: oklch(0.68 0.12 75); --critical: oklch(0.54 0.19 25);
+  }
+  :root[data-theme="dark"] {
+    --surface: oklch(0.19 0.012 250); --surface-inset: oklch(0.165 0.012 250);
+    --text-1: oklch(0.93 0.005 250); --text-2: oklch(0.66 0.012 250);
+    --text-3: oklch(0.50 0.012 250); --separator: oklch(0.28 0.012 250);
+    --accent: oklch(0.72 0.10 230); --ok: oklch(0.72 0.14 150);
+    --warn: oklch(0.78 0.12 80); --critical: oklch(0.68 0.17 25);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--surface); color: var(--text-1);
+    font: 14px/1.5 var(--sans);
+    /* No bottom padding on body: it sits BELOW the detail view's
+       position:sticky composer, so scrolling into it un-pins the composer
+       (it rides up by the padding height at max scroll). Breathing room at
+       the bottom is applied per-view instead — the board wants it, the
+       detail view must not have anything scrollable beneath its composer. */
+    padding: 32px clamp(16px, 4vw, 48px) 0;
+  }
+  .frame { max-width: 820px; margin: 0 auto; }
+  #board { padding-bottom: 64px; }
+
+  header.identity {
+    display: grid;
+    grid-template-columns: var(--col-dot) minmax(0, 1fr) auto;
+    column-gap: var(--col-gap);
+    align-items: baseline;
+    margin-bottom: 40px;
+  }
+  header.identity > .hgroup { grid-column: 1 / 3; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; min-width: 0; }
+  .app-name { font-size: 16px; font-weight: 650; letter-spacing: -0.01em; margin: 0; }
+  .app-name .dim { color: var(--text-3); font-weight: 400; }
+  .app-name a { color: inherit; text-decoration: none; }
+  .app-name a:hover { color: var(--accent); }
+  .id-line { font-family: var(--mono); font-size: 12px; color: var(--text-2); display: flex; flex-wrap: wrap; gap: 4px 14px; }
+  .conn { grid-column: 3; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); }
+  .conn .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); }
+  .conn.connected .dot { background: var(--ok); }
+  .conn.reconnecting .dot { background: var(--warn); }
+  @media (prefers-reduced-motion: no-preference) {
+    .conn.connected .dot { animation: breathe 2.4s ease-in-out infinite; }
+  }
+
+  /* Connect affordance: shown in place of the session list until a base URL
+     + token are set (localStorage empty on first visit, or cleared). */
+  .connect { margin: 8px 0 28px; }
+  .connect p { color: var(--text-2); font-size: 13px; margin: 0 0 14px; }
+  /* Same house tone as the intro paragraph above (not critical/alarming —
+     see connectPanelState's own doc comment: this explains why a carried-in
+     #b= link won't be tried, it never blocks the own-origin connect). */
+  .connect .cross-box-notice { color: var(--text-2); font-size: 13px; margin: -6px 0 14px; }
+  .connect form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+  /* :not([hidden]) is load-bearing here for the SAME reason it is on
+     .detail-head .livechip (see that rule's own comment): a bare
+     `.connect label { display: flex }` would silently defeat
+     base-url-label.hidden = true (connectPanelState's showBaseField:
+     false case) — verified against that exact class of bug earlier in
+     this file's history, not a hypothetical. */
+  .connect label:not([hidden]) { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-3); }
+  .connect input {
+    background: var(--surface-inset); color: var(--text-1);
+    border: 1px solid var(--separator); border-radius: 8px;
+    padding: 8px 10px; font: 13px/1.4 var(--sans); min-width: 220px;
+  }
+  .connect input:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .connect button {
+    border: 1px solid transparent; border-radius: 8px; padding: 9px 16px;
+    background: var(--accent); color: oklch(0.99 0 0);
+    font: 600 13.5px/1.5 var(--sans); cursor: pointer;
+  }
+  .connect button:hover { filter: brightness(1.08); }
+  .connect button:focus-visible { outline: 2px solid var(--text-1); outline-offset: 2px; }
+  .connect .err { color: var(--critical); font-size: 12.5px; margin: 8px 0 0; min-height: 16px; }
+  body:not(.connected) .sessions, body:not(.connected) .legend { display: none; }
+  /* The connect panel is hidden BY DEFAULT and revealed only when a panel is
+     genuinely wanted — bootstrap()/forceDisconnect add `show-connect`: a
+     non-embedded page with no stored creds up front, an embedded (or stored-
+     cred) auto-attempt that FAILED, or a hard disconnect. This is what
+     actually implements embeddedConnectPlan's "no panel shown at all" for the
+     common embedded case: the async auto-attempt now paints NOTHING rather
+     than flashing the token field for the fetch's duration before
+     `body.connected` lands. `:not(.connected)` keeps it hidden the instant a
+     connect succeeds, even before show-connect is cleared. */
+  #connect-panel { display: none; }
+  body.show-connect:not(.connected) #connect-panel { display: block; }
+
+  .sessions { display: flex; flex-direction: column; gap: 18px; }
+  .group-gap { height: 10px; }
+  .board-empty { color: var(--text-3); font-size: 13px; padding: 4px 0 8px; }
+
+  .session {
+    display: grid;
+    grid-template-columns: var(--col-dot) var(--col-phase) minmax(0, 1fr) auto;
+    column-gap: var(--col-gap);
+    row-gap: 4px;
+    align-items: baseline;
+    outline: none;
+    cursor: pointer;
+    text-decoration: none; color: inherit;
+  }
+  .session:focus-visible { outline: 2px solid var(--accent); outline-offset: 8px; border-radius: 2px; }
+  .session:hover .sid { color: var(--accent); }
+
+  .pulse { grid-column: 1; align-self: center; width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); }
+  .live .pulse { background: var(--ok); }
+  .quiet .pulse { background: var(--warn); }
+  .bad .pulse { background: var(--critical); }
+  .idle .pulse { background: transparent; border: 1.5px solid var(--separator); }
+
+  .phase { grid-column: 2; font-weight: 600; font-size: 13px; }
+  .live .phase { color: var(--ok); }
+  .quiet .phase { color: var(--warn); }
+  .bad .phase { color: var(--critical); }
+  .idle .phase { color: var(--text-3); font-weight: 500; }
+
+  .content { grid-column: 3; display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+  .sid {
+    font-family: var(--mono); font-size: 12.5px; color: var(--text-2);
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .detail {
+    font-family: var(--mono); font-size: 12.5px; color: var(--text-1);
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .idle .detail { color: var(--text-2); font-family: var(--sans); font-size: 12.5px; }
+  .extra { font-size: 12px; color: var(--text-3); flex: none; }
+  .elapsed {
+    grid-column: 4; font-family: var(--mono); font-variant-numeric: tabular-nums;
+    font-size: 12.5px; color: var(--text-2); text-align: right;
+  }
+  .line-2 { grid-column: 3 / 5; font-size: 12.5px; color: var(--text-2); min-width: 0; }
+  .bad .line-2 { color: var(--critical); }
+  .goal { color: var(--text-3); }
+  .goal::before { content: "goal · "; }
+  .live-goal { color: var(--ok); }
+
+  .legend {
+    margin-top: 44px; padding-top: 14px; border-top: 1px solid var(--separator);
+    font-size: 12px; color: var(--text-3); line-height: 1.7;
+  }
+  .legend .sw { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin: 0 3px 0 0; }
+
+  /* ── Session detail view ─────────────────────────────────────────── */
+  #detail { display: none; }
+  .showing-detail #board { display: none; }
+  .showing-detail #detail { display: block; }
+
+  .crumb { font-size: 12.5px; margin-bottom: 6px; }
+  .crumb a { color: var(--accent); text-decoration: none; }
+  .crumb a:hover { text-decoration: underline; }
+  .detail-head {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px;
+    margin-bottom: 36px;
+  }
+  .detail-head .sid-full { font-family: var(--mono); font-size: 14px; color: var(--text-1); font-weight: 600; }
+  .detail-head .meta { font-family: var(--mono); font-size: 12px; color: var(--text-2); display: flex; gap: 14px; flex-wrap: wrap; }
+  /* :not([hidden]) is load-bearing, not decorative: the browser's own UA
+     stylesheet hides a [hidden] element via a PLAIN (non-!important)
+     `[hidden] { display: none }` rule, whose origin (user-agent) is always
+     lower-priority than ANY author-stylesheet rule that sets `display` on
+     the same element, regardless of that rule's selector specificity — a
+     bare `.livechip` rule setting `display` here would silently defeat
+     `chip.hidden = true` (verified in a real Chrome tab: the element stayed
+     fully visible, offsetParent non-null, computed display "inline-flex",
+     with `hidden` set). That was the bug: a freshly opened, idle session's
+     detail view showed the chip's stale/default text ("tool running")
+     forever, because JS's own hidden=true had no visual effect. Guarding
+     the display declaration with :not([hidden]) here restores it. */
+  .detail-head .livechip:not([hidden]) { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ok); font-weight: 600; margin-left: auto; }
+  .detail-head .livechip .pulse2 { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+
+  /* Transcript: a typographic document. Speaker rail on the left shares
+     the board's column rhythm; content stays near 70ch. */
+  .transcript { display: flex; flex-direction: column; gap: 26px; }
+  .turn-mark {
+    font-size: 11px; color: var(--text-3); letter-spacing: 0.06em; text-transform: uppercase;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .turn-mark::after { content: ""; flex: 1; border-top: 1px solid var(--separator); }
+
+  .msg { display: grid; grid-template-columns: 84px minmax(0, 1fr); column-gap: 20px; }
+  .who { font-size: 11.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-3); padding-top: 2px; }
+  .msg.user .who { color: var(--accent); }
+  .msg.reasoning .who, .msg.reasoning .body { color: var(--text-3); }
+  /* session.error/turn.end(error)/session.aborted fold into this same "msg"
+     shape (see transcriptModel's "error" entry kind) so the failure lands
+     inline, aligned in the content column like every other transcript
+     entry — no banner/toast — styled in the mockup's critical register. */
+  .msg.error .who, .msg.error .body { color: var(--critical); }
+  .body { min-width: 0; max-width: 70ch; }
+  /* pre-wrap: an operator/assistant reply is prose the model chose to break
+     into lines (a pasted diff, a list) — collapsing those breaks the way
+     plain HTML text-flow does would scramble intentional structure on a
+     page whose whole point is reading a transcript accurately. */
+  .body p { margin: 0 0 8px; white-space: pre-wrap; }
+  .body p:last-child { margin: 0; }
+
+  /* "Show earlier" — a plain-text affordance sharing the turn-mark's rail
+     position and rhythm, not a button trying to look important. */
+  .show-earlier {
+    display: block; width: 100%; text-align: left; margin: 0 0 22px;
+    background: none; border: none; padding: 0; cursor: pointer;
+    font: 11.5px var(--sans); color: var(--text-3); text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .show-earlier:hover { color: var(--accent); }
+  .show-earlier:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+  .transcript-note { font-size: 12.5px; color: var(--text-3); padding: 4px 0 8px; }
+  .transcript-note.err { color: var(--critical); }
+  /* The "Thinking…" pending-assistant indicator (transcriptModel's "pending"
+     kind — see its own doc comment): shares .transcript-note's dim, quiet
+     register — it is not an error, not a loading state, just "nothing to
+     show yet for a turn that's genuinely running" — with the animation
+     applied only under the SAME prefers-reduced-motion gate every other
+     "something is live" animation in this file already uses (see the
+     .conn.connected .dot / .live .pulse rules below). */
+  .pending-indicator { display: flex; align-items: center; gap: 2px; }
+
+  .toolblock {
+    font-family: var(--mono); font-size: 12px; line-height: 1.55;
+    background: var(--surface-inset); border-radius: 6px;
+    padding: 8px 12px; overflow-x: auto; white-space: pre;
+    color: var(--text-2);
+  }
+  .toolblock .cmd { color: var(--text-1); font-weight: 600; }
+  .tool-summary {
+    display: flex; gap: 10px; align-items: baseline; margin: 0 0 6px;
+    font-family: var(--mono); font-size: 12.5px; color: var(--text-1);
+  }
+  .tool-summary .t-elapsed { color: var(--text-3); font-size: 12px; margin-left: auto; }
+  details.toolfold > summary { list-style: none; cursor: pointer; }
+  details.toolfold > summary::-webkit-details-marker { display: none; }
+  details.toolfold > summary .fold-hint { color: var(--text-3); font-size: 11.5px; }
+  details.toolfold[open] > summary .fold-hint { display: none; }
+
+  /* Composer: the one colored action in the app. Sticky under the
+     transcript; sends prompt_async — idle starts a turn, busy queues with
+     tool-boundary injection, and the UI says which honestly. */
+  .composer {
+    position: sticky; bottom: 0; margin-top: 36px;
+    background: var(--surface); padding: 12px 0 14px;
+    border-top: 1px solid var(--separator);
+  }
+  .composer form { display: flex; gap: 10px; align-items: flex-end; }
+  .composer textarea {
+    flex: 1; min-width: 0; resize: none; field-sizing: content;
+    max-height: 8lh; min-height: 1.5lh;
+    background: var(--surface-inset); color: var(--text-1);
+    border: 1px solid var(--separator); border-radius: 8px;
+    padding: 9px 12px; font: 13.5px/1.5 var(--sans);
+  }
+  .composer textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .composer textarea::placeholder { color: var(--text-3); }
+  .composer textarea:disabled { opacity: .55; }
+  .composer button {
+    flex: none; border: 1px solid transparent; border-radius: 8px; padding: 9px 16px;
+    background: var(--accent); color: oklch(0.99 0 0);
+    font: 600 13.5px/1.5 var(--sans); cursor: pointer;
+  }
+  .composer button:hover:not(:disabled) { filter: brightness(1.08); }
+  .composer button:disabled { opacity: .55; cursor: not-allowed; }
+  .composer button:focus-visible { outline: 2px solid var(--text-1); outline-offset: 2px; }
+  .composer .hint { font-size: 11.5px; color: var(--text-3); margin-top: 6px; }
+  .composer .composer-err { color: var(--critical); font-size: 12px; margin: 6px 0 0; min-height: 14px; }
+
+  .streaming-tail { color: var(--text-1); }
+  .caret { display: inline-block; width: 7px; height: 14px; background: var(--ok); vertical-align: text-bottom; margin-left: 2px; }
+  @media (prefers-reduced-motion: no-preference) {
+    .live .pulse, .livechip .pulse2, .pending-indicator { animation: breathe 2.4s ease-in-out infinite; }
+    .caret { animation: blink 1.1s steps(1) infinite; }
+    @keyframes breathe { 50% { opacity: 0.35; } }
+    @keyframes blink { 50% { opacity: 0; } }
+  }
+</style>
+</head>
+<body>
+  <div class="frame">
+
+    <div id="board">
+      <header class="identity">
+        <div class="hgroup">
+          <h1 class="app-name">monitor <span class="dim" id="hdr-box">/ —</span></h1>
+          <div class="id-line" id="hdr-idline">
+            <span id="hdr-version">—</span>
+            <span id="hdr-sync">—</span>
+            <span>up <span id="hdr-uptime">—</span></span>
+          </div>
+        </div>
+        <span class="conn" id="conn" role="status" aria-live="polite"><span class="dot" id="conn-dot"></span><span id="conn-text">disconnected</span></span>
+      </header>
+
+      <section id="connect-panel" class="connect" aria-label="Connect to a harness instance">
+        <p id="connect-intro">Connect to a harness serve instance to see its sessions.</p>
+        <p class="cross-box-notice" id="connect-cross-box-notice" hidden></p>
+        <form id="connect-form">
+          <label for="base-url" id="base-url-label">Base URL
+            <input id="base-url" type="text" placeholder="http://localhost:4096" autocomplete="off" spellcheck="false" aria-describedby="connect-err" required>
+          </label>
+          <label for="run-token">Run token
+            <input id="run-token" type="password" placeholder="run token" autocomplete="off" aria-describedby="connect-err"
+                   title="stored in this browser's localStorage in plaintext — use a dev token on a private origin" required>
+          </label>
+          <button type="submit">Connect</button>
+        </form>
+        <p class="err" id="connect-err" role="alert"></p>
+      </section>
+
+      <section class="sessions" id="sessions" aria-label="Sessions"></section>
+
+      <footer class="legend">
+        <div>
+          <span class="sw" style="background: var(--ok)"></span> live (streaming / tool) &nbsp;·&nbsp;
+          <span class="sw" style="background: var(--warn)"></span> quiet &gt;15s &nbsp;·&nbsp;
+          <span class="sw" style="background: var(--critical)"></span> stalled &gt;60s / failed &nbsp;·&nbsp;
+          click a session to open it
+        </div>
+      </footer>
+    </div>
+
+    <div id="detail">
+      <nav class="crumb"><a href="#" id="back-link">← monitor<span id="crumb-box"></span></a></nav>
+      <header class="detail-head">
+        <span class="sid-full" id="detail-sid-full"></span>
+        <span class="meta">
+          <span id="detail-msgcount"></span>
+          <span>turn <span id="detail-turn-elapsed"></span></span>
+          <span id="detail-toolcount"></span>
+        </span>
+        <span class="livechip" id="detail-livechip" hidden><span class="pulse2"></span><span id="detail-livechip-text"></span></span>
+      </header>
+
+      <section class="transcript" id="transcript" aria-label="Session transcript"></section>
+
+      <div class="composer">
+        <form id="composer-form">
+          <textarea id="composer-input" rows="1" placeholder="Message the session" aria-label="Message the session"></textarea>
+          <button type="submit">Send</button>
+        </form>
+        <p class="hint">Enter to send · Shift+Enter for a new line</p>
+        <p class="composer-err" id="composer-err" role="alert"></p>
+      </div>
+    </div>
+
+  </div>
+
+<script>
+"use strict";
+
+/* ---------- pure helpers (kept small and side-effect free) ---------- */
+/* TESTABLE-BEGIN — the region below is extracted verbatim by
+   monitor_test.mjs and evaluated in a node:vm sandbox. Keep it pure (no
+   DOM, no globals beyond Date/JSON) so the single-file page stays
+   build-free while its logic is still unit-tested. */
+
+// createSSEParser: feed it decoded stream text; it invokes onEvent({id, data})
+// once per complete frame (terminated by a blank line). Handles: multi-line
+// data (joined with "\n"), id lines, and comment lines beginning with ":".
+// Values keep an optional single leading space stripped, per the SSE spec.
+// Stateful across chunk boundaries. Copied verbatim from tools/inspector —
+// an accepted duplication between these two single-file tools.
+function createSSEParser(onEvent) {
+  let buf = "", data = [], id = null;
+  return function feed(chunk) {
+    buf += chunk;
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      let line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      if (line.endsWith("\r")) line = line.slice(0, -1);
+      if (line === "") {                      // blank line: dispatch frame
+        if (data.length) onEvent({ id, data: data.join("\n") });
+        // Per the WHATWG SSE spec the last-event-ID buffer persists across
+        // frames — it is replaced only by a new `id:` line, never cleared
+        // when a frame omits one. Reset only the data buffer here.
+        data = [];
+        continue;
+      }
+      if (line[0] === ":") continue;          // comment / heartbeat
+      const c = line.indexOf(":");
+      let field, value;
+      if (c === -1) { field = line; value = ""; }
+      else {
+        field = line.slice(0, c);
+        value = line.slice(c + 1);
+        if (value[0] === " ") value = value.slice(1);
+      }
+      if (field === "data") data.push(value);
+      else if (field === "id") id = value;
+      // "event"/"retry" fields are unused by this API and ignored.
+    }
+  };
+}
+
+// maxSeq returns the largest `seq` across a session list (0 if none). The
+// SSE stream is opened from this cursor so replay picks up exactly what the
+// REST snapshot did not yet include — no gap, no double-counting. Copied
+// verbatim from tools/inspector.
+function maxSeq(list) {
+  let m = 0;
+  for (const s of list) if (typeof s.seq === "number" && s.seq > m) m = s.seq;
+  return m;
+}
+
+// partsText concatenates the text of Text parts (used for tool_result
+// content, which may hold only Text and Blob parts). Copied verbatim from
+// tools/inspector.
+function partsText(parts) {
+  if (!Array.isArray(parts)) return "";
+  return parts.filter(p => p && p.type === "text").map(p => p.text || "").join("\n");
+}
+
+// summarizeArgs pulls a short, human-legible summary out of a tool call's
+// (possibly JSON-string-encoded) arguments — the "go test ./server/ -race"
+// half of a "Bash · go test ./server/ -race" board/transcript label. Tries
+// a small set of common argument field names in priority order; returns ""
+// (name-only display) when nothing recognizable is found, rather than
+// dumping raw JSON into a one-line UI.
+function summarizeArgs(rawArguments) {
+  if (rawArguments == null) return "";
+  let obj = rawArguments;
+  if (typeof rawArguments === "string") {
+    try { obj = JSON.parse(rawArguments); } catch { return ""; }
+  }
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return "";
+  for (const key of ["command", "cmd", "query", "pattern", "path", "url"]) {
+    if (typeof obj[key] === "string" && obj[key]) return obj[key];
+  }
+  return "";
+}
+
+// toolLabel joins a tool name and its (possibly empty) argument summary into
+// the one-line "Bash · go test ./server/ -race" / "Bash" label used on both
+// the board and the transcript's tool folds.
+function toolLabel(name, argsSummary) {
+  const n = name || "tool";
+  return argsSummary ? n + " · " + argsSummary : n;
+}
+
+// fmtElapsed renders a whole-seconds duration the way the mockup's ticker
+// does: "41s", "2m 34s", "1h 3m".
+function fmtElapsed(seconds) {
+  if (seconds == null || !isFinite(seconds)) return "—";
+  const s = Math.max(0, Math.floor(seconds));
+  if (s < 60) return s + "s";
+  if (s < 3600) return Math.floor(s / 60) + "m " + String(s % 60).padStart(2, "0") + "s";
+  return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m";
+}
+
+// fmtAgo renders a millisecond duration as a coarse "12m ago" / "1h 3m ago"
+// — the format idle board rows use (no per-second ticking, so no seconds
+// precision once past a minute).
+function fmtAgo(ms) {
+  if (ms == null || !isFinite(ms)) return "—";
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return s + "s ago";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m ago";
+  const h = Math.floor(m / 60);
+  const remM = m % 60;
+  return remM > 0 ? h + "h " + remM + "m ago" : h + "h ago";
+}
+
+// hostLabel extracts a short "host[:port]" identity string from a base URL
+// for the header's "monitor / <host>" line — the only per-instance identity
+// available (Health carries no box name; see server/openapi.yaml). Written
+// by hand (strip a leading "scheme://", cut at the first "/", "?", or "#")
+// rather than `new URL(...)` so this stays usable in the TESTABLE sandbox,
+// which exposes only Date/JSON (see monitor_test.mjs's extraction preamble).
+// Tolerates junk: an unparseable string is returned as-is rather than
+// throwing, and an empty/missing base yields "".
+function hostLabel(base) {
+  if (!base) return "";
+  var s = String(base).replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, "");
+  var end = s.search(/[/?#]/);
+  return end === -1 ? s : s.slice(0, end);
+}
+
+// route/unroute codec the app's URL fragment: "#b=<base>&s=<session id>",
+// small explicit params (not a base64 blob) so the URL stays readable and
+// bookmarkable. Values are percent-encoded; unroute tolerates junk (missing
+// "#", unknown keys, malformed percent-encoding) rather than throwing.
+function route(state) {
+  const s = state || {};
+  const params = [];
+  if (s.base) params.push("b=" + encodeURIComponent(s.base));
+  if (s.sessionId) params.push("s=" + encodeURIComponent(s.sessionId));
+  return params.length ? "#" + params.join("&") : "#";
+}
+
+function unroute(hash) {
+  const out = { base: null, sessionId: null };
+  if (typeof hash !== "string") return out;
+  const h = hash[0] === "#" ? hash.slice(1) : hash;
+  if (!h) return out;
+  for (const part of h.split("&")) {
+    if (!part) continue;
+    const eq = part.indexOf("=");
+    const key = eq === -1 ? part : part.slice(0, eq);
+    const rawVal = eq === -1 ? "" : part.slice(eq + 1);
+    let val;
+    try { val = decodeURIComponent(rawVal); } catch { val = rawVal; }
+    if (key === "b") out.base = val;
+    else if (key === "s") out.sessionId = val;
+    // unknown keys, and any other malformed junk, are silently ignored.
+  }
+  return out;
+}
+
+// sameOriginDefaultBase decides the base URL bootstrap() should prefill
+// when nothing is already stored/fragment-linked: when this page is being
+// served BY a box itself (GET /monitor — see server/handlers.go's
+// handleMonitor), pathname starts with "/monitor", and the box's own
+// origin IS the base URL to connect to — no separate host/port to type, no
+// -cors-origin needed at all (this becomes a same-origin fetch; see
+// server/handlers.go's monitorContentSecurityPolicy, which scopes
+// connect-src to 'self' on the assumption this holds). Every other serving
+// mode this file documents (file://, a separately hosted static copy) has
+// no such relationship between where the PAGE came from and where the BOX
+// is, so this returns null and bootstrap()'s existing stored/fragment-
+// prefill/blank behavior is unchanged — this is additive, never a
+// replacement for a stored preference (see bootstrap()'s own precedence:
+// storedBase still wins over this when both are present). Takes a plain
+// {pathname, origin} object rather than `location` itself so it stays
+// callable from this TESTABLE sandbox, which exposes no `location` (or any
+// other DOM/window global) — see monitor_test.mjs's extraction preamble.
+function sameOriginDefaultBase(loc) {
+  var l = loc || {};
+  if (typeof l.pathname !== "string" || typeof l.origin !== "string" || !l.origin) return null;
+  if (l.pathname !== "/monitor" && l.pathname.indexOf("/monitor/") !== 0) return null;
+  return l.origin;
+}
+
+// embeddedConnectPlan is the single source of truth for the "frictionless
+// local" behavior: when this page is served embedded (sameOriginDefaultBase
+// — a box's own GET /monitor), bootstrap() ATTEMPTS the connection
+// immediately, with no panel shown at all, rather than making the operator
+// type anything. The auth model itself is UNCHANGED by any of this — a
+// token is still required by every route unless the box itself opted into
+// server.Options.Unauthenticated (loopback-only — see its own doc comment);
+// this only decides what the PAGE tries automatically and what it falls
+// back to showing, never what the SERVER accepts.
+//
+// The return value composes four outcomes rather than naming one
+// exclusive branch (they are not mutually exclusive in practice — see
+// each one below):
+//   - auto-attempt-same-origin: embedded — bootstrap() calls
+//     attemptConnect(base, autoToken || "") immediately, before rendering
+//     any panel. This covers BOTH the loopback-Unauthenticated case (no
+//     token needed — an empty Authorization header is fine, see
+//     authorized()) and the capability-URL/returning-operator case
+//     (autoToken carries a real one) with the SAME call: an empty token
+//     against an Unauthenticated box succeeds exactly like a correct one
+//     against any box.
+//   - show-full-panel: NOT embedded (file:// or a separately hosted static
+//     copy) — host is unknown to this page, so there is nothing to
+//     auto-attempt; the traditional two-field panel, entirely unchanged.
+//   - show-token-panel: embedded, but ONLY reached if/when the auto-
+//     attempt's own result is a failure (attemptConnect resolves false —
+//     see bootstrap()'s revealEmbeddedPanel) — this function cannot know
+//     that synchronously, so it only signals the STATIC part: showBaseField
+//     false (base is fixed/known, never re-typed) is what the eventual
+//     fallback panel renders as. A tunneled/non-loopback box with no
+//     capability link lands here, once, after one failed silent attempt.
+//   - show-cross-box-notice: crossBoxNotice is set whenever a fragment
+//     base names a DIFFERENT origin than this one — independent of (and
+//     composes with) the auto-attempt above: the embedded copy is pinned
+//     to its own box by server/handlers.go's monitorContentSecurityPolicy
+//     (connect-src 'self'), so a foreign #b= would only ever produce an
+//     opaque, undiagnosable network error if tried — this never attempts
+//     it, only explains it, while the SAME-origin auto-attempt (using
+//     autoToken) proceeds normally regardless.
+//
+// autoToken precedence (mirrors extractFragmentToken's own doc comment):
+// fragToken (the fresher credential, e.g. a rotated token shared via a new
+// link) wins over storedToken; neither present yields null, which
+// bootstrap() passes to attemptConnect as "" (still worth trying — see
+// auto-attempt-same-origin above).
+function embeddedConnectPlan(loc, fragToken, storedToken, fragBase) {
+  var base = sameOriginDefaultBase(loc);
+  if (base == null) {
+    return { embedded: false, base: null, autoToken: null, showBaseField: true, crossBoxNotice: null };
+  }
+  var autoToken = null;
+  if (typeof fragToken === "string" && fragToken) autoToken = fragToken;
+  else if (typeof storedToken === "string" && storedToken) autoToken = storedToken;
+  var crossBoxNotice = null;
+  if (typeof fragBase === "string" && fragBase && fragBase !== base) {
+    crossBoxNotice = "This embedded monitor can only watch its own instance — open " + fragBase + "/monitor instead.";
+  }
+  return { embedded: true, base: base, autoToken: autoToken, showBaseField: false, crossBoxNotice: crossBoxNotice };
+}
+
+// extractFragmentToken parses a run token carried in the URL fragment as
+// "#t=<token>" — a capability URL an operator can paste or click without
+// typing a token by hand. tools/hub (see AGENTS.md's "Development hub"
+// section) established the precedent in this repo that run tokens riding
+// the URL fragment is a deliberate, documented tradeoff ("run tokens ride
+// the URL by design; treat a link like a secret"), not a novel hazard —
+// this reuses that philosophy while keeping THIS file's own established
+// encoding (small explicit params, route/unroute — see their doc comments
+// — never the hub's base64 blob).
+//
+// Returns the adoption plan, not the side effects themselves (this stays
+// pure/TESTABLE; bootstrap() applies it: localStorage.setItem + a
+// history.replaceState scrub):
+//   - token: the decoded value, or null if no "t" param is present.
+//     Percent-decoding failures degrade to the raw text (matching
+//     unroute's own tolerance) rather than throwing; an explicitly empty
+//     "#t=" is also null (nothing to adopt). A repeated "t" param uses the
+//     LAST occurrence, matching unroute's own last-write-wins handling of
+//     repeated "b"/"s" params.
+//   - cleanedHash: the SAME hash with "t" removed but every other
+//     recognized param preserved (route(unroute(hash)) — minus token by
+//     construction, since unroute never parsed "t" from `hash` in the
+//     first place) — e.g. "#t=X&s=Y" -> "#s=Y", "#t=X" -> "#", "#s=Y"
+//     (no token) -> "#s=Y" unchanged. A totally unrecognized third param
+//     is dropped either way, same as unroute already tolerates (see its
+//     "unknown keys ... silently ignored" comment) — this never carried
+//     it forward to begin with.
+function extractFragmentToken(hash) {
+  var h = typeof hash === "string" ? hash : "";
+  var stripped = h[0] === "#" ? h.slice(1) : h;
+  var token = null;
+  if (stripped) {
+    var parts = stripped.split("&");
+    for (var i = 0; i < parts.length; i++) {
+      var part = parts[i];
+      if (!part) continue;
+      var eq = part.indexOf("=");
+      var key = eq === -1 ? part : part.slice(0, eq);
+      if (key !== "t") continue;
+      var rawVal = eq === -1 ? "" : part.slice(eq + 1);
+      try { token = decodeURIComponent(rawVal); } catch (e) { token = rawVal; }
+    }
+  }
+  if (token === "") token = null;
+  var r = unroute(hash);
+  var cleanedHash = route({ base: r.base, sessionId: r.sessionId });
+  return { token: token, cleanedHash: cleanedHash };
+}
+
+// QUIET_MS/STALL_MS are `var`, not `const`: top-level `const`/`let` bindings
+// live in a vm context's lexical environment, not as properties of it, so
+// monitor_test.mjs's sandbox destructure would see them as undefined (see
+// its extraction preamble comment). `var` (like a function declaration)
+// becomes a property of the global object either way.
+var QUIET_MS = 15000;
+var STALL_MS = 60000;
+
+// staleness classifies a session's live-ness purely from its activity fold:
+// "idle" (never quiet/stalled — there is nothing to be silent about),
+// "live" (recent event), "quiet" (>= QUIET_MS since the last event while
+// busy), or "stalled" (>= STALL_MS). Boundaries are inclusive at the
+// threshold (>=), matching the mockup's ">15s" / ">60s" legend read as "at
+// least this stale".
+function staleness(activity, nowMs) {
+  if (!activity || activity.phase === "idle") return "idle";
+  var last = typeof activity.lastEventAt === "number" ? activity.lastEventAt : null;
+  if (last == null) return "live";
+  var delta = nowMs - last;
+  if (delta >= STALL_MS) return "stalled";
+  if (delta >= QUIET_MS) return "quiet";
+  return "live";
+}
+
+function baseActivity() {
+  return { phase: "idle", tool: null, turn: null, lastEventAt: null, lastOutcome: null };
+}
+
+// reduceActivity folds one journal/live event into a session's activity
+// state: phase (idle | streaming | tool | between), the current tool (if
+// any), the open turn's start time + tool-call count, the last time any
+// event was observed, and the most recent turn's outcome. `prev` may be
+// null (a fresh session) or the result of seedActivity (a mid-turn connect,
+// whose turn.startedAt is null and must stay null — never fabricated).
+// `nowMs` defaults to Date.now() so callers don't have to thread it through
+// for ordinary use, but tests pass an explicit value for determinism.
+function reduceActivity(prev, ev, nowMs) {
+  var now = typeof nowMs === "number" ? nowMs : Date.now();
+  var a = Object.assign(baseActivity(), prev || {});
+  if (!ev || typeof ev.type !== "string") return a;
+  var next = Object.assign({}, a, { lastEventAt: now });
+  switch (ev.type) {
+    case "session.status":
+      if (ev.status === "busy") {
+        next.phase = "between";
+        next.tool = null;
+        next.turn = a.turn || { startedAt: now, toolCalls: 0 };
+      } else {
+        next.phase = "idle";
+        next.tool = null;
+        next.turn = null;
+      }
+      return next;
+    case "text.delta":
+    case "reasoning.delta":
+      next.phase = "streaming";
+      next.tool = null;
+      if (!next.turn) next.turn = { startedAt: now, toolCalls: 0 };
+      return next;
+    case "tool.start": {
+      if (!ev.tool_call) return next;
+      var turn = a.turn || { startedAt: now, toolCalls: 0 };
+      next.phase = "tool";
+      next.tool = {
+        name: ev.tool_call.name || "",
+        argsSummary: summarizeArgs(ev.tool_call.arguments),
+        sinceAt: now,
+      };
+      next.turn = { startedAt: turn.startedAt, toolCalls: turn.toolCalls + 1 };
+      return next;
+    }
+    case "tool.end":
+      // An end with no matching current tool is an unpaired/duplicate
+      // event: ignore it rather than guessing at a phase change.
+      if (!a.tool) return next;
+      next.phase = "between";
+      next.tool = null;
+      return next;
+    case "turn.end":
+      next.lastOutcome = ev.outcome || null;
+      return next;
+    default:
+      return next; // unrecognized event: still counts as activity (lastEventAt bump)
+  }
+}
+
+// seedActivity bootstraps an activity fold from a polled Session summary —
+// what a monitor connecting mid-turn knows before any live event arrives.
+// A running session (state busy or goal-running) seeds an OPEN turn with a
+// null startedAt: the poll snapshot carries no turn-start timestamp, and
+// fabricating "now" would understate elapsed time by an unknown, possibly
+// large amount. The renderer shows an em dash for that null rather than a
+// wrong number.
+function seedActivity(sessionSummary) {
+  var s = sessionSummary || {};
+  var parsed = s.last_activity_at ? Date.parse(s.last_activity_at) : NaN;
+  var lastEventAt = isNaN(parsed) ? null : parsed;
+  var lastOutcome = s.last_turn && s.last_turn.outcome ? s.last_turn.outcome : null;
+  var running = s.state === "busy" || s.state === "goal-running";
+  if (running) {
+    return { phase: "between", tool: null, turn: { startedAt: null, toolCalls: 0 }, lastEventAt: lastEventAt, lastOutcome: lastOutcome };
+  }
+  return { phase: "idle", tool: null, turn: null, lastEventAt: lastEventAt, lastOutcome: lastOutcome };
+}
+
+// outcomeLabel renders a LastTurn.outcome value (see server/openapi.yaml)
+// as the short word/phrase the idle board row's detail cell shows.
+function outcomeLabel(outcome) {
+  switch (outcome) {
+    case "completed": return "completed";
+    case "error": return "error";
+    case "context_exhausted": return "context exhausted";
+    case "max_turns_exceeded": return "max turns exceeded";
+    case "evaluator_exhausted": return "evaluator exhausted";
+    case "worker_parked": return "worker parked";
+    default: return outcome || "";
+  }
+}
+
+// detailFor picks the board row's detail-cell text (and whether it renders
+// critical), precedence: an active/last-known tool cmd, else — while
+// quiet/stalled — the raw phase word (what the session claims to be doing
+// despite the silence), else — while idle — the last turn's outcome, or a
+// paused-goal presentation ("worker parked" / "goal paused") when that's
+// why the session is sitting idle with an active goal.
+function detailFor(cssClass, activity, session) {
+  if (activity && activity.tool && activity.tool.name) {
+    return { text: toolLabel(activity.tool.name, activity.tool.argsSummary), critical: false };
+  }
+  if (cssClass === "quiet" || cssClass === "bad") {
+    if (activity && activity.phase && activity.phase !== "idle") return { text: activity.phase, critical: false };
+    return { text: null, critical: false };
+  }
+  if (cssClass === "idle") {
+    var goal = session && session.goal;
+    if (goal && goal.paused) {
+      if (goal.pause_reason === "worker_failure") return { text: "worker parked", critical: true };
+      if (goal.pause_reason === "restart") return { text: "goal paused", critical: true };
+      if (goal.pause_reason === "provider-backoff") return { text: "goal paused", critical: false };
+    }
+    var outcome = activity && activity.lastOutcome;
+    if (outcome) return { text: outcomeLabel(outcome), critical: outcome !== "completed" };
+    // Lowest priority: a truly untouched session (never prompted, zero
+    // durable messages) otherwise renders a plain "idle" phase word with an
+    // EMPTY detail cell — indistinguishable, at a glance, from a rendering
+    // failure (reported via live testing: an operator clicked one expecting
+    // content and read the blank detail cell as broken). `session.messages`
+    // is the session summary's own durable message count (server/
+    // handlers.go's sessionJSON.Messages field) — a real 0 here is
+    // unambiguous, never a missing/omitted-field guess (a session this page
+    // has only seen via a live "session.created" stub, not yet a poll,
+    // simply falls through to the null case below until the next poll fills
+    // `messages` in — the same staleness tolerance every other composite
+    // board field already has).
+    if (session && session.messages === 0) return { text: "empty", critical: false };
+    return { text: null, critical: false };
+  }
+  return { text: null, critical: false };
+}
+
+// boardModel merges the polled session list with each session's derived
+// activity fold into render-ready rows: css/status class, the phase word,
+// the detail cell, a non-zero-only queue count, elapsed/silence/ago timing
+// (pre-formatted, plus the raw seconds/ms a 1s ticker needs to keep
+// counting without recomputing the whole model), and the goal/stall line-2.
+// Sort: active sessions (live/quiet/bad) before idle, most-recently-active
+// first within each group; ties preserve input order (stable sort).
+function boardModel(sessions, activities, nowMs) {
+  var list = Array.isArray(sessions) ? sessions : [];
+  var acts = activities || {};
+  function activityFor(s) {
+    // Duck-type rather than `instanceof Map`: the caller's Map may have
+    // been constructed in a different realm (as in this file's own vm-
+    // sandboxed tests), where `instanceof` against this scope's own Map
+    // constructor would wrongly say no.
+    var found = acts && typeof acts.get === "function" ? acts.get(s.id) : acts[s.id];
+    return found || seedActivity(s);
+  }
+  var rows = list.map(function (s) {
+    var activity = activityFor(s);
+    var st = staleness(activity, nowMs); // "idle" | "live" | "quiet" | "stalled"
+    var cssClass = st === "stalled" ? "bad" : st;
+    var phase = cssClass === "idle" ? "idle" : (cssClass === "live" ? (activity.phase || "idle") : st);
+    var detail = detailFor(cssClass, activity, s);
+    var extra = typeof s.queued === "number" && s.queued > 0 ? s.queued + " queued" : null;
+
+    var elapsed;
+    if (cssClass === "idle") {
+      var agoMs = activity && typeof activity.lastEventAt === "number" ? Math.max(0, nowMs - activity.lastEventAt) : null;
+      elapsed = { kind: "ago", ms: agoMs, text: agoMs == null ? "—" : fmtAgo(agoMs) };
+    } else if (cssClass === "live") {
+      var startedAt = activity && activity.turn && typeof activity.turn.startedAt === "number" ? activity.turn.startedAt : null;
+      var turnSeconds = startedAt == null ? null : Math.max(0, Math.floor((nowMs - startedAt) / 1000));
+      elapsed = { kind: "turn", seconds: turnSeconds, text: turnSeconds == null ? "—" : fmtElapsed(turnSeconds) };
+    } else {
+      var lastEventAt = activity && typeof activity.lastEventAt === "number" ? activity.lastEventAt : null;
+      var silentSeconds = lastEventAt == null ? null : Math.max(0, Math.floor((nowMs - lastEventAt) / 1000));
+      elapsed = { kind: "silence", seconds: silentSeconds, text: silentSeconds == null ? "silent —" : "silent " + fmtElapsed(silentSeconds) };
+    }
+
+    var line2 = null;
+    if (cssClass === "bad") {
+      line2 = { kind: "note", text: "no events while busy — check the session" };
+    } else if (s.goal && s.goal.condition) {
+      line2 = { kind: "goal", text: s.goal.condition, live: cssClass === "live" };
+    }
+
+    var recencyAt = activity && typeof activity.lastEventAt === "number" ? activity.lastEventAt : 0;
+
+    return {
+      id: s.id,
+      cssClass: cssClass,
+      phase: phase,
+      sid: s.id,
+      detail: detail.text,
+      detailCritical: detail.critical,
+      extra: extra,
+      elapsed: elapsed,
+      line2: line2,
+      recencyAt: recencyAt,
+    };
+  });
+
+  rows.sort(function (x, y) {
+    var xIdle = x.cssClass === "idle", yIdle = y.cssClass === "idle";
+    if (xIdle !== yIdle) return xIdle ? 1 : -1;
+    return y.recencyAt - x.recencyAt;
+  });
+
+  return rows;
+}
+
+// transcriptModel folds durable messages plus live (undurable) events into
+// render-ready transcript entries: {kind: "turn-mark"|"operator"|"assistant"
+// |"reasoning"|"tool"|"error"|"turn-empty"|"pending", ...}. Durable messages
+// are the source of truth for everything they cover; `liveEvents` covers
+// only what has streamed in since the durable snapshot was taken. Tool calls
+// (in an assistant message) pair with their result (in the following
+// tool-role message) by call_id — durable or live, whichever arrives first —
+// matching message.go's own assembly rule. Streaming deltas and open tool
+// folds accumulate in a separate draft that a "message" event for the same
+// turn discards wholesale (superseded, not duplicated); anything still open
+// at the end of `liveEvents` is the current in-progress tail. The "error"
+// kind is live-only (session.error/turn.end-with-outcome-"error"/
+// session.aborted carry no durable message representation of their own —
+// see pushIfNewError below), so a detail view opened well after a turn
+// already failed shows no error entry for it, same as this function never
+// fabricating a tool fold's elapsed time it didn't itself observe.
+//
+// `pendingSends` (a 4th, optional input — an array of {text, clientId}) is
+// the composer's own optimistic state: text the operator has submitted but
+// which has NOT yet round-tripped as a real durable/stream operator message.
+// Folded, purely, as {kind:"operator", pendingSend:true, clientId} entries,
+// positioned one of two ways depending on whether it OPENS a new turn or is
+// QUEUED behind one already running (see the turnMarkIdx/
+// turnAlreadyHasOperator block near the end of this function for the exact
+// mechanics):
+//   - OPENING (the idle-send case): a live "session.status":"busy" has
+//     already turn-marked a new turn, but no operator entry has landed for
+//     it yet (durable or prompt.queued) — this pendingSend IS that turn's
+//     own message, just not confirmed yet, so it is spliced right after
+//     that turn-mark, BEFORE the draft (the "Thinking…" indicator/streaming
+//     assistant or reasoning text). Getting this wrong — appending
+//     unconditionally at the very end, trailing the draft — was a real,
+//     visually-confirmed bug: submitting into an idle session briefly
+//     rendered the response ABOVE the operator's own just-sent message,
+//     snapping to the correct order only once the turn durably landed.
+//   - QUEUED: the currently open turn already has its own operator entry
+//     shown (it's mid-stream, unrelated to this pendingSend), so this one
+//     trails at the very end — the newest thing on the page, regardless of
+//     where that turn's own content sits, exactly like the OLD
+//     unconditional behavior above, just now scoped to the case it's
+//     actually correct for.
+// Deduped against TWO candidates, matched by CONTAINMENT rather than strict
+// equality (candidateText.indexOf(pendingText) !== -1), because a queued
+// prompt's eventual delivery is template-wrapped by the engine ("OPERATOR
+// MESSAGES (address these, then continue the task): 1. <text>") — the same
+// tolerance prompt.queued's own placeholder dedup below already needs:
+//   1. the BOUNDED TAIL of userMessageTexts — the last pendingSends.length
+//      user-role message texts seen across the whole fold (durable `messages`
+//      AND live "message" events both append, via foldMessage's user-role
+//      branch — see below), each reconciled oldest-first at the very end of
+//      this function. Scoped to that P-message tail, not every durable
+//      message in the window: P outstanding pendingSends become exactly P
+//      durable user messages in submit order, so only the P most recent user
+//      messages can be their confirmations — matching each clears EVERY
+//      confirmed send (a second send no longer strands the first as a
+//      permanent phantom), while the bounded window still keeps a short/
+//      generic pending text ("go", "continue") from false-matching some
+//      unrelated OLDER message far outside the tail and dismissing the
+//      optimistic entry before its real send confirms. This bounded scope is
+//      also what keeps reconcileDetail's own eviction safe: once a reconcile
+//      refetches `messages` wholesale and trims the now-stale "message"
+//      liveEvent that first confirmed a send, the FRESH snapshot's own tail
+//      re-derives the same matches on the next render — self-healing, not a
+//      permanent duplicate.
+//   2. a LIVE "prompt.queued" event's queue_text (see that case below) — the
+//      busy-session composer path's own first confirmation, matched
+//      immediately as that one event is processed; prompt.queued is
+//      inherently live-only (never part of durable history), so this
+//      already carries no old-history false-positive risk to narrow.
+// FIFO: pendingRemaining is scanned oldest-first, so the FIRST still-
+// outstanding pendingSend whose text is contained in the candidate is the
+// one reconciled — this is a pure, side-effect-free filter of the
+// `pendingSends` argument (never mutates the caller's array), so a
+// pendingSend that has already been matched simply stops appearing on the
+// NEXT call with the same inputs — the caller (detailState.pendingSends)
+// never needs to be told which entry matched; it can stay append-only,
+// shrinking only on an explicit POST-failure removal (see wireComposer).
+function transcriptModel(messages, liveEvents, turnOffset, pendingSends) {
+  var msgs = Array.isArray(messages) ? messages : [];
+  var evs = Array.isArray(liveEvents) ? liveEvents : [];
+
+  // pendingRemaining: a local, mutable copy of `pendingSends` — entries are
+  // spliced out of THIS copy as they're matched, never touching the
+  // caller's array (keeps this function pure).
+  var pendingRemaining = Array.isArray(pendingSends) ? pendingSends.slice() : [];
+  function reconcilePendingSend(candidateText) {
+    if (!candidateText) return;
+    for (var pi = 0; pi < pendingRemaining.length; pi++) {
+      var p = pendingRemaining[pi];
+      if (p && p.text && candidateText.indexOf(p.text) !== -1) { pendingRemaining.splice(pi, 1); return; }
+    }
+  }
+  // userMessageTexts: every user-role message text foldMessage folds, in
+  // order, durable AND live — see the reconcilePendingSend usage at the end
+  // of this function for why the last pendingSends.length of them (a bounded
+  // tail), not just the single newest, is the right reconcile scope.
+  var userMessageTexts = [];
+
+  // call_id -> tool_result, spanning every RoleTool message: durable, or a
+  // live "message" event the caller hasn't migrated into `messages` yet.
+  var resultsByCallID = new Map();
+  // call_id -> the entry object for a durable tool_call folded from
+  // `messages` (or an already-migrated "message" event) with no result yet.
+  // A live tool.end for that call_id is never itself durable/journaled (see
+  // Publish's EventToolEnd case in server/journal.go — only the eventual
+  // tool-role message is), so it can arrive for a call that started before
+  // `liveEvents` began, or before this page ever fetched history. The
+  // live-event loop below patches THIS object in place when that happens,
+  // rather than silently ignoring an end it has no live "started" record
+  // for (see the "tool.end" case).
+  var durableRunningTools = new Map();
+  function collectResults(m) {
+    if (m && m.role === "tool" && Array.isArray(m.parts)) {
+      for (var i = 0; i < m.parts.length; i++) {
+        var p = m.parts[i];
+        if (p && p.type === "tool_result" && p.call_id) resultsByCallID.set(p.call_id, p);
+      }
+    }
+  }
+  for (var mi = 0; mi < msgs.length; mi++) collectResults(msgs[mi]);
+  for (var ei2 = 0; ei2 < evs.length; ei2++) {
+    var ev0 = evs[ei2];
+    if (ev0 && ev0.type === "message" && ev0.message) collectResults(ev0.message);
+  }
+
+  var entries = [];
+  var turnNum = typeof turnOffset === "number" ? turnOffset : 0;
+
+  // liveTurnOpen is true exactly while a turn has been opened by a live
+  // "session.status":"busy" event but its user message hasn't arrived yet.
+  // Single-sources turn-mark emission: on the real wire, BOTH an
+  // idle-dispatched prompt and a queued prompt's delivery emit
+  // session.status(busy) BEFORE the "message" event that durably delivers
+  // the user's own prompt text (see server/handlers.go's handlePrompt and
+  // dispatchQueueHead — emitDurable(busy) precedes the Prompt() call that
+  // appends + publishes the message). Without this flag, the
+  // "session.status" case below and foldMessage's user-role branch each
+  // pushed their OWN mark for that same turn — every turn beginning while
+  // the detail view was open double-marked (and double-incremented
+  // turnNum). Declared here, before the durable `messages` loop runs, so it
+  // stays permanently false for every foldMessage call from that loop:
+  // durable history carries no session.status events at all, so that path
+  // (unaffected by this bug) is unchanged — every user message there still
+  // marks its own turn. Consumed (reset to false) the moment a user message
+  // actually lands, so a LATER, unrelated user message with no immediately
+  // preceding busy (connecting mid-stream; a goal-internal busy/idle cycle
+  // with no message of its own) still marks correctly rather than being
+  // silently swallowed by a stale flag — see the "session.status" case's
+  // else branch, which also resets it on any non-busy transition.
+  var liveTurnOpen = false;
+
+  // turnBusy is the pending "Thinking…" indicator's own open/closed flag —
+  // deliberately a SEPARATE flag from liveTurnOpen above, which is consumed
+  // (reset false) the instant the turn's user message lands, well before the
+  // turn itself is done running. turnBusy instead stays true for the WHOLE
+  // span a live "session.status":"busy" has been observed with no
+  // subsequent "session.status":"idle" — set by the "session.status" case
+  // below, read only once, after the whole fold, to decide whether a
+  // trailing {kind:"pending"} entry belongs in the result (see
+  // turnHasNoContentYet below). Starts false: with no live busy event
+  // observed at all (e.g. a detail view opened purely against durable
+  // history, or connecting mid-turn before this page ever saw the busy
+  // transition), there is nothing this fold can honestly call "currently
+  // open" — same "never fabricate what wasn't observed" spirit as
+  // toolElapsedText/seedActivity's null startedAt elsewhere in this file.
+  var turnBusy = false;
+
+  function foldMessage(m) {
+    if (!m) return;
+    if (m.role === "user") {
+      if (liveTurnOpen) {
+        liveTurnOpen = false;
+        // Backfill the real timestamp onto the turn-mark session.status
+        // already opened (it had none — status events carry no wall-clock
+        // content of their own) now that the message it was waiting for
+        // has actually arrived, instead of leaving that mark's `at` null
+        // forever.
+        for (var lm = entries.length - 1; lm >= 0; lm--) {
+          if (entries[lm].kind === "turn-mark") { if (!entries[lm].at) entries[lm].at = m.created_at || null; break; }
+        }
+      } else {
+        turnNum += 1;
+        entries.push({ kind: "turn-mark", turn: turnNum, at: m.created_at || null, live: false });
+      }
+      userMessageTexts.push(partsText(m.parts));
+    }
+    if (m.role === "tool") return; // consumed via resultsByCallID
+    var parts = Array.isArray(m.parts) ? m.parts : [];
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i];
+      if (!p) continue;
+      if (p.type === "text") {
+        // partIndex: this part's own index within m.parts — see entryKey's
+        // "operator"/"assistant"/"reasoning" case for why a text and a
+        // reasoning part of the SAME message (m.id shared by both) need
+        // this to avoid colliding on one DOM node.
+        entries.push({ kind: m.role === "user" ? "operator" : "assistant", id: m.id || null, partIndex: i, text: p.text || "", at: m.created_at || null });
+      } else if (p.type === "reasoning") {
+        entries.push({ kind: "reasoning", id: m.id || null, partIndex: i, text: p.text || "", at: m.created_at || null });
+      } else if (p.type === "tool_call") {
+        var result = resultsByCallID.get(p.call_id);
+        var toolEntry = {
+          kind: "tool",
+          id: p.call_id,
+          name: p.name || "",
+          argsSummary: summarizeArgs(p.arguments),
+          output: result ? partsText(result.content) : "",
+          isError: !!(result && result.is_error),
+          running: !result,
+          at: m.created_at || null,
+        };
+        entries.push(toolEntry);
+        if (!result) durableRunningTools.set(p.call_id, toolEntry);
+      } else if (p.type === "blob") {
+        entries.push({ kind: m.role === "user" ? "operator" : "assistant", id: m.id || null, partIndex: i, text: "[blob" + (p.media_type ? " " + p.media_type : "") + "]", at: m.created_at || null });
+      }
+    }
+  }
+
+  for (var mj = 0; mj < msgs.length; mj++) foldMessage(msgs[mj]);
+
+  // Live tail: a draft, held separately from `entries` so a "message" event
+  // that supersedes it can discard it wholesale instead of leaving
+  // duplicate content behind.
+  var draft = [];
+  var openText = null;
+  var openReasoning = null;
+  var openTools = new Map();
+
+  function resetDraft() {
+    draft = [];
+    openText = null;
+    openReasoning = null;
+    openTools = new Map();
+  }
+
+  // pushIfNewError appends a critical "error" entry for `text` to `entries`
+  // (never `draft` — a failure must survive a later resetDraft(), e.g. the
+  // terminal session.status idle transition right behind it on the real
+  // wire), unless the immediately preceding entry is already that exact
+  // same error — the dedup for session.error/turn.end's redundant pair (see
+  // their cases in the event-loop switch below).
+  function pushIfNewError(text) {
+    var last = entries.length ? entries[entries.length - 1] : null;
+    if (last && last.kind === "error" && last.text === text) return;
+    entries.push({ kind: "error", id: null, text: text });
+  }
+
+  // turnHasContentSinceMark looks for a visible entry belonging to the
+  // current turn — checking `draft` first, THEN `entries` backward, stopping
+  // at (and not including) the most recent turn-mark. `draft` matters: a
+  // tool call whose "message" event (the assistant's tool_call, then the
+  // tool-role result) hasn't landed yet is represented ONLY by its live
+  // tool.start/tool.end pair, which mutates an entry already sitting in
+  // `draft` (see the "tool.start"/"tool.end" cases below) rather than ever
+  // migrating into `entries` — checking `entries` alone would miss a
+  // completed tool call still waiting on its durable message. "assistant"/
+  // "tool"/"error" always count; `includeReasoningAndEmpty` additionally
+  // counts "reasoning" and "turn-empty" — the two callers below need
+  // opposite answers for those two kinds:
+  //   - turnHadVisibleOutput (includeReasoningAndEmpty=false): the "turn
+  //     completed with no output" placeholder's own check. Deliberately
+  //     excludes reasoning — a turn that only thought out loud and never
+  //     replied or acted IS exactly the "no output" case this exists to
+  //     surface, not a false negative. "turn-empty" cannot occur here (this
+  //     runs BEFORE that placeholder would ever be pushed for the CURRENT
+  //     turn.end — see that case below). Live-only (mirrors pushIfNewError/
+  //     the "error" kind's own scoping: there is no durable record of "this
+  //     turn produced no output" to reconstruct from a `messages`-only
+  //     history fetch, so a detail view opened well after such a turn shows
+  //     nothing special for it, same as it shows no error entry for a
+  //     long-past failure).
+  //   - the pending "Thinking…" indicator's own derivation (see turnBusy,
+  //     read once at the very end of this function): includes reasoning — a
+  //     turn that has started thinking out loud is no longer silent, even
+  //     though it hasn't replied yet, the OPPOSITE of turnHadVisibleOutput's
+  //     exclusion above — and "turn-empty", so once turn.end(completed) has
+  //     already pushed that placeholder for this turn (see the "turn.end"
+  //     case below), the pending indicator stops claiming "nothing yet" even
+  //     though session.status(idle) — which flips turnBusy false — may not
+  //     have been processed yet on the real wire's own ordering (turn.end
+  //     precedes it). Without this, the two placeholders could both render
+  //     for one beat.
+  function turnHasContentSinceMark(includeReasoningAndEmpty) {
+    for (var d = draft.length - 1; d >= 0; d--) {
+      var dk = draft[d].kind;
+      if (dk === "assistant" || dk === "tool") return true;
+      if (includeReasoningAndEmpty && dk === "reasoning") return true;
+    }
+    for (var i = entries.length - 1; i >= 0; i--) {
+      var k = entries[i].kind;
+      if (k === "turn-mark") return false;
+      if (k === "assistant" || k === "tool" || k === "error") return true;
+      if (includeReasoningAndEmpty && (k === "reasoning" || k === "turn-empty")) return true;
+    }
+    return false;
+  }
+
+  for (var ek = 0; ek < evs.length; ek++) {
+    var ev = evs[ek];
+    if (!ev || typeof ev.type !== "string") continue;
+    switch (ev.type) {
+      case "session.status":
+        resetDraft();
+        if (ev.status === "busy") {
+          turnNum += 1;
+          entries.push({ kind: "turn-mark", turn: turnNum, at: null, live: true });
+          liveTurnOpen = true; // consumed by foldMessage's user-role branch above
+          turnBusy = true;
+        } else {
+          // Bounds how long an unconsumed liveTurnOpen can linger: a busy
+          // cycle with no discrete user message (e.g. a goal-loop internal
+          // turn) resets here at its idle transition, so it can never leak
+          // into suppressing a later, unrelated user message's own mark.
+          liveTurnOpen = false;
+          turnBusy = false;
+        }
+        break;
+      case "message":
+        resetDraft();
+        // A "message" event whose role is "user" durably delivers a prompt
+        // that may have rendered earlier as an optimistic "prompt.queued"
+        // placeholder (below) while it waited its turn. Drop the oldest
+        // still-queued placeholder — FIFO, since the wire carries no shared
+        // id between prompt.queued's queue_id and this event's message id —
+        // so the real, turn-marked message replaces it instead of
+        // duplicating it.
+        if (ev.message && ev.message.role === "user") {
+          for (var qi = 0; qi < entries.length; qi++) {
+            if (entries[qi].kind === "operator" && entries[qi].queued) { entries.splice(qi, 1); break; }
+          }
+        }
+        // pendingSends reconciliation for a "message" event is NOT wired
+        // here — foldMessage (called just below) already tracks
+        // lastUserMessageText for every user message it folds, durable or
+        // live alike, and this function reconciles against that ONE value
+        // once at the very end (see its own doc comment for why "the
+        // single latest user message" is the right scope, not every event
+        // individually).
+        if (ev.message) foldMessage(ev.message);
+        break;
+      case "prompt.queued":
+        // Optimistic-but-honest: this fires only once the server has
+        // durably accepted the composer's prompt_async POST (see
+        // server/journal.go's publishQueue), so it is not a client-side
+        // phantom — it is the earliest the stream itself confirms the
+        // message. Pushed straight into `entries`, not the draft, so an
+        // unrelated resetDraft() elsewhere (e.g. the current turn's own
+        // streaming text completing) cannot make it vanish before delivery.
+        entries.push({ kind: "operator", id: null, text: ev.queue_text || "", queued: true, queueId: ev.queue_id != null ? ev.queue_id : null, at: null });
+        // This is the busy-session composer path's first real confirmation
+        // of the send — reconcile any still-optimistic pendingSend for the
+        // SAME text here too (prompt.queued events never route through
+        // foldMessage, unlike "message" above, so this is its own call
+        // site rather than falling out of foldMessage's user-role branch).
+        if (pendingRemaining.length) reconcilePendingSend(ev.queue_text || "");
+        break;
+      case "turn.restart":
+        // A base-loop retry (engine/prompt_retry.go) re-streams this turn's
+        // partial assistant text/reasoning from scratch after a masked
+        // transient provider error. Drop the open streamed drafts so the
+        // retry rebuilds them, instead of showing the failed attempt's
+        // partial concatenated ahead of the retry's text. Tools are
+        // untouched: turn.restart fires only before any tool call.
+        if (openText) { var oti = draft.indexOf(openText); if (oti !== -1) draft.splice(oti, 1); openText = null; }
+        if (openReasoning) { var ori = draft.indexOf(openReasoning); if (ori !== -1) draft.splice(ori, 1); openReasoning = null; }
+        break;
+      case "text.delta":
+        if (!openText) { openText = { kind: "assistant", id: null, text: "", streaming: true }; draft.push(openText); }
+        openText.text += ev.text || "";
+        break;
+      case "reasoning.delta":
+        if (!openReasoning) { openReasoning = { kind: "reasoning", id: null, text: "", streaming: true }; draft.push(openReasoning); }
+        openReasoning.text += ev.text || "";
+        break;
+      case "tool.start":
+        if (ev.tool_call && ev.tool_call.call_id) {
+          var t = {
+            kind: "tool", id: ev.tool_call.call_id, name: ev.tool_call.name || "",
+            argsSummary: summarizeArgs(ev.tool_call.arguments),
+            output: "", isError: false, running: true,
+          };
+          draft.push(t);
+          openTools.set(ev.tool_call.call_id, t);
+          openText = null;
+          openReasoning = null;
+        }
+        break;
+      case "tool.end":
+        if (ev.tool_call && ev.tool_call.call_id) {
+          var callID = ev.tool_call.call_id;
+          var running = openTools.get(callID) || durableRunningTools.get(callID);
+          // No matching open (live-started or durable-running) tool: an
+          // unpaired/duplicate end. Ignore it rather than guessing which
+          // fold it belongs to.
+          if (running) {
+            running.running = false;
+            running.output = partsText(ev.output);
+            running.isError = !!ev.is_error;
+            openTools.delete(callID);
+            durableRunningTools.delete(callID);
+          }
+        }
+        break;
+      // session.error/turn.end(error)/session.aborted all fold into the SAME
+      // "error" entry kind (rendered via buildMsgEl/updateMsgEl like any
+      // other message, styled critical via CSS's .msg.error rule). See
+      // server/handlers.go's runPrompt/runGoal: a genuine turn failure
+      // ALWAYS emits session.error immediately followed by turn.end with
+      // the identical (sanitized) error text — pushIfNewError's dedup
+      // means whichever of the two arrives second is a no-op, while EITHER
+      // one arriving alone (a page connecting mid-failure, replaying only
+      // one of the two) still folds its own entry.
+      case "session.error":
+        pushIfNewError(ev.error || "");
+        break;
+      case "turn.end":
+        if (ev.outcome === "error" && ev.error) {
+          pushIfNewError(ev.error);
+        } else if (ev.outcome === "completed" && !turnHasContentSinceMark(false)) {
+          // A turn can legitimately complete with nothing to show: no
+          // assistant text, no tool call, no error (observed with an
+          // exhausted scripted provider; rare but real with an actual
+          // model too). Without this, the transcript renders NOTHING for
+          // that turn beyond its own operator prompt — indistinguishable
+          // from the turn having silently vanished. A dim, turn-mark-
+          // register placeholder (not the critical "error" register: this
+          // is not a failure) says so plainly instead.
+          entries.push({ kind: "turn-empty", turn: turnNum, text: "turn completed with no output" });
+        }
+        break;
+      case "session.aborted":
+        // No dedup needed: unlike session.error/turn.end, a deliberate
+        // abort (see runPrompt's context.Canceled branch) never pairs with
+        // a second event carrying the same text.
+        entries.push({ kind: "error", id: null, text: "turn aborted" });
+        break;
+      default:
+        break;
+    }
+  }
+
+  // Reconcile any still-outstanding pendingSends against the BOUNDED TAIL of
+  // user messages seen across the fold — the last pendingRemaining.length of
+  // them, oldest-first. Each pendingSend becomes exactly one durable user
+  // message, in submit order (FIFO), so the P still-outstanding pendingSends
+  // can only be confirmed by the P most recent user messages; matching each
+  // in order clears EVERY confirmed send, not just the newest. Scoping the
+  // scan to that P-message tail (not the full ~50-message window) preserves
+  // the false-positive protection that motivated the original single-message
+  // check: a short/generic pending text ("go", "continue") that happens to be
+  // a substring of some unrelated OLDER message stays outside the window and
+  // never dismisses the optimistic entry before its own real send confirms.
+  // Matching only the single newest message here was the multi-send phantom
+  // bug: a second send left the first pendingSend rendering as a permanent
+  // trailing duplicate until the operator navigated away and back.
+  // prompt.queued's own reconciliation already happened earlier, inline, as
+  // that event was processed — this is only the "message"-event path's
+  // deferred check.
+  if (pendingRemaining.length) {
+    var tail = userMessageTexts.slice(-pendingRemaining.length);
+    for (var uti = 0; uti < tail.length && pendingRemaining.length; uti++) {
+      reconcilePendingSend(tail[uti]);
+    }
+  }
+
+  // Does the CURRENT open turn already have its own operator entry showing
+  // (durable, via foldMessage's user-role branch, or a "prompt.queued"
+  // placeholder — both push kind:"operator" straight into `entries`)? Scan
+  // backward from the end of `entries`, stopping at (not including) the
+  // most recent turn-mark — same backward-scan shape as
+  // turnHasContentSinceMark just above, but checking for "operator"
+  // specifically, since that is what distinguishes the two pendingSend
+  // scenarios documented on this function's own pendingSends comment:
+  //   - IDLE-send: a live "session.status":"busy" already pushed a new
+  //     turn-mark (liveTurnOpen), but the user message that would carry an
+  //     "operator" entry for THIS turn hasn't landed yet — the pendingSend
+  //     IS that message, just not durable/confirmed yet. turnMarkIdx points
+  //     at that mark with turnAlreadyHasOperator still false.
+  //   - BUSY-send (queued behind a running turn): the running turn's own
+  //     operator entry already landed (real message or prompt.queued) well
+  //     before this NEW pendingSend was even added — turnAlreadyHasOperator
+  //     is true, so this pendingSend belongs to some turn that hasn't
+  //     opened yet, not the one currently running.
+  // If `entries` carries no turn-mark at all (nothing has ever opened),
+  // turnMarkIdx stays -1 and there is nothing to "open" — a pendingSend
+  // here is the very first thing on the page either way, so trailing vs.
+  // leading is unobservable and the code below leaves it to the trailing
+  // path unchanged.
+  var turnMarkIdx = -1;
+  var turnAlreadyHasOperator = false;
+  for (var bi = entries.length - 1; bi >= 0; bi--) {
+    if (entries[bi].kind === "turn-mark") { turnMarkIdx = bi; break; }
+    if (entries[bi].kind === "operator") turnAlreadyHasOperator = true;
+  }
+  // Only the FIRST (oldest, FIFO — pendingRemaining is scanned/shifted in
+  // submission order throughout this function) still-outstanding
+  // pendingSend can ever be the one that opened the CURRENT turn; a second,
+  // later pendingSend queued up behind it belongs to a turn this fold
+  // hasn't opened yet, so it stays in the ordinary trailing group either
+  // way (see pendingSendEntries below).
+  var openingPendingSend = turnMarkIdx !== -1 && !turnAlreadyHasOperator && pendingRemaining.length
+    ? pendingRemaining.shift()
+    : null;
+  // Spliced right after the turn-mark it opens — i.e. appended to `entries`
+  // itself, BEFORE the draft/pending-indicator/trailing groups below — so
+  // the render order is [turn-mark][operator (pending)][Thinking…/
+  // streaming draft], matching what a real idle-session send must look
+  // like: the operator's own message precedes the response it triggered,
+  // never the other way around.
+  var openedEntries = openingPendingSend
+    ? entries.concat([{ kind: "operator", id: null, text: openingPendingSend.text, pendingSend: true, clientId: openingPendingSend.clientId, at: null }])
+    : entries;
+
+  // The pending "Thinking…" indicator, if this turn is genuinely still open
+  // (turnBusy) and has shown nothing yet (turnHasContentSinceMark(true) is
+  // false) — computed fresh from the fold, not from any externally-supplied
+  // busy/idle flag (see turnBusy's own doc comment) — sits right after the
+  // open turn's own draft tail, BEFORE any trailing pendingSend entries: it
+  // belongs to the turn that is actually running, never to a pendingSend
+  // still waiting to even be dispatched (see the "queued behind a running
+  // turn" scenario in monitor_test.mjs).
+  var pendingIndicator = turnBusy && !turnHasContentSinceMark(true) ? [{ kind: "pending" }] : [];
+
+  // Trailing pendingSend entries: whatever's left in pendingRemaining after
+  // every reconciliation above (including the opening splice just above)
+  // had its chance to match/place one. Always last — the newest thing on
+  // the page, regardless of any currently-open turn's own content above
+  // it — this is the QUEUED case: a send made while a turn that already has
+  // its own operator entry is still running.
+  var pendingSendEntries = pendingRemaining.map(function (p) {
+    return { kind: "operator", id: null, text: p.text, pendingSend: true, clientId: p.clientId, at: null };
+  });
+
+  return openedEntries.concat(draft).concat(pendingIndicator).concat(pendingSendEntries);
+}
+
+// HISTORY_WINDOW is the number of most-recent durable messages the detail
+// view renders on open; historyWindow's "show earlier" affordance expands
+// past it on request. 50 messages runs roughly 15-25 turns deep for a
+// typical tool-heavy session — enough to orient the operator immediately
+// without laying out an entire long-running transcript by default (see the
+// plan's "no virtualization heroics").
+var HISTORY_WINDOW = 50;
+
+// historyWindow trims a full durable message list down to its most recent
+// `limit` messages (the detail view's default view), or returns it
+// untouched when `limit` is null/undefined/Infinity/>= the list length (the
+// "show earlier" expanded state). hiddenTurns counts the user-role messages
+// among the dropped prefix so the caller can start transcriptModel's turn
+// numbering (its `turnOffset` parameter) where the window begins, instead
+// of every windowed view restarting at "turn 1" for what may be turn 41.
+function historyWindow(messages, limit) {
+  var msgs = Array.isArray(messages) ? messages : [];
+  if (limit == null || !isFinite(limit) || limit >= msgs.length) {
+    return { window: msgs, hiddenCount: 0, hiddenTurns: 0 };
+  }
+  var cut = msgs.length - limit;
+  var hidden = msgs.slice(0, cut);
+  var hiddenTurns = 0;
+  for (var i = 0; i < hidden.length; i++) if (hidden[i] && hidden[i].role === "user") hiddenTurns++;
+  return { window: msgs.slice(cut), hiddenCount: hidden.length, hiddenTurns: hiddenTurns };
+}
+
+// adaptHistory turns GET /session/{id}/message's raw response (an array
+// mixing real messages with messagePlaceholder objects — see
+// server/handlers.go's handleMessages doc comment on why one unmarshalable
+// message must not take the whole endpoint down) into the message list
+// transcriptModel expects, plus a count of entries that had to be dropped
+// because they carry no renderable parts. Never throws on malformed input —
+// a non-array/empty response degrades to an empty, fully-available history
+// rather than crashing the detail view.
+function adaptHistory(raw) {
+  var list = Array.isArray(raw) ? raw : [];
+  var messages = [];
+  var unavailable = 0;
+  for (var i = 0; i < list.length; i++) {
+    var m = list[i];
+    if (m && Array.isArray(m.parts)) messages.push(m);
+    else unavailable++;
+  }
+  return { messages: messages, unavailable: unavailable };
+}
+
+// countKind counts how many transcriptModel entries match the given kind —
+// used for the detail header's tool-call count.
+function countKind(entries, kind) {
+  var list = Array.isArray(entries) ? entries : [];
+  var n = 0;
+  for (var i = 0; i < list.length; i++) if (list[i] && list[i].kind === kind) n++;
+  return n;
+}
+
+// liveMessageCount counts "message" events in a liveEvents buffer. Each one
+// durably adds exactly one message that the next GET /session/{id}/message
+// fetch would also report, so a detail header's msgCount = messages.length
+// + this, without waiting on a re-fetch to stay accurate.
+function liveMessageCount(liveEvents) {
+  var evs = Array.isArray(liveEvents) ? liveEvents : [];
+  var n = 0;
+  for (var i = 0; i < evs.length; i++) if (evs[i] && evs[i].type === "message") n++;
+  return n;
+}
+
+// detailUnderpopulated (TESTABLE) is the self-heal predicate: given the
+// session's own board summary message count (sessionJSON's "messages" —
+// server/handlers.go's len(sess.History()), the SAME durable count GET
+// /session/{id}/message would report) and how many durable messages the
+// currently-open detail view has actually rendered (detailState.messages
+// .length — NOT + liveMessageCount(detailState.liveEvents); live-only
+// content legitimately has no board-summary backing yet), decides whether
+// the detail view has fallen behind in the one way that can never
+// self-correct on its own: it rendered NOTHING at all while the summary
+// proves durable history exists. pollOnce (every POLL_MS, already
+// fetching this summary regardless) and enterDetail's own fetch-resolved
+// callback (closing the gap immediately, without waiting a full poll
+// interval) both call this and trigger reconcileDetail() on true — see
+// their call sites' own doc comments for why this closes the deep-link
+// history race even when its exact trigger can't be pinned down (finding
+// 3 in reconcileDetail's own doc comment).
+//
+// Deliberately NOT "rendered < summary" in general: a session mid-live-
+// turn legitimately has the summary's count run ahead of
+// detailState.messages for seconds at a time (detailState.messages only
+// advances on enterDetail/reconcileDetail's own re-fetch, never on a live
+// event) — that lag is normal, already visible via liveEvents, and
+// closes itself the next time ANY reconcile trigger fires; treating it as
+// "stuck" would re-fetch on every single poll for every session someone
+// happens to be watching mid-turn. "Rendered zero while the summary says
+// otherwise" has no such false-positive: a genuinely fresh, never-
+// prompted session has summary 0 too, so this only fires on the one
+// combination that means the initial load never landed.
+function detailUnderpopulated(summaryMessages, renderedMessages) {
+  var summary = typeof summaryMessages === "number" && isFinite(summaryMessages) ? summaryMessages : 0;
+  var rendered = typeof renderedMessages === "number" && isFinite(renderedMessages) ? renderedMessages : 0;
+  return rendered === 0 && summary > 0;
+}
+
+// entryKey derives a stable DOM-reconciliation key for a transcriptModel
+// entry, so the detail view can patch existing nodes in place instead of
+// rebuilding the transcript on every delta (mirrors boardModel's row keying
+// via session id). Turn marks key by turn number; tool folds key by
+// call_id, which stays the same whether the fold is running or resolved,
+// durable or live-started — the same object gets patched, not replaced,
+// when a tool.end lands. Settled messages key by their durable id PLUS
+// partIndex — NOT id alone: a single durable message can carry MULTIPLE
+// renderable parts (foldMessage's own loop — e.g. a Reasoning part followed
+// by a Text part, both stamped with the SAME m.id), so keying by id alone
+// collided the reasoning entry and the assistant entry from one message
+// onto the SAME map slot. syncTranscript's reuse-by-key then patched
+// whichever of the two entries it folded LAST onto the node the OTHER one
+// built — updateMsgEl only ever touches the body/caret, never the "who"
+// label or the kind-derived CSS class set at buildMsgEl time — so the node
+// kept its first entry's label (e.g. "reasoning") while showing the last
+// entry's text (e.g. the assistant reply): a real, visually-confirmed bug,
+// not hypothetical (a reasoning part always precedes a text part in
+// foldMessage's own part loop, so the label lost this race deterministically
+// every time, not just occasionally). partIndex disambiguates the two; the
+// draft's singleton open-text/open-reasoning entries (transcriptModel holds
+// at most one of each) and not-yet-durable queued placeholders key by a
+// fixed per-kind (or per-queue-id) tag instead, since they have no id yet.
+// `index` is a last-resort tiebreaker never expected to matter in practice.
+function entryKey(entry, index) {
+  if (!entry) return "idx:" + index;
+  switch (entry.kind) {
+    case "turn-mark": return "turn:" + entry.turn;
+    case "tool": return "tool:" + entry.id;
+    // error entries have no durable id of their own (session.error/turn.end/
+    // session.aborted are live-only, never part of durable `messages` — see
+    // pushIfNewError's doc comment); `entries` only ever grows (nothing is
+    // spliced out ahead of an error entry the way a queued placeholder can
+    // be), so an error entry's position among the full folded array is
+    // stable across re-renders, same as this function's own "idx:" fallback
+    // below — named explicitly here rather than falling through to default
+    // so this stability isn't accidental.
+    case "error": return "error:" + index;
+    // At most one "no output" placeholder can ever exist per turn (see
+    // transcriptModel's turnHadVisibleOutput/turn.end case), so keying by
+    // turn number is both stable across re-renders and, unlike "idx:",
+    // never ambiguous if something else were ever inserted before it.
+    case "turn-empty": return "turn-empty:" + entry.turn;
+    // At most one pending entry can ever exist per transcriptModel call (it
+    // reflects the ONE currently-open turn — see turnBusy's own doc
+    // comment), so — like turn-empty above — a fixed tag is both stable
+    // across re-renders and unambiguous: one DOM node is created once and
+    // then only removed (once content arrives) or repositioned, never
+    // rebuilt on every 1s tick.
+    case "pending": return "pending";
+    case "operator":
+    case "assistant":
+    case "reasoning":
+      // pendingSend entries key by their clientId — independent of, and
+      // checked before, the `queued` case just below: a pendingSend and a
+      // prompt.queued placeholder are two distinct, never-simultaneous
+      // mechanisms for the SAME underlying send (see transcriptModel's own
+      // doc comment on pendingSends), so this ordering never matters in
+      // practice, but is explicit rather than relying on the two flags
+      // happening never to collide.
+      if (entry.pendingSend) return "pendingSend:" + entry.clientId;
+      if (entry.queued) return "queued:" + (entry.queueId != null ? entry.queueId : "idx:" + index);
+      if (entry.id) return "msg:" + entry.id + ":" + (typeof entry.partIndex === "number" ? entry.partIndex : 0);
+      return "draft:" + entry.kind;
+    default: return "idx:" + index;
+  }
+}
+
+// turnMarkAgoText renders a settled turn-mark's "· Xm ago" suffix (empty
+// string when `entry.at` is missing/unparseable, or while the turn is still
+// current, i.e. entry.at is null) from an explicit nowMs. Pure (Date.parse
+// + fmtAgo only), so it lives here rather than beside its two DOM-touching
+// callers (entrySignature/updateTurnMarkEl, in the detail-view section
+// below) — factored out precisely so BOTH of them compute the IDENTICAL
+// string from the SAME nowMs on a given render pass, rather than one
+// quietly calling Date.now() a beat later and drifting from the other by a
+// tick's worth of skew, AND so the "does this value actually change as
+// nowMs advances" logic (the whole point of entrySignature keying on it —
+// see that function's own comment) is unit-testable on its own.
+function turnMarkAgoText(entry, nowMs) {
+  if (!entry || !entry.at) return "";
+  var ms = Date.parse(entry.at);
+  if (isNaN(ms)) return "";
+  return fmtAgo(Math.max(0, nowMs - ms));
+}
+
+// keepsLiveEventAfterReconcile decides whether a detailState.liveEvents
+// entry survives reconcileDetail's post-snapshot filter (see that
+// function's own doc comment, in the detail-view section below, for the
+// full reasoning). Two rules, in order:
+//
+//   1. session.error / turn.end / session.aborted are ALWAYS kept,
+//      unconditionally, regardless of seq or snapSeq. These three are
+//      durable (server/journal.go's emitDurable assigns them a seq) but —
+//      unlike every OTHER durable event this file handles — have NO
+//      GET /session/{id}/message representation at all: they are journal
+//      records, not message.Message objects, so a fresh /message snapshot
+//      can never reconstruct one. transcriptModel's "error" entry kind
+//      (pushIfNewError) is folded EXCLUSIVELY from these three live events
+//      — dropping one once its seq fell behind snapSeq would silently
+//      erase the one piece of the transcript an operator most needs to
+//      see, discovered the hard way: an earlier version of this rule
+//      dropped them like anything else durable, which made a detail view
+//      whose liveEvents crossed DETAIL_LIVE_EVENTS_CAP while rendering a
+//      failed turn's error entry lose that entry the instant
+//      reconcileDetail's cap trigger fired. transcriptModel's own
+//      pushIfNewError dedup (against the immediately preceding entry)
+//      already guards the one case that could otherwise duplicate one of
+//      these post-reconcile: session.error paired with its own matching
+//      turn.end. The cost is a small, bounded exception to
+//      DETAIL_LIVE_EVENTS_CAP's growth bound — at most a couple of these
+//      per TURN, never per delta, nowhere near the unbounded-per-delta
+//      growth finding 3 exists to cap.
+//   2. Everything else: kept iff `ev` carries a numeric `seq` strictly
+//      greater than `snapSeq`. Every OTHER durable event type either opens/
+//      resets a turn (session.status — transcriptModel recomputes
+//      liveTurnOpen fresh on every call, so dropping a stale one never
+//      loses a turn-mark: the message that would have consumed it marks
+//      its own turn instead) or IS itself directly superseded by a
+//      "message" event the fresh snapshot now already contains (message;
+//      prompt.queued, whose only downside if dropped un-delivered is a
+//      brief, self-healing optimistic-UI gap until the real "message"
+//      event lands). A transient, non-journaled live event (text.delta,
+//      reasoning.delta, tool.start, tool.end, compaction_failed —
+//      publishLive's events) never carries a seq at all, and is therefore
+//      ALWAYS dropped by this branch — there is no way to place it
+//      relative to snapSeq's boundary, and keeping it on a guess risks
+//      resurrecting the exact stale-duplicate problem reconcileDetail
+//      exists to prevent.
+//
+// Factored out as a pure predicate (reconcileDetail itself is DOM/fetch-
+// wiring, outside this TESTABLE region) so this boundary rule — the crux
+// of both the reconnect-gap fix and the buffer-cap fix — is unit-testable
+// independent of any network/DOM plumbing.
+function keepsLiveEventAfterReconcile(ev, snapSeq) {
+  if (!ev) return false;
+  if (ev.type === "session.error" || ev.type === "turn.end" || ev.type === "session.aborted") return true;
+  return typeof ev.seq === "number" && ev.seq > snapSeq;
+}
+
+/* TESTABLE-END */
+
+// DETAIL_LIVE_EVENTS_CAP bounds detailState.liveEvents (a detail view's live
+// tail buffer): transcriptModel refolds the ENTIRE buffer on every
+// tick/delta (see renderDetail), so an unbounded buffer makes a long-lived
+// detail view's per-render cost grow without bound across a session's
+// lifetime. handleDetailEvent triggers reconcileDetail() once the buffer
+// exceeds this — see reconcileDetail's own doc comment for how that
+// actually shrinks it back down (this is only the trigger threshold, not
+// the mechanism). `var`, not `const` — see window.__monitorTuning below,
+// which overrides it the same way it overrides QUIET_MS/STALL_MS.
+var DETAIL_LIVE_EVENTS_CAP = 500;
+
+/* ---------- app state + DOM wiring (board live; detail view stays static
+   until the next step) ----------
+
+   State shape:
+     base, token: the connected instance (mirrors localStorage once set).
+     health: raw GET /health body (identity: version/vcs_revision/
+       session_sync/started_at), or null before the first successful connect.
+     sessions: Map<id, Session> — the latest GET /session poll, replaced
+       wholesale each 5s tick (composite state/queue/goal fields the SSE
+       stream does not carry — see the plan's Connection lifecycle section).
+     activities: Map<id, activity> — reduceActivity's fold, updated by every
+       SSE event; boardModel seeds a missing entry from seedActivity(session)
+       so a session polled but never yet seen on the stream still renders.
+     lastSeq, backoff, running, abort, streamTimer, pollTimer, tickTimer:
+       the connection lifecycle's own bookkeeping (hub/inspector's pattern). */
+var LS_BASE = "harness.monitor.base";
+var LS_TOKEN = "harness.monitor.token";
+var POLL_MS = 5000;
+var TICK_MS = 1000;
+var BACKOFF_MIN = 500;
+var BACKOFF_MAX = 10000;
+
+// Test-only tuning seam: tools/monitor/e2e's jsdom driver sets
+// window.__monitorTuning = { QUIET_MS, STALL_MS, DETAIL_LIVE_EVENTS_CAP,
+// BACKOFF_MIN, BACKOFF_MAX } (via JSDOM's beforeParse, so it lands before
+// this inline script ever runs) to move these values off their production
+// defaults (staleness thresholds 15s/60s, live-events cap 500, reconnect
+// backoff 500ms-10s) to whatever a scripted test needs to cross inside a
+// CI-sane budget — shrunk for staleness/the cap, WIDENED for backoff (the
+// reconnect-gap-heal scenario needs a deterministically wide window between
+// a real server-side kill/restart and the page's own reconnect attempt to
+// reliably land a "the durable turn completed while this page was still in
+// backoff" race, rather than depending on exact wall-clock luck) — without
+// touching the values any real deployment sees; nothing in production ever
+// sets window.__monitorTuning, so this is a no-op there. Kept outside
+// TESTABLE-BEGIN/END (monitor_test.mjs's vm sandbox exposes no `window`),
+// and — unlike the QUIET_MS/STALL_MS/DETAIL_LIVE_EVENTS_CAP declarations
+// above, which sit right after TESTABLE-END — placed HERE, after
+// BACKOFF_MIN/BACKOFF_MAX's own declarations: applying an override before
+// the `var` statement that assigns its production default would just get
+// silently clobbered back to that default a few lines later (`var`
+// declarations hoist, but the ASSIGNMENT runs in source order). Applied
+// once, before bootstrap()/any staleness() call or state's own `backoff:
+// BACKOFF_MIN` initializer just below, which must see the FINAL value.
+if (typeof window !== "undefined" && window.__monitorTuning) {
+  if (typeof window.__monitorTuning.QUIET_MS === "number") QUIET_MS = window.__monitorTuning.QUIET_MS;
+  if (typeof window.__monitorTuning.STALL_MS === "number") STALL_MS = window.__monitorTuning.STALL_MS;
+  if (typeof window.__monitorTuning.DETAIL_LIVE_EVENTS_CAP === "number") DETAIL_LIVE_EVENTS_CAP = window.__monitorTuning.DETAIL_LIVE_EVENTS_CAP;
+  if (typeof window.__monitorTuning.BACKOFF_MIN === "number") BACKOFF_MIN = window.__monitorTuning.BACKOFF_MIN;
+  if (typeof window.__monitorTuning.BACKOFF_MAX === "number") BACKOFF_MAX = window.__monitorTuning.BACKOFF_MAX;
+  // POLL_MS: shrunk by the reconnect-gap-heal e2e scenario so a REAL poll
+  // tick reliably lands during a brief server-side outage window and
+  // genuinely advances state.lastSeq past it — the actual finding-1
+  // mechanism (see reconcileDetail's doc comment) — rather than leaving
+  // "did a poll happen to land in that window" to wall-clock chance.
+  if (typeof window.__monitorTuning.POLL_MS === "number") POLL_MS = window.__monitorTuning.POLL_MS;
+}
+
+// __monitorDebug exposes read-only test hooks for state this script keeps
+// closured (detailState.liveEvents.length is not otherwise reachable from
+// outside this <script>) — same "nothing in production ever reads this"
+// contract as window.__monitorTuning above; e2e's real_e2e.mjs uses this to
+// assert liveEvents actually stays bounded after a reconcile, rather than
+// merely trusting the cap was applied. liveEventsPeakLength reads
+// detailState.peakLiveEventsLength (maintained by handleDetailEvent — see
+// its own comment) rather than sampling liveEventsLength() on a polling
+// timer: a real scripted turn with no bash sleep can cross a small tuned
+// cap and get reconciled back down within a single JS microtask, entirely
+// between two 25ms poll samples — the peak counter can never miss that,
+// since it is updated synchronously on every push, before any reconcile
+// trim has a chance to run.
+if (typeof window !== "undefined") {
+  window.__monitorDebug = {
+    liveEventsLength: function () { return detailState ? detailState.liveEvents.length : null; },
+    liveEventsPeakLength: function () { return detailState ? detailState.peakLiveEventsLength : null; },
+  };
+}
+
+var state = {
+  base: "", token: "",
+  health: null,
+  sessions: new Map(),
+  activities: new Map(),
+  lastSeq: 0, backoff: BACKOFF_MIN,
+  running: false, abort: null, streamTimer: null, pollTimer: null, tickTimer: null,
+};
+
+// boardDom holds the keyed row reconciliation state: one entry per session
+// id, `sig` gating the (cheap but not free) DOM patch so a render pass that
+// changes nothing for a row touches nothing. See syncBoard.
+var boardDom = { rows: new Map(), gapEl: null, emptyEl: null };
+
+// detailState is non-null exactly while the detail view is showing a
+// session, and holds everything that view needs that isn't already global
+// (state.sessions/activities cover the session's composite/activity fold;
+// this covers the transcript's own history + live tail + DOM keys). A
+// fresh object replaces it wholesale on every enterDetail — never mutated
+// in place across sessions — so a slow-resolving history fetch for a
+// session the operator has since navigated away from can detect that via
+// `loadToken` and discard its result instead of clobbering the new view.
+// See enterDetail/exitDetail/handleDetailEvent.
+var detailState = null;
+var detailLoadCounter = 0;
+
+var baseInput = document.getElementById("base-url");
+var tokenInput = document.getElementById("run-token");
+var connectForm = document.getElementById("connect-form");
+var connectErr = document.getElementById("connect-err");
+var connectBtn = connectForm.querySelector("button[type=submit]");
+var sessionsEl = document.getElementById("sessions");
+var connEl = document.getElementById("conn");
+var connText = document.getElementById("conn-text");
+
+/* ---------- HTTP ---------- */
+
+function api(method, path, body) {
+  var opts = { method: method, headers: { Authorization: "Bearer " + state.token } };
+  if (body !== undefined) {
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  return fetch(state.base + path, opts);
+}
+
+/* ---------- identity + connection-state header ---------- */
+
+function renderIdentity() {
+  var h = state.health || {};
+  document.getElementById("hdr-box").textContent = "/ " + (hostLabel(state.base) || "—");
+  document.getElementById("hdr-version").textContent = "harness " + (h.vcs_revision || h.version || "—");
+  document.getElementById("hdr-sync").textContent = h.session_sync ? "session_sync " + h.session_sync : "—";
+  renderUptime(Date.now());
+}
+
+function renderUptime(nowMs) {
+  var h = state.health;
+  var startedMs = h && h.started_at ? Date.parse(h.started_at) : NaN;
+  document.getElementById("hdr-uptime").textContent = isNaN(startedMs) ? "—" : fmtElapsed(Math.floor((nowMs - startedMs) / 1000));
+}
+
+// setConnState renders the header's honest connection state (connected /
+// reconnecting / disconnected) into a role="status" aria-live="polite"
+// element so the transition is announced without a manual screen-reader poll
+// of the header. "connected" here means only that the SSE /event stream is
+// open — NOT that any session is doing model inference. A session's own
+// "streaming" phase (see boardModel / reduceActivity) is a separate, per-row
+// concept; the connection label deliberately avoids the word "streaming" so
+// an idle box's live-but-quiet stream never reads as "a chat is happening".
+function setConnState(kind) {
+  connEl.className = "conn " + kind;
+  connText.textContent = kind === "connected" ? "connected" : kind === "reconnecting" ? "reconnecting…" : "disconnected";
+}
+
+/* ---------- board rendering: keyed per-row reconciliation ----------
+   Rows are keyed by session id and patched in place — a row's DOM subtree is
+   only rewritten when its boardModel signature changes, and its position is
+   only touched when it is actually out of place (append-in-sorted-order is a
+   no-op DOM move when a row is already where it belongs). A row element is
+   created or destroyed only when the session SET changes (new/gone id); the
+   1s ticker and every SSE event otherwise reuse the same nodes. Mirrors
+   tools/hub/index.html's renderFleet keyed-card pattern. */
+
+function buildRowEl() {
+  var a = document.createElement("a");
+  a.className = "session";
+  var pulse = document.createElement("span"); pulse.className = "pulse";
+  var phase = document.createElement("span"); phase.className = "phase";
+  var content = document.createElement("span"); content.className = "content";
+  var sid = document.createElement("span"); sid.className = "sid";
+  var detail = document.createElement("span"); detail.className = "detail";
+  var extra = document.createElement("span"); extra.className = "extra";
+  content.append(sid, detail, extra);
+  var elapsed = document.createElement("span"); elapsed.className = "elapsed";
+  var line2 = document.createElement("span"); line2.className = "line-2";
+  a.append(pulse, phase, content, elapsed, line2);
+  a._refs = { phase: phase, sid: sid, detail: detail, extra: extra, elapsed: elapsed, line2: line2 };
+  return a;
+}
+
+function updateRowEl(a, row) {
+  a.className = "session " + row.cssClass;
+  // Forward-looking: the detail view's own live wiring lands in the next
+  // step, but a stable, bookmarkable href (this app's route codec) costs
+  // nothing to wire now and keeps the row a real, keyboard-focusable link
+  // rather than a div with a click handler (better-accessibility: native
+  // elements first).
+  a.href = route({ base: state.base, sessionId: row.id });
+  var r = a._refs;
+  r.phase.textContent = row.phase;
+  r.sid.textContent = row.sid;
+  r.sid.title = row.sid;
+  if (row.detail) {
+    r.detail.hidden = false;
+    r.detail.textContent = row.detail;
+    r.detail.style.color = row.detailCritical ? "var(--critical)" : "";
+  } else {
+    r.detail.hidden = true;
+    r.detail.textContent = "";
+  }
+  if (row.extra) { r.extra.hidden = false; r.extra.textContent = row.extra; }
+  else { r.extra.hidden = true; r.extra.textContent = ""; }
+  r.elapsed.textContent = row.elapsed.text;
+  r.line2.textContent = "";
+  if (row.line2 && row.line2.kind === "goal") {
+    r.line2.hidden = false;
+    var g = document.createElement("span");
+    g.className = "goal" + (row.line2.live ? " live-goal" : "");
+    g.textContent = row.line2.text;
+    r.line2.append(g);
+  } else if (row.line2) {
+    r.line2.hidden = false;
+    r.line2.textContent = row.line2.text;
+  } else {
+    r.line2.hidden = true;
+  }
+}
+
+function rowSignature(row) {
+  return JSON.stringify([
+    row.cssClass, row.phase, row.detail, row.detailCritical, row.extra, row.elapsed.text,
+    row.line2 ? row.line2.kind : null, row.line2 ? row.line2.text : null, row.line2 ? row.line2.live : null,
+  ]);
+}
+
+function syncBoard(nowMs) {
+  var rows = boardModel(Array.from(state.sessions.values()), state.activities, nowMs);
+
+  if (!rows.length) {
+    boardDom.rows.forEach(function (entry) { entry.el.remove(); });
+    boardDom.rows.clear();
+    if (boardDom.gapEl) { boardDom.gapEl.remove(); boardDom.gapEl = null; }
+    if (!boardDom.emptyEl) {
+      boardDom.emptyEl = document.createElement("div");
+      boardDom.emptyEl.className = "board-empty";
+      boardDom.emptyEl.textContent = "no sessions yet";
+      sessionsEl.append(boardDom.emptyEl);
+    }
+    return;
+  }
+  if (boardDom.emptyEl) { boardDom.emptyEl.remove(); boardDom.emptyEl = null; }
+
+  var seen = new Set();
+  var prevEl = null;
+  var gapPlaced = false;
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    seen.add(row.id);
+    var entry = boardDom.rows.get(row.id);
+    if (!entry) {
+      entry = { el: buildRowEl(), sig: null };
+      boardDom.rows.set(row.id, entry);
+    }
+    var sig = rowSignature(row);
+    if (entry.sig !== sig) { updateRowEl(entry.el, row); entry.sig = sig; }
+
+    if (row.cssClass === "idle" && !gapPlaced && i > 0 && rows[i - 1].cssClass !== "idle") {
+      gapPlaced = true;
+      if (!boardDom.gapEl) {
+        boardDom.gapEl = document.createElement("div");
+        boardDom.gapEl.className = "group-gap";
+        boardDom.gapEl.setAttribute("role", "presentation");
+      }
+      if (prevEl) { if (prevEl.nextSibling !== boardDom.gapEl) sessionsEl.insertBefore(boardDom.gapEl, prevEl.nextSibling); }
+      else if (sessionsEl.firstChild !== boardDom.gapEl) sessionsEl.insertBefore(boardDom.gapEl, sessionsEl.firstChild);
+      prevEl = boardDom.gapEl;
+    }
+
+    if (prevEl) { if (prevEl.nextSibling !== entry.el) sessionsEl.insertBefore(entry.el, prevEl.nextSibling); }
+    else if (sessionsEl.firstChild !== entry.el) sessionsEl.insertBefore(entry.el, sessionsEl.firstChild);
+    prevEl = entry.el;
+  }
+  if (boardDom.gapEl && !gapPlaced) { boardDom.gapEl.remove(); boardDom.gapEl = null; }
+  boardDom.rows.forEach(function (entry, id) {
+    if (!seen.has(id)) { entry.el.remove(); boardDom.rows.delete(id); }
+  });
+}
+
+/* ---------- live event handling ---------- */
+
+function handleEvent(ev) {
+  if (!ev || typeof ev.type !== "string") return;
+  if (typeof ev.seq === "number" && ev.seq > state.lastSeq) state.lastSeq = ev.seq;
+  var sid = ev.session_id;
+  if (!sid) return;
+  if (ev.type === "session.created" && !state.sessions.has(sid)) {
+    // A minimal stub so the new row appears immediately; the next poll (at
+    // most POLL_MS later) fills in workdir/goal/queued/etc — see the plan's
+    // "5s poll refreshes composite/queue/goal fields the stream doesn't
+    // carry".
+    state.sessions.set(sid, {
+      id: sid, state: "idle", status: "idle", queued: 0, goal: null,
+      last_activity_at: new Date().toISOString(),
+    });
+  }
+  var prev = state.activities.get(sid);
+  if (!prev && state.sessions.has(sid)) prev = seedActivity(state.sessions.get(sid));
+  state.activities.set(sid, reduceActivity(prev, ev, Date.now()));
+  syncBoard(Date.now());
+  // The board and an open detail view are both fed from this SAME stream
+  // (the plan's "single stream carries ALL sessions' events" — the detail
+  // view filters by session id, never a second connection).
+  if (detailState && sid === detailState.sessionId) handleDetailEvent(ev);
+}
+
+/* ---------- poll: health identity is fetched once at connect (started_at
+   never changes for a process's lifetime); GET /session refreshes composite
+   state/queue/goal every POLL_MS. ---------- */
+
+function pollOnce() {
+  return api("GET", "/session").then(function (resp) {
+    if (resp.status === 401) { forceDisconnect("run token was rejected — reconnect"); return; }
+    if (!resp.ok) return; // transient; the next poll or the stream will refill
+    return resp.json().then(function (list) {
+      if (!state.running) return;
+      state.sessions = new Map(list.map(function (s) { return [s.id, s]; }));
+      state.activities.forEach(function (_v, id) { if (!state.sessions.has(id)) state.activities.delete(id); });
+      var hw = maxSeq(list);
+      if (hw > state.lastSeq) state.lastSeq = hw;
+      syncBoard(Date.now());
+      // The primary self-heal trigger (maybeSelfHealDetail, TESTABLE
+      // predicate detailUnderpopulated) — every POLL_MS, unconditionally,
+      // while a detail view is open: whatever silently stalled its
+      // initial/reconciled history load self-corrects within one poll
+      // interval, independent of the stream ever (re)opening.
+      maybeSelfHealDetail();
+    });
+  }).catch(function () { /* transient; the next poll or the stream will refill */ });
+}
+
+/* ---------- SSE stream: resumes from state.lastSeq, jittered-backoff
+   reconnect. Never EventSource (can't set the Authorization header) — a
+   hand-rolled fetch-stream reader, same as hub/inspector. ---------- */
+
+function connectStream() {
+  if (!state.running) return;
+  var ac = new AbortController();
+  state.abort = ac;
+  fetch(state.base + "/event?from=" + state.lastSeq, {
+    headers: { Authorization: "Bearer " + state.token }, signal: ac.signal,
+  }).then(function (resp) {
+    if (!resp.ok || !resp.body) throw new Error("event stream " + resp.status);
+    state.backoff = BACKOFF_MIN;
+    setConnState("connected");
+    // reconcileDetail's finding-1 trigger, now firing on EVERY successful
+    // stream open, not only a genuine RE-establish after a reconnect — see
+    // the deep-link-history race this closes ("deep-linked detail view
+    // reliably loads history after connect").
+    //
+    // The ORIGINAL reasoning here (still correct as far as it went) was:
+    // only a re-establish can have missed EVENTS, because the very first
+    // stream open has nothing behind it to have missed, and enterDetail's
+    // own history fetch (if a detail view raced ahead of connect via a
+    // deep link — applyRoute() runs synchronously right after THIS
+    // function is invoked, in attemptConnect, so enterDetail's fetch is
+    // always ISSUED with an already-correct state.base/state.token) is
+    // already fresh AS OF THE MOMENT IT WAS ISSUED. That data-freshness
+    // argument is still true. What it missed: freshness-as-issued is not
+    // the same as guaranteed delivery. enterDetail's initial fetch is a
+    // single, un-retried GET with no fallback — confirmed live, it can
+    // silently fail to land (a transient response hiccup on that one
+    // request while /health, /session and this very stream all succeed)
+    // and nothing ever retries it, leaving the transcript stuck on "no
+    // messages yet" until the operator navigates again. Re-running
+    // reconcileDetail() here — cheap, idempotent, already guarded by
+    // detailState.loadToken (a superseded/navigated-away session's result
+    // is discarded, never clobbers the current view) and
+    // detailState.reconciling (no overlapping fetches) — costs one extra
+    // GET /session/{id}/message on every fresh connect that happens to
+    // have a detail view already open (the deep-link case), and turns
+    // enterDetail's fetch from a single point of failure into a race this
+    // page always wins: whichever of the two GETs lands, the transcript
+    // renders. A stream that never reaches "connected" at all (the box is
+    // genuinely down) leaves forceDisconnect's own exitDetail() to drop
+    // back to the board, same as before this change.
+    if (detailState) reconcileDetail();
+    var reader = resp.body.getReader();
+    var dec = new TextDecoder();
+    var parse = createSSEParser(function (frame) {
+      var ev;
+      try { ev = JSON.parse(frame.data); } catch (e) { return; }
+      handleEvent(ev);
+    });
+    function pump() {
+      return reader.read().then(function (r) {
+        if (r.done) return;
+        parse(dec.decode(r.value, { stream: true }));
+        return pump();
+      });
+    }
+    return pump();
+  }).catch(function () { /* fall through to reconnect below unless deliberately stopped */ })
+    .then(function () {
+      if (!state.running) return;
+      scheduleReconnect();
+    });
+}
+
+// scheduleReconnect backs off 500ms -> 1s -> 2s ... capped at 10s, jittered
+// to 50-100% of that delay each attempt so a reconnect never lands on an
+// exact, predictable cadence.
+function scheduleReconnect() {
+  setConnState("reconnecting");
+  var jitter = 0.5 + Math.random() * 0.5;
+  var delay = Math.round(state.backoff * jitter);
+  state.backoff = Math.min(state.backoff * 2, BACKOFF_MAX);
+  clearTimeout(state.streamTimer);
+  state.streamTimer = setTimeout(function () { if (state.running) connectStream(); }, delay);
+}
+
+/* ---------- 1s ticker: elapsed/staleness text + classes only, via the same
+   keyed syncBoard patch path (a no-op DOM write for any row whose signature
+   didn't change this tick). ---------- */
+
+function tick() {
+  renderUptime(Date.now());
+  syncBoard(Date.now());
+  if (detailState) renderDetail();
+}
+
+/* ---------- detail view: history fetch + live tail + tool folds +
+   composer, all against the SAME connect/stream/poll lifecycle above (no
+   second connection — the plan's "single stream carries ALL sessions'
+   events"; this view just filters handleEvent's dispatch by session id, see
+   handleEvent's tail call into handleDetailEvent).
+
+   DOM reconciliation mirrors the board's keyed-row pattern (buildRowEl/
+   updateRowEl/rowSignature/syncBoard): each transcriptModel entry gets a
+   stable key (entryKey, TESTABLE), an element is created once per key and
+   patched in place on every subsequent render whose signature changed —
+   the durable prefix of a long transcript is touched exactly once; only
+   the live tail (streaming text, a running tool fold's ticking elapsed) is
+   ever re-patched on a delta or a 1s tick. ---------- */
+
+var transcriptEl = document.getElementById("transcript");
+
+// toolElapsedText renders a tool fold's elapsed time from LOCALLY observed
+// timestamps only (detailState.toolStartedAt/toolEndedAt, populated by
+// handleDetailEvent as tool.start/tool.end/tool-result events are actually
+// seen on this page) — never fabricated. A fold resolved entirely from the
+// initial history fetch (already running, or already finished, before this
+// page ever watched it) carries no local timing at all and renders no
+// number, same spirit as seedActivity's null startedAt on the board.
+function toolElapsedText(entry, nowMs) {
+  if (!detailState) return "";
+  var start = detailState.toolStartedAt.get(entry.id);
+  if (start == null) return "";
+  var end = entry.running ? nowMs : (detailState.toolEndedAt.get(entry.id) || nowMs);
+  return fmtElapsed(Math.max(0, Math.round((end - start) / 1000)));
+}
+
+function entrySignature(entry, isCurrentTurn, nowMs) {
+  switch (entry.kind) {
+    case "turn-mark":
+      // Keys on the RENDERED ago-text (mirroring boardModel's own
+      // elapsed.text-in-the-signature approach for idle rows), not
+      // entry.at itself: entry.at is immutable once a turn settles, so
+      // keying on it alone meant a settled turn-mark's "· Xm ago" froze at
+      // whatever it first rendered — syncTranscript's signature-gated patch
+      // (see its own doc comment) never saw a reason to re-touch the node
+      // on a later tick. Cheaper than special-casing turn-marks as an
+      // always-repatch exception, and consistent with how every other
+      // ticking display in this file (toolElapsedText, boardModel's own
+      // elapsed) is kept fresh.
+      return "turn|" + entry.turn + "|" + (isCurrentTurn ? "current" : turnMarkAgoText(entry, nowMs));
+    case "tool":
+      return "tool|" + entry.running + "|" + entry.output + "|" + entry.isError + "|" + toolElapsedText(entry, nowMs);
+    default:
+      return entry.kind + "|" + (entry.text || "") + "|" + !!entry.streaming;
+  }
+}
+
+function buildTurnMarkEl() {
+  var d = document.createElement("div");
+  d.className = "turn-mark";
+  return d;
+}
+function updateTurnMarkEl(el, entry, isCurrentTurn, nowMs) {
+  if (isCurrentTurn) { el.textContent = "current turn"; return; }
+  var label = "turn " + entry.turn;
+  var ago = turnMarkAgoText(entry, nowMs);
+  if (ago) label += " · " + ago;
+  el.textContent = label;
+}
+
+function buildMsgEl(kind) {
+  var d = document.createElement("div");
+  d.className = "msg" + (kind === "operator" ? " user" : kind === "reasoning" ? " reasoning" : kind === "error" ? " error" : "");
+  var who = document.createElement("span");
+  who.className = "who";
+  who.textContent = kind === "operator" ? "operator" : kind;
+  var body = document.createElement("div");
+  body.className = "body";
+  var p = document.createElement("p");
+  body.append(p);
+  d.append(who, body);
+  d._refs = { p: p, caret: null };
+  return d;
+}
+function updateMsgEl(el, entry) {
+  var r = el._refs;
+  r.p.textContent = entry.text || "";
+  var wantCaret = !!entry.streaming;
+  if (wantCaret && !r.caret) {
+    r.caret = document.createElement("span");
+    r.caret.className = "caret";
+    r.p.append(r.caret);
+  } else if (!wantCaret && r.caret) {
+    r.caret.remove();
+    r.caret = null;
+  }
+}
+
+function buildToolEl() {
+  var d = document.createElement("div");
+  d.className = "msg";
+  var who = document.createElement("span");
+  who.className = "who";
+  who.textContent = "tool";
+  var body = document.createElement("div");
+  body.className = "body";
+  var details = document.createElement("details");
+  details.className = "toolfold";
+  var summary = document.createElement("summary");
+  var ts = document.createElement("div");
+  ts.className = "tool-summary";
+  var cmdEl = document.createElement("span");
+  var hint = document.createElement("span");
+  hint.className = "fold-hint";
+  hint.textContent = "show output";
+  var elapsedEl = document.createElement("span");
+  elapsedEl.className = "t-elapsed";
+  ts.append(cmdEl, hint, elapsedEl);
+  summary.append(ts);
+  var block = document.createElement("div");
+  block.className = "toolblock";
+  details.append(summary, block);
+  body.append(details);
+  d.append(who, body);
+  d._refs = { details: details, cmdEl: cmdEl, elapsedEl: elapsedEl, block: block };
+  return d;
+}
+function updateToolEl(el, entry, elapsedText) {
+  var r = el._refs;
+  r.cmdEl.textContent = toolLabel(entry.name, entry.argsSummary);
+  r.cmdEl.className = entry.running ? "cmd" : "";
+  r.elapsedEl.textContent = entry.running ? ("running" + (elapsedText ? " · " + elapsedText : "")) : elapsedText;
+  var out = entry.output || (entry.running ? "" : (entry.isError ? "(error, no output)" : "(no output)"));
+  r.block.textContent = out;
+  r.block.style.color = entry.isError ? "var(--critical)" : "";
+}
+
+// buildTurnEmptyEl/updateTurnEmptyEl render the "turn completed with no
+// output" placeholder (transcriptModel's "turn-empty" kind) by reusing the
+// SAME .transcript-note class the empty-transcript/history-load-error notes
+// already use elsewhere in this file — already dim (var(--text-3)) and
+// unobtrusive, i.e. exactly the "turn-mark register, not error" the entry
+// calls for, with no new CSS needed.
+function buildTurnEmptyEl() {
+  var d = document.createElement("div");
+  d.className = "transcript-note";
+  return d;
+}
+function updateTurnEmptyEl(el, entry) {
+  el.textContent = entry.text || "";
+}
+
+// buildPendingEl/updatePendingEl render the "Thinking…" pending-assistant
+// indicator (transcriptModel's "pending" kind — see its own doc comment for
+// the derivation rule). Static content: nothing about it ever changes while
+// it exists (entrySignature's default case — entry.kind + text + streaming
+// — is constant for a bare {kind:"pending"} entry with no text field), so
+// updatePendingEl is a no-op; syncTranscript's signature gate means it is
+// built exactly once and then only removed (once real content dismisses it)
+// or repositioned, never re-touched on a tick, matching entryKey's own
+// "one node, never rebuilt" comment for this kind.
+function buildPendingEl() {
+  var d = document.createElement("div");
+  d.className = "transcript-note pending-indicator";
+  d.textContent = "Thinking";
+  var dots = document.createElement("span");
+  dots.setAttribute("aria-hidden", "true");
+  dots.textContent = "…";
+  d.append(dots);
+  return d;
+}
+function updatePendingEl() { /* static — nothing to patch */ }
+
+function buildEntryEl(entry) {
+  if (entry.kind === "turn-mark") return buildTurnMarkEl();
+  if (entry.kind === "tool") return buildToolEl();
+  if (entry.kind === "turn-empty") return buildTurnEmptyEl();
+  if (entry.kind === "pending") return buildPendingEl();
+  return buildMsgEl(entry.kind);
+}
+function updateEntryEl(el, entry, isCurrentTurn, nowMs) {
+  if (entry.kind === "turn-mark") return updateTurnMarkEl(el, entry, isCurrentTurn, nowMs);
+  if (entry.kind === "tool") return updateToolEl(el, entry, toolElapsedText(entry, nowMs));
+  if (entry.kind === "turn-empty") return updateTurnEmptyEl(el, entry);
+  if (entry.kind === "pending") return updatePendingEl();
+  return updateMsgEl(el, entry);
+}
+
+function showTranscriptError(msg) {
+  transcriptEl.textContent = "";
+  var d = document.createElement("div");
+  d.className = "transcript-note err";
+  d.textContent = msg;
+  transcriptEl.append(d);
+  if (detailState) { detailState.nodes = new Map(); detailState.order = []; }
+}
+
+// syncTranscript reconciles `entries` (transcriptModel's full current
+// output) against the DOM by key (entryKey): existing nodes are patched in
+// place (only when their signature actually changed) and repositioned only
+// if out of order; nodes for keys no longer present are removed. The last
+// turn-mark is labeled "current turn" instead of a timestamp only while the
+// session's own activity fold (the SAME one the board uses) says it isn't
+// idle — so a turn that finished stops claiming to be current the next
+// time any event for this session ticks a render.
+function syncTranscript(entries, nowMs) {
+  if (!detailState) return;
+  if (!entries.length) {
+    transcriptEl.textContent = "";
+    detailState.nodes = new Map();
+    detailState.order = [];
+    var empty = document.createElement("div");
+    empty.className = "transcript-note";
+    empty.textContent = "no messages yet";
+    transcriptEl.append(empty);
+    return;
+  }
+  if (!detailState.nodes.size) transcriptEl.textContent = ""; // clear "no messages yet"/error note, if present
+
+  var lastTurnMarkIdx = -1;
+  for (var ti = 0; ti < entries.length; ti++) if (entries[ti].kind === "turn-mark") lastTurnMarkIdx = ti;
+  var activity = state.activities.get(detailState.sessionId);
+  var sessionLive = !!activity && activity.phase !== "idle";
+
+  var seen = new Set();
+  var prevEl = null;
+  for (var idx = 0; idx < entries.length; idx++) {
+    var entry = entries[idx];
+    var key = entryKey(entry, idx);
+    seen.add(key);
+    var isCurrentTurn = idx === lastTurnMarkIdx && sessionLive;
+    var node = detailState.nodes.get(key);
+    var isNew = !node;
+    if (isNew) {
+      node = buildEntryEl(entry);
+      detailState.nodes.set(key, node);
+    }
+    var sig = entrySignature(entry, isCurrentTurn, nowMs);
+    if (isNew || node._sig !== sig) {
+      updateEntryEl(node, entry, isCurrentTurn, nowMs);
+      node._sig = sig;
+      // A running tool fold starts open (so the operator watching it land
+      // sees output as it arrives); a completed fold discovered directly
+      // from history starts collapsed. Set only on creation — never forced
+      // open/closed again afterward, so a manual toggle is never overridden
+      // by a later, unrelated patch (better-accessibility: respect the
+      // user's own <details> state).
+      if (isNew && entry.kind === "tool") node._refs.details.open = entry.running;
+    }
+    if (prevEl) { if (prevEl.nextSibling !== node) transcriptEl.insertBefore(node, prevEl.nextSibling); }
+    else if (transcriptEl.firstChild !== node) transcriptEl.insertBefore(node, transcriptEl.firstChild);
+    prevEl = node;
+  }
+  detailState.nodes.forEach(function (node, key) {
+    if (!seen.has(key)) { node.remove(); detailState.nodes.delete(key); }
+  });
+}
+
+function updateShowEarlier(win) {
+  if (!detailState) return;
+  if (win.hiddenCount > 0 && !detailState.expanded) {
+    if (!detailState.showEarlierEl) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "show-earlier";
+      b.addEventListener("click", function () {
+        if (!detailState) return;
+        detailState.expanded = true;
+        renderDetail();
+      });
+      detailState.showEarlierEl = b;
+    }
+    detailState.showEarlierEl.textContent = "Show " + win.hiddenCount + " earlier message" + (win.hiddenCount === 1 ? "" : "s");
+    if (transcriptEl.firstChild !== detailState.showEarlierEl) transcriptEl.insertBefore(detailState.showEarlierEl, transcriptEl.firstChild);
+  } else if (detailState.showEarlierEl && detailState.showEarlierEl.parentNode) {
+    detailState.showEarlierEl.remove();
+  }
+}
+
+function updateDetailHeader(entries, nowMs) {
+  var sid = detailState.sessionId;
+  var msgs = detailState.messages.length + liveMessageCount(detailState.liveEvents);
+  document.getElementById("detail-msgcount").textContent = msgs + (msgs === 1 ? " msg" : " msgs");
+  var toolCalls = countKind(entries, "tool");
+  document.getElementById("detail-toolcount").textContent = toolCalls + (toolCalls === 1 ? " tool call" : " tool calls");
+
+  // Reuse boardModel for this one session so the header's phase/elapsed/
+  // live-ness is drawn from the exact same activity fold the board shows —
+  // "live chip mirroring board phase" by construction, not a second,
+  // possibly-divergent read of the same state.
+  var sessionSummary = state.sessions.get(sid) || { id: sid, state: "idle", queued: 0 };
+  var row = boardModel([sessionSummary], state.activities, nowMs)[0];
+  var turnEl = document.getElementById("detail-turn-elapsed");
+  var chip = document.getElementById("detail-livechip");
+  var chipText = document.getElementById("detail-livechip-text");
+  if (row && row.cssClass !== "idle") {
+    turnEl.textContent = row.elapsed.text;
+    chip.hidden = false;
+    chipText.textContent = row.phase === "tool" ? "tool running" : row.phase;
+  } else {
+    turnEl.textContent = "—";
+    chip.hidden = true;
+    // Belt-and-suspenders, matching updateRowEl's own r.detail.textContent =
+    // "" on the board: never rely on `hidden` alone to keep stale content
+    // from being visible (see the .livechip:not([hidden]) CSS comment above
+    // for why `hidden` alone was, in fact, not enough).
+    chipText.textContent = "";
+  }
+}
+
+// renderDetail is the detail view's whole render pass: pure model recompute
+// (historyWindow + transcriptModel, both cheap/pure — same cost profile as
+// the board's own boardModel-per-tick) followed by keyed DOM reconciliation
+// (syncTranscript), which is where "no full re-render per delta" actually
+// pays off — most calls here touch zero or one DOM node.
+function renderDetail() {
+  if (!detailState) return;
+  var now = Date.now();
+  var win = historyWindow(detailState.messages, detailState.expanded ? null : HISTORY_WINDOW);
+  var entries = transcriptModel(win.window, detailState.liveEvents, win.hiddenTurns, detailState.pendingSends);
+  syncTranscript(entries, now);
+  updateShowEarlier(win);
+  updateDetailHeader(entries, now);
+}
+
+// handleDetailEvent is handleEvent's per-session forward for whichever
+// session the detail view currently has open: it records local tool
+// start/end timestamps for honest elapsed rendering (see toolElapsedText),
+// appends the raw event to the live buffer transcriptModel folds, and
+// re-renders. Triggers reconcileDetail() once liveEvents crosses
+// DETAIL_LIVE_EVENTS_CAP — the perf half of reconcileDetail's job (see its
+// doc comment); the reconnect half is triggered separately, from
+// connectStream, on stream re-establish.
+function handleDetailEvent(ev) {
+  if (!detailState) return;
+  var now = Date.now();
+  if (ev.type === "tool.start" && ev.tool_call && ev.tool_call.call_id) {
+    detailState.toolStartedAt.set(ev.tool_call.call_id, now);
+  } else if (ev.type === "tool.end" && ev.tool_call && ev.tool_call.call_id) {
+    detailState.toolEndedAt.set(ev.tool_call.call_id, now);
+  } else if (ev.type === "message" && ev.message && ev.message.role === "tool" && Array.isArray(ev.message.parts)) {
+    for (var i = 0; i < ev.message.parts.length; i++) {
+      var p = ev.message.parts[i];
+      if (p && p.type === "tool_result" && p.call_id && !detailState.toolEndedAt.has(p.call_id)) {
+        detailState.toolEndedAt.set(p.call_id, now);
+      }
+    }
+  }
+  detailState.liveEvents.push(ev);
+  // Tracked synchronously, before reconcileDetail's async trim can ever
+  // run — see __monitorDebug.liveEventsPeakLength's own comment for why a
+  // test can't reliably observe a transient over-cap spike any other way
+  // for a fast turn.
+  if (detailState.liveEvents.length > detailState.peakLiveEventsLength) detailState.peakLiveEventsLength = detailState.liveEvents.length;
+  if (detailState.liveEvents.length > DETAIL_LIVE_EVENTS_CAP) reconcileDetail();
+  renderDetail();
+}
+
+// reconcileDetail re-anchors the detail view's live tail against a fresh
+// durable snapshot, closing three independent gaps with the SAME mechanism:
+//
+//   1. RECONNECT GAP (finding 1): pollOnce silently advances state.lastSeq
+//      past whatever a poll snapshot's own maxSeq reports, REGARDLESS of
+//      whether this page's own SSE connection actually delivered every
+//      event up to that point — a durable event published while this
+//      page's stream was down (jittered backoff — see scheduleReconnect)
+//      is one this page never saw, yet the NEXT connectStream() resumes
+//      from that already-advanced from=state.lastSeq, so the resumed
+//      stream never redelivers it either. The board doesn't notice: every
+//      5s poll REPLACES state.sessions wholesale, a full resnapshot, not an
+//      incremental delta. The detail view has no equivalent — liveEvents is
+//      purely additive — so a gap during a reconnect leaves a permanent
+//      hole transcriptModel can never fill from what it's given.
+//   2. UNBOUNDED BUFFER (finding 3): liveEvents otherwise grows without
+//      bound across a long session's lifetime, and transcriptModel refolds
+//      the WHOLE buffer on every tick/delta (see DETAIL_LIVE_EVENTS_CAP).
+//   3. DEEP-LINK BOOT RACE: enterDetail's OWN initial history fetch (fired
+//      the instant a "#s=<id>" deep link resolves via applyRoute(), right
+//      after a fresh connect — see attemptConnect) is a single, un-retried
+//      GET with no fallback of its own. Confirmed live: it can silently
+//      fail to land while /health, /session, and this very stream all
+//      succeed, leaving the transcript stuck on "no messages yet" with no
+//      retry. connectStream's "connected" branch now calls this function
+//      on EVERY successful stream open (first included, not only a
+//      genuine reconnect) whenever a detail view is already showing,
+//      turning enterDetail's fetch from a single point of failure into a
+//      race this page always wins — see connectStream's own doc comment
+//      for the full reasoning.
+//
+// The fix for all three: re-fetch GET /session/{id}/message (guarded by
+// detailState.loadToken exactly like enterDetail's own initial fetch, so a
+// slow response for a session the operator has since navigated away from —
+// or into a different session — is discarded, never applied to the wrong
+// detailState), replace detailState.messages wholesale, THEN capture
+// snapSeq = state.lastSeq (the highest seq this page has observed
+// ANYWHERE — board or detail; server/journal.go's Seq is ONE monotonically
+// increasing counter across every session on one server, see maxSeq/
+// journal.go's emitDurableLocked) and drop every liveEvents entry whose seq
+// is <= snapSeq. What's left is exactly what postdates the snapshot — no
+// gap, no duplication, by the monotonic-seq guarantee.
+//
+// snapSeq is read AFTER the fetch resolves, not when it's issued: a stream
+// re-establish (this function's OTHER trigger, from connectStream) can
+// itself cause the server to replay a small backlog over the SAME newly
+// reconnected stream (whenever state.lastSeq was NOT already advanced past
+// some durable events — e.g. no poll happened to land during a brief
+// outage), concurrently with this fetch. handleEvent bumps state.lastSeq
+// for EVERY event BEFORE forwarding it to handleDetailEvent, so any such
+// replayed event that this page has already processed by the time the
+// fetch resolves has already pushed state.lastSeq past its own seq — this
+// function then correctly recognizes it as already reflected in the JUST-
+// fetched snapshot and drops it, rather than keeping it (its seq was
+// captured-as-"new" under the old, pre-fetch reading) and rendering it
+// TWICE — once from the fresh `messages` fold, once from the surviving
+// liveEvents entry. Capturing snapSeq first (before the fetch) is what
+// caused exactly that double-render in practice. This still leaves one
+// narrow, accepted race: an event journaled on the server WHILE the
+// GET /message response was already being serialized (so it missed that
+// snapshot) but that streams in and gets processed here BEFORE this
+// function reads state.lastSeq would be dropped without ever appearing —
+// a real gap, but one bounded by a single fast local read's duration, not
+// an entire reconnect backoff window.
+//
+// Which liveEvents entries actually survive the seq boundary — including
+// the seq-less-events rule and the session.error/turn.end/session.aborted
+// exception (these three have NO GET /message representation at all, so a
+// fresh snapshot can never reconstruct one that the boundary dropped; see
+// the hard-won lesson in that doc comment) — is keepsLiveEventAfterReconcile
+// (TESTABLE region, above)'s own doc comment; not repeated here.
+// detailState's own toolStartedAt/toolEndedAt maps (separate from
+// liveEvents, keyed by call_id, never touched by this function) keep a
+// genuinely still-running tool's LOCALLY OBSERVED elapsed time ticking
+// accurately straight through the reconcile regardless of what happens to
+// its tool.start/tool.end liveEvents entries.
+//
+// detailState.reconciling guards against overlapping fetches (e.g. the
+// buffer is still over-cap immediately after one reconcile, because every
+// surviving event genuinely postdates snapSeq) — the same in-flight-guard
+// shape as the composer's own postInFlight.
+function reconcileDetail() {
+  if (!detailState || detailState.reconciling) return;
+  detailState.reconciling = true;
+  var sessionId = detailState.sessionId;
+  var loadToken = detailState.loadToken;
+  api("GET", "/session/" + encodeURIComponent(sessionId) + "/message").then(function (resp) {
+    if (!detailState || detailState.loadToken !== loadToken) return; // navigated away meanwhile
+    if (!resp.ok) return; // transient; the next trigger (cap or reconnect) retries
+    return resp.json().then(function (raw) {
+      if (!detailState || detailState.loadToken !== loadToken) return;
+      var adapted = adaptHistory(raw);
+      detailState.messages = adapted.messages;
+      detailState.unavailable = adapted.unavailable;
+      // Read AFTER the fetch resolves — see this function's doc comment
+      // for why that ordering, not "before the fetch", is what avoids
+      // double-rendering a turn the reconnect itself also naturally
+      // replayed live.
+      var snapSeq = state.lastSeq;
+      detailState.liveEvents = detailState.liveEvents.filter(function (ev) {
+        return keepsLiveEventAfterReconcile(ev, snapSeq);
+      });
+      renderDetail();
+    });
+  }).catch(function () { /* transient; the next trigger (cap or reconnect) retries */ })
+    .then(function () {
+      if (detailState && detailState.loadToken === loadToken) detailState.reconciling = false;
+    });
+}
+
+// maybeSelfHealDetail applies detailUnderpopulated (TESTABLE, above) against
+// LIVE state: the currently-open detail view's rendered durable message
+// count vs. its session's own board summary (state.sessions — already kept
+// current by pollOnce, and by attemptConnect's own initial GET /session
+// before enterDetail/applyRoute ever run). Triggers reconcileDetail() on a
+// true verdict — cheap and safe to call speculatively: reconcileDetail's own
+// detailState.reconciling guard drops an overlapping call, and its loadToken
+// guard drops a result for a session the operator has since left. Called
+// from two places:
+//   - pollOnce, every POLL_MS, unconditionally while a detail view is open —
+//     the primary self-heal: whatever silently stalled enterDetail's own
+//     initial fetch (network hiccup, dropped response, anything — this
+//     deliberately does not depend on diagnosing WHY), the view heals
+//     within one poll interval, not "whenever the stream happens to open"
+//     (connectStream's own reconcile trigger can be seconds away on a slow
+//     box, and does not fire at all until the stream successfully opens).
+//   - enterDetail's own fetch-resolved callback, checking IMMEDIATELY
+//     against the summary connect already fetched — closing the stuck-empty
+//     window well inside a single poll interval for the common case where
+//     the initial fetch resolves fast but empty/wrong, rather than making
+//     every deep link wait out a full POLL_MS regardless.
+function maybeSelfHealDetail() {
+  if (!detailState) return;
+  var summary = state.sessions.get(detailState.sessionId);
+  if (!summary) return;
+  if (detailUnderpopulated(summary.messages, detailState.messages.length)) reconcileDetail();
+}
+
+// enterDetail switches to the detail view for `sessionId` and fetches its
+// durable history. Focus moves to the breadcrumb immediately (a screen
+// reader/keyboard user lands at the top of the new view the moment
+// navigation happens, not after the network round trip) — see
+// better-accessibility's focus-management pass in the plan.
+//
+// This fetch is no longer the ONLY thing that can load this view's
+// history: connectStream's "connected" branch also calls reconcileDetail()
+// on every successful stream open while a detail view is showing (see its
+// own doc comment and reconcileDetail's "DEEP-LINK BOOT RACE" finding),
+// and pollOnce/this function's own fetch-resolved callback both call
+// maybeSelfHealDetail() (see its doc comment) — a deep link resolved via
+// applyRoute() right after a fresh connect (this call) races that same
+// connect's own stream open AND is checked against the board summary
+// immediately and every POLL_MS after. Any of these landing is enough to
+// populate the transcript; all are guarded by the SAME loadToken, so
+// whichever resolves is safe to apply regardless of order.
+function enterDetail(sessionId) {
+  var loadToken = ++detailLoadCounter;
+  detailState = {
+    sessionId: sessionId, messages: [], unavailable: 0, liveEvents: [], expanded: false,
+    nodes: new Map(), showEarlierEl: null,
+    toolStartedAt: new Map(), toolEndedAt: new Map(),
+    postInFlight: false, loadToken: loadToken, reconciling: false, peakLiveEventsLength: 0,
+    // pendingSends: the composer's optimistic-send state (see wireComposer
+    // and transcriptModel's own doc comment) — {text, clientId} entries
+    // appended on submit, removed only on an explicit POST-failure rollback.
+    // A fresh, empty array per enterDetail — never carried over between
+    // sessions, same as every other detailState field.
+    pendingSends: [],
+  };
+  document.body.classList.add("showing-detail");
+  document.getElementById("detail-sid-full").textContent = sessionId;
+  document.getElementById("crumb-box").textContent = " / " + (hostLabel(state.base) || "—");
+  document.getElementById("back-link").href = route({ base: state.base });
+  document.getElementById("composer-err").textContent = "";
+  document.getElementById("composer-input").value = "";
+  transcriptEl.textContent = "";
+  var loading = document.createElement("div");
+  loading.className = "transcript-note";
+  loading.textContent = "loading history…";
+  transcriptEl.append(loading);
+  document.getElementById("detail-msgcount").textContent = "";
+  document.getElementById("detail-toolcount").textContent = "";
+  document.getElementById("detail-turn-elapsed").textContent = "—";
+  document.getElementById("detail-livechip").hidden = true;
+  document.getElementById("back-link").focus();
+
+  api("GET", "/session/" + encodeURIComponent(sessionId) + "/message").then(function (resp) {
+    if (!detailState || detailState.loadToken !== loadToken) return; // navigated away meanwhile
+    if (!resp.ok) { showTranscriptError("failed to load history (status " + resp.status + ")"); maybeSelfHealDetail(); return; }
+    return resp.json().then(function (raw) {
+      if (!detailState || detailState.loadToken !== loadToken) return;
+      var adapted = adaptHistory(raw);
+      detailState.messages = adapted.messages;
+      detailState.unavailable = adapted.unavailable;
+      renderDetail();
+      if (adapted.unavailable > 0) {
+        var note = document.createElement("div");
+        note.className = "transcript-note";
+        note.textContent = adapted.unavailable + " message" + (adapted.unavailable === 1 ? "" : "s") + " could not be rendered";
+        transcriptEl.append(note);
+      }
+      // Checked here too, not only on the next poll: this fetch may have
+      // resolved 200-OK but genuinely empty (or truncated) despite the
+      // session's own board summary — already known from connect's own
+      // GET /session — reporting real durable messages. See
+      // maybeSelfHealDetail's own doc comment for why this is safe to
+      // call unconditionally (a no-op unless the stuck-empty case is
+      // detected).
+      maybeSelfHealDetail();
+    });
+  }).catch(function () {
+    if (detailState && detailState.loadToken === loadToken) showTranscriptError("failed to load history — check the connection");
+    maybeSelfHealDetail();
+  });
+}
+
+// exitDetail returns to the board, moving focus to the row that opened this
+// session if it still exists (better-accessibility: focus return on back
+// navigation), else to the session list itself.
+function exitDetail() {
+  if (!detailState) return;
+  var sid = detailState.sessionId;
+  detailState = null;
+  document.body.classList.remove("showing-detail");
+  var rowEntry = boardDom.rows.get(sid);
+  if (rowEntry) {
+    rowEntry.el.focus();
+  } else {
+    sessionsEl.setAttribute("tabindex", "-1");
+    sessionsEl.focus();
+  }
+}
+
+// applyRoute reads the URL fragment and enters/exits the detail view to
+// match it — the sole navigation path (hashchange-driven, house style):
+// clicking a board row, the back link, browser back/forward, and a direct
+// "#b=...&s=..." deep link all funnel through the SAME hash and this SAME
+// function, called after every hashchange and once more right after a
+// successful connect (a deep link's session id can arrive before this page
+// is even connected to fetch it).
+function applyRoute() {
+  var r = unroute(location.hash);
+  if (r.sessionId && state.running) {
+    if (!detailState || detailState.sessionId !== r.sessionId) enterDetail(r.sessionId);
+  } else if (!r.sessionId && detailState) {
+    exitDetail();
+  }
+}
+window.addEventListener("hashchange", applyRoute);
+
+// bfcache restore (browser back/forward reviving this exact page instance
+// rather than re-running its scripts — event.persisted true): the
+// underlying SSE stream connection is presumed dead (suspended/discarded
+// by the browser while this page was frozen), even though state.running
+// and the header's "connected"/"reconnecting" styling still reflect
+// whatever they were the instant the page was frozen, not reality. Only
+// acts if this page was actually connected when frozen (state.running) —
+// nothing to resync for a frozen connect panel. Two independent, reused
+// mechanisms, no new reconnect logic of its own:
+//   - abort the (presumed-dead) stream: connectStream's OWN existing
+//     catch -> scheduleReconnect path re-establishes it with the SAME
+//     jittered backoff any other network failure gets, rather than this
+//     page silently never noticing the stream is gone.
+//   - pollOnce() immediately, rather than waiting out however much of the
+//     current POLL_MS interval happened to be left when the page froze —
+//     refreshes state.sessions and, via maybeSelfHealDetail (see its own
+//     doc comment), re-syncs an open detail view against the board
+//     summary right away.
+window.addEventListener("pageshow", function (e) {
+  if (!e.persisted || !state.running) return;
+  if (state.abort) state.abort.abort();
+  pollOnce();
+});
+
+/* ---------- composer: POST prompt_async. The sent message renders
+   IMMEDIATELY on submit — a pendingSend pushed into detailState.pendingSends
+   and folded by transcriptModel as a trailing optimistic operator entry (see
+   its own doc comment) — independent of the POST resolving, so there is no
+   perceived network-hop lag for the common idle-session case. It is
+   reconciled away (dropped, not duplicated) the instant a real durable/
+   stream operator message arrives: a "message" event when the session was
+   idle and the turn starts immediately, or a "prompt.queued" event when it
+   was busy. A non-2xx response or a network failure instead ROLLS BACK the
+   optimistic entry (removePendingSend) — it was never real — leaving the
+   existing inline composer error to explain why. The input is disabled ONLY
+   for the duration of the POST itself — queueing a prompt into a busy
+   session is a feature, not a wait state. See also the "Thinking…" pending
+   entry (transcriptModel's "pending" kind): a DIFFERENT, non-optimistic
+   mechanism — it reflects a real running turn, derived purely from the
+   fold, never from this composer's own submit path. ---------- */
+
+// nextPendingSendId hands out a small, monotonic, page-local id for a
+// pendingSend's clientId (see transcriptModel's own doc comment and
+// entryKey's "pendingSend:" case) — never sent over the wire, so it only
+// needs to be unique within this one page's lifetime, not globally.
+var pendingSendCounter = 0;
+function nextPendingSendId() {
+  pendingSendCounter += 1;
+  return "psend-" + pendingSendCounter;
+}
+
+// removePendingSend rolls back a pendingSend by clientId — used ONLY on a
+// failed POST (the send never actually happened), never on success (a
+// successful POST's pendingSend is left in place; the eventual stream event
+// reconciles it out via transcriptModel's own fold — see its doc comment).
+function removePendingSend(ds, clientId) {
+  if (!ds) return;
+  ds.pendingSends = ds.pendingSends.filter(function (p) { return p.clientId !== clientId; });
+}
+
+function setComposerBusy(busy) {
+  document.getElementById("composer-input").disabled = busy;
+  document.getElementById("composer-form").querySelector("button").disabled = busy;
+}
+
+function wireComposer() {
+  var form = document.getElementById("composer-form");
+  var input = document.getElementById("composer-input");
+  var err = document.getElementById("composer-err");
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    if (!detailState || detailState.postInFlight) return;
+    var text = input.value.trim();
+    if (!text) return;
+    err.textContent = "";
+    detailState.postInFlight = true;
+    setComposerBusy(true);
+    var sid = detailState.sessionId;
+    // Captured so this POST's eventual completion can never mutate a LATER
+    // session's detailState/composer DOM: the composer's input/err/button
+    // elements are singletons reused across every session's detail view
+    // (never recreated per enterDetail), so an unguarded completion here
+    // used to leak this POST's postInFlight-clear/setComposerBusy(false)
+    // (and its success/error message) onto whichever session happened to
+    // be open when the response finally landed, if the operator navigated
+    // away — or to a different session — while it was still in flight. The
+    // SAME guard protects the optimistic pendingSend's failure rollback
+    // below: a POST for a session the operator has since left must never
+    // reach into a DIFFERENT (possibly same-clientId-by-coincidence, though
+    // that can't actually happen — see nextPendingSendId) session's
+    // pendingSends array.
+    var loadToken = detailState.loadToken;
+    function stillCurrent() { return !!detailState && detailState.loadToken === loadToken; }
+
+    // Optimistic: render the operator's own text into the transcript RIGHT
+    // NOW, before the POST below has even been issued — see this section's
+    // header comment. detailState.pendingSends is model input, not a DOM
+    // hack: it survives every re-render (the 1s tick, a live delta) exactly
+    // like durable/live data, via transcriptModel's own pure fold, until
+    // reconciled (success path) or explicitly rolled back (failure path,
+    // below).
+    var clientId = nextPendingSendId();
+    detailState.pendingSends.push({ text: text, clientId: clientId });
+    renderDetail();
+
+    // rollback undoes the optimistic pendingSend on a failed POST (it was
+    // never real) and surfaces the failure text inline — the one thing the
+    // two failure branches below (a non-2xx response, a network throw) both
+    // need to do, factored out so that shared behavior can't drift apart.
+    function rollback(errText) {
+      err.textContent = errText;
+      removePendingSend(detailState, clientId);
+      renderDetail();
+    }
+
+    api("POST", "/session/" + encodeURIComponent(sid) + "/prompt_async", { parts: [{ type: "text", text: text }] })
+      .then(function (resp) {
+        return resp.json().catch(function () { return null; }).then(function (body) { return { resp: resp, body: body }; });
+      })
+      .then(function (r) {
+        if (!stillCurrent()) return;
+        if (r.resp.ok) {
+          input.value = "";
+          // No pendingSend removal here — leave it in place. The stream
+          // event (a "message" or "prompt.queued" arrival) will reconcile
+          // it out via transcriptModel's own dedup, same as it always has
+          // for prompt.queued's own placeholder.
+        } else {
+          rollback((r.body && r.body.error) || ("send failed (status " + r.resp.status + ")"));
+        }
+      }, function (netErr) {
+        if (!stillCurrent()) return;
+        rollback("send failed: " + ((netErr && netErr.message) || "network error"));
+      })
+      .then(function () {
+        if (stillCurrent()) {
+          detailState.postInFlight = false;
+          setComposerBusy(false);
+        }
+      });
+  });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); }
+  });
+}
+wireComposer();
+
+/* ---------- connect / disconnect lifecycle ---------- */
+
+function setFormBusy(busy, label) {
+  baseInput.disabled = busy;
+  tokenInput.disabled = busy;
+  connectBtn.disabled = busy;
+  connectBtn.textContent = label;
+}
+
+// attemptConnect: GET /health (unauthenticated — identity + reachability)
+// THEN authed GET /session, so a wrong token surfaces as a 401 from /session,
+// never from /health (see the plan's Connect flow). On success this primes
+// the SSE resume cursor from the poll (hub's approach — from=lastSeq, never
+// from=0) before opening the stream.
+function attemptConnect(base, token) {
+  connectErr.textContent = "";
+  return fetch(base + "/health").then(function (hResp) {
+    if (!hResp.ok) throw { userMessage: "cannot reach " + base + " (health " + hResp.status + ")" };
+    return hResp.json();
+  }, function () {
+    throw { userMessage: "cannot reach " + base };
+  }).then(function (health) {
+    return api2(base, token, "GET", "/session").then(function (sResp) {
+      if (sResp.status === 401) throw { userMessage: "run token was rejected" };
+      if (!sResp.ok) throw { userMessage: "session list failed (" + sResp.status + ")" };
+      return sResp.json().then(function (list) { return { health: health, list: list }; });
+    }, function () {
+      throw { userMessage: "cannot reach " + base };
+    });
+  }).then(function (r) {
+    state.base = base;
+    state.token = token;
+    state.health = r.health;
+    state.sessions = new Map(r.list.map(function (s) { return [s.id, s]; }));
+    state.activities = new Map();
+    state.lastSeq = maxSeq(r.list);
+    state.backoff = BACKOFF_MIN;
+    localStorage.setItem(LS_BASE, base);
+    localStorage.setItem(LS_TOKEN, token);
+    document.body.classList.add("connected");
+    document.body.classList.remove("show-connect"); // clear any panel left up by a prior failed attempt / disconnect
+    renderIdentity();
+    syncBoard(Date.now());
+    // Preserve a "#s=<id>" deep link across the connect-time replaceState —
+    // a bookmarked/shared session URL must still resolve to that session
+    // once connected, not be silently dropped back to the bare board route.
+    history.replaceState(null, "", route({ base: base, sessionId: unroute(location.hash).sessionId }));
+
+    state.running = true;
+    clearInterval(state.pollTimer);
+    state.pollTimer = setInterval(pollOnce, POLL_MS);
+    clearInterval(state.tickTimer);
+    state.tickTimer = setInterval(tick, TICK_MS);
+    setConnState("reconnecting"); // "connecting…" reuses the honest reconnecting label until the stream opens
+    // applyRoute BEFORE connectStream: a "#s=<id>" deep link's history GET
+    // (issued synchronously inside enterDetail) must claim its HTTP
+    // connection before connectStream opens the long-lived, never-completing
+    // SSE /event stream. On HTTP/1.1 (and behind some proxies) the streaming
+    // response can otherwise pin a connection and queue the finite history
+    // GET behind it for seconds — the intermittent "no messages yet on a
+    // session that has history" seen live. Issuing the finite request first
+    // lets it complete promptly; the stream then opens on its own connection.
+    applyRoute(); // resolves a "#s=<id>" deep link into the detail view now that we're connected
+    connectStream();
+    return true;
+  }, function (err) {
+    connectErr.textContent = (err && err.userMessage) || "connect failed";
+    return false;
+  });
+}
+
+// api2 is attemptConnect's pre-state fetch helper: state.base/state.token
+// aren't set until a connect attempt SUCCEEDS, so the /session probe during
+// connect can't go through api() (which reads them from state).
+function api2(base, token, method, path) {
+  return fetch(base + path, { method: method, headers: { Authorization: "Bearer " + token } });
+}
+
+function forceDisconnect(reason) {
+  state.running = false;
+  if (state.abort) state.abort.abort();
+  clearTimeout(state.streamTimer);
+  clearInterval(state.pollTimer);
+  clearInterval(state.tickTimer);
+  document.body.classList.remove("connected");
+  document.body.classList.add("show-connect"); // a hard disconnect needs the panel back to reconnect / re-enter a token
+  setConnState("disconnected");
+  if (reason) connectErr.textContent = reason;
+  // A disconnected instance can't serve a live detail view (history fetch
+  // and the composer both need an authed connection) — drop back to the
+  // board rather than leave a detail view showing frozen, increasingly
+  // stale data. The URL fragment is left alone so a subsequent reconnect
+  // (same token, corrected token, or the instance coming back) can resolve
+  // straight back into it via applyRoute.
+  if (detailState) exitDetail();
+}
+
+/* ---------- bootstrap ---------- */
+
+(function bootstrap() {
+  var storedBase = localStorage.getItem(LS_BASE) || "";
+  var storedToken = localStorage.getItem(LS_TOKEN) || "";
+
+  // #t=<token> capability URL (extractFragmentToken, TESTABLE): adopt into
+  // the SAME localStorage key manual entry uses, then immediately scrub it
+  // from the visible/bookmarkable URL via history.replaceState — a token
+  // must never linger in browser history or a shared screenshot/link one
+  // beat longer than it takes to read it. An explicit #t= wins over a
+  // previously stored token: it is the fresher credential (e.g. shared via
+  // a new link after a rotation) — see extractFragmentToken's own doc
+  // comment for the tools/hub precedent this mirrors. This does NOT
+  // weaken the auth model in any way: the token is still required, still
+  // checked by attemptConnect exactly as a hand-typed one would be — this
+  // only removes the typing, not the credential.
+  var fragToken = extractFragmentToken(location.hash);
+  if (fragToken.token) {
+    storedToken = fragToken.token;
+    localStorage.setItem(LS_TOKEN, storedToken);
+    history.replaceState(null, "", fragToken.cleanedHash);
+  }
+
+  // embeddedConnectPlan (TESTABLE) is the single source of truth for the
+  // whole "frictionless local" behavior — see its own doc comment for the
+  // four composing outcomes. Read location.hash fresh (not the possibly-
+  // stale value fragToken parsed above): if the token scrub just ran, this
+  // is now the CLEANED hash, but "b" is preserved by cleanedHash's own
+  // construction, so the fragment base decision is identical either way.
+  var fragBase = unroute(location.hash).base;
+  var plan = embeddedConnectPlan(location, fragToken.token, storedToken, fragBase);
+
+  var baseLabel = document.getElementById("base-url-label");
+  var introEl = document.getElementById("connect-intro");
+  var noticeEl = document.getElementById("connect-cross-box-notice");
+  baseLabel.hidden = !plan.showBaseField;
+  if (plan.crossBoxNotice) {
+    noticeEl.textContent = plan.crossBoxNotice;
+    noticeEl.hidden = false;
+  } else {
+    noticeEl.hidden = true;
+  }
+
+  connectForm.addEventListener("submit", function (e) {
+    e.preventDefault();
+    // Fixed to this box's own origin once embedded (never user-edited —
+    // the field is hidden): CSP (connect-src 'self') would block anything
+    // else anyway, and a differing fragment base is exactly what
+    // crossBoxNotice explains, not silently substitutes.
+    var base = plan.embedded ? plan.base : baseInput.value.trim().replace(/\/+$/, "");
+    var token = tokenInput.value;
+    if (!base || !token) { connectErr.textContent = "base URL and token are required"; return; }
+    setFormBusy(true, "Connecting…");
+    attemptConnect(base, token).then(function () { setFormBusy(false, "Connect"); });
+  });
+
+  if (plan.embedded) {
+    // auto-attempt-same-origin: no panel interaction required up front —
+    // try immediately with whatever token is available (autoToken, or ""
+    // when none — still worth trying: an Unauthenticated loopback box
+    // accepts an empty Authorization header exactly like a correct
+    // bearer token everywhere else). The panel is display:none by default
+    // (see the #connect-panel rule) and this path never adds show-connect,
+    // so it stays hidden the whole time — "no connect panel, no fields,
+    // nothing typed" — and never paints during the in-flight probe. Only a
+    // FAILED attempt (below) adds show-connect to reveal the token panel.
+    introEl.textContent = "Connecting to " + plan.base + "…";
+    baseInput.value = plan.base;
+    tokenInput.value = plan.autoToken || "";
+    setConnState("disconnected");
+    setFormBusy(true, "Connecting…");
+    attemptConnect(plan.base, plan.autoToken || "").then(function (ok) {
+      if (ok) return;
+      // show-token-panel: the attempt failed (a real token is required
+      // and none of autoToken's sources had a valid one, or this box
+      // isn't reachable — either way attemptConnect already set
+      // connectErr's text). Base stays fixed/shown as plain text via
+      // introEl (showBaseField is already false — the field itself
+      // stays hidden); clear whatever token was just tried so the
+      // operator types a fresh one rather than staring at a rejected
+      // value sitting in the field.
+      document.body.classList.add("show-connect"); // reveal the token panel now that the silent auto-attempt has failed
+      introEl.textContent = "Connect to " + plan.base + " to see its sessions.";
+      tokenInput.value = "";
+      setFormBusy(false, "Connect");
+    });
+  } else {
+    // show-full-panel: the two-field flow.
+    // Fragment #b= prefills the base URL field (e.g. a shared bookmark)
+    // when nothing is stored yet; a stored preference still wins, since it
+    // reflects a deliberate earlier choice this page must not override.
+    baseInput.value = storedBase || fragBase || "";
+    tokenInput.value = storedToken;
+    setConnState("disconnected");
+    if (storedBase && storedToken) {
+      // Have creds — attempt SILENTLY (panel stays hidden), revealing it only
+      // on failure, exactly like the embedded auto-attempt above, so a
+      // returning operator with a stored connection sees the board appear
+      // without the panel flashing first.
+      setFormBusy(true, "Connecting…");
+      attemptConnect(storedBase, storedToken).then(function (ok) {
+        if (!ok) document.body.classList.add("show-connect");
+        setFormBusy(false, "Connect");
+      });
+    } else {
+      // No stored creds — the panel IS the entry point, so show it from the
+      // first paint (added synchronously here, before any paint, so it does
+      // not flash in either direction).
+      document.body.classList.add("show-connect");
+    }
+  }
+})();
+</script>
+</body>
+</html>

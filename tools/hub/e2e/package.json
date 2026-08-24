@@ -1,0 +1,12 @@
+{
+  "name": "harness-hub-e2e",
+  "private": true,
+  "description": "Isolated verification tooling for tools/hub/index.html's real-backend end-to-end check (real_e2e.mjs, driven by e2e_test.go). Deliberately kept in its own package.json, separate from the shipped hub page itself, which stays a single build-free HTML file with zero dependencies — see tools/hub/index.html's header comment.",
+  "type": "module",
+  "scripts": {
+    "e2e": "node real_e2e.mjs"
+  },
+  "dependencies": {
+    "jsdom": "^29.1.1"
+  }
+}

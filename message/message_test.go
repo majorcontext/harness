@@ -1,0 +1,981 @@
+package message
+
+import (
+	"bytes"
+	"encoding/json"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestMessageJSONRoundTrip(t *testing.T) {
+	in := Message{
+		ID:   "msg_1",
+		Role: RoleAssistant,
+		Parts: Parts{
+			&Text{Text: "hello"},
+			&Reasoning{
+				Text: "thinking summary",
+				ProviderData: ProviderData{
+					"anthropic": json.RawMessage(`{"signature":"abc"}`),
+				},
+			},
+			&ToolCall{
+				CallID:    "tc_1",
+				Name:      "bash",
+				Arguments: json.RawMessage(`{"command":"ls"}`),
+			},
+			&Blob{MediaType: "image/png", Data: []byte{0x89, 0x50}},
+		},
+		Model:     ModelRef{Provider: "anthropic", Model: "claude-fable-5"},
+		CreatedAt: time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC),
+	}
+
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out Message
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(in, out) {
+		t.Errorf("round trip mismatch:\n in: %+v\nout: %+v", in, out)
+	}
+}
+
+func TestToolResultRoundTrip(t *testing.T) {
+	in := Message{
+		ID:   "msg_2",
+		Role: RoleTool,
+		Parts: Parts{
+			&ToolResult{
+				CallID: "tc_1",
+				Content: Parts{
+					&Text{Text: "output line"},
+					&Blob{MediaType: "image/png", URL: "https://example.com/x.png"},
+				},
+				IsError: true,
+			},
+		},
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out Message
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(in, out) {
+		t.Errorf("round trip mismatch:\n in: %+v\nout: %+v", in, out)
+	}
+}
+
+func TestPartTypeDiscriminator(t *testing.T) {
+	raw, err := json.Marshal(Parts{&Text{Text: "hi"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"type":"text"`) {
+		t.Errorf("marshaled part missing type discriminator: %s", raw)
+	}
+}
+
+func TestUnknownPartTypeErrors(t *testing.T) {
+	var ps Parts
+	err := json.Unmarshal([]byte(`[{"type":"holo_deck"}]`), &ps)
+	if err == nil {
+		t.Fatal("expected error for unknown part type")
+	}
+}
+
+func TestPartsText(t *testing.T) {
+	ps := Parts{
+		&Text{Text: "a"},
+		&Blob{MediaType: "image/png"},
+		&Text{Text: "b"},
+	}
+	if got := ps.Text(); got != "a\nb" {
+		t.Errorf("Text() = %q, want %q", got, "a\nb")
+	}
+}
+
+func TestProviderCallID(t *testing.T) {
+	a := ProviderCallID("toolu_", "tc_1", 24)
+	b := ProviderCallID("toolu_", "tc_1", 24)
+	if a != b {
+		t.Errorf("not deterministic: %q vs %q", a, b)
+	}
+	if len(a) != 24 {
+		t.Errorf("len = %d, want 24", len(a))
+	}
+	if !strings.HasPrefix(a, "toolu_") {
+		t.Errorf("missing prefix: %q", a)
+	}
+	if ProviderCallID("call_", "tc_2", 0) == ProviderCallID("call_", "tc_3", 0) {
+		t.Error("distinct call IDs collided")
+	}
+}
+
+func TestModelRef(t *testing.T) {
+	ref, err := ParseModelRef("amazon-bedrock/us.anthropic.claude-opus-4-8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Provider != "amazon-bedrock" || ref.Model != "us.anthropic.claude-opus-4-8" {
+		t.Errorf("unexpected parse: %+v", ref)
+	}
+
+	// Model portion may contain slashes.
+	ref, err = ParseModelRef("vertex/publishers/google/gemini-3.1-pro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Model != "publishers/google/gemini-3.1-pro" {
+		t.Errorf("slash split wrong: %+v", ref)
+	}
+
+	for _, bad := range []string{"", "anthropic", "/model", "anthropic/"} {
+		if _, err := ParseModelRef(bad); err == nil {
+			t.Errorf("ParseModelRef(%q) should fail", bad)
+		}
+	}
+
+	raw, err := json.Marshal(ModelRef{Provider: "anthropic", Model: "claude-fable-5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != `"anthropic/claude-fable-5"` {
+		t.Errorf("marshal = %s", raw)
+	}
+	var out ModelRef
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "anthropic/claude-fable-5" {
+		t.Errorf("unmarshal = %+v", out)
+	}
+
+	// Zero ref round-trips through "".
+	raw, _ = json.Marshal(ModelRef{})
+	if string(raw) != `""` {
+		t.Errorf("zero marshal = %s", raw)
+	}
+	var zero ModelRef
+	if err := json.Unmarshal(raw, &zero); err != nil {
+		t.Fatal(err)
+	}
+	if !zero.IsZero() {
+		t.Errorf("zero unmarshal = %+v", zero)
+	}
+}
+
+// TestToolCallEmptyArgumentsMarshal is the regression guard for the
+// json.RawMessage footgun that produced the goal-supervised session
+// incident (session ses_01kx3pvqttfwgbf2n5x1f1y8yh.jsonl): a worker turn's
+// json.Marshal failed with "json: error calling MarshalJSON for type
+// json.RawMessage: unexpected end of JSON input" because a ToolCall's
+// Arguments field was an empty-but-non-nil json.RawMessage.
+// json.RawMessage.MarshalJSON only special-cases nil (-> "null"); any other
+// zero-length value is handed to the encoder unvalidated, and zero bytes is
+// not valid JSON. `omitempty` does not help: it tests the Go zero value
+// (nil), not len == 0.
+//
+// Both an empty non-nil Arguments and a nil Arguments must marshal cleanly
+// — as a Parts element (marshalPart's tagged union) and as a bare ToolCall
+// value (any direct struct field elsewhere, e.g. an SSE event's ToolCall
+// pointer) — and must not lose the "type" discriminator when marshaled as
+// a Parts element.
+//
+// The normalized value must be "{}", not "null": every transcoder
+// (provider/anthropic, provider/openai) already coerces a zero-length
+// Arguments to an empty JSON object before sending it to the provider, so
+// the canonical marshal must agree — a "null" here would diverge from what
+// actually goes out on the wire and would not survive a resumed session's
+// retranscode as a valid tool-call arguments value.
+func TestToolCallEmptyArgumentsMarshal(t *testing.T) {
+	cases := []struct {
+		name string
+		args json.RawMessage
+	}{
+		{"nil", nil},
+		{"empty-non-nil", json.RawMessage{}},
+		{"empty-string-literal", json.RawMessage("")},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tc := &ToolCall{CallID: "tc_1", Name: "bash", Arguments: c.args}
+
+			// Bare ToolCall value, as any direct struct field would encode
+			// it (e.g. an event's ToolCall pointer) — this is exactly the
+			// json.Marshal(ToolCall{...}) call that failed in production.
+			bareRaw, err := json.Marshal(*tc)
+			if err != nil {
+				t.Fatalf("marshal bare ToolCall: %v", err)
+			}
+			if !strings.Contains(string(bareRaw), `"arguments":{}`) {
+				t.Errorf("bare ToolCall arguments = %s, want normalized to {}", bareRaw)
+			}
+
+			// As a Parts element: must round-trip through the tagged
+			// union without losing the "type" discriminator.
+			raw, err := json.Marshal(Parts{tc})
+			if err != nil {
+				t.Fatalf("marshal Parts: %v", err)
+			}
+			if !strings.Contains(string(raw), `"arguments":{}`) {
+				t.Errorf("Parts element arguments = %s, want normalized to {}", raw)
+			}
+			var out Parts
+			if err := json.Unmarshal(raw, &out); err != nil {
+				t.Fatalf("unmarshal Parts: %v (raw=%s)", err, raw)
+			}
+			if len(out) != 1 {
+				t.Fatalf("len(out) = %d, want 1 (raw=%s)", len(out), raw)
+			}
+			got, ok := out[0].(*ToolCall)
+			if !ok {
+				t.Fatalf("out[0] = %T, want *ToolCall (raw=%s)", out[0], raw)
+			}
+			if got.CallID != "tc_1" || got.Name != "bash" {
+				t.Errorf("got = %+v, want CallID=tc_1 Name=bash (raw=%s)", got, raw)
+			}
+			if string(got.Arguments) != "{}" {
+				t.Errorf("got.Arguments = %s, want {}", got.Arguments)
+			}
+		})
+	}
+}
+
+// TestToolCallEmptyArgumentsRoundTripMatchesTranscodeConvention is the
+// marshal -> unmarshal -> transcode-path round trip: a ToolCall with
+// zero-length Arguments, persisted to canonical JSON and reloaded (as a
+// resumed session would), must present Arguments in exactly the form the
+// provider transcoders expect to consume — an empty JSON object, not null
+// — so that a transcoder's own "coerce empty to {}" fallback (which only
+// fires on len(Arguments) == 0) is not silently bypassed by a literal
+// "null" that has non-zero length but is not a usable arguments object.
+func TestToolCallEmptyArgumentsRoundTripMatchesTranscodeConvention(t *testing.T) {
+	msg := Message{
+		ID:   "msg_1",
+		Role: RoleAssistant,
+		Parts: Parts{
+			&ToolCall{CallID: "tc_1", Name: "bash", Arguments: json.RawMessage{}},
+		},
+	}
+
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var reloaded Message
+	if err := json.Unmarshal(raw, &reloaded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	tc, ok := reloaded.Parts[0].(*ToolCall)
+	if !ok {
+		t.Fatalf("reloaded part = %T, want *ToolCall", reloaded.Parts[0])
+	}
+
+	// The transcode-path expectation: transcoders test len(Arguments) == 0
+	// to decide whether to substitute their own empty-object literal (see
+	// provider/anthropic/transcode.go and provider/openai/transcode.go).
+	// After a round trip through canonical JSON, Arguments must already be
+	// "{}" — valid, non-empty, parseable JSON that a transcoder can pass
+	// straight through — never the 4-byte non-object literal "null".
+	if len(tc.Arguments) == 0 {
+		t.Fatalf("reloaded Arguments has zero length, want non-empty {}")
+	}
+	if string(tc.Arguments) == "null" {
+		t.Fatalf("reloaded Arguments round-tripped to null, want {} (diverges from transcoder convention)")
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(tc.Arguments, &obj); err != nil {
+		t.Fatalf("reloaded Arguments not a JSON object: %v (arguments=%s)", err, tc.Arguments)
+	}
+	if len(obj) != 0 {
+		t.Errorf("reloaded Arguments = %s, want empty object {}", tc.Arguments)
+	}
+}
+
+// TestMarshalPartToolCallFieldsMatchStruct is a reflection-based divergence
+// guard for marshalPart's *ToolCall case. That case deliberately does not
+// embed *ToolCall (embedding would promote ToolCall.MarshalJSON onto the
+// wrapper and silently drop the "type" discriminator — see the comment on
+// marshalPart) and instead reconstructs ToolCall's fields one by one in an
+// inline anonymous struct. That reconstruction is invisible to the
+// compiler: adding a field to ToolCall does not fail to compile here, it
+// just silently stops appearing in the Parts-element JSON.
+//
+// This test compares the set of JSON keys ToolCall's own field tags produce
+// against the set of keys marshalPart actually emits for a *ToolCall (minus
+// the "type" discriminator, which has no counterpart on the bare struct).
+// If someone adds a field to ToolCall without updating marshalPart's
+// reconstruction, the key sets diverge and this test fails with the
+// specific missing key named, instead of the field silently vanishing from
+// every persisted tool call.
+func TestMarshalPartToolCallFieldsMatchStruct(t *testing.T) {
+	structKeys := jsonFieldKeys(t, reflect.TypeOf(ToolCall{}))
+
+	tc := &ToolCall{CallID: "tc_1", Name: "bash", Arguments: json.RawMessage(`{"a":1}`)}
+	raw, err := marshalPart(tc)
+	if err != nil {
+		t.Fatalf("marshalPart: %v", err)
+	}
+	var wireObj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &wireObj); err != nil {
+		t.Fatalf("unmarshal marshalPart output: %v", err)
+	}
+	delete(wireObj, "type") // the tagged-union discriminator; not a ToolCall field.
+	wireKeys := make(map[string]bool, len(wireObj))
+	for k := range wireObj {
+		wireKeys[k] = true
+	}
+
+	for k := range structKeys {
+		if !wireKeys[k] {
+			t.Errorf("ToolCall field with JSON key %q is present on the struct but missing from marshalPart's Parts-element encoding — the explicit field-by-field reconstruction in marshalPart's *ToolCall case must be updated to include it", k)
+		}
+	}
+	for k := range wireKeys {
+		if !structKeys[k] {
+			t.Errorf("marshalPart's Parts-element encoding emits key %q with no corresponding ToolCall struct field", k)
+		}
+	}
+}
+
+// jsonFieldKeys returns the set of JSON object keys a struct type's own
+// fields (as reflected via their `json` tags) would produce. It ignores
+// "-" (skip) tags and options like ",omitempty"; fields without a json tag
+// fall back to their Go name to match encoding/json's default behavior.
+func jsonFieldKeys(t *testing.T, typ reflect.Type) map[string]bool {
+	t.Helper()
+	if typ.Kind() != reflect.Struct {
+		t.Fatalf("jsonFieldKeys: %v is not a struct", typ)
+	}
+	keys := make(map[string]bool)
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		tag := f.Tag.Get("json")
+		if tag == "-" {
+			continue
+		}
+		name, _, _ := strings.Cut(tag, ",")
+		if name == "" {
+			name = f.Name
+		}
+		keys[name] = true
+	}
+	return keys
+}
+
+// TestMessageWithEmptyToolCallArgumentsMarshal proves the full incident
+// shape: an assistant Message carrying a ToolCall with an empty-non-nil
+// Arguments — the shape engine.Session.append persists to the session log
+// and the server journals and serves from GET /session/{id}/message —
+// marshals successfully end to end.
+func TestMessageWithEmptyToolCallArgumentsMarshal(t *testing.T) {
+	m := Message{
+		ID:   "msg_1",
+		Role: RoleAssistant,
+		Parts: Parts{
+			&ToolCall{CallID: "tc_1", Name: "bash", Arguments: json.RawMessage{}},
+		},
+	}
+	if _, err := json.Marshal(m); err != nil {
+		t.Fatalf("marshal message with empty-non-nil tool call arguments: %v", err)
+	}
+	if _, err := json.Marshal([]Message{m}); err != nil {
+		t.Fatalf("marshal []Message (the /message response shape): %v", err)
+	}
+}
+
+// TestReasoningProviderDataEmptyMarshal is the round-2 forensic regression
+// guard: #42 normalized ToolCall.Arguments (a bare json.RawMessage field)
+// but left Reasoning.ProviderData — a map[string]json.RawMessage carrying
+// the exact same footgun one layer of indirection away — completely
+// unguarded. This reproduces the incident shape directly: a Reasoning part
+// whose provider_data entry is present but zero-length (non-nil), the same
+// "no data yet" shape a partially-assembled provider stream item can leave
+// behind. Before the ProviderData.MarshalJSON guard this failed with
+// exactly "json: error calling MarshalJSON for type json.RawMessage:
+// unexpected end of JSON input" — the production error.
+func TestReasoningProviderDataEmptyMarshal(t *testing.T) {
+	cases := []struct {
+		name string
+		data json.RawMessage
+	}{
+		{"nil", nil},
+		{"empty-non-nil", json.RawMessage{}},
+		{"empty-string-literal", json.RawMessage("")},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := &Reasoning{
+				Text:         "thinking",
+				ProviderData: ProviderData{"anthropic": c.data},
+			}
+
+			// Bare Reasoning value, as a direct struct field would encode
+			// it (e.g. an Event's Message field, or a plugin hook payload
+			// carrying a message.Message) — no tagged-union wrapper
+			// involved.
+			if _, err := json.Marshal(*r); err != nil {
+				t.Fatalf("marshal bare Reasoning: %v", err)
+			}
+
+			// As a Parts element: the tagged-union path every session
+			// message goes through.
+			raw, err := json.Marshal(Parts{r})
+			if err != nil {
+				t.Fatalf("marshal Parts: %v", err)
+			}
+			var out Parts
+			if err := json.Unmarshal(raw, &out); err != nil {
+				t.Fatalf("unmarshal Parts: %v (raw=%s)", err, raw)
+			}
+			if len(out) != 1 {
+				t.Fatalf("len(out) = %d, want 1 (raw=%s)", len(out), raw)
+			}
+			got, ok := out[0].(*Reasoning)
+			if !ok {
+				t.Fatalf("out[0] = %T, want *Reasoning (raw=%s)", out[0], raw)
+			}
+			// The empty entry must not survive as spurious "present" data:
+			// Get must report it absent, exactly as ToolCall.Arguments
+			// normalizes an empty entry to a well-defined shape rather than
+			// silently keeping a footgun around for the next consumer.
+			if _, ok := got.ProviderData.Get("anthropic"); ok {
+				t.Errorf("got.ProviderData.Get(\"anthropic\") = present, want absent (raw=%s)", raw)
+			}
+		})
+	}
+}
+
+// TestMessageWithEmptyReasoningProviderDataMarshal proves the full incident
+// shape end to end: an assistant Message carrying a Reasoning part whose
+// provider_data entry is empty-non-nil — the shape engine.Session.append
+// persists to the session log and the server journals — marshals
+// successfully, both alone and as the []Message shape GET
+// /session/{id}/message returns.
+func TestMessageWithEmptyReasoningProviderDataMarshal(t *testing.T) {
+	m := Message{
+		ID:   "msg_1",
+		Role: RoleAssistant,
+		Parts: Parts{
+			&Reasoning{
+				Text:         "thinking",
+				ProviderData: ProviderData{"anthropic": json.RawMessage{}},
+			},
+			&Text{Text: "hello"},
+		},
+	}
+	if _, err := json.Marshal(m); err != nil {
+		t.Fatalf("marshal message with empty-non-nil reasoning provider_data: %v", err)
+	}
+	if _, err := json.Marshal([]Message{m}); err != nil {
+		t.Fatalf("marshal []Message (the /message response shape): %v", err)
+	}
+}
+
+// TestProviderDataGetOversizedEntryIsAbsent is the round-3 forensic
+// regression guard: ProviderData.Get treated only an empty entry as
+// "absent" (round 2's fix), leaving an oversized one — a thinking
+// signature or redacted_thinking payload with no upper bound at all — to
+// be replayed verbatim on every subsequent request for the rest of the
+// session (see the package doc, "Unbounded replay is a request-size/time
+// bomb"). This is a synthetic fixture shaped like the incident (a
+// production session carried one ~30KB signature against seven ~500-byte
+// siblings in the same run), not session-log content: a byte slice one
+// byte over maxProviderDataEntry, and one exactly at the boundary.
+func TestProviderDataGetOversizedEntryIsAbsent(t *testing.T) {
+	small := json.RawMessage(`{"signature":"c2hvcnQ="}`) // ~24 bytes, ordinary size
+	atCap := append(append(json.RawMessage(`"`), bytes.Repeat([]byte("a"), maxProviderDataEntry-2)...), '"')
+	overCap := append(append(json.RawMessage(`"`), bytes.Repeat([]byte("a"), maxProviderDataEntry-1)...), '"')
+
+	pd := ProviderData{
+		"small":  small,
+		"at-cap": atCap,
+		"over":   overCap,
+	}
+
+	if _, ok := pd.Get("small"); !ok {
+		t.Error(`Get("small") = absent, want present (ordinary-sized entry)`)
+	}
+	if got := len(atCap); got != maxProviderDataEntry {
+		t.Fatalf("fixture bug: len(atCap) = %d, want exactly %d", got, maxProviderDataEntry)
+	}
+	if _, ok := pd.Get("at-cap"); !ok {
+		t.Error(`Get("at-cap") = absent, want present (exactly at the cap)`)
+	}
+	if got := len(overCap); got <= maxProviderDataEntry {
+		t.Fatalf("fixture bug: len(overCap) = %d, want > %d", got, maxProviderDataEntry)
+	}
+	if _, ok := pd.Get("over"); ok {
+		t.Error(`Get("over") = present, want absent (one byte over the cap — the request-size-bomb entry)`)
+	}
+}
+
+// TestToolCallInvalidTruncatedArgumentsMarshal is the defense-in-depth
+// regression guard from the incident behind two production goal sessions,
+// ses_01kx453ewfedqrg7p3c64f8sca and ses_01kx453ev9ejattygpf7rbzptw: both
+// died at the start of a worker turn with "json: error calling MarshalJSON
+// for type json.RawMessage: unexpected end of JSON input", and
+// GET /session/{id}/message on them then 500'd with the message.Parts
+// wrapper of the same error.
+//
+// Every guard here at the time (TestToolCallEmptyArgumentsMarshal,
+// TestReasoningProviderDataEmptyMarshal) special-cased len(Arguments) == 0
+// only. A provider stream that dies mid tool_use block — a dropped
+// connection during input_json_delta accumulation, or (as audited in
+// provider/anthropic/anthropic.go) a max_tokens cutoff mid tool-call, which
+// the Anthropic wire protocol still closes out with a normal
+// content_block_stop/message_delta/message_stop sequence — can leave
+// Arguments non-empty but syntactically invalid (truncated) JSON. That
+// value sails straight past the len==0 guard, and
+// json.RawMessage.MarshalJSON does not validate its bytes at all: the
+// failure only appears once the value is embedded in a larger document and
+// encoding/json compacts it to validate, which is exactly why it looked
+// like two different bugs (a bare marshal "succeeds", the same value one
+// layer deeper fails) before this test pinned both call sites at once.
+//
+// This is the second, independent half of the incident's fix (see
+// TestNormalizeDropsInvalidToolCallArguments for the primary, ingest-time
+// half in Message.Normalize): even if a future producer bypasses Normalize
+// entirely — a plugin's chat.message hook building a Message by hand, a
+// hand-rolled provider adapter, a test's scripted provider — safeArguments
+// itself must never let invalid Arguments reach the encoder.
+func TestToolCallInvalidTruncatedArgumentsMarshal(t *testing.T) {
+	cases := []struct {
+		name string
+		args json.RawMessage
+	}{
+		{"truncated-object", json.RawMessage(`{"command":"echo hel`)},
+		{"truncated-string", json.RawMessage(`{"command":"ls`)},
+		{"lone-open-brace", json.RawMessage(`{`)},
+		{"garbage", json.RawMessage(`not json`)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tc := &ToolCall{CallID: "tc_1", Name: "bash", Arguments: c.args}
+
+			// Bare ToolCall value, as any direct struct field would encode
+			// it (e.g. an event's ToolCall pointer) — this is the shape
+			// that would otherwise marshal "successfully" (RawMessage's own
+			// MarshalJSON does not validate) only to fail once nested.
+			bareRaw, err := json.Marshal(*tc)
+			if err != nil {
+				t.Fatalf("marshal bare ToolCall: %v", err)
+			}
+			if !strings.Contains(string(bareRaw), `"arguments":{}`) {
+				t.Errorf("bare ToolCall arguments = %s, want normalized to {}", bareRaw)
+			}
+
+			// As a Parts element: the tagged-union path every session
+			// message goes through, and the exact nesting (Parts inside a
+			// Message inside a []Message) that turned this into "message:
+			// unexpected end of JSON input" in persistMessage and
+			// "message.Parts: ..." from GET /message.
+			raw, err := json.Marshal(Parts{tc})
+			if err != nil {
+				t.Fatalf("marshal Parts: %v", err)
+			}
+			if !strings.Contains(string(raw), `"arguments":{}`) {
+				t.Errorf("Parts element arguments = %s, want normalized to {}", raw)
+			}
+
+			m := Message{ID: "msg_1", Role: RoleAssistant, Parts: Parts{tc}}
+			if _, err := json.Marshal(m); err != nil {
+				t.Fatalf("marshal message: %v", err)
+			}
+			if _, err := json.Marshal([]Message{m}); err != nil {
+				t.Fatalf("marshal []Message (the /message response shape): %v", err)
+			}
+		})
+	}
+}
+
+// TestNormalizeDropsInvalidToolCallArguments is the primary-fix regression
+// guard for the incident behind two production goal sessions,
+// ses_01kx453ewfedqrg7p3c64f8sca and ses_01kx453ev9ejattygpf7rbzptw: both
+// died at the start of a worker turn with "json: error calling MarshalJSON
+// for type json.RawMessage: unexpected end of JSON input" — three identical
+// attempts, because every retry re-transcoded the same poisoned history —
+// and GET /session/{id}/message on them then 500'd with the message.Parts
+// wrapper of the same error, while the on-disk log stayed clean (the
+// poisoned message failed to persist and was never journaled).
+//
+// Message.Normalize is the one ingest choke point every message passes
+// through before entering a session's history (engine.Session.append), so
+// it is where a salvaged, truncated tool call — left behind by a provider
+// stream that dies mid tool_use block, e.g. a connection drop during
+// input_json_delta accumulation, or a max_tokens cutoff mid tool-call that
+// the wire protocol still closes out normally (see
+// provider/anthropic/anthropic.go) — must be sanitized once, rather than
+// leaving every downstream consumer (persist, GET /message, a future
+// transcoder) to separately guard against it.
+//
+// Dropping only Arguments (not the whole ToolCall part) preserves the most
+// information safely: CallID and Name say which tool the model was in the
+// middle of calling, which is useful context for a human or a next turn,
+// and neither can be malformed the way a truncated JSON blob can — they are
+// plain strings the provider adapter set directly from wire fields, never
+// json.RawMessage. Only Arguments carries the footgun, so only Arguments is
+// cleared, to nil (not "{}") at this layer: safeArguments and every
+// transcoder already coerce a nil/zero-length Arguments to an empty JSON
+// object at the one place each of them needs to, so nil here is the same
+// "no usable arguments" signal Normalize already sends for a
+// present-but-zero-length ProviderData entry, not a third distinct shape
+// for downstream code to learn.
+func TestNormalizeDropsInvalidToolCallArguments(t *testing.T) {
+	m := Message{
+		ID:   "msg_1",
+		Role: RoleAssistant,
+		Parts: Parts{
+			&Text{Text: "running"},
+			&ToolCall{CallID: "tc_1", Name: "bash", Arguments: json.RawMessage(`{"command":"echo hel`)},
+		},
+	}
+	m.Normalize()
+
+	tc, ok := m.Parts[1].(*ToolCall)
+	if !ok {
+		t.Fatalf("m.Parts[1] = %T, want *ToolCall", m.Parts[1])
+	}
+	if tc.CallID != "tc_1" || tc.Name != "bash" {
+		t.Errorf("Normalize must preserve CallID/Name, got %+v", tc)
+	}
+	if len(tc.Arguments) != 0 {
+		t.Errorf("Normalize left invalid Arguments = %s, want cleared", tc.Arguments)
+	}
+
+	// A genuinely empty (already-handled) Arguments is left exactly as
+	// Normalize found it — Normalize does not need to touch what
+	// safeArguments already normalizes at marshal time.
+	m2 := Message{Parts: Parts{&ToolCall{CallID: "tc_2", Name: "bash", Arguments: json.RawMessage{}}}}
+	m2.Normalize()
+	if len(m2.Parts[0].(*ToolCall).Arguments) != 0 {
+		t.Errorf("Normalize should not add content to an already-empty Arguments")
+	}
+
+	// Valid, complete Arguments must survive untouched.
+	m3 := Message{Parts: Parts{&ToolCall{CallID: "tc_3", Name: "bash", Arguments: json.RawMessage(`{"a":1}`)}}}
+	m3.Normalize()
+	if string(m3.Parts[0].(*ToolCall).Arguments) != `{"a":1}` {
+		t.Errorf("Normalize altered valid Arguments: %s, want unchanged {\"a\":1}", m3.Parts[0].(*ToolCall).Arguments)
+	}
+}
+
+// TestResolveOrphanToolCallsNoOrphans proves ResolveOrphanToolCalls is a
+// no-op — returning the identical input slice, not a copy — when every
+// ToolCall already has an immediately-following ToolResult, so a
+// well-formed history is never disturbed.
+func TestResolveOrphanToolCallsNoOrphans(t *testing.T) {
+	in := []Message{
+		{Role: RoleUser, Parts: Parts{&Text{Text: "go"}}},
+		{Role: RoleAssistant, Parts: Parts{toolCallPart("tc1", "bash", `{}`)}},
+		{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "tc1", Content: Parts{&Text{Text: "ok"}}}}},
+		{Role: RoleAssistant, Parts: Parts{&Text{Text: "done"}}},
+	}
+	out := ResolveOrphanToolCalls(in)
+	if len(out) != len(in) {
+		t.Fatalf("len(out) = %d, want %d (no orphans, no change)", len(out), len(in))
+	}
+	for i := range in {
+		if len(out[i].Parts) != len(in[i].Parts) {
+			t.Errorf("message %d parts changed: %+v", i, out[i])
+		}
+	}
+}
+
+// TestResolveOrphanToolCallsMidHistory reproduces the shape behind incident
+// ses_01kx48z4rqfkpbwmzfdv1jzeg6 with the orphan buried mid-transcript: an
+// assistant tool_use with no result at all (the very next message skips
+// straight to a fresh user turn), followed by ordinary, well-formed turns.
+// ResolveOrphanToolCalls must inject a synthetic RoleTool message
+// immediately after the orphaned assistant turn without disturbing
+// anything else in history.
+func TestResolveOrphanToolCallsMidHistory(t *testing.T) {
+	in := []Message{
+		{Role: RoleUser, Parts: Parts{&Text{Text: "first"}}},
+		{Role: RoleAssistant, Parts: Parts{toolCallPart("orphan1", "bash", `{"command":"echo hi"}`)}},
+		// No tool-role message follows: the turn died before execution.
+		{Role: RoleUser, Parts: Parts{&Text{Text: "second"}}},
+		{Role: RoleAssistant, Parts: Parts{&Text{Text: "done"}}},
+	}
+	out := ResolveOrphanToolCalls(in)
+	if len(out) != len(in)+1 {
+		t.Fatalf("len(out) = %d, want %d (one synthetic message inserted)", len(out), len(in)+1)
+	}
+	if out[0].Role != RoleUser || out[1].Role != RoleAssistant {
+		t.Fatalf("unexpected shape before the inserted message: %+v", out[:2])
+	}
+	synth := out[2]
+	if synth.Role != RoleTool {
+		t.Fatalf("out[2].Role = %s, want tool (the synthesized result)", synth.Role)
+	}
+	if len(synth.Parts) != 1 {
+		t.Fatalf("synthetic message parts = %d, want 1", len(synth.Parts))
+	}
+	tr, ok := synth.Parts[0].(*ToolResult)
+	if !ok {
+		t.Fatalf("synthetic part = %T, want *ToolResult", synth.Parts[0])
+	}
+	if tr.CallID != "orphan1" {
+		t.Errorf("synthetic ToolResult.CallID = %q, want %q", tr.CallID, "orphan1")
+	}
+	if !tr.IsError {
+		t.Error("synthetic ToolResult.IsError = false, want true")
+	}
+	if !strings.Contains(tr.Content.Text(), "synthesized") {
+		t.Errorf("synthetic ToolResult.Content = %q, want it to say \"synthesized\"", tr.Content.Text())
+	}
+	// The rest of history rides along unchanged.
+	if out[3].Role != RoleUser || out[3].Parts.Text() != "second" {
+		t.Errorf("out[3] = %+v, want the original second user turn", out[3])
+	}
+	if out[4].Role != RoleAssistant || out[4].Parts.Text() != "done" {
+		t.Errorf("out[4] = %+v, want the original closing assistant turn", out[4])
+	}
+}
+
+// TestResolveOrphanToolCallsFinalMessage covers the other shape incident
+// ses_01kx48z4rqfkpbwmzfdv1jzeg6's mechanism can leave behind: the orphaned
+// tool_use is the very last message in history (the turn died and nothing
+// else was ever appended after it) — there is no "next" message at all to
+// look at, let alone merge into.
+func TestResolveOrphanToolCallsFinalMessage(t *testing.T) {
+	in := []Message{
+		{Role: RoleUser, Parts: Parts{&Text{Text: "go"}}},
+		{Role: RoleAssistant, Parts: Parts{
+			toolCallPart("tc1", "bash", `{"command":"echo hi"}`),
+			toolCallPart("tc2", "read_file", `{"path":"x"}`),
+		}},
+	}
+	out := ResolveOrphanToolCalls(in)
+	if len(out) != 3 {
+		t.Fatalf("len(out) = %d, want 3 (one synthetic message appended)", len(out))
+	}
+	synth := out[2]
+	if synth.Role != RoleTool {
+		t.Fatalf("out[2].Role = %s, want tool", synth.Role)
+	}
+	if len(synth.Parts) != 2 {
+		t.Fatalf("synthetic message parts = %d, want 2 (one per orphaned call)", len(synth.Parts))
+	}
+	gotIDs := map[string]bool{}
+	for _, p := range synth.Parts {
+		tr, ok := p.(*ToolResult)
+		if !ok {
+			t.Fatalf("synthetic part = %T, want *ToolResult", p)
+		}
+		if !tr.IsError {
+			t.Errorf("synthetic ToolResult for %s: IsError = false, want true", tr.CallID)
+		}
+		gotIDs[tr.CallID] = true
+	}
+	if !gotIDs["tc1"] || !gotIDs["tc2"] {
+		t.Errorf("synthetic call IDs = %v, want both tc1 and tc2", gotIDs)
+	}
+}
+
+// TestResolveOrphanToolCallsPartialMerge covers a tool message that already
+// resolves SOME of an assistant turn's tool calls but not all of them —
+// e.g. the engine executed one call, appended its result, and the turn
+// died before the rest. Only the missing CallIDs get synthesized, merged
+// into the existing tool-role message rather than a new one.
+func TestResolveOrphanToolCallsPartialMerge(t *testing.T) {
+	in := []Message{
+		{Role: RoleUser, Parts: Parts{&Text{Text: "go"}}},
+		{Role: RoleAssistant, Parts: Parts{
+			toolCallPart("tc1", "bash", `{}`),
+			toolCallPart("tc2", "bash", `{}`),
+		}},
+		{Role: RoleTool, Parts: Parts{
+			&ToolResult{CallID: "tc1", Content: Parts{&Text{Text: "ok"}}},
+		}},
+	}
+	out := ResolveOrphanToolCalls(in)
+	if len(out) != len(in) {
+		t.Fatalf("len(out) = %d, want %d (merged into the existing tool message, no new one)", len(out), len(in))
+	}
+	tool := out[2]
+	if len(tool.Parts) != 2 {
+		t.Fatalf("tool message parts = %d, want 2 (original + synthesized)", len(tool.Parts))
+	}
+	tr0 := tool.Parts[0].(*ToolResult)
+	if tr0.CallID != "tc1" || tr0.IsError {
+		t.Errorf("original result disturbed: %+v", tr0)
+	}
+	tr1 := tool.Parts[1].(*ToolResult)
+	if tr1.CallID != "tc2" || !tr1.IsError {
+		t.Errorf("merged synthetic result = %+v, want tc2/IsError", tr1)
+	}
+	// Input must not have been mutated in place.
+	if len(in[2].Parts) != 1 {
+		t.Errorf("ResolveOrphanToolCalls mutated its input slice: in[2].Parts = %+v", in[2].Parts)
+	}
+}
+
+func toolCallPart(id, name, args string) *ToolCall {
+	return &ToolCall{CallID: id, Name: name, Arguments: json.RawMessage(args)}
+}
+
+// TestResolveOrphanToolCallsDistinctSyntheticIDs pins that two orphaned
+// turns whose calls happen to reuse the same CallID (nothing guarantees
+// provider call-ID uniqueness across turns) still get synthetic messages
+// with distinct message IDs — a UI keyed by message ID must never see two
+// messages collide.
+func TestResolveOrphanToolCallsDistinctSyntheticIDs(t *testing.T) {
+	in := []Message{
+		{Role: RoleAssistant, Parts: Parts{toolCallPart("tc_reused", "bash", `{}`)}},
+		{Role: RoleUser, Parts: Parts{&Text{Text: "still there?"}}},
+		{Role: RoleAssistant, Parts: Parts{toolCallPart("tc_reused", "bash", `{}`)}},
+	}
+	out := ResolveOrphanToolCalls(in)
+	if len(out) != 5 {
+		t.Fatalf("len(out) = %d, want 5 (two synthetic messages inserted)", len(out))
+	}
+	first, second := out[1], out[4]
+	if first.Role != RoleTool || second.Role != RoleTool {
+		t.Fatalf("synthetic roles = %s, %s, want tool, tool", first.Role, second.Role)
+	}
+	if first.ID == second.ID {
+		t.Errorf("synthetic message IDs collide: %q", first.ID)
+	}
+}
+
+// TestIsSyntheticOrphanIDMatchesResolveOrphanToolCalls is the red-first test
+// for NEP-5292's shared-prefix requirement: IsSyntheticOrphanID must report
+// true for exactly the IDs ResolveOrphanToolCalls actually mints (built from
+// the same SyntheticOrphanIDPrefix constant, so the two can never drift) and
+// false for an ordinary message ID.
+func TestIsSyntheticOrphanIDMatchesResolveOrphanToolCalls(t *testing.T) {
+	in := []Message{
+		{ID: "msg_1", Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
+	}
+	out := ResolveOrphanToolCalls(in)
+	if len(out) != 2 {
+		t.Fatalf("len(out) = %d, want 2 (assistant + synthetic tool result)", len(out))
+	}
+	synthID := out[1].ID
+	if !IsSyntheticOrphanID(synthID) {
+		t.Errorf("IsSyntheticOrphanID(%q) = false, want true", synthID)
+	}
+	for _, ordinary := range []string{"msg_1", "msg_synthetic", "", "synthetic-orphan-tool-resul"} {
+		if IsSyntheticOrphanID(ordinary) {
+			t.Errorf("IsSyntheticOrphanID(%q) = true, want false", ordinary)
+		}
+	}
+}
+
+// TestToolResultNilContentNeverMarshalsNull reproduces the second root
+// cause folded into NEP-5272: ToolResult.Content has json tag "content"
+// with no omitempty, so json.Marshal of a ToolResult whose Content is nil
+// (a tool that produced truly no output, e.g. box hyper-lemon's `grep ... |
+// head -20` matching nothing) marshals as literal `"content": null`.
+// Bedrock/Anthropic's own API rejects a null-content tool_result block
+// with the same "tool_use ids were found without tool_result blocks
+// immediately after" 400 a fully missing tool_result produces — this is
+// why the wedge could fire with no crash, no stream truncation, and no
+// sandbox death at all. Content must never marshal as null.
+func TestToolResultNilContentNeverMarshalsNull(t *testing.T) {
+	m := Message{
+		ID:    "msg_tr_nil",
+		Role:  RoleTool,
+		Parts: Parts{&ToolResult{CallID: "tc1", Content: nil}},
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("json.Marshal = %v, want success", err)
+	}
+	if strings.Contains(string(raw), `"content":null`) {
+		t.Fatalf("marshaled ToolResult carries literal null content: %s", raw)
+	}
+	var out Message
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("json.Unmarshal = %v", err)
+	}
+	tr, ok := out.Parts[0].(*ToolResult)
+	if !ok {
+		t.Fatalf("out.Parts[0] = %T, want *ToolResult", out.Parts[0])
+	}
+	if len(tr.Content) == 0 {
+		t.Errorf("round-tripped Content is empty, want a non-empty marker")
+	}
+}
+
+// TestToolResultBlankTextContentNeverMarshalsNull covers the EXACT shape
+// behind box hyper-lemon's wedge: the tool ran successfully (no error) and
+// returned Content holding one Text part whose Text is the empty string
+// (bash.go's captured-output path for a command with no stdout/stderr) --
+// non-nil, len 1, but empty in every way that matters. This must be
+// treated the same as nil Content: transcodeParts (provider/anthropic/
+// transcode.go) skips an empty Text part entirely, so this shape collapses
+// to zero wire blocks exactly like a nil Content would.
+func TestToolResultBlankTextContentNeverMarshalsNull(t *testing.T) {
+	m := Message{
+		ID:    "msg_tr_blank",
+		Role:  RoleTool,
+		Parts: Parts{&ToolResult{CallID: "tc1", Content: Parts{&Text{Text: ""}}}},
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("json.Marshal = %v, want success", err)
+	}
+	if strings.Contains(string(raw), `"content":null`) {
+		t.Fatalf("marshaled ToolResult carries literal null content: %s", raw)
+	}
+	var out Message
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("json.Unmarshal = %v", err)
+	}
+	tr := out.Parts[0].(*ToolResult)
+	if tr.Content.Text() == "" {
+		t.Errorf("round-tripped Content still renders blank, want a non-empty marker")
+	}
+}
+
+// TestMessageNormalizeFillsEmptyToolResultContent proves Normalize -- the
+// one ingest choke point every message passes through (Session.append) --
+// repairs an empty ToolResult.Content in place, mirroring how it already
+// repairs a truncated ToolCall.Arguments. This is the primary fix: by the
+// time a message this poisoned enters history, Content is already the
+// marker text, so no later marshal ever has to fall back to SafeContent's
+// own defense-in-depth substitution.
+func TestMessageNormalizeFillsEmptyToolResultContent(t *testing.T) {
+	m := Message{
+		Role:  RoleTool,
+		Parts: Parts{&ToolResult{CallID: "tc1", Content: nil}},
+	}
+	m.Normalize()
+	tr := m.Parts[0].(*ToolResult)
+	if len(tr.Content) == 0 {
+		t.Fatalf("Normalize left Content empty: %+v", tr)
+	}
+	if tr.Content.Text() == "" {
+		t.Errorf("Normalize left Content rendering blank: %+v", tr)
+	}
+}
+
+// TestMessageNormalizeLeavesRealToolResultContentAlone proves the fix is
+// scoped: a ToolResult that genuinely has content (text or otherwise) is
+// never touched.
+func TestMessageNormalizeLeavesRealToolResultContentAlone(t *testing.T) {
+	m := Message{
+		Role:  RoleTool,
+		Parts: Parts{&ToolResult{CallID: "tc1", Content: Parts{&Text{Text: "real output"}}}},
+	}
+	m.Normalize()
+	tr := m.Parts[0].(*ToolResult)
+	if tr.Content.Text() != "real output" {
+		t.Errorf("Normalize disturbed real content: got %q", tr.Content.Text())
+	}
+}
