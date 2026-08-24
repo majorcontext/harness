@@ -48,21 +48,84 @@ const taskNotificationResultCap = 4000
 // checkoutTaskNotificationsSegment and withAmbientStatus in process.go).
 const taskResumeTriggerText = "A background task you started has finished. See the engine context below for its result, and continue accordingly."
 
-// enqueueTaskNotification appends n to s's pending queue. Safe to call
-// from any goroutine (SessionManager.finalizeTurn calls it from whichever
-// goroutine just finished driving the CHILD's turn, which is never s
-// itself).
+// enqueueTaskNotification appends n to s's pending queue AND durably
+// persists it in one call. Safe to call from any goroutine NOT already
+// holding SessionManager's own m.mu — see enqueueTaskNotificationMemoryOnly/
+// persistQueuedTaskNotification's own doc comments for the split version
+// every SessionManager call site (finalizeTurn, recoverInterruptedTurnLocked,
+// Spawn) uses instead, and why. Kept as a single call for direct callers
+// outside that lock (tests, primarily).
 func (s *Session) enqueueTaskNotification(n taskNotification) {
+	s.enqueueTaskNotificationMemoryOnly(n)
+	s.persistQueuedTaskNotification(n)
+}
+
+// enqueueTaskNotificationMemoryOnly appends n to s's pending queue without
+// persisting — the in-memory half of enqueueTaskNotification, split out
+// for SessionManager callers that hold m.mu (the single lock guarding
+// every session in the tree) and must not do disk I/O while holding it.
+// persistQueuedTaskNotification is the paired durable half, meant to run
+// AFTER m.mu is released — see SessionManager.deferPersist/
+// unlockAndFlushPersist's own doc comment for the full mechanism and why
+// it exists (a live review finding: this session's own disk write used
+// to run WHILE m.mu was held, letting one session's slow disk stall
+// Info/Reap/Spawn/finalize for every OTHER session in the process).
+// Splitting is safe here specifically because nothing durable needs to
+// have happened yet for the in-memory append to be immediately useful:
+// checkoutTaskNotificationsSegment (an idle-resume turn started under
+// the SAME m.mu-held call this append is part of, via triggerResumeLocked)
+// reads s.taskNotifications directly, never waiting on the durable write.
+func (s *Session) enqueueTaskNotificationMemoryOnly(n taskNotification) {
 	s.mu.Lock()
 	s.taskNotifications = append(s.taskNotifications, n)
-	// Durable trace of "a delivery is now owed" — see recTaskNotifyQueued's
-	// own doc comment (store.go) for the two follow-ups this closes: a
-	// structured, independently-queryable spawn/delivery journal, and
-	// (paired with commitTaskNotifications' matching recTaskNotifyDelivered
-	// write) surviving a parent-side crash/restart BEFORE this notification
-	// is ever checked out — LoadSession's queued-minus-delivered fold
-	// restores it into s.taskNotifications exactly as if this process had
-	// never stopped.
+	s.mu.Unlock()
+}
+
+// enqueueTaskNotificationMemoryOnlyDeduped is
+// enqueueTaskNotificationMemoryOnly's sibling for
+// recoverInterruptedTurnLocked's crash-window-safe delivery specifically:
+// like enqueueTaskNotificationMigrated (see its own doc comment for the
+// exact-value dedup rationale — taskNotification is a plain comparable
+// struct), it skips the append when an identical notification is already
+// present, but unlike that method it reports whether it actually added
+// anything, so the caller knows whether persistQueuedTaskNotification
+// needs to run at all for n. A live review finding: recovery used to
+// durably close a child's own history (making a retry structurally
+// impossible — hasUnansweredTurn() becomes false forever) BEFORE
+// delivering its failure notification to the ancestor; a crash in
+// between permanently lost the notification with no way to ever retry.
+// Reordering so delivery happens first means a crash in THAT gap now
+// causes a genuine retry (hasUnansweredTurn() stays true) instead of
+// silent loss — but a retry recomputes and re-attempts the SAME
+// delivery, which must not re-persist (or re-render to the parent
+// model) a notification already durably queued from the earlier,
+// partially-completed attempt. Returns true (added, caller should
+// persist) for a genuinely first delivery OR anything that has
+// genuinely changed since; false (skip) for an exact-value repeat.
+func (s *Session) enqueueTaskNotificationMemoryOnlyDeduped(n taskNotification) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, existing := range s.taskNotifications {
+		if existing == n {
+			return false
+		}
+	}
+	s.taskNotifications = append(s.taskNotifications, n)
+	return true
+}
+
+// persistQueuedTaskNotification durably writes n's recTaskNotifyQueued
+// record — the deferred counterpart to enqueueTaskNotificationMemoryOnly/
+// enqueueTaskNotificationMemoryOnlyDeduped's in-memory-only append. See
+// recTaskNotifyQueued's own doc comment (store.go) for the two
+// follow-ups this closes: a structured, independently-queryable
+// spawn/delivery journal, and (paired with commitTaskNotifications'
+// matching recTaskNotifyDelivered write) surviving a parent-side
+// crash/restart BEFORE this notification is ever checked out —
+// LoadSession's queued-minus-delivered fold restores it into
+// s.taskNotifications exactly as if this process had never stopped.
+func (s *Session) persistQueuedTaskNotification(n taskNotification) {
+	s.mu.Lock()
 	s.persistTaskNotifyLocked(recTaskNotifyQueued, n)
 	s.mu.Unlock()
 }
@@ -102,20 +165,17 @@ func (s *Session) enqueueTaskNotification(n taskNotification) {
 // NEVER persists — not even on the append (genuinely-new, race-window)
 // branch. A live review finding, caught within minutes of this method's
 // own first version landing: n can only ever reach this method by having
-// first been drained off old (drainAllTaskNotificationsSameLog, this
-// method's own paired sibling — see its doc comment), and old can only
-// ever have HAD n in the first place because old's own earlier
-// enqueueTaskNotification call already durably wrote n's
-// recTaskNotifyQueued record — to THIS SAME shared log, since old and s
-// are two in-memory objects for one durable session id. Writing a SECOND
-// recTaskNotifyQueued for n here, even on the "new" branch, is therefore
-// always a duplicate of a record that's already there: a future reload's
-// queued-minus-delivered fold would net one phantom pending copy of n,
-// double-delivering the same child completion after a restart — the
-// exact durability inversion drainAllTaskNotificationsSameLog's own
-// no-persist-on-drain half exists to prevent, just on the enqueue half
-// instead. The in-memory append is the only work this method ever needs
-// to do.
+// first been drained off old (drainAllTaskNotifications — memory-only for
+// every caller now, see its own doc comment), and old can only ever have
+// HAD n in the first place because old's own earlier enqueueTaskNotification
+// call already durably wrote n's recTaskNotifyQueued record — to THIS
+// SAME shared log, since old and s are two in-memory objects for one
+// durable session id. Writing a SECOND recTaskNotifyQueued for n here,
+// even on the "new" branch, is therefore always a duplicate of a record
+// that's already there: a future reload's queued-minus-delivered fold
+// would net one phantom pending copy of n, double-delivering the same
+// child completion after a restart. The in-memory append is the only
+// work this method ever needs to do.
 func (s *Session) enqueueTaskNotificationMigrated(n taskNotification) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -140,87 +200,78 @@ func (s *Session) hasPendingTaskNotifications() bool {
 
 // drainAllTaskNotifications unconditionally empties BOTH the pending and
 // in-flight sets and returns everything that was in them, in original
-// order, durably marking each one delivered on THIS session's own log.
-// Unlike checkoutTaskNotificationsSegment's checkout/commit/requeue
-// two-phase handoff (which exists so a notification survives a RETRIED
-// turn), this is for a session that is never going to run another turn of
-// its own at all — SessionManager.finalizeTurn and
+// order. Unlike checkoutTaskNotificationsSegment's checkout/commit/
+// requeue two-phase handoff (which exists so a notification survives a
+// RETRIED turn), this is for a session that is never going to run
+// another turn of its own at all: SessionManager.finalizeTurn and
 // recoverInterruptedTurnLocked both call it on a CHILD that just went
 // terminal itself, to FORWARD any notifications ITS OWN children
-// (grandchildren) queued on it onto a DIFFERENT session (the nearest live
-// ancestor) — which would otherwise be stranded forever on a node that
-// will never check out its queue again. See finalizeTurn's doc comment.
+// (grandchildren) queued on it onto a DIFFERENT session (the nearest
+// live ancestor) — which would otherwise be stranded forever on a node
+// that will never check out its queue again (see finalizeTurn's own doc
+// comment); ReportTurnStart's OLD-object-to-fresh-object migration also
+// calls it, for the SAME durable session id rather than a different one.
 //
-// The recTaskNotifyDelivered write below is correct precisely because the
-// caller re-homes each notification onto a DIFFERENT log (the ancestor's,
-// via a fresh enqueueTaskNotification call) — THIS session's own copy is
-// genuinely done, delivered elsewhere, and its own queued record should
-// stop being restored on a future reload of THIS session.
-// drainAllTaskNotificationsSameLog below is the sibling for the one
-// caller that does NOT re-home onto a different log — do not add a new
-// same-log caller of THIS method without re-reading that method's own
-// doc comment first.
+// Memory-only — does NOT persist a recTaskNotifyDelivered record for
+// what it drains. Two live review findings, in order:
+//
+//  1. This method used to persist unconditionally. That was correct
+//     for the forward-to-a-different-ancestor callers (finalizeTurn,
+//     recoverInterruptedTurnLocked — see persistDeliveredTaskNotifications,
+//     which those callers now call explicitly once the forwarded set has
+//     actually been re-homed) but WRONG for the migration's same-session-id
+//     case: old and sess there are two in-memory objects for ONE durable
+//     session id sharing ONE log. Persisting a delivered record there
+//     durably canceled the notification's ORIGINAL recTaskNotifyQueued
+//     entry on that shared log, while enqueueTaskNotificationMigrated's
+//     own dedup correctly declined to write a compensating fresh queued
+//     record for something LoadSession's fold already restored — leaving
+//     the log showing a balanced (queued+delivered) notification that was
+//     still, in fact, only in-memory pending and undelivered. A crash or a
+//     second eviction before it was ever checked out then had the next
+//     LoadSession fold it as genuinely delivered and silently drop it.
+//  2. Once (1)'s fix made this method memory-only for that one caller, a
+//     second review finding: SessionManager's finalizeTurn/
+//     recoverInterruptedTurnLocked callers hold m.mu (the single lock
+//     guarding every session in the tree) for the whole call — persisting
+//     here, even correctly, meant disk I/O ran WHILE that global lock was
+//     held. Making this method memory-only for EVERY caller and moving the
+//     persist step to persistDeliveredTaskNotifications, called explicitly
+//     after m.mu is released (via SessionManager.deferPersist/
+//     unlockAndFlushPersist), closes that too — one caller with one
+//     obligation (persist after forwarding succeeds) instead of two
+//     divergent behaviors hidden behind one method name.
 func (s *Session) drainAllTaskNotifications() []taskNotification {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	all := s.drainAllTaskNotificationsLocked()
-	// Durable proof of delivery, symmetric with commitTaskNotifications'
-	// identical loop — a live review finding: every notification drained
-	// here was originally persisted as recTaskNotifyQueued on THIS
-	// session's own log when it first arrived (a grandchild completing
-	// while this now-terminal child was still tracking it). Forwarding it
-	// to an ancestor (the caller's job, not this method's — see this
-	// method's own doc comment) re-enqueues a FRESH recTaskNotifyQueued
-	// record on the ancestor's log, which is correct — but without this
-	// loop, THIS session's own queued record was never matched by a
-	// delivered one. A later LoadSession of this exact child (e.g. a
-	// session.send re-run of a done/failed child) would fold that
-	// unmatched queued record back in via store.go's queued-minus-
-	// delivered logic, resurrecting a notification the ancestor already
-	// received — the child would re-deliver it to itself, breaking the
-	// queued-minus-delivered durability invariant this whole mechanism
-	// depends on.
-	for _, n := range all {
-		s.persistTaskNotifyLocked(recTaskNotifyDelivered, n)
-	}
-	return all
-}
-
-// drainAllTaskNotificationsSameLog is drainAllTaskNotifications' sibling
-// for ReportTurnStart's OLD-object-to-fresh-object migration specifically
-// — the ONE caller that does NOT re-home a drained notification onto a
-// DIFFERENT session's log. old and sess there are two in-memory objects
-// for the SAME durable session id, sharing the SAME on-disk log. This
-// does not persist recTaskNotifyDelivered at all — a live review finding
-// (caught within minutes of drainAllTaskNotifications' own delivered-
-// persistence fix landing): writing a delivered record here would durably
-// cancel the notification's ORIGINAL recTaskNotifyQueued entry on that
-// SHARED log, while enqueueTaskNotificationMigrated's own dedup (see its
-// doc comment) correctly declines to write a compensating fresh queued
-// record for something already restored by LoadSession's fold — leaving
-// the durable log showing a balanced (queued+delivered = not pending)
-// notification that is STILL, in fact, only in-memory pending and
-// undelivered. A crash or a second eviction before it is ever checked out
-// would then have the next LoadSession fold it as genuinely delivered and
-// drop it — silent data loss, exactly the durability guarantee this
-// persistence feature exists to prevent. The original recTaskNotifyQueued
-// record already sitting on the shared log remains the correct durable
-// backing for a notification staying on the same session id; nothing new
-// needs writing for it.
-func (s *Session) drainAllTaskNotificationsSameLog() []taskNotification {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.drainAllTaskNotificationsLocked()
-}
-
-// drainAllTaskNotificationsLocked is the shared empty-both-sets-and-
-// return-everything core both exported drain variants above build on.
-// Caller holds s.mu.
-func (s *Session) drainAllTaskNotificationsLocked() []taskNotification {
 	all := append(s.taskNotificationsInFlight, s.taskNotifications...) //nolint:gocritic // deliberately combining, not appending in place — both are cleared immediately below
 	s.taskNotifications = nil
 	s.taskNotificationsInFlight = nil
 	return all
+}
+
+// persistDeliveredTaskNotifications durably writes a recTaskNotifyDelivered
+// record for each of ns, on s's own log — the deferred, explicit
+// counterpart to drainAllTaskNotifications' now memory-only drain, for
+// the two callers (finalizeTurn, recoverInterruptedTurnLocked) that
+// re-home a terminal child's own pending notifications onto a DIFFERENT
+// session (the nearest live ancestor). Call only once the notifications
+// have actually been (re-)enqueued on that different session — this is
+// what stops THIS session's own now-unmatched recTaskNotifyQueued records
+// from resurrecting as phantom pending notifications on a future
+// LoadSession of this exact child (e.g. a session.send re-run of a
+// done/failed child), which would re-deliver to it results its ancestor
+// already received. A no-op for an empty ns, so callers can call it
+// unconditionally without checking len(ns) first.
+func (s *Session) persistDeliveredTaskNotifications(ns []taskNotification) {
+	if len(ns) == 0 {
+		return
+	}
+	s.mu.Lock()
+	for _, n := range ns {
+		s.persistTaskNotifyLocked(recTaskNotifyDelivered, n)
+	}
+	s.mu.Unlock()
 }
 
 // checkoutTaskNotificationsSegment renders every notification currently

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -203,40 +204,62 @@ func agentDefsDir(workDir string) string {
 // (nil, nil), mirroring skill.Discover's convention for a project with no
 // custom definitions at all.
 //
-// A single MALFORMED *.md file — bad frontmatter, an unknown tool name,
-// an invalid model string, a missing required field (parseAgentDef's own
-// errors, or a bare os.ReadFile failure) — is SKIPPED with a logged
-// warning, not a load error for the whole directory: a live review
-// finding ("frontmatter leniency"). An earlier revision failed the
-// ENTIRE directory on the FIRST bad file (`return nil, err`), and
-// because AgentDefs (this package's sole caller) caches a load failure
-// for the session's whole life, one contributor's single typo in one
-// file broke EVERY custom agent type — not just the broken one — for
-// every `task` call in every session rooted at dir, for as long as that
-// session lived. Skip-and-warn means a typo in agent-b.md costs exactly
-// agent-b, never agent-a or agent-c sitting right next to it.
+// errUnknownFrontmatterKey is the ONE parseAgentDef error class
+// LoadAgentDefs treats leniently — skip this one file, log a warning,
+// keep loading the rest of the directory. A design-owner decision on a
+// live review finding ("frontmatter leniency" scope): an earlier
+// revision of this package skipped-and-warned on EVERY parseAgentDef
+// error alike (bad frontmatter delimiters, a missing required field, an
+// unknown tool name, an invalid model string), reasoning that one
+// contributor's single mistake in one file should never break every
+// OTHER custom agent type in the same directory. A later review
+// disagreed for two specific classes: an unknown tool name and an
+// invalid model string are SEMANTIC authoring mistakes the design doc
+// explicitly requires to be "an error surfaced at load, not spawn" — a
+// silently-skipped file means the agent simply does not exist, and a
+// later `task` call naming it fails with a generic "unknown agent %q"
+// that gives no hint the definition was ever written, let alone why it
+// was rejected. An unknown FRONTMATTER KEY (a stray typo'd line, like
+// `desc:` instead of `description:`) is judged a lower-stakes,
+// genuinely cosmetic mistake worth the same one-file-only blast radius
+// the original leniency fix targeted — every OTHER parseAgentDef error
+// (structural frontmatter problems, missing required fields, duplicate
+// keys, unknown tool names, invalid models) is a hard load error for the
+// WHOLE directory once again, matching the design doc's original,
+// pre-leniency-fix behavior for those classes.
+var errUnknownFrontmatterKey = errors.New("unknown frontmatter key")
+
+// LoadAgentDefs discovers custom agent definitions from dir: loose
+// top-level *.md files only (a subdirectory — .agents/skills/ in
+// particular — is never descended into). A missing dir is not an error:
+// (nil, nil), mirroring skill.Discover's convention for a project with no
+// custom definitions at all.
 //
-// This DOES cover the design doc's "unknown tool names in a definition
-// are an error surfaced at load, not spawn" — a later review finding
-// caught an earlier version of THIS comment quoting that rule to justify
-// a completely different case below (cross-file conflicts), leaving the
-// unknown-tool-name case itself looking like it had silently stopped
-// being surfaced at load at all. It has not: an unknown tool name is
-// still caught and reported the moment this function runs (parseAgentDef
-// returns it as an error here, this function turns that into a
-// slog.Warn identifying the exact file and reason), never deferred to a
-// `task` call's own "unknown agent %q" at spawn time. What changed is
-// only the BLAST RADIUS one bad file has on every OTHER file in the same
-// directory, not whether the file's own error is surfaced, or when.
+// Exactly ONE class of per-file error is lenient: an unknown frontmatter
+// KEY (errUnknownFrontmatterKey — see its own doc comment for the full
+// design-owner reasoning) skips just that one file with a logged
+// warning, not a load error for the whole directory. Every OTHER
+// per-file error — a bad frontmatter delimiter, a malformed "key: value"
+// line, a missing required field, a duplicate key, an unknown TOOL name,
+// an invalid MODEL string, or a bare os.ReadFile failure — fails the
+// WHOLE directory's load (`return nil, err`), exactly as the design
+// doc's "unknown tool names in a definition are an error surfaced at
+// load, not spawn" already requires for those two specifically, and as
+// this whole function did for every error class before the (now
+// narrowed) leniency fix existed at all. Because AgentDefs (this
+// package's sole caller) caches a load failure for the session's whole
+// life, this DOES mean one contributor's unknown-tool typo in agent-b.md
+// costs every OTHER custom agent type too, not just agent-b — a
+// deliberate trade-off: silently letting agent-b simply not exist would
+// bury a real authoring mistake behind a generic "unknown agent %q" at
+// spawn time instead of surfacing it, loudly, at load.
 //
-// This leniency does NOT extend to cross-file conflicts, which stay hard
-// load errors: a custom definition's name colliding with a built-in
-// (general-purpose, explore, plan), or with ANOTHER custom definition in
-// the same directory. Neither has an obvious "which one wins" answer the
-// way a single unparseable file does — there is nothing to silently
-// prefer between two genuinely different definitions both claiming the
-// same name, so these two fail the WHOLE directory's load, unlike every
-// single-file error above.
+// This same hard-fail treatment already covered cross-file conflicts — a
+// custom definition's name colliding with a built-in (general-purpose,
+// explore, plan), or with ANOTHER custom definition in the same
+// directory. Neither has an obvious "which one wins" answer the way an
+// unknown-key typo does — there is nothing to silently prefer between two
+// genuinely different definitions both claiming the same name.
 func LoadAgentDefs(dir string) (map[string]AgentDef, error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
@@ -253,13 +276,15 @@ func LoadAgentDefs(dir string) (map[string]AgentDef, error) {
 		path := filepath.Join(dir, e.Name())
 		data, err := os.ReadFile(path)
 		if err != nil {
-			slog.Warn("engine: skipping malformed agent definition", "path", path, "error", err)
-			continue
+			return nil, fmt.Errorf("engine: reading agent definition %s: %w", path, err)
 		}
 		def, err := parseAgentDef(string(data), path)
 		if err != nil {
-			slog.Warn("engine: skipping malformed agent definition", "path", path, "error", err)
-			continue
+			if errors.Is(err, errUnknownFrontmatterKey) {
+				slog.Warn("engine: skipping agent definition with an unknown frontmatter key", "path", path, "error", err)
+				continue
+			}
+			return nil, fmt.Errorf("engine: agent definition %s: %w", path, err)
 		}
 		if _, ok := builtinAgentDefs[def.Name]; ok {
 			return nil, fmt.Errorf("engine: agent definition %s: name %q collides with a built-in agent type", path, def.Name)
@@ -312,7 +337,13 @@ func parseAgentDef(doc, path string) (AgentDef, error) {
 		key = strings.TrimSpace(key)
 		value = unquoteAgentDefValue(strings.TrimSpace(value))
 		if !agentDefKnownKeys[key] {
-			return AgentDef{}, fmt.Errorf("unknown frontmatter key %q", key)
+			// Wrapped with errUnknownFrontmatterKey — the ONE error class
+			// LoadAgentDefs treats leniently (skip this file, warn, keep
+			// going). See that sentinel's own doc comment for why every
+			// OTHER error parseAgentDef can return, including the two
+			// right below (unknown tool, invalid model), is a hard load
+			// error for the whole directory instead.
+			return AgentDef{}, fmt.Errorf("%w: %q", errUnknownFrontmatterKey, key)
 		}
 		if _, dup := fields[key]; dup {
 			return AgentDef{}, fmt.Errorf("duplicate frontmatter key %q", key)

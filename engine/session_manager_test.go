@@ -1416,6 +1416,23 @@ func TestForgetRootThenChildrenReapedEventuallyCollectsRoot(t *testing.T) {
 		t.Fatalf("Spawn: %v", err)
 	}
 	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	// The child's own completion also delivers a notification to root
+	// (idle at that point) and fires an active resume — waitForStatus
+	// above only confirms the CHILD's own status, not that root's
+	// downstream resume (rootProv has zero scripted turns, so it fails
+	// fast) has settled back out of StatusRunning. ForgetRoot's own
+	// StatusRunning check runs BEFORE its children check, so racing that
+	// transient Running window here can make it take the "busy" refusal
+	// path instead of the "has children" one — which is the ONE path
+	// that arms pendingForget, so the test's later second Reap() would
+	// then wrongly find nothing to collect. A status-based wait is
+	// itself racy here (root reads StatusIdle at the very first poll,
+	// before the resume goroutine has even started — a false "already
+	// settled" signal); a flat settle sleep avoids racing that
+	// goroutine's own scheduling entirely. A live -race/timing flake
+	// caught under repeated stress runs (pre-existing, unrelated to this
+	// session's own changes).
+	time.Sleep(100 * time.Millisecond)
 
 	// Refused: root still has a (terminal, but not yet reaped) child.
 	if err := mgr.ForgetRoot(root.ID); err == nil {
@@ -1610,6 +1627,41 @@ func TestSpawnBudgetExceeded(t *testing.T) {
 	}
 }
 
+// TestSpawnBudgetCountsCacheTokensToo is the regression test for a live
+// review finding: the ErrBudgetExceeded gate used to compare only
+// InputTokens+OutputTokens against SetMaxTreeTokens, while usageByRoot
+// itself already accumulated all four provider.Usage fields — a
+// cache-heavy child (a large prompt resent every turn, reading mostly
+// from cache, the shape AGENTS.md calls out for the openaicompat/
+// Fireworks and anthropic routes) could spend well past the operator's
+// real intended ceiling with the gate never noticing, because cache
+// read/write tokens were silently exempt from the very check meant to
+// bound them. Gives a child a small input+output total (20) but a large
+// cache total (200) against a 100-token budget: input+output alone
+// (20) would let a second Spawn sail through; the true four-field total
+// (220) must refuse it.
+func TestSpawnBudgetCountsCacheTokensToo(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	mgr.SetMaxTreeTokens(100)
+	child1Prov := scriptedTurns("child1", doneTurnWithUsage("done", provider.Usage{
+		InputTokens: 10, OutputTokens: 10, CacheReadTokens: 150, CacheWriteTokens: 50,
+	})) // input+output = 20 (under budget alone); all four fields = 220 (well over)
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		child1Prov,
+		scriptedTurns("child2", nil),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child1")})
+	if err != nil {
+		t.Fatalf("Spawn child1: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	if _, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child2")}); !errors.Is(err, ErrBudgetExceeded) {
+		t.Errorf("Spawn over budget (cache-heavy) = %v, want ErrBudgetExceeded — the gate must count cache read/write tokens, not just input+output", err)
+	}
+}
+
 // TestSpawnBudgetUnsetByDefault proves SetMaxTreeTokens is opt-in: a
 // SessionManager that never calls it enforces no budget at all,
 // regardless of how much usage accumulates.
@@ -1765,5 +1817,64 @@ func waitForStatus(t *testing.T, mgr *SessionManager, id string, want SessionSta
 			t.Fatalf("Info(%s).Status = %s after %s, want %s", id, info.Status, timeout, want)
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+// TestUnlockAndFlushPersistRunsThunksAfterReleasingLock is the regression
+// test for a live review finding: session-log disk writes (task-
+// notification queued/delivered records, the task-spawn audit record)
+// used to run WHILE m.mu — the single lock guarding every session in the
+// tree, taken by Info/Reap/Spawn/Send/finalize alike — was held, on
+// finalizeTurn/Spawn/recoverInterruptedTurnLocked's own hot paths. A slow
+// or contended disk on one session's notification could stall every
+// OTHER session's own Info/Reap/Spawn/finalize call in the same process.
+// deferPersist/unlockAndFlushPersist close this by queuing durable-write
+// thunks while m.mu is held and running them only after it is released.
+//
+// Proves the ordering directly: a thunk that tries to re-acquire m.mu
+// via TryLock (which would fail if m.mu were still held when the thunk
+// runs) must succeed — i.e., unlockAndFlushPersist really does release
+// the lock BEFORE running any queued thunk, not after.
+func TestUnlockAndFlushPersistRunsThunksAfterReleasingLock(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	ran := false
+	mgr.mu.Lock()
+	mgr.deferPersist(func() {
+		if !mgr.mu.TryLock() {
+			t.Error("deferPersist thunk ran while m.mu was still held — disk I/O is still running inside the critical section")
+			return
+		}
+		mgr.mu.Unlock()
+		ran = true
+	})
+	mgr.unlockAndFlushPersist()
+	if !ran {
+		t.Error("deferPersist thunk never ran at all")
+	}
+}
+
+// TestUnlockAndFlushPersistPreservesQueueOrder is the regression test for
+// deferPersist/unlockAndFlushPersist's FIFO ordering guarantee — load-
+// bearing for recoverInterruptedTurnLocked's own crash-window fix (see
+// TestRecoverInterruptedTurnSurvivesACrashBetweenDeliveryAndHistoryClose),
+// which relies on its notify/forwarded delivery thunks running BEFORE its
+// closing-message persist thunk, in the exact order they were queued.
+func TestUnlockAndFlushPersistPreservesQueueOrder(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	var order []int
+	mgr.mu.Lock()
+	for i := 0; i < 5; i++ {
+		i := i
+		mgr.deferPersist(func() { order = append(order, i) })
+	}
+	mgr.unlockAndFlushPersist()
+	want := []int{0, 1, 2, 3, 4}
+	if len(order) != len(want) {
+		t.Fatalf("order = %v, want %v", order, want)
+	}
+	for i, v := range want {
+		if order[i] != v {
+			t.Fatalf("order = %v, want %v", order, want)
+		}
 	}
 }

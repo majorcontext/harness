@@ -1053,20 +1053,49 @@ func (s *Session) TaskToolNames() []string {
 }
 
 // hasUnansweredTurn reports whether s's persisted history ends on a
-// user-role message with nothing after it — the signature of a turn that
-// was genuinely IN FLIGHT when the process last stopped: Session.Prompt
-// durably appends the user-role message BEFORE ever calling the provider
-// (see runAgenticLoop), so a crash mid-turn leaves exactly this shape on
-// disk. The same signature isSafeToDropDirectiveTail's len==1 case
-// already trusts for a DIFFERENT purpose (goal-loop retry, engine/
-// goal.go) — reused here for restart-recovery detection (see
-// adoptReloadedLocked's own use of this), not duplicated with new
-// heuristics. A false positive is impossible: nothing else in this
-// package ever leaves a trailing lone user message durably on disk
-// outside this exact crash window (every other path either completes
-// the turn, synthesizing a terminal assistant/tool message, or never
-// appends the user message in the first place if it errors before
-// Prompt's own durable-append point).
+// message shape that can only mean a turn was genuinely IN FLIGHT when
+// the process last stopped — restart-recovery detection (see
+// adoptReloadedLocked's own use of this).
+//
+// Three trailing shapes, all crash windows runAgenticLoop's own append
+// order can leave on disk, none reachable any other way:
+//
+//   - RoleUser: Session.Prompt durably appends the user-role message
+//     BEFORE ever calling the provider, so a crash before any response
+//     at all leaves exactly this. The same signature
+//     isSafeToDropDirectiveTail's len==1 case already trusts for a
+//     DIFFERENT purpose (goal-loop retry, engine/goal.go) — reused here,
+//     not duplicated with new heuristics.
+//   - RoleTool: runAgenticLoop appends an assistant tool_use message,
+//     runs the tools, appends their RoleTool results, THEN loops back to
+//     call the provider again for the next assistant response. A crash
+//     after the tool results land but before that next call completes
+//     leaves RoleTool trailing — a live review finding: the original
+//     RoleUser-only check missed this shape entirely, so a child crashed
+//     mid-tool-loop (arguably the MOST likely interruption point for a
+//     child doing real multi-step work, far more than the brief window
+//     right after a fresh user message) silently reloaded as StatusIdle,
+//     indistinguishable from a child that never received a turn at all —
+//     recovery never fired, and its parent waited forever.
+//   - RoleAssistant carrying at least one ToolCall part: the narrower
+//     crash window one step earlier in that same sequence — the
+//     assistant's tool_use message durably landed, but the process died
+//     WHILE runToolCalls was still executing, before any RoleTool result
+//     was ever appended. appendUnexecutedToolCallResults (this file)
+//     closes the same shape for the ordinary in-process case (a provider
+//     reporting a non-tool_use stop reason alongside tool_use blocks),
+//     but only runs synchronously within the SAME turn — it never gets a
+//     chance to run if the crash happens first.
+//
+// A false positive is impossible for any of the three: nothing else in
+// this package ever leaves a trailing lone user message, a trailing tool
+// result, or a trailing unresolved tool_use assistant message durably on
+// disk outside these exact crash windows — every other path either
+// completes the turn (a final assistant message with a non-tool_use stop
+// reason), synthesizes a closing tool/assistant message
+// (appendUnexecutedToolCallResults, or this method's own caller,
+// recoverInterruptedTurnLocked), or never appends the user message in the
+// first place if it errors before Prompt's own durable-append point.
 func (s *Session) hasUnansweredTurn() bool {
 	// s.mu directly, reading the last element in place — not s.History(),
 	// which does a full append([]message.Message(nil), s.history...) copy
@@ -1077,7 +1106,21 @@ func (s *Session) hasUnansweredTurn() bool {
 	// cost is pure waste for a long-lived session's transcript.
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.history) > 0 && s.history[len(s.history)-1].Role == message.RoleUser
+	if len(s.history) == 0 {
+		return false
+	}
+	last := s.history[len(s.history)-1]
+	switch last.Role {
+	case message.RoleUser, message.RoleTool:
+		return true
+	case message.RoleAssistant:
+		for _, p := range last.Parts {
+			if _, ok := p.(*message.ToolCall); ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Plugins returns a snapshot of this session's configured plugins — name,
@@ -1195,19 +1238,8 @@ func (s *Session) append(m message.Message) {
 // into cumulative usage and keeps the last one seen as lastUsage, since the
 // log has no separate cumulative-usage record to replay instead.
 func (s *Session) appendWithUsage(m message.Message, usage *provider.Usage) {
-	// Normalize before this message enters history at all: see
-	// message.Message.Normalize's doc comment. This is the single ingest
-	// choke point every message passes through (user, assistant, and tool
-	// messages alike), so it is the right place to scrub a
-	// present-but-zero-length Reasoning.ProviderData entry before it can
-	// diverge an in-memory history from what LoadSession would reload.
 	m.Normalize()
 	if m.CreatedAt.IsZero() {
-		// Every production provider adapter (anthropic, openaicompat, ...)
-		// already stamps CreatedAt on the assistant message it assembles;
-		// this is a backstop for any caller (a bare Tool, a test fixture, a
-		// future adapter) that doesn't, so LastActivityAt (see engine.go)
-		// never silently reports zero for an otherwise-ordinary message.
 		m.CreatedAt = time.Now().UTC()
 	}
 	s.mu.Lock()
@@ -1221,6 +1253,47 @@ func (s *Session) appendWithUsage(m message.Message, usage *provider.Usage) {
 		s.haveLastUsage = true
 	}
 	s.persistMessage(&m, usage)
+	s.mu.Unlock()
+}
+
+// appendMemoryOnly is append's split-in-two sibling for
+// recoverInterruptedTurnLocked specifically — the ONE caller in this
+// package that needs a message append to interleave with
+// SessionManager's own deferred-persist ordering (see
+// SessionManager.deferPersist/unlockAndFlushPersist's own doc comment)
+// instead of persisting synchronously the moment it is called, the way
+// every other append in this package still correctly does. This is
+// deliberately NOT a general split of Session.append/appendWithUsage —
+// every other call site's own ordering requirements are untouched and
+// unexamined by this change; broadening message-append persistence to
+// defer-outside-m.mu generally is a substantially larger change than
+// this one caller's own narrow crash-window requirement, and out of
+// scope here.
+//
+// Normalizes and stamps CreatedAt exactly like appendWithUsage, appends
+// to s.history, but does NOT call persistMessage — returns the
+// normalized message so the caller can pass the IDENTICAL value to
+// persistAppendedMessage later, once m.mu has been released, rather than
+// risk a second Normalize/CreatedAt pass producing a subtly different
+// persisted record than what is already sitting in memory.
+func (s *Session) appendMemoryOnly(m message.Message) message.Message {
+	m.Normalize()
+	if m.CreatedAt.IsZero() {
+		m.CreatedAt = time.Now().UTC()
+	}
+	s.mu.Lock()
+	s.history = append(s.history, m)
+	s.mu.Unlock()
+	return m
+}
+
+// persistAppendedMessage durably writes m — the deferred counterpart to
+// appendMemoryOnly. m must be the EXACT value appendMemoryOnly returned
+// (already normalized and timestamped), not a freshly-built one, so the
+// durable record matches what is already in s.history byte-for-byte.
+func (s *Session) persistAppendedMessage(m message.Message) {
+	s.mu.Lock()
+	s.persistMessage(&m, nil)
 	s.mu.Unlock()
 }
 
