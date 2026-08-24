@@ -594,7 +594,20 @@ func (m *SessionManager) NewRoot(cfg Config) *Session {
 // adoptReloadedLocked's doc comment.
 func (m *SessionManager) AdoptRoot(s *Session) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	// unlockAndFlushPersist, not a plain m.mu.Unlock() — see that
+	// method's own doc comment for the convention. adoptRootLocked now
+	// calls recoverCrashedChildrenLocked, which can genuinely queue
+	// deferred persists (recovering a crashed child durably commits its
+	// outcome, delivers, and settles it — all via m.deferPersist) — a
+	// plain Unlock() here would silently drop every one of those writes
+	// for the one caller (handleCreate) that reaches this method. Today
+	// that caller only ever adopts a brand-new, childless session, so
+	// the sweep is a harmless no-op in production as of this writing —
+	// but AdoptRoot is public API, and "safe by coincidence of the one
+	// current caller" is exactly the trap this convention exists to
+	// close before a future caller (or a test) adopts a root that DOES
+	// already have spawned children on disk.
+	defer m.unlockAndFlushPersist()
 	if _, exists := m.nodes[s.ID]; exists {
 		return fmt.Errorf("engine: session %s already managed", s.ID)
 	}
@@ -632,6 +645,11 @@ func (m *SessionManager) adoptRootLocked(s *Session) *sessionNode {
 	s.tools[taskToolName] = taskTool()
 	n := m.adoptLocked(s, "", 0)
 	m.installTaskToolLocked(s, 0)
+	// See recoverCrashedChildrenLocked's own doc comment: a root is the
+	// single most common node ANY caller (a box's own restart, a plain
+	// GET-triggered ReportTurnStart) adopts fresh, so this is the
+	// primary place a crashed subtree actually gets discovered again.
+	m.recoverCrashedChildrenLocked(n)
 	return n
 }
 
@@ -750,8 +768,189 @@ func (m *SessionManager) adoptReloadedLocked(s *Session, recover bool) *sessionN
 	m.restoreTaskToolRestrictionLocked(s, depth)
 	if recover {
 		m.recoverInterruptedTurnLocked(n, s)
+		// Restores n.status/n.result/n.failReason for the case
+		// recoverInterruptedTurnLocked's own guard just above does NOT
+		// handle: s was ALREADY settled before this specific adoption —
+		// see restoreKnownStatusLocked's own doc comment. A no-op,
+		// harmlessly, whenever recoverInterruptedTurnLocked just ran to
+		// completion for a genuine crash instead (committedOutcome is
+		// still whatever IT just set, so restoring from it here is
+		// redundant but correct).
+		//
+		// Gated on recover, deliberately NOT run unconditionally: the
+		// recover=false caller (ReportTurnStart's own adopt-on-first-sight,
+		// self-contradicting-recovery case — see its own doc comment) is
+		// about to drive a FRESH turn on n immediately, and that turn's
+		// own eventual finalizeTurn call does not necessarily overwrite
+		// EVERY field this method would restore (n.result specifically —
+		// finalizeTurn's own nil-msg branch, reachable from
+		// runGoal/ReportTurnEnd(id, nil, err), leaves n.result untouched
+		// rather than clearing it) — a live regression an earlier version
+		// of this change reproduced: a reloaded child's PRIOR turn's real
+		// result leaked into a brand-new turn's own nil-msg completion,
+		// which should have reported empty.
+		m.restoreKnownStatusLocked(n, s)
 	}
+	m.recoverCrashedChildrenLocked(n)
 	return n
+}
+
+// restoreKnownStatusLocked restores n.status (and n.result/n.failReason)
+// from s's own last committed outcome (Session.committedOutcome,
+// engine.go) for a node that is ALREADY settled by the time this specific
+// adoption runs — a live prod finding: adoptLocked always constructs a
+// freshly-adopted node with the bare StatusIdle default (see its own doc
+// comment), and — before this method existed — NOTHING ever corrected
+// that default for an already-settled reload; only recoverInterruptedTurnLocked
+// did, and only for a node it ACTIVELY recovered from a genuine crash.
+// SessionManager.recoverCrashedChildrenLocked's own sweep made this
+// suddenly common instead of rare (it now adopts EVERY spawned child, not
+// only crashed ones, to reach a crashed descendant more than one level
+// down — see its own doc comment) — a wire caller reading Info()/lineage
+// for a long-done child right after its ancestor's own adoption would
+// otherwise see a flatly wrong "idle" status.
+//
+// A no-op in two cases: s still has an unfinalized turn (not this
+// method's job — recoverInterruptedTurnLocked's own guard already covers
+// that, whether or not it actually ran here), or s has never had a
+// committed outcome at all (predates this whole mechanism, or is a
+// genuinely fresh node with no terminal turn yet — adoptLocked's
+// StatusIdle default is the honest answer for both).
+//
+// Callers only ever reach this when recover is true (see the one call
+// site, adoptReloadedLocked) — deliberately NOT unconditional: a
+// recover=false caller (ReportTurnStart's own adopt-on-first-sight) is
+// about to drive a FRESH turn on n immediately, and letting this method
+// touch n.result there leaked a PRIOR turn's real result into a brand-new
+// turn's own nil-msg completion (finalizeTurn's nil-msg branch leaves
+// n.result untouched rather than clearing it) — a live regression an
+// earlier version of this change reproduced.
+//
+// Caller holds m.mu.
+func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
+	if s.hasUnfinalizedTurn() {
+		return
+	}
+	committed, ok := s.committedTurnOutcome()
+	if !ok {
+		return
+	}
+	n.finalized = true
+	if committed.Status == StatusDone {
+		n.status = StatusDone
+		n.result = committed.Result
+	} else {
+		n.status = StatusFailed
+		n.failReason = committed.FailReason
+	}
+	// Fold this child's already-spent tokens into its root's tree-wide
+	// budget total too — the exact same delta-accounting
+	// recoverInterruptedTurnLocked/finalizeTurn both do, and for the
+	// identical reason (usageByRoot's own doc comment): without this, a
+	// long-settled child merely ADOPTED here (never actively recovered,
+	// since it was never crashed) would have its real spend silently
+	// excluded from the tree budget forever, letting a later Spawn
+	// exceed SetMaxTreeTokens by exactly this child's own total. Safe to
+	// run every time this method finds a committed outcome, including
+	// redundantly on a later re-adoption of the SAME already-credited
+	// node: n.budgetedUsage/m.budgetedByChild make the delta zero on any
+	// re-run, the same idempotency guarantee those two callers already
+	// rely on.
+	total := s.Usage()
+	delta := provider.Usage{
+		InputTokens:      total.InputTokens - n.budgetedUsage.InputTokens,
+		OutputTokens:     total.OutputTokens - n.budgetedUsage.OutputTokens,
+		CacheReadTokens:  total.CacheReadTokens - n.budgetedUsage.CacheReadTokens,
+		CacheWriteTokens: total.CacheWriteTokens - n.budgetedUsage.CacheWriteTokens,
+	}
+	n.budgetedUsage = total
+	m.budgetedByChild[n.id] = total
+	u := m.usageByRoot[n.rootID]
+	u.InputTokens += delta.InputTokens
+	u.OutputTokens += delta.OutputTokens
+	u.CacheReadTokens += delta.CacheReadTokens
+	u.CacheWriteTokens += delta.CacheWriteTokens
+	m.usageByRoot[n.rootID] = u
+}
+
+// recoverCrashedChildrenLocked sweeps n's own durably-recorded children
+// (Session.SpawnedChildIDs, engine.go) for any whose turn crashed and was
+// never recovered, adopting (and thereby recovering) each one found — a
+// live prod finding: recoverInterruptedTurnLocked only ever fires
+// reactively, on next touch of the CRASHED node's own id (see its own
+// "purely reactive" doc section) — a box whose only post-restart traffic
+// touches an ANCESTOR (a read-only transcript/session GET, or a later
+// follow-up turn on the parent/root itself) never independently touches
+// the crashed child's own id, so that trigger never fires. The child's
+// parent then waits forever for a notification that was always
+// detectable the moment this parent itself was adopted again — the exact
+// sequence a live e2e run on a restartPolicy:Always box reproduced:
+// kill -9 mid-child, restart, GET the child (cold lineage renders fine —
+// see lineageJSONFor, server/handlers.go, unaffected by this), but the
+// root never receives a lost-to-restart notification because nothing
+// ever independently reloads the child.
+//
+// Called every time n is adopted (adoptRootLocked, and this method's own
+// non-root branch above) — n is ALREADY registered in m.nodes by the
+// time this runs, so nearestLiveAncestorLocked can find n itself as the
+// delivery target for anything recovered here. Recurses naturally:
+// adopting a crashed child via adoptReloadedLocked(recover=true) runs
+// THIS SAME sweep for that child's own children too, so a whole crashed
+// subtree converges from one ancestor touch, not just n's immediate
+// children.
+//
+// Cost/scope note: one LoadSession, AND one m.nodes adoption, per spawned
+// child not ALREADY tracked — every child n has EVER spawned, including
+// ones settled long ago, since spawnedChildIDs is an append-only audit
+// trail with no "already confirmed settled" watermark to narrow the
+// sweep, and EVERY child (not only a crashed one) must be adopted for the
+// recursion above to reach a crashed descendant more than one level down
+// — see the loop body's own comment for why a settled intermediate
+// cannot just be skipped. This pins every live descendant in memory
+// until the next Reap() call, on the first ancestor touch after a
+// restart. Accepted for v1 (a session with a large lifetime child count
+// pays a real, one-time-per-process cost the first time it — or an
+// ancestor — is touched after a restart); narrowing this (e.g. a
+// persisted per-child "already confirmed settled" watermark, so a
+// long-done subtree can be skipped without loading it) is a real
+// follow-up, deliberately out of scope here.
+func (m *SessionManager) recoverCrashedChildrenLocked(n *sessionNode) {
+	for _, childID := range n.session.SpawnedChildIDs() {
+		if _, tracked := m.nodes[childID]; tracked {
+			// Already live in this process — either never forgotten, or
+			// already adopted (possibly by an earlier iteration of this
+			// same sweep, recursively, for a grandchild). Nothing to do.
+			continue
+		}
+		childSess, err := LoadSession(Config{Providers: n.session.cfg.Providers, SessionDir: n.session.cfg.SessionDir}, childID)
+		if err != nil {
+			// Most commonly: this child never survived its own FIRST
+			// message append (see store.go's package doc comment —
+			// nothing touches disk until then, so a child killed THAT
+			// early has no log file at all to load) — an even narrower
+			// crash window than this sweep targets, with genuinely
+			// nothing durable to recover from. Any other LoadSession
+			// failure is equally unrecoverable here: skip this one child
+			// rather than aborting the whole sweep over it.
+			continue
+		}
+		// Adopted unconditionally — NOT gated on childSess.hasUnfinalizedTurn()
+		// here, deliberately: adoptReloadedLocked's own non-root branch
+		// already re-runs THIS SAME sweep for childSess's own children once
+		// it is registered (that is the recursion this method's own doc
+		// comment describes), so a SETTLED intermediate child must still
+		// be adopted — not just skipped — for a crashed GRANDCHILD beneath
+		// it to ever be discovered at all: nearestLiveAncestorLocked needs
+		// every ancestor between n and a recovered descendant actually
+		// tracked in m.nodes to walk the chain, so a crashed grandchild
+		// under an un-adopted (merely "peeked at") settled child would
+		// wrongly look like it has no live ancestor to deliver to. recover
+		// itself stays true unconditionally too — recoverInterruptedTurnLocked's
+		// own top guard (hasUnfinalizedTurn()) already makes that a safe,
+		// harmless no-op for a settled child, so there is no reason to
+		// duplicate that check here.
+		m.adoptReloadedLocked(childSess, true)
+	}
 }
 
 // recoverInterruptedTurnLocked closes the "in-flight-children restart
@@ -1910,6 +2109,15 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	// acquired later, from unlockAndFlushPersist's own goroutine, after
 	// m.mu has already been released by this method's own caller.
 	parentSess := parent.session
+	// Memory-only update now (synchronously, still under m.mu, before
+	// this method returns) — see spawnedChildIDs' own doc comment
+	// (engine.go) for why this list exists at all
+	// (recoverCrashedChildrenLocked's own "which children did I spawn"
+	// question). Cheap and disk-free, unlike persistTaskSpawnLocked just
+	// below, which is why only THAT call is deferred.
+	parentSess.mu.Lock()
+	parentSess.recordSpawnedChildLocked(child.ID)
+	parentSess.mu.Unlock()
 	m.deferPersist(func() {
 		parentSess.mu.Lock()
 		parentSess.persistTaskSpawnLocked(child.ID, opts.AgentType)
