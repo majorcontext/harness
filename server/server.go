@@ -797,6 +797,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("DELETE /session/{id}", s.auth(s.handleEnd))
 	mux.HandleFunc("GET /session/{id}/wait", s.auth(s.handleWait))
 	mux.HandleFunc("GET /session/{id}/message", s.auth(s.handleMessages))
+	mux.HandleFunc("GET /session/{id}/journal", s.auth(s.handleJournal))
 	mux.HandleFunc("GET /session/{id}/request", s.auth(s.handleRequest))
 	mux.HandleFunc("POST /session/{id}/prompt_async", s.auth(s.handlePrompt))
 	mux.HandleFunc("POST /session/{id}/enqueue", s.auth(s.handleEnqueue))
