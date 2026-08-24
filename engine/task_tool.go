@@ -351,7 +351,18 @@ func runTaskSend(s *Session, in taskToolArgs) (message.Parts, error) {
 	// only done/failed — and telling the model a session "finished" when
 	// it never ran a turn at all could mislead its follow-up reasoning. A
 	// live review finding.
-	note := "the descendant was not actively running, so this started it with your message as a fresh turn; the outcome will arrive later as engine context — no need to poll or wait for it"
+	//
+	// "dispatched," not a guaranteed "started": SendToDescendant's
+	// settled-target path launches the re-run in a fire-and-forget
+	// goroutine (see its own doc comment on the accepted residual
+	// admission race — a concurrent change can still make that goroutine's
+	// own Send call lose ErrSessionBusy/ErrSessionCanceled/
+	// ErrConcurrencyLimit, which is silently discarded, same as it always
+	// was). Claiming a definite "started... no need to poll" here would be
+	// a caller-facing overclaim on that rare path: a live review finding.
+	// task status on session_id remains the honest way to confirm the
+	// re-run actually took, on the off chance it didn't.
+	note := "the descendant was not actively running, so this was dispatched as a fresh turn with your message; check back with task status on this session_id if you want to confirm it actually started"
 	if queued {
 		note = "queued for delivery at the descendant's next turn boundary — no need to poll or wait for it"
 	}
