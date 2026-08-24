@@ -1515,7 +1515,7 @@ Rules:
   and cannot run in a bubble, the fix is to add the seam to the production
   code, not to sleep in the test. Reviewers treat any `time.Sleep` in a
   test diff as an automatic blocker; do not push one expecting discussion.
-  The single carve-out is `e2e/` cross-process polling (below), and only
+  The single carve-out is `e2e/` cross-process polling (the exception bullet above), and only
   through its deadline-bounded poll helper — never a bare sleep loop
   written inline. To simulate a hung component, block on a channel closed
   in `t.Cleanup`; in a bubble the hang deterministically outlasts any
