@@ -2714,7 +2714,7 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 func drainQueueAndPrompt(ctx context.Context, s *Session, text string) (*message.Message, error) {
 	msg, err := s.Prompt(ctx, text)
 	for {
-		next, ok := s.DequeuePrompt("delivered")
+		next, _, ok := s.DequeuePrompt("delivered")
 		if !ok {
 			return msg, err
 		}
