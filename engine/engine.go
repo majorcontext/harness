@@ -1710,6 +1710,23 @@ func (s *Session) emitSessionError(err error) {
 // execute any tool calls, feed results back — until the model ends its turn.
 // It returns the final assistant message.
 func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, error) {
+	return s.promptWithOrigin(ctx, text, "")
+}
+
+// PromptEngineResume is Prompt's sibling for SessionManager.triggerResumeLocked's
+// engine-initiated resume turn: identical behavior, but tags the appended
+// user message with message.OriginEngine so a client can render it as a
+// system notice rather than a human-typed bubble — see Message.Origin's own
+// doc comment. The ONLY caller is triggerResumeLocked; every other synthetic
+// or programmatic turn driver (the goal loop's own directive text, notably)
+// still goes through plain Prompt, unchanged.
+func (s *Session) PromptEngineResume(ctx context.Context, text string) (*message.Message, error) {
+	return s.promptWithOrigin(ctx, text, message.OriginEngine)
+}
+
+// promptWithOrigin is Prompt/PromptEngineResume's shared body, parameterized
+// on the appended message's Origin tag.
+func (s *Session) promptWithOrigin(ctx context.Context, text string, origin string) (*message.Message, error) {
 	// Load project instructions once, before mutating history: a
 	// present-but-unusable AGENTS.md fails the prompt without recording a
 	// user message or calling the provider.
@@ -1738,6 +1755,7 @@ func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, er
 		Role:      message.RoleUser,
 		Parts:     message.Parts{&message.Text{Text: text}},
 		CreatedAt: time.Now().UTC(),
+		Origin:    origin,
 	})
 	return s.runAgenticLoop(ctx)
 }

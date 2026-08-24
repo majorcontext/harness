@@ -126,6 +126,47 @@ func TestPromptToolLoop(t *testing.T) {
 	}
 }
 
+// TestPromptEngineResumeTagsOrigin proves PromptEngineResume's ONLY
+// observable difference from Prompt is the appended user message's Origin
+// tag (message.OriginEngine vs. empty) — everything else (history shape,
+// the turn actually running) is identical. See message.Message.Origin's own
+// doc comment: this is presentation metadata for a client to render a
+// system notice, never a change to how the model itself is driven.
+func TestPromptEngineResumeTagsOrigin(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "ack"}),
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "ack2"}),
+	}}
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+	})
+
+	if _, err := s.Prompt(context.Background(), "ordinary prompt"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if _, err := s.PromptEngineResume(context.Background(), taskResumeTriggerText); err != nil {
+		t.Fatalf("PromptEngineResume: %v", err)
+	}
+
+	h := s.History()
+	if len(h) != 4 { // user, assistant, user, assistant
+		t.Fatalf("history len = %d: %+v", len(h), h)
+	}
+	if h[0].Origin != "" {
+		t.Errorf("ordinary user message Origin = %q, want empty", h[0].Origin)
+	}
+	if h[2].Origin != message.OriginEngine {
+		t.Errorf("engine-resume user message Origin = %q, want %q", h[2].Origin, message.OriginEngine)
+	}
+	// Role is unaffected by Origin — an engine-resume message is still an
+	// ordinary RoleUser turn, real history a resumed conversation can refer
+	// back to.
+	if h[2].Role != message.RoleUser {
+		t.Errorf("engine-resume message Role = %q, want %q", h[2].Role, message.RoleUser)
+	}
+}
+
 func TestCreatedAt(t *testing.T) {
 	before := time.Now().UTC()
 	s := NewSession(Config{

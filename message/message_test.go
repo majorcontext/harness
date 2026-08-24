@@ -45,6 +45,54 @@ func TestMessageJSONRoundTrip(t *testing.T) {
 	}
 }
 
+// TestMessageOriginRoundTrip proves Origin round-trips through JSON like any
+// other field, and that its omitempty tag keeps the wire shape unchanged for
+// the overwhelmingly common empty case — an ordinary end-user or
+// model-produced message, and every message ever persisted before this
+// field existed (see Message.Origin's own doc comment).
+func TestMessageOriginRoundTrip(t *testing.T) {
+	in := Message{
+		ID:     "msg_engine_1",
+		Role:   RoleUser,
+		Parts:  Parts{&Text{Text: "A background task you started has finished."}},
+		Origin: OriginEngine,
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"origin":"engine"`) {
+		t.Errorf("marshaled message missing origin field: %s", raw)
+	}
+	var out Message
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(in, out) {
+		t.Errorf("round trip mismatch:\n in: %+v\nout: %+v", in, out)
+	}
+
+	// An ordinary message (empty Origin, the default for every message ever
+	// written before this field existed) must omit the key entirely — never
+	// emit `"origin":""` — so a legacy log line and a freshly written
+	// ordinary message stay byte-identical.
+	ordinary := Message{ID: "msg_ordinary", Role: RoleUser, Parts: Parts{&Text{Text: "hi"}}}
+	raw, err = json.Marshal(ordinary)
+	if err != nil {
+		t.Fatalf("marshal ordinary: %v", err)
+	}
+	if bytes.Contains(raw, []byte(`"origin"`)) {
+		t.Errorf("ordinary message marshaled with an origin key: %s", raw)
+	}
+	var out2 Message
+	if err := json.Unmarshal(raw, &out2); err != nil {
+		t.Fatalf("unmarshal ordinary: %v", err)
+	}
+	if out2.Origin != "" {
+		t.Errorf("ordinary message round-tripped with Origin = %q, want empty", out2.Origin)
+	}
+}
+
 func TestToolResultRoundTrip(t *testing.T) {
 	in := Message{
 		ID:   "msg_2",
