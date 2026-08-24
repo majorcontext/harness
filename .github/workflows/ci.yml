@@ -19,6 +19,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: no Claude attribution in commits
+        run: |
+          RANGE="${{ github.event.pull_request.base.sha && format('{0}..HEAD', github.event.pull_request.base.sha) || 'HEAD' }}"
+          if git log "$RANGE" --format='%H %B%n--END--' | grep -qiE 'co-authored-by:.*claude|claude-session:|generated with \[claude code\]'; then
+            echo '::error::commit message contains Claude attribution — strip Co-Authored-By/Claude-Session/Generated-with lines'
+            exit 1
+          fi
 
       - uses: actions/setup-go@v6
         with:
