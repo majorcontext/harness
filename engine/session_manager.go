@@ -871,10 +871,21 @@ func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
 	switch {
 	case ok:
 		n.finalized = true
-		if committed.Status == StatusDone {
+		switch nodeStatusForOutcome(committed) {
+		case StatusCanceled:
+			// Mirrors cancelOneNodeLocked's own live-path bookkeeping
+			// exactly: a canceled node's n.result/n.failReason stay
+			// untouched (empty) — the ONLY thing that ever marked this
+			// outcome canceled, live, was n.status itself. Restoring
+			// committed.FailReason ("canceled", the fixed text
+			// finalizeTurn's alreadyCanceled branch puts in the
+			// PARENT-facing notification) into n.failReason here would
+			// invent a value a live cancellation never actually sets.
+			n.status = StatusCanceled
+		case StatusDone:
 			n.status = StatusDone
 			n.result = committed.Result
-		} else {
+		default:
 			n.status = StatusFailed
 			n.failReason = committed.FailReason
 		}
@@ -1014,10 +1025,16 @@ func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
 //   - n itself may no longer be the live node for its id (reaped, in the
 //     one shape that is possible for an already-terminal, already-
 //     finalized node a concurrent Reap() call could legitimately collect
-//     while unlocked). Checked once, up front: if n is no longer live,
-//     the WHOLE integration is abandoned — attaching a recovered child
-//     under a node that has left the tree makes no sense, and whatever
-//     concurrent path removed it is authoritative.
+//     while unlocked). Checked at the top of EVERY loop iteration below,
+//     not merely once up front — a live review finding: this method's
+//     own recursion (adoptReloadedLocked, called per candidate, calls
+//     this same method again for the child it just adopted) can release
+//     and reacquire m.mu again, mid-loop, so a check only before the
+//     loop covers candidate #1 but misses n going stale during THAT
+//     nested call, before candidate #2 is reached. Wherever this finds n
+//     stale, the WHOLE remaining integration is abandoned — attaching a
+//     recovered child under a node that has left the tree makes no
+//     sense, and whatever concurrent path removed it is authoritative.
 //   - Each individual candidate child may have been adopted by someone
 //     else in the meantime — another ancestor's own concurrent sweep
 //     sharing this same child (a grandchild reachable from two different
@@ -1107,10 +1124,21 @@ func (m *SessionManager) recoverCrashedChildrenLocked(n *sessionNode) {
 	// Step 3 (locked again): integrate, revalidating against whatever
 	// ran while unlocked — see this method's own doc comment for the
 	// exact race semantics decided here.
-	if m.nodes[nID] != n {
-		return
-	}
+	//
+	// The n-itself-still-live check is re-run at the TOP OF EVERY
+	// iteration below, not just once before the loop starts — a live
+	// review finding: adoptReloadedLocked's own call (last line of this
+	// loop body) recurses into THIS SAME method for the child it just
+	// adopted, which can release and reacquire m.mu AGAIN, mid-loop. A
+	// single check before the loop only covers candidate #1; n can go
+	// stale (reaped — the one shape this method's own doc comment already
+	// documents as reachable) during THAT nested call, and a check only
+	// before the loop would then let candidate #2 (and any after it) be
+	// adopted as a child of a node that has already left the tree.
 	for _, childID := range candidates {
+		if m.nodes[nID] != n {
+			return
+		}
 		childSess, ok := loaded[childID]
 		if !ok {
 			continue
@@ -1340,10 +1368,21 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	// agree.
 	notify.Usage = total
 
-	if notify.Status == StatusDone {
+	// See nodeStatusForOutcome's own doc comment (taskdelivery.go) — a
+	// replayed committed outcome (the notify = committed branch above)
+	// can legitimately carry Canceled: true (this turn was Cancel()ed,
+	// then crashed before finishing its own delivery/settle sequence
+	// last time), and collapsing that into StatusFailed here would be
+	// the exact same history-rewriting bug restoreKnownStatusLocked had.
+	// The settledSuccessResult/generic-fallback branches above never set
+	// Canceled, so this is a correctly-scoped no-op for both of those.
+	switch nodeStatusForOutcome(notify) {
+	case StatusCanceled:
+		n.status = StatusCanceled // n.result/n.failReason left untouched — mirrors cancelOneNodeLocked's own live bookkeeping.
+	case StatusDone:
 		n.status = StatusDone
 		n.result = notify.Result
-	} else {
+	default:
 		n.status = StatusFailed
 		n.failReason = notify.FailReason
 	}
@@ -2541,9 +2580,16 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 		// perr may even be nil here (the turn could have raced to a
 		// genuine success in the same instant Cancel() marked it
 		// canceled), and the node's OWN status already carries the
-		// distinct StatusCanceled value — this FailReason is only ever
-		// read from the notification text, never compared against status.
-		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: "canceled", Usage: n.session.Usage()}
+		// distinct StatusCanceled value — this Status/FailReason pair is
+		// the ordinary PARENT-facing wire shape (queued/rendered exactly
+		// like any other failed child), never itself compared against
+		// status. Canceled: true is the SEPARATE, restore-only signal
+		// (see its own doc comment, taskdelivery.go) that lets a LATER
+		// re-adoption of this same child (restoreKnownStatusLocked)
+		// distinguish this from an ordinary failure and correctly restore
+		// StatusCanceled rather than silently rewriting history to
+		// StatusFailed — a live review finding.
+		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: "canceled", Canceled: true, Usage: n.session.Usage()}
 	case perr != nil:
 		n.status = StatusFailed
 		n.failReason = classifySpawnError(perr)
