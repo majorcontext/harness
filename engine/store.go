@@ -99,9 +99,18 @@ const (
 	//     silent, permanent drop.
 	//
 	// recTaskSpawned is written once, on the PARENT's log, at Spawn —
-	// pure informational audit trail, never replayed into any live state
-	// (LoadSession's fold is a no-op for it; it exists to be found, not to
-	// change behavior). recTaskNotifyQueued/recTaskNotifyDelivered mirror
+	// an informational audit trail ("child X spawned by Y at T") that ALSO,
+	// as of a live prod finding, folds into Session.spawnedChildIDs
+	// (engine.go): the durable record recoverCrashedChildrenLocked
+	// (session_manager.go) consults to discover a freshly-adopted node's
+	// own children and check each for a crashed, never-recovered turn —
+	// see that method's own doc comment for the full mechanism this closes
+	// (a box that only ever GETs/resumes the PARENT after a restart, never
+	// touching the crashed CHILD directly, used to leave that child's
+	// "lost to restart" notification undelivered forever — the "reactive,
+	// not proactive" scope cut this design doc's own "Accepted scope cut"
+	// bullet had flagged as future work, escalated after live prod
+	// evidence). recTaskNotifyQueued/recTaskNotifyDelivered mirror
 	// recPromptQueued/recPromptDequeued's own queued/dequeued shape
 	// exactly, and DOUBLE as the notification-persistence fix: LoadSession
 	// folds queued-minus-delivered (keyed by ChildID — a child notifies
@@ -1051,13 +1060,14 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			}
 		case recChildTurnSettled:
 			s.turnUnsettled = false
-			// The commit's job ends here too — see Session.committedOutcome's
-			// own doc comment: nothing consults it once the turn it
-			// describes is confirmed settled (hasUnfinalizedTurn's guard
-			// at the top of recoverInterruptedTurnLocked already prevents
-			// that), and clearing it stops a stale value from outliving
-			// the turn it was ever valid for.
-			s.committedOutcome = nil
+			// committedOutcome deliberately NOT cleared here — see its own
+			// doc comment (engine.go): once settled, it becomes the last
+			// known terminal outcome a LATER adoption of this node
+			// restores n.status/n.result/n.failReason from
+			// (SessionManager.restoreKnownStatusLocked) — cleared only
+			// when a genuinely NEW turn later starts (the recMessage
+			// case's own fold, mirroring appendWithUsage's live-path
+			// clear), not merely because THIS turn settled.
 		case recTaskOutcomeCommitted:
 			// See recTaskOutcomeCommitted's own doc comment for the full
 			// mechanism. Last-writer-wins is fine on the rare chance more
@@ -1187,10 +1197,16 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				}
 			}
 		case recTaskSpawned:
-			// Pure audit trail — see recTaskSpawned's own doc comment.
-			// Deliberately no fold: nothing in this package reads it back
-			// as live state, only as journal content a caller might
-			// separately query the raw log for.
+			// Folded into s.spawnedChildIDs — see recTaskSpawned's own doc
+			// comment (the "proactive-enough" crash-recovery finding) and
+			// Session.spawnedChildIDs' own doc comment (engine.go) for the
+			// full mechanism. Written exactly once per child (Spawn's own
+			// single persistTaskSpawnLocked call), so no dedup/removal
+			// logic is needed here, unlike recPromptQueued/
+			// recTaskNotifyQueued's own queued/dequeued matched-pair folds.
+			if rec.TaskSpawn != nil && rec.TaskSpawn.ChildID != "" {
+				s.spawnedChildIDs = append(s.spawnedChildIDs, rec.TaskSpawn.ChildID)
+			}
 		case recTaskNotifyQueued:
 			// Fold back into s.taskNotifications exactly as if this
 			// process had never stopped — see recTaskNotifyQueued's own
