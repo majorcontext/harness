@@ -2012,6 +2012,26 @@ func (m *SessionManager) Info(id string) (info SessionNode, ok bool) {
 	return n.snapshot(), true
 }
 
+// SessionAndInfo is Session and Info's combined form: both the managed
+// *Session and its lifecycle snapshot, for a caller that needs both and
+// would otherwise call Session then Info separately — two m.mu
+// acquisitions, and (a live review finding on Server.lookup, the first
+// caller) a correct-today-by-coincidence TOCTOU: nothing currently reaps a
+// node between two such calls (Reap only removes terminal leaves, so a
+// RUNNING child's status can never flip to "gone" in that gap), but that
+// reasoning has to be re-verified by every future two-call caller rather
+// than being structurally impossible. One lock hold here removes the gap
+// entirely, for this and any future caller.
+func (m *SessionManager) SessionAndInfo(id string) (sess *Session, info SessionNode, ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n, ok := m.nodes[id]
+	if !ok {
+		return nil, SessionNode{}, false
+	}
+	return n.session, n.snapshot(), true
+}
+
 // Reap removes every LEAF (no children) node whose status is terminal
 // (done, failed, canceled) and which has a parent — a root is never
 // removed, since it is the tree's own address and a caller may still hold

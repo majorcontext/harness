@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -225,6 +226,34 @@ func TestSessionManagerNewRootStartsIdle(t *testing.T) {
 	}
 	if info.ParentID != "" || info.Depth != 0 {
 		t.Errorf("root parent/depth = %q/%d, want empty/0", info.ParentID, info.Depth)
+	}
+}
+
+// TestSessionAndInfoMatchesSeparateCalls proves SessionAndInfo (Server.lookup's
+// one-lock replacement for a separate Session-then-Info pair) returns
+// exactly what those two calls would, for both a known and an unknown id.
+func TestSessionAndInfoMatchesSeparateCalls(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	root := mgr.NewRoot(managedConfig("root", scriptedTurns("root", nil)))
+
+	sess, info, ok := mgr.SessionAndInfo(root.ID)
+	if !ok {
+		t.Fatalf("SessionAndInfo(%s) not found", root.ID)
+	}
+	wantSess, sessOK := mgr.Session(root.ID)
+	wantInfo, infoOK := mgr.Info(root.ID)
+	if !sessOK || !infoOK {
+		t.Fatalf("Session/Info(%s) not found", root.ID)
+	}
+	if sess != wantSess {
+		t.Errorf("SessionAndInfo session = %p, want %p (Session's own)", sess, wantSess)
+	}
+	if !reflect.DeepEqual(info, wantInfo) {
+		t.Errorf("SessionAndInfo info = %+v, want %+v (Info's own)", info, wantInfo)
+	}
+
+	if _, _, ok := mgr.SessionAndInfo("ses_unknown"); ok {
+		t.Error("SessionAndInfo(unknown id) ok = true, want false")
 	}
 }
 

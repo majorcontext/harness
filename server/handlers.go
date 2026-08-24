@@ -2994,9 +2994,9 @@ func (s *Server) lookup(id string) (*engine.Session, string, bool) {
 	if st != nil {
 		return st.sess, statusStr(running), true
 	}
-	if childSess, ok := s.sessMgr.Session(id); ok {
+	if childSess, info, ok := s.sessMgr.SessionAndInfo(id); ok {
 		status := "idle"
-		if info, ok := s.sessMgr.Info(id); ok && info.Status == engine.StatusRunning {
+		if info.Status == engine.StatusRunning {
 			status = "busy"
 		}
 		return childSess, status, true
