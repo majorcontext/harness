@@ -96,6 +96,7 @@ func (s *Server) handleSpawnChild(w http.ResponseWriter, parentID, agent, prompt
 		ToolNames:    def.Tools,
 		AgentType:    agent,
 	})
+	s.reportTaskEvent(parentID, childID, err)
 	if err != nil {
 		if errors.Is(err, engine.ErrUnknownSession) {
 			writeErr(w, http.StatusNotFound, err.Error())
@@ -131,6 +132,36 @@ func (s *Server) handleSpawnChild(w http.ResponseWriter, parentID, agent, prompt
 	// live SessionManager node) correctly reported "running" beside it.
 	// A live review caught this.
 	writeJSON(w, http.StatusCreated, s.buildSession(spawned, "busy"))
+}
+
+// reportTaskEvent forwards one handleSpawnChild outcome to
+// Options.OnTaskEvent, nil-guarded — see that field's own doc comment
+// for the event vocabulary and scope. spawnErr is the raw error
+// engine.SessionManager.Spawn returned (nil on success); childID is
+// only meaningful when spawnErr is nil (Spawn's own zero-value "" on
+// any failure).
+func (s *Server) reportTaskEvent(parentID, childID string, spawnErr error) {
+	if s.opts.OnTaskEvent == nil {
+		return
+	}
+	event := "spawned"
+	switch {
+	case errors.Is(spawnErr, engine.ErrDepthLimit):
+		event = "depth_refused"
+	case errors.Is(spawnErr, engine.ErrConcurrencyLimit):
+		event = "concurrency_refused"
+	case errors.Is(spawnErr, engine.ErrBudgetExceeded):
+		event = "budget_refused"
+	case spawnErr != nil:
+		// ErrUnknownSession, ErrSessionCanceled, or an unrecognized-tool
+		// restrictTools error — none of these are the three specific
+		// "limit hit" cases the metrics vocabulary above names; not
+		// reported at all rather than inventing a fourth, less useful
+		// bucket for "some other spawn failure" (a caller wanting that
+		// detail already gets it from the HTTP response body itself).
+		return
+	}
+	s.opts.OnTaskEvent(event, parentID, childID)
 }
 
 // lookupSpawned returns the just-Spawned child by id. Spawn only just
@@ -190,30 +221,34 @@ func lookupSpawned(s *Server, id string) (*engine.Session, bool) {
 // fallback, a raw Session.Prompt call that bypasses the run-slot
 // entirely — exactly the hazard a workdir-held conflict exists to
 // prevent).
-func (s *Server) runOrQueueText(id, text string) (handled bool) {
+func (s *Server) runOrQueueText(id, text string) engine.RunnerOutcome {
 	st, ctx, _, code, holder := s.claimForPrompt(id)
 	switch {
 	case code == http.StatusNotFound:
-		return false
+		return engine.RunnerUnknown
 	case code == http.StatusConflict && holder != "":
-		s.sessMgr.RevertResumeIfStillRunning(id)
-		return true
+		// A live review finding centralized the revert this case (and
+		// StatusServiceUnavailable below) needs: it now happens inside
+		// engine.SessionManager.triggerResumeLocked's own closure,
+		// unconditionally, whenever this returns RunnerRefused — see
+		// engine.RunnerOutcome's own doc comment. This function no
+		// longer calls RevertResumeIfStillRunning itself.
+		return engine.RunnerRefused
 	case code == http.StatusServiceUnavailable:
-		s.sessMgr.RevertResumeIfStillRunning(id)
-		return true
+		return engine.RunnerRefused
 	case code == http.StatusConflict:
 		// Ordinary busy: a different, already-running bracketed turn
 		// holds the slot and will release the commitment itself on its
 		// own ReportTurnEnd — no revert needed.
-		return true
+		return engine.RunnerHandled
 	}
 	if len(st.sess.QueuedPrompts()) > 0 {
 		s.dispatchQueueHead(id, st, ctx)
-		return true
+		return engine.RunnerHandled
 	}
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 	go s.runPrompt(ctx, id, st, text)
-	return true
+	return engine.RunnerHandled
 }
 
 // sendTextToRoot delivers text to root id through this server's ordinary
@@ -312,7 +347,7 @@ func (s *Server) sendTextToRoot(id, text string) (status string, queuedDepth int
 // ExternalRunner's doc comment for why a root's engine-initiated resume
 // turn must go through this server's OWN run-slot admission rather than
 // SessionManager calling Session.Prompt directly.
-func (s *Server) resumeSessionForTaskNotification(id, text string) bool {
+func (s *Server) resumeSessionForTaskNotification(id, text string) engine.RunnerOutcome {
 	return s.runOrQueueText(id, text)
 }
 

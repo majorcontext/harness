@@ -216,6 +216,24 @@ type Options struct {
 	// named phase (persist/register/emit_created) already covers. Called
 	// synchronously; keep it fast, same rules as OnCreatePhase/OnError.
 	OnCreatePhaseStart func(sessionID, phase string)
+	// OnTaskEvent, when non-nil, is invoked once per handleSpawnChild
+	// (session.create's "with a parent" form) outcome — a follow-up
+	// finding ("metrics"), mirroring OnCreatePhase's own callback shape
+	// exactly (a plain func field, not a new dependency like a
+	// Prometheus client — this repo has no metrics library and this
+	// isn't the place to introduce one). event is one of "spawned"
+	// (engine.SessionManager.Spawn succeeded), "depth_refused"
+	// (engine.ErrDepthLimit), "concurrency_refused"
+	// (engine.ErrConcurrencyLimit), or "budget_refused"
+	// (engine.ErrBudgetExceeded) — parentID always set, childID set only
+	// for "spawned" (empty otherwise: no child session was ever
+	// created). Called synchronously from the request goroutine; keep it
+	// fast, same rules as OnCreatePhase/OnError. Does not cover the
+	// `task` TOOL's own spawns (engine/task_tool.go's runTaskTool calls
+	// SessionManager.Spawn directly, entirely inside the engine package,
+	// with no server-layer hook point) — only the wire-level
+	// session.create parent_id form this field's doc comment names.
+	OnTaskEvent func(event, parentID, childID string)
 	// MCP is the MCP client integration shared by every session this server
 	// hosts (see engine.MCPRegistry): it is the same *engine.MCPManager the
 	// NewSession/LoadSession wrapper wires into each session's

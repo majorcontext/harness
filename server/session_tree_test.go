@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,7 +24,20 @@ import (
 // /session directly rather than the SSE journal.
 func multiProviderHarness(t *testing.T, model message.ModelRef, mutate func(*Options), providers ...provider.Provider) *harness {
 	t.Helper()
-	dir := t.TempDir()
+	return multiProviderHarnessInDir(t, t.TempDir(), model, mutate, providers...)
+}
+
+// multiProviderHarnessInDir is multiProviderHarness with an explicit,
+// caller-supplied SessionDir instead of a fresh t.TempDir() per call — so
+// two independent harnesses (two independent *Server, each its own fresh
+// engine.SessionManager) can share the SAME on-disk session storage,
+// simulating a real process restart at the test level: the second
+// harness's SessionManager starts with an EMPTY m.nodes, exactly like a
+// freshly started `harness serve` process would, while the first
+// harness's on-disk state (including anything Persist wrote) is still
+// there for it to cold-load.
+func multiProviderHarnessInDir(t *testing.T, dir string, model message.ModelRef, mutate func(*Options), providers ...provider.Provider) *harness {
+	t.Helper()
 	reg := make(provider.Registry, len(providers))
 	for _, p := range providers {
 		reg[p.Name()] = p
@@ -154,6 +168,93 @@ func TestSessionCreateWithParentIDSpawnsChild(t *testing.T) {
 	}
 }
 
+// TestSessionCreateWithParentIDFiresOnTaskEvent is the regression test
+// for a follow-up finding ("metrics"): handleSpawnChild now reports each
+// spawn outcome to Options.OnTaskEvent — "spawned" on success,
+// "depth_refused"/"concurrency_refused"/"budget_refused" mirroring the
+// matching engine sentinel. Proves both the success case and the
+// depth-refused case (the cheapest of the three limits to trigger in a
+// unit test — a depth-0 SessionManager).
+func TestSessionCreateWithParentIDFiresOnTaskEvent(t *testing.T) {
+	var mu sync.Mutex
+	var events []string
+	onTaskEvent := func(event, parentID, childID string) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, event)
+		if parentID == "" {
+			t.Error("OnTaskEvent called with empty parentID")
+		}
+		if event == "spawned" && childID == "" {
+			t.Error("OnTaskEvent(\"spawned\", ...) called with empty childID")
+		}
+	}
+	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("done")}}
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, func(o *Options) {
+		o.OnTaskEvent = onTaskEvent
+	}, &scriptedProvider{name: "root"}, childProv)
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": root.ID, "agent": engine.AgentExplore, "prompt": "go", "model": "child/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+
+	mu.Lock()
+	got := append([]string(nil), events...)
+	mu.Unlock()
+	if len(got) != 1 || got[0] != "spawned" {
+		t.Errorf("events = %v, want [spawned]", got)
+	}
+}
+
+// TestReportTaskEventClassifiesEachSentinel proves reportTaskEvent's
+// error-to-event-string mapping directly, covering the three refusal
+// cases TestSessionCreateWithParentIDFiresOnTaskEvent's HTTP round trip
+// above does not exercise (each requires a limit genuinely at capacity,
+// awkward to set up over HTTP — this is the same classification logic,
+// tested directly).
+func TestReportTaskEventClassifiesEachSentinel(t *testing.T) {
+	cases := []struct {
+		err  error
+		want string
+	}{
+		{nil, "spawned"},
+		{engine.ErrDepthLimit, "depth_refused"},
+		{engine.ErrConcurrencyLimit, "concurrency_refused"},
+		{engine.ErrBudgetExceeded, "budget_refused"},
+	}
+	for _, tc := range cases {
+		var got string
+		h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, func(o *Options) {
+			o.OnTaskEvent = func(event, parentID, childID string) { got = event }
+		}, &scriptedProvider{name: "root"})
+		h.srv.reportTaskEvent("ses_parent", "ses_child", tc.err)
+		if got != tc.want {
+			t.Errorf("reportTaskEvent(err=%v) event = %q, want %q", tc.err, got, tc.want)
+		}
+	}
+	// ErrUnknownSession and any other unclassified error: no event at all.
+	var called bool
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, func(o *Options) {
+		o.OnTaskEvent = func(event, parentID, childID string) { called = true }
+	}, &scriptedProvider{name: "root"})
+	h.srv.reportTaskEvent("ses_parent", "", engine.ErrUnknownSession)
+	if called {
+		t.Error("reportTaskEvent(ErrUnknownSession) fired OnTaskEvent, want no call")
+	}
+}
+
 // TestSessionCreateWithParentIDUnknownAgentIs400 proves an unknown agent
 // name is rejected before anything is spawned.
 func TestSessionCreateWithParentIDUnknownAgentIs400(t *testing.T) {
@@ -174,6 +275,175 @@ func TestSessionCreateWithParentIDUnknownAgentIs400(t *testing.T) {
 	})
 	if resp.StatusCode != 400 {
 		t.Fatalf("unknown agent status = %d, want 400: %s", resp.StatusCode, data)
+	}
+}
+
+// TestColdChildHasDurableLineage is the regression test for a follow-up
+// finding: GET /session/{id}'s lineage block used to require this
+// process's SessionManager to have the session adopted in memory
+// (sessMgr.Info succeeding) — a child Reaped, or simply never touched
+// since a fresh process started (simulated here via a SECOND, independent
+// harness sharing the first's on-disk session storage — see
+// multiProviderHarnessInDir), reported NO lineage at all, even though its
+// parent id and agent type are fully durable on disk (Config.
+// TaskParentID/TaskAgentType, restored by LoadSession unconditionally).
+// Proves the cold-fallback branch in lineageJSONFor surfaces parent_id
+// and agent_type without requiring any write (a prompt/send call) to
+// force a reload first.
+//
+// Also covers two later review findings on the same cold-fallback branch,
+// both about Children specifically:
+//
+//   - It used to set Children to []string{} — indistinguishable on the
+//     wire from a WARM, genuinely childless node's real empty list. For a
+//     MID-TREE parent (this test's child, which itself spawns a
+//     grandchild below) that is exactly wrong: the child has a real,
+//     live grandchild on disk, but a caller reading "children":[] from a
+//     cold GET would reasonably conclude it has none — an affirmatively
+//     wrong answer, worse than an honestly unknown one.
+//   - The fix for THAT (giving Children omitempty, so the cold branch
+//     could leave it nil and have it vanish from the wire) went one step
+//     too far: omitempty collapses nil and a genuinely empty non-nil
+//     slice to the same "absent" wire shape, so a WARM, truly childless
+//     node ALSO started omitting the field — indistinguishable from this
+//     cold branch's own "unknown." Children now has NO omitempty
+//     instead: the cold branch's nil serializes as an explicit
+//     "children":null (present, but honestly unknown — distinct from
+//     both "known: zero" and "known: non-zero"), while the warm branch
+//     (lineageJSONFor) normalizes nil to []string{} so a real empty list
+//     still reads "children":[].
+//
+// Proves "children" is present as JSON null on the cold path — neither
+// omitted nor an affirmative empty list — even though a real child (the
+// grandchild) exists.
+func TestColdChildHasDurableLineage(t *testing.T) {
+	dir := t.TempDir()
+	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("the answer is 42")}}
+	grandchildProv := &scriptedProvider{name: "grandchild", turns: [][]provider.Event{asstTurn("the deeper answer is 43")}}
+	h1 := multiProviderHarnessInDir(t, dir, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, childProv, grandchildProv)
+
+	resp, data := h1.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h1.do("POST", "/session", map[string]string{
+		"parent_id": root.ID, "agent": engine.AgentExplore, "prompt": "find the answer", "model": "child/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+	var child struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &child)
+	waitForLineageStatus(t, h1, child.ID, "done", 2*time.Second)
+
+	// Give the child its own grandchild — a real, live subtree the child
+	// (a mid-tree parent from here on) genuinely has, on disk, once h1
+	// itself goes cold below.
+	resp, data = h1.do("POST", "/session", map[string]string{
+		"parent_id": child.ID, "agent": engine.AgentExplore, "prompt": "go deeper", "model": "grandchild/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn grandchild status %d: %s", resp.StatusCode, data)
+	}
+	var grandchild struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &grandchild)
+	waitForLineageStatus(t, h1, grandchild.ID, "done", 2*time.Second)
+
+	// A SECOND, independent harness against the SAME dir: a fresh
+	// SessionManager that has never seen child.ID — the exact "cold"
+	// condition (Reap, or a real process restart) this fix targets.
+	// Deliberately never sends the child a prompt: that would trigger
+	// ReportTurnStart's own adopt-on-first-sight reload and mask the bug
+	// this test exists to catch.
+	h2 := multiProviderHarnessInDir(t, dir, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, childProv, grandchildProv)
+	resp, data = h2.do("GET", "/session/"+child.ID, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("cold GET child status %d: %s", resp.StatusCode, data)
+	}
+	var cold struct {
+		Lineage map[string]any `json:"lineage"`
+	}
+	mustUnmarshal(t, data, &cold)
+	if cold.Lineage == nil {
+		t.Fatal("cold GET has no lineage at all — durable fallback did not fire")
+	}
+	if cold.Lineage["parent_id"] != root.ID {
+		t.Errorf("cold lineage.parent_id = %v, want %q", cold.Lineage["parent_id"], root.ID)
+	}
+	if cold.Lineage["agent_type"] != engine.AgentExplore {
+		t.Errorf("cold lineage.agent_type = %v, want %q", cold.Lineage["agent_type"], engine.AgentExplore)
+	}
+	// Fields with no durable source must be OMITTED, not guessed.
+	if _, ok := cold.Lineage["status"]; ok {
+		t.Errorf("cold lineage.status = %v, want omitted (no durable source)", cold.Lineage["status"])
+	}
+	if _, ok := cold.Lineage["depth"]; ok {
+		t.Errorf("cold lineage.depth = %v, want omitted (no durable source)", cold.Lineage["depth"])
+	}
+	// children has no omitempty (see its own doc comment, handlers.go) —
+	// present but explicitly null on the cold path, not omitted and not
+	// an affirmative []. The child genuinely has a live grandchild on
+	// disk, so an affirmative empty list would be actively wrong, not
+	// just unknown — and simply omitting the key again would reopen the
+	// exact warm/cold ambiguity the field's own fix exists to close.
+	v, ok := cold.Lineage["children"]
+	if !ok {
+		t.Error("cold lineage.children key missing entirely, want present as JSON null")
+	}
+	if v != nil {
+		t.Errorf("cold lineage.children = %v, want null (unknown) — the child genuinely has a live grandchild on disk, so an affirmative list would be actively wrong", v)
+	}
+}
+
+// TestWarmChildlessLineageHasExplicitEmptyChildren is the regression test
+// for the OTHER half of Children's own fix (see TestColdChildHasDurableLineage's
+// doc comment for the full history): a WARM, genuinely childless node
+// must serialize "children":[] — present and explicitly empty, never
+// omitted (which would be indistinguishable from the cold-fallback
+// branch's own honest "unknown" null) and never simply absent from the
+// map. Uses a plain root with no children spawned: sessMgr.Info succeeds
+// for a root exactly like it does for a child, so lineageJSONFor's warm
+// branch is exercised the same way.
+func TestWarmChildlessLineageHasExplicitEmptyChildren(t *testing.T) {
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil, &scriptedProvider{name: "root"})
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h.do("GET", "/session/"+root.ID, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("get root status %d: %s", resp.StatusCode, data)
+	}
+	var got struct {
+		Lineage map[string]any `json:"lineage"`
+	}
+	mustUnmarshal(t, data, &got)
+	v, ok := got.Lineage["children"]
+	if !ok {
+		t.Fatal("warm childless lineage.children key missing entirely, want present as []")
+	}
+	list, isList := v.([]any)
+	if !isList {
+		t.Fatalf("warm childless lineage.children = %#v (type %T), want an empty JSON array, not null or omitted", v, v)
+	}
+	if len(list) != 0 {
+		t.Errorf("warm childless lineage.children = %v, want empty", list)
 	}
 }
 
@@ -910,6 +1180,89 @@ func TestCancelTreeCascadesToChild(t *testing.T) {
 
 	waitForLineageStatus(t, h, child.ID, "canceled", 2*time.Second)
 	waitForLineageStatus(t, h, root.ID, "canceled", 2*time.Second)
+}
+
+// TestSessionEndCascadesToChild is the regression test for a follow-up
+// finding: plain DELETE /session/{id} (handleEnd) used to only ever touch
+// server residency (s.sessions), never sessMgr, so ending a parent with a
+// still-running child silently orphaned it — the child kept running to
+// completion with no one left to ever check out its result, since its
+// parent's own row was already gone. Mirrors TestCancelTreeCascadesToChild
+// exactly, but drives plain DELETE (not /cancel_tree) — proves handleEnd
+// itself now cascade-cancels live children.
+func TestSessionEndCascadesToChild(t *testing.T) {
+	blocker := newBlockingProvider("blocker")
+	t.Cleanup(blocker.releaseAll)
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, blocker)
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": root.ID,
+		"agent":     engine.AgentGeneralPurpose,
+		"prompt":    "go",
+		"model":     "blocker/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+	var child struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &child)
+
+	waitForLineageStatus(t, h, child.ID, "running", 2*time.Second)
+
+	resp, data = h.do("DELETE", "/session/"+root.ID, nil)
+	if resp.StatusCode != 204 {
+		t.Fatalf("end status %d: %s", resp.StatusCode, data)
+	}
+
+	waitForLineageStatus(t, h, child.ID, "canceled", 2*time.Second)
+}
+
+// TestSessionEndForgetsRootFromSessionManager is the regression test for
+// a follow-up finding: DELETE /session/{id} used to only ever touch
+// server residency (s.sessions), never sessMgr — a root's sessionNode
+// (and the *Session it pins: full message history, ctx) survived in
+// sessMgr's m.nodes for the rest of the PROCESS's life even after its
+// caller explicitly deleted it, since Reap's own documented contract
+// never removes a root automatically. Proves handleEnd's new
+// ForgetRoot call actually closes that leak for the common case: a
+// plain, childless root.
+func TestSessionEndForgetsRootFromSessionManager(t *testing.T) {
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"})
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	if _, ok := h.srv.SessionManager().Info(root.ID); !ok {
+		t.Fatal("test setup: root not tracked by SessionManager before DELETE")
+	}
+
+	resp, data = h.do("DELETE", "/session/"+root.ID, nil)
+	if resp.StatusCode != 204 {
+		t.Fatalf("end status %d: %s", resp.StatusCode, data)
+	}
+
+	if _, ok := h.srv.SessionManager().Info(root.ID); ok {
+		t.Error("root still tracked by SessionManager after DELETE — leaked (Reap never removes a root automatically)")
+	}
 }
 
 // TestSessionSendToBusyChildIs409NotLost is the regression test for a

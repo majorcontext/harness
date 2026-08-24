@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -67,6 +68,16 @@ func scriptedTurns(name string, turns [][]provider.Event) provider.Provider {
 // doneTurn is a one-shot scripted turn ending with text.
 func doneTurn(text string) [][]provider.Event {
 	return [][]provider.Event{asstTurn(provider.StopEndTurn, &message.Text{Text: text})}
+}
+
+// doneTurnWithUsage is doneTurn plus an explicit Usage on the terminal
+// event — for tests exercising per-tree token budget accounting
+// (SessionManager.SetMaxTreeTokens), where asstTurn's own zero-Usage
+// default is not useful.
+func doneTurnWithUsage(text string, usage provider.Usage) [][]provider.Event {
+	turn := asstTurn(provider.StopEndTurn, &message.Text{Text: text})
+	turn[0].Usage = usage
+	return [][]provider.Event{turn}
 }
 
 // managedConfig builds a Config whose Providers map holds every entry in
@@ -1346,6 +1357,450 @@ func TestReapNeverRemovesRootOrNodeWithChildren(t *testing.T) {
 	}
 }
 
+// TestForgetRootRemovesIdleRootWithNoChildren proves ForgetRoot's happy
+// path: a childless, non-running root is removed from m.nodes — the
+// follow-up fix for the leak Reap's own doc comment describes as a
+// deliberate v1 scope cut (a root is never automatically reaped).
+func TestForgetRootRemovesIdleRootWithNoChildren(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(managedConfig("root", scriptedTurns("root", nil)))
+
+	if err := mgr.ForgetRoot(root.ID); err != nil {
+		t.Fatalf("ForgetRoot: %v", err)
+	}
+	if _, ok := mgr.Info(root.ID); ok {
+		t.Error("root still tracked after ForgetRoot")
+	}
+}
+
+// TestForgetRootAlsoCleansUsageAndRunningMaps is the regression test for
+// a live review finding: ForgetRoot deleted only m.nodes[id], leaving a
+// stale m.usageByRoot[id]/m.runningByRoot[id] entry behind — both keyed
+// by root id and written to by every turn anywhere in the tree — for
+// the rest of the process's life, one pair per forgotten root on a
+// long-lived server that creates and deletes many.
+func TestForgetRootAlsoCleansUsageAndRunningMaps(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(managedConfig("root", scriptedTurns("root", nil)))
+	mgr.usageByRoot[root.ID] = provider.Usage{InputTokens: 5}
+	mgr.runningByRoot[root.ID] = 0
+
+	if err := mgr.ForgetRoot(root.ID); err != nil {
+		t.Fatalf("ForgetRoot: %v", err)
+	}
+	if _, ok := mgr.usageByRoot[root.ID]; ok {
+		t.Error("usageByRoot entry still present after ForgetRoot")
+	}
+	if _, ok := mgr.runningByRoot[root.ID]; ok {
+		t.Error("runningByRoot entry still present after ForgetRoot")
+	}
+}
+
+// TestForgetRootThenChildrenReapedEventuallyCollectsRoot is the
+// regression test for a live review finding: a root DELETEd while it
+// still had live children (cascade-canceled by endSubagentLineage, but
+// not yet removed — Reap collects them bottom-up, one generation per
+// call) was refused by ForgetRoot and then NEVER revisited — Reap
+// unconditionally skips every root, so the now-childless root leaked
+// for the rest of the process's life. ForgetRoot's pendingForget flag
+// closes this: once the child is reaped away, a LATER Reap call also
+// collects the root itself.
+func TestForgetRootThenChildrenReapedEventuallyCollectsRoot(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("child", doneTurn("done")),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	// The child's own completion also delivers a notification to root
+	// (idle at that point) and fires an active resume — waitForStatus
+	// above only confirms the CHILD's own status, not that root's
+	// downstream resume (rootProv has zero scripted turns, so it fails
+	// fast) has settled back out of StatusRunning. ForgetRoot's own
+	// StatusRunning check runs BEFORE its children check, so racing that
+	// transient Running window here can make it take the "busy" refusal
+	// path instead of the "has children" one — which is the ONE path
+	// that arms pendingForget, so the test's later second Reap() would
+	// then wrongly find nothing to collect. A status-based wait is
+	// itself racy here (root reads StatusIdle at the very first poll,
+	// before the resume goroutine has even started — a false "already
+	// settled" signal); a flat settle sleep avoids racing that
+	// goroutine's own scheduling entirely. A live -race/timing flake
+	// caught under repeated stress runs (pre-existing, unrelated to this
+	// session's own changes).
+	time.Sleep(100 * time.Millisecond)
+
+	// Refused: root still has a (terminal, but not yet reaped) child.
+	if err := mgr.ForgetRoot(root.ID); err == nil {
+		t.Fatal("ForgetRoot on a root with a child: want error, got nil")
+	}
+	if _, ok := mgr.Info(root.ID); !ok {
+		t.Fatal("root removed despite still having a child")
+	}
+
+	// First Reap collects the child (one generation).
+	if n := mgr.Reap(); n != 1 {
+		t.Fatalf("first Reap() = %d, want 1 (the child)", n)
+	}
+	// Second Reap: root is now childless AND pendingForget — must be
+	// collected too, the one exception to "Reap never removes a root".
+	if n := mgr.Reap(); n != 1 {
+		t.Fatalf("second Reap() = %d, want 1 (the now-childless, pendingForget root)", n)
+	}
+	if _, ok := mgr.Info(root.ID); ok {
+		t.Error("root still tracked after its pendingForget'd subtree was fully reaped")
+	}
+}
+
+// TestReapNeverCollectsAnOrdinaryRootEvenWhenChildless proves the
+// pendingForget exception is exactly that — an exception, not a
+// loosening of "Reap never removes a root" for the ordinary case: a
+// ROOT no caller ever asked ForgetRoot to remove stays tracked
+// indefinitely even once childless, exactly like before this fix.
+func TestReapNeverCollectsAnOrdinaryRootEvenWhenChildless(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("child", doneTurn("done")),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	if n := mgr.Reap(); n != 1 {
+		t.Fatalf("Reap() = %d, want 1 (the child)", n)
+	}
+	// root is now childless, but ForgetRoot was never called — must
+	// survive indefinitely, unlike the pendingForget case above.
+	if n := mgr.Reap(); n != 0 {
+		t.Errorf("Reap() removed the root without ForgetRoot ever being called: %d nodes removed", n)
+	}
+	if _, ok := mgr.Info(root.ID); !ok {
+		t.Fatal("ordinary root removed by Reap — must never happen")
+	}
+}
+
+// TestForgetRootRejectsRootWithChildren proves ForgetRoot refuses to
+// orphan a live subtree — matches Cancel's own cascade philosophy: tear
+// the subtree down first (via Cancel) if that's really the intent.
+func TestForgetRootRejectsRootWithChildren(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("child", doneTurn("done")),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	if err := mgr.ForgetRoot(root.ID); err == nil {
+		t.Error("ForgetRoot on a root with a live (even if terminal) child: want error, got nil")
+	}
+	if _, ok := mgr.Info(root.ID); !ok {
+		t.Error("root removed despite still having a child")
+	}
+}
+
+// TestForgetRootRejectsBusyRoot proves ForgetRoot refuses a currently
+// running root — an in-flight turn still has a goroutine that will
+// eventually call finalizeTurn expecting to find this node.
+func TestForgetRootRejectsBusyRoot(t *testing.T) {
+	blocker := &blockingProvider{name: "root", release: make(chan struct{})}
+	t.Cleanup(func() { close(blocker.release) })
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(managedConfig("root", blocker))
+
+	mgr.ReportTurnStart(root)
+	go root.Prompt(context.Background(), "go") //nolint:errcheck // released via t.Cleanup
+	waitForStatus(t, mgr, root.ID, StatusRunning, time.Second)
+
+	if err := mgr.ForgetRoot(root.ID); err == nil {
+		t.Error("ForgetRoot on a running root: want error, got nil")
+	}
+	if _, ok := mgr.Info(root.ID); !ok {
+		t.Error("root removed while still running")
+	}
+}
+
+// TestForgetRootRejectsNonRoot proves ForgetRoot is never a substitute
+// for Reap on a child — that is Reap's own job (a terminal, childless
+// leaf) or, for a non-terminal child, nobody's job at all (its own
+// in-flight turn must be protected).
+func TestForgetRootRejectsNonRoot(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("child", doneTurn("done")),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	if err := mgr.ForgetRoot(childID); err == nil {
+		t.Error("ForgetRoot on a non-root child: want error, got nil")
+	}
+	if _, ok := mgr.Info(childID); !ok {
+		t.Error("child removed by ForgetRoot — not its job")
+	}
+}
+
+// TestForgetRootUnknownIDIsError proves ForgetRoot on an id this
+// SessionManager never tracked returns ErrUnknownSession, mirroring
+// Cancel/AbortTurn's own identical contract.
+func TestForgetRootUnknownIDIsError(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	if err := mgr.ForgetRoot("ses_doesnotexist00000000"); !errors.Is(err, ErrUnknownSession) {
+		t.Errorf("ForgetRoot(unknown) = %v, want ErrUnknownSession", err)
+	}
+}
+
+// TestSpawnPersistsTaskSpawnedRecord is the regression test for a
+// follow-up finding: "child journal records." Before this fix, a task
+// spawn had no durable, structured, independently-queryable trace of
+// "child X spawned by Y at T" — only the rendered "[tasks: ...]"
+// conversation text once the child eventually delivered. Proves Spawn
+// writes a task.spawned record on the PARENT's own log, immediately, not
+// waiting for delivery.
+func TestSpawnPersistsTaskSpawnedRecord(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := scriptedTurns("root", nil)
+	childProv := scriptedTurns("child", doneTurn("done"))
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(Config{Providers: reg, Model: modelFor("root"), SessionDir: dir})
+
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentExplore})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	data, err := os.ReadFile(filepath.Join(dir, root.ID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	if !strings.Contains(log, `"type":"task.spawned"`) {
+		t.Fatalf("parent log missing task.spawned record: %s", log)
+	}
+	if !strings.Contains(log, `"child_id":"`+childID+`"`) {
+		t.Errorf("task.spawned record missing child_id %q: %s", childID, log)
+	}
+	if !strings.Contains(log, `"agent":"`+AgentExplore+`"`) {
+		t.Errorf("task.spawned record missing agent %q: %s", AgentExplore, log)
+	}
+}
+
+// TestSpawnBudgetExceeded is the regression test for a follow-up finding
+// ("per-tree budgets"): Spawn now refuses once its tree's cumulative
+// child token usage reaches the configured SetMaxTreeTokens budget,
+// mirroring ErrDepthLimit/ErrConcurrencyLimit's identical shape.
+func TestSpawnBudgetExceeded(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	mgr.SetMaxTreeTokens(100)
+	child1Prov := scriptedTurns("child1", doneTurnWithUsage("done", provider.Usage{InputTokens: 60, OutputTokens: 50}))
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		child1Prov,
+		scriptedTurns("child2", nil),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child1")})
+	if err != nil {
+		t.Fatalf("Spawn child1: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	// child1 alone spent 110 tokens (60+50), already over the 100-token
+	// budget — a second spawn from the same root must be refused.
+	if _, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child2")}); !errors.Is(err, ErrBudgetExceeded) {
+		t.Errorf("Spawn over budget = %v, want ErrBudgetExceeded", err)
+	}
+}
+
+// TestSpawnBudgetCountsCacheTokensToo is the regression test for a live
+// review finding: the ErrBudgetExceeded gate used to compare only
+// InputTokens+OutputTokens against SetMaxTreeTokens, while usageByRoot
+// itself already accumulated all four provider.Usage fields — a
+// cache-heavy child (a large prompt resent every turn, reading mostly
+// from cache, the shape AGENTS.md calls out for the openaicompat/
+// Fireworks and anthropic routes) could spend well past the operator's
+// real intended ceiling with the gate never noticing, because cache
+// read/write tokens were silently exempt from the very check meant to
+// bound them. Gives a child a small input+output total (20) but a large
+// cache total (200) against a 100-token budget: input+output alone
+// (20) would let a second Spawn sail through; the true four-field total
+// (220) must refuse it.
+func TestSpawnBudgetCountsCacheTokensToo(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	mgr.SetMaxTreeTokens(100)
+	child1Prov := scriptedTurns("child1", doneTurnWithUsage("done", provider.Usage{
+		InputTokens: 10, OutputTokens: 10, CacheReadTokens: 150, CacheWriteTokens: 50,
+	})) // input+output = 20 (under budget alone); all four fields = 220 (well over)
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		child1Prov,
+		scriptedTurns("child2", nil),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child1")})
+	if err != nil {
+		t.Fatalf("Spawn child1: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	if _, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child2")}); !errors.Is(err, ErrBudgetExceeded) {
+		t.Errorf("Spawn over budget (cache-heavy) = %v, want ErrBudgetExceeded — the gate must count cache read/write tokens, not just input+output", err)
+	}
+}
+
+// TestSpawnBudgetUnsetByDefault proves SetMaxTreeTokens is opt-in: a
+// SessionManager that never calls it enforces no budget at all,
+// regardless of how much usage accumulates.
+func TestSpawnBudgetUnsetByDefault(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("child1", doneTurnWithUsage("done", provider.Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000})),
+		scriptedTurns("child2", nil),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child1")})
+	if err != nil {
+		t.Fatalf("Spawn child1: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	if _, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child2")}); err != nil {
+		t.Errorf("Spawn with no budget configured: want nil error, got %v", err)
+	}
+}
+
+// TestSpawnBudgetDeltaAccountingAcrossFollowupSend is the regression test
+// for a real bug caught before it shipped: n.session.Usage() is
+// CUMULATIVE across all of a session's turns, but finalizeTurn can run
+// MULTIPLE times for the same node (session.send restarting an
+// already-done child for a legitimate follow-up turn). Adding the full
+// cumulative total on every finalizeTurn call, rather than just the
+// NEW turn's delta, would double-count every prior turn on each
+// follow-up. Proves the budget check sees exactly the true total spent
+// (two 50-token turns = 100, not 150 or 200), by spawning a child, then
+// sending it one follow-up, then asserting a THIRD child is refused only
+// once the TRUE cumulative total (not an inflated one) crosses budget.
+func TestSpawnBudgetDeltaAccountingAcrossFollowupSend(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	mgr.SetMaxTreeTokens(120)
+	childProv := &scriptedProvider{name: "child1", turns: [][]provider.Event{
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "first"}),
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "second"}),
+	}}
+	childProv.turns[0][0].Usage = provider.Usage{InputTokens: 30, OutputTokens: 20} // 50
+	childProv.turns[1][0].Usage = provider.Usage{InputTokens: 30, OutputTokens: 20} // 50 more; cumulative 100
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		childProv,
+		scriptedTurns("child2", nil),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child1")})
+	if err != nil {
+		t.Fatalf("Spawn child1: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	if _, err := mgr.Send(context.Background(), childID, "again"); err != nil {
+		t.Fatalf("Send follow-up: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	// True cumulative total is 100 (50+50) — still under the 120 budget.
+	// If finalizeTurn had double-counted (e.g. 50 then 100, landing on
+	// 150 total, or worse 50+150=200), this would already be refused.
+	if _, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child2")}); err != nil {
+		t.Errorf("Spawn at true-total 100/120 budget: want nil error, got %v (budget accounting likely double-counted the follow-up turn)", err)
+	}
+}
+
+// TestSpawnBudgetDeltaAccountingSurvivesReapAndReadopt is the regression
+// test for a live review finding distinct from the one above: THAT test
+// covers two finalizeTurn calls against the SAME sessionNode (a plain
+// Send follow-up, node never destroyed). This one covers a child that is
+// REAPED between its two turns — Reap deletes its sessionNode entirely
+// (usageByRoot survives; only a root-shaped node's usageByRoot entry is
+// ever cleared, see Reap's own doc comment), so the follow-up turn goes
+// through AdoptReloaded, which calls adoptLocked and builds a BRAND NEW
+// sessionNode. Proves that new node's budgetedUsage is seeded from the
+// warm session's own already-cumulative Usage(), not left at zero — the
+// bug this closes would double the first turn's spend into usageByRoot a
+// second time.
+func TestSpawnBudgetDeltaAccountingSurvivesReapAndReadopt(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	mgr.SetMaxTreeTokens(120)
+	childProv := &scriptedProvider{name: "child1", turns: [][]provider.Event{
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "first"}),
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "second"}),
+	}}
+	childProv.turns[0][0].Usage = provider.Usage{InputTokens: 40, OutputTokens: 30} // 70
+	childProv.turns[1][0].Usage = provider.Usage{InputTokens: 10, OutputTokens: 20} // 30 more; cumulative 100
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		childProv,
+		scriptedTurns("child2", nil),
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child1")})
+	if err != nil {
+		t.Fatalf("Spawn child1: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	childSess, ok := mgr.Session(childID)
+	if !ok {
+		t.Fatal("child not tracked after its first turn")
+	}
+	if got := childSess.Usage(); got.InputTokens+got.OutputTokens != 70 {
+		t.Fatalf("test setup: child usage after turn 1 = %+v, want 70 total", got)
+	}
+
+	// Reap the now-terminal, childless leaf — usageByRoot[root.ID] stays
+	// at 70 (only a root-shaped node's entry is ever cleared by Reap).
+	if n := mgr.Reap(); n != 1 {
+		t.Fatalf("Reap() = %d, want 1", n)
+	}
+	if _, ok := mgr.Info(childID); ok {
+		t.Fatal("child still tracked after Reap")
+	}
+
+	// Re-adopt the SAME warm *Session object (still carries its own
+	// cumulative Usage()=70 in memory) — the exact shape a real
+	// claimForPrompt cold-reload-then-run, or a direct AdoptReloaded
+	// call, produces for a legitimate follow-up to a reaped child.
+	// Config.TaskParentID survives on the object itself (set once at
+	// Spawn), so no LoadSession/SessionDir round-trip is needed here to
+	// exercise the same adoptLocked construction path.
+	if err := mgr.AdoptReloaded(childSess); err != nil {
+		t.Fatalf("AdoptReloaded: %v", err)
+	}
+	if _, err := mgr.Send(context.Background(), childID, "again"); err != nil {
+		t.Fatalf("Send follow-up: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	// True cumulative total is 100 (70+30) — still under the 120 budget.
+	// If the reaped-then-readopted node's budgetedUsage had started at
+	// zero, this follow-up's finalizeTurn would have added the full 100
+	// on top of the 70 usageByRoot already carried across the reap,
+	// landing at 170 and refusing this Spawn.
+	if _, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child2")}); err != nil {
+		t.Errorf("Spawn at true-total 100/120 budget: want nil error, got %v (budget accounting likely double-counted the reaped child's prior turn)", err)
+	}
+}
+
 // waitForStatus polls until id reaches want or the timeout elapses.
 func waitForStatus(t *testing.T, mgr *SessionManager, id string, want SessionStatus, timeout time.Duration) {
 	t.Helper()
@@ -1362,5 +1817,64 @@ func waitForStatus(t *testing.T, mgr *SessionManager, id string, want SessionSta
 			t.Fatalf("Info(%s).Status = %s after %s, want %s", id, info.Status, timeout, want)
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+// TestUnlockAndFlushPersistRunsThunksAfterReleasingLock is the regression
+// test for a live review finding: session-log disk writes (task-
+// notification queued/delivered records, the task-spawn audit record)
+// used to run WHILE m.mu — the single lock guarding every session in the
+// tree, taken by Info/Reap/Spawn/Send/finalize alike — was held, on
+// finalizeTurn/Spawn/recoverInterruptedTurnLocked's own hot paths. A slow
+// or contended disk on one session's notification could stall every
+// OTHER session's own Info/Reap/Spawn/finalize call in the same process.
+// deferPersist/unlockAndFlushPersist close this by queuing durable-write
+// thunks while m.mu is held and running them only after it is released.
+//
+// Proves the ordering directly: a thunk that tries to re-acquire m.mu
+// via TryLock (which would fail if m.mu were still held when the thunk
+// runs) must succeed — i.e., unlockAndFlushPersist really does release
+// the lock BEFORE running any queued thunk, not after.
+func TestUnlockAndFlushPersistRunsThunksAfterReleasingLock(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	ran := false
+	mgr.mu.Lock()
+	mgr.deferPersist(func() {
+		if !mgr.mu.TryLock() {
+			t.Error("deferPersist thunk ran while m.mu was still held — disk I/O is still running inside the critical section")
+			return
+		}
+		mgr.mu.Unlock()
+		ran = true
+	})
+	mgr.unlockAndFlushPersist()
+	if !ran {
+		t.Error("deferPersist thunk never ran at all")
+	}
+}
+
+// TestUnlockAndFlushPersistPreservesQueueOrder is the regression test for
+// deferPersist/unlockAndFlushPersist's FIFO ordering guarantee — load-
+// bearing for recoverInterruptedTurnLocked's own crash-window fix (see
+// TestRecoverInterruptedTurnSurvivesACrashBetweenDeliveryAndHistoryClose),
+// which relies on its notify/forwarded delivery thunks running BEFORE its
+// closing-message persist thunk, in the exact order they were queued.
+func TestUnlockAndFlushPersistPreservesQueueOrder(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	var order []int
+	mgr.mu.Lock()
+	for i := 0; i < 5; i++ {
+		i := i
+		mgr.deferPersist(func() { order = append(order, i) })
+	}
+	mgr.unlockAndFlushPersist()
+	want := []int{0, 1, 2, 3, 4}
+	if len(order) != len(want) {
+		t.Fatalf("order = %v, want %v", order, want)
+	}
+	for i, v := range want {
+		if order[i] != v {
+			t.Fatalf("order = %v, want %v", order, want)
+		}
 	}
 }

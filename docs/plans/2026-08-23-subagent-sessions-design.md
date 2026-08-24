@@ -96,7 +96,17 @@ only top-level `.md` files are agent definitions), Claude Code-compatible frontm
 
 Loaded once at root-session start (same lifecycle as skills discovery).
 A custom definition whose `tools` list omits `task` is a leaf. Unknown
-tool names in a definition are an error surfaced at load, not spawn.
+tool names in a definition are an error surfaced at load, not spawn —
+never silently deferred to a later `task` call's own "unknown agent"
+error at spawn time. A malformed or semantically-invalid `.agents/*.md`
+file fails the WHOLE directory's load (a design-owner decision, after a
+narrower "frontmatter leniency" follow-up first tried skip-and-warn for
+every parseAgentDef error alike): the one exception is a stray unknown
+frontmatter KEY (e.g. a typo'd `desc:` in place of `description:`),
+which is judged low-stakes and cosmetic enough to skip just that one
+file with a logged warning instead. An unknown tool name or an invalid
+model string are not that — see engine/agentdef.go's
+errUnknownFrontmatterKey doc comment for the full reasoning.
 
 ### The `task` tool (model-facing)
 
@@ -195,6 +205,126 @@ operations (the boxes control plane is the first consumer):
   finalizes.
 - Child session logs persist like any session's, so a child's work is
   inspectable after the fact.
+- Token budget (opt-in, follow-up): `SetMaxTreeTokens` refuses `Spawn`
+  once a tree's cumulative usage (all four `provider.Usage` fields —
+  input, output, cache read, cache write) reaches the configured
+  ceiling. The budget is process-memory only, like the rest of
+  `SessionManager`'s own tree state — it resets to zero on every
+  process restart, so a tree that spends most of a large budget across
+  children later `Reap`ed (and never touched again) under-enforces the
+  operator's real ceiling after a respawn; a durable, cross-restart
+  budget is a separate piece of design work this PR does not attempt.
+
+### Process-restart recovery
+
+The four terminal outcomes above (provider failure, tool crash,
+cancellation, natural completion) all have one thing in common: a live
+goroutine — somewhere in `finalizeTurn`'s call chain — is always the one
+that discovers and reports them. A child whose turn was genuinely IN
+FLIGHT when the process crashed or was killed has no such goroutine left
+in the NEW process. Left unhandled, it cold-reloads as `StatusIdle` —
+indistinguishable from a child that never received a turn at all — and
+its parent, if it ever queries or auto-resumes based on that child's
+outcome, waits forever for a notification that can never arrive.
+
+**Detection.** An earlier revision inferred "was this turn interrupted"
+from the trailing message's own role in history (the session's last
+message being user-role and nothing after it). A live review proved that
+heuristic unreliable in both directions — several legitimate, fully-
+settled paths (an ordinary provider error appending nothing at all; two
+different synthetic tool-result closers) leave trailing shapes
+indistinguishable from a genuine crash. Detection is now explicit
+instead: `Session.turnUnsettled`/`hasUnfinalizedTurn` (engine.go) is true
+from the moment any message is appended until `SessionManager.finalizeTurn`
+(or `recoverInterruptedTurnLocked` itself) explicitly marks the turn
+settled via `markTurnSettled`, durably backed by a `child_turn.settled`
+log record — regardless of what outcome resulted or what trailing
+message shape it left. Only a genuine crash, the process dying before
+either of those ever runs, leaves this true on the next reload.
+
+**Decision: treat it as `failed`, synthetically, on next touch — unless
+the turn actually finished.** A dangling child is normally marked
+`StatusFailed` (`FailReason`: `"lost to restart: turn was in flight when
+the process last stopped"`) the moment `adoptReloadedLocked` reconstructs
+it, and a synthetic notification is delivered to its nearest live
+ancestor through the EXACT SAME `nearestLiveAncestorLocked` +
+`enqueueTaskNotification` path every other terminal outcome uses — never
+a second-class delivery mechanism. One narrow exception: if the child's
+own trailing history message is an unambiguous natural completion (a
+plain final assistant answer, no pending tool call —
+`Session.settledSuccessResult`, engine.go), the crash struck AFTER the
+turn genuinely finished but BEFORE `finalizeTurn`'s own bookkeeping
+durably landed (the "notify→settled window"). Reporting that as a
+failure would be a false, permanent misstatement to the parent — worse
+than a merely-late notification, since nothing else would ever correct
+it — so recovery reconstructs a `StatusDone` notification with the
+child's real result instead. See `recoverInterruptedTurnLocked`'s own doc
+comment (session_manager.go) for the full mechanism, including why the
+resulting resume is fired asynchronously rather than threaded back
+through `AdoptReloaded`/`ReportTurnStart`'s public signatures, and
+`settledSuccessResult`'s own doc comment for exactly which trailing shape
+this covers and which rarer one (a synthetic tool-result closer one step
+removed from the real answer) it deliberately does not.
+
+A forwarded grandchild notification (see above) is only ever durably
+marked delivered when there was a live ancestor to actually hand it to —
+when there is none, it is dropped exactly like `finalizeTurn`'s own
+identical case, never recorded as delivered work that was, in fact, lost.
+
+**Replay, not re-derive: `committedOutcome` closes the crash-INSIDE-
+finalizeTurn window too.** A deeper live review found that "deliver
+first, mark settled last" is necessary but not sufficient: a crash
+landing INSIDE `finalizeTurn`'s own deliver-then-settle sequence (the
+notify already durably queued on the ancestor's log, but this turn not
+yet marked settled) used to let a later recovery attempt reconstruct a
+DIFFERENT payload than the one already delivered — a generic
+`"lost to restart"` instead of a failed turn's real classified reason, or
+(on a recovery-of-recovery retry) misreading recovery's own synthetic
+closing message as a fresh natural completion. Either way the ancestor
+ends up told two DIFFERENT accounts of the same child's outcome — worse
+than the exact-match dedup (`enqueueTaskNotificationMemoryOnlyDeduped`)
+was ever designed to catch, since it only recognizes a byte-identical
+repeat.
+
+The fix: `SessionManager.commitOutcomeLocked` durably records the EXACT
+computed `taskNotification` (a `task.outcome_committed` record, on the
+child's OWN log) BEFORE either `finalizeTurn` or
+`recoverInterruptedTurnLocked` attempts delivery. A later recovery
+attempt checks for this record FIRST (`Session.committedTurnOutcome`)
+and, when present, replays it VERBATIM instead of re-deriving a guess —
+making the retry idempotent-by-content even across the finalizeTurn→
+recovery handoff, not just recovery-retrying-itself. See
+`recoverInterruptedTurnLocked`'s own doc comment (session_manager.go) for
+the full crash-window table (every step × every crash point × the
+resulting durable state and recovery outcome) this closes.
+
+**One predicate for "does this node have a parent," used everywhere.**
+A related finding: `finalizeTurn`'s settled-marker (and now commit-
+outcome) gate used to check the IN-MEMORY `sessionNode.parentID`, while
+`adoptReloadedLocked`'s own root/non-root branch — which decides whether
+a reloaded node is a recovery CANDIDATE at all — checks the DURABLE
+`Session.TaskParentID()`. The two agree except for
+`adoptReloadedLocked`'s own "true depth is unrecoverable" case (a
+reloaded child whose real parent is not tracked in this process, adopted
+root-shaped despite durably having a real parent): gating on the
+in-memory pointer meant such a node's turns were NEVER marked settled,
+even on an ordinary successful completion, so a later reload spuriously
+ran recovery against an already-clean turn. Both decisions now go
+through the one `Session.hasTaskParent()` helper, so the two ends of
+this exact crash/degraded-lineage window can no longer disagree about
+which nodes recovery covers.
+
+**Accepted scope cut: reactive, not proactive.** This only fires when
+something actually reloads the dangling child's own id again (a
+legitimate follow-up `session.send`, `ReportTurnStart`'s
+adopt-on-first-sight, or `handleSpawnChild`'s parent-lookup fallback all
+already reach this path). If nothing ever touches that child's id again,
+its parent still waits forever. Fully closing that requires a proactive
+startup sweep across every session on disk — a durable parent→children
+index does not exist today, and `ListSessions`' cheap header decode
+(`readSessionInfo`) does not currently read `TaskParentID` or the last
+record's type — a larger, separate piece of work, deliberately deferred
+rather than folded into this fix.
 
 ## Non-goals (v1)
 
