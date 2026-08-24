@@ -132,11 +132,15 @@ func TestLiveChildToolCallNotSynthesizedAsOrphanError(t *testing.T) {
 		t.Fatalf("Spawn: %v", err)
 	}
 
-	select {
-	case <-entered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("gate tool never entered — child turn never started")
-	}
+	// Block directly on entered — a synchronous, unbuffered channel closed
+	// from inside the gate tool's own Run call (above) the instant it starts
+	// executing. No timeout wrapper: AGENTS.md's testing rules ("No raw
+	// time.Sleep for synchronization... block directly on channels for
+	// expected events and let the test binary timeout catch hangs") apply
+	// here too — a real hang (the turn never starting at all) is caught by
+	// go test's own binary timeout, not a guessed deadline that can flake
+	// under a loaded runner.
+	<-entered
 
 	// The gate tool is now genuinely, currently executing: the child's own
 	// durable log has an assistant message carrying tc1's tool_call and NO
@@ -160,14 +164,21 @@ func TestLiveChildToolCallNotSynthesizedAsOrphanError(t *testing.T) {
 		t.Errorf("live in-flight child's tool call already has a result — test setup did not actually catch it mid-flight: %s", body)
 	}
 
+	// Subscribe to the child's own event stream BEFORE releasing the gate —
+	// the gate tool is still genuinely blocked at this point (nothing else
+	// can emit for this session until release closes), so opening the
+	// subscription here first closes the only window a live-only event
+	// (tool.end carries no Seq — see the Event doc comment — so a reconnect
+	// cannot replay one that fired before a subscriber existed) could ever
+	// be missed. waitFor blocks on the subscription's own channel with no
+	// timeout, same rationale as the entered channel above: a genuine hang
+	// is the test binary's own timeout to catch, not a guessed deadline.
+	sse := h.openSSE("?session="+childID+"&from=0", "")
 	close(release)
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		_, data := h.do("GET", "/session/"+childID+"/message", nil)
-		if strings.Contains(string(data), "gate done") {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
+	sse.waitFor(t, engine.EventToolEnd)
+
+	_, data = h.do("GET", "/session/"+childID+"/message", nil)
+	if !strings.Contains(string(data), "gate done") {
+		t.Fatalf("gate tool call's result missing after it completed: %s", data)
 	}
-	t.Fatal("gate tool call never completed after release")
 }

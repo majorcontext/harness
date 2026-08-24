@@ -1767,7 +1767,7 @@ func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Cont
 // disconnected orchestrator learns the outcome on replay; the 202 only
 // acknowledged receipt.
 //
-// origin is forwarded to Session.PromptEngineResume/Prompt verbatim (see
+// origin is forwarded to Session.PromptWithOrigin verbatim (see
 // message.Message.Origin's own doc comment): message.OriginEngine for
 // runOrQueueText's own resume-trigger dispatch (session_tree.go, the ONLY
 // call site that ever passes it), empty for every other caller — an
@@ -1790,13 +1790,7 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	// hits, closing the "task tool broken after restart" gap a live
 	// review caught.
 	s.sessMgr.ReportTurnStart(st.sess)
-	var msg *message.Message
-	var err error
-	if origin == message.OriginEngine {
-		msg, err = st.sess.PromptEngineResume(ctx, text)
-	} else {
-		msg, err = st.sess.Prompt(ctx, text)
-	}
+	msg, err := st.sess.PromptWithOrigin(ctx, text, origin)
 	s.syncMessages(id) // catch any message not yet journaled
 	switch {
 	case err == nil:

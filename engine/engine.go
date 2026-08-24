@@ -1708,9 +1708,11 @@ func (s *Session) emitSessionError(err error) {
 
 // Prompt appends a user message and runs the agent loop — stream a turn,
 // execute any tool calls, feed results back — until the model ends its turn.
-// It returns the final assistant message.
+// It returns the final assistant message. A thin, origin-less wrapper around
+// PromptWithOrigin for the overwhelming majority of callers that never need
+// to set one.
 func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, error) {
-	return s.promptWithOrigin(ctx, text, "")
+	return s.PromptWithOrigin(ctx, text, "")
 }
 
 // PromptEngineResume is Prompt's sibling for SessionManager.triggerResumeLocked's
@@ -1721,12 +1723,20 @@ func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, er
 // or programmatic turn driver (the goal loop's own directive text, notably)
 // still goes through plain Prompt, unchanged.
 func (s *Session) PromptEngineResume(ctx context.Context, text string) (*message.Message, error) {
-	return s.promptWithOrigin(ctx, text, message.OriginEngine)
+	return s.PromptWithOrigin(ctx, text, message.OriginEngine)
 }
 
-// promptWithOrigin is Prompt/PromptEngineResume's shared body, parameterized
-// on the appended message's Origin tag.
-func (s *Session) promptWithOrigin(ctx context.Context, text string, origin string) (*message.Message, error) {
+// PromptWithOrigin is Prompt/PromptEngineResume's shared, exported body,
+// parameterized on the appended message's Origin tag. Exported (not just
+// promptWithOrigin, package-private) so a caller that already HOLDS an
+// origin value of its own — server/handlers.go's runPrompt, notably, which
+// is reached from four call sites that each already know statically
+// whether their own text is the engine's resume trigger or not — can pass
+// it straight through in one call, rather than re-deriving Prompt vs.
+// PromptEngineResume's own two-arm choice a second time on top of a choice
+// the caller already made. One parameterized entry point for the value
+// means a future third Origin value is handled in exactly one place.
+func (s *Session) PromptWithOrigin(ctx context.Context, text string, origin string) (*message.Message, error) {
 	// Load project instructions once, before mutating history: a
 	// present-but-unusable AGENTS.md fails the prompt without recording a
 	// user message or calling the provider.
