@@ -1148,6 +1148,63 @@ by construction: one build, one live probe, or one subagent runs longer than
 the window, and a user reads an answer before sending the next turn. The
 commit that introduced this default carries the measured evidence.
 
+### Lazy MCP tools (deferred schemas)
+
+An MCP server's tools reach the model as full JSON Schemas in the tools
+array. A box that wires several large servers therefore pays for hundreds
+of schemas on every turn, at the FRONT of the cached prefix. The MCP
+CONNECTION was already lazy; the schema cost was not.
+
+`engine/mcp_lazy.go` defers that cost, opt-in. A DEFERRED server's tools
+leave the tools array and appear instead as a name-only catalog — one
+`name — one-line description` line each — in a system segment placed after
+the Agent Skills catalog and before hook (`system.transform`) segments. It
+is the same progressive-disclosure staging Agent Skills already use. The
+model loads a schema with the `mcp` tool's `select` action, and the loaded
+def is back in the tools array on the next request, so a selected tool is
+called exactly like a statically registered one. `runAgenticLoop` rebuilds
+the request per tool round, so a `select` takes effect inside the same
+turn.
+
+Config: `mcp_tool_loading` is `eager` (the default, and today's behaviour
+byte for byte), `auto` (defer once the live catalog exceeds
+`mcp_tool_loading_threshold`, default 20 tools), or `lazy` (always).
+`mcp_servers.<name>.tool_loading` pins one server `eager` or `lazy`;
+`auto` is global-only, because the threshold measures whole-catalog
+pressure. Any non-positive threshold resolves to the DEFAULT, never to a
+floor of 1 — that value would defer every catalog.
+
+Four rules are load-bearing. Do not relax them:
+
+- **A session that does not hold the `mcp` tool defers nothing.** Never
+  defer what the session cannot select. A subagent restricted by an agent
+  definition that omits `"mcp"` (`restrictTools`) would otherwise lose
+  every MCP schema AND the only path to load one back.
+- **The `auto` threshold counts the WHOLE catalog**, including a server
+  pinned `eager`. A pin says "always keep these loaded", never "ignore
+  their cost".
+- **The catalog listing sorts by full tool name, in the engine**, not by
+  the registry's server-then-tool slice order (the two differ for servers
+  `a` and `a0`). The tools array stays byte-stable because the partition
+  preserves the registry's order and changes only when a selection does.
+- **`streamTurn` resolves the provider BEFORE it computes the tool plan.**
+  The plan's `Tools(ctx)` call is what dials a server for the first time
+  and spawns a child process for every stdio server. A turn naming an
+  unconfigured provider must return before any of that. The plan still
+  runs before `mcpStatusSegment`, which is the pre-existing rule that a
+  first-attempt failure is reported in its own turn.
+
+A stale selection is reaped at plan time: a selected name whose server is
+CONNECTED and whose catalog lacks it is dropped. That is what keeps an
+invented name — accepted while a server was unconnected, where a real name
+and an invented one are indistinguishable — out of the effective set. A
+selection whose server is still unconnected is KEPT, so it arms itself on
+reconnect. The reap is memory-only; replay re-unions the log and prunes
+again.
+
+Full design, including the `search`/`select` surface and the durable
+record: `docs/design/mcp-lazy-tools.md`.
+
 ### The tool array is byte-stable across requests
 
 `Session.toolDefs` (`engine/engine.go`) sorts the BUILT-IN tool group by

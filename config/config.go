@@ -159,6 +159,28 @@ type Config struct {
 	// especially). With "volume", an attestation means the write(2) completed
 	// and durability is delegated to the volume layer.
 	SessionSync string `json:"session_sync,omitempty"`
+	// MCPToolLoading selects when a session defers MCP tool SCHEMAS instead
+	// of registering every one of them up front (see
+	// docs/design/mcp-lazy-tools.md). "eager" (the default, and what an
+	// absent value means) keeps today's behaviour: every tool of every
+	// connected server registers with its full JSON Schema. "lazy" defers
+	// every server: its tools appear as a name-only catalog in the system
+	// prompt, and the model loads the schema it needs with the mcp tool's
+	// select action. "auto" defers only once the live catalog holds more
+	// tools than MCPToolLoadingThreshold. An unrecognized value is rejected
+	// by validateMCPToolLoading rather than falling back to the default:
+	// deferral changes what the model can call without asking, so a typo
+	// must never decide it silently.
+	MCPToolLoading string `json:"mcp_tool_loading,omitempty"`
+	// MCPToolLoadingThreshold is the tool COUNT "auto" compares the live
+	// catalog against; 0/absent leaves engine.Config.MCPToolLoadingThreshold
+	// at zero, which the engine itself then defaults to 20
+	// (defaultMCPDeferThreshold). A count rather than a token estimate: the
+	// engine has no tokenizer on the request path. A NEGATIVE value cannot
+	// possibly be wired -- len(catalog) > -1 holds even for an empty
+	// catalog, so a stray minus sign would silently turn "auto" into "always
+	// defer" -- and is rejected loudly, like MCPServerSpec.ConnectTimeoutS.
+	MCPToolLoadingThreshold int `json:"mcp_tool_loading_threshold,omitempty"`
 }
 
 // validSessionSync are the only accepted config values for SessionSync — see
@@ -177,6 +199,34 @@ var validSessionSync = map[string]bool{"": true, "fsync": true, "volume": true}
 func validateSessionSync(v string) error {
 	if !validSessionSync[v] {
 		return fmt.Errorf("session_sync: unknown value %q; valid values: \"\" (default), \"fsync\", \"volume\"", v)
+	}
+	return nil
+}
+
+// validMCPToolLoading are the only accepted config values for
+// MCPToolLoading -- see its doc comment. "auto" is global-only: the
+// threshold measures whole-catalog context pressure, which is not a
+// property of one server, so MCPServerSpec.ToolLoading rejects it (see
+// validMCPServerToolLoading).
+var validMCPToolLoading = map[string]bool{"": true, "eager": true, "auto": true, "lazy": true}
+
+// validMCPServerToolLoading are the only accepted values for one server's
+// MCPServerSpec.ToolLoading override.
+var validMCPServerToolLoading = map[string]bool{"": true, "eager": true, "lazy": true}
+
+// validateMCPToolLoading fails loudly on an unrecognized mcp_tool_loading
+// value or a negative mcp_tool_loading_threshold -- the same "cannot
+// possibly be wired" philosophy as validateSessionSync/validateMCPServers.
+// Both halves guard a silent misreading rather than a crash: an
+// unrecognized mode would fall back to eager and quietly keep shipping the
+// catalog a box asked to defer, and a negative threshold would turn "auto"
+// into "always defer" for every catalog, including an empty one.
+func validateMCPToolLoading(mode string, threshold int) error {
+	if !validMCPToolLoading[mode] {
+		return fmt.Errorf("mcp_tool_loading: unknown value %q; valid values: \"\" (default), \"eager\", \"auto\", \"lazy\"", mode)
+	}
+	if threshold < 0 {
+		return fmt.Errorf("mcp_tool_loading_threshold: must not be negative (got %d)", threshold)
 	}
 	return nil
 }
@@ -252,6 +302,14 @@ type MCPServerSpec struct {
 	// integer-seconds field, not a time.Duration/string, since JSON has no
 	// duration literal).
 	ConnectTimeoutS int `json:"connect_timeout_s,omitempty"`
+	// ToolLoading overrides Config.MCPToolLoading for THIS server:
+	// "eager" always registers its tools with their schemas, "lazy" always
+	// defers them to the name-only catalog (see
+	// docs/design/mcp-lazy-tools.md). An absent value inherits the global
+	// mode. "auto" is rejected here, unlike at the top level: the threshold
+	// it selects measures whole-catalog context pressure, which is not a
+	// property of one server.
+	ToolLoading string `json:"tool_loading,omitempty"`
 }
 
 // PluginSpec configures one plugin process, loaded verbatim into a
@@ -478,6 +536,9 @@ func Load(path string) (*Config, error) {
 	if err := validateSessionSync(c.SessionSync); err != nil {
 		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
 	}
+	if err := validateMCPToolLoading(c.MCPToolLoading, c.MCPToolLoadingThreshold); err != nil {
+		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
+	}
 	return &c, nil
 }
 
@@ -624,6 +685,12 @@ func validateMCPServers(servers map[string]MCPServerSpec) error {
 		}
 		if s.ConnectTimeoutS < 0 {
 			return fmt.Errorf("mcp_servers.%s: connect_timeout_s must not be negative (got %d)", name, s.ConnectTimeoutS)
+		}
+		if !validMCPServerToolLoading[s.ToolLoading] {
+			if s.ToolLoading == "auto" {
+				return fmt.Errorf("mcp_servers.%s: tool_loading %q is global-only (the threshold it selects measures the whole catalog); use \"eager\" or \"lazy\" here", name, s.ToolLoading)
+			}
+			return fmt.Errorf("mcp_servers.%s: tool_loading: unknown value %q; valid values: \"\" (inherit), \"eager\", \"lazy\"", name, s.ToolLoading)
 		}
 	}
 	return nil
@@ -843,6 +910,12 @@ func merge(base, over *Config) *Config {
 	}
 	if over.SessionSync != "" {
 		out.SessionSync = over.SessionSync
+	}
+	if over.MCPToolLoading != "" {
+		out.MCPToolLoading = over.MCPToolLoading
+	}
+	if over.MCPToolLoadingThreshold != 0 {
+		out.MCPToolLoadingThreshold = over.MCPToolLoadingThreshold
 	}
 	// Arrays override wholesale: a non-empty project value replaces the user
 	// value entirely; otherwise inherit. Copy so the merged config never
