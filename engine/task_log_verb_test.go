@@ -352,3 +352,50 @@ func TestTaskLogRoutesThroughTheToolDispatch(t *testing.T) {
 		t.Error("task tool schema does not offer the tail property")
 	}
 }
+
+// TestTaskLogSurfacesToolResultAttachments proves an image a tool returned
+// is visible in the tail. Parts.Text() renders Text parts only, so a
+// read_file/MCP [Text, Blob] result would otherwise read as a one-line
+// summary with no sign that a picture came back — a review finding.
+func TestTaskLogSurfacesToolResultAttachments(t *testing.T) {
+	mgr, root, childID := spawnLoggedChild(t, "done")
+	child, ok := mgr.Session(childID)
+	if !ok {
+		t.Fatal("Session(child): not found")
+	}
+	child.append(message.Message{ID: "m_img", Role: message.RoleTool, Parts: message.Parts{
+		&message.ToolResult{CallID: "tc1", Content: message.Parts{
+			&message.Text{Text: "PNG 800x600, 12345 bytes"},
+			&message.Blob{MediaType: "image/png", Data: []byte{1, 2, 3}},
+		}},
+	}})
+
+	got := runTaskLogJSON(t, root, taskToolArgs{SessionID: childID})
+	last := got.Entries[len(got.Entries)-1]
+	if !strings.Contains(last.Text, "1 attachment(s)") {
+		t.Errorf("tool-result entry = %q, want the attachment counted", last.Text)
+	}
+}
+
+// TestTaskLogSkipsEmptyTextParts proves an empty Text part contributes no
+// blank line — it spends budget and tells a reader less than no line.
+func TestTaskLogSkipsEmptyTextParts(t *testing.T) {
+	mgr, root, childID := spawnLoggedChild(t, "done")
+	child, ok := mgr.Session(childID)
+	if !ok {
+		t.Fatal("Session(child): not found")
+	}
+	// An empty part on EITHER side of the real one: a leading empty part
+	// is absorbed by the builder's own first-line handling, but a
+	// trailing one used to append a bare newline.
+	child.append(message.Message{ID: "m_mixed", Role: message.RoleAssistant, Parts: message.Parts{
+		&message.Text{Text: ""},
+		&message.Text{Text: "real content"},
+		&message.Text{Text: ""},
+	}})
+
+	got := runTaskLogJSON(t, root, taskToolArgs{SessionID: childID})
+	if last := got.Entries[len(got.Entries)-1]; last.Text != "real content" {
+		t.Errorf("entry text = %q, want %q with no blank line on either side", last.Text, "real content")
+	}
+}

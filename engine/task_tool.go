@@ -682,7 +682,11 @@ func renderTaskLogEntry(m message.Message) taskLogEntry {
 	for _, p := range m.Parts {
 		switch part := p.(type) {
 		case *message.Text:
-			writeLine(part.Text)
+			// An empty Text part writes nothing: a blank line spends
+			// budget and tells a reader less than no line at all.
+			if part.Text != "" {
+				writeLine(part.Text)
+			}
 		case *message.EngineContext:
 			writeLine("[engine_context] " + part.Text)
 		case *message.Reasoning:
@@ -697,6 +701,13 @@ func renderTaskLogEntry(m message.Message) taskLogEntry {
 				label = "[tool_result error]"
 			}
 			writeLine(label + " " + part.SafeContent().Text())
+			// Parts.Text() renders Text parts only, so an image a tool
+			// returned (read_file's [Text, Blob] shape, and MCP's) would
+			// otherwise vanish from the tail entirely. Count it with the
+			// top-level blobs: a reader diagnosing a death should see
+			// that the child received a picture, not silently read a
+			// one-line summary as the whole result.
+			blobs += countBlobs(part.SafeContent())
 		case *message.Blob:
 			blobs++
 		}
@@ -707,6 +718,17 @@ func renderTaskLogEntry(m message.Message) taskLogEntry {
 	text := b.String()
 	capped := capRunes(text, taskLogEntryCap)
 	return taskLogEntry{Role: string(m.Role), Text: capped, Truncated: capped != text}
+}
+
+// countBlobs counts the Blob parts in ps — the parts Parts.Text() drops.
+func countBlobs(ps message.Parts) int {
+	n := 0
+	for _, p := range ps {
+		if _, ok := p.(*message.Blob); ok {
+			n++
+		}
+	}
+	return n
 }
 
 // capRunes cuts s to at most n runes, marking a cut.
