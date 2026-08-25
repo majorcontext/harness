@@ -37,6 +37,16 @@ type QueuedPrompt struct {
 	Seq int64
 }
 
+// ErrEmptyPromptText is returned for a prompt whose text is empty or
+// whitespace-only. One shared sentinel, not a fresh errors.New per call
+// site — a review finding: SessionManager.SendToDescendant validates the
+// same rule for a running target (it enqueues through
+// enqueueMemoryOnlyLocked, which assumes validated text), and a fresh
+// value there could not be classified with errors.Is, so
+// classifyTaskVerbError (task_tool.go) fell through to its default arm
+// and leaked the internal "engine:" layer to the model.
+var ErrEmptyPromptText = errors.New("engine: prompt text must not be empty or whitespace-only")
+
 // EnqueuePrompt appends text to the session's durable FIFO prompt queue: it
 // assigns the next monotonic ID, persists a prompt.queued record, and emits
 // EventPromptQueued — all under s.mu (RegisterGoal's persist-and-emit-while-
@@ -51,19 +61,132 @@ type QueuedPrompt struct {
 func (s *Session) EnqueuePrompt(text string) (int64, error) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
-		return 0, errors.New("engine: EnqueuePrompt requires non-empty text")
+		return 0, ErrEmptyPromptText
 	}
 	s.mu.Lock()
-	id := s.promptQueueNextID
-	s.promptQueueNextID++
-	s.promptQueue = append(s.promptQueue, QueuedPrompt{ID: id, Text: trimmed})
-	s.persistPromptQueueLocked(recPromptQueued, promptRecord{ID: id, Text: trimmed})
+	p := s.enqueueMemoryOnlyLocked(trimmed)
+	s.persistPromptQueueLocked(recPromptQueued, promptRecord{ID: p.ID, Text: p.Text})
 	// Emit while still holding s.mu (see ClearGoal in goal.go): keeps event
 	// order matching log order under a concurrent dequeue. OnEvent must not
 	// call back into this Session — that would deadlock on s.mu, held here.
-	s.emit(Event{Type: EventPromptQueued, QueueID: id, QueueText: trimmed, QueueLen: len(s.promptQueue)})
+	s.emit(Event{Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue)})
 	s.mu.Unlock()
-	return id, nil
+	return p.ID, nil
+}
+
+// enqueueMemoryOnlyLocked is EnqueuePrompt's memory-only half: assigns
+// the next monotonic queue ID and appends to s.promptQueue — WITHOUT
+// EnqueuePrompt's own persistPromptQueueLocked call (a synchronous disk
+// write: ensureLog + writeRecord) or its emit. Exists for a caller that
+// must mutate s's queue from inside ANOTHER lock's own critical section
+// without paying for that disk write under it —
+// SessionManager.SendToDescendant's running-target branch, which holds
+// the tree-wide m.mu across this call (see its own doc comment) and
+// defers the matching persistPromptQueueLocked call via
+// SessionManager.deferPersist/unlockAndFlushPersist instead, exactly
+// like the task-notification delivery path already does for its own
+// durable writes (commitOutcomeLocked, finalizeTurn's notify-delivery
+// block). A live review finding: an earlier version of this fix called
+// the full EnqueuePrompt (persist inline) from inside SendToDescendant's
+// own m.mu-held block, stalling every OTHER session's Info/Reap/Spawn/
+// finalize call on this ONE session's fsync for as long as it took.
+//
+// Deliberately does NOT emit: unlike the notification path (which never
+// emits an event on enqueue at all), a queued prompt DOES have an
+// observable event (EventPromptQueued, for the queue-depth UI) — the
+// caller decides when to emit it relative to the (possibly deferred)
+// persist, exactly as EnqueuePrompt itself does above (persist, then
+// emit, unchanged order for its own direct callers).
+//
+// text is assumed already validated non-empty and trimmed — the one
+// other caller (SendToDescendant) applies the same validation
+// EnqueuePrompt does above, on its own copy of the text. Caller holds
+// s.mu.
+func (s *Session) enqueueMemoryOnlyLocked(text string) QueuedPrompt {
+	id := s.promptQueueNextID
+	s.promptQueueNextID++
+	p := QueuedPrompt{ID: id, Text: text}
+	s.promptQueue = append(s.promptQueue, p)
+	return p
+}
+
+// deferredQueueRecord is one prompt-queue record (see promptRecord in
+// store.go) whose memory mutation is already applied but whose disk write
+// is deferred — see queueRecordDeferredLocked.
+type deferredQueueRecord struct {
+	recType string
+	prompt  promptRecord
+
+	// event is the queue event this record's memory mutation owes its
+	// subscribers, emitted by flushQueueRecordsLocked immediately after
+	// the record is written. Parked with the record, not emitted at
+	// mutation time — a review finding: the two m.mu-held mutation sites
+	// emitted inline, and a subscriber can do real work on the call
+	// (server.Server's Publish journals a prompt.queued/prompt.dequeued
+	// event to events.jsonl, a synchronous disk write under its own
+	// server.mu), which put that write back inside the tree-wide m.mu
+	// this whole park/flush mechanism exists to keep clear of slow work.
+	// Emitting from the flush keeps event order equal to record order for
+	// a session — whichever s.mu holder drains the park emits the parked
+	// event before its own — while no emit runs under m.mu at all.
+	event Event
+}
+
+// queueRecordDeferredLocked parks one prompt-queue record for a write that
+// runs LATER, outside the tree-wide m.mu — the durable half of
+// enqueueMemoryOnlyLocked/dequeueMemoryOnlyLocked. The caller must park the
+// record under the SAME s.mu hold as the memory mutation it describes, then
+// arrange the flush via SessionManager.deferPersist/unlockAndFlushPersist
+// (SendToDescendant's running-target enqueue, finalizeTurn's queued-message
+// re-drive).
+//
+// Parking on the SESSION, not in the caller's own closure, is what keeps
+// the log's record order equal to the memory-mutation order. A review
+// finding proved the closure form wrong: SendToDescendant appends to the
+// queue in memory under m.mu and defers the prompt.queued write, while the
+// child's own turn goroutine — which needs only s.mu, never m.mu — can
+// drain that very item at a tool-call boundary and write its
+// prompt.dequeued record synchronously. The dequeued record then reached
+// disk FIRST, and LoadSession's fold (which removes a dequeued item by ID
+// and no-ops when its queued record has not folded yet) let the later
+// queued record re-append the item: a reload resurrected an
+// already-delivered prompt and the child ran it twice, breaking the
+// queue's no-double-delivery invariant. Because a parked record lives on
+// s and every prompt-queue write drains the park first
+// (persistPromptQueueLocked), the competing dequeuer now writes the parked
+// queued record before its own — whichever goroutine gets there first
+// writes both, in order.
+//
+// A duplicate write is impossible: the flush removes what it wrote, so a
+// dequeuer that drains the park makes the later deferred flush a no-op.
+// Caller holds s.mu.
+func (s *Session) queueRecordDeferredLocked(recType string, p promptRecord, ev Event) {
+	s.deferredQueueRecords = append(s.deferredQueueRecords, deferredQueueRecord{recType: recType, prompt: p, event: ev})
+}
+
+// flushQueueRecordsLocked writes every parked prompt-queue record, in FIFO
+// order, and clears the park. Called by persistPromptQueueLocked before its
+// own write, and by the deferPersist thunk the parking caller queued. Cheap
+// no-op when nothing is parked, which is every ordinary session's steady
+// state. Caller holds s.mu.
+func (s *Session) flushQueueRecordsLocked() {
+	if len(s.deferredQueueRecords) == 0 {
+		return
+	}
+	pending := s.deferredQueueRecords
+	s.deferredQueueRecords = nil
+	for _, r := range pending {
+		s.writePromptQueueRecordLocked(r.recType, r.prompt)
+		// Emit right after the write, still under s.mu — the same
+		// persist-then-emit order EnqueuePrompt/dequeueLocked use for
+		// their own inline records, so event order matches log order for
+		// this session either way. An empty Type means a caller parked a
+		// record with no event to emit; nothing in this package does that
+		// today, and a zero Event must never reach a subscriber.
+		if r.event.Type != "" {
+			s.emit(r.event)
+		}
+	}
 }
 
 // EnqueuePromptDurable is EnqueuePrompt with an honest durability and
@@ -119,7 +242,7 @@ func (s *Session) EnqueuePrompt(text string) (int64, error) {
 func (s *Session) EnqueuePromptDurable(text string, seq int64) (id int64, duplicate bool, err error) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
-		return 0, false, errors.New("engine: EnqueuePromptDurable requires non-empty text")
+		return 0, false, ErrEmptyPromptText
 	}
 	if seq < 1 {
 		return 0, false, errors.New("engine: EnqueuePromptDurable requires seq >= 1")
@@ -140,6 +263,21 @@ func (s *Session) EnqueuePromptDurable(text string, seq int64) (id int64, duplic
 		s.lastPersistErr = err
 		return 0, false, err
 	}
+	// Drain the park before this record, exactly as persistPromptQueueLocked
+	// does for every other prompt-queue write — a review finding: this
+	// method writes through writeRecord directly (it owns its own fsync and
+	// error contract), so it was the one writer that could put its own
+	// queued record ahead of a still-parked one. Memory order stayed [A, B]
+	// while disk order became [queued(B), queued(A)], and LoadSession's fold
+	// appends in record order and never sorts by ID, so a reload restored
+	// [B, A] — a FIFO reorder across a restart. See
+	// queueRecordDeferredLocked's own doc comment for the park itself.
+	//
+	// Ordering only: a parked record carries the ordinary best-effort
+	// durability every non-durable enqueue has, so this drain neither
+	// weakens nor strengthens this method's own write-ahead contract for
+	// the record it is about to write.
+	s.flushQueueRecordsLocked()
 	const op = "enqueue_durable"
 	rec := record{Type: recPromptQueued, Prompt: &promptRecord{ID: id, Text: trimmed, Seq: seq}}
 	if err := s.timedStorePhase(op, "write_record", func() error {
@@ -210,11 +348,10 @@ func (s *Session) DequeuePrompt(reason string) (p QueuedPrompt, remaining int, o
 // drain journals every record within one critical section, atomically with
 // respect to a concurrent EnqueuePrompt.
 func (s *Session) dequeueLocked(reason string) (QueuedPrompt, int, bool) {
-	if len(s.promptQueue) == 0 {
+	p, ok := s.dequeueMemoryOnlyLocked()
+	if !ok {
 		return QueuedPrompt{}, 0, false
 	}
-	p := s.promptQueue[0]
-	s.promptQueue = s.promptQueue[1:]
 	s.persistPromptQueueLocked(recPromptDequeued, promptRecord{ID: p.ID, Text: p.Text, Reason: reason})
 	remaining := len(s.promptQueue)
 	// Emit while still holding s.mu (see EnqueuePrompt above): keeps event
@@ -222,6 +359,23 @@ func (s *Session) dequeueLocked(reason string) (QueuedPrompt, int, bool) {
 	// Session — that would deadlock on s.mu, held here.
 	s.emit(Event{Type: EventPromptDequeued, QueueID: p.ID, QueueText: p.Text, QueueReason: reason, QueueLen: remaining})
 	return p, remaining, true
+}
+
+// dequeueMemoryOnlyLocked is dequeueLocked's memory-only half: pops the
+// queue head, if any — WITHOUT the persist or emit dequeueLocked itself
+// always does inline. See enqueueMemoryOnlyLocked's own doc comment for
+// why this split exists and who needs it:
+// SessionManager.finalizeTurn's own queued-message re-drive check, which
+// — like SendToDescendant's enqueue — holds the tree-wide m.mu across
+// this call and must not pay for persistPromptQueueLocked's synchronous
+// disk write under it. Caller holds s.mu.
+func (s *Session) dequeueMemoryOnlyLocked() (QueuedPrompt, bool) {
+	if len(s.promptQueue) == 0 {
+		return QueuedPrompt{}, false
+	}
+	p := s.promptQueue[0]
+	s.promptQueue = s.promptQueue[1:]
+	return p, true
 }
 
 // dequeueAllLocked drains the entire queue in FIFO order, journaling one

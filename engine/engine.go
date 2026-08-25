@@ -901,6 +901,13 @@ type Session struct {
 	// — see LoadSession's recPromptQueued case. Guarded by mu.
 	promptQueueNextID int64
 
+	// deferredQueueRecords holds prompt-queue records whose memory
+	// mutation already happened but whose disk write was deferred out
+	// from under the tree-wide m.mu (see queueRecordDeferredLocked in
+	// queue.go and SessionManager.deferPersist). FIFO, in memory-mutation
+	// order. Guarded by mu.
+	deferredQueueRecords []deferredQueueRecord
+
 	// enqueueSeq is the durable-enqueue idempotency high-water mark (see
 	// EnqueuePromptDurable in queue.go and promptRecord.Seq in store.go):
 	// the largest caller-issued seq durably accepted. Monotonic; a seq at or
@@ -1210,6 +1217,20 @@ func (s *Session) SpawnedChildIDs() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.spawnedChildIDs...)
+}
+
+// HasHistoryOrSpawnedChildren reports whether s has any message history
+// or has ever spawned a child, without allocating either full copy the
+// way History()/SpawnedChildIDs() do — restoreKnownStatusLocked's own
+// non-emptiness check (session_manager.go) needs only this boolean, not
+// either slice's actual contents, and previously paid for two full
+// slice copies (append([]T(nil), ...)) just to compare their lengths
+// against zero and discard the result. A declined-thread follow-up from
+// the subagent-sessions review.
+func (s *Session) HasHistoryOrSpawnedChildren() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.history) > 0 || len(s.spawnedChildIDs) > 0
 }
 
 // recordSpawnedChildLocked appends childID to s.spawnedChildIDs — the

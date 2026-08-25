@@ -1334,16 +1334,29 @@ func TestReportTurnStartBalancesRunningByRootForReloadedChild(t *testing.T) {
 // ctx.Done(), letting a test wait for exactly that moment before making
 // any assertion about what Reap does while the goroutine is still
 // "in flight."
+//
+// started closes the instant Stream is first entered, and is optional
+// (only closed when a test supplies it). A test must wait on it before
+// canceling: a node reads StatusRunning from the moment Spawn reserves
+// its slot, which is BEFORE the launched goroutine has called Prompt at
+// all, and drainQueueAndPrompt starts no turn whose ctx is already
+// canceled (see its own doc comment). Waiting on the node status alone
+// therefore does not prove this provider will ever be entered.
 type slowCancelProvider struct {
 	name        string
+	started     chan struct{}
 	ctxDoneSeen chan struct{}
 	release     chan struct{}
+	startOnce   sync.Once
 	once        sync.Once
 }
 
 func (p *slowCancelProvider) Name() string { return p.name }
 
 func (p *slowCancelProvider) Stream(ctx context.Context, _ *provider.Request) (provider.Stream, error) {
+	if p.started != nil {
+		p.startOnce.Do(func() { close(p.started) })
+	}
 	return &slowCancelStream{ctx: ctx, p: p}, nil
 }
 
@@ -1495,7 +1508,7 @@ func TestReapDoesNotLeakConcurrencySlotAcrossSendThenAbort(t *testing.T) {
 // this root again.
 func TestReapNeverRemovesACanceledNodeStillUnwinding(t *testing.T) {
 	mgr := NewSessionManager(context.Background(), 0, 1) // concurrency cap 1
-	prov := &slowCancelProvider{name: "slow", ctxDoneSeen: make(chan struct{}), release: make(chan struct{})}
+	prov := &slowCancelProvider{name: "slow", started: make(chan struct{}), ctxDoneSeen: make(chan struct{}), release: make(chan struct{})}
 	root := mgr.NewRoot(managedConfig("root", scriptedTurns("root", nil), prov, scriptedTurns("fast", doneTurn("fast done"))))
 
 	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("slow")})
@@ -1503,6 +1516,13 @@ func TestReapNeverRemovesACanceledNodeStillUnwinding(t *testing.T) {
 		t.Fatalf("Spawn: %v", err)
 	}
 	waitForStatus(t, mgr, childID, StatusRunning, time.Second)
+	// Wait for the provider call itself, not just the reserved slot:
+	// Spawn sets StatusRunning before its launched goroutine ever calls
+	// Prompt, and drainQueueAndPrompt starts no turn on an
+	// already-canceled ctx — so a Cancel racing ahead of that first call
+	// would leave this provider never entered and ctxDoneSeen never
+	// closed.
+	<-prov.started
 
 	if err := mgr.Cancel(childID); err != nil {
 		t.Fatalf("Cancel: %v", err)

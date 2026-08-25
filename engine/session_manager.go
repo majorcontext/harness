@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -113,6 +114,17 @@ var (
 	// so it must refuse the second rather than starting a second
 	// concurrent Prompt loop.
 	ErrSessionBusy = errors.New("engine: session is already running a turn")
+	// ErrNotDescendant is returned by CancelDescendant, DescendantInfo, and
+	// SendToDescendant when the named target is not actually a descendant
+	// of the calling session in m's tree — the "only ancestors may act on
+	// their descendants" rule the model-facing `task` tool's cancel/
+	// status/send verbs all share (see isDescendantLocked's own doc
+	// comment for exactly what counts). Deliberately indistinguishable, on
+	// the wire, from "session_id names something entirely unrelated to
+	// you" — an unrelated tree and a sibling's subtree are the same
+	// authorization failure from the caller's point of view, and neither
+	// is a hint worth leaking about the wider tree's shape.
+	ErrNotDescendant = errors.New("engine: target session is not a descendant of the calling session")
 )
 
 // ExternalRunner lets an outside scheduler — the server's own run-slot
@@ -418,6 +430,26 @@ func (m *SessionManager) markChangedLocked() {
 // method's own doc comment for why queue order is preserved).
 func (m *SessionManager) deferPersist(fn func()) {
 	m.pendingPersist = append(m.pendingPersist, fn)
+}
+
+// deferQueueRecordFlush queues the flush half of the parked-record
+// sequence both m.mu-held prompt-queue mutations use: SendToDescendant's
+// running-target enqueue and finalizeTurn's queued-message re-drive. Each
+// site parks its own record under the same s.mu hold as its memory
+// mutation (queueRecordDeferredLocked, queue.go), then calls this so the
+// write lands after m.mu releases.
+//
+// One helper, not two hand-maintained copies — a review finding. The
+// ordering this sequence protects is the whole point of parking a record
+// on the session (see queueRecordDeferredLocked's own doc comment for the
+// double-delivery defect a closure-held record caused), so the flush must
+// not be re-derived per call site. Caller holds m.mu.
+func (m *SessionManager) deferQueueRecordFlush(s *Session) {
+	m.deferPersist(func() {
+		s.mu.Lock()
+		s.flushQueueRecordsLocked()
+		s.mu.Unlock()
+	})
 }
 
 // unlockAndFlushPersist is the m.mu.Unlock() every SessionManager entry
@@ -1042,7 +1074,7 @@ func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
 			n.failReason = committed.FailReason
 		}
 		m.markChangedLocked()
-	case len(s.SpawnedChildIDs()) > 0 || len(s.History()) > 0:
+	case s.HasHistoryOrSpawnedChildren():
 		// No committed outcome, but s has definitely already run a turn
 		// — the legacy case, not the genuinely-fresh one. Proven by
 		// EITHER signal: a non-empty SpawnedChildIDs (Spawn/the task
@@ -2108,7 +2140,11 @@ func (m *SessionManager) ReportTurnStart(sess *Session) {
 // start ANOTHER turn on itself (a notification arrived too late for this
 // turn's own checkout — see finalizeTurn's doc comment).
 func (m *SessionManager) ReportTurnEnd(id string, msg *message.Message, err error) (resume func()) {
-	return m.finalizeTurn(id, msg, err)
+	// external=true: this turn was driven by the caller's own scheduler,
+	// which still holds its run slot and drains any queued prompt itself
+	// — see finalizeTurnFrom's own doc comment for the two concrete
+	// defects an in-package re-drive caused on this path.
+	return m.finalizeTurnFrom(id, msg, err, true)
 }
 
 // adoptLocked registers s as a new node. Callers hold m.mu.
@@ -2656,13 +2692,91 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	m.unlockAndFlushPersist()
 
 	go func() {
-		msg, perr := child.Prompt(n.ctx, opts.Prompt)
+		msg, perr := drainQueueAndPrompt(n.ctx, child, opts.Prompt)
 		if resume := m.finalizeTurn(child.ID, msg, perr); resume != nil {
 			go resume()
 		}
 	}()
 
 	return child.ID, nil
+}
+
+// drainQueueAndPrompt runs one Prompt call on s with text, then — for as
+// long as s's durable prompt queue is non-empty once that call returns —
+// dequeues the next entry (FIFO, one at a time, mirroring the server's
+// own post-turn tail dispatch for a root: dispatchQueueHead,
+// server/handlers.go) and runs ANOTHER Prompt call with it, repeating
+// until the queue is empty. Returns the LAST Prompt call's own (msg, err)
+// — the pair the caller's finalizeTurn call should be given, exactly as
+// if that had been the only call made.
+//
+// This is the CHILD-side counterpart to a root's post-turn tail dispatch
+// (maybeDispatchQueued, called from runPrompt's own tail once the run
+// slot frees): engine.go's Prompt loop only drains the queue AT A
+// MID-TURN TOOL-CALL BOUNDARY (DequeueAllPrompts, right after a tool
+// result is appended, before the next provider request in the SAME
+// turn) — a turn that ends with no further tool-call boundary (its
+// final provider response has a non-tool-use stop reason) never reaches
+// that drain at all, by that code path's own design (see
+// operatorMessagesBlock's doc comment, queue.go). A ROOT session
+// tolerates this because the SERVER'S OWN residency layer picks the
+// queue back up the instant Prompt returns, as a brand-new turn
+// (maybeDispatchQueued). A CHILD, driven directly by Spawn's launched
+// goroutine or by Send, has no such external tail — without this,
+// SendToDescendant's promise to the model ("queued for delivery at the
+// descendant's next turn boundary") would be broken exactly whenever a
+// message lands after the child's last mid-turn drain point: the child
+// settles done/failed with the message still sitting, undelivered, in
+// its own promptQueue, and nothing would ever look at it again — a live
+// review finding on this fix's first pass (the original version relied
+// on the mid-turn drain alone).
+//
+// Runs regardless of the prior call's own outcome — including a failed
+// one — mirroring maybeDispatchQueued's own unconditional tail-dispatch
+// (it fires whether the just-finished turn errored or not): a queued
+// follow-up deserves its own attempt rather than being silently
+// abandoned because an unrelated earlier turn on the same child failed.
+//
+// Stops draining, WITHOUT dequeuing anything further, the instant ctx is
+// already canceled — checked before the FIRST Prompt call and again at
+// the top of every loop iteration, before the next dequeue. Without this, a child canceled (task cancel) WHILE
+// this loop is between Prompt calls would keep calling s.DequeuePrompt
+// (journaling each item as "delivered") and s.Prompt(ctx, ...) — on an
+// already-dead ctx — for every remaining queued entry: a live review
+// finding. Any prompt still in the queue at that point is left there,
+// UNTOUCHED — never explicitly drained or cleared by this loop — which
+// is the right answer, not merely the simplest one: it matches
+// cancellation's existing "stop, full stop" semantics elsewhere in this
+// package (finalizeTurn's own re-drive re-check is gated on the node NOT
+// being StatusCanceled, precisely so a canceled child's queue is never
+// looked at again by anyone — see its own doc comment, and
+// runTaskSend's queued-path note in task_tool.go, which already
+// documents this same outcome from the model-facing side). A canceled
+// child's leftover queue simply sits inert until the node itself is
+// eventually Reaped — "stays queued," not "discarded" by any explicit
+// step.
+func drainQueueAndPrompt(ctx context.Context, s *Session, text string) (*message.Message, error) {
+	// The FIRST call is guarded too, not just the loop — a review
+	// finding: on the finalizeTurn re-drive and settled-relaunch paths a
+	// cancel landing between the closure's creation and its `go resume()`
+	// left this call issuing one wasted Prompt (appending one user
+	// message) on an already-dead ctx. Returning ctx.Err() matches what
+	// Prompt itself returns for that ctx, so finalizeTurn classifies the
+	// turn exactly as before.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	msg, err := s.Prompt(ctx, text)
+	for {
+		if ctx.Err() != nil {
+			return msg, err
+		}
+		next, _, ok := s.DequeuePrompt("delivered")
+		if !ok {
+			return msg, err
+		}
+		msg, err = s.Prompt(ctx, next.Text)
+	}
 }
 
 // Send delivers text to session id as its next turn and blocks until that
@@ -2725,25 +2839,83 @@ func (m *SessionManager) CanSend(id string) error {
 
 func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Message, error) {
 	m.mu.Lock()
+	s, nodeCtx, isChild, err := m.reserveSendLocked(id)
+	// unlockAndFlushPersist, matching SendToDescendant's settled branch,
+	// which reserves through this same reserveSendLocked call — a review
+	// finding on the one plain unlock left after that branch was
+	// hardened. reserveSendLocked defers nothing today, so this is
+	// uniformity rather than a live fix: the helper is the standard
+	// unlock for every SessionManager method (an empty-slice no-op when
+	// nothing is queued), so a future deferred write on this path cannot
+	// be dropped silently.
+	m.unlockAndFlushPersist()
+	if err != nil {
+		return nil, err
+	}
+
+	runCtx, stop := mergeCancel(ctx, nodeCtx)
+	defer stop()
+	var msg *message.Message
+	if isChild {
+		msg, err = drainQueueAndPrompt(runCtx, s, text)
+	} else {
+		msg, err = s.Prompt(runCtx, text)
+	}
+	if resume := m.finalizeTurn(id, msg, err); resume != nil {
+		go resume()
+	}
+	return msg, err
+}
+
+// reserveSendLocked performs Send's own admission checks and slot
+// reservation for id, assuming m.mu is ALREADY held by the caller — it
+// neither locks nor unlocks m.mu itself. Factored out of Send's own top
+// so SendToDescendant's settled-target path (which has already
+// re-validated id's existence/ancestry/status under this SAME m.mu hold,
+// moments earlier) can reserve the turn in that SAME critical section
+// instead of releasing m.mu and having a freshly launched goroutine call
+// Send, which re-acquires m.mu from scratch — a live review finding: a
+// caller's own periodic Reap() sweep could collect an already-terminal
+// leaf in the gap between SendToDescendant's own admission decision and
+// that goroutine's Send call actually re-acquiring m.mu, silently
+// discarding the resulting ErrUnknownSession and leaving the "dispatched
+// as a fresh turn" promise unfulfilled with no trace at all. Reserving
+// here, inside the SAME unbroken critical section, closes the window
+// entirely rather than narrowing it: once this returns nil, n.status is
+// ALREADY StatusRunning, and Reap's own eligibility switch never
+// collects a running node — there is nothing left for a concurrent Reap
+// to race against.
+//
+// Returns Send's own four admission errors on refusal (err is the only
+// meaningful return then): ErrUnknownSession, ErrSessionCanceled,
+// ErrSessionBusy, ErrConcurrencyLimit. On success, reserves the
+// concurrency slot and flips n.status to StatusRunning exactly as Send's
+// own top always did, and returns the session/context/isChild triple the
+// caller needs to actually drive the turn OUTSIDE m.mu — exactly what
+// Send itself does immediately after unlocking.
+func (m *SessionManager) reserveSendLocked(id string) (s *Session, nodeCtx context.Context, isChild bool, err error) {
 	n, ok := m.nodes[id]
 	if !ok {
-		m.mu.Unlock()
-		return nil, fmt.Errorf("%w: %s", ErrUnknownSession, id)
+		return nil, nil, false, fmt.Errorf("%w: %s", ErrUnknownSession, id)
 	}
 	if n.status == StatusCanceled {
-		m.mu.Unlock()
-		return nil, ErrSessionCanceled
+		return nil, nil, false, ErrSessionCanceled
 	}
 	if n.status == StatusRunning {
 		// Refuse rather than proceed: Session.Prompt must never be called
-		// concurrently with itself, and this is the one SessionManager
+		// concurrently with itself, and Send is the one SessionManager
 		// entry point a caller might plausibly invoke twice at once for
 		// the same id (see ErrSessionBusy's doc comment) — a bug a live
 		// -race run against an earlier version of this method caught,
-		// where this check was missing and a second concurrent Send
-		// fell through to a second concurrent Prompt call.
-		m.mu.Unlock()
-		return nil, ErrSessionBusy
+		// where this check was missing and a second concurrent Send fell
+		// through to a second concurrent Prompt call. Unreachable from
+		// SendToDescendant's own settled-target call site specifically
+		// (it only ever calls this after already confirming, under this
+		// SAME unbroken m.mu hold, that status is NOT Running) — kept
+		// anyway, for Send's own direct callers, in the same
+		// defensive-dead-code spirit classifyTaskVerbError's identical
+		// ErrSessionBusy case documents (task_tool.go).
+		return nil, nil, false, ErrSessionBusy
 	}
 	if n.depth > 0 && m.runningByRoot[n.rootID] >= m.maxConcurrent {
 		// A done/failed CHILD is eligible for Send (a legitimate follow-up
@@ -2753,8 +2925,7 @@ func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Me
 		// already-settled children could push runningByRoot above
 		// maxConcurrent, the same overrun Spawn's own check exists to
 		// prevent.
-		m.mu.Unlock()
-		return nil, ErrConcurrencyLimit
+		return nil, nil, false, ErrConcurrencyLimit
 	}
 	n.status = StatusRunning
 	// See ReportTurnStart's identical reset for why: n may be a
@@ -2766,17 +2937,416 @@ func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Me
 	if n.depth > 0 {
 		m.runningByRoot[n.rootID]++
 	}
-	s := n.session
-	nodeCtx := n.ctx
-	m.mu.Unlock()
+	// isChild gates drainQueueAndPrompt to CHILDREN only — see its own
+	// doc comment for why a child needs it (no external tail dispatch).
+	// A ROOT keeps its original single-Prompt-call behavior unchanged: in
+	// bare-CLI/engine usage with no server layered over it (the only case
+	// Send ever drives a root's turn directly — see this method's own doc
+	// comment), a root's residency/queue semantics are this package's
+	// existing, separately-tested contract — not a behavior change for
+	// roots nothing asked for.
+	return n.session, n.ctx, n.depth > 0, nil
+}
 
-	runCtx, stop := mergeCancel(ctx, nodeCtx)
-	defer stop()
-	msg, err := s.Prompt(runCtx, text)
-	if resume := m.finalizeTurn(id, msg, err); resume != nil {
-		go resume()
+// isDescendantLocked reports whether targetID is a STRICT descendant of
+// ancestorID: ancestorID appears somewhere in targetID's own parent
+// chain, walking m.nodes' live parentID pointers up from targetID.
+// Backs the `task` tool's three ancestor-gated verbs (cancel/status/
+// send — see the design doc's "only ancestors may cancel their
+// descendants," which this generalizes to all three): a spawning session
+// may act on anything it spawned, directly or transitively, and nothing
+// else.
+//
+// ancestorID == targetID is deliberately false — acting on yourself is
+// not this mechanism's job (self-cancel has no established meaning here;
+// self-status already has session_info; self-send is just an ordinary
+// prompt) — and a target whose chain does not reach ancestorID, or
+// breaks on a node this process no longer tracks (Reaped, or never
+// adopted), is false rather than guessed true: an unrelated or
+// unreachable lineage is not proof of descent. Caller holds m.mu.
+func (m *SessionManager) isDescendantLocked(ancestorID, targetID string) bool {
+	if ancestorID == "" || targetID == "" || ancestorID == targetID {
+		return false
 	}
-	return msg, err
+	n, ok := m.nodes[targetID]
+	if !ok {
+		return false
+	}
+	for n.parentID != "" {
+		if n.parentID == ancestorID {
+			return true
+		}
+		p, ok := m.nodes[n.parentID]
+		if !ok {
+			return false
+		}
+		n = p
+	}
+	return false
+}
+
+// CancelDescendant cancels targetID's entire subtree on callerID's
+// behalf, after confirming callerID is a live ancestor of targetID (see
+// isDescendantLocked) — the SessionManager side of the `task` tool's
+// cancel verb.
+//
+// Routes to Cancel/cancelSubtreeLocked (cascade cancellation), not
+// AbortTurn: "stop this delegation" means the whole subtree targetID may
+// itself have fanned out, not merely targetID's own current turn —
+// AbortTurn's own doc comment is explicit that it deliberately leaves a
+// target's children running, which is the opposite of what a caller
+// asking to cancel a child it spawned wants. See Cancel's doc comment
+// for the one case it does NOT reach on its own — a ROOT's turn driven
+// by an ExternalRunner needs the external scheduler's own abort too
+// (server.Server's handleCancelTree calls both) — which cannot arise
+// here: isDescendantLocked can never return true for a root target
+// (parentID == "" has no ancestor by construction), so targetID is
+// always a genuine child, always driven directly by this package, and
+// Cancel alone is always sufficient.
+//
+// Returns targetID's resulting status (StatusCanceled for the ordinary
+// case; whatever terminal status it already carried if canceling an
+// already-done/failed descendant was a no-op — see cancelOneNodeLocked's
+// own doc comment) read back BEFORE releasing m.mu, in the SAME locked
+// operation that performed the cancellation — not via a separate later
+// Info(targetID) call. A live review finding on this fix's first pass:
+// a done/failed/canceled LEAF is Reap-eligible the instant it is
+// finalized (Reap's own doc comment), so a caller's periodic Reap sweep
+// could collect targetID in the gap between this method returning and a
+// separate follow-up read, turning "no such session" into an incorrect
+// answer for a cancel call that had just, in fact, succeeded. Reading
+// the outcome inside the same critical section that produced it closes
+// that gap by construction rather than papering over it with a guess.
+//
+// Returns ErrUnknownSession if either id is not tracked, ErrNotDescendant
+// if targetID is not callerID's descendant.
+func (m *SessionManager) CancelDescendant(callerID, targetID string) (SessionStatus, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.nodes[callerID]; !ok {
+		return "", fmt.Errorf("%w: %s", ErrUnknownSession, callerID)
+	}
+	n, ok := m.nodes[targetID]
+	if !ok {
+		return "", fmt.Errorf("%w: %s", ErrUnknownSession, targetID)
+	}
+	if !m.isDescendantLocked(callerID, targetID) {
+		return "", fmt.Errorf("%w: %s", ErrNotDescendant, targetID)
+	}
+	m.cancelSubtreeLocked(n)
+	return n.status, nil
+}
+
+// DescendantInfo returns targetID's lifecycle snapshot (status, lineage,
+// result/fail reason) and cumulative token usage, after confirming
+// callerID is a live ancestor of targetID — the SessionManager side of
+// the `task` tool's status verb, and the engine-level counterpart to the
+// wire's session.info payload (design doc: "status, lineage ..., usage").
+//
+// Usage is read from the live *Session (n.session.Usage(), which takes
+// s.mu internally) while m.mu is still held — nesting m.mu outer, a
+// session's own mu inner, the same order Spawn's parentSess.mu access
+// already establishes for this package — so it reflects targetID's
+// current total, not a stale or partial snapshot.
+//
+// Returns ErrUnknownSession if either id is not tracked, ErrNotDescendant
+// if targetID is not callerID's descendant.
+func (m *SessionManager) DescendantInfo(callerID, targetID string) (SessionNode, provider.Usage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.nodes[callerID]; !ok {
+		return SessionNode{}, provider.Usage{}, fmt.Errorf("%w: %s", ErrUnknownSession, callerID)
+	}
+	n, ok := m.nodes[targetID]
+	if !ok {
+		return SessionNode{}, provider.Usage{}, fmt.Errorf("%w: %s", ErrUnknownSession, targetID)
+	}
+	if !m.isDescendantLocked(callerID, targetID) {
+		return SessionNode{}, provider.Usage{}, fmt.Errorf("%w: %s", ErrNotDescendant, targetID)
+	}
+	snap := n.snapshot()
+	// Children is the DURABLE-plus-live union, not the live list alone —
+	// a review finding: Reap removes a terminal leaf from its parent's
+	// live children, so once a descendant's own children finish and are
+	// swept, n.children is empty while the session's durable spawn record
+	// still names them. The wire's GET /session/{id}/lineage already
+	// merges the same two sources (childIDsUnion, server/handlers.go),
+	// and the design doc promises `task status` reports the lineage the
+	// wire reports — reporting only the live half told a model inspecting
+	// its own delegation tree that grandchildren it really did spawn
+	// never existed.
+	//
+	// Durable first, in spawn order, then any live id the durable list
+	// does not have: the same order the wire builds, so the two answers
+	// are byte-comparable. n.depth needs no equivalent merge — the wire
+	// prefers the durable TaskDepth and adoptReloadedLocked already
+	// restores n.depth from that same value.
+	// snap.Children, not n.children: snapshot already made a private copy,
+	// and mergeChildIDs takes ownership of its live argument, so the
+	// common case (no durable ids to merge) reuses that one copy instead
+	// of allocating a second — a review finding on the first version of
+	// this call, which discarded snapshot's copy and built another.
+	snap.Children = mergeChildIDs(n.session.SpawnedChildIDs(), snap.Children)
+	return snap, n.session.Usage(), nil
+}
+
+// mergeChildIDs returns durable's ids first, in order, then every id in
+// live that durable does not already name — the engine-side twin of the
+// wire's childIDsUnion (server/handlers.go). Never nil for a childless
+// session: an empty, non-nil slice, matching snapshot's own shape.
+//
+// Takes ownership of live: it is returned as-is when there is nothing to
+// merge, so the caller must pass a slice it owns (snapshot's own fresh
+// copy), never a live node field.
+func mergeChildIDs(durable, live []string) []string {
+	if len(durable) == 0 {
+		// Live cannot contain duplicates: adoptLocked appends a child id
+		// at most once.
+		return live
+	}
+	out := make([]string, 0, len(durable)+len(live))
+	seen := make(map[string]bool, len(durable)+len(live))
+	for _, ids := range [2][]string{durable, live} {
+		for _, id := range ids {
+			if !seen[id] {
+				seen[id] = true
+				out = append(out, id)
+			}
+		}
+	}
+	return out
+}
+
+// SendToDescendant delivers text to targetID, a live descendant of
+// callerID, after the same ancestry check as CancelDescendant/
+// DescendantInfo — the SessionManager side of the `task` tool's send
+// verb. Reuses the wire's session.send machinery and settled-target
+// semantics (server/session_tree.go's handleSessionSend, child branch —
+// specifically its underlying Send/EnqueuePrompt primitives) rather than
+// duplicating a third implementation, but DIVERGES from it, deliberately,
+// for a RUNNING target: handleSessionSend's own child branch calls
+// CanSend, which refuses a running child outright (ErrSessionBusy, wire
+// 409) — its own comment there is explicit that "a child has no prompt
+// queue... nowhere to defer to," true of THAT surface. This method gives
+// it one instead, per the design doc's own explicit choice for the
+// `task` tool's send verb ("reuse the existing prompt-queue machinery
+// rather than rejecting busy children, mirroring how roots queue
+// prompts") — a live review finding on an earlier revision of this
+// comment, which claimed this "mirrors" the wire unconditionally,
+// overlooking that the two surfaces now behave OPPOSITELY for exactly
+// this case:
+//
+//   - A RUNNING target gets text appended to its own durable prompt
+//     queue (in memory synchronously, the durable record deferred — see
+//     enqueueMemoryOnlyLocked's own doc comment) instead of being
+//     refused. Delivery itself takes one of two paths: the
+//     target's own mid-turn tool-call-boundary drain (engine.go's Prompt
+//     loop, the "OPERATOR MESSAGES" injection) if one arrives before the
+//     current turn ends, or — if it does not, since a child (unlike a
+//     root) has no external residency layer to pick the queue back up
+//     once Prompt returns — drainQueueAndPrompt (below), called from
+//     both of the places that drive a child's own turn (Spawn's launched
+//     goroutine, and Send itself for a child target). A live review
+//     finding on this fix's first pass: relying on the mid-turn drain
+//     ALONE stranded a message enqueued after a target's last tool-call
+//     boundary — its turn would simply end, taking the child straight to
+//     done/failed with the message still sitting, undelivered, in its
+//     own promptQueue forever. drainQueueAndPrompt closes that gap.
+//     queued is true on this path.
+//   - A settled (idle/done/failed) target is restarted with text as its
+//     next turn — existing Send semantics, unchanged — but launched in a
+//     goroutine rather than called synchronously: Send blocks until the
+//     WHOLE re-run turn completes (see its own doc comment), and
+//     SessionManager's one deliberately non-blocking entry point is
+//     Spawn (the "non-blocking execution" locked decision) — calling
+//     Send inline here would make this verb the one exception, blocking
+//     the caller's own tool call for as long as the re-run takes. The
+//     re-run's outcome is not this call's to report: it arrives later
+//     via the ordinary completion-notification path, exactly like a
+//     Spawn'd child's result. queued is false on this path.
+//   - A canceled target, or one that would push the tree over its
+//     concurrency cap, is refused synchronously and deterministically —
+//     mirroring CanSend's own pre-Send admission checks (used by
+//     handleSessionSend for the identical reason: a caller-visible error
+//     up front, not a silently dropped launch). Unlike an earlier
+//     revision of this method, there is no residual admission race left
+//     to accept here: the settled-target path reserves the turn
+//     (reserveSendLocked) inside the SAME m.mu critical section that
+//     just re-validated targetID, rather than releasing m.mu and having
+//     a freshly launched goroutine call Send, which would re-acquire
+//     m.mu from scratch — closing a live review finding (a caller's own
+//     periodic Reap() sweep could collect an already-terminal leaf in
+//     that gap, silently discarding the resulting ErrUnknownSession and
+//     leaving the "dispatched as a fresh turn" promise unfulfilled) by
+//     eliminating the window entirely rather than merely narrowing or
+//     documenting it.
+//
+// Returns ErrUnknownSession if either id is not tracked, ErrNotDescendant
+// if targetID is not callerID's descendant, ErrSessionCanceled if
+// targetID is canceled, or ErrConcurrencyLimit if the tree is already at
+// its running-children cap (settled-target restart path only — a
+// running target's enqueue never touches this budget).
+func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queued bool, err error) {
+	// Validate and trim ONCE, before either delivery path — a review
+	// finding: the running-target branch rejected blank text while the
+	// settled-target branch passed it straight to Prompt and burned a
+	// whole re-run turn on a space. runTaskSend masks that for the `task`
+	// tool, but this is an exported API and the asymmetry is exactly the
+	// class this method exists to remove. The trimmed text is what both
+	// paths use, matching EnqueuePrompt's own trim-then-store rule
+	// (queue.go).
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false, ErrEmptyPromptText
+	}
+	m.mu.Lock()
+	if _, ok := m.nodes[callerID]; !ok {
+		m.mu.Unlock()
+		return false, fmt.Errorf("%w: %s", ErrUnknownSession, callerID)
+	}
+	n, ok := m.nodes[targetID]
+	if !ok {
+		m.mu.Unlock()
+		return false, fmt.Errorf("%w: %s", ErrUnknownSession, targetID)
+	}
+	if !m.isDescendantLocked(callerID, targetID) {
+		m.mu.Unlock()
+		return false, fmt.Errorf("%w: %s", ErrNotDescendant, targetID)
+	}
+	if n.status == StatusRunning {
+		// Mutate the queue and emit its event while STILL HOLDING m.mu —
+		// nested m.mu (outer) -> s.mu (inner, taken inside
+		// enqueueMemoryOnlyLocked itself), the same lock order Spawn's
+		// own parentSess.mu access already establishes elsewhere in this
+		// file — not released first. A live review finding: an earlier
+		// version of this branch released m.mu before enqueueing,
+		// leaving a window where a concurrent finalizeTurn call (also
+		// serialized on m.mu) could observe n.status still Running (the
+		// read just above already happened), transition n to
+		// done/failed, and have THIS enqueue land afterward in an
+		// already-settled child's queue that nothing would ever drain
+		// again. Keeping both steps inside ONE m.mu critical section
+		// makes them atomic relative to finalizeTurn's own
+		// terminal-status transition (which also runs under m.mu
+		// throughout — see its own doc comment): either this whole block
+		// completes strictly before finalizeTurn's, in which case
+		// finalizeTurn's own queue re-check (added alongside this fix)
+		// sees the enqueued text and re-drives instead of finalizing; or
+		// finalizeTurn's transition completes strictly first, in which
+		// case the n.status read above would instead observe the new
+		// terminal status and this method would take the settled/
+		// relaunch branch below, never reaching here at all. Neither
+		// ordering can strand the message — see finalizeTurn's matching
+		// doc comment for the other half of this fix.
+		//
+		// The durable persist (persistPromptQueueLocked's own
+		// ensureLog+writeRecord) is deliberately NOT run inline here —
+		// a SEPARATE live review finding: doing so would hold m.mu, the
+		// tree-wide lock every OTHER session's Info/Reap/Spawn/finalize
+		// call also needs, across a synchronous disk write for the
+		// WHOLE duration of this ONE session's fsync. Deferred via
+		// SessionManager.deferPersist/unlockAndFlushPersist instead —
+		// the exact mechanism this package's task-notification delivery
+		// path already uses for its own durable writes
+		// (commitOutcomeLocked, finalizeTurn's own notify-delivery
+		// block) — so the write happens after m.mu releases, in this
+		// same goroutine, in order.
+		//
+		// The record is PARKED on the session
+		// (queueRecordDeferredLocked), under the same s.mu hold as the
+		// memory append, and only then flushed by the deferPersist
+		// thunk — never written from the thunk's own closure. See that
+		// method's own doc comment (queue.go): a closure-held record
+		// could reach disk AFTER the child's own goroutine (which needs
+		// only s.mu) drained this very item and wrote its
+		// prompt.dequeued record synchronously, and LoadSession's fold
+		// then resurrected the delivered prompt.
+		s := n.session
+		s.mu.Lock()
+		p := s.enqueueMemoryOnlyLocked(text)
+		s.queueRecordDeferredLocked(recPromptQueued, promptRecord{ID: p.ID, Text: p.Text},
+			Event{Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue)})
+		s.mu.Unlock()
+		m.deferQueueRecordFlush(s)
+		m.unlockAndFlushPersist()
+		return true, nil
+	}
+	// Settled (idle/done/failed): reserve the turn HERE, inside this SAME
+	// m.mu critical section that just re-validated targetID's existence/
+	// ancestry/status — not via a separate later Send call re-acquiring
+	// m.mu from scratch (see reserveSendLocked's own doc comment for the
+	// Reap race this closes). n.status is already flipped to
+	// StatusRunning, atomically, before this method ever returns — the
+	// turn is genuinely committed, not merely intended.
+	s, nodeCtx, _, rerr := m.reserveSendLocked(targetID)
+	// unlockAndFlushPersist, not a plain m.mu.Unlock(), even though
+	// reserveSendLocked defers nothing today — that method's own doc
+	// comment makes it the standard unlock for every SessionManager
+	// method (cheap, an empty-slice no-op when nothing is queued), so a
+	// future deferred write on this path cannot be dropped silently. A
+	// review finding on the lone plain unlock this method had left.
+	m.unlockAndFlushPersist()
+	if rerr != nil {
+		// ErrSessionCanceled/ErrConcurrencyLimit: reachable — mirror the
+		// checks this method used to run separately, now folded into
+		// reserveSendLocked. ErrSessionBusy/ErrUnknownSession are NOT
+		// reachable from here: status was already confirmed not Running
+		// above and targetID confirmed tracked moments ago, both under
+		// this one unbroken m.mu hold — kept anyway, in
+		// reserveSendLocked's own defensive spirit (see its doc
+		// comment), rather than asserted away.
+		return false, rerr
+	}
+	go func() {
+		// drainQueueAndPrompt unconditionally, not gated on the isChild
+		// reserveSendLocked also returns: targetID is ALWAYS a genuine
+		// descendant here (isDescendantLocked guaranteed it above), so
+		// isChild is always true — this call can never actually reach a
+		// root.
+		msg, perr := drainQueueAndPrompt(nodeCtx, s, text)
+		if resume := m.finalizeTurn(targetID, msg, perr); resume != nil {
+			go resume()
+		}
+	}()
+	return false, nil
+}
+
+// accumulateUsageLocked folds n's newly-spent usage (this turn's DELTA,
+// not its full cumulative total — see budgetedUsage's own doc comment
+// for why a delta is required: n may be a done/failed child Send just
+// restarted for a follow-up turn, and this is not the first time this
+// has run for it) into its ROOT's running tree-wide total — see
+// usageByRoot's own doc comment ("per-tree budgets," a follow-up
+// finding). Called unconditionally, near the very top of finalizeTurn,
+// BEFORE that method's own re-drive-or-settle decision: it must run
+// exactly once per turn that actually happened, regardless of whether
+// finalizeTurn goes on to settle n terminal, re-drive it (the queued-
+// message race fix — see finalizeTurn's own doc comment), or leave a
+// root idle — a live review finding on this fix's first pass, which ran
+// this accumulation much later, AFTER the re-drive branch's own early
+// return, silently skipping it for however long the re-driven turn
+// takes and letting a concurrent Spawn under-count the tree budget in
+// that window (self-correcting once the re-driven turn's own eventual
+// call reaches this same accumulation with the combined total, but a
+// real, if narrow, gap until then). Never re-derived by re-summing every
+// node — incremental, mirroring runningByRoot's own accumulator shape
+// exactly. Caller holds m.mu.
+func (m *SessionManager) accumulateUsageLocked(n *sessionNode) {
+	total := n.session.Usage()
+	delta := provider.Usage{
+		InputTokens:      total.InputTokens - n.budgetedUsage.InputTokens,
+		OutputTokens:     total.OutputTokens - n.budgetedUsage.OutputTokens,
+		CacheReadTokens:  total.CacheReadTokens - n.budgetedUsage.CacheReadTokens,
+		CacheWriteTokens: total.CacheWriteTokens - n.budgetedUsage.CacheWriteTokens,
+	}
+	n.budgetedUsage = total
+	m.budgetedByChild[n.id] = total
+	u := m.usageByRoot[n.rootID]
+	u.InputTokens += delta.InputTokens
+	u.OutputTokens += delta.OutputTokens
+	u.CacheReadTokens += delta.CacheReadTokens
+	u.CacheWriteTokens += delta.CacheWriteTokens
+	m.usageByRoot[n.rootID] = u
 }
 
 // finalizeTurn records the outcome of one turn just run via Prompt (Spawn's
@@ -2792,12 +3362,147 @@ func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Me
 // SOLE decrementer and a cancel racing a natural completion can never
 // double-decrement (see cancelSubtreeLocked's doc comment).
 func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr error) (resume func()) {
+	return m.finalizeTurnFrom(id, msg, perr, false)
+}
+
+// finalizeTurnFrom is finalizeTurn with the one fact finalizeTurn's own
+// signature cannot carry: WHO drove the turn. external is true only for
+// ReportTurnEnd — a turn an outside scheduler ran (the server's runPrompt/
+// runGoal on a resident session) — and false for every in-package driver
+// (Spawn's launched goroutine, Send, triggerResumeLocked, this method's own
+// recursive re-drive).
+//
+// It exists because the queued-message re-drive below is only correct for
+// an in-package turn, a review finding. The re-drive assumes the resume it
+// returns is the SOLE continuation of the session and that no run slot is
+// held by anyone else. For an externally scheduled turn both assumptions
+// are false: the server holds its own run slot across the ReportTurnEnd
+// call and its tail (maybeDispatchQueued, server/handlers.go) drains the
+// queue itself as an ordinary prompt turn. A depth>0 node reaches that
+// path for real — claimForPrompt LoadSessions any id with no depth guard,
+// so a former child driven through POST /session/{id}/prompt_async or
+// /goal is resident and externally scheduled — and the re-drive then did
+// one of two wrong things: with one item queued it popped it and returned
+// a resume that runs Prompt with no slot held (a concurrent HTTP prompt
+// can claim the freed slot and call Prompt on the same session), and with
+// two it popped the first, journaled it delivered, and left the server's
+// own tail to dispatch the second, so the first never ran.
+func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr error, external bool) (resume func()) {
 	m.mu.Lock()
 	n, ok := m.nodes[id]
 	if !ok {
 		m.mu.Unlock()
 		return nil
 	}
+
+	// Accumulate n's newly-spent usage BEFORE the re-drive check below —
+	// a live review finding: an earlier version of this call ran only
+	// once, much later (right before the settled-marker persist), which
+	// the re-drive branch's early return skipped entirely. That left
+	// usageByRoot under-counting the just-finished turn's tokens for the
+	// WHOLE duration of the re-driven turn (self-correcting once ITS OWN
+	// eventual finalizeTurn call finally reaches this same accumulation
+	// with the combined total, but a concurrent Spawn checking the tree
+	// budget in that window could be wrongly admitted). See
+	// accumulateUsageLocked's own doc comment for why this is safe to
+	// run unconditionally, every call, regardless of which path below
+	// this ends up taking.
+	m.accumulateUsageLocked(n)
+
+	// A CHILD (depth>0), not already canceled, may have had a message
+	// enqueued to it by a concurrent SendToDescendant call that read
+	// n.status == StatusRunning and enqueued — both under this SAME
+	// m.mu, nested, never released in between (see SendToDescendant's
+	// own doc comment) — in the instant strictly before this call
+	// acquired m.mu. drainQueueAndPrompt's own loop, which drove
+	// whichever turn just produced msg/perr, already made its own last
+	// (empty) queue check and returned BEFORE this call ever started —
+	// it cannot see anything enqueued after that point. Re-check here,
+	// atomically with the terminal-status decision the rest of this
+	// method is about to make, and dequeue-and-re-drive instead of
+	// settling if anything is waiting: a live review finding, and the
+	// other half of the fix described in SendToDescendant's own doc
+	// comment (nesting the enqueue under m.mu is necessary but not
+	// sufficient without this matching re-check on the finalize side).
+	//
+	// Runs BEFORE any of this method's own bookkeeping below
+	// (decrementRunningLocked, notify construction, commitOutcomeLocked,
+	// the settled marker) and returns immediately when it fires: from
+	// THIS call's point of view the turn simply is not over yet, so
+	// nothing below should run for it at all. The re-driven turn's own
+	// EVENTUAL finalizeTurn call is what actually settles n — exactly as
+	// if drainQueueAndPrompt's own loop had picked the message up
+	// directly, which, absent the race this closes, it always does.
+	// n.status is deliberately left untouched (still StatusRunning): the
+	// child genuinely is still running, one more turn.
+	//
+	// Dequeues via dequeueMemoryOnlyLocked, not DequeuePrompt, for the
+	// same reason SendToDescendant's enqueue does — see its own doc
+	// comment: DequeuePrompt's own persistPromptQueueLocked call is a
+	// synchronous disk write, and this whole branch runs under m.mu, the
+	// tree-wide lock every OTHER session's Info/Reap/Spawn/finalize call
+	// also needs. The durable record is deferred via deferPersist,
+	// flushed by unlockAndFlushPersist below, same as SendToDescendant's
+	// own enqueue and this package's existing task-notification writes.
+	//
+	// Gated on n.ctx as well as n.status — a review finding.
+	// StatusCanceled is set ONLY by cancelOneNodeLocked/
+	// cancelSubtreeLocked (task cancel, AbortTurn), so a cascade cancel
+	// of the manager's own base ctx — process shutdown — cancels n.ctx
+	// and leaves n.status at StatusRunning. The status test alone then
+	// popped a queued prompt and journaled it prompt.dequeued
+	// ("delivered") while drainQueueAndPrompt's own ctx guard made sure
+	// nothing ran, and the resume's own finalizeTurn call re-entered
+	// this gate and popped the next one, draining the whole queue as
+	// delivered; a later reload folds those records out and the prompts
+	// are gone. Testing n.ctx here gives a ctx-only cancel the same
+	// "the queue stays queued, untouched" outcome a status cancel has
+	// (see drainQueueAndPrompt's own doc comment for that contract).
+	//
+	// One bounded exception to that contract lives PAST this gate, named
+	// here at a review's request rather than left absolute: this branch
+	// pops next and journals it dequeued("delivered") before the resume
+	// goroutine runs, so a cancel landing in THAT window leaves exactly
+	// one item recorded delivered that never ran. Journaling the dequeue
+	// before the text enters a turn is what makes double delivery
+	// impossible, and holding the record back until the resume has
+	// started would trade this bounded inconsistency for a crash window
+	// that delivers the same prompt twice — the same lose-once-on-crash
+	// exposure every in-flight prompt already carries (see
+	// maybeDispatchQueued's "No-double-delivery equivalence", invariant
+	// 7, server/handlers.go). Every item still IN the queue is untouched,
+	// exactly as documented.
+	if !external && n.parentID != "" && n.status != StatusCanceled && n.ctx.Err() == nil {
+		s := n.session
+		s.mu.Lock()
+		next, ok := s.dequeueMemoryOnlyLocked()
+		if ok {
+			// Parked on the session, under the same s.mu hold as the
+			// memory pop — see queueRecordDeferredLocked's own doc
+			// comment (queue.go) for why a closure-held record breaks
+			// the log's record order and what that costs on replay.
+			s.queueRecordDeferredLocked(recPromptDequeued, promptRecord{ID: next.ID, Text: next.Text, Reason: "delivered"},
+				Event{Type: EventPromptDequeued, QueueID: next.ID, QueueText: next.Text, QueueReason: "delivered", QueueLen: len(s.promptQueue)})
+		}
+		s.mu.Unlock()
+		if ok {
+			m.deferQueueRecordFlush(s)
+			nodeCtx := n.ctx
+			m.unlockAndFlushPersist()
+			return func() {
+				nmsg, nperr := drainQueueAndPrompt(nodeCtx, s, next.Text)
+				// go, not inline — matching every other recursive resume
+				// invocation in this file (triggerResumeLocked's own
+				// closures): keeps a pathological repeatedly-re-enqueued
+				// chain from growing one goroutine's call stack instead
+				// of just its goroutine count.
+				if resume2 := m.finalizeTurn(id, nmsg, nperr); resume2 != nil {
+					go resume2()
+				}
+			}
+		}
+	}
+
 	alreadyCanceled := n.status == StatusCanceled
 	m.decrementRunningLocked(n)
 	// See sessionNode.finalized's doc comment: this call is always the
@@ -2905,38 +3610,6 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 	// under this single m.mu hold, so an observer woken here re-reads a
 	// fully settled node. See markChangedLocked's own doc comment.
 	m.markChangedLocked()
-
-	// Accumulate n's newly-spent usage (this turn's delta, NOT its full
-	// cumulative total — see budgetedUsage's own doc comment for why a
-	// delta is required: n may be a done/failed child Send just
-	// restarted for a follow-up turn, and this is not the first time
-	// finalizeTurn has run for it) into its ROOT's running tree-wide
-	// total — see usageByRoot's own doc comment ("per-tree budgets," a
-	// follow-up finding). Runs regardless of which of the three branches
-	// above fired (including alreadyCanceled: a canceled turn may still
-	// have spent real tokens before cancellation, and those must still
-	// count toward the budget) or whether notify is even non-nil (a
-	// ROOT's own turns spend tokens too, and must count toward ITS
-	// OWN — degenerate, self — tree budget for TestSpawn_BudgetExceeded-
-	// style single-node trees to behave sensibly, though roots have no
-	// Spawn caller to ever check the budget against in the first place
-	// today). Never re-derived by re-summing every node — incremental,
-	// mirroring runningByRoot's own accumulator shape exactly.
-	total := n.session.Usage()
-	delta := provider.Usage{
-		InputTokens:      total.InputTokens - n.budgetedUsage.InputTokens,
-		OutputTokens:     total.OutputTokens - n.budgetedUsage.OutputTokens,
-		CacheReadTokens:  total.CacheReadTokens - n.budgetedUsage.CacheReadTokens,
-		CacheWriteTokens: total.CacheWriteTokens - n.budgetedUsage.CacheWriteTokens,
-	}
-	n.budgetedUsage = total
-	m.budgetedByChild[n.id] = total
-	u := m.usageByRoot[n.rootID]
-	u.InputTokens += delta.InputTokens
-	u.OutputTokens += delta.OutputTokens
-	u.CacheReadTokens += delta.CacheReadTokens
-	u.CacheWriteTokens += delta.CacheWriteTokens
-	m.usageByRoot[n.rootID] = u
 
 	// n.parentID != "" here exactly when notify != nil was possible (the
 	// three non-root cases above) — a CHILD that just went terminal

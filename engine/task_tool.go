@@ -18,7 +18,40 @@ import (
 // see installTaskToolLocked and Spawn in session_manager.go.
 const taskToolName = "task"
 
-// taskToolResult is the `task` tool's immediate return: proof the child
+// The task tool's four actions. "" (the JSON zero value, so an omitted
+// action field) is treated as taskActionSpawn — the original, pre-verbs
+// shape of this tool's arguments (agent/prompt/model, no action at all)
+// keeps working unchanged, the backward-compatibility requirement behind
+// this whole extension. The other three — cancel/status/send — are the
+// model-facing sugar over SessionManager.CancelDescendant/DescendantInfo/
+// SendToDescendant (session_manager.go), inspired by fx's consolidated
+// subagent tool and following this codebase's own action-based-tool
+// precedent (goal_tool.go, mcp_tool.go) rather than four separate tools.
+const (
+	taskActionSpawn  = "spawn"
+	taskActionCancel = "cancel"
+	taskActionStatus = "status"
+	taskActionSend   = "send"
+)
+
+// taskActionNames lists every valid action, for the "unknown action"
+// error's own roster — mirrors sortedAgentNames' identical role for the
+// spawn action's "unknown agent" error, below.
+var taskActionNames = []string{taskActionSpawn, taskActionCancel, taskActionStatus, taskActionSend}
+
+// taskToolArgs is the task tool's full input shape across all four
+// actions. Only the fields a given action actually uses are validated as
+// required for it — see runTaskTool's dispatch and each action's own
+// runTask* function.
+type taskToolArgs struct {
+	Action    string `json:"action"`
+	Agent     string `json:"agent"`
+	Prompt    string `json:"prompt"`
+	Model     string `json:"model"`
+	SessionID string `json:"session_id"`
+}
+
+// taskToolResult is the spawn action's immediate return: proof the child
 // exists and its first turn has been launched — never the child's actual
 // result. That arrives later, delivered to the PARENT as an EngineContext
 // notification (taskdelivery.go) once the child reaches done or failed —
@@ -27,6 +60,50 @@ const taskToolName = "task"
 type taskToolResult struct {
 	SessionID string `json:"session_id"`
 	Agent     string `json:"agent"`
+	Note      string `json:"note"`
+}
+
+// taskCancelResult is the cancel action's return: targetID's status
+// immediately after SessionManager.CancelDescendant ran. Not always
+// "canceled" — cancelOneNodeLocked leaves an ALREADY-terminal node's
+// status untouched (see its own doc comment), so canceling an already
+// done/failed descendant reports that real terminal status honestly
+// rather than claiming a cancellation that did not actually change
+// anything.
+type taskCancelResult struct {
+	SessionID string `json:"session_id"`
+	Status    string `json:"status"`
+}
+
+// taskStatusResult is the status action's return: the engine-level
+// counterpart to the wire's session.info payload for one descendant —
+// status, lineage, and cumulative usage (design doc: "the child's live
+// status/lineage/usage").
+type taskStatusResult struct {
+	SessionID  string         `json:"session_id"`
+	ParentID   string         `json:"parent_id"`
+	Depth      int            `json:"depth"`
+	Status     string         `json:"status"`
+	Children   []string       `json:"children"`
+	AgentType  string         `json:"agent_type"`
+	Result     string         `json:"result,omitempty"`
+	FailReason string         `json:"fail_reason,omitempty"`
+	Usage      provider.Usage `json:"usage"`
+}
+
+// taskSendResult is the send action's return. Queued distinguishes the
+// two paths SendToDescendant can take: true means text was appended to a
+// still-running descendant's own prompt queue — delivered at its next
+// mid-turn tool-call boundary if one comes first, or as the start of a
+// fresh follow-up turn once its current one ends otherwise (see
+// drainQueueAndPrompt, session_manager.go); false means a settled
+// descendant was relaunched with text as a fresh turn directly (existing
+// Send semantics) — either way the actual outcome arrives later via the
+// ordinary completion-notification path, never synchronously from this
+// call.
+type taskSendResult struct {
+	SessionID string `json:"session_id"`
+	Queued    bool   `json:"queued"`
 	Note      string `json:"note"`
 }
 
@@ -54,21 +131,30 @@ func taskTool() Tool {
 	return Tool{
 		Def: provider.ToolDef{
 			Name: taskToolName,
-			Description: "Delegate work to a child session that runs independently in the background. Returns immediately with the child's " +
+			Description: "Delegate work to a child session, or manage one you already spawned (directly or transitively). action selects the " +
+				"operation and defaults to \"spawn\" if omitted. " +
+				"spawn(agent, prompt, model?): starts a child session that runs independently in the background and returns immediately with its " +
 				"session id — it does NOT wait for the child to finish, and you do not need to poll for the result. The child's outcome arrives " +
 				"later as engine context on one of your own future turns. agent selects the child's tool set and persona: built-in types are " +
 				"\"general-purpose\" (full tool set, can itself spawn children), \"explore\" (read-only, for fast code search), and \"plan\" " +
 				"(read-only, returns an implementation plan instead of edits) — a project's .agents/*.md files may define more, and this project's " +
 				"current full roster (built-ins plus any custom types) is listed in the error if you call this tool with an agent name it does " +
-				"not recognize. model optionally overrides which model the child uses.",
+				"not recognize. model optionally overrides which model the child uses. " +
+				"cancel(session_id): stops a descendant you spawned and its entire subtree — anything IT has spawned too. " +
+				"status(session_id): reports a descendant's current status, lineage, and cumulative token usage. " +
+				"send(session_id, prompt): delivers a message to a descendant — if it is still running, the message is queued and delivered at its " +
+				"next turn boundary (you do not need to wait for it to go idle first); if it is NOT actively running (finished, or idle and never " +
+				"started), it is relaunched with your message as a fresh turn, and that outcome arrives later exactly like a new spawn's would. " +
+				"cancel/status/send only work on a session YOU spawned, directly or through a chain of your own children — anything else is refused.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"agent": {"type": "string", "description": "The agent type to spawn: general-purpose, explore, plan, or a custom .agents/*.md definition name — call with an unrecognized name to see this project's full current roster in the error"},
-					"prompt": {"type": "string", "description": "The task for the child session to perform"},
-					"model": {"type": "string", "description": "Optional model override, as \"provider/model\""}
-				},
-				"required": ["agent", "prompt"]
+					"action": {"type": "string", "enum": ["spawn", "cancel", "status", "send"], "description": "The operation to perform; defaults to \"spawn\" if omitted"},
+					"agent": {"type": "string", "description": "spawn only: the agent type to spawn: general-purpose, explore, plan, or a custom .agents/*.md definition name — call with an unrecognized name to see this project's full current roster in the error"},
+					"prompt": {"type": "string", "description": "The task for the child session to perform (spawn), or the message to deliver to it (send)"},
+					"model": {"type": "string", "description": "spawn only: optional model override, as \"provider/model\""},
+					"session_id": {"type": "string", "description": "cancel/status/send only: the id of a session you spawned, directly or transitively"}
+				}
 			}`),
 		},
 		Run: func(ctx context.Context, s *Session, args json.RawMessage) (message.Parts, error) {
@@ -77,24 +163,45 @@ func taskTool() Tool {
 	}
 }
 
-// runTaskTool resolves in.Agent against every agent definition available
+// runTaskTool dispatches one `task` tool call against s by in.Action,
+// defaulting an omitted (empty-string) action to taskActionSpawn — the
+// original, pre-verbs argument shape (agent/prompt/model, no action
+// field at all) keeps working completely unchanged, which is what makes
+// this extension backward compatible rather than a breaking schema
+// change.
+func runTaskTool(s *Session, raw json.RawMessage) (message.Parts, error) {
+	var in taskToolArgs
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return nil, fmt.Errorf("task: invalid arguments: %w", err)
+	}
+	action := in.Action
+	if action == "" {
+		action = taskActionSpawn
+	}
+	switch action {
+	case taskActionSpawn:
+		return runTaskSpawn(s, in)
+	case taskActionCancel:
+		return runTaskCancel(s, in)
+	case taskActionStatus:
+		return runTaskStatus(s, in)
+	case taskActionSend:
+		return runTaskSend(s, in)
+	default:
+		return nil, fmt.Errorf("task: unknown action %q (want one of: %s)", action, strings.Join(taskActionNames, ", "))
+	}
+}
+
+// runTaskSpawn resolves in.Agent against every agent definition available
 // to s (built-ins plus s.cfg.WorkDir's .agents/*.md — see
 // ResolveAgentDefs) and spawns a child via s.cfg.SessionManager. It takes
 // no ctx: Spawn's own goroutine, not this call, drives the child's turn
 // (see SessionManager.Spawn's doc comment) — this call only needs to
 // return once the child is registered and launched, which never blocks on
 // I/O worth cancelling.
-func runTaskTool(s *Session, raw json.RawMessage) (message.Parts, error) {
-	var in struct {
-		Agent  string `json:"agent"`
-		Prompt string `json:"prompt"`
-		Model  string `json:"model"`
-	}
-	if err := json.Unmarshal(raw, &in); err != nil {
-		return nil, fmt.Errorf("task: invalid arguments: %w", err)
-	}
+func runTaskSpawn(s *Session, in taskToolArgs) (message.Parts, error) {
 	if in.Agent == "" || in.Prompt == "" {
-		return nil, fmt.Errorf("task: agent and prompt are required")
+		return nil, fmt.Errorf("task: agent and prompt are required for action %q", taskActionSpawn)
 	}
 	m := s.cfg.SessionManager
 	if m == nil {
@@ -157,6 +264,145 @@ func runTaskTool(s *Session, raw json.RawMessage) (message.Parts, error) {
 	})
 }
 
+// runTaskCancel implements the cancel action: stop a descendant's entire
+// subtree (SessionManager.CancelDescendant — cascade cancellation; see
+// its own doc comment for why cancel_tree, not AbortTurn, is the right
+// primitive for "stop this delegation").
+func runTaskCancel(s *Session, in taskToolArgs) (message.Parts, error) {
+	if in.SessionID == "" {
+		return nil, fmt.Errorf("task: session_id is required for action %q", taskActionCancel)
+	}
+	m := s.cfg.SessionManager
+	if m == nil {
+		return nil, fmt.Errorf("task: this session has no session manager")
+	}
+	// status is targetID's REAL resulting status, read by CancelDescendant
+	// itself inside the same locked operation that performed the
+	// cancellation — never assumed StatusCanceled (canceling an
+	// already-terminal done/failed descendant is a no-op on its own
+	// status) and never re-derived from a separate later read, which
+	// could race a caller's own periodic Reap sweep collecting an
+	// already-terminal leaf in the gap — see CancelDescendant's own doc
+	// comment for the live review finding this closes.
+	status, err := m.CancelDescendant(s.ID, in.SessionID)
+	if err != nil {
+		return nil, classifyTaskVerbError(err, in.SessionID)
+	}
+	return jsonResult(taskCancelResult{SessionID: in.SessionID, Status: string(status)})
+}
+
+// runTaskStatus implements the status action: a descendant's live
+// status/lineage/usage (SessionManager.DescendantInfo).
+func runTaskStatus(s *Session, in taskToolArgs) (message.Parts, error) {
+	if in.SessionID == "" {
+		return nil, fmt.Errorf("task: session_id is required for action %q", taskActionStatus)
+	}
+	m := s.cfg.SessionManager
+	if m == nil {
+		return nil, fmt.Errorf("task: this session has no session manager")
+	}
+	node, usage, err := m.DescendantInfo(s.ID, in.SessionID)
+	if err != nil {
+		return nil, classifyTaskVerbError(err, in.SessionID)
+	}
+	// Non-nil even for a genuinely childless descendant — matches
+	// lineageJSONFor's identical normalization (server/handlers.go) so
+	// this serializes as "children":[] rather than "children":null.
+	children := node.Children
+	if children == nil {
+		children = []string{}
+	}
+	return jsonResult(taskStatusResult{
+		SessionID:  node.ID,
+		ParentID:   node.ParentID,
+		Depth:      node.Depth,
+		Status:     string(node.Status),
+		Children:   children,
+		AgentType:  node.AgentType,
+		Result:     node.Result,
+		FailReason: node.FailReason,
+		Usage:      usage,
+	})
+}
+
+// runTaskSend implements the send action: deliver a message to a
+// descendant (SessionManager.SendToDescendant — queued for a running
+// target, a fresh re-run for a settled one; see that method's own doc
+// comment for the full reasoning).
+func runTaskSend(s *Session, in taskToolArgs) (message.Parts, error) {
+	if in.SessionID == "" {
+		return nil, fmt.Errorf("task: session_id is required for action %q", taskActionSend)
+	}
+	// TrimSpace, not a bare == "" test: a whitespace-only prompt used to
+	// behave OPPOSITELY by target state — a live review finding. A running
+	// target reached SendToDescendant's own enqueue validation and came
+	// back with a raw, non-sentinel error classifyTaskVerbError leaks to
+	// the model verbatim ("task: engine: EnqueuePrompt requires non-empty
+	// text"), while a settled target accepted the blank text and burned a
+	// whole real turn on it. One validation here, before either path,
+	// makes both answers the same and keeps the message model-facing.
+	// The trimmed text is what gets sent, matching EnqueuePrompt's own
+	// trim-then-store rule (queue.go).
+	prompt := strings.TrimSpace(in.Prompt)
+	if prompt == "" {
+		return nil, fmt.Errorf("task: prompt is required for action %q", taskActionSend)
+	}
+	m := s.cfg.SessionManager
+	if m == nil {
+		return nil, fmt.Errorf("task: this session has no session manager")
+	}
+	queued, err := m.SendToDescendant(s.ID, in.SessionID, prompt)
+	if err != nil {
+		return nil, classifyTaskVerbError(err, in.SessionID)
+	}
+	// "was not actively running," not "had already finished": the
+	// non-queued branch also covers a StatusIdle target (adopted but
+	// never yet run, or resumed to idle) — SendToDescendant's else branch
+	// fires for anything that isn't StatusRunning/StatusCanceled, not
+	// only done/failed — and telling the model a session "finished" when
+	// it never ran a turn at all could mislead its follow-up reasoning. A
+	// live review finding.
+	//
+	// "dispatched," not a guaranteed "started": SendToDescendant's
+	// settled-target path reserves the turn synchronously
+	// (reserveSendLocked, under the same m.mu hold as its own admission
+	// checks) but runs it in a launched goroutine, so this call returns
+	// before the re-run's first provider request. Admission failures are
+	// no longer lost — an earlier revision released m.mu and let that
+	// goroutine's own Send call discard ErrUnknownSession/
+	// ErrSessionCanceled/ErrConcurrencyLimit, which two live review
+	// findings closed — so the reservation itself is certain by the time
+	// the model reads this note. "Started" would still overclaim the
+	// turn's own progress, and task status on session_id remains the way
+	// to observe it.
+	note := "the descendant was not actively running, so this was dispatched as a fresh turn with your message; check back with task status on this session_id if you want to confirm it actually started"
+	if queued {
+		// Hedged with "unless it is canceled first," not an unconditional
+		// "no need to poll": finalizeTurn's own re-drive re-check (the
+		// mechanism that actually guarantees this delivery) is gated on
+		// the descendant not being StatusCanceled — canceling it after
+		// this call but before its next turn boundary drops the queued
+		// entry along with everything else in its subtree (cancellation's
+		// ordinary "stop, full stop" semantics — see CancelDescendant's
+		// own doc comment), which this note should not paper over. A live
+		// review finding.
+		//
+		// "interrupted ... by a cancel or an abort", not "canceled":
+		// a second review finding. A cancel is not the only way a
+		// running descendant loses a queued message. An external POST
+		// /abort on an ancestor (AbortTurn), or a base-ctx shutdown,
+		// cancels the descendant's ctx through Go's context cascade
+		// while its status stays StatusRunning until its interrupted
+		// Prompt returns; finalizeTurn's re-drive gate and
+		// drainQueueAndPrompt both refuse to run the queue on a dead
+		// ctx, and the descendant then settles StatusFailed, never
+		// StatusCanceled. Naming only cancellation told the model the
+		// wrong failure mode for that path.
+		note = "queued for delivery at the descendant's next turn boundary — no need to poll or wait for it, unless the descendant's turn is interrupted first by a cancel or an abort (an interrupted descendant leaves anything still queued undelivered, like the rest of its own state)"
+	}
+	return jsonResult(taskSendResult{SessionID: in.SessionID, Queued: queued, Note: note})
+}
+
 // sortedAgentNames returns defs' keys sorted, for a stable, readable
 // "unknown agent" error message.
 func sortedAgentNames(defs map[string]AgentDef) []string {
@@ -202,5 +448,62 @@ func classifyTaskToolError(err error) error {
 		return fmt.Errorf("task: parent session no longer tracked")
 	default:
 		return fmt.Errorf("task: cannot spawn: %w", err)
+	}
+}
+
+// classifyTaskVerbError maps a cancel/status/send verb's SessionManager
+// error into the model-visible tool error — the cancel/status/send
+// counterpart to classifyTaskToolError above, for the different
+// (overlapping but not identical) sentinel set CancelDescendant/
+// DescendantInfo/SendToDescendant can return. Every one of these is
+// already a short, fixed, secret-free string — safe to surface directly,
+// same reasoning as classifyTaskToolError's own doc comment — including
+// targetID itself in the two cases that name it: it is caller-supplied
+// input, never provider/request data, and naming it is what actually
+// tells the caller which session_id was rejected and why.
+//
+// ErrUnknownSession is always attributed to targetID here, even though
+// CancelDescendant/DescendantInfo/SendToDescendant can technically return
+// it for either id. The caller-unknown case is unreachable in practice:
+// s (the session running this very tool call) is definitionally
+// StatusRunning for the duration of its own Run function, and Reap only
+// ever removes a TERMINAL leaf node — s cannot have been forgotten out
+// from under its own in-flight call.
+//
+// The ErrSessionBusy case below is currently unreachable too — a review
+// finding: none of the three callers this function serves can produce it
+// synchronously. SendToDescendant deliberately ENQUEUES to a running
+// target rather than refusing it (see its own doc comment), and
+// CancelDescendant/DescendantInfo only ever return ErrUnknownSession/
+// ErrNotDescendant. Send CAN return ErrSessionBusy, but only from
+// SendToDescendant's OWN fire-and-forget goroutine on the settled-restart
+// path, where the error is intentionally discarded, never returned to
+// this function's caller at all (see that goroutine's own comment).
+// Kept anyway, deliberately, as defensive forward-compatibility: it is
+// exactly as safe to surface as every other sentinel here, and dropping
+// it would silently start falling through to the generic default case
+// the moment any future change to these three methods legitimately
+// starts returning it synchronously — a worse failure mode (a vague
+// error) than one extra, currently-dead case today.
+func classifyTaskVerbError(err error, targetID string) error {
+	switch {
+	case errors.Is(err, ErrUnknownSession):
+		return fmt.Errorf("task: no such session %q", targetID)
+	case errors.Is(err, ErrNotDescendant):
+		return fmt.Errorf("task: %s is not a session you spawned, directly or transitively", targetID)
+	case errors.Is(err, ErrSessionCanceled):
+		return fmt.Errorf("task: %w", ErrSessionCanceled)
+	case errors.Is(err, ErrConcurrencyLimit):
+		return fmt.Errorf("task: %w", ErrConcurrencyLimit)
+	case errors.Is(err, ErrSessionBusy):
+		return fmt.Errorf("task: %w", ErrSessionBusy)
+	case errors.Is(err, ErrEmptyPromptText):
+		// runTaskSend rejects blank text before either send path runs, so
+		// this arm is defense in depth for a future caller — it keeps the
+		// answer model-facing instead of leaking the "engine:" layer
+		// through the default arm below (a review finding).
+		return fmt.Errorf("task: prompt must not be empty or whitespace-only")
+	default:
+		return fmt.Errorf("task: %w", err)
 	}
 }
