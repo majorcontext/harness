@@ -67,7 +67,7 @@ func (s *Server) handleJournal(w http.ResponseWriter, r *http.Request) {
 	// []JournalRecord). This is a debug endpoint, not a hot path, so the
 	// redundant I/O is an accepted tradeoff rather than something worth a
 	// cache or a leaner existence check.
-	if _, _, ok := s.lookup(id); !ok {
+	if _, ok := s.lookup(id); !ok {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
 	}

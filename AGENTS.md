@@ -1580,6 +1580,20 @@ notification, `SessionNode.FailReason` (so `task status` and
 `GET /session/{id}.lineage.fail_reason`), and the journal's
 `task_fail_reason`.
 
+Server-side session resolution has ONE entry point: `Server.resolveLive`
+returns a `liveSession` snapshot (`server/live.go`) that holds the
+residency half (`Server.sessions`, one `s.mu` hold) and the SessionManager
+half (one `SessionAndInfo` hold) together. Read a session, its status, or
+its lineage from that snapshot — never from `s.sessions` or `sessMgr`
+directly, and never take a second manager read later in the same request.
+The two halves are separate holds on purpose: `server.mu` is a leaf lock
+with respect to `SessionManager.mu`, so one atomic hold over both would
+build the cycle that rule forbids. Residency wins whenever it has an
+answer, because a resident session's own `running` flag is authoritative
+for itself (`freeRunSlotAndEmitIdle` clears it before `ReportTurnEnd`
+flips the node). The manager half answers only what residency cannot: a
+Spawn-driven child, which is never a residency key.
+
 `Config.OnRequest` receives the firing session's own id as its first
 parameter (`engine/engine.go`). Never wire it as a closure over a
 captured session variable: `configSnapshot` copies the func value into
