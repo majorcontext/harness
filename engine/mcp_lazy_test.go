@@ -101,7 +101,8 @@ func mcpDefNames(defs []provider.ToolDef) []string {
 
 // # Effective mode
 
-// TestResolveMCPLoadingModes pins the per-server decision across every
+// TestResolveMCPLoadingModes pins resolveMCPLoading's per-server decision
+// across every
 // combination of global mode, per-server override, and the auto threshold —
 // including the threshold boundary itself (at, one below, one above), which
 // is where an off-by-one silently changes what the model can call.
@@ -436,6 +437,46 @@ func TestCatalogSegmentTruncatesDescription(t *testing.T) {
 	}
 	if !strings.Contains(got, "é") || strings.Contains(got, "\ufffd") {
 		t.Fatalf("description truncated mid-rune:\n%s", got)
+	}
+	// A clipped line must say so, or it reads as if the description ended
+	// there.
+	if !strings.HasSuffix(line, mcpCatalogEllipsis) {
+		t.Fatalf("clipped description carries no marker: %q", line)
+	}
+	// An unclipped one must NOT carry the marker. Checked on the tool LINE,
+	// since the header itself contains a literal query="..." example.
+	short := mcpCatalogSegment([]provider.ToolDef{{Name: mcpToolName("a", "t"), Description: "short one"}})
+	shortLine := short[strings.Index(short, "mcp__a__t"):]
+	if strings.Contains(shortLine, mcpCatalogEllipsis) {
+		t.Fatalf("an unclipped description gained a marker: %q", shortLine)
+	}
+}
+
+// TestReapIgnoresAServerMissingFromTheSnapshot is the race guard: the
+// catalog snapshot and the connection state are read at two different
+// instants, so a server that connects in the gap reports Connected while
+// the snapshot still predates its tools. Reaping on connection state alone
+// would drop a valid selection in that window.
+func TestReapIgnoresAServerMissingFromTheSnapshot(t *testing.T) {
+	s, reg := lazySession(t, Config{MCPToolLoading: MCPToolLoadingLazy}, map[string]int{"a": 1})
+	// "late" is connected but contributes nothing to this snapshot — the
+	// shape a connect racing the Tools() read produces.
+	reg.names = append(reg.names, "late")
+	reg.connected["late"] = true
+	name := mcpToolName("late", "tool00")
+	s.markMCPToolsSelected(name)
+
+	s.planMCPTools(context.Background())
+	if !s.mcpToolSelected(name) {
+		t.Fatalf("%q was reaped against a snapshot that does not represent its server", name)
+	}
+
+	// Once the snapshot DOES represent that server without the tool, the
+	// name is genuinely stale and goes.
+	reg.tools = append(reg.tools, provider.ToolDef{Name: mcpToolName("late", "other")})
+	s.planMCPTools(context.Background())
+	if s.mcpToolSelected(name) {
+		t.Fatalf("%q survived a snapshot that represents its server without it", name)
 	}
 }
 

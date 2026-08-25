@@ -86,6 +86,9 @@ const defaultMCPDeferThreshold = 20
 // exists to let the model recognize a tool, not to reproduce its docs.
 const mcpCatalogDescriptionMax = 160
 
+// mcpCatalogEllipsis marks a description line the catalog had to clip.
+const mcpCatalogEllipsis = "..."
+
 // mcpCatalogListingMax bounds how many tools the catalog segment names
 // before it stops and points at search instead. An unbounded listing over a
 // pathological catalog would re-create the very cost this file removes.
@@ -236,7 +239,7 @@ func (s *Session) planMCPTools(ctx context.Context) mcpToolPlan {
 			defs = append(defs, d)
 			continue
 		}
-		if !mcpServerDefers(s.mcpPolicyMode(server), overThreshold) {
+		if s.resolveMCPLoading(server, overThreshold) != MCPToolLoadingLazy {
 			defs = append(defs, d)
 			continue
 		}
@@ -249,22 +252,27 @@ func (s *Session) planMCPTools(ctx context.Context) mcpToolPlan {
 	return mcpToolPlan{defs: defs, catalog: mcpCatalogSegment(deferred)}
 }
 
-// mcpServerDefers turns one server's policy mode plus the live
-// over-threshold answer into the request's actual decision.
+// resolveMCPLoading reports one server's EFFECTIVE mode for this request:
+// eager or lazy, never auto. It composes the server's policy mode
+// (mcpPolicyMode) with the live over-threshold answer, which is the only
+// input auto needs.
 //
-// The over-threshold answer counts the WHOLE catalog, including the tools
-// of a server pinned eager (see planMCPTools). A pinned server's schemas
-// fill the prompt like any other, so they are part of the pressure the
-// threshold measures: a pin says "always keep these loaded", never "ignore
-// their cost".
-func mcpServerDefers(mode MCPToolLoading, overThreshold bool) bool {
-	switch mode {
+// That answer counts the WHOLE catalog, including the tools of a server
+// pinned eager (see planMCPTools). A pinned server's schemas fill the
+// prompt like any other, so they are part of the pressure the threshold
+// measures: a pin says "always keep these loaded", never "ignore their
+// cost".
+func (s *Session) resolveMCPLoading(server string, overThreshold bool) MCPToolLoading {
+	switch s.mcpPolicyMode(server) {
 	case MCPToolLoadingLazy:
-		return true
+		return MCPToolLoadingLazy
 	case MCPToolLoadingAuto:
-		return overThreshold
+		if overThreshold {
+			return MCPToolLoadingLazy
+		}
+		return MCPToolLoadingEager
 	default:
-		return false
+		return MCPToolLoadingEager
 	}
 }
 
@@ -289,15 +297,29 @@ func (s *Session) reapMCPSelections(catalog []provider.ToolDef) map[string]bool 
 		return nil
 	}
 	live := make(map[string]bool, len(catalog))
+	// inSnapshot records which servers the catalog snapshot actually
+	// represents. It is what makes the reap race-free: the catalog and the
+	// connection state are read at two different instants, so a server that
+	// connects in the gap reports Connected while the snapshot still
+	// predates its tools/list. Reaping on connection state alone would drop
+	// a perfectly valid selection in that window. A server with at least
+	// one tool in the snapshot, by contrast, had already committed its
+	// tools before the snapshot was taken (MCPManager commits tools and
+	// flips Connected under one lock), so a name missing from it is
+	// genuinely absent.
+	inSnapshot := make(map[string]bool)
 	for _, d := range catalog {
 		live[d.Name] = true
+		if server, _, ok := splitMCPToolName(d.Name); ok {
+			inSnapshot[server] = true
+		}
 	}
 	connected := mcpConnectedServers(s.cfg.MCP)
 	out := make(map[string]bool, len(s.mcpSelected))
 	for name := range s.mcpSelected {
 		if !live[name] {
 			server, _, ok := splitMCPToolName(name)
-			if ok && connected[server] {
+			if ok && connected[server] && inSnapshot[server] {
 				delete(s.mcpSelected, name)
 				continue
 			}
@@ -412,5 +434,12 @@ func mcpCatalogDescription(d string) string {
 		d = d[:i]
 	}
 	d = strings.TrimSpace(d)
-	return truncateUTF8(d, mcpCatalogDescriptionMax)
+	cut := truncateUTF8(d, mcpCatalogDescriptionMax)
+	if cut != d {
+		// A clipped line must not read as if the description genuinely
+		// ended there. The marker is inside the bound, so the line's total
+		// length never exceeds mcpCatalogDescriptionMax.
+		cut = truncateUTF8(d, mcpCatalogDescriptionMax-len(mcpCatalogEllipsis)) + mcpCatalogEllipsis
+	}
+	return cut
 }

@@ -179,7 +179,11 @@ type Config struct {
 	// is accepted and inert.
 	MCPToolLoading string `json:"mcp_tool_loading,omitempty"`
 	// MCPToolLoadingThreshold is the tool COUNT "auto" compares the live
-	// catalog against; 0/absent leaves engine.Config.MCPToolLoadingThreshold
+	// catalog against. It is consulted in "auto" mode ONLY: with "eager" or
+	// "lazy" the decision needs no catalog size, so a threshold set beside
+	// either of them is accepted and inert. It is not rejected there,
+	// because a config that switches mode back to "auto" should not have to
+	// re-supply it; 0/absent leaves engine.Config.MCPToolLoadingThreshold
 	// at zero, which the engine itself then defaults to 20
 	// (defaultMCPDeferThreshold). A count rather than a token estimate: the
 	// engine has no tokenizer on the request path. A NEGATIVE value cannot
