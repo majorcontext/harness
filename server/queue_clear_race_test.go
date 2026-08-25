@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 )
 
@@ -58,11 +59,27 @@ func TestQueueClearRaceDuringIdleDispatchIsNotAnError(t *testing.T) {
 	// lock (right after its own EnqueuePrompt, right before dispatching the
 	// head), clear the entire queue -- q1 AND the prompt this very request
 	// just enqueued -- out from under it.
+	//
+	// One-shot: queueDispatchRace has four call sites (handlePrompt's two
+	// branches, dispatchQueueHead, and maybeDispatchQueued — the tail
+	// runPrompt/runGoal fire), and only the FIRST call is the one this
+	// test forces. A later tail call used to re-enter this body after the
+	// test function had already returned, issue a request against the
+	// torn-down server, and reach h2.do's own t.Fatalf on a finished
+	// test — which the testing package turns into a process-wide panic
+	// ("Fail in goroutine after ... has completed"), failing the whole
+	// server package whatever this test asserted. The field itself is
+	// read unsynchronized by production code, so the guard belongs INSIDE
+	// the closure; clearing the field from t.Cleanup would be a data
+	// race.
+	var raceOnce sync.Once
 	srv2.queueDispatchRace = func() {
-		resp, data := h2.do("DELETE", "/session/"+id+"/queue", nil)
-		if resp.StatusCode != http.StatusNoContent {
-			t.Fatalf("DELETE queue status %d: %s", resp.StatusCode, data)
-		}
+		raceOnce.Do(func() {
+			resp, data := h2.do("DELETE", "/session/"+id+"/queue", nil)
+			if resp.StatusCode != http.StatusNoContent {
+				t.Fatalf("DELETE queue status %d: %s", resp.StatusCode, data)
+			}
+		})
 	}
 
 	resp, data := h2.do("POST", "/session/"+id+"/prompt_async", map[string]any{
@@ -115,16 +132,36 @@ func TestQueueClearRaceDuringDispatchIsNotAnError(t *testing.T) {
 	// the first turn finish (freeing the run slot so the retry can win it)
 	// and then clear the entire queue -- including the "second" prompt this
 	// very request just enqueued -- before dispatchQueueHead gets a chance.
+	//
+	// One-shot, for the same reason the sibling test above documents: the
+	// tail maybeDispatchQueued call re-entered this body after the test
+	// had returned and panicked the whole package. calls counts every
+	// invocation so the assertion below can prove that late call really
+	// happens and is now inert.
+	var (
+		raceOnce  sync.Once
+		callsMu   sync.Mutex
+		calls     int
+		bodyCalls int
+	)
 	h.srv.queueDispatchRace = func() {
-		prov.releaseAll()
-		waitResp, waitData := h.do("GET", "/session/"+id+"/wait?until=idle&timeout_s=5", nil)
-		if waitResp.StatusCode != http.StatusOK {
-			t.Fatalf("wait for first turn's idle status %d: %s", waitResp.StatusCode, waitData)
-		}
-		delResp, delData := h.do("DELETE", "/session/"+id+"/queue", nil)
-		if delResp.StatusCode != http.StatusNoContent {
-			t.Fatalf("DELETE queue status %d: %s", delResp.StatusCode, delData)
-		}
+		callsMu.Lock()
+		calls++
+		callsMu.Unlock()
+		raceOnce.Do(func() {
+			callsMu.Lock()
+			bodyCalls++
+			callsMu.Unlock()
+			prov.releaseAll()
+			waitResp, waitData := h.do("GET", "/session/"+id+"/wait?until=idle&timeout_s=5", nil)
+			if waitResp.StatusCode != http.StatusOK {
+				t.Fatalf("wait for first turn's idle status %d: %s", waitResp.StatusCode, waitData)
+			}
+			delResp, delData := h.do("DELETE", "/session/"+id+"/queue", nil)
+			if delResp.StatusCode != http.StatusNoContent {
+				t.Fatalf("DELETE queue status %d: %s", delResp.StatusCode, delData)
+			}
+		})
 	}
 
 	resp, data = h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
@@ -147,5 +184,24 @@ func TestQueueClearRaceDuringDispatchIsNotAnError(t *testing.T) {
 	}
 	if final.Queued != 0 {
 		t.Fatalf("final queued = %d, want 0", final.Queued)
+	}
+
+	// The late invocation this test's one-shot guard exists for: the first
+	// turn's own runPrompt tail calls maybeDispatchQueued, which fires the
+	// hook again. Waiting for the session to go idle makes that call
+	// deterministic rather than timing-dependent, so this assertion is a
+	// real guard: more than one invocation, exactly one body run.
+	waitResp, waitData := h.do("GET", "/session/"+id+"/wait?until=idle&timeout_s=5", nil)
+	if waitResp.StatusCode != http.StatusOK {
+		t.Fatalf("wait until=idle status %d: %s", waitResp.StatusCode, waitData)
+	}
+	callsMu.Lock()
+	gotCalls, gotBody := calls, bodyCalls
+	callsMu.Unlock()
+	if gotCalls < 2 {
+		t.Errorf("queueDispatchRace invocations = %d, want at least 2: the tail dispatch call this guard protects against no longer happens, so the guard needs re-deriving", gotCalls)
+	}
+	if gotBody != 1 {
+		t.Errorf("queueDispatchRace body runs = %d, want exactly 1: a later invocation re-entered the body and can panic the package after the test ends", gotBody)
 	}
 }
