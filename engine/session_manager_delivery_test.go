@@ -1446,6 +1446,32 @@ func TestDrainAllTaskNotificationsPersistsDeliverySoReloadDoesNotResurrectIt(t *
 		t.Fatal("test setup: mid does not have the grandchild's notification pending")
 	}
 
+	// The grandchild's queued record must be on mid's log BEFORE mid is
+	// released, or this test flakes at about 3% — reproduced at that rate
+	// on unmodified code, so it predates this file's sleep migration.
+	//
+	// Two goroutines write mid's one log. The grandchild's finalizeTurn
+	// enqueues the notification in memory under m.mu and defers the
+	// recTaskNotifyQueued write; mid's own finalizeTurn, on another
+	// goroutine, forwards that same notification and defers the matching
+	// recTaskNotifyDelivered write. Nothing orders the two thunks, and
+	// hasPendingTaskNotifications() above only proves the IN-MEMORY
+	// enqueue happened.
+	//
+	// Order matters because the replay fold is order-sensitive:
+	// recTaskNotifyDelivered removes a queued entry already folded in
+	// (store.go). A delivered record written FIRST removes nothing, and
+	// the queued record that lands after it folds in as pending — the
+	// "resurrected" notification this test then reports. Waiting for the
+	// queued record here makes the write order deterministic.
+	//
+	// The same hazard exists in production for a real crash-restart, and
+	// store.go's fold comment claims an order-independence it does not
+	// have. That is a separate finding, filed rather than fixed here.
+	flushes.waitUntil(t, 2*time.Second, "test setup: the grandchild's queued notification never landed on mid's own log", func() bool {
+		return countRecordType(t, sessionPath(dir, midID), recTaskNotifyQueued) == 1
+	})
+
 	// Release mid — its own turn completes normally. finalizeTurn forwards
 	// mid's still-pending queue (the grandchild's notification) to root via
 	// drainAllTaskNotifications — the mechanism under test, not the
