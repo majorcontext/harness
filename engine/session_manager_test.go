@@ -11,7 +11,6 @@ import (
 	"sync"
 	"testing"
 	"testing/synctest"
-	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -208,7 +207,7 @@ func TestBareSessionManagerRootNeverRacesConcurrentResumeDuringOwnTurn(t *testin
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	// If the bracket is doing its job, root is StatusRunning right now
 	// (ReportTurnStart set it, and nothing has cleared it — root's own
@@ -221,11 +220,7 @@ func TestBareSessionManagerRootNeverRacesConcurrentResumeDuringOwnTurn(t *testin
 	}
 
 	close(rootBlocker.release)
-	select {
-	case <-turnDone:
-	case <-time.After(time.Second):
-		t.Fatal("root's own turn never completed")
-	}
+	awaitSignal(t, turnDone, "root's own turn never completed")
 	if promptErr != nil {
 		t.Fatalf("root Prompt: %v", promptErr)
 	}
@@ -297,7 +292,7 @@ func TestSessionManagerSpawnLifecycleDone(t *testing.T) {
 		t.Fatalf("Spawn: %v", err)
 	}
 
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	info, _ := mgr.Info(childID)
 	if info.ParentID != root.ID {
@@ -331,7 +326,7 @@ func TestSessionManagerSpawnLifecycleFailed(t *testing.T) {
 		t.Fatalf("Spawn: %v", err)
 	}
 
-	waitForStatus(t, mgr, childID, StatusFailed, 2*time.Second)
+	waitForStatus(t, mgr, childID, StatusFailed)
 
 	info, _ := mgr.Info(childID)
 	if info.FailReason == "" {
@@ -350,7 +345,7 @@ func TestSessionManagerDepthLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn depth 1: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	// The child is at depth 1, the manager's limit — a further Spawn from
 	// it must be rejected with ErrDepthLimit, mirroring the `task` tool
@@ -377,16 +372,16 @@ func TestSessionManagerConcurrencyLimit(t *testing.T) {
 		}
 		ids = append(ids, id)
 	}
-	waitForStatus(t, mgr, ids[0], StatusRunning, time.Second)
-	waitForStatus(t, mgr, ids[1], StatusRunning, time.Second)
+	waitForStatus(t, mgr, ids[0], StatusRunning)
+	waitForStatus(t, mgr, ids[1], StatusRunning)
 
 	if _, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "one too many", Model: modelFor("blocker")}); !errors.Is(err, ErrConcurrencyLimit) {
 		t.Errorf("Spawn over limit: err = %v, want ErrConcurrencyLimit", err)
 	}
 
 	close(release)
-	waitForStatus(t, mgr, ids[0], StatusDone, time.Second)
-	waitForStatus(t, mgr, ids[1], StatusDone, time.Second)
+	waitForStatus(t, mgr, ids[0], StatusDone)
+	waitForStatus(t, mgr, ids[1], StatusDone)
 
 	// The budget is freed once both children finish: a further Spawn now
 	// succeeds.
@@ -430,7 +425,7 @@ func TestSessionManagerConcurrencyLimitRace(t *testing.T) {
 	}
 	close(release)
 	for _, id := range spawned {
-		waitForStatus(t, mgr, id, StatusDone, 2*time.Second)
+		waitForStatus(t, mgr, id, StatusDone)
 	}
 }
 
@@ -448,7 +443,7 @@ func TestSessionManagerCancelCascadesSubtree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn child: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusRunning, time.Second)
+	waitForStatus(t, mgr, childID, StatusRunning)
 
 	// The grandchild is spawned from the child while the child's own turn
 	// is still mid-flight (blocked on release) — Spawn only inspects parent
@@ -458,7 +453,7 @@ func TestSessionManagerCancelCascadesSubtree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn grandchild: %v", err)
 	}
-	waitForStatus(t, mgr, grandID, StatusDone, time.Second)
+	waitForStatus(t, mgr, grandID, StatusDone)
 
 	if err := mgr.Cancel(root.ID); err != nil {
 		t.Fatalf("Cancel: %v", err)
@@ -468,7 +463,7 @@ func TestSessionManagerCancelCascadesSubtree(t *testing.T) {
 	if rootInfo.Status != StatusCanceled {
 		t.Errorf("root status = %s, want canceled", rootInfo.Status)
 	}
-	waitForStatus(t, mgr, childID, StatusCanceled, time.Second)
+	waitForStatus(t, mgr, childID, StatusCanceled)
 
 	// The grandchild had already reached a terminal state (done) before the
 	// cancel — Cancel must leave that recorded outcome alone even though it
@@ -522,7 +517,7 @@ func TestSessionManagerRestrictToolNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	child, _ := mgr.Session(childID)
 	if len(child.tools) != 1 {
@@ -560,7 +555,7 @@ func TestSessionManagerChildLogRecordsParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	logPath := filepath.Join(dir, childID+".jsonl")
 	if _, err := os.Stat(logPath); err != nil {
@@ -612,7 +607,7 @@ func TestReapCancelsNodeContextBeforeRemoving(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	mgr.mu.Lock()
 	childCtx := mgr.nodes[childID].ctx
@@ -644,7 +639,7 @@ func TestReapRemovesTerminalLeavesAndUpdatesParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	if n := mgr.Reap(); n != 1 {
 		t.Fatalf("Reap() = %d, want 1", n)
@@ -688,7 +683,7 @@ func TestReapThenReloadRestoresToolRestriction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 	child, ok := mgr.Session(childID)
 	if !ok {
 		t.Fatal("child not found before reap")
@@ -763,7 +758,7 @@ func TestReloadedChildWithUnresolvableAgentDefFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 	child, ok := mgr.Session(childID)
 	if !ok {
 		t.Fatal("child not found")
@@ -846,7 +841,7 @@ func TestReloadedChildWithEmptyIntersectionRestrictionStaysEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn mid: %v", err)
 	}
-	waitForStatus(t, mgr, midID, StatusDone, time.Second)
+	waitForStatus(t, mgr, midID, StatusDone)
 
 	// A child spawned FROM mid, naming the disjoint bash-only definition
 	// — the intersection of mid's {read_file, task} with bash-only's
@@ -861,7 +856,7 @@ func TestReloadedChildWithEmptyIntersectionRestrictionStaysEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn child: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 	child, ok := mgr.Session(childID)
 	if !ok {
 		t.Fatal("child not found before reap")
@@ -917,7 +912,7 @@ func TestReapThenReloadRestoresTrueDepthNotAFreshRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	child, ok := mgr.Session(childID)
 	if !ok {
@@ -991,7 +986,7 @@ func TestReloadedChildWithUnknownParentUsesDurableTaskDepth(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Spawn: %v", err)
 		}
-		waitForStatus(t, mgr1, childID, StatusDone, time.Second)
+		waitForStatus(t, mgr1, childID, StatusDone)
 		child, ok := mgr1.Session(childID)
 		if !ok {
 			t.Fatal("child not found")
@@ -1048,7 +1043,7 @@ func TestReloadedChildWithUnknownParentAndNoDurableDepthStaysConservative(t *tes
 		if err != nil {
 			t.Fatalf("Spawn: %v", err)
 		}
-		waitForStatus(t, mgr1, childID, StatusDone, time.Second)
+		waitForStatus(t, mgr1, childID, StatusDone)
 		child, ok := mgr1.Session(childID)
 		if !ok {
 			t.Fatal("child not found")
@@ -1225,7 +1220,7 @@ func TestReportTurnEndNilMsgOnReloadedChildDoesNotPanic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 	child, ok := mgr.Session(childID)
 	if !ok {
 		t.Fatal("child not found before reap")
@@ -1289,7 +1284,7 @@ func TestReportTurnStartBalancesRunningByRootForReloadedChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn child: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 	child, ok := mgr.Session(childID)
 	if !ok {
 		t.Fatal("child not found before reap")
@@ -1322,7 +1317,7 @@ func TestReportTurnStartBalancesRunningByRootForReloadedChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn after ReportTurnEnd released the slot: %v", err)
 	}
-	waitForStatus(t, mgr, otherID, StatusDone, time.Second)
+	waitForStatus(t, mgr, otherID, StatusDone)
 }
 
 // slowCancelProvider blocks in Next until its context is canceled, THEN
@@ -1450,7 +1445,7 @@ func TestReapDoesNotLeakConcurrencySlotAcrossSendThenAbort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	// Restart the same, now-done child for a legitimate follow-up turn —
 	// exactly what session.send permits.
@@ -1459,21 +1454,24 @@ func TestReapDoesNotLeakConcurrencySlotAcrossSendThenAbort(t *testing.T) {
 		defer close(sendDone)
 		mgr.Send(context.Background(), childID, "follow-up") //nolint:errcheck // expected to return a context-canceled error once aborted below
 	}()
+	// The turn must be genuinely under way, and must NOT have seen its
+	// context canceled yet. Wait for the real signal — the node reaching
+	// StatusRunning — then probe ctxDoneSeen without blocking. An earlier
+	// version waited out a flat 50ms window instead and read "nothing
+	// fired" as proof. That window guaranteed nothing about the turn
+	// having started, so it could report a pass having exercised neither
+	// half of the claim.
+	waitForStatus(t, mgr, childID, StatusRunning)
 	select {
 	case <-prov.slow.ctxDoneSeen:
 		t.Fatal("second turn reported ctx.Done() before it was ever started — test setup invalid")
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
-	waitForStatus(t, mgr, childID, StatusRunning, time.Second)
 
 	if err := mgr.AbortTurn(childID); err != nil {
 		t.Fatalf("AbortTurn: %v", err)
 	}
-	select {
-	case <-prov.slow.ctxDoneSeen:
-	case <-time.After(time.Second):
-		t.Fatal("second turn's provider never observed the abort")
-	}
+	awaitSignal(t, prov.slow.ctxDoneSeen, "second turn's provider never observed the abort")
 
 	// Still unwinding (blocked on prov.slow.release) — must not be reapable yet.
 	if n := mgr.Reap(); n != 0 {
@@ -1483,13 +1481,13 @@ func TestReapDoesNotLeakConcurrencySlotAcrossSendThenAbort(t *testing.T) {
 	close(prov.slow.release)
 	<-sendDone
 
-	waitForReap(t, mgr, 1, time.Second, "node never became reapable after its second turn finished")
+	waitForReap(t, mgr, 1, "node never became reapable after its second turn finished")
 
 	otherID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("other")})
 	if err != nil {
 		t.Fatalf("Spawn after the slot should have been freed: %v — the reservation leaked across the Send-then-abort cycle", err)
 	}
-	waitForStatus(t, mgr, otherID, StatusDone, time.Second)
+	waitForStatus(t, mgr, otherID, StatusDone)
 }
 
 // TestReapNeverRemovesACanceledNodeStillUnwinding is the regression test
@@ -1515,7 +1513,7 @@ func TestReapNeverRemovesACanceledNodeStillUnwinding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusRunning, time.Second)
+	waitForStatus(t, mgr, childID, StatusRunning)
 	// Wait for the provider call itself, not just the reserved slot:
 	// Spawn sets StatusRunning before its launched goroutine ever calls
 	// Prompt, and drainQueueAndPrompt starts no turn on an
@@ -1527,11 +1525,7 @@ func TestReapNeverRemovesACanceledNodeStillUnwinding(t *testing.T) {
 	if err := mgr.Cancel(childID); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
-	select {
-	case <-prov.ctxDoneSeen:
-	case <-time.After(time.Second):
-		t.Fatal("provider never observed cancellation")
-	}
+	awaitSignal(t, prov.ctxDoneSeen, "provider never observed cancellation")
 	// The goroutine has seen cancellation but is deliberately still
 	// blocked in Next (on prov.release) — exactly the "still unwinding"
 	// window. The node's own status is already canceled (set
@@ -1548,7 +1542,7 @@ func TestReapNeverRemovesACanceledNodeStillUnwinding(t *testing.T) {
 
 	close(prov.release) // let the goroutine's Prompt call actually return, triggering finalizeTurn
 
-	waitForReap(t, mgr, 1, time.Second, "node never became reapable after its turn finished — finalizeTurn never ran, or never marked it finalized")
+	waitForReap(t, mgr, 1, "node never became reapable after its turn finished — finalizeTurn never ran, or never marked it finalized")
 
 	// The slot is free again: a fresh Spawn under the same root, at the
 	// same concurrency cap, must now succeed.
@@ -1556,7 +1550,7 @@ func TestReapNeverRemovesACanceledNodeStillUnwinding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn after the slot was freed: %v — the reservation leaked", err)
 	}
-	waitForStatus(t, mgr, otherID, StatusDone, time.Second)
+	waitForStatus(t, mgr, otherID, StatusDone)
 }
 
 // TestReapNeverRemovesRootOrNodeWithChildren proves the two things Reap
@@ -1575,12 +1569,12 @@ func TestReapNeverRemovesRootOrNodeWithChildren(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn mid: %v", err)
 	}
-	waitForStatus(t, mgr, midID, StatusDone, time.Second)
+	waitForStatus(t, mgr, midID, StatusDone)
 	grandID, err := mgr.Spawn(SpawnOptions{ParentID: midID, Prompt: "go", Model: modelFor("grand")})
 	if err != nil {
 		t.Fatalf("Spawn grand: %v", err)
 	}
-	waitForStatus(t, mgr, grandID, StatusDone, time.Second)
+	waitForStatus(t, mgr, grandID, StatusDone)
 
 	// mid is terminal (done) but has a child (grand) — must survive a
 	// Reap that only removes grand (the actual leaf).
@@ -1675,7 +1669,7 @@ func TestForgetRootThenChildrenReapedEventuallyCollectsRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	// The child's own completion also delivers a notification to root
 	// (idle at that point) and fires an active resume. The wait above only
@@ -1696,7 +1690,7 @@ func TestForgetRootThenChildrenReapedEventuallyCollectsRoot(t *testing.T) {
 	// therefore cannot observe the pre-resume idle, only the settle after
 	// the turn (root's provider has no scripted turn, so it fails at once).
 	<-rootStreamed
-	waitForStatus(t, mgr, root.ID, StatusIdle, time.Second)
+	waitForStatus(t, mgr, root.ID, StatusIdle)
 
 	// Refused: root still has a (terminal, but not yet reaped) child.
 	if err := mgr.ForgetRoot(root.ID); err == nil {
@@ -1735,7 +1729,7 @@ func TestReapNeverCollectsAnOrdinaryRootEvenWhenChildless(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	if n := mgr.Reap(); n != 1 {
 		t.Fatalf("Reap() = %d, want 1 (the child)", n)
@@ -1763,7 +1757,7 @@ func TestForgetRootRejectsRootWithChildren(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	if err := mgr.ForgetRoot(root.ID); err == nil {
 		t.Error("ForgetRoot on a root with a live (even if terminal) child: want error, got nil")
@@ -1784,7 +1778,7 @@ func TestForgetRootRejectsBusyRoot(t *testing.T) {
 
 	mgr.ReportTurnStart(root)
 	go root.Prompt(context.Background(), "go") //nolint:errcheck // released via t.Cleanup
-	waitForStatus(t, mgr, root.ID, StatusRunning, time.Second)
+	waitForStatus(t, mgr, root.ID, StatusRunning)
 
 	if err := mgr.ForgetRoot(root.ID); err == nil {
 		t.Error("ForgetRoot on a running root: want error, got nil")
@@ -1808,7 +1802,7 @@ func TestForgetRootRejectsNonRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	if err := mgr.ForgetRoot(childID); err == nil {
 		t.Error("ForgetRoot on a non-root child: want error, got nil")
@@ -1847,7 +1841,7 @@ func TestSpawnPersistsTaskSpawnedRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	data, err := os.ReadFile(filepath.Join(dir, root.ID+".jsonl"))
 	if err != nil {
@@ -1882,7 +1876,7 @@ func TestSpawnBudgetExceeded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn child1: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	// child1 alone spent 110 tokens (60+50), already over the 100-token
 	// budget — a second spawn from the same root must be refused.
@@ -1919,7 +1913,7 @@ func TestSpawnBudgetCountsCacheTokensToo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn child1: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	if _, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child2")}); !errors.Is(err, ErrBudgetExceeded) {
 		t.Errorf("Spawn over budget (cache-heavy) = %v, want ErrBudgetExceeded — the gate must count cache read/write tokens, not just input+output", err)
@@ -1940,7 +1934,7 @@ func TestSpawnBudgetUnsetByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn child1: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	if _, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child2")}); err != nil {
 		t.Errorf("Spawn with no budget configured: want nil error, got %v", err)
@@ -1976,12 +1970,12 @@ func TestSpawnBudgetDeltaAccountingAcrossFollowupSend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn child1: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	if _, err := mgr.Send(context.Background(), childID, "again"); err != nil {
 		t.Fatalf("Send follow-up: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	// True cumulative total is 100 (50+50) — still under the 120 budget.
 	// If finalizeTurn had double-counted (e.g. 50 then 100, landing on
@@ -2021,7 +2015,7 @@ func TestSpawnBudgetDeltaAccountingSurvivesReapAndReadopt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn child1: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	childSess, ok := mgr.Session(childID)
 	if !ok {
@@ -2053,7 +2047,7 @@ func TestSpawnBudgetDeltaAccountingSurvivesReapAndReadopt(t *testing.T) {
 	if _, err := mgr.Send(context.Background(), childID, "again"); err != nil {
 		t.Fatalf("Send follow-up: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	// True cumulative total is 100 (70+30) — still under the 120 budget.
 	// If the reaped-then-readopted node's budgetedUsage had started at
@@ -2065,19 +2059,20 @@ func TestSpawnBudgetDeltaAccountingSurvivesReapAndReadopt(t *testing.T) {
 	}
 }
 
-// waitForStatus blocks until id reaches want, or fails the test once
-// timeout elapses.
+// waitForStatus blocks until id reaches want, or fails the test once the
+// test binary's own deadline is at hand.
 //
 // It blocks on SessionManager.Changed — the manager's own "a node's state
 // settled" signal — and never samples on an interval, so nothing here
 // guesses how long a transition takes. Changed is armed BEFORE each Info
 // read, so a transition that lands between the read and the wait is still
-// delivered. timeout is a failure bound only: the happy path returns on
-// the very transition that satisfies it.
-func waitForStatus(t *testing.T, mgr *SessionManager, id string, want SessionStatus, timeout time.Duration) {
+// delivered. The give-up channel is a failure bound only, and it comes
+// from failAfterTestDeadline rather than from a duration a call site
+// picked: the happy path returns on the very transition that satisfies it.
+func waitForStatus(t *testing.T, mgr *SessionManager, id string, want SessionStatus) {
 	t.Helper()
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
+	giveUp, stop := failAfterTestDeadline(t)
+	defer stop()
 	var last SessionStatus
 	for {
 		changed := mgr.Changed()
@@ -2091,14 +2086,15 @@ func waitForStatus(t *testing.T, mgr *SessionManager, id string, want SessionSta
 		}
 		select {
 		case <-changed:
-		case <-timer.C:
-			t.Fatalf("Info(%s).Status = %s after %s, want %s", id, last, timeout, want)
+		case <-giveUp:
+			t.Fatalf("Info(%s).Status = %s, want %s (waited to the test binary's own deadline)", id, last, want)
 		}
 	}
 }
 
 // waitForReap blocks until Reap calls have collected at least want nodes in
-// total, or fails the test once timeout elapses. Same Changed-driven,
+// total, or fails the test once the test binary's own deadline is at
+// hand. Same Changed-driven,
 // sample-free shape as waitForStatus: a node becomes reapable only once
 // finalizeTurn has marked it finalized, which is itself a state settle
 // Changed reports.
@@ -2110,10 +2106,10 @@ func waitForStatus(t *testing.T, mgr *SessionManager, id string, want SessionSta
 // for 1 — after which every later Reap returns 0. An equality test would
 // then never match and would block to the timeout reporting "never became
 // reapable", while nodes had in fact been reaped.
-func waitForReap(t *testing.T, mgr *SessionManager, want int, timeout time.Duration, msg string) {
+func waitForReap(t *testing.T, mgr *SessionManager, want int, msg string) {
 	t.Helper()
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
+	giveUp, stop := failAfterTestDeadline(t)
+	defer stop()
 	got := 0
 	for {
 		changed := mgr.Changed()
@@ -2123,14 +2119,14 @@ func waitForReap(t *testing.T, mgr *SessionManager, want int, timeout time.Durat
 		}
 		select {
 		case <-changed:
-		case <-timer.C:
-			t.Fatalf("%s (Reap collected %d node(s), want at least %d, within %s)", msg, got, want, timeout)
+		case <-giveUp:
+			t.Fatalf("%s (Reap collected %d node(s), want at least %d, by the test binary's own deadline)", msg, got, want)
 		}
 	}
 }
 
 // waitForFinalized blocks until id's node carries finalized=true, or fails
-// the test once timeout elapses.
+// the test once the test binary's own deadline is at hand.
 //
 // Same Changed-driven, sample-free shape as waitForStatus: finalizeTurn
 // sets the flag and runs markChangedLocked under m.mu, so a waiter that
@@ -2144,10 +2140,10 @@ func waitForReap(t *testing.T, mgr *SessionManager, want int, timeout time.Durat
 // goroutine still runs — it would outlive the test and race the next
 // test's freshly allocated provider — waits here, not on the status it
 // already has.
-func waitForFinalized(t *testing.T, mgr *SessionManager, id string, timeout time.Duration) {
+func waitForFinalized(t *testing.T, mgr *SessionManager, id string) {
 	t.Helper()
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
+	giveUp, stop := failAfterTestDeadline(t)
+	defer stop()
 	for {
 		changed := mgr.Changed()
 		mgr.mu.Lock()
@@ -2162,8 +2158,8 @@ func waitForFinalized(t *testing.T, mgr *SessionManager, id string, timeout time
 		}
 		select {
 		case <-changed:
-		case <-timer.C:
-			t.Fatalf("node %s never finalized within %s — its turn goroutine is still running", id, timeout)
+		case <-giveUp:
+			t.Fatalf("node %s never finalized by the test binary's own deadline — its turn goroutine is still running", id)
 		}
 	}
 }
@@ -2244,10 +2240,10 @@ func (w *resumeWatch) take(id string) bool {
 
 // waitClaim blocks until a resume has been claimed for id, and consumes
 // that claim.
-func (w *resumeWatch) waitClaim(t *testing.T, id string, timeout time.Duration) {
+func (w *resumeWatch) waitClaim(t *testing.T, id string) {
 	t.Helper()
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
+	giveUp, stop := failAfterTestDeadline(t)
+	defer stop()
 	for {
 		wake := w.wake()
 		if w.take(id) {
@@ -2255,8 +2251,8 @@ func (w *resumeWatch) waitClaim(t *testing.T, id string, timeout time.Duration) 
 		}
 		select {
 		case <-wake:
-		case <-timer.C:
-			t.Fatalf("no engine-initiated resume was claimed for %s within %s", id, timeout)
+		case <-giveUp:
+			t.Fatalf("no engine-initiated resume was claimed for %s by the test binary's own deadline", id)
 		}
 	}
 }
@@ -2269,10 +2265,10 @@ func (w *resumeWatch) waitClaim(t *testing.T, id string, timeout time.Duration) 
 // having started at all. Together they bracket exactly one resume turn, so
 // everything that turn produces — its trigger message, its requeued or
 // committed notifications, its history — is settled when this returns.
-func waitResumeSettled(t *testing.T, mgr *SessionManager, w *resumeWatch, id string, timeout time.Duration) {
+func waitResumeSettled(t *testing.T, mgr *SessionManager, w *resumeWatch, id string) {
 	t.Helper()
-	w.waitClaim(t, id, timeout)
-	waitForStatus(t, mgr, id, StatusIdle, timeout)
+	w.waitClaim(t, id)
+	waitForStatus(t, mgr, id, StatusIdle)
 }
 
 // flushWatch reports every completed persist flush a manager makes,
@@ -2323,17 +2319,18 @@ func (w *flushWatch) wake() <-chan struct{} {
 }
 
 // waitUntil re-runs cond after every persist flush the manager completes,
-// until cond reports true. It fails the test with msg once timeout elapses.
+// until cond reports true. It fails the test with msg once the test
+// binary's own deadline is at hand.
 //
 // cond re-reads the real condition — normally a fresh LoadSession of the
 // log under test — rather than inferring it from a status. It runs once
 // before the first wait, so an already-satisfied condition returns at once.
 // The wakeup is armed BEFORE each cond call, so a flush that lands while
 // cond is still reading the disk cannot be missed.
-func (w *flushWatch) waitUntil(t *testing.T, timeout time.Duration, msg string, cond func() bool) {
+func (w *flushWatch) waitUntil(t *testing.T, msg string, cond func() bool) {
 	t.Helper()
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
+	giveUp, stop := failAfterTestDeadline(t)
+	defer stop()
 	for {
 		wake := w.wake()
 		if cond() {
@@ -2341,8 +2338,8 @@ func (w *flushWatch) waitUntil(t *testing.T, timeout time.Duration, msg string, 
 		}
 		select {
 		case <-wake:
-		case <-timer.C:
-			t.Fatalf("%s (after %s)", msg, timeout)
+		case <-giveUp:
+			t.Fatalf("%s (waited to the test binary's own deadline)", msg)
 		}
 	}
 }

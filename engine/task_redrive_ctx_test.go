@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"testing"
-	"time"
 )
 
 // TestFinalizeTurnReDriveLeavesQueueOnCtxOnlyCancel is the regression test
@@ -60,7 +59,7 @@ func TestFinalizeTurnReDriveLeavesQueueOnCtxOnlyCancel(t *testing.T) {
 	// sessionNode.finalized's doc comment, session_manager.go). Reached
 	// through the Changed seam, with no sampling. The Session handle above
 	// keeps the queue readable after the sweep removes the node.
-	waitForReap(t, mgr, 1, time.Second, "child never became reapable after the base ctx was canceled")
+	waitForReap(t, mgr, 1, "child never became reapable after the base ctx was canceled")
 
 	pending := child.QueuedPrompts()
 	if len(pending) != 2 || pending[0].Text != "message A" || pending[1].Text != "message B" {

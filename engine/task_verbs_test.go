@@ -14,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -141,7 +140,7 @@ func TestCancelDescendantRejectsUnrelatedSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusRunning, time.Second)
+	waitForStatus(t, mgr, childID, StatusRunning)
 
 	if _, err := mgr.CancelDescendant(otherRoot.ID, childID); !errors.Is(err, ErrNotDescendant) {
 		t.Errorf("CancelDescendant from an unrelated root: err = %v, want ErrNotDescendant", err)
@@ -152,7 +151,7 @@ func TestCancelDescendantRejectsUnrelatedSession(t *testing.T) {
 		t.Errorf("child status after a refused cancel = %s, want still running", info.Status)
 	}
 	close(release)
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 }
 
 // TestCancelDescendantCascadesSubtree proves CancelDescendant does the
@@ -174,18 +173,18 @@ func TestCancelDescendantCascadesSubtree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn child: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusRunning, time.Second)
+	waitForStatus(t, mgr, childID, StatusRunning)
 
 	grandID, err := mgr.Spawn(SpawnOptions{ParentID: childID, Prompt: "go deeper", Model: modelFor("grand")})
 	if err != nil {
 		t.Fatalf("Spawn grandchild: %v", err)
 	}
-	waitForStatus(t, mgr, grandID, StatusDone, time.Second)
+	waitForStatus(t, mgr, grandID, StatusDone)
 
 	if _, err := mgr.CancelDescendant(root.ID, childID); err != nil {
 		t.Fatalf("CancelDescendant(root, child): %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusCanceled, time.Second)
+	waitForStatus(t, mgr, childID, StatusCanceled)
 
 	grandInfo, _ := mgr.Info(grandID)
 	if grandInfo.Status != StatusDone {
@@ -206,18 +205,18 @@ func TestCancelDescendantAllowsTransitiveAncestor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn child: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	grandID, err := mgr.Spawn(SpawnOptions{ParentID: childID, Prompt: "go deeper", Model: modelFor("blocker")})
 	if err != nil {
 		t.Fatalf("Spawn grandchild: %v", err)
 	}
-	waitForStatus(t, mgr, grandID, StatusRunning, time.Second)
+	waitForStatus(t, mgr, grandID, StatusRunning)
 
 	if _, err := mgr.CancelDescendant(root.ID, grandID); err != nil {
 		t.Fatalf("CancelDescendant(root, grand): %v", err)
 	}
-	waitForStatus(t, mgr, grandID, StatusCanceled, time.Second)
+	waitForStatus(t, mgr, grandID, StatusCanceled)
 }
 
 func TestCancelDescendantUnknownSessionIsError(t *testing.T) {
@@ -240,7 +239,7 @@ func TestDescendantInfoReturnsStatusLineageUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	node, gotUsage, err := mgr.DescendantInfo(root.ID, childID)
 	if err != nil {
@@ -316,7 +315,7 @@ func TestSendToDescendantRunningQueuesAndDeliversAtBoundary(t *testing.T) {
 	}
 
 	close(release)
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	if len(childProv.requests) != 2 {
 		t.Fatalf("child provider requests = %d, want 2", len(childProv.requests))
@@ -420,7 +419,7 @@ func TestDrainQueueAndPromptStopsDequeuingOnCancelMidDrain(t *testing.T) {
 	if err := mgr.Cancel(childID); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusCanceled, time.Second)
+	waitForStatus(t, mgr, childID, StatusCanceled)
 	// Read the queue only once drainQueueAndPrompt's own goroutine has
 	// FINISHED, never merely once the status flipped: Cancel marks a
 	// running node StatusCanceled synchronously, while that goroutine is
@@ -434,7 +433,7 @@ func TestDrainQueueAndPromptStopsDequeuingOnCancelMidDrain(t *testing.T) {
 	// seam, with no sampling. The child Session handle is captured above,
 	// before the sweep removes the node, so its queue stays readable
 	// after collection.
-	waitForReap(t, mgr, 1, time.Second, "canceled child never became reapable, so drainQueueAndPrompt never returned")
+	waitForReap(t, mgr, 1, "canceled child never became reapable, so drainQueueAndPrompt never returned")
 
 	pending := child.QueuedPrompts()
 	if len(pending) != 1 || pending[0].Text != "message B" {
@@ -535,7 +534,7 @@ func TestSendToDescendantRunningWithoutToolBoundaryStillDelivers(t *testing.T) {
 
 	close(release) // the first turn ends with StopEndTurn and no tool calls — the mid-turn drain point is never reached at all
 
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	if len(childProv.requests) != 2 {
 		t.Fatalf("child provider requests = %d, want 2 (drainQueueAndPrompt must launch a second turn, not strand the message)", len(childProv.requests))
@@ -570,7 +569,7 @@ func TestSendToDescendantSettledRelaunchesAsynchronously(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	// No wall-clock deadline assertion here (AGENTS.md's "no guessed
 	// deadlines" testing rule — a live review finding on an earlier
@@ -591,9 +590,9 @@ func TestSendToDescendantSettledRelaunchesAsynchronously(t *testing.T) {
 		t.Error("SendToDescendant on a settled child: queued = true, want false (a fresh re-run turn, not an enqueue)")
 	}
 
-	waitForStatus(t, mgr, childID, StatusRunning, time.Second)
+	waitForStatus(t, mgr, childID, StatusRunning)
 	close(release)
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 }
 
 // TestSendToDescendantRunningPersistsQueueRecordAfterUnlock guards the
@@ -688,7 +687,7 @@ func TestSendToDescendantSettledReservesTurnBeforeReturning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	queued, err := mgr.SendToDescendant(root.ID, childID, "please redo this")
 	if err != nil {
@@ -713,7 +712,7 @@ func TestSendToDescendantSettledReservesTurnBeforeReturning(t *testing.T) {
 	}
 
 	close(release)
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 }
 
 func TestSendToDescendantRejectsCanceledTarget(t *testing.T) {
@@ -726,12 +725,12 @@ func TestSendToDescendantRejectsCanceledTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusRunning, time.Second)
+	waitForStatus(t, mgr, childID, StatusRunning)
 
 	if err := mgr.Cancel(childID); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusCanceled, time.Second)
+	waitForStatus(t, mgr, childID, StatusCanceled)
 
 	if _, err := mgr.SendToDescendant(root.ID, childID, "hi"); !errors.Is(err, ErrSessionCanceled) {
 		t.Errorf("SendToDescendant on a canceled child: err = %v, want ErrSessionCanceled", err)
@@ -747,7 +746,7 @@ func TestSendToDescendantRejectsNonDescendant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	if _, err := mgr.SendToDescendant(otherRoot.ID, childID, "hi"); !errors.Is(err, ErrNotDescendant) {
 		t.Errorf("SendToDescendant from an unrelated root: err = %v, want ErrNotDescendant", err)
@@ -766,7 +765,7 @@ func TestRunTaskToolCancelAction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusRunning, time.Second)
+	waitForStatus(t, mgr, childID, StatusRunning)
 
 	raw, _ := json.Marshal(map[string]string{"action": "cancel", "session_id": childID})
 	parts, err := runTaskTool(root, raw)
@@ -780,7 +779,7 @@ func TestRunTaskToolCancelAction(t *testing.T) {
 	if result.Status != string(StatusCanceled) {
 		t.Errorf("result.Status = %q, want %q", result.Status, StatusCanceled)
 	}
-	waitForStatus(t, mgr, childID, StatusCanceled, time.Second)
+	waitForStatus(t, mgr, childID, StatusCanceled)
 }
 
 func TestRunTaskToolCancelRejectsNonDescendant(t *testing.T) {
@@ -792,7 +791,7 @@ func TestRunTaskToolCancelRejectsNonDescendant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	raw, _ := json.Marshal(map[string]string{"action": "cancel", "session_id": childID})
 	if _, err := runTaskTool(root, raw); err == nil {
@@ -810,7 +809,7 @@ func TestRunTaskToolStatusAction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	raw, _ := json.Marshal(map[string]string{"action": "status", "session_id": childID})
 	parts, err := runTaskTool(root, raw)
@@ -869,7 +868,7 @@ func TestRunTaskToolSendActionOnRunningChildQueues(t *testing.T) {
 		t.Error("result.Queued = false, want true for a running descendant")
 	}
 	close(release)
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 }
 
 func TestRunTaskToolSendActionMissingArgumentsAreErrors(t *testing.T) {
@@ -914,7 +913,7 @@ func TestRunTaskToolSendActionWhitespaceOnlyPromptIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn settled child: %v", err)
 	}
-	waitForStatus(t, mgr, settledID, StatusDone, time.Second)
+	waitForStatus(t, mgr, settledID, StatusDone)
 
 	for _, tc := range []struct {
 		name string
@@ -1029,7 +1028,7 @@ func TestSendToDescendantSettledRejectsBlankText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	if _, err := mgr.SendToDescendant(root.ID, childID, "   "); !errors.Is(err, ErrEmptyPromptText) {
 		t.Fatalf("SendToDescendant blank text to a settled target: err = %v, want ErrEmptyPromptText", err)
@@ -1064,11 +1063,11 @@ func TestDescendantInfoReportsReapedChildren(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn grandchild: %v", err)
 	}
-	waitForStatus(t, mgr, grandID, StatusDone, time.Second)
+	waitForStatus(t, mgr, grandID, StatusDone)
 
 	// Reap the finished grandchild: mid's LIVE children list loses it,
 	// its durable spawn record does not.
-	waitForReap(t, mgr, 1, time.Second, "finished grandchild never became reapable")
+	waitForReap(t, mgr, 1, "finished grandchild never became reapable")
 
 	info, _, err := mgr.DescendantInfo(root.ID, midID)
 	if err != nil {
