@@ -442,6 +442,58 @@ func TestDrainQueueAndPromptStopsDequeuingOnCancelMidDrain(t *testing.T) {
 	}
 }
 
+// countingProvider records how many Stream calls it received and fails
+// every one — for a test that asserts a request is never issued at all.
+type countingProvider struct {
+	name string
+	mu   sync.Mutex
+	n    int
+}
+
+func (p *countingProvider) Name() string { return p.name }
+
+func (p *countingProvider) Stream(context.Context, *provider.Request) (provider.Stream, error) {
+	p.mu.Lock()
+	p.n++
+	p.mu.Unlock()
+	return nil, errors.New("countingProvider: Stream must never be called")
+}
+
+func (p *countingProvider) calls() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.n
+}
+
+// TestDrainQueueAndPromptSkipsFirstPromptOnCanceledCtx is the regression
+// test for a review finding on the ctx-guard fix: only the LOOP body was
+// guarded, so the FIRST s.Prompt call ran unconditionally. On the
+// finalizeTurn re-drive and settled-relaunch paths a cancel landing
+// between the closure's creation and its `go resume()` therefore issued
+// one wasted provider request and appended one user message to a session
+// whose ctx was already dead. The guard must skip that call entirely and
+// return the ctx error, leaving history untouched.
+func TestDrainQueueAndPromptSkipsFirstPromptOnCanceledCtx(t *testing.T) {
+	prov := &countingProvider{name: "never"}
+	s := NewSession(managedConfig("never", prov))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	msg, err := drainQueueAndPrompt(ctx, s, "wasted directive")
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("drainQueueAndPrompt on a canceled ctx: err = %v, want context.Canceled", err)
+	}
+	if msg != nil {
+		t.Errorf("drainQueueAndPrompt on a canceled ctx: msg = %+v, want nil", msg)
+	}
+	if got := prov.calls(); got != 0 {
+		t.Errorf("provider Stream calls = %d, want 0: a canceled turn must not issue a request", got)
+	}
+	if h := s.History(); len(h) != 0 {
+		t.Errorf("history after a canceled drain = %d message(s), want 0: the wasted directive was appended anyway", len(h))
+	}
+}
+
 // TestSendToDescendantRunningWithoutToolBoundaryStillDelivers is the
 // regression test for a live review finding on this fix's first pass: a
 // message enqueued to a running child whose CURRENT (and only remaining)
@@ -832,6 +884,63 @@ func TestRunTaskToolSendActionMissingArgumentsAreErrors(t *testing.T) {
 	raw, _ = json.Marshal(map[string]string{"action": "send", "prompt": "hi"})
 	if _, err := runTaskTool(root, raw); err == nil {
 		t.Error("send with no session_id: want error, got nil")
+	}
+}
+
+// TestRunTaskToolSendActionWhitespaceOnlyPromptIsRejected is the
+// regression test for a live review finding: runTaskSend guarded only
+// `in.Prompt == ""`, so a whitespace-only prompt behaved OPPOSITELY by
+// target state. A RUNNING target reached SendToDescendant's own enqueue
+// validation and returned a raw, non-sentinel error that
+// classifyTaskVerbError leaks to the model verbatim ("engine:
+// EnqueuePrompt requires non-empty text"); a SETTLED target accepted the
+// blank text and burned a real turn on it. Both targets must now get the
+// same model-facing rejection from runTaskSend itself, before either
+// path runs.
+func TestRunTaskToolSendActionWhitespaceOnlyPromptIsRejected(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	runningProv := &signaledBlockingProvider{name: "running", started: make(chan struct{}), release: release}
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	root := mgr.NewRoot(managedConfig("root", scriptedTurns("root", nil), runningProv, scriptedTurns("settled", doneTurn("done"))))
+
+	runningID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("running"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn running child: %v", err)
+	}
+	<-runningProv.started
+
+	settledID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("settled"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn settled child: %v", err)
+	}
+	waitForStatus(t, mgr, settledID, StatusDone, time.Second)
+
+	for _, tc := range []struct {
+		name string
+		id   string
+	}{
+		{"running target", runningID},
+		{"settled target", settledID},
+	} {
+		raw, _ := json.Marshal(map[string]string{"action": "send", "session_id": tc.id, "prompt": "   "})
+		parts, err := runTaskTool(root, raw)
+		if err == nil {
+			t.Errorf("%s: whitespace-only prompt accepted (result %q), want an error", tc.name, parts.Text())
+			continue
+		}
+		if !strings.Contains(err.Error(), "prompt is required") {
+			t.Errorf("%s: error = %v, want the same model-facing \"prompt is required\" rejection both targets get", tc.name, err)
+		}
+	}
+
+	// The settled target must not have been restarted by the rejected call.
+	info, ok := mgr.Info(settledID)
+	if !ok {
+		t.Fatal("Info(settled child): not found")
+	}
+	if info.Status != StatusDone {
+		t.Errorf("settled child Status after a rejected whitespace-only send = %s, want %s: a blank prompt burned a real turn", info.Status, StatusDone)
 	}
 }
 

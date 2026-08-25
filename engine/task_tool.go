@@ -333,14 +333,25 @@ func runTaskSend(s *Session, in taskToolArgs) (message.Parts, error) {
 	if in.SessionID == "" {
 		return nil, fmt.Errorf("task: session_id is required for action %q", taskActionSend)
 	}
-	if in.Prompt == "" {
+	// TrimSpace, not a bare == "" test: a whitespace-only prompt used to
+	// behave OPPOSITELY by target state — a live review finding. A running
+	// target reached SendToDescendant's own enqueue validation and came
+	// back with a raw, non-sentinel error classifyTaskVerbError leaks to
+	// the model verbatim ("task: engine: EnqueuePrompt requires non-empty
+	// text"), while a settled target accepted the blank text and burned a
+	// whole real turn on it. One validation here, before either path,
+	// makes both answers the same and keeps the message model-facing.
+	// The trimmed text is what gets sent, matching EnqueuePrompt's own
+	// trim-then-store rule (queue.go).
+	prompt := strings.TrimSpace(in.Prompt)
+	if prompt == "" {
 		return nil, fmt.Errorf("task: prompt is required for action %q", taskActionSend)
 	}
 	m := s.cfg.SessionManager
 	if m == nil {
 		return nil, fmt.Errorf("task: this session has no session manager")
 	}
-	queued, err := m.SendToDescendant(s.ID, in.SessionID, in.Prompt)
+	queued, err := m.SendToDescendant(s.ID, in.SessionID, prompt)
 	if err != nil {
 		return nil, classifyTaskVerbError(err, in.SessionID)
 	}
@@ -353,15 +364,17 @@ func runTaskSend(s *Session, in taskToolArgs) (message.Parts, error) {
 	// live review finding.
 	//
 	// "dispatched," not a guaranteed "started": SendToDescendant's
-	// settled-target path launches the re-run in a fire-and-forget
-	// goroutine (see its own doc comment on the accepted residual
-	// admission race — a concurrent change can still make that goroutine's
-	// own Send call lose ErrSessionBusy/ErrSessionCanceled/
-	// ErrConcurrencyLimit, which is silently discarded, same as it always
-	// was). Claiming a definite "started... no need to poll" here would be
-	// a caller-facing overclaim on that rare path: a live review finding.
-	// task status on session_id remains the honest way to confirm the
-	// re-run actually took, on the off chance it didn't.
+	// settled-target path reserves the turn synchronously
+	// (reserveSendLocked, under the same m.mu hold as its own admission
+	// checks) but runs it in a launched goroutine, so this call returns
+	// before the re-run's first provider request. Admission failures are
+	// no longer lost — an earlier revision released m.mu and let that
+	// goroutine's own Send call discard ErrUnknownSession/
+	// ErrSessionCanceled/ErrConcurrencyLimit, which two live review
+	// findings closed — so the reservation itself is certain by the time
+	// the model reads this note. "Started" would still overclaim the
+	// turn's own progress, and task status on session_id remains the way
+	// to observe it.
 	note := "the descendant was not actively running, so this was dispatched as a fresh turn with your message; check back with task status on this session_id if you want to confirm it actually started"
 	if queued {
 		// Hedged with "unless it is canceled first," not an unconditional

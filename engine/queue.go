@@ -100,6 +100,62 @@ func (s *Session) enqueueMemoryOnlyLocked(text string) QueuedPrompt {
 	return p
 }
 
+// deferredQueueRecord is one prompt-queue record (see promptRecord in
+// store.go) whose memory mutation is already applied but whose disk write
+// is deferred — see queueRecordDeferredLocked.
+type deferredQueueRecord struct {
+	recType string
+	prompt  promptRecord
+}
+
+// queueRecordDeferredLocked parks one prompt-queue record for a write that
+// runs LATER, outside the tree-wide m.mu — the durable half of
+// enqueueMemoryOnlyLocked/dequeueMemoryOnlyLocked. The caller must park the
+// record under the SAME s.mu hold as the memory mutation it describes, then
+// arrange the flush via SessionManager.deferPersist/unlockAndFlushPersist
+// (SendToDescendant's running-target enqueue, finalizeTurn's queued-message
+// re-drive).
+//
+// Parking on the SESSION, not in the caller's own closure, is what keeps
+// the log's record order equal to the memory-mutation order. A review
+// finding proved the closure form wrong: SendToDescendant appends to the
+// queue in memory under m.mu and defers the prompt.queued write, while the
+// child's own turn goroutine — which needs only s.mu, never m.mu — can
+// drain that very item at a tool-call boundary and write its
+// prompt.dequeued record synchronously. The dequeued record then reached
+// disk FIRST, and LoadSession's fold (which removes a dequeued item by ID
+// and no-ops when its queued record has not folded yet) let the later
+// queued record re-append the item: a reload resurrected an
+// already-delivered prompt and the child ran it twice, breaking the
+// queue's no-double-delivery invariant. Because a parked record lives on
+// s and every prompt-queue write drains the park first
+// (persistPromptQueueLocked), the competing dequeuer now writes the parked
+// queued record before its own — whichever goroutine gets there first
+// writes both, in order.
+//
+// A duplicate write is impossible: the flush removes what it wrote, so a
+// dequeuer that drains the park makes the later deferred flush a no-op.
+// Caller holds s.mu.
+func (s *Session) queueRecordDeferredLocked(recType string, p promptRecord) {
+	s.deferredQueueRecords = append(s.deferredQueueRecords, deferredQueueRecord{recType: recType, prompt: p})
+}
+
+// flushQueueRecordsLocked writes every parked prompt-queue record, in FIFO
+// order, and clears the park. Called by persistPromptQueueLocked before its
+// own write, and by the deferPersist thunk the parking caller queued. Cheap
+// no-op when nothing is parked, which is every ordinary session's steady
+// state. Caller holds s.mu.
+func (s *Session) flushQueueRecordsLocked() {
+	if len(s.deferredQueueRecords) == 0 {
+		return
+	}
+	pending := s.deferredQueueRecords
+	s.deferredQueueRecords = nil
+	for _, r := range pending {
+		s.writePromptQueueRecordLocked(r.recType, r.prompt)
+	}
+}
+
 // EnqueuePromptDurable is EnqueuePrompt with an honest durability and
 // idempotency contract, for callers (an inbox poller, a coordinator relay)
 // whose OWN upstream ack rides on this call's success — see

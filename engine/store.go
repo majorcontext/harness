@@ -529,7 +529,22 @@ func (s *Session) persistGoalLocked(recType string, g goalRecord) {
 // to the session log (see queue.go's EnqueuePrompt/DequeuePrompt). It forces
 // the log to exist — a prompt.queued may be the first thing ever written to
 // a fresh session — mirroring persistGoalLocked exactly. Caller holds s.mu.
+//
+// Drains s.deferredQueueRecords FIRST, so a record parked by
+// queueRecordDeferredLocked always reaches disk before any prompt-queue
+// record written after the memory mutation it belongs to — see that
+// method's own doc comment for the resurrection defect this ordering
+// prevents.
 func (s *Session) persistPromptQueueLocked(recType string, p promptRecord) {
+	s.flushQueueRecordsLocked()
+	s.writePromptQueueRecordLocked(recType, p)
+}
+
+// writePromptQueueRecordLocked is persistPromptQueueLocked's write half,
+// with NO deferred-record drain — the one path both
+// persistPromptQueueLocked and flushQueueRecordsLocked write through, so a
+// drain can never recurse into another drain. Caller holds s.mu.
+func (s *Session) writePromptQueueRecordLocked(recType string, p promptRecord) {
 	if s.cfg.SessionDir == "" {
 		return
 	}
@@ -1230,8 +1245,18 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 		case recPromptDequeued:
 			// Remove the matching queued entry (by ID, not position — see
 			// promptRecord's doc comment) so the folded queue ends up exactly
-			// the undelivered set, in ID order, regardless of how queued and
-			// dequeued records interleave in the log.
+			// the undelivered set, in ID order, however many other records
+			// separate a queued record from its own dequeued record.
+			//
+			// This fold reads FORWARD only: a dequeued record for an ID
+			// not folded yet is a no-op, and a queued record arriving
+			// after it re-appends the item. Every writer therefore owes
+			// this fold one ordering guarantee — a queued record reaches
+			// disk before its own dequeued record. The two writers that
+			// defer a prompt-queue write out from under the tree-wide
+			// m.mu keep it by parking the record on the session, not in
+			// their own closure; see queueRecordDeferredLocked (queue.go)
+			// for the resurrection defect a closure-held record caused.
 			if rec.Prompt != nil {
 				for i, p := range s.promptQueue {
 					if p.ID == rec.Prompt.ID {

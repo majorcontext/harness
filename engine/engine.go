@@ -901,6 +901,13 @@ type Session struct {
 	// — see LoadSession's recPromptQueued case. Guarded by mu.
 	promptQueueNextID int64
 
+	// deferredQueueRecords holds prompt-queue records whose memory
+	// mutation already happened but whose disk write was deferred out
+	// from under the tree-wide m.mu (see queueRecordDeferredLocked in
+	// queue.go and SessionManager.deferPersist). FIFO, in memory-mutation
+	// order. Guarded by mu.
+	deferredQueueRecords []deferredQueueRecord
+
 	// enqueueSeq is the durable-enqueue idempotency high-water mark (see
 	// EnqueuePromptDurable in queue.go and promptRecord.Seq in store.go):
 	// the largest caller-issued seq durably accepted. Monotonic; a seq at or

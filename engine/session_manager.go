@@ -2714,8 +2714,8 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 // abandoned because an unrelated earlier turn on the same child failed.
 //
 // Stops draining, WITHOUT dequeuing anything further, the instant ctx is
-// already canceled — checked at the top of every loop iteration, before
-// the next dequeue. Without this, a child canceled (task cancel) WHILE
+// already canceled — checked before the FIRST Prompt call and again at
+// the top of every loop iteration, before the next dequeue. Without this, a child canceled (task cancel) WHILE
 // this loop is between Prompt calls would keep calling s.DequeuePrompt
 // (journaling each item as "delivered") and s.Prompt(ctx, ...) — on an
 // already-dead ctx — for every remaining queued entry: a live review
@@ -2732,6 +2732,16 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 // eventually Reaped — "stays queued," not "discarded" by any explicit
 // step.
 func drainQueueAndPrompt(ctx context.Context, s *Session, text string) (*message.Message, error) {
+	// The FIRST call is guarded too, not just the loop — a review
+	// finding: on the finalizeTurn re-drive and settled-relaunch paths a
+	// cancel landing between the closure's creation and its `go resume()`
+	// left this call issuing one wasted Prompt (appending one user
+	// message) on an already-dead ctx. Returning ctx.Err() matches what
+	// Prompt itself returns for that ctx, so finalizeTurn classifies the
+	// turn exactly as before.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	msg, err := s.Prompt(ctx, text)
 	for {
 		if ctx.Err() != nil {
@@ -3152,14 +3162,25 @@ func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queu
 		// (commitOutcomeLocked, finalizeTurn's own notify-delivery
 		// block) — so the write happens after m.mu releases, in this
 		// same goroutine, in order.
+		//
+		// The record is PARKED on the session
+		// (queueRecordDeferredLocked), under the same s.mu hold as the
+		// memory append, and only then flushed by the deferPersist
+		// thunk — never written from the thunk's own closure. See that
+		// method's own doc comment (queue.go): a closure-held record
+		// could reach disk AFTER the child's own goroutine (which needs
+		// only s.mu) drained this very item and wrote its
+		// prompt.dequeued record synchronously, and LoadSession's fold
+		// then resurrected the delivered prompt.
 		s := n.session
 		s.mu.Lock()
 		p := s.enqueueMemoryOnlyLocked(trimmed)
+		s.queueRecordDeferredLocked(recPromptQueued, promptRecord{ID: p.ID, Text: p.Text})
 		s.emit(Event{Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue)})
 		s.mu.Unlock()
 		m.deferPersist(func() {
 			s.mu.Lock()
-			s.persistPromptQueueLocked(recPromptQueued, promptRecord{ID: p.ID, Text: p.Text})
+			s.flushQueueRecordsLocked()
 			s.mu.Unlock()
 		})
 		m.unlockAndFlushPersist()
@@ -3311,13 +3332,18 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 		s.mu.Lock()
 		next, ok := s.dequeueMemoryOnlyLocked()
 		if ok {
+			// Parked on the session, under the same s.mu hold as the
+			// memory pop — see queueRecordDeferredLocked's own doc
+			// comment (queue.go) for why a closure-held record breaks
+			// the log's record order and what that costs on replay.
+			s.queueRecordDeferredLocked(recPromptDequeued, promptRecord{ID: next.ID, Text: next.Text, Reason: "delivered"})
 			s.emit(Event{Type: EventPromptDequeued, QueueID: next.ID, QueueText: next.Text, QueueReason: "delivered", QueueLen: len(s.promptQueue)})
 		}
 		s.mu.Unlock()
 		if ok {
 			m.deferPersist(func() {
 				s.mu.Lock()
-				s.persistPromptQueueLocked(recPromptDequeued, promptRecord{ID: next.ID, Text: next.Text, Reason: "delivered"})
+				s.flushQueueRecordsLocked()
 				s.mu.Unlock()
 			})
 			nodeCtx := n.ctx
