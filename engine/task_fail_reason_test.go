@@ -1,5 +1,5 @@
 // Tests for the cause-carrying half of a failed child's fail_reason:
-// classifySpawnError (session_manager.go) appends the underlying provider
+// classifySpawnFailure (session_manager.go) appends the underlying provider
 // error to its classified prefix, so a parent learns WHY a child died, not
 // only that it did.
 //
@@ -132,12 +132,12 @@ func TestClassifySpawnErrorKeepsClassifiedPrefix(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := classifySpawnError(tc.err)
+			got := classifySpawnFailure(tc.err).Reason
 			if !strings.HasPrefix(got, tc.wantPrefix) {
-				t.Errorf("classifySpawnError = %q, want prefix %q", got, tc.wantPrefix)
+				t.Errorf("classifySpawnFailure reason = %q, want prefix %q", got, tc.wantPrefix)
 			}
 			if !strings.Contains(got, tc.wantDetail) {
-				t.Errorf("classifySpawnError = %q, want it to contain %q", got, tc.wantDetail)
+				t.Errorf("classifySpawnFailure reason = %q, want it to contain %q", got, tc.wantDetail)
 			}
 		})
 	}
@@ -147,14 +147,14 @@ func TestClassifySpawnErrorKeepsClassifiedPrefix(t *testing.T) {
 // timed-out turn keeps its short fixed reason: "context canceled" adds
 // nothing a parent can act on, and both strings are compared elsewhere.
 func TestClassifySpawnErrorContextCausesStayFixed(t *testing.T) {
-	if got := classifySpawnError(context.Canceled); got != "canceled" {
-		t.Errorf("classifySpawnError(context.Canceled) = %q, want %q", got, "canceled")
+	if got := classifySpawnFailure(context.Canceled).Reason; got != "canceled" {
+		t.Errorf("classifySpawnFailure(context.Canceled).Reason = %q, want %q", got, "canceled")
 	}
-	if got := classifySpawnError(context.DeadlineExceeded); got != "timed out" {
-		t.Errorf("classifySpawnError(context.DeadlineExceeded) = %q, want %q", got, "timed out")
+	if got := classifySpawnFailure(context.DeadlineExceeded).Reason; got != "timed out" {
+		t.Errorf("classifySpawnFailure(context.DeadlineExceeded).Reason = %q, want %q", got, "timed out")
 	}
-	if got := classifySpawnError(nil); got != "" {
-		t.Errorf("classifySpawnError(nil) = %q, want empty", got)
+	if got := classifySpawnFailure(nil).Reason; got != "" {
+		t.Errorf("classifySpawnFailure(nil).Reason = %q, want empty", got)
 	}
 }
 
@@ -162,13 +162,13 @@ func TestClassifySpawnErrorContextCausesStayFixed(t *testing.T) {
 // embeds a whole response body cannot balloon the notification a parent
 // replays on every later turn.
 func TestClassifySpawnErrorTruncatesLongCause(t *testing.T) {
-	long := strings.Repeat("x", spawnErrorDetailCap*3)
-	got := classifySpawnError(errors.New(long))
+	longErr := errors.New(strings.Repeat("x", spawnErrorDetailCap*3))
+	got := classifySpawnFailure(longErr).Reason
 	if len([]rune(got)) > spawnErrorDetailCap+len(spawnErrorDetailTruncationMarker)+120 {
-		t.Errorf("classifySpawnError length = %d runes, want it bounded near the %d-rune cap", len([]rune(got)), spawnErrorDetailCap)
+		t.Errorf("classifySpawnFailure reason length = %d runes, want it bounded near the %d-rune cap", len([]rune(got)), spawnErrorDetailCap)
 	}
 	if !strings.Contains(got, spawnErrorDetailTruncationMarker) {
-		t.Errorf("classifySpawnError = %q, want the truncation marker %q", got, spawnErrorDetailTruncationMarker)
+		t.Errorf("classifySpawnFailure reason = %q, want the truncation marker %q", got, spawnErrorDetailTruncationMarker)
 	}
 }
 
@@ -176,11 +176,11 @@ func TestClassifySpawnErrorTruncatesLongCause(t *testing.T) {
 // the same masking every other model-visible text uses: a provider error
 // can quote the request it rejected, headers included.
 func TestClassifySpawnErrorMasksSecretsInCause(t *testing.T) {
-	got := classifySpawnError(errors.New(`openai: 401 on request (Authorization: Bearer sk-live-abcdefgh12345678)`))
+	got := classifySpawnFailure(errors.New(`openai: 401 on request (Authorization: Bearer sk-live-abcdefgh12345678)`)).Reason
 	if strings.Contains(got, "sk-live-abcdefgh12345678") {
-		t.Errorf("classifySpawnError = %q, want the bearer token masked", got)
+		t.Errorf("classifySpawnFailure reason = %q, want the bearer token masked", got)
 	}
 	if !strings.Contains(got, "401") {
-		t.Errorf("classifySpawnError = %q, want the rest of the cause preserved", got)
+		t.Errorf("classifySpawnFailure reason = %q, want the rest of the cause preserved", got)
 	}
 }

@@ -1594,6 +1594,46 @@ for itself (`freeRunSlotAndEmitIdle` clears it before `ReportTurnEnd`
 flips the node). The manager half answers only what residency cannot: a
 Spawn-driven child, which is never a residency key.
 
+**Provider exhaustion is not a child failure.** An ACCOUNT-level supply
+wall — the API key's usage limit, quota, credit balance, or spend cap — is
+FLEET-WIDE (every sibling on the same key hits the identical wall at the
+identical moment) and TEMPORAL (the child's session and work are intact and
+re-runnable once the provider's clock rolls over). A parent that reads it as
+an ordinary failure respawns a replacement into the same wall, which a live
+incident measured. Three layers carry it:
+
+- The ADAPTER classifies, never the engine. `provider/anthropic`'s
+  `parseUsageExhaustion` gates on the HTTP status (400/402/403/429, or none
+  at all for a mid-stream `error` event) and then matches
+  `usageExhaustionPatterns` — a deliberately flat, extensible list of
+  observed wall wordings, one regexp per shape, each of which must name a
+  spent SUPPLY, never a per-minute THROTTLE. It returns a
+  `provider.Error{Kind: ErrKindProviderExhausted, RecoverHint}` wrapped
+  permanent (no backoff outlives a spent quota). This is the second place
+  message matching is tolerated, under `parseContextOverflow`'s rules. Other
+  adapters opt in by producing the same kind; only anthropic does today.
+- The ENGINE reads the typed classification, never text.
+  `classifySpawnFailure` (`engine/session_manager.go`) maps
+  `provider.AsProviderExhausted` — or a `RetryableRateLimited` class that
+  outlived the retry budget — to `FailKindProviderExhausted`
+  (`"provider_exhausted"`). Overload and 5xx weather deliberately do NOT
+  qualify: those clear in seconds and a sibling may well succeed.
+- The STATUS VOCABULARY is unchanged. An exhausted child is `StatusFailed`,
+  with the kind in a SEPARATE `FailKind` field (`SessionNode`,
+  `taskNotification`, the durable `taskNotifyRecord`, `task status`'s
+  `fail_kind`, `GET /session/{id}.lineage.fail_kind`, the journal's
+  `task_fail_kind`). A sixth `SessionStatus` value would have forced every
+  cancellation/Reap/delivery/restore switch to grow an arm that behaves
+  exactly like `StatusFailed`; only the PARENT's next move differs.
+
+`taskFailureGuidance` (`engine/taskdelivery.go`) appends the parent's
+instructions to that child's own notification line — child preserved, do not
+spawn a replacement, resume with `task send` on this session id, after the
+recover-at hint when the provider gave one. Resuming is the existing
+send-to-a-settled-descendant re-run path, unchanged. A turn that then
+succeeds clears `failReason`/`failKind` on the node, so a resumed child
+stops reporting a wall it already got past.
+
 `Config.OnRequest` receives the firing session's own id as its first
 parameter (`engine/engine.go`). Never wire it as a closure over a
 captured session variable: `configSnapshot` copies the func value into

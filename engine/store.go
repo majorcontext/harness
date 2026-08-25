@@ -397,12 +397,19 @@ type taskSpawnRecord struct {
 // identical "Text carried on both record types" reasoning) without
 // cross-referencing the matching queued record earlier in the log.
 type taskNotifyRecord struct {
-	ChildID    string         `json:"child_id,omitempty"`
-	Agent      string         `json:"agent,omitempty"`
-	Status     SessionStatus  `json:"status,omitempty"`
-	Result     string         `json:"result,omitempty"`
-	FailReason string         `json:"fail_reason,omitempty"`
-	Usage      provider.Usage `json:"usage,omitzero"`
+	ChildID    string        `json:"child_id,omitempty"`
+	Agent      string        `json:"agent,omitempty"`
+	Status     SessionStatus `json:"status,omitempty"`
+	Result     string        `json:"result,omitempty"`
+	FailReason string        `json:"fail_reason,omitempty"`
+	// FailKind mirrors taskNotification.FailKind (see its own doc
+	// comment, taskdelivery.go): the structured classification a parent
+	// branches on. Carried durably so a reloaded parent — or a re-adopted
+	// child restored through restoreKnownStatusLocked — reports the same
+	// kind a live one would. A legacy record with no fail_kind restores
+	// "", exactly the ordinary-failure value.
+	FailKind string         `json:"fail_kind,omitempty"`
+	Usage    provider.Usage `json:"usage,omitzero"`
 	// Canceled mirrors taskNotification.Canceled (see its own doc
 	// comment, taskdelivery.go) — carried on every record type this
 	// struct backs, though only recTaskOutcomeCommitted's own fold below
@@ -620,7 +627,7 @@ func (s *Session) persistTaskNotifyLocked(recType string, n taskNotification) {
 		s.lastPersistErr = err
 		return
 	}
-	rec := taskNotifyRecord{ChildID: n.ChildID, Agent: n.Agent, Status: n.Status, Result: n.Result, FailReason: n.FailReason, Usage: n.Usage, Canceled: n.Canceled}
+	rec := taskNotifyRecord{ChildID: n.ChildID, Agent: n.Agent, Status: n.Status, Result: n.Result, FailReason: n.FailReason, FailKind: n.FailKind, Usage: n.Usage, Canceled: n.Canceled}
 	if err := s.writeRecord(record{Type: recType, TaskNotify: &rec}); err != nil {
 		s.lastPersistErr = err
 	}
@@ -1137,8 +1144,8 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				tn := rec.TaskNotify
 				oc := taskNotification{
 					ChildID: tn.ChildID, Agent: tn.Agent, Status: tn.Status,
-					Result: tn.Result, FailReason: tn.FailReason, Usage: tn.Usage,
-					Canceled: tn.Canceled,
+					Result: tn.Result, FailReason: tn.FailReason, FailKind: tn.FailKind,
+					Usage: tn.Usage, Canceled: tn.Canceled,
 				}
 				s.committedOutcome = &oc
 			}
@@ -1305,8 +1312,8 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				tn := rec.TaskNotify
 				s.taskNotifications = append(s.taskNotifications, taskNotification{
 					ChildID: tn.ChildID, Agent: tn.Agent, Status: tn.Status,
-					Result: tn.Result, FailReason: tn.FailReason, Usage: tn.Usage,
-					Canceled: tn.Canceled,
+					Result: tn.Result, FailReason: tn.FailReason, FailKind: tn.FailKind,
+					Usage: tn.Usage, Canceled: tn.Canceled,
 				})
 			}
 		case recTaskNotifyDelivered:

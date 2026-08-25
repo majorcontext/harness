@@ -206,6 +206,14 @@ type lineageJSON struct {
 	// rule its doc comment states). Both empty otherwise.
 	Result     string `json:"result,omitempty"`
 	FailReason string `json:"fail_reason,omitempty"`
+	// FailKind classifies FailReason for a control plane that must branch
+	// rather than parse prose: "provider_exhausted" (engine's
+	// FailKindProviderExhausted) means the provider ACCOUNT is walled, so
+	// the child is intact and re-runnable and a replacement child would
+	// hit the same wall. Empty for an ordinary failure, and — like Status
+	// — always empty on the cold-fallback branch, which has no durable
+	// source for a SessionManager-only field.
+	FailKind string `json:"fail_kind,omitempty"`
 }
 
 // usageJSON is the Session/StatusEntry usage sub-object (issue #62 layer 2):
@@ -3582,6 +3590,7 @@ func lineageJSONFor(lv liveSession) *lineageJSON {
 			AgentType:  info.AgentType,
 			Result:     info.Result,
 			FailReason: info.FailReason,
+			FailKind:   info.FailKind,
 		}
 	}
 	parentID := sess.TaskParentID()

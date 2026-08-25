@@ -276,6 +276,18 @@ operations (the boxes control plane is the first consumer):
   guess as "respawn a sibling into the same fleet-wide provider wall".
   `canceled` and `timed out` keep their short fixed strings: a context
   error names nothing a parent can act on.
+- An ACCOUNT-level provider wall (usage limit, quota, credit balance,
+  spend cap) is a distinct outcome: `fail_kind ==
+  "provider_exhausted"` alongside the ordinary `failed` status. The
+  condition is fleet-wide (every sibling on the key is walled) and
+  temporal (the child's work survives), so the notification tells the
+  parent explicitly not to spawn a replacement and to resume THIS child
+  with `task send` — the existing settled-descendant re-run path — after
+  the provider's own recover-at hint. Classification happens in the
+  adapter (`provider/anthropic`'s `parseUsageExhaustion`), never by the
+  engine matching provider text; the engine reads
+  `provider.AsProviderExhausted`, or a rate limit that outlived the retry
+  budget. A successful resume clears the failure bookkeeping.
 - Canceling a parent cancels its entire subtree before the parent
   finalizes.
 - Child session logs persist like any session's, so a child's work is

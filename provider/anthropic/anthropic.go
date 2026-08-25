@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/majorcontext/harness/message"
@@ -130,6 +131,23 @@ func apiError(resp *http.Response) error {
 		// combination — classifyStatus already reports 400 as not
 		// retryable, so this mark and that one can never collide on the
 		// same error.
+		// An ACCOUNT-level supply wall (usage limit, quota, credit
+		// balance, spend cap) is classified before both the generic
+		// permanent branch below and classifyStatus's retryable weather:
+		// Anthropic delivers it as an ordinary 400 invalid_request_error
+		// or 429 rate_limit_error, so without this check the same wall
+		// reads as "malformed request" on one status and "retry in a
+		// moment" on the other — neither of which tells a supervising
+		// parent that every sibling on this key is walled too. Wrapped
+		// permanent for the same reason the branch below is: no backoff
+		// schedule outlives a spent quota, so retrying only burns turns.
+		if hint, ok := parseUsageExhaustion(resp.StatusCode, body.Error.Message); ok {
+			return provider.MarkPermanent(&provider.Error{
+				Kind:        provider.ErrKindProviderExhausted,
+				Raw:         msg,
+				RecoverHint: hint,
+			})
+		}
 		if resp.StatusCode == http.StatusBadRequest && body.Error.Type == "invalid_request_error" {
 			return provider.MarkPermanent(errors.New(msg))
 		}
@@ -211,6 +229,81 @@ func parseContextOverflow(errType string, status int, message string) (promptTok
 		return 0, 0, false
 	}
 	return promptTokens, limit, true
+}
+
+// usageExhaustionPatterns matches the message shapes Anthropic uses for an
+// ACCOUNT-level supply wall. Like contextOverflowPattern above, Anthropic
+// gives these no distinct error type or code — a spent usage limit arrives
+// as a plain invalid_request_error and a spent quota as a plain
+// rate_limit_error — so this is the second place message matching is
+// tolerated, under the identical rules: scoped to this adapter, never the
+// engine, and gated on a structural signal (see parseUsageExhaustion)
+// before the message is ever inspected.
+//
+// The list is meant to GROW. Each entry is one observed wall shape, kept
+// separate and narrow rather than folded into one clever alternation, so
+// adding a newly observed wording is a one-line change with an obvious
+// test row (TestUsageLimitShapes). Every entry must name a SUPPLY that is
+// spent — a limit, quota, balance, or spend cap — never a per-minute or
+// per-token THROTTLE, which is ordinary weather classifyStatus already
+// handles correctly (TestPlainRateLimitStaysRetryable guards that line).
+var usageExhaustionPatterns = []*regexp.Regexp{
+	// "You have reached your specified API usage limits." — the live
+	// 2026-08-25 incident's own message, an HTTP 400.
+	regexp.MustCompile(`(?i)reached your specified API usage limits?`),
+	// "Your credit balance is too low to access the Anthropic API"
+	regexp.MustCompile(`(?i)credit balance is too low`),
+	// "You have exceeded your monthly quota" / "Organization quota exceeded"
+	regexp.MustCompile(`(?i)quota (?:has been )?exceeded`),
+	regexp.MustCompile(`(?i)exceeded your (?:\w+ )?quota`),
+	// "...would exceed your organization's monthly spend limit"
+	regexp.MustCompile(`(?i)spend limit`),
+	// "usage limit reached" / "usage limit exceeded" phrasings
+	regexp.MustCompile(`(?i)usage limit (?:reached|exceeded)`),
+}
+
+// recoverHintPattern extracts the provider's own statement of when access
+// returns, e.g. "You will regain access on 2026-09-01 at 00:00 UTC." The
+// hint is optional detail: parseUsageExhaustion classifies with or without
+// it (see provider.Error.RecoverHint).
+var recoverHintPattern = regexp.MustCompile(`(?i)regain access on ([^.\n"]+)`)
+
+// exhaustionStatuses are the HTTP statuses an account-level wall can
+// arrive on: 400 (usage limit, credit balance), 402 (payment required),
+// 403 (some organization-level refusals), 429 (quota). The status gate
+// runs BEFORE any message match, so a 500 that happens to quote a quota
+// message stays server weather.
+var exhaustionStatuses = map[int]bool{
+	http.StatusBadRequest:      true,
+	http.StatusPaymentRequired: true,
+	http.StatusForbidden:       true,
+	http.StatusTooManyRequests: true,
+}
+
+// parseUsageExhaustion classifies an Anthropic error message as an
+// account-level supply wall, returning the recover-at hint when the
+// message carries one (empty string otherwise — never a reason to refuse
+// the classification). status <= 0 skips the status gate: a mid-stream
+// "error" SSE event carries no status of its own, exactly as
+// classifyErrorType has to work from the wire type alone.
+func parseUsageExhaustion(status int, message string) (recoverHint string, ok bool) {
+	if status > 0 && !exhaustionStatuses[status] {
+		return "", false
+	}
+	matched := false
+	for _, pat := range usageExhaustionPatterns {
+		if pat.MatchString(message) {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return "", false
+	}
+	if m := recoverHintPattern.FindStringSubmatch(message); m != nil {
+		return strings.TrimSpace(m[1]), true
+	}
+	return "", true
 }
 
 // assembledBlock accumulates one content block across SSE deltas.
@@ -500,6 +593,19 @@ func (s *stream) handle(name string, data []byte) error {
 		// deterministic retry budget instead of failing fast on attempt 1.
 		// No context-overflow carve-out is needed here: an oversized
 		// request is rejected before any stream opens, never mid-stream.
+		//
+		// An account-level supply wall CAN arrive here, though: a long
+		// stream can outlive the moment the key's limit is reached.
+		// Classified first, on the message alone — a stream event carries
+		// no HTTP status, the same constraint classifyErrorType works
+		// under — so a mid-stream wall reads identically to an HTTP one.
+		if hint, ok := parseUsageExhaustion(0, ev.Error.Message); ok {
+			return provider.MarkPermanent(&provider.Error{
+				Kind:        provider.ErrKindProviderExhausted,
+				Raw:         err.Error(),
+				RecoverHint: hint,
+			})
+		}
 		if ev.Error.Type == "invalid_request_error" {
 			return provider.MarkPermanent(err)
 		}

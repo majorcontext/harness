@@ -662,6 +662,11 @@ type sessionNode struct {
 	// Reap's own eligibility check treats pendingForget as the ONE
 	// exception to "a root is never reaped" — see its doc comment.
 	pendingForget bool
+
+	// failKind is the structured classification of failReason, empty for
+	// an ordinary failure — see FailKindProviderExhausted, the only value
+	// this package produces today.
+	failKind string
 }
 
 // SessionNode is a read-only snapshot of one managed session's lifecycle
@@ -676,6 +681,10 @@ type SessionNode struct {
 	AgentType  string
 	Result     string
 	FailReason string
+	// FailKind classifies FailReason for a caller that must branch rather
+	// than read prose — empty for an ordinary failure. See
+	// FailKindProviderExhausted.
+	FailKind string
 }
 
 func (n *sessionNode) snapshot() SessionNode {
@@ -688,6 +697,7 @@ func (n *sessionNode) snapshot() SessionNode {
 		AgentType:  n.agentType,
 		Result:     n.result,
 		FailReason: n.failReason,
+		FailKind:   n.failKind,
 	}
 }
 
@@ -1072,6 +1082,7 @@ func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
 		default:
 			n.status = StatusFailed
 			n.failReason = committed.FailReason
+			n.failKind = committed.FailKind
 		}
 		m.markChangedLocked()
 	case s.HasHistoryOrSpawnedChildren():
@@ -3583,11 +3594,20 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 		// StatusFailed — a live review finding.
 		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: "canceled", Canceled: true, Usage: n.session.Usage()}
 	case perr != nil:
+		fail := classifySpawnFailure(perr)
 		n.status = StatusFailed
-		n.failReason = classifySpawnError(perr)
-		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: n.failReason, Usage: n.session.Usage()}
+		n.failReason = fail.Reason
+		n.failKind = fail.Kind
+		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: fail.Reason, FailKind: fail.Kind, RecoverHint: fail.RecoverHint, Usage: n.session.Usage()}
 	default:
 		n.status = StatusDone
+		// A node can reach StatusDone after an earlier FAILED turn: the
+		// send-to-a-settled-descendant re-run path (SendToDescendant) is
+		// exactly how a provider-exhausted child resumes once the wall
+		// lifts. Clear the previous failure's bookkeeping, or that child
+		// keeps reporting the wall it already got past.
+		n.failReason = ""
+		n.failKind = ""
 		// msg is nil for a caller that never has one to give — an
 		// external scheduler's ReportTurnEnd(id, nil, err) (server's
 		// runGoal and cmd/harness's own runGoal both pass nil
@@ -4097,9 +4117,39 @@ const spawnErrorDetailCap = 500
 // mistakes a truncated message for the provider's whole answer.
 const spawnErrorDetailTruncationMarker = "… [truncated]"
 
-// classifySpawnError maps a raw Prompt error from a managed session's turn
-// into the reason for a child's completion notification: a fixed
-// classified prefix, then the underlying error itself as the cause.
+// FailKindProviderExhausted is the spawnFailure kind for an ACCOUNT-level
+// provider supply wall: the key's usage limit, quota, credit balance, or
+// spend cap is spent (provider.ErrKindProviderExhausted), or a rate limit
+// outlived the whole retry budget. It is the one failure kind a parent
+// must answer differently from every other: the condition is FLEET-WIDE
+// (every sibling on the same key hits the identical wall at the identical
+// moment, so a replacement child is guaranteed to fail too) and TEMPORAL
+// (the child's own session and work are intact and re-runnable once the
+// provider's clock rolls over).
+//
+// A string, and a SEPARATE field from Status, on purpose. The status
+// vocabulary (running/idle/done/failed/canceled — see SessionStatus) is
+// consumed by cascade cancellation, Reap eligibility, delivery routing,
+// and restore; an exhausted child is genuinely StatusFailed for every one
+// of those, and a sixth status value would have forced every switch in
+// this package to grow an arm that behaves exactly like StatusFailed. The
+// only thing that differs is what the PARENT should do next, which is
+// exactly what this field says.
+const FailKindProviderExhausted = "provider_exhausted"
+
+// spawnFailure is one failed child turn, classified: a machine-readable
+// Kind (empty for an ordinary failure), the model-visible Reason, and the
+// provider's own recover-at hint when it gave one.
+type spawnFailure struct {
+	Kind        string
+	Reason      string
+	RecoverHint string
+}
+
+// classifySpawnFailure maps a raw Prompt error from a managed session's
+// turn into the reason for a child's completion notification: a fixed
+// classified prefix, then the underlying error itself as the cause, plus
+// the structured kind a parent branches on.
 //
 // The prefix alone was the whole reason until a live incident proved it
 // unusable. A child died on "[permanent] anthropic: You have reached your
@@ -4127,18 +4177,44 @@ const spawnErrorDetailTruncationMarker = "… [truncated]"
 // reads (see taskNotification.Canceled's doc comment for why it is NOT
 // compared, and finalizeTurn's alreadyCanceled branch, which produces the
 // same literal).
-func classifySpawnError(err error) string {
+func classifySpawnFailure(err error) spawnFailure {
 	if err == nil {
-		return ""
+		return spawnFailure{}
 	}
 	if errors.Is(err, context.Canceled) {
-		return "canceled"
+		return spawnFailure{Reason: "canceled"}
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return "timed out"
+		return spawnFailure{Reason: "timed out"}
+	}
+	// Exhaustion is read from the adapter's typed classification
+	// (provider.AsProviderExhausted) or from the retryable CLASS value —
+	// never from the error text. The engine string-matching a provider
+	// message is the exact thing provider.Error's doc comment forbids, and
+	// it would need one copy of the rule per provider integration.
+	//
+	// A rate limit that reached this point survived the whole retry
+	// budget, so from the parent's side it is the same wall: waiting is
+	// the only move, and a replacement child inherits the condition.
+	// Overload and 5xx weather deliberately do NOT qualify — those clear
+	// in seconds and a sibling may well succeed, so telling a parent to
+	// stand down would cost it real throughput.
+	class, retryable := provider.AsRetryable(err)
+	if pe, ok := provider.AsProviderExhausted(err); ok {
+		return spawnFailure{
+			Kind:        FailKindProviderExhausted,
+			Reason:      exhaustionReason(pe.RecoverHint) + ": " + spawnErrorDetail(err),
+			RecoverHint: pe.RecoverHint,
+		}
+	}
+	if retryable && class == provider.RetryableRateLimited {
+		return spawnFailure{
+			Kind:   FailKindProviderExhausted,
+			Reason: "provider rate limit outlasted the retry budget for this account: " + spawnErrorDetail(err),
+		}
 	}
 	var prefix string
-	switch class, retryable := provider.AsRetryable(err); {
+	switch {
 	case retryable:
 		prefix = fmt.Sprintf("provider %s errors exhausted the retry budget", class)
 	case provider.AsPermanent(err):
@@ -4146,7 +4222,16 @@ func classifySpawnError(err error) string {
 	default:
 		prefix = "turn failed and did not recover"
 	}
-	return prefix + ": " + spawnErrorDetail(err)
+	return spawnFailure{Reason: prefix + ": " + spawnErrorDetail(err)}
+}
+
+// exhaustionReason is the classified prefix for an account wall, naming
+// when access returns whenever the provider said so.
+func exhaustionReason(hint string) string {
+	if hint == "" {
+		return "provider capacity exhausted for this account"
+	}
+	return "provider capacity exhausted for this account; access returns " + hint
 }
 
 // spawnErrorDetail renders err as the model-visible cause half of a

@@ -80,15 +80,20 @@ type taskCancelResult struct {
 // status, lineage, and cumulative usage (design doc: "the child's live
 // status/lineage/usage").
 type taskStatusResult struct {
-	SessionID  string         `json:"session_id"`
-	ParentID   string         `json:"parent_id"`
-	Depth      int            `json:"depth"`
-	Status     string         `json:"status"`
-	Children   []string       `json:"children"`
-	AgentType  string         `json:"agent_type"`
-	Result     string         `json:"result,omitempty"`
-	FailReason string         `json:"fail_reason,omitempty"`
-	Usage      provider.Usage `json:"usage"`
+	SessionID  string   `json:"session_id"`
+	ParentID   string   `json:"parent_id"`
+	Depth      int      `json:"depth"`
+	Status     string   `json:"status"`
+	Children   []string `json:"children"`
+	AgentType  string   `json:"agent_type"`
+	Result     string   `json:"result,omitempty"`
+	FailReason string   `json:"fail_reason,omitempty"`
+	// FailKind classifies FailReason for a model that must branch rather
+	// than parse prose — "provider_exhausted" means the account, not the
+	// child, is the problem: preserve the child and resume it with the
+	// send action later, never spawn a replacement.
+	FailKind string         `json:"fail_kind,omitempty"`
+	Usage    provider.Usage `json:"usage"`
 }
 
 // taskSendResult is the send action's return. Queued distinguishes the
@@ -321,6 +326,7 @@ func runTaskStatus(s *Session, in taskToolArgs) (message.Parts, error) {
 		AgentType:  node.AgentType,
 		Result:     node.Result,
 		FailReason: node.FailReason,
+		FailKind:   node.FailKind,
 		Usage:      usage,
 	})
 }
