@@ -192,15 +192,33 @@ func (waitTimeoutError) Error() string { return "timeout_s must be a positive in
 // next natural drain trigger") — loadJournal never sets queueDrainPending,
 // so that case is unaffected here and still returns idle immediately.
 //
-// running also falls back to SessionManager's live status when neither
-// queueDrainPending nor residency has anything: a Spawn-driven child is
+// running also falls back to SessionManager's live status, but ONLY when
+// id is not resident at all (st == nil) — never merely because
+// queueDrainPending/st.running both read false. A Spawn-driven child is
 // never a key in s.sessions (Spawn drives its turn directly, never through
 // claimForPrompt — see resolveSessForSync's doc comment for the identical
-// reasoning on the journaling path). Without it, a mid-turn child reads
-// running=false here and until=idle returns a false "idle" immediately.
-// sessMgr.Info is consulted OUTSIDE s.mu: server.mu stays a leaf lock (see
-// syncMessages' lock-ordering note), and no established order exists
-// between server.mu and SessionManager.mu to rely on.
+// reasoning on the journaling path). Without the fallback, a mid-turn
+// child reads running=false here and until=idle returns a false "idle"
+// immediately.
+//
+// Gating on st == nil is load-bearing, not a belt-and-suspenders extra
+// check — a live review finding caught a real regression from an earlier
+// revision that fell back whenever !running, resident or not.
+// freeRunSlotAndEmitIdle (handlers.go) sets st.running = false and wakes
+// waiters BEFORE ReportTurnEnd flips the SessionManager node off
+// StatusRunning (the two calls are deliberately ordered that way — see
+// runPrompt's own doc comment). A waiter woken in that gap used to read
+// st.running == false correctly, then see this fallback (ungated) still
+// find sessMgr's node StatusRunning and report busy — a genuinely wrong
+// answer for an ordinary resident session's prompt-then-wait flow, not
+// just a promptness gap, and the waiter then hangs to timeout_s with
+// nothing left to wake it (the idle event already fired once). A resident
+// session's own st.running is always the authoritative, race-free answer
+// for itself; the fallback exists ONLY to cover the one case residency
+// has no answer for at all. sessMgr.Info is consulted OUTSIDE s.mu:
+// server.mu stays a leaf lock (see syncMessages' lock-ordering note), and
+// no established order exists between server.mu and SessionManager.mu to
+// rely on.
 //
 // Known residual, accepted for this fix's scope (a live review finding):
 // a GET /session/{childID}/wait?until=idle waiter can still block until
@@ -223,12 +241,16 @@ func (waitTimeoutError) Error() string { return "timeout_s must be a positive in
 func (s *Server) waitSnapshot(id string) (string, *goalJSON) {
 	s.mu.Lock()
 	running := s.queueDrainPending[id]
-	if st := s.sessions[id]; st != nil {
+	st := s.sessions[id]
+	if st != nil {
 		running = running || st.running
 	}
 	goal := goalJSONFrom(s.goalState[id])
 	s.mu.Unlock()
-	if !running {
+	// The sessMgr fallback is for a NON-resident id only (st == nil) — see
+	// this function's own doc comment for why gating on residency, not
+	// merely !running, is load-bearing.
+	if st == nil {
 		if info, ok := s.sessMgr.Info(id); ok && info.Status == engine.StatusRunning {
 			running = true
 		}

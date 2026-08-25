@@ -3510,11 +3510,21 @@ func (s *Server) lineageJSONFor(id string, sess *engine.Session) *lineageJSON {
 // legacy parent whose log predates task.spawned records) follow, in their
 // own order.
 //
-// Durable-first is what preserves spawn order overall. The live list is
-// always a spawn-order subsequence of durable: adoptLocked appends at
-// spawn, and Reap's filter keeps survivor order. Live-first would reorder
-// siblings the moment an elder child settles and is Reaped while a
-// younger one still runs ([B, A] instead of [A, B]).
+// Durable-first preserves spawn order for the common, all-post-field
+// case. The live list is a spawn-order subsequence of durable there:
+// adoptLocked appends at spawn, and Reap's filter keeps survivor order.
+// Live-first would reorder siblings the moment an elder child settles and
+// is Reaped while a younger one still runs ([B, A] instead of [A, B]).
+//
+// A live review finding: this guarantee does NOT extend to a mixed
+// legacy/non-legacy tree — a parent that spawned an elder child A before
+// task.spawned records existed (A lives only in the live tree, never in
+// durable SpawnedChildIDs) and a younger child B after the field shipped
+// (durable) yields childIDsUnion(live=[A,B], durable=[B]) = [B, A]: B
+// before A, reversed from true spawn order. Narrow and low severity —
+// pre-field lineage was always best-effort, and this ordering was never a
+// documented contract for that migration edge — but the guarantee above
+// is specifically an all-post-field one, not universal.
 //
 // Always returns a non-nil slice — never omitted, see lineageJSON.Children's
 // own doc comment on why that field has no omitempty. "children":[] means
