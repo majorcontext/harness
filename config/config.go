@@ -527,6 +527,16 @@ func validateProviders(providers map[string]Provider) error {
 // registered under that same key, so no anthropic adapter would ever read
 // the value. A name match alone would pass that shape and let cache_ttl
 // vanish into a client that ignores it.
+// ValidateProviderCacheTTL reports whether ttl is a value this package
+// accepts for Provider.CacheTTL. It is the exported seam cmd/harness's
+// parity test uses to prove this list and provider/anthropic's own list
+// still agree; package config cannot import a provider package, so nothing
+// else binds the two copies together. Empty is valid — it means "adapter
+// default".
+func ValidateProviderCacheTTL(ttl string) error {
+	return validateCacheTTL("anthropic", Provider{CacheTTL: ttl})
+}
+
 func validateCacheTTL(name string, p Provider) error {
 	if p.CacheTTL == "" {
 		return nil

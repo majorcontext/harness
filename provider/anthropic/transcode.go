@@ -158,6 +158,13 @@ const (
 // such miss costs more than the 1h write premium over hundreds of turns.
 const DefaultCacheTTL = CacheTTL1h
 
+// ResolveCacheTTL reports whether ttl is a value this adapter accepts for
+// Client.CacheTTL, returning the resolved wire TTL. It is the exported seam
+// cmd/harness's parity test uses to prove this adapter's accepted list still
+// agrees with package config's duplicated copy. Stream calls the unexported
+// resolveCacheTTL directly.
+func ResolveCacheTTL(ttl string) (string, error) { return resolveCacheTTL(ttl) }
+
 // resolveCacheTTL maps a configured Client.CacheTTL to a wire TTL. It fails on
 // an unknown value instead of falling back: a typo must never silently ship
 // different cache economics than the operator asked for.
