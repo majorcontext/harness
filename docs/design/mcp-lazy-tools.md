@@ -73,7 +73,13 @@ Global policy, in `config.Config` (`config/config.go`):
 | `"lazy"` | Always defer, whatever the catalog size. |
 
 `mcp_tool_loading_threshold` is the tool COUNT `"auto"` compares against;
-`0` or absent means the engine default (`defaultMCPDeferThreshold`, 20).
+`0` or absent means the engine default (`defaultMCPDeferThreshold`, 20). A
+NEGATIVE value is rejected by `Config.validate`, exactly as
+`connect_timeout_s` already is: `len(catalog) > -1` holds for an empty
+catalog, so a stray minus sign would silently turn `"auto"` into
+"always defer" — the one reading the author certainly did not intend. The
+engine clamps any non-positive value it is handed to the default, so an
+embedder that bypasses config validation still gets sane behaviour.
 A count, not a token estimate: the engine has no tokenizer on the request
 path, and a count is deterministic and testable. Twenty is the point where
 a typical catalog's schema block stops being small enough to ignore, while
@@ -287,19 +293,49 @@ moves with the catalog but the policy does not.
 {"action": "search", "query": "create issue", "limit": 20}
 ```
 
-Ranking is deterministic and needs no index. For each catalog tool, the
-score sums:
+Ranking is deterministic and needs no index. The rules are stated to the
+byte, because a golden ranking test must have exactly one right answer.
+
+Normalization, applied once before any scoring:
+
+- Lowercase the query and every field it is matched against, with
+  `strings.ToLower`.
+- Tokenize the lowercased query on every run of characters outside
+  `[a-z0-9]`. Drop empty tokens, then DEDUPLICATE: a token repeated in the
+  query scores once, not twice.
+- A blank query, or one that yields no token, is an error. `search` never
+  answers with the whole catalog.
+
+Scoring, for one tool, against the DEDUPLICATED token set:
 
 | Signal | Points |
 |---|---|
-| Query equals the tool's full name or its remote name (case-insensitive) | 100 |
-| A query token appears in the remote name | 50 |
-| A query token appears in the server name | 5 |
-| A query token appears in the description | 10 |
+| The whole trimmed lowercased query equals the lowercased full name, or the lowercased remote name | 100, once |
+| A token is a SUBSTRING of the lowercased remote name | 50 per distinct token |
+| A token is a SUBSTRING of the lowercased description | 10 per distinct token |
+| A token is a SUBSTRING of the lowercased server name | 5 per distinct token |
+
+Substring, never whole-word: a query token must match inside
+`create_issue` and inside `createIssue` alike, and the engine does no
+stemming. Each distinct token scores at most once per field, whatever the
+number of occurrences. A tool scores in all four rows at once when it
+qualifies for all four.
+
+Worked example. Query `create issue`, tokens `[create, issue]`, tool
+`mcp__github__create_issue` on server `github`, described as `Create a new
+issue in a repository`:
+
+- The whole query, `create issue`, does not equal `create_issue`, so no
+  exact bonus.
+- Both tokens are substrings of `create_issue`: +100.
+- Both are substrings of the lowercased description: +20.
+- Neither is a substring of `github`: +0.
+- Total: 120.
 
 Results sort by score descending, then by name ascending, so ties are
-stable. `limit` defaults to `mcpSearchDefaultLimit` (20) and is capped at
-`mcpSearchMaxLimit` (50). A zero-score tool never appears.
+stable. A zero-score tool never appears. `limit` defaults to
+`mcpSearchDefaultLimit` (20), is capped at `mcpSearchMaxLimit` (50), and a
+value below 1 falls back to the default.
 
 The result is JSON:
 
@@ -307,15 +343,29 @@ The result is JSON:
 {
   "matches": [
     {"name": "mcp__github__create_issue", "server": "github",
-     "description": "Create a new issue in a repository", "selected": false}
+     "description": "Create a new issue in a repository", "loaded": false},
+    {"name": "mcp__github__list_issues", "server": "github",
+     "description": "List issues in a repository", "loaded": true}
   ],
-  "total": 3,
+  "total": 2,
   "truncated": false
 }
 ```
 
-`search` covers the whole catalog, deferred or not, and marks what is
-already selected. It never mutates state.
+`total` counts every tool that scored above zero, before `limit` cuts the
+list. `truncated` is `total > len(matches)`, so the two fields never
+disagree.
+
+`loaded` reports whether the tool's schema is in the tools array RIGHT NOW.
+It is true for a tool of an eager server and for a selected tool of a
+deferred server. It deliberately does not report set membership: what the
+model needs to know is whether it must call `select` before it calls the
+tool, and under `auto` below the threshold — where nothing defers — the
+honest answer for every tool is `true`. A `selected` flag would answer
+`false` there and send the model into a `select` call it does not need.
+
+`search` covers the whole catalog, deferred or not. It never mutates
+state.
 
 ### `select`
 
@@ -359,6 +409,22 @@ itself on reconnect, exactly like a restored one.
 hold it is a typo or an invention; recording it would let a hallucinated
 name live in the session's durable state for good.
 
+`pending` cannot close that hole at select time — a parked server's catalog
+is unknown, so an invented name and a real one are indistinguishable — so
+it closes it at REAP time instead. Whenever the plan runs, a selected name
+is dropped from the session's set when its server is CONNECTED and the
+catalog does not hold the name. A real tool arms itself; an invented one is
+reaped on the same event. The reap is memory-only and needs no removal
+record: replay unions the log again on the next reload, and the same rule
+prunes the same name again on that session's first plan. The durable log
+therefore keeps one inert line per `select` call, and the EFFECTIVE set
+never exceeds the live catalog.
+
+The reap is deliberately blind to WHY a connected server does not hold a
+name. A server that drops a tool from its own catalog reaps that selection
+too, which is correct: the tool is gone, the model re-selects if it comes
+back.
+
 Rules:
 
 - An empty or absent `tools` array is an error. Every other input shape
@@ -369,7 +435,11 @@ Rules:
   but under `auto` that server can flip to deferred later in the session,
   and the record is what keeps the tool loaded across the flip and across a
   reload. This is the reason `select` records the name rather than
-  answering "already available" and forgetting it.
+  answering "already available" and forgetting it. The call is cheap by
+  construction: the def is in the array before and after, so the array's
+  bytes do not move and no cached prefix is invalidated. The waste is one
+  tool round trip, and the `loaded` flag on every `search` result exists to
+  stop the model spending it.
 - Only the namespaced form is accepted. `search` returns namespaced names,
   so the model always holds one, and a bare remote name is ambiguous across
   servers.
@@ -410,11 +480,12 @@ Recovery degrades in one direction only:
 
 - A restored name whose tool is present again contributes its schema on the
   first request after the reload. The model needs no re-select.
-- A restored name whose server is absent, parked, or has dropped that tool
-  contributes nothing, and the model sees the catalog listing (or nothing,
-  when the server itself is gone). It re-selects when the tool returns.
-  The name STAYS in the selected set: the state is small, and keeping it
-  makes the recovery self-healing the moment the server reconnects.
+- A restored name whose server is absent or parked contributes nothing and
+  STAYS in the selected set. The state is small, and keeping it makes the
+  recovery self-healing the moment that server reconnects.
+- A restored name whose server IS connected without it is reaped from the
+  set on the first plan after the reload (§4). Nothing durable is written;
+  the same rule prunes the same name after every later reload.
 - A session created under `lazy` and reloaded under `eager` keeps the
   restored set; it is inert, because every tool is registered anyway.
 
@@ -494,8 +565,11 @@ construction, since nothing here has a schedule.
    text, listing bound, description truncation, and the position of the
    segment in the assembled system slice, asserted on the slice
    `Session.Prompt` actually sends.
-2. **Search and select.** Ranking table test, including tie-break by name
-   and the zero-score exclusion. `select` partition across all four
+2. **Search and select.** Ranking table test driven from the normalization
+   and scoring rules in §4, including the worked example's exact total, a
+   repeated query token scoring once, a substring hit inside a compound
+   name, tie-break by name, the zero-score exclusion, the blank-query
+   error, and `total`/`truncated` agreeing when `limit` cuts the list. `select` partition across all four
    buckets, with the journal write asserted for `selected` and `pending`
    and asserted ABSENT for `already` and `missing`. Empty `tools` errors.
    The action gate: a global-`eager` session with one per-server `lazy`
@@ -509,8 +583,10 @@ construction, since nothing here has a schedule.
    `LoadSession`: selection survives, malformed and duplicate names are
    skipped, and a restored name whose tool is gone yields no def and no
    error. A `pending` selection made during an outage arms itself once the
-   server connects, without a second `select`. Red-verify each guard
-   against the pre-fix code.
+   server connects, without a second `select`, and an INVENTED pending name
+   is reaped on that same event — the pair that proves the reap rule closes
+   the hallucinated-name hole without breaking self-heal. Red-verify each
+   guard against the pre-fix code.
 4. **End-to-end.** An `httptest` MCP server (the `fakeMCPHTTPServer` shape
    in `engine/mcp_test.go`) serving a catalog above the threshold, driven
    through a real `MCPManager` and a real `Session`: the first request
