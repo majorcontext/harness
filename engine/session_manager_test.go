@@ -2187,11 +2187,18 @@ func waitForFinalized(t *testing.T, mgr *SessionManager, id string, timeout time
 type resumeWatch struct {
 	mu     sync.Mutex
 	claims []string
-	// sig carries a wakeup, not a count: it is buffered by one and sent
-	// to without blocking. A waiter checks its condition BEFORE blocking
-	// here, so a claim landing between the check and the receive still
-	// leaves a token behind and wakes it. A stale token only costs one
-	// extra re-check.
+	// sig is a BROADCAST wakeup, the same close-and-replace shape
+	// SessionManager.Changed uses: record closes it and installs a fresh
+	// one, so every waiter blocked on it wakes and re-reads.
+	//
+	// A single buffered token would be wrong here. Claims are tracked per
+	// target id, so two waiters on different ids can be blocked at once;
+	// one token means whichever waiter wakes first consumes it, finds no
+	// claim for ITS id, and re-blocks — while the waiter whose claim
+	// actually landed sleeps until its bound with the wakeup already
+	// spent. Closing wakes both, and each re-reads its own id. A waiter
+	// must arm (call wake) BEFORE its take, exactly as a Changed waiter
+	// arms before its Info read.
 	sig chan struct{}
 }
 
@@ -2207,11 +2214,17 @@ func watchResumes(t *testing.T, mgr *SessionManager) *resumeWatch {
 func (w *resumeWatch) record(targetID string) {
 	w.mu.Lock()
 	w.claims = append(w.claims, targetID)
+	close(w.sig)
+	w.sig = make(chan struct{})
 	w.mu.Unlock()
-	select {
-	case w.sig <- struct{}{}:
-	default:
-	}
+}
+
+// wake returns the channel that closes on the next recorded claim. Arm it
+// before reading claims, never after.
+func (w *resumeWatch) wake() <-chan struct{} {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.sig
 }
 
 // take consumes one recorded claim for id, and reports whether it found
@@ -2229,21 +2242,6 @@ func (w *resumeWatch) take(id string) bool {
 	return false
 }
 
-// count reports how many claims for id this watch has recorded and not yet
-// consumed. Use it only where a barrier already proves no further claim can
-// arrive; a bare count is otherwise a race against a claim still to come.
-func (w *resumeWatch) count(id string) int {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	n := 0
-	for _, got := range w.claims {
-		if got == id {
-			n++
-		}
-	}
-	return n
-}
-
 // waitClaim blocks until a resume has been claimed for id, and consumes
 // that claim.
 func (w *resumeWatch) waitClaim(t *testing.T, id string, timeout time.Duration) {
@@ -2251,11 +2249,12 @@ func (w *resumeWatch) waitClaim(t *testing.T, id string, timeout time.Duration) 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	for {
+		wake := w.wake()
 		if w.take(id) {
 			return
 		}
 		select {
-		case <-w.sig:
+		case <-wake:
 		case <-timer.C:
 			t.Fatalf("no engine-initiated resume was claimed for %s within %s", id, timeout)
 		}
@@ -2290,6 +2289,11 @@ func waitResumeSettled(t *testing.T, mgr *SessionManager, w *resumeWatch, id str
 // the hook body must never block the manager and must never touch
 // *testing.T.
 type flushWatch struct {
+	mu sync.Mutex
+	// sig is the same close-and-replace broadcast resumeWatch uses, for
+	// the same reason: two waiters can block on one manager's flushes at
+	// once, and a single buffered token lets one of them swallow the
+	// other's wakeup.
 	sig chan struct{}
 }
 
@@ -2298,14 +2302,24 @@ type flushWatch struct {
 // AdoptRoot queued it — not on a second manager that only reads the log.
 func watchFlushes(t *testing.T, mgr *SessionManager) *flushWatch {
 	t.Helper()
-	w := &flushWatch{sig: make(chan struct{}, 1)}
-	mgr.testFlushDoneHook = func() {
-		select {
-		case w.sig <- struct{}{}:
-		default:
-		}
-	}
+	w := &flushWatch{sig: make(chan struct{})}
+	mgr.testFlushDoneHook = w.record
 	return w
+}
+
+func (w *flushWatch) record() {
+	w.mu.Lock()
+	close(w.sig)
+	w.sig = make(chan struct{})
+	w.mu.Unlock()
+}
+
+// wake returns the channel that closes on the next completed flush. Arm it
+// before running the condition, never after.
+func (w *flushWatch) wake() <-chan struct{} {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.sig
 }
 
 // waitUntil re-runs cond after every persist flush the manager completes,
@@ -2314,16 +2328,19 @@ func watchFlushes(t *testing.T, mgr *SessionManager) *flushWatch {
 // cond re-reads the real condition — normally a fresh LoadSession of the
 // log under test — rather than inferring it from a status. It runs once
 // before the first wait, so an already-satisfied condition returns at once.
+// The wakeup is armed BEFORE each cond call, so a flush that lands while
+// cond is still reading the disk cannot be missed.
 func (w *flushWatch) waitUntil(t *testing.T, timeout time.Duration, msg string, cond func() bool) {
 	t.Helper()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	for {
+		wake := w.wake()
 		if cond() {
 			return
 		}
 		select {
-		case <-w.sig:
+		case <-wake:
 		case <-timer.C:
 			t.Fatalf("%s (after %s)", msg, timeout)
 		}
@@ -2387,4 +2404,51 @@ func TestUnlockAndFlushPersistPreservesQueueOrder(t *testing.T) {
 			t.Fatalf("order = %v, want %v", order, want)
 		}
 	}
+}
+
+// TestWatchWakeupsAreBroadcastNotStolen pins the property both watches
+// depend on: ONE recorded event wakes EVERY armed observer, not just the
+// first one to reach the channel.
+//
+// Claims and flushes are tracked per target, so two waiters can be blocked
+// on one watch at the same time, each looking for a different thing. A
+// wakeup implemented as a single buffered token cannot serve them: the
+// first waiter to receive consumes the token, finds nothing for its own
+// target, and re-blocks — while the waiter whose event actually landed
+// sleeps on with the wakeup already spent, and fails at its bound for a
+// reason that never happened. A live review caught this as a latent hole
+// before any test hit it.
+//
+// The test arms two observers, records once, and requires both to be
+// released. Against a buffered-token record only the first receive
+// succeeds, so the second check falls through to its default and fails.
+func TestWatchWakeupsAreBroadcastNotStolen(t *testing.T) {
+	t.Run("resumeWatch", func(t *testing.T) {
+		w := &resumeWatch{sig: make(chan struct{})}
+		first, second := w.wake(), w.wake()
+		w.record("ses_a")
+		for i, wake := range []<-chan struct{}{first, second} {
+			select {
+			case <-wake:
+			default:
+				t.Errorf("observer %d was not woken by a recorded claim — the wakeup was stolen by another observer", i)
+			}
+		}
+		if !w.take("ses_a") {
+			t.Error("take(ses_a) = false, want the recorded claim")
+		}
+	})
+
+	t.Run("flushWatch", func(t *testing.T) {
+		w := &flushWatch{sig: make(chan struct{})}
+		first, second := w.wake(), w.wake()
+		w.record()
+		for i, wake := range []<-chan struct{}{first, second} {
+			select {
+			case <-wake:
+			default:
+				t.Errorf("observer %d was not woken by a completed flush — the wakeup was stolen by another observer", i)
+			}
+		}
+	})
 }
