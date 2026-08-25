@@ -921,7 +921,6 @@ func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
 	switch {
 	case ok:
 		n.finalized = true
-		m.markChangedLocked()
 		switch nodeStatusForOutcome(committed) {
 		case StatusCanceled:
 			// Mirrors cancelOneNodeLocked's own live-path bookkeeping

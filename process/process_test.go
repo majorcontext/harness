@@ -24,22 +24,15 @@ import (
 	"github.com/majorcontext/harness/internal/testpoll"
 )
 
-// waitForExit blocks on Manager.Done — the waiter goroutine's own
+// waitForExit blocks on Manager.WaitExit — the waiter goroutine's own
 // completion signal — until name's OS process is gone and its terminal
-// state is recorded, then returns that status. Manager.Done closes strictly
-// after managedProcess.wait writes the terminal state, so the Status read
-// below can never observe a stale StateRunning. Nothing here samples on an
+// state is recorded, then returns that state. Nothing here samples on an
 // interval, so nothing has to guess how long to wait between samples.
 func waitForExit(t *testing.T, m *Manager, name string) Status {
 	t.Helper()
-	done, err := m.Done(name)
+	st, err := m.WaitExit(context.Background(), name)
 	if err != nil {
-		t.Fatalf("Done(%q): %v", name, err)
-	}
-	<-done
-	st, err := m.Status(name)
-	if err != nil {
-		t.Fatalf("Status(%q): %v", name, err)
+		t.Fatalf("WaitExit(%q): %v", name, err)
 	}
 	return st
 }

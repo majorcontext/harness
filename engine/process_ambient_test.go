@@ -223,18 +223,15 @@ func TestAmbientProcessStatusNeverPersisted(t *testing.T) {
 	}
 }
 
-// waitForExit blocks on process.Manager.Done — the waiter goroutine's own
-// completion signal — until name's OS process is gone and its terminal
-// state is recorded. Manager.Done closes strictly after that state is
-// written, so a Status read afterwards can never see a stale StateRunning,
-// and nothing here has to guess a sleep between samples.
+// waitForExit blocks on process.Manager.WaitExit — the waiter goroutine's
+// own completion signal — until name's OS process is gone and its terminal
+// state is recorded. Nothing here samples on an interval, so nothing has to
+// guess how long to wait between samples.
 func waitForExit(t *testing.T, m *process.Manager, name string) {
 	t.Helper()
-	done, err := m.Done(name)
-	if err != nil {
-		t.Fatalf("Done(%q): %v", name, err)
+	if _, err := m.WaitExit(context.Background(), name); err != nil {
+		t.Fatalf("WaitExit(%q): %v", name, err)
 	}
-	<-done
 }
 
 // TestAmbientBlockIsEngineContextPart drives the production Prompt entry

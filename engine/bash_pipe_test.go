@@ -208,7 +208,7 @@ func TestPgidAliveIgnoresZombies(t *testing.T) {
 	// readProcStat, so this fixture wait keeps compiling even if pgidAlive's
 	// fix is reverted for red-verification.
 	var lastState, lastErr string
-	testpoll.Until(t, 3*time.Second, "fixture process never reached zombie state", func() bool {
+	zombie := testpoll.UntilNoT(3*time.Second, func() bool {
 		b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pgid))
 		if err != nil {
 			lastErr = err.Error()
@@ -225,7 +225,12 @@ func TestPgidAliveIgnoresZombies(t *testing.T) {
 		lastState = fields[0]
 		return lastState == "Z"
 	})
-	_, _ = lastState, lastErr
+	if !zombie {
+		// Report what the poll actually saw: the bare "never reached
+		// zombie state" alone makes a real CI failure here much harder
+		// to diagnose.
+		t.Fatalf("fixture process never reached zombie state (last state %q, last read err %q)", lastState, lastErr)
+	}
 
 	if pgidAlive(pgid) {
 		t.Fatal("pgidAlive(pgid) = true for a process group whose only member is a zombie, want false")
