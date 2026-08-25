@@ -1065,7 +1065,13 @@ documents its own affinity hint:
   behind it reads `prompt_cache_key` while the measured Fireworks path reads
   `user`. Both fields carry the identical value, one extra field costs
   nothing, and an upstream that knows neither ignores both. Add, never swap
-  — the rule above still binds.
+  — the rule above still binds. Config key `no_prompt_cache_key` on an
+  `openai-compat` providers entry suppresses that ONE field for a strict
+  self-hosted upstream that rejects an unknown top-level parameter; `user`
+  keeps carrying the session key, so the opt-out never costs the measured
+  affinity win. It is rejected on any entry that is not `openai-compat` —
+  the native openai adapter always sends `prompt_cache_key`, its own
+  documented field.
 - `provider/openai` (Responses API) sets the wire top-level
   `prompt_cache_key` field — the Responses API's own documented routing/
   cache-affinity hint, distinct from `user`. OpenAI combines it with the
@@ -1099,38 +1105,48 @@ never stores a marker in the session log (`transcodeRequest`,
 `provider/anthropic/transcode.go`). The marker's TTL defaults to the
 EXTENDED 1-hour cache, not the API's own 5-minute default.
 
+This is an opt-OUT default, and it changes the wire for an operator who
+configures nothing: every anthropic request carries the beta header and
+writes 1h entries. Two deployments must know it. A proxy that rejects an
+unknown `anthropic-beta` value fails every request, and a workload of short
+one-shot sessions pays the 2x incremental write premium with no later turn
+to read the entry back. Both set `cache_ttl: "5m"`, which restores the
+previous bytes exactly.
+
 `Client.CacheTTL` selects it: `"5m"`, `"1h"`, or empty for
-`DefaultCacheTTL` (`"1h"`). Config key `cache_ttl` on the native
-`anthropic` providers entry sets it, and `cmd/harness`'s `registry` passes
-it to the client. The value is validated twice, and both checks fail loudly
-rather than fall back: `config.validateCacheTTL` rejects an unknown value —
-and rejects `cache_ttl` on ANY other providers entry, since no other adapter
-reads it — while `anthropic.resolveCacheTTL` rejects an unknown value at the
-first `Stream` call, like a missing API key. A typo must never silently ship
-different cache economics.
+`DefaultCacheTTL` (`"1h"`). Config key `cache_ttl` on the NATIVE `anthropic`
+providers entry sets it, and `cmd/harness`'s `registry` passes it to the
+client. The value is validated twice, and both checks fail loudly rather
+than fall back: `config.validateCacheTTL` rejects an unknown value, and
+rejects `cache_ttl` on any entry that is not the native anthropic adapter —
+matching on IDENTITY, the map key `anthropic` with no `type`, never on the
+key alone, since an entry keyed `anthropic` but typed `openai-compat` builds
+an openaicompat client that would never read the value. `anthropic.
+resolveCacheTTL` then rejects an unknown value again at the first `Stream`
+call, like a missing API key. A typo must never silently ship different
+cache economics.
 
 Wire shapes, by TTL:
 
 - `"1h"` sends `cache_control: {"type":"ephemeral","ttl":"1h"}` on both
   breakpoints, plus the request header `anthropic-beta:
   extended-cache-ttl-2025-04-11`. That header is the documented gate for the
-  extended TTL. A live probe through Bifrost on 2026-08-25 wrote a 1h entry
-  without the header too (`ephemeral_1h_input_tokens=2162`), so the upstream
-  no longer enforces the gate on that path — harness still sends it, because
-  an endpoint that DOES enforce it must not fail.
+  extended TTL. Some endpoints no longer enforce the gate and accept the TTL
+  without it. Harness sends it regardless, because an endpoint that DOES
+  enforce it must not fail.
 - `"5m"` sends `cache_control: {"type":"ephemeral"}` and NO beta header —
   byte-identical to a build with no TTL support at all. This is the escape
   hatch for a gateway that rejects an unknown beta.
 
-The default is 1h because of measured cost, not theory. Cache READS price
-the same at both TTLs. A 1h WRITE costs 2x base input where a 5m write costs
-1.25x, and that premium applies only to the INCREMENTAL tokens each turn
-adds to the prefix. One 5m expiry on a mature session, by contrast, rewrites
-the WHOLE prefix: we measured 433k-token rewrites in production when long
-tool calls blew the 5m window. That single miss costs more than the 1h write
-premium over hundreds of turns. Agentic sessions exceed 5 minutes by
-construction — one build, one live probe, or one subagent runs longer than
-the window, and a user reads an answer before the next turn.
+The default is 1h because of cost. Cache READS price the same at both TTLs.
+A 1h WRITE costs 2x base input where a 5m write costs 1.25x, and that
+premium applies only to the INCREMENTAL tokens each turn adds to the prefix.
+A 5m expiry on a mature session, by contrast, rewrites the WHOLE prefix —
+the entire history, at full input price. One such miss costs more than the
+1h write premium over hundreds of turns. Agentic sessions exceed 5 minutes
+by construction: one build, one live probe, or one subagent runs longer than
+the window, and a user reads an answer before sending the next turn. The
+commit that introduced this default carries the measured evidence.
 
 ### The tool array is byte-stable across requests
 
@@ -1142,11 +1158,12 @@ system, then messages. An unsorted build therefore emitted a different tools
 array on every request and invalidated the WHOLE prefix each turn, which no
 TTL can help.
 
-The defect was invisible in unit tests and only appeared in live traffic: a
-2026-08-25 two-turn probe through Bifrost logged
-`cache_creation_input_tokens=2824, cache_read_input_tokens=0` on BOTH turns
-for a byte-identical system prompt. With the sort, the same probe reads
-`cache_read_input_tokens=2440` plus a 399-token incremental write on turn 2.
+The defect is invisible to a unit test that checks the tool SET, and it
+appears only in live traffic: consecutive turns of one session each report a
+full cache write and no cache read, for a byte-identical system prompt. A
+new test must therefore assert the byte-stability of the array, not its
+membership. The commit that introduced the sort carries the measured
+before/after evidence.
 
 Group order stays built-ins, then MCP, then plugins. The other two groups were
 already deterministic — `MCPManager.rebuildToolsLocked` sorts by server then

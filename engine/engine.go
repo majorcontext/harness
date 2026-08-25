@@ -2492,10 +2492,9 @@ func (e *emptyTurnError) Error() string {
 // iteration on every range, so an unsorted build emitted a differently
 // ordered tools array on every single request. Tools sit at the FRONT of the
 // cached prefix on every provider (Anthropic caches tools, then system, then
-// messages), so one reordering invalidated the WHOLE prefix and rewrote it —
-// measured live on 2026-08-25, where two consecutive turns of one session
-// both reported cache_creation_input_tokens > 0 and cache_read_input_tokens
-// = 0 for a byte-identical system prompt.
+// messages), so one reordering invalidated the WHOLE prefix and rewrote it:
+// consecutive turns of one session each reported a full cache write and no
+// cache read, for a byte-identical system prompt.
 //
 // The two other groups were already deterministic and keep their own order:
 // MCP (MCPManager.rebuildToolsLocked sorts by server, then tool) and plugins

@@ -153,10 +153,9 @@ const (
 // live probe, a subagent) routinely runs longer than 5 minutes, and a user
 // reads the answer before the next turn. Cache READS price the same at both
 // TTLs. A 1h WRITE costs 2x base input instead of 1.25x, and only on the
-// incremental tokens each turn adds. One 5m expiry on a mature session
-// rewrites the WHOLE prefix: we measured 433k-token rewrites in production
-// when long tool calls blew the 5m window. That single miss costs more than
-// the 1h write premium over hundreds of turns.
+// incremental tokens each turn adds. A 5m expiry on a mature session
+// rewrites the WHOLE prefix — the entire history, at full input price. One
+// such miss costs more than the 1h write premium over hundreds of turns.
 const DefaultCacheTTL = CacheTTL1h
 
 // resolveCacheTTL maps a configured Client.CacheTTL to a wire TTL. It fails on

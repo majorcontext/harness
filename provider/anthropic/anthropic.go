@@ -23,12 +23,11 @@ const (
 	apiVersion     = "2023-06-01"
 	// extendedCacheTTLBeta is the documented gate for the 1-hour
 	// cache_control TTL, sent with — and only with — a CacheTTL1h request.
-	// A live probe through Bifrost on 2026-08-25 wrote a 1h cache entry
-	// even WITHOUT this header (ephemeral_1h_input_tokens=2162), so the
-	// upstream no longer enforces the gate on that path. The adapter still
-	// sends it: the documented contract asks for it, and an endpoint that
-	// does enforce it must not fail. The 5m TTL sends no beta at all, which
-	// is the escape hatch for a gateway that rejects an unknown beta.
+	// Some endpoints no longer enforce the gate and accept the TTL without
+	// this header. The adapter sends it regardless: the documented contract
+	// asks for it, and an endpoint that does enforce it must not fail. The
+	// 5m TTL sends no beta at all, which is the escape hatch for a gateway
+	// that rejects an unknown beta.
 	extendedCacheTTLBeta = "extended-cache-ttl-2025-04-11"
 )
 

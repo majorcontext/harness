@@ -395,6 +395,17 @@ type Provider struct {
 	// ExtraHeaders are sent verbatim on every request by the openaicompat
 	// adapter, e.g. OpenRouter's HTTP-Referer/X-Title attribution headers.
 	ExtraHeaders map[string]string `json:"extra_headers,omitempty"`
+	// NoPromptCacheKey omits the top-level prompt_cache_key field from
+	// every request this provider sends. The default (false) sends it,
+	// carrying the session id, as the cache-affinity hint an OpenAI-shaped
+	// upstream behind a gateway reads. Set it for a strict upstream that
+	// rejects an unknown top-level parameter. It suppresses that ONE
+	// field: the "user" field keeps carrying the session id either way.
+	// Valid ONLY on a TypeOpenAICompat entry — the native openai
+	// (Responses) adapter always sends prompt_cache_key, its own
+	// documented field — so validateProviders rejects it elsewhere rather
+	// than ignoring it, the same rule CacheTTL follows.
+	NoPromptCacheKey bool `json:"no_prompt_cache_key,omitempty"`
 	// CacheTTL selects the Anthropic prompt-cache breakpoint lifetime:
 	// "5m" (the Anthropic API default) or "1h" (the extended TTL, beta
 	// extended-cache-ttl-2025-04-11). Empty (the default) leaves the
@@ -486,8 +497,11 @@ func validateProviders(providers map[string]Provider) error {
 		default:
 			return fmt.Errorf("providers.%s: unknown type %q", name, p.Type)
 		}
-		if err := validateCacheTTL(name, p.CacheTTL); err != nil {
+		if err := validateCacheTTL(name, p); err != nil {
 			return err
+		}
+		if p.NoPromptCacheKey && p.Type != TypeOpenAICompat {
+			return fmt.Errorf("providers.%s: no_prompt_cache_key is only valid on a %q entry (only the openaicompat adapter reads it)", name, TypeOpenAICompat)
 		}
 	}
 	return nil
@@ -495,17 +509,24 @@ func validateProviders(providers map[string]Provider) error {
 
 // validateCacheTTL fails loudly on a cache_ttl that no adapter would honor:
 // an unknown value (a typo silently shipping different cache economics), or
-// any value at all outside the native "anthropic" entry (the one adapter
-// that reads it). Empty is always valid — it means "adapter default".
-func validateCacheTTL(name, ttl string) error {
-	if ttl == "" {
+// any value at all outside the NATIVE anthropic entry (the one adapter that
+// sets cache_control). Empty is always valid — it means "adapter default".
+//
+// The entry must match on IDENTITY, not on the map key alone: the key
+// "anthropic" with type "openai-compat" builds an openaicompat client, and
+// cmd/harness's registerOpenAICompatProviders overwrites the native client
+// registered under that same key, so no anthropic adapter would ever read
+// the value. A name match alone would pass that shape and let cache_ttl
+// vanish into a client that ignores it.
+func validateCacheTTL(name string, p Provider) error {
+	if p.CacheTTL == "" {
 		return nil
 	}
-	if name != "anthropic" {
-		return fmt.Errorf("providers.%s: cache_ttl is only valid on the %q provider (only the anthropic adapter sets cache_control)", name, "anthropic")
+	if name != "anthropic" || p.Type != "" {
+		return fmt.Errorf("providers.%s: cache_ttl is only valid on the native %q provider (map key %q with no type); only the anthropic adapter sets cache_control", name, "anthropic", "anthropic")
 	}
-	if ttl != CacheTTL5m && ttl != CacheTTL1h {
-		return fmt.Errorf("providers.%s: unknown cache_ttl %q (valid values: %q, %q)", name, ttl, CacheTTL5m, CacheTTL1h)
+	if p.CacheTTL != CacheTTL5m && p.CacheTTL != CacheTTL1h {
+		return fmt.Errorf("providers.%s: unknown cache_ttl %q (valid values: %q, %q)", name, p.CacheTTL, CacheTTL5m, CacheTTL1h)
 	}
 	return nil
 }
@@ -852,6 +873,9 @@ func merge(base, over *Config) *Config {
 				}
 				if v.CacheTTL != "" {
 					ex.CacheTTL = v.CacheTTL
+				}
+				if v.NoPromptCacheKey {
+					ex.NoPromptCacheKey = true
 				}
 				if n := len(ex.ExtraHeaders) + len(v.ExtraHeaders); n > 0 {
 					hm := make(map[string]string, n)
