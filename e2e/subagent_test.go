@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/majorcontext/harness/internal/testpoll"
 )
 
 // lineageJSON mirrors server.lineageJSON (session.info's subagent-sessions
@@ -62,24 +64,22 @@ func (p *serveProc) getSessionLineage(id string) (int, sessionJSON) {
 // or timeout elapses.
 func (p *serveProc) waitForLineageStatus(id, want string, timeout time.Duration) sessionJSON {
 	p.t.Helper()
-	deadline := time.Now().Add(timeout)
-	for {
-		code, s := p.getSessionLineage(id)
+	var s sessionJSON
+	if !testpoll.UntilNoT(timeout, func() bool {
+		code, sess := p.getSessionLineage(id)
 		if code != http.StatusOK {
 			p.t.Fatalf("get session %s: status %d", id, code)
 		}
-		if s.Lineage != nil && s.Lineage.Status == want {
-			return s
+		s = sess
+		return s.Lineage != nil && s.Lineage.Status == want
+	}, 20*time.Millisecond) {
+		got := ""
+		if s.Lineage != nil {
+			got = s.Lineage.Status
 		}
-		if time.Now().After(deadline) {
-			got := ""
-			if s.Lineage != nil {
-				got = s.Lineage.Status
-			}
-			p.t.Fatalf("session %s lineage.status = %q after %s, want %q", id, got, timeout, want)
-		}
-		time.Sleep(20 * time.Millisecond)
+		p.t.Fatalf("session %s lineage.status = %q after %s, want %q", id, got, timeout, want)
 	}
+	return s
 }
 
 // TestSubagentSpawnDeliversViaQueueOrResume is this repo's first COMMITTED,
@@ -116,19 +116,16 @@ func TestSubagentSpawnDeliversViaQueueOrResume(t *testing.T) {
 	// path to fire (rather than the turn-boundary queue path a BUSY
 	// parent would use instead).
 	p.prompt(rootID, "say hi")
-	deadline := time.Now().Add(10 * time.Second)
-	for {
+	var lastStatus string
+	if !testpoll.UntilNoT(10*time.Second, func() bool {
 		code, s := p.getSessionLineage(rootID)
 		if code != http.StatusOK {
 			t.Fatalf("get root: status %d", code)
 		}
-		if s.Status == "idle" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("root never went idle after its first turn (status=%q)", s.Status)
-		}
-		time.Sleep(20 * time.Millisecond)
+		lastStatus = s.Status
+		return s.Status == "idle"
+	}, 20*time.Millisecond) {
+		t.Fatalf("root never went idle after its first turn (status=%q)", lastStatus)
 	}
 	msgsBefore := p.messages(rootID)
 
@@ -179,16 +176,11 @@ func TestSubagentSpawnDeliversViaQueueOrResume(t *testing.T) {
 	// root's own message count growing past what it was right before the
 	// spawn (a real resume turn appends at least a synthetic user-role
 	// trigger message and a real assistant reply).
-	deadline = time.Now().Add(10 * time.Second)
-	for {
+	if !testpoll.UntilNoT(10*time.Second, func() bool {
 		msgsAfter := p.messages(rootID)
-		if len(msgsAfter) > len(msgsBefore) {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("root never resumed after its child completed; message count stayed at %d", len(msgsBefore))
-		}
-		time.Sleep(20 * time.Millisecond)
+		return len(msgsAfter) > len(msgsBefore)
+	}, 20*time.Millisecond) {
+		t.Fatalf("root never resumed after its child completed; message count stayed at %d", len(msgsBefore))
 	}
 
 	// DELETE .../cancel_tree cascades to the whole subtree — a second,
@@ -208,19 +200,15 @@ func TestSubagentSpawnDeliversViaQueueOrResume(t *testing.T) {
 	// its terminal outcome alone (Cancel never overwrites an
 	// already-terminal node's status). Accept either terminal outcome;
 	// only a still-"running" status after cancel_tree would be a bug.
-	deadline = time.Now().Add(5 * time.Second)
-	for {
+	var lastLineageStatus string
+	if !testpoll.UntilNoT(5*time.Second, func() bool {
 		_, s := p.getSessionLineage(child2.ID)
-		if s.Lineage != nil && (s.Lineage.Status == "canceled" || s.Lineage.Status == "done") {
-			break
+		if s.Lineage != nil {
+			lastLineageStatus = s.Lineage.Status
+			return s.Lineage.Status == "canceled" || s.Lineage.Status == "done"
 		}
-		if time.Now().After(deadline) {
-			got := ""
-			if s.Lineage != nil {
-				got = s.Lineage.Status
-			}
-			t.Fatalf("child2 lineage.status = %q after cancel_tree, want canceled or done", got)
-		}
-		time.Sleep(20 * time.Millisecond)
+		return false
+	}, 20*time.Millisecond) {
+		t.Fatalf("child2 lineage.status = %q after cancel_tree, want canceled or done", lastLineageStatus)
 	}
 }

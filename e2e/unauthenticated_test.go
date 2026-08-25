@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/majorcontext/harness/internal/testpoll"
 )
 
 // TestServeNonLoopbackNoTokenFailsClosed proves resolveUnauthenticated's
@@ -154,20 +156,20 @@ func freeAddrOnHost(t *testing.T, host string) string {
 // different address than the one passed to -addr).
 func waitHealthyAt(t *testing.T, dialAddr string, stderr *lockedBuffer) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
+	if !testpoll.UntilNoT(10*time.Second, func() bool {
 		resp, err := http.Get("http://" + dialAddr + "/health")
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
-				return
+				return true
 			}
 		}
-		time.Sleep(15 * time.Millisecond)
+		return false
+	}, 15*time.Millisecond) {
+		extra := ""
+		if stderr != nil {
+			extra = "\nstderr:\n" + stderr.String()
+		}
+		t.Fatalf("serve did not become healthy on %s%s", dialAddr, extra)
 	}
-	extra := ""
-	if stderr != nil {
-		extra = "\nstderr:\n" + stderr.String()
-	}
-	t.Fatalf("serve did not become healthy on %s%s", dialAddr, extra)
 }

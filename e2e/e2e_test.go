@@ -33,6 +33,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/majorcontext/harness/internal/testpoll"
 )
 
 // harnessBin is the path to the harness binary built once by TestMain.
@@ -253,18 +255,18 @@ func (p *serveProc) kill() {
 // startup: poll on a short interval bounded by a deadline (synctest N/A).
 func (p *serveProc) waitHealthy() {
 	p.t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
+	if !testpoll.UntilNoT(10*time.Second, func() bool {
 		resp, err := http.Get("http://" + p.addr + "/health")
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
-				return
+				return true
 			}
 		}
-		time.Sleep(15 * time.Millisecond)
+		return false
+	}, 15*time.Millisecond) {
+		p.t.Fatalf("serve did not become healthy on %s\nstderr:\n%s", p.addr, p.stderr.String())
 	}
-	p.t.Fatalf("serve did not become healthy on %s\nstderr:\n%s", p.addr, p.stderr.String())
 }
 
 // freeAddr returns a localhost address that was free a moment ago. There is a
@@ -414,17 +416,14 @@ func (p *serveProc) listSessionIDs() []string {
 // short interval bounded by a deadline (synctest N/A).
 func (p *serveProc) waitMessages(id string, want int) []apiMessage {
 	p.t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
 	var last []apiMessage
-	for time.Now().Before(deadline) {
+	if !testpoll.UntilNoT(10*time.Second, func() bool {
 		last = p.messages(id)
-		if len(last) >= want {
-			return last
-		}
-		time.Sleep(15 * time.Millisecond)
+		return len(last) >= want
+	}, 15*time.Millisecond) {
+		p.t.Fatalf("session %s: got %d messages, want %d\nstderr:\n%s", id, len(last), want, p.stderr.String())
 	}
-	p.t.Fatalf("session %s: got %d messages, want %d\nstderr:\n%s", id, len(last), want, p.stderr.String())
-	return nil
+	return last
 }
 
 type apiEvent struct {
@@ -979,9 +978,8 @@ func (p *serveProc) goal(id, condition string) {
 // waitStatus polls GET /session/{id} until its status equals want or a deadline.
 func (p *serveProc) waitStatus(id, want string) {
 	p.t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
 	var last string
-	for time.Now().Before(deadline) {
+	if !testpoll.UntilNoT(10*time.Second, func() bool {
 		resp, data := p.do(http.MethodGet, "/session/"+id, nil)
 		if resp.StatusCode == http.StatusOK {
 			var s struct {
@@ -990,13 +988,14 @@ func (p *serveProc) waitStatus(id, want string) {
 			if json.Unmarshal(data, &s) == nil {
 				last = s.Status
 				if s.Status == want {
-					return
+					return true
 				}
 			}
 		}
-		time.Sleep(15 * time.Millisecond)
+		return false
+	}, 15*time.Millisecond) {
+		p.t.Fatalf("session %s status = %q, want %q\nstderr:\n%s", id, last, want, p.stderr.String())
 	}
-	p.t.Fatalf("session %s status = %q, want %q\nstderr:\n%s", id, last, want, p.stderr.String())
 }
 
 func goalEventsFor(events []apiEvent, id string) []apiEvent {
