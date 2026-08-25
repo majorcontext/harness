@@ -60,24 +60,27 @@ func TestQueueClearRaceDuringIdleDispatchIsNotAnError(t *testing.T) {
 	// head), clear the entire queue -- q1 AND the prompt this very request
 	// just enqueued -- out from under it.
 	//
-	// One-shot: queueDispatchRace has four call sites (handlePrompt's two
-	// branches, dispatchQueueHead, and maybeDispatchQueued — the tail
-	// runPrompt/runGoal fire), and only the FIRST call is the one this
-	// test forces. A later tail call used to re-enter this body after the
-	// test function had already returned, issue a request against the
-	// torn-down server, and reach h2.do's own t.Fatalf on a finished
-	// test — which the testing package turns into a process-wide panic
-	// ("Fail in goroutine after ... has completed"), failing the whole
-	// server package whatever this test asserted. The field itself is
-	// read unsynchronized by production code, so the guard belongs INSIDE
-	// the closure; clearing the field from t.Cleanup would be a data
-	// race.
+	// One-shot, defensively: in THIS test the seam fires exactly once —
+	// the queue is cleared before any dispatch, so dispatchQueueHead
+	// returns ok=false, releases the claim, and spawns no runPrompt, and
+	// maybeDispatchQueued (the tail call site) is never reached at all
+	// (the final assertion below, last_turn == nil, is the proof). The
+	// guard is here because the field stays installed for the server's
+	// whole life and the body is not safe to run twice; the sibling test
+	// TestQueueClearRaceDuringDispatchIsNotAnError is where a real
+	// second invocation happens, and it asserts that shape directly. The
+	// field is read unsynchronized by production code, so the guard
+	// belongs INSIDE the closure; clearing the field from t.Cleanup would
+	// be a data race.
 	var raceOnce sync.Once
 	srv2.queueDispatchRace = func() {
 		raceOnce.Do(func() {
+			// t.Errorf, not t.Fatalf — see the sibling test's own note:
+			// this body runs on the HTTP-handler goroutine, where
+			// FailNow is not allowed.
 			resp, data := h2.do("DELETE", "/session/"+id+"/queue", nil)
 			if resp.StatusCode != http.StatusNoContent {
-				t.Fatalf("DELETE queue status %d: %s", resp.StatusCode, data)
+				t.Errorf("DELETE queue status %d: %s", resp.StatusCode, data)
 			}
 		})
 	}
@@ -152,14 +155,22 @@ func TestQueueClearRaceDuringDispatchIsNotAnError(t *testing.T) {
 			callsMu.Lock()
 			bodyCalls++
 			callsMu.Unlock()
+			// t.Errorf, not t.Fatalf: this body runs on the server's
+			// HTTP-handler goroutine (the seam fires synchronously from
+			// enqueueOrDispatch while the test goroutine is blocked in
+			// h.do), and Fatalf's FailNow may only be called from the
+			// test goroutine — elsewhere its runtime.Goexit kills the
+			// handler mid-request, so a genuine failure here would
+			// surface as a broken connection on the outer POST instead
+			// of a clean failure. There is no cleanup to abort.
 			prov.releaseAll()
 			waitResp, waitData := h.do("GET", "/session/"+id+"/wait?until=idle&timeout_s=5", nil)
 			if waitResp.StatusCode != http.StatusOK {
-				t.Fatalf("wait for first turn's idle status %d: %s", waitResp.StatusCode, waitData)
+				t.Errorf("wait for first turn's idle status %d: %s", waitResp.StatusCode, waitData)
 			}
 			delResp, delData := h.do("DELETE", "/session/"+id+"/queue", nil)
 			if delResp.StatusCode != http.StatusNoContent {
-				t.Fatalf("DELETE queue status %d: %s", delResp.StatusCode, delData)
+				t.Errorf("DELETE queue status %d: %s", delResp.StatusCode, delData)
 			}
 		})
 	}
