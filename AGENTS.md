@@ -1059,7 +1059,13 @@ documents its own affinity hint:
   adapter by swapping in `prompt_cache_key` — that field is specific to
   OpenAI's own API, and the openaicompat adapter targets non-OpenAI
   backends behind a gateway, whose measured path reads `user`. Swapping it
-  would silently drop the measured cache-affinity win.
+  would silently drop the measured cache-affinity win. The adapter now sends
+  `prompt_cache_key` ALONGSIDE `user`, set from the same `SessionKey`: a
+  gateway fronts several upstream shapes, and an OpenAI-shaped upstream
+  behind it reads `prompt_cache_key` while the measured Fireworks path reads
+  `user`. Both fields carry the identical value, one extra field costs
+  nothing, and an upstream that knows neither ignores both. Add, never swap
+  — the rule above still binds.
 - `provider/openai` (Responses API) sets the wire top-level
   `prompt_cache_key` field — the Responses API's own documented routing/
   cache-affinity hint, distinct from `user`. OpenAI combines it with the
@@ -1084,6 +1090,70 @@ time-to-first-token, through the same gateway. Harness sessions re-send the
 whole history every request (stateless transcoding), so a long session on
 the openaicompat route (a gateway to Fireworks kimi-k3 and similar models)
 pays full prefill on nearly every turn without this hint.
+
+### Anthropic cache TTL (default 1 hour)
+
+`provider/anthropic` marks two prompt-cache breakpoints on every request —
+the last system block and the last content block of the final message — and
+never stores a marker in the session log (`transcodeRequest`,
+`provider/anthropic/transcode.go`). The marker's TTL defaults to the
+EXTENDED 1-hour cache, not the API's own 5-minute default.
+
+`Client.CacheTTL` selects it: `"5m"`, `"1h"`, or empty for
+`DefaultCacheTTL` (`"1h"`). Config key `cache_ttl` on the native
+`anthropic` providers entry sets it, and `cmd/harness`'s `registry` passes
+it to the client. The value is validated twice, and both checks fail loudly
+rather than fall back: `config.validateCacheTTL` rejects an unknown value —
+and rejects `cache_ttl` on ANY other providers entry, since no other adapter
+reads it — while `anthropic.resolveCacheTTL` rejects an unknown value at the
+first `Stream` call, like a missing API key. A typo must never silently ship
+different cache economics.
+
+Wire shapes, by TTL:
+
+- `"1h"` sends `cache_control: {"type":"ephemeral","ttl":"1h"}` on both
+  breakpoints, plus the request header `anthropic-beta:
+  extended-cache-ttl-2025-04-11`. That header is the documented gate for the
+  extended TTL. A live probe through Bifrost on 2026-08-25 wrote a 1h entry
+  without the header too (`ephemeral_1h_input_tokens=2162`), so the upstream
+  no longer enforces the gate on that path — harness still sends it, because
+  an endpoint that DOES enforce it must not fail.
+- `"5m"` sends `cache_control: {"type":"ephemeral"}` and NO beta header —
+  byte-identical to a build with no TTL support at all. This is the escape
+  hatch for a gateway that rejects an unknown beta.
+
+The default is 1h because of measured cost, not theory. Cache READS price
+the same at both TTLs. A 1h WRITE costs 2x base input where a 5m write costs
+1.25x, and that premium applies only to the INCREMENTAL tokens each turn
+adds to the prefix. One 5m expiry on a mature session, by contrast, rewrites
+the WHOLE prefix: we measured 433k-token rewrites in production when long
+tool calls blew the 5m window. That single miss costs more than the 1h write
+premium over hundreds of turns. Agentic sessions exceed 5 minutes by
+construction — one build, one live probe, or one subagent runs longer than
+the window, and a user reads an answer before the next turn.
+
+### The tool array is byte-stable across requests
+
+`Session.toolDefs` (`engine/engine.go`) sorts the BUILT-IN tool group by
+name. That sort is a prompt-cache requirement, not cosmetics. `Session.tools`
+is a map, Go randomizes map iteration on every range, and tools sit at the
+FRONT of the cached prefix on every provider — Anthropic caches tools, then
+system, then messages. An unsorted build therefore emitted a different tools
+array on every request and invalidated the WHOLE prefix each turn, which no
+TTL can help.
+
+The defect was invisible in unit tests and only appeared in live traffic: a
+2026-08-25 two-turn probe through Bifrost logged
+`cache_creation_input_tokens=2824, cache_read_input_tokens=0` on BOTH turns
+for a byte-identical system prompt. With the sort, the same probe reads
+`cache_read_input_tokens=2440` plus a 399-token incremental write on turn 2.
+
+Group order stays built-ins, then MCP, then plugins. The other two groups were
+already deterministic — `MCPManager.rebuildToolsLocked` sorts by server then
+tool, and `plugin.Host.Tools` walks the configured instance slice — so the
+sort applies WITHIN the built-in group only. Adding an MCP server must never
+reshuffle the built-in block ahead of it. Any new tool source must be
+deterministic before it joins this list.
 
 ### Deliberately absent — do not add
 

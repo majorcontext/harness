@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -2484,12 +2485,29 @@ func (e *emptyTurnError) Error() string {
 }
 
 // toolDefs merges built-in tools, MCP-provided tools, and plugin-provided
-// ones.
+// ones, in that group order.
+//
+// The built-in group is SORTED BY NAME, and that sort is a prompt-cache
+// requirement, not cosmetics. s.tools is a map, and Go randomizes map
+// iteration on every range, so an unsorted build emitted a differently
+// ordered tools array on every single request. Tools sit at the FRONT of the
+// cached prefix on every provider (Anthropic caches tools, then system, then
+// messages), so one reordering invalidated the WHOLE prefix and rewrote it —
+// measured live on 2026-08-25, where two consecutive turns of one session
+// both reported cache_creation_input_tokens > 0 and cache_read_input_tokens
+// = 0 for a byte-identical system prompt.
+//
+// The two other groups were already deterministic and keep their own order:
+// MCP (MCPManager.rebuildToolsLocked sorts by server, then tool) and plugins
+// (plugin.Host.Tools walks the configured instance slice). Sorting stays
+// WITHIN the built-in group so adding an MCP server never reshuffles the
+// built-in block that precedes it.
 func (s *Session) toolDefs(ctx context.Context) []provider.ToolDef {
-	var defs []provider.ToolDef
+	defs := make([]provider.ToolDef, 0, len(s.tools))
 	for _, t := range s.tools {
 		defs = append(defs, t.Def)
 	}
+	sort.Slice(defs, func(i, j int) bool { return defs[i].Name < defs[j].Name })
 	if s.cfg.MCP != nil {
 		defs = append(defs, s.cfg.MCP.Tools(ctx)...)
 	}
