@@ -333,6 +333,98 @@ func TestSendToDescendantRunningQueuesAndDeliversAtBoundary(t *testing.T) {
 	}
 }
 
+// twoStageBlockingProvider blocks its FIRST call on release1 (returning
+// a plain "ok" StopEndTurn once released, via blockingStream) and every
+// call after that purely on ctx.Done() — it has nothing else to
+// release, since TestDrainQueueAndPromptStopsDequeuingOnCancelMidDrain
+// only ever cancels it. secondCall closes the instant the SECOND Stream
+// call starts, so the test can deterministically wait for it to be
+// genuinely in flight before canceling, without polling call count from
+// outside (which would race the session's own turn-driving goroutine).
+type twoStageBlockingProvider struct {
+	name       string
+	release1   chan struct{}
+	secondCall chan struct{}
+	once       sync.Once
+	call       int
+}
+
+func (p *twoStageBlockingProvider) Name() string { return p.name }
+
+func (p *twoStageBlockingProvider) Stream(ctx context.Context, _ *provider.Request) (provider.Stream, error) {
+	p.call++
+	if p.call == 1 {
+		return &blockingStream{ctx: ctx, release: p.release1}, nil
+	}
+	p.once.Do(func() { close(p.secondCall) })
+	return &ctxOnlyBlockingStream{ctx: ctx}, nil
+}
+
+// ctxOnlyBlockingStream blocks forever except for ctx cancellation —
+// used for a call this test intends to interrupt, never to release.
+type ctxOnlyBlockingStream struct{ ctx context.Context }
+
+func (s *ctxOnlyBlockingStream) Next() (provider.Event, error) {
+	<-s.ctx.Done()
+	return provider.Event{}, s.ctx.Err()
+}
+
+func (s *ctxOnlyBlockingStream) Close() error { return nil }
+
+// TestDrainQueueAndPromptStopsDequeuingOnCancelMidDrain is the
+// regression test for a live review finding: drainQueueAndPrompt's loop
+// never checked ctx cancellation, so canceling a running child mid-drain
+// (task cancel arriving between two of its re-driven turns) kept
+// dequeuing and re-running every remaining queued prompt on an
+// already-dead ctx — journaling each as "delivered" even though none of
+// them actually ran. Two messages are enqueued while the child's FIRST
+// turn is still blocked; the first turn completes, drainQueueAndPrompt
+// dequeues "message A" and starts a second turn (which blocks on ctx
+// only); the child is canceled while that second turn is genuinely in
+// flight. "message B" must be left exactly where it was — still queued,
+// never dequeued or discarded by drainQueueAndPrompt itself — matching
+// cancellation's existing "stop, full stop" semantics elsewhere in this
+// package (a canceled node's queue is never looked at again by anyone;
+// see drainQueueAndPrompt's own doc comment).
+func TestDrainQueueAndPromptStopsDequeuingOnCancelMidDrain(t *testing.T) {
+	release1 := make(chan struct{})
+	childProv := &twoStageBlockingProvider{name: "child", release1: release1, secondCall: make(chan struct{})}
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	root := mgr.NewRoot(managedConfig("root", scriptedTurns("root", nil), childProv))
+
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	queuedA, err := mgr.SendToDescendant(root.ID, childID, "message A")
+	if err != nil || !queuedA {
+		t.Fatalf("SendToDescendant A: queued=%v err=%v", queuedA, err)
+	}
+	queuedB, err := mgr.SendToDescendant(root.ID, childID, "message B")
+	if err != nil || !queuedB {
+		t.Fatalf("SendToDescendant B: queued=%v err=%v", queuedB, err)
+	}
+
+	close(release1) // first turn completes; drainQueueAndPrompt dequeues "message A" and starts the second (ctx-only-blocking) turn
+
+	<-childProv.secondCall // that second turn is genuinely in flight
+
+	if err := mgr.Cancel(childID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusCanceled, time.Second)
+
+	child, ok := mgr.Session(childID)
+	if !ok {
+		t.Fatal("Session after cancel: not found")
+	}
+	pending := child.QueuedPrompts()
+	if len(pending) != 1 || pending[0].Text != "message B" {
+		t.Fatalf("QueuedPrompts after cancel-mid-drain = %+v, want exactly one entry left untouched: message B", pending)
+	}
+}
+
 // TestSendToDescendantRunningWithoutToolBoundaryStillDelivers is the
 // regression test for a live review finding on this fix's first pass: a
 // message enqueued to a running child whose CURRENT (and only remaining)

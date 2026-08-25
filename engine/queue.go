@@ -54,16 +54,50 @@ func (s *Session) EnqueuePrompt(text string) (int64, error) {
 		return 0, errors.New("engine: EnqueuePrompt requires non-empty text")
 	}
 	s.mu.Lock()
-	id := s.promptQueueNextID
-	s.promptQueueNextID++
-	s.promptQueue = append(s.promptQueue, QueuedPrompt{ID: id, Text: trimmed})
-	s.persistPromptQueueLocked(recPromptQueued, promptRecord{ID: id, Text: trimmed})
+	p := s.enqueueMemoryOnlyLocked(trimmed)
+	s.persistPromptQueueLocked(recPromptQueued, promptRecord{ID: p.ID, Text: p.Text})
 	// Emit while still holding s.mu (see ClearGoal in goal.go): keeps event
 	// order matching log order under a concurrent dequeue. OnEvent must not
 	// call back into this Session — that would deadlock on s.mu, held here.
-	s.emit(Event{Type: EventPromptQueued, QueueID: id, QueueText: trimmed, QueueLen: len(s.promptQueue)})
+	s.emit(Event{Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue)})
 	s.mu.Unlock()
-	return id, nil
+	return p.ID, nil
+}
+
+// enqueueMemoryOnlyLocked is EnqueuePrompt's memory-only half: assigns
+// the next monotonic queue ID and appends to s.promptQueue — WITHOUT
+// EnqueuePrompt's own persistPromptQueueLocked call (a synchronous disk
+// write: ensureLog + writeRecord) or its emit. Exists for a caller that
+// must mutate s's queue from inside ANOTHER lock's own critical section
+// without paying for that disk write under it —
+// SessionManager.SendToDescendant's running-target branch, which holds
+// the tree-wide m.mu across this call (see its own doc comment) and
+// defers the matching persistPromptQueueLocked call via
+// SessionManager.deferPersist/unlockAndFlushPersist instead, exactly
+// like the task-notification delivery path already does for its own
+// durable writes (commitOutcomeLocked, finalizeTurn's notify-delivery
+// block). A live review finding: an earlier version of this fix called
+// the full EnqueuePrompt (persist inline) from inside SendToDescendant's
+// own m.mu-held block, stalling every OTHER session's Info/Reap/Spawn/
+// finalize call on this ONE session's fsync for as long as it took.
+//
+// Deliberately does NOT emit: unlike the notification path (which never
+// emits an event on enqueue at all), a queued prompt DOES have an
+// observable event (EventPromptQueued, for the queue-depth UI) — the
+// caller decides when to emit it relative to the (possibly deferred)
+// persist, exactly as EnqueuePrompt itself does above (persist, then
+// emit, unchanged order for its own direct callers).
+//
+// text is assumed already validated non-empty and trimmed — the one
+// other caller (SendToDescendant) applies the same validation
+// EnqueuePrompt does above, on its own copy of the text. Caller holds
+// s.mu.
+func (s *Session) enqueueMemoryOnlyLocked(text string) QueuedPrompt {
+	id := s.promptQueueNextID
+	s.promptQueueNextID++
+	p := QueuedPrompt{ID: id, Text: text}
+	s.promptQueue = append(s.promptQueue, p)
+	return p
 }
 
 // EnqueuePromptDurable is EnqueuePrompt with an honest durability and
@@ -210,11 +244,10 @@ func (s *Session) DequeuePrompt(reason string) (p QueuedPrompt, remaining int, o
 // drain journals every record within one critical section, atomically with
 // respect to a concurrent EnqueuePrompt.
 func (s *Session) dequeueLocked(reason string) (QueuedPrompt, int, bool) {
-	if len(s.promptQueue) == 0 {
+	p, ok := s.dequeueMemoryOnlyLocked()
+	if !ok {
 		return QueuedPrompt{}, 0, false
 	}
-	p := s.promptQueue[0]
-	s.promptQueue = s.promptQueue[1:]
 	s.persistPromptQueueLocked(recPromptDequeued, promptRecord{ID: p.ID, Text: p.Text, Reason: reason})
 	remaining := len(s.promptQueue)
 	// Emit while still holding s.mu (see EnqueuePrompt above): keeps event
@@ -222,6 +255,23 @@ func (s *Session) dequeueLocked(reason string) (QueuedPrompt, int, bool) {
 	// Session — that would deadlock on s.mu, held here.
 	s.emit(Event{Type: EventPromptDequeued, QueueID: p.ID, QueueText: p.Text, QueueReason: reason, QueueLen: remaining})
 	return p, remaining, true
+}
+
+// dequeueMemoryOnlyLocked is dequeueLocked's memory-only half: pops the
+// queue head, if any — WITHOUT the persist or emit dequeueLocked itself
+// always does inline. See enqueueMemoryOnlyLocked's own doc comment for
+// why this split exists and who needs it:
+// SessionManager.finalizeTurn's own queued-message re-drive check, which
+// — like SendToDescendant's enqueue — holds the tree-wide m.mu across
+// this call and must not pay for persistPromptQueueLocked's synchronous
+// disk write under it. Caller holds s.mu.
+func (s *Session) dequeueMemoryOnlyLocked() (QueuedPrompt, bool) {
+	if len(s.promptQueue) == 0 {
+		return QueuedPrompt{}, false
+	}
+	p := s.promptQueue[0]
+	s.promptQueue = s.promptQueue[1:]
+	return p, true
 }
 
 // dequeueAllLocked drains the entire queue in FIFO order, journaling one
