@@ -2840,7 +2840,15 @@ func (m *SessionManager) CanSend(id string) error {
 func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Message, error) {
 	m.mu.Lock()
 	s, nodeCtx, isChild, err := m.reserveSendLocked(id)
-	m.mu.Unlock()
+	// unlockAndFlushPersist, matching SendToDescendant's settled branch,
+	// which reserves through this same reserveSendLocked call — a review
+	// finding on the one plain unlock left after that branch was
+	// hardened. reserveSendLocked defers nothing today, so this is
+	// uniformity rather than a live fix: the helper is the standard
+	// unlock for every SessionManager method (an empty-slice no-op when
+	// nothing is queued), so a future deferred write on this path cannot
+	// be dropped silently.
+	m.unlockAndFlushPersist()
 	if err != nil {
 		return nil, err
 	}
