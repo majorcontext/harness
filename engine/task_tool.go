@@ -18,26 +18,28 @@ import (
 // see installTaskToolLocked and Spawn in session_manager.go.
 const taskToolName = "task"
 
-// The task tool's four actions. "" (the JSON zero value, so an omitted
+// The task tool's five actions. "" (the JSON zero value, so an omitted
 // action field) is treated as taskActionSpawn — the original, pre-verbs
 // shape of this tool's arguments (agent/prompt/model, no action at all)
 // keeps working unchanged, the backward-compatibility requirement behind
-// this whole extension. The other three — cancel/status/send — are the
+// this whole extension. The other four — cancel/status/send/log — are the
 // model-facing sugar over SessionManager.CancelDescendant/DescendantInfo/
-// SendToDescendant (session_manager.go), inspired by fx's consolidated
-// subagent tool and following this codebase's own action-based-tool
-// precedent (goal_tool.go, mcp_tool.go) rather than four separate tools.
+// SendToDescendant/DescendantTranscript (session_manager.go), inspired by
+// fx's consolidated subagent tool and following this codebase's own
+// action-based-tool precedent (goal_tool.go, mcp_tool.go) rather than five
+// separate tools.
 const (
 	taskActionSpawn  = "spawn"
 	taskActionCancel = "cancel"
 	taskActionStatus = "status"
 	taskActionSend   = "send"
+	taskActionLog    = "log"
 )
 
 // taskActionNames lists every valid action, for the "unknown action"
 // error's own roster — mirrors sortedAgentNames' identical role for the
 // spawn action's "unknown agent" error, below.
-var taskActionNames = []string{taskActionSpawn, taskActionCancel, taskActionStatus, taskActionSend}
+var taskActionNames = []string{taskActionSpawn, taskActionCancel, taskActionStatus, taskActionSend, taskActionLog}
 
 // taskToolArgs is the task tool's full input shape across all four
 // actions. Only the fields a given action actually uses are validated as
@@ -49,6 +51,11 @@ type taskToolArgs struct {
 	Prompt    string `json:"prompt"`
 	Model     string `json:"model"`
 	SessionID string `json:"session_id"`
+	// Tail is the log action's entry count: omitted (0) means
+	// taskLogDefaultTail, a value over taskLogMaxTail is clamped, and a
+	// NEGATIVE value is an error rather than a silent reinterpretation
+	// (see runTaskLog).
+	Tail int `json:"tail"`
 }
 
 // taskToolResult is the spawn action's immediate return: proof the child
@@ -145,15 +152,19 @@ func taskTool() Tool {
 				"send(session_id, prompt): delivers a message to a descendant — if it is still running, the message is queued and delivered at its " +
 				"next turn boundary (you do not need to wait for it to go idle first); if it is NOT actively running (finished, or idle and never " +
 				"started), it is relaunched with your message as a fresh turn, and that outcome arrives later exactly like a new spawn's would. " +
-				"cancel/status/send only work on a session YOU spawned, directly or through a chain of your own children — anything else is refused.",
+				"log(session_id, tail?): returns the last tail transcript entries of a descendant — living or dead — so you can read what it was doing and how it " +
+				"ended, instead of guessing from its fail_reason. tail defaults to 20 and is capped; entries are filled newest-first under a total size " +
+				"budget, and the reply reports how many of the transcript's messages it returned. " +
+				"cancel/status/send/log only work on a session YOU spawned, directly or through a chain of your own children — anything else is refused.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"action": {"type": "string", "enum": ["spawn", "cancel", "status", "send"], "description": "The operation to perform; defaults to \"spawn\" if omitted"},
+					"action": {"type": "string", "enum": ["spawn", "cancel", "status", "send", "log"], "description": "The operation to perform; defaults to \"spawn\" if omitted"},
 					"agent": {"type": "string", "description": "spawn only: the agent type to spawn: general-purpose, explore, plan, or a custom .agents/*.md definition name — call with an unrecognized name to see this project's full current roster in the error"},
 					"prompt": {"type": "string", "description": "The task for the child session to perform (spawn), or the message to deliver to it (send)"},
 					"model": {"type": "string", "description": "spawn only: optional model override, as \"provider/model\""},
-					"session_id": {"type": "string", "description": "cancel/status/send only: the id of a session you spawned, directly or transitively"}
+					"session_id": {"type": "string", "description": "cancel/status/send/log only: the id of a session you spawned, directly or transitively"},
+					"tail": {"type": "integer", "description": "log only: how many of the descendant's most recent transcript entries to return (default 20, capped)"}
 				}
 			}`),
 		},
@@ -187,6 +198,8 @@ func runTaskTool(s *Session, raw json.RawMessage) (message.Parts, error) {
 		return runTaskStatus(s, in)
 	case taskActionSend:
 		return runTaskSend(s, in)
+	case taskActionLog:
+		return runTaskLog(s, in)
 	default:
 		return nil, fmt.Errorf("task: unknown action %q (want one of: %s)", action, strings.Join(taskActionNames, ", "))
 	}
@@ -506,4 +519,195 @@ func classifyTaskVerbError(err error, targetID string) error {
 	default:
 		return fmt.Errorf("task: %w", err)
 	}
+}
+
+// The log action's bounds. Every one of them exists because this tool's
+// output lands in the PARENT's context, is replayed on every later turn
+// of that parent's history, and is requested by a model that cannot see
+// how big a child's transcript is before it asks.
+const (
+	// taskLogDefaultTail is the entry count for an omitted tail — enough
+	// to cover a child's last tool loop and its final answer.
+	taskLogDefaultTail = 20
+	// taskLogMaxTail clamps an explicit tail. A parent that needs more
+	// than this is not diagnosing a death any more; the child's own
+	// durable log is the right surface for a full read.
+	taskLogMaxTail = 100
+	// taskLogEntryCap bounds ONE entry's rendered text, in runes. One
+	// pasted file or one large tool result must not consume the whole
+	// reply.
+	taskLogEntryCap = 2000
+	// taskLogTotalCap bounds the WHOLE reply's rendered text, in runes.
+	// Entries are filled newest-first against it (see renderTaskLog), so
+	// the messages nearest the child's death always survive the budget.
+	taskLogTotalCap = 20000
+	// taskLogTruncationMarker marks a cut entry, so a reader never
+	// mistakes a truncated message for a complete one — the same rule
+	// truncateTaskResult follows for a child's final text.
+	taskLogTruncationMarker = "… [truncated]"
+	// taskLogArgsCap bounds a rendered tool call's arguments. A tool call
+	// is diagnostic gold (which tool, on what) but its arguments can carry
+	// a whole file's contents.
+	taskLogArgsCap = 300
+)
+
+// taskLogEntry is one rendered transcript message: its role and a flat
+// text rendering of every part, since a model reading a tail wants to see
+// what happened, not a part-kind union it has to reassemble.
+type taskLogEntry struct {
+	Role string `json:"role"`
+	Text string `json:"text,omitempty"`
+	// Truncated marks an entry cut at taskLogEntryCap.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// taskLogResult is the log action's return: the descendant's lifecycle
+// facts (so a reader can interpret the tail without a second status call)
+// plus the tail itself, oldest first — reading order.
+//
+// Total is the descendant's WHOLE message count and Returned is how many
+// entries came back. They differ whenever the tail bound or the size
+// budget bit, and reporting both is what tells a model it is looking at a
+// window rather than the whole story.
+type taskLogResult struct {
+	SessionID  string         `json:"session_id"`
+	Status     string         `json:"status"`
+	AgentType  string         `json:"agent_type,omitempty"`
+	FailReason string         `json:"fail_reason,omitempty"`
+	Total      int            `json:"total_messages"`
+	Returned   int            `json:"returned"`
+	Entries    []taskLogEntry `json:"entries"`
+}
+
+// runTaskLog implements the log action: the tail of a descendant's
+// transcript, living or dead (SessionManager.DescendantTranscript).
+//
+// The verb exists because a fail reason is one line and a death is a
+// story. A live incident had a parent guess at a dead child's cause and
+// act on the guess; the child's own last messages — the tool it was
+// running, what it had already found — were sitting in memory the parent
+// had no in-process way to read. `task status` reports the lifecycle
+// facts; this reports the evidence behind them.
+//
+// A separate verb rather than a bigger status result: status is a small,
+// cheap, poll-shaped answer that several call sites already render, and
+// folding an unbounded transcript into it would make every existing
+// status call pay for a payload it never asked for.
+//
+// Content is NOT masked. The parent and the child are the same operator's
+// sessions in one process, and a child's final text already reaches the
+// parent verbatim through its completion notification (truncateTaskResult)
+// — masking here would hide the tool output a parent is reading this to
+// see, without closing any boundary that is actually open.
+func runTaskLog(s *Session, in taskToolArgs) (message.Parts, error) {
+	if in.SessionID == "" {
+		return nil, fmt.Errorf("task: session_id is required for action %q", taskActionLog)
+	}
+	if in.Tail < 0 {
+		return nil, fmt.Errorf("task: tail must not be negative for action %q", taskActionLog)
+	}
+	m := s.cfg.SessionManager
+	if m == nil {
+		return nil, fmt.Errorf("task: this session has no session manager")
+	}
+	tail := in.Tail
+	if tail == 0 {
+		tail = taskLogDefaultTail
+	}
+	if tail > taskLogMaxTail {
+		tail = taskLogMaxTail
+	}
+	node, msgs, total, err := m.DescendantTranscript(s.ID, in.SessionID, tail)
+	if err != nil {
+		return nil, classifyTaskVerbError(err, in.SessionID)
+	}
+	entries := renderTaskLog(msgs)
+	return jsonResult(taskLogResult{
+		SessionID:  node.ID,
+		Status:     string(node.Status),
+		AgentType:  node.AgentType,
+		FailReason: node.FailReason,
+		Total:      total,
+		Returned:   len(entries),
+		Entries:    entries,
+	})
+}
+
+// renderTaskLog renders msgs (already tail-trimmed, oldest first) into
+// entries under taskLogTotalCap, filling NEWEST-first so the messages
+// nearest a child's death always survive the budget, then returning them
+// in reading order. An entry is always emitted for the newest message,
+// even if it alone exceeds the budget: a reply that reports Returned == 0
+// for a non-empty transcript would tell a reader nothing at all.
+func renderTaskLog(msgs []message.Message) []taskLogEntry {
+	out := make([]taskLogEntry, 0, len(msgs))
+	budget := taskLogTotalCap
+	for i := len(msgs) - 1; i >= 0; i-- {
+		entry := renderTaskLogEntry(msgs[i])
+		size := len([]rune(entry.Text))
+		if size > budget && len(out) > 0 {
+			break
+		}
+		budget -= size
+		out = append(out, entry)
+	}
+	// Reverse into reading order.
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out
+}
+
+// renderTaskLogEntry flattens one message's parts into readable text: text
+// verbatim, a tool call as "[tool_call name(args)]", a tool result as
+// "[tool_result] <output>", a reasoning summary as "[reasoning] ...", and
+// any binary blob as a count. Every non-text part is rendered rather than
+// dropped, because a child that died mid-tool-loop has almost nothing BUT
+// non-text parts in its last messages.
+func renderTaskLogEntry(m message.Message) taskLogEntry {
+	var b strings.Builder
+	writeLine := func(s string) {
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(s)
+	}
+	blobs := 0
+	for _, p := range m.Parts {
+		switch part := p.(type) {
+		case *message.Text:
+			writeLine(part.Text)
+		case *message.EngineContext:
+			writeLine("[engine_context] " + part.Text)
+		case *message.Reasoning:
+			if part.Text != "" {
+				writeLine("[reasoning] " + part.Text)
+			}
+		case *message.ToolCall:
+			writeLine("[tool_call] " + part.Name + "(" + capRunes(string(part.Arguments), taskLogArgsCap) + ")")
+		case *message.ToolResult:
+			label := "[tool_result]"
+			if part.IsError {
+				label = "[tool_result error]"
+			}
+			writeLine(label + " " + part.SafeContent().Text())
+		case *message.Blob:
+			blobs++
+		}
+	}
+	if blobs > 0 {
+		writeLine(fmt.Sprintf("[%d attachment(s)]", blobs))
+	}
+	text := b.String()
+	capped := capRunes(text, taskLogEntryCap)
+	return taskLogEntry{Role: string(m.Role), Text: capped, Truncated: capped != text}
+}
+
+// capRunes cuts s to at most n runes, marking a cut.
+func capRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + taskLogTruncationMarker
 }

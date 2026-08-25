@@ -3090,6 +3090,63 @@ func (m *SessionManager) DescendantInfo(callerID, targetID string) (SessionNode,
 	return snap, n.session.Usage(), nil
 }
 
+// DescendantTranscript returns targetID's lifecycle snapshot and the LAST
+// tail messages of its canonical history, after the same ancestry check
+// CancelDescendant/DescendantInfo/SendToDescendant apply — the
+// SessionManager side of the `task` tool's log verb.
+//
+// It works for a LIVE descendant and a DEAD one alike, which is the whole
+// point: a node stays in m.nodes after it goes terminal, until Reap
+// collects it, and its *Session — history included — stays with it. A
+// parent whose child died therefore reads the child's own last messages
+// through the same call it would use on a running one, with no session
+// reload and no disk read. A REAPED descendant is gone from the tree and
+// answers ErrUnknownSession, exactly as it does for every other verb; the
+// child's durable log still exists on disk for an operator to read out of
+// band.
+//
+// History is read through n.session.History() (which takes s.mu) while
+// m.mu is still held — m.mu outer, session mu inner, the same nesting
+// DescendantInfo's own Usage() read establishes.
+//
+// tail <= 0 returns no messages rather than the whole history: the caller
+// decides the bound, and a zero must never silently mean "everything" on
+// a surface whose output goes into a model's context. A tail larger than
+// the history returns the whole history.
+//
+// total is the descendant's WHOLE message count, reported alongside the
+// trimmed slice and read in the SAME locked operation. A caller cannot
+// derive it from the slice — that is by construction only the part that
+// survived the bound — and a separate follow-up read could race the
+// descendant's own next turn appending to it.
+//
+// Returns ErrUnknownSession if either id is not tracked, ErrNotDescendant
+// if targetID is not callerID's descendant.
+func (m *SessionManager) DescendantTranscript(callerID, targetID string, tail int) (node SessionNode, msgs []message.Message, total int, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.nodes[callerID]; !ok {
+		return SessionNode{}, nil, 0, fmt.Errorf("%w: %s", ErrUnknownSession, callerID)
+	}
+	n, ok := m.nodes[targetID]
+	if !ok {
+		return SessionNode{}, nil, 0, fmt.Errorf("%w: %s", ErrUnknownSession, targetID)
+	}
+	if !m.isDescendantLocked(callerID, targetID) {
+		return SessionNode{}, nil, 0, fmt.Errorf("%w: %s", ErrNotDescendant, targetID)
+	}
+	snap := n.snapshot()
+	history := n.session.History()
+	total = len(history)
+	if tail <= 0 {
+		return snap, nil, total, nil
+	}
+	if len(history) > tail {
+		history = history[len(history)-tail:]
+	}
+	return snap, history, total, nil
+}
+
 // mergeChildIDs returns durable's ids first, in order, then every id in
 // live that durable does not already name — the engine-side twin of the
 // wire's childIDsUnion (server/handlers.go). Never nil for a childless
