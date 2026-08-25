@@ -3073,7 +3073,12 @@ func (m *SessionManager) DescendantInfo(callerID, targetID string) (SessionNode,
 	// are byte-comparable. n.depth needs no equivalent merge — the wire
 	// prefers the durable TaskDepth and adoptReloadedLocked already
 	// restores n.depth from that same value.
-	snap.Children = mergeChildIDs(n.session.SpawnedChildIDs(), n.children)
+	// snap.Children, not n.children: snapshot already made a private copy,
+	// and mergeChildIDs takes ownership of its live argument, so the
+	// common case (no durable ids to merge) reuses that one copy instead
+	// of allocating a second — a review finding on the first version of
+	// this call, which discarded snapshot's copy and built another.
+	snap.Children = mergeChildIDs(n.session.SpawnedChildIDs(), snap.Children)
 	return snap, n.session.Usage(), nil
 }
 
@@ -3081,18 +3086,24 @@ func (m *SessionManager) DescendantInfo(callerID, targetID string) (SessionNode,
 // live that durable does not already name — the engine-side twin of the
 // wire's childIDsUnion (server/handlers.go). Never nil for a childless
 // session: an empty, non-nil slice, matching snapshot's own shape.
+//
+// Takes ownership of live: it is returned as-is when there is nothing to
+// merge, so the caller must pass a slice it owns (snapshot's own fresh
+// copy), never a live node field.
 func mergeChildIDs(durable, live []string) []string {
 	if len(durable) == 0 {
 		// Live cannot contain duplicates: adoptLocked appends a child id
 		// at most once.
-		return append(make([]string, 0, len(live)), live...)
+		return live
 	}
 	out := make([]string, 0, len(durable)+len(live))
 	seen := make(map[string]bool, len(durable)+len(live))
-	for _, id := range append(append([]string(nil), durable...), live...) {
-		if !seen[id] {
-			seen[id] = true
-			out = append(out, id)
+	for _, ids := range [2][]string{durable, live} {
+		for _, id := range ids {
+			if !seen[id] {
+				seen[id] = true
+				out = append(out, id)
+			}
 		}
 	}
 	return out
