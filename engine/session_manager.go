@@ -824,40 +824,42 @@ func (m *SessionManager) adoptReloadedLocked(s *Session, recover bool) *sessionN
 	parentID := s.TaskParentID()
 	s.cfg.SessionManager = m
 	s.tools[taskToolName] = taskTool()
-	// depth's default is the REFUSAL sentinel (m.maxDepth, the one value
-	// TaskToolAllowed always refuses — see this method's own doc comment
-	// for why an unrecoverable depth must never guess permissively), used
-	// only when neither of the two better sources below applies. Preferred,
-	// in order:
+	// depth's default is the REFUSAL sentinel: m.maxDepth, the one value
+	// TaskToolAllowed always refuses. See this method's own doc comment
+	// for why an unrecoverable depth must never guess permissively. The
+	// sentinel applies only when neither better source below does.
+	// Preferred, in order:
 	//   1. s durably recorded its own TaskDepth at spawn time (see
-	//      Config.TaskDepth's own doc comment): s's OWN true depth,
-	//      authoritative regardless of whether the live parent chain is
-	//      trustworthy right now — checked FIRST, even when the parent IS
-	//      currently tracked. A live review finding: an earlier revision
-	//      preferred the live parent.depth+1 whenever the parent was
-	//      tracked, which silently propagates the PARENT's own wrong depth
-	//      forward whenever THAT parent was itself adopted via case 3
-	//      below (its own parent untracked, no durable TaskDepth of its
-	//      own — a legacy grandparent, say): the child then computed
-	//      m.maxDepth+1, discarding its own known-correct durable value,
-	//      and — since TaskToolAllowed(maxDepth+1) is always false — was
+	//      Config.TaskDepth's own doc comment). This is s's OWN true
+	//      depth. It is authoritative regardless of whether the live
+	//      parent chain is trustworthy right now, so this check runs
+	//      FIRST — even when the parent IS currently tracked. A live
+	//      review finding: an earlier revision preferred the live
+	//      parent.depth+1 whenever the parent was tracked. That silently
+	//      propagates the PARENT's own wrong depth forward whenever THAT
+	//      parent was itself adopted via case 3 below (its own parent
+	//      untracked, no durable TaskDepth of its own — a legacy
+	//      grandparent, say). The child then computed m.maxDepth+1,
+	//      discarding its own known-correct durable value.
+	//      TaskToolAllowed(maxDepth+1) is always false, so the child was
 	//      silently denied the task tool even though its true depth was
 	//      under the limit. Checking s's own durable value first makes
-	//      that impossible: it can never be shadowed by an upstream
-	//      node's bad depth.
+	//      that impossible — an upstream node's bad depth can never
+	//      shadow it.
 	//   2. The parent IS currently tracked and s has no durable TaskDepth
-	//      of its own (a legacy child predating the field): depth =
-	//      p.depth + 1, the best available signal — the live parent
-	//      chain, however imperfect, beats guessing the sentinel outright.
-	//   3. Neither applies (parent not tracked AND s's own depth was never
-	//      durably recorded): the sentinel. Closes a live-audited bug: a
-	//      direct child (true depth 1) whose parent was not tracked at
-	//      reload time reported lineage.depth 3 (== DefaultMaxTaskDepth),
-	//      indistinguishable from a session genuinely refused at the
-	//      limit — case 1 above now catches this before it ever reaches
-	//      here, for any child with a durably recorded depth; this case
-	//      remains, unchanged, for the legacy fallback it originally
-	//      existed for.
+	//      of its own — a legacy child predating the field: depth =
+	//      p.depth + 1. This is the best available signal. The live
+	//      parent chain, however imperfect, beats guessing the sentinel
+	//      outright.
+	//   3. Neither applies: the parent is not tracked AND s's own depth
+	//      was never durably recorded. Use the sentinel. This closes a
+	//      live-audited bug: a direct child (true depth 1) whose parent
+	//      was not tracked at reload time reported lineage.depth 3 (==
+	//      DefaultMaxTaskDepth) — indistinguishable from a session
+	//      genuinely refused at the limit. Case 1 above now catches this
+	//      before it ever reaches here, for any child with a durably
+	//      recorded depth. This case remains, unchanged, for the legacy
+	//      fallback it originally existed for.
 	depth := m.maxDepth
 	attachTo := ""
 	p, tracked := m.nodes[parentID]

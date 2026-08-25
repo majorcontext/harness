@@ -3414,20 +3414,36 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 //     lineageJSON's own field comments for why that's safe on the wire
 //     (omitempty distinguishes "unknown" from every real zero value).
 //
-// Depth: info.Depth (branch 1) is trusted ONLY when it came from a live
-// parent chain — adoptReloadedLocked substitutes m.maxDepth, a deliberate
-// REFUSAL SENTINEL, whenever id's own parent was not currently tracked at
-// adopt time, and that sentinel is indistinguishable from a session
-// genuinely AT that depth (a live audit caught a direct child, true depth
-// 1, reporting lineage.depth 3 == DefaultMaxTaskDepth this exact way).
-// sess.TaskDepth() — the durable value Spawn itself recorded, never
-// re-derived from the live tree — is the one source neither branch here
-// can get wrong, so it is preferred whenever it is present (> 0; a legacy
-// session predating Config.TaskDepth reports 0, in which case info.Depth
-// from branch 1 is the best remaining answer, and the cold branch 2 omits
-// Depth entirely rather than report a false 0 — the SAME "unknown, not
-// zero" rule Children below and every other field in this function
-// already follows).
+// Depth: branch 1 (warm) reports info.Depth VERBATIM — never re-derived or
+// overridden here from sess.TaskDepth() a second time. This is a
+// deliberate adjudication, not an oversight: info.Depth IS the
+// ENFORCEMENT-effective depth, the exact value adoptReloadedLocked
+// computed and TaskToolAllowed gates this session's own `task` tool
+// against RIGHT NOW (see that method's own doc comment for its full
+// preference order, durable TaskDepth included). A caller reading
+// lineage.depth needs to be able to PREDICT what this session can
+// actually do — whether it can spawn a child of its own — not a
+// separately-recomputed "more correct" number that could disagree with
+// what is actually enforced. An earlier revision of this function
+// re-preferred sess.TaskDepth() independently here, which happened to
+// agree with info.Depth in every case that revision's own tests covered,
+// but was two sources of truth for one fact by construction, free to
+// drift the moment either side's derivation changed — a live review
+// finding. Durable TaskDepth still matters, just not as a SECOND wire-side
+// override: adoptReloadedLocked already folds it into info.Depth as
+// enforcement's own PRIMARY source, and it remains the direct answer on
+// the cold branch below, which has no live info.Depth to defer to at all.
+//
+// Sentinel semantics live where depth is actually computed
+// (adoptReloadedLocked, engine/session_manager.go) — a REFUSAL SENTINEL
+// (m.maxDepth) substituted whenever a node's true depth is unrecoverable
+// can propagate forward through a live-tracked-but-poisoned ancestor (a
+// legacy node with no durable TaskDepth of its own, adopted with ITS OWN
+// parent untracked) into a legacy descendant that also has no durable
+// depth of its own — see TestSentinelPoisonedChainWireDepthMatchesEnforcement
+// (session_tree_test.go), which proves the wire and TaskToolAllowed agree
+// on that exact propagated value, by construction, since both read the
+// same info.Depth.
 //
 // Children: sessionNode.children (branch 1's info.Children) is the LIVE
 // in-memory tree only — Reap() explicitly drops a settled leaf from its
@@ -3448,12 +3464,25 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 // TaskParentID) or a session predating this feature.
 func (s *Server) lineageJSONFor(id string, sess *engine.Session) *lineageJSON {
 	if info, ok := s.sessMgr.Info(id); ok {
+		// info.Depth reported verbatim — see this function's own doc
+		// comment ("Depth:" paragraph) for why the wire must match
+		// enforcement exactly rather than re-preferring sess.TaskDepth()
+		// a second time here.
 		depth := info.Depth
-		if d := sess.TaskDepth(); d > 0 {
-			depth = d
+		// info.ParentID is empty when adoptReloadedLocked adopted id with
+		// its parent untracked (the durable-TaskDepth branch sets depth but
+		// never attachTo). The durable TaskParentID still names the true
+		// parent. Fall back to it. Without this fallback, a warm orphan
+		// reports depth > 0 with no parent_id — a shape lineageJSON.Depth's
+		// doc comment rules out. A genuine root never reaches
+		// adoptReloadedLocked's non-root branch and has an empty
+		// TaskParentID, so the fallback changes nothing for roots.
+		parentID := info.ParentID
+		if parentID == "" {
+			parentID = sess.TaskParentID()
 		}
 		return &lineageJSON{
-			ParentID:   info.ParentID,
+			ParentID:   parentID,
 			Depth:      depth,
 			Status:     string(info.Status),
 			Children:   childIDsUnion(info.Children, sess.SpawnedChildIDs()),
@@ -3479,14 +3508,17 @@ func (s *Server) lineageJSONFor(id string, sess *engine.Session) *lineageJSON {
 // see Session.SpawnedChildIDs' own doc comment) into ONE de-duplicated
 // list. Durable entries come first, in spawn order. Live-only entries (a
 // legacy parent whose log predates task.spawned records) follow, in their
-// own order. Durable-first is what preserves spawn order overall: the live
-// list is always a spawn-order subsequence of durable (adoptLocked appends
-// at spawn; Reap's filter keeps survivor order), so live-first would
-// reorder siblings the moment an elder child settles and is Reaped while a
-// younger one still runs ([B, A] instead of [A, B]). Always returns a
-// non-nil slice (never omitted — see lineageJSON.Children's own doc
-// comment on why that field has no omitempty): "children":[] means "known:
-// zero children now, and none ever durably spawned either," never
+// own order.
+//
+// Durable-first is what preserves spawn order overall. The live list is
+// always a spawn-order subsequence of durable: adoptLocked appends at
+// spawn, and Reap's filter keeps survivor order. Live-first would reorder
+// siblings the moment an elder child settles and is Reaped while a
+// younger one still runs ([B, A] instead of [A, B]).
+//
+// Always returns a non-nil slice — never omitted, see lineageJSON.Children's
+// own doc comment on why that field has no omitempty. "children":[] means
+// "known: zero children now, and none ever durably spawned either," never
 // "unknown."
 func childIDsUnion(live, durable []string) []string {
 	if len(durable) == 0 {

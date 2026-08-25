@@ -1805,6 +1805,18 @@ func TestRecoverInterruptedTurnDoesNotFalselyMarkForwardedNotificationDelivered(
 	// id, but mgr2 has no node tracked under it, so
 	// nearestLiveAncestorLocked(mid) will find nothing and return nil.
 	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	// flushed receives a signal every time unlockAndFlushPersist finishes
+	// running ALL of its queued durable-write thunks — see
+	// testFlushDoneHook's own doc comment (session_manager.go) and
+	// TestRecoverInterruptedTurnForwardsGrandchildNotifications's
+	// identical fix for the full reasoning: a guessed sleep here is
+	// exactly the class of flake independently reproduced on unmodified
+	// main by a separate audit (PR #159, 2/30 under CPU pressure) —
+	// recoverInterruptedTurnLocked's own deferred persists are not
+	// guaranteed to have landed by the time any fixed real-time delay
+	// elapses, however generous.
+	flushed := make(chan struct{}, 64)
+	mgr2.testFlushDoneHook = func() { flushed <- struct{}{} }
 
 	reloadedMid, err := LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
 	if err != nil {
@@ -1818,14 +1830,20 @@ func TestRecoverInterruptedTurnDoesNotFalselyMarkForwardedNotificationDelivered(
 		t.Fatalf("AdoptReloaded: %v", err)
 	}
 
-	// Give recoverInterruptedTurnLocked's deferred persists a moment to
-	// flush (see unlockAndFlushPersist's own doc comment) before reading
-	// the durable ground truth back.
-	time.Sleep(100 * time.Millisecond)
-
-	reloadedAgain, err := LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
-	if err != nil {
-		t.Fatalf("second LoadSession: %v", err)
+	// Block on mgr2's flush signal and re-read from disk rather than sleep
+	// for a guessed interval — AdoptReloaded's own deferred persists (see
+	// unlockAndFlushPersist's own doc comment) are not guaranteed to have
+	// landed by the time this line runs otherwise.
+	var reloadedAgain *Session
+	for {
+		<-flushed
+		reloadedAgain, err = LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
+		if err != nil {
+			t.Fatalf("second LoadSession: %v", err)
+		}
+		if reloadedAgain.hasPendingTaskNotifications() {
+			break
+		}
 	}
 	if !reloadedAgain.hasPendingTaskNotifications() {
 		t.Fatal("grandchild's forwarded notification was falsely persisted as delivered (recTaskNotifyDelivered written with no live target) — it should still read back as pending/lost, not silently resolved")

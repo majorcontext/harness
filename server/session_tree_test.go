@@ -400,6 +400,136 @@ func TestColdChildHasDurableLineage(t *testing.T) {
 	}
 }
 
+// TestWarmOrphanChildLineageKeepsDurableParentID covers the WARM
+// orphaned-parent shape (a review finding on the TaskDepth fix): a child
+// adopted by adoptReloadedLocked while its parent is untracked gets its
+// depth from durable TaskDepth, but the node's parentID stays empty (only
+// the live-parent branch sets attachTo). lineageJSONFor's warm branch must
+// then fall back to the durable TaskParentID. Without the fallback, the
+// wire showed depth 1 with no parent_id — a shape lineageJSON.Depth's doc
+// comment rules out ("depth 0 only ever occurs for a root"), and one that
+// makes a tree-reconstructing client misfile a real child as a root.
+//
+// The orphan state is real: after a restart, ReportTurnStart's
+// adopt-on-first-sight reload adopts a child whose parent nothing has
+// touched yet. This test builds that state directly: spawn a child in one
+// harness, then adopt only its reload into a second harness's fresh
+// SessionManager via ReportTurnStart, and GET it there.
+func TestWarmOrphanChildLineageKeepsDurableParentID(t *testing.T) {
+	dir := t.TempDir()
+	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("the answer is 42")}}
+	h1 := multiProviderHarnessInDir(t, dir, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, childProv)
+
+	resp, data := h1.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h1.do("POST", "/session", map[string]string{
+		"parent_id": root.ID, "agent": engine.AgentExplore, "prompt": "find the answer", "model": "child/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+	var child struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &child)
+	waitForLineageStatus(t, h1, child.ID, "done", 2*time.Second)
+
+	// Fresh harness, same dir: an empty SessionManager, like a restarted
+	// process. Adopt ONLY the child, the way ReportTurnStart's
+	// adopt-on-first-sight path would — root stays untracked, so
+	// adoptReloadedLocked takes its durable-TaskDepth branch.
+	h2 := multiProviderHarnessInDir(t, dir, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, childProv)
+	reloaded, err := engine.LoadSession(engine.Config{SessionDir: dir, Model: message.ModelRef{Provider: "child", Model: "m1"}}, child.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	h2.srv.sessMgr.ReportTurnStart(reloaded)
+
+	resp, data = h2.do("GET", "/session/"+child.ID, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("warm-orphan GET child status %d: %s", resp.StatusCode, data)
+	}
+	var got struct {
+		Lineage map[string]any `json:"lineage"`
+	}
+	mustUnmarshal(t, data, &got)
+	if got.Lineage == nil {
+		t.Fatal("warm-orphan GET has no lineage at all")
+	}
+	if got.Lineage["depth"] != float64(1) {
+		t.Errorf("warm-orphan lineage.depth = %v, want 1 (durable TaskDepth)", got.Lineage["depth"])
+	}
+	if got.Lineage["parent_id"] != root.ID {
+		t.Errorf("warm-orphan lineage.parent_id = %v, want %q (durable TaskParentID fallback)", got.Lineage["parent_id"], root.ID)
+	}
+}
+
+// TestSentinelPoisonedChainWireDepthMatchesEnforcement is the adjudicated
+// fix for a review finding: an earlier revision of lineageJSONFor
+// independently re-preferred sess.TaskDepth() over info.Depth on the wire
+// — a SECOND derivation of "this session's depth" that could disagree
+// with the ENFORCEMENT depth (info.Depth, the exact value TaskToolAllowed
+// gates this session's own `task` tool against) whenever a poisoned
+// ancestor's refusal-sentinel depth propagates forward into a legacy
+// descendant with no durable TaskDepth of its own. lineage.depth must
+// report exactly what is enforced, not a value a caller could act on and
+// be wrong about. Proves the wire and enforcement now agree by
+// construction (lineageJSONFor reports info.Depth verbatim): whatever
+// depth GET /session/{id} shows is exactly what SessionManager already
+// decided.
+//
+// Builds the poisoned chain directly: "mid" is legacy (no durable
+// TaskDepth) with its own parent untracked, so adoptReloadedLocked gives
+// it the m.maxDepth refusal sentinel (the harness default, 3 — see
+// engine.DefaultMaxTaskDepth). "child" is ALSO legacy, adopted under mid
+// (now tracked) — its enforcement depth becomes sentinel+1 = 4, one past
+// the configured limit.
+func TestSentinelPoisonedChainWireDepthMatchesEnforcement(t *testing.T) {
+	dir := t.TempDir()
+	h := multiProviderHarnessInDir(t, dir, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"})
+
+	midCfg := engine.Config{SessionDir: dir, Model: message.ModelRef{Provider: "root", Model: "m1"}, TaskParentID: "ses_0000000000000099"}
+	mid := engine.NewSession(midCfg)
+	h.srv.sessMgr.ReportTurnStart(mid)
+	midInfo, ok := h.srv.sessMgr.Info(mid.ID)
+	if !ok || midInfo.Depth != 3 {
+		t.Fatalf("mid enforcement depth = %v (ok=%v), want 3 (the sentinel — test setup invalid)", midInfo.Depth, ok)
+	}
+
+	childCfg := engine.Config{SessionDir: dir, Model: message.ModelRef{Provider: "root", Model: "m1"}, TaskParentID: mid.ID}
+	child := engine.NewSession(childCfg)
+	h.srv.sessMgr.ReportTurnStart(child)
+	childInfo, ok := h.srv.sessMgr.Info(child.ID)
+	if !ok || childInfo.Depth != 4 {
+		t.Fatalf("child enforcement depth = %v (ok=%v), want 4 (sentinel+1 — test setup invalid)", childInfo.Depth, ok)
+	}
+
+	resp, data := h.do("GET", "/session/"+child.ID, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET child status %d: %s", resp.StatusCode, data)
+	}
+	var got struct {
+		Lineage map[string]any `json:"lineage"`
+	}
+	mustUnmarshal(t, data, &got)
+	if got.Lineage == nil {
+		t.Fatal("no lineage in response")
+	}
+	if got.Lineage["depth"] != float64(childInfo.Depth) {
+		t.Errorf("wire lineage.depth = %v, want %v (must match enforcement's info.Depth exactly, not a separately-derived value)", got.Lineage["depth"], childInfo.Depth)
+	}
+}
+
 // TestWarmChildlessLineageHasExplicitEmptyChildren is the regression test
 // for the OTHER half of Children's own fix (see TestColdChildHasDurableLineage's
 // doc comment for the full history): a WARM, genuinely childless node

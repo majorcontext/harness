@@ -346,25 +346,32 @@ type Config struct {
 	TaskToolNames []string
 
 	// TaskDepth is the child's tree depth: a root's own children are depth
-	// 1, their children depth 2, and so on. It is set ONLY by Spawn,
-	// alongside TaskParentID/TaskAgentType/TaskToolNames above, and durably
-	// persisted the same way. See adoptReloadedLocked's own doc comment for
-	// why this exists. SessionManager derives a LIVE node's depth as
-	// parent.depth+1 at adopt time. But when a reload finds this child's
-	// OWN parent NOT currently tracked (Reap, or a process restart that
-	// hasn't touched the parent again yet), there was previously no durable
-	// fallback at all. adoptReloadedLocked substituted m.maxDepth — a
-	// deliberate "refuse further spawning" REFUSAL SENTINEL,
-	// indistinguishable on the wire from a session genuinely AT that depth.
-	// A live audit caught this exact collision: a direct child, true depth
-	// 1, reported lineage.depth 3 (DefaultMaxTaskDepth). 0 means "not
-	// recorded". Every real child's depth is >= 1; only the durably-blank
-	// case and a genuine root (which never reaches the code that reads this
-	// field at all) are ever 0. This is the same "legacy header, restores
-	// to the Go zero value" rule TaskAgentType's own doc comment already
-	// establishes, so an already-recorded session predating this field
-	// degrades to the OLD sentinel-fallback behavior rather than reporting
+	// 1, their children depth 2, and so on. Spawn sets it, alongside
+	// TaskParentID/TaskAgentType/TaskToolNames above, and persists it the
+	// same durable way. See adoptReloadedLocked's own doc comment for why
+	// this exists. SessionManager derives a LIVE node's depth as
+	// parent.depth+1 at adopt time. But a reload can find this child's OWN
+	// parent NOT currently tracked — Reap, or a process restart that
+	// hasn't touched the parent again yet. There was previously no durable
+	// fallback for that case at all. adoptReloadedLocked substituted
+	// m.maxDepth instead: a deliberate "refuse further spawning" REFUSAL
+	// SENTINEL, indistinguishable on the wire from a session genuinely AT
+	// that depth. A live audit caught this exact collision: a direct
+	// child, true depth 1, reported lineage.depth 3 (DefaultMaxTaskDepth).
+	//
+	// 0 means "not recorded". Every real child's depth is >= 1; only the
+	// durably-blank case and a genuine root are ever 0 (a root never reads
+	// this field at all). This is the same "legacy header, restores to the
+	// Go zero value" rule TaskAgentType's own doc comment already
+	// establishes. An already-recorded session predating this field
+	// degrades to the OLD sentinel-fallback behavior instead of reporting
 	// a false 0.
+	//
+	// GET /session/{id}.lineage.depth reports SessionManager's own
+	// enforcement-effective depth verbatim, not this field re-derived a
+	// second time on the wire — see server.lineageJSONFor's own doc
+	// comment ("Depth:" paragraph) for why the two must never be allowed
+	// to disagree.
 	TaskDepth int
 
 	Hooks Hooks // optional plugin host
@@ -424,22 +431,18 @@ type Config struct {
 	// SHARED with the provider call: callbacks MUST NOT mutate it or anything it
 	// references (System, Messages, Tools). A nil OnRequest costs nothing.
 	//
-	// sessionID is the FIRING session's own s.ID, supplied by the call site
-	// (see streamTurn) — never something the callback must derive itself.
-	// This mirrors emit()'s ev.SessionID = s.ID for OnEvent, and for the
-	// SAME reason: configSnapshot (session_manager.go) copies a Config by
-	// value into a freshly Spawn'd child, including this func value
-	// unchanged — a callback built as a closure over its ORIGINAL session's
-	// id (e.g. `func(turn int, req) { report(origSess.ID, turn, req) }`)
-	// would silently misattribute every request.meta record from every
-	// descendant that ever inherits this Config to that one original
-	// session, forever. A live audit caught exactly this: a spawned child's
-	// OnRequest closure over cmd/harness's local `sess` variable reported
-	// every one of the child's own requests under its PARENT's id instead
-	// of its own. Passing sessionID explicitly at the call site makes the
-	// callback itself session-agnostic — safe to inherit through any number
-	// of Spawn generations — so cmd/harness's wiring no longer needs a
-	// per-construction closure at all (see newSessionFn/loadSessionFn).
+	// sessionID is the firing session's own s.ID. The call site
+	// (streamTurn) supplies it; the callback never derives it. This
+	// mirrors emit()'s ev.SessionID = s.ID for OnEvent, for the same
+	// reason. configSnapshot (session_manager.go) copies a Config by
+	// value into every Spawn'd child, func value included. A callback
+	// closed over its original session's id would therefore misattribute
+	// every descendant's request.meta records to that one session. A live
+	// audit caught exactly this: cmd/harness closed OnRequest over a
+	// local `sess` variable, and a spawned child's requests all reported
+	// the parent's id. The explicit sessionID keeps the callback
+	// session-agnostic, so any number of Spawn generations can inherit it
+	// safely (see newSessionFn/loadSessionFn).
 	OnRequest func(sessionID string, turn int, req *provider.Request)
 
 	// Instructions controls project-instruction (AGENTS.md) injection into

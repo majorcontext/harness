@@ -1516,21 +1516,17 @@ func newSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.M
 		cfg.SkillsDirs = skillsDirs(appCfg, flagDirs, sessionWorkDir)
 		cfg.AgentDefsDirs = agentDefsDirs(appCfg, agentDefFlagDirs, sessionWorkDir)
 		cfg.ParentSession = parentSession
-		// onRequest already has engine.Config.OnRequest's own signature
-		// (sessionID, turn, req) — the FIRING session's own id, supplied by
-		// the engine at the call site (see Config.OnRequest's doc comment),
-		// so this can be wired directly with no per-construction closure.
-		// An EARLIER version of this wiring built a closure over a locally
-		// declared `sess` variable instead (`func(turn int, req) {
-		// onRequest(sess.ID, turn, req) }`) — which configSnapshot
-		// (session_manager.go) then copied BY VALUE into every child
-		// SessionManager.Spawn ever builds from a session using this
-		// Config, permanently misattributing every one of that child's own
-		// request.meta records to THIS session's id instead of its own
-		// (a live audit caught it: a spawned child's request.meta never
-		// appeared under its own id in the shared journal at all). Wiring
-		// the plain, session-agnostic onRequest func value directly closes
-		// that regardless of how many Spawn generations later it is read.
+		// onRequest already has engine.Config.OnRequest's signature
+		// (sessionID, turn, req). The engine supplies the firing session's
+		// own id at the call site, so wire the func value directly. An
+		// earlier version closed over a local `sess` variable instead.
+		// configSnapshot (session_manager.go) copies that closure by value
+		// into every child Spawn builds from this Config, so every child's
+		// request.meta records carried this session's id, not its own. A
+		// live audit caught it: a spawned child's request.meta never
+		// appeared under its own id in the shared journal. The
+		// session-agnostic func value fixes this for every Spawn
+		// generation. See Config.OnRequest's doc comment.
 		cfg.OnRequest = onRequest
 		return engine.NewSession(cfg), nil
 	}

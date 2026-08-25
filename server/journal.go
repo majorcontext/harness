@@ -820,22 +820,25 @@ func (s *Server) syncMessages(sessionID string) {
 // node for sessionID, or nil when neither knows it.
 //
 // The fallback is what makes syncMessages work for a SessionManager.Spawn'd
-// session. Spawn drives a child's turn directly (child.Prompt, in its own
-// goroutine — see Spawn's doc comment), never through claimForPrompt/
+// session. Spawn drives a child's turn directly — child.Prompt, in its own
+// goroutine, see Spawn's doc comment. It never goes through claimForPrompt/
 // handleCreate, so a spawned child's id is NEVER a key in s.sessions. That
-// map exists purely for THIS server's own HTTP claim/eviction residency —
-// an orthogonal concept from "does anything in this process hold a live
-// *engine.Session for this id". sessMgr.Session, by contrast, is populated
-// for exactly the sessions that matter here. Spawn calls adoptLocked
-// synchronously, before the child's turn ever starts. For a child this
-// process merely rediscovers (a follow-up touch after Reap, or after a
-// restart), ReportTurnStart/handleSpawnChild's own AdoptReloaded fallback
-// registers it there too. sessMgr is deliberately consulted only as a
-// FALLBACK, not tried first: a resident st.sess may be a fresher reload of
-// the same durable session than whatever sessMgr currently points at (see
-// ReportTurnStart's "always re-attach to the LIVE object" doc comment).
-// Preferring residency when it exists keeps this the same object every
-// other resident-aware call site (claimForPrompt's callers) already uses.
+// map exists purely for THIS server's own HTTP claim/eviction residency.
+// That is an orthogonal concept from "does anything in this process hold a
+// live *engine.Session for this id".
+//
+// sessMgr.Session, by contrast, is populated for exactly the sessions that
+// matter here. Spawn calls adoptLocked synchronously, before the child's
+// turn ever starts. For a child this process merely rediscovers — a
+// follow-up touch after Reap, or after a restart — ReportTurnStart/
+// handleSpawnChild's own AdoptReloaded fallback registers it there too.
+//
+// sessMgr is deliberately consulted only as a FALLBACK, not tried first. A
+// resident st.sess may be a fresher reload of the same durable session
+// than whatever sessMgr currently points at — see ReportTurnStart's
+// "always re-attach to the LIVE object" doc comment. Preferring residency
+// when it exists keeps this the same object every other resident-aware
+// call site (claimForPrompt's callers) already uses.
 func resolveSessForSync(st *sessionState, sessMgr *engine.SessionManager, sessionID string) *engine.Session {
 	if st != nil {
 		return st.sess
