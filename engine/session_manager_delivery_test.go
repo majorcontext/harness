@@ -1595,11 +1595,13 @@ func TestRecoverInterruptedTurnReportsTotalUsageNotDelta(t *testing.T) {
 	waitResumeClaimed(root.ID)
 	waitForStatus(t, mgr, root.ID, StatusIdle, time.Second)
 
-	// Find the recovery notification specifically by ChildID+StatusFailed:
-	// root.taskNotifications also carries turn 1's own ordinary "done"
-	// notification once the resume above requeues nothing for it (it was
-	// genuinely delivered), so asserting the queue's total length would
-	// be wrong regardless of the timing fixed above.
+	// Find the recovery notification specifically by ChildID+StatusFailed
+	// rather than asserting the queue's total length: which OTHER
+	// notifications remain queued here is an implementation detail of
+	// delivery/commit ordering (turn 1's own "done" notification was
+	// already committed — delivered and removed — by the first resume
+	// above), and a length assertion would silently re-encode the very
+	// timing assumptions this test just stopped making.
 	root.mu.Lock()
 	defer root.mu.Unlock()
 	var found *taskNotification
