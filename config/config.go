@@ -171,12 +171,7 @@ type Config struct {
 	// by validateMCPToolLoading rather than falling back to the default:
 	// deferral changes what the model can call without asking, so a typo
 	// must never decide it silently.
-	//
-	// STAGING: this key is parsed and validated but NOT yet wired into
-	// engine.Config -- cmd/harness holds the wiring until the mcp tool's
-	// select action exists, since deferring a schema with no way to load it
-	// back would turn "enable deferral" into "disable MCP". Setting it today
-	// is accepted and inert.
+
 	MCPToolLoading string `json:"mcp_tool_loading,omitempty"`
 	// MCPToolLoadingThreshold is the tool COUNT "auto" compares the live
 	// catalog against. It is consulted in "auto" mode ONLY: with "eager" or

@@ -57,8 +57,11 @@ type mcpConnector interface {
 
 // mcpToolArgs is the mcp tool's input shape.
 type mcpToolArgs struct {
-	Action string `json:"action"`
-	Server string `json:"server"`
+	Action string   `json:"action"`
+	Server string   `json:"server"`
+	Query  string   `json:"query"`
+	Limit  int      `json:"limit"`
+	Tools  []string `json:"tools"`
 }
 
 // mcpServerStatusResult is one server's entry in the status action's
@@ -87,19 +90,18 @@ type mcpToolConnectResult struct {
 
 // mcpTool builds the `mcp` session tool. See the package doc for the action
 // contract.
-func mcpTool() Tool {
-	return Tool{
-		Def: provider.ToolDef{
-			Name: mcpSessionToolName,
-			Description: "Inspect or reconnect this session's configured MCP servers. " +
-				"Actions: " +
-				"status() reports every configured server's live connection state — connected, " +
-				"still retrying in the background, or parked (background retries exhausted); " +
-				"connect(server) makes ONE bounded, synchronous connect attempt for a server that " +
-				"is not yet connected — the only way to bring a parked server back once its " +
-				"automatic background retries have given up. Already-connected is a friendly " +
-				"no-op; an unknown server name errors listing the configured names.",
-			InputSchema: json.RawMessage(`{
+func mcpTool(canDefer bool) Tool {
+	def := provider.ToolDef{
+		Name: mcpSessionToolName,
+		Description: "Inspect or reconnect this session's configured MCP servers. " +
+			"Actions: " +
+			"status() reports every configured server's live connection state — connected, " +
+			"still retrying in the background, or parked (background retries exhausted); " +
+			"connect(server) makes ONE bounded, synchronous connect attempt for a server that " +
+			"is not yet connected — the only way to bring a parked server back once its " +
+			"automatic background retries have given up. Already-connected is a friendly " +
+			"no-op; an unknown server name errors listing the configured names.",
+		InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
 					"action": {"type": "string", "enum": ["status", "connect"], "description": "The operation to perform"},
@@ -107,12 +109,52 @@ func mcpTool() Tool {
 				},
 				"required": ["action"]
 			}`),
-		},
+	}
+	if canDefer {
+		def.Description = mcpToolDeferDescription
+		def.InputSchema = json.RawMessage(mcpToolDeferSchema)
+	}
+	return Tool{
+		Def: def,
 		Run: func(ctx context.Context, s *Session, args json.RawMessage) (message.Parts, error) {
 			return runMCPTool(ctx, s, args)
 		},
 	}
 }
+
+// mcpToolDeferDescription is the description a session that CAN defer gets:
+// the same two actions plus search and select. Two variants rather than one
+// superset, so a session that defers nothing never advertises an action
+// with nothing to act on — see sessionCanDefer (mcp_lazy.go) for why the
+// gate reads more than the global mode. Both variants are fixed for a
+// session's life, so the def stays byte-stable across requests either way.
+const mcpToolDeferDescription = "Inspect this session's configured MCP servers, and load the schemas of " +
+	"deferred MCP tools. Some MCP tools are DEFERRED: the system prompt lists their names and " +
+	"one-line descriptions, but their input schemas are not loaded and you cannot call them yet. " +
+	"Actions: " +
+	"search(query) ranks deferred and loaded tools by keyword over their names and descriptions, " +
+	"and reports whether each is already loaded; " +
+	"select(tools) loads the schemas of the named tools — they appear in your tool list on the " +
+	"next request and are then called directly, like any other tool. Select every tool you need " +
+	"in ONE call, and do not select a tool search already reports as loaded. " +
+	"status() reports every configured server's live connection state — connected, still " +
+	"retrying in the background, or parked (background retries exhausted); " +
+	"connect(server) makes ONE bounded, synchronous connect attempt for a server that is not " +
+	"yet connected — the only way to bring a parked server back once its automatic background " +
+	"retries have given up, and the way to discover the tools of a server that has never connected."
+
+// mcpToolDeferSchema is the matching input schema.
+const mcpToolDeferSchema = `{
+				"type": "object",
+				"properties": {
+					"action": {"type": "string", "enum": ["status", "connect", "search", "select"], "description": "The operation to perform"},
+					"server": {"type": "string", "description": "The configured server name (required for connect)"},
+					"query": {"type": "string", "description": "Keywords to rank tools by (required for search)"},
+					"limit": {"type": "integer", "description": "Maximum search results (default 20, max 50)"},
+					"tools": {"type": "array", "items": {"type": "string"}, "description": "Namespaced tool names to load, e.g. mcp__github__create_issue (required for select)"}
+				},
+				"required": ["action"]
+			}`
 
 // runMCPTool dispatches one mcp tool call against s.
 func runMCPTool(ctx context.Context, s *Session, raw json.RawMessage) (message.Parts, error) {
@@ -126,7 +168,14 @@ func runMCPTool(ctx context.Context, s *Session, raw json.RawMessage) (message.P
 		return runMCPStatus(s.cfg.MCP)
 	case "connect":
 		return runMCPConnect(ctx, s.cfg.MCP, in.Server)
+	case "search":
+		return runMCPSearch(ctx, s, in.Query, in.Limit)
+	case "select":
+		return runMCPSelect(ctx, s, in.Tools)
 	default:
+		if s.sessionCanDefer() {
+			return nil, fmt.Errorf("mcp: unknown action %q (want %q, %q, %q or %q)", in.Action, "status", "connect", "search", "select")
+		}
 		return nil, fmt.Errorf("mcp: unknown action %q (want %q or %q)", in.Action, "status", "connect")
 	}
 }

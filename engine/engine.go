@@ -491,12 +491,7 @@ type Config struct {
 	// mcp_lazy.go and docs/design/mcp-lazy-tools.md). The zero value is
 	// eager: every tool of every connected server registers with its full
 	// schema, exactly as it did before deferral existed.
-	//
-	// STAGING: the loader a deferred tool needs -- the mcp tool's select
-	// action -- lands with the next slice of that design. Until it does, a
-	// non-eager value here defers schemas with no way to load one back, so
-	// an embedder must leave this at its zero value. cmd/harness therefore
-	// does not copy the mcp_tool_loading config key into this field yet.
+
 	MCPToolLoading MCPToolLoading
 	// MCPToolLoadingThreshold is the tool COUNT MCPToolLoadingAuto compares
 	// the live catalog against. Any non-positive value (including the zero
@@ -1053,7 +1048,12 @@ func newSession(cfg Config) *Session {
 		s.tools[modelToolName] = modelTool()
 	}
 	if mcpConfiguredCount(cfg.MCP) > 0 {
-		s.tools[mcpSessionToolName] = mcpTool()
+		// The def carries the search/select actions only when this
+		// session's POLICY can defer (mcpPolicyCanDefer, mcp_lazy.go): a
+		// session that defers nothing must not advertise an action with
+		// nothing to act on. Policy is fixed for the session's life, so
+		// the def stays byte-stable across requests.
+		s.tools[mcpSessionToolName] = mcpTool(s.mcpPolicyCanDefer())
 	}
 	// task is registered here unconditionally whenever a SessionManager is
 	// present; SessionManager itself withholds it post-construction for a
@@ -2692,6 +2692,24 @@ func (s *Session) executeTool(ctx context.Context, tc *message.ToolCall, args js
 		out, isErr, err := s.cfg.MCP.CallTool(ctx, tc.Name, args)
 		if err != nil {
 			return message.Parts{&message.Text{Text: err.Error()}}, true
+		}
+		// Use implies selection (see mcp_lazy.go): a call that ROUTED names
+		// a real tool, so recording it keeps that tool's schema loaded when
+		// an auto flip later defers its server. Without this, a tool the
+		// model has been calling directly -- an eager server's tool needs no
+		// select, and the model is told not to select a loaded one -- would
+		// lose its definition mid-task the moment a second server connected
+		// and pushed the catalog over the threshold.
+		//
+		// A nil err is the routed signal: CallTool resolves the binding
+		// before it dials, so "unknown tool" and "server not configured"
+		// both return an error above and record nothing. A tool-level
+		// failure (isErr) DID route and is recorded, and so is a call whose
+		// transport failed on a later attempt -- the next successful call
+		// records it. A session that can defer nothing records nothing at
+		// all, so a plain eager config pays for none of this.
+		if s.sessionCanDefer() {
+			s.markMCPToolsSelected(tc.Name)
 		}
 		return out, isErr
 	}

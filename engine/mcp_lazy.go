@@ -98,12 +98,7 @@ const mcpCatalogListingMax = 200
 // a deferred tool is not callable until the model loads it. It names the
 // exact call shape because that is the only in-band documentation the model
 // gets at the moment it needs it.
-//
-// STAGING: the select and search actions it names land with the next slice
-// of docs/design/mcp-lazy-tools.md. This header is therefore reachable only
-// by an embedder that sets Config.MCPToolLoading itself -- no config key
-// reaches that field yet (see cmd/harness) -- and that embedder must wait
-// for the loader.
+
 const mcpCatalogHeader = "Deferred MCP tools. These tools exist but their input schemas are not loaded. " +
 	"To use one you MUST first load it with the mcp tool: " +
 	`mcp(action="select", tools=["mcp__server__tool"]). ` +
@@ -180,6 +175,19 @@ func (s *Session) sessionCanDefer() bool {
 	if _, ok := s.tools[mcpSessionToolName]; !ok {
 		return false
 	}
+	return s.mcpPolicyCanDefer()
+}
+
+// mcpPolicyCanDefer is sessionCanDefer's CONFIG-only half: some configured
+// server's policy mode is not eager. It exists separately because
+// newSession builds the mcp tool's own def from it (see engine.go), and at
+// that moment the tool is not in s.tools yet -- asking sessionCanDefer
+// there would answer false for every session and never advertise the
+// search/select actions at all.
+//
+// The two agree for every session that HOLDS the mcp tool, which is the
+// only session whose def anyone reads.
+func (s *Session) mcpPolicyCanDefer() bool {
 	cr, ok := s.cfg.MCP.(mcpConfigReader)
 	if !ok {
 		return false
@@ -225,7 +233,14 @@ func (s *Session) planMCPTools(ctx context.Context) mcpToolPlan {
 	if s.cfg.MCP == nil {
 		return mcpToolPlan{}
 	}
-	all := s.cfg.MCP.Tools(ctx)
+	return s.planMCPToolsFrom(s.cfg.MCP.Tools(ctx))
+}
+
+// planMCPToolsFrom is planMCPTools over a catalog the caller already has.
+// It exists so a caller that needs BOTH the full catalog and the plan --
+// the mcp tool's search action, which ranks over everything while reporting
+// what is loaded -- pays for one MCPRegistry.Tools call, not two.
+func (s *Session) planMCPToolsFrom(all []provider.ToolDef) mcpToolPlan {
 	if len(all) == 0 {
 		return mcpToolPlan{}
 	}

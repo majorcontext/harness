@@ -1210,15 +1210,28 @@ selection whose server is still unconnected is KEPT, so it arms itself on
 reconnect. The reap is memory-only; replay re-unions the log and prunes
 again.
 
-**Staging.** The `select` and `search` actions the catalog header names,
-and the durable record behind a selection, land in the following slices of
-this design. Until they do, `engine.Config.MCPToolLoading` must stay at its
-zero value: `mcp_tool_loading` is parsed but deliberately not wired into the
-engine, because deferring a schema with no way to load it back would turn
-"enable deferral" into "disable MCP".
+The `mcp` session tool carries two extra actions when the session can
+defer, and only then — a session that defers nothing must not advertise an
+action with nothing to act on. `search(query)` ranks the live catalog by
+keyword: substring matching over lowercased text, scored once per DISTINCT
+query token per field (remote name 50, description 10, server name 5, plus
+100 once when the whole query equals a name), sorted by score then name. A
+blank query errors rather than dumping the catalog. `select(tools)` loads
+schemas, and every name lands in exactly one bucket, tested TOP TO BOTTOM:
+`already`, `selected`, `pending` (its server is configured but not
+connected — it arms on reconnect), `missing` (no connected server holds it,
+or the name is malformed). `select` returns NO schemas: the tools array is
+the one authoritative copy, and echoing them would write every schema a
+second time into durable history.
 
-Full design, including the `search`/`select` surface and the durable
-record: `docs/design/mcp-lazy-tools.md`.
+**Use implies selection.** An MCP tool call that ROUTES records its own
+name, in a session that can defer. Without it, a tool of an eager server —
+which needs no `select`, and which the model is told not to select — would
+lose its schema the moment an `auto` flip deferred its server mid-task.
+The gate keeps this off the default path entirely: a plain `eager` config
+can never flip, so it records nothing.
+
+Full design, including the durable record: `docs/design/mcp-lazy-tools.md`.
 
 ### The tool array is byte-stable across requests
 
