@@ -982,11 +982,18 @@ func (s *Server) handleList(w http.ResponseWriter, _ *http.Request) {
 		if seen[info.ID] {
 			continue
 		}
-		sess, err := s.opts.LoadSession(info.ID)
-		if err != nil {
+		// Server.lookup, not a bare LoadSession: an id on disk can still
+		// be live in this process — a Spawn-driven child is never a
+		// residency key, so it lands in this branch, and its status and
+		// lineage must come from SessionManager's own node. lookup reads
+		// the log only when nothing live holds the id (a live review
+		// finding: the old unconditional load re-read and then discarded
+		// such a child's whole log on every listing).
+		lv, ok := s.lookup(info.ID)
+		if !ok {
 			continue
 		}
-		out = append(out, s.buildSession(s.resolveLive(info.ID).withLoaded(sess)))
+		out = append(out, s.buildSession(lv))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	writeJSON(w, http.StatusOK, out)
