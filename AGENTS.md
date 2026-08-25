@@ -1518,8 +1518,9 @@ Rules:
   rather than sampling: `engine.SessionManager.Changed` (a node's status,
   finalized flag, or tree membership settled — arm it BEFORE the read, so a
   transition landing between read and wait is still delivered),
-  `process.Manager.Done` (a managed OS process exited and its terminal state
-  is recorded), and `GET /session/{id}/wait?until=idle` (the production
+  `process.Manager.WaitExit` (blocks until a managed OS process has exited,
+  and returns that instance's own terminal state — never a later
+  restart's), and `GET /session/{id}/wait?until=idle` (the production
   long-poll, which also spans a queue drain). Sampling one of these on an
   interval is a guessed deadline: it flakes under load, and it turns a real
   hang into a slow pass.
