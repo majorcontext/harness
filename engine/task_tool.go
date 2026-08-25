@@ -143,8 +143,8 @@ func taskTool() Tool {
 				"cancel(session_id): stops a descendant you spawned and its entire subtree — anything IT has spawned too. " +
 				"status(session_id): reports a descendant's current status, lineage, and cumulative token usage. " +
 				"send(session_id, prompt): delivers a message to a descendant — if it is still running, the message is queued and delivered at its " +
-				"next turn boundary (you do not need to wait for it to go idle first); if it has already finished (done or failed), it is relaunched " +
-				"with your message as a fresh turn, and that outcome arrives later exactly like a new spawn's would. " +
+				"next turn boundary (you do not need to wait for it to go idle first); if it is NOT actively running (finished, or idle and never " +
+				"started), it is relaunched with your message as a fresh turn, and that outcome arrives later exactly like a new spawn's would. " +
 				"cancel/status/send only work on a session YOU spawned, directly or through a chain of your own children — anything else is refused.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
@@ -386,7 +386,19 @@ func runTaskSend(s *Session, in taskToolArgs) (message.Parts, error) {
 		// ordinary "stop, full stop" semantics — see CancelDescendant's
 		// own doc comment), which this note should not paper over. A live
 		// review finding.
-		note = "queued for delivery at the descendant's next turn boundary — no need to poll or wait for it, unless the descendant is canceled first (a canceled descendant drops anything still queued, like the rest of its own state)"
+		//
+		// "interrupted ... by a cancel or an abort", not "canceled":
+		// a second review finding. A cancel is not the only way a
+		// running descendant loses a queued message. An external POST
+		// /abort on an ancestor (AbortTurn), or a base-ctx shutdown,
+		// cancels the descendant's ctx through Go's context cascade
+		// while its status stays StatusRunning until its interrupted
+		// Prompt returns; finalizeTurn's re-drive gate and
+		// drainQueueAndPrompt both refuse to run the queue on a dead
+		// ctx, and the descendant then settles StatusFailed, never
+		// StatusCanceled. Naming only cancellation told the model the
+		// wrong failure mode for that path.
+		note = "queued for delivery at the descendant's next turn boundary — no need to poll or wait for it, unless the descendant's turn is interrupted first by a cancel or an abort (an interrupted descendant leaves anything still queued undelivered, like the rest of its own state)"
 	}
 	return jsonResult(taskSendResult{SessionID: in.SessionID, Queued: queued, Note: note})
 }

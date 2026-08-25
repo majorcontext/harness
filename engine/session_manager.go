@@ -2140,7 +2140,11 @@ func (m *SessionManager) ReportTurnStart(sess *Session) {
 // start ANOTHER turn on itself (a notification arrived too late for this
 // turn's own checkout — see finalizeTurn's doc comment).
 func (m *SessionManager) ReportTurnEnd(id string, msg *message.Message, err error) (resume func()) {
-	return m.finalizeTurn(id, msg, err)
+	// external=true: this turn was driven by the caller's own scheduler,
+	// which still holds its run slot and drains any queued prompt itself
+	// — see finalizeTurnFrom's own doc comment for the two concrete
+	// defects an in-package re-drive caused on this path.
+	return m.finalizeTurnFrom(id, msg, err, true)
 }
 
 // adoptLocked registers s as a new node. Callers hold m.mu.
@@ -3052,7 +3056,46 @@ func (m *SessionManager) DescendantInfo(callerID, targetID string) (SessionNode,
 	if !m.isDescendantLocked(callerID, targetID) {
 		return SessionNode{}, provider.Usage{}, fmt.Errorf("%w: %s", ErrNotDescendant, targetID)
 	}
-	return n.snapshot(), n.session.Usage(), nil
+	snap := n.snapshot()
+	// Children is the DURABLE-plus-live union, not the live list alone —
+	// a review finding: Reap removes a terminal leaf from its parent's
+	// live children, so once a descendant's own children finish and are
+	// swept, n.children is empty while the session's durable spawn record
+	// still names them. The wire's GET /session/{id}/lineage already
+	// merges the same two sources (childIDsUnion, server/handlers.go),
+	// and the design doc promises `task status` reports the lineage the
+	// wire reports — reporting only the live half told a model inspecting
+	// its own delegation tree that grandchildren it really did spawn
+	// never existed.
+	//
+	// Durable first, in spawn order, then any live id the durable list
+	// does not have: the same order the wire builds, so the two answers
+	// are byte-comparable. n.depth needs no equivalent merge — the wire
+	// prefers the durable TaskDepth and adoptReloadedLocked already
+	// restores n.depth from that same value.
+	snap.Children = mergeChildIDs(n.session.SpawnedChildIDs(), n.children)
+	return snap, n.session.Usage(), nil
+}
+
+// mergeChildIDs returns durable's ids first, in order, then every id in
+// live that durable does not already name — the engine-side twin of the
+// wire's childIDsUnion (server/handlers.go). Never nil for a childless
+// session: an empty, non-nil slice, matching snapshot's own shape.
+func mergeChildIDs(durable, live []string) []string {
+	if len(durable) == 0 {
+		// Live cannot contain duplicates: adoptLocked appends a child id
+		// at most once.
+		return append(make([]string, 0, len(live)), live...)
+	}
+	out := make([]string, 0, len(durable)+len(live))
+	seen := make(map[string]bool, len(durable)+len(live))
+	for _, id := range append(append([]string(nil), durable...), live...) {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // SendToDescendant delivers text to targetID, a live descendant of
@@ -3125,6 +3168,18 @@ func (m *SessionManager) DescendantInfo(callerID, targetID string) (SessionNode,
 // its running-children cap (settled-target restart path only — a
 // running target's enqueue never touches this budget).
 func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queued bool, err error) {
+	// Validate and trim ONCE, before either delivery path — a review
+	// finding: the running-target branch rejected blank text while the
+	// settled-target branch passed it straight to Prompt and burned a
+	// whole re-run turn on a space. runTaskSend masks that for the `task`
+	// tool, but this is an exported API and the asymmetry is exactly the
+	// class this method exists to remove. The trimmed text is what both
+	// paths use, matching EnqueuePrompt's own trim-then-store rule
+	// (queue.go).
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false, ErrEmptyPromptText
+	}
 	m.mu.Lock()
 	if _, ok := m.nodes[callerID]; !ok {
 		m.mu.Unlock()
@@ -3140,11 +3195,6 @@ func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queu
 		return false, fmt.Errorf("%w: %s", ErrNotDescendant, targetID)
 	}
 	if n.status == StatusRunning {
-		trimmed := strings.TrimSpace(text)
-		if trimmed == "" {
-			m.mu.Unlock()
-			return false, ErrEmptyPromptText
-		}
 		// Mutate the queue and emit its event while STILL HOLDING m.mu —
 		// nested m.mu (outer) -> s.mu (inner, taken inside
 		// enqueueMemoryOnlyLocked itself), the same lock order Spawn's
@@ -3194,7 +3244,7 @@ func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queu
 		// then resurrected the delivered prompt.
 		s := n.session
 		s.mu.Lock()
-		p := s.enqueueMemoryOnlyLocked(trimmed)
+		p := s.enqueueMemoryOnlyLocked(text)
 		s.queueRecordDeferredLocked(recPromptQueued, promptRecord{ID: p.ID, Text: p.Text},
 			Event{Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue)})
 		s.mu.Unlock()
@@ -3293,6 +3343,32 @@ func (m *SessionManager) accumulateUsageLocked(n *sessionNode) {
 // SOLE decrementer and a cancel racing a natural completion can never
 // double-decrement (see cancelSubtreeLocked's doc comment).
 func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr error) (resume func()) {
+	return m.finalizeTurnFrom(id, msg, perr, false)
+}
+
+// finalizeTurnFrom is finalizeTurn with the one fact finalizeTurn's own
+// signature cannot carry: WHO drove the turn. external is true only for
+// ReportTurnEnd — a turn an outside scheduler ran (the server's runPrompt/
+// runGoal on a resident session) — and false for every in-package driver
+// (Spawn's launched goroutine, Send, triggerResumeLocked, this method's own
+// recursive re-drive).
+//
+// It exists because the queued-message re-drive below is only correct for
+// an in-package turn, a review finding. The re-drive assumes the resume it
+// returns is the SOLE continuation of the session and that no run slot is
+// held by anyone else. For an externally scheduled turn both assumptions
+// are false: the server holds its own run slot across the ReportTurnEnd
+// call and its tail (maybeDispatchQueued, server/handlers.go) drains the
+// queue itself as an ordinary prompt turn. A depth>0 node reaches that
+// path for real — claimForPrompt LoadSessions any id with no depth guard,
+// so a former child driven through POST /session/{id}/prompt_async or
+// /goal is resident and externally scheduled — and the re-drive then did
+// one of two wrong things: with one item queued it popped it and returned
+// a resume that runs Prompt with no slot held (a concurrent HTTP prompt
+// can claim the freed slot and call Prompt on the same session), and with
+// two it popped the first, journaled it delivered, and left the server's
+// own tail to dispatch the second, so the first never ran.
+func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr error, external bool) (resume func()) {
 	m.mu.Lock()
 	n, ok := m.nodes[id]
 	if !ok {
@@ -3377,7 +3453,7 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 	// maybeDispatchQueued's "No-double-delivery equivalence", invariant
 	// 7, server/handlers.go). Every item still IN the queue is untouched,
 	// exactly as documented.
-	if n.parentID != "" && n.status != StatusCanceled && n.ctx.Err() == nil {
+	if !external && n.parentID != "" && n.status != StatusCanceled && n.ctx.Err() == nil {
 		s := n.session
 		s.mu.Lock()
 		next, ok := s.dequeueMemoryOnlyLocked()

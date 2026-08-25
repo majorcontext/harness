@@ -1015,3 +1015,66 @@ func TestRunTaskToolOmittedActionDefaultsToSpawn(t *testing.T) {
 		t.Errorf("result.Agent = %q, want %q", result.Agent, AgentExplore)
 	}
 }
+
+// TestSendToDescendantSettledRejectsBlankText guards the symmetry a review
+// finding asked for: SendToDescendant validated blank text only on the
+// running-target path, so a settled target accepted " " and burned a whole
+// re-run turn on it. runTaskSend masks that for the `task` tool, but this
+// is an exported API — both paths must answer the same way.
+func TestSendToDescendantSettledRejectsBlankText(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	root := mgr.NewRoot(managedConfig("root", scriptedTurns("root", nil), scriptedTurns("child", doneTurn("done"))))
+
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	if _, err := mgr.SendToDescendant(root.ID, childID, "   "); !errors.Is(err, ErrEmptyPromptText) {
+		t.Fatalf("SendToDescendant blank text to a settled target: err = %v, want ErrEmptyPromptText", err)
+	}
+	info, ok := mgr.Info(childID)
+	if !ok {
+		t.Fatal("Info: child not found")
+	}
+	if info.Status != StatusDone {
+		t.Errorf("settled child Status after a rejected blank send = %s, want %s: the blank text started a real re-run turn", info.Status, StatusDone)
+	}
+}
+
+// TestDescendantInfoReportsReapedChildren guards the lineage consistency a
+// review finding asked for: DescendantInfo reported only the LIVE children
+// list, and Reap removes a terminal leaf from its parent's live list, so
+// `task status` on a mid-tree descendant answered children:[] for
+// grandchildren it really did spawn — while the wire's GET
+// /session/{id}/lineage still named them from the durable spawn record.
+func TestDescendantInfoReportsReapedChildren(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 3, 0)
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		scriptedTurns("mid", doneTurn("mid done")),
+		scriptedTurns("grand", doneTurn("grand done"))))
+
+	midID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("mid"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn mid: %v", err)
+	}
+	grandID, err := mgr.Spawn(SpawnOptions{ParentID: midID, Prompt: "deeper", Model: modelFor("grand"), AgentType: AgentExplore})
+	if err != nil {
+		t.Fatalf("Spawn grandchild: %v", err)
+	}
+	waitForStatus(t, mgr, grandID, StatusDone, time.Second)
+
+	// Reap the finished grandchild: mid's LIVE children list loses it,
+	// its durable spawn record does not.
+	waitForReap(t, mgr, 1, time.Second, "finished grandchild never became reapable")
+
+	info, _, err := mgr.DescendantInfo(root.ID, midID)
+	if err != nil {
+		t.Fatalf("DescendantInfo: %v", err)
+	}
+	if len(info.Children) != 1 || info.Children[0] != grandID {
+		t.Errorf("DescendantInfo(mid).Children = %v, want [%s]: a reaped grandchild vanished from task status while the wire's lineage still reports it", info.Children, grandID)
+	}
+}
