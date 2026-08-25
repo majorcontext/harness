@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -410,15 +412,30 @@ func TestDrainQueueAndPromptStopsDequeuingOnCancelMidDrain(t *testing.T) {
 
 	<-childProv.secondCall // that second turn is genuinely in flight
 
+	child, ok := mgr.Session(childID)
+	if !ok {
+		t.Fatal("Session before cancel: not found")
+	}
+
 	if err := mgr.Cancel(childID); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
 	waitForStatus(t, mgr, childID, StatusCanceled, time.Second)
+	// Read the queue only once drainQueueAndPrompt's own goroutine has
+	// FINISHED, never merely once the status flipped: Cancel marks a
+	// running node StatusCanceled synchronously, while that goroutine is
+	// still unwinding, so a read at the status transition alone races the
+	// very dequeue this test forbids and passes vacuously against the bug
+	// (measured: the pre-fix loop still consumed "message B" after such a
+	// read). A canceled node stays un-reapable until its own eventual
+	// finalizeTurn call flips finalized (see sessionNode.finalized's doc
+	// comment, session_manager.go), so Reap-eligibility is exactly the
+	// "that goroutine has returned" signal — reached through the Changed
+	// seam, with no sampling. The child Session handle is captured above,
+	// before the sweep removes the node, so its queue stays readable
+	// after collection.
+	waitForReap(t, mgr, 1, time.Second, "canceled child never became reapable, so drainQueueAndPrompt never returned")
 
-	child, ok := mgr.Session(childID)
-	if !ok {
-		t.Fatal("Session after cancel: not found")
-	}
 	pending := child.QueuedPrompts()
 	if len(pending) != 1 || pending[0].Text != "message B" {
 		t.Fatalf("QueuedPrompts after cancel-mid-drain = %+v, want exactly one entry left untouched: message B", pending)
@@ -523,6 +540,126 @@ func TestSendToDescendantSettledRelaunchesAsynchronously(t *testing.T) {
 	}
 
 	waitForStatus(t, mgr, childID, StatusRunning, time.Second)
+	close(release)
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+}
+
+// TestSendToDescendantRunningPersistsQueueRecordAfterUnlock guards the
+// durability half of a live review finding's fix: SendToDescendant's
+// running-target branch used to call the full EnqueuePrompt (memory
+// mutation plus a synchronous ensureLog+writeRecord disk write) while
+// holding m.mu, the tree-wide lock every other session's Info/Reap/
+// Spawn/finalize call also needs. It now mutates memory under m.mu and
+// queues the durable write via deferPersist, which
+// unlockAndFlushPersist runs after m.mu releases.
+//
+// The risk that split creates is a silently DROPPED write — memory-only
+// enqueue, no journal record, a queued prompt no reload could ever see.
+// This test drives the production entry point with a real SessionDir and
+// asserts the prompt.queued record is on disk by the time
+// SendToDescendant returns (the flush runs in the same goroutine, right
+// after the unlock, so no wait is needed). The complementary ordering
+// property — that thunks run only after m.mu is released — is proven by
+// TestUnlockAndFlushPersistRunsThunksAfterReleasingLock.
+func TestSendToDescendantRunningPersistsQueueRecordAfterUnlock(t *testing.T) {
+	dir := t.TempDir()
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	childProv := &signaledBlockingProvider{name: "child", started: make(chan struct{}), release: release}
+	cfg := managedConfig("root", scriptedTurns("root", nil), childProv)
+	cfg.SessionDir = dir
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	root := mgr.NewRoot(cfg)
+
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	<-childProv.started // the child's first turn is genuinely in flight, so the target is StatusRunning
+
+	queued, err := mgr.SendToDescendant(root.ID, childID, "message A")
+	if err != nil || !queued {
+		t.Fatalf("SendToDescendant: queued=%v err=%v, want queued=true err=nil", queued, err)
+	}
+
+	logPath := filepath.Join(dir, childID+".jsonl")
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("reading child session log %s: %v", logPath, err)
+	}
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var rec struct {
+			Type   string `json:"type"`
+			Prompt *struct {
+				Text string `json:"text"`
+			} `json:"prompt"`
+		}
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("unmarshaling session log line %q: %v", line, err)
+		}
+		if rec.Type == recPromptQueued && rec.Prompt != nil && rec.Prompt.Text == "message A" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no %s record for the enqueued text in %s after SendToDescendant returned — the deferred durable write was dropped; log:\n%s", recPromptQueued, logPath, data)
+	}
+}
+
+// TestSendToDescendantSettledReservesTurnBeforeReturning is the
+// regression test for a live review finding: SendToDescendant's
+// settled-target branch used to release m.mu and let a freshly launched
+// goroutine call Send, which re-acquired m.mu from scratch and only THEN
+// reserved the turn. A Reap() sweep landing in that gap collected the
+// still-terminal leaf, Send returned ErrUnknownSession, and the launched
+// goroutine discarded it — the caller kept a queued:false, err:nil
+// answer whose "dispatched as a fresh turn" promise silently never
+// happened. reserveSendLocked now runs inside SendToDescendant's OWN
+// still-held m.mu critical section, so the node is already StatusRunning
+// when the call returns and Reap (which only ever collects a finalized,
+// terminal node) can never collect it.
+//
+// The assertions are made with NO wait in between: they run on the
+// caller's own goroutine, immediately after the call returns, so they
+// test the by-construction postcondition rather than a race that has to
+// be won. The launched turn's provider blocks on release, which stays
+// open until the end, so a StatusRunning read here can only come from
+// the synchronous reservation.
+func TestSendToDescendantSettledReservesTurnBeforeReturning(t *testing.T) {
+	release := make(chan struct{})
+	childProv := &blockAfterFirstProvider{name: "child", release: release}
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	root := mgr.NewRoot(managedConfig("root", scriptedTurns("root", nil), childProv))
+
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	queued, err := mgr.SendToDescendant(root.ID, childID, "please redo this")
+	if err != nil {
+		t.Fatalf("SendToDescendant: %v", err)
+	}
+	if queued {
+		t.Fatalf("SendToDescendant on a settled child: queued = true, want false (a fresh re-run turn)")
+	}
+
+	info, ok := mgr.Info(childID)
+	if !ok {
+		t.Fatal("Info right after SendToDescendant returned: child not found, want a reserved (running) node")
+	}
+	if info.Status != StatusRunning {
+		t.Errorf("Info(child).Status right after SendToDescendant returned = %s, want %s (the turn must already be reserved, not merely intended)", info.Status, StatusRunning)
+	}
+	if n := mgr.Reap(); n != 0 {
+		t.Errorf("Reap() right after SendToDescendant returned collected %d node(s), want 0: a reserved turn must never be collectable", n)
+	}
+	if _, ok := mgr.Info(childID); !ok {
+		t.Error("Info(child) after Reap: child was collected, so its re-run turn is stranded")
+	}
+
 	close(release)
 	waitForStatus(t, mgr, childID, StatusDone, time.Second)
 }
