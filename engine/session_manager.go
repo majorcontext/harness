@@ -432,6 +432,26 @@ func (m *SessionManager) deferPersist(fn func()) {
 	m.pendingPersist = append(m.pendingPersist, fn)
 }
 
+// deferQueueRecordFlush queues the flush half of the parked-record
+// sequence both m.mu-held prompt-queue mutations use: SendToDescendant's
+// running-target enqueue and finalizeTurn's queued-message re-drive. Each
+// site parks its own record under the same s.mu hold as its memory
+// mutation (queueRecordDeferredLocked, queue.go), then calls this so the
+// write lands after m.mu releases.
+//
+// One helper, not two hand-maintained copies — a review finding. The
+// ordering this sequence protects is the whole point of parking a record
+// on the session (see queueRecordDeferredLocked's own doc comment for the
+// double-delivery defect a closure-held record caused), so the flush must
+// not be re-derived per call site. Caller holds m.mu.
+func (m *SessionManager) deferQueueRecordFlush(s *Session) {
+	m.deferPersist(func() {
+		s.mu.Lock()
+		s.flushQueueRecordsLocked()
+		s.mu.Unlock()
+	})
+}
+
 // unlockAndFlushPersist is the m.mu.Unlock() every SessionManager entry
 // point that might have queued a durable write via deferPersist must use
 // instead of a plain m.mu.Unlock() — a live review finding: session-log
@@ -3123,7 +3143,7 @@ func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queu
 		trimmed := strings.TrimSpace(text)
 		if trimmed == "" {
 			m.mu.Unlock()
-			return false, errors.New("engine: EnqueuePrompt requires non-empty text")
+			return false, ErrEmptyPromptText
 		}
 		// Mutate the queue and emit its event while STILL HOLDING m.mu —
 		// nested m.mu (outer) -> s.mu (inner, taken inside
@@ -3178,11 +3198,7 @@ func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queu
 		s.queueRecordDeferredLocked(recPromptQueued, promptRecord{ID: p.ID, Text: p.Text})
 		s.emit(Event{Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue)})
 		s.mu.Unlock()
-		m.deferPersist(func() {
-			s.mu.Lock()
-			s.flushQueueRecordsLocked()
-			s.mu.Unlock()
-		})
+		m.deferQueueRecordFlush(s)
 		m.unlockAndFlushPersist()
 		return true, nil
 	}
@@ -3327,7 +3343,21 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 	// also needs. The durable record is deferred via deferPersist,
 	// flushed by unlockAndFlushPersist below, same as SendToDescendant's
 	// own enqueue and this package's existing task-notification writes.
-	if n.parentID != "" && n.status != StatusCanceled {
+	//
+	// Gated on n.ctx as well as n.status — a review finding.
+	// StatusCanceled is set ONLY by cancelOneNodeLocked/
+	// cancelSubtreeLocked (task cancel, AbortTurn), so a cascade cancel
+	// of the manager's own base ctx — process shutdown — cancels n.ctx
+	// and leaves n.status at StatusRunning. The status test alone then
+	// popped a queued prompt and journaled it prompt.dequeued
+	// ("delivered") while drainQueueAndPrompt's own ctx guard made sure
+	// nothing ran, and the resume's own finalizeTurn call re-entered
+	// this gate and popped the next one, draining the whole queue as
+	// delivered; a later reload folds those records out and the prompts
+	// are gone. Testing n.ctx here gives a ctx-only cancel the same
+	// "the queue stays queued, untouched" outcome a status cancel has
+	// (see drainQueueAndPrompt's own doc comment for that contract).
+	if n.parentID != "" && n.status != StatusCanceled && n.ctx.Err() == nil {
 		s := n.session
 		s.mu.Lock()
 		next, ok := s.dequeueMemoryOnlyLocked()
@@ -3341,11 +3371,7 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 		}
 		s.mu.Unlock()
 		if ok {
-			m.deferPersist(func() {
-				s.mu.Lock()
-				s.flushQueueRecordsLocked()
-				s.mu.Unlock()
-			})
+			m.deferQueueRecordFlush(s)
 			nodeCtx := n.ctx
 			m.unlockAndFlushPersist()
 			return func() {

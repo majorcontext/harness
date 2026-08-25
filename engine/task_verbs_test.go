@@ -892,8 +892,8 @@ func TestRunTaskToolSendActionMissingArgumentsAreErrors(t *testing.T) {
 // `in.Prompt == ""`, so a whitespace-only prompt behaved OPPOSITELY by
 // target state. A RUNNING target reached SendToDescendant's own enqueue
 // validation and returned a raw, non-sentinel error that
-// classifyTaskVerbError leaks to the model verbatim ("engine:
-// EnqueuePrompt requires non-empty text"); a SETTLED target accepted the
+// classifyTaskVerbError leaked to the model verbatim (the raw "engine:"
+// layer, before ErrEmptyPromptText existed); a SETTLED target accepted the
 // blank text and burned a real turn on it. Both targets must now get the
 // same model-facing rejection from runTaskSend itself, before either
 // path runs.
@@ -941,6 +941,34 @@ func TestRunTaskToolSendActionWhitespaceOnlyPromptIsRejected(t *testing.T) {
 	}
 	if info.Status != StatusDone {
 		t.Errorf("settled child Status after a rejected whitespace-only send = %s, want %s: a blank prompt burned a real turn", info.Status, StatusDone)
+	}
+}
+
+// TestSendToDescendantBlankTextIsClassifiableSentinel guards the shared
+// sentinel a review finding asked for: SendToDescendant's running-target
+// branch used a fresh errors.New for the blank-text rule, which
+// classifyTaskVerbError could not match with errors.Is, so it fell through
+// to the default arm and leaked the internal "engine:" layer to the model.
+func TestSendToDescendantBlankTextIsClassifiableSentinel(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	prov := &signaledBlockingProvider{name: "child", started: make(chan struct{}), release: release}
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	root := mgr.NewRoot(managedConfig("root", scriptedTurns("root", nil), prov))
+
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	<-prov.started
+
+	_, err = mgr.SendToDescendant(root.ID, childID, "   ")
+	if !errors.Is(err, ErrEmptyPromptText) {
+		t.Fatalf("SendToDescendant with blank text: err = %v, want ErrEmptyPromptText", err)
+	}
+	classified := classifyTaskVerbError(err, childID)
+	if strings.Contains(classified.Error(), "engine:") {
+		t.Errorf("classifyTaskVerbError(%v) = %q, want a model-facing message with no internal \"engine:\" layer", err, classified)
 	}
 }
 

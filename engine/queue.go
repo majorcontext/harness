@@ -37,6 +37,16 @@ type QueuedPrompt struct {
 	Seq int64
 }
 
+// ErrEmptyPromptText is returned for a prompt whose text is empty or
+// whitespace-only. One shared sentinel, not a fresh errors.New per call
+// site — a review finding: SessionManager.SendToDescendant validates the
+// same rule for a running target (it enqueues through
+// enqueueMemoryOnlyLocked, which assumes validated text), and a fresh
+// value there could not be classified with errors.Is, so
+// classifyTaskVerbError (task_tool.go) fell through to its default arm
+// and leaked the internal "engine:" layer to the model.
+var ErrEmptyPromptText = errors.New("engine: prompt text must not be empty or whitespace-only")
+
 // EnqueuePrompt appends text to the session's durable FIFO prompt queue: it
 // assigns the next monotonic ID, persists a prompt.queued record, and emits
 // EventPromptQueued — all under s.mu (RegisterGoal's persist-and-emit-while-
@@ -51,7 +61,7 @@ type QueuedPrompt struct {
 func (s *Session) EnqueuePrompt(text string) (int64, error) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
-		return 0, errors.New("engine: EnqueuePrompt requires non-empty text")
+		return 0, ErrEmptyPromptText
 	}
 	s.mu.Lock()
 	p := s.enqueueMemoryOnlyLocked(trimmed)
@@ -209,7 +219,7 @@ func (s *Session) flushQueueRecordsLocked() {
 func (s *Session) EnqueuePromptDurable(text string, seq int64) (id int64, duplicate bool, err error) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
-		return 0, false, errors.New("engine: EnqueuePromptDurable requires non-empty text")
+		return 0, false, ErrEmptyPromptText
 	}
 	if seq < 1 {
 		return 0, false, errors.New("engine: EnqueuePromptDurable requires seq >= 1")

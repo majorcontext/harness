@@ -485,6 +485,12 @@ func classifyTaskVerbError(err error, targetID string) error {
 		return fmt.Errorf("task: %w", ErrConcurrencyLimit)
 	case errors.Is(err, ErrSessionBusy):
 		return fmt.Errorf("task: %w", ErrSessionBusy)
+	case errors.Is(err, ErrEmptyPromptText):
+		// runTaskSend rejects blank text before either send path runs, so
+		// this arm is defense in depth for a future caller — it keeps the
+		// answer model-facing instead of leaking the "engine:" layer
+		// through the default arm below (a review finding).
+		return fmt.Errorf("task: prompt must not be empty or whitespace-only")
 	default:
 		return fmt.Errorf("task: %w", err)
 	}
