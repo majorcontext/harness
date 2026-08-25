@@ -2018,7 +2018,12 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 	// Assembly order matters, and three steps are pinned:
 	//
 	//  1. chat.params runs first: it fixes params.Model, which both the
-	//     provider lookup and system.transform below need.
+	//     provider lookup and system.transform below need. It still fires
+	//     on every turn. system.transform, by contrast, now runs after
+	//     provider resolution, so a turn naming an unconfigured provider
+	//     returns WITHOUT firing it (it used to fire, then fail):
+	//     assembling a system prompt for a request that is never sent buys
+	//     nothing.
 	//  2. Providers.For runs BEFORE the tool plan. The plan's
 	//     s.cfg.MCP.Tools(ctx) call is what triggers a server's first
 	//     connect attempt (see MCPManager.ensureConnected) — network dials,

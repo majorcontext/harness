@@ -622,3 +622,27 @@ func TestUnconfiguredProviderTriggersNoMCPConnect(t *testing.T) {
 		t.Fatalf("MCPRegistry.Tools called %d times on a failed-provider turn, want 0", reg.calls)
 	}
 }
+
+// TestUnconfiguredProviderSkipsSystemTransform documents the one hook the
+// streamTurn reorder moved. chat.params still fires on every turn, because
+// provider resolution needs the model it returns. system.transform now runs
+// after that resolution, so a turn that cannot resolve its provider returns
+// without firing it: building a system prompt for a request that is never
+// sent buys nothing.
+func TestUnconfiguredProviderSkipsSystemTransform(t *testing.T) {
+	hooks := &fakeHooks{segments: []string{"hook seg"}}
+	s := NewSession(Config{
+		Providers: provider.Registry{},
+		Model:     message.ModelRef{Provider: "nope", Model: "m1"},
+		Hooks:     hooks,
+	})
+	if _, err := s.Prompt(context.Background(), "go"); err == nil {
+		t.Fatal("Prompt succeeded with an unconfigured provider, want an error")
+	}
+	if hooks.systemCalls != 0 {
+		t.Fatalf("system.transform fired %d times on a failed-provider turn, want 0", hooks.systemCalls)
+	}
+	if hooks.paramCalls != 1 {
+		t.Fatalf("chat.params fired %d times, want 1 (provider resolution needs its model)", hooks.paramCalls)
+	}
+}

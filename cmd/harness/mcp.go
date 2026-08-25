@@ -53,33 +53,6 @@ func mcpServerConfig(spec config.MCPServerSpec) engine.MCPServerConfig {
 	}
 }
 
-// mcpToolLoading converts a config mode string into the engine's own typed
-// mode. An unrecognized value cannot reach here from a loaded config file
-// (config.validateMCPToolLoading rejects it), so this maps verbatim and
-// lets the engine's own zero value mean eager.
-func mcpToolLoading(mode string) engine.MCPToolLoading {
-	return engine.MCPToolLoading(mode)
-}
-
-// mcpToolLoadingByServer collects every per-server tool_loading override
-// into the map engine.Config carries (see that field's doc comment for why
-// the policy rides Config rather than the manager). It returns nil when no
-// server sets one, so a config that never mentions tool_loading produces
-// exactly the zero-value engine Config it did before deferral existed.
-func mcpToolLoadingByServer(servers map[string]config.MCPServerSpec) map[string]engine.MCPToolLoading {
-	var out map[string]engine.MCPToolLoading
-	for name, spec := range servers {
-		if spec.ToolLoading == "" {
-			continue
-		}
-		if out == nil {
-			out = make(map[string]engine.MCPToolLoading, len(servers))
-		}
-		out[name] = engine.MCPToolLoading(spec.ToolLoading)
-	}
-	return out
-}
-
 // mcpRegistry adapts a possibly-nil *engine.MCPManager to engine.MCPRegistry,
 // the same typed-nil guard pluginHooks applies to *plugin.Host: assigning a
 // typed-nil *engine.MCPManager directly to an engine.MCPRegistry-typed

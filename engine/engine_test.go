@@ -220,13 +220,20 @@ type fakeHooks struct {
 	shellEnvCalls []string
 	pluginTool    *plugin.ToolExecuteResponse
 	events        []plugin.Event
+
+	// paramCalls/systemCalls count hook dispatches, so a test can assert
+	// WHEN a hook fires and not only what it returned.
+	paramCalls  int
+	systemCalls int
 }
 
 func (f *fakeHooks) ChatParams(_ context.Context, req *plugin.ChatParamsRequest) plugin.ChatParams {
+	f.paramCalls++
 	return req.Params
 }
 
 func (f *fakeHooks) SystemTransform(_ context.Context, _ *plugin.SystemTransformRequest) []string {
+	f.systemCalls++
 	return f.segments
 }
 

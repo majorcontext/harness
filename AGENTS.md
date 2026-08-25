@@ -1194,6 +1194,14 @@ Four rules are load-bearing. Do not relax them:
   runs before `mcpStatusSegment`, which is the pre-existing rule that a
   first-attempt failure is reported in its own turn.
 
+The same reorder moved one hook. `chat.params` still runs first and still
+fires on every turn. `system.transform` now runs AFTER provider
+resolution, so a turn naming an unconfigured provider returns without
+firing it — it used to fire, then fail. Building a system prompt for a
+request that is never sent buys nothing, and a plugin that counts
+`system.transform` calls now counts sent requests. `chat.params` is
+unaffected because provider resolution needs the model it returns.
+
 A stale selection is reaped at plan time: a selected name whose server is
 CONNECTED and whose catalog lacks it is dropped. That is what keeps an
 invented name — accepted while a server was unconnected, where a real name
