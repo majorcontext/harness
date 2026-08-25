@@ -888,3 +888,60 @@ func TestWaitUntilIdleReturnsImmediatelyForBootResumedQueue(t *testing.T) {
 		t.Errorf("GET session after restart = state=%q queued=%d, want state=idle queued=1", sess.State, sess.Queued)
 	}
 }
+
+// TestWaitSnapshotResidentSessionTrustsOwnRunningOverSessMgrFallback is the
+// regression test for a review finding on waitSnapshot's own SessionManager
+// fallback (a live review on an earlier revision of this fix): the
+// fallback used to fire whenever !running, resident or not. The finding's
+// own trace names a specific window — between freeRunSlotAndEmitIdle
+// (sets st.running=false) and ReportTurnEnd (flips the SessionManager
+// node off StatusRunning) — but that exact window turns out to be masked
+// in practice by Server.queueDrainPending, which freeRunSlotAndEmitIdle
+// also sets, unconditionally, in the SAME call: any waiter able to
+// observe queueDrainPending having since cleared is, by the Go memory
+// model's transitivity through freeRunSlotAndEmitIdle's and
+// maybeDispatchQueued's shared s.mu, guaranteed to also observe
+// ReportTurnEnd's already-applied status update (ReportTurnEnd always
+// runs strictly before the maybeDispatchQueued call that clears the
+// flag) — so the two-lock race the finding describes cannot actually
+// manifest through that one path today.
+//
+// The underlying defect the finding correctly diagnosed stands regardless:
+// consulting sessMgr AT ALL for a resident session is unconditionally
+// wrong, because the server's own st.running is always the authoritative,
+// race-free answer for anything it tracks — the fallback exists ONLY to
+// cover a Spawn-driven child, which is NEVER resident. Proves the fix
+// directly and deterministically rather than via a timing window that
+// happens not to be reachable through today's callers: force the exact
+// state mismatch the finding describes (residency says idle, sessMgr
+// still says Running) by construction, sidestepping any dependence on
+// which production code path can or cannot currently produce it — a
+// property this test must keep holding even if some future call site
+// changes that ordering.
+func TestWaitSnapshotResidentSessionTrustsOwnRunningOverSessMgrFallback(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("ok")}}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	h.srv.mu.Lock()
+	st := h.srv.sessions[id]
+	if st == nil {
+		h.srv.mu.Unlock()
+		t.Fatal("session not resident after create — test setup invalid")
+	}
+	st.running = false
+	sess := st.sess
+	h.srv.mu.Unlock()
+
+	// Flips SessionManager's own node to StatusRunning without touching
+	// st.running at all — the exact mismatch a waiter woken in the real
+	// finalizeTurn/ReportTurnEnd gap the finding describes would see.
+	h.srv.sessMgr.ReportTurnStart(sess)
+	if info, ok := h.srv.sessMgr.Info(id); !ok || info.Status != engine.StatusRunning {
+		t.Fatalf("sessMgr status = %v (ok=%v), want StatusRunning — test setup invalid", info.Status, ok)
+	}
+
+	if state, _ := h.srv.waitSnapshot(id); state != "idle" {
+		t.Errorf("waitSnapshot state = %q, want idle — a RESIDENT session's own st.running must be authoritative, never overridden by sessMgr's status", state)
+	}
+}

@@ -1572,6 +1572,21 @@ func TestRecoverInterruptedTurnForwardsGrandchildNotifications(t *testing.T) {
 	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
 
 	mgr1 := NewSessionManager(context.Background(), 3, 0)
+
+	// flushed receives a signal every time unlockAndFlushPersist finishes
+	// running ALL of its queued durable-write thunks (see that method's
+	// own doc comment, and testFlushDoneHook's) — the test-only seam for
+	// the real race this test used to hit under load: finalizeTurn
+	// releases m.mu (making grandID's StatusDone visible to Info() on
+	// this goroutine) BEFORE the notification it forwards to mid is
+	// actually persisted to mid's own on-disk log — those are two
+	// different events, and polling status was never proof the SECOND one
+	// had happened. Buffered generously (this test drives a handful of
+	// Spawn/finalizeTurn calls total, each at most one flush) so the
+	// hook's send never blocks the production goroutine running it.
+	flushed := make(chan struct{}, 64)
+	mgr1.testFlushDoneHook = func() { flushed <- struct{}{} }
+
 	root1 := mgr1.NewRoot(rootCfg)
 
 	midID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("mid"), AgentType: AgentGeneralPurpose})
@@ -1584,14 +1599,28 @@ func TestRecoverInterruptedTurnForwardsGrandchildNotifications(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn grandchild: %v", err)
 	}
-	waitForStatus(t, mgr1, grandID, StatusDone, time.Second)
 
-	midSess, ok := mgr1.Session(midID)
-	if !ok {
-		t.Fatal("mid not tracked")
-	}
-	if !midSess.hasPendingTaskNotifications() {
-		t.Fatal("test setup: mid does not have the grandchild's notification pending")
+	// Wait for the grandchild's OWN finalizeTurn flush specifically — not
+	// merely "status reads Done" (see the channel's own comment above):
+	// block on each flush signal in turn and re-check the real in-memory
+	// condition this step actually needs (mid's own live session object
+	// already reflects the forwarded notification the instant the SAME
+	// finalizeTurn call that sets grandID Done releases m.mu — both are
+	// applied in the same critical section — so this loop's exit
+	// condition is exactly "that call's flush has now run"). No timeout
+	// wrapper: a genuine hang is the test binary's own timeout to catch,
+	// the same style PR #153's lookup_live_session_test.go established.
+	var midSess *Session
+	for {
+		<-flushed
+		var ok bool
+		midSess, ok = mgr1.Session(midID)
+		if !ok {
+			t.Fatal("mid not tracked")
+		}
+		if info, ok := mgr1.Info(grandID); ok && info.Status == StatusDone && midSess.hasPendingTaskNotifications() {
+			break
+		}
 	}
 
 	// Simulate a crash: mid's blocked goroutine is simply abandoned,
@@ -1599,20 +1628,52 @@ func TestRecoverInterruptedTurnForwardsGrandchildNotifications(t *testing.T) {
 	// technique as every other dangling-turn test in this file.
 
 	// Fresh process: a brand-new SessionManager, root re-adopted at the
-	// same id.
+	// same id. Its own flush-signal channel, mirroring mgr1's above —
+	// recoverInterruptedTurnLocked's own active-resume (fired from INSIDE
+	// AdoptReloaded's locked section, before its deferred
+	// unlockAndFlushPersist even runs — session_manager.go's
+	// `go m.fireIdleResumeAsync`) and the resume turn's own eventual
+	// finalizeTurn call both flow through mgr2.unlockAndFlushPersist, so
+	// this same seam covers the whole chain below too. claimed receives
+	// root2's own id the instant fireIdleResumeAsync claims its run slot
+	// — see testResumeClaimedHook's own doc comment for why polling
+	// status/counts alone cannot tell "notifications freshly delivered,
+	// resume not yet even scheduled" apart from "resume already ran to
+	// completion": both read identically (same count, StatusIdle) from
+	// outside, and a goroutine this fast can complete before this test's
+	// own next scheduler slice ever observes it mid-flight.
 	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	flushed2 := make(chan struct{}, 64)
+	mgr2.testFlushDoneHook = func() { flushed2 <- struct{}{} }
+	claimed := make(chan string, 4)
+	mgr2.testResumeClaimedHook = func(targetID string) { claimed <- targetID }
 	root2 := NewSession(rootCfg)
 	root2.ID = root1.ID
 	if err := mgr2.AdoptRoot(root2); err != nil {
 		t.Fatalf("AdoptRoot: %v", err)
 	}
 
-	reloadedMid, err := LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
-	if err != nil {
-		t.Fatalf("LoadSession: %v", err)
-	}
-	if !reloadedMid.hasPendingTaskNotifications() {
-		t.Fatal("test setup: reloaded mid did not restore the grandchild's pending notification from its own durable log")
+	// The durable half of the SAME race the flush loop above closed for
+	// the in-memory check: mid's own finalizeTurn flush (confirmed done
+	// above) queues the notification's disk write, but does not
+	// GUARANTEE it landed before this exact instant if some OTHER,
+	// unrelated flush (e.g. root1's own idle-notify bookkeeping) is what
+	// the loop above actually observed completing last — LoadSession here
+	// re-reads from disk and, on a miss, waits for the NEXT flush signal
+	// and retries, rather than trusting a single read. Once true, the
+	// durable persist this reload depends on has unconditionally already
+	// run (LoadSession's own disk read cannot race a write from a
+	// goroutine that already returned from its flush call).
+	var reloadedMid *Session
+	for {
+		reloadedMid, err = LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
+		if err != nil {
+			t.Fatalf("LoadSession: %v", err)
+		}
+		if reloadedMid.hasPendingTaskNotifications() {
+			break
+		}
+		<-flushed
 	}
 
 	if err := mgr2.AdoptReloaded(reloadedMid); err != nil {
@@ -1620,36 +1681,44 @@ func TestRecoverInterruptedTurnForwardsGrandchildNotifications(t *testing.T) {
 	}
 
 	// root2 is genuinely idle when recovery delivers to it, so this
-	// triggers a REAL active resume (go m.fireIdleResumeAsync) racing
-	// this test's own read — rootProv's zero scripted turns make that
+	// triggers a REAL active resume (go m.fireIdleResumeAsync,
+	// session_manager.go) — rootProv's zero scripted turns make that
 	// resume's own Stream() call fail immediately, requeuing the
-	// notifications back onto root2.taskNotifications, but the checkout
-	// (into taskNotificationsInFlight) and requeue both happen on that
-	// OTHER goroutine, asynchronously. Poll rather than read once, and
-	// count BOTH sets — pending plus in-flight is the true "delivered to
-	// root2" total regardless of which side of that race is caught mid-
-	// flight.
-	countAll := func() int {
-		root2.mu.Lock()
-		defer root2.mu.Unlock()
-		return len(root2.taskNotifications) + len(root2.taskNotificationsInFlight)
+	// notifications back onto root2.taskNotifications. The checkout (into
+	// taskNotificationsInFlight, inside PromptEngineResume's
+	// checkoutTaskNotificationsSegment) and requeue (requeueTaskNotifications,
+	// on that SAME call's failure path) both run on that OTHER goroutine,
+	// entirely at the Session level (s.mu) — but that goroutine's resume
+	// closure ends with `m.finalizeTurn(id, msg, err)` (triggerResumeLocked's
+	// own returned func, session_manager.go), which — for root2, err !=
+	// nil — settles it back to StatusIdle and calls
+	// m.unlockAndFlushPersist(), by which point requeueTaskNotifications
+	// has already run (PromptEngineResume returned before finalizeTurn is
+	// even called, same goroutine, no concurrency to race).
+	//
+	// <-claimed first, unconditionally: confirms fireIdleResumeAsync has
+	// definitely claimed root2's run slot (see its own doc comment for
+	// why this step cannot be skipped in favor of just polling
+	// taskNotifications — a live hammer run caught this exact ambiguity:
+	// the notifications read back as a stable count of 2 immediately
+	// after delivery, BEFORE the resume goroutine had even been
+	// scheduled, which a naive "wait until count==2" loop could not tell
+	// apart from the cycle having already finished). Then wait for root2
+	// to read StatusIdle again — unambiguous now that the claim is
+	// confirmed: it can only mean this SAME resume attempt has settled,
+	// never "never started".
+	if got := <-claimed; got != root2.ID {
+		t.Fatalf("resume claimed for %q, want root2 %q", got, root2.ID)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && countAll() != 2 {
-		time.Sleep(5 * time.Millisecond)
-	}
-	// Also give the requeue itself a moment to settle back into
-	// taskNotifications specifically, so the content check below reads a
-	// stable, non-in-flight set.
-	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		root2.mu.Lock()
-		n := len(root2.taskNotifications)
-		root2.mu.Unlock()
-		if n == 2 {
+	for {
+		info, ok := mgr2.Info(root2.ID)
+		if !ok {
+			t.Fatal("root2 not tracked")
+		}
+		if info.Status == StatusIdle {
 			break
 		}
-		time.Sleep(5 * time.Millisecond)
+		<-flushed2
 	}
 
 	root2.mu.Lock()
@@ -1736,6 +1805,18 @@ func TestRecoverInterruptedTurnDoesNotFalselyMarkForwardedNotificationDelivered(
 	// id, but mgr2 has no node tracked under it, so
 	// nearestLiveAncestorLocked(mid) will find nothing and return nil.
 	mgr2 := NewSessionManager(context.Background(), 3, 0)
+	// flushed receives a signal every time unlockAndFlushPersist finishes
+	// running ALL of its queued durable-write thunks — see
+	// testFlushDoneHook's own doc comment (session_manager.go) and
+	// TestRecoverInterruptedTurnForwardsGrandchildNotifications's
+	// identical fix for the full reasoning: a guessed sleep here is
+	// exactly the class of flake independently reproduced on unmodified
+	// main by a separate audit (PR #159, 2/30 under CPU pressure) —
+	// recoverInterruptedTurnLocked's own deferred persists are not
+	// guaranteed to have landed by the time any fixed real-time delay
+	// elapses, however generous.
+	flushed := make(chan struct{}, 64)
+	mgr2.testFlushDoneHook = func() { flushed <- struct{}{} }
 
 	reloadedMid, err := LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
 	if err != nil {
@@ -1749,14 +1830,20 @@ func TestRecoverInterruptedTurnDoesNotFalselyMarkForwardedNotificationDelivered(
 		t.Fatalf("AdoptReloaded: %v", err)
 	}
 
-	// Give recoverInterruptedTurnLocked's deferred persists a moment to
-	// flush (see unlockAndFlushPersist's own doc comment) before reading
-	// the durable ground truth back.
-	time.Sleep(100 * time.Millisecond)
-
-	reloadedAgain, err := LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
-	if err != nil {
-		t.Fatalf("second LoadSession: %v", err)
+	// Block on mgr2's flush signal and re-read from disk rather than sleep
+	// for a guessed interval — AdoptReloaded's own deferred persists (see
+	// unlockAndFlushPersist's own doc comment) are not guaranteed to have
+	// landed by the time this line runs otherwise.
+	var reloadedAgain *Session
+	for {
+		<-flushed
+		reloadedAgain, err = LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
+		if err != nil {
+			t.Fatalf("second LoadSession: %v", err)
+		}
+		if reloadedAgain.hasPendingTaskNotifications() {
+			break
+		}
 	}
 	if !reloadedAgain.hasPendingTaskNotifications() {
 		t.Fatal("grandchild's forwarded notification was falsely persisted as delivered (recTaskNotifyDelivered written with no live target) — it should still read back as pending/lost, not silently resolved")
@@ -2418,6 +2505,8 @@ func TestFinalizeTurnCrashBeforeDeliveryStillDeliversViaRecovery(t *testing.T) {
 	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
 
 	mgr1 := NewSessionManager(context.Background(), 0, 0)
+	flushed1 := make(chan struct{}, 64)
+	mgr1.testFlushDoneHook = func() { flushed1 <- struct{}{} }
 	root1 := mgr1.NewRoot(rootCfg)
 
 	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
@@ -2434,22 +2523,20 @@ func TestFinalizeTurnCrashBeforeDeliveryStillDeliversViaRecovery(t *testing.T) {
 	}
 
 	// finalizeTurn's own deferred persists are asynchronous relative to
-	// waitForStatus's in-memory read above — poll until the child's log
-	// shows it fully settled (all four steps landed) before manufacturing
-	// the partial-crash state on top of that complete, correct log.
-	deadline := time.Now().Add(2 * time.Second)
+	// waitForStatus's in-memory read above — block on mgr1's flush signal
+	// and re-read from disk until the child's log shows it fully settled
+	// (all four steps landed) before manufacturing the partial-crash
+	// state on top of that complete, correct log.
+	var settlePoll *Session
 	for {
-		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, childID)
+		settlePoll, err = LoadSession(Config{Providers: reg, SessionDir: dir}, childID)
 		if err != nil {
 			t.Fatalf("LoadSession (settle poll): %v", err)
 		}
-		if !s.hasUnfinalizedTurn() {
+		if !settlePoll.hasUnfinalizedTurn() {
 			break
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("test setup: child's settled marker never landed durably")
-		}
-		time.Sleep(5 * time.Millisecond)
+		<-flushed1
 	}
 
 	// Simulate the crash: strip the child's own settled marker (step 4)
@@ -2480,6 +2567,10 @@ func TestFinalizeTurnCrashBeforeDeliveryStillDeliversViaRecovery(t *testing.T) {
 	}
 
 	mgr2 := NewSessionManager(context.Background(), 0, 0)
+	flushed2 := make(chan struct{}, 64)
+	mgr2.testFlushDoneHook = func() { flushed2 <- struct{}{} }
+	claimed := make(chan string, 4)
+	mgr2.testResumeClaimedHook = func(targetID string) { claimed <- targetID }
 	// Adopted via the low-level adoptLocked, NOT the public AdoptRoot --
 	// AdoptRoot now also runs recoverCrashedChildrenLocked (a live prod
 	// finding, see that method's own doc comment), which would recover
@@ -2503,31 +2594,28 @@ func TestFinalizeTurnCrashBeforeDeliveryStillDeliversViaRecovery(t *testing.T) {
 	}
 
 	// reloadedRoot is genuinely idle when recovery delivers to it, so this
-	// triggers a REAL active resume (go m.fireIdleResumeAsync) racing
-	// this test's own read below — rootProv's zero scripted turns make
-	// that resume's own Stream() call fail immediately, requeuing the
-	// notification back onto reloadedRoot.taskNotifications, but the
-	// checkout (into taskNotificationsInFlight) and requeue both happen
-	// on that OTHER goroutine, asynchronously — same race and same fix
-	// as TestRecoverInterruptedTurnForwardsGrandchildNotifications.
-	countAll := func() int {
-		reloadedRoot.mu.Lock()
-		defer reloadedRoot.mu.Unlock()
-		return len(reloadedRoot.taskNotifications) + len(reloadedRoot.taskNotificationsInFlight)
+	// triggers a REAL active resume (go m.fireIdleResumeAsync) — rootProv's
+	// zero scripted turns make that resume's own Stream() call fail
+	// immediately, requeuing the notification back onto
+	// reloadedRoot.taskNotifications. <-claimed first, unconditionally,
+	// then wait for reloadedRoot to read StatusIdle again — see
+	// TestRecoverInterruptedTurnForwardsGrandchildNotifications's
+	// identical fix and its own doc comment for why polling the
+	// notification count alone cannot tell "freshly delivered, resume not
+	// yet even scheduled" apart from "resume already ran to completion":
+	// both read identically from outside.
+	if got := <-claimed; got != reloadedRoot.ID {
+		t.Fatalf("resume claimed for %q, want reloadedRoot %q", got, reloadedRoot.ID)
 	}
-	deadline = time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) && countAll() != 1 {
-		time.Sleep(5 * time.Millisecond)
-	}
-	deadline = time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		reloadedRoot.mu.Lock()
-		n := len(reloadedRoot.taskNotifications)
-		reloadedRoot.mu.Unlock()
-		if n == 1 {
+	for {
+		info, ok := mgr2.Info(reloadedRoot.ID)
+		if !ok {
+			t.Fatal("reloadedRoot not tracked")
+		}
+		if info.Status == StatusIdle {
 			break
 		}
-		time.Sleep(5 * time.Millisecond)
+		<-flushed2
 	}
 
 	reloadedRoot.mu.Lock()
@@ -2567,6 +2655,8 @@ func TestFinalizeTurnCrashAfterDeliveryReplaysIdenticalFailureNotDivergent(t *te
 	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
 
 	mgr1 := NewSessionManager(context.Background(), 0, 0)
+	flushed1 := make(chan struct{}, 64)
+	mgr1.testFlushDoneHook = func() { flushed1 <- struct{}{} }
 	root1 := mgr1.NewRoot(rootCfg)
 
 	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
@@ -2582,19 +2672,20 @@ func TestFinalizeTurnCrashAfterDeliveryReplaysIdenticalFailureNotDivergent(t *te
 		t.Fatalf("test setup: unexpected original fail_reason %q", origInfo.FailReason)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
+	// The child's own settled marker (recChildTurnSettled) is a deferred
+	// durable write, same as the notification it accompanies — see
+	// finalizeTurn's own deferPersist queueing. Block on mgr1's flush
+	// signal and re-read from disk rather than sleep-polling a deadline.
+	var settlePoll *Session
 	for {
-		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, childID)
+		settlePoll, err = LoadSession(Config{Providers: reg, SessionDir: dir}, childID)
 		if err != nil {
 			t.Fatalf("LoadSession (settle poll): %v", err)
 		}
-		if !s.hasUnfinalizedTurn() {
+		if !settlePoll.hasUnfinalizedTurn() {
 			break
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("test setup: child's settled marker never landed durably")
-		}
-		time.Sleep(5 * time.Millisecond)
+		<-flushed1
 	}
 
 	// Simulate the crash: strip ONLY the child's own settled marker
@@ -2615,6 +2706,10 @@ func TestFinalizeTurnCrashAfterDeliveryReplaysIdenticalFailureNotDivergent(t *te
 	}
 
 	mgr2 := NewSessionManager(context.Background(), 0, 0)
+	flushed2 := make(chan struct{}, 64)
+	mgr2.testFlushDoneHook = func() { flushed2 <- struct{}{} }
+	claimed := make(chan string, 4)
+	mgr2.testResumeClaimedHook = func(targetID string) { claimed <- targetID }
 	// Adopted via the low-level adoptLocked, NOT the public AdoptRoot --
 	// AdoptRoot now also runs recoverCrashedChildrenLocked (a live prod
 	// finding, see that method's own doc comment), which would recover
@@ -2638,27 +2733,26 @@ func TestFinalizeTurnCrashAfterDeliveryReplaysIdenticalFailureNotDivergent(t *te
 	}
 
 	// reloadedRoot is genuinely idle when AdoptReloaded runs, so this can
-	// trigger a REAL active resume (go m.fireIdleResumeAsync) racing this
-	// test's own read below, the same as the sibling test above — poll
-	// rather than read once.
-	countAll := func() int {
-		reloadedRoot.mu.Lock()
-		defer reloadedRoot.mu.Unlock()
-		return len(reloadedRoot.taskNotifications) + len(reloadedRoot.taskNotificationsInFlight)
+	// trigger a REAL active resume (go m.fireIdleResumeAsync). <-claimed
+	// first, unconditionally, then wait for reloadedRoot to read
+	// StatusIdle again — see
+	// TestRecoverInterruptedTurnForwardsGrandchildNotifications's
+	// identical fix and its own doc comment for why polling the
+	// notification count alone cannot tell "freshly delivered, resume not
+	// yet even scheduled" apart from "resume already ran to completion":
+	// both read identically from outside.
+	if got := <-claimed; got != reloadedRoot.ID {
+		t.Fatalf("resume claimed for %q, want reloadedRoot %q", got, reloadedRoot.ID)
 	}
-	deadline = time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) && countAll() != 1 {
-		time.Sleep(5 * time.Millisecond)
-	}
-	deadline = time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		reloadedRoot.mu.Lock()
-		n := len(reloadedRoot.taskNotifications)
-		reloadedRoot.mu.Unlock()
-		if n == 1 {
+	for {
+		info, ok := mgr2.Info(reloadedRoot.ID)
+		if !ok {
+			t.Fatal("reloadedRoot not tracked")
+		}
+		if info.Status == StatusIdle {
 			break
 		}
-		time.Sleep(5 * time.Millisecond)
+		<-flushed2
 	}
 
 	reloadedRoot.mu.Lock()

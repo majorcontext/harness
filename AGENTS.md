@@ -1458,6 +1458,24 @@ record) rather than a false "still running" reading. `parent_session`
 re-dispatch to the task it continues from, so a fleet UI can group a box's
 history by task across boxes.
 
+Subagent lineage is durable. `SessionManager.Spawn` records
+`task_parent_id`, `task_agent_type`, and `task_depth` on the child's
+session header (`engine/store.go`), and appends each child id to the
+parent's own log. `LoadSession` restores all of them with no
+SessionManager adoption needed. `GET /session/{id}.lineage` prefers the
+durable `task_depth` over the live tree's derived depth, and merges live
+children with the durable spawn list (`childIDsUnion`,
+`server/handlers.go`) — so `lineage.depth` and `lineage.children` survive
+`Reap` and a process restart. A legacy header without `task_depth`
+restores 0; `adoptReloadedLocked` then falls back to the `m.maxDepth`
+refusal sentinel, exactly as before the field existed.
+
+`Config.OnRequest` receives the firing session's own id as its first
+parameter (`engine/engine.go`). Never wire it as a closure over a
+captured session variable: `configSnapshot` copies the func value into
+every spawned child, which misattributes the child's `request.meta`
+records to the closed-over session's id.
+
 **Hub spawn contract:** the hub that spawns boxes — `harness hub`, now
 implemented in `tools/hub/` (see the Development hub above) — passes the
 generated box NAME to the spawn command's environment as

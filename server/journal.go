@@ -749,6 +749,29 @@ func (s *Server) OnRequest(sessionID string, _ int, req *provider.Request) {
 // (reconcile) — so the "journal mirrors the session log" invariant cannot
 // drift. It is idempotent: already-journaled message IDs are skipped.
 //
+// sessionID's *engine.Session is resolved via resolveSessForSync, not a bare
+// s.sessions[sessionID] read — see that function's own doc comment for why:
+// a session SessionManager.Spawn drives (the `task` tool, or session.create's
+// parent_id form) is never inserted into s.sessions at all, ever, since it is
+// never claimed through claimForPrompt/handleCreate — so a plain residency
+// read here would silently and PERMANENTLY drop every message from a
+// spawned child's own turn, for every child, always, not merely a
+// timing-dependent subset. A live audit surfaced this as "children spawned
+// after a long idle gap show zero events" — that framing is really just the
+// shape most likely to go unmasked: a child an orchestrator never happens to
+// prompt directly afterward (the ordinary fire-and-forget task-tool shape —
+// the PARENT gets the completion notification, not the child) never becomes
+// s.sessions-resident by ANY other path either, so nothing ever backfills
+// it. A child that DOES later receive a direct HTTP prompt (claimForPrompt's
+// own cold-load path) becomes resident then, and that turn's own
+// "s.syncMessages(id) // catch any message not yet journaled" call
+// (runPrompt) backfills its entire history at once — which is why some
+// children "journal fine" and others show zero rows: whether an external
+// caller happens to touch the child again, not spawn timing itself, decided
+// it. resolveSessForSync's SessionManager fallback makes a spawned child's
+// own messages reach the journal as they stream in, the same turn they are
+// produced, regardless of whether anything ever prompts it directly again.
+//
 // Lock-ordering invariant: server.mu is a LEAF with respect to a session's
 // own mutex — this function must never call a session method that acquires
 // it while holding server.mu. The engine emits goal.* (and other) events
@@ -757,7 +780,7 @@ func (s *Server) OnRequest(sessionID string, _ int, req *provider.Request) {
 // session.mu -> server.mu order. If server.mu ever called back into the
 // session's lock (server.mu -> session.mu) the two orders would form a cycle
 // and deadlock under concurrency (see TestGoalEmitVsSyncMessagesNoDeadlock).
-// So both st.sess.History() and st.sess.PersistErr() are read here in an
+// So both sess.History() and sess.PersistErr() are read here in an
 // unlocked window, server.mu is re-acquired only for this server's own
 // bookkeeping (seen-message index, journal, last-seen persist error), and
 // Options.OnError is invoked outside server.mu too — an OnError handler that
@@ -767,11 +790,12 @@ func (s *Server) syncMessages(sessionID string) {
 	s.mu.Lock()
 	st := s.sessions[sessionID]
 	s.mu.Unlock()
-	if st == nil {
+	sess := resolveSessForSync(st, s.sessMgr, sessionID)
+	if sess == nil {
 		return
 	}
-	history := st.sess.History()
-	persistErr := st.sess.PersistErr()
+	history := sess.History()
+	persistErr := sess.PersistErr()
 
 	s.mu.Lock()
 	for i := range history {
@@ -788,6 +812,39 @@ func (s *Server) syncMessages(sessionID string) {
 	if reportErr != nil {
 		s.reportError(reportErr)
 	}
+}
+
+// resolveSessForSync returns the *engine.Session syncMessages should read
+// history from for sessionID: st.sess when st (the server's own residency
+// lookup, s.sessions[sessionID]) is non-nil, otherwise sessMgr's own live
+// node for sessionID, or nil when neither knows it.
+//
+// The fallback is what makes syncMessages work for a SessionManager.Spawn'd
+// session. Spawn drives a child's turn directly — child.Prompt, in its own
+// goroutine, see Spawn's doc comment. It never goes through claimForPrompt/
+// handleCreate, so a spawned child's id is NEVER a key in s.sessions. That
+// map exists purely for THIS server's own HTTP claim/eviction residency.
+// That is an orthogonal concept from "does anything in this process hold a
+// live *engine.Session for this id".
+//
+// sessMgr.Session, by contrast, is populated for exactly the sessions that
+// matter here. Spawn calls adoptLocked synchronously, before the child's
+// turn ever starts. For a child this process merely rediscovers — a
+// follow-up touch after Reap, or after a restart — ReportTurnStart/
+// handleSpawnChild's own AdoptReloaded fallback registers it there too.
+//
+// sessMgr is deliberately consulted only as a FALLBACK, not tried first. A
+// resident st.sess may be a fresher reload of the same durable session
+// than whatever sessMgr currently points at — see ReportTurnStart's
+// "always re-attach to the LIVE object" doc comment. Preferring residency
+// when it exists keeps this the same object every other resident-aware
+// call site (claimForPrompt's callers) already uses.
+func resolveSessForSync(st *sessionState, sessMgr *engine.SessionManager, sessionID string) *engine.Session {
+	if st != nil {
+		return st.sess
+	}
+	sess, _ := sessMgr.Session(sessionID)
+	return sess
 }
 
 // emitDurable assigns the next sequence number, journals the event, and fans

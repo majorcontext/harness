@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/majorcontext/harness/message"
@@ -933,48 +934,249 @@ func TestReapThenReloadRestoresTrueDepthNotAFreshRoot(t *testing.T) {
 	}
 }
 
-// TestReloadedChildWithUnknownParentGetsConservativeDepth proves the
-// OTHER branch of adoptReloadedLocked: when a child's recorded true
-// parent is not tracked by THIS SessionManager either (a fresh process —
-// e.g. `harness run -r <id>` naming a former task-tool child from a
-// previous process, whose tree lived and died with that process), the
-// true depth is unrecoverable, and the safe default is the MOST
-// restrictive one (m.maxDepth, refusing `task` outright) rather than the
-// MOST permissive one (depth 0, unrestricted) an earlier revision used.
-func TestReloadedChildWithUnknownParentGetsConservativeDepth(t *testing.T) {
-	mgr1 := NewSessionManager(context.Background(), 3, 0)
-	root := mgr1.NewRoot(managedConfig("root",
-		scriptedTurns("root", nil),
-		scriptedTurns("child", doneTurn("done")),
-	))
-	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+// TestReloadedChildWithUnknownParentUsesDurableTaskDepth is the regression
+// test for a live audit finding (the "singleton 3" bug): a live-reproduced
+// GET /session/{id}.lineage.depth on a genuine DIRECT child (true depth 1)
+// reported 3 == DefaultMaxTaskDepth, indistinguishable from a session
+// genuinely refused at the depth limit — while every OTHER child (real
+// grandchildren included) reported a flatly wrong 0. Root cause: THIS
+// exact scenario — adoptReloadedLocked's "child's recorded true parent is
+// not tracked by THIS SessionManager either" branch (a fresh process, or
+// — the far more common live shape — an ancestor that Reap already
+// collected while this specific child stayed live/re-touched) — used to
+// substitute m.maxDepth, a deliberate REFUSAL SENTINEL for "true depth is
+// unrecoverable", with no way for a caller to tell that sentinel apart
+// from a session genuinely AT that depth.
+//
+// It no longer needs to guess: Config.TaskDepth (set by Spawn, durably
+// persisted and restored by LoadSession exactly like TaskParentID/
+// TaskAgentType already were — see that field's own doc comment) records
+// the child's real depth at spawn time, so this branch now uses it
+// whenever it is present (> 0) instead of falling back to the sentinel.
+// TestReloadedChildWithUnknownParentAndNoDurableDepthStaysConservative
+// covers the complementary legacy case (TaskDepth never recorded), where
+// the OLD conservative sentinel behavior this test used to assert still
+// applies unchanged.
+func TestReloadedChildWithUnknownParentUsesDurableTaskDepth(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mgr1 := NewSessionManager(context.Background(), 3, 0)
+		root := mgr1.NewRoot(managedConfig("root",
+			scriptedTurns("root", nil),
+			scriptedTurns("child", doneTurn("done")),
+		))
+		childID, err := mgr1.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+		if err != nil {
+			t.Fatalf("Spawn: %v", err)
+		}
+		waitForStatus(t, mgr1, childID, StatusDone, time.Second)
+		child, ok := mgr1.Session(childID)
+		if !ok {
+			t.Fatal("child not found")
+		}
+		if d := child.TaskDepth(); d != 1 {
+			t.Fatalf("child.TaskDepth() = %d, want 1 (test setup invalid)", d)
+		}
+
+		// A brand new SessionManager (a different process entirely, or this
+		// SAME process after Reap collected the root while this child stayed
+		// live) has never heard of child's true parent: its TaskParentID
+		// names an id this manager's tree has no record of at all.
+		mgr2 := NewSessionManager(context.Background(), 3, 0)
+		mgr2.ReportTurnStart(child)
+
+		info, ok := mgr2.Info(childID)
+		if !ok {
+			t.Fatal("child not adopted by the second manager")
+		}
+		if info.Depth != 1 {
+			t.Errorf("depth = %d, want 1 (the child's own durable TaskDepth, not the m.maxDepth=3 refusal sentinel)", info.Depth)
+		}
+		if info.ParentID != "" {
+			t.Errorf("parent = %q, want empty (true parent id itself is still unrecoverable in this manager — only depth is)", info.ParentID)
+		}
+		// A real depth-1 child, 2 below the depth-3 limit, correctly regains
+		// the task tool — the OLD sentinel-based fallback wrongly withheld
+		// it from every such child (true depth < limit) whose immediate
+		// parent simply wasn't tracked in this particular process.
+		if _, hasTask := child.tools[taskToolName]; !hasTask {
+			t.Errorf("task tool withheld from a real depth-1 child (limit 3): %v", toolNames(child))
+		}
+	})
+}
+
+// TestReloadedChildWithUnknownParentAndNoDurableDepthStaysConservative
+// covers the legacy/backward-compat half of adoptReloadedLocked's "parent
+// not tracked" branch: a session predating Config.TaskDepth (or one whose
+// header the field was for any other reason never recorded on) reports
+// TaskDepth() == 0 — indistinguishable, by construction, from "never
+// spawned a child" — so this branch must NOT trust it, and must fall back
+// to the exact same m.maxDepth refusal sentinel it always used, preserving
+// the original safety invariant this test used to cover before
+// TestReloadedChildWithUnknownParentUsesDurableTaskDepth's fix: refusing
+// an unverifiable depth is always safer than guessing permissively.
+func TestReloadedChildWithUnknownParentAndNoDurableDepthStaysConservative(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mgr1 := NewSessionManager(context.Background(), 3, 0)
+		root := mgr1.NewRoot(managedConfig("root",
+			scriptedTurns("root", nil),
+			scriptedTurns("child", doneTurn("done")),
+		))
+		childID, err := mgr1.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+		if err != nil {
+			t.Fatalf("Spawn: %v", err)
+		}
+		waitForStatus(t, mgr1, childID, StatusDone, time.Second)
+		child, ok := mgr1.Session(childID)
+		if !ok {
+			t.Fatal("child not found")
+		}
+		// Simulate a legacy record: TaskDepth was never persisted for this
+		// session (the field predates it, or this log was written between
+		// TaskParentID's own rollout and TaskDepth's — see TaskAgentType's
+		// doc comment for the same already-accepted rollout gap). Poking
+		// cfg directly is safe here: child has not been exposed to any
+		// other goroutine since Spawn returned, and this test's own
+		// mgr2.ReportTurnStart call below is the first thing to touch it.
+		child.cfg.TaskDepth = 0
+
+		mgr2 := NewSessionManager(context.Background(), 3, 0)
+		mgr2.ReportTurnStart(child)
+
+		info, ok := mgr2.Info(childID)
+		if !ok {
+			t.Fatal("child not adopted by the second manager")
+		}
+		if info.Depth != 3 {
+			t.Errorf("depth = %d, want 3 (the configured max — refused rather than guessed permissively, exactly as before TaskDepth existed)", info.Depth)
+		}
+		if info.ParentID != "" {
+			t.Errorf("parent = %q, want empty (true parent unrecoverable in this manager)", info.ParentID)
+		}
+		if _, hasTask := child.tools[taskToolName]; hasTask {
+			t.Errorf("task tool present despite unrecoverable depth: %v", toolNames(child))
+		}
+	})
+}
+
+// TestReloadedChildDurableDepthWinsOverBadTrackedParentDepth is a
+// review-driven addition: proves adoptReloadedLocked's depth derivation
+// checks the CHILD's own durable TaskDepth first, even when its parent is
+// currently tracked — not just when the parent is untracked (the case
+// TestReloadedChildWithUnknownParentUsesDurableTaskDepth already covers).
+//
+// Reproduces a mixed legacy/non-legacy tree across a rollout: "mid" is a
+// legacy node (predates Config.TaskDepth) whose OWN parent is not tracked
+// in this manager, so it gets adopted at the m.maxDepth refusal sentinel
+// (5 here) — a WRONG depth for mid, but the best this manager can do
+// without a durable TaskDepth to fall back on. "child" is mid's own real,
+// non-legacy child, spawned in an earlier, correctly-functioning process
+// with its true depth (2) durably recorded. Reloading child while mid IS
+// tracked used to compute depth = mid.depth+1 = 6 (the sentinel,
+// propagated forward and off by one), discarding child's own known-correct
+// value and silently denying it the task tool (TaskToolAllowed(6) is
+// always false at maxDepth 5) even though its true depth (2) is well
+// under the limit. child's own durable TaskDepth now wins regardless.
+func TestReloadedChildDurableDepthWinsOverBadTrackedParentDepth(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 5, 0) // maxDepth 5
+
+	midCfg := managedConfig("mid", scriptedTurns("mid", nil))
+	midCfg.TaskParentID = "ses_0000000000000099" // untracked in this manager
+	mid := NewSession(midCfg)
+	if err := mgr.AdoptReloaded(mid); err != nil {
+		t.Fatalf("AdoptReloaded(mid): %v", err)
+	}
+	midInfo, ok := mgr.Info(mid.ID)
+	if !ok {
+		t.Fatal("mid not adopted")
+	}
+	if midInfo.Depth != 5 {
+		t.Fatalf("mid depth = %d, want 5 (the sentinel — test setup invalid)", midInfo.Depth)
+	}
+
+	childCfg := managedConfig("child", scriptedTurns("child", nil))
+	childCfg.TaskParentID = mid.ID
+	childCfg.TaskDepth = 2 // real, durably recorded depth from an earlier process
+	child := NewSession(childCfg)
+	if err := mgr.AdoptReloaded(child); err != nil {
+		t.Fatalf("AdoptReloaded(child): %v", err)
+	}
+
+	info, ok := mgr.Info(child.ID)
+	if !ok {
+		t.Fatal("child not adopted")
+	}
+	if info.Depth != 2 {
+		t.Errorf("child depth = %d, want 2 (its own durable TaskDepth, not mid.depth+1 = %d)", info.Depth, midInfo.Depth+1)
+	}
+	if info.ParentID != mid.ID {
+		t.Errorf("child parent = %q, want %q (mid IS tracked, so the live attach still applies)", info.ParentID, mid.ID)
+	}
+	if _, hasTask := child.tools[taskToolName]; !hasTask {
+		t.Errorf("task tool withheld from child (true depth 2, limit 5): %v", toolNames(child))
+	}
+}
+
+// TestTaskDepthHeaderRoundTrip is a review-driven addition, mirroring
+// TestParentSessionLegacyHeaderCompat/TestParentSessionHeaderRoundTrip
+// (parent_session_test.go): proves Config.TaskDepth's own restore rule
+// directly against a REAL on-disk header, not just an in-memory *Session
+// object poked by a live Spawn call — the two prior tests above only
+// exercise TaskDepth() on an object Spawn itself just constructed, never a
+// genuinely reloaded one. A legacy header with no "task_depth" key at all
+// restores TaskDepth() == 0; a header that DOES carry it restores the
+// exact persisted value, regardless of what the loading Config supplies.
+func TestTaskDepthHeaderRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+
+	legacyID := "ses_4444444444444446"
+	legacyData := `{"type":"session","id":"ses_4444444444444446","created_at":"2025-01-02T03:04:05Z","task_parent_id":"ses_0000000000000001","task_agent_type":"reviewer"}
+{"type":"model","model":"test/m1"}
+`
+	if err := os.WriteFile(filepath.Join(dir, legacyID+".jsonl"), []byte(legacyData), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{SessionDir: dir, Model: message.ModelRef{Provider: "test", Model: "m1"}}
+	legacy, err := LoadSession(cfg, legacyID)
 	if err != nil {
-		t.Fatalf("Spawn: %v", err)
+		t.Fatal(err)
 	}
-	waitForStatus(t, mgr1, childID, StatusDone, time.Second)
-	child, ok := mgr1.Session(childID)
-	if !ok {
-		t.Fatal("child not found")
+	if got := legacy.TaskDepth(); got != 0 {
+		t.Errorf("legacy header (no task_depth key) TaskDepth() = %d, want 0", got)
 	}
 
-	// A brand new SessionManager (a different process entirely) has never
-	// heard of child's true parent: its TaskParentID names an id this
-	// manager's tree has no record of at all.
-	mgr2 := NewSessionManager(context.Background(), 3, 0)
-	mgr2.ReportTurnStart(child)
+	recordedID := "ses_4444444444444447"
+	recordedData := `{"type":"session","id":"ses_4444444444444447","created_at":"2025-01-02T03:04:05Z","task_parent_id":"ses_0000000000000001","task_agent_type":"reviewer","task_depth":2}
+{"type":"model","model":"test/m1"}
+`
+	if err := os.WriteFile(filepath.Join(dir, recordedID+".jsonl"), []byte(recordedData), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	recorded, err := LoadSession(cfg, recordedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := recorded.TaskDepth(); got != 2 {
+		t.Errorf("header with task_depth:2 restored TaskDepth() = %d, want 2", got)
+	}
 
-	info, ok := mgr2.Info(childID)
-	if !ok {
-		t.Fatal("child not adopted by the second manager")
+	// Review finding: a legacy child (no task_depth key) loaded under a
+	// Config whose OWN TaskDepth is already non-zero must still restore
+	// to 0, not silently inherit that value. This is exactly the shape
+	// recoverCrashedChildrenLocked produces in production —
+	// configSnapshot() copies Config BY VALUE from the parent node
+	// currently being adopted, TaskDepth included, before calling
+	// LoadSession for each of that parent's own candidate children — so
+	// a genuinely legacy child would otherwise inherit its PARENT's depth
+	// instead of correctly falling back to adoptReloadedLocked's own
+	// m.maxDepth refusal sentinel.
+	inheritedCfg := cfg
+	inheritedCfg.TaskDepth = 5 // simulates a live parent's own configSnapshot
+	legacyUnderInheritedCfg, err := LoadSession(inheritedCfg, legacyID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if info.Depth != 3 {
-		t.Errorf("depth = %d, want 3 (the configured max — refused rather than guessed permissively)", info.Depth)
-	}
-	if info.ParentID != "" {
-		t.Errorf("parent = %q, want empty (true parent unrecoverable in this manager)", info.ParentID)
-	}
-	if _, hasTask := child.tools[taskToolName]; hasTask {
-		t.Errorf("task tool present despite unrecoverable depth: %v", toolNames(child))
+	if got := legacyUnderInheritedCfg.TaskDepth(); got != 0 {
+		t.Errorf("legacy child loaded under a Config with inherited TaskDepth=5 restored TaskDepth() = %d, want 0 (reset, not inherited)", got)
 	}
 }
 

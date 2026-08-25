@@ -292,30 +292,19 @@ func TestSessionCreateWithParentIDUnknownAgentIs400(t *testing.T) {
 // force a reload first.
 //
 // Also covers two later review findings on the same cold-fallback branch,
-// both about Children specifically:
-//
-//   - It used to set Children to []string{} — indistinguishable on the
-//     wire from a WARM, genuinely childless node's real empty list. For a
-//     MID-TREE parent (this test's child, which itself spawns a
-//     grandchild below) that is exactly wrong: the child has a real,
-//     live grandchild on disk, but a caller reading "children":[] from a
-//     cold GET would reasonably conclude it has none — an affirmatively
-//     wrong answer, worse than an honestly unknown one.
-//   - The fix for THAT (giving Children omitempty, so the cold branch
-//     could leave it nil and have it vanish from the wire) went one step
-//     too far: omitempty collapses nil and a genuinely empty non-nil
-//     slice to the same "absent" wire shape, so a WARM, truly childless
-//     node ALSO started omitting the field — indistinguishable from this
-//     cold branch's own "unknown." Children now has NO omitempty
-//     instead: the cold branch's nil serializes as an explicit
-//     "children":null (present, but honestly unknown — distinct from
-//     both "known: zero" and "known: non-zero"), while the warm branch
-//     (lineageJSONFor) normalizes nil to []string{} so a real empty list
-//     still reads "children":[].
-//
-// Proves "children" is present as JSON null on the cold path — neither
-// omitted nor an affirmative empty list — even though a real child (the
-// grandchild) exists.
+// both concluding "no durable source" for Depth and Children when there
+// actually IS one — Config.TaskDepth and Session.SpawnedChildIDs(),
+// exactly as durable and unconditional as TaskParentID/TaskAgentType
+// above, both restored by LoadSession without any SessionManager adoption
+// needed. An earlier revision of this fix left Depth omitted and Children
+// an honest-but-needlessly-conservative JSON null on the cold path,
+// reasoning neither was recoverable without a live parent chain — true for
+// Depth only until Config.TaskDepth started recording the real value at
+// Spawn time, and never actually true for Children, which the cold
+// branch's own already-loaded sess had the complete durable answer for
+// the whole time. This test proves BOTH are now the real, durably-known
+// values on the cold path: depth 1 (child is root's direct child) and
+// children [grandchild.ID] (child's own SpawnedChildIDs), not "unknown".
 func TestColdChildHasDurableLineage(t *testing.T) {
 	dir := t.TempDir()
 	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("the answer is 42")}}
@@ -384,25 +373,238 @@ func TestColdChildHasDurableLineage(t *testing.T) {
 	if cold.Lineage["agent_type"] != engine.AgentExplore {
 		t.Errorf("cold lineage.agent_type = %v, want %q", cold.Lineage["agent_type"], engine.AgentExplore)
 	}
-	// Fields with no durable source must be OMITTED, not guessed.
+	// Status still has no durable source at all and must stay omitted.
 	if _, ok := cold.Lineage["status"]; ok {
 		t.Errorf("cold lineage.status = %v, want omitted (no durable source)", cold.Lineage["status"])
 	}
-	if _, ok := cold.Lineage["depth"]; ok {
-		t.Errorf("cold lineage.depth = %v, want omitted (no durable source)", cold.Lineage["depth"])
+	// Depth and Children, unlike Status, DO have a durable source — Config.
+	// TaskDepth and Session.SpawnedChildIDs(), both restored by LoadSession
+	// unconditionally, no SessionManager adoption needed (see
+	// lineageJSONFor's own doc comment) — so the cold path now reports the
+	// real values instead of guessing "unknown". child is root's direct
+	// child, so its true depth is 1.
+	if cold.Lineage["depth"] != float64(1) {
+		t.Errorf("cold lineage.depth = %v, want 1 (durable TaskDepth)", cold.Lineage["depth"])
 	}
 	// children has no omitempty (see its own doc comment, handlers.go) —
-	// present but explicitly null on the cold path, not omitted and not
-	// an affirmative []. The child genuinely has a live grandchild on
-	// disk, so an affirmative empty list would be actively wrong, not
-	// just unknown — and simply omitting the key again would reopen the
-	// exact warm/cold ambiguity the field's own fix exists to close.
+	// present, and now the REAL durable list (SpawnedChildIDs), not an
+	// affirmative-but-wrong []: the child's own persisted log durably
+	// records which children IT spawned. A NON-empty SpawnedChildIDs() is
+	// trustworthy on the cold path regardless of log vintage — see
+	// TestColdChildlessLineageChildrenIsUnknownNotZero for the OTHER
+	// half, where an EMPTY cold-path SpawnedChildIDs() is deliberately
+	// reported as unknown (null), not confirmed zero.
+	got, ok := cold.Lineage["children"].([]any)
+	if !ok {
+		t.Fatalf("cold lineage.children = %v (%T), want a one-element array", cold.Lineage["children"], cold.Lineage["children"])
+	}
+	if len(got) != 1 || got[0] != grandchild.ID {
+		t.Errorf("cold lineage.children = %v, want [%q]", got, grandchild.ID)
+	}
+}
+
+// TestColdChildlessLineageChildrenIsUnknownNotZero is the regression test
+// for a review finding: the cold-fallback branch used to run Children
+// through childIDsUnion just like the warm branch, normalizing an empty
+// sess.SpawnedChildIDs() to a confirmed "children":[]. But
+// SpawnedChildIDs() is a complete answer only for a log written after
+// recTaskSpawned records shipped — a legacy log that genuinely spawned
+// children before that record existed has an empty SpawnedChildIDs()
+// indistinguishable from a parent that truly never spawned anything, and
+// unlike the warm branch, the cold branch has no live tree to cross-check
+// an empty result against. So an empty cold-path SpawnedChildIDs() must
+// report "children":null (genuinely unknown), matching how this exact
+// branch already treats Status/Result/FailReason — not an affirmative,
+// possibly-false "zero".
+//
+// This test's child is genuinely, unambiguously childless (never spawned
+// anything, in a log written with the current field set) — so this is
+// the conservative, over-cautious direction of the fix: even a case that
+// COULD safely report "known: zero" now reports "unknown" instead, since
+// the cold branch has no way to distinguish it from the legacy case
+// above using only sess.SpawnedChildIDs(). That conservatism, not
+// precision for this specific case, is the deliberate tradeoff.
+func TestColdChildlessLineageChildrenIsUnknownNotZero(t *testing.T) {
+	dir := t.TempDir()
+	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("the answer is 42")}}
+	h1 := multiProviderHarnessInDir(t, dir, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, childProv)
+
+	resp, data := h1.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h1.do("POST", "/session", map[string]string{
+		"parent_id": root.ID, "agent": engine.AgentExplore, "prompt": "find the answer", "model": "child/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+	var child struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &child)
+	waitForLineageStatus(t, h1, child.ID, "done", 2*time.Second)
+	// This child never spawns anything of its own (an "explore" leaf) —
+	// SpawnedChildIDs() is genuinely, unambiguously empty.
+
+	// A SECOND, independent harness against the SAME dir: a fresh
+	// SessionManager that has never seen child.ID — the cold-fallback
+	// condition, exactly like TestColdChildHasDurableLineage.
+	h2 := multiProviderHarnessInDir(t, dir, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, childProv)
+	resp, data = h2.do("GET", "/session/"+child.ID, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("cold GET child status %d: %s", resp.StatusCode, data)
+	}
+	var cold struct {
+		Lineage map[string]any `json:"lineage"`
+	}
+	mustUnmarshal(t, data, &cold)
+	if cold.Lineage == nil {
+		t.Fatal("cold GET has no lineage at all — durable fallback did not fire")
+	}
 	v, ok := cold.Lineage["children"]
 	if !ok {
-		t.Error("cold lineage.children key missing entirely, want present as JSON null")
+		t.Fatal("cold lineage.children key missing entirely, want present as JSON null")
 	}
 	if v != nil {
-		t.Errorf("cold lineage.children = %v, want null (unknown) — the child genuinely has a live grandchild on disk, so an affirmative list would be actively wrong", v)
+		t.Errorf("cold lineage.children = %v, want null (unknown) — an empty SpawnedChildIDs() on the cold path cannot be told apart from a legacy pre-recTaskSpawned log that lost the record", v)
+	}
+}
+
+// TestWarmOrphanChildLineageKeepsDurableParentID covers the WARM
+// orphaned-parent shape (a review finding on the TaskDepth fix): a child
+// adopted by adoptReloadedLocked while its parent is untracked gets its
+// depth from durable TaskDepth, but the node's parentID stays empty (only
+// the live-parent branch sets attachTo). lineageJSONFor's warm branch must
+// then fall back to the durable TaskParentID. Without the fallback, the
+// wire showed depth 1 with no parent_id — a shape lineageJSON.Depth's doc
+// comment rules out ("depth 0 only ever occurs for a root"), and one that
+// makes a tree-reconstructing client misfile a real child as a root.
+//
+// The orphan state is real: after a restart, ReportTurnStart's
+// adopt-on-first-sight reload adopts a child whose parent nothing has
+// touched yet. This test builds that state directly: spawn a child in one
+// harness, then adopt only its reload into a second harness's fresh
+// SessionManager via ReportTurnStart, and GET it there.
+func TestWarmOrphanChildLineageKeepsDurableParentID(t *testing.T) {
+	dir := t.TempDir()
+	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("the answer is 42")}}
+	h1 := multiProviderHarnessInDir(t, dir, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, childProv)
+
+	resp, data := h1.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h1.do("POST", "/session", map[string]string{
+		"parent_id": root.ID, "agent": engine.AgentExplore, "prompt": "find the answer", "model": "child/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+	var child struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &child)
+	waitForLineageStatus(t, h1, child.ID, "done", 2*time.Second)
+
+	// Fresh harness, same dir: an empty SessionManager, like a restarted
+	// process. Adopt ONLY the child, the way ReportTurnStart's
+	// adopt-on-first-sight path would — root stays untracked, so
+	// adoptReloadedLocked takes its durable-TaskDepth branch.
+	h2 := multiProviderHarnessInDir(t, dir, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, childProv)
+	reloaded, err := engine.LoadSession(engine.Config{SessionDir: dir, Model: message.ModelRef{Provider: "child", Model: "m1"}}, child.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	h2.srv.sessMgr.ReportTurnStart(reloaded)
+
+	resp, data = h2.do("GET", "/session/"+child.ID, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("warm-orphan GET child status %d: %s", resp.StatusCode, data)
+	}
+	var got struct {
+		Lineage map[string]any `json:"lineage"`
+	}
+	mustUnmarshal(t, data, &got)
+	if got.Lineage == nil {
+		t.Fatal("warm-orphan GET has no lineage at all")
+	}
+	if got.Lineage["depth"] != float64(1) {
+		t.Errorf("warm-orphan lineage.depth = %v, want 1 (durable TaskDepth)", got.Lineage["depth"])
+	}
+	if got.Lineage["parent_id"] != root.ID {
+		t.Errorf("warm-orphan lineage.parent_id = %v, want %q (durable TaskParentID fallback)", got.Lineage["parent_id"], root.ID)
+	}
+}
+
+// TestSentinelPoisonedChainWireDepthMatchesEnforcement is the adjudicated
+// fix for a review finding: an earlier revision of lineageJSONFor
+// independently re-preferred sess.TaskDepth() over info.Depth on the wire
+// — a SECOND derivation of "this session's depth" that could disagree
+// with the ENFORCEMENT depth (info.Depth, the exact value TaskToolAllowed
+// gates this session's own `task` tool against) whenever a poisoned
+// ancestor's refusal-sentinel depth propagates forward into a legacy
+// descendant with no durable TaskDepth of its own. lineage.depth must
+// report exactly what is enforced, not a value a caller could act on and
+// be wrong about. Proves the wire and enforcement now agree by
+// construction (lineageJSONFor reports info.Depth verbatim): whatever
+// depth GET /session/{id} shows is exactly what SessionManager already
+// decided.
+//
+// Builds the poisoned chain directly: "mid" is legacy (no durable
+// TaskDepth) with its own parent untracked, so adoptReloadedLocked gives
+// it the m.maxDepth refusal sentinel (the harness default, 3 — see
+// engine.DefaultMaxTaskDepth). "child" is ALSO legacy, adopted under mid
+// (now tracked) — its enforcement depth becomes sentinel+1 = 4, one past
+// the configured limit.
+func TestSentinelPoisonedChainWireDepthMatchesEnforcement(t *testing.T) {
+	dir := t.TempDir()
+	h := multiProviderHarnessInDir(t, dir, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"})
+
+	midCfg := engine.Config{SessionDir: dir, Model: message.ModelRef{Provider: "root", Model: "m1"}, TaskParentID: "ses_0000000000000099"}
+	mid := engine.NewSession(midCfg)
+	h.srv.sessMgr.ReportTurnStart(mid)
+	midInfo, ok := h.srv.sessMgr.Info(mid.ID)
+	if !ok || midInfo.Depth != 3 {
+		t.Fatalf("mid enforcement depth = %v (ok=%v), want 3 (the sentinel — test setup invalid)", midInfo.Depth, ok)
+	}
+
+	childCfg := engine.Config{SessionDir: dir, Model: message.ModelRef{Provider: "root", Model: "m1"}, TaskParentID: mid.ID}
+	child := engine.NewSession(childCfg)
+	h.srv.sessMgr.ReportTurnStart(child)
+	childInfo, ok := h.srv.sessMgr.Info(child.ID)
+	if !ok || childInfo.Depth != 4 {
+		t.Fatalf("child enforcement depth = %v (ok=%v), want 4 (sentinel+1 — test setup invalid)", childInfo.Depth, ok)
+	}
+
+	resp, data := h.do("GET", "/session/"+child.ID, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET child status %d: %s", resp.StatusCode, data)
+	}
+	var got struct {
+		Lineage map[string]any `json:"lineage"`
+	}
+	mustUnmarshal(t, data, &got)
+	if got.Lineage == nil {
+		t.Fatal("no lineage in response")
+	}
+	if got.Lineage["depth"] != float64(childInfo.Depth) {
+		t.Errorf("wire lineage.depth = %v, want %v (must match enforcement's info.Depth exactly, not a separately-derived value)", got.Lineage["depth"], childInfo.Depth)
 	}
 }
 
@@ -1332,6 +1534,85 @@ func TestGenericTurnRoutesRejectManagedChild(t *testing.T) {
 			resp, data := h.do(tc.method, tc.path, tc.body)
 			if resp.StatusCode != 409 {
 				t.Errorf("%s %s status = %d, want 409: %s", tc.method, tc.path, resp.StatusCode, data)
+			}
+		})
+	}
+}
+
+// TestGenericTurnRoutesRejectWarmOrphanChild is the regression test for a
+// review finding: rejectManagedChildTurn used to key "is this a managed
+// child" on info.ParentID != "", the LIVE tree pointer — but
+// adoptReloadedLocked leaves info.ParentID EMPTY for a warm orphan (a
+// genuine child adopted while its own parent was untracked at adopt time
+// — see that method's own doc comment and
+// TestWarmOrphanChildLineageKeepsDurableParentID). A warm orphan's
+// durable TaskParentID is still set, and it is still very much a managed
+// child SessionManager is the SOLE scheduler for, but the old check let
+// it slip through this guard entirely — the exact concurrent-Session
+// corruption (a SECOND *engine.Session cold-loaded over the same
+// on-disk log, driven concurrently with the child's own object) this
+// guard exists to prevent, reachable through precisely the child shape
+// least equipped to survive it.
+//
+// Builds the warm-orphan state directly, the same technique as
+// TestWarmOrphanChildLineageKeepsDurableParentID: spawn a child under a
+// root in one harness, then adopt ONLY the child's reload into a second,
+// independent harness's fresh SessionManager via ReportTurnStart — root
+// stays untracked there, so adoptReloadedLocked takes its
+// durable-TaskDepth branch (attachTo never set, info.ParentID empty).
+func TestGenericTurnRoutesRejectWarmOrphanChild(t *testing.T) {
+	dir := t.TempDir()
+	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("child done")}}
+	h1 := multiProviderHarnessInDir(t, dir, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, childProv)
+
+	resp, data := h1.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h1.do("POST", "/session", map[string]string{
+		"parent_id": root.ID, "agent": engine.AgentGeneralPurpose, "prompt": "go", "model": "child/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+	var child struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &child)
+	waitForLineageStatus(t, h1, child.ID, "done", 2*time.Second)
+
+	h2 := multiProviderHarnessInDir(t, dir, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, childProv)
+	reloaded, err := engine.LoadSession(engine.Config{SessionDir: dir, Model: message.ModelRef{Provider: "child", Model: "m1"}}, child.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	h2.srv.sessMgr.ReportTurnStart(reloaded)
+	if info, ok := h2.srv.sessMgr.Info(child.ID); !ok || info.ParentID != "" {
+		t.Fatalf("child info = %+v (ok=%v), want ParentID empty (warm orphan) — test setup invalid", info, ok)
+	}
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		body   any
+	}{
+		{"prompt_async", "POST", "/session/" + child.ID + "/prompt_async", map[string]any{"parts": []map[string]string{{"type": "text", "text": "hi"}}}},
+		{"goal", "POST", "/session/" + child.ID + "/goal", map[string]string{"condition": "done"}},
+		{"enqueue", "POST", "/session/" + child.ID + "/enqueue", map[string]any{"parts": []map[string]string{{"type": "text", "text": "hi"}}, "seq": 1}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, data := h2.do(tc.method, tc.path, tc.body)
+			if resp.StatusCode != 409 {
+				t.Errorf("%s %s status = %d, want 409 (warm orphan must be recognized as a managed child): %s", tc.method, tc.path, resp.StatusCode, data)
 			}
 		})
 	}

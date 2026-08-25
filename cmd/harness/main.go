@@ -1516,10 +1516,19 @@ func newSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.M
 		cfg.SkillsDirs = skillsDirs(appCfg, flagDirs, sessionWorkDir)
 		cfg.AgentDefsDirs = agentDefsDirs(appCfg, agentDefFlagDirs, sessionWorkDir)
 		cfg.ParentSession = parentSession
-		var sess *engine.Session
-		cfg.OnRequest = func(turn int, req *provider.Request) { onRequest(sess.ID, turn, req) }
-		sess = engine.NewSession(cfg)
-		return sess, nil
+		// onRequest already has engine.Config.OnRequest's signature
+		// (sessionID, turn, req). The engine supplies the firing session's
+		// own id at the call site, so wire the func value directly. An
+		// earlier version closed over a local `sess` variable instead.
+		// configSnapshot (session_manager.go) copies that closure by value
+		// into every child Spawn builds from this Config, so every child's
+		// request.meta records carried this session's id, not its own. A
+		// live audit caught it: a spawned child's request.meta never
+		// appeared under its own id in the shared journal. The
+		// session-agnostic func value fixes this for every Spawn
+		// generation. See Config.OnRequest's doc comment.
+		cfg.OnRequest = onRequest
+		return engine.NewSession(cfg), nil
 	}
 }
 
@@ -1536,11 +1545,12 @@ func newSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.M
 func loadSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.ModelRef, appCfg *config.Config, flagDirs []string, agentDefFlagDirs []string, onRequest func(id string, turn int, req *provider.Request)) func(string) (*engine.Session, error) {
 	return func(id string) (*engine.Session, error) {
 		cfg := mkCfg(defModel)
+		// onRequest is wired directly, not via a per-construction closure —
+		// see newSessionFn's identical fix and its own doc comment for the
+		// misattribution bug this avoids.
 		wire := func(c engine.Config) (*engine.Session, error) {
-			var sess *engine.Session
-			c.OnRequest = func(turn int, req *provider.Request) { onRequest(sess.ID, turn, req) }
-			sess, err := engine.LoadSession(c, id)
-			return sess, err
+			c.OnRequest = onRequest
+			return engine.LoadSession(c, id)
 		}
 		sess, err := wire(cfg)
 		if err != nil {

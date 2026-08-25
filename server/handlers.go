@@ -109,9 +109,9 @@ type sessionJSON struct {
 	// s.opts.LoadSession call sites), OR — for a child session this
 	// process has NOT (yet, or ever again) adopted, e.g. after a Reap or a
 	// process restart — a durable fallback built directly from the
-	// child's own on-disk Config.TaskParentID/TaskAgentType (see
-	// lineageJSONFor's cold-fallback branch), missing only the fields
-	// with no durable source (Depth, Status, Children, Result,
+	// child's own on-disk Config.TaskParentID/TaskAgentType/TaskDepth/
+	// SpawnedChildIDs (see lineageJSONFor's cold-fallback branch), missing
+	// only the fields with no durable source at all (Status, Result,
 	// FailReason — see lineageJSON's own field comments). nil only for a
 	// genuine root or a session with no lineage at all (an embedder that
 	// opts out, or a session predating this feature). Deliberately a
@@ -128,15 +128,21 @@ type sessionJSON struct {
 // engine.SessionManager.Info — see sessionJSON.Lineage's doc comment.
 type lineageJSON struct {
 	ParentID string `json:"parent_id,omitempty"`
-	// Depth is omitempty: a WARM root's real depth 0 and a COLD session's
-	// genuinely UNKNOWN depth (see lineageJSONFor's cold-fallback branch)
-	// would otherwise be indistinguishable on the wire — both print
-	// "depth":0. Since depth 0 only ever occurs for a root, and a root
-	// never has a durable TaskParentID to trigger the cold-fallback
+	// Depth is omitempty: a WARM root's real depth 0 and a session whose
+	// true depth is genuinely UNKNOWN (a legacy child predating
+	// Config.TaskDepth, cold or warm — see lineageJSONFor's Depth
+	// paragraph) would otherwise be indistinguishable on the wire — both
+	// print "depth":0. Since depth 0 only ever occurs for a root, and a
+	// root never has a durable TaskParentID to trigger the cold-fallback
 	// branch in the first place, omitting a zero depth costs nothing for
 	// the warm case (a warm root's depth was always knowably 0; a caller
-	// that cares can infer it from parent_id's absence) while letting the
-	// cold-fallback branch omit it truthfully instead of guessing.
+	// that cares can infer it from parent_id's absence) while letting an
+	// unknown depth omit it truthfully instead of guessing. For a child
+	// with a durably recorded TaskDepth (every child spawned since that
+	// field shipped), THIS is the value reported — cold or warm alike,
+	// never the live-tree-derived m.maxDepth refusal sentinel a reload
+	// with no currently-tracked parent used to substitute (see
+	// lineageJSONFor's Depth paragraph for the incident this closes).
 	Depth int `json:"depth,omitempty"`
 	// Status is the SessionManager lifecycle state (running/idle/done/
 	// failed/canceled — engine.SessionStatus) — DISTINCT from
@@ -153,26 +159,45 @@ type lineageJSON struct {
 	// AgentType/Result/FailReason just above and below — a live review
 	// finding on an earlier revision's fix: giving it omitempty (to stop
 	// the cold-fallback branch's old []string{} from lying "zero
-	// children" — see lineageJSONFor's own doc comment for that
-	// incident) went one step too far, since a Go slice's omitempty
+	// children") went one step too far, since a Go slice's omitempty
 	// collapses nil AND a genuinely empty non-nil slice to the exact
 	// same "field absent" wire shape. That made a WARM, truly childless
-	// node ALSO omit the field — indistinguishable from the cold-
-	// fallback branch's own honest "unknown," the very ambiguity
-	// omitempty was supposed to close. A caller polling the same session
-	// as it transitions between these states (or between different
-	// process/lineage-tracking states) would see the field flicker
-	// between present and absent with no way to tell "known: zero" from
-	// "don't know" from the flicker alone.
+	// node ALSO omit the field, indistinguishable from "unknown" — the
+	// very ambiguity omitempty was supposed to close. A caller polling
+	// the same session as it transitions between these states would see
+	// the field flicker between present and absent with no way to tell
+	// "known: zero" from "don't know" from the flicker alone.
 	//
-	// The fix: no omitempty, and lineageJSONFor guarantees a NON-nil
-	// (possibly empty) slice on its warm branch, leaving it nil ONLY on
-	// the cold-fallback branch. That gives three distinct, stable wire
-	// shapes instead of two ambiguous ones: `"children":null` (cold,
-	// genuinely unknown), `"children":[]` (warm, known zero),
-	// `"children":["..."]` (warm, known non-zero) — the field is always
-	// present, so a consumer never has to distinguish "absent because
-	// unknown" from "absent because empty" again.
+	// The fix: no omitempty, and lineageJSONFor's childIDsUnion helper
+	// guarantees a non-nil (possibly empty) slice on the WARM branch — see
+	// that helper's own doc comment. On the warm branch, Children has no
+	// "genuinely unknown" wire state to distinguish at all:
+	// sess.SpawnedChildIDs() (engine/store.go restores it on every
+	// LoadSession, unconditionally, exactly like TaskParentID/
+	// TaskAgentType) is cross-checked against info.Children (this
+	// process's OWN live adoption history), so an empty result there is
+	// trustworthy — a live audit finding on an EARLIER version of this
+	// fix: the cold-fallback branch used to report Children as nil
+	// ("unknown") even though SpawnedChildIDs had the real answer sitting
+	// right there in sess's own already-loaded Config.
+	//
+	// The cold-fallback branch is a narrower story: a live review finding
+	// on THAT earlier fix caught that SpawnedChildIDs() is a complete
+	// answer only for a log written after recTaskSpawned records shipped
+	// — a legacy log that genuinely did spawn children before that record
+	// existed has an empty SpawnedChildIDs() indistinguishable from a
+	// parent that truly never spawned anything, and the cold branch has
+	// no live tree to cross-check against the way the warm branch does.
+	// So an empty result there IS reported as genuinely unknown (nil,
+	// `"children":null`) again — only a NON-empty SpawnedChildIDs() is
+	// trustworthy regardless of log vintage, since a durably recorded
+	// child is a durably recorded child no matter how old the log. Three
+	// wire shapes in total: `"children":null` (cold fallback ONLY,
+	// genuinely unknown — the warm branch never produces this),
+	// `"children":[]` (known: zero — the warm branch only; the cold
+	// branch never produces this shape, since an empty durable list there
+	// is exactly the unknown case above), and `"children":["..."]`
+	// (known: non-zero, either branch).
 	Children  []string `json:"children"`
 	AgentType string   `json:"agent_type,omitempty"`
 	// Result is the final assistant text for a done session; FailReason a
@@ -378,21 +403,31 @@ func (s *Server) sessionIDOrNotFound(w http.ResponseWriter, r *http.Request) (st
 }
 
 // rejectManagedChildTurn refuses id if it names a session SessionManager
-// tracks as a CHILD (info.ParentID != "") — see handleSessionSend's own
-// doc comment: SessionManager is a child's SOLE scheduler. The generic
-// per-{id} routes that can drive a turn or persist a durable record
-// directly against whatever *engine.Session claimForPrompt (or an
-// equivalent cold-load) hands them — prompt_async, goal, enqueue,
-// compact, model, thinking — have no notion of that at all. Without this
-// guard, a request against a child's id cold-loads a SECOND, independent
-// *engine.Session for the SAME on-disk log and drives Session.Prompt (or
-// persists a recModel/recEffort record) on it CONCURRENTLY with the
-// child's own Spawn-driven turn on the FIRST object — both appending to
-// the same session log at once, the exact "never call Prompt
-// concurrently with itself" contract violation ExternalRunner exists to
-// prevent for roots, left wide open for children (which get addressable
-// ids from handleSpawnChild's 201 and session.info's lineage). A live
-// review caught this.
+// tracks as a CHILD — see handleSessionSend's own doc comment:
+// SessionManager is a child's SOLE scheduler. The generic per-{id} routes
+// that can drive a turn or persist a durable record directly against
+// whatever *engine.Session claimForPrompt (or an equivalent cold-load)
+// hands them — prompt_async, goal, enqueue, compact, model, thinking —
+// have no notion of that at all. Without this guard, a request against a
+// child's id cold-loads a SECOND, independent *engine.Session for the SAME
+// on-disk log and drives Session.Prompt (or persists a recModel/recEffort
+// record) on it CONCURRENTLY with the child's own Spawn-driven turn on the
+// FIRST object — both appending to the same session log at once, the
+// exact "never call Prompt concurrently with itself" contract violation
+// ExternalRunner exists to prevent for roots, left wide open for children
+// (which get addressable ids from handleSpawnChild's 201 and
+// session.info's lineage). A live review caught this.
+//
+// "Is a managed CHILD" is decided on sess.TaskParentID() != "" — the
+// DURABLE signal, restored by LoadSession unconditionally — never
+// info.ParentID, the LIVE tree pointer. A live review finding: an earlier
+// revision of this guard checked info.ParentID, which adoptReloadedLocked
+// leaves EMPTY for a warm orphan (a genuine managed child adopted while
+// its own parent was untracked — see that method's own doc comment and
+// lineageJSONFor's identical ParentID fallback just above in this file).
+// A warm orphan slipped through the old check entirely, letting exactly
+// the concurrent-Session corruption this guard exists to prevent happen
+// to precisely the child shape it was least equipped to protect.
 //
 // Returns true (having already written a 409) if id is a managed child
 // and the caller must stop; false — safe to proceed through the ordinary
@@ -404,7 +439,7 @@ func (s *Server) sessionIDOrNotFound(w http.ResponseWriter, r *http.Request) (st
 // task-on-reload-adoption boundary this PR's SessionManager.
 // adoptReloadedLocked already documents elsewhere.
 func (s *Server) rejectManagedChildTurn(w http.ResponseWriter, id string) bool {
-	if info, ok := s.sessMgr.Info(id); ok && info.ParentID != "" {
+	if sess, ok := s.sessMgr.Session(id); ok && sess.TaskParentID() != "" {
 		writeErr(w, http.StatusConflict, "session is a SessionManager-managed child session; use POST /session/{id}/send instead")
 		return true
 	}
@@ -2405,6 +2440,14 @@ func (s *Server) handleGoalDelete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Same guard as every other mutating per-{id} route (prompt_async, goal,
+	// enqueue, compact, model, thinking): without it, the cold-load below
+	// builds a SECOND *engine.Session over a live managed child's log and
+	// journals goal.cleared on it concurrently with the child's own
+	// Spawn-driven turn — see rejectManagedChildTurn's doc comment.
+	if s.rejectManagedChildTurn(w, id) {
+		return
+	}
 	s.mu.Lock()
 	st := s.sessions[id]
 	s.mu.Unlock()
@@ -2706,8 +2749,18 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 	// child DOES exist on disk so the 404 branch below never fired
 	// either) — a misleading 204 while the child ran to completion
 	// untouched.
-	if info, ok := s.sessMgr.Info(id); ok && info.ParentID != "" {
-		_ = s.sessMgr.AbortTurn(id) // errors only on an unknown id — impossible, Info just confirmed it
+	//
+	// Keyed on sess.TaskParentID() (durable), not info.ParentID (live) — a
+	// live review finding: adoptReloadedLocked leaves info.ParentID EMPTY
+	// for a warm orphan (a genuine managed child adopted while its own
+	// parent was untracked — see that method's own doc comment and
+	// rejectManagedChildTurn's identical fix above), which used to skip
+	// this branch entirely for exactly that child, falling through to the
+	// unconditional 204 below — the same "misleading 204 while the child
+	// ran untouched" bug this comment already describes as fixed for the
+	// tracked-child case, left open for the untracked-parent one.
+	if sess, ok := s.sessMgr.Session(id); ok && sess.TaskParentID() != "" {
+		_ = s.sessMgr.AbortTurn(id) // errors only on an unknown id — impossible, Session just confirmed it
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -2797,6 +2850,14 @@ func (s *Server) handleQueueGet(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleQueueDelete(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
+		return
+	}
+	// Same guard as every other mutating per-{id} route: without it, the
+	// cold-load below builds a SECOND *engine.Session over a live managed
+	// child's log and persists prompt.dequeued records on it concurrently
+	// with the child's own Spawn-driven turn — see rejectManagedChildTurn's
+	// doc comment.
+	if s.rejectManagedChildTurn(w, id) {
 		return
 	}
 	s.mu.Lock()
@@ -3370,45 +3431,102 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 // Two sources, in order:
 //
 //  1. sessMgr.Info(id): this process currently tracks id in memory — the
-//     full, precise lineage snapshot (depth, live status, children,
-//     result/fail_reason).
+//     full, precise lineage snapshot (live status, result/fail_reason),
+//     PLUS Depth and Children, each reconciled against sess's own durable
+//     record below rather than trusted from the live snapshot alone (see
+//     their own paragraphs).
 //
 //  2. A durable cold fallback, built directly from sess's own persisted
-//     Config.TaskParentID()/TaskAgentType() (engine/store.go restores
-//     these on every LoadSession, unconditionally — no SessionManager
-//     adoption needed) — a live review finding: without this, a child
-//     Reaped or never touched since a process restart reported NO
-//     lineage at all on GET /session/{id}, even though its lineage is
-//     fully durable on disk; a caller had no way to learn "this session
-//     has a parent" without first forcing a reload via an unrelated
-//     write (a prompt/send call). Depth, Status, Children, Result, and
-//     FailReason have no durable source (see adoptReloadedLocked's own
-//     doc comment on why depth specifically is unrecoverable without a
-//     live parent chain) and are omitted rather than guessed — see
+//     Config.TaskParentID()/TaskAgentType()/TaskDepth()/SpawnedChildIDs()
+//     (engine/store.go restores these on every LoadSession, unconditionally
+//     — no SessionManager adoption needed) — a live review finding:
+//     without this, a child Reaped or never touched since a process
+//     restart reported NO lineage at all on GET /session/{id}, even though
+//     its lineage is fully durable on disk; a caller had no way to learn
+//     "this session has a parent" without first forcing a reload via an
+//     unrelated write (a prompt/send call). Status/Result/FailReason still
+//     have no durable source and are omitted rather than guessed — see
 //     lineageJSON's own field comments for why that's safe on the wire
 //     (omitempty distinguishes "unknown" from every real zero value).
+//
+// Depth: branch 1 (warm) reports info.Depth VERBATIM — never re-derived or
+// overridden here from sess.TaskDepth() a second time. This is a
+// deliberate adjudication, not an oversight: info.Depth IS the
+// ENFORCEMENT-effective depth, the exact value adoptReloadedLocked
+// computed and TaskToolAllowed gates this session's own `task` tool
+// against RIGHT NOW (see that method's own doc comment for its full
+// preference order, durable TaskDepth included). A caller reading
+// lineage.depth needs to be able to PREDICT what this session can
+// actually do — whether it can spawn a child of its own — not a
+// separately-recomputed "more correct" number that could disagree with
+// what is actually enforced. An earlier revision of this function
+// re-preferred sess.TaskDepth() independently here, which happened to
+// agree with info.Depth in every case that revision's own tests covered,
+// but was two sources of truth for one fact by construction, free to
+// drift the moment either side's derivation changed — a live review
+// finding. Durable TaskDepth still matters, just not as a SECOND wire-side
+// override: adoptReloadedLocked already folds it into info.Depth as
+// enforcement's own PRIMARY source, and it remains the direct answer on
+// the cold branch below, which has no live info.Depth to defer to at all.
+//
+// Sentinel semantics live where depth is actually computed
+// (adoptReloadedLocked, engine/session_manager.go) — a REFUSAL SENTINEL
+// (m.maxDepth) substituted whenever a node's true depth is unrecoverable
+// can propagate forward through a live-tracked-but-poisoned ancestor (a
+// legacy node with no durable TaskDepth of its own, adopted with ITS OWN
+// parent untracked) into a legacy descendant that also has no durable
+// depth of its own — see TestSentinelPoisonedChainWireDepthMatchesEnforcement
+// (session_tree_test.go), which proves the wire and TaskToolAllowed agree
+// on that exact propagated value, by construction, since both read the
+// same info.Depth.
+//
+// Children: sessionNode.children (branch 1's info.Children) is the LIVE
+// in-memory tree only — Reap() explicitly drops a settled leaf from its
+// parent's Children list once reaped (see Reap's own doc comment: "Removing
+// a leaf also drops its id from its parent's Children list"), while
+// sess.SpawnedChildIDs() is the durable, append-only, NEVER-shrinking
+// record of every child this session ever spawned (persisted at spawn
+// time, unconditionally — see persistTaskSpawnLocked). A live audit
+// caught exactly this gap: a parent whose only child had already settled
+// and been reaped reported "children":[] even though SpawnedChildIDs()
+// still listed it. childIDsUnion merges the two (durable first, in spawn
+// order — see its own doc comment for why durable-first, not live-first,
+// is what preserves spawn order overall) so a caller always sees every
+// child this session ever spawned, live or long since reaped — never only
+// whichever half of the bookkeeping happens to still be resident.
+//
+// The cold-fallback branch (2) has no live tree to cross-check against,
+// so it does NOT run Children through childIDsUnion — an empty
+// sess.SpawnedChildIDs() there is reported as genuinely unknown (nil),
+// not confirmed zero — see lineageJSON.Children's own doc comment for
+// why (a legacy, pre-recTaskSpawned log can lose that record entirely).
 //
 // nil only when NEITHER source has anything: a genuine root (empty
 // TaskParentID) or a session predating this feature.
 func (s *Server) lineageJSONFor(id string, sess *engine.Session) *lineageJSON {
 	if info, ok := s.sessMgr.Info(id); ok {
-		// Normalized to a non-nil slice here — Children has no omitempty
-		// (see its own doc comment), so this warm branch is the one place
-		// that must guarantee "known: zero children" actually serializes
-		// as "children":[] rather than "children":null: info.Children
-		// (sessionNode.snapshot, session_manager.go) is nil for a
-		// genuinely childless node, since it is built via
-		// append([]string(nil), n.children...), which returns nil
-		// unchanged when n.children is empty.
-		children := info.Children
-		if children == nil {
-			children = []string{}
+		// info.Depth reported verbatim — see this function's own doc
+		// comment ("Depth:" paragraph) for why the wire must match
+		// enforcement exactly rather than re-preferring sess.TaskDepth()
+		// a second time here.
+		depth := info.Depth
+		// info.ParentID is empty when adoptReloadedLocked adopted id with
+		// its parent untracked (the durable-TaskDepth branch sets depth but
+		// never attachTo). The durable TaskParentID still names the true
+		// parent. Fall back to it. Without this fallback, a warm orphan
+		// reports depth > 0 with no parent_id — a shape lineageJSON.Depth's
+		// doc comment rules out. A genuine root never reaches
+		// adoptReloadedLocked's non-root branch and has an empty
+		// TaskParentID, so the fallback changes nothing for roots.
+		parentID := info.ParentID
+		if parentID == "" {
+			parentID = sess.TaskParentID()
 		}
 		return &lineageJSON{
-			ParentID:   info.ParentID,
-			Depth:      info.Depth,
+			ParentID:   parentID,
+			Depth:      depth,
 			Status:     string(info.Status),
-			Children:   children,
+			Children:   childIDsUnion(info.Children, sess.SpawnedChildIDs()),
 			AgentType:  info.AgentType,
 			Result:     info.Result,
 			FailReason: info.FailReason,
@@ -3418,16 +3536,80 @@ func (s *Server) lineageJSONFor(id string, sess *engine.Session) *lineageJSON {
 	if parentID == "" {
 		return nil
 	}
-	// Children deliberately left nil (not []string{}) — see Children's own
-	// doc comment: this cold branch has no durable source for the child
-	// list (only the WARM sessMgr.Info branch above ever knows it), so a
-	// nil Children here — the field's one remaining "genuinely unknown"
-	// signal, serializing as "children":null — is the honest answer, not
-	// an affirmative (and possibly wrong) "zero children" one.
+	// Children is sess.SpawnedChildIDs() verbatim here — NOT run through
+	// childIDsUnion, which always normalizes an empty result to a non-nil
+	// []string{} ("known: zero"). A live review finding: SpawnedChildIDs()
+	// is complete only for a log written AFTER recTaskSpawned records
+	// shipped — a parent whose log predates that record, but genuinely did
+	// spawn children before this process ever adopted it, has an empty
+	// SpawnedChildIDs() with no way to tell that apart from a parent that
+	// truly never spawned anything. This cold branch has no live tree to
+	// cross-check against (unlike the warm branch above, where
+	// info.Children — this process's OWN adoption history — corroborates
+	// an empty durable result), so an empty SpawnedChildIDs() here is
+	// honestly UNKNOWN, not confirmed zero: left nil, serializing as
+	// "children":null, exactly like this same cold branch already treats
+	// Status/Result/FailReason. A NON-empty SpawnedChildIDs() is still a
+	// reliable positive signal regardless of log vintage (a durably
+	// recorded child is a durably recorded child), so that case is
+	// reported normally, unmodified.
 	return &lineageJSON{
 		ParentID:  parentID,
+		Depth:     sess.TaskDepth(),
 		AgentType: sess.TaskAgentType(),
+		Children:  sess.SpawnedChildIDs(),
 	}
+}
+
+// childIDsUnion merges live (the current in-memory tree's child list) with
+// durable (Config-persisted SpawnedChildIDs, spawn order, never shrinks —
+// see Session.SpawnedChildIDs' own doc comment) into ONE de-duplicated
+// list. Durable entries come first, in spawn order. Live-only entries (a
+// legacy parent whose log predates task.spawned records) follow, in their
+// own order.
+//
+// Durable-first preserves spawn order for the common, all-post-field
+// case. The live list is a spawn-order subsequence of durable there:
+// adoptLocked appends at spawn, and Reap's filter keeps survivor order.
+// Live-first would reorder siblings the moment an elder child settles and
+// is Reaped while a younger one still runs ([B, A] instead of [A, B]).
+//
+// A live review finding: this guarantee does NOT extend to a mixed
+// legacy/non-legacy tree — a parent that spawned an elder child A before
+// task.spawned records existed (A lives only in the live tree, never in
+// durable SpawnedChildIDs) and a younger child B after the field shipped
+// (durable) yields childIDsUnion(live=[A,B], durable=[B]) = [B, A]: B
+// before A, reversed from true spawn order. Narrow and low severity —
+// pre-field lineage was always best-effort, and this ordering was never a
+// documented contract for that migration edge — but the guarantee above
+// is specifically an all-post-field one, not universal.
+//
+// Always returns a non-nil slice — never omitted, see lineageJSON.Children's
+// own doc comment on why that field has no omitempty. "children":[] means
+// "known: zero children now, and none ever durably spawned either," never
+// "unknown."
+func childIDsUnion(live, durable []string) []string {
+	if len(durable) == 0 {
+		// Common case (childless session, or legacy live-only): live alone.
+		// Live cannot contain duplicates — adoptLocked appends a child id
+		// at most once — so no dedup map is needed here.
+		return append(make([]string, 0, len(live)), live...)
+	}
+	out := make([]string, 0, len(live)+len(durable))
+	seen := make(map[string]bool, len(live)+len(durable))
+	for _, id := range durable {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	for _, id := range live {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // lastTurnJSONLocked builds the Session.last_turn / StatusEntry.last_turn

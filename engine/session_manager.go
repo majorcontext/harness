@@ -313,6 +313,51 @@ type SessionManager struct {
 	// exists to handle correctly, rather than relying on incidental
 	// goroutine-scheduling luck.
 	testSweepUnlockedHook func()
+
+	// testFlushDoneHook, if non-nil, is called by unlockAndFlushPersist
+	// immediately after every one of its queued durable-write thunks has
+	// actually run (see that method's own doc comment for the unlock-
+	// THEN-flush ordering this exists to let a test observe) — a
+	// test-only synchronization seam, nil in production, mirroring
+	// testSweepUnlockedHook's identical shape just above.
+	//
+	// Exists because a status transition becoming visible to another
+	// goroutine (via Info/Session, which only need m.mu) is NOT proof
+	// that an associated durable write queued in the SAME critical
+	// section — a forwarded task notification's persistQueuedTaskNotification,
+	// notably — has completed: m.mu is released BEFORE the queued thunks
+	// run (see unlockAndFlushPersist's own doc comment for why that
+	// order, not the reverse, is required), so there is a real window
+	// where a concurrent Info() poll observes e.g. StatusDone while the
+	// notification it implies was delivered is still only in memory on
+	// the target ancestor, not yet on disk. A live test (TestRecoverInterrupted
+	// TurnForwardsGrandchildNotifications) polling status as a durability
+	// proxy hit exactly this window under load — reworked to block on
+	// this hook and re-check the real on-disk condition instead of
+	// inferring it from status.
+	testFlushDoneHook func()
+
+	// testResumeClaimedHook, if non-nil, is called by fireIdleResumeAsync
+	// with targetID the INSTANT it claims that target's run slot (right
+	// after triggerResumeLocked returns, still under m.mu) — a test-only
+	// synchronization seam, nil in production, mirroring
+	// testFlushDoneHook's identical shape just above.
+	//
+	// Exists because "target's pending notifications read back as a
+	// stable count with nothing in flight" is NOT by itself proof that a
+	// triggered active resume has run to completion — it is equally true
+	// the INSTANT after delivery, before fireIdleResumeAsync's spawned
+	// goroutine has even been scheduled to run at all. Both states are
+	// observationally identical (same count, same StatusIdle) from
+	// outside; only the transition THROUGH StatusRunning in between
+	// distinguishes "not yet started" from "already finished". A test
+	// that cannot reliably observe that transition (the goroutine may run
+	// to completion before the poller's own next scheduler slice) has no
+	// way to tell them apart by polling status/counts alone — this hook
+	// gives it an explicit, unmissable signal for "the resume has
+	// definitely been claimed", so a subsequent wait for the SAME
+	// target's status to read Idle again is then unambiguous.
+	testResumeClaimedHook func(targetID string)
 }
 
 // deferPersist queues fn to run once m.mu is released via
@@ -355,12 +400,28 @@ func (m *SessionManager) deferPersist(fn func()) {
 // cheap: an empty-slice no-op) to use as the standard unlock helper on
 // any SessionManager method, whether or not that specific call path
 // happens to queue anything.
+//
+// Observability caveat this unlock-then-flush order creates: m.mu releases
+// BEFORE the thunks run, so a status/state change this same critical
+// section already applied to m.nodes (e.g. finalizeTurn setting a child
+// StatusDone) becomes visible to any OTHER goroutine's Info()/Session()
+// call strictly BEFORE the durable write(s) that same critical section
+// queued — a forwarded task notification's persistQueuedTaskNotification,
+// notably — have actually landed on disk. A caller must never treat a
+// status transition as proof that an associated durable write has
+// completed; only that it has been memory-committed and QUEUED to run,
+// in order, on this same goroutine, momentarily. testFlushDoneHook (see
+// its own doc comment) is the test-only seam for a caller that genuinely
+// needs to wait for the flush itself, not just the status.
 func (m *SessionManager) unlockAndFlushPersist() {
 	pending := m.pendingPersist
 	m.pendingPersist = nil
 	m.mu.Unlock()
 	for _, fn := range pending {
 		fn()
+	}
+	if m.testFlushDoneHook != nil {
+		m.testFlushDoneHook()
 	}
 }
 
@@ -763,11 +824,52 @@ func (m *SessionManager) adoptReloadedLocked(s *Session, recover bool) *sessionN
 	parentID := s.TaskParentID()
 	s.cfg.SessionManager = m
 	s.tools[taskToolName] = taskTool()
+	// depth's default is the REFUSAL sentinel: m.maxDepth, the one value
+	// TaskToolAllowed always refuses. See this method's own doc comment
+	// for why an unrecoverable depth must never guess permissively. The
+	// sentinel applies only when neither better source below does.
+	// Preferred, in order:
+	//   1. s durably recorded its own TaskDepth at spawn time (see
+	//      Config.TaskDepth's own doc comment). This is s's OWN true
+	//      depth. It is authoritative regardless of whether the live
+	//      parent chain is trustworthy right now, so this check runs
+	//      FIRST — even when the parent IS currently tracked. A live
+	//      review finding: an earlier revision preferred the live
+	//      parent.depth+1 whenever the parent was tracked. That silently
+	//      propagates the PARENT's own wrong depth forward whenever THAT
+	//      parent was itself adopted via case 3 below (its own parent
+	//      untracked, no durable TaskDepth of its own — a legacy
+	//      grandparent, say). The child then computed m.maxDepth+1,
+	//      discarding its own known-correct durable value.
+	//      TaskToolAllowed(maxDepth+1) is always false, so the child was
+	//      silently denied the task tool even though its true depth was
+	//      under the limit. Checking s's own durable value first makes
+	//      that impossible — an upstream node's bad depth can never
+	//      shadow it.
+	//   2. The parent IS currently tracked and s has no durable TaskDepth
+	//      of its own — a legacy child predating the field: depth =
+	//      p.depth + 1. This is the best available signal. The live
+	//      parent chain, however imperfect, beats guessing the sentinel
+	//      outright.
+	//   3. Neither applies: the parent is not tracked AND s's own depth
+	//      was never durably recorded. Use the sentinel. This closes a
+	//      live-audited bug: a direct child (true depth 1) whose parent
+	//      was not tracked at reload time reported lineage.depth 3 (==
+	//      DefaultMaxTaskDepth) — indistinguishable from a session
+	//      genuinely refused at the limit. Case 1 above now catches this
+	//      before it ever reaches here, for any child with a durably
+	//      recorded depth. This case remains, unchanged, for the legacy
+	//      fallback it originally existed for.
 	depth := m.maxDepth
 	attachTo := ""
-	if p, ok := m.nodes[parentID]; ok {
-		depth = p.depth + 1
+	p, tracked := m.nodes[parentID]
+	if tracked {
 		attachTo = parentID
+	}
+	if d := s.TaskDepth(); d > 0 {
+		depth = d
+	} else if tracked {
+		depth = p.depth + 1
 	}
 	n := m.adoptLocked(s, attachTo, depth)
 	// TaskAgentType survives a reload durably (see its own doc comment)
@@ -1727,6 +1829,9 @@ func (m *SessionManager) fireIdleResumeAsync(targetID string) {
 		return
 	}
 	resume := m.triggerResumeLocked(n)
+	if m.testResumeClaimedHook != nil {
+		m.testResumeClaimedHook(targetID)
+	}
 	m.unlockAndFlushPersist()
 	if resume != nil {
 		resume()
@@ -2013,13 +2118,13 @@ func (m *SessionManager) Info(id string) (info SessionNode, ok bool) {
 }
 
 // SessionAndInfo is Session and Info's combined form: both the managed
-// *Session and its lifecycle snapshot, for a caller that needs both and
-// would otherwise call Session then Info separately — two m.mu
+// *Session and its lifecycle snapshot, under ONE m.mu hold. A caller that
+// needs both would otherwise call Session then Info separately — two m.mu
 // acquisitions, and (a live review finding on Server.lookup, the first
-// caller) a correct-today-by-coincidence TOCTOU: nothing currently reaps a
-// node between two such calls (Reap only removes terminal leaves, so a
-// RUNNING child's status can never flip to "gone" in that gap), but that
-// reasoning has to be re-verified by every future two-call caller rather
+// caller) a correct-today-by-coincidence TOCTOU. Nothing currently reaps a
+// node between two such calls: Reap only removes terminal leaves, so a
+// RUNNING child's status can never flip to "gone" in that gap. But that
+// reasoning had to be re-verified by every future two-call caller rather
 // than being structurally impossible. One lock hold here removes the gap
 // entirely, for this and any future caller.
 func (m *SessionManager) SessionAndInfo(id string) (sess *Session, info SessionNode, ok bool) {
@@ -2342,6 +2447,12 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	// is eligible for Send" contract lets a legitimate follow-up touch
 	// it again.
 	childCfg.TaskParentID = parent.id
+	// Durable depth record — see Config.TaskDepth's own doc comment for why
+	// this exists: without it, adoptReloadedLocked's "true depth is
+	// unrecoverable" fallback (parent not currently tracked) had nothing
+	// but m.maxDepth, a REFUSAL sentinel indistinguishable on the wire from
+	// a session genuinely at that depth.
+	childCfg.TaskDepth = childDepth
 	if !opts.Model.IsZero() {
 		childCfg.Model = opts.Model
 	}

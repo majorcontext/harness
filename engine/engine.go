@@ -345,6 +345,35 @@ type Config struct {
 	TaskAgentType string
 	TaskToolNames []string
 
+	// TaskDepth is the child's tree depth: a root's own children are depth
+	// 1, their children depth 2, and so on. Spawn sets it, alongside
+	// TaskParentID/TaskAgentType/TaskToolNames above, and persists it the
+	// same durable way. See adoptReloadedLocked's own doc comment for why
+	// this exists. SessionManager derives a LIVE node's depth as
+	// parent.depth+1 at adopt time. But a reload can find this child's OWN
+	// parent NOT currently tracked — Reap, or a process restart that
+	// hasn't touched the parent again yet. There was previously no durable
+	// fallback for that case at all. adoptReloadedLocked substituted
+	// m.maxDepth instead: a deliberate "refuse further spawning" REFUSAL
+	// SENTINEL, indistinguishable on the wire from a session genuinely AT
+	// that depth. A live audit caught this exact collision: a direct
+	// child, true depth 1, reported lineage.depth 3 (DefaultMaxTaskDepth).
+	//
+	// 0 means "not recorded". Every real child's depth is >= 1; only the
+	// durably-blank case and a genuine root are ever 0 (a root never reads
+	// this field at all). This is the same "legacy header, restores to the
+	// Go zero value" rule TaskAgentType's own doc comment already
+	// establishes. An already-recorded session predating this field
+	// degrades to the OLD sentinel-fallback behavior instead of reporting
+	// a false 0.
+	//
+	// GET /session/{id}.lineage.depth reports SessionManager's own
+	// enforcement-effective depth verbatim, not this field re-derived a
+	// second time on the wire — see server.lineageJSONFor's own doc
+	// comment ("Depth:" paragraph) for why the two must never be allowed
+	// to disagree.
+	TaskDepth int
+
 	Hooks Hooks // optional plugin host
 	// OnEvent is optional; called synchronously, keep it fast. The goal.*
 	// events (see goal.go) are emitted while Session.mu is held so the event
@@ -401,7 +430,20 @@ type Config struct {
 	// per model call, so a tool loop advances it. The *provider.Request is
 	// SHARED with the provider call: callbacks MUST NOT mutate it or anything it
 	// references (System, Messages, Tools). A nil OnRequest costs nothing.
-	OnRequest func(turn int, req *provider.Request)
+	//
+	// sessionID is the firing session's own s.ID. The call site
+	// (streamTurn) supplies it; the callback never derives it. This
+	// mirrors emit()'s ev.SessionID = s.ID for OnEvent, for the same
+	// reason. configSnapshot (session_manager.go) copies a Config by
+	// value into every Spawn'd child, func value included. A callback
+	// closed over its original session's id would therefore misattribute
+	// every descendant's request.meta records to that one session. A live
+	// audit caught exactly this: cmd/harness closed OnRequest over a
+	// local `sess` variable, and a spawned child's requests all reported
+	// the parent's id. The explicit sessionID keeps the callback
+	// session-agnostic, so any number of Spawn generations can inherit it
+	// safely (see newSessionFn/loadSessionFn).
+	OnRequest func(sessionID string, turn int, req *provider.Request)
 
 	// Instructions controls project-instruction (AGENTS.md) injection into
 	// the system prompt. A nil value is the default: auto-discover AGENTS.md
@@ -1189,6 +1231,16 @@ func (s *Session) TaskAgentType() string {
 
 func (s *Session) TaskToolNames() []string {
 	return s.cfg.TaskToolNames
+}
+
+// TaskDepth returns Config.TaskDepth — see that field's own doc comment.
+// 0 for a genuine root (which never has a TaskParentID to trigger a
+// caller's cold-fallback branch in the first place) AND for a legacy child
+// predating this field; a caller that needs to tell those apart already
+// gates on hasTaskParent()/TaskParentID() first, exactly like every other
+// Task* accessor here.
+func (s *Session) TaskDepth() int {
+	return s.cfg.TaskDepth
 }
 
 // hasUnfinalizedTurn reports whether s has a turn that started (any
@@ -2031,7 +2083,7 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 	s.lastSystem = append([]string(nil), system...)
 	s.mu.Unlock()
 	if s.cfg.OnRequest != nil {
-		s.cfg.OnRequest(turn, req)
+		s.cfg.OnRequest(s.ID, turn, req)
 	}
 
 	// Idle-stream watchdog (see Config.StreamIdleTimeout and
