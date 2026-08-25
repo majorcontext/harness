@@ -66,6 +66,25 @@ func TestEveryAcceptedCacheTTLPassesBothSides(t *testing.T) {
 	}
 }
 
+// TestBothSidesRejectATTLOutsideTheAcceptedSet is the surplus direction. The
+// two tests above only look for what is MISSING: each requires every accepted
+// value to pass both validators, and both would stay green against a
+// validator that accepted everything — including a garbage cache_ttl that
+// then reaches the wire as an invalid ttl field. This asserts the refusal
+// half of the contract on both sides.
+func TestBothSidesRejectATTLOutsideTheAcceptedSet(t *testing.T) {
+	const bogus = "7q" // not a duration either side can ever accept
+	if slices.Contains(config.CacheTTLValues(), bogus) || slices.Contains(anthropic.CacheTTLValues(), bogus) {
+		t.Fatalf("%q is in an accepted set; pick another probe value", bogus)
+	}
+	if err := config.ValidateProviderCacheTTL(bogus); err == nil {
+		t.Errorf("config accepted cache_ttl %q, want an error", bogus)
+	}
+	if _, err := anthropic.ResolveCacheTTL(bogus); err == nil {
+		t.Errorf("adapter accepted cache_ttl %q, want an error", bogus)
+	}
+}
+
 // TestAdapterDefaultCacheTTLIsAConfigValue: an operator must be able to write
 // the adapter's own default into config and get the identical behavior.
 func TestAdapterDefaultCacheTTLIsAConfigValue(t *testing.T) {
