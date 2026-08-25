@@ -838,7 +838,7 @@ func registry(cfg *config.Config) provider.Registry {
 	akey, abase := providerAuth(cfg, anthropic.Family, "ANTHROPIC_API_KEY")
 	okey, obase := providerAuth(cfg, openai.Family, "OPENAI_API_KEY")
 	reg := provider.Registry{
-		anthropic.Family: &anthropic.Client{APIKey: akey, BaseURL: abase},
+		anthropic.Family: &anthropic.Client{APIKey: akey, BaseURL: abase, CacheTTL: anthropicCacheTTL(cfg)},
 		openai.Family:    &openai.Client{APIKey: okey, BaseURL: obase},
 	}
 	registerOpenAICompatProviders(reg, cfg)
@@ -897,10 +897,11 @@ func newOpenAICompatClient(name string, p config.Provider) *openaicompat.Client 
 		apiKey = os.Getenv(p.APIKeyEnv)
 	}
 	return &openaicompat.Client{
-		Family:       family,
-		APIKey:       apiKey,
-		BaseURL:      p.BaseURL,
-		ExtraHeaders: p.ExtraHeaders,
+		Family:           family,
+		APIKey:           apiKey,
+		BaseURL:          p.BaseURL,
+		ExtraHeaders:     p.ExtraHeaders,
+		NoPromptCacheKey: p.NoPromptCacheKey,
 	}
 }
 
@@ -917,6 +918,17 @@ func providerAuth(cfg *config.Config, family, defaultKeyEnv string) (apiKey, bas
 		}
 	}
 	return os.Getenv(keyEnv), baseURL
+}
+
+// anthropicCacheTTL reads the configured prompt-cache TTL for the native
+// anthropic entry. Empty (no config, or no cache_ttl key) leaves the
+// adapter's own DefaultCacheTTL in place; config.validateProviders has
+// already rejected any other value on the load path.
+func anthropicCacheTTL(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	return cfg.Providers[anthropic.Family].CacheTTL
 }
 
 // isLoopbackAddr classifies a `harness serve -addr` listen address as

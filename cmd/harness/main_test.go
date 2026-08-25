@@ -647,6 +647,44 @@ func TestRegistry(t *testing.T) {
 			t.Errorf("BaseURL = %q, want http://proxy", c.BaseURL)
 		}
 	})
+	t.Run("config cache_ttl reaches the anthropic client", func(t *testing.T) {
+		t.Setenv("ANTHROPIC_API_KEY", "sk-any")
+		reg := registry(&config.Config{Providers: map[string]config.Provider{
+			"anthropic": {CacheTTL: config.CacheTTL5m},
+		}})
+		if c := reg[anthropic.Family].(*anthropic.Client); c.CacheTTL != "5m" {
+			t.Errorf("CacheTTL = %q, want 5m", c.CacheTTL)
+		}
+	})
+	t.Run("no_prompt_cache_key reaches the openai-compat client", func(t *testing.T) {
+		t.Setenv("MY_COMPAT_KEY", "sk-compat")
+		reg := registry(&config.Config{Providers: map[string]config.Provider{
+			"strict": {
+				Type:             config.TypeOpenAICompat,
+				BaseURL:          "http://x",
+				APIKeyEnv:        "MY_COMPAT_KEY",
+				NoPromptCacheKey: true,
+			},
+			"lenient": {
+				Type:      config.TypeOpenAICompat,
+				BaseURL:   "http://y",
+				APIKeyEnv: "MY_COMPAT_KEY",
+			},
+		}})
+		if c := reg["strict"].(*openaicompat.Client); !c.NoPromptCacheKey {
+			t.Error("strict: NoPromptCacheKey = false, want true")
+		}
+		if c := reg["lenient"].(*openaicompat.Client); c.NoPromptCacheKey {
+			t.Error("lenient: NoPromptCacheKey = true, want false (default sends the field)")
+		}
+	})
+	t.Run("no cache_ttl leaves the adapter default", func(t *testing.T) {
+		t.Setenv("ANTHROPIC_API_KEY", "sk-any")
+		reg := registry(&config.Config{})
+		if c := reg[anthropic.Family].(*anthropic.Client); c.CacheTTL != "" {
+			t.Errorf("CacheTTL = %q, want empty (adapter default)", c.CacheTTL)
+		}
+	})
 	t.Run("nil config is safe", func(t *testing.T) {
 		t.Setenv("ANTHROPIC_API_KEY", "sk-nil")
 		reg := registry(nil)

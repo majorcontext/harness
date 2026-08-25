@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/majorcontext/harness/imageclamp"
@@ -123,8 +124,12 @@ type apiToolDef struct {
 	InputSchema json.RawMessage `json:"input_schema"`
 }
 
+// apiCacheControl marks a prompt-cache breakpoint. TTL is the cache lifetime:
+// empty means the API default (5 minutes) and omits the field; "1h" selects the
+// extended TTL, which requires the extendedCacheTTLBeta header on the request.
 type apiCacheControl struct {
-	Type string `json:"type"` // ephemeral
+	Type string `json:"type"`          // ephemeral
+	TTL  string `json:"ttl,omitempty"` // "1h" — empty means the 5m default
 }
 
 // anthropicReasoningData is the shape stored under ProviderData[Family] on
@@ -135,7 +140,65 @@ type anthropicReasoningData struct {
 	Redacted  string `json:"redacted,omitempty"`
 }
 
-var ephemeral = &apiCacheControl{Type: "ephemeral"}
+// Cache TTL values for Client.CacheTTL. CacheTTL5m is the Anthropic API
+// default; CacheTTL1h is the extended TTL (beta extendedCacheTTLBeta).
+const (
+	CacheTTL5m = "5m"
+	CacheTTL1h = "1h"
+)
+
+// CacheTTLValues returns every non-empty value resolveCacheTTL accepts, in a
+// fresh slice. It is the adapter's own accepted set, not a copy maintained
+// beside it: resolveCacheTTL iterates this same list, so a TTL added here is
+// accepted, and one added anywhere else is unreachable. cmd/harness's parity
+// test compares this set against config's for equality — the seam that turns
+// one-sided drift into a test failure instead of a load-time/first-Stream
+// split.
+func CacheTTLValues() []string {
+	return []string{CacheTTL5m, CacheTTL1h}
+}
+
+// DefaultCacheTTL is what an empty Client.CacheTTL resolves to.
+//
+// The default is the EXTENDED 1-hour TTL, not the API's own 5-minute default,
+// because harness sessions are agentic: a single tool call (a long build, a
+// live probe, a subagent) routinely runs longer than 5 minutes, and a user
+// reads the answer before the next turn. Cache READS price the same at both
+// TTLs. A 1h WRITE costs 2x base input instead of 1.25x, and only on the
+// incremental tokens each turn adds. A 5m expiry on a mature session
+// rewrites the WHOLE prefix — the entire history, at full input price. One
+// such miss costs more than the 1h write premium over hundreds of turns.
+const DefaultCacheTTL = CacheTTL1h
+
+// ResolveCacheTTL reports whether ttl is a value this adapter accepts for
+// Client.CacheTTL, returning the resolved wire TTL. It is the exported seam
+// cmd/harness's parity test uses to prove this adapter's accepted list still
+// agrees with package config's duplicated copy. Stream calls the unexported
+// resolveCacheTTL directly.
+func ResolveCacheTTL(ttl string) (string, error) { return resolveCacheTTL(ttl) }
+
+// resolveCacheTTL maps a configured Client.CacheTTL to a wire TTL. It fails on
+// an unknown value instead of falling back: a typo must never silently ship
+// different cache economics than the operator asked for.
+func resolveCacheTTL(v string) (string, error) {
+	if v == "" {
+		return DefaultCacheTTL, nil
+	}
+	if slices.Contains(CacheTTLValues(), v) {
+		return v, nil
+	}
+	return "", fmt.Errorf("anthropic: invalid cache_ttl %q (want %q or %q)", v, CacheTTL5m, CacheTTL1h)
+}
+
+// cacheControl builds the breakpoint marker for a resolved TTL. The 5m TTL is
+// the API default, so it omits the ttl field and keeps the request byte-
+// identical to a build that had no TTL support at all.
+func cacheControl(ttl string) *apiCacheControl {
+	if ttl == CacheTTL1h {
+		return &apiCacheControl{Type: "ephemeral", TTL: CacheTTL1h}
+	}
+	return &apiCacheControl{Type: "ephemeral"}
+}
 
 // wireIDPattern is what the API accepts for client-supplied tool_use IDs.
 var wireIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -153,7 +216,9 @@ func wireCallID(id string) string {
 // transcodeRequest maps a canonical request to the Anthropic Messages API.
 // Cache markers are injected here — on the last system block and the last
 // content block of the final message — and never stored in the session log.
-func transcodeRequest(req *provider.Request) (*apiRequest, error) {
+// ttl is the resolved cache lifetime (see resolveCacheTTL); the caller sends
+// the extendedCacheTTLBeta header when it is CacheTTL1h.
+func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 	out := &apiRequest{
 		Model:       req.Model.Model,
 		MaxTokens:   req.MaxTokens,
@@ -204,7 +269,7 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 		out.System = append(out.System, apiBlock{Type: "text", Text: seg})
 	}
 	if n := len(out.System); n > 0 {
-		out.System[n-1].CacheControl = ephemeral
+		out.System[n-1].CacheControl = cacheControl(ttl)
 	}
 
 	for _, t := range req.Tools {
@@ -260,7 +325,7 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 		return nil, fmt.Errorf("anthropic: request has no transcodable messages")
 	}
 	last := &out.Messages[len(out.Messages)-1]
-	last.Content[len(last.Content)-1].CacheControl = ephemeral
+	last.Content[len(last.Content)-1].CacheControl = cacheControl(ttl)
 
 	return out, nil
 }

@@ -21,6 +21,14 @@ import (
 const (
 	defaultBaseURL = "https://api.anthropic.com"
 	apiVersion     = "2023-06-01"
+	// extendedCacheTTLBeta is the documented gate for the 1-hour
+	// cache_control TTL, sent with — and only with — a CacheTTL1h request.
+	// Some endpoints no longer enforce the gate and accept the TTL without
+	// this header. The adapter sends it regardless: the documented contract
+	// asks for it, and an endpoint that does enforce it must not fail. The
+	// 5m TTL sends no beta at all, which is the escape hatch for a gateway
+	// that rejects an unknown beta.
+	extendedCacheTTLBeta = "extended-cache-ttl-2025-04-11"
 )
 
 // Client is a provider.Provider for the Anthropic Messages API. The zero
@@ -29,6 +37,11 @@ type Client struct {
 	APIKey     string
 	BaseURL    string       // defaults to https://api.anthropic.com
 	HTTPClient *http.Client // defaults to http.DefaultClient
+	// CacheTTL is the prompt-cache breakpoint lifetime: CacheTTL5m (the
+	// API default) or CacheTTL1h (the extended TTL). Empty resolves to
+	// DefaultCacheTTL — see that constant for why the default is 1h. Any
+	// other value fails Stream, like a missing API key.
+	CacheTTL string
 }
 
 func (c *Client) Name() string { return Family }
@@ -37,7 +50,11 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	if c.APIKey == "" {
 		return nil, fmt.Errorf("anthropic: no API key configured (set ANTHROPIC_API_KEY)")
 	}
-	wire, err := transcodeRequest(req)
+	ttl, err := resolveCacheTTL(c.CacheTTL)
+	if err != nil {
+		return nil, err
+	}
+	wire, err := transcodeRequest(req, ttl)
 	if err != nil {
 		return nil, err
 	}
@@ -58,6 +75,9 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	httpReq.Header.Set("Accept", "text/event-stream")
 	httpReq.Header.Set("X-Api-Key", c.APIKey)
 	httpReq.Header.Set("Anthropic-Version", apiVersion)
+	if ttl == CacheTTL1h {
+		httpReq.Header.Set("Anthropic-Beta", extendedCacheTTLBeta)
+	}
 
 	hc := c.HTTPClient
 	if hc == nil {

@@ -1059,7 +1059,19 @@ documents its own affinity hint:
   adapter by swapping in `prompt_cache_key` — that field is specific to
   OpenAI's own API, and the openaicompat adapter targets non-OpenAI
   backends behind a gateway, whose measured path reads `user`. Swapping it
-  would silently drop the measured cache-affinity win.
+  would silently drop the measured cache-affinity win. The adapter now sends
+  `prompt_cache_key` ALONGSIDE `user`, set from the same `SessionKey`: a
+  gateway fronts several upstream shapes, and an OpenAI-shaped upstream
+  behind it reads `prompt_cache_key` while the measured Fireworks path reads
+  `user`. Both fields carry the identical value, one extra field costs
+  nothing, and an upstream that knows neither ignores both. Add, never swap
+  — the rule above still binds. Config key `no_prompt_cache_key` on an
+  `openai-compat` providers entry suppresses that ONE field for a strict
+  self-hosted upstream that rejects an unknown top-level parameter; `user`
+  keeps carrying the session key, so the opt-out never costs the measured
+  affinity win. It is rejected on any entry that is not `openai-compat` —
+  the native openai adapter always sends `prompt_cache_key`, its own
+  documented field.
 - `provider/openai` (Responses API) sets the wire top-level
   `prompt_cache_key` field — the Responses API's own documented routing/
   cache-affinity hint, distinct from `user`. OpenAI combines it with the
@@ -1084,6 +1096,81 @@ time-to-first-token, through the same gateway. Harness sessions re-send the
 whole history every request (stateless transcoding), so a long session on
 the openaicompat route (a gateway to Fireworks kimi-k3 and similar models)
 pays full prefill on nearly every turn without this hint.
+
+### Anthropic cache TTL (default 1 hour)
+
+`provider/anthropic` marks two prompt-cache breakpoints on every request —
+the last system block and the last content block of the final message — and
+never stores a marker in the session log (`transcodeRequest`,
+`provider/anthropic/transcode.go`). The marker's TTL defaults to the
+EXTENDED 1-hour cache, not the API's own 5-minute default.
+
+This is an opt-OUT default, and it changes the wire for an operator who
+configures nothing: every anthropic request carries the beta header and
+writes 1h entries. Two deployments must know it. A proxy that rejects an
+unknown `anthropic-beta` value fails every request, and a workload of short
+one-shot sessions pays the 2x incremental write premium with no later turn
+to read the entry back. Both set `cache_ttl: "5m"`, which restores the
+previous bytes exactly.
+
+`Client.CacheTTL` selects it: `"5m"`, `"1h"`, or empty for
+`DefaultCacheTTL` (`"1h"`). Config key `cache_ttl` on the NATIVE `anthropic`
+providers entry sets it, and `cmd/harness`'s `registry` passes it to the
+client. The value is validated twice, and both checks fail loudly rather
+than fall back: `config.validateCacheTTL` rejects an unknown value, and
+rejects `cache_ttl` on any entry that is not the native anthropic adapter —
+matching on IDENTITY, the map key `anthropic` with no `type`, never on the
+key alone, since an entry keyed `anthropic` but typed `openai-compat` builds
+an openaicompat client that would never read the value. `anthropic.
+resolveCacheTTL` then rejects an unknown value again at the first `Stream`
+call, like a missing API key. A typo must never silently ship different
+cache economics.
+
+Wire shapes, by TTL:
+
+- `"1h"` sends `cache_control: {"type":"ephemeral","ttl":"1h"}` on both
+  breakpoints, plus the request header `anthropic-beta:
+  extended-cache-ttl-2025-04-11`. That header is the documented gate for the
+  extended TTL. Some endpoints no longer enforce the gate and accept the TTL
+  without it. Harness sends it regardless, because an endpoint that DOES
+  enforce it must not fail.
+- `"5m"` sends `cache_control: {"type":"ephemeral"}` and NO beta header —
+  byte-identical to a build with no TTL support at all. This is the escape
+  hatch for a gateway that rejects an unknown beta.
+
+The default is 1h because of cost. Cache READS price the same at both TTLs.
+A 1h WRITE costs 2x base input where a 5m write costs 1.25x, and that
+premium applies only to the INCREMENTAL tokens each turn adds to the prefix.
+A 5m expiry on a mature session, by contrast, rewrites the WHOLE prefix —
+the entire history, at full input price. One such miss costs more than the
+1h write premium over hundreds of turns. Agentic sessions exceed 5 minutes
+by construction: one build, one live probe, or one subagent runs longer than
+the window, and a user reads an answer before sending the next turn. The
+commit that introduced this default carries the measured evidence.
+
+### The tool array is byte-stable across requests
+
+`Session.toolDefs` (`engine/engine.go`) sorts the BUILT-IN tool group by
+name. That sort is a prompt-cache requirement, not cosmetics. `Session.tools`
+is a map, Go randomizes map iteration on every range, and tools sit at the
+FRONT of the cached prefix on every provider — Anthropic caches tools, then
+system, then messages. An unsorted build therefore emitted a different tools
+array on every request and invalidated the WHOLE prefix each turn, which no
+TTL can help.
+
+The defect is invisible to a unit test that checks the tool SET, and it
+appears only in live traffic: consecutive turns of one session each report a
+full cache write and no cache read, for a byte-identical system prompt. A
+new test must therefore assert the byte-stability of the array, not its
+membership. The commit that introduced the sort carries the measured
+before/after evidence.
+
+Group order stays built-ins, then MCP, then plugins. The other two groups were
+already deterministic — `MCPManager.rebuildToolsLocked` sorts by server then
+tool, and `plugin.Host.Tools` walks the configured instance slice — so the
+sort applies WITHIN the built-in group only. Adding an MCP server must never
+reshuffle the built-in block ahead of it. Any new tool source must be
+deterministic before it joins this list.
 
 ### Deliberately absent — do not add
 

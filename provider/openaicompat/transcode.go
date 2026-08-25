@@ -51,6 +51,15 @@ type apiRequest struct {
 	// section, for the Fireworks per-replica prompt-cache evidence). Empty
 	// sends no field.
 	User string `json:"user,omitempty"`
+	// PromptCacheKey is the newer prompt-cache affinity hint, set from the
+	// same Request.SessionKey as User. It rides ALONGSIDE User, never
+	// instead of it: User is the field the measured Bifrost/Fireworks path
+	// reads, while an OpenAI-shaped upstream behind the same gateway reads
+	// prompt_cache_key. One extra field costs nothing and an upstream that
+	// knows neither ignores both. Empty sends no field, and
+	// transcodeOptions.noPromptCacheKey suppresses it for an upstream that
+	// rejects an unknown top-level parameter.
+	PromptCacheKey string `json:"prompt_cache_key,omitempty"`
 }
 
 type apiStreamOptions struct {
@@ -114,11 +123,26 @@ func wireCallID(id string) string {
 	return message.ProviderCallID("call_", id, 64)
 }
 
-// transcodeRequest maps a canonical request to the OpenAI-compatible
+// transcodeOptions carries per-Client wire choices into the transcoder. It
+// exists so a deployment-specific field can be suppressed without threading a
+// bool through every call site.
+type transcodeOptions struct {
+	// noPromptCacheKey omits the top-level prompt_cache_key field. See the
+	// SessionKey block in transcodeRequestOpts for the reasoning.
+	noPromptCacheKey bool
+}
+
+// transcodeRequest maps a canonical request to the chat-completions wire with
+// the default options.
+func transcodeRequest(req *provider.Request, family string) (*apiRequest, error) {
+	return transcodeRequestOpts(req, family, transcodeOptions{})
+}
+
+// transcodeRequestOpts maps a canonical request to the OpenAI-compatible
 // chat-completions wire format. family is the Client's configured Family: it
 // is both the ModelRef.Provider value and the ProviderData tag this call
 // reads reasoning attachments from.
-func transcodeRequest(req *provider.Request, family string) (*apiRequest, error) {
+func transcodeRequestOpts(req *provider.Request, family string, opts transcodeOptions) (*apiRequest, error) {
 	if len(req.Messages) == 0 {
 		return nil, fmt.Errorf("openaicompat: request has no transcodable messages")
 	}
@@ -159,12 +183,23 @@ func transcodeRequest(req *provider.Request, family string) (*apiRequest, error)
 		out.ReasoningEffort = string(req.Effort)
 	}
 
-	// SessionKey, when set, becomes the wire "user" field: a stable routing
-	// hint a gateway (Bifrost) or provider (Fireworks) can use to pin a
-	// session's requests to the same backend replica, keeping its
-	// prefix-based prompt cache warm across turns. Empty omits the field.
+	// SessionKey, when set, becomes BOTH the wire "user" field and the wire
+	// "prompt_cache_key" field: a stable routing hint a gateway (Bifrost) or
+	// provider (Fireworks) can use to pin a session's requests to the same
+	// backend replica, keeping its prefix-based prompt cache warm across
+	// turns. The two fields carry the identical value because different
+	// upstreams behind one gateway read different names. Empty omits both.
+	//
+	// opts.noPromptCacheKey suppresses the newer field alone. Most upstreams
+	// ignore an unknown top-level parameter, but a strict self-hosted
+	// OpenAI-compatible server can reject one, and "user" — a standard
+	// chat-completions field such a server already accepts — must keep
+	// riding so the opt-out never costs the measured affinity win.
 	if req.SessionKey != "" {
 		out.User = req.SessionKey
+		if !opts.noPromptCacheKey {
+			out.PromptCacheKey = req.SessionKey
+		}
 	}
 
 	for _, t := range req.Tools {
