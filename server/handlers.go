@@ -3426,6 +3426,15 @@ func (s *Server) teardownWorktree(sessionID string, wt *worktreeInfo) {
 // see lookup's own doc comment for the split-instant response that shape
 // replaces. A caller with no snapshot of its own builds one with
 // Server.resolveLive.
+//
+// Precondition: lv.session() is non-nil. Every caller establishes it —
+// lookup and lookupSpawned report ok only for a resolved session, and
+// handleList passes a residency entry it already read. There is
+// deliberately no nil guard: a zero *engine.Session renders a
+// plausible-looking but malformed body (blank id and model beside a
+// populated lineage block), which a live review already rejected once on
+// handleSpawnChild. A caller with no session must return an error instead
+// of calling this.
 func (s *Server) buildSession(lv liveSession) sessionJSON {
 	sess := lv.session()
 	status := lv.status()
