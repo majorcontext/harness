@@ -72,14 +72,14 @@ Global policy, in `config.Config` (`config/config.go`):
 | `"auto"` | Defer when the live catalog holds more tools than the threshold. |
 | `"lazy"` | Always defer, whatever the catalog size. |
 
-`mcp_tool_loading_threshold` is the tool COUNT `"auto"` compares against;
-`0` or absent means the engine default (`defaultMCPDeferThreshold`, 20). A
-NEGATIVE value is rejected by `Config.validate`, exactly as
-`connect_timeout_s` already is: `len(catalog) > -1` holds for an empty
-catalog, so a stray minus sign would silently turn `"auto"` into
-"always defer" — the one reading the author certainly did not intend. The
-engine clamps any non-positive value it is handed to the default, so an
-embedder that bypasses config validation still gets sane behaviour.
+`mcp_tool_loading_threshold` is the tool COUNT `"auto"` compares against.
+`0` or absent means the engine default (`defaultMCPDeferThreshold`, 20).
+
+`Config.validate` rejects a NEGATIVE value, exactly as `connect_timeout_s`
+is rejected today. The reason is that `len(catalog) > -1` holds even for an
+empty catalog. A stray minus sign would silently turn `"auto"` into
+"always defer". The engine also clamps any non-positive value it is
+handed, so an embedder that bypasses config validation stays safe.
 A count, not a token estimate: the engine has no tokenizer on the request
 path, and a count is deterministic and testable. Twenty is the point where
 a typical catalog's schema block stops being small enough to ignore, while
@@ -149,6 +149,13 @@ is unambiguous), and `Description` supplies the listing text. Growing
    tool `Tools(ctx)` returned on THIS request, across every connected
    server.
 
+Rule 3 counts the WHOLE catalog, including the tools of a server pinned
+`eager` by rule 1. A pinned server's schemas fill the prompt like any
+other, so they are part of the pressure the threshold measures. Pinning a
+large server `eager` therefore makes `auto` defer the rest sooner, which is
+the intended reading: the pin says "always keep these loaded", not "ignore
+their cost".
+
 One condition overrides all three: a session that does not hold the `mcp`
 tool defers NOTHING. `resolveMCPLoading` reports `eager` for every server
 when `Session.tools` has no `mcp` entry.
@@ -169,8 +176,29 @@ server connects (a background retry commits, or the `mcp` tool's `connect`
 action succeeds), the catalog crosses the threshold, and tools that were
 registered eagerly on turn N are deferred on turn N+1. This is deliberate.
 The alternative — latch the first decision — freezes a session on a
-one-server catalog it no longer has. The flip is safe because the call
-path stays open (§7).
+one-server catalog it no longer has.
+
+### Use implies selection
+
+A flip must not take away a tool the session is already using. A tool of an
+eager server needs no `select` call — the design tells the model NOT to
+select a loaded tool (§4) — so nothing would hold its schema across the
+flip, and a working tool would silently lose its definition mid-task.
+
+Every MCP tool call that ROUTES therefore adds its own name to the selected
+set. `executeTool` (`engine/engine.go`) already resolves the binding before
+it calls the server; a name that resolves is a real tool by construction,
+so this can never record an invented one. A tool the model has actually
+used stays loaded across a flip, across a later `select` of something else,
+and across a reload.
+
+This also closes the recovery path in §7 from the other end: a model that
+calls a deferred tool without selecting it — replaying a name from earlier
+history — gets the call served AND the schema loaded for the next round,
+instead of working once by luck and then vanishing.
+
+The record is written once per tool, on first use. A repeat call finds the
+name in the set and writes nothing.
 
 ### The tools array
 
@@ -394,7 +422,13 @@ own server, which the name itself carries:
 | `already` | The name is in the selected set already. | no — it is already durable |
 | `selected` | The catalog holds the name. | yes |
 | `pending` | The name's server is configured but not connected. | yes |
-| `missing` | The server is connected and has no such tool, or the server is not configured. | no |
+| `missing` | The server is connected and has no such tool, the server is not configured, or the name is malformed. | no |
+
+A name that is not `mcp__<server>__<tool>` shaped, or that has an empty
+server or tool segment, is `missing`. It carries no server, so no other
+bucket can hold it, and it must not be journaled — the same shape §5's
+replay guard already skips. The two guards state one rule at the two ends
+of the record's life.
 
 `pending` exists to keep `select` symmetric with reload. A selection
 restored by `LoadSession` for an absent server stays in the set and arms
@@ -402,8 +436,20 @@ itself the moment that server reconnects (§5). Without `pending`, the same
 `select` call made DURING an outage would report `missing` and record
 nothing, so a model that selects at the wrong moment gets no tool and no
 signal. The result names the state, and the ambient degraded-server block
-(`mcpStatusSegment`) already names the reason. A `pending` name arms
-itself on reconnect, exactly like a restored one.
+(`mcpStatusSegment`) already names the reason.
+
+`pending` accepts a name; it does not help the model FIND one. `search`
+ranks over the live catalog, and a server that has never connected in this
+process has no catalog to rank — `mcpServerEntry.Connected` is a one-way
+latch (`engine/mcp.go`), so an unconnected server is one whose first
+attempt never succeeded, not one that dropped after working. The model
+therefore reaches `pending` only with a name it already holds: from its own
+history after a restart, or from the user. Discovery during an outage is
+`mcp(action="connect", server=...)`, the explicit re-trigger that already
+exists — connect the server, then search its catalog. A cached
+last-known-good catalog for an unconnected server would create a second
+discovery path, and a second source of stale names; it is a non-goal
+(§10).
 
 `missing` is never journaled. A name for a connected server that does not
 hold it is a typo or an invention; recording it would let a hallucinated
@@ -556,7 +602,8 @@ construction, since nothing here has a schedule.
 
 1. **Deferral core.** Effective-mode table test across global mode,
    per-server override, and the `auto` threshold boundary (at, one below,
-   one above). A session with no `mcp` tool defers nothing, even under
+   one above), with a server pinned `eager` still counted in the total. A
+   session with no `mcp` tool defers nothing, even under
    global `lazy` — the subagent-lockout guard. Tools-array partition: a
    deferred server contributes no def, an eager server contributes every
    def. Byte-stability: repeated `toolDefs` calls with no selection change
@@ -574,7 +621,10 @@ construction, since nothing here has a schedule.
    and asserted ABSENT for `already` and `missing`. Empty `tools` errors.
    The action gate: a global-`eager` session with one per-server `lazy`
    advertises `search`/`select` — red-verify this against a
-   global-mode-only gate. The in-turn effect: a fake provider that calls
+   global-mode-only gate. A malformed name is `missing` and journals nothing.
+   Use implies selection: a routed call to a tool that was never selected
+   loads its schema for the next round, and a repeat call writes no second
+   record. The in-turn effect: a fake provider that calls
    `select` on round 1, and an assertion that round 2's
    `provider.Request.Tools` carries the schema — driven through
    `Session.Prompt`, the production entry point, never by calling
@@ -603,6 +653,8 @@ construction, since nothing here has a schedule.
   and a per-provider mechanism would not serve the openai, openaicompat,
   or gemini routes.
 - **No deselect, no eviction, no TTL** on a selected tool (§4).
+- **No cached catalog for an unconnected server.** `search` ranks over
+  live tools only (§4).
 - **No semantic or embedding search.** Keyword ranking is deterministic,
   needs no model call, and costs no startup budget.
 - **No change to MCP connection lifecycle.** Lazy connect, bounded
