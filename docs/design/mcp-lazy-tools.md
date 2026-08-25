@@ -143,6 +143,21 @@ is unambiguous), and `Description` supplies the listing text. Growing
    tool `Tools(ctx)` returned on THIS request, across every connected
    server.
 
+One condition overrides all three: a session that does not hold the `mcp`
+tool defers NOTHING. `resolveMCPLoading` reports `eager` for every server
+when `Session.tools` has no `mcp` entry.
+
+Never defer what the session cannot select. The `mcp` tool is absent in two
+cases. A session with no configured server has no catalog to defer, so the
+rule is moot there. The load-bearing case is a subagent: `restrictTools`
+(`engine/session_manager.go`) narrows a child to an agent definition's
+`tools:` list, and a definition that omits `"mcp"` removes the tool.
+Without this rule, deferral would strip that child's MCP schemas AND its
+only path to load them back — a lockout, converting a restriction that is
+harmless today into a total loss of MCP for that child. The child instead
+keeps eager registration, which is exactly its behaviour before this
+change.
+
 Rule 3 reads live state, so the decision can flip mid-session: a second
 server connects (a background retry commits, or the `mcp` tool's `connect`
 action succeeds), the catalog crosses the threshold, and tools that were
@@ -174,12 +189,29 @@ the position the Skills catalog already occupies for the same reason.
 The segment is computed fresh per request from the same
 `[]provider.ToolDef` slice `toolDefs` used, never cached for the session:
 the catalog changes when a server connects, and a stale listing would name
-tools `select` cannot find. `streamTurn` (`engine/engine.go`) already
-computes `tools := s.toolDefs(ctx)` before the ambient MCP status segment,
-for a documented ordering reason (the `Tools()` call is what triggers a
-server's first connect). The plan computed there carries both halves — the
-filtered defs and the catalog text — so `Tools(ctx)` is still called
-exactly once per request.
+tools `select` cannot find.
+
+That forces one ordering change in `streamTurn` (`engine/engine.go`). Today
+`streamTurn` assembles the system slice first and computes
+`tools := s.toolDefs(ctx)` afterwards. The catalog segment belongs INSIDE
+the system slice, so the tool plan must exist before the slice is
+assembled. `streamTurn` therefore computes the plan FIRST — one call that
+returns the filtered defs and the catalog text together — then builds the
+system slice, then the messages and their ambient blocks. `Tools(ctx)` is
+still called exactly once per request, and the plan's defs are still
+reused verbatim as `req.Tools`.
+
+Moving the plan earlier preserves the ordering rule `streamTurn` already
+documents, and strengthens it. That rule exists because
+`toolDefs -> s.cfg.MCP.Tools(ctx)` is what TRIGGERS a server's first
+connect attempt, so `mcpStatusSegment` must run after it or a first-attempt
+failure is reported one turn late. The plan now runs even earlier, so both
+the status block and the catalog segment read post-attempt state.
+
+The plan does not depend on anything the system assembly produces. The
+`chat.params` hook can rewrite the model, but no tool source reads
+`params`: `toolDefs` reads `s.tools`, the MCP registry, and
+`Hooks.Tools()`, none of which take the model as input.
 
 Shape:
 
@@ -236,11 +268,18 @@ provider validates against the schema. A single overloaded `query` string
 would move parsing (and a whole class of malformed-input errors) into the
 tool body for no gain.
 
-The two actions are advertised only when the session's policy can defer
-(`MCPToolLoading != eager`). An eager session gets today's two-action
-schema unchanged, so an existing config sees no new text in its tools
-array. The policy is fixed for a session's life, so the def stays
-byte-stable either way.
+The two actions are advertised whenever the session's policy can defer ANY
+server: the global mode is not `eager`, OR at least one entry of
+`MCPToolLoadingByServer` is `lazy`. The gate must not read the global mode
+alone. A global `eager` with one per-server `lazy` still defers that
+server's tools and still lists them as selectable, so a global-only gate
+would tell the model to call an action its schema does not offer.
+
+A session that can defer nothing gets today's two-action schema unchanged,
+so an existing config sees no new text in its tools array. Both inputs to
+the gate are session config, fixed for the session's life, so the def is
+byte-stable either way — including under `auto`, where the RUNTIME decision
+moves with the catalog but the policy does not.
 
 ### `search`
 
@@ -291,21 +330,46 @@ already selected. It never mutates state.
 {
   "selected": ["mcp__github__create_issue"],
   "already":  [],
+  "pending":  [],
   "missing":  [],
   "note": "selected tools are callable from the next request in this turn"
 }
 ```
 
+Each name lands in exactly one bucket. The bucket is decided by the name's
+own server, which the name itself carries:
+
+| Bucket | Condition | Journaled |
+|---|---|---|
+| `already` | The name is in the selected set already. | no — it is already durable |
+| `selected` | The catalog holds the name. | yes |
+| `pending` | The name's server is configured but not connected. | yes |
+| `missing` | The server is connected and has no such tool, or the server is not configured. | no |
+
+`pending` exists to keep `select` symmetric with reload. A selection
+restored by `LoadSession` for an absent server stays in the set and arms
+itself the moment that server reconnects (§5). Without `pending`, the same
+`select` call made DURING an outage would report `missing` and record
+nothing, so a model that selects at the wrong moment gets no tool and no
+signal. The result names the state, and the ambient degraded-server block
+(`mcpStatusSegment`) already names the reason. A `pending` name arms
+itself on reconnect, exactly like a restored one.
+
+`missing` is never journaled. A name for a connected server that does not
+hold it is a typo or an invention; recording it would let a hallucinated
+name live in the session's durable state for good.
+
 Rules:
 
 - An empty or absent `tools` array is an error. Every other input shape
-  yields a result, never an error: a name the catalog does not hold lands
-  in `missing`, so one bad name never voids a batch of good ones.
-- A name that is already selected lands in `already` and journals nothing.
-- A name from an EAGER server is accepted and reported in `already`: it is
-  callable, which is what the model asked for. Recording it is harmless and
-  keeps the answer honest if that server later flips to deferred under
-  `auto`.
+  yields a result, never an error, so one bad name never voids a batch of
+  good ones.
+- A name from an EAGER server is `selected` and journaled like any other.
+  The tool is already callable, so the selection changes nothing today —
+  but under `auto` that server can flip to deferred later in the session,
+  and the record is what keeps the tool loaded across the flip and across a
+  reload. This is the reason `select` records the name rather than
+  answering "already available" and forgetting it.
 - Only the namespaced form is accepted. `search` returns namespaced names,
   so the model always holds one, and a bare remote name is ambiguous across
   servers.
@@ -332,6 +396,10 @@ v1.
 engine-internal session state, journaled and folded, with no engine event
 and no server journal mapping. Selection is not a lifecycle transition a
 dashboard renders; it is state a resumed session must not lose.
+
+One record covers every name the call adds, `selected` and `pending`
+together (§4): the two differ only in whether the tool is reachable right
+now, and the durable state has no reason to keep them apart.
 
 `LoadSession` unions every such record, in log order, into the restored
 session's selected set. Replay is defensive, like `recPromptQueued`'s: a
@@ -383,9 +451,11 @@ array grows at the same instant.
   `mcpStatusSegment` names it as degraded, and `mcp(action="connect")`
   remains the explicit re-trigger. Once it connects, its tools appear in
   the catalog listing on the very next request.
-- **`select` for a tool of a degraded server.** The name is `missing`
-  (the catalog does not hold it). The ambient status block already tells
-  the model why.
+- **`select` for a tool of a degraded server.** The name is `pending`: it
+  is journaled, and it arms itself when the server reconnects (§4). The
+  ambient status block already tells the model why the server is down.
+- **A child session that cannot select.** Deferral is off for it entirely
+  (§3), so it keeps eager registration.
 - **No MCP servers configured.** No `mcp` tool, no catalog segment, no
   change of any kind.
 
@@ -395,6 +465,10 @@ Selection is per-session state. A child spawned through `task`
 (`engine/session_manager.go`) starts with an empty set and re-selects what
 it needs. Inheriting a parent's set would ship schemas the child's own task
 may never touch, which is the cost this design removes.
+
+A child whose agent definition drops the `mcp` tool defers nothing at all
+(§3). It keeps eager registration, because a session that cannot call
+`select` must never be shown a catalog it cannot load.
 
 The agent-definition tool restriction is unchanged, and it is worth
 recording what it does today: `restrictTools` narrows `Session.tools`, the
@@ -411,23 +485,32 @@ construction, since nothing here has a schedule.
 
 1. **Deferral core.** Effective-mode table test across global mode,
    per-server override, and the `auto` threshold boundary (at, one below,
-   one above). Tools-array partition: a deferred server contributes no
-   def, an eager server contributes every def. Byte-stability: repeated
-   `toolDefs` calls with no selection change marshal identically, the
-   assertion shape `engine/tooldefs_order_test.go` already uses. Catalog
-   segment: exact text, listing bound, description truncation, and the
-   position of the segment in the assembled system slice.
+   one above). A session with no `mcp` tool defers nothing, even under
+   global `lazy` — the subagent-lockout guard. Tools-array partition: a
+   deferred server contributes no def, an eager server contributes every
+   def. Byte-stability: repeated `toolDefs` calls with no selection change
+   marshal identically, the assertion shape
+   `engine/tooldefs_order_test.go` already uses. Catalog segment: exact
+   text, listing bound, description truncation, and the position of the
+   segment in the assembled system slice, asserted on the slice
+   `Session.Prompt` actually sends.
 2. **Search and select.** Ranking table test, including tie-break by name
-   and the zero-score exclusion. `select` partition into
-   selected/already/missing. Empty `tools` errors. The in-turn effect:
-   a fake provider that calls `select` on round 1, and an assertion that
-   round 2's `provider.Request.Tools` carries the schema — driven through
+   and the zero-score exclusion. `select` partition across all four
+   buckets, with the journal write asserted for `selected` and `pending`
+   and asserted ABSENT for `already` and `missing`. Empty `tools` errors.
+   The action gate: a global-`eager` session with one per-server `lazy`
+   advertises `search`/`select` — red-verify this against a
+   global-mode-only gate. The in-turn effect: a fake provider that calls
+   `select` on round 1, and an assertion that round 2's
+   `provider.Request.Tools` carries the schema — driven through
    `Session.Prompt`, the production entry point, never by calling
    `toolDefs` by hand.
 3. **Persistence and recovery.** A journal round trip through
    `LoadSession`: selection survives, malformed and duplicate names are
    skipped, and a restored name whose tool is gone yields no def and no
-   error. Red-verify each guard against the pre-fix code.
+   error. A `pending` selection made during an outage arms itself once the
+   server connects, without a second `select`. Red-verify each guard
+   against the pre-fix code.
 4. **End-to-end.** An `httptest` MCP server (the `fakeMCPHTTPServer` shape
    in `engine/mcp_test.go`) serving a catalog above the threshold, driven
    through a real `MCPManager` and a real `Session`: the first request
