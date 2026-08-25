@@ -1245,6 +1245,20 @@ one answer whichever writer asks. A pinned-`eager` server's tool is still
 reported `selected` — it is loaded and callable — and simply records
 nothing.
 
+A selection is durable. `mcp.tools_selected` (`recMCPToolsSelected`,
+`engine/store.go`) records the names that ENTER the set, and `LoadSession`
+unions every record back. It follows `recToolResultRetained`:
+engine-internal state, journaled and folded, with no engine event and no
+server journal mapping. **Two writers produce it** — `select`, and a routed
+MCP call through use-implies-selection. Wiring only the first silently
+loses a tool the model used but never selected.
+
+Recovery degrades in one direction. A restored name whose server is absent
+or parked is KEPT, so it arms on reconnect. One whose server connects
+WITHOUT it is reaped. A malformed name is skipped on replay, exactly as
+`select` refuses to record one — one rule at both ends of the record's
+life.
+
 Full design, including the durable record: `docs/design/mcp-lazy-tools.md`.
 
 ### The tool array is byte-stable across requests

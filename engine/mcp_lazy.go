@@ -434,10 +434,14 @@ func mcpConnectedServersKnown(reg MCPRegistry) (connected map[string]bool, known
 // name is ignored, matching select's own malformed-name rule and the replay
 // guard: a name no server can own must never enter durable state.
 //
-// This is the only writer in this slice. It does not journal: the durable
-// record and its two callers (the mcp tool's select action, and
-// use-implies-selection on a routed call) land with the surface that needs
-// them.
+// Every name that ENTERS the set is journaled, in ONE mcp.tools_selected
+// record per call (see recMCPToolsSelected, store.go), written under the
+// same s.mu the mutation holds -- the persist-under-s.mu shape SetModel and
+// RegisterGoal already use, so log order matches state order. A name that
+// was already selected changes nothing and writes nothing.
+//
+// Both writers of that record funnel through here: the mcp tool's select
+// action and use-implies-selection on a routed call.
 func (s *Session) markMCPToolsSelected(names ...string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -455,6 +459,7 @@ func (s *Session) markMCPToolsSelected(names ...string) []string {
 		s.mcpSelected[name] = true
 		added = append(added, name)
 	}
+	s.persistMCPToolsSelected(added)
 	return added
 }
 

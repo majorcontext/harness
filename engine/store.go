@@ -78,6 +78,31 @@ const (
 	// makes the trh_N counter, the handle metadata, and the retained-bytes
 	// total survive a process restart.
 	recToolResultRetained = "toolresult.retained"
+	// recMCPToolsSelected records the namespaced MCP tool names a session
+	// has loaded the schemas of (see mcp_lazy.go and docs/design/
+	// mcp-lazy-tools.md §5). It follows recToolResultRetained: engine-
+	// internal session state, journaled and folded by LoadSession, with no
+	// engine event and no server journal mapping -- a selection is not a
+	// lifecycle transition a dashboard renders, it is state a resumed
+	// session must not lose.
+	//
+	// TWO writers produce it, and an implementation that wires only the
+	// first loses the guarantee the second exists for:
+	//
+	//   - the mcp tool's select action, one record per call that adds
+	//     names (selected and pending together -- they differ only in
+	//     whether the tool is reachable right now, which the durable state
+	//     has no reason to keep apart), and
+	//   - a routed MCP tool call, when its own name enters the set (use
+	//     implies selection), which is what keeps a tool the model is
+	//     already using loaded across an auto flip.
+	//
+	// The record is written when a name ENTERS the set, not once per
+	// session: a repeat call finds the name already there and writes
+	// nothing, while a tool that was reaped (see reapMCPSelections) and
+	// then used again enters a second time and writes again. Replay
+	// dedups, so the restored set is identical either way.
+	recMCPToolsSelected = "mcp.tools_selected"
 	// recTaskSpawned/recTaskNotifyQueued/recTaskNotifyDelivered are the
 	// subagent-sessions task-delivery records (see session_manager.go's
 	// Spawn and taskdelivery.go), two follow-ups from PR #145's
@@ -268,6 +293,10 @@ type record struct {
 	// ToolResult carries a recToolResultRetained record's payload (see
 	// toolResultRecord). nil on every other record type.
 	ToolResult *toolResultRecord `json:"tool_result,omitempty"`
+	// MCPTools carries a recMCPToolsSelected record's payload: the
+	// namespaced tool names this record adds to the session's selected set.
+	// nil on every other record type.
+	MCPTools []string `json:"mcp_tools,omitempty"`
 }
 
 // toolResultRecord carries the durable payload of a toolresult.retained
@@ -489,6 +518,30 @@ func (s *Session) persistModel(ref message.ModelRef) {
 		return
 	}
 	if err := s.writeRecord(record{Type: recModel, Model: ref}); err != nil {
+		s.lastPersistErr = err
+	}
+}
+
+// persistMCPToolsSelected appends an mcp.tools_selected record naming the
+// tools that just entered the selected set. It mirrors persistModel and
+// persistEffort exactly: a no-op until the log exists (lazy creation),
+// caller holds s.mu.
+//
+// Empty input writes nothing, which is what keeps a repeat select -- every
+// name already in the set -- from appending a record that would restore
+// nothing new.
+func (s *Session) persistMCPToolsSelected(names []string) {
+	if len(names) == 0 {
+		return
+	}
+	if s.cfg.SessionDir == "" || !s.logStarted {
+		return
+	}
+	if err := s.ensureLog(); err != nil {
+		s.lastPersistErr = err
+		return
+	}
+	if err := s.writeRecord(record{Type: recMCPToolsSelected, MCPTools: names}); err != nil {
 		s.lastPersistErr = err
 	}
 }
@@ -1146,6 +1199,28 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			s.model = rec.Model
 		case recEffort:
 			s.effort = rec.Effort
+		case recMCPToolsSelected:
+			// Union every record, in log order, into the restored selected
+			// set (see mcp_lazy.go). Replay is defensive, like
+			// recPromptQueued's: a name that is not mcp__<server>__<tool>
+			// shaped is SKIPPED rather than folded, the same shape select
+			// itself refuses to record, so one rule holds at both ends of
+			// the record's life. Duplicates collapse into the set.
+			//
+			// Nothing here checks whether the named tool still EXISTS. It
+			// cannot: no server has connected at load time. A restored name
+			// whose server is absent or parked is kept, so it arms itself
+			// on reconnect; one whose server connects WITHOUT it is reaped
+			// on that session's first plan (reapMCPSelections).
+			for _, name := range rec.MCPTools {
+				if _, _, ok := splitMCPToolName(name); !ok {
+					continue
+				}
+				if s.mcpSelected == nil {
+					s.mcpSelected = map[string]bool{}
+				}
+				s.mcpSelected[name] = true
+			}
 		case recGoalSet:
 			// An active goal is one set without a later achieved/cleared. The
 			// condition is restored; per Claude Code semantics the run counters
