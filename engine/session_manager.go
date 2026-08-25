@@ -3195,8 +3195,8 @@ func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queu
 		s := n.session
 		s.mu.Lock()
 		p := s.enqueueMemoryOnlyLocked(trimmed)
-		s.queueRecordDeferredLocked(recPromptQueued, promptRecord{ID: p.ID, Text: p.Text})
-		s.emit(Event{Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue)})
+		s.queueRecordDeferredLocked(recPromptQueued, promptRecord{ID: p.ID, Text: p.Text},
+			Event{Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue)})
 		s.mu.Unlock()
 		m.deferQueueRecordFlush(s)
 		m.unlockAndFlushPersist()
@@ -3210,7 +3210,13 @@ func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queu
 	// StatusRunning, atomically, before this method ever returns — the
 	// turn is genuinely committed, not merely intended.
 	s, nodeCtx, _, rerr := m.reserveSendLocked(targetID)
-	m.mu.Unlock()
+	// unlockAndFlushPersist, not a plain m.mu.Unlock(), even though
+	// reserveSendLocked defers nothing today — that method's own doc
+	// comment makes it the standard unlock for every SessionManager
+	// method (cheap, an empty-slice no-op when nothing is queued), so a
+	// future deferred write on this path cannot be dropped silently. A
+	// review finding on the lone plain unlock this method had left.
+	m.unlockAndFlushPersist()
 	if rerr != nil {
 		// ErrSessionCanceled/ErrConcurrencyLimit: reachable — mirror the
 		// checks this method used to run separately, now folded into
@@ -3366,8 +3372,8 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 			// memory pop — see queueRecordDeferredLocked's own doc
 			// comment (queue.go) for why a closure-held record breaks
 			// the log's record order and what that costs on replay.
-			s.queueRecordDeferredLocked(recPromptDequeued, promptRecord{ID: next.ID, Text: next.Text, Reason: "delivered"})
-			s.emit(Event{Type: EventPromptDequeued, QueueID: next.ID, QueueText: next.Text, QueueReason: "delivered", QueueLen: len(s.promptQueue)})
+			s.queueRecordDeferredLocked(recPromptDequeued, promptRecord{ID: next.ID, Text: next.Text, Reason: "delivered"},
+				Event{Type: EventPromptDequeued, QueueID: next.ID, QueueText: next.Text, QueueReason: "delivered", QueueLen: len(s.promptQueue)})
 		}
 		s.mu.Unlock()
 		if ok {

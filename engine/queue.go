@@ -116,6 +116,20 @@ func (s *Session) enqueueMemoryOnlyLocked(text string) QueuedPrompt {
 type deferredQueueRecord struct {
 	recType string
 	prompt  promptRecord
+
+	// event is the queue event this record's memory mutation owes its
+	// subscribers, emitted by flushQueueRecordsLocked immediately after
+	// the record is written. Parked with the record, not emitted at
+	// mutation time — a review finding: the two m.mu-held mutation sites
+	// emitted inline, and a subscriber can do real work on the call
+	// (server.Server's Publish journals a prompt.queued/prompt.dequeued
+	// event to events.jsonl, a synchronous disk write under its own
+	// server.mu), which put that write back inside the tree-wide m.mu
+	// this whole park/flush mechanism exists to keep clear of slow work.
+	// Emitting from the flush keeps event order equal to record order for
+	// a session — whichever s.mu holder drains the park emits the parked
+	// event before its own — while no emit runs under m.mu at all.
+	event Event
 }
 
 // queueRecordDeferredLocked parks one prompt-queue record for a write that
@@ -146,8 +160,8 @@ type deferredQueueRecord struct {
 // A duplicate write is impossible: the flush removes what it wrote, so a
 // dequeuer that drains the park makes the later deferred flush a no-op.
 // Caller holds s.mu.
-func (s *Session) queueRecordDeferredLocked(recType string, p promptRecord) {
-	s.deferredQueueRecords = append(s.deferredQueueRecords, deferredQueueRecord{recType: recType, prompt: p})
+func (s *Session) queueRecordDeferredLocked(recType string, p promptRecord, ev Event) {
+	s.deferredQueueRecords = append(s.deferredQueueRecords, deferredQueueRecord{recType: recType, prompt: p, event: ev})
 }
 
 // flushQueueRecordsLocked writes every parked prompt-queue record, in FIFO
@@ -163,6 +177,15 @@ func (s *Session) flushQueueRecordsLocked() {
 	s.deferredQueueRecords = nil
 	for _, r := range pending {
 		s.writePromptQueueRecordLocked(r.recType, r.prompt)
+		// Emit right after the write, still under s.mu — the same
+		// persist-then-emit order EnqueuePrompt/dequeueLocked use for
+		// their own inline records, so event order matches log order for
+		// this session either way. An empty Type means a caller parked a
+		// record with no event to emit; nothing in this package does that
+		// today, and a zero Event must never reach a subscriber.
+		if r.event.Type != "" {
+			s.emit(r.event)
+		}
 	}
 }
 
@@ -240,6 +263,21 @@ func (s *Session) EnqueuePromptDurable(text string, seq int64) (id int64, duplic
 		s.lastPersistErr = err
 		return 0, false, err
 	}
+	// Drain the park before this record, exactly as persistPromptQueueLocked
+	// does for every other prompt-queue write — a review finding: this
+	// method writes through writeRecord directly (it owns its own fsync and
+	// error contract), so it was the one writer that could put its own
+	// queued record ahead of a still-parked one. Memory order stayed [A, B]
+	// while disk order became [queued(B), queued(A)], and LoadSession's fold
+	// appends in record order and never sorts by ID, so a reload restored
+	// [B, A] — a FIFO reorder across a restart. See
+	// queueRecordDeferredLocked's own doc comment for the park itself.
+	//
+	// Ordering only: a parked record carries the ordinary best-effort
+	// durability every non-durable enqueue has, so this drain neither
+	// weakens nor strengthens this method's own write-ahead contract for
+	// the record it is about to write.
+	s.flushQueueRecordsLocked()
 	const op = "enqueue_durable"
 	rec := record{Type: recPromptQueued, Prompt: &promptRecord{ID: id, Text: trimmed, Seq: seq}}
 	if err := s.timedStorePhase(op, "write_record", func() error {
