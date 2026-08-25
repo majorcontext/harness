@@ -268,6 +268,14 @@ operations (the boxes control plane is the first consumer):
   crash, cancellation) delivers a `failed` notification with the error
   classified through the existing model-visible-string rules. It never
   crashes the parent.
+- The `fail_reason` a failed child reports is a fixed classified prefix
+  plus the CAUSE: the underlying error message, masked (`maskSecrets`)
+  and capped at 500 runes — `classifySpawnError`. The prefix alone
+  cannot separate a quota rejection from a malformed request, so a
+  parent reading only the prefix guesses; a live incident measured that
+  guess as "respawn a sibling into the same fleet-wide provider wall".
+  `canceled` and `timed out` keep their short fixed strings: a context
+  error names nothing a parent can act on.
 - Canceling a parent cancels its entire subtree before the parent
   finalizes.
 - Child session logs persist like any session's, so a child's work is

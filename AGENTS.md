@@ -1563,6 +1563,23 @@ it. A legacy header without `task_depth`
 restores 0; `adoptReloadedLocked` then falls back to the `m.maxDepth`
 refusal sentinel, exactly as before the field existed.
 
+A failed child's `fail_reason` carries the CAUSE, not only a class.
+`classifySpawnError` (`engine/session_manager.go`) builds it as a fixed
+classified prefix, then the underlying error message — masked with
+`maskSecrets` and capped at `spawnErrorDetailCap` (500) runes. One prefix
+covers a whole family of causes (a permanent 400 is a malformed request
+AND a quota rejection AND a policy refusal), so a parent that reads only
+the prefix must guess: a live incident measured that guess as "respawn a
+sibling straight into the same fleet-wide provider wall". The #82 leak
+rule still holds in its narrower form — never surface a provider error
+RAW — through masking plus the cap, the same best-effort trade a retained
+tool result already makes. `context.Canceled`/`context.DeadlineExceeded`
+keep their short fixed `canceled`/`timed out` strings, with no cause
+appended. The reason reaches the parent through the `[tasks: ...]`
+notification, `SessionNode.FailReason` (so `task status` and
+`GET /session/{id}.lineage.fail_reason`), and the journal's
+`task_fail_reason`.
+
 `Config.OnRequest` receives the firing session's own id as its first
 parameter (`engine/engine.go`). Never wire it as a closure over a
 captured session variable: `configSnapshot` copies the func value into
