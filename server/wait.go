@@ -250,7 +250,10 @@ func (s *Server) waitSnapshot(id string) (string, *goalJSON) {
 	drainPending := s.queueDrainPending[id]
 	goal := goalJSONFrom(s.goalState[id])
 	s.mu.Unlock()
-	lv = lv.withManager(s.sessMgr)
+	// withManagerIfUnresolved, not withManager: a resident session answers
+	// from its own running flag, so the manager read would be a discarded
+	// global-lock acquisition on every poll (a live review finding).
+	lv = lv.withManagerIfUnresolved(s.sessMgr)
 	running := drainPending || lv.status() == "busy"
 	return compositeState(running, goal != nil && goal.Active, forcesIdlePause(goal)), goal
 }

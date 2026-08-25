@@ -966,11 +966,11 @@ func (s *Server) handleList(w http.ResponseWriter, _ *http.Request) {
 	out := []sessionJSON{}
 	seen := make(map[string]bool)
 	for _, m := range mem {
-		// withLoaded keeps m.sess as the answer if this session was
-		// evicted between the bulk residency read above and this
-		// per-session snapshot — the listing still reports the object it
-		// already read, never a nil one.
-		out = append(out, s.buildSession(s.resolveLive(m.sess.ID).withLoaded(m.sess)))
+		// Built from the bulk residency read above rather than a second
+		// per-session s.mu hold: m.sess and m.running already come from
+		// ONE hold, which is the pairing rule liveSession needs. Only the
+		// manager half (for the lineage block) is read here.
+		out = append(out, s.buildSession(liveFromResident(m.sess.ID, m.sess, m.running).withManager(s.sessMgr)))
 		seen[m.sess.ID] = true
 	}
 	infos, err := engine.ListSessions(s.opts.SessionDir)

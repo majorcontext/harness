@@ -749,8 +749,9 @@ func (s *Server) OnRequest(sessionID string, _ int, req *provider.Request) {
 // (reconcile) — so the "journal mirrors the session log" invariant cannot
 // drift. It is idempotent: already-journaled message IDs are skipped.
 //
-// sessionID's *engine.Session is resolved via Server.resolveLive, not a bare
-// s.sessions[sessionID] read — see liveSession's own doc comment for why:
+// sessionID's *engine.Session is resolved via Server.liveSessionObject, not
+// a bare s.sessions[sessionID] read — see liveSession's own doc comment for
+// why:
 // a session SessionManager.Spawn drives (the `task` tool, or session.create's
 // parent_id form) is never inserted into s.sessions at all, ever, since it is
 // never claimed through claimForPrompt/handleCreate — so a plain residency
@@ -771,10 +772,12 @@ func (s *Server) OnRequest(sessionID string, _ int, req *provider.Request) {
 // it. The snapshot's SessionManager half makes a spawned child's own
 // messages reach the journal as they stream in, the same turn they are
 // produced, regardless of whether anything ever prompts it directly again.
-// This path never falls through to a disk load (resolveLive has no such
-// tier, unlike Server.lookup): journaling is for a session something in
-// this process is actively driving, never a reason to re-read a log from
-// disk.
+// This path never falls through to a disk load (liveSessionObject has no
+// such tier, unlike Server.lookup): journaling is for a session something
+// in this process is actively driving, never a reason to re-read a log from
+// disk. It also skips the manager read entirely for a resident session —
+// this runs per journaled message, and residency already answers (see
+// withManagerIfUnresolved).
 //
 // Lock-ordering invariant: server.mu is a LEAF with respect to a session's
 // own mutex — this function must never call a session method that acquires
@@ -791,7 +794,7 @@ func (s *Server) OnRequest(sessionID string, _ int, req *provider.Request) {
 // happened to call back into the session could otherwise re-enter the same
 // cycle.
 func (s *Server) syncMessages(sessionID string) {
-	sess := s.resolveLive(sessionID).session()
+	sess := s.liveSessionObject(sessionID)
 	if sess == nil {
 		return
 	}

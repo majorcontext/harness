@@ -128,6 +128,47 @@ func (lv liveSession) withManager(sessMgr *engine.SessionManager) liveSession {
 	return lv
 }
 
+// withManagerIfUnresolved fills the manager half ONLY when residency has no
+// answer, and is the shape a caller uses when it needs nothing but the
+// session object or its status.
+//
+// session() and status() both prefer residency outright, so for a resident
+// id the manager half changes neither answer — and reading it costs the
+// box-global SessionManager.mu plus a discarded SessionNode copy, on paths
+// that run per journaled message and per wait poll (a live review finding).
+//
+// NEVER build a snapshot this way for a response that renders lineage:
+// lineageJSONFor reads the manager half even for a resident session, and a
+// skipped half would silently demote it to the durable cold branch. Use
+// resolveLive there.
+func (lv liveSession) withManagerIfUnresolved(sessMgr *engine.SessionManager) liveSession {
+	if lv.resident != nil {
+		return lv
+	}
+	return lv.withManager(sessMgr)
+}
+
+// liveSessionObject resolves ONLY the live *engine.Session for id, with the
+// same residency-then-manager preference resolveLive uses and none of its
+// manager read when residency already answers. It returns the session
+// itself, not a snapshot, so a partial snapshot can never reach a status or
+// lineage projection — see withManagerIfUnresolved's own doc comment.
+func (s *Server) liveSessionObject(id string) *engine.Session {
+	s.mu.Lock()
+	lv := s.liveResidentLocked(id)
+	s.mu.Unlock()
+	return lv.withManagerIfUnresolved(s.sessMgr).session()
+}
+
+// liveFromResident builds a snapshot around a residency entry the caller
+// already read under its OWN s.mu hold — handleList takes one bulk
+// residency snapshot and renders every session from it. sess and running
+// must come from one hold, for the pairing rule in this type's doc comment.
+// The caller completes the manager half itself.
+func liveFromResident(id string, sess *engine.Session, running bool) liveSession {
+	return liveSession{id: id, resident: sess, running: running}
+}
+
 // withLoaded returns lv carrying sess as its disk-loaded tier. A caller
 // uses it when it has already loaded (or already holds) a session no live
 // source knows about; it never displaces a resident or managed object.
