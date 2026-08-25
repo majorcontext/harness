@@ -1777,17 +1777,25 @@ func TestRecoverInterruptedTurnDoesNotFalselyMarkForwardedNotificationDelivered(
 	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
 
 	mgr1 := NewSessionManager(context.Background(), 3, 0)
-	// flushed signals every completed unlockAndFlushPersist thunk batch on
-	// mgr1 — the same seam, for the same reason, as the sibling test
-	// TestRecoverInterruptedTurnForwardsGrandchildNotifications (see its
-	// own comment, and testFlushDoneHook's doc comment in
-	// session_manager.go). This test's own setup below reads mid's log from
-	// DISK through LoadSession, and finalizeTurn makes grandID's StatusDone
-	// visible to Info() BEFORE the notification it forwards to mid is
-	// persisted to mid's on-disk log: two different events, so waiting on
-	// the status was never proof the write had landed. That gap is what
-	// made this test fail in CI — always at its own setup assertion, never
-	// at the behavior under test — while passing on a developer machine.
+	// flushed1 receives a signal every time mgr1's unlockAndFlushPersist
+	// finishes running ALL of its queued durable-write thunks — see
+	// testFlushDoneHook's own doc comment (session_manager.go) and
+	// TestRecoverInterruptedTurnForwardsGrandchildNotifications's
+	// identical fix for the full reasoning. #163 installed this hook on
+	// mgr1 and gated the in-memory midSess check on it, but left the
+	// disk-side reloadedMid read below as a one-shot LoadSession: a
+	// live-reproduced CI failure (PR #164, an unrelated diff branched from
+	// main WITH #163's fix) caught the residual hole that left open — the
+	// FIRST disk read below (reloadedMid, populated by mgr1's own
+	// finalizeTurn-triggered flush delivering the grandchild's
+	// notification to mid) was still gated on nothing but the in-memory
+	// check, which proves grandID's status and mid's in-memory pending
+	// flag are visible, never that mid's own durable write has landed (see
+	// unlockAndFlushPersist's own doc comment: status becomes visible to
+	// Info() strictly BEFORE the deferred thunks that record it durably
+	// actually run). Only the SECOND disk read (reloadedAgain, after
+	// mgr2.AdoptReloaded) was covered before; this closes the same gap on
+	// the first one.
 	flushed1 := make(chan struct{}, 64)
 	mgr1.testFlushDoneHook = func() { flushed1 <- struct{}{} }
 
@@ -1804,10 +1812,12 @@ func TestRecoverInterruptedTurnDoesNotFalselyMarkForwardedNotificationDelivered(
 		t.Fatalf("Spawn grandchild: %v", err)
 	}
 
-	// Block on the grandchild's own finalizeTurn flush, then re-check the
-	// real condition — the same loop shape the sibling test uses. No
-	// timeout wrapper: a genuine hang is the test binary's own timeout to
-	// catch.
+	// Block on mgr1's flush signal and recheck the real in-memory
+	// condition, exactly like TestRecoverInterruptedTurnForwardsGrandchild
+	// Notifications' identical loop: grandID's status and mid's own
+	// pending notification are set in the SAME finalizeTurn critical
+	// section, so this loop's exit condition is precisely "that call's
+	// flush has now run" — not merely "status reads Done".
 	var midSess *Session
 	for {
 		<-flushed1
@@ -1827,25 +1837,33 @@ func TestRecoverInterruptedTurnDoesNotFalselyMarkForwardedNotificationDelivered(
 	// id, but mgr2 has no node tracked under it, so
 	// nearestLiveAncestorLocked(mid) will find nothing and return nil.
 	mgr2 := NewSessionManager(context.Background(), 3, 0)
-	// flushed receives a signal every time unlockAndFlushPersist finishes
-	// running ALL of its queued durable-write thunks — see
-	// testFlushDoneHook's own doc comment (session_manager.go) and
-	// TestRecoverInterruptedTurnForwardsGrandchildNotifications's
-	// identical fix for the full reasoning: a guessed sleep here is
-	// exactly the class of flake independently reproduced on unmodified
-	// main by a separate audit (PR #159, 2/30 under CPU pressure) —
-	// recoverInterruptedTurnLocked's own deferred persists are not
-	// guaranteed to have landed by the time any fixed real-time delay
-	// elapses, however generous.
-	flushed := make(chan struct{}, 64)
-	mgr2.testFlushDoneHook = func() { flushed <- struct{}{} }
+	// flushed2 mirrors flushed1 above, for mgr2's own deferred persists
+	// below (AdoptReloaded's own flush, and anything the recovery it
+	// triggers eventually queues).
+	flushed2 := make(chan struct{}, 64)
+	mgr2.testFlushDoneHook = func() { flushed2 <- struct{}{} }
 
-	reloadedMid, err := LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
-	if err != nil {
-		t.Fatalf("LoadSession: %v", err)
-	}
-	if !reloadedMid.hasPendingTaskNotifications() {
-		t.Fatal("test setup: reloaded mid did not restore the grandchild's pending notification from its own durable log")
+	// The durable half of the SAME race the flush loop above closed for
+	// the in-memory check: mid's own finalizeTurn flush (confirmed done
+	// above) queues the notification's disk write, but does not GUARANTEE
+	// it landed before this exact instant if some OTHER, unrelated flush
+	// (e.g. root1's own idle-notify bookkeeping) is what the loop above
+	// actually observed completing last — LoadSession here re-reads from
+	// disk and, on a miss, waits for the NEXT flush1 signal and retries,
+	// rather than trusting a single read. Once true, the durable persist
+	// this reload depends on has unconditionally already run (LoadSession's
+	// own disk read cannot race a write from a goroutine that already
+	// returned from its flush call).
+	var reloadedMid *Session
+	for {
+		reloadedMid, err = LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
+		if err != nil {
+			t.Fatalf("LoadSession: %v", err)
+		}
+		if reloadedMid.hasPendingTaskNotifications() {
+			break
+		}
+		<-flushed1
 	}
 
 	if err := mgr2.AdoptReloaded(reloadedMid); err != nil {
@@ -1858,7 +1876,7 @@ func TestRecoverInterruptedTurnDoesNotFalselyMarkForwardedNotificationDelivered(
 	// landed by the time this line runs otherwise.
 	var reloadedAgain *Session
 	for {
-		<-flushed
+		<-flushed2
 		reloadedAgain, err = LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
 		if err != nil {
 			t.Fatalf("second LoadSession: %v", err)
