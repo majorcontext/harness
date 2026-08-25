@@ -185,7 +185,29 @@ func TestLiveChildToolCallNotSynthesizedAsOrphanError(t *testing.T) {
 	// is the test binary's own timeout to catch, not a guessed deadline.
 	sse := h.openSSE("?session="+childID+"&from=0", "")
 	close(release)
-	sse.waitFor(t, engine.EventToolEnd)
+
+	// Wait for the FOLLOW-UP TURN's reply, not for the tool to end.
+	//
+	// EventToolEnd fires from inside runToolCall, and runAgenticLoop
+	// appends the tool-role result message to history only afterwards, on
+	// its own next statement (engine/engine.go). A GET issued the instant
+	// tool.end arrives can therefore legitimately read a transcript that
+	// still holds only the assistant's tool_call — the very shape this
+	// test's first half deliberately provoked, now read at the wrong
+	// moment and reported as "result missing after it completed". That is
+	// a pre-existing flake, not one this file's sibling sleep migration
+	// introduced: it reproduces on unmodified main, and CI hit it once.
+	//
+	// The child's second scripted turn answers "done sleeping". That
+	// message can only exist after the tool result was appended and fed
+	// back to the provider, so it is a real happens-after edge for the
+	// assertion below. session.status is NOT an option here: a
+	// task-spawned child's status events are not fanned out on its own
+	// SSE stream, so collectUntilIdle blocks forever on it (measured).
+	// waitForMessageText blocks on the subscription's own channel, and
+	// the subscription was opened before the release, so no event can be
+	// missed in between.
+	waitForMessageText(t, sse, "done sleeping", 5*time.Second)
 
 	_, data = h.do("GET", "/session/"+childID+"/message", nil)
 	if !strings.Contains(string(data), "gate done") {
