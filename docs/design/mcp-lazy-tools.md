@@ -78,8 +78,9 @@ Global policy, in `config.Config` (`config/config.go`):
 `Config.validate` rejects a NEGATIVE value, exactly as `connect_timeout_s`
 is rejected today. The reason is that `len(catalog) > -1` holds even for an
 empty catalog. A stray minus sign would silently turn `"auto"` into
-"always defer". The engine also clamps any non-positive value it is
-handed, so an embedder that bypasses config validation stays safe.
+"always defer". The engine also resolves any non-positive value it is handed to that same
+default of 20, so an embedder that bypasses config validation stays safe.
+It never clamps to a floor of 1: that would BE the always-defer bug.
 A count, not a token estimate: the engine has no tokenizer on the request
 path, and a count is deterministic and testable. Twenty is the point where
 a typical catalog's schema block stops being small enough to ignore, while
@@ -185,20 +186,29 @@ eager server needs no `select` call — the design tells the model NOT to
 select a loaded tool (§4) — so nothing would hold its schema across the
 flip, and a working tool would silently lose its definition mid-task.
 
-Every MCP tool call that ROUTES therefore adds its own name to the selected
-set. `executeTool` (`engine/engine.go`) already resolves the binding before
-it calls the server; a name that resolves is a real tool by construction,
-so this can never record an invented one. A tool the model has actually
-used stays loaded across a flip, across a later `select` of something else,
-and across a reload.
+In a session that CAN defer (§4's `sessionCanDefer`), every MCP tool call
+that ROUTES adds its own name to the selected set. `executeTool`
+(`engine/engine.go`) already resolves the binding before it calls the
+server; a name that resolves is a real tool by construction, so this can
+never record an invented one. A tool the model has actually used stays
+loaded across a flip, across a later `select` of something else, and across
+a reload.
+
+The `sessionCanDefer` gate is what keeps this off the default path. Under a
+plain `eager` config nothing can ever defer, so the record could never pay
+for itself — and without the gate every first call to every MCP tool would
+write a permanently inert record, spending log bytes and a disk write on
+the hot path of a config that opted into none of this.
 
 This also closes the recovery path in §7 from the other end: a model that
 calls a deferred tool without selecting it — replaying a name from earlier
 history — gets the call served AND the schema loaded for the next round,
 instead of working once by luck and then vanishing.
 
-The record is written once per tool, on first use. A repeat call finds the
-name in the set and writes nothing.
+The record is written when a tool ENTERS the set, not once per session: a
+repeat call finds the name already there and writes nothing, while a tool
+that was reaped (§4) and then used again enters a second time and writes
+again. Replay dedups, so the set is identical either way.
 
 ### The tools array
 
@@ -302,17 +312,33 @@ provider validates against the schema. A single overloaded `query` string
 would move parsing (and a whole class of malformed-input errors) into the
 tool body for no gain.
 
-The two actions are advertised whenever the session's policy can defer ANY
-server: the global mode is not `eager`, OR at least one entry of
-`MCPToolLoadingByServer` is `lazy`. The gate must not read the global mode
-alone. A global `eager` with one per-server `lazy` still defers that
-server's tools and still lists them as selectable, so a global-only gate
-would tell the model to call an action its schema does not offer.
+The two actions are advertised when `sessionCanDefer` holds. That predicate
+walks the CONFIGURED server names and asks whether any one of them could
+ever defer:
+
+```
+sessionCanDefer = the session holds the mcp tool
+                  AND some configured server's policy mode is not eager
+```
+
+A server's policy mode is its `MCPToolLoadingByServer` override when set,
+and the global mode otherwise. `auto` counts as "not eager" here, because a
+catalog can cross the threshold at any moment.
+
+Both halves of the predicate matter, in both directions:
+
+- Reading the global mode alone OVER-advertises. A global `lazy` whose
+  every server is pinned `eager` defers nothing, yet would still offer two
+  actions with nothing to act on.
+- Reading the global mode alone also UNDER-advertises. A global `eager`
+  with one per-server `lazy` defers that server and lists its tools as
+  selectable, so the model would be told to call an action its schema does
+  not offer.
 
 A session that can defer nothing gets today's two-action schema unchanged,
-so an existing config sees no new text in its tools array. Both inputs to
-the gate are session config, fixed for the session's life, so the def is
-byte-stable either way — including under `auto`, where the RUNTIME decision
+so an existing config sees no new text in its tools array. Every input to
+the predicate is session config, fixed for the session's life, so the def
+is byte-stable either way — including under `auto`, where the RUNTIME decision
 moves with the catalog but the policy does not.
 
 ### `search`
@@ -414,12 +440,12 @@ state.
 }
 ```
 
-Each name lands in exactly one bucket. The bucket is decided by the name's
-own server, which the name itself carries:
+Each name lands in exactly one bucket. The table is evaluated TOP TO
+BOTTOM, and the first row that matches wins:
 
 | Bucket | Condition | Journaled |
 |---|---|---|
-| `already` | The name is in the selected set already. | no — it is already durable |
+| `already` | The name is in the selected set already, whatever its server's state. | no — it is already durable |
 | `selected` | The catalog holds the name. | yes |
 | `pending` | The name's server is configured but not connected. | yes |
 | `missing` | The server is connected and has no such tool, the server is not configured, or the name is malformed. | no |
@@ -619,12 +645,16 @@ construction, since nothing here has a schedule.
    error, and `total`/`truncated` agreeing when `limit` cuts the list. `select` partition across all four
    buckets, with the journal write asserted for `selected` and `pending`
    and asserted ABSENT for `already` and `missing`. Empty `tools` errors.
-   The action gate: a global-`eager` session with one per-server `lazy`
-   advertises `search`/`select` — red-verify this against a
-   global-mode-only gate. A malformed name is `missing` and journals nothing.
+The action gate, in both directions: a global-`eager` session
+   with one per-server `lazy` advertises `search`/`select`, and a global-
+   `lazy` session whose every server is pinned `eager` does NOT —
+   red-verify both against a global-mode-only gate. Bucket order: a
+   restored name whose server has since parked is `already`, never a second
+   `pending` record. A malformed name is `missing` and journals nothing.
    Use implies selection: a routed call to a tool that was never selected
    loads its schema for the next round, and a repeat call writes no second
-   record. The in-turn effect: a fake provider that calls
+   record — and a session that can defer nothing records NOTHING on a
+   routed call, the default-path cost guard. The in-turn effect: a fake provider that calls
    `select` on round 1, and an assertion that round 2's
    `provider.Request.Tools` carries the schema — driven through
    `Session.Prompt`, the production entry point, never by calling
