@@ -446,7 +446,7 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "text is required")
 		return
 	}
-	info, ok := s.sessMgr.Info(id)
+	sess, ok := s.sessMgr.Session(id)
 	if !ok {
 		// Not a tracked node yet — could be a root that exists on disk but
 		// has had no turn run against it in this process (see
@@ -463,7 +463,18 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 		s.writeSendToRootResult(w, id, status, queuedDepth, errCode, holder)
 		return
 	}
-	if info.ParentID == "" {
+	// sess.TaskParentID() (durable), not the live tree's ParentID — a live
+	// review finding: adoptReloadedLocked leaves a warm orphan's live
+	// parent pointer EMPTY (its own parent was untracked at adopt time —
+	// see that method's own doc comment and lineageJSONFor's identical
+	// fallback, handlers.go), even though the child's durable
+	// TaskParentID is set and it is a genuine managed child. Keying this
+	// branch on the live pointer used to misroute a warm orphan's
+	// session.send through the ROOT path below — driving claimForPrompt
+	// against a session SessionManager's own node.ctx already owns —
+	// instead of the child path, the exact concurrent-Session hazard
+	// rejectManagedChildTurn (handlers.go) exists to prevent elsewhere.
+	if sess.TaskParentID() == "" {
 		// Root: route through the ordinary run-slot admission path — see
 		// sendTextToRoot's doc comment for why session.send must never
 		// independently drive Session.Prompt for a root, and never
