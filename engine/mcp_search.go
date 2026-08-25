@@ -101,7 +101,14 @@ type mcpSelectResult struct {
 const mcpSelectNote = "selected tools are callable from the next request in this turn"
 
 // runMCPSearch implements the search action: rank the live catalog by
-// keyword and report what is already loaded. It never mutates state.
+// keyword and report what is loaded.
+//
+// It changes no SELECTION of its own -- no name enters the set here -- but
+// it is not side-effect free: computing the loaded set runs the same plan a
+// request builds, and that plan reaps a stale selection (see
+// reapMCPSelections). A search made after a server reconnects without a
+// previously selected tool therefore drops that name, exactly as the next
+// request would have.
 func runMCPSearch(ctx context.Context, s *Session, query string, limit int) (message.Parts, error) {
 	tokens := mcpSearchTokens(query)
 	if len(tokens) == 0 {
@@ -281,6 +288,14 @@ const (
 // missing. It carries no server, so no other bucket could hold it, and it
 // must never be recorded: that is the same shape the replay guard skips, so
 // one rule holds at both ends of the record's life.
+//
+// One shape production never reaches: a registry that implements
+// mcpConfigReader but NOT mcpStatusReader reports no connected server at
+// all, so every name for a configured server looks pending, and the reap --
+// which needs the same connection state -- can never remove an invented
+// one. *MCPManager implements both interfaces, so only a test fake can be
+// shaped this way. If a status-less registry ever becomes a supported
+// production shape, this needs a fourth answer for "cannot tell".
 func (s *Session) mcpSelectBucket(name string, live, connected, configured map[string]bool) mcpSelectBucket {
 	if s.mcpToolSelected(name) {
 		return mcpBucketAlready
