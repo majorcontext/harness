@@ -59,6 +59,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/engine"
+	"github.com/majorcontext/harness/internal/testpoll"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 	"github.com/majorcontext/harness/provider/anthropic"
@@ -335,12 +336,12 @@ func TestEnableMidToolRoundLive(t *testing.T) {
 	}
 	// Wait for round 1's tool_use to land (bash is now sleeping), then enable
 	// thinking so round 2 rebuilds with it.
-	deadline := time.Now().Add(30 * time.Second)
-	for !h.hasToolCall(id) {
-		if time.Now().After(deadline) {
-			t.Skip("model made no tool call — cannot set up the mid-round enable")
-		}
-		time.Sleep(300 * time.Millisecond)
+	// The tool call comes from a real remote model, so this waits through
+	// testpoll, the shared cross-process poll helper. A model that never
+	// calls the tool is a skip, not a failure, so this uses UntilNoT and
+	// branches on the result instead of failing the test.
+	if !testpoll.UntilNoT(30*time.Second, func() bool { return h.hasToolCall(id) }, 300*time.Millisecond) {
+		t.Skip("model made no tool call — cannot set up the mid-round enable")
 	}
 	if resp, data := h.do("POST", "/session/"+id+"/thinking", map[string]string{"effort": "high"}); resp.StatusCode != http.StatusOK {
 		t.Fatalf("set high: %d %s", resp.StatusCode, data)

@@ -34,7 +34,9 @@ var httpReadyClient = &http.Client{Timeout: readyProbeTimeout}
 // docs/design/managed-processes.md for the rationale (a log-regex gate
 // can match the wrong task's output in a multiplexed runner; a port/HTTP
 // probe cannot).
-func pollReady(stop <-chan struct{}, interval time.Duration, check func() bool, onMatch func()) {
+// pollReady's onFail argument, when non-nil, fires after every probe
+// attempt that reported "not ready" (see Manager.onReadyProbeFailed).
+func pollReady(stop <-chan struct{}, interval time.Duration, check func() bool, onMatch func(), onFail func()) {
 	if interval <= 0 {
 		interval = readyPollInterval
 	}
@@ -44,6 +46,9 @@ func pollReady(stop <-chan struct{}, interval time.Duration, check func() bool, 
 		if check() {
 			onMatch()
 			return
+		}
+		if onFail != nil {
+			onFail()
 		}
 		select {
 		case <-ticker.C:

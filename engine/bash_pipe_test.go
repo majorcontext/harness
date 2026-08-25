@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/majorcontext/harness/internal/testpoll"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 )
@@ -130,21 +131,24 @@ func readProcStat(pid int) (state byte, pgrp int, err error) {
 // process state across an OS process boundary, so no in-process channel
 // can substitute) for path to contain non-empty content, returning it. Safe
 // to call from a non-test goroutine (unlike *testing.T.Fatalf).
-func waitForFileContent(path string, deadline time.Time) (string, bool) {
-	for time.Now().Before(deadline) {
-		if b, err := os.ReadFile(path); err == nil && len(b) > 0 {
-			return string(b), true
+func waitForFileContent(path string, timeout time.Duration) (string, bool) {
+	var content string
+	ok := testpoll.UntilNoT(timeout, func() bool {
+		b, err := os.ReadFile(path)
+		if err != nil || len(b) == 0 {
+			return false
 		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	return "", false
+		content = string(b)
+		return true
+	})
+	return content, ok
 }
 
 // mustWaitForFileContent is the *testing.T-failing wrapper of
 // waitForFileContent for use on the test's own goroutine.
 func mustWaitForFileContent(t *testing.T, path string) string {
 	t.Helper()
-	content, ok := waitForFileContent(path, time.Now().Add(3*time.Second))
+	content, ok := waitForFileContent(path, 3*time.Second)
 	if !ok {
 		t.Fatalf("file %s did not appear in time", path)
 	}
@@ -158,14 +162,9 @@ func mustWaitForFileContent(t *testing.T, path string) string {
 // orphaning it holding a dead pipe.
 func waitForGroupDeath(t *testing.T, pgid int) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if !pgidAlive(pgid) {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("process group %d still alive after deadline: orphaned grandchild (process-group kill did not work)", pgid)
+	testpoll.Until(t, 3*time.Second,
+		fmt.Sprintf("process group %d still alive: orphaned grandchild (process-group kill did not work)", pgid),
+		func() bool { return !pgidAlive(pgid) })
 }
 
 // TestPgidAliveIgnoresZombies is the pinning test for the zombie bug fixed
@@ -208,24 +207,29 @@ func TestPgidAliveIgnoresZombies(t *testing.T) {
 	// delivery isn't synchronous. Parsed inline, independent of
 	// readProcStat, so this fixture wait keeps compiling even if pgidAlive's
 	// fix is reverted for red-verification.
-	deadline := time.Now().Add(3 * time.Second)
 	var lastState, lastErr string
-	for {
+	zombie := testpoll.UntilNoT(3*time.Second, func() bool {
 		b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pgid))
 		if err != nil {
 			lastErr = err.Error()
-		} else if i := strings.LastIndexByte(string(b), ')'); i >= 0 {
-			if fields := strings.Fields(string(b)[i+1:]); len(fields) > 0 {
-				lastState = fields[0]
-				if lastState == "Z" {
-					break
-				}
-			}
+			return false
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("fixture process never reached zombie state (last state %q, last read err %q)", lastState, lastErr)
+		i := strings.LastIndexByte(string(b), ')')
+		if i < 0 {
+			return false
 		}
-		time.Sleep(5 * time.Millisecond)
+		fields := strings.Fields(string(b)[i+1:])
+		if len(fields) == 0 {
+			return false
+		}
+		lastState = fields[0]
+		return lastState == "Z"
+	})
+	if !zombie {
+		// Report what the poll actually saw: the bare "never reached
+		// zombie state" alone makes a real CI failure here much harder
+		// to diagnose.
+		t.Fatalf("fixture process never reached zombie state (last state %q, last read err %q)", lastState, lastErr)
 	}
 
 	if pgidAlive(pgid) {
@@ -363,7 +367,7 @@ func TestBashAbortUnblocksInFlightTurn(t *testing.T) {
 		// confirm its backgrounded grandchild has actually forked (by
 		// writing its own pgid) before aborting, so the abort genuinely
 		// races a live pipe-holder rather than a command that never started.
-		waitForFileContent(pgidFile, time.Now().Add(3*time.Second))
+		waitForFileContent(pgidFile, 3*time.Second)
 		cancel()
 	}()
 
