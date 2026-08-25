@@ -3363,6 +3363,20 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 	// are gone. Testing n.ctx here gives a ctx-only cancel the same
 	// "the queue stays queued, untouched" outcome a status cancel has
 	// (see drainQueueAndPrompt's own doc comment for that contract).
+	//
+	// One bounded exception to that contract lives PAST this gate, named
+	// here at a review's request rather than left absolute: this branch
+	// pops next and journals it dequeued("delivered") before the resume
+	// goroutine runs, so a cancel landing in THAT window leaves exactly
+	// one item recorded delivered that never ran. Journaling the dequeue
+	// before the text enters a turn is what makes double delivery
+	// impossible, and holding the record back until the resume has
+	// started would trade this bounded inconsistency for a crash window
+	// that delivers the same prompt twice — the same lose-once-on-crash
+	// exposure every in-flight prompt already carries (see
+	// maybeDispatchQueued's "No-double-delivery equivalence", invariant
+	// 7, server/handlers.go). Every item still IN the queue is untouched,
+	// exactly as documented.
 	if n.parentID != "" && n.status != StatusCanceled && n.ctx.Err() == nil {
 		s := n.session
 		s.mu.Lock()
