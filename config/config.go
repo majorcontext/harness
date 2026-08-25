@@ -395,7 +395,24 @@ type Provider struct {
 	// ExtraHeaders are sent verbatim on every request by the openaicompat
 	// adapter, e.g. OpenRouter's HTTP-Referer/X-Title attribution headers.
 	ExtraHeaders map[string]string `json:"extra_headers,omitempty"`
+	// CacheTTL selects the Anthropic prompt-cache breakpoint lifetime:
+	// "5m" (the Anthropic API default) or "1h" (the extended TTL, beta
+	// extended-cache-ttl-2025-04-11). Empty (the default) leaves the
+	// adapter default in place, which is "1h" — see
+	// provider/anthropic.DefaultCacheTTL for the cost reasoning. Valid
+	// ONLY on the native "anthropic" entry: no other adapter reads it, so
+	// validateProviders rejects it elsewhere rather than ignoring it.
+	CacheTTL string `json:"cache_ttl,omitempty"`
 }
+
+// Cache TTL values accepted by Provider.CacheTTL. They mirror
+// provider/anthropic's own CacheTTL5m/CacheTTL1h constants; package config
+// does not import a provider package, so the two lists are duplicated
+// deliberately and must stay in step.
+const (
+	CacheTTL5m = "5m"
+	CacheTTL1h = "1h"
+)
 
 // Load reads a single config file. A missing file yields a zero-value Config
 // and a nil error (config is optional). Malformed JSON or an unknown field
@@ -469,6 +486,26 @@ func validateProviders(providers map[string]Provider) error {
 		default:
 			return fmt.Errorf("providers.%s: unknown type %q", name, p.Type)
 		}
+		if err := validateCacheTTL(name, p.CacheTTL); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateCacheTTL fails loudly on a cache_ttl that no adapter would honor:
+// an unknown value (a typo silently shipping different cache economics), or
+// any value at all outside the native "anthropic" entry (the one adapter
+// that reads it). Empty is always valid — it means "adapter default".
+func validateCacheTTL(name, ttl string) error {
+	if ttl == "" {
+		return nil
+	}
+	if name != "anthropic" {
+		return fmt.Errorf("providers.%s: cache_ttl is only valid on the %q provider (only the anthropic adapter sets cache_control)", name, "anthropic")
+	}
+	if ttl != CacheTTL5m && ttl != CacheTTL1h {
+		return fmt.Errorf("providers.%s: unknown cache_ttl %q (valid values: %q, %q)", name, ttl, CacheTTL5m, CacheTTL1h)
 	}
 	return nil
 }
@@ -812,6 +849,9 @@ func merge(base, over *Config) *Config {
 				}
 				if v.Family != "" {
 					ex.Family = v.Family
+				}
+				if v.CacheTTL != "" {
+					ex.CacheTTL = v.CacheTTL
 				}
 				if n := len(ex.ExtraHeaders) + len(v.ExtraHeaders); n > 0 {
 					hm := make(map[string]string, n)

@@ -13,7 +13,7 @@ import (
 
 func mustTranscode(t *testing.T, req *provider.Request) *apiRequest {
 	t.Helper()
-	out, err := transcodeRequest(req)
+	out, err := transcodeRequest(req, DefaultCacheTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestTranscodeReasoningEmptyProviderDataDropped(t *testing.T) {
 					&message.Text{Text: "answer"},
 				}},
 			)
-			out, err := transcodeRequest(req)
+			out, err := transcodeRequest(req, DefaultCacheTTL)
 			if err != nil {
 				t.Fatalf("transcodeRequest: %v", err)
 			}
@@ -187,7 +187,7 @@ func TestTranscodeOversizedReasoningProviderDataDropped(t *testing.T) {
 			&message.Text{Text: "answer"},
 		}},
 	)
-	out, err := transcodeRequest(req)
+	out, err := transcodeRequest(req, DefaultCacheTTL)
 	if err != nil {
 		t.Fatalf("transcodeRequest: %v", err)
 	}
@@ -420,7 +420,7 @@ func TestWireCallID(t *testing.T) {
 }
 
 func TestTranscodeEmptyHistoryFails(t *testing.T) {
-	if _, err := transcodeRequest(baseRequest()); err == nil {
+	if _, err := transcodeRequest(baseRequest(), DefaultCacheTTL); err == nil {
 		t.Fatal("expected error for empty request")
 	}
 }
