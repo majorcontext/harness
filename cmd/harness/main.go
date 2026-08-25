@@ -897,10 +897,11 @@ func newOpenAICompatClient(name string, p config.Provider) *openaicompat.Client 
 		apiKey = os.Getenv(p.APIKeyEnv)
 	}
 	return &openaicompat.Client{
-		Family:       family,
-		APIKey:       apiKey,
-		BaseURL:      p.BaseURL,
-		ExtraHeaders: p.ExtraHeaders,
+		Family:           family,
+		APIKey:           apiKey,
+		BaseURL:          p.BaseURL,
+		ExtraHeaders:     p.ExtraHeaders,
+		NoPromptCacheKey: p.NoPromptCacheKey,
 	}
 }
 

@@ -44,6 +44,18 @@ type Client struct {
 	// ExtraHeaders are sent verbatim on every request, e.g. OpenRouter's
 	// HTTP-Referer and X-Title attribution headers.
 	ExtraHeaders map[string]string
+	// NoPromptCacheKey omits the top-level prompt_cache_key field. The
+	// default (false) sends it, set from Request.SessionKey, because it is
+	// the cache-affinity hint an OpenAI-shaped upstream behind a gateway
+	// reads. Set it for a strict upstream that rejects an unknown top-level
+	// parameter. It suppresses that ONE field: "user" keeps carrying the
+	// session key either way.
+	NoPromptCacheKey bool
+}
+
+// transcodeOptions renders this client's wire choices for the transcoder.
+func (c *Client) transcodeOptions() transcodeOptions {
+	return transcodeOptions{noPromptCacheKey: c.NoPromptCacheKey}
 }
 
 func (c *Client) Name() string { return c.Family }
@@ -55,7 +67,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	if c.APIKey == "" {
 		return nil, fmt.Errorf("openaicompat(%s): no API key configured", c.Family)
 	}
-	wire, err := transcodeRequest(req, c.Family)
+	wire, err := transcodeRequestOpts(req, c.Family, c.transcodeOptions())
 	if err != nil {
 		return nil, err
 	}
