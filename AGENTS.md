@@ -1553,7 +1553,13 @@ SessionManager adoption needed. `GET /session/{id}.lineage` prefers the
 durable `task_depth` over the live tree's derived depth, and merges live
 children with the durable spawn list (`childIDsUnion`,
 `server/handlers.go`) — so `lineage.depth` and `lineage.children` survive
-`Reap` and a process restart. A legacy header without `task_depth`
+`Reap` and a process restart. `childIDsUnion` merges both sides through
+ONE de-duplicating loop and trusts neither side to be duplicate-free: an
+id appears exactly once, whichever side carried it. Never re-add a
+per-side fast path that skips the merge — an earlier one copied `live`
+verbatim when `durable` was empty, so one repeated id survived or
+collapsed depending only on whether the OTHER argument had anything in
+it. A legacy header without `task_depth`
 restores 0; `adoptReloadedLocked` then falls back to the `m.maxDepth`
 refusal sentinel, exactly as before the field existed.
 

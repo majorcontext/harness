@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -161,6 +162,47 @@ func TestChildIDsUnionPreservesSpawnOrder(t *testing.T) {
 				if got[i] != tc.want[i] {
 					t.Fatalf("childIDsUnion(%v, %v) = %v, want %v", tc.live, tc.durable, got, tc.want)
 				}
+			}
+		})
+	}
+}
+
+// TestChildIDsUnionDedupsEverySideWhicheverIsEmpty pins the one contract
+// childIDsUnion's two internal paths used to disagree on: de-duplication.
+//
+// The general path built a `seen` map and dropped a repeated id from
+// EITHER argument. The `len(durable) == 0` early return copied live
+// verbatim, so childIDsUnion([]string{"A", "A"}, nil) kept both copies
+// while childIDsUnion([]string{"A", "A"}, []string{"B"}) kept one. The
+// contract a caller reads off lineageJSON.Children — "every child this
+// session ever spawned", a SET of ids — never says the answer depends on
+// whether the other argument happens to be empty.
+//
+// The union is a merge of two independent bookkeeping sources (the live
+// tree and the durable SpawnedChildIDs list) whose no-duplicate property
+// each rests on a separate producer's own invariant. This test states the
+// merge's own contract instead: one id appears once, whichever side (or
+// sides) carried it, and however many times.
+func TestChildIDsUnionDedupsEverySideWhicheverIsEmpty(t *testing.T) {
+	cases := []struct {
+		name          string
+		live, durable []string
+		want          []string
+	}{
+		{"repeat in live, durable empty", []string{"A", "A"}, nil, []string{"A"}},
+		{"repeat in live, durable non-empty", []string{"A", "A"}, []string{"B"}, []string{"B", "A"}},
+		{"repeat in durable, live empty", nil, []string{"A", "A"}, []string{"A"}},
+		{"repeat in durable, live non-empty", []string{"B"}, []string{"A", "A"}, []string{"A", "B"}},
+		{"repeat across both sides", []string{"A", "B"}, []string{"A"}, []string{"A", "B"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := childIDsUnion(tc.live, tc.durable)
+			if got == nil {
+				t.Fatal("childIDsUnion returned nil, want a non-nil slice (wire contract: \"children\":[] never null)")
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("childIDsUnion(live=%v, durable=%v) = %v, want %v (one id once, whichever side carried it)", tc.live, tc.durable, got, tc.want)
 			}
 		})
 	}
