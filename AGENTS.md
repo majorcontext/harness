@@ -1626,13 +1626,26 @@ incident measured. Three layers carry it:
   cancellation/Reap/delivery/restore switch to grow an arm that behaves
   exactly like `StatusFailed`; only the PARENT's next move differs.
 
+The rate-limit arm conflates a spent quota with a per-minute throttle that
+outlived the child's small `PromptRetries` budget, one-directionally and on
+purpose: a missed wall makes a parent respawn into it (the incident), while
+a false wall costs one deferred resume of an intact child, and a hintless
+guidance names no waiting period. An adapter that classifies its own quota
+shape never reaches that arm. Both halves of the reason — the cause and the
+recover-at hint — go through `boundedProviderText` (mask, then cap), so
+model-visible provider text on this surface has one rule, not one per
+field.
+
 `taskFailureGuidance` (`engine/taskdelivery.go`) appends the parent's
 instructions to that child's own notification line — child preserved, do not
 spawn a replacement, resume with `task send` on this session id, after the
 recover-at hint when the provider gave one. Resuming is the existing
 send-to-a-settled-descendant re-run path, unchanged. A turn that then
 succeeds clears `failReason`/`failKind` on the node, so a resumed child
-stops reporting a wall it already got past.
+stops reporting a wall it already got past; `finalizeTurn`'s
+`alreadyCanceled` branch clears them too, since a CANCELED re-run must not
+keep snapshotting a classification no live cancellation sets and
+`restoreKnownStatusLocked` restores as empty.
 
 `Config.OnRequest` receives the firing session's own id as its first
 parameter (`engine/engine.go`). Never wire it as a closure over a

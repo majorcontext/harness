@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -272,5 +273,133 @@ func TestProviderExhaustedOutcomeSurvivesReload(t *testing.T) {
 	}
 	if pending[0].FailKind != FailKindProviderExhausted {
 		t.Errorf("restored FailKind = %q, want %q", pending[0].FailKind, FailKindProviderExhausted)
+	}
+}
+
+// TestExhaustionHintIsMaskedAndCapped proves the recover-at hint obeys the
+// same one rule the cause half obeys — mask, then cap. A review finding:
+// the hint used to ride into a durable fail reason raw, so the surface had
+// one masked field and one unmasked field side by side.
+func TestExhaustionHintIsMaskedAndCapped(t *testing.T) {
+	long := strings.Repeat("y", spawnErrorHintCap*2)
+	got := classifySpawnFailure(provider.MarkPermanent(&provider.Error{
+		Kind:        provider.ErrKindProviderExhausted,
+		Raw:         "anthropic: usage limit",
+		RecoverHint: long,
+	}))
+	if len([]rune(got.RecoverHint)) > spawnErrorHintCap+len(spawnErrorDetailTruncationMarker) {
+		t.Errorf("RecoverHint = %d runes, want it capped at %d", len([]rune(got.RecoverHint)), spawnErrorHintCap)
+	}
+
+	got = classifySpawnFailure(provider.MarkPermanent(&provider.Error{
+		Kind:        provider.ErrKindProviderExhausted,
+		Raw:         "anthropic: usage limit",
+		RecoverHint: "retry with api_key=sk-live-abcdefgh12345678",
+	}))
+	if strings.Contains(got.RecoverHint, "sk-live-abcdefgh12345678") {
+		t.Errorf("RecoverHint = %q, want the credential masked", got.RecoverHint)
+	}
+	if strings.Contains(got.Reason, "sk-live-abcdefgh12345678") {
+		t.Errorf("Reason = %q, want the credential masked", got.Reason)
+	}
+}
+
+// TestCanceledResumeDropsPriorExhaustionBookkeeping proves a canceled node
+// never keeps a previous turn's failure fields. A review finding: only a
+// SUCCESSFUL turn cleared them, so canceling the re-run of a
+// provider-exhausted child left a StatusCanceled node still snapshotting
+// "provider_exhausted" — a value no live cancellation sets, and one
+// restoreKnownStatusLocked's canceled arm restores as empty, so the live
+// and reloaded views disagreed.
+func TestCanceledResumeDropsPriorExhaustionBookkeeping(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		&exhaustThenBlockProvider{name: "child", started: make(chan struct{}), release: release},
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusFailed, time.Second)
+	node, _, err := mgr.DescendantInfo(root.ID, childID)
+	if err != nil {
+		t.Fatalf("DescendantInfo: %v", err)
+	}
+	if node.FailKind != FailKindProviderExhausted {
+		t.Fatalf("test setup: FailKind = %q, want %q", node.FailKind, FailKindProviderExhausted)
+	}
+
+	// Resume it: the second turn blocks, so the node is RUNNING with the
+	// prior failure's bookkeeping still on it when the cancel lands.
+	if _, err := mgr.SendToDescendant(root.ID, childID, "continue"); err != nil {
+		t.Fatalf("SendToDescendant: %v", err)
+	}
+	child, ok := mgr.Session(childID)
+	if !ok {
+		t.Fatal("Session(child): not found")
+	}
+	prov, _ := child.cfg.Providers["child"].(*exhaustThenBlockProvider)
+	<-prov.started
+
+	if _, err := mgr.CancelDescendant(root.ID, childID); err != nil {
+		t.Fatalf("CancelDescendant: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusCanceled, time.Second)
+	// cancelSubtreeLocked sets StatusCanceled immediately, BEFORE the
+	// interrupted turn unwinds into finalizeTurn — the call that settles a
+	// canceled node's own bookkeeping. Block on the manager's Changed
+	// signal (armed before each read, exactly like waitForStatus) until
+	// the node settles, with the timeout as a failure bound only.
+	waitForNode(t, mgr, root.ID, childID, time.Second, "canceled node must report no failure fields",
+		func(n SessionNode) bool { return n.FailKind == "" && n.FailReason == "" })
+}
+
+// exhaustThenBlockProvider fails its first Stream call with the account
+// wall, then blocks on release — a resumed turn a test can cancel while it
+// is genuinely in flight.
+type exhaustThenBlockProvider struct {
+	name    string
+	calls   int
+	started chan struct{}
+	once    sync.Once
+	release chan struct{}
+}
+
+func (p *exhaustThenBlockProvider) Name() string { return p.name }
+
+func (p *exhaustThenBlockProvider) Stream(ctx context.Context, _ *provider.Request) (provider.Stream, error) {
+	p.calls++
+	if p.calls == 1 {
+		return nil, exhaustionError("2026-09-01")
+	}
+	p.once.Do(func() { close(p.started) })
+	return &blockingStream{ctx: ctx, release: p.release}, nil
+}
+
+// waitForNode blocks until targetID's snapshot satisfies pred, or fails
+// the test once timeout elapses. Same Changed-driven, sample-free shape as
+// waitForStatus: every state settle this package makes wakes it, and the
+// timeout is a failure bound, never a synchronization delay.
+func waitForNode(t *testing.T, mgr *SessionManager, callerID, targetID string, timeout time.Duration, what string, pred func(SessionNode) bool) {
+	t.Helper()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		changed := mgr.Changed()
+		node, _, err := mgr.DescendantInfo(callerID, targetID)
+		if err != nil {
+			t.Fatalf("DescendantInfo(%s): %v", targetID, err)
+		}
+		if pred(node) {
+			return
+		}
+		select {
+		case <-changed:
+		case <-timer.C:
+			t.Fatalf("%s: node = %+v after %s", what, node, timeout)
+		}
 	}
 }

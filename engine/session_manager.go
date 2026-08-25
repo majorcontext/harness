@@ -3592,6 +3592,20 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 		// distinguish this from an ordinary failure and correctly restore
 		// StatusCanceled rather than silently rewriting history to
 		// StatusFailed — a live review finding.
+		//
+		// Clear any PRIOR turn's failure bookkeeping while we are here. A
+		// node reaching this branch was RUNNING, and a running node can
+		// carry a previous failure's failReason/failKind: that is exactly
+		// the resume path a provider-exhausted child takes
+		// (SendToDescendant re-runs it, and only a SUCCESSFUL turn clears
+		// the fields below). Canceling that re-run would otherwise leave
+		// a StatusCanceled node still snapshotting "provider_exhausted",
+		// which no live cancellation ever sets — and which
+		// restoreKnownStatusLocked's own canceled arm deliberately
+		// restores as empty, so the live and restored views would
+		// disagree.
+		n.failReason = ""
+		n.failKind = ""
 		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: "canceled", Canceled: true, Usage: n.session.Usage()}
 	case perr != nil:
 		fail := classifySpawnFailure(perr)
@@ -4117,6 +4131,12 @@ const spawnErrorDetailCap = 500
 // mistakes a truncated message for the provider's whole answer.
 const spawnErrorDetailTruncationMarker = "… [truncated]"
 
+// spawnErrorHintCap bounds the provider's recover-at hint, in runes. The
+// hint is a short time phrase ("2026-09-01 at 00:00 UTC"), so this is far
+// smaller than the cause cap — an adapter capture group that ever ran
+// long would otherwise ride into a fail reason uncapped.
+const spawnErrorHintCap = 120
+
 // FailKindProviderExhausted is the spawnFailure kind for an ACCOUNT-level
 // provider supply wall: the key's usage limit, quota, credit balance, or
 // spend cap is spent (provider.ErrKindProviderExhausted), or a rate limit
@@ -4201,13 +4221,33 @@ func classifySpawnFailure(err error) spawnFailure {
 	// stand down would cost it real throughput.
 	class, retryable := provider.AsRetryable(err)
 	if pe, ok := provider.AsProviderExhausted(err); ok {
+		// The hint is masked and capped exactly like the cause half
+		// beside it. It is only ever an adapter capture group, so a
+		// secret in it is unlikely — but "model-visible provider text is
+		// masked and bounded" must be one rule with no exceptions, or the
+		// next field added here inherits the exception instead of the
+		// rule.
+		hint := boundedProviderText(pe.RecoverHint, spawnErrorHintCap)
 		return spawnFailure{
 			Kind:        FailKindProviderExhausted,
-			Reason:      exhaustionReason(pe.RecoverHint) + ": " + spawnErrorDetail(err),
-			RecoverHint: pe.RecoverHint,
+			Reason:      exhaustionReason(hint) + ": " + spawnErrorDetail(err),
+			RecoverHint: hint,
 		}
 	}
 	if retryable && class == provider.RetryableRateLimited {
+		// Deliberately conflates a spent quota with a per-minute throttle
+		// that outlived the budget, and the conflation is one-directional
+		// by design. A child's only retry budget is the base loop's
+		// Config.PromptRetries (a couple of quick attempts), not the goal
+		// loop's ~30-minute weather schedule, so a throttle lasting a few
+		// seconds can land here. The two answers cost differently: a
+		// missed wall makes the parent respawn into it (the incident),
+		// while a false wall costs the parent one deferred resume of a
+		// child that is fully intact — and the guidance for a hintless
+		// case names no waiting period, so the parent may resume at once.
+		// A provider adapter that classifies its own quota shape (see
+		// provider/anthropic's parseUsageExhaustion) never reaches this
+		// arm; it exists for the adapters that do not yet.
 		return spawnFailure{
 			Kind:   FailKindProviderExhausted,
 			Reason: "provider rate limit outlasted the retry budget for this account: " + spawnErrorDetail(err),
@@ -4239,9 +4279,15 @@ func exhaustionReason(hint string) string {
 // maskSecrets needs the whole text to recognize a key/value shape, and a
 // cut applied first could hand it half a token with no recognizable key.
 func spawnErrorDetail(err error) string {
-	detail := maskSecrets(err.Error())
-	if r := []rune(detail); len(r) > spawnErrorDetailCap {
-		detail = string(r[:spawnErrorDetailCap]) + spawnErrorDetailTruncationMarker
+	return boundedProviderText(err.Error(), spawnErrorDetailCap)
+}
+
+// boundedProviderText is the one rule every piece of model-visible
+// provider text on this surface follows: mask, then cap to n runes.
+func boundedProviderText(text string, n int) string {
+	masked := maskSecrets(text)
+	if r := []rune(masked); len(r) > n {
+		return string(r[:n]) + spawnErrorDetailTruncationMarker
 	}
-	return detail
+	return masked
 }
