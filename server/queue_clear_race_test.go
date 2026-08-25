@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -137,12 +138,30 @@ func TestQueueClearRaceDuringDispatchIsNotAnError(t *testing.T) {
 	// very request just enqueued -- before dispatchQueueHead gets a chance.
 	//
 	// One-shot, for the same reason the sibling test above documents: the
-	// tail maybeDispatchQueued call re-entered this body after the test
-	// had returned and panicked the whole package. calls counts every
+	// tail maybeDispatchQueued call re-enters this hook after the request
+	// goroutine's own body is already running. calls counts every
 	// invocation so the assertion below can prove that late call really
 	// happens and is now inert.
+	//
+	// The guard is a lock-free CAS (atomic.Bool), never sync.Once: this
+	// body itself blocks on maybeDispatchQueued's own completion (the
+	// wait?until=idle call below) — the exact call the SECOND invocation
+	// below IS. maybeDispatchQueued calls this hook BEFORE its own defer
+	// clears Server.queueDrainPending, and waitSnapshot (wait.go) refuses
+	// to report idle while queueDrainPending is set, so the wait call
+	// below cannot return until that second invocation returns from this
+	// hook. sync.Once.Do blocks a second, concurrent caller until the
+	// first caller's function returns — with Once here, the tail
+	// goroutine's second invocation would block waiting for this body to
+	// finish, while this body blocks waiting for the wait call, which
+	// blocks waiting for that same second invocation to finish: a genuine
+	// deadlock, caught live (a 10-minute test-binary timeout panic) under
+	// repeated GOMAXPROCS=2 -race hammering. CompareAndSwap never blocks a
+	// second caller — it returns false immediately, so the tail
+	// invocation falls straight through to maybeDispatchQueued's own
+	// defer, clearing queueDrainPending and unblocking the wait call.
 	var (
-		raceOnce  sync.Once
+		raced     atomic.Bool
 		callsMu   sync.Mutex
 		calls     int
 		bodyCalls int
@@ -151,28 +170,29 @@ func TestQueueClearRaceDuringDispatchIsNotAnError(t *testing.T) {
 		callsMu.Lock()
 		calls++
 		callsMu.Unlock()
-		raceOnce.Do(func() {
-			callsMu.Lock()
-			bodyCalls++
-			callsMu.Unlock()
-			// t.Errorf, not t.Fatalf: this body runs on the server's
-			// HTTP-handler goroutine (the seam fires synchronously from
-			// enqueueOrDispatch while the test goroutine is blocked in
-			// h.do), and Fatalf's FailNow may only be called from the
-			// test goroutine — elsewhere its runtime.Goexit kills the
-			// handler mid-request, so a genuine failure here would
-			// surface as a broken connection on the outer POST instead
-			// of a clean failure. There is no cleanup to abort.
-			prov.releaseAll()
-			waitResp, waitData := h.do("GET", "/session/"+id+"/wait?until=idle&timeout_s=5", nil)
-			if waitResp.StatusCode != http.StatusOK {
-				t.Errorf("wait for first turn's idle status %d: %s", waitResp.StatusCode, waitData)
-			}
-			delResp, delData := h.do("DELETE", "/session/"+id+"/queue", nil)
-			if delResp.StatusCode != http.StatusNoContent {
-				t.Errorf("DELETE queue status %d: %s", delResp.StatusCode, delData)
-			}
-		})
+		if !raced.CompareAndSwap(false, true) {
+			return
+		}
+		callsMu.Lock()
+		bodyCalls++
+		callsMu.Unlock()
+		// t.Errorf, not t.Fatalf: this body runs on the server's
+		// HTTP-handler goroutine (the seam fires synchronously from
+		// enqueueOrDispatch while the test goroutine is blocked in
+		// h.do), and Fatalf's FailNow may only be called from the
+		// test goroutine — elsewhere its runtime.Goexit kills the
+		// handler mid-request, so a genuine failure here would
+		// surface as a broken connection on the outer POST instead
+		// of a clean failure. There is no cleanup to abort.
+		prov.releaseAll()
+		waitResp, waitData := h.do("GET", "/session/"+id+"/wait?until=idle&timeout_s=5", nil)
+		if waitResp.StatusCode != http.StatusOK {
+			t.Errorf("wait for first turn's idle status %d: %s", waitResp.StatusCode, waitData)
+		}
+		delResp, delData := h.do("DELETE", "/session/"+id+"/queue", nil)
+		if delResp.StatusCode != http.StatusNoContent {
+			t.Errorf("DELETE queue status %d: %s", delResp.StatusCode, delData)
+		}
 	}
 
 	resp, data = h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
