@@ -4084,12 +4084,49 @@ func restrictTools(s *Session, names []string) error {
 	return nil
 }
 
+// spawnErrorDetailCap bounds the cause half of a classified fail reason,
+// in runes. A provider error can embed a whole rejected request or
+// response body, and a fail reason is replayed to the parent model on
+// every later turn (renderTaskNotifications) as well as stored on the
+// node. 500 runes holds every real provider message observed so far — the
+// usage-limit text that motivated this is under 120 — while keeping a
+// runaway body out of the parent's context.
+const spawnErrorDetailCap = 500
+
+// spawnErrorDetailTruncationMarker marks a cut cause, so a reader never
+// mistakes a truncated message for the provider's whole answer.
+const spawnErrorDetailTruncationMarker = "… [truncated]"
+
 // classifySpawnError maps a raw Prompt error from a managed session's turn
-// into a short, secret-free reason for a child's completion notification —
-// the #82 leak rule (see classifyGoalWorkerError in goal.go, the sibling
-// this mirrors): never surface err.Error() verbatim, since a provider error
-// can carry request or response bytes with API keys or endpoint URLs baked
-// in.
+// into the reason for a child's completion notification: a fixed
+// classified prefix, then the underlying error itself as the cause.
+//
+// The prefix alone was the whole reason until a live incident proved it
+// unusable. A child died on "[permanent] anthropic: You have reached your
+// specified API usage limits. You will regain access on <date>"; its
+// parent read "turn failed and did not recover", guessed the child had hit
+// a bug, and respawned a sibling straight into the same fleet-wide wall.
+// Every classified prefix here covers a whole family of causes — a
+// permanent 400 is a malformed request AND a quota rejection AND a
+// content-policy refusal — so the prefix can never tell a parent which
+// response is right. The cause can.
+//
+// The #82 leak rule (see classifyGoalWorkerError in goal.go, the sibling
+// this mirrors) still holds, in a narrower form: the cause is never
+// surfaced RAW. spawnErrorDetail masks credential shapes with the same
+// maskSecrets pass every retained tool result uses, and caps the result at
+// spawnErrorDetailCap runes. This is best-effort masking, exactly as it is
+// for a tool result — a provider error is free-form text and no pattern
+// set catches every secret shape — so the trade is deliberate: a parent
+// that cannot see the cause makes the wrong call every time, which the
+// incident measured, against a bounded, masked leak risk on an error path.
+//
+// context.Canceled and context.DeadlineExceeded keep their short fixed
+// strings with no cause appended: "context canceled" names nothing a
+// parent can act on, and "canceled" specifically is a value other code
+// reads (see taskNotification.Canceled's doc comment for why it is NOT
+// compared, and finalizeTurn's alreadyCanceled branch, which produces the
+// same literal).
 func classifySpawnError(err error) string {
 	if err == nil {
 		return ""
@@ -4100,11 +4137,26 @@ func classifySpawnError(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "timed out"
 	}
-	if class, retryable := provider.AsRetryable(err); retryable {
-		return fmt.Sprintf("provider %s errors exhausted the retry budget", class)
+	var prefix string
+	switch class, retryable := provider.AsRetryable(err); {
+	case retryable:
+		prefix = fmt.Sprintf("provider %s errors exhausted the retry budget", class)
+	case provider.AsPermanent(err):
+		prefix = "turn failed with a permanent provider error and cannot succeed on retry"
+	default:
+		prefix = "turn failed and did not recover"
 	}
-	if provider.AsPermanent(err) {
-		return "turn failed with a permanent provider error and cannot succeed on retry"
+	return prefix + ": " + spawnErrorDetail(err)
+}
+
+// spawnErrorDetail renders err as the model-visible cause half of a
+// classified fail reason: masked, then capped. Mask first, cap second —
+// maskSecrets needs the whole text to recognize a key/value shape, and a
+// cut applied first could hand it half a token with no recognizable key.
+func spawnErrorDetail(err error) string {
+	detail := maskSecrets(err.Error())
+	if r := []rune(detail); len(r) > spawnErrorDetailCap {
+		detail = string(r[:spawnErrorDetailCap]) + spawnErrorDetailTruncationMarker
 	}
-	return "turn failed and did not recover"
+	return detail
 }

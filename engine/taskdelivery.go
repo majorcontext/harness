@@ -15,11 +15,15 @@ import (
 // is), engine-initiated for an idle one (see SessionManager.finalizeTurn
 // and triggerResumeLocked).
 type taskNotification struct {
-	ChildID    string
-	Agent      string
-	Status     SessionStatus // StatusDone or StatusFailed; nothing else is ever queued
-	Result     string        // the child's final text — set for StatusDone
-	FailReason string        // classified (#82-rule) reason — set for StatusFailed
+	ChildID string
+	Agent   string
+	Status  SessionStatus // StatusDone or StatusFailed; nothing else is ever queued
+	Result  string        // the child's final text — set for StatusDone
+	// FailReason is set for StatusFailed: a fixed classified prefix, then
+	// the masked, capped provider cause — see classifySpawnError
+	// (session_manager.go) for both halves and the #82 leak rule they
+	// satisfy together.
+	FailReason string
 	Usage      provider.Usage
 	// Canceled distinguishes a child that was explicitly Cancel()ed from
 	// an ordinarily failed one — deliberately NOT folded into Status
@@ -445,9 +449,12 @@ func renderTaskNotifications(pending []taskNotification) string {
 // neutralizeNotificationText collapses newlines to spaces — see
 // renderTaskNotifications' doc comment for why. FailReason is always
 // engine-generated (classifySpawnError, or the fixed "canceled" string —
-// never raw child text), so it never actually needs this; applied
-// uniformly anyway so there is exactly one rule for "text that lands
-// inside a [tasks: ...] line," not one rule per field that could drift.
+// never raw CHILD text), but it does now carry the provider's own error
+// message as its cause half, and a provider error can be multi-line, so
+// this pass is load-bearing for FailReason too, not only for a child's
+// Result. Applied uniformly, so there is exactly one rule for "text that
+// lands inside a [tasks: ...] line," not one rule per field that could
+// drift.
 func neutralizeNotificationText(s string) string {
 	s = strings.ReplaceAll(s, "\r\n", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
