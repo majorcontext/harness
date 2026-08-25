@@ -1042,12 +1042,12 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	lv, ok := s.lookup(id)
+	sess, ok := s.lookupSession(id)
 	if !ok {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
 	}
-	msgs := lv.session().History()
+	msgs := sess.History()
 	out := make([]json.RawMessage, 0, len(msgs))
 	for i := range msgs {
 		m := &msgs[i]
@@ -2816,12 +2816,12 @@ func (s *Server) handleQueueGet(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	lv, ok := s.lookup(id)
+	sess, ok := s.lookupSession(id)
 	if !ok {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
 	}
-	watermark, prompts := lv.session().QueueState()
+	watermark, prompts := sess.QueueState()
 	resp := queueGetResponse{Watermark: watermark, Queued: []queuedItemJSON{}}
 	for _, p := range prompts {
 		resp.Queued = append(resp.Queued, queuedItemJSON{ID: p.ID, Text: p.Text, Seq: p.Seq})
@@ -3136,6 +3136,28 @@ func (s *Server) sessionOnDisk(id string) bool {
 // and no repair artifacts. Only an id sessMgr has never adopted (or has
 // since forgotten — e.g. this process restarted and the id has not been
 // re-adopted onto a NEW node yet) ever reaches the disk-load fallback below.
+// lookupSession resolves id for a read that needs the session object and
+// nothing else — no status, no lineage: the same three tiers lookup uses
+// (residency, SessionManager, disk), minus the manager read when residency
+// already answers. handleMessages, handleQueueGet, handleJournal, and the
+// plugin client API all discard the rest of the snapshot, and two of them
+// are polled, so paying the box-global SessionManager.mu and a discarded
+// SessionNode copy per poll is waste (a live review finding — the same
+// class already fixed on syncMessages and waitSnapshot).
+//
+// A caller that renders lineage must use lookup instead: lineageJSONFor
+// reads the manager half even for a resident session.
+func (s *Server) lookupSession(id string) (*engine.Session, bool) {
+	if sess := s.liveSessionObject(id); sess != nil {
+		return sess, true
+	}
+	sess, err := s.opts.LoadSession(id)
+	if err != nil {
+		return nil, false
+	}
+	return sess, true
+}
+
 func (s *Server) lookup(id string) (liveSession, bool) {
 	lv := s.resolveLive(id)
 	if lv.session() != nil {

@@ -59,7 +59,7 @@ func (s *Server) handleJournal(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// s.lookup's own cold-load path (LoadSession: full ReadFile + scanLog +
+	// s.lookupSession's own cold-load path (LoadSession: full ReadFile + scanLog +
 	// message replay + orphan repair) is discarded here — engine.LoadJournal
 	// below re-reads and re-parses the SAME file from scratch, and every
 	// subsequent page of a long log re-reads the whole file again
@@ -67,7 +67,7 @@ func (s *Server) handleJournal(w http.ResponseWriter, r *http.Request) {
 	// []JournalRecord). This is a debug endpoint, not a hot path, so the
 	// redundant I/O is an accepted tradeoff rather than something worth a
 	// cache or a leaner existence check.
-	if _, ok := s.lookup(id); !ok {
+	if _, ok := s.lookupSession(id); !ok {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
 	}
