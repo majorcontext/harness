@@ -26,9 +26,15 @@ import (
 	"time"
 )
 
-// Interval is the gap between attempts. It is short enough that a fast
-// machine is not meaningfully delayed, and it never appears in an
+// Interval is the default gap between attempts. It is short enough that a
+// fast machine is not meaningfully delayed, and it never appears in an
 // assertion, so no test depends on its value.
+//
+// It suits a cheap local check — a Status read, a small file read. A check
+// that costs a real network round trip should pass its own coarser
+// interval (see Until's every argument): at 2ms, a wait for a turn that
+// streams for tens of seconds would issue thousands of requests, and those
+// requests compete with the very work the wait is timing.
 const Interval = 2 * time.Millisecond
 
 // Until calls check until it reports true, then returns. It fails the test
@@ -38,9 +44,12 @@ const Interval = 2 * time.Millisecond
 // returns as soon as check reports true, so a generous timeout costs a slow
 // machine nothing and a loaded machine no flake. Pick it far above any
 // plausible real latency.
-func Until(t *testing.T, timeout time.Duration, msg string, check func() bool) {
+//
+// every overrides Interval for a check that is expensive to run. Pass at
+// most one; a non-positive value falls back to Interval.
+func Until(t *testing.T, timeout time.Duration, msg string, check func() bool, every ...time.Duration) {
 	t.Helper()
-	if !UntilNoT(timeout, check) {
+	if !UntilNoT(timeout, check, every...) {
 		t.Fatalf("%s (after %s)", msg, timeout)
 	}
 }
@@ -48,9 +57,13 @@ func Until(t *testing.T, timeout time.Duration, msg string, check func() bool) {
 // UntilNoT is Until for a goroutine that is not the test's own goroutine,
 // where calling t.Fatalf is illegal. It reports whether check succeeded
 // before the timeout; the caller propagates the failure.
-func UntilNoT(timeout time.Duration, check func() bool) bool {
+func UntilNoT(timeout time.Duration, check func() bool, every ...time.Duration) bool {
+	interval := Interval
+	if len(every) > 0 && every[0] > 0 {
+		interval = every[0]
+	}
 	deadline := time.Now().Add(timeout)
-	ticker := time.NewTicker(Interval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		if check() {

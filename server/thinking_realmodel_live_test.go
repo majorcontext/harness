@@ -340,7 +340,7 @@ func TestEnableMidToolRoundLive(t *testing.T) {
 	// testpoll, the shared cross-process poll helper. A model that never
 	// calls the tool is a skip, not a failure, so this uses UntilNoT and
 	// branches on the result instead of failing the test.
-	if !testpoll.UntilNoT(30*time.Second, func() bool { return h.hasToolCall(id) }) {
+	if !testpoll.UntilNoT(30*time.Second, func() bool { return h.hasToolCall(id) }, 300*time.Millisecond) {
 		t.Skip("model made no tool call — cannot set up the mid-round enable")
 	}
 	if resp, data := h.do("POST", "/session/"+id+"/thinking", map[string]string{"effort": "high"}); resp.StatusCode != http.StatusOK {

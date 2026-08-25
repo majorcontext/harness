@@ -120,7 +120,7 @@ func (h *harness) waitIdleLive(id string) {
 		}
 		_ = json.Unmarshal(data, &s)
 		return s.Status == "idle"
-	})
+	}, 500*time.Millisecond) // a real remote-model turn: poll coarsely
 }
 
 // hasReasoning reports whether any returned message carries a Reasoning part —
