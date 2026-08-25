@@ -1044,30 +1044,26 @@ func TestAbortOfTerminalChildLeavesGrandchildAndSendUntouched(t *testing.T) {
 	}
 	waitForLineageStatus(t, h, mid.ID, "done", 2*time.Second)
 
-	// grand must be untouched collateral — still running, not failed or
-	// canceled.
+	// grand must be untouched collateral: its turn must still be able to
+	// finish normally, as "done".
 	//
-	// The completed follow-up turn just above is this check's ordering
-	// barrier, and it is the reason no settling delay is needed here. A
-	// wrongful cascade would cancel grand's context inside the abort call
-	// itself; grand's provider selects on that context (blockingStream),
-	// so grand's turn would then end and its status leave "running". The
-	// follow-up turn is a whole real turn — admitted, run, and finalized
-	// through the same SessionManager lock — after the abort returned, so
-	// a cascade that had really fired has long since landed by the time
-	// this reads grand's status. A fixed sleep here bought strictly less
-	// ordering than one completed turn, and bought it by guessing.
-	resp, data = h.do("GET", "/session/"+grand.ID, nil)
-	if resp.StatusCode != 200 {
-		t.Fatalf("get grand status %d: %s", resp.StatusCode, data)
-	}
-	var grandInfo struct {
-		Lineage map[string]any `json:"lineage"`
-	}
-	mustUnmarshal(t, data, &grandInfo)
-	if grandInfo.Lineage["status"] != "running" {
-		t.Errorf("grand lineage.status = %v, want %q (aborting the already-done mid must not touch its running grandchild)", grandInfo.Lineage["status"], "running")
-	}
+	// Reading grand's status right here instead would prove nothing. A
+	// wrongful cascade cancels grand's context synchronously inside the
+	// abort call, but grand only LEAVES "running" later, asynchronously,
+	// in its own goroutine — blockingStream returns on the canceled
+	// context and finalizeTurn runs there. Nothing orders that goroutine
+	// against this one: mid's follow-up turn and grand's finalize both
+	// take m.mu, but two goroutines taking the same lock impose no
+	// happens-before between them. So a status read could land first, see
+	// "running", and pass while the regression it names was live.
+	//
+	// Release grand's provider and wait for its own terminal status
+	// instead. That has a real edge with grand's goroutine, and it is a
+	// positive assertion: an uncanceled grand runs its scripted turn to
+	// "done", while a wrongfully canceled one ends "canceled" and this
+	// wait fails naming the status it actually saw.
+	blockerGrand.releaseAll()
+	waitForLineageStatus(t, h, grand.ID, "done", 2*time.Second)
 }
 
 // TestSessionSendUnknownSessionIs404 proves session.send 404s for an id

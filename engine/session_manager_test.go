@@ -1875,23 +1875,34 @@ func waitForStatus(t *testing.T, mgr *SessionManager, id string, want SessionSta
 	}
 }
 
-// waitForReap blocks until a Reap call collects want nodes, or fails the
-// test once timeout elapses. Same Changed-driven, sample-free shape as
-// waitForStatus: a node becomes reapable only once finalizeTurn has marked
-// it finalized, which is itself a state settle Changed reports.
+// waitForReap blocks until Reap calls have collected at least want nodes in
+// total, or fails the test once timeout elapses. Same Changed-driven,
+// sample-free shape as waitForStatus: a node becomes reapable only once
+// finalizeTurn has marked it finalized, which is itself a state settle
+// Changed reports.
+//
+// The count accumulates across calls, and the test is "at least want", not
+// "exactly want on one call". Reap collects EVERY currently-reapable node
+// in one call and removes it, so an interleave that makes two nodes
+// reapable before the first Reap lands returns 2 where the caller asked
+// for 1 — after which every later Reap returns 0. An equality test would
+// then never match and would block to the timeout reporting "never became
+// reapable", while nodes had in fact been reaped.
 func waitForReap(t *testing.T, mgr *SessionManager, want int, timeout time.Duration, msg string) {
 	t.Helper()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+	got := 0
 	for {
 		changed := mgr.Changed()
-		if n := mgr.Reap(); n == want {
+		got += mgr.Reap()
+		if got >= want {
 			return
 		}
 		select {
 		case <-changed:
 		case <-timer.C:
-			t.Fatalf("%s (no Reap collected %d node(s) within %s)", msg, want, timeout)
+			t.Fatalf("%s (Reap collected %d node(s), want at least %d, within %s)", msg, got, want, timeout)
 		}
 	}
 }
