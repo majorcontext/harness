@@ -1777,6 +1777,20 @@ func TestRecoverInterruptedTurnDoesNotFalselyMarkForwardedNotificationDelivered(
 	rootCfg := Config{Providers: reg, Model: modelFor("root"), SessionDir: dir}
 
 	mgr1 := NewSessionManager(context.Background(), 3, 0)
+	// flushed signals every completed unlockAndFlushPersist thunk batch on
+	// mgr1 — the same seam, for the same reason, as the sibling test
+	// TestRecoverInterruptedTurnForwardsGrandchildNotifications (see its
+	// own comment, and testFlushDoneHook's doc comment in
+	// session_manager.go). This test's own setup below reads mid's log from
+	// DISK through LoadSession, and finalizeTurn makes grandID's StatusDone
+	// visible to Info() BEFORE the notification it forwards to mid is
+	// persisted to mid's on-disk log: two different events, so waiting on
+	// the status was never proof the write had landed. That gap is what
+	// made this test fail in CI — always at its own setup assertion, never
+	// at the behavior under test — while passing on a developer machine.
+	flushed1 := make(chan struct{}, 64)
+	mgr1.testFlushDoneHook = func() { flushed1 <- struct{}{} }
+
 	root1 := mgr1.NewRoot(rootCfg)
 
 	midID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("mid"), AgentType: AgentGeneralPurpose})
@@ -1789,14 +1803,22 @@ func TestRecoverInterruptedTurnDoesNotFalselyMarkForwardedNotificationDelivered(
 	if err != nil {
 		t.Fatalf("Spawn grandchild: %v", err)
 	}
-	waitForStatus(t, mgr1, grandID, StatusDone, time.Second)
 
-	midSess, ok := mgr1.Session(midID)
-	if !ok {
-		t.Fatal("mid not tracked")
-	}
-	if !midSess.hasPendingTaskNotifications() {
-		t.Fatal("test setup: mid does not have the grandchild's notification pending")
+	// Block on the grandchild's own finalizeTurn flush, then re-check the
+	// real condition — the same loop shape the sibling test uses. No
+	// timeout wrapper: a genuine hang is the test binary's own timeout to
+	// catch.
+	var midSess *Session
+	for {
+		<-flushed1
+		var ok bool
+		midSess, ok = mgr1.Session(midID)
+		if !ok {
+			t.Fatal("mid not tracked")
+		}
+		if info, ok := mgr1.Info(grandID); ok && info.Status == StatusDone && midSess.hasPendingTaskNotifications() {
+			break
+		}
 	}
 
 	// Simulate a crash: mid's blocked goroutine is simply abandoned. The
