@@ -320,12 +320,6 @@ type SessionManager struct {
 	testSweepUnlockedHook func()
 }
 
-// deferPersist queues fn to run once m.mu is released via
-// unlockAndFlushPersist — see that method's own doc comment. Caller
-// holds m.mu. fn itself must not touch m or take m.mu (it runs AFTER
-// m.mu is released, from unlockAndFlushPersist's own goroutine, never
-// concurrently with anything else queued in the SAME flush — see that
-// method's own doc comment for why queue order is preserved).
 // Changed returns a channel that closes the next time any node's
 // observable state settles — a status transition, a finalized flag, or a
 // node entering or leaving the tree. A caller re-reads the state it cares
@@ -371,6 +365,12 @@ func (m *SessionManager) markChangedLocked() {
 	m.changed = make(chan struct{})
 }
 
+// deferPersist queues fn to run once m.mu is released via
+// unlockAndFlushPersist — see that method's own doc comment. Caller
+// holds m.mu. fn itself must not touch m or take m.mu (it runs AFTER
+// m.mu is released, from unlockAndFlushPersist's own goroutine, never
+// concurrently with anything else queued in the SAME flush — see that
+// method's own doc comment for why queue order is preserved).
 func (m *SessionManager) deferPersist(fn func()) {
 	m.pendingPersist = append(m.pendingPersist, fn)
 }
@@ -933,16 +933,14 @@ func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
 			// PARENT-facing notification) into n.failReason here would
 			// invent a value a live cancellation never actually sets.
 			n.status = StatusCanceled
-			m.markChangedLocked()
 		case StatusDone:
 			n.status = StatusDone
-			m.markChangedLocked()
 			n.result = committed.Result
 		default:
 			n.status = StatusFailed
-			m.markChangedLocked()
 			n.failReason = committed.FailReason
 		}
+		m.markChangedLocked()
 	case len(s.SpawnedChildIDs()) > 0 || len(s.History()) > 0:
 		// No committed outcome, but s has definitely already run a turn
 		// — the legacy case, not the genuinely-fresh one. Proven by
@@ -995,16 +993,14 @@ func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
 		// it for an idle node worth an async resume), AND so Reap can
 		// finally collect it, closing the leak described above.
 		n.finalized = true
-		m.markChangedLocked()
 		if result, ok := s.settledSuccessResult(); ok {
 			n.status = StatusDone
-			m.markChangedLocked()
 			n.result = result
 		} else {
 			n.status = StatusFailed
-			m.markChangedLocked()
 			n.failReason = unknownLegacyOutcomeFailReason
 		}
+		m.markChangedLocked()
 	default:
 		// Both signals empty: nothing proves this node ever ran a turn
 		// at all — genuinely fresh, and adoptLocked's StatusIdle default
@@ -1486,16 +1482,14 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	switch nodeStatusForOutcome(notify) {
 	case StatusCanceled:
 		n.status = StatusCanceled // n.result/n.failReason left untouched — mirrors cancelOneNodeLocked's own live bookkeeping.
-		m.markChangedLocked()
 	case StatusDone:
 		n.status = StatusDone
-		m.markChangedLocked()
 		n.result = notify.Result
 	default:
 		n.status = StatusFailed
-		m.markChangedLocked()
 		n.failReason = notify.FailReason
 	}
+	m.markChangedLocked()
 
 	// Commit THIS notify durably BEFORE attempting delivery — mirrors
 	// finalizeTurn's own identical step (SessionManager.commitOutcomeLocked)
@@ -1971,7 +1965,6 @@ func (m *SessionManager) ReportTurnStart(sess *Session) {
 		m.runningByRoot[n.rootID]++
 	}
 	n.status = StatusRunning
-	m.markChangedLocked()
 	// finalized must be cleared on every transition INTO StatusRunning —
 	// not just implicitly left at its zero value for a brand-new node —
 	// because a node reused for a SECOND (or later) turn (a session.send
@@ -2267,11 +2260,10 @@ func (m *SessionManager) ForgetRoot(id string) error {
 		// settle" reasoning is safe here.
 		if n.status != StatusDone && n.status != StatusFailed && n.status != StatusCanceled {
 			n.status = StatusCanceled
-			m.markChangedLocked()
 		}
 		n.finalized = true
-		m.markChangedLocked()
 		n.pendingForget = true
+		m.markChangedLocked()
 		return fmt.Errorf("engine: root %s still has live children", id)
 	}
 	n.cancel() // see Reap's identical call for why this is required, not optional
@@ -2655,7 +2647,6 @@ func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Me
 		return nil, ErrConcurrencyLimit
 	}
 	n.status = StatusRunning
-	m.markChangedLocked()
 	// See ReportTurnStart's identical reset for why: n may be a
 	// done/failed child Send is legitimately restarting for a follow-up
 	// turn, and it still carries finalized=true from finishing its PRIOR
@@ -2704,7 +2695,6 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 	// is fully settled, regardless of which status branch runs below —
 	// safe for Reap to remove n once this is true.
 	n.finalized = true
-	m.markChangedLocked()
 
 	// resume is set here (never fired directly — see below) whenever this
 	// call needs to actively start another turn rather than simply
@@ -2755,7 +2745,6 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 			resume = m.triggerResumeLocked(n)
 		default:
 			n.status = StatusIdle
-			m.markChangedLocked()
 		}
 	case alreadyCanceled:
 		// Cancel() already set the terminal node status directly (see
@@ -2780,12 +2769,10 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: "canceled", Canceled: true, Usage: n.session.Usage()}
 	case perr != nil:
 		n.status = StatusFailed
-		m.markChangedLocked()
 		n.failReason = classifySpawnError(perr)
 		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusFailed, FailReason: n.failReason, Usage: n.session.Usage()}
 	default:
 		n.status = StatusDone
-		m.markChangedLocked()
 		// msg is nil for a caller that never has one to give — an
 		// external scheduler's ReportTurnEnd(id, nil, err) (server's
 		// runGoal and cmd/harness's own runGoal both pass nil
@@ -2803,6 +2790,11 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 		}
 		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusDone, Result: n.result, Usage: n.session.Usage()}
 	}
+	// One notification for the whole terminal transition above: every
+	// field it writes (finalized, status, result, failReason) is set
+	// under this single m.mu hold, so an observer woken here re-reads a
+	// fully settled node. See markChangedLocked's own doc comment.
+	m.markChangedLocked()
 
 	// Accumulate n's newly-spent usage (this turn's delta, NOT its full
 	// cumulative total — see budgetedUsage's own doc comment for why a
@@ -3015,7 +3007,6 @@ func (m *SessionManager) nearestLiveAncestorLocked(n *sessionNode) *sessionNode 
 // external scheduler, so this delegation never applies to one.
 func (m *SessionManager) triggerResumeLocked(node *sessionNode) func() {
 	node.status = StatusRunning
-	m.markChangedLocked()
 	// See ReportTurnStart's identical reset for why: node may be resuming
 	// from a PRIOR completed turn and still carry finalized=true from it.
 	node.finalized = false
@@ -3110,7 +3101,6 @@ func (m *SessionManager) RevertResumeIfStillRunning(id string) {
 		return
 	}
 	n.status = StatusIdle
-	m.markChangedLocked()
 	m.decrementRunningLocked(n)
 	// No goroutine will ever call finalizeTurn for this abandoned
 	// attempt (nothing actually started) — matching cancelOneNodeLocked's
@@ -3259,12 +3249,16 @@ func (m *SessionManager) cancelOneNodeLocked(n *sessionNode) {
 	// eventually mark it finalized, once that goroutine's own canceled
 	// Prompt call actually returns.
 	wasRunning := n.status == StatusRunning
+	settled := false
 	if n.status != StatusDone && n.status != StatusFailed && n.status != StatusCanceled {
 		n.status = StatusCanceled
-		m.markChangedLocked()
+		settled = true
 	}
 	if !wasRunning {
 		n.finalized = true
+		settled = true
+	}
+	if settled {
 		m.markChangedLocked()
 	}
 	// Canceling the context aborts an in-flight Prompt call driven

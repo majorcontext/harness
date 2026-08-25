@@ -45,27 +45,6 @@ func Until(t *testing.T, timeout time.Duration, msg string, check func() bool) {
 	}
 }
 
-// UntilValue calls check until it reports ok, then returns the value check
-// produced with it. It fails the test with msg once timeout elapses.
-func UntilValue[T any](t *testing.T, timeout time.Duration, msg string, check func() (T, bool)) T {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	ticker := time.NewTicker(Interval)
-	defer ticker.Stop()
-	for {
-		v, ok := check()
-		if ok {
-			return v
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("%s (after %s)", msg, timeout)
-			var zero T
-			return zero
-		}
-		<-ticker.C
-	}
-}
-
 // UntilNoT is Until for a goroutine that is not the test's own goroutine,
 // where calling t.Fatalf is illegal. It reports whether check succeeded
 // before the timeout; the caller propagates the failure.
