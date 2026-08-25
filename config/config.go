@@ -405,6 +405,15 @@ type Provider struct {
 	// (Responses) adapter always sends prompt_cache_key, its own
 	// documented field — so validateProviders rejects it elsewhere rather
 	// than ignoring it, the same rule CacheTTL follows.
+	//
+	// Merge semantics are additive, like every other Provider field: a
+	// project layer can set this to true, but cannot flip an inherited
+	// true back to false (nor clear an inherited CacheTTL). That differs
+	// from the *bool fields on Config itself (Instructions, ModelTool),
+	// and it is deliberate — no Provider field is layer-clearable, and a
+	// strict upstream is a property of one endpoint, configured in the
+	// same layer as its base_url. Use a *bool here only if a real
+	// two-layer override of this one field appears.
 	NoPromptCacheKey bool `json:"no_prompt_cache_key,omitempty"`
 	// CacheTTL selects the Anthropic prompt-cache breakpoint lifetime:
 	// "5m" (the Anthropic API default) or "1h" (the extended TTL, beta
