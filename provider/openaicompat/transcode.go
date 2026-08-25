@@ -123,10 +123,6 @@ func wireCallID(id string) string {
 	return message.ProviderCallID("call_", id, 64)
 }
 
-// transcodeRequest maps a canonical request to the OpenAI-compatible
-// chat-completions wire format. family is the Client's configured Family: it
-// is both the ModelRef.Provider value and the ProviderData tag this call
-// reads reasoning attachments from.
 // transcodeOptions carries per-Client wire choices into the transcoder. It
 // exists so a deployment-specific field can be suppressed without threading a
 // bool through every call site.
@@ -142,6 +138,10 @@ func transcodeRequest(req *provider.Request, family string) (*apiRequest, error)
 	return transcodeRequestOpts(req, family, transcodeOptions{})
 }
 
+// transcodeRequestOpts maps a canonical request to the OpenAI-compatible
+// chat-completions wire format. family is the Client's configured Family: it
+// is both the ModelRef.Provider value and the ProviderData tag this call
+// reads reasoning attachments from.
 func transcodeRequestOpts(req *provider.Request, family string, opts transcodeOptions) (*apiRequest, error) {
 	if len(req.Messages) == 0 {
 		return nil, fmt.Errorf("openaicompat: request has no transcodable messages")
