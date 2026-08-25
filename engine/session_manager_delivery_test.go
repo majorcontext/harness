@@ -1481,11 +1481,75 @@ func TestRecoverInterruptedTurnReportsTotalUsageNotDelta(t *testing.T) {
 	mgr := NewSessionManager(context.Background(), 3, 0)
 	root := mgr.NewRoot(rootCfg)
 
+	// resumeClaimed receives targetID every time fireIdleResumeAsync
+	// actually claims an idle target's run slot — testResumeClaimedHook's
+	// own doc comment (session_manager.go): "target's pending
+	// notifications read back as a stable count with nothing in flight"
+	// is not by itself proof a triggered active resume has run to
+	// completion, since that is equally true the instant BEFORE the
+	// resume's own goroutine has even been scheduled. This hook gives an
+	// unmissable signal for the claim, so a following wait for the same
+	// target's status to read Idle again is unambiguous. Used below only
+	// for recovery's own resume, the one that goes through
+	// fireIdleResumeAsync's asynchronous "go" launch (see that call's own
+	// doc comment); turn 1's own resume, waited out first, goes through
+	// finalizeTurn's synchronous triggerResumeLocked call instead, which
+	// never fires this hook (see the wait right below for why that one
+	// needs no claimed-signal step at all). Buffered generously even
+	// though one send is all this test ever does.
+	resumeClaimed := make(chan string, 4)
+	mgr.testResumeClaimedHook = func(targetID string) { resumeClaimed <- targetID }
+	waitResumeClaimed := func(want string) {
+		t.Helper()
+		timer := time.NewTimer(time.Second)
+		defer timer.Stop()
+		select {
+		case gotID := <-resumeClaimed:
+			if gotID != want {
+				t.Fatalf("resume claimed for %s, want %s", gotID, want)
+			}
+		case <-timer.C:
+			t.Fatalf("timed out waiting for an active resume on %s to be claimed", want)
+		}
+	}
+
 	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("childprov1"), AgentType: AgentGeneralPurpose})
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
 	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+
+	// childID's own turn 1 finalizing delivers an ordinary "done"
+	// notification to root and, because root was idle, fires an active
+	// resume on it (SessionManager.finalizeTurn's own queue-or-resume
+	// tail) — an independent goroutine racing everything below. Left
+	// unsynchronized, that resume's own streamTurn call
+	// (checkoutTaskNotificationsSegment) can land AFTER the recovery
+	// notification this test checks for is appended further down,
+	// sweeping both into ONE checkout and — since rootProv's single
+	// scripted turn is still unused at that point — successfully
+	// COMMITTING both together: the recovery notification is then gone
+	// for good (delivered, not merely relocated), which no later re-read
+	// or retry can recover. Live-reproduced via a reverted copy of this
+	// wait, hammered under GOMAXPROCS=2 -race: root.taskNotifications
+	// read empty even though the notification had genuinely been
+	// delivered moments earlier.
+	//
+	// Waiting here for root to settle back to idle forces that first
+	// resume to run to completion — checking out and committing ONLY
+	// turn 1's own notification, and exhausting rootProv's script —
+	// before recovery ever runs, making recovery's own resume below the
+	// SECOND, cleanly separated attempt against an already-exhausted
+	// script. No claimed-signal wait is needed first, unlike recovery's
+	// own resume below: finalizeTurn calls triggerResumeLocked
+	// SYNCHRONOUSLY, inside the SAME m.mu critical section that marks
+	// childID StatusDone (session_manager.go), so root's status has
+	// already flipped to StatusRunning (or, for a resume fast enough to
+	// have already finished, back to StatusIdle) by the instant
+	// waitForStatus above observes childID's own transition — there is no
+	// "not yet claimed" ambiguity to resolve here the way
+	// fireIdleResumeAsync's own asynchronous re-check needs below.
+	waitForStatus(t, mgr, root.ID, StatusIdle, time.Second)
 
 	childSess, ok := mgr.Session(childID)
 	if !ok {
@@ -1516,16 +1580,26 @@ func TestRecoverInterruptedTurnReportsTotalUsageNotDelta(t *testing.T) {
 		t.Fatalf("AdoptReloaded: %v", err)
 	}
 
-	// root's own turn-1 completion ALSO legitimately delivered an
-	// ordinary "done" notification here (root was idle when childProv1
-	// finished, so finalizeTurn both enqueued it and fired an active
-	// resume) — unrelated to what this test checks, but not guaranteed
-	// to have already been checked out and committed off
-	// root.taskNotifications by the time this assertion runs (that
-	// resume is itself async, racing this goroutine under load). Find
-	// the recovery notification specifically by ChildID+StatusFailed,
-	// rather than asserting the queue's total length — a live -race/
-	// timing flake caught under repeated stress runs.
+	// root was just confirmed idle above, immediately before AdoptReloaded
+	// ran, and nothing else touches root's status in between — so
+	// recoverInterruptedTurnLocked's own "if target.status == StatusIdle"
+	// check (session_manager.go) deterministically fires a SECOND active
+	// resume here, against rootProv's now-exhausted script. That resume's
+	// own streamTurn call still checks out root.taskNotifications first —
+	// moving the notification this test wants into
+	// root.taskNotificationsInFlight, see checkoutTaskNotificationsSegment's
+	// doc comment (taskdelivery.go) — before failing and requeuing it, so
+	// a read taken before THIS resume also settles back to idle can still
+	// land inside that narrower, transient in-flight window. Wait for the
+	// same claimed-then-idle sequence as above before reading.
+	waitResumeClaimed(root.ID)
+	waitForStatus(t, mgr, root.ID, StatusIdle, time.Second)
+
+	// Find the recovery notification specifically by ChildID+StatusFailed:
+	// root.taskNotifications also carries turn 1's own ordinary "done"
+	// notification once the resume above requeues nothing for it (it was
+	// genuinely delivered), so asserting the queue's total length would
+	// be wrong regardless of the timing fixed above.
 	root.mu.Lock()
 	defer root.mu.Unlock()
 	var found *taskNotification
