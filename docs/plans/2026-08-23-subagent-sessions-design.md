@@ -116,8 +116,9 @@ operation and defaults to `"spawn"` — the tool's original, pre-verbs
 argument shape (`agent`/`prompt`/`model`, no `action` field at all) is
 unchanged and keeps working:
 
-    task(action?: "spawn"|"cancel"|"status"|"send", agent?: string,
-         prompt?: string, model?: string, session_id?: string) -> {...}
+    task(action?: "spawn"|"cancel"|"status"|"send"|"log", agent?: string,
+         prompt?: string, model?: string, session_id?: string,
+         tail?: int) -> {...}
 
 One tool, action-based, rather than four separate tools — inspired by
 fx's consolidated subagent tool, and following this codebase's own
@@ -135,7 +136,7 @@ precedent for a multi-operation session tool (`goal_tool.go`,
 - Optional `model` overrides the definition's model, which overrides the
   parent's.
 
-**cancel**, **status**, and **send** are ancestor-gated: `session_id`
+**cancel**, **status**, **send**, and **log** are ancestor-gated: `session_id`
 must be a descendant of the calling session — spawned by it directly, or
 by one of its own descendants, transitively. Anything else (an unrelated
 session, a sibling's subtree, `session_id` naming the caller itself)
@@ -160,6 +161,26 @@ mechanism:
   `SessionManager.DescendantInfo`, the engine-level counterpart to the
   wire's `session.info` payload, scoped to what a spawning ancestor may
   inspect.
+- **log** (`session_id`, `tail?`) returns the last `tail` transcript
+  entries of a descendant, LIVING OR DEAD —
+  `SessionManager.DescendantTranscript`. A terminal child stays in the
+  live tree until `Reap`, and its `*Session` — history included — stays
+  with it, so a parent reads a dead child's own final messages through
+  the same call it would use on a running one, with no session reload
+  and no disk read. A REAPED descendant answers "no such session", like
+  every other verb. `task status` reports the lifecycle facts; this
+  reports the evidence behind them, for the case a one-line
+  `fail_reason` cannot carry: what the child was running when it died.
+  Bounded on three axes, because the reply lands in the PARENT's context
+  and is replayed on every later turn of it: `tail` (default 20, clamped
+  at 100; a negative value is an error, never a silent default), a
+  per-entry rune cap, and a total rune budget filled NEWEST-first so the
+  messages nearest the death always survive. The reply reports the
+  descendant's whole message count alongside how many entries came
+  back, so a model always knows it is reading a window. Every non-text
+  part is rendered (tool call with capped arguments, tool result,
+  reasoning summary, an attachment count) rather than dropped: a child
+  that died mid-tool-loop has almost nothing else in its last messages.
 - **send** (`session_id`, `prompt`) delivers a message to a descendant —
   `SessionManager.SendToDescendant`. A RUNNING descendant gets the
   message appended to its own durable prompt queue

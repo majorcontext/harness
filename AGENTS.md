@@ -1652,6 +1652,23 @@ stops reporting a wall it already got past; `finalizeTurn`'s
 keep snapshotting a classification no live cancellation sets and
 `restoreKnownStatusLocked` restores as empty.
 
+A parent can read a dead child's tail. The `task` tool's `log` verb
+(`runTaskLog`, `engine/task_tool.go`, over
+`SessionManager.DescendantTranscript`) returns the last N transcript
+entries of a descendant, LIVING OR DEAD, under the same ancestor gate
+(`isDescendantLocked`) cancel/status/send use — a terminal node keeps its
+`*Session`, history included, until `Reap`, so no reload and no disk read
+is involved; a REAPED descendant answers "no such session" like every
+other verb. It is bounded on three axes, because its output lands in the
+PARENT's context and replays on every later turn: `tail` (default 20,
+clamped at 100, a negative value is an error), a per-entry rune cap, and a
+total rune budget filled NEWEST-first so the messages nearest a death
+always survive. The reply reports the descendant's whole message count
+next to how many entries came back, so a model knows it is reading a
+window. Content is deliberately NOT masked: parent and child are the same
+operator's sessions in one process, and a child's final text already
+reaches the parent verbatim in its completion notification.
+
 `Config.OnRequest` receives the firing session's own id as its first
 parameter (`engine/engine.go`). Never wire it as a closure over a
 captured session variable: `configSnapshot` copies the func value into
