@@ -354,26 +354,41 @@ type SessionManager struct {
 	// inferring it from status.
 	testFlushDoneHook func()
 
-	// testResumeClaimedHook, if non-nil, is called by fireIdleResumeAsync
-	// with targetID the INSTANT it claims that target's run slot (right
-	// after triggerResumeLocked returns, still under m.mu) — a test-only
+	// testResumeClaimedHook, if non-nil, is called by
+	// triggerResumeLocked with the target's own id the INSTANT that
+	// target's run slot is claimed, still under m.mu — a test-only
 	// synchronization seam, nil in production, mirroring
 	// testFlushDoneHook's identical shape just above.
 	//
 	// Exists because "target's pending notifications read back as a
 	// stable count with nothing in flight" is NOT by itself proof that a
 	// triggered active resume has run to completion — it is equally true
-	// the INSTANT after delivery, before fireIdleResumeAsync's spawned
-	// goroutine has even been scheduled to run at all. Both states are
-	// observationally identical (same count, same StatusIdle) from
-	// outside; only the transition THROUGH StatusRunning in between
-	// distinguishes "not yet started" from "already finished". A test
-	// that cannot reliably observe that transition (the goroutine may run
-	// to completion before the poller's own next scheduler slice) has no
-	// way to tell them apart by polling status/counts alone — this hook
-	// gives it an explicit, unmissable signal for "the resume has
-	// definitely been claimed", so a subsequent wait for the SAME
-	// target's status to read Idle again is then unambiguous.
+	// the INSTANT after delivery, before the resume's own goroutine has
+	// even been scheduled to run at all. Both states are observationally
+	// identical (same count, same StatusIdle) from outside; only the
+	// transition THROUGH StatusRunning in between distinguishes "not yet
+	// started" from "already finished". A test that cannot reliably
+	// observe that transition (the goroutine may run to completion before
+	// the poller's own next scheduler slice) has no way to tell them
+	// apart by polling status/counts alone — this hook gives it an
+	// explicit, unmissable signal for "the resume has definitely been
+	// claimed", so a subsequent wait for the SAME target's status to read
+	// Idle again is then unambiguous.
+	//
+	// It sits in triggerResumeLocked, the ONE place a resume claim
+	// happens, so every claim signals whichever caller made it:
+	// fireIdleResumeAsync's own asynchronous claim, finalizeTurn's
+	// turn-tail re-trigger for a notification that arrived too late for
+	// the turn just ending, and finalizeTurn's ancestor-delivery claim on
+	// an idle target. An earlier revision called it from
+	// fireIdleResumeAsync alone, which left the other two claim paths
+	// unobservable and forced a test waiting on one of them to sample
+	// history or a status on an interval instead.
+	//
+	// A hook body runs under m.mu, so it must never block and must never
+	// call back into this manager. Tests install it through watchResumes
+	// (session_manager_test.go), which only records the id and does a
+	// non-blocking wakeup send.
 	testResumeClaimedHook func(targetID string)
 }
 
@@ -1915,9 +1930,6 @@ func (m *SessionManager) fireIdleResumeAsync(targetID string) {
 		return
 	}
 	resume := m.triggerResumeLocked(n)
-	if m.testResumeClaimedHook != nil {
-		m.testResumeClaimedHook(targetID)
-	}
 	m.unlockAndFlushPersist()
 	if resume != nil {
 		resume()
@@ -3794,6 +3806,9 @@ func (m *SessionManager) triggerResumeLocked(node *sessionNode) func() {
 	// from a PRIOR completed turn and still carry finalized=true from it.
 	node.finalized = false
 	m.markChangedLocked()
+	if m.testResumeClaimedHook != nil {
+		m.testResumeClaimedHook(node.id)
+	}
 	if node.depth > 0 {
 		m.runningByRoot[node.rootID]++
 	}

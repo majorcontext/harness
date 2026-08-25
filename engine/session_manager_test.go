@@ -2129,6 +2129,207 @@ func waitForReap(t *testing.T, mgr *SessionManager, want int, timeout time.Durat
 	}
 }
 
+// waitForFinalized blocks until id's node carries finalized=true, or fails
+// the test once timeout elapses.
+//
+// Same Changed-driven, sample-free shape as waitForStatus: finalizeTurn
+// sets the flag and runs markChangedLocked under m.mu, so a waiter that
+// arms Changed before its own read cannot miss it.
+//
+// It answers a question no status wait can. A node Cancel() marked
+// terminal reaches its terminal status SYNCHRONOUSLY, inside the Cancel
+// call, while its own Prompt goroutine is still parked in the provider.
+// That goroutine only finishes later, in finalizeTurn, and finalized is
+// the flag finalizeTurn sets. A test that must not return while that
+// goroutine still runs — it would outlive the test and race the next
+// test's freshly allocated provider — waits here, not on the status it
+// already has.
+func waitForFinalized(t *testing.T, mgr *SessionManager, id string, timeout time.Duration) {
+	t.Helper()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		changed := mgr.Changed()
+		mgr.mu.Lock()
+		n, ok := mgr.nodes[id]
+		done := ok && n.finalized
+		mgr.mu.Unlock()
+		if !ok {
+			t.Fatalf("waitForFinalized(%s): node not tracked", id)
+		}
+		if done {
+			return
+		}
+		select {
+		case <-changed:
+		case <-timer.C:
+			t.Fatalf("node %s never finalized within %s — its turn goroutine is still running", id, timeout)
+		}
+	}
+}
+
+// resumeWatch records every engine-initiated resume claim a manager makes,
+// through the manager's own testResumeClaimedHook seam (session_manager.go).
+//
+// A resume claim is the ONE unambiguous "this target's resume turn has
+// really started" signal. Its effects — a synthetic user-role trigger
+// message appearing in the target's history, a delivered notification
+// moving into and back out of the in-flight set — all land later, on the
+// resume's own goroutine. Reading any of them without first observing the
+// claim cannot tell "the resume has not started yet" from "the resume
+// already finished", because both read identically.
+//
+// The hook body runs under the manager's m.mu, so it only appends an id
+// and does a non-blocking wakeup send: it never blocks, never calls back
+// into the manager, and never touches *testing.T. A claim recorded after
+// the test function returns is therefore harmless, which matters because
+// a resume goroutine can outlive a test that never waited for it.
+type resumeWatch struct {
+	mu     sync.Mutex
+	claims []string
+	// sig carries a wakeup, not a count: it is buffered by one and sent
+	// to without blocking. A waiter checks its condition BEFORE blocking
+	// here, so a claim landing between the check and the receive still
+	// leaves a token behind and wakes it. A stale token only costs one
+	// extra re-check.
+	sig chan struct{}
+}
+
+// watchResumes installs a resumeWatch on mgr. Call it before the first
+// Spawn/Send/AdoptRoot, while nothing else can be reading the seam.
+func watchResumes(t *testing.T, mgr *SessionManager) *resumeWatch {
+	t.Helper()
+	w := &resumeWatch{sig: make(chan struct{}, 1)}
+	mgr.testResumeClaimedHook = w.record
+	return w
+}
+
+func (w *resumeWatch) record(targetID string) {
+	w.mu.Lock()
+	w.claims = append(w.claims, targetID)
+	w.mu.Unlock()
+	select {
+	case w.sig <- struct{}{}:
+	default:
+	}
+}
+
+// take consumes one recorded claim for id, and reports whether it found
+// one. Claims for other targets stay recorded: one manager resumes many
+// nodes, and a waiter must never swallow another node's claim.
+func (w *resumeWatch) take(id string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for i, got := range w.claims {
+		if got == id {
+			w.claims = append(w.claims[:i], w.claims[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// count reports how many claims for id this watch has recorded and not yet
+// consumed. Use it only where a barrier already proves no further claim can
+// arrive; a bare count is otherwise a race against a claim still to come.
+func (w *resumeWatch) count(id string) int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n := 0
+	for _, got := range w.claims {
+		if got == id {
+			n++
+		}
+	}
+	return n
+}
+
+// waitClaim blocks until a resume has been claimed for id, and consumes
+// that claim.
+func (w *resumeWatch) waitClaim(t *testing.T, id string, timeout time.Duration) {
+	t.Helper()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		if w.take(id) {
+			return
+		}
+		select {
+		case <-w.sig:
+		case <-timer.C:
+			t.Fatalf("no engine-initiated resume was claimed for %s within %s", id, timeout)
+		}
+	}
+}
+
+// waitResumeSettled blocks until a resume turn for id has been claimed AND
+// has run to completion — the claimed-then-idle pair.
+//
+// Both halves are needed. The claim alone proves the turn started, not that
+// it finished. The idle status alone is satisfied by the target never
+// having started at all. Together they bracket exactly one resume turn, so
+// everything that turn produces — its trigger message, its requeued or
+// committed notifications, its history — is settled when this returns.
+func waitResumeSettled(t *testing.T, mgr *SessionManager, w *resumeWatch, id string, timeout time.Duration) {
+	t.Helper()
+	w.waitClaim(t, id, timeout)
+	waitForStatus(t, mgr, id, StatusIdle, timeout)
+}
+
+// flushWatch reports every completed persist flush a manager makes,
+// through the manager's own testFlushDoneHook seam (session_manager.go).
+//
+// It exists for one question: has a durable write this manager queued
+// actually landed on disk? A status transition is visible to Info/Session
+// strictly BEFORE the durable-write thunks queued in the same critical
+// section run, because unlockAndFlushPersist releases m.mu first by design.
+// So waitForStatus returning is not proof that the log a test is about to
+// reload already carries the record it expects.
+//
+// Same non-blocking wakeup discipline as resumeWatch, for the same reason:
+// the hook body must never block the manager and must never touch
+// *testing.T.
+type flushWatch struct {
+	sig chan struct{}
+}
+
+// watchFlushes installs a flushWatch on mgr. Install it on the manager that
+// OWNS the write being waited for — the one whose finalizeTurn or
+// AdoptRoot queued it — not on a second manager that only reads the log.
+func watchFlushes(t *testing.T, mgr *SessionManager) *flushWatch {
+	t.Helper()
+	w := &flushWatch{sig: make(chan struct{}, 1)}
+	mgr.testFlushDoneHook = func() {
+		select {
+		case w.sig <- struct{}{}:
+		default:
+		}
+	}
+	return w
+}
+
+// waitUntil re-runs cond after every persist flush the manager completes,
+// until cond reports true. It fails the test with msg once timeout elapses.
+//
+// cond re-reads the real condition — normally a fresh LoadSession of the
+// log under test — rather than inferring it from a status. It runs once
+// before the first wait, so an already-satisfied condition returns at once.
+func (w *flushWatch) waitUntil(t *testing.T, timeout time.Duration, msg string, cond func() bool) {
+	t.Helper()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		if cond() {
+			return
+		}
+		select {
+		case <-w.sig:
+		case <-timer.C:
+			t.Fatalf("%s (after %s)", msg, timeout)
+		}
+	}
+}
+
 // TestUnlockAndFlushPersistRunsThunksAfterReleasingLock is the regression
 // test for a live review finding: session-log disk writes (task-
 // notification queued/delivered records, the task-spawn audit record)
