@@ -491,6 +491,12 @@ type Config struct {
 	// mcp_lazy.go and docs/design/mcp-lazy-tools.md). The zero value is
 	// eager: every tool of every connected server registers with its full
 	// schema, exactly as it did before deferral existed.
+	//
+	// STAGING: the loader a deferred tool needs -- the mcp tool's select
+	// action -- lands with the next slice of that design. Until it does, a
+	// non-eager value here defers schemas with no way to load one back, so
+	// an embedder must leave this at its zero value. cmd/harness therefore
+	// does not copy the mcp_tool_loading config key into this field yet.
 	MCPToolLoading MCPToolLoading
 	// MCPToolLoadingThreshold is the tool COUNT MCPToolLoadingAuto compares
 	// the live catalog against. Any non-positive value (including the zero

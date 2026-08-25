@@ -1210,6 +1210,13 @@ selection whose server is still unconnected is KEPT, so it arms itself on
 reconnect. The reap is memory-only; replay re-unions the log and prunes
 again.
 
+**Staging.** The `select` and `search` actions the catalog header names,
+and the durable record behind a selection, land in the following slices of
+this design. Until they do, `engine.Config.MCPToolLoading` must stay at its
+zero value: `mcp_tool_loading` is parsed but deliberately not wired into the
+engine, because deferring a schema with no way to load it back would turn
+"enable deferral" into "disable MCP".
+
 Full design, including the `search`/`select` surface and the durable
 record: `docs/design/mcp-lazy-tools.md`.
 

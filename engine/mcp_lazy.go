@@ -95,6 +95,12 @@ const mcpCatalogListingMax = 200
 // a deferred tool is not callable until the model loads it. It names the
 // exact call shape because that is the only in-band documentation the model
 // gets at the moment it needs it.
+//
+// STAGING: the select and search actions it names land with the next slice
+// of docs/design/mcp-lazy-tools.md. This header is therefore reachable only
+// by an embedder that sets Config.MCPToolLoading itself -- no config key
+// reaches that field yet (see cmd/harness) -- and that embedder must wait
+// for the loader.
 const mcpCatalogHeader = "Deferred MCP tools. These tools exist but their input schemas are not loaded. " +
 	"To use one you MUST first load it with the mcp tool: " +
 	`mcp(action="select", tools=["mcp__server__tool"]). ` +
