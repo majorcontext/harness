@@ -3,7 +3,6 @@ package engine
 import (
 	"sync"
 	"testing"
-	"time"
 )
 
 // This file holds the waiting scaffolding the crash-recovery tests in
@@ -224,7 +223,7 @@ func (c *resumeClaims) wantClaim(t *testing.T, want string) {
 func (c *resumeClaims) waitSettled(t *testing.T, mgr *SessionManager, id string) {
 	t.Helper()
 	c.wantClaim(t, id)
-	waitForStatus(t, mgr, id, StatusIdle, time.Second)
+	waitForStatus(t, mgr, id, StatusIdle)
 }
 
 // TestResumeClaimWakeupsAreBroadcastNotStolen pins the property

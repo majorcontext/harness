@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -64,7 +63,7 @@ func TestTaskToolWithheldAtDepthLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	child, _ := mgr.Session(childID)
 	if _, ok := child.tools[taskToolName]; ok {
@@ -88,7 +87,7 @@ func TestTaskToolLeafDefinitionExcludesTaskEvenBelowLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	child, _ := mgr.Session(childID)
 	if _, ok := child.tools[taskToolName]; ok {
@@ -128,7 +127,7 @@ func TestGrandchildRegistryIsIntersectionNeverWiderThanParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn mid: %v", err)
 	}
-	waitForStatus(t, mgr, midID, StatusDone, time.Second)
+	waitForStatus(t, mgr, midID, StatusDone)
 	mid, _ := mgr.Session(midID)
 	if _, ok := mid.tools["bash"]; ok {
 		t.Fatalf("test setup: mid unexpectedly has bash: %v", toolNames(mid))
@@ -144,7 +143,7 @@ func TestGrandchildRegistryIsIntersectionNeverWiderThanParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn grand: %v", err)
 	}
-	waitForStatus(t, mgr, grandID, StatusDone, time.Second)
+	waitForStatus(t, mgr, grandID, StatusDone)
 	grand, _ := mgr.Session(grandID)
 
 	if _, ok := grand.tools["bash"]; ok {
@@ -302,7 +301,7 @@ func TestRunTaskToolDepthLimitSurfacesAsCleanError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 	child, _ := mgr.Session(childID)
 
 	raw, _ := json.Marshal(map[string]string{"agent": AgentGeneralPurpose, "prompt": "go deeper"})
@@ -334,17 +333,17 @@ func TestTaskDeliveryParentIdleTriggersResumeTurn(t *testing.T) {
 	if _, err := mgr.Send(context.Background(), root.ID, "start"); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	waitForStatus(t, mgr, root.ID, StatusIdle, time.Second)
+	waitForStatus(t, mgr, root.ID, StatusIdle)
 
 	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go find it", Model: modelFor("child"), AgentType: AgentExplore})
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	// The child's completion must have driven the root back to running
 	// and then idle again, ALL WITHOUT any Send call from this test.
-	waitForStatus(t, mgr, root.ID, StatusIdle, time.Second)
+	waitForStatus(t, mgr, root.ID, StatusIdle)
 
 	if len(rootProv.requests) != 2 {
 		t.Fatalf("root received %d requests, want 2 (initial Send + engine-initiated resume)", len(rootProv.requests))

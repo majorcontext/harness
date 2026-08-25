@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -41,7 +40,7 @@ func TestCanceledChildNotifiesParent(t *testing.T) {
 	if err := mgr.Cancel(childID); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusCanceled, 2*time.Second)
+	waitForStatus(t, mgr, childID, StatusCanceled)
 
 	// The cancellation must have produced a notification on the root,
 	// delivered as an engine-initiated resume (root was idle). Cancel
@@ -73,7 +72,7 @@ func TestCanceledChildNotifiesParent(t *testing.T) {
 	// address — a live -race flake caught under repeated runs. The child
 	// reached StatusCanceled synchronously inside Cancel, so only the
 	// finalized flag distinguishes "goroutine still running" from "done".
-	waitForFinalized(t, mgr, childID, 2*time.Second)
+	waitForFinalized(t, mgr, childID)
 }
 
 // TestReAdoptedCanceledChildRestoresStatusCanceledNotFailed is the
@@ -116,7 +115,7 @@ func TestReAdoptedCanceledChildRestoresStatusCanceledNotFailed(t *testing.T) {
 	if err := mgr1.Cancel(childID); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
-	waitForStatus(t, mgr1, childID, StatusCanceled, 2*time.Second)
+	waitForStatus(t, mgr1, childID, StatusCanceled)
 
 	// Wait for finalizeTurn's own alreadyCanceled branch to durably
 	// commit and settle before this test reloads the log fresh below.
@@ -261,7 +260,7 @@ func TestGrandchildReparentsToNearestLiveAncestor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn mid: %v", err)
 	}
-	waitForStatus(t, mgr, midID, StatusDone, time.Second)
+	waitForStatus(t, mgr, midID, StatusDone)
 	// mid's own completion also delivers a notification to root (idle at
 	// that point) and fires an active resume — Config.Providers is
 	// inherited BY REFERENCE across this whole tree (root/mid/grand all
@@ -286,7 +285,7 @@ func TestGrandchildReparentsToNearestLiveAncestor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn grandchild: %v", err)
 	}
-	waitForStatus(t, mgr, grandID, StatusDone, time.Second)
+	waitForStatus(t, mgr, grandID, StatusDone)
 
 	// mid (the grandchild's DIRECT parent) is done and never runs again —
 	// nothing should be pending there. The root, as the nearest LIVE
@@ -373,7 +372,7 @@ func TestSendEnforcesConcurrencyLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusRunning, time.Second)
+	waitForStatus(t, mgr, childID, StatusRunning)
 
 	// A second child is at the cap already (the first is still running) —
 	// Spawn's concurrency check runs before it ever touches a provider, so
@@ -383,7 +382,7 @@ func TestSendEnforcesConcurrencyLimit(t *testing.T) {
 	}
 
 	close(release)
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	// Send to the now-done child again — this itself must respect the
 	// concurrency budget too, exactly like the Spawn check above, not
@@ -392,7 +391,7 @@ func TestSendEnforcesConcurrencyLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn other child: %v", err)
 	}
-	waitForStatus(t, mgr, otherChildID, StatusRunning, time.Second)
+	waitForStatus(t, mgr, otherChildID, StatusRunning)
 
 	// Now Send to the FIRST (done) child while the second is still
 	// running and the cap is 1: must be rejected.
@@ -459,11 +458,7 @@ func TestFinalizeTurnFailedResumeDoesNotHotLoop(t *testing.T) {
 		mgr.Send(context.Background(), root.ID, "go") //nolint:errcheck
 		close(done)
 	}()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Send did not return — suspected hot-loop retrying a failed resume")
-	}
+	awaitSignal(t, done, "Send did not return — suspected hot-loop retrying a failed resume")
 
 	// The notification must still be recoverable (requeued, not lost) for
 	// a later, legitimate trigger.
@@ -494,14 +489,14 @@ func TestExternalRunnerConsultedOnlyForRoots(t *testing.T) {
 	if _, err := mgr.Send(context.Background(), root.ID, "start"); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
-	waitForStatus(t, mgr, root.ID, StatusIdle, time.Second)
+	waitForStatus(t, mgr, root.ID, StatusIdle)
 
 	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
-	waitForStatus(t, mgr, root.ID, StatusIdle, 2*time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
+	waitForStatus(t, mgr, root.ID, StatusIdle)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -536,13 +531,13 @@ func TestTriggerResumeRevertsCentrallyOnRunnerRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	// The child's completion notification triggers a resume attempt on
 	// the idle root, which the fake ExternalRunner above refuses. If the
 	// revert did not happen, root would be stuck StatusRunning forever
 	// (queue-or-resume dead for it) — waitForStatus would time out.
-	waitForStatus(t, mgr, root.ID, StatusIdle, time.Second)
+	waitForStatus(t, mgr, root.ID, StatusIdle)
 }
 
 // TestReportTurnStartAdoptsUnknownSession proves the fix for reloaded
@@ -895,7 +890,7 @@ func TestFinalizeTurnGrandchildNotStrandedWhenParentSettlesRightAfterEnqueue(t *
 	if err != nil {
 		t.Fatalf("Spawn child: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusRunning, time.Second)
+	waitForStatus(t, mgr, childID, StatusRunning)
 
 	// The grandchild is spawned and runs to completion WHILE the child's
 	// own turn is still blocked — its notification lands on the child
@@ -904,7 +899,7 @@ func TestFinalizeTurnGrandchildNotStrandedWhenParentSettlesRightAfterEnqueue(t *
 	if err != nil {
 		t.Fatalf("Spawn grandchild: %v", err)
 	}
-	waitForStatus(t, mgr, grandID, StatusDone, time.Second)
+	waitForStatus(t, mgr, grandID, StatusDone)
 
 	child, _ := mgr.Session(childID)
 	if !child.hasPendingTaskNotifications() {
@@ -915,7 +910,7 @@ func TestFinalizeTurnGrandchildNotStrandedWhenParentSettlesRightAfterEnqueue(t *
 	// forward the already-pending grandchild notification to the root
 	// rather than dropping it once it settles done.
 	close(release)
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	// The child's finalizeTurn forwards the grandchild's notification to
 	// root, which is idle, so it claims a resume there. Bracket that
@@ -1060,7 +1055,7 @@ func TestReloadedChildWithDanglingTurnFoldsUsageIntoTreeBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr1, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr1, childID, StatusDone)
 	childSess, _ := mgr1.Session(childID)
 	if got := childSess.Usage(); got.InputTokens+got.OutputTokens == 0 {
 		t.Fatal("test setup: child's first turn recorded no usage")
@@ -1172,7 +1167,7 @@ func TestReloadedChildWithDanglingTurnIsIdempotentAcrossReapAndReload(t *testing
 	if err := mgr2.AdoptReloaded(load()); err != nil {
 		t.Fatalf("AdoptReloaded (1st): %v", err)
 	}
-	waitForStatus(t, mgr2, childID, StatusFailed, time.Second)
+	waitForStatus(t, mgr2, childID, StatusFailed)
 
 	// Bracket the first recovery's own resume turn, so root2's history is
 	// settled and holds exactly the one trigger that recovery earned.
@@ -1387,7 +1382,7 @@ func TestReportTurnStartDoesNotFalselyReportChildDeadWhenContinuingIt(t *testing
 	if resume := mgr2.ReportTurnEnd(childID, doneMsg, nil); resume != nil {
 		resume()
 	}
-	waitForStatus(t, mgr2, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr2, childID, StatusDone)
 
 	// That legitimate completion DOES notify the idle root and claim a
 	// resume there. Settle it, so its goroutine cannot outlive this test
@@ -1432,7 +1427,7 @@ func TestDrainAllTaskNotificationsPersistsDeliverySoReloadDoesNotResurrectIt(t *
 	if err != nil {
 		t.Fatalf("Spawn grandchild: %v", err)
 	}
-	waitForStatus(t, mgr, grandID, StatusDone, time.Second)
+	waitForStatus(t, mgr, grandID, StatusDone)
 
 	// The grandchild's notification lands on mid — the nearest LIVE
 	// ancestor (mid.status == StatusRunning, not Done/Failed/Canceled) —
@@ -1478,7 +1473,7 @@ func TestDrainAllTaskNotificationsPersistsDeliverySoReloadDoesNotResurrectIt(t *
 	// separate forwarding-destination logic TestGrandchildReparentsToNearestLiveAncestor
 	// already covers.
 	close(midProv.release)
-	waitForStatus(t, mgr, midID, StatusDone, time.Second)
+	waitForStatus(t, mgr, midID, StatusDone)
 
 	// finalizeTurn's own durable writes (the forwarded notification's
 	// recTaskNotifyQueued on root's log, and — the mechanism under test —
@@ -1533,7 +1528,7 @@ func TestRecoverInterruptedTurnReportsTotalUsageNotDelta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	// childID's own turn 1 finalizing delivers an ordinary "done"
 	// notification to root and, because root was idle, fires an active
@@ -2140,7 +2135,7 @@ func TestRecoverInterruptedTurnFiresForChildCrashedMidToolLoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr1, childID, StatusFailed, time.Second) // scriptedTurns("child", nil) has zero turns, so this Spawn's own turn fails immediately
+	waitForStatus(t, mgr1, childID, StatusFailed) // scriptedTurns("child", nil) has zero turns, so this Spawn's own turn fails immediately
 
 	childSess, ok := mgr1.Session(childID)
 	if !ok {
@@ -2256,7 +2251,7 @@ func TestRecoverInterruptedTurnDoesNotRefireForASettledFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr1, childID, StatusFailed, time.Second)
+	waitForStatus(t, mgr1, childID, StatusFailed)
 
 	childSess, ok := mgr1.Session(childID)
 	if !ok {
@@ -2347,7 +2342,7 @@ func TestRecoverInterruptedTurnDeliversRealResultInsteadOfFalseFailure(t *testin
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr1, childID, StatusFailed, time.Second)
+	waitForStatus(t, mgr1, childID, StatusFailed)
 
 	childSess, ok := mgr1.Session(childID)
 	if !ok {
@@ -2518,7 +2513,7 @@ func TestFinalizeTurnCrashBeforeDeliveryStillDeliversViaRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr1, childID, StatusFailed, time.Second)
+	waitForStatus(t, mgr1, childID, StatusFailed)
 	origInfo, ok := mgr1.Info(childID)
 	if !ok {
 		t.Fatal("child not tracked")
@@ -2643,7 +2638,7 @@ func TestFinalizeTurnCrashAfterDeliveryReplaysIdenticalFailureNotDivergent(t *te
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr1, childID, StatusFailed, time.Second)
+	waitForStatus(t, mgr1, childID, StatusFailed)
 	origInfo, ok := mgr1.Info(childID)
 	if !ok {
 		t.Fatal("child not tracked")
@@ -2917,7 +2912,7 @@ func TestFinalizeTurnSettlesADurablyParentedButUntrackedNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr1, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr1, childID, StatusDone)
 
 	// finalizeTurn's own deferred persists are asynchronous relative to
 	// waitForStatus's in-memory read above — poll until the child's log
@@ -3096,7 +3091,7 @@ func TestAdoptRootDoesNotRecoverAnAlreadySettledChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr1, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr1, childID, StatusDone)
 
 	// Give finalizeTurn's own deferred settled-marker persist a moment to
 	// land durably before this test reloads the same log fresh below.
@@ -3181,7 +3176,7 @@ func TestAdoptRootRecoversCrashedGrandchildTwoLevelsDeep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn mid: %v", err)
 	}
-	waitForStatus(t, mgr1, midID, StatusDone, time.Second)
+	waitForStatus(t, mgr1, midID, StatusDone)
 
 	grandID, err := mgr1.Spawn(SpawnOptions{ParentID: midID, Prompt: "go deeper", Model: modelFor("grand"), AgentType: AgentExplore})
 	if err != nil {
@@ -3309,13 +3304,13 @@ func TestAdoptRootRestoresLegacySettledChildAsDoneWhenLogReconstructsSuccess(t *
 	if err != nil {
 		t.Fatalf("Spawn mid: %v", err)
 	}
-	waitForStatus(t, mgr1, midID, StatusDone, time.Second)
+	waitForStatus(t, mgr1, midID, StatusDone)
 
 	childID, err := mgr1.Spawn(SpawnOptions{ParentID: midID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
 	if err != nil {
 		t.Fatalf("Spawn child: %v", err)
 	}
-	waitForStatus(t, mgr1, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr1, childID, StatusDone)
 
 	flushes.waitUntilMsg(t, "test setup: mid's settled marker never landed durably", func() bool {
 		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
@@ -3400,7 +3395,7 @@ func TestAdoptRootRestoresLegacySettledChildAsUnknownFailureWhenLogCannotReconst
 	if err != nil {
 		t.Fatalf("Spawn mid: %v", err)
 	}
-	waitForStatus(t, mgr1, midID, StatusFailed, 2*time.Second)
+	waitForStatus(t, mgr1, midID, StatusFailed)
 
 	flushes.waitUntilMsg(t, "test setup: mid's settled marker never landed durably", func() bool {
 		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
@@ -3479,7 +3474,7 @@ func TestAdoptRootRestoresLegacyChildlessSettledChildAsTerminalNotIdle(t *testin
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr1, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr1, childID, StatusDone)
 
 	flushes.waitUntilMsg(t, "test setup: child's settled marker never landed durably", func() bool {
 		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, childID)
@@ -3580,7 +3575,7 @@ func TestAdoptRootReparentsGrandchildPastSettledIntermediateWithoutCommittedOutc
 	if err != nil {
 		t.Fatalf("Spawn mid: %v", err)
 	}
-	waitForStatus(t, mgr1, midID, StatusDone, time.Second)
+	waitForStatus(t, mgr1, midID, StatusDone)
 
 	grandID, err := mgr1.Spawn(SpawnOptions{ParentID: midID, Prompt: "go deeper", Model: modelFor("grand"), AgentType: AgentExplore})
 	if err != nil {
@@ -3793,7 +3788,7 @@ func TestRecoverCrashedChildrenLockedSurvivesConcurrentReapOfJustAdoptedIntermed
 	if err != nil {
 		t.Fatalf("Spawn mid: %v", err)
 	}
-	waitForStatus(t, mgr1, midID, StatusDone, time.Second)
+	waitForStatus(t, mgr1, midID, StatusDone)
 
 	grandID, err := mgr1.Spawn(SpawnOptions{ParentID: midID, Prompt: "go deeper", Model: modelFor("grand"), AgentType: AgentExplore})
 	if err != nil {
@@ -3948,13 +3943,13 @@ func TestRecoverCrashedChildrenLockedRevalidatesNPerLoopIterationNotJustOnce(t *
 	if err != nil {
 		t.Fatalf("Spawn mid: %v", err)
 	}
-	waitForStatus(t, mgr1, midID, StatusDone, time.Second)
+	waitForStatus(t, mgr1, midID, StatusDone)
 
 	grandAID, err := mgr1.Spawn(SpawnOptions{ParentID: midID, Prompt: "go A", Model: modelFor("grandA"), AgentType: AgentGeneralPurpose})
 	if err != nil {
 		t.Fatalf("Spawn grandA: %v", err)
 	}
-	waitForStatus(t, mgr1, grandAID, StatusDone, time.Second)
+	waitForStatus(t, mgr1, grandAID, StatusDone)
 
 	greatgrandID, err := mgr1.Spawn(SpawnOptions{ParentID: grandAID, Prompt: "go deeper", Model: modelFor("greatgrand"), AgentType: AgentExplore})
 	if err != nil {
@@ -3966,7 +3961,7 @@ func TestRecoverCrashedChildrenLockedRevalidatesNPerLoopIterationNotJustOnce(t *
 	if err != nil {
 		t.Fatalf("Spawn grandB: %v", err)
 	}
-	waitForStatus(t, mgr1, grandBID, StatusDone, time.Second)
+	waitForStatus(t, mgr1, grandBID, StatusDone)
 
 	// Settle-poll every non-blocked node before reloading fresh below —
 	// same discipline as every other test in this file exercising a

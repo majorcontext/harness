@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/majorcontext/harness/message"
 )
@@ -40,7 +39,7 @@ func TestReportTurnEndDoesNotReDriveQueuedPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+	waitForStatus(t, mgr, childID, StatusDone)
 
 	child, ok := mgr.Session(childID)
 	if !ok {

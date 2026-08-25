@@ -14,7 +14,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/majorcontext/harness/provider"
 )
@@ -55,7 +54,7 @@ func spawnFailedChild(t *testing.T, err error) (*SessionManager, *Session, strin
 	if spawnErr != nil {
 		t.Fatalf("Spawn: %v", spawnErr)
 	}
-	waitForStatus(t, mgr, childID, StatusFailed, time.Second)
+	waitForStatus(t, mgr, childID, StatusFailed)
 	return mgr, root, childID
 }
 

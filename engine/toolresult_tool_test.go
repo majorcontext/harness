@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -539,28 +538,18 @@ func TestReaderAtLineSourceTerminatesWhenFileShorterThanClaimedSize(t *testing.T
 	go func() {
 		done <- src.Scan()
 	}()
-	select {
-	case ok := <-done:
-		if !ok {
-			t.Fatalf("Scan() = false, Err() = %v; want true (the short real content should still surface as a final line)", src.Err())
-		}
-		if got := src.Text(); got != content {
-			t.Errorf("Text() = %q, want %q", got, content)
-		}
-		// A second Scan call, past the real EOF, must also terminate
-		// promptly (not resume spinning).
-		done2 := make(chan bool, 1)
-		go func() { done2 <- src.Scan() }()
-		select {
-		case ok2 := <-done2:
-			if ok2 {
-				t.Errorf("second Scan() = true, want false (no more real content)")
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatal("second Scan() did not return within 2s — busy-loop on the tail call")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Scan() did not return within 2s — busy-loop: the file is shorter than the claimed size, and the loop cannot detect true EOF")
+	if !awaitSignal(t, done, "Scan() did not return — busy-loop: the file is shorter than the claimed size, and the loop cannot detect true EOF") {
+		t.Fatalf("Scan() = false, Err() = %v; want true (the short real content should still surface as a final line)", src.Err())
+	}
+	if got := src.Text(); got != content {
+		t.Errorf("Text() = %q, want %q", got, content)
+	}
+	// A second Scan call, past the real EOF, must also terminate promptly
+	// (not resume spinning).
+	done2 := make(chan bool, 1)
+	go func() { done2 <- src.Scan() }()
+	if awaitSignal(t, done2, "second Scan() did not return — busy-loop on the tail call") {
+		t.Errorf("second Scan() = true, want false (no more real content)")
 	}
 }
 
