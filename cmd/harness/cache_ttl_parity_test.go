@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/majorcontext/harness/config"
@@ -29,17 +30,38 @@ func TestCacheTTLConstantsAgree(t *testing.T) {
 	}
 }
 
-// TestEveryConfigCacheTTLIsAcceptedByTheAdapter walks every value config
-// accepts and asserts the adapter accepts it too. A new TTL added to config's
-// list without a matching adapter case fails here, at build time for the
-// developer who adds it, instead of at a user's first request.
-func TestEveryConfigCacheTTLIsAcceptedByTheAdapter(t *testing.T) {
-	for _, ttl := range []string{config.CacheTTL5m, config.CacheTTL1h} {
+// TestCacheTTLAcceptedSetsAreIdentical compares the two sides' OWN accepted
+// sets — config.CacheTTLValues and anthropic.CacheTTLValues, each of which
+// its validator derives from — rather than walking a third, manually
+// maintained list here. A TTL added to only one side changes that side's
+// exported set and fails the equality check; a hardcoded slice in this test
+// would have stayed green through exactly that drift (it could only ever
+// prove the values it happened to name).
+func TestCacheTTLAcceptedSetsAreIdentical(t *testing.T) {
+	cfg := config.CacheTTLValues()
+	adp := anthropic.CacheTTLValues()
+	slices.Sort(cfg)
+	slices.Sort(adp)
+	if !slices.Equal(cfg, adp) {
+		t.Fatalf("accepted cache_ttl sets differ: config %q, adapter %q", cfg, adp)
+	}
+}
+
+// TestEveryAcceptedCacheTTLPassesBothSides walks the union of both exported
+// sets and asserts BOTH the config validator and the adapter resolver accept
+// every element — the direct probe that no value is accepted at load and
+// rejected at the first Stream call, or vice versa. Together with the
+// set-equality test above this holds even if a future change breaks a
+// validator's derivation from its own exported list.
+func TestEveryAcceptedCacheTTLPassesBothSides(t *testing.T) {
+	union := append(config.CacheTTLValues(), anthropic.CacheTTLValues()...)
+	slices.Sort(union)
+	for _, ttl := range slices.Compact(union) {
 		if err := config.ValidateProviderCacheTTL(ttl); err != nil {
-			t.Fatalf("config rejects its own constant %q: %v", ttl, err)
+			t.Errorf("config rejects accepted TTL %q: %v", ttl, err)
 		}
 		if _, err := anthropic.ResolveCacheTTL(ttl); err != nil {
-			t.Errorf("adapter rejects config-accepted TTL %q: %v", ttl, err)
+			t.Errorf("adapter rejects accepted TTL %q: %v", ttl, err)
 		}
 	}
 }

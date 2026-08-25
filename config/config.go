@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/majorcontext/harness/message"
@@ -544,10 +545,20 @@ func validateCacheTTL(name string, p Provider) error {
 	if name != "anthropic" || p.Type != "" {
 		return fmt.Errorf("providers.%s: cache_ttl is only valid on the native %q provider (map key %q with no type); only the anthropic adapter sets cache_control", name, "anthropic", "anthropic")
 	}
-	if p.CacheTTL != CacheTTL5m && p.CacheTTL != CacheTTL1h {
+	if !slices.Contains(CacheTTLValues(), p.CacheTTL) {
 		return fmt.Errorf("providers.%s: unknown cache_ttl %q (valid values: %q, %q)", name, p.CacheTTL, CacheTTL5m, CacheTTL1h)
 	}
 	return nil
+}
+
+// CacheTTLValues returns every non-empty cache_ttl validateCacheTTL accepts,
+// in a fresh slice. validateCacheTTL iterates this same list, so the set and
+// the validator cannot drift from each other; cmd/harness's parity test
+// compares this set against provider/anthropic's for equality, binding the
+// two deliberately-duplicated copies together (package config cannot import
+// a provider package).
+func CacheTTLValues() []string {
+	return []string{CacheTTL5m, CacheTTL1h}
 }
 
 // validatePlugins fails loudly on a plugin spec that cannot possibly be

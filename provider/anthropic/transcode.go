@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/majorcontext/harness/imageclamp"
@@ -146,6 +147,17 @@ const (
 	CacheTTL1h = "1h"
 )
 
+// CacheTTLValues returns every non-empty value resolveCacheTTL accepts, in a
+// fresh slice. It is the adapter's own accepted set, not a copy maintained
+// beside it: resolveCacheTTL iterates this same list, so a TTL added here is
+// accepted, and one added anywhere else is unreachable. cmd/harness's parity
+// test compares this set against config's for equality — the seam that turns
+// one-sided drift into a test failure instead of a load-time/first-Stream
+// split.
+func CacheTTLValues() []string {
+	return []string{CacheTTL5m, CacheTTL1h}
+}
+
 // DefaultCacheTTL is what an empty Client.CacheTTL resolves to.
 //
 // The default is the EXTENDED 1-hour TTL, not the API's own 5-minute default,
@@ -169,14 +181,13 @@ func ResolveCacheTTL(ttl string) (string, error) { return resolveCacheTTL(ttl) }
 // an unknown value instead of falling back: a typo must never silently ship
 // different cache economics than the operator asked for.
 func resolveCacheTTL(v string) (string, error) {
-	switch v {
-	case "":
+	if v == "" {
 		return DefaultCacheTTL, nil
-	case CacheTTL5m, CacheTTL1h:
-		return v, nil
-	default:
-		return "", fmt.Errorf("anthropic: invalid cache_ttl %q (want %q or %q)", v, CacheTTL5m, CacheTTL1h)
 	}
+	if slices.Contains(CacheTTLValues(), v) {
+		return v, nil
+	}
+	return "", fmt.Errorf("anthropic: invalid cache_ttl %q (want %q or %q)", v, CacheTTL5m, CacheTTL1h)
 }
 
 // cacheControl builds the breakpoint marker for a resolved TTL. The 5m TTL is
