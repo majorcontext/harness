@@ -3568,6 +3568,11 @@ func (s *Server) lineageJSONFor(id string, sess *engine.Session) *lineageJSON {
 // legacy parent whose log predates task.spawned records) follow, in their
 // own order.
 //
+// De-duplication is uniform: one id appears exactly once in the result,
+// whichever argument carried it and however many times. Neither argument
+// is trusted to be duplicate-free — see the merge loop's own comment for
+// the asymmetry that rule replaced.
+//
 // Durable-first preserves spawn order for the common, all-post-field
 // case. The live list is a spawn-order subsequence of durable there:
 // adoptLocked appends at spawn, and Reap's filter keeps survivor order.
@@ -3589,22 +3594,25 @@ func (s *Server) lineageJSONFor(id string, sess *engine.Session) *lineageJSON {
 // "known: zero children now, and none ever durably spawned either," never
 // "unknown."
 func childIDsUnion(live, durable []string) []string {
-	if len(durable) == 0 {
-		// Common case (childless session, or legacy live-only): live alone.
-		// Live cannot contain duplicates — adoptLocked appends a child id
-		// at most once — so no dedup map is needed here.
-		return append(make([]string, 0, len(live)), live...)
-	}
-	out := make([]string, 0, len(live)+len(durable))
-	seen := make(map[string]bool, len(live)+len(durable))
-	for _, id := range durable {
-		if !seen[id] {
-			seen[id] = true
-			out = append(out, id)
-		}
-	}
-	for _, id := range live {
-		if !seen[id] {
+	out := make([]string, 0, len(durable)+len(live))
+	seen := make(map[string]bool, len(durable)+len(live))
+	// ONE merge loop over both sides, in durable-then-live order. An
+	// earlier revision took a `len(durable) == 0` fast path that copied
+	// live verbatim, on the argument that live can hold no duplicate
+	// (adoptLocked appends a child id at most once). That reasoning was
+	// true but it made the two sides answer differently: a repeated id in
+	// live survived when durable was empty and collapsed when it was not
+	// (a live review finding). This merge states the union's OWN contract
+	// instead of borrowing each producer's invariant — one id appears
+	// once, whichever side carried it — so a future change to either
+	// producer cannot silently split the two answers apart again. The
+	// dropped fast path saved one small map allocation per childless
+	// lineage read; correctness of a wire contract is worth more.
+	for _, src := range [...][]string{durable, live} {
+		for _, id := range src {
+			if seen[id] {
+				continue
+			}
 			seen[id] = true
 			out = append(out, id)
 		}
