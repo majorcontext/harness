@@ -98,12 +98,7 @@ const mcpCatalogListingMax = 200
 // a deferred tool is not callable until the model loads it. It names the
 // exact call shape because that is the only in-band documentation the model
 // gets at the moment it needs it.
-//
-// STAGING: the select and search actions it names land with the next slice
-// of docs/design/mcp-lazy-tools.md. This header is therefore reachable only
-// by an embedder that sets Config.MCPToolLoading itself -- no config key
-// reaches that field yet (see cmd/harness) -- and that embedder must wait
-// for the loader.
+
 const mcpCatalogHeader = "Deferred MCP tools. These tools exist but their input schemas are not loaded. " +
 	"To use one you MUST first load it with the mcp tool: " +
 	`mcp(action="select", tools=["mcp__server__tool"]). ` +
@@ -180,6 +175,19 @@ func (s *Session) sessionCanDefer() bool {
 	if _, ok := s.tools[mcpSessionToolName]; !ok {
 		return false
 	}
+	return s.mcpPolicyCanDefer()
+}
+
+// mcpPolicyCanDefer is sessionCanDefer's CONFIG-only half: some configured
+// server's policy mode is not eager. It exists separately because
+// newSession builds the mcp tool's own def from it (see engine.go), and at
+// that moment the tool is not in s.tools yet -- asking sessionCanDefer
+// there would answer false for every session and never advertise the
+// search/select actions at all.
+//
+// The two agree for every session that HOLDS the mcp tool, which is the
+// only session whose def anyone reads.
+func (s *Session) mcpPolicyCanDefer() bool {
 	cr, ok := s.cfg.MCP.(mcpConfigReader)
 	if !ok {
 		return false
@@ -190,6 +198,34 @@ func (s *Session) sessionCanDefer() bool {
 		}
 	}
 	return false
+}
+
+// mcpToolUseImpliesSelection reports whether a routed call to name should
+// record name in the selected set (see executeTool, engine.go, and
+// docs/design/mcp-lazy-tools.md §3 "Use implies selection").
+//
+// The gate is per SERVER, not per session, and that is load-bearing rather
+// than cosmetic. The record exists only so a tool the model is USING keeps
+// its schema across a flip to deferred. A server pinned eager by
+// MCPToolLoadingByServer can never flip -- the override is absolute -- so a
+// record for its tools could never pay for itself. A session-level gate
+// would still write one for every tool of that pinned server, merely
+// because some OTHER server in the same session is lazy.
+//
+// auto counts as "can defer", since a catalog can cross the threshold at
+// any moment. The session must also hold the mcp tool: a session that
+// cannot select cannot defer either (see sessionCanDefer), so recording
+// there is pure waste too. A malformed name records nothing, matching
+// markMCPToolsSelected's own guard.
+func (s *Session) mcpToolUseImpliesSelection(name string) bool {
+	if _, ok := s.tools[mcpSessionToolName]; !ok {
+		return false
+	}
+	server, _, ok := splitMCPToolName(name)
+	if !ok {
+		return false
+	}
+	return s.mcpPolicyMode(server) != MCPToolLoadingEager
 }
 
 // mcpToolPlan is one request's decision about MCP tools: which defs enter
@@ -225,7 +261,26 @@ func (s *Session) planMCPTools(ctx context.Context) mcpToolPlan {
 	if s.cfg.MCP == nil {
 		return mcpToolPlan{}
 	}
-	all := s.cfg.MCP.Tools(ctx)
+	return s.planMCPToolsFrom(s.cfg.MCP.Tools(ctx), renderCatalogSegment)
+}
+
+// catalogRender selects whether planMCPToolsFrom renders the stage-1
+// segment. A caller that only needs the DEFS -- the mcp tool's search
+// action, computing which tools are loaded -- would otherwise re-render up
+// to mcpCatalogListingMax lines into a strings.Builder and throw them away
+// on every search.
+type catalogRender bool
+
+const (
+	renderCatalogSegment catalogRender = true
+	skipCatalogSegment   catalogRender = false
+)
+
+// planMCPToolsFrom is planMCPTools over a catalog the caller already has.
+// It exists so a caller that needs BOTH the full catalog and the plan --
+// the mcp tool's search action, which ranks over everything while reporting
+// what is loaded -- pays for one MCPRegistry.Tools call, not two.
+func (s *Session) planMCPToolsFrom(all []provider.ToolDef, render catalogRender) mcpToolPlan {
 	if len(all) == 0 {
 		return mcpToolPlan{}
 	}
@@ -258,6 +313,9 @@ func (s *Session) planMCPTools(ctx context.Context) mcpToolPlan {
 			continue
 		}
 		deferred = append(deferred, d)
+	}
+	if !render {
+		return mcpToolPlan{defs: defs}
 	}
 	return mcpToolPlan{defs: defs, catalog: mcpCatalogSegment(deferred)}
 }
@@ -347,9 +405,20 @@ func (s *Session) reapMCPSelections(catalog []provider.ToolDef) map[string]bool 
 // registry with no status surface reports none, which makes the reap a
 // no-op: without connection state there is no evidence a name is stale.
 func mcpConnectedServers(reg MCPRegistry) map[string]bool {
+	out, _ := mcpConnectedServersKnown(reg)
+	return out
+}
+
+// mcpConnectedServersKnown is mcpConnectedServers plus the distinction its
+// caller sometimes needs: whether connection state is KNOWN at all. An
+// empty map means "every server is disconnected" when known is true, and
+// "no evidence either way" when it is false -- two answers a bare nil map
+// cannot tell apart, and select's pending bucket must not confuse (see
+// mcpSelectBucket).
+func mcpConnectedServersKnown(reg MCPRegistry) (connected map[string]bool, known bool) {
 	sr, ok := reg.(mcpStatusReader)
 	if !ok {
-		return nil
+		return nil, false
 	}
 	out := map[string]bool{}
 	for _, st := range sr.Status() {
@@ -357,7 +426,7 @@ func mcpConnectedServers(reg MCPRegistry) map[string]bool {
 			out[st.Name] = true
 		}
 	}
-	return out
+	return out, true
 }
 
 // markMCPToolsSelected adds well-formed namespaced names to the session's
@@ -365,10 +434,14 @@ func mcpConnectedServers(reg MCPRegistry) map[string]bool {
 // name is ignored, matching select's own malformed-name rule and the replay
 // guard: a name no server can own must never enter durable state.
 //
-// This is the only writer in this slice. It does not journal: the durable
-// record and its two callers (the mcp tool's select action, and
-// use-implies-selection on a routed call) land with the surface that needs
-// them.
+// Every name that ENTERS the set is journaled, in ONE mcp.tools_selected
+// record per call (see recMCPToolsSelected, store.go), written under the
+// same s.mu the mutation holds -- the persist-under-s.mu shape SetModel and
+// RegisterGoal already use, so log order matches state order. A name that
+// was already selected changes nothing and writes nothing.
+//
+// Both writers of that record funnel through here: the mcp tool's select
+// action and use-implies-selection on a routed call.
 func (s *Session) markMCPToolsSelected(names ...string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -386,6 +459,7 @@ func (s *Session) markMCPToolsSelected(names ...string) []string {
 		s.mcpSelected[name] = true
 		added = append(added, name)
 	}
+	s.persistMCPToolsSelected(added)
 	return added
 }
 
