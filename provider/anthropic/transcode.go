@@ -119,10 +119,46 @@ type apiSource struct {
 }
 
 type apiToolDef struct {
+	// Type names a SERVER-side tool (e.g. the tool search tool); it is
+	// omitted for an ordinary client tool, which the API identifies by
+	// name plus schema. A server tool entry carries Type and Name only --
+	// Description and InputSchema stay empty, which is why both are
+	// omitempty here.
+	Type        string          `json:"type,omitempty"`
 	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema,omitempty"`
+	// DeferLoading keeps this tool's definition out of the model's context
+	// until it discovers the tool through tool search. The definition is
+	// still sent: the API needs it server-side to run the search and to
+	// expand the tool_reference block it returns.
+	//
+	// Never set on the tool search tool itself, and never on every tool --
+	// the API rejects a request whose tools are all deferred ("At least one
+	// tool must have defer_loading=false").
+	DeferLoading bool `json:"defer_loading,omitempty"`
 }
+
+// Tool search tool identifiers, from
+// platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool.
+//
+// harness sends the BM25 variant. Both variants search the same fields
+// (tool names, descriptions, argument names, argument descriptions) and
+// ship on the same models, so the choice is only about how the model
+// expresses a query: regex makes it construct a pattern, BM25 lets it write
+// a natural-language query. Two reasons BM25 wins here. A malformed pattern
+// is a real failure mode the regex variant owns -- the doc's own
+// invalid_tool_input example is "missing ) at position 1", and a pattern is
+// also capped at 200 characters -- while a natural-language query cannot be
+// syntactically invalid. And harness's own client-side search, which stays
+// the mechanism on every other provider, already ranks a natural-language
+// query over exactly those fields (see engine/mcp_search.go), so BM25 keeps
+// one mental model for the same task across routes rather than making the
+// query language depend on which provider a session happens to run.
+const (
+	toolSearchToolType = "tool_search_tool_bm25_20251119"
+	toolSearchToolName = "tool_search_tool_bm25"
+)
 
 // apiCacheControl marks a prompt-cache breakpoint. TTL is the cache lifetime:
 // empty means the API default (5 minutes) and omits the field; "1h" selects the
@@ -272,11 +308,40 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 		out.System[n-1].CacheControl = cacheControl(ttl)
 	}
 
+	// Tool array. A deferred tool is sent in full, exactly like any other
+	// -- defer_loading controls what enters the model's CONTEXT, not what
+	// the request carries -- and its presence is what makes the tool search
+	// tool useful, so the search tool is prepended whenever anything is
+	// deferred.
+	//
+	// The search tool goes FIRST, and that position is a prompt-cache
+	// decision as much as a readability one: it is a fixed two-field entry,
+	// so the array's leading bytes stay identical across requests, and the
+	// caller's own group order (built-ins, then MCP, then plugins -- see
+	// engine.Session.toolDefs) is preserved behind it.
+	var deferred int
+	for _, t := range req.Tools {
+		if t.DeferLoading {
+			deferred++
+		}
+	}
+	if deferred > 0 && deferred < len(req.Tools) {
+		// The guard is deferred < len(req.Tools), not deferred > 0 alone:
+		// the API rejects a request whose tools are ALL deferred, and the
+		// search tool itself does not count as the non-deferred one for
+		// that rule. A caller that defers everything gets its tools sent
+		// eagerly rather than a 400 -- degrading to today's behaviour beats
+		// failing the turn.
+		out.Tools = append(out.Tools, apiToolDef{Type: toolSearchToolType, Name: toolSearchToolName})
+	}
 	for _, t := range req.Tools {
 		out.Tools = append(out.Tools, apiToolDef{
 			Name:        t.Name,
 			Description: t.Description,
 			InputSchema: t.InputSchema,
+			// Only marked when the search tool went out with it: a deferred
+			// tool with no way to be discovered is an unreachable tool.
+			DeferLoading: t.DeferLoading && deferred < len(req.Tools),
 		})
 	}
 
