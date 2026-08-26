@@ -230,8 +230,12 @@ separate paths), mapped to the sha256 hash of that path's raw on-disk bytes
 at the moment of that read or write. `read_file` hashes the complete raw
 file bytes it already read off disk for its own content classification
 (`readPathContent`'s `TextData`/`ImageData`) — never the offset/limit-sliced
-text it returns to the model, since `read_file` always reads the whole file
-regardless of what window it displays.
+text it returns to the model. This matches the reference guards (Claude
+Code, opencode): the guard authorizes per successful OPEN, not per byte
+displayed — a windowed read of a large file authorizes replacing the whole
+file. The hash is recorded only at a `read_file` return that hands the
+model content; a read that errors (offset past end-of-file) records
+nothing.
 
 `write_file` on a path that `os.Stat` resolves to an existing regular file
 requires, in order: (1) the path is present in this session's read set —
@@ -239,9 +243,12 @@ absent means `write_file: %s exists and has not been read this session;
 read it first (or use edit_file)`; (2) hashing the path's CURRENT on-disk
 bytes fresh (never trusting the recorded hash's age) matches the recorded
 hash — a mismatch means `write_file: %s changed on disk since it was read;
-read it again before overwriting`. A path `os.Stat` cannot resolve to an
-existing regular file (missing, or a stat error) is unguarded — creation is
-`write_file`'s main job, and there is no prior content to protect. A
+read it again before overwriting`. A path that does not exist
+(`fs.ErrNotExist`) is unguarded — creation is `write_file`'s main job, and
+there is no prior content to protect. Any OTHER stat failure (permission,
+transient metadata error) refuses the write with `write_file: cannot stat
+%s to check the read-before-overwrite guard` — a failed stat cannot prove
+no protected file exists there. A
 successful `write_file` or `edit_file` records/updates the written path's
 hash to the new content's hash, so a write immediately followed by another
 write to the SAME path (the assistant overwriting its own just-written
