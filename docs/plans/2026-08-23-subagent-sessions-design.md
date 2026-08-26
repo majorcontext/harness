@@ -177,7 +177,9 @@ mechanism:
   per-entry rune cap, and a total rune budget filled NEWEST-first so the
   messages nearest the death always survive. The reply reports the
   descendant's whole message count alongside how many entries came
-  back, so a model always knows it is reading a window. Every non-text
+  back, so a model always knows it is reading a window, and it repeats
+  `fail_kind` beside `fail_reason` so a death's structured cause arrives
+  with its evidence. Every non-text
   part is rendered (tool call with capped arguments, tool result,
   reasoning summary, an attachment count) rather than dropped: a child
   that died mid-tool-loop has almost nothing else in its last messages.

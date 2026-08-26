@@ -126,6 +126,9 @@ func TestTaskLogReadsADeadChild(t *testing.T) {
 	if got.Returned == 0 {
 		t.Fatalf("returned = 0, want the dead child's messages: %+v", got)
 	}
+	if got.FailKind != "" {
+		t.Errorf("fail_kind = %q, want empty for an ordinary permanent failure", got.FailKind)
+	}
 	if !strings.Contains(got.Entries[len(got.Entries)-1].Text, "do the work") {
 		t.Errorf("last entry = %+v, want the prompt the child died on", got.Entries[len(got.Entries)-1])
 	}
@@ -470,5 +473,38 @@ func TestBoundedPartsTextExactBoundary(t *testing.T) {
 	got, cut = boundedPartsText(message.Parts{&message.Text{Text: exact}, &message.Text{Text: "more"}}, 10)
 	if !cut {
 		t.Errorf("boundedPartsText(exact + more text) = (%q, %v), want cut = true", got, cut)
+	}
+}
+
+// TestTaskLogReportsFailKind proves the tail carries FailReason's
+// structured half — the same value the status action reports — so a
+// parent diagnosing a death from the tail does not need a second call to
+// learn the cause was an account wall rather than the child.
+func TestTaskLogReportsFailKind(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	root := mgr.NewRoot(managedConfig("root",
+		scriptedTurns("root", nil),
+		&logFailingProvider{name: "child", err: provider.MarkPermanent(&provider.Error{
+			Kind:        provider.ErrKindProviderExhausted,
+			Raw:         "anthropic: You have reached your specified API usage limits.",
+			RecoverHint: "2026-09-01",
+		})},
+	))
+	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child")})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr, childID, StatusFailed, time.Second)
+
+	got := runTaskLogJSON(t, root, taskToolArgs{SessionID: childID})
+	if got.FailKind != FailKindProviderExhausted {
+		t.Errorf("fail_kind = %q, want %q", got.FailKind, FailKindProviderExhausted)
+	}
+	status, _, err := mgr.DescendantInfo(root.ID, childID)
+	if err != nil {
+		t.Fatalf("DescendantInfo: %v", err)
+	}
+	if got.FailKind != status.FailKind {
+		t.Errorf("log fail_kind = %q, status fail_kind = %q, want identical", got.FailKind, status.FailKind)
 	}
 }

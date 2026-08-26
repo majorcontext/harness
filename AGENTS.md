@@ -1665,7 +1665,10 @@ clamped at 100, a negative value is an error), a per-entry rune cap, and a
 total rune budget filled NEWEST-first so the messages nearest a death
 always survive. The reply reports the descendant's whole message count
 next to how many entries came back, so a model knows it is reading a
-window. Every non-text part is rendered rather than dropped — a tool call
+window, and it carries `fail_kind` alongside `fail_reason` — the same
+structured half `task status` reports, so a reader with the tail in front
+of it never needs a second call to learn a death was an account wall
+rather than the child. Every non-text part is rendered rather than dropped — a tool call
 with capped arguments, a tool result, a reasoning summary, and an
 attachment COUNT that includes blobs nested inside a tool result, which
 `Parts.Text()` itself drops. Content is deliberately NOT masked: parent

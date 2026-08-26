@@ -582,13 +582,19 @@ type taskLogEntry struct {
 // budget bit, and reporting both is what tells a model it is looking at a
 // window rather than the whole story.
 type taskLogResult struct {
-	SessionID  string         `json:"session_id"`
-	Status     string         `json:"status"`
-	AgentType  string         `json:"agent_type,omitempty"`
-	FailReason string         `json:"fail_reason,omitempty"`
-	Total      int            `json:"total_messages"`
-	Returned   int            `json:"returned"`
-	Entries    []taskLogEntry `json:"entries"`
+	SessionID  string `json:"session_id"`
+	Status     string `json:"status"`
+	AgentType  string `json:"agent_type,omitempty"`
+	FailReason string `json:"fail_reason,omitempty"`
+	// FailKind is FailReason's structured half, the same value the status
+	// action reports (taskStatusResult.FailKind). Carried here too because
+	// this verb's whole job is diagnosing a death: a reader that has the
+	// tail in front of it should not need a second call to learn that the
+	// cause was an account wall, not the child.
+	FailKind string         `json:"fail_kind,omitempty"`
+	Total    int            `json:"total_messages"`
+	Returned int            `json:"returned"`
+	Entries  []taskLogEntry `json:"entries"`
 }
 
 // runTaskLog implements the log action: the tail of a descendant's
@@ -639,6 +645,7 @@ func runTaskLog(s *Session, in taskToolArgs) (message.Parts, error) {
 		Status:     string(node.Status),
 		AgentType:  node.AgentType,
 		FailReason: node.FailReason,
+		FailKind:   node.FailKind,
 		Total:      total,
 		Returned:   len(entries),
 		Entries:    entries,
