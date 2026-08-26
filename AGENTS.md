@@ -316,12 +316,11 @@ ID threaded through the provider boundary.
 `On*` callback in `Config` (`OnEvent`, `OnRequest`, `OnStorePhase`), nil is
 NOT "disabled": `emitTurnMetrics` substitutes `defaultTurnMetricsLog`
 (`engine/turn_metrics.go`), a `slog.NewJSONHandler` line written to
-`os.Stdout` specifically — not the `os.Stderr` every other structured log
-line in this repo uses (see `cmd/harness/main.go`'s "Structured logging: JSON
-to stderr" comment) — because a per-turn line is operational telemetry a
-deployment's log pipeline scrapes off a process's stderr stream (the
-"event streams on stderr" architecture priority above), not a diagnostic a
-human tails on the terminal. A plain `harness run`/`harness serve` process
+`os.Stderr` — the same stream every other structured log line in this repo
+uses (see `cmd/harness/main.go`'s "Structured logging: JSON to stderr"
+comment). Stderr keeps the line out of `harness run`'s stdout, which is
+the model's answer channel, while a deployment's log pipeline (Kubernetes
+captures both streams) scrapes it identically. A plain `harness run`/`harness serve` process
 with no embedder wiring therefore still emits this line by default; an
 embedder that wants a different sink (an OTel exporter, an in-memory test
 recorder) sets `OnTurnMetrics` and never needs to suppress the default

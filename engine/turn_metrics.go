@@ -64,13 +64,13 @@ type TurnMetrics struct {
 // slog.Default() would, but pinned to os.Stderr regardless of what
 // slog.SetDefault has been called with elsewhere.
 //
-// This deliberately targets stderr, not the stderr every other structured
-// log line in this repo uses (see cmd/harness/main.go's serveCmd/runCmd
-// "Structured logging: JSON to stderr" comment) — a per-turn line is
-// operational telemetry a deployment's log pipeline scrapes from a
-// process's stderr stream (see the architecture note "event streams on
-// stderr" in AGENTS.md), not a diagnostic a human tails on the terminal
-// alongside everything else on stderr.
+// Stderr is deliberate on BOTH counts. It joins the same stream every
+// other structured log line in this repo uses (cmd/harness/main.go's
+// "Structured logging: JSON to stderr"), so a deployment's log pipeline
+// (Kubernetes captures stdout and stderr alike) scrapes it with no extra
+// wiring — and it stays OFF stdout, which for `harness run` is the
+// answer channel itself: a metrics line interleaved there would corrupt
+// captured output (the review finding that moved this from stdout).
 var defaultTurnMetricsStderr = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 // defaultTurnMetricsLog is Config.OnTurnMetrics's default when the embedder

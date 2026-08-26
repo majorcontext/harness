@@ -456,7 +456,7 @@ type Config struct {
 	//
 	// Unlike every other On* callback in this Config, nil is NOT "disabled":
 	// emitTurnMetrics (turn_metrics.go) substitutes defaultTurnMetricsLog, a
-	// stdout JSON slog line, so a plain `harness run`/`harness serve` process
+	// stderr JSON slog line, so a plain `harness run`/`harness serve` process
 	// with no embedder wiring still emits per-turn telemetry by default. An
 	// embedder that wants a different sink (an in-memory recorder for a
 	// test, an OTel exporter) sets this field; it never needs to suppress

@@ -272,7 +272,7 @@ func TestTurnMetricsRecordsRetryAttempt(t *testing.T) {
 // TestDefaultTurnMetricsLogDoesNotPanic is a minimal smoke test for
 // Config.OnTurnMetrics's default (see emitTurnMetrics/defaultTurnMetricsLog,
 // turn_metrics.go): a session built with no OnTurnMetrics callback must
-// still complete a turn without panicking, proving the stdout slog default
+// still complete a turn without panicking, proving the stderr slog default
 // is actually wired rather than left nil.
 func TestDefaultTurnMetricsLogDoesNotPanic(t *testing.T) {
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
