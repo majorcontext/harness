@@ -321,6 +321,18 @@ func toolConcurrency() int {
 	if os.Getenv("HARNESS_SEQUENTIAL_TOOLS") == "1" {
 		return 1
 	}
+	// A NEGATIVE value is handled here rather than through envInt, which
+	// folds every non-positive value into 0 (the engine default). That
+	// fold would make engine.Config.ToolConcurrency's documented "a
+	// negative value is clamped to 1 (sequential)" unreachable through
+	// the only operator-facing seam: HARNESS_TOOL_CONCURRENCY=-1 would
+	// silently give parallel-at-8 to an operator who asked for the
+	// opposite. An explicit negative therefore means sequential, exactly
+	// as the field says. 0, empty, and a malformed value still mean "not
+	// set" and fall through to the engine default.
+	if n, err := strconv.Atoi(os.Getenv("HARNESS_TOOL_CONCURRENCY")); err == nil && n < 0 {
+		return 1
+	}
 	return envInt("HARNESS_TOOL_CONCURRENCY")
 }
 

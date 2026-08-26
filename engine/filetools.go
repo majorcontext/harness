@@ -169,10 +169,10 @@ func readPathContent(path string) (fileContent, error) {
 	return fileContent{IsImage: true, ImageData: full, MediaType: mediaType, Width: cfg.Width, Height: cfg.Height}, nil
 }
 
-// resolvePath resolves a tool path argument against the session working
-// directory. Absolute paths pass through unchanged.
-// resolvePath maps a tool argument to the path the tool opens. Every file
-// tool MUST route its path argument through it.
+// resolvePath maps a tool argument to the path the tool opens, resolving
+// a relative argument against the session working directory; an absolute
+// argument passes through unchanged. Every file tool MUST route its path
+// argument through it.
 //
 // That is load-bearing beyond convenience: filePathKey builds the batch
 // executor's per-file exclusion key from resolvePath's own output (see
@@ -267,12 +267,10 @@ func filePathKey(s *Session, args json.RawMessage) string {
 	// spellings through the same resolvePath, so cleaning here can only
 	// merge two keys that name one file, never split one file into two.
 	//
-	// A symlink or a hard link that reaches one inode under two different
-	// paths still keys as two resources. Resolving that needs a
-	// filepath.EvalSymlinks (or a stat for inode identity) on every key,
-	// which is a syscall on the batch's hot path and fails on a path that
-	// does not exist yet — a write_file target routinely does not. This is
-	// an accepted, documented residual, not an oversight.
+	// A SYMLINK alias is closed separately, by canonicalFileKeyPath below,
+	// which this function calls. A HARD link is the one remaining
+	// residual: two names for one inode with no link to follow. See
+	// canonicalFileKeyPath for why closing that is not worth it.
 	resolved := s.resolvePath(in.Path)
 	abs, err := filepath.Abs(resolved)
 	if err != nil {

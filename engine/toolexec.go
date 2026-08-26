@@ -86,6 +86,31 @@
 //     the retention ceiling above, where relative order changes the
 //     OUTCOME (which call wins the ceiling), not just the record order.
 //
+//   - task (task_tool.go): NOT Serial, and correctly so — a spawn hands
+//     the child to the SessionManager and returns. But its verbs
+//     (cancel/send/status/log) name a TARGET descendant, and two calls
+//     naming one descendant reordered by completion order change the
+//     outcome: a cancel(X) then send(X) executed as send-then-cancel
+//     delivers a message to a still-running child and then kills both.
+//     Fixed by keying, not by a barrier: taskToolKey keys on session_id,
+//     so same-target calls run in call order while different targets and
+//     all spawns stay parallel. SessionManager's own state is
+//     independently mutex-guarded; this is about ORDER, not about a race.
+//
+//   - read_tool_result (toolresult_tool.go): reads s.toolResults through
+//     lookupToolResult/openRetainedToolResult, both s.mu-guarded, and
+//     writes nothing. maybeRetainToolResult exempts its output from
+//     re-retention by tool name, which is a pure read of the name. Safe
+//     for concurrent calls, no key needed: a handle's sidecar file is
+//     immutable once written.
+//
+//   - session_info (session_info.go): reads s.mu-guarded counters plus
+//     toolDefs and Plugins, and writes nothing. Concurrent with a batch
+//     it reports a mid-batch snapshot (a toolExecCount that a sibling
+//     call is still incrementing), which is inherent to asking a session
+//     about itself while it works and was already true of a `task`
+//     child's concurrent turn. Safe.
+//
 //   - s.tools (the built-in tool registry map): written only by
 //     newSession, LoadSession, and SessionManager's adopt/spawn paths
 //     (store.go, session_manager.go) — every one of those runs BEFORE a
@@ -327,10 +352,12 @@ func (s *Session) runToolBatch(ctx context.Context, asst *message.Message) messa
 	return results
 }
 
-// toolCallCanceledText and toolCallNoResultText are the two synthesized
-// results the executor can produce without the tool running at all. Both
-// exist to hold the pairing invariant: a tool_use block with no
-// tool_result wedges a session permanently (AGENTS.md, NEP-5272).
+// These are the three synthesized results the executor produces when a
+// tool did not return a normal result: the call was refused after the
+// turn was canceled, no execution path filled its slot, or the tool
+// panicked. All three exist to hold the pairing invariant: a tool_use
+// block with no tool_result wedges a session permanently (AGENTS.md,
+// NEP-5272).
 const (
 	toolCallCanceledText = "tool call not started: the turn was canceled"
 	toolCallNoResultText = "tool call produced no result"
@@ -347,9 +374,16 @@ const (
 // otherwise keep starting fresh work for as long as the batch is wide.
 // And several built-ins commit their side effect without consulting ctx
 // at all — write_file writes the file — so "the tool decides" is not a
-// real gate for them. The turn is over; a canceled turn's results are
-// discarded anyway, so the only thing still running work can produce is
-// an unwanted side effect.
+// real gate for them. The turn is over, so the only thing still-starting
+// work can add is a side effect nobody asked for.
+//
+// A canceled turn's results are NOT discarded, and an earlier version of
+// this comment wrongly said they were. runToolCalls returns the
+// synthesized results, runAgenticLoop appends the whole RoleTool message
+// to DURABLE history, and they survive a resume. That makes the gate more
+// important, not less: what lands in the log is a legible "not started"
+// result for each refused call, instead of a side effect the operator
+// aborted to prevent.
 //
 // A call ALREADY RUNNING when the abort lands is not interrupted here: it
 // owns its own ctx and returns whatever it returns. This gate governs
@@ -478,6 +512,19 @@ func (s *Session) toolKey(name string, args json.RawMessage) (key string) {
 func (s *Session) runToolBatchParallel(ctx context.Context, calls []*message.ToolCall, outputs []message.Parts, errs []bool, done []bool) {
 	for _, seg := range s.splitBatch(calls) {
 		if seg.serial {
+			i := seg.idx[0]
+			outputs[i], errs[i] = s.runOneGuarded(ctx, seg.calls[0])
+			done[i] = true
+			continue
+		}
+		if len(seg.calls) == 1 {
+			// One-call fast path. A parallel segment of exactly one call
+			// is the COMMON shape — a turn with a single tool call, or a
+			// lone call between two Serial ones — and building a
+			// goroutine, a WaitGroup, a semaphore channel and a keyChain
+			// for it buys nothing: there is no sibling to run beside, and
+			// no sibling to exclude. Running it inline is what the serial
+			// branch above already does.
 			i := seg.idx[0]
 			outputs[i], errs[i] = s.runOneGuarded(ctx, seg.calls[0])
 			done[i] = true

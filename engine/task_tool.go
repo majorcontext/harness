@@ -176,7 +176,37 @@ func taskTool() Tool {
 		Run: func(ctx context.Context, s *Session, args json.RawMessage) (message.Parts, error) {
 			return runTaskTool(s, args)
 		},
+		// Key: serializes per TARGET descendant. Two calls in one batch
+		// that name the same session_id must run in call order — a
+		// cancel(X) followed by a send(X) that executed as send-then-
+		// cancel would deliver a message to a still-running child and
+		// then kill both, which is the reverse of what the model asked
+		// for. Calls naming DIFFERENT descendants still run side by side.
+		//
+		// A spawn carries no session_id and so takes no key: it is
+		// asynchronous and cheap, it hands the child to the
+		// SessionManager and returns, and two spawns are independent by
+		// construction. That is the approved design's "task spawn is
+		// already async-cheap — parallel is fine".
+		Key: taskToolKey,
 	}
+}
+
+// taskToolKey returns the per-descendant resource key for one `task`
+// call: its session_id, or "" (no key) for a call that names none — a
+// spawn, or a malformed call runTaskTool rejects before it touches any
+// session. An unparseable call cannot collide with a real session id, so
+// no key is the safe fallback here, the same reasoning processToolKey
+// uses (and unlike filePathKey, which needs a fixed fallback because an
+// unparseable path COULD name a file another call in the batch touches).
+func taskToolKey(_ *Session, args json.RawMessage) string {
+	var in struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(args, &in); err != nil || in.SessionID == "" {
+		return ""
+	}
+	return "task-session:" + in.SessionID
 }
 
 // runTaskTool dispatches one `task` tool call against s by in.Action,

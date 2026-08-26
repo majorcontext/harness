@@ -18,7 +18,13 @@ func TestToolConcurrencyKnobs(t *testing.T) {
 		{"cap is honored", "", "4", 4},
 		{"a non-one sequential value is ignored", "0", "4", 4},
 		{"a bad cap falls back to the engine default", "", "nope", 0},
-		{"a non-positive cap falls back to the engine default", "", "0", 0},
+		{"a zero cap falls back to the engine default", "", "0", 0},
+		// A negative value must reach the engine's documented clamp
+		// (Config.ToolConcurrency: "clamped to 1 (sequential)"). envInt
+		// alone folds it to 0, which would silently give parallel-at-8 to
+		// an operator who asked for the opposite.
+		{"a negative cap means sequential", "", "-1", 1},
+		{"a large negative cap means sequential", "", "-5", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("HARNESS_SEQUENTIAL_TOOLS", tc.sequential)

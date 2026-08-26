@@ -1253,3 +1253,40 @@ func TestFilePathKeySeesThroughSymlinks(t *testing.T) {
 		t.Errorf("key through a symlinked dir %q != %q", got, want)
 	}
 }
+
+// TestTaskToolKeysPerTargetDescendant pins the task tool's resource key.
+// Its verbs name a TARGET descendant, and two calls in one batch naming
+// one descendant reordered by completion order change the outcome: a
+// cancel(X) then send(X) executed as send-then-cancel delivers a message
+// to a still-running child and then kills both. A spawn names no target
+// and stays unkeyed, so spawns run in parallel as the design requires.
+func TestTaskToolKeysPerTargetDescendant(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	s := mgr.NewRoot(Config{})
+	key := func(args string) string {
+		return s.toolKey(taskToolName, json.RawMessage(args))
+	}
+
+	cancelX := key(`{"action":"cancel","session_id":"ses_x"}`)
+	sendX := key(`{"action":"send","session_id":"ses_x","prompt":"hi"}`)
+	if cancelX == "" {
+		t.Fatal("a task verb naming a descendant has no key: cancel and send on one child could reorder")
+	}
+	if cancelX != sendX {
+		t.Errorf("cancel key %q != send key %q: two verbs on ONE descendant must share a key", cancelX, sendX)
+	}
+	if other := key(`{"action":"cancel","session_id":"ses_y"}`); other == cancelX {
+		t.Error("two different descendants share a key: they must run concurrently")
+	}
+	for _, spawn := range []string{
+		`{"action":"spawn","agent":"general-purpose","prompt":"go"}`,
+		`{"agent":"general-purpose","prompt":"go"}`,
+	} {
+		if got := key(spawn); got != "" {
+			t.Errorf("spawn %s took key %q, want none: spawns must stay parallel", spawn, got)
+		}
+	}
+	if got := key(`{`); got != "" {
+		t.Errorf("a malformed task call took key %q, want none", got)
+	}
+}
