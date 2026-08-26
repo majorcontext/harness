@@ -202,7 +202,7 @@ type lineageJSON struct {
 	AgentType string   `json:"agent_type,omitempty"`
 	// Result is the final assistant text for a done session; FailReason a
 	// classified reason for a failed one — a fixed prefix plus the masked,
-	// capped provider cause (engine's classifySpawnError, and the #82 leak
+	// capped provider cause (engine's classifySpawnFailure, and the #82 leak
 	// rule its doc comment states). Both empty otherwise.
 	Result     string `json:"result,omitempty"`
 	FailReason string `json:"fail_reason,omitempty"`

@@ -3579,7 +3579,7 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 		// cancellation among a child's terminal outcomes a parent must be
 		// told about ("A child that errors terminally (...cancellation)
 		// delivers a failed notification"), never silently swallowed. The
-		// reason is a fixed "canceled" (not classifySpawnError(perr)):
+		// reason is a fixed "canceled" (not classifySpawnFailure(perr)):
 		// perr may even be nil here (the turn could have raced to a
 		// genuine success in the same instant Cancel() marked it
 		// canceled), and the node's OWN status already carries the
@@ -4230,7 +4230,7 @@ func classifySpawnFailure(err error) spawnFailure {
 		hint := boundedProviderText(pe.RecoverHint, spawnErrorHintCap)
 		return spawnFailure{
 			Kind:        FailKindProviderExhausted,
-			Reason:      exhaustionReason(hint) + ": " + spawnErrorDetail(err),
+			Reason:      exhaustionReason + ": " + spawnErrorDetail(err),
 			RecoverHint: hint,
 		}
 	}
@@ -4265,14 +4265,15 @@ func classifySpawnFailure(err error) spawnFailure {
 	return spawnFailure{Reason: prefix + ": " + spawnErrorDetail(err)}
 }
 
-// exhaustionReason is the classified prefix for an account wall, naming
-// when access returns whenever the provider said so.
-func exhaustionReason(hint string) string {
-	if hint == "" {
-		return "provider capacity exhausted for this account"
-	}
-	return "provider capacity exhausted for this account; access returns " + hint
-}
+// exhaustionReason is the classified prefix for an account wall. It states
+// the classification ONLY, never the recover-at hint — a review finding:
+// the hint is extracted FROM the provider message that spawnErrorDetail
+// renders right after it, and taskFailureGuidance states it a third time,
+// so naming it here made one rendered line repeat the same time up to
+// three times. The guidance's "after <hint>" is the single canonical
+// statement now; the cause half stays purely descriptive, and the
+// provider's own sentence inside it stays verbatim.
+const exhaustionReason = "provider capacity exhausted for this account"
 
 // spawnErrorDetail renders err as the model-visible cause half of a
 // classified fail reason: masked, then capped. Mask first, cap second —

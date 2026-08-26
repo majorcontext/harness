@@ -408,7 +408,14 @@ type taskNotifyRecord struct {
 	// child restored through restoreKnownStatusLocked — reports the same
 	// kind a live one would. A legacy record with no fail_kind restores
 	// "", exactly the ordinary-failure value.
-	FailKind string         `json:"fail_kind,omitempty"`
+	FailKind string `json:"fail_kind,omitempty"`
+	// FailHint mirrors taskNotification.RecoverHint: the provider's own
+	// recover-at statement, carried durably because the guidance line a
+	// parent reads is the only place that time is stated (see
+	// exhaustionReason). A legacy record with no fail_hint restores "",
+	// and the guidance simply names no time — the same rendering a wall
+	// with no parseable hint already produces.
+	FailHint string         `json:"fail_hint,omitempty"`
 	Usage    provider.Usage `json:"usage,omitzero"`
 	// Canceled mirrors taskNotification.Canceled (see its own doc
 	// comment, taskdelivery.go) — carried on every record type this
@@ -627,7 +634,7 @@ func (s *Session) persistTaskNotifyLocked(recType string, n taskNotification) {
 		s.lastPersistErr = err
 		return
 	}
-	rec := taskNotifyRecord{ChildID: n.ChildID, Agent: n.Agent, Status: n.Status, Result: n.Result, FailReason: n.FailReason, FailKind: n.FailKind, Usage: n.Usage, Canceled: n.Canceled}
+	rec := taskNotifyRecord{ChildID: n.ChildID, Agent: n.Agent, Status: n.Status, Result: n.Result, FailReason: n.FailReason, FailKind: n.FailKind, FailHint: n.RecoverHint, Usage: n.Usage, Canceled: n.Canceled}
 	if err := s.writeRecord(record{Type: recType, TaskNotify: &rec}); err != nil {
 		s.lastPersistErr = err
 	}
@@ -1145,7 +1152,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				oc := taskNotification{
 					ChildID: tn.ChildID, Agent: tn.Agent, Status: tn.Status,
 					Result: tn.Result, FailReason: tn.FailReason, FailKind: tn.FailKind,
-					Usage: tn.Usage, Canceled: tn.Canceled,
+					RecoverHint: tn.FailHint, Usage: tn.Usage, Canceled: tn.Canceled,
 				}
 				s.committedOutcome = &oc
 			}
@@ -1313,7 +1320,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				s.taskNotifications = append(s.taskNotifications, taskNotification{
 					ChildID: tn.ChildID, Agent: tn.Agent, Status: tn.Status,
 					Result: tn.Result, FailReason: tn.FailReason, FailKind: tn.FailKind,
-					Usage: tn.Usage, Canceled: tn.Canceled,
+					RecoverHint: tn.FailHint, Usage: tn.Usage, Canceled: tn.Canceled,
 				})
 			}
 		case recTaskNotifyDelivered:

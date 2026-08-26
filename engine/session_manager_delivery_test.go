@@ -96,7 +96,7 @@ func TestCanceledChildNotifiesParent(t *testing.T) {
 // branch, read by nodeStatusForOutcome and applied by
 // restoreKnownStatusLocked (and recoverInterruptedTurnLocked, for the
 // analogous in-flight-crash-of-an-already-canceled-turn case) —
-// deliberately NOT inferred from FailReason=="canceled": classifySpawnError
+// deliberately NOT inferred from FailReason=="canceled": classifySpawnFailure
 // can ALSO produce that exact text for a genuinely FAILED "caught in the
 // crossfire" descendant of an AbortTurn call (cancel_tree's own doc
 // comment covers that distinction) — string-matching FailReason would

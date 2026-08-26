@@ -270,7 +270,7 @@ operations (the boxes control plane is the first consumer):
   crashes the parent.
 - The `fail_reason` a failed child reports is a fixed classified prefix
   plus the CAUSE: the underlying error message, masked (`maskSecrets`)
-  and capped at 500 runes — `classifySpawnError`. The prefix alone
+  and capped at 500 runes — `classifySpawnFailure`. The prefix alone
   cannot separate a quota rejection from a malformed request, so a
   parent reading only the prefix guesses; a live incident measured that
   guess as "respawn a sibling into the same fleet-wide provider wall".
@@ -283,7 +283,8 @@ operations (the boxes control plane is the first consumer):
   temporal (the child's work survives), so the notification tells the
   parent explicitly not to spawn a replacement and to resume THIS child
   with `task send` — the existing settled-descendant re-run path — after
-  the provider's own recover-at hint. Classification happens in the
+  the provider's own recover-at hint, which the guidance clause states
+  once and the durable record carries. Classification happens in the
   adapter (`provider/anthropic`'s `parseUsageExhaustion`), never by the
   engine matching provider text; the engine reads
   `provider.AsProviderExhausted`, or a rate limit that outlived the retry

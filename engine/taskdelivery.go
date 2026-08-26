@@ -32,9 +32,15 @@ type taskNotification struct {
 	FailKind string
 	// RecoverHint is the provider's own statement of when access returns
 	// ("2026-09-01 at 00:00 UTC"), for FailKindProviderExhausted only, and
-	// only when the provider gave one. Runtime-only: it is already spelled
-	// out inside FailReason, which is what the durable record carries, so
-	// a reloaded notification renders the same sentence without it.
+	// only when the provider gave one. Masked and capped like every other
+	// piece of provider text on this surface (boundedProviderText, see
+	// classifySpawnFailure).
+	//
+	// Durable, not runtime-only: taskFailureGuidance's "after <hint>" is
+	// the ONE canonical statement of the recover time (FailReason names
+	// the classification, not the time — see exhaustionReason), so a
+	// notification restored from the log would otherwise lose the fact
+	// entirely rather than merely repeat it less.
 	RecoverHint string
 	Usage       provider.Usage
 	// Canceled distinguishes a child that was explicitly Cancel()ed from
@@ -42,7 +48,7 @@ type taskNotification struct {
 	// (which stays exactly Done/Failed, unchanged, for every existing
 	// parent-facing consumer: the queued/delivered wire shape, the
 	// [tasks:] rendering, etc.) and NOT inferable from FailReason=="canceled"
-	// either: classifySpawnError (below) also produces that exact string
+	// either: classifySpawnFailure (below) also produces that exact string
 	// for a genuinely FAILED turn whose own context was canceled for some
 	// OTHER reason (e.g. an ancestor's context propagating), which is a
 	// real StatusFailed outcome, not a StatusCanceled one — string-matching
@@ -490,7 +496,7 @@ func taskFailureGuidance(n taskNotification) string {
 
 // neutralizeNotificationText collapses newlines to spaces — see
 // renderTaskNotifications' doc comment for why. FailReason is always
-// engine-generated (classifySpawnError, or the fixed "canceled" string —
+// engine-generated (classifySpawnFailure, or the fixed "canceled" string —
 // never raw CHILD text), but it does now carry the provider's own error
 // message as its cause half, and a provider error can be multi-line, so
 // this pass is load-bearing for FailReason too, not only for a child's

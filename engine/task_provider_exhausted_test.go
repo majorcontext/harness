@@ -44,9 +44,6 @@ func TestProviderExhaustedChildIsClassified(t *testing.T) {
 	if node.FailKind != FailKindProviderExhausted {
 		t.Errorf("FailKind = %q, want %q", node.FailKind, FailKindProviderExhausted)
 	}
-	if !strings.Contains(node.FailReason, "2026-09-01") {
-		t.Errorf("FailReason = %q, want it to carry the recover-at hint", node.FailReason)
-	}
 	if !strings.Contains(node.FailReason, "usage limits") {
 		t.Errorf("FailReason = %q, want it to carry the provider cause", node.FailReason)
 	}
@@ -243,6 +240,54 @@ func TestProviderExhaustedChildResumesOnSend(t *testing.T) {
 	}
 	if !firstPrompt {
 		t.Error("child history lost the original prompt across the resume")
+	}
+}
+
+// TestExhaustionReasonStatesTheTimeOnce proves the rendered notification
+// names the recover time in ONE engine-authored place. A review finding:
+// the reason prefix, the provider message it is extracted from, and the
+// guidance clause each stated it, so one line repeated the same date three
+// times. The provider's own sentence stays verbatim — that is its text,
+// not ours — so exactly one engine-authored statement remains.
+func TestExhaustionReasonStatesTheTimeOnce(t *testing.T) {
+	fail := classifySpawnFailure(exhaustionError("2026-09-01"))
+	if strings.Contains(exhaustionReason, "2026-09-01") || strings.Contains(exhaustionReason, "access returns") {
+		t.Errorf("exhaustionReason = %q, want the classification only, with no recover time", exhaustionReason)
+	}
+	if fail.RecoverHint != "2026-09-01" {
+		t.Errorf("RecoverHint = %q, want the hint still carried for the guidance", fail.RecoverHint)
+	}
+	line := renderTaskNotifications([]taskNotification{{
+		ChildID: "ses_x", Agent: "explore", Status: StatusFailed,
+		FailReason: fail.Reason, FailKind: fail.Kind, RecoverHint: fail.RecoverHint,
+	}})
+	// Once in the provider's own quoted message, once in the guidance.
+	if got := strings.Count(line, "2026-09-01"); got != 2 {
+		t.Errorf("rendered line states 2026-09-01 %d times, want 2 (the provider's sentence and one guidance clause):\n%s", got, line)
+	}
+}
+
+// TestProviderExhaustedGuidanceSurvivesReload proves the recover time is
+// still stated after a restart. It rides the durable record now: the
+// reason names the classification, not the time, so a runtime-only hint
+// would have silently dropped the fact from a reloaded notification.
+func TestProviderExhaustedGuidanceSurvivesReload(t *testing.T) {
+	dir := t.TempDir()
+	reg := provider.Registry{"root": scriptedTurns("root", nil)}
+	parent := NewSession(Config{Providers: reg, Model: modelFor("root"), SessionDir: dir})
+	fail := classifySpawnFailure(exhaustionError("2026-09-01"))
+	parent.enqueueTaskNotification(taskNotification{
+		ChildID: "ses_child", Agent: "general-purpose", Status: StatusFailed,
+		FailReason: fail.Reason, FailKind: fail.Kind, RecoverHint: fail.RecoverHint,
+	})
+
+	reloaded, err := LoadSession(Config{Providers: reg, SessionDir: dir}, parent.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	seg := reloaded.checkoutTaskNotificationsSegment()
+	if !strings.Contains(seg, "after 2026-09-01") {
+		t.Errorf("reloaded notification omits the recover-at guidance:\n%s", seg)
 	}
 }
 

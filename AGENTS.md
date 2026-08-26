@@ -1564,7 +1564,7 @@ restores 0; `adoptReloadedLocked` then falls back to the `m.maxDepth`
 refusal sentinel, exactly as before the field existed.
 
 A failed child's `fail_reason` carries the CAUSE, not only a class.
-`classifySpawnError` (`engine/session_manager.go`) builds it as a fixed
+`classifySpawnFailure` (`engine/session_manager.go`) builds it as a fixed
 classified prefix, then the underlying error message — masked with
 `maskSecrets` and capped at `spawnErrorDetailCap` (500) runes. One prefix
 covers a whole family of causes (a permanent 400 is a malformed request
@@ -1631,10 +1631,15 @@ outlived the child's small `PromptRetries` budget, one-directionally and on
 purpose: a missed wall makes a parent respawn into it (the incident), while
 a false wall costs one deferred resume of an intact child, and a hintless
 guidance names no waiting period. An adapter that classifies its own quota
-shape never reaches that arm. Both halves of the reason — the cause and the
-recover-at hint — go through `boundedProviderText` (mask, then cap), so
-model-visible provider text on this surface has one rule, not one per
-field.
+shape never reaches that arm. Both the cause and the recover-at hint go through
+`boundedProviderText` (mask, then cap), so model-visible provider text on
+this surface has one rule, not one per field. The hint is stated in ONE
+engine-authored place — `taskFailureGuidance`'s "after <hint>" — never in
+the reason prefix as well: the hint is extracted FROM the provider message
+the reason already quotes, so naming it there made one rendered line
+repeat the same time three times. It rides the durable record
+(`taskNotifyRecord.FailHint`) because that guidance clause is now the only
+carrier of the fact.
 
 `taskFailureGuidance` (`engine/taskdelivery.go`) appends the parent's
 instructions to that child's own notification line — child preserved, do not
