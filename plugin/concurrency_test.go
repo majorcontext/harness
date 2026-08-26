@@ -21,8 +21,9 @@ import (
 // This file is the specification for ONE property: a harness may keep
 // several requests in flight on one plugin connection at the same time.
 //
-// The property is load-bearing for parallel tool execution in the engine. A
-// batch of tool calls that runs concurrently dispatches the
+// The property is load-bearing for parallel tool execution in the engine,
+// which is not implemented yet: Session.runToolCalls still runs one call at
+// a time. A batch of tool calls that runs concurrently will dispatch the
 // tool.execute.before / tool.execute.after hooks concurrently too, all over
 // the same plugin pipe. If that pipe paired requests with responses by
 // ARRIVAL ORDER, or if two writers could interleave the bytes of two
@@ -203,9 +204,13 @@ func TestConcurrentWritesNeverInterleaveFrames(t *testing.T) {
 	c := newConn(&tearingConn{ReadWriteCloser: connSide, chunk: 16}, func(context.Context, string, json.RawMessage) (any, error) {
 		return nil, errors.New("plugin: test peer sends no requests")
 	})
+	// Close the conn itself, not just the pipes: newConn starts the
+	// runNotifications goroutine, and only conn.close (through conn.fail)
+	// closes the channel that goroutine exits on. Closing the pipes alone
+	// leaks it.
 	t.Cleanup(func() {
+		_ = c.close()
 		_ = peer.Close()
-		_ = connSide.Close()
 	})
 
 	// Pad each frame well past the chunk size, so an unserialized write is

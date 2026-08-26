@@ -179,9 +179,12 @@ The rules, for a plugin in any language:
 Concurrency is not new to this version. `plugin.Host` is a box-scoped
 singleton shared by every session, so two sessions have always been able to
 dispatch a hook to one plugin at the same time. Parallel tool execution in
-the engine adds the same concurrency WITHIN one session: the tool calls of
-one assistant message run as a batch, so their `tool.execute.before` and
-`tool.execute.after` dispatches overlap.
+the engine will add the same concurrency WITHIN one session: the tool calls
+of one assistant message will run as a batch, so their
+`tool.execute.before` and `tool.execute.after` dispatches will overlap.
+Today the engine still runs those calls one at a time
+(`Session.runToolCalls`), so a plugin sees within-session overlap only
+after that change lands.
 
 This section documents an existing wire property. It changes no payload
 shape, so `ProtocolVersion` stays 1.
