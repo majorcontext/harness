@@ -293,17 +293,40 @@ func tailPage(f *os.File, logSize int64, total, lo, hi int) ([]message.Message, 
 // foldedPage is the general path, for a journal that carries at least one
 // compact record. It folds the journal exactly as LoadSession does — the
 // same indexFold, so the same applyCompactRecord — to learn WHICH message
-// ids occupy seqs lo..hi, then reads just those records back.
+// ids occupy seqs lo..hi, then decodes just those records.
 //
-// It costs one slim pass over the journal: ids, roles, and timestamps, never
-// message bodies. That is the price of an answer that cannot disagree with
-// the forward fold about what compaction did, and it is still three orders
-// of magnitude below materializing the history.
+// One pass, two decode depths. Every line is folded through indexRecord:
+// ids, roles, timestamps, and tool-call ids, never a message body. The same
+// pass keeps each record's raw line, by the id it contributes to the
+// sequence, as a subslice of data rather than a copy. Only the handful of
+// lines a page actually carries is then decoded in full.
+//
+// An earlier revision ran a SECOND scanLog over the journal, decoding every
+// line into a full record to find the wanted ones. That decoded every
+// message body in the file, which is the cost this whole endpoint exists to
+// avoid — a review caught it. The raw-line map is what removes it.
 func foldedPage(data []byte, lo, hi int) ([]message.Message, error) {
 	var fold indexFold
-	err := scanLog(data, func(rec indexRecord, line int, isLast bool) error {
+	// lineByID aliases data; it never copies a record.
+	lineByID := make(map[string][]byte)
+	err := scanLogRaw(data, func(line []byte, n int, isLast bool) error {
+		var rec indexRecord
+		if err := json.Unmarshal(line, &rec); err != nil {
+			if isLast {
+				return errTruncatedFinalRecord
+			}
+			return fmt.Errorf("corrupt record at line %d: %v", n, err)
+		}
 		if err := fold.applyIndexRecord(rec, isLast); err != nil {
-			return fmt.Errorf("%w at line %d", err, line)
+			return fmt.Errorf("%w at line %d", err, n)
+		}
+		switch {
+		case rec.Type == recMessage && rec.Message != nil:
+			lineByID[rec.Message.ID] = line
+		case rec.Type == recCompact && rec.Compact != nil:
+			// A compact record contributes its summary to the sequence,
+			// and the summary lives inside that record's own line.
+			lineByID[rec.Compact.Summary.ID] = line
 		}
 		return nil
 	})
@@ -316,38 +339,32 @@ func foldedPage(data []byte, lo, hi int) ([]message.Message, error) {
 	if hi > len(fold.messages) {
 		return nil, fmt.Errorf("message page [%d,%d]: journal folds to %d messages", lo, hi, len(fold.messages))
 	}
-	want := make(map[string]int, hi-lo+1)
-	for seq := lo; seq <= hi; seq++ {
-		want[fold.messages[seq-1].ID] = seq - lo
-	}
 	out := make([]message.Message, hi-lo+1)
-	found := 0
-	err = scanLog(data, func(rec record, _ int, isLast bool) error {
+	for seq := lo; seq <= hi; seq++ {
+		id := fold.messages[seq-1].ID
+		line, ok := lineByID[id]
+		if !ok {
+			return nil, fmt.Errorf("message page [%d,%d]: no record for message %q at seq %d", lo, hi, id, seq)
+		}
+		var rec record
+		if err := json.Unmarshal(line, &rec); err != nil {
+			return nil, fmt.Errorf("message page [%d,%d]: message %q: %v", lo, hi, id, err)
+		}
 		var msg *message.Message
-		switch rec.Type {
-		case recMessage:
+		switch {
+		case rec.Type == recMessage:
 			msg = rec.Message
-		case recCompact:
-			if rec.Compact != nil {
-				msg = &rec.Compact.Summary
-			}
+		case rec.Type == recCompact && rec.Compact != nil:
+			msg = &rec.Compact.Summary
 		}
 		if msg == nil {
-			return nil
+			return nil, fmt.Errorf("message page [%d,%d]: record for message %q carries no message", lo, hi, id)
 		}
-		if slot, ok := want[msg.ID]; ok {
-			m := *msg
-			m.Normalize()
-			out[slot] = m
-			found++
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	if found != len(out) {
-		return nil, fmt.Errorf("message page [%d,%d]: found %d of %d records", lo, hi, found, len(out))
+		m := *msg
+		// The same ingest-time repair LoadSession applies to every message
+		// it replays (message.Message.Normalize's doc comment).
+		m.Normalize()
+		out[seq-lo] = m
 	}
 	return out, nil
 }

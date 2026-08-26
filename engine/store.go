@@ -1734,6 +1734,36 @@ func advanceToolResultNextIDFromHistory(s *Session) {
 // a corrupt or truncated final line (crash mid-write) ends iteration
 // silently; corruption anywhere else is an error.
 func scanLog[T any](data []byte, fn func(rec T, line int, isLast bool) error) error {
+	return scanLogRaw(data, func(raw []byte, line int, isLast bool) error {
+		var rec T
+		if err := json.Unmarshal(raw, &rec); err != nil {
+			if isLast {
+				return errTruncatedFinalRecord // crash mid-write, ignore
+			}
+			return fmt.Errorf("corrupt record at line %d: %v", line, err)
+		}
+		return fn(rec, line, isLast)
+	})
+}
+
+// errTruncatedFinalRecord ends a scan at a corrupt FINAL line, which is
+// scanLog's documented tolerance for a crash mid-write. scanLogRaw absorbs
+// it, so a caller sees the same clean end scanLog has always returned.
+// Every OTHER error propagates.
+var errTruncatedFinalRecord = errors.New("engine: truncated final record")
+
+// scanLogRaw is scanLog without the decode: it hands fn each non-empty line
+// as raw bytes, aliasing data rather than copying it, and owns the same
+// corruption discipline (a corrupt or truncated FINAL line ends iteration
+// silently; corruption anywhere else is the caller's error to report).
+//
+// It exists for a reader that must decide, per line, HOW MUCH of it to
+// decode. foldedPage (messagepage.go) folds every line through a slim shape
+// and then fully decodes only the handful of records a page actually
+// carries. Routed through scanLog instead, that reader would decode every
+// message body in the journal — the cost the paginated read exists to
+// avoid.
+func scanLogRaw(data []byte, fn func(raw []byte, line int, isLast bool) error) error {
 	lines := bytes.Split(data, []byte("\n"))
 	last := len(lines) - 1
 	for last >= 0 && len(bytes.TrimSpace(lines[last])) == 0 {
@@ -1744,14 +1774,10 @@ func scanLog[T any](data []byte, fn func(rec T, line int, isLast bool) error) er
 		if len(line) == 0 {
 			continue
 		}
-		var rec T
-		if err := json.Unmarshal(line, &rec); err != nil {
-			if i == last {
-				return nil // truncated final line: crash mid-write, ignore
+		if err := fn(line, i+1, i == last); err != nil {
+			if errors.Is(err, errTruncatedFinalRecord) {
+				return nil
 			}
-			return fmt.Errorf("corrupt record at line %d: %v", i+1, err)
-		}
-		if err := fn(rec, i+1, i == last); err != nil {
 			return err
 		}
 	}

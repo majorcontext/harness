@@ -801,3 +801,90 @@ func TestFoldedPageReadsOnlyTheIndexedPrefix(t *testing.T) {
 		t.Errorf("total = %d, want %d", page.Total, len(want))
 	}
 }
+
+// TestFoldedPageDecodesOnlyThePage is the cost guard for the fold path. A
+// page that reaches into compacted history folds every line through the
+// slim shape, but it must decode IN FULL only the records the page carries.
+// An earlier revision ran a second scan that decoded every line into a full
+// record to find the wanted ones, which decoded every message body in the
+// journal — the cost this endpoint exists to remove. A review caught it.
+//
+// The probe is a record carrying a part of an unknown type. It is valid
+// JSON, and the slim fold walks past it: indexPart keeps only tool-call and
+// tool-result parts. A FULL decode of that same line fails, because
+// unmarshalPart rejects an unknown part type (message/message.go). So a
+// page that excludes that message proves the record was never fully
+// decoded, and a page that includes it fails loudly.
+func TestFoldedPageDecodesOnlyThePage(t *testing.T) {
+	dir := t.TempDir()
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10}),
+		compactTurn("two", provider.Usage{InputTokens: 10}),
+		compactTurn("three", provider.Usage{InputTokens: 10}),
+		compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}),
+		compactTurn("four", provider.Usage{InputTokens: 10}),
+	}}
+	cfg := persistCfg(dir, prov)
+	s := NewSession(cfg)
+	runTurns(t, s, 3)
+	if _, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1}); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	runTurns(t, s, 1)
+
+	// Rewrite the OLDEST message record — folded away by the compaction, so
+	// no page below asks for it — to carry an unknown part type.
+	path := filepath.Join(dir, s.ID+".jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	var poisonedID string
+	for i, line := range lines {
+		var probe struct {
+			Type    string `json:"type"`
+			Message *struct {
+				ID string `json:"id"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &probe) != nil || probe.Type != recMessage || probe.Message == nil {
+			continue
+		}
+		lines[i] = `{"type":"message","message":{"id":"` + probe.Message.ID +
+			`","role":"user","parts":[{"type":"from_a_newer_binary","text":"x"}]}}`
+		poisonedID = probe.Message.ID
+		break
+	}
+	if poisonedID == "" {
+		t.Fatal("test setup: no message record to rewrite")
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The slim fold must still accept the journal: this probe is only
+	// meaningful while the record is foldable and merely undecodable.
+	ix, err := ReadSessionIndex(dir, s.ID)
+	if err != nil {
+		t.Fatalf("the slim fold rejected the record, so this probe proves nothing: %v", err)
+	}
+	if ix.DurableMessages < 3 {
+		t.Fatalf("test setup: %d durable messages", ix.DurableMessages)
+	}
+
+	// A page over the compacted history: it crosses the compact record, so
+	// it takes the fold path, and it must not decode the rewritten record.
+	page, err := ReadMessagePage(dir, s.ID, 0, ix.DurableMessages)
+	if err != nil {
+		t.Fatalf("ReadMessagePage: %v", err)
+	}
+	for _, m := range page.Messages {
+		if m.ID == poisonedID {
+			t.Fatalf("the page carried the folded-away record %q", poisonedID)
+		}
+	}
+	if !sameIDs(idsOf(page.Messages), wholeSequence(t, dir, s.ID)) {
+		t.Errorf("page ids = %v, want the whole durable sequence", idsOf(page.Messages))
+	}
+}

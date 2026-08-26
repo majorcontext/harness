@@ -1952,7 +1952,31 @@ paths:
                   - $ref: "#/components/schemas/MessagePage"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
+        "404":
+          description: >
+            No session with that id: no journal on disk, and nothing live in
+            this process. A session whose journal EXISTS but cannot be read
+            is a 500, not a 404 — see below.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: >
+            A page request whose journal exists but cannot be read: a
+            corrupt record, an I/O error, or a journal that keeps changing
+            under the read. Error text "cannot read session messages".
+
+            A live session is answered from its resident history for ONE
+            case only — a session that has no durable journal at all — so a
+            live session with an unreadable journal is a 500 as well. Paging
+            resident history there would give a sequence number to a message
+            that has no record, and a client that paged again after the
+            journal became readable would see its pages renumbered. Only the
+            page routes (`before_seq`/`limit`) can answer 500; a request
+            naming no page is unchanged.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /session/{id}/journal:
     get:
