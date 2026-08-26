@@ -171,7 +171,6 @@ type Config struct {
 	// by validateMCPToolLoading rather than falling back to the default:
 	// deferral changes what the model can call without asking, so a typo
 	// must never decide it silently.
-
 	MCPToolLoading string `json:"mcp_tool_loading,omitempty"`
 	// MCPToolLoadingThreshold is the tool COUNT "auto" compares the live
 	// catalog against. It is consulted in "auto" mode ONLY: with "eager" or
