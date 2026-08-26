@@ -285,6 +285,75 @@ the outer weather tier ever counts it, so a goal loop rides a brief provider
 blip without spending an outer attempt. `PromptRetries` 0 disables the inner
 budget for a host that wants the outer tiers to be the only retry.
 
+### Max-tokens auto-continue
+
+A turn whose stop reason is `provider.StopMaxTokens` means the provider cut
+the model off mid-emission — it did not choose to stop. Before this existed,
+`runAgenticLoop`'s `if stop != provider.StopToolUse` branch
+(`engine/engine.go`) treated every non-`tool_use` stop reason alike: append
+`asst`, synthesize an is_error result for any orphaned `ToolCall` part via
+`appendUnexecutedToolCallResults` (NEP-5272, see "Wire normalization"
+above), and return. For `max_tokens` specifically that return settles the
+session idle with nothing further ever prompting it. Incident: box
+harness-parallel-tools — the model emitted a large tool call, the provider
+stopped mid-emission with `max_tokens`, the engine synthesized the
+unexecuted-call result exactly as designed, and the session then sat idle
+until a human noticed and re-prompted it. On an autonomous fleet a silent
+work stoppage is as bad as a crash.
+
+`runAgenticLoop` now branches on `stop == provider.StopMaxTokens` inside
+that same `if`: `maybeAutoContinueMaxTokens` decides whether to `continue`
+the loop (issuing a real follow-up model call in this SAME `Prompt` call)
+instead of returning. This applies identically whether or not `asst` carried
+a `ToolCall` part — a pure-text `max_tokens` truncation (Claude Code's own
+behavior is to let the turn end and rely on the user re-prompting) gets the
+same auto-continue an autonomous harness session needs, not a human-facing
+half-answer. The follow-up call carries the synthetic unexecuted-tool-call
+result (if any) plus a one-shot nudge —
+`s.pendingContinuationNudge`/`continuationNudgeSegment`, rendered through
+the same `message.EngineContext`/`withAmbientStatus` idiom every other
+ambient status segment uses (process, MCP, goal-parked, identity — see
+"Ambient engine context" above) — telling the model its last turn hit the
+ceiling and it should continue in smaller pieces. The nudge rides every
+attempt a transient-error retry makes for that ONE follow-up call (mirroring
+`checkoutTaskNotificationsSegment`'s idempotent-reread shape,
+`taskdelivery.go`) and is cleared by `runAgenticLoop` the instant that whole
+`streamTurnWithRetry` call returns, so it never bleeds into a later,
+unrelated turn.
+
+Loop safety is the critical part: `runAgenticLoop`'s local `maxTokensStreak`
+counts CONSECUTIVE `max_tokens` stops, bounded by
+`Config.MaxTokensContinuations`. A model can pathologically re-emit
+oversized output turn after turn; `maxTokensStreak+1` such stops in a row —
+none completing normally in between — trips the bound.
+`maybeAutoContinueMaxTokens` then returns a `*maxTokensContinuationExhaustedError`
+naming the bound instead of arming yet another doomed attempt;
+`runAgenticLoop` emits `session.error` and returns it, the same
+"honest terminal, never a silent success" shape `emptyTurnError`'s own
+budget exhaustion uses (see "Base loop retry" above). The streak resets to
+zero the moment any turn in the same loop completes with a stop reason
+other than `max_tokens` — a genuine `tool_use` turn, an `end_turn`, a
+`refusal` — so an isolated `max_tokens` stop can never count against a
+later, unrelated one.
+
+`Config.MaxTokensContinuations` follows `PromptRetries`'s own
+unset-vs-zero config idiom: the engine field's zero value DISABLES
+auto-continue entirely (a bare embedder-built `engine.Config`, and every
+test that constructs one directly, keeps the exact pre-fix behavior — the
+turn ends immediately on the first `max_tokens` stop). The config/CLI layer
+(`config.Config.MaxTokensContinuations *int`, key
+`max_tokens_continuations`, resolved via `MaxTokensContinuationsValue`)
+supplies the product default of 3; an explicit `0` disables it the same way
+`prompt_retries: 0` disables base-loop retry.
+
+A task child runs its turn through this exact same `runAgenticLoop` — a
+child `Session` is a full `NewSession(childCfg)`
+(`SessionManager.Spawn`, `engine/session_manager.go`), and `childCfg` comes
+from `configSnapshot`, a whole-struct copy of the parent's `engine.Config`
+— so `MaxTokensContinuations` (and every other engine.Config field) reaches
+a child with no separate wiring. A child that hits `max_tokens`
+auto-continues under the identical bound the root does.
+
 ### Per-turn metrics
 
 `streamTurn` (`engine/engine.go`) emits one structured `turn_metrics` line per

@@ -788,6 +788,74 @@ func TestPromptRetries(t *testing.T) {
 	})
 }
 
+// TestMaxTokensContinuations covers the max_tokens_continuations config
+// field: a *int so unset means the product default
+// (MaxTokensContinuationsValue -> 3), an explicit 0 disables auto-continue,
+// and a project value overrides the user layer -- the same shape
+// TestPromptRetries covers for its sibling field.
+func TestMaxTokensContinuations(t *testing.T) {
+	t.Run("unset uses default 3", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.MaxTokensContinuations != nil {
+			t.Errorf("MaxTokensContinuations = %v, want nil (unset)", c.MaxTokensContinuations)
+		}
+		if got := c.MaxTokensContinuationsValue(); got != 3 {
+			t.Errorf("MaxTokensContinuationsValue = %d, want 3 (default)", got)
+		}
+	})
+	t.Run("explicit zero disables", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"max_tokens_continuations": 0}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.MaxTokensContinuations == nil || *c.MaxTokensContinuations != 0 {
+			t.Fatalf("MaxTokensContinuations = %v, want explicit 0", c.MaxTokensContinuations)
+		}
+		if got := c.MaxTokensContinuationsValue(); got != 0 {
+			t.Errorf("MaxTokensContinuationsValue = %d, want 0 (disabled)", got)
+		}
+	})
+	t.Run("explicit value", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"max_tokens_continuations": 5}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got := c.MaxTokensContinuationsValue(); got != 5 {
+			t.Errorf("MaxTokensContinuationsValue = %d, want 5", got)
+		}
+	})
+	t.Run("nil receiver uses default", func(t *testing.T) {
+		var c *Config
+		if got := c.MaxTokensContinuationsValue(); got != 3 {
+			t.Errorf("nil MaxTokensContinuationsValue = %d, want 3", got)
+		}
+	})
+	t.Run("project overrides user", func(t *testing.T) {
+		zero := 0
+		base := &Config{MaxTokensContinuations: intPtr(3)}
+		merged := merge(base, &Config{MaxTokensContinuations: &zero})
+		if merged.MaxTokensContinuations == nil || *merged.MaxTokensContinuations != 0 {
+			t.Errorf("merged = %v, want project override 0", merged.MaxTokensContinuations)
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{MaxTokensContinuations: intPtr(3)}
+		merged := merge(base, &Config{})
+		if merged.MaxTokensContinuations == nil || *merged.MaxTokensContinuations != 3 {
+			t.Errorf("merged = %v, want inherited 3", merged.MaxTokensContinuations)
+		}
+	})
+}
+
 // TestStreamIdleTimeoutS is the red-first test for the stream_idle_timeout_s
 // config field: 0/omitted means "engine default", negative means "disable
 // the watchdog", and project non-zero values override the user layer, same

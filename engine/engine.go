@@ -638,6 +638,49 @@ type Config struct {
 	// provider.AsPermanent malformed-request shape, or an interruptedTurnError
 	// is never retried regardless of this value — see streamTurnWithRetry.
 	PromptRetries int
+	// MaxTokensContinuations bounds how many CONSECUTIVE times
+	// runAgenticLoop auto-continues a turn whose stop reason was
+	// provider.StopMaxTokens — the provider cut the model off mid-emission
+	// instead of letting it choose to stop. Zero (the zero value) DISABLES
+	// auto-continue: a max_tokens turn ends exactly as it did before this
+	// field existed (asst is appended, any orphaned ToolCall parts get their
+	// usual synthetic is_error result via appendUnexecutedToolCallResults,
+	// and runAgenticLoop returns), which keeps a bare embedder-built
+	// engine.Config unchanged. The config/CLI wiring sets the product
+	// default of 3 (config key `max_tokens_continuations`,
+	// config.Config.MaxTokensContinuationsValue) — the same unset-vs-zero
+	// split PromptRetries uses.
+	//
+	// Unlike PromptRetries (a transient-error budget for ONE model call),
+	// this bounds a CHAIN of otherwise-successful calls: each continuation
+	// re-issues a fresh model call in the SAME Prompt loop, carrying
+	// forward whatever synthetic tool results the truncated turn produced
+	// plus a one-shot message.EngineContext nudge (see
+	// maybeAutoContinueMaxTokens and the maxTokensContinuationNudgeFmt
+	// constant) telling the model its last turn hit the ceiling and it
+	// should continue in smaller pieces. The bound exists because a model
+	// can pathologically re-emit oversized output turn after turn: without
+	// it, auto-continue would retry forever and never surface a failure.
+	// Exhausting the bound — MaxTokensContinuations+1 consecutive
+	// max_tokens stops with no turn completing normally in between —
+	// synthesizes a *maxTokensContinuationExhaustedError naming the bound,
+	// emits session.error, and returns, rather than looping forever or
+	// settling silently idle. The count resets to zero the moment any turn
+	// in the same loop completes with a different stop reason (see
+	// runAgenticLoop's maxTokensStreak).
+	//
+	// Fixes the box harness-parallel-tools incident: a provider stopped
+	// mid-tool-call-emission with stop reason "max_tokens",
+	// appendUnexecutedToolCallResults synthesized the usual unexecuted-call
+	// result, and the session then went idle with no further model
+	// call — a silent work stoppage on an autonomous fleet, requiring a
+	// human to notice and re-prompt. Applies equally to a task child's own
+	// turn loop: a child Session runs this exact same runAgenticLoop (see
+	// SessionManager's configSnapshot, which copies the whole engine.Config
+	// — including this field — into childCfg), so a child that hits
+	// max_tokens auto-continues under the identical bound, with no separate
+	// wiring.
+	MaxTokensContinuations int
 	// ContextWindowTokens is the model's context window size, in tokens, as
 	// an EXPLICIT operator override. A caller passing a positive value here
 	// pins the window for the session's lifetime, immune to a later model
@@ -835,6 +878,24 @@ type Session struct {
 	// OnRequest and the session_info tool (see session_info.go). Guarded by mu.
 	turn       int
 	lastSystem []string
+
+	// pendingContinuationNudge is the one-shot max_tokens auto-continuation
+	// nudge text (see maybeAutoContinueMaxTokens and
+	// maxTokensContinuationNudgeFmt), set by runAgenticLoop right before it
+	// re-issues streamTurnWithRetry after deciding to continue a max_tokens
+	// stop. continuationNudgeSegment reads it on every streamTurn call
+	// inside that streamTurnWithRetry call (so a transient-error retry
+	// inside the SAME call keeps re-rendering the identical nudge, mirroring
+	// checkoutTaskNotificationsSegment's idempotent-reread shape,
+	// taskdelivery.go); runAgenticLoop clears it once that whole
+	// streamTurnWithRetry call returns, so it never bleeds into a later,
+	// unrelated turn. Not mu-guarded: unlike taskNotifications (which
+	// Spawn can mutate from another session's goroutine), this field is
+	// only ever touched from within this session's own single in-flight
+	// Prompt call — the same single-caller property turn/lastSystem rely
+	// on for their own correctness, just without session_info's need to
+	// read it concurrently.
+	pendingContinuationNudge string
 
 	// skills is the structured catalog discovered on the first Prompt (name +
 	// absolute SKILL.md path), used by the session_info tool. The advertised
@@ -1935,6 +1996,16 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 	s.emitStatus("busy")
 	defer s.emitStatus("idle")
 
+	// maxTokensStreak counts CONSECUTIVE turns in THIS loop that stopped
+	// with provider.StopMaxTokens, across streamTurnWithRetry calls — never
+	// across a whole Session's lifetime. It resets to zero the instant a
+	// turn completes with any OTHER stop reason (see the StopToolUse branch
+	// below, this loop's one other point that continues rather than
+	// returns), so a model that eventually recovers is never penalized for
+	// an earlier, unrelated max_tokens stop. See maybeAutoContinueMaxTokens
+	// and Config.MaxTokensContinuations.
+	var maxTokensStreak int
+
 	for {
 		// streamTurnWithRetry is a drop-in for streamTurn that smooths a
 		// one-off retryable provider error (a momentary HTTP 5xx/429/529 or a
@@ -1945,6 +2016,12 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 		// here), a context.Canceled, or an exhausted/non-retryable failure —
 		// so everything below is unchanged. See its doc comment.
 		asst, stop, usage, err := s.streamTurnWithRetry(ctx)
+		// The pending continuation nudge (if any) rode every attempt this
+		// call just made — see continuationNudgeSegment and
+		// pendingContinuationNudge's doc comment — and must not bleed into
+		// whatever streamTurnWithRetry call comes next, success or failure
+		// alike.
+		s.pendingContinuationNudge = ""
 		if err != nil {
 			// Whatever this attempt's own streamTurn calls checked out
 			// (checkoutTaskNotificationsSegment, engine.go's streamTurn)
@@ -1988,8 +2065,45 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 			// synthetic results before Prompt ever returns, closing the
 			// hole instead of leaving them orphaned in history.
 			s.appendUnexecutedToolCallResults(asst, stop)
+			if stop == provider.StopMaxTokens {
+				// The provider cut this turn off mid-emission rather than
+				// letting the model choose to stop -- see the box
+				// harness-parallel-tools incident (Config.MaxTokensContinuations'
+				// doc comment). Left alone, this early return would settle
+				// the session idle with nothing further ever prompting it:
+				// a silent work stoppage on an autonomous fleet. Ask to
+				// continue instead of returning immediately.
+				cont, cerr := s.maybeAutoContinueMaxTokens(&maxTokensStreak)
+				if cerr != nil {
+					// maxTokensStreak exceeded Config.MaxTokensContinuations:
+					// a model pathologically re-emitting oversized output
+					// must not loop forever. Settle with a loud, classified
+					// error instead -- the same "honest terminal, never a
+					// silent success" shape emptyTurnError's own budget
+					// exhaustion uses.
+					s.emitSessionError(cerr)
+					return nil, cerr
+				}
+				if cont {
+					// maybeAutoContinueMaxTokens armed
+					// pendingContinuationNudge for the next
+					// streamTurnWithRetry call: loop back around instead of
+					// returning, so that call issues a real follow-up model
+					// request in this SAME Prompt loop.
+					continue
+				}
+				// cont is false with no error only when
+				// Config.MaxTokensContinuations is 0 (auto-continue
+				// disabled): fall through to the pre-fix return below,
+				// unchanged.
+			}
 			return asst, nil
 		}
+		// A genuine tool_use stop -- not a max_tokens truncation -- is a
+		// turn that completed normally: reset the consecutive-max_tokens
+		// streak so an EARLIER, unrelated max_tokens stop can never count
+		// against a LATER one. See maxTokensStreak's own doc comment above.
+		maxTokensStreak = 0
 		results := s.runToolCalls(ctx, asst)
 		if len(results) == 0 {
 			// tool_use stop with no tool calls: treat as end of turn
@@ -2165,6 +2279,13 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 	// runAgenticLoop, once this WHOLE turn's outcome — including any
 	// retries streamTurnWithRetry runs — is known.
 	if seg := s.checkoutTaskNotificationsSegment(); seg != "" {
+		messages = withAmbientStatus(messages, seg)
+	}
+	// The max_tokens auto-continuation nudge (see continuationNudgeSegment,
+	// maybeAutoContinueMaxTokens): present only on the follow-up call(s)
+	// runAgenticLoop issues right after a max_tokens stop it decided to
+	// continue, absent on every ordinary turn.
+	if seg := s.continuationNudgeSegment(); seg != "" {
 		messages = withAmbientStatus(messages, seg)
 	}
 	req := &provider.Request{
@@ -2513,6 +2634,82 @@ func (s *Session) appendUnexecutedToolCallResults(asst *message.Message, stop pr
 		return
 	}
 	s.append(syntheticUnexecutedToolResults(asst, fmt.Sprintf(unexecutedToolCallStopReasonTextFmt, stop)))
+}
+
+// maxTokensContinuationNudgeFmt is the ambient-context nudge text for the
+// streamTurnWithRetry call runAgenticLoop issues right after a max_tokens
+// stop it decided to auto-continue (see maybeAutoContinueMaxTokens). It
+// rides the newest user message as a *message.EngineContext part — the
+// same trusted, unforgeable idiom every other ambient status segment uses
+// (see withAmbientStatus and message.EngineContext) — so neither a user-
+// nor a tool-authored string can ever spoof it. %d/%d are the 1-indexed
+// continuation attempt and Config.MaxTokensContinuations' bound, so the
+// model (and anyone reading the transcript) can see how much budget is
+// left.
+const maxTokensContinuationNudgeFmt = "[continuation: your previous turn was cut off because it reached the max_tokens output limit (auto-continue %d of %d). Continue exactly where you left off. Produce your output in smaller pieces so this does not happen again.]"
+
+// continuationNudgeSegment returns the pending max_tokens auto-continuation
+// nudge, if any, for injection via withAmbientStatus — the same "compute
+// fresh, ride only this request" shape processStatusSegment/
+// mcpStatusSegment use, except the underlying state
+// (pendingContinuationNudge) is written by maybeAutoContinueMaxTokens
+// rather than recomputed from live external state. A deliberate READ, not
+// a checkout: streamTurnWithRetry can call streamTurn more than once for
+// one logical attempt (a transient-error retry), and every one of those
+// attempts must see the identical nudge — runAgenticLoop is what clears
+// pendingContinuationNudge, once, after the WHOLE streamTurnWithRetry call
+// returns. See pendingContinuationNudge's own doc comment (Session struct)
+// for the full checkout/clear split, mirroring
+// checkoutTaskNotificationsSegment's reasoning in taskdelivery.go.
+func (s *Session) continuationNudgeSegment() string {
+	return s.pendingContinuationNudge
+}
+
+// maxTokensContinuationExhaustedError is runAgenticLoop's synthetic,
+// terminal error for a session that hit Config.MaxTokensContinuations
+// consecutive provider.StopMaxTokens stops in a row, with no turn
+// completing normally in between (see maxTokensStreak in runAgenticLoop).
+// A model pathologically re-emitting oversized output must not loop
+// forever; this settles the turn with a classified, session.error-visible
+// record instead — never a silent, parked-idle success. Mirrors
+// emptyTurnError's exhaustion shape: the discarded attempts already
+// appended real (truncated) content and billed real tokens, but the loop
+// itself must stop and say so plainly, naming the bound that tripped.
+type maxTokensContinuationExhaustedError struct {
+	bound int
+}
+
+func (e *maxTokensContinuationExhaustedError) Error() string {
+	return fmt.Sprintf("max_tokens auto-continue exhausted: %d consecutive turns stopped with reason \"max_tokens\" (bound %d); the model may be pathologically re-emitting oversized output", e.bound+1, e.bound)
+}
+
+// maybeAutoContinueMaxTokens decides whether runAgenticLoop should re-issue
+// a follow-up model call after a turn stopped with provider.StopMaxTokens,
+// rather than settling the turn immediately — see Config.MaxTokensContinuations'
+// doc comment for the box harness-parallel-tools incident this exists to
+// close.
+//
+// *streak is runAgenticLoop's maxTokensStreak, incremented here on every
+// call: a session with Config.MaxTokensContinuations == 0 returns (false,
+// nil) without touching it at all, preserving the exact pre-fix behavior
+// for a bare embedder engine.Config (auto-continue disabled entirely). A
+// positive bound increments the streak and compares it against the bound:
+// at or under, it arms pendingContinuationNudge (naming this attempt number
+// and the bound) and returns (true, nil) so the caller loops back around;
+// over the bound, it returns (false, a *maxTokensContinuationExhaustedError)
+// so the caller settles the turn with a loud, classified failure instead of
+// arming yet another doomed attempt.
+func (s *Session) maybeAutoContinueMaxTokens(streak *int) (bool, error) {
+	bound := s.cfg.MaxTokensContinuations
+	if bound <= 0 {
+		return false, nil
+	}
+	*streak++
+	if *streak > bound {
+		return false, &maxTokensContinuationExhaustedError{bound: bound}
+	}
+	s.pendingContinuationNudge = fmt.Sprintf(maxTokensContinuationNudgeFmt, *streak, bound)
+	return true, nil
 }
 
 // turnHasActionableContent reports whether asst carries content a caller
