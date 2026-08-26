@@ -37,10 +37,13 @@ import (
 // before/tool/after sequence finished before call B started. A hook
 // implementation that keeps cross-call state — a running quota, an audit
 // chain, a policy that reads the previous call — must key that state by
-// call id or serialize itself; plugin/PROTOCOL.md's "Concurrency" section
-// states the same contract for out-of-process plugins. A deployment that
-// cannot adapt sets HARNESS_SEQUENTIAL_TOOLS=1, which restores
-// one-at-a-time execution and with it the old hook order.
+// call id or serialize itself. The same contract binds an out-of-process
+// plugin: its hook dispatches ride the connection plugin/PROTOCOL.md
+// specifies, which is id-multiplexed and already carries several requests
+// in flight at once, so a plugin must never assume its hooks are called
+// one at a time. A deployment that cannot adapt sets
+// HARNESS_SEQUENTIAL_TOOLS=1, which restores one-at-a-time execution and
+// with it the old hook order.
 type Hooks interface {
 	ChatParams(ctx context.Context, req *plugin.ChatParamsRequest) plugin.ChatParams
 	SystemTransform(ctx context.Context, req *plugin.SystemTransformRequest) []string
