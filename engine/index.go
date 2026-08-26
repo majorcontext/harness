@@ -314,7 +314,11 @@ func indexMessageOf(m message.Message) *indexMessage {
 type indexFold struct {
 	ix       SessionIndex
 	messages []message.Message
-	queue    promptQueueFold
+	// repairs is how many messages message.ResolveOrphanToolCalls would
+	// insert into the skeleton, maintained as records arrive so snapshot
+	// stays constant time. See appendMessage.
+	repairs int
+	queue   promptQueueFold
 	// header is set by the session header record. A journal whose first
 	// record is not a header is not a session log (events.jsonl is the one
 	// in-tree example), and snapshot refuses it.
@@ -349,7 +353,7 @@ func (f *indexFold) applyIndexRecord(rec indexRecord, isLast bool) error {
 			}
 			return errors.New("message record without message")
 		}
-		f.messages = append(f.messages, rec.Message.skeleton())
+		f.appendMessage(rec.Message.skeleton())
 		if rec.Usage != nil {
 			f.addUsage(*rec.Usage)
 			f.ix.LastInputTokens = rec.Usage.InputTokens
@@ -386,6 +390,7 @@ func (f *indexFold) applyIndexRecord(rec indexRecord, isLast bool) error {
 			return nil
 		}
 		f.messages = spliced
+		f.recountRepairs()
 		f.ix.CompactionCount++
 		f.ix.LastCompactedAt = rec.CreatedAt
 		if rec.Usage != nil {
@@ -419,16 +424,102 @@ func (f *indexFold) addUsage(u provider.Usage) {
 	f.ix.Usage.CacheWriteTokens += u.CacheWriteTokens
 }
 
-// snapshot renders the fold as an index covering a journal of logSize
-// bytes last modified at modTime. ok is false for a fold that never saw a
-// session header, or one a record broke — neither is a summary anything may
-// serve or store.
+// repairsAt returns how many messages message.ResolveOrphanToolCalls
+// inserts on account of the skeleton message at index i.
 //
-// Messages and LastActivityAt are computed through
-// message.ResolveOrphanToolCalls, the same repair LoadSession applies after
-// its own replay, so both fields equal what a full load reports. The repair
-// runs over a copy of the skeleton: it may append parts to the messages it
-// is given, and the fold must keep accumulating from unrepaired state.
+// It CALLS that function, over a two-message window, rather than restating
+// its rule. The repair reads exactly one pair at a time — an assistant
+// message and whatever follows it (message/message.go) — so a window of
+// that pair decides for message i exactly as the whole slice does. Reusing
+// the real function is what keeps this in step with it; restating "an
+// assistant message with an unmatched tool call gets one synthetic result
+// unless a tool message follows" would be a second copy of a rule this
+// repository has already been burned by copying.
+//
+// Insertions are attributed POSITIONALLY. The window's second message is
+// evaluated too, as a message with no follower of its own, and any
+// insertion it earns belongs to ITS index, not to i. The repair preserves
+// order and inserts directly after the message that earned the insertion,
+// so everything before the follower in the result is i's, and everything
+// from the follower on is not.
+//
+// The window is a deep copy: the repair appends parts to the messages it
+// returns, and a shallow copy would share the skeleton's own Parts backing
+// array.
+func (f *indexFold) repairsAt(i int) int {
+	if i < 0 || i >= len(f.messages) {
+		return 0
+	}
+	end := i + 2
+	if end > len(f.messages) {
+		end = len(f.messages)
+	}
+	window := make([]message.Message, 0, end-i)
+	for _, m := range f.messages[i:end] {
+		cp := m
+		cp.Parts = make(message.Parts, len(m.Parts))
+		copy(cp.Parts, m.Parts)
+		window = append(window, cp)
+	}
+	out := message.ResolveOrphanToolCalls(window)
+	if end == i+1 {
+		// No follower: message i is the last, so every insertion is its
+		// own.
+		return len(out) - 1
+	}
+	followerID := f.messages[i+1].ID
+	for pos := range out {
+		if out[pos].ID == followerID {
+			return pos - 1 // out[0] is message i; anything between is its repair
+		}
+	}
+	// Unreachable for a well-formed window: the repair never drops a
+	// message. Attribute nothing rather than guess.
+	return 0
+}
+
+// appendMessage adds one durable message to the skeleton and keeps the
+// running repair count in step.
+//
+// Appending at index n can change the repair decision for exactly two
+// messages: n-1, whose follower changes from nothing to this message, and n
+// itself, which now has no follower. Every earlier pair is untouched,
+// because the repair never looks further than one message ahead. That is
+// what makes the count maintainable in constant time.
+//
+// Constant time is the point. snapshot runs after EVERY record a session
+// writes, and it used to re-run the repair over the whole skeleton — O(n)
+// per record, so O(n^2) over a session's life. An index that makes reads
+// cheap and writes quadratic is a net loss on exactly the long sessions it
+// exists for. A review caught it.
+func (f *indexFold) appendMessage(m message.Message) {
+	last := len(f.messages) - 1
+	f.repairs -= f.repairsAt(last)
+	f.messages = append(f.messages, m)
+	f.repairs += f.repairsAt(last) + f.repairsAt(last+1)
+}
+
+// recountRepairs recomputes the repair count from scratch. Compaction is
+// the one operation that rewrites the skeleton's middle — a fold replaces a
+// whole range with one summary — so pairs far from the tail change and an
+// incremental update cannot see them. It is O(n), and it runs once per
+// compact record rather than once per record.
+func (f *indexFold) recountRepairs() {
+	f.repairs = 0
+	for i := range f.messages {
+		f.repairs += f.repairsAt(i)
+	}
+}
+
+// snapshot renders the fold as an index covering a journal of logSize bytes
+// last modified at modTime. ok is false for a fold that never saw a session
+// header, or one a record broke — neither is a summary anything may serve
+// or store.
+//
+// It is constant time. Messages and LastActivityAt describe the history a
+// full LoadSession produces, repair included, but the repair count is
+// maintained as records arrive (see appendMessage) rather than recomputed
+// here.
 func (f *indexFold) snapshot(logSize int64, modTime time.Time) (SessionIndex, bool) {
 	if !f.header || f.broken {
 		return SessionIndex{}, false
@@ -436,6 +527,7 @@ func (f *indexFold) snapshot(logSize int64, modTime time.Time) (SessionIndex, bo
 	ix := f.ix
 	ix.Version = sessionIndexVersion
 	ix.DurableMessages = len(f.messages)
+	ix.Messages = len(f.messages) + f.repairs
 	ix.Queued = len(f.queue.queue)
 	ix.LogSize = logSize
 	ix.LogModTime = modTime
@@ -443,15 +535,15 @@ func (f *indexFold) snapshot(logSize int64, modTime time.Time) (SessionIndex, bo
 	// Config fallback is involved. See SessionIndex.Complete.
 	ix.Complete = !ix.Model.IsZero() && ix.WorkDir != ""
 
-	repaired := message.ResolveOrphanToolCalls(append([]message.Message(nil), f.messages...))
-	ix.Messages = len(repaired)
 	ix.LastActivityAt = ix.CreatedAt
-	if n := len(repaired); n > 0 {
-		// Same fallback as Session.LastActivityAt, and the same input: a
+	if n := len(f.messages); n > 0 && f.repairsAt(n-1) == 0 {
+		// Same fallback as Session.LastActivityAt, over the same input. A
 		// message record written before the timestamp field existed
-		// replays as zero, and so does a synthetic repair message, which
-		// is why this reads the REPAIRED tail rather than the durable one.
-		if t := repaired[n-1].CreatedAt; !t.IsZero() {
+		// replays as zero, and so does a synthetic repair message — and a
+		// repair on the LAST message puts exactly such a message at the
+		// end of the repaired history, which is why a non-zero repair
+		// count there keeps the session's own CreatedAt.
+		if t := f.messages[n-1].CreatedAt; !t.IsZero() {
 			ix.LastActivityAt = t
 		}
 	}

@@ -1006,8 +1006,9 @@ func (s *Server) handleList(w http.ResponseWriter, _ *http.Request) {
 			// The journal did not record every field a reader needs — see
 			// coldSessionJSON. Answer from the authoritative load path, or
 			// omit the session if even that fails, exactly as this listing
-			// always has.
-			if body, ok := s.coldSessionJSON(ix.ID); ok {
+			// always has. The index this loop already holds is passed
+			// through, never re-read.
+			if body, ok := s.coldSessionJSON(ix.ID, ix, false); ok {
 				out = append(out, body)
 			}
 			continue
@@ -1038,15 +1039,22 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.buildSession(lv))
 		return
 	}
-	if body, ok := s.coldSessionJSON(id); ok {
+	ix, err := engine.ReadSessionIndex(s.opts.SessionDir, id)
+	if body, ok := s.coldSessionJSON(id, ix, err == nil && ix.Complete); ok {
 		writeJSON(w, http.StatusOK, body)
 		return
 	}
 	writeErr(w, http.StatusNotFound, "no such session")
 }
 
-// coldSessionJSON renders a session no live source holds, preferring its
-// metadata index and falling back to a full load.
+// coldSessionJSON renders a session no live source holds, from the index
+// the caller already has, and falls back to a full load when that index
+// cannot answer.
+//
+// The caller passes the index it holds rather than an id to re-read: GET
+// /session has one per session already, and re-reading would cost a second
+// stat and sidecar read per session in a listing. usable is false when the
+// caller has no index at all, or holds one that is not Complete.
 //
 // The fallback is not a safety net, it is a correctness rule. A journal
 // does not always record every field a reader needs: a legacy header
@@ -1062,15 +1070,13 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 // the false-idle answer an orchestrator acts on. The re-check does not
 // close the window — nothing can, without holding a lock across a disk read
 // — but it narrows it to the width of one map lookup.
-func (s *Server) coldSessionJSON(id string) (sessionJSON, bool) {
-	ix, err := engine.ReadSessionIndex(s.opts.SessionDir, id)
+func (s *Server) coldSessionJSON(id string, ix engine.SessionIndex, usable bool) (sessionJSON, bool) {
 	var body sessionJSON
-	switch {
-	case err == nil && ix.Complete:
+	if usable {
 		body = s.buildSessionFromIndex(ix)
-	default:
-		sess, lerr := s.opts.LoadSession(id)
-		if lerr != nil {
+	} else {
+		sess, err := s.opts.LoadSession(id)
+		if err != nil {
 			return sessionJSON{}, false
 		}
 		body = s.buildSession(liveSession{id: id}.withLoaded(sess))
