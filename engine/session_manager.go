@@ -386,9 +386,9 @@ type SessionManager struct {
 	// history or a status on an interval instead.
 	//
 	// A hook body runs under m.mu, so it must never block and must never
-	// call back into this manager. Tests install it through watchResumes
-	// (session_manager_test.go), which only records the id and does a
-	// non-blocking wakeup send.
+	// call back into this manager. Tests install it through
+	// newResumeClaims (recovery_harness_test.go), which only records the
+	// id and does a non-blocking wakeup send.
 	testResumeClaimedHook func(targetID string)
 }
 
