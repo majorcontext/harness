@@ -160,11 +160,6 @@ func (g *turnGates) release(session string) {
 	}
 }
 
-// gatedTurnMaxWait bounds how long a gated turn waits for its release. It is
-// a FAILURE bound, not a delay: the happy path returns the instant the test
-// releases. It exists only so a test that forgets to release fails with a
-// streamed turn instead of hanging until the suite's own timeout.
-
 // scriptedProvider serves one pre-built scriptedTurn per call, numbered from
 // 0; calls beyond the scripted turns repeat the last one (defensive — a
 // session should never be prompted more times than its script anticipates,
@@ -283,18 +278,22 @@ func quickTurns(reply string) []scriptedTurn {
 	}
 }
 
-// pendingThinkTurns is quickTurns' single plain text-only turn with an
-// initialDelay grafted onto it — see scriptedTurn's own doc comment for why:
-// it gives the "Thinking…" pending-assistant indicator e2e scenario
-// (ProvPendingThink) a deterministic window in which the turn is genuinely
-// busy with nothing to show yet, without racing a real turn's own
-// near-instant streaming start.
+// pendingThinkTurns is quickTurns' single plain text-only turn with its
+// gate armed — see scriptedTurn's own doc comment: the gate holds the turn
+// genuinely busy with nothing to show until the scenario releases it, so
+// the "Thinking…" pending-assistant indicator e2e (ProvPendingThink) never
+// races a real turn's near-instant streaming start and never waits on a
+// timed window.
 func pendingThinkTurns(reply string) []scriptedTurn {
 	turns := quickTurns(reply)
 	turns[0].gated = true
 	return turns
 }
 
+// gatedTurnMaxWait bounds how long a gated turn waits for its release
+// before the stub fails the turn loudly — the backstop that turns a
+// scenario that forgot to release its gate into a visible failure instead
+// of a hang. (The fuller discussion sits with scriptedProvider's doc.)
 const gatedTurnMaxWait = 30 * time.Second
 
 // capTurns builds a single turn with MANY streaming text deltas (no tool
