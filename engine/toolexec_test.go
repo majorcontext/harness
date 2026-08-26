@@ -1290,3 +1290,115 @@ func TestTaskToolKeysPerTargetDescendant(t *testing.T) {
 		t.Errorf("a malformed task call took key %q, want none", got)
 	}
 }
+
+// TestPanicKeepsToolEventsBalanced proves a recovered panic leaves no
+// dangling tool.start on the live event stream. runToolCall emits
+// EventToolStart before anything can panic, so a subscriber that pairs
+// start and end by call id — the session monitor's reducer, an ACP tool
+// node, a plugin audit trail — would otherwise wait forever for an end
+// that never comes.
+//
+// The second case is the one a naive fix gets wrong: emitToolExecuteEnd
+// fires BEFORE the after-hook chain, so a panic inside ToolExecuteAfter
+// must not emit a duplicate tool.execute.end.
+func TestPanicKeepsToolEventsBalanced(t *testing.T) {
+	count := func(evs []Event, typ, callID string) int {
+		n := 0
+		for _, ev := range evs {
+			if ev.Type == typ && ev.ToolCall != nil && ev.ToolCall.CallID == callID {
+				n++
+			}
+		}
+		return n
+	}
+
+	t.Run("tool panics", func(t *testing.T) {
+		var mu sync.Mutex
+		var evs []Event
+		s := NewSession(Config{OnEvent: func(ev Event) {
+			mu.Lock()
+			evs = append(evs, ev)
+			mu.Unlock()
+		}})
+		s.tools["panics"] = Tool{
+			Def: provider.ToolDef{Name: "panics", Description: "d", InputSchema: json.RawMessage(`{}`)},
+			Run: func(context.Context, *Session, json.RawMessage) (message.Parts, error) {
+				panic("boom")
+			},
+		}
+		call := &message.ToolCall{CallID: "tc_p", Name: "panics", Arguments: json.RawMessage(`{}`)}
+		wantOrder(t, s.runToolCalls(context.Background(), asstWith(call)), call)
+
+		mu.Lock()
+		defer mu.Unlock()
+		if got := count(evs, EventToolStart, "tc_p"); got != 1 {
+			t.Errorf("EventToolStart count = %d, want 1", got)
+		}
+		if got := count(evs, EventToolEnd, "tc_p"); got != 1 {
+			t.Errorf("EventToolEnd count = %d, want exactly 1 (a dangling start never closes)", got)
+		}
+		for _, ev := range evs {
+			if ev.Type == EventToolEnd && !ev.IsError {
+				t.Error("the panic's EventToolEnd is not marked as an error")
+			}
+		}
+	})
+
+	t.Run("after-hook panics, no duplicate execute-end", func(t *testing.T) {
+		hooks := &panickingAfterHooks{}
+		s := NewSession(Config{Hooks: hooks})
+		s.tools["ok"] = batchTool("ok", nil)
+		call := batchCall("ok", "c0")
+		wantOrder(t, s.runToolCalls(context.Background(), asstWith(call)), call)
+
+		hooks.mu.Lock()
+		defer hooks.mu.Unlock()
+		ends := 0
+		for _, e := range hooks.emitted {
+			if e == plugin.EventToolExecuteEnd {
+				ends++
+			}
+		}
+		if ends != 1 {
+			t.Errorf("tool.execute.end emitted %d times, want exactly 1", ends)
+		}
+	})
+}
+
+// panickingAfterHooks panics in ToolExecuteAfter and records every plugin
+// event type the engine emits, so a duplicate tool.execute.end is visible.
+type panickingAfterHooks struct {
+	mu      sync.Mutex
+	emitted []string
+}
+
+func (h *panickingAfterHooks) ChatParams(_ context.Context, req *plugin.ChatParamsRequest) plugin.ChatParams {
+	return req.Params
+}
+func (h *panickingAfterHooks) ChatMessage(_ context.Context, req *plugin.ChatMessageRequest) message.Message {
+	return req.Message
+}
+func (h *panickingAfterHooks) SystemTransform(context.Context, *plugin.SystemTransformRequest) []string {
+	return nil
+}
+func (h *panickingAfterHooks) ShellEnv(context.Context, *plugin.ShellEnvRequest) map[string]string {
+	return nil
+}
+func (h *panickingAfterHooks) ToolExecuteBefore(context.Context, *plugin.ToolExecuteBeforeRequest) (json.RawMessage, string) {
+	return nil, ""
+}
+func (h *panickingAfterHooks) ToolExecuteAfter(context.Context, *plugin.ToolExecuteAfterRequest) message.Parts {
+	panic("after-hook exploded")
+}
+func (h *panickingAfterHooks) ExecuteTool(_ context.Context, req *plugin.ToolExecuteRequest) (*plugin.ToolExecuteResponse, error) {
+	return nil, fmt.Errorf("plugin: no plugin provides tool %q", req.Tool)
+}
+func (h *panickingAfterHooks) Emit(events []plugin.Event) {
+	h.mu.Lock()
+	for _, e := range events {
+		h.emitted = append(h.emitted, e.Type)
+	}
+	h.mu.Unlock()
+}
+func (h *panickingAfterHooks) Plugins() []plugin.Info  { return nil }
+func (h *panickingAfterHooks) Tools() []plugin.ToolDef { return nil }

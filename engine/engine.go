@@ -2740,8 +2740,46 @@ func (s *Session) runToolCalls(ctx context.Context, asst *message.Message) messa
 	return s.runToolBatch(ctx, asst)
 }
 
-func (s *Session) runToolCall(ctx context.Context, tc *message.ToolCall) (message.Parts, bool) {
+// runToolCall runs one call end to end: the before-hook chain, the tool
+// itself, the after-hook chain, and the four events that bracket them.
+//
+// It recovers a PANIC from the tool or from either hook chain. The recover
+// lives here, rather than only in toolexec.go's runOneGuarded, because
+// this is the one frame that knows WHICH events have already been emitted.
+// EventToolStart fires before anything can panic, so a panic unwinding
+// past this function would otherwise leave a dangling tool.start on the
+// live event stream forever — a subscriber that pairs start and end by
+// call id (the session monitor's reducer, an ACP tool node, a plugin
+// audit trail) would wait on an end that never comes. History stayed
+// correct either way, because runOneGuarded still produces one error
+// result; the event stream is the half it cannot fix from outside.
+//
+// The two flags matter: emitToolExecuteEnd fires BEFORE the after-hook
+// chain and EventToolEnd fires after it, so a panic inside
+// ToolExecuteAfter must emit only the second. Emitting both would hand
+// plugins a duplicate tool.execute.end for one call.
+//
+// This path is new with concurrent execution. Before runOneGuarded a tool
+// panic killed the process, so "the session survives a panic" never
+// existed and neither did the unbalanced pair.
+func (s *Session) runToolCall(ctx context.Context, tc *message.ToolCall) (out message.Parts, isErr bool) {
 	s.emit(Event{Type: EventToolStart, ToolCall: tc})
+
+	execEndEmitted, toolEndEmitted := false, false
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		out = message.Parts{&message.Text{Text: fmt.Sprintf("%s: %v", toolCallPanicText, r)}}
+		isErr = true
+		if !execEndEmitted {
+			s.emitToolExecuteEnd(tc.Name, tc.CallID, false)
+		}
+		if !toolEndEmitted {
+			s.emit(Event{Type: EventToolEnd, ToolCall: tc, Output: out, IsError: true})
+		}
+	}()
 
 	args := tc.Arguments
 	if s.cfg.Hooks != nil {
@@ -2749,9 +2787,10 @@ func (s *Session) runToolCall(ctx context.Context, tc *message.ToolCall) (messag
 			SessionID: s.ID, CallID: tc.CallID, Tool: tc.Name, Args: args,
 		})
 		if deny != "" {
-			out := message.Parts{&message.Text{Text: deny}}
-			s.emit(Event{Type: EventToolEnd, ToolCall: tc, Output: out, IsError: true})
-			return out, true
+			denied := message.Parts{&message.Text{Text: deny}}
+			toolEndEmitted = true
+			s.emit(Event{Type: EventToolEnd, ToolCall: tc, Output: denied, IsError: true})
+			return denied, true
 		}
 		if newArgs != nil {
 			args = newArgs
@@ -2763,14 +2802,16 @@ func (s *Session) runToolCall(ctx context.Context, tc *message.ToolCall) (messag
 	s.toolExecCount++
 	s.mu.Unlock()
 
-	out, isErr := s.executeTool(ctx, tc, args)
+	out, isErr = s.executeTool(ctx, tc, args)
 	s.emitToolExecuteEnd(tc.Name, tc.CallID, !isErr)
+	execEndEmitted = true
 
 	if s.cfg.Hooks != nil {
 		out = s.cfg.Hooks.ToolExecuteAfter(ctx, &plugin.ToolExecuteAfterRequest{
 			SessionID: s.ID, CallID: tc.CallID, Tool: tc.Name, Args: args, Output: out,
 		})
 	}
+	toolEndEmitted = true
 	s.emit(Event{Type: EventToolEnd, ToolCall: tc, Output: out, IsError: isErr})
 	return out, isErr
 }
