@@ -14,12 +14,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/majorcontext/harness/message"
@@ -299,6 +297,36 @@ type record struct {
 	MCPTools []string `json:"mcp_tools,omitempty"`
 }
 
+// applyGoalRecord folds one goal.* record into the durable goal state a
+// resumed session restores: an active goal is one set without a later
+// goal.achieved or goal.cleared, and per Claude Code semantics the run
+// counters reset, so nothing else carries over. It is the ONE
+// implementation of that rule, shared by LoadSession's replay and the
+// session metadata index's own fold (index.go).
+//
+// Every other goal.* record type (goal.eval, goal.stalled,
+// goal.eval_failed, goal.parked) is per-turn trace with no resume state,
+// and returns the state unchanged — in particular a park never clears the
+// goal, live or on replay.
+func applyGoalRecord(active bool, condition string, recType string, g *goalRecord) (bool, string) {
+	switch recType {
+	case recGoalSet:
+		active = true
+		if g != nil {
+			condition = g.Condition
+		}
+	case recGoalUpdated:
+		// Only meaningful while active (see UpdateGoal): rewrites the
+		// restored condition in place, same as the live path.
+		if active && g != nil {
+			condition = g.Condition
+		}
+	case recGoalAchieved, recGoalCleared:
+		active, condition = false, ""
+	}
+	return active, condition
+}
+
 // toolResultRecord carries the durable payload of a toolresult.retained
 // record (see toolresult.go's writeRetainedToolResult). It is a POINTER
 // record: Handle names the sidecar file holding the actual bytes, and
@@ -461,10 +489,10 @@ type SessionInfo struct {
 	CreatedAt time.Time
 	Messages  int
 	// Usage is cumulative token usage summed from every message record's
-	// optional Usage (see record.Usage, persistMessage), computed by the
-	// same cheap header-only scan that counts Messages — no full
-	// LoadSession/message.Message replay required (issue #62 layer 2:
-	// GET /session/status needs this without paying for a full session
+	// optional Usage (see record.Usage, persistMessage). It comes from the
+	// session's metadata index (index.go), like every other field here —
+	// no full LoadSession/message.Message replay required (issue #62 layer
+	// 2: GET /session/status needs this without paying for a full session
 	// load per entry).
 	Usage provider.Usage
 	// LastInputTokens is the input-token count of the most recent message
@@ -969,6 +997,14 @@ func (s *Session) ensureLog() error {
 			s.logFile = nil
 			return err
 		}
+		// The header records bypass writeRecord (they go out in ONE Write,
+		// see above), so fold them here — the metadata index must see
+		// every record the journal holds, starting with the header that
+		// names the session at all.
+		size += int64(buf.Len())
+		for _, rec := range headerRecs {
+			s.index.applyIndexRecordBestEffort(indexRecordOf(rec), false)
+		}
 		// A file fsync (as EnqueuePromptDurable does before attesting
 		// durability — see queue.go) commits the file's *contents* but not
 		// its directory entry: POSIX leaves the entry itself up to the
@@ -1007,18 +1043,123 @@ func (s *Session) ensureLog() error {
 		}
 	}
 	s.logStarted = true
+	// The sidecar index handle is opened beside the log, once, and rewritten
+	// in place from then on (see writeIndexTo). A failure to open it is
+	// never a session failure: the index is a cache, and a reader that
+	// cannot find one refolds the journal.
+	if s.indexFile == nil {
+		if idxf, err := os.OpenFile(sessionIndexPath(s.cfg.SessionDir, s.ID), os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+			s.indexFile = idxf
+		} else {
+			s.lastIndexErr = err
+		}
+	}
+	// size is the journal length after any tail repair above, which is
+	// exactly the bytes the index fold covers: a repair that TRUNCATED a
+	// torn tail dropped a record scanLog never folded either, and a repair
+	// that only terminated a complete record added one byte to a record
+	// the fold already holds.
+	s.logSize = size
+	// Flush now, not only after the first record: a session that is
+	// created and persisted but never prompted (Session.Persist, which the
+	// serve API calls so an evicted session can be reloaded) must still
+	// answer GET /session/{id} from its index.
+	s.flushIndexLocked()
 	return nil
+}
+
+// ReleaseFiles closes the session's log and sidecar-index handles and drops
+// them. The session stays fully usable: the next persist call re-enters
+// ensureLog, which reopens both, repairs a torn tail if one is there, and
+// continues appending. Nothing in memory changes, so a caller can release a
+// session it may still use.
+//
+// It exists because a Session holds two descriptors for its whole life, and
+// a server keeps one Session per session it has touched. A long-lived box
+// with many subagent sessions accumulates them. The server calls this when
+// it evicts a session from residency (evictResidentLocked), which is the
+// point it has already decided the session is idle and can be reloaded from
+// disk.
+//
+// Errors are dropped on purpose: a close failure on a handle being
+// discarded tells a caller nothing it can act on, and the next ensureLog
+// reopens from the path regardless.
+func (s *Session) ReleaseFiles() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.logFile != nil {
+		s.logFile.Close()
+		s.logFile = nil
+	}
+	if s.indexFile != nil {
+		s.indexFile.Close()
+		s.indexFile = nil
+	}
 }
 
 // writeRecord marshals one record and appends it as a line. Caller holds
 // s.mu and has called ensureLog.
+//
+// It is also the session's single record choke point, so it is where the
+// metadata index folds (see index.go): every durable record, from every
+// persist path, passes here exactly once. A failed write folds nothing and
+// advances no byte counter — it marks the fold broken instead, so this
+// session stops writing a sidecar that could claim to summarize a record it
+// never saw. The next reader refolds the journal from byte 0.
 func (s *Session) writeRecord(rec record) error {
 	b, err := json.Marshal(rec)
 	if err != nil {
 		return err
 	}
-	_, err = s.logFile.Write(append(b, '\n'))
-	return err
+	n, err := s.logFile.Write(append(b, '\n'))
+	if err != nil {
+		// The file may have grown by a partial line. Two things follow.
+		//
+		// The fold and logSize both stay put, and the fold is marked
+		// broken, so this session never again writes a sidecar that could
+		// claim to summarize a record it did not see. Readers refold.
+		//
+		// The handle is closed, so the next persist call re-enters
+		// ensureLog instead of returning at its fast path. That is what
+		// runs the torn-tail repair over the partial line. Without it the
+		// next append concatenates onto that line with no separator, and
+		// the pair becomes a hard load error as soon as any later record
+		// makes it non-final — a retry of a failed EnqueuePromptDurable
+		// could poison the whole session log.
+		s.index.broken = true
+		s.logFile.Close()
+		s.logFile = nil
+		return err
+	}
+	s.logSize += int64(n)
+	s.index.applyIndexRecordBestEffort(indexRecordOf(rec), false)
+	s.flushIndexLocked()
+	return nil
+}
+
+// flushIndexLocked writes the session's sidecar metadata index for the
+// journal as it now stands (see index.go). Best effort by design: the index
+// is a memoized fold, and a reader that finds it missing, torn, or stale
+// refolds the journal instead. Caller holds s.mu.
+func (s *Session) flushIndexLocked() {
+	if s.indexFile == nil || s.logFile == nil {
+		return
+	}
+	// The journal's modification time is half the staleness key (see
+	// SessionIndex.LogModTime), and it must be read AFTER the record write
+	// this flush follows. One fstat on a handle already open.
+	fi, err := s.logFile.Stat()
+	if err != nil {
+		s.lastIndexErr = err
+		return
+	}
+	ix, ok := s.index.snapshot(s.logSize, fi.ModTime())
+	if !ok {
+		return
+	}
+	if err := writeIndexTo(s.indexFile, ix); err != nil {
+		s.lastIndexErr = err
+	}
 }
 
 // taskToolNamesPtr converts a Config.TaskToolNames value into the pointer
@@ -1077,7 +1218,20 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 	s.ID = id
 	s.logStarted = true
 
+	// The prompt queue folds through promptQueueFold (queue.go), seeded
+	// from this fresh session's own counters and written back after the
+	// scan — the same fold the metadata index uses, so the two can never
+	// drift on the torn-write and ID-burn rules it holds.
+	qf := promptQueueFold{nextID: s.promptQueueNextID, seq: s.enqueueSeq}
+
 	err = scanLog(data, func(rec record, line int, isLast bool) error {
+		// Seed the session's metadata-index fold from the same records
+		// (index.go). A resumed session keeps writing that index through
+		// on every later record, so it must start from the state this
+		// journal already holds — a fold that began empty here would
+		// flush a summary claiming to cover the whole journal while
+		// describing one record of it.
+		s.index.applyIndexRecordBestEffort(indexRecordOf(rec), isLast)
 		switch rec.Type {
 		case recSession:
 			s.createdAt = rec.CreatedAt
@@ -1249,23 +1403,11 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				}
 				s.mcpSelected[name] = true
 			}
-		case recGoalSet:
-			// An active goal is one set without a later achieved/cleared. The
-			// condition is restored; per Claude Code semantics the run counters
-			// reset, so nothing else carries over.
-			s.goalActive = true
-			if rec.Goal != nil {
-				s.goalCondition = rec.Goal.Condition
-			}
-		case recGoalUpdated:
-			// Only meaningful while active (see UpdateGoal): rewrites the
-			// restored condition in place, same as the live path.
-			if s.goalActive && rec.Goal != nil {
-				s.goalCondition = rec.Goal.Condition
-			}
-		case recGoalAchieved, recGoalCleared:
-			s.goalActive = false
-			s.goalCondition = ""
+		case recGoalSet, recGoalUpdated, recGoalAchieved, recGoalCleared:
+			// applyGoalRecord holds the rule (an active goal is one set
+			// without a later achieved/cleared; the run counters reset) —
+			// shared with the metadata index's own fold (index.go).
+			s.goalActive, s.goalCondition = applyGoalRecord(s.goalActive, s.goalCondition, rec.Type, rec.Goal)
 		case recGoalEval, recGoalStalled, recGoalEvalFailed, recGoalParked:
 			// Per-turn evaluation/stall/eval-failure/park trace; no resume
 			// state (counters reset). None of these ever change goalActive
@@ -1277,96 +1419,17 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// set s.goalActive=true and the condition) — a park never
 			// clears the goal, live or on replay.
 		case recPromptQueued:
-			// Append to the folded queue and advance the next-ID counter past
-			// whatever this record used (IDs are burned on failed durable
-			// writes — see EnqueuePromptDurable — so advancing past every ID
-			// seen, folded or not, is what keeps a resumed session's counter
-			// collision-free).
-			//
-			// A record carrying Seq (durable enqueue) folds last-writer-wins
-			// against any already-folded entry with the SAME Seq: a failed
-			// fsync can leave a torn record on disk whose write reported
-			// failure, followed by its successful retry under a fresh ID —
-			// live memory only ever held the retry's entry, so replay must
-			// converge to that one too (a later prompt.dequeued references
-			// the retry's ID — this holds under EnqueuePromptDurable's caller
-			// contract that the same seq is retried before any higher seq is
-			// accepted, see queue.go). Seq also advances the enqueueSeq
-			// high-water mark, which is what makes duplicate detection
-			// survive a process restart.
-			//
-			// The fold REMOVES the old same-Seq entry from its slot and
-			// APPENDS the new one at the tail, rather than replacing it
-			// in place: a plain EnqueuePrompt can land BETWEEN the torn
-			// write and its retry (log order id1/seq5 torn, id2/seq0
-			// plain, id3/seq5 retry). Live memory only ever appended
-			// id2 then id3, in that order — an in-place replacement at
-			// id1's old slot would instead fold to [id3, id2], reordering
-			// delivery relative to what actually happened live. Remove+
-			// append reconstructs live append order faithfully (the retry
-			// always carries the highest ID seen so far, so this can never
-			// misorder against a later, genuinely-newer plain entry); the
-			// common case with no interposed record degenerates to the
-			// exact same single-entry result as an in-place replacement.
+			// Both prompt-queue cases fold through promptQueueFold (queue.go),
+			// which owns the torn-write last-writer-wins rule, the malformed-
+			// record guards, and the ID-burn counter advance. See its own doc
+			// comments; the rules moved there verbatim so the metadata index
+			// can share them.
 			if rec.Prompt != nil {
-				q := QueuedPrompt{ID: rec.Prompt.ID, Text: rec.Prompt.Text, Seq: rec.Prompt.Seq}
-				// Malformed-record guards (found by FuzzLoadSessionReplay):
-				// the live path can never write a queued record with ID <= 0
-				// (promptQueueNextID starts at 1) nor two records with the
-				// same ID (IDs are burned, never reused — see
-				// EnqueuePromptDurable), so either shape in a journal is
-				// corruption, not history. Folding them anyway would violate
-				// the queue's ID-uniqueness invariant (two ID-0 entries from
-				// two `{"prompt":{}}` lines) and a later dequeue-by-ID would
-				// remove an arbitrary one. Skip the record; same defensive
-				// posture as message.ResolveOrphanToolCalls at this layer.
-				valid := q.ID > 0
-				for _, p := range s.promptQueue {
-					if p.ID == q.ID {
-						valid = false
-						break
-					}
-				}
-				if valid {
-					if q.Seq > 0 {
-						for i, p := range s.promptQueue {
-							if p.Seq == q.Seq {
-								s.promptQueue = append(s.promptQueue[:i], s.promptQueue[i+1:]...)
-								break
-							}
-						}
-						if q.Seq > s.enqueueSeq {
-							s.enqueueSeq = q.Seq
-						}
-					}
-					s.promptQueue = append(s.promptQueue, q)
-					if rec.Prompt.ID >= s.promptQueueNextID {
-						s.promptQueueNextID = rec.Prompt.ID + 1
-					}
-				}
+				qf.queued(*rec.Prompt)
 			}
 		case recPromptDequeued:
-			// Remove the matching queued entry (by ID, not position — see
-			// promptRecord's doc comment) so the folded queue ends up exactly
-			// the undelivered set, in ID order, however many other records
-			// separate a queued record from its own dequeued record.
-			//
-			// This fold reads FORWARD only: a dequeued record for an ID
-			// not folded yet is a no-op, and a queued record arriving
-			// after it re-appends the item. Every writer therefore owes
-			// this fold one ordering guarantee — a queued record reaches
-			// disk before its own dequeued record. The two writers that
-			// defer a prompt-queue write out from under the tree-wide
-			// m.mu keep it by parking the record on the session, not in
-			// their own closure; see queueRecordDeferredLocked (queue.go)
-			// for the resurrection defect a closure-held record caused.
 			if rec.Prompt != nil {
-				for i, p := range s.promptQueue {
-					if p.ID == rec.Prompt.ID {
-						s.promptQueue = append(s.promptQueue[:i], s.promptQueue[i+1:]...)
-						break
-					}
-				}
+				qf.dequeued(*rec.Prompt)
 			}
 		case recTaskSpawned:
 			// Folded into s.spawnedChildIDs — see recTaskSpawned's own doc
@@ -1517,18 +1580,15 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// error. Not a regression: main hard-fails this load every time,
 			// and a session that loads with a slightly-wrong fold beats a
 			// session that never loads again.
-			lastID := rec.Compact.LastID
-			if _, found := indexOfMessageID(s.history, lastID); !found {
-				healed, herr := healCompactFoldEnd(s.history, rec.Compact.FirstID, rec.Compact.TurnsFolded)
-				if herr == nil {
-					lastID = healed
-				}
-				// A failed heal falls through unchanged: spliceCompact below
-				// will look for the original (unhealed) LastID, fail to find
-				// it exactly as before, and return its usual loud, explicit
-				// error — never a silent best-effort guess.
-			}
-			spliced, err := spliceCompact(s.history, rec.Compact.FirstID, lastID, rec.Compact.Summary)
+			// applyCompactRecord (compact.go) runs the heal and then
+			// spliceCompact. It is shared with the metadata index's own
+			// fold (index.go), so both agree on how many messages a
+			// compact record removes. A failed heal falls through
+			// unchanged: spliceCompact looks for the original (unhealed)
+			// LastID, fails to find it exactly as before, and returns its
+			// usual loud, explicit error — never a silent best-effort
+			// guess.
+			spliced, err := applyCompactRecord(s.history, rec.Compact.FirstID, rec.Compact.LastID, rec.Compact.TurnsFolded, rec.Compact.Summary)
 			if err != nil {
 				return fmt.Errorf("%w at line %d", err, line)
 			}
@@ -1553,6 +1613,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("engine: session %s: %w", id, err)
 	}
+	s.promptQueue, s.promptQueueNextID, s.enqueueSeq = qf.queue, qf.nextID, qf.seq
 	// A log from an older binary or an external writer can carry an
 	// assistant tool_call whose turn died before a result was recorded.
 	// Repair at ingest so every downstream consumer sees a protocol-valid
@@ -1698,76 +1759,33 @@ func scanLog[T any](data []byte, fn func(rec T, line int, isLast bool) error) er
 }
 
 // ListSessions lists persisted sessions in dir, sorted by creation time. A
-// missing directory yields an empty list, not an error. Only headers and
-// record types are decoded, never message bodies.
+// missing directory yields an empty list, not an error.
+//
+// It is a projection of ListSessionIndexes (index.go): every field
+// SessionInfo carries is a field the metadata index already folds, so a
+// listing costs one small sidecar read per session instead of a scan of
+// every journal in the directory. A session whose sidecar is missing or
+// stale is refolded on the spot, which is still cheaper than the full
+// LoadSession every caller of this used to pay downstream.
+//
+// One semantic changed with that projection, deliberately: Messages now
+// counts durable messages AFTER compaction splices, where the previous
+// header-only scan counted every message record ever written and so
+// over-reported a compacted session. See SessionIndex.Messages.
 func ListSessions(dir string) ([]SessionInfo, error) {
-	entries, err := os.ReadDir(dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
+	indexes, err := ListSessionIndexes(dir)
 	if err != nil {
 		return nil, err
 	}
 	var infos []SessionInfo
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
-			continue
-		}
-		info, err := readSessionInfo(filepath.Join(dir, e.Name()))
-		if err != nil {
-			continue // unreadable or corrupt header: not listable
-		}
-		infos = append(infos, info)
+	for _, ix := range indexes {
+		infos = append(infos, SessionInfo{
+			ID:              ix.ID,
+			CreatedAt:       ix.CreatedAt,
+			Messages:        ix.Messages,
+			Usage:           ix.Usage,
+			LastInputTokens: ix.LastInputTokens,
+		})
 	}
-	sort.Slice(infos, func(i, j int) bool { return infos[i].CreatedAt.Before(infos[j].CreatedAt) })
 	return infos, nil
-}
-
-func readSessionInfo(path string) (SessionInfo, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return SessionInfo{}, err
-	}
-
-	// headRecord decodes only the fields listings need — never message
-	// bodies, which keeps ListSessions cheap on large sessions. Usage is a
-	// small flat sub-object (sibling to the message body, never nested
-	// inside it — see record.Usage), so decoding it here costs nothing
-	// like a full message.Message unmarshal would.
-	type headRecord struct {
-		Type      string          `json:"type"`
-		ID        string          `json:"id"`
-		CreatedAt time.Time       `json:"created_at"`
-		Usage     *provider.Usage `json:"usage,omitempty"`
-	}
-
-	var info SessionInfo
-	first := true
-	err = scanLog(data, func(rec headRecord, line int, isLast bool) error {
-		if first {
-			if rec.Type != recSession {
-				return fmt.Errorf("engine: %s: missing session header", path)
-			}
-			info.ID = rec.ID
-			info.CreatedAt = rec.CreatedAt
-			first = false
-		} else if rec.Type == recMessage {
-			info.Messages++
-			if rec.Usage != nil {
-				info.Usage.InputTokens += rec.Usage.InputTokens
-				info.Usage.OutputTokens += rec.Usage.OutputTokens
-				info.Usage.CacheReadTokens += rec.Usage.CacheReadTokens
-				info.Usage.CacheWriteTokens += rec.Usage.CacheWriteTokens
-				info.LastInputTokens = rec.Usage.InputTokens
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return SessionInfo{}, err
-	}
-	if first {
-		return SessionInfo{}, fmt.Errorf("engine: %s: empty session file", path)
-	}
-	return info, nil
 }

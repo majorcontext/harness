@@ -28,6 +28,7 @@ import (
 
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/plugin"
 )
 
 // Workdir isolation modes for POST /session's workdir_isolation field (see
@@ -98,7 +99,28 @@ type Options struct {
 	// way. It returns an error when no log with that ID exists. The
 	// session's workdir is restored from its log header (see
 	// engine.LoadSession), not passed in here.
+	//
+	// The Config it builds must be GENERIC: a model, a workdir, and process
+	// wiring, never state that belongs to one specific session.
+	// engine.LoadSession keeps the Config's value for any header field a
+	// journal does not carry, and a cold read answers from that session's
+	// metadata index instead, which has no Config at all (see
+	// engine.SessionIndex.Complete). A wrapper that injected, say, a parent
+	// session id per session would make those two reads disagree.
 	LoadSession func(id string) (*engine.Session, error)
+	// Plugins reports the plugin.Info list a session carries
+	// (engine.Session.Plugins, which reads the plugin.Host out of that
+	// session's own Config). GET /session and GET /session/{id} answer a
+	// session that is NOT live in this process from its metadata index
+	// (engine.SessionIndex), and an index has no Session to ask — plugins
+	// are process configuration, not durable session state.
+	//
+	// It takes the session id because an embedder may wire a different host
+	// per session through its own NewSession/LoadSession wrappers, even
+	// though harness serve wires one host for the whole process. nil
+	// reports no plugins, which is also what a process with no plugin host
+	// configured reports.
+	Plugins func(sessionID string) []plugin.Info
 	// WorkspaceRoots bounds the directories POST /session may accept as an
 	// explicit workdir: the request value must clean-resolve (absolute,
 	// cleaned) to one of these roots or a descendant of one. Empty means the

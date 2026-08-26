@@ -726,6 +726,69 @@ The goal loop is a **plan-artifact-free, gate-free** control loop: it is
 mode, and no permission gate. It does not violate the no-plan-mode decision
 below.
 
+### Session metadata index
+
+`GET /session` and `GET /session/{id}` do not replay a session journal. Each
+session log has a sidecar `<id>.index.json` holding one
+`engine.SessionIndex`. The index carries every wire `Session` field with a
+durable source: timestamps, model, effort, workdir, parent session, task
+lineage, message count, usage, durable goal state, queue depth, and
+compaction counters.
+
+Before the index, a read of a non-live session called `LoadSession`. That
+call decodes every message body and rebuilds the whole history. The handler
+then reported a dozen scalars and dropped the rest. The list endpoint paid
+that cost once per non-live session (meetneptune/boxes
+`docs/design/console-read-path.md`, workstream 1).
+
+The index is a fold of the journal (`engine/index.go`). Three rules keep it
+honest.
+
+**It folds records, not memory.** `Session.writeRecord` folds every record
+it appends. `ensureLog` folds the header records it writes directly, which
+is the one write that does not pass `writeRecord`. Memory is never the
+source: `EnqueuePromptDurable` writes its record before it mutates the
+queue, so a fold of memory at that instant would disagree with the log it
+claims to summarize.
+
+**It is a cache, never an authority.** `ReadSessionIndex` serves a stored
+index only when three checks pass: a checksum over the stored bytes, the
+journal's byte length, and the journal's modification time. Anything else
+refolds from byte 0. There is no repair path, so no repair path can be
+wrong. The checksum catches a torn read — both writers replace the sidecar
+in place, and a reader in another process can otherwise mix old bytes with
+new ones that parse. Length and modification time are a staleness key, not a
+proof: they rest on the journal's own contract of one writer and append-only
+writes.
+
+**It reports what a full load reports.** `Messages` and `LastActivityAt` run
+through `message.ResolveOrphanToolCalls`, over a skeleton of ids, roles, and
+tool-call ids. A crash between a tool call and its result therefore counts
+the same on both paths. `DurableMessages` counts the records alone, for a
+reader that must map a message to a byte offset; paginated message reads are
+numbered against it.
+
+Some journals cannot be answered by a fold at all. A legacy header records
+no workdir, and a crash can tear away the initial model record. `LoadSession`
+answers those from the loading `Config`; a fold has no `Config`.
+`SessionIndex.Complete` reports the difference, and
+`Server.coldSessionJSON` uses the authoritative load path for such a
+session.
+
+Three folds have real state machines. Each has one implementation, shared by
+`LoadSession` and the index: `applyCompactRecord` (`compact.go`),
+`applyGoalRecord` (`store.go`), and `promptQueueFold` (`queue.go`).
+`engine/index_test.go`'s oracle test pins every index field against a full
+`LoadSession`.
+
+A refold is far cheaper than a full `LoadSession`, and a current index is
+cheaper again. Write-through costs one marshal and one rewrite per record.
+The sidecar never gets an `fsync`: losing it in a crash costs one refold.
+
+`server.Options.Plugins` supplies a session's plugins to a cold read.
+Plugins are process configuration, not durable session state, and a cold
+read has no `Session` to ask.
+
 ### Prompt queue
 
 `POST /session/{id}/prompt_async` against a session already busy (another

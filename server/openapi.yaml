@@ -126,7 +126,13 @@ components:
           $ref: "#/components/schemas/SessionState"
         messages:
           type: integer
-          description: Count of messages in the session log.
+          description: |
+            Count of messages in the session's history. For a session this
+            process holds live it is the resident history length. For any
+            other session it is the same count taken from the session's
+            metadata index: message records with compaction folds applied,
+            plus the synthetic tool results a replay derives for a tool call
+            whose result never reached the log.
         seq:
           type: integer
           description: Sequence number of the latest durable record.

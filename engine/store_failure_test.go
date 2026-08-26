@@ -3,7 +3,10 @@ package engine
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/majorcontext/harness/provider"
 )
 
 // unwritableSessionDir returns a SessionDir path guaranteed to make
@@ -71,5 +74,71 @@ func TestRegisterGoalSurvivesUnwritableSessionDir(t *testing.T) {
 	}
 	if perr := s.PersistErr(); perr == nil {
 		t.Fatal("PersistErr() = nil after RegisterGoal against an unwritable SessionDir, want the write failure reported")
+	}
+}
+
+// TestFailedRecordWriteDropsTheLogHandle covers the window a partial write
+// opens. When Write fails after putting bytes on disk, the journal's last
+// line is torn. ensureLog knows how to repair that, but it only runs when
+// the session has no open handle: its fast path returns immediately while
+// one exists. A session that kept its handle would append the NEXT record
+// directly onto the torn line with no separator. The two lines become one
+// unparseable line, and scanLog hard-fails the whole session as soon as any
+// later record makes it non-final — so one failed write could poison a log
+// permanently. The retry of a failed EnqueuePromptDurable is exactly that
+// shape.
+//
+// The failure is injected at the OS level, by closing the session's own
+// file descriptor: the next Write returns an error, through the production
+// persist path, with no stub in the way.
+func TestFailedRecordWriteDropsTheLogHandle(t *testing.T) {
+	dir := t.TempDir()
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10}),
+	}}
+	cfg := persistCfg(dir, prov)
+	s := NewSession(cfg)
+	runTurns(t, s, 1)
+
+	// The bytes a partial write leaves behind: a torn final line.
+	path := sessionPath(dir, s.ID)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"type":"message","message":{"id":"msg_torn`); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	// Make the session's own next write fail.
+	s.mu.Lock()
+	s.logFile.Close()
+	s.mu.Unlock()
+
+	if err := s.RegisterGoal("a goal whose record cannot be written"); err != nil {
+		t.Fatalf("RegisterGoal: %v", err)
+	}
+	if s.PersistErr() == nil {
+		t.Fatal("test setup: the record write did not fail")
+	}
+	s.mu.Lock()
+	handle := s.logFile
+	s.mu.Unlock()
+	if handle != nil {
+		t.Error("a failed record write kept the log handle; the next write appends onto the torn line instead of repairing it")
+	}
+
+	// The next record must reopen, repair, and append cleanly.
+	s.ClearGoal()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "msg_torn") {
+		t.Error("the torn line survived; ensureLog's tail repair did not run")
+	}
+	if _, err := LoadSession(cfg, s.ID); err != nil {
+		t.Errorf("journal is no longer loadable after a failed write: %v", err)
 	}
 }

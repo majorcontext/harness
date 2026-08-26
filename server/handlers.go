@@ -838,8 +838,9 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	s.timedCreatePhase(sess.ID, "register", func() error { //nolint:errcheck // never errors; see timedCreatePhase's uniform shape
 		s.mu.Lock()
 		s.sessions[sess.ID] = &sessionState{sess: sess, lastUsed: time.Now(), shareWorkdir: body.ShareWorkdir, isolation: isolation, worktree: wt}
-		s.evictResidentLocked()
+		evicted := s.evictResidentLocked()
 		s.mu.Unlock()
+		releaseEvicted(evicted)
 		return nil
 	})
 
@@ -981,43 +982,103 @@ func (s *Server) handleList(w http.ResponseWriter, _ *http.Request) {
 		out = append(out, s.buildSession(liveFromResident(m.sess.ID, m.sess, m.running).withManager(s.sessMgr)))
 		seen[m.sess.ID] = true
 	}
-	infos, err := engine.ListSessions(s.opts.SessionDir)
+	indexes, err := engine.ListSessionIndexes(s.opts.SessionDir)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "cannot list sessions")
 		return
 	}
-	for _, info := range infos {
-		if seen[info.ID] {
+	for _, ix := range indexes {
+		if seen[ix.ID] {
 			continue
 		}
-		// Server.lookup, not a bare LoadSession: an id on disk can still
-		// be live in this process — a Spawn-driven child is never a
-		// residency key, so it lands in this branch, and its status and
-		// lineage must come from SessionManager's own node. lookup reads
-		// the log only when nothing live holds the id (a live review
-		// finding: the old unconditional load re-read and then discarded
-		// such a child's whole log on every listing).
-		lv, ok := s.lookup(info.ID)
-		if !ok {
+		// resolveLive first, index second. An id on disk can still be live
+		// in this process — a Spawn-driven child is never a residency key,
+		// so it lands in this branch, and its status and lineage must come
+		// from SessionManager's own node. Only an id nothing live holds is
+		// rendered from its index, which is the case this listing used to
+		// pay a full LoadSession for, per session, on every call.
+		lv := s.resolveLive(ix.ID)
+		if lv.session() != nil {
+			out = append(out, s.buildSession(lv))
 			continue
 		}
-		out = append(out, s.buildSession(lv))
+		if !ix.Complete {
+			// The journal did not record every field a reader needs — see
+			// coldSessionJSON. Answer from the authoritative load path, or
+			// omit the session if even that fails, exactly as this listing
+			// always has.
+			if body, ok := s.coldSessionJSON(ix.ID); ok {
+				out = append(out, body)
+			}
+			continue
+		}
+		out = append(out, s.buildSessionFromIndex(ix))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	writeJSON(w, http.StatusOK, out)
 }
 
+// handleGet answers GET /session/{id}.
+//
+// A session any live source in this process holds — this server's own
+// residency map or SessionManager's tree — is rendered from that live
+// object, unchanged. Anything else is rendered from its metadata index
+// (engine.ReadSessionIndex): one small sidecar read, no journal replay.
+// That cold path used to call engine.LoadSession, decode every message
+// body, rebuild the whole history, and then throw all of it away to report
+// a dozen scalar fields — about 7 s per read on the fleet's longest session
+// (see docs/design/console-read-path.md in meetneptune/boxes).
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
 		return
 	}
-	lv, ok := s.lookup(id)
-	if !ok {
-		writeErr(w, http.StatusNotFound, "no such session")
+	lv := s.resolveLive(id)
+	if lv.session() != nil {
+		writeJSON(w, http.StatusOK, s.buildSession(lv))
 		return
 	}
-	writeJSON(w, http.StatusOK, s.buildSession(lv))
+	if body, ok := s.coldSessionJSON(id); ok {
+		writeJSON(w, http.StatusOK, body)
+		return
+	}
+	writeErr(w, http.StatusNotFound, "no such session")
+}
+
+// coldSessionJSON renders a session no live source holds, preferring its
+// metadata index and falling back to a full load.
+//
+// The fallback is not a safety net, it is a correctness rule. A journal
+// does not always record every field a reader needs: a legacy header
+// carries no workdir, and a crash can tear away the initial model record a
+// fresh log writes beside its header. engine.LoadSession answers those from
+// the loading Config; a fold has no Config, and reports
+// SessionIndex.Complete false rather than an empty model. Then the
+// authoritative path answers, exactly as it did before this index existed.
+//
+// It also re-checks residency at the end. resolveLive ran before the index
+// read, so a concurrent claimForPrompt can make the session live in that
+// gap, and reporting "idle" for a session this process is now running is
+// the false-idle answer an orchestrator acts on. The re-check does not
+// close the window — nothing can, without holding a lock across a disk read
+// — but it narrows it to the width of one map lookup.
+func (s *Server) coldSessionJSON(id string) (sessionJSON, bool) {
+	ix, err := engine.ReadSessionIndex(s.opts.SessionDir, id)
+	var body sessionJSON
+	switch {
+	case err == nil && ix.Complete:
+		body = s.buildSessionFromIndex(ix)
+	default:
+		sess, lerr := s.opts.LoadSession(id)
+		if lerr != nil {
+			return sessionJSON{}, false
+		}
+		body = s.buildSession(liveSession{id: id}.withLoaded(sess))
+	}
+	if lv := s.resolveLive(id); lv.session() != nil {
+		body = s.buildSession(lv)
+	}
+	return body, true
 }
 
 // messagePlaceholder substitutes for a resident message that fails to
@@ -1708,8 +1769,9 @@ func (s *Server) releasePromptClaim(st *sessionState) {
 	st.cancel = nil
 	st.goalLoop = false
 	st.lastUsed = time.Now()
-	s.evictResidentLocked()
+	evicted := s.evictResidentLocked()
 	s.mu.Unlock()
+	releaseEvicted(evicted)
 	s.wg.Done()
 }
 
@@ -1758,10 +1820,11 @@ func (s *Server) freeRunSlotAndEmitIdle(id string, st *sessionState) {
 	st.cancel = nil
 	st.goalLoop = false
 	st.lastUsed = time.Now()
-	s.evictResidentLocked()
+	evicted := s.evictResidentLocked()
 	s.emitDurableLocked(&Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
 	s.queueDrainPending[id] = true
 	s.mu.Unlock()
+	releaseEvicted(evicted)
 }
 
 // dispatchQueueHead dequeues the session's queue head (reason "delivered")
@@ -2497,14 +2560,16 @@ func (s *Server) handleGoalDelete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.mu.Lock()
+		var evicted []*engine.Session
 		if ex := s.sessions[id]; ex != nil {
 			st = ex // a resident appeared while we loaded; use the winner
 		} else {
 			st = &sessionState{sess: sess, lastUsed: time.Now()}
 			s.sessions[id] = st
-			s.evictResidentLocked()
+			evicted = s.evictResidentLocked()
 		}
 		s.mu.Unlock()
+		releaseEvicted(evicted)
 	}
 	s.mu.Lock()
 	var cancel context.CancelFunc
@@ -2590,14 +2655,16 @@ func (s *Server) handleSetModel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.mu.Lock()
+		var evicted []*engine.Session
 		if ex := s.sessions[id]; ex != nil {
 			st = ex // a resident appeared while we loaded; use the winner
 		} else {
 			st = &sessionState{sess: sess, lastUsed: time.Now()}
 			s.sessions[id] = st
-			s.evictResidentLocked()
+			evicted = s.evictResidentLocked()
 		}
 		s.mu.Unlock()
+		releaseEvicted(evicted)
 	}
 
 	if body.Model.IsZero() {
@@ -2664,14 +2731,16 @@ func (s *Server) handleSetThinking(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.mu.Lock()
+		var evicted []*engine.Session
 		if ex := s.sessions[id]; ex != nil {
 			st = ex
 		} else {
 			st = &sessionState{sess: sess, lastUsed: time.Now()}
 			s.sessions[id] = st
-			s.evictResidentLocked()
+			evicted = s.evictResidentLocked()
 		}
 		s.mu.Unlock()
+		releaseEvicted(evicted)
 	}
 
 	effort, err := message.ParseEffort(body.Effort)
@@ -2700,10 +2769,16 @@ func (s *Server) handleSetThinking(w http.ResponseWriter, r *http.Request) {
 // sessMgr-pinned one, not a fresh LoadSession reread from disk — eviction
 // here narrows only this server's own bookkeeping, never a guarantee that
 // the next access is served cold. Caller holds s.mu.
-func (s *Server) evictResidentLocked() {
+// It returns the evicted sessions for the caller to release, and never
+// releases them itself: releaseEvicted takes each session's OWN mutex, and
+// s.mu is a leaf lock with respect to that (see syncMessages' lock-ordering
+// note, journal.go). Taking a session mutex under s.mu would close exactly
+// the cycle that rule forbids — the engine holds a session's mutex while
+// emitting events into Publish, which takes s.mu.
+func (s *Server) evictResidentLocked() (evicted []*engine.Session) {
 	excess := len(s.sessions) - s.opts.MaxResident
 	if excess <= 0 {
-		return
+		return nil
 	}
 	type cand struct {
 		id   string
@@ -2718,12 +2793,31 @@ func (s *Server) evictResidentLocked() {
 	}
 	sort.Slice(cands, func(i, j int) bool { return cands[i].last.Before(cands[j].last) })
 	for i := 0; i < excess && i < len(cands); i++ {
+		if st := s.sessions[cands[i].id]; st != nil {
+			evicted = append(evicted, st.sess)
+		}
 		delete(s.sessions, cands[i].id)
 		// Release the request snapshot (it holds a full copy of the
 		// assembled system segments). lastReqHash survives deliberately:
 		// it is small and keeps hash-on-change journaling correct if the
 		// session is later reloaded.
 		delete(s.lastRequest, cands[i].id)
+	}
+	return evicted
+}
+
+// releaseEvicted closes the file descriptors of sessions eviction just
+// dropped: a session's journal handle and its sidecar-index handle. Call it
+// only after s.mu is released — see evictResidentLocked's own doc comment
+// for why.
+//
+// The sessions stay usable. Eviction has already decided each one is idle
+// and reloadable, and the next persist call reopens both handles through
+// ensureLog. Without this, a process holds two descriptors for every
+// session it has ever touched.
+func releaseEvicted(evicted []*engine.Session) {
+	for _, sess := range evicted {
+		sess.ReleaseFiles()
 	}
 }
 
@@ -2897,14 +2991,16 @@ func (s *Server) handleQueueDelete(w http.ResponseWriter, r *http.Request) {
 			s.queueDeleteRace()
 		}
 		s.mu.Lock()
+		var evicted []*engine.Session
 		if ex := s.sessions[id]; ex != nil {
 			st = ex // a resident appeared while we loaded; use the winner
 		} else {
 			st = &sessionState{sess: sess, lastUsed: time.Now()}
 			s.sessions[id] = st
-			s.evictResidentLocked()
+			evicted = s.evictResidentLocked()
 		}
 		s.mu.Unlock()
+		releaseEvicted(evicted)
 	}
 	st.sess.DequeueAllPrompts("cleared")
 	w.WriteHeader(http.StatusNoContent)
@@ -3279,8 +3375,9 @@ func (s *Server) claimForPrompt(id string) (st *sessionState, ctx context.Contex
 	s.wg.Add(1)
 	// A cold load grew the resident set; cap it now. st is running, so
 	// evictResidentLocked will not evict the session we just claimed.
-	s.evictResidentLocked()
+	evicted := s.evictResidentLocked()
 	s.mu.Unlock()
+	releaseEvicted(evicted)
 	return st, ctx, fromSeq, 0, ""
 }
 
@@ -3475,6 +3572,75 @@ func (s *Server) buildSession(lv liveSession) sessionJSON {
 	}
 }
 
+// buildSessionFromIndex renders the wire Session for an id NO live source
+// in this process holds, from its durable metadata index alone.
+//
+// It is buildSession's cold twin, and the split is along one line: what has
+// a durable source and what does not. The index answers everything the
+// session log records — created/activity timestamps, model, effort,
+// workdir, message count, usage, durable goal state, queue depth,
+// compaction, lineage. The three fields that are process-local answer
+// exactly as they do in buildSession, from the same server-side maps:
+// journal seq, the goal presentation (goalTracker, which survives a
+// restart through the event journal, not the session log), and last_turn.
+//
+// Status is always "idle" here, by construction: a session running a turn
+// in this process is, by definition, live in it, so it never reaches this
+// path. That matches what the old cold path reported — a disk-loaded
+// session contributed no status either (see liveSession.status).
+//
+// Plugins come from Options.Plugins, because plugins are process
+// configuration rather than durable session state, and an index has no
+// Session to ask.
+func (s *Server) buildSessionFromIndex(ix engine.SessionIndex) sessionJSON {
+	s.mu.Lock()
+	seq := s.sessionSeqLocked(ix.ID)
+	goal := goalJSONFrom(s.goalState[ix.ID])
+	lastTurn := s.lastTurnJSONLocked(ix.ID)
+	s.mu.Unlock()
+	return sessionJSON{
+		ID:        ix.ID,
+		CreatedAt: ix.CreatedAt,
+		Model:     ix.Model,
+		Effort:    ix.Effort,
+		Status:    "idle",
+		State:     compositeState(false, goal != nil && goal.Active, forcesIdlePause(goal)),
+		Messages:  ix.Messages,
+		Seq:       seq,
+		Goal:      goal,
+		WorkDir:   ix.WorkDir,
+		LastTurn:  lastTurn,
+		Usage: usageJSON{
+			InputTokens:      ix.Usage.InputTokens,
+			OutputTokens:     ix.Usage.OutputTokens,
+			CacheReadTokens:  ix.Usage.CacheReadTokens,
+			CacheWriteTokens: ix.Usage.CacheWriteTokens,
+			Messages:         ix.Messages,
+			LastInputTokens:  ix.LastInputTokens,
+		},
+		LastActivityAt:  ix.LastActivityAt,
+		ParentSession:   ix.ParentSession,
+		CompactionCount: ix.CompactionCount,
+		LastCompactedAt: ix.LastCompactedAt,
+		Plugins:         s.pluginInfo(ix.ID),
+		Queued:          ix.Queued,
+		Lineage:         coldLineageJSON(ix.TaskParentID, ix.TaskAgentType, ix.TaskDepth, ix.SpawnedChildIDs),
+	}
+}
+
+// pluginInfo reports a session's configured plugins for a cold read (see
+// Options.Plugins). It never returns nil: the wire contract for
+// Session.plugins is an array, empty when nothing is configured.
+func (s *Server) pluginInfo(sessionID string) []plugin.Info {
+	if s.opts.Plugins == nil {
+		return []plugin.Info{}
+	}
+	if infos := s.opts.Plugins(sessionID); infos != nil {
+		return infos
+	}
+	return []plugin.Info{}
+}
+
 // lineageJSONFor returns lv.id's subagent-sessions lineage. It reads only
 // the caller's already-taken liveSession snapshot (see that type's own doc
 // comment) — never sessMgr again — so the lineage block always describes
@@ -3614,11 +3780,23 @@ func lineageJSONFor(lv liveSession) *lineageJSON {
 	// reliable positive signal regardless of log vintage (a durably
 	// recorded child is a durably recorded child), so that case is
 	// reported normally, unmodified.
+	return coldLineageJSON(parentID, sess.TaskAgentType(), sess.TaskDepth(), sess.SpawnedChildIDs())
+}
+
+// coldLineageJSON builds the durable-only lineage block from the four
+// fields a session log carries, whether they were read off a loaded
+// Session (lineageJSONFor's cold branch) or off its metadata index
+// (buildSessionFromIndex). Both callers describe a session no live source
+// in this process holds, so both omit the live-only fields identically.
+func coldLineageJSON(parentID, agentType string, depth int, children []string) *lineageJSON {
+	if parentID == "" {
+		return nil
+	}
 	return &lineageJSON{
 		ParentID:  parentID,
-		Depth:     sess.TaskDepth(),
-		AgentType: sess.TaskAgentType(),
-		Children:  sess.SpawnedChildIDs(),
+		Depth:     depth,
+		AgentType: agentType,
+		Children:  children,
 	}
 }
 

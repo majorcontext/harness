@@ -37,6 +37,109 @@ type QueuedPrompt struct {
 	Seq int64
 }
 
+// promptQueueFold replays prompt.queued/prompt.dequeued records into the
+// exact set of undelivered prompts, in the order live memory held them. It
+// is the ONE implementation of that fold, shared by LoadSession (store.go)
+// and the session metadata index (index.go), which needs the same depth
+// without paying for a full replay.
+//
+// nextID and seq mirror Session.promptQueueNextID and Session.enqueueSeq: a
+// caller seeds them with the session's current values and reads them back
+// after the fold.
+type promptQueueFold struct {
+	queue  []QueuedPrompt
+	nextID int64
+	seq    int64
+}
+
+// queued folds one prompt.queued record.
+//
+// A record carrying Seq (durable enqueue) folds last-writer-wins against
+// any already-folded entry with the SAME Seq: a failed fsync can leave a
+// torn record on disk whose write reported failure, followed by its
+// successful retry under a fresh ID — live memory only ever held the
+// retry's entry, so replay must converge to that one too (a later
+// prompt.dequeued references the retry's ID — this holds under
+// EnqueuePromptDurable's caller contract that the same seq is retried
+// before any higher seq is accepted). Seq also advances the enqueueSeq
+// high-water mark, which is what makes duplicate detection survive a
+// process restart.
+//
+// The fold REMOVES the old same-Seq entry from its slot and APPENDS the new
+// one at the tail, rather than replacing it in place: a plain EnqueuePrompt
+// can land BETWEEN the torn write and its retry (log order id1/seq5 torn,
+// id2/seq0 plain, id3/seq5 retry). Live memory only ever appended id2 then
+// id3, in that order — an in-place replacement at id1's old slot would
+// instead fold to [id3, id2], reordering delivery relative to what actually
+// happened live. Remove+append reconstructs live append order faithfully
+// (the retry always carries the highest ID seen so far, so this can never
+// misorder against a later, genuinely-newer plain entry); the common case
+// with no interposed record degenerates to the exact same single-entry
+// result as an in-place replacement.
+//
+// Malformed-record guards (found by FuzzLoadSessionReplay): the live path
+// can never write a queued record with ID <= 0 (promptQueueNextID starts at
+// 1) nor two records with the same ID (IDs are burned, never reused — see
+// EnqueuePromptDurable), so either shape in a journal is corruption, not
+// history. Folding them anyway would violate the queue's ID-uniqueness
+// invariant (two ID-0 entries from two `{"prompt":{}}` lines) and a later
+// dequeue-by-ID would remove an arbitrary one. Skip the record; same
+// defensive posture as message.ResolveOrphanToolCalls at this layer.
+//
+// nextID advances past every ID seen — folded or skipped — because IDs are
+// burned on failed durable writes, so advancing past every ID that ever
+// reached the log is what keeps a resumed session's counter collision-free.
+func (f *promptQueueFold) queued(p promptRecord) {
+	q := QueuedPrompt{ID: p.ID, Text: p.Text, Seq: p.Seq}
+	valid := q.ID > 0
+	for _, existing := range f.queue {
+		if existing.ID == q.ID {
+			valid = false
+			break
+		}
+	}
+	if !valid {
+		return
+	}
+	if q.Seq > 0 {
+		for i, existing := range f.queue {
+			if existing.Seq == q.Seq {
+				f.queue = append(f.queue[:i], f.queue[i+1:]...)
+				break
+			}
+		}
+		if q.Seq > f.seq {
+			f.seq = q.Seq
+		}
+	}
+	f.queue = append(f.queue, q)
+	if p.ID >= f.nextID {
+		f.nextID = p.ID + 1
+	}
+}
+
+// dequeued folds one prompt.dequeued record: it removes the matching queued
+// entry by ID, not by position (see promptRecord's doc comment), so the
+// folded queue ends up exactly the undelivered set however many other
+// records separate a queued record from its own dequeued record.
+//
+// This fold reads FORWARD only: a dequeued record for an ID not folded yet
+// is a no-op, and a queued record arriving after it re-appends the item.
+// Every writer therefore owes this fold one ordering guarantee — a queued
+// record reaches disk before its own dequeued record. The two writers that
+// defer a prompt-queue write out from under the tree-wide m.mu keep it by
+// parking the record on the session, not in their own closure; see
+// queueRecordDeferredLocked for the resurrection defect a closure-held
+// record caused.
+func (f *promptQueueFold) dequeued(p promptRecord) {
+	for i, existing := range f.queue {
+		if existing.ID == p.ID {
+			f.queue = append(f.queue[:i], f.queue[i+1:]...)
+			return
+		}
+	}
+}
+
 // ErrEmptyPromptText is returned for a prompt whose text is empty or
 // whitespace-only. One shared sentinel, not a fresh errors.New per call
 // site — a review finding: SessionManager.SendToDescendant validates the

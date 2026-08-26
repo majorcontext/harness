@@ -819,6 +819,31 @@ type Session struct {
 	logStarted     bool     // the log file exists on disk
 	lastPersistErr error
 
+	// index is the running fold of every record this session has written
+	// or replayed, and logSize the journal length that fold covers (see
+	// index.go). Together they are what flushIndexLocked writes to the
+	// session's sidecar after every record, so a reader answers GET
+	// /session for a non-resident session without replaying the journal.
+	//
+	// The fold reads RECORDS, never these in-memory fields, because a
+	// record does not always reach disk at the same instant memory changes
+	// — EnqueuePromptDurable writes its record BEFORE it mutates the queue,
+	// deliberately. logSize counts only bytes this session wrote (or found
+	// at ensureLog time), so a second writer on the same log can only ever
+	// make it too SMALL, which reads as stale and refolds.
+	index   indexFold
+	logSize int64
+	// indexFile is the sidecar's handle, opened beside the log in
+	// ensureLog and rewritten in place from then on. It follows logFile's
+	// own lifetime rule exactly: a Session never closes either one, and an
+	// evicted session's handles are released when the object is collected.
+	// One session therefore holds two descriptors rather than one.
+	indexFile *os.File
+	// lastIndexErr holds the most recent sidecar write failure. It is
+	// deliberately NOT lastPersistErr: the index is a cache, and its loss
+	// must never be reported to a caller as a durability failure.
+	lastIndexErr error
+
 	// Project-instruction segment, loaded once on the first Prompt (see
 	// instructions.go). instrLoaded gates the one-time disk read; instrSeg is
 	// the cached system-prompt segment (empty when none); instrErr records a

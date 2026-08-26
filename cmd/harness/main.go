@@ -1429,6 +1429,12 @@ func serveCmd(args []string) error {
 		// (handleSpawnChild, handleSessionSend, buildSession's lineage)
 		// consult).
 		SessionManager: sessMgr,
+		// Plugins: the same host mkCfg wires into every session's
+		// engine.Config.Hooks. A read of a session this process does not
+		// hold live is answered from its metadata index and has no
+		// Session to ask, so the process's plugin list is supplied here
+		// directly — see server.Options.Plugins.
+		Plugins: pluginInfoFn(pluginHost),
 		// MonitorPage: every `harness serve` box offers its own same-origin
 		// monitor at GET /monitor — no CORS/-cors-origin dance, no
 		// separately hosted copy required (see AGENTS.md's "Session

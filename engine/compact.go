@@ -721,6 +721,24 @@ func healCompactFoldEnd(history []message.Message, firstID string, turnsFolded i
 	return history[foldEnd].ID, nil
 }
 
+// applyCompactRecord folds one journaled compact record into history: the
+// LastID heal above, then spliceCompact. It is the ONE implementation of
+// "what a compact record does to a history", shared by LoadSession's replay
+// (store.go) and the metadata index's own fold (index.go), so the two can
+// never disagree about how many messages a fold removed.
+//
+// A FOUND lastID keeps the pre-heal behavior exactly: the heal never runs
+// for it. A failed heal falls through unchanged, so spliceCompact returns
+// its usual loud error rather than a silent best-effort guess.
+func applyCompactRecord(history []message.Message, firstID, lastID string, turnsFolded int, summary message.Message) ([]message.Message, error) {
+	if _, found := indexOfMessageID(history, lastID); !found {
+		if healed, err := healCompactFoldEnd(history, firstID, turnsFolded); err == nil {
+			lastID = healed
+		}
+	}
+	return spliceCompact(history, firstID, lastID, summary)
+}
+
 // bytesPerTokenEstimate is the standard ~4-bytes-per-token heuristic used by
 // estimatePromptTokensFromHistory below when a provider's own usage
 // accounting is unavailable.
