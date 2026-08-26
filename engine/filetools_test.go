@@ -723,3 +723,54 @@ func TestFileToolsOfferedToProvider(t *testing.T) {
 		}
 	}
 }
+
+// TestWriteFileFailedReadDoesNotUnlock proves a read_file that ERRORED
+// (offset past end-of-file) does not authorize an overwrite: the guard
+// records a hash only at a return that handed the model content.
+func TestWriteFileFailedReadDoesNotUnlock(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "a.txt"), "line1\nline2\n")
+	s := NewSession(Config{WorkDir: dir})
+
+	if _, err := readFileTool().Run(context.Background(), s, json.RawMessage(`{"path":"a.txt","offset":99}`)); err == nil {
+		t.Fatal("want read_file error for offset past end of file")
+	}
+	_, err := writeFileTool().Run(context.Background(), s, json.RawMessage(`{"path":"a.txt","content":"new"}`))
+	if err == nil {
+		t.Fatal("want write_file refusal: the only read of this file errored")
+	}
+	if !strings.Contains(err.Error(), "has not been read this session") {
+		t.Errorf("error = %q, want the unread-file refusal", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "a.txt"))
+	if string(got) != "line1\nline2\n" {
+		t.Errorf("content = %q, want unchanged", got)
+	}
+}
+
+// TestWriteFileStatErrorRefuses proves a stat failure OTHER than not-exist
+// refuses the write: an unreadable path cannot prove no protected file
+// exists there, so falling through to unguarded-create would be a hole.
+func TestWriteFileStatErrorRefuses(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("permission-based stat failure cannot be produced as root")
+	}
+	dir := t.TempDir()
+	locked := filepath.Join(dir, "locked")
+	if err := os.Mkdir(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(locked, "a.txt"), "old")
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	_, err := writeFileTool().Run(context.Background(), NewSession(Config{WorkDir: dir}), json.RawMessage(`{"path":"locked/a.txt","content":"new"}`))
+	if err == nil {
+		t.Fatal("want write_file refusal on a stat error that is not not-exist")
+	}
+	if !strings.Contains(err.Error(), "cannot stat") {
+		t.Errorf("error = %q, want the cannot-stat refusal", err)
+	}
+}

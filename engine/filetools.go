@@ -5,12 +5,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"  // register GIF decoder for image.DecodeConfig
 	_ "image/jpeg" // register JPEG decoder for image.DecodeConfig
 	_ "image/png"  // register PNG decoder for image.DecodeConfig
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -256,16 +258,15 @@ func readFileTool() Tool {
 			if content.IsImage {
 				rawBytes = content.ImageData
 			}
-			// Record the read-before-overwrite guard's hash from the RAW
-			// bytes readPathContent already read off disk, never the
-			// offset/limit-sliced text below — read_file always reads the
-			// whole file regardless of what window it goes on to display.
-			// This runs for every successful read, including one whose
-			// requested offset later turns out to be past end-of-file: the
-			// disk read itself still happened, before the model made any
-			// request the guard needs to have honored.
-			s.recordRead(path, sha256.Sum256(rawBytes))
+			// The read-before-overwrite guard's hash comes from the RAW
+			// bytes readPathContent read off disk, never the offset/limit-
+			// sliced window below — matching the reference guards (Claude
+			// Code, opencode), which authorize per successful OPEN, not per
+			// byte displayed. It is recorded only at a return that hands the
+			// model content: a read that errors (offset past end-of-file)
+			// records nothing, so a failed read cannot unlock an overwrite.
 			if content.IsImage {
+				s.recordRead(path, sha256.Sum256(rawBytes))
 				summary := fmt.Sprintf("image (%s), %d bytes, %dx%d pixels", content.MediaType, len(content.ImageData), content.Width, content.Height)
 				return message.Parts{
 					&message.Text{Text: summary},
@@ -290,11 +291,13 @@ func readFileTool() Tool {
 				limit = readFileDefaultLimit
 			}
 			if total == 0 {
+				s.recordRead(path, sha256.Sum256(rawBytes))
 				return message.Parts{&message.Text{Text: "(empty file)"}}, nil
 			}
 			if offset > total {
 				return nil, fmt.Errorf("read_file: offset %d is past end of file (%d lines)", offset, total)
 			}
+			s.recordRead(path, sha256.Sum256(rawBytes))
 			end := offset + limit - 1
 			if end > total {
 				end = total
@@ -342,12 +345,16 @@ func writeFileTool() Tool {
 			path := s.resolvePath(in.Path)
 
 			// Read-before-overwrite guard: only an EXISTING regular file is
-			// gated — creation is write_file's main job, so a path os.Stat
-			// cannot resolve to an existing regular file (missing, or any
-			// stat error) falls straight through unguarded, exactly as
-			// before this guard existed. See AGENTS.md's "write_file
+			// gated — creation is write_file's main job, so a path that
+			// does not exist falls straight through unguarded. Any OTHER
+			// stat failure refuses the write: it cannot prove no protected
+			// file exists there. See AGENTS.md's "write_file
 			// read-before-overwrite guard" section for the full design.
-			if info, statErr := os.Stat(path); statErr == nil && !info.IsDir() {
+			info, statErr := os.Stat(path)
+			if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
+				return nil, fmt.Errorf("write_file: cannot stat %s to check the read-before-overwrite guard: %v", path, statErr)
+			}
+			if statErr == nil && !info.IsDir() {
 				recorded, everRead := s.readHashFor(path)
 				if !everRead {
 					return nil, fmt.Errorf("write_file: %s exists and has not been read this session; read it first (or use edit_file)", path)
