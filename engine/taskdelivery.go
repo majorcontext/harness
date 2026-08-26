@@ -515,9 +515,6 @@ func neutralizeNotificationText(s string) string {
 // knows more is available (via session_info / session.info, Stage 4) —
 // never a silent truncation.
 func truncateTaskResult(s string) string {
-	r := []rune(s)
-	if len(r) <= taskNotificationResultCap {
-		return s
-	}
-	return string(r[:taskNotificationResultCap]) + "… [truncated]"
+	text, _ := capRunes(s, taskNotificationResultCap)
+	return text
 }
