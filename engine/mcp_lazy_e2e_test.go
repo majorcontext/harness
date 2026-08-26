@@ -25,6 +25,11 @@ import (
 // canned text result naming itself.
 func lazyE2EServer(t *testing.T, n int) (*fakeMCPHTTPServer, string) {
 	t.Helper()
+	if n > 26 {
+		// The letter-suffix naming below collides past 'z'; fail loudly
+		// instead of silently degrading a future caller's tool names.
+		t.Fatalf("lazyE2EServer supports at most 26 tools, got %d", n)
+	}
 	srv := &fakeMCPHTTPServer{}
 	for i := 0; i < n; i++ {
 		name := "tool" + string(rune('a'+i))
@@ -91,7 +96,7 @@ func TestLazyMCPEndToEnd(t *testing.T) {
 	if len(rounds[0].tools) != 0 {
 		t.Fatalf("round 1 carried MCP schemas %v, want none", rounds[0].tools)
 	}
-	catalog := lastSegment(t, rounds[0].system, mcpCatalogHeader)
+	catalog := soleSegment(t, rounds[0].system, mcpCatalogHeader)
 	for _, want := range []string{"mcp__weather__toola", target, "mcp__weather__toolc", "mcp__weather__toold"} {
 		if !strings.Contains(catalog, want) {
 			t.Fatalf("catalog does not list %q:\n%s", want, catalog)
@@ -106,7 +111,7 @@ func TestLazyMCPEndToEnd(t *testing.T) {
 	if len(rounds[1].tools) != 1 || rounds[1].tools[0] != target {
 		t.Fatalf("round 2 carried %v, want exactly [%s]", rounds[1].tools, target)
 	}
-	catalog2 := lastSegment(t, rounds[1].system, mcpCatalogHeader)
+	catalog2 := soleSegment(t, rounds[1].system, mcpCatalogHeader)
 	if strings.Contains(catalog2, target) {
 		t.Fatalf("catalog still lists the loaded tool:\n%s", catalog2)
 	}
@@ -202,6 +207,10 @@ func TestLazyMCPEndToEndSurvivesReload(t *testing.T) {
 	if len(firstTools) != 1 || firstTools[0] != target {
 		t.Fatalf("first request after the reload carried %v, want the restored [%s]", firstTools, target)
 	}
+	// The load-bearing restore check is firstTools above: CallTool routes
+	// by name whether or not the schema was restored, so this call
+	// assertion only proves the wired transport still works end to end —
+	// it cannot catch a broken restore on its own (review note).
 	if len(srv.calls) != 1 || srv.calls[0] != "toolc" {
 		t.Fatalf("server saw calls %v, want exactly [toolc]", srv.calls)
 	}
@@ -276,9 +285,9 @@ func TestLazyMCPEndToEndEagerIsUnchanged(t *testing.T) {
 	}
 }
 
-// lastSegment returns the one system segment starting with prefix, failing
+// soleSegment returns the one system segment starting with prefix, failing
 // the test when there is not exactly one.
-func lastSegment(t *testing.T, system []string, prefix string) string {
+func soleSegment(t *testing.T, system []string, prefix string) string {
 	t.Helper()
 	var found []string
 	for _, seg := range system {
