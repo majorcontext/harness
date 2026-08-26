@@ -211,6 +211,16 @@ type mcpToolPlan struct {
 //
 // A nil registry yields the zero plan, so a session with no MCP configured
 // pays nothing.
+//
+// LOCKING: the caller must NOT hold s.mu. A session that can defer reaches
+// reapMCPSelections, which takes s.mu to prune the selected set, and
+// sync.Mutex is not reentrant -- a caller holding the lock would deadlock
+// itself. This is a new constraint on the whole toolDefs call chain (see
+// toolDefs), which held no session lock before deferral existed. Every
+// caller today is already outside the lock, and two of them say so: sessionInfo
+// gathers tool names before it takes s.mu (session_info.go), and streamTurn
+// builds the request before its own s.mu section (engine.go). A session that
+// cannot defer returns above without ever reaching the lock.
 func (s *Session) planMCPTools(ctx context.Context) mcpToolPlan {
 	if s.cfg.MCP == nil {
 		return mcpToolPlan{}
@@ -278,6 +288,9 @@ func (s *Session) resolveMCPLoading(server string, overThreshold bool) MCPToolLo
 
 // reapMCPSelections returns a snapshot of the selected set with every stale
 // name dropped, and drops those names from the session's own set too.
+//
+// LOCKING: takes s.mu itself, so the caller must not hold it (see
+// planMCPTools).
 //
 // A selection is stale when its server is CONNECTED and the live catalog
 // does not hold the name. That is the rule that keeps an invented name out

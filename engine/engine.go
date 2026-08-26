@@ -2571,6 +2571,14 @@ func (e *emptyTurnError) Error() string {
 // -- for a session that defers. A filter of a deterministic slice is
 // deterministic, so byte-stability holds either way: two requests that
 // change no selection produce identical bytes.
+//
+// LOCKING: the caller must NOT hold s.mu. This is new as of deferral: for a
+// session that can defer, the plan reaps stale selections under s.mu (see
+// planMCPTools), and sync.Mutex is not reentrant. Before deferral this
+// chain took no session lock at all, so a caller was free to call it under
+// the lock. Both callers today are outside it by construction -- sessionInfo
+// deliberately gathers tool names before its own Lock, and streamTurn builds
+// the whole request before its s.mu section.
 func (s *Session) toolDefs(ctx context.Context) []provider.ToolDef {
 	defs, _ := s.toolDefsWithCatalog(ctx)
 	return defs
