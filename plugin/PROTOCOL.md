@@ -149,6 +149,43 @@ on the fire-and-forget `event` hook needs a throttling/coalescing design
 first so a slow plugin can't fall arbitrarily far behind or amplify RPC
 volume. Not in this vocabulary yet.
 
+## Concurrency
+
+The harness MAY keep **several requests in flight on one connection at the
+same time**. A plugin must not assume request/response lockstep.
+
+The rules, for a plugin in any language:
+
+- **`id` is the only correlation.** Match a response to its request by the
+  request `id`, never by arrival order. Both sides number their own requests
+  independently, so an id is unique only within one direction.
+- **Answer in any order.** A plugin may reply to a later request first. The
+  harness demultiplexes by `id` (`conn.call`, `conn.dispatch`), so a slow
+  handler never blocks a fast one.
+- **Write each frame as one whole line, atomically.** A plugin that writes
+  from more than one thread MUST serialize its writes. Two frames whose
+  bytes interleave are both lost, and the connection carries responses for
+  every other in-flight request too. The Go SDK holds one write mutex for
+  the life of the connection (`conn.write`).
+- **Reentrancy is the plugin's choice.** A plugin whose handlers are not
+  safe to run at the same time MAY serialize them internally. The harness
+  stays correct — it is throttled, not broken. The Go SDK does the opposite
+  by default: it serves each incoming request on its own goroutine, so a Go
+  plugin's hook handlers must be safe for concurrent use.
+- **The `hook/event` FIFO guarantee is unchanged.** Notifications still
+  arrive in emit order, one at a time, per plugin (see "Chaining semantics"
+  above). Concurrency applies to REQUESTS only.
+
+Concurrency is not new to this version. `plugin.Host` is a box-scoped
+singleton shared by every session, so two sessions have always been able to
+dispatch a hook to one plugin at the same time. Parallel tool execution in
+the engine adds the same concurrency WITHIN one session: the tool calls of
+one assistant message run as a batch, so their `tool.execute.before` and
+`tool.execute.after` dispatches overlap.
+
+This section documents an existing wire property. It changes no payload
+shape, so `ProtocolVersion` stays 1.
+
 ## Message content
 
 Tool outputs and generate results use the canonical `message.Parts` encoding:
