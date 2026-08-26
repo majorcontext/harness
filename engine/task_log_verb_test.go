@@ -399,3 +399,57 @@ func TestTaskLogSkipsEmptyTextParts(t *testing.T) {
 		t.Errorf("entry text = %q, want %q with no blank line on either side", last.Text, "real content")
 	}
 }
+
+// TestTaskLogTruncatedCoversInnerCuts proves the structured flag reports
+// the whole truth. A review finding: Truncated reflected only the
+// entry-level cap, so a tool call whose 5000-rune arguments were cut to
+// 300 — inside an entry whose total text stayed well under the entry cap
+// — reported Truncated: false, and a reader keying on the field read a
+// cut entry as complete.
+func TestTaskLogTruncatedCoversInnerCuts(t *testing.T) {
+	mgr, root, childID := spawnLoggedChild(t, "done")
+	child, ok := mgr.Session(childID)
+	if !ok {
+		t.Fatal("Session(child): not found")
+	}
+	args := `{"command":"` + strings.Repeat("z", taskLogArgsCap*3) + `"}`
+	child.append(message.Message{ID: "m_args", Role: message.RoleAssistant, Parts: message.Parts{
+		toolCall("tc1", "bash", args),
+	}})
+
+	got := runTaskLogJSON(t, root, taskToolArgs{SessionID: childID, Tail: 1})
+	entry := got.Entries[0]
+	if len([]rune(entry.Text)) >= taskLogEntryCap {
+		t.Fatalf("test setup: entry is %d runes, want it under the %d-rune entry cap so only the INNER cut can set the flag",
+			len([]rune(entry.Text)), taskLogEntryCap)
+	}
+	if !entry.Truncated {
+		t.Errorf("entry = %+v, want Truncated: true from the capped tool-call arguments", entry)
+	}
+}
+
+// TestTaskLogBoundsToolResultTextAtThePart proves a huge tool result is
+// cut where it is read, not copied whole into the builder and cut after —
+// a review finding: a mid-loop child can hold a 200KB read_file result,
+// and a tail of many such messages would allocate tens of MB to discard
+// almost all of it.
+func TestTaskLogBoundsToolResultTextAtThePart(t *testing.T) {
+	huge := strings.Repeat("q", taskLogEntryCap*10)
+	got, cut := boundedPartsText(message.Parts{&message.Text{Text: huge}}, taskLogEntryCap)
+	if !cut {
+		t.Error("boundedPartsText cut = false, want true")
+	}
+	if len([]rune(got)) > taskLogEntryCap+len(taskLogTruncationMarker) {
+		t.Errorf("boundedPartsText returned %d runes, want it bounded at %d", len([]rune(got)), taskLogEntryCap)
+	}
+	if !strings.HasSuffix(got, taskLogTruncationMarker) {
+		t.Errorf("boundedPartsText = %q..., want the truncation marker", got[:40])
+	}
+
+	// It renders like Parts.Text() when nothing is cut: Text parts only,
+	// newline-joined, so the tail reads the same as before.
+	ps := message.Parts{&message.Text{Text: "a"}, &message.Blob{MediaType: "image/png"}, &message.Text{Text: "b"}}
+	if got, cut := boundedPartsText(ps, taskLogEntryCap); got != ps.Text() || cut {
+		t.Errorf("boundedPartsText = (%q, %v), want (%q, false) — identical to Parts.Text() under the cap", got, cut, ps.Text())
+	}
+}

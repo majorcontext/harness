@@ -41,7 +41,7 @@ const (
 // spawn action's "unknown agent" error, below.
 var taskActionNames = []string{taskActionSpawn, taskActionCancel, taskActionStatus, taskActionSend, taskActionLog}
 
-// taskToolArgs is the task tool's full input shape across all four
+// taskToolArgs is the task tool's full input shape across all five
 // actions. Only the fields a given action actually uses are validated as
 // required for it — see runTaskTool's dispatch and each action's own
 // runTask* function.
@@ -563,7 +563,13 @@ const (
 type taskLogEntry struct {
 	Role string `json:"role"`
 	Text string `json:"text,omitempty"`
-	// Truncated marks an entry cut at taskLogEntryCap.
+	// Truncated marks an entry that lost content to ANY cap — the
+	// entry-level taskLogEntryCap, or an inner one (a tool call's
+	// arguments at taskLogArgsCap, a tool result's own text). A reader
+	// keying on this field rather than scanning for the inline marker
+	// must never read a cut entry as complete, which an entry-cap-only
+	// flag allowed: 5000 runes of arguments cut to 300 inside an entry
+	// whose total stayed under the entry cap reported Truncated: false.
 	Truncated bool `json:"truncated,omitempty"`
 }
 
@@ -678,6 +684,17 @@ func renderTaskLogEntry(m message.Message) taskLogEntry {
 		}
 		b.WriteString(s)
 	}
+	// inner records a cut made BELOW the entry level (a tool call's
+	// arguments, a tool result's text), so Truncated reports the whole
+	// truth rather than only the entry cap's share of it.
+	inner := false
+	// capInner, not "cap": shadowing the builtin in a function this long
+	// is a trap for the next reader.
+	capInner := func(text string, n int) string {
+		out, cut := capRunes(text, n)
+		inner = inner || cut
+		return out
+	}
 	blobs := 0
 	for _, p := range m.Parts {
 		switch part := p.(type) {
@@ -694,13 +711,21 @@ func renderTaskLogEntry(m message.Message) taskLogEntry {
 				writeLine("[reasoning] " + part.Text)
 			}
 		case *message.ToolCall:
-			writeLine("[tool_call] " + part.Name + "(" + capRunes(string(part.Arguments), taskLogArgsCap) + ")")
+			writeLine("[tool_call] " + part.Name + "(" + capInner(string(part.Arguments), taskLogArgsCap) + ")")
 		case *message.ToolResult:
 			label := "[tool_result]"
 			if part.IsError {
 				label = "[tool_result error]"
 			}
-			writeLine(label + " " + part.SafeContent().Text())
+			// Bounded at the PART level, not only by the entry cap below:
+			// a mid-loop child can hold a 200KB read_file result, and a
+			// tail of up to taskLogMaxTail such messages would otherwise
+			// copy tens of MB into this builder just to discard almost
+			// all of it. boundedPartsText stops reading at the cap, the
+			// same inline-cap shape the tool-call arguments above use.
+			text, cut := boundedPartsText(part.SafeContent(), taskLogEntryCap)
+			inner = inner || cut
+			writeLine(label + " " + text)
 			// Parts.Text() renders Text parts only, so an image a tool
 			// returned (read_file's [Text, Blob] shape, and MCP's) would
 			// otherwise vanish from the tail entirely. Count it with the
@@ -716,8 +741,38 @@ func renderTaskLogEntry(m message.Message) taskLogEntry {
 		writeLine(fmt.Sprintf("[%d attachment(s)]", blobs))
 	}
 	text := b.String()
-	capped := capRunes(text, taskLogEntryCap)
-	return taskLogEntry{Role: string(m.Role), Text: capped, Truncated: capped != text}
+	capped, cut := capRunes(text, taskLogEntryCap)
+	return taskLogEntry{Role: string(m.Role), Text: capped, Truncated: cut || inner}
+}
+
+// boundedPartsText renders ps's Text parts joined by newlines, exactly as
+// message.Parts.Text() does, but stops once n runes are written — so a
+// huge tool result is never materialized in full just to be cut
+// afterwards. cut reports whether anything was dropped.
+func boundedPartsText(ps message.Parts, n int) (text string, cut bool) {
+	var b strings.Builder
+	written := 0
+	for _, p := range ps {
+		t, ok := p.(*message.Text)
+		if !ok {
+			continue
+		}
+		if written >= n {
+			return b.String() + taskLogTruncationMarker, true
+		}
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+			written++
+		}
+		r := []rune(t.Text)
+		if len(r) > n-written {
+			b.WriteString(string(r[:n-written]))
+			return b.String() + taskLogTruncationMarker, true
+		}
+		b.WriteString(t.Text)
+		written += len(r)
+	}
+	return b.String(), false
 }
 
 // countBlobs counts the Blob parts in ps — the parts Parts.Text() drops.
@@ -731,11 +786,12 @@ func countBlobs(ps message.Parts) int {
 	return n
 }
 
-// capRunes cuts s to at most n runes, marking a cut.
-func capRunes(s string, n int) string {
+// capRunes cuts s to at most n runes, marking a cut in the text and
+// reporting it to the caller (which folds it into taskLogEntry.Truncated).
+func capRunes(s string, n int) (text string, cut bool) {
 	r := []rune(s)
 	if len(r) <= n {
-		return s
+		return s, false
 	}
-	return string(r[:n]) + taskLogTruncationMarker
+	return string(r[:n]) + taskLogTruncationMarker, true
 }
