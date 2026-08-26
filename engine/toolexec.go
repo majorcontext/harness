@@ -151,6 +151,29 @@
 // does get a slot, runs and closes the channel independent of who else is
 // waiting on it.
 //
+// # Residuals of the per-file key
+//
+// filePathKey covers read_file, write_file and edit_file. Two tool
+// shapes sit OUTSIDE that namespace, and an operator relying on the
+// same-file guarantee should know both.
+//
+//  1. bash. bashTool (bash.go) sets neither Key nor Serial, and it runs
+//     arbitrary shell: "echo x > f.txt" and "cat f.txt" touch files the
+//     engine cannot see. A batch that pairs a bash write with an
+//     edit_file on the same path, or two bash calls on one file, races on
+//     disk. A bash call's file targets are not statically knowable, so
+//     keying it generally is not possible, and keying it pessimistically
+//     (one global bash key) would serialize the most common parallel
+//     workload there is. bash stays parallel by design: the model owns
+//     batching judgment, which is the same contract Claude Code ships.
+//     The strictly-sequential default never exposed this, so it IS a
+//     behavior change for the default configuration, and
+//     HARNESS_SEQUENTIAL_TOOLS=1 is the operator's answer for a workload
+//     that cannot tolerate it.
+//  2. A symlink or hard link reaching one inode under two paths keys as
+//     two resources. See filePathKey for why resolving that is not worth
+//     a syscall on the batch's hot path.
+//
 // # Cancellation and the orphan-result invariant
 //
 // ctx cancellation (an aborted turn) cancels every in-flight call's own
