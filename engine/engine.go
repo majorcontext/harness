@@ -639,6 +639,59 @@ type Config struct {
 	// provider.AsPermanent malformed-request shape, or an interruptedTurnError
 	// is never retried regardless of this value — see streamTurnWithRetry.
 	PromptRetries int
+	// MaxTokensContinuations bounds how many times, TOTAL within one
+	// Prompt call, runAgenticLoop auto-continues a turn whose stop reason
+	// was provider.StopMaxTokens — the provider cut the model off
+	// mid-emission instead of letting it choose to stop. Zero (the zero
+	// value) DISABLES auto-continue: a max_tokens turn ends exactly as it
+	// did before this field existed (asst is appended, any orphaned
+	// ToolCall parts get their usual synthetic is_error result via
+	// appendUnexecutedToolCallResults, and runAgenticLoop returns), which
+	// keeps a bare embedder-built engine.Config unchanged. The config/CLI
+	// wiring sets the product default of 3 (config key
+	// `max_tokens_continuations`, config.Config.MaxTokensContinuationsValue)
+	// — the same unset-vs-zero split PromptRetries uses.
+	//
+	// Unlike PromptRetries (a transient-error budget for ONE model call),
+	// this bounds a CHAIN of otherwise-successful calls: each continuation
+	// re-issues a fresh model call in the SAME Prompt loop, carrying
+	// forward whatever synthetic tool results the truncated turn produced
+	// plus a one-shot message.EngineContext nudge (see
+	// maybeAutoContinueMaxTokens and the maxTokensContinuationNudgeFmt
+	// constant) telling the model its last turn hit the ceiling and it
+	// should continue in smaller pieces. The bound exists because a model
+	// can pathologically re-emit oversized output turn after turn: without
+	// it, auto-continue would retry forever and never surface a failure.
+	//
+	// This is a PER-PROMPT BUDGET, not a consecutive streak: runAgenticLoop's
+	// local counter (maxTokensUsed) is spent by every continuation issued
+	// in the loop and NEVER resets partway through, including across an
+	// intervening StopToolUse round. An earlier version of this counter did
+	// reset on any non-max_tokens stop, which let a model alternate
+	// max_tokens and tool_use (including denied, unknown, or failing tool
+	// calls — none of which need touch toolExecCount) indefinitely inside
+	// one Prompt call, spending an unbounded number of continuations
+	// without ever tripping the bound (an adversarial review finding on
+	// the PR that introduced this field). Exhausting the budget —
+	// MaxTokensContinuations+1 max_tokens stops used within the loop —
+	// synthesizes a *maxTokensContinuationExhaustedError naming the bound,
+	// wrapped provider.MarkPermanent so a goal-loop retry
+	// (promptTurnWithRetry, goal.go) fails fast on attempt 1 instead of
+	// re-running the whole exhausted chain, emits session.error, and
+	// returns, rather than looping forever or settling silently idle.
+	//
+	// Fixes the box harness-parallel-tools incident: a provider stopped
+	// mid-tool-call-emission with stop reason "max_tokens",
+	// appendUnexecutedToolCallResults synthesized the usual unexecuted-call
+	// result, and the session then went idle with no further model
+	// call — a silent work stoppage on an autonomous fleet, requiring a
+	// human to notice and re-prompt. Applies equally to a task child's own
+	// turn loop: a child Session runs this exact same runAgenticLoop (see
+	// SessionManager's configSnapshot, which copies the whole engine.Config
+	// — including this field — into childCfg), so a child that hits
+	// max_tokens auto-continues under the identical bound, with no separate
+	// wiring.
+	MaxTokensContinuations int
 	// ContextWindowTokens is the model's context window size, in tokens, as
 	// an EXPLICIT operator override. A caller passing a positive value here
 	// pins the window for the session's lifetime, immune to a later model
@@ -836,6 +889,24 @@ type Session struct {
 	// OnRequest and the session_info tool (see session_info.go). Guarded by mu.
 	turn       int
 	lastSystem []string
+
+	// pendingContinuationNudge is the one-shot max_tokens auto-continuation
+	// nudge text (see maybeAutoContinueMaxTokens and
+	// maxTokensContinuationNudgeFmt), set by runAgenticLoop right before it
+	// re-issues streamTurnWithRetry after deciding to continue a max_tokens
+	// stop. continuationNudgeSegment reads it on every streamTurn call
+	// inside that streamTurnWithRetry call (so a transient-error retry
+	// inside the SAME call keeps re-rendering the identical nudge, mirroring
+	// checkoutTaskNotificationsSegment's idempotent-reread shape,
+	// taskdelivery.go); runAgenticLoop clears it once that whole
+	// streamTurnWithRetry call returns, so it never bleeds into a later,
+	// unrelated turn. Not mu-guarded: unlike taskNotifications (which
+	// Spawn can mutate from another session's goroutine), this field is
+	// only ever touched from within this session's own single in-flight
+	// Prompt call — the same single-caller property turn/lastSystem rely
+	// on for their own correctness, just without session_info's need to
+	// read it concurrently.
+	pendingContinuationNudge string
 
 	// skills is the structured catalog discovered on the first Prompt (name +
 	// absolute SKILL.md path), used by the session_info tool. The advertised
@@ -1955,6 +2026,20 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 	s.emitStatus("busy")
 	defer s.emitStatus("idle")
 
+	// maxTokensUsed counts every max_tokens auto-continuation issued in THIS
+	// loop — i.e. across one Prompt call — never across a whole Session's
+	// lifetime. It is a PER-PROMPT BUDGET, not a consecutive streak: unlike
+	// an earlier version of this counter, it does NOT reset on a StopToolUse
+	// turn. A model can alternate max_tokens and tool_use stops
+	// indefinitely, including denied, unknown, or failing tool calls that
+	// never touch toolExecCount; a counter that reset on every StopToolUse
+	// let that alternation spend an unbounded number of max_tokens
+	// continuations inside one Prompt call, defeating
+	// Config.MaxTokensContinuations as a bound on the loop (an adversarial
+	// review finding on the PR that introduced this counter). See
+	// maybeAutoContinueMaxTokens and Config.MaxTokensContinuations.
+	var maxTokensUsed int
+
 	for {
 		// streamTurnWithRetry is a drop-in for streamTurn that smooths a
 		// one-off retryable provider error (a momentary HTTP 5xx/429/529 or a
@@ -1965,6 +2050,12 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 		// here), a context.Canceled, or an exhausted/non-retryable failure —
 		// so everything below is unchanged. See its doc comment.
 		asst, stop, usage, err := s.streamTurnWithRetry(ctx)
+		// The pending continuation nudge (if any) rode every attempt this
+		// call just made — see continuationNudgeSegment and
+		// pendingContinuationNudge's doc comment — and must not bleed into
+		// whatever streamTurnWithRetry call comes next, success or failure
+		// alike.
+		s.pendingContinuationNudge = ""
 		if err != nil {
 			// Whatever this attempt's own streamTurn calls checked out
 			// (checkoutTaskNotificationsSegment, engine.go's streamTurn)
@@ -2008,6 +2099,54 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 			// synthetic results before Prompt ever returns, closing the
 			// hole instead of leaving them orphaned in history.
 			s.appendUnexecutedToolCallResults(asst, stop)
+			if stop == provider.StopMaxTokens {
+				// The provider cut this turn off mid-emission rather than
+				// letting the model choose to stop -- see the box
+				// harness-parallel-tools incident (Config.MaxTokensContinuations'
+				// doc comment). Left alone, this early return would settle
+				// the session idle with nothing further ever prompting it:
+				// a silent work stoppage on an autonomous fleet. Ask to
+				// continue instead of returning immediately.
+				cont, cerr := s.maybeAutoContinueMaxTokens(&maxTokensUsed)
+				if cerr != nil {
+					// maxTokensUsed exceeded Config.MaxTokensContinuations:
+					// a model pathologically re-emitting oversized output
+					// must not loop forever. Settle with a loud, classified
+					// error instead -- the same "honest terminal, never a
+					// silent success" shape emptyTurnError's own budget
+					// exhaustion uses. Classified provider.MarkPermanent so
+					// a goal-loop retry (promptTurnWithRetry, goal.go) fails
+					// fast on attempt 1 instead of re-running the whole
+					// exhausted continuation chain: see
+					// maybeAutoContinueMaxTokens' doc comment.
+					s.emitSessionError(cerr)
+					return nil, cerr
+				}
+				if cont {
+					// maybeAutoContinueMaxTokens armed
+					// pendingContinuationNudge for the next
+					// streamTurnWithRetry call. Drain any operator prompt
+					// queued while this max_tokens turn was in flight
+					// FIRST, exactly like the tool-call-boundary drain
+					// below -- this loop is about to issue another
+					// provider request in the SAME Prompt call, which is
+					// the identical mid-turn steering opportunity a
+					// StopToolUse round already gets; without this, an
+					// operator message queued during a long truncated
+					// response could sit undelivered for the entire
+					// continuation chain (an adversarial review finding on
+					// the PR that introduced auto-continue). Then loop back
+					// around instead of returning, so that call issues a
+					// real follow-up model request in this SAME Prompt
+					// loop.
+					s.drainQueuedPromptsIntoHistory()
+					continue
+				}
+				// cont is false with no error only when
+				// Config.MaxTokensContinuations is 0 (auto-continue
+				// disabled): fall through to the pre-fix return below,
+				// unchanged.
+			}
 			return asst, nil
 		}
 		results := s.runToolCalls(ctx, asst)
@@ -2040,35 +2179,48 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 		// turn that ends with no tool calls never reaches this point at
 		// all (see the two early returns above) — that path is unchanged
 		// and left entirely to the server's tail drain / the goal loop's
-		// own turn-boundary drain.
-		//
-		// DequeueAllPrompts drains the ENTIRE queue, FIFO, in one locked
-		// operation and journals every prompt.dequeued(injected) record
-		// BEFORE this method returns — so, exactly like the goal-boundary
-		// drain in goal.go, a crash between that journal write and this
-		// append can never double-deliver: the prompt is simply gone from
-		// the queue on replay. The rendered content is the same labeled
-		// "OPERATOR MESSAGES" block goal-turn-boundary injection uses
-		// (operatorMessagesBlock, queue.go), differing only in the
-		// trailing clause: this call site passes operatorContextTask, not
-		// operatorContextGoal, since this loop has no goal directive to
-		// hand back to — even when it happens to be driving a goal loop's
-		// worker turn (see operatorMessagesBlock's doc comment).
-		//
-		// This appends a REAL, durable user message straight into history
-		// (never an ephemeral segment like the managed-processes status
-		// block near streamTurn below) — appending only, never touching an
-		// earlier message, so any provider's prompt-cache prefix stays
-		// intact exactly per the managed-processes precedent, except this
-		// one really is delivered mail, not a disposable status line.
-		if queued := s.DequeueAllPrompts("injected"); len(queued) > 0 {
-			s.append(message.Message{
-				ID:        newID("msg"),
-				Role:      message.RoleUser,
-				Parts:     message.Parts{&message.Text{Text: strings.TrimSuffix(operatorMessagesBlock(queued, operatorContextTask), "\n")}},
-				CreatedAt: time.Now().UTC(),
-			})
-		}
+		// own turn-boundary drain. See drainQueuedPromptsIntoHistory's own
+		// doc comment for the mechanism (shared with the max_tokens
+		// auto-continue branch above, which needs the identical mid-turn
+		// steering opportunity for the same reason).
+		s.drainQueuedPromptsIntoHistory()
+	}
+}
+
+// drainQueuedPromptsIntoHistory drains the ENTIRE prompt queue, FIFO, in one
+// locked DequeueAllPrompts("injected") call and, if it returned anything,
+// appends it as a REAL, durable RoleUser message straight into history
+// (never an ephemeral segment like the managed-processes status block near
+// streamTurn below) — appending only, never touching an earlier message, so
+// any provider's prompt-cache prefix stays intact exactly per the
+// managed-processes precedent, except this one really is delivered mail,
+// not a disposable status line. DequeueAllPrompts journals every
+// prompt.dequeued(injected) record BEFORE this method returns, so a crash
+// between that journal write and this append can never double-deliver: the
+// prompt is simply gone from the queue on replay. The rendered content is
+// the same labeled "OPERATOR MESSAGES" block goal-turn-boundary injection
+// uses (operatorMessagesBlock, queue.go); this call site always passes
+// operatorContextTask, never operatorContextGoal, since runAgenticLoop has
+// no goal directive to hand back to — even when it happens to be driving a
+// goal loop's worker turn (see operatorMessagesBlock's doc comment).
+//
+// Two call sites in runAgenticLoop share this exact drain: the tool-call
+// boundary (after a StopToolUse round actually runs a tool) and the
+// max_tokens auto-continuation branch (right before looping back for
+// another follow-up call) — both are points where this SAME Prompt call is
+// about to issue another provider request, so both are valid mid-turn
+// steering opportunities. Before the max_tokens call site existed, an
+// operator prompt queued while a long truncated response was streaming
+// went undelivered for the entire continuation chain — this closes that gap
+// by reusing the identical mechanism rather than adding a second one.
+func (s *Session) drainQueuedPromptsIntoHistory() {
+	if queued := s.DequeueAllPrompts("injected"); len(queued) > 0 {
+		s.append(message.Message{
+			ID:        newID("msg"),
+			Role:      message.RoleUser,
+			Parts:     message.Parts{&message.Text{Text: strings.TrimSuffix(operatorMessagesBlock(queued, operatorContextTask), "\n")}},
+			CreatedAt: time.Now().UTC(),
+		})
 	}
 }
 
@@ -2186,6 +2338,17 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 	// retries streamTurnWithRetry runs — is known.
 	if seg := s.checkoutTaskNotificationsSegment(); seg != "" {
 		messages = withAmbientStatus(messages, seg)
+	}
+	// The max_tokens auto-continuation nudge (see continuationNudgeSegment,
+	// maybeAutoContinueMaxTokens): present only on the follow-up call(s)
+	// runAgenticLoop issues right after a max_tokens stop it decided to
+	// continue, absent on every ordinary turn. Deliberately NOT
+	// withAmbientStatus, unlike every segment above: see
+	// appendContinuationNudgeMessage's doc comment for why this one needs a
+	// genuine new trailing user message instead of gluing onto an existing
+	// one.
+	if seg := s.continuationNudgeSegment(); seg != "" {
+		messages = appendContinuationNudgeMessage(messages, seg)
 	}
 	req := &provider.Request{
 		Model:       params.Model,
@@ -2533,6 +2696,135 @@ func (s *Session) appendUnexecutedToolCallResults(asst *message.Message, stop pr
 		return
 	}
 	s.append(syntheticUnexecutedToolResults(asst, fmt.Sprintf(unexecutedToolCallStopReasonTextFmt, stop)))
+}
+
+// maxTokensContinuationNudgeFmt is the max_tokens auto-continuation nudge
+// text for the follow-up request runAgenticLoop issues right after a
+// max_tokens stop it decided to auto-continue (see
+// maybeAutoContinueMaxTokens). It rides a genuine new user-role message as a
+// *message.EngineContext part — see appendContinuationNudgeMessage's doc
+// comment for why a new message, not an existing one — the same trusted,
+// unforgeable PART TYPE every other ambient status segment uses (see
+// message.EngineContext), so neither a user- nor a tool-authored string can
+// ever spoof it. %d/%d are the 1-indexed continuation attempt and
+// Config.MaxTokensContinuations' bound, so the model (and anyone reading
+// the transcript) can see how much budget is left.
+const maxTokensContinuationNudgeFmt = "[continuation: your previous turn was cut off because it reached the max_tokens output limit (auto-continue %d of %d). Continue exactly where you left off. Produce your output in smaller pieces so this does not happen again.]"
+
+// continuationNudgeSegment returns the pending max_tokens auto-continuation
+// nudge, if any — the underlying state (pendingContinuationNudge) is
+// written by maybeAutoContinueMaxTokens rather than recomputed from live
+// external state, the one deliberate exception among the ambient segments
+// streamTurn assembles (see that function). A deliberate READ, not a
+// checkout: streamTurnWithRetry can call streamTurn more than once for one
+// logical attempt (a transient-error retry), and every one of those
+// attempts must see the identical nudge — runAgenticLoop is what clears
+// pendingContinuationNudge, once, after the WHOLE streamTurnWithRetry call
+// returns. See pendingContinuationNudge's own doc comment (Session struct)
+// for the full checkout/clear split, mirroring
+// checkoutTaskNotificationsSegment's reasoning in taskdelivery.go.
+func (s *Session) continuationNudgeSegment() string {
+	return s.pendingContinuationNudge
+}
+
+// appendContinuationNudgeMessage appends a genuine NEW message.RoleUser
+// message carrying seg as a *message.EngineContext part to the END of
+// messages, and returns the result. It is streamTurn's own throwaway,
+// per-request copy being extended (messages == s.History(), never
+// s.history itself), so — exactly like every other ambient segment — the
+// nudge never touches the durable log: a session reload, or any later,
+// unrelated request built from the same durable history, never sees it.
+//
+// This does NOT reuse withAmbientStatus, unlike every other ambient
+// segment. withAmbientStatus glues its segment onto the NEWEST EXISTING
+// RoleUser message, scanning backward from the end of messages — for the
+// process/MCP/goal/identity/task-notification segments that message really
+// is the newest thing in the conversation. It is not here: by the time a
+// max_tokens continuation request is built, the newest messages are the
+// truncated assistant turn and (if it carried a tool call)
+// appendUnexecutedToolCallResults' synthetic tool-role result, so
+// withAmbientStatus's scan lands on an EARLIER user message, still ending
+// the canonical request with RoleAssistant or RoleTool. Anthropic
+// serializes a request shaped that way as assistant PREFILL: some models
+// reject it outright with a permanent 400, and even a model that accepts it
+// sees a "continue" instruction that precedes, chronologically, the very
+// output it refers to (an adversarial review finding on the PR that
+// introduced auto-continue). Appending a whole new trailing user message
+// instead makes the request end exactly where a real continuation turn
+// should — genuinely after the truncated output — regardless of what
+// stands before it.
+func appendContinuationNudgeMessage(messages []message.Message, seg string) []message.Message {
+	return append(messages, message.Message{
+		ID:        newID("msg"),
+		Role:      message.RoleUser,
+		Parts:     message.Parts{&message.EngineContext{Text: seg}},
+		CreatedAt: time.Now().UTC(),
+	})
+}
+
+// maxTokensContinuationExhaustedError is runAgenticLoop's synthetic,
+// terminal error for a session that used Config.MaxTokensContinuations
+// max_tokens auto-continuations within one Prompt call (see maxTokensUsed
+// in runAgenticLoop — a per-Prompt budget, not a consecutive streak; see
+// its own doc comment for why). A model pathologically re-emitting
+// oversized output must not loop forever; this settles the turn with a
+// classified, session.error-visible record instead — never a silent,
+// parked-idle success. Mirrors emptyTurnError's exhaustion shape: the
+// discarded attempts already appended real (truncated) content and billed
+// real tokens, but the loop itself must stop and say so plainly, naming the
+// bound that tripped.
+//
+// provider.MarkPermanent wraps every value of this type at its one
+// construction site (maybeAutoContinueMaxTokens) — never left for a caller
+// to classify — so goal.go's promptTurnWithRetry fails fast on attempt 1
+// via its existing provider.AsPermanent branch instead of re-running the
+// goalWorkerRetries budget's worth of already-exhausted continuation
+// chains: with the default bound of 3, one worker attempt already makes 4
+// completed, fully billed max_tokens calls before this error is even
+// returned, and goalWorkerRetries (2 additional attempts) would otherwise
+// multiply that to 12 for one goal boundary (an adversarial review finding
+// on the PR that introduced auto-continue). Unlike a context-overflow
+// error, a permanent classification here does not clear the goal — the
+// condition that produced 3+1 consecutive max_tokens stops might not
+// recur on a later resume — it only stops THIS attempt from being retried;
+// see promptTurnWithRetry's provider.AsPermanent branch for the shared
+// parking behavior every other permanent-classified worker error already
+// gets.
+type maxTokensContinuationExhaustedError struct {
+	bound int
+}
+
+func (e *maxTokensContinuationExhaustedError) Error() string {
+	return fmt.Sprintf("max_tokens auto-continue exhausted: %d consecutive turns stopped with reason \"max_tokens\" (bound %d); the model may be pathologically re-emitting oversized output", e.bound+1, e.bound)
+}
+
+// maybeAutoContinueMaxTokens decides whether runAgenticLoop should re-issue
+// a follow-up model call after a turn stopped with provider.StopMaxTokens,
+// rather than settling the turn immediately — see Config.MaxTokensContinuations'
+// doc comment for the box harness-parallel-tools incident this exists to
+// close.
+//
+// *used is runAgenticLoop's maxTokensUsed, incremented here on every call:
+// a session with Config.MaxTokensContinuations == 0 returns (false, nil)
+// without touching it at all, preserving the exact pre-fix behavior for a
+// bare embedder engine.Config (auto-continue disabled entirely). A positive
+// bound increments the count and compares it against the bound: at or
+// under, it arms pendingContinuationNudge (naming this attempt number and
+// the bound) and returns (true, nil) so the caller loops back around; over
+// the bound, it returns (false, a provider.MarkPermanent-wrapped
+// *maxTokensContinuationExhaustedError) so the caller settles the turn with
+// a loud, classified failure instead of arming yet another doomed attempt.
+func (s *Session) maybeAutoContinueMaxTokens(used *int) (bool, error) {
+	bound := s.cfg.MaxTokensContinuations
+	if bound <= 0 {
+		return false, nil
+	}
+	*used++
+	if *used > bound {
+		return false, provider.MarkPermanent(&maxTokensContinuationExhaustedError{bound: bound})
+	}
+	s.pendingContinuationNudge = fmt.Sprintf(maxTokensContinuationNudgeFmt, *used, bound)
+	return true, nil
 }
 
 // turnHasActionableContent reports whether asst carries content a caller

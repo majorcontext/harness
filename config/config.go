@@ -115,6 +115,18 @@ type Config struct {
 	// PromptRetriesValue. It is deliberately small and short — see
 	// engine.Config.PromptRetries and streamTurnWithRetry.
 	PromptRetries *int `json:"prompt_retries,omitempty"`
+	// MaxTokensContinuations sets engine.Config.MaxTokensContinuations: how
+	// many CONSECUTIVE times the base interactive Prompt loop auto-continues
+	// a turn that stopped with provider reason "max_tokens" (the provider
+	// cut the model off mid-emission) instead of settling the turn — see the
+	// engine field's own doc comment for the box harness-parallel-tools
+	// incident this closes. A nil value (the field omitted) leaves the
+	// product default of 3 in place; an explicit 0 disables auto-continue
+	// entirely, reverting to the pre-fix behavior. A *int distinguishes
+	// "unset" (3) from "0" (off) across the project-config merge, exactly
+	// like PromptRetries above. Resolve it with
+	// MaxTokensContinuationsValue.
+	MaxTokensContinuations *int `json:"max_tokens_continuations,omitempty"`
 	// StreamIdleTimeoutS sets engine.Config.StreamIdleTimeout (in seconds)
 	// for every session this process creates: how long a streamed response
 	// may go without a delta before the engine's idle-stream watchdog aborts
@@ -897,6 +909,9 @@ func merge(base, over *Config) *Config {
 	if over.PromptRetries != nil {
 		out.PromptRetries = over.PromptRetries
 	}
+	if over.MaxTokensContinuations != nil {
+		out.MaxTokensContinuations = over.MaxTokensContinuations
+	}
 	if over.StreamIdleTimeoutS != 0 {
 		out.StreamIdleTimeoutS = over.StreamIdleTimeoutS
 	}
@@ -1133,6 +1148,24 @@ func (c *Config) PromptRetriesValue() int {
 		return defaultPromptRetries
 	}
 	return *c.PromptRetries
+}
+
+// defaultMaxTokensContinuations is the product default for how many
+// consecutive max_tokens stops the base interactive Prompt loop
+// auto-continues when `max_tokens_continuations` is unset (see
+// MaxTokensContinuationsValue and engine.Config.MaxTokensContinuations).
+const defaultMaxTokensContinuations = 3
+
+// MaxTokensContinuationsValue reports the base interactive Prompt loop's
+// max_tokens auto-continuation budget. The default is
+// defaultMaxTokensContinuations (3): only an explicit
+// `max_tokens_continuations: 0` disables auto-continue. A nil receiver (no
+// config) uses the default too.
+func (c *Config) MaxTokensContinuationsValue() int {
+	if c == nil || c.MaxTokensContinuations == nil {
+		return defaultMaxTokensContinuations
+	}
+	return *c.MaxTokensContinuations
 }
 
 // defaultToolResultInlineBytes / defaultToolResultRetainedBytes are the
