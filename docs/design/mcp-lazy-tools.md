@@ -477,9 +477,14 @@ The result is JSON:
 list. `truncated` is `total > len(matches)`, so the two fields never
 disagree.
 
-`loaded` reports whether the tool's schema is in the tools array RIGHT NOW.
-It is true for a tool of an eager server, and for a selected tool of a
-deferred server that the live catalog holds. A `pending` selection is not
+`loaded` is true for a tool of an eager server, and for a selected tool
+of a deferred server that the live catalog holds — the set-and-catalog
+test is the single authority. That usually coincides with "the schema is
+in the tools array right now", with one deliberate window: a `select` and
+a `search` in the SAME assistant message report the just-selected tool
+`loaded: true` although its schema only enters the array on the next
+request (§1) — the answer describes that next request, which is the one
+the model is deciding about. A `pending` selection is not
 loaded — no catalog holds it — and it never appears in a result anyway,
 since `search` ranks the live catalog only. It deliberately does not report set membership: what the
 model needs to know is whether it must call `select` before it calls the
@@ -528,7 +533,7 @@ BOTTOM, and the first row that matches wins:
 |---|---|---|
 | `already` | The name is in the selected set already, whatever its server's state. | no — it is already durable |
 | `selected` | The catalog holds the name. | yes, unless that server's selected mode is `eager` (see below) |
-| `pending` | The name's server is configured but not connected. | yes |
+| `pending` | The name's server is configured but not connected. | yes, unless that server's selected mode is `eager` — same gate as `selected` (see below) |
 | `missing` | The server is connected and has no such tool, the server is not configured, or the name is malformed. | no |
 
 A name that is not `mcp__<server>__<tool>` shaped, or that has an empty
@@ -597,8 +602,11 @@ Rules:
     reported `selected` — it is loaded and callable, which is what the
     model asked for — but nothing is recorded, because the record could
     never pay for itself. A repeat `select` reports `selected` again rather
-    than `already`, which is honest: the tool is loaded, and no set
-    membership was ever needed to make it so.
+    than `already` — honest, since no set membership made the tool loaded —
+    UNLESS the name is already in the restored selected set (a session
+    created under `lazy`, selected, then reloaded under `eager` keeps its
+    set, and the bucket order tests `already` first): then it reports
+    `already`, equally honest.
 
     Two configurations reach that state, and the rule covers both: a server
     pinned `eager` by `MCPToolLoadingByServer`, and a server that simply
@@ -707,8 +715,10 @@ array grows at the same instant.
   main one.
 - **An unconnected server.** Unchanged. Its tools are in no catalog,
   `mcpStatusSegment` names it as degraded, and `mcp(action="connect")`
-  remains the explicit re-trigger. Once it connects, its tools appear in
-  the catalog listing on the very next request.
+  remains the explicit re-trigger. Once it connects, its tools appear on
+  the very next request — in the catalog listing if deferred, or in the
+  tools array with full schemas if the server's resolved mode registers
+  them eagerly (`eager`, or `auto` below the threshold).
 - **`select` for a tool of a degraded server.** The name is `pending`: it
   is journaled, and it arms itself when the server reconnects (§4). The
   ambient status block already tells the model why the server is down.
