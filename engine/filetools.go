@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -178,6 +179,42 @@ func (s *Session) resolvePath(path string) string {
 	return filepath.Join(s.cfg.WorkDir, path)
 }
 
+// recordRead records that this session has seen resolvedPath's raw on-disk
+// bytes hash to hash, either because read_file just read them or because
+// write_file/edit_file just wrote them. resolvedPath must already be an
+// s.resolvePath output — every caller in this file passes one, so the map
+// never keys on a raw, unresolved tool argument. See the readHashes field
+// doc comment (engine.go) and the "write_file read-before-overwrite guard"
+// section of AGENTS.md for the full design.
+func (s *Session) recordRead(resolvedPath string, hash [sha256.Size]byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.readHashes[resolvedPath] = hash
+}
+
+// readHashFor reports the hash last recorded for resolvedPath and whether
+// this session has ever read or written it at all.
+func (s *Session) readHashFor(resolvedPath string) (hash [sha256.Size]byte, everRead bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	hash, everRead = s.readHashes[resolvedPath]
+	return hash, everRead
+}
+
+// hashFileContent returns the sha256 hash of path's complete current bytes,
+// read fresh from disk. write_file uses it to detect whether an
+// already-read file changed on disk since this session last saw it (a
+// concurrent writer, an external process, a `bash` command) — the recorded
+// hash alone is not enough, since a stale record would let a write through
+// against content the session's last read no longer describes.
+func hashFileContent(path string) ([sha256.Size]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	return sha256.Sum256(data), nil
+}
+
 func readFileTool() Tool {
 	return Tool{
 		Def: provider.ToolDef{
@@ -215,6 +252,19 @@ func readFileTool() Tool {
 			if err != nil {
 				return nil, fmt.Errorf("read_file: %s: %w", path, err)
 			}
+			rawBytes := content.TextData
+			if content.IsImage {
+				rawBytes = content.ImageData
+			}
+			// Record the read-before-overwrite guard's hash from the RAW
+			// bytes readPathContent already read off disk, never the
+			// offset/limit-sliced text below — read_file always reads the
+			// whole file regardless of what window it goes on to display.
+			// This runs for every successful read, including one whose
+			// requested offset later turns out to be past end-of-file: the
+			// disk read itself still happened, before the model made any
+			// request the guard needs to have honored.
+			s.recordRead(path, sha256.Sum256(rawBytes))
 			if content.IsImage {
 				summary := fmt.Sprintf("image (%s), %d bytes, %dx%d pixels", content.MediaType, len(content.ImageData), content.Width, content.Height)
 				return message.Parts{
@@ -271,7 +321,7 @@ func writeFileTool() Tool {
 	return Tool{
 		Def: provider.ToolDef{
 			Name:        "write_file",
-			Description: "Write content to a file, creating parent directories as needed and overwriting any existing file. Prefer this over shell redirection or heredocs for creating and rewriting files. Relative paths resolve against the session working directory.",
+			Description: "Write content to a file, creating parent directories as needed. Overwriting an existing file requires having read it first with read_file this session, with no changes on disk since — use edit_file for a targeted change, or read_file then write_file to intentionally replace it. Relative paths resolve against the session working directory.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
@@ -290,12 +340,39 @@ func writeFileTool() Tool {
 				return nil, fmt.Errorf("write_file: missing path or content argument")
 			}
 			path := s.resolvePath(in.Path)
+
+			// Read-before-overwrite guard: only an EXISTING regular file is
+			// gated — creation is write_file's main job, so a path os.Stat
+			// cannot resolve to an existing regular file (missing, or any
+			// stat error) falls straight through unguarded, exactly as
+			// before this guard existed. See AGENTS.md's "write_file
+			// read-before-overwrite guard" section for the full design.
+			if info, statErr := os.Stat(path); statErr == nil && !info.IsDir() {
+				recorded, everRead := s.readHashFor(path)
+				if !everRead {
+					return nil, fmt.Errorf("write_file: %s exists and has not been read this session; read it first (or use edit_file)", path)
+				}
+				current, err := hashFileContent(path)
+				if err != nil {
+					return nil, fmt.Errorf("write_file: %w", err)
+				}
+				if current != recorded {
+					return nil, fmt.Errorf("write_file: %s changed on disk since it was read; read it again before overwriting", path)
+				}
+			}
+
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				return nil, fmt.Errorf("write_file: %w", err)
 			}
 			if err := os.WriteFile(path, []byte(*in.Content), 0o644); err != nil {
 				return nil, fmt.Errorf("write_file: %w", err)
 			}
+			// The bytes just written are now, by definition, what this
+			// session has "seen" at this path — record/update the hash so
+			// an immediate follow-up write to the SAME path (this session
+			// overwriting its own just-written content) never spuriously
+			// re-triggers the guard above.
+			s.recordRead(path, sha256.Sum256([]byte(*in.Content)))
 			s.emitFileEdited(path)
 			return message.Parts{&message.Text{Text: fmt.Sprintf("wrote %d bytes to %s", len(*in.Content), path)}}, nil
 		},
@@ -354,6 +431,13 @@ func editFileTool() Tool {
 			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 				return nil, fmt.Errorf("edit_file: %w", err)
 			}
+			// Update the read-before-overwrite guard's hash to the new
+			// content: edit_file's own exact-match requirement already
+			// proves the model saw the pre-edit content, and the file now
+			// holds exactly what this session just wrote — a later
+			// write_file to this same path must not have to read_file
+			// again to learn what edit_file already put there.
+			s.recordRead(path, sha256.Sum256([]byte(content)))
 			s.emitFileEdited(path)
 			return message.Parts{&message.Text{Text: fmt.Sprintf("replaced %d occurrence(s) in %s", replaced, path)}}, nil
 		},

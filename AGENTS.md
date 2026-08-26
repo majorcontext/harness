@@ -209,6 +209,75 @@ issue #129. Until it lands, a model with no vision support receives the
 image Blob exactly as any vision-capable model does; how it handles that
 block is between the model and its provider.
 
+### write_file read-before-overwrite guard
+
+`write_file` (`engine/filetools.go`) refuses to overwrite an EXISTING file
+the session has not read. Before this guard, `write_file` overwrote any
+existing file unconditionally — a model could destroy a file it never
+opened, with no recovery path. `edit_file` never had this hole: its
+`old_string` match is exact-content-required by construction, so it cannot
+blindly clobber unseen content. Claude Code and opencode both close the
+same gap on their own write tools (opencode's is a literal `"You must read
+file X before overwriting it"` error); this guard gives `write_file` the
+same property.
+
+`Session.recordRead`/`readHashFor` (`engine/filetools.go`) track, per live
+session and in memory only, every path `read_file` has read or
+`write_file`/`edit_file` has written, keyed on the RESOLVED absolute path
+(`s.resolvePath`'s output, never the raw tool argument — two different
+relative arguments that resolve to the same file must not be tracked as two
+separate paths), mapped to the sha256 hash of that path's raw on-disk bytes
+at the moment of that read or write. `read_file` hashes the complete raw
+file bytes it already read off disk for its own content classification
+(`readPathContent`'s `TextData`/`ImageData`) — never the offset/limit-sliced
+text it returns to the model, since `read_file` always reads the whole file
+regardless of what window it displays.
+
+`write_file` on a path that `os.Stat` resolves to an existing regular file
+requires, in order: (1) the path is present in this session's read set —
+absent means `write_file: %s exists and has not been read this session;
+read it first (or use edit_file)`; (2) hashing the path's CURRENT on-disk
+bytes fresh (never trusting the recorded hash's age) matches the recorded
+hash — a mismatch means `write_file: %s changed on disk since it was read;
+read it again before overwriting`. A path `os.Stat` cannot resolve to an
+existing regular file (missing, or a stat error) is unguarded — creation is
+`write_file`'s main job, and there is no prior content to protect. A
+successful `write_file` or `edit_file` records/updates the written path's
+hash to the new content's hash, so a write immediately followed by another
+write to the SAME path (the assistant overwriting its own just-written
+content, or an `edit_file` followed by a `write_file` on the same path)
+never spuriously re-triggers the guard — the session already knows exactly
+what is on disk because it just put it there.
+
+The read set is runtime-only: never persisted, never folded by
+`LoadSession`. A reloaded session starts with an EMPTY read set, so a
+resumed session must `read_file` a path again before `write_file` can
+overwrite it — even a path the session genuinely read in a prior process
+life. This is deliberately conservative and matches the guard's purpose:
+the guard exists to stop an overwrite of content the model never actually
+saw THIS session, and a resumed model has no live memory of raw file bytes
+from a prior process either, only whatever text happened to land in the
+persisted transcript. The read set lives on `Session` state, not `Config`,
+so `configSnapshot` (used to seed a spawned child's config) never copies
+it — a spawned child starts with its own empty read set, correctly, since
+it is a different session that has read nothing yet.
+
+Tool calls execute strictly sequentially today
+(`Session.runToolCalls`/`runToolCall`, `engine/engine.go`), so the read
+set's own `sync.Mutex`-guarded map access is sufficient protection now.
+A future parallel tool executor must serialize concurrent
+`write_file`/`edit_file` calls against the SAME resolved path — matching
+`edit_file`'s existing same-path safety requirement — rather than relying
+on the map's per-operation lock alone, which does not cover the
+check-current-hash-then-write sequence as one atomic unit against a
+concurrent writer to the same path.
+
+`bash` writes (a model redirecting output to an existing file via a shell
+command) are explicitly OUT of scope: harness cannot classify an arbitrary
+shell command as a file write versus anything else it might do, so this
+guard covers only the two built-in tools that make a structured, typed
+claim to write a file.
+
 ### Base loop retry
 
 The base interactive `Prompt` loop retries a transient provider error itself,
