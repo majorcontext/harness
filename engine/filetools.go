@@ -171,6 +171,15 @@ func readPathContent(path string) (fileContent, error) {
 
 // resolvePath resolves a tool path argument against the session working
 // directory. Absolute paths pass through unchanged.
+// resolvePath maps a tool argument to the path the tool opens. Every file
+// tool MUST route its path argument through it.
+//
+// That is load-bearing beyond convenience: filePathKey builds the batch
+// executor's per-file exclusion key from resolvePath's own output (see
+// filePathKey), so the key names the file a tool touches only while every
+// tool resolves the same way. A new file tool that resolved a path by any
+// other route would key one file under two names, and a concurrent write
+// and edit on it would stop being serialized.
 func (s *Session) resolvePath(path string) string {
 	if filepath.IsAbs(path) {
 		return path

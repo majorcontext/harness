@@ -308,6 +308,15 @@ const (
 // A call ALREADY RUNNING when the abort lands is not interrupted here: it
 // owns its own ctx and returns whatever it returns. This gate governs
 // admission only.
+//
+// A refused call emits NO tool events. Both EventToolStart and
+// EventToolEnd fire inside runToolCall (engine.go), which this gate
+// short-circuits, so an aborted batch's refused calls appear in the
+// transcript as tool_result parts with no matching event pair. That is
+// deliberate — the events describe an execution that never happened — and
+// it is safe because an aborted turn's event stream is already incomplete
+// by definition. The transcript, which the provider validates, still
+// pairs every tool_use with a tool_result.
 func (s *Session) admitAndRun(ctx context.Context, tc *message.ToolCall) (message.Parts, bool) {
 	if ctx.Err() != nil {
 		return message.Parts{&message.Text{Text: toolCallCanceledText}}, true
