@@ -96,19 +96,74 @@ const PendingThinkReply = "pending-think reply landed"
 // path tools/monitor's transcript "error" entry (see index.html's
 // pushIfNewError) exists to render.
 //
-// initialDelay, when set, is slept through before the turn's FIRST event is
-// returned (see scriptedStream.Next) — used exclusively by
-// pendingThinkTurns to give the "Thinking…" pending-assistant indicator
-// scenario (tools/monitor/index.html's transcriptModel "pending" kind) a
-// deterministic, CI-sane window in which the turn is genuinely
-// busy-with-nothing-to-show-yet, rather than racing a real turn's own
-// near-instant streaming start (every other scripted turn in this file
-// streams its first event essentially immediately).
+// gated, when true, holds the turn's FIRST event until the TEST releases
+// this session (see turnGates and scriptedStream.Next) — used exclusively
+// by pendingThinkTurns, so the "Thinking…" pending-assistant indicator
+// scenario (tools/monitor/index.html's transcriptModel "pending" kind) can
+// observe a genuinely busy-with-nothing-to-show-yet turn.
+//
+// This replaces a fixed initialDelay, and the replacement is the whole
+// point. A sleep makes the observation window a RACE: the test has to poll,
+// re-render, and see the indicator before the sleep expires, so a slow
+// machine loses the window and the assertion fails. That window was widened
+// once already (400ms -> 1500ms) after a 1-in-4 CI flake, and it still
+// failed about half the time on a 2-core runner under full-suite load. A
+// gate has no window to lose: the turn stays busy until the test says it is
+// done looking, which is AGENTS.md's rule that a timeout is a failure
+// bound, never a synchronization device.
 type scriptedTurn struct {
-	events       []provider.Event
-	err          error
-	initialDelay time.Duration
+	events []provider.Event
+	err    error
+	gated  bool
 }
+
+// turnGates holds one release channel per SESSION id (provider.Request's
+// SessionKey, which engine.Session.streamTurn sets to the session id). A
+// gated turn blocks on its session's channel until the control endpoint
+// closes it.
+//
+// Release-before-wait is safe and expected: gateFor creates the channel on
+// whichever side asks first, and release closes it, so a test that releases
+// before the stream even starts simply finds an already-closed channel.
+type turnGates struct {
+	mu sync.Mutex
+	m  map[string]chan struct{}
+}
+
+func newTurnGates() *turnGates { return &turnGates{m: map[string]chan struct{}{}} }
+
+func (g *turnGates) gateFor(session string) chan struct{} {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	ch, ok := g.m[session]
+	if !ok {
+		ch = make(chan struct{})
+		g.m[session] = ch
+	}
+	return ch
+}
+
+// release opens the named session's gate. Idempotent: a second release for
+// the same session is a no-op rather than a double-close panic.
+func (g *turnGates) release(session string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	ch, ok := g.m[session]
+	if !ok {
+		ch = make(chan struct{})
+		g.m[session] = ch
+	}
+	select {
+	case <-ch: // already released
+	default:
+		close(ch)
+	}
+}
+
+// gatedTurnMaxWait bounds how long a gated turn waits for its release. It is
+// a FAILURE bound, not a delay: the happy path returns the instant the test
+// releases. It exists only so a test that forgets to release fails with a
+// streamed turn instead of hanging until the suite's own timeout.
 
 // scriptedProvider serves one pre-built scriptedTurn per call, numbered from
 // 0; calls beyond the scripted turns repeat the last one (defensive — a
@@ -122,11 +177,13 @@ type scriptedProvider struct {
 	name  string
 	call  int
 	turns []scriptedTurn
+	// gates is non-nil only for a provider with gated turns; see turnGates.
+	gates *turnGates
 }
 
 func (p *scriptedProvider) Name() string { return p.name }
 
-func (p *scriptedProvider) Stream(_ context.Context, _ *provider.Request) (provider.Stream, error) {
+func (p *scriptedProvider) Stream(_ context.Context, req *provider.Request) (provider.Stream, error) {
 	p.mu.Lock()
 	n := p.call
 	if n >= len(p.turns) {
@@ -134,17 +191,32 @@ func (p *scriptedProvider) Stream(_ context.Context, _ *provider.Request) (provi
 	}
 	p.call++
 	p.mu.Unlock()
-	return &scriptedStream{turn: p.turns[n]}, nil
+	st := &scriptedStream{turn: p.turns[n]}
+	// SessionKey is the session id (engine.Session.streamTurn sets it), so a
+	// gated turn waits for ITS OWN session's release — two sessions sharing
+	// this provider instance never release each other.
+	if st.turn.gated && p.gates != nil && req != nil && req.SessionKey != "" {
+		st.gate = p.gates.gateFor(req.SessionKey)
+	}
+	return st, nil
 }
 
 type scriptedStream struct {
 	turn scriptedTurn
 	i    int
+	// gate, when non-nil, holds the FIRST event until the test releases this
+	// session (see turnGates).
+	gate chan struct{}
 }
 
 func (s *scriptedStream) Next() (provider.Event, error) {
-	if s.i == 0 && s.turn.initialDelay > 0 {
-		time.Sleep(s.turn.initialDelay)
+	if s.i == 0 && s.gate != nil {
+		t := time.NewTimer(gatedTurnMaxWait)
+		defer t.Stop()
+		select {
+		case <-s.gate:
+		case <-t.C: // see gatedTurnMaxWait: a failure bound, never a delay
+		}
 	}
 	if s.i >= len(s.turn.events) {
 		if s.turn.err != nil {
@@ -217,11 +289,13 @@ func quickTurns(reply string) []scriptedTurn {
 // (ProvPendingThink) a deterministic window in which the turn is genuinely
 // busy with nothing to show yet, without racing a real turn's own
 // near-instant streaming start.
-func pendingThinkTurns(delay time.Duration, reply string) []scriptedTurn {
+func pendingThinkTurns(reply string) []scriptedTurn {
 	turns := quickTurns(reply)
-	turns[0].initialDelay = delay
+	turns[0].gated = true
 	return turns
 }
+
+const gatedTurnMaxWait = 30 * time.Second
 
 // capTurns builds a single turn with MANY streaming text deltas (no tool
 // call — keeps this fast, no real bash sleep needed) so its live event
@@ -293,6 +367,10 @@ type Stub struct {
 	// server.Server as BoxBase: every OTHER scenario in this package
 	// depends on BoxBase actually enforcing its RunToken.
 	UnauthBase string
+
+	// gates releases a gated scripted turn (see turnGates); the
+	// /__control/release-turn route below drives it.
+	gates *turnGates
 
 	boxAddr    string // fixed host:port the box listens on — reused across Kill/Restart
 	boxHTTP    *http.Server
@@ -393,6 +471,7 @@ func Start() (*Stub, error) {
 		return nil, err
 	}
 
+	gates := newTurnGates()
 	reg := provider.Registry{
 		ProvQuickIdle:  &scriptedProvider{name: ProvQuickIdle, turns: quickTurns("hello — this is the idle-session reply")},
 		ProvToolBoard:  &scriptedProvider{name: ProvToolBoard, turns: toolTurns("thinking it over", "looking into it", "tc-board", 0.6, "all set")},
@@ -405,16 +484,13 @@ func Start() (*Stub, error) {
 		ProvStreamError:  &scriptedProvider{name: ProvStreamError, turns: errorTurns("starting the request", StreamErrorText)},
 		ProvReconnectGap: &scriptedProvider{name: ProvReconnectGap, turns: quickTurns(ReconnectGapReply)},
 		ProvLiveCap:      &scriptedProvider{name: ProvLiveCap, turns: capTurns(6)},
-		// The delay is real_e2e.mjs's observation window for the "Thinking…"
-		// pending-assistant indicator (Change 2 — see pendingThinkTurns'
-		// doc comment): the turn must stay busy-with-nothing-to-show-yet
-		// long enough for the test to poll and see the indicator before
-		// streaming content arrives and replaces it. At 400ms this was
-		// comparable to the monitor page's own SSE-delivery-plus-render
-		// latency under full-suite CPU contention, so the poll sometimes
-		// landed after content had already streamed in — about a 1-in-4
-		// flake. 1500ms widens the window; no assertion changed.
-		ProvPendingThink: &scriptedProvider{name: ProvPendingThink, turns: pendingThinkTurns(1500*time.Millisecond, PendingThinkReply)},
+		// This turn is GATED, not delayed: it stays
+		// busy-with-nothing-to-show-yet until real_e2e.mjs has finished
+		// observing the "Thinking…" indicator and posts
+		// /__control/release-turn for its own session. See scriptedTurn's
+		// doc comment for why the fixed delay this replaces could not be
+		// made reliable by widening it.
+		ProvPendingThink: &scriptedProvider{name: ProvPendingThink, turns: pendingThinkTurns(PendingThinkReply), gates: gates},
 	}
 
 	var srv *server.Server
@@ -531,6 +607,7 @@ func Start() (*Stub, error) {
 	}
 
 	stub := &Stub{
+		gates:           gates,
 		BoxBase:         "http://" + boxLn.Addr().String(),
 		MonitorBase:     "http://" + monitorLn.Addr().String(),
 		Token:           RunToken,
@@ -571,6 +648,19 @@ func Start() (*Stub, error) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		w.WriteHeader(http.StatusOK)
+	})
+	// release-turn opens one session's gated turn (see turnGates): the test
+	// calls it once it has finished observing the busy-with-no-content
+	// window, so the window is bounded by the OBSERVATION rather than by a
+	// clock the test has to outrun.
+	mux.HandleFunc("POST /__control/release-turn", func(w http.ResponseWriter, r *http.Request) {
+		sid := r.URL.Query().Get("session")
+		if sid == "" {
+			http.Error(w, "missing session query param", http.StatusBadRequest)
+			return
+		}
+		stub.gates.release(sid)
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("POST /__control/fail-message", func(w http.ResponseWriter, r *http.Request) {

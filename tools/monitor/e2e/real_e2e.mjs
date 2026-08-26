@@ -38,6 +38,17 @@ if (!boxBase || !monitorBase || !token || !unauthBase) {
 }
 console.error("box:", boxBase, "monitor:", monitorBase, "unauth:", unauthBase);
 
+// releaseTurn opens a GATED scripted turn (stub.go's turnGates): the
+// ProvPendingThink scenarios below hold their turn's first event until the
+// test has finished observing the "Thinking…" indicator's
+// busy-with-no-content window. The window is therefore bounded by the
+// observation itself, never by a clock the test has to outrun — a fixed
+// delay here flaked on CI even after being widened once.
+async function releaseTurn(sessionID) {
+  const r = await fetch(monitorBase + "/__control/release-turn?session=" + encodeURIComponent(sessionID), { method: "POST" });
+  assert.equal(r.status, 200, "control-plane release-turn for " + sessionID);
+}
+
 const here = dirname(fileURLToPath(import.meta.url));
 const committedIndexHTML = readFileSync(join(here, "..", "index.html"), "utf8");
 
@@ -504,6 +515,11 @@ async function main() {
   assert.equal(assistantTexts(doc).length, 0, "no assistant content has streamed yet — this IS the genuinely empty window the indicator exists for");
   console.error("PASS: the Thinking… pending indicator appears while a real turn is busy with no content yet");
 
+  // Observation done: let the turn stream. Until this call the turn is
+  // genuinely busy with nothing to show, so the three assertions above race
+  // nothing at all.
+  await releaseTurn(pendID);
+
   await waitFor(() => assistantTexts(doc).some((t) => t.includes(PENDING_THINK_REPLY)), { timeoutMs: 4000, label: "assistant reply streams in for the pending-indicator session" });
   assert.equal(doc.querySelector("#transcript .pending-indicator"), null, "the pending indicator must be gone the instant streaming text is present");
   console.error("PASS: the pending indicator is dismissed the instant streaming text is present");
@@ -535,29 +551,30 @@ async function main() {
   composerInput.value = orderText;
   composerForm.dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
 
-  // Wait for the RELIABLE, always-present element: the operator's own
-  // optimistic entry, rendered synchronously on submit. The transient
-  // "Thinking…" indicator is then checked OPPORTUNISTICALLY (only if still
-  // present) rather than waited-for: on slower/differently-timed CI runners
-  // the turn can stream its first token before this observation point,
-  // dismissing the indicator. The operator-precedes-streaming-reply
-  // assertion just below verifies the SAME DOM-order invariant regardless,
-  // so a missed indicator window must never fail the run — hard-waiting for
-  // the indicator here made this scenario flake on CI.
+  // Both elements are now RELIABLY present: the operator's own optimistic
+  // entry renders synchronously on submit, and this session's turn is gated
+  // (stub.go's turnGates) so it cannot stream — and so cannot dismiss the
+  // indicator — before this observation point. The indicator check was
+  // previously opportunistic, skipped when the turn had already streamed,
+  // because the window was a fixed delay the runner could outrun; with the
+  // gate there is no window to lose, so the assertion is unconditional
+  // again.
   const orderOperatorEl = await waitFor(
     () => [...doc.querySelectorAll("#transcript .msg.user .body p")].find((p) => p.textContent === orderText),
     { timeoutMs: 3000, label: "the idle-send's optimistic operator entry appears" }
   );
-  const pendingIndicatorEl = doc.querySelector("#transcript .pending-indicator");
-  if (pendingIndicatorEl) {
+  const pendingIndicatorEl = await waitFor(
+    () => doc.querySelector("#transcript .pending-indicator"),
+    { timeoutMs: 3000, label: "the idle-send's own pending indicator appears (its turn is gated, so it cannot have streamed yet)" }
+  );
+  {
     const posVsPending = orderOperatorEl.compareDocumentPosition(pendingIndicatorEl);
     assert.ok(
       posVsPending & w.Node.DOCUMENT_POSITION_FOLLOWING,
       "the operator entry must precede the Thinking… indicator in DOM order — the turn's response must render below the operator's own message, never above it"
     );
     console.error("PASS: an idle-send's optimistic operator entry precedes its own turn's pending indicator in DOM order");
-  } else {
-    console.error("NOTE: Thinking… indicator already dismissed by observation time — DOM order verified against the streaming reply below");
+    await releaseTurn(orderID);
   }
 
   await waitFor(() => assistantTexts(doc).some((t) => t.includes(PENDING_THINK_REPLY)), { timeoutMs: 4000, label: "assistant reply streams in for the DOM-order check" });
