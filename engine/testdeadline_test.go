@@ -85,10 +85,37 @@ func testDeadline(t *testing.T) (deadline time.Time, ok bool) {
 // re-read state after each wakeup wants a loop helper (waitForStatus,
 // flushWatch.waitUntil) instead. A caller with nothing to assert about the
 // value just discards it.
+//
+// The non-blocking pre-check gives this helper the same "an already
+// satisfied wait never fails" property the loop helpers get from testing
+// their condition before their own select. Go picks uniformly at random
+// among ready select cases, so without it a channel that has ALREADY
+// delivered could still lose the coin flip to a ready giveUp and be
+// reported as a deadline failure that never happened. That needs giveUp to
+// be ready too — failAfterTestDeadline clamps its timer to zero for a wait
+// that starts within deadlineReportMargin of the binary's whole -timeout —
+// so it is far-fetched for a package that runs in seconds. It is still the
+// exact asymmetry these helpers exist to remove.
 func awaitSignal[T any](t *testing.T, ch <-chan T, msg string) T {
 	t.Helper()
 	giveUp, stop := failAfterTestDeadline(t)
 	defer stop()
+	return awaitSignalUntil(t, ch, giveUp, msg)
+}
+
+// awaitSignalUntil is awaitSignal with its give-up channel supplied rather
+// than derived. It exists so the pre-check above can be tested: a caller
+// can hand it a give-up channel that is ALREADY ready, which is the only
+// state in which the two select cases race, and which
+// failAfterTestDeadline will not produce on any run that is not already
+// out of time.
+func awaitSignalUntil[T any](t *testing.T, ch <-chan T, giveUp <-chan time.Time, msg string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	default:
+	}
 	select {
 	case v := <-ch:
 		return v
@@ -96,5 +123,31 @@ func awaitSignal[T any](t *testing.T, ch <-chan T, msg string) T {
 		t.Fatalf("%s (waited to the test binary's own deadline)", msg)
 		var zero T
 		return zero
+	}
+}
+
+// TestAwaitSignalPrefersAnAlreadyDeliveredValue pins awaitSignal's
+// "an already satisfied wait never fails" property.
+//
+// Go picks uniformly at random among ready select cases. Without the
+// non-blocking pre-check, a channel that has already delivered loses that
+// coin flip about half the time whenever the give-up channel is ready too,
+// and the helper reports a deadline failure for a signal that did in fact
+// arrive.
+//
+// The give-up channel is supplied ready, through awaitSignalUntil, because
+// that is the only state in which the two cases race —
+// failAfterTestDeadline produces it only for a wait starting within
+// deadlineReportMargin of the binary's whole -timeout. 200 iterations put
+// the chance of a missed regression below 2^-200.
+func TestAwaitSignalPrefersAnAlreadyDeliveredValue(t *testing.T) {
+	ready := make(chan time.Time)
+	close(ready)
+	for i := 0; i < 200; i++ {
+		ch := make(chan int, 1)
+		ch <- 42
+		if got := awaitSignalUntil(t, (<-chan int)(ch), ready, "signal never arrived"); got != 42 {
+			t.Fatalf("iteration %d: awaitSignalUntil = %d, want 42", i, got)
+		}
 	}
 }
