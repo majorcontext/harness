@@ -200,14 +200,21 @@ func TestSubagentSpawnDeliversViaQueueOrResume(t *testing.T) {
 	// its terminal outcome alone (Cancel never overwrites an
 	// already-terminal node's status). Accept either terminal outcome;
 	// only a still-"running" status after cancel_tree would be a bug.
+	// lastLineageStatus is written on EVERY attempt, including one that
+	// read a nil lineage, so the failure message reports the FINAL poll's
+	// value — what the pre-migration loop printed. Assigning it only
+	// inside the non-nil branch would instead report the last non-nil
+	// status ever seen, which is a different value the moment lineage
+	// flaps back to nil.
 	var lastLineageStatus string
 	if !testpoll.UntilNoT(5*time.Second, func() bool {
 		_, s := p.getSessionLineage(child2.ID)
-		if s.Lineage != nil {
-			lastLineageStatus = s.Lineage.Status
-			return s.Lineage.Status == "canceled" || s.Lineage.Status == "done"
+		lastLineageStatus = ""
+		if s.Lineage == nil {
+			return false
 		}
-		return false
+		lastLineageStatus = s.Lineage.Status
+		return s.Lineage.Status == "canceled" || s.Lineage.Status == "done"
 	}, 20*time.Millisecond) {
 		t.Fatalf("child2 lineage.status = %q after cancel_tree, want canceled or done", lastLineageStatus)
 	}
