@@ -920,10 +920,24 @@ func (s *Session) ensureLog() error {
 		// under a mid-write crash is a truncated final line, which
 		// LoadSession already tolerates.
 		var buf bytes.Buffer
-		for _, rec := range []record{
+		headerRecs := []record{
 			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir, ParentSession: s.cfg.ParentSession, TaskParentID: s.cfg.TaskParentID, TaskAgentType: s.cfg.TaskAgentType, TaskToolNames: taskToolNamesPtr(s.cfg.TaskToolNames), TaskDepth: s.cfg.TaskDepth, Effort: s.effort},
 			{Type: recModel, Model: s.model},
-		} {
+		}
+		// A selection made before the log existed has no other durable
+		// carrier: persistMCPToolsSelected no-ops until logStarted, and
+		// unlike model/effort the header record has no selected-tools
+		// slot. Capture the live set here, exactly as the header captures
+		// the live model and effort, so a pre-log select survives reload.
+		if len(s.mcpSelected) > 0 {
+			names := make([]string, 0, len(s.mcpSelected))
+			for name := range s.mcpSelected {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			headerRecs = append(headerRecs, record{Type: recMCPToolsSelected, MCPTools: names})
+		}
+		for _, rec := range headerRecs {
 			b, err := json.Marshal(rec)
 			if err != nil {
 				f.Close()

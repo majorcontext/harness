@@ -355,3 +355,37 @@ func TestSelectionIsInertWhenReloadedEager(t *testing.T) {
 		t.Fatalf("eager reload registered %d MCP defs, want all 3", got)
 	}
 }
+
+// TestPreLogSelectionSurvivesReload closes the gap review found on this
+// PR: a selection made BEFORE the log exists (persistMCPToolsSelected
+// no-ops until logStarted) must still reach disk. ensureLog captures the
+// live selected set into the header write, exactly as it captures the
+// live model and effort, so the first turn's log creation carries the
+// earlier selection.
+func TestPreLogSelectionSurvivesReload(t *testing.T) {
+	dir := t.TempDir()
+	reg := &lazyFakeRegistry{names: []string{"a"}, connected: map[string]bool{"a": true}, tools: lazyTools("a", 3)}
+	cfg := lazyPersistCfg(dir, reg)
+
+	s := NewSession(cfg)
+	want := mcpToolName("a", "tool01")
+	// Select while no log exists yet: the persist path is a no-op here.
+	if added := s.markMCPToolsSelected(want); len(added) != 1 {
+		t.Fatalf("markMCPToolsSelected = %v", added)
+	}
+	// First prompt creates the log; the header write must carry the set.
+	if _, err := s.Prompt(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PersistErr(); err != nil {
+		t.Fatalf("PersistErr = %v", err)
+	}
+
+	re, err := LoadSession(cfg, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !re.mcpSelected[want] {
+		t.Fatalf("reloaded session lost the pre-log selection %q; mcpSelected = %v", want, re.mcpSelected)
+	}
+}
