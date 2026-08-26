@@ -335,7 +335,7 @@ loop also emits `goal.*` engine events so the server journals them. Config
 `POST /session/{id}/goal`.
 
 A worker-turn error (`s.Prompt` failing) is retried by `promptTurnWithRetry`
-on one of THREE independent budgets, chosen by classification via
+on one of FOUR independent budgets, chosen by classification via
 `provider.AsRetryable` — never by matching error text.
 
 One class skips every budget. Before it selects a budget,
@@ -353,6 +353,24 @@ select a more accurate classified reason and tier name
 (`classifyGoalWorkerError`, `goalWorkerParkedError`), so an operator can
 tell a single-attempt park from `goalWorkerRetries`+1 identical attempts.
 
+One shape is wrapped `provider.MarkPermanent` by the adapter but is
+DELIBERATELY EXCLUDED from this fail-fast branch: `provider.AsProviderExhausted`
+— an ACCOUNT-level usage/quota wall (PR #174's `provider.ErrKindProviderExhausted`,
+originally added for task-child resumability; see `engine/session_manager.go`'s
+`FailKindProviderExhausted`). An adapter marks it permanent for ordinary
+HTTP-retry purposes (no short backoff schedule outlives a monthly quota),
+but a wall lifts on its own, unchanged, so treating it as a doomed malformed
+request silently kills goal supervision on the very first usage-limit
+rejection. Live evidence: box bx-01m0x8996 parked after "1 permanent-tier
+attempt(s)" on "You have reached your specified API usage limits" and never
+resumed without an operator `DELETE` + re-register. `promptTurnWithRetry`
+and `PursueGoal`'s worker-turn handling both check
+`provider.AsProviderExhausted` explicitly and fold a positive result into
+their local `retryable`/`class` bookkeeping (`class` set to the dedicated
+marker `goalClassProviderExhausted`, never one of `provider.RetryableClass`'s
+real values) — reusing the existing stall/park recording machinery rather
+than adding a fourth field throughout.
+
 A deterministic
 failure (not classified retryable, not permanent) gets `goalWorkerRetries` (2) additional
 attempts on the short schedule (~5s total: 1s, then 4s). A provider error
@@ -366,9 +384,25 @@ error to classify from (see the idle-stream watchdog below) — gets its own
 deterministic tier uses (~5s total): truncation is retryable, but it is not
 weather — waiting longer never raises a stream ceiling, and every retry
 re-prompts a full turn at full input cost — so it must ride neither the fast
-deterministic budget nor the long weather-tier one. Every attempt records a
+deterministic budget nor the long weather-tier one. A `provider.AsProviderExhausted`
+failure gets its OWN `goalProviderExhaustedMaxAttempts` budget (equal in
+size to `goalRetryableMaxAttempts`, on the identical jittered schedule) —
+never the ordinary weather counter, so a concurrent overload spell and an
+account wall in the same turn can never silently share or steal from one
+another's budget. It deliberately rides the SAME schedule ordinary weather
+uses rather than computing a wait from the provider's own `RecoverHint`
+("you regain access on <date>"): `RecoverHint`'s format varies by provider
+and by plan (see `provider.Error.RecoverHint`'s doc comment), so it is
+never parsed into a duration, only ever quoted verbatim to a model-visible
+caller. A wall that clears within the budget (a burst rate limit that
+reached this classification, or a short-lived cap) resumes the worker turn
+— and the whole goal — with NO operator action; a wall measured in hours or
+days still exhausts the budget and parks, but honestly classified via
+`classifyGoalWorkerError`'s dedicated branch ("provider account usage limit
+exhausted the retry budget"), never as a permanent, unretriable request.
+Every attempt records a
 `goal.stalled` record regardless of tier, so the loop is never silent.
-Exhausting ANY of the three budgets — or the non-idempotency gate stopping
+Exhausting ANY of the four budgets — or the non-idempotency gate stopping
 retries early once a tool has already executed this attempt — PARKS the goal
 instead of clearing it: `PursueGoal` exits, journals a durable, CLASSIFIED
 `goal.parked` record (never raw provider error text — the same leak rule
