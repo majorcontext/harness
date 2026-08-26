@@ -626,3 +626,89 @@ func TestRoutedCallRecordsNothingForAPinnedEagerServer(t *testing.T) {
 		t.Fatalf("%q was not recorded by its own routed call", deferred)
 	}
 }
+
+// TestMCPActionsRefusedWhenNothingCanDefer enforces the gate at DISPATCH,
+// not only in the advertised schema. The def of an eager-only session omits
+// both actions from its action enum, but providers do not all reject an
+// off-enum value, so a model that emits one anyway must not be able to
+// mutate selection state on a session that has none.
+func TestMCPActionsRefusedWhenNothingCanDefer(t *testing.T) {
+	s, _ := lazySession(t, Config{MCPToolLoading: MCPToolLoadingEager}, map[string]int{"a": 2})
+	name := mcpToolName("a", "tool00")
+
+	for _, args := range []string{
+		`{"action":"search","query":"tool"}`,
+		`{"action":"select","tools":["` + name + `"]}`,
+	} {
+		err := runMCPActionErr(t, s, args)
+		if err == nil {
+			t.Fatalf("%s was routed on a session that can defer nothing", args)
+		}
+		// The error names exactly the actions this session offers, so it
+		// can never advertise one the model cannot call. The wanted-list
+		// suffix is what carries that, since the rejected action's own name
+		// is quoted earlier in the same string.
+		if !strings.Contains(err.Error(), "unknown action") {
+			t.Fatalf("error %q should read as an unknown action", err)
+		}
+		if !strings.HasSuffix(err.Error(), `(want "status" or "connect")`) {
+			t.Fatalf("error %q must offer only the two actions this session advertises", err)
+		}
+	}
+	if s.mcpToolSelected(name) {
+		t.Fatalf("a refused select still recorded %q", name)
+	}
+
+	// The same two actions DO route once the session can defer.
+	d, _ := lazySession(t, Config{MCPToolLoading: MCPToolLoadingLazy}, map[string]int{"a": 2})
+	if err := runMCPActionErr(t, d, `{"action":"search","query":"tool"}`); err != nil {
+		t.Fatalf("search refused on a deferring session: %v", err)
+	}
+}
+
+// TestMCPSearchTokensHandlesNonASCII covers a query in a language the ASCII
+// split mangled: an accented word was silently truncated, and a CJK query
+// produced no tokens at all and surfaced as the blank-query error.
+func TestMCPSearchTokensHandlesNonASCII(t *testing.T) {
+	if got := mcpSearchTokens("café"); len(got) != 1 || got[0] != "café" {
+		t.Fatalf("tokens for %q = %v, want [café] — an ASCII split truncates it to \"caf\"", "café", got)
+	}
+	if got := mcpSearchTokens("创建 问题"); len(got) != 2 || got[0] != "创建" || got[1] != "问题" {
+		t.Fatalf("tokens for a CJK query = %v, want two tokens", got)
+	}
+	// Punctuation still splits, and a blank query still yields nothing.
+	if got := mcpSearchTokens("créer_問題!"); len(got) != 2 {
+		t.Fatalf("tokens = %v, want the two words split on punctuation", got)
+	}
+	if got := mcpSearchTokens(" ... "); got != nil {
+		t.Fatalf("tokens for a blank query = %v, want nil", got)
+	}
+}
+
+// TestMCPSelectWithoutStatusSurfaceNeverPends closes the one shape where an
+// invented name could enter the set unverifiably: with no status surface,
+// every configured server looks disconnected, so a bad name would be
+// accepted as pending — and the reap, needing that same missing evidence,
+// could never remove it.
+func TestMCPSelectWithoutStatusSurfaceNeverPends(t *testing.T) {
+	s := NewSession(Config{MCP: configOnlyMCPRegistry{}, MCPToolLoading: MCPToolLoadingLazy})
+	invented := mcpToolName("a", "never_existed")
+
+	var res mcpSelectResult
+	runMCPAction(t, s, `{"action":"select","tools":["`+invented+`"]}`, &res)
+	if len(res.Pending) != 0 {
+		t.Fatalf("pending = %v, want none: connection state is unknown, so nothing can verify it later", res.Pending)
+	}
+	if len(res.Missing) != 1 || res.Missing[0] != invented {
+		t.Fatalf("missing = %v, want [%s]", res.Missing, invented)
+	}
+	if s.mcpToolSelected(invented) {
+		t.Fatalf("%q entered the selected set with no way to ever reap it", invented)
+	}
+}
+
+// configOnlyMCPRegistry reports configured names but no Status — the shape
+// only a test fake can have (*MCPManager implements both).
+type configOnlyMCPRegistry struct{ minimalFakeMCPRegistry }
+
+func (configOnlyMCPRegistry) ConfiguredNames() []string { return []string{"a"} }

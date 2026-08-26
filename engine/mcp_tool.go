@@ -168,16 +168,35 @@ func runMCPTool(ctx context.Context, s *Session, raw json.RawMessage) (message.P
 		return runMCPStatus(s.cfg.MCP)
 	case "connect":
 		return runMCPConnect(ctx, s.cfg.MCP, in.Server)
-	case "search":
-		return runMCPSearch(ctx, s, in.Query, in.Limit)
-	case "select":
+	case "search", "select":
+		// The gate is ENFORCED here, not merely advertised in the schema.
+		// A session that can defer nothing has no deferred catalog to
+		// search and no schema to load, and its tool def omits both
+		// actions from the action enum -- but a provider that does not
+		// strictly reject an off-enum value would otherwise route the call
+		// anyway, letting a model mutate selection state on a session
+		// whose whole point is that it has none. An unadvertised action is
+		// an unknown action, and says so in the same words.
+		if !s.sessionCanDefer() {
+			return nil, unknownMCPActionErr(in.Action, false)
+		}
+		if in.Action == "search" {
+			return runMCPSearch(ctx, s, in.Query, in.Limit)
+		}
 		return runMCPSelect(ctx, s, in.Tools)
 	default:
-		if s.sessionCanDefer() {
-			return nil, fmt.Errorf("mcp: unknown action %q (want %q, %q, %q or %q)", in.Action, "status", "connect", "search", "select")
-		}
-		return nil, fmt.Errorf("mcp: unknown action %q (want %q or %q)", in.Action, "status", "connect")
+		return nil, unknownMCPActionErr(in.Action, s.sessionCanDefer())
 	}
+}
+
+// unknownMCPActionErr renders the unknown-action error, listing exactly the
+// actions THIS session offers -- the same set its tool def advertises, so
+// the error can never name an action the model cannot call.
+func unknownMCPActionErr(action string, canDefer bool) error {
+	if canDefer {
+		return fmt.Errorf("mcp: unknown action %q (want %q, %q, %q or %q)", action, "status", "connect", "search", "select")
+	}
+	return fmt.Errorf("mcp: unknown action %q (want %q or %q)", action, "status", "connect")
 }
 
 // runMCPStatus implements the status action: every configured server's

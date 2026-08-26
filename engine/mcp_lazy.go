@@ -261,14 +261,26 @@ func (s *Session) planMCPTools(ctx context.Context) mcpToolPlan {
 	if s.cfg.MCP == nil {
 		return mcpToolPlan{}
 	}
-	return s.planMCPToolsFrom(s.cfg.MCP.Tools(ctx))
+	return s.planMCPToolsFrom(s.cfg.MCP.Tools(ctx), renderCatalogSegment)
 }
+
+// catalogRender selects whether planMCPToolsFrom renders the stage-1
+// segment. A caller that only needs the DEFS -- the mcp tool's search
+// action, computing which tools are loaded -- would otherwise re-render up
+// to mcpCatalogListingMax lines into a strings.Builder and throw them away
+// on every search.
+type catalogRender bool
+
+const (
+	renderCatalogSegment catalogRender = true
+	skipCatalogSegment   catalogRender = false
+)
 
 // planMCPToolsFrom is planMCPTools over a catalog the caller already has.
 // It exists so a caller that needs BOTH the full catalog and the plan --
 // the mcp tool's search action, which ranks over everything while reporting
 // what is loaded -- pays for one MCPRegistry.Tools call, not two.
-func (s *Session) planMCPToolsFrom(all []provider.ToolDef) mcpToolPlan {
+func (s *Session) planMCPToolsFrom(all []provider.ToolDef, render catalogRender) mcpToolPlan {
 	if len(all) == 0 {
 		return mcpToolPlan{}
 	}
@@ -301,6 +313,9 @@ func (s *Session) planMCPToolsFrom(all []provider.ToolDef) mcpToolPlan {
 			continue
 		}
 		deferred = append(deferred, d)
+	}
+	if !render {
+		return mcpToolPlan{defs: defs}
 	}
 	return mcpToolPlan{defs: defs, catalog: mcpCatalogSegment(deferred)}
 }
@@ -390,9 +405,20 @@ func (s *Session) reapMCPSelections(catalog []provider.ToolDef) map[string]bool 
 // registry with no status surface reports none, which makes the reap a
 // no-op: without connection state there is no evidence a name is stale.
 func mcpConnectedServers(reg MCPRegistry) map[string]bool {
+	out, _ := mcpConnectedServersKnown(reg)
+	return out
+}
+
+// mcpConnectedServersKnown is mcpConnectedServers plus the distinction its
+// caller sometimes needs: whether connection state is KNOWN at all. An
+// empty map means "every server is disconnected" when known is true, and
+// "no evidence either way" when it is false -- two answers a bare nil map
+// cannot tell apart, and select's pending bucket must not confuse (see
+// mcpSelectBucket).
+func mcpConnectedServersKnown(reg MCPRegistry) (connected map[string]bool, known bool) {
 	sr, ok := reg.(mcpStatusReader)
 	if !ok {
-		return nil
+		return nil, false
 	}
 	out := map[string]bool{}
 	for _, st := range sr.Status() {
@@ -400,7 +426,7 @@ func mcpConnectedServers(reg MCPRegistry) map[string]bool {
 			out[st.Name] = true
 		}
 	}
-	return out
+	return out, true
 }
 
 // markMCPToolsSelected adds well-formed namespaced names to the session's

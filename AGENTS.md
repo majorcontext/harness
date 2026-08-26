@@ -1215,8 +1215,12 @@ defer, and only then — a session that defers nothing must not advertise an
 action with nothing to act on. `search(query)` ranks the live catalog by
 keyword: substring matching over lowercased text, scored once per DISTINCT
 query token per field (remote name 50, description 10, server name 5, plus
-100 once when the whole query equals a name), sorted by score then name. A
-blank query errors rather than dumping the catalog. `select(tools)` loads
+100 once when the whole query equals a name), sorted by score then name.
+Tokens split on Unicode letter/digit classes, never the ASCII ranges — an
+ASCII split truncates `café` to `caf` and reduces a CJK query to nothing. A
+blank query errors rather than dumping the catalog. Both actions are
+refused at DISPATCH, not only omitted from the advertised enum, on a
+session that can defer nothing. `select(tools)` loads
 schemas, and every name lands in exactly one bucket, tested TOP TO BOTTOM:
 `already`, `selected`, `pending` (its server is configured but not
 connected — it arms on reconnect), `missing` (no connected server holds it,

@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -148,9 +149,12 @@ func runMCPSearch(ctx context.Context, s *Session, query string, limit int) (mes
 		def   provider.ToolDef
 		score int
 	}
+	// Normalized once, not once per catalog tool: identical for every call
+	// in this search.
+	whole := strings.ToLower(strings.TrimSpace(query))
 	var hits []scored
 	for _, d := range catalog {
-		if score := mcpSearchScore(d, query, tokens); score > 0 {
+		if score := mcpSearchScore(d, whole, tokens); score > 0 {
 			hits = append(hits, scored{def: d, score: score})
 		}
 	}
@@ -179,13 +183,19 @@ func runMCPSearch(ctx context.Context, s *Session, query string, limit int) (mes
 }
 
 // mcpSearchTokens lowercases query and splits it on every run of characters
-// outside [a-z0-9], then deduplicates: a token repeated in the query scores
-// once, not twice. It returns nil for a blank query, which is what makes a
-// whole-catalog dump impossible.
+// that are neither letters nor digits, then deduplicates: a token repeated
+// in the query scores once, not twice. It returns nil for a blank query,
+// which is what makes a whole-catalog dump impossible.
+//
+// The split is over UNICODE letter/digit classes, not the ASCII ranges. An
+// ASCII-only split silently truncated an accented word ("café" searched for
+// "caf") and reduced a CJK query to NO tokens at all, which surfaced as the
+// blank-query error even though the model had supplied a real query. Tool
+// names and descriptions are not guaranteed to be English.
 func mcpSearchTokens(query string) []string {
 	lower := strings.ToLower(query)
 	fields := strings.FieldsFunc(lower, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	})
 	seen := make(map[string]bool, len(fields))
 	var out []string
@@ -202,7 +212,10 @@ func mcpSearchTokens(query string) []string {
 // mcpSearchScore scores one tool against the deduplicated token set. See
 // the score constants for the rules; the arithmetic is deliberately simple
 // and total, so a golden ranking test has exactly one right answer.
-func mcpSearchScore(d provider.ToolDef, query string, tokens []string) int {
+//
+// whole is the already-lowercased, already-trimmed WHOLE query (see
+// runMCPSearch), passed in rather than recomputed per tool.
+func mcpSearchScore(d provider.ToolDef, whole string, tokens []string) int {
 	server, remote, ok := splitMCPToolName(d.Name)
 	if !ok {
 		return 0
@@ -213,7 +226,7 @@ func mcpSearchScore(d provider.ToolDef, query string, tokens []string) int {
 	desc := strings.ToLower(d.Description)
 
 	score := 0
-	if whole := strings.ToLower(strings.TrimSpace(query)); whole == name || whole == remote {
+	if whole == name || whole == remote {
 		score += mcpSearchScoreExactName
 	}
 	for _, tok := range tokens {
@@ -243,7 +256,7 @@ func runMCPSelect(ctx context.Context, s *Session, names []string) (message.Part
 	for _, d := range catalog {
 		live[d.Name] = true
 	}
-	connected := mcpConnectedServers(s.cfg.MCP)
+	connected, haveStatus := mcpConnectedServersKnown(s.cfg.MCP)
 	configured := map[string]bool{}
 	if cr, ok := s.cfg.MCP.(mcpConfigReader); ok {
 		for _, n := range cr.ConfiguredNames() {
@@ -264,7 +277,7 @@ func runMCPSelect(ctx context.Context, s *Session, names []string) (message.Part
 			continue
 		}
 		seen[name] = true
-		switch s.mcpSelectBucket(name, live, connected, configured) {
+		switch s.mcpSelectBucket(name, live, connected, configured, haveStatus) {
 		case mcpBucketAlready:
 			out.Already = append(out.Already, name)
 		case mcpBucketSelected:
@@ -321,14 +334,14 @@ const (
 // must never be recorded: that is the same shape the replay guard skips, so
 // one rule holds at both ends of the record's life.
 //
-// One shape production never reaches: a registry that implements
-// mcpConfigReader but NOT mcpStatusReader reports no connected server at
-// all, so every name for a configured server looks pending, and the reap --
-// which needs the same connection state -- can never remove an invented
-// one. *MCPManager implements both interfaces, so only a test fake can be
-// shaped this way. If a status-less registry ever becomes a supported
-// production shape, this needs a fourth answer for "cannot tell".
-func (s *Session) mcpSelectBucket(name string, live, connected, configured map[string]bool) mcpSelectBucket {
+// haveStatus is that fourth answer for "cannot tell". A registry that
+// implements mcpConfigReader but NOT mcpStatusReader (only a test fake can
+// be shaped this way -- *MCPManager implements both) reports no connected
+// server at all, so without this flag every name for a configured server
+// would look pending, an invented one would be recorded, and the reap --
+// which needs the same missing evidence -- could never remove it. With it,
+// a status-less registry simply never produces a pending name.
+func (s *Session) mcpSelectBucket(name string, live, connected, configured map[string]bool, haveStatus bool) mcpSelectBucket {
 	if s.mcpToolSelected(name) {
 		return mcpBucketAlready
 	}
@@ -339,7 +352,14 @@ func (s *Session) mcpSelectBucket(name string, live, connected, configured map[s
 	if live[name] {
 		return mcpBucketSelected
 	}
-	if configured[server] && !connected[server] {
+	// pending needs POSITIVE evidence that the server is not connected, and
+	// that evidence is the status surface. Without one (a registry with no
+	// Status method -- see mcpConnectedServersKnown) every configured
+	// server would look unconnected, so an invented name would be accepted
+	// as pending and, because the reap needs the same absent evidence,
+	// could never be removed again. No evidence therefore means missing:
+	// nothing is recorded that nothing can later verify.
+	if haveStatus && configured[server] && !connected[server] {
 		return mcpBucketPending
 	}
 	return mcpBucketMissing
@@ -361,7 +381,7 @@ func (s *Session) mcpCatalog(ctx context.Context) []provider.ToolDef {
 // the catalog the caller already fetched -- one MCPRegistry.Tools call for
 // the whole action. This is what search's Loaded flag reports.
 func (s *Session) mcpLoadedNames(catalog []provider.ToolDef) map[string]bool {
-	plan := s.planMCPToolsFrom(catalog)
+	plan := s.planMCPToolsFrom(catalog, skipCatalogSegment)
 	out := make(map[string]bool, len(plan.defs))
 	for _, d := range plan.defs {
 		out[d.Name] = true
