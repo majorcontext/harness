@@ -486,6 +486,30 @@ type Config struct {
 	// with no separate config flag, unlike GoalTool below.
 	MCP MCPRegistry
 
+	// MCPToolLoading selects when this session defers MCP tool SCHEMAS
+	// instead of registering every one of them on every request (see
+	// mcp_lazy.go and docs/design/mcp-lazy-tools.md). The zero value is
+	// eager: every tool of every connected server registers with its full
+	// schema, exactly as it did before deferral existed.
+	MCPToolLoading MCPToolLoading
+	// MCPToolLoadingThreshold is the tool COUNT MCPToolLoadingAuto compares
+	// the live catalog against. Any non-positive value (including the zero
+	// value) resolves to defaultMCPDeferThreshold -- never to a floor of 1,
+	// which would defer every catalog (see mcpDeferThreshold).
+	MCPToolLoadingThreshold int
+	// MCPToolLoadingByServer overrides MCPToolLoading for one named server:
+	// MCPToolLoadingEager pins its tools loaded, MCPToolLoadingLazy always
+	// defers them. An absent entry inherits MCPToolLoading.
+	//
+	// The policy rides Config, not MCPServerConfig, because *MCPManager is
+	// a box-scoped singleton shared by every session (see mcp.go's package
+	// doc) while a SELECTION is per-session state: two sessions on one box
+	// select different tools from the same catalog. Connection settings
+	// stay with the manager; presentation policy sits with the session that
+	// applies it. cmd/harness still lets the config author write the
+	// override next to the server it names (mcp_servers.<name>.tool_loading).
+	MCPToolLoadingByServer map[string]MCPToolLoading
+
 	// Processes is the managed-process integration the `process` session
 	// tool and the ambient status injection (see streamTurn) draw from.
 	// *process.Manager (see engine/process.go and package process) is the
@@ -922,6 +946,11 @@ type Session struct {
 	// read_tool_result serve a handle minted by a previous process.
 	// Guarded by mu.
 	toolResults map[string]toolResultMeta
+	// mcpSelected is the set of namespaced MCP tool names whose schemas
+	// this session has loaded (see mcp_lazy.go). Only consulted for a
+	// server the request decided to DEFER: an eager server's tools are in
+	// the array whether or not they appear here. Guarded by mu.
+	mcpSelected map[string]bool
 	// toolResultNextID mints the session-monotonic handle number, starting
 	// at 1 for a fresh session (set in newSession) and advanced by
 	// LoadSession past every handle seen in the log — the counter-survives-
@@ -1018,7 +1047,12 @@ func newSession(cfg Config) *Session {
 		s.tools[modelToolName] = modelTool()
 	}
 	if mcpConfiguredCount(cfg.MCP) > 0 {
-		s.tools[mcpSessionToolName] = mcpTool()
+		// The def carries the search/select actions only when this
+		// session's POLICY can defer (mcpPolicyCanDefer, mcp_lazy.go): a
+		// session that defers nothing must not advertise an action with
+		// nothing to act on. Policy is fixed for the session's life, so
+		// the def stays byte-stable across requests.
+		s.tools[mcpSessionToolName] = mcpTool(s.mcpPolicyCanDefer())
 	}
 	// task is registered here unconditionally whenever a SessionManager is
 	// present; SessionManager itself withholds it post-construction for a
@@ -1986,7 +2020,44 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 // streamTurn makes one model call and returns the assembled assistant
 // message.
 func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.StopReason, provider.Usage, error) {
+	// Assembly order matters, and three steps are pinned:
+	//
+	//  1. chat.params runs first: it fixes params.Model, which both the
+	//     provider lookup and system.transform below need. It still fires
+	//     on every turn. system.transform, by contrast, now runs after
+	//     provider resolution, so a turn naming an unconfigured provider
+	//     returns WITHOUT firing it (it used to fire, then fail):
+	//     assembling a system prompt for a request that is never sent buys
+	//     nothing.
+	//  2. Providers.For runs BEFORE the tool plan. The plan's
+	//     s.cfg.MCP.Tools(ctx) call is what triggers a server's first
+	//     connect attempt (see MCPManager.ensureConnected) — network dials,
+	//     and a spawned child process for every stdio server. Resolving the
+	//     provider first keeps a turn that names an unconfigured provider
+	//     from spawning anything at all: it returns here, exactly as it did
+	//     before the plan existed. Provider resolution is a pure map lookup,
+	//     so paying for it first costs nothing.
+	//  3. The tool plan runs before the system slice is finished and before
+	//     the ambient segments: its catalog half IS a system segment (see
+	//     mcp_lazy.go), and its Tools(ctx) call must precede
+	//     mcpStatusSegment, or Status() is read against stale pre-connect
+	//     state and this turn's own connect failure is reported one turn
+	//     late.
 	params := plugin.ChatParams{Model: s.Model()}
+	if s.cfg.Hooks != nil {
+		params = s.cfg.Hooks.ChatParams(ctx, &plugin.ChatParamsRequest{SessionID: s.ID, Params: params})
+		if params.Model.IsZero() {
+			params.Model = s.Model()
+		}
+	}
+
+	prov, err := s.cfg.Providers.For(params.Model)
+	if err != nil {
+		return nil, "", provider.Usage{}, err
+	}
+
+	tools, mcpCatalog := s.toolDefsWithCatalog(ctx)
+
 	system := append([]string(nil), s.cfg.System...)
 	// Project instructions sit after the base system prompt and before any
 	// hook-contributed segments (see ensureInstructions in instructions.go).
@@ -1999,20 +2070,18 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 	if seg := s.skillsSegment(); seg != "" {
 		system = append(system, seg)
 	}
+	// The deferred-MCP catalog sits after the skills catalog — the same
+	// progressive-disclosure stage-1 role — and, like it, before any
+	// hook-contributed segments. Empty for every session that defers
+	// nothing (see mcp_lazy.go).
+	if mcpCatalog != "" {
+		system = append(system, mcpCatalog)
+	}
 	if s.cfg.Hooks != nil {
-		params = s.cfg.Hooks.ChatParams(ctx, &plugin.ChatParamsRequest{SessionID: s.ID, Params: params})
-		if params.Model.IsZero() {
-			params.Model = s.Model()
-		}
 		system = append(system, s.cfg.Hooks.SystemTransform(ctx, &plugin.SystemTransformRequest{
 			SessionID: s.ID,
 			Model:     params.Model,
 		})...)
-	}
-
-	prov, err := s.cfg.Providers.For(params.Model)
-	if err != nil {
-		return nil, "", provider.Usage{}, err
 	}
 
 	maxTokens := s.cfg.MaxTokens
@@ -2032,16 +2101,10 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 	// request prefix, is byte-identical to a request built with no
 	// process ever started and every MCP server healthy.
 	//
-	// toolDefs is computed FIRST, before either segment, and reused below
-	// as req.Tools rather than recomputed: for MCP, toolDefs ->
-	// s.cfg.MCP.Tools(ctx) is what actually TRIGGERS a server's first
-	// connect attempt (see MCPManager.ensureConnected). Computing
-	// mcpStatusSegment before that trigger would read Status() against
-	// stale pre-connect state, silently delaying THIS turn's own connect
-	// failure from surfacing until the NEXT turn — ordering toolDefs
-	// first means a server that fails its first attempt on turn 1 is
-	// reported in turn 1's own request, not turn 2's.
-	tools := s.toolDefs(ctx)
+	// The tool plan already ran above (see the numbered ordering note at the
+	// top of this function), so every segment below reads post-connect
+	// state and req.Tools is the plan's own slice, never a second
+	// computation.
 	messages := s.History()
 	if seg := processStatusSegment(s.cfg.Processes, s.cfg.WorkDir); seg != "" {
 		messages = withAmbientStatus(messages, seg)
@@ -2501,15 +2564,42 @@ func (e *emptyTurnError) Error() string {
 // (plugin.Host.Tools walks the configured instance slice). Sorting stays
 // WITHIN the built-in group so adding an MCP server never reshuffles the
 // built-in block that precedes it.
+//
+// The MCP group is the plan's defs (see mcp_lazy.go), which is the whole
+// registry slice for an eager session and a FILTER of it -- order preserved
+// -- for a session that defers. A filter of a deterministic slice is
+// deterministic, so byte-stability holds either way: two requests that
+// change no selection produce identical bytes.
+//
+// LOCKING: the caller must NOT hold s.mu. This is new as of deferral: for a
+// session that can defer, the plan reaps stale selections under s.mu (see
+// planMCPTools), and sync.Mutex is not reentrant. Before deferral this
+// chain took no session lock at all, so a caller was free to call it under
+// the lock. Both callers today are outside it by construction -- sessionInfo
+// deliberately gathers tool names before its own Lock, and streamTurn builds
+// the whole request before its s.mu section.
 func (s *Session) toolDefs(ctx context.Context) []provider.ToolDef {
+	defs, _ := s.toolDefsWithCatalog(ctx)
+	return defs
+}
+
+// toolDefsWithCatalog is toolDefs plus the stage-1 MCP catalog segment that
+// belongs in the same request's system prompt (see mcp_lazy.go). The two
+// come from ONE plan, and therefore from one MCPRegistry.Tools call, because
+// that call is what triggers a server's first connect attempt: computing
+// them separately would dial twice and could disagree if a background retry
+// committed between the two reads.
+//
+// The catalog is "" whenever nothing is deferred, which includes every
+// session that did not opt into deferral at all.
+func (s *Session) toolDefsWithCatalog(ctx context.Context) ([]provider.ToolDef, string) {
 	defs := make([]provider.ToolDef, 0, len(s.tools))
 	for _, t := range s.tools {
 		defs = append(defs, t.Def)
 	}
 	sort.Slice(defs, func(i, j int) bool { return defs[i].Name < defs[j].Name })
-	if s.cfg.MCP != nil {
-		defs = append(defs, s.cfg.MCP.Tools(ctx)...)
-	}
+	plan := s.planMCPTools(ctx)
+	defs = append(defs, plan.defs...)
 	if s.cfg.Hooks != nil {
 		for _, d := range s.cfg.Hooks.Tools() {
 			defs = append(defs, provider.ToolDef{
@@ -2519,7 +2609,7 @@ func (s *Session) toolDefs(ctx context.Context) []provider.ToolDef {
 			})
 		}
 	}
-	return defs
+	return defs, plan.catalog
 }
 
 // runToolCalls executes every tool call in an assistant message, in order,
@@ -2601,6 +2691,29 @@ func (s *Session) executeTool(ctx context.Context, tc *message.ToolCall, args js
 		out, isErr, err := s.cfg.MCP.CallTool(ctx, tc.Name, args)
 		if err != nil {
 			return message.Parts{&message.Text{Text: err.Error()}}, true
+		}
+		// Use implies selection (see mcp_lazy.go): a call that ROUTED names
+		// a real tool, so recording it keeps that tool's schema loaded when
+		// an auto flip later defers its server. Without this, a tool the
+		// model has been calling directly -- an eager server's tool needs no
+		// select, and the model is told not to select a loaded one -- would
+		// lose its definition mid-task the moment a second server connected
+		// and pushed the catalog over the threshold.
+		//
+		// A nil err is the routed signal: CallTool resolves the binding
+		// before it dials, so "unknown tool" and "server not configured"
+		// both return an error above and record nothing. A tool-level
+		// failure (isErr) DID route and is recorded, and so is a call whose
+		// transport failed on a later attempt -- the next successful call
+		// records it.
+		//
+		// The gate is per SERVER (see mcpToolUseImpliesSelection): a server
+		// pinned eager can never flip, so a record for its tools could
+		// never pay for itself. A plain eager config therefore records
+		// nothing at all, and neither does a defer-capable session on a
+		// call to one of its pinned-eager servers.
+		if s.mcpToolUseImpliesSelection(tc.Name) {
+			s.markMCPToolsSelected(tc.Name)
 		}
 		return out, isErr
 	}
