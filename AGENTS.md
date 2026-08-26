@@ -209,6 +209,82 @@ issue #129. Until it lands, a model with no vision support receives the
 image Blob exactly as any vision-capable model does; how it handles that
 block is between the model and its provider.
 
+### write_file read-before-overwrite guard
+
+`write_file` (`engine/filetools.go`) refuses to overwrite an EXISTING file
+the session has not read. Before this guard, `write_file` overwrote any
+existing file unconditionally — a model could destroy a file it never
+opened, with no recovery path. `edit_file` never had this hole: its
+`old_string` match is exact-content-required by construction, so it cannot
+blindly clobber unseen content. Claude Code and opencode both close the
+same gap on their own write tools (opencode's is a literal `"You must read
+file X before overwriting it"` error); this guard gives `write_file` the
+same property.
+
+`Session.recordRead`/`readHashFor` (`engine/filetools.go`) track, per live
+session and in memory only, every path `read_file` has read or
+`write_file`/`edit_file` has written, keyed on the RESOLVED absolute path
+(`s.resolvePath`'s output, never the raw tool argument — two different
+relative arguments that resolve to the same file must not be tracked as two
+separate paths), mapped to the sha256 hash of that path's raw on-disk bytes
+at the moment of that read or write. `read_file` hashes the complete raw
+file bytes it already read off disk for its own content classification
+(`readPathContent`'s `TextData`/`ImageData`) — never the offset/limit-sliced
+text it returns to the model. This matches the reference guards (Claude
+Code, opencode): the guard authorizes per successful OPEN, not per byte
+displayed — a windowed read of a large file authorizes replacing the whole
+file. The hash is recorded only at a `read_file` return that hands the
+model content; a read that errors (offset past end-of-file) records
+nothing.
+
+`write_file` on a path that `os.Stat` resolves to an existing regular file
+requires, in order: (1) the path is present in this session's read set —
+absent means `write_file: %s exists and has not been read this session;
+read it first (or use edit_file)`; (2) hashing the path's CURRENT on-disk
+bytes fresh (never trusting the recorded hash's age) matches the recorded
+hash — a mismatch means `write_file: %s changed on disk since it was read;
+read it again before overwriting`. A path that does not exist
+(`fs.ErrNotExist`) is unguarded — creation is `write_file`'s main job, and
+there is no prior content to protect. Any OTHER stat failure (permission,
+transient metadata error) refuses the write with `write_file: cannot stat
+%s to check the read-before-overwrite guard` — a failed stat cannot prove
+no protected file exists there. A
+successful `write_file` or `edit_file` records/updates the written path's
+hash to the new content's hash, so a write immediately followed by another
+write to the SAME path (the assistant overwriting its own just-written
+content, or an `edit_file` followed by a `write_file` on the same path)
+never spuriously re-triggers the guard — the session already knows exactly
+what is on disk because it just put it there.
+
+The read set is runtime-only: never persisted, never folded by
+`LoadSession`. A reloaded session starts with an EMPTY read set, so a
+resumed session must `read_file` a path again before `write_file` can
+overwrite it — even a path the session genuinely read in a prior process
+life. This is deliberately conservative and matches the guard's purpose:
+the guard exists to stop an overwrite of content the model never actually
+saw THIS session, and a resumed model has no live memory of raw file bytes
+from a prior process either, only whatever text happened to land in the
+persisted transcript. The read set lives on `Session` state, not `Config`,
+so `configSnapshot` (used to seed a spawned child's config) never copies
+it — a spawned child starts with its own empty read set, correctly, since
+it is a different session that has read nothing yet.
+
+Tool calls execute strictly sequentially today
+(`Session.runToolCalls`/`runToolCall`, `engine/engine.go`), so the read
+set's own `sync.Mutex`-guarded map access is sufficient protection now.
+A future parallel tool executor must serialize concurrent
+`write_file`/`edit_file` calls against the SAME resolved path — matching
+`edit_file`'s existing same-path safety requirement — rather than relying
+on the map's per-operation lock alone, which does not cover the
+check-current-hash-then-write sequence as one atomic unit against a
+concurrent writer to the same path.
+
+`bash` writes (a model redirecting output to an existing file via a shell
+command) are explicitly OUT of scope: harness cannot classify an arbitrary
+shell command as a file write versus anything else it might do, so this
+guard covers only the two built-in tools that make a structured, typed
+claim to write a file.
+
 ### Base loop retry
 
 The base interactive `Prompt` loop retries a transient provider error itself,
@@ -285,6 +361,64 @@ the outer weather tier ever counts it, so a goal loop rides a brief provider
 blip without spending an outer attempt. `PromptRetries` 0 disables the inner
 budget for a host that wants the outer tiers to be the only retry.
 
+### Per-turn metrics
+
+`streamTurn` (`engine/engine.go`) emits one structured `turn_metrics` line per
+COMPLETED model call — a stream that reached `EventDone`; a turn that errors
+or is interrupted mid-stream (see `interruptedTurnError` above) reports
+nothing, since there is no finished call to summarize. This is the box-fleet
+answer to "why does this session feel slow": TTFT and stream duration, token
+and prompt-cache accounting, and request shape, greppable straight off a
+process's stderr.
+
+Fields: `session_id`, `model` (full `provider/model` ref), `ttft_ms` (elapsed
+from just before `prov.Stream` to the first non-`EventActivity` stream event
+— `EventActivity` carries no content, so a keep-alive ping or an in-progress
+tool-argument chunk must never be mistaken for "first byte"; if `EventDone`
+itself is the first event, `ttft_ms` covers the whole call and `stream_ms` is
+0), `stream_ms` (first delta to `EventDone`), `input_tokens`/`output_tokens`/
+`cache_read_tokens`/`cache_write_tokens` (passed through from
+`provider.Usage` verbatim), `system_len`/`tools_count`, and `retry` (the
+1-indexed attempt number `streamTurnWithRetry` — `engine/prompt_retry.go` —
+was on when this call completed; 1 for a turn that succeeded on its first
+try). `system_len` is computed identically to the server's `request.meta`
+record (`len(strings.Join(req.System, "\n"))`, see `server/journal.go`'s
+`OnRequest`) — deliberately, not coincidentally: `session_id` + `model` +
+`system_len` together are a natural join key between a `turn_metrics` stderr
+line and the durable `request.meta` record for the same request, with no new
+ID threaded through the provider boundary.
+
+`Config.OnTurnMetrics func(TurnMetrics)` is the seam. Unlike every other
+`On*` callback in `Config` (`OnEvent`, `OnRequest`, `OnStorePhase`), nil is
+NOT "disabled": `emitTurnMetrics` substitutes `defaultTurnMetricsLog`
+(`engine/turn_metrics.go`), a `slog.NewJSONHandler` line written to
+`os.Stderr` — the same stream every other structured log line in this repo
+uses (see `cmd/harness/main.go`'s "Structured logging: JSON to stderr"
+comment). Stderr keeps the line out of `harness run`'s stdout, which is
+the model's answer channel, while a deployment's log pipeline (Kubernetes
+captures both streams) scrapes it identically. A plain `harness run`/`harness serve` process
+with no embedder wiring therefore still emits this line by default; an
+embedder that wants a different sink (an OTel exporter, an in-memory test
+recorder) sets `OnTurnMetrics` and never needs to suppress the default
+first.
+
+`Config.Now func() time.Time` is the clock this measurement reads (nil
+resolves to `time.Now` in `newSession`), scoped to this one seam rather than
+a general engine clock — every other timestamp in the package still reads
+`time.Now` directly. It exists so a test can script an exact instant sequence
+instead of depending on real elapsed wall-clock time between two in-process
+calls with nothing to wait on between them, per the Testing rule against real
+sleeps.
+
+This was built for a deployment that ships a served process's stderr to a
+log pipeline (a fleet of boxes running `harness serve`, each pod's stderr
+collected by a Vector-style agent into BetterStack or an equivalent log
+store). The intended query there filters `msg: "turn_metrics"` and groups by
+`model`/`session_id` to compare TTFT and stream-duration distributions across
+sessions — quantifying, with real numbers instead of a feeling, whether a
+session "feels slow" because of provider latency, prompt-cache misses, or
+something else entirely.
+
 ### Goal loop
 
 `Session.PursueGoal(ctx, condition, GoalOptions)` drives the ordinary `Prompt`
@@ -334,8 +468,50 @@ loop also emits `goal.*` engine events so the server journals them. Config
 `goal_evaluator_model` supplies the evaluator for `harness run -goal` and
 `POST /session/{id}/goal`.
 
+The evaluator's own `CONVERSATION TRANSCRIPT` field is BOUNDED, independent
+of whatever context window the MAIN session model has and independent of
+whether automatic compaction (below) has fired at all.
+`renderConversationBounded` (`engine/goal.go`, called from `runEvaluator`)
+replaced the old unconditional `renderConversation(s.History())`: box
+bx-01m0x8996, a real long session, died with "engine: goal evaluator failed
+at 5 consecutive turn boundaries: context exhausted: prompt 245332 tokens >
+limit ..." because the evaluator's prompt grows with the WHOLE session
+transcript forever — unlike the main session, which automatic compaction
+protects, the evaluator had no bound of its own at all. The budget comes
+from `goalEvaluatorTranscriptBudgetBytes`, which resolves the EVALUATOR
+model's own context window via `modelContextWindowLookup`
+(`modelmeta.ContextWindow`) — the same table automatic compaction's
+`resolveContextWindow` (`engine/context_window.go`) reads, called
+DIRECTLY rather than through `resolveContextWindow` itself: that
+function's `minAutoContextWindowTokens` floor answers "should automatic
+compaction ARM for this window," so a real, small, KNOWN window (gpt-4's
+documented 8,192 tokens) reports identically to a genuinely UNRECOGNIZED
+model (0, disabled) — conflating them would give a real small-window
+evaluator a budget roughly double its actual limit, the exact overflow
+class this fix closes. `goalEvaluatorTranscriptBudgetBytes` trusts ANY
+positive, known window from the table, however small, and falls back to
+`goalEvaluatorFallbackContextWindowTokens` (mirroring
+`minAutoContextWindowTokens`'s value) only when the model has NO entry at
+all. It also reserves headroom for the system prompt and MaxTokens' output
+budget, and applies a conservative fraction (`goalEvaluatorContextBudgetFraction`,
+0.5) on top of the same crude ~4-bytes-per-token estimate
+(`bytesPerTokenEstimate`) automatic compaction's own resilience fallback
+uses — reused, not reinvented.
+`renderConversationBounded` walks history from the NEWEST message backward,
+accumulating rendered blocks until the budget would be exceeded, and
+prefers "summary + tail" for free rather than summarizing a second time:
+Compact (`engine/compact.go`) already splices its own summary message in
+place of whatever range it folded, tagged with the `compactionSummaryIDTag`
+prefix, so the backward walk simply STOPS the instant it includes such a
+message — everything before it is already captured there. The newest
+message is always kept regardless of budget (an empty transcript can never
+be assessed); a truncated transcript is prefixed with
+`goalEvaluatorTruncationNotice` so the evaluator, and an operator reading a
+later `goal.eval` record, never mistakes a bounded view for the whole
+session.
+
 A worker-turn error (`s.Prompt` failing) is retried by `promptTurnWithRetry`
-on one of THREE independent budgets, chosen by classification via
+on one of FOUR independent budgets, chosen by classification via
 `provider.AsRetryable` — never by matching error text.
 
 One class skips every budget. Before it selects a budget,
@@ -353,6 +529,24 @@ select a more accurate classified reason and tier name
 (`classifyGoalWorkerError`, `goalWorkerParkedError`), so an operator can
 tell a single-attempt park from `goalWorkerRetries`+1 identical attempts.
 
+One shape is wrapped `provider.MarkPermanent` by the adapter but is
+DELIBERATELY EXCLUDED from this fail-fast branch: `provider.AsProviderExhausted`
+— an ACCOUNT-level usage/quota wall (PR #174's `provider.ErrKindProviderExhausted`,
+originally added for task-child resumability; see `engine/session_manager.go`'s
+`FailKindProviderExhausted`). An adapter marks it permanent for ordinary
+HTTP-retry purposes (no short backoff schedule outlives a monthly quota),
+but a wall lifts on its own, unchanged, so treating it as a doomed malformed
+request silently kills goal supervision on the very first usage-limit
+rejection. Live evidence: box bx-01m0x8996 parked after "1 permanent-tier
+attempt(s)" on "You have reached your specified API usage limits" and never
+resumed without an operator `DELETE` + re-register. `promptTurnWithRetry`
+and `PursueGoal`'s worker-turn handling both check
+`provider.AsProviderExhausted` explicitly and fold a positive result into
+their local `retryable`/`class` bookkeeping (`class` set to the dedicated
+marker `goalClassProviderExhausted`, never one of `provider.RetryableClass`'s
+real values) — reusing the existing stall/park recording machinery rather
+than adding a fourth field throughout.
+
 A deterministic
 failure (not classified retryable, not permanent) gets `goalWorkerRetries` (2) additional
 attempts on the short schedule (~5s total: 1s, then 4s). A provider error
@@ -366,9 +560,25 @@ error to classify from (see the idle-stream watchdog below) — gets its own
 deterministic tier uses (~5s total): truncation is retryable, but it is not
 weather — waiting longer never raises a stream ceiling, and every retry
 re-prompts a full turn at full input cost — so it must ride neither the fast
-deterministic budget nor the long weather-tier one. Every attempt records a
+deterministic budget nor the long weather-tier one. A `provider.AsProviderExhausted`
+failure gets its OWN `goalProviderExhaustedMaxAttempts` budget (equal in
+size to `goalRetryableMaxAttempts`, on the identical jittered schedule) —
+never the ordinary weather counter, so a concurrent overload spell and an
+account wall in the same turn can never silently share or steal from one
+another's budget. It deliberately rides the SAME schedule ordinary weather
+uses rather than computing a wait from the provider's own `RecoverHint`
+("you regain access on <date>"): `RecoverHint`'s format varies by provider
+and by plan (see `provider.Error.RecoverHint`'s doc comment), so it is
+never parsed into a duration, only ever quoted verbatim to a model-visible
+caller. A wall that clears within the budget (a burst rate limit that
+reached this classification, or a short-lived cap) resumes the worker turn
+— and the whole goal — with NO operator action; a wall measured in hours or
+days still exhausts the budget and parks, but honestly classified via
+`classifyGoalWorkerError`'s dedicated branch ("provider account usage limit
+exhausted the retry budget"), never as a permanent, unretriable request.
+Every attempt records a
 `goal.stalled` record regardless of tier, so the loop is never silent.
-Exhausting ANY of the three budgets — or the non-idempotency gate stopping
+Exhausting ANY of the four budgets — or the non-idempotency gate stopping
 retries early once a tool has already executed this attempt — PARKS the goal
 instead of clearing it: `PursueGoal` exits, journals a durable, CLASSIFIED
 `goal.parked` record (never raw provider error text — the same leak rule
@@ -1765,14 +1975,49 @@ stops reporting a wall it already got past; `finalizeTurn`'s
 keep snapshotting a classification no live cancellation sets and
 `restoreKnownStatusLocked` restores as empty.
 
+A REAPED descendant is still resolvable, not "no such session." `Reap`
+collects a done/failed/canceled LEAF the instant it settles (its own doc
+comment), which a caller that spawned it has no way to observe before
+asking about it again — a live incident hit exactly this: `task send` to
+a settled child answered `no such session` depending on internal reap
+timing the parent could not see. `resolveOrReviveDescendantLocked`
+(`engine/session_manager.go`), the shared first step of all four verbs,
+falls back to disk when a live-tree lookup misses: `LoadSession` the
+target, then confirm ancestry from its own DURABLE `task_parent_id`
+chain (`durableAncestorChainHas`) — never from live state alone, which is
+exactly what `Reap` already erased. Only a target with no session log on
+disk either, or whose durable lineage does not reach the caller, still
+answers `ErrUnknownSession`/`ErrNotDescendant`. The four verbs then
+diverge on what a successful disk resolution does: `send` RE-ADOPTS the
+revived child into the tree (`adoptReloadedLocked`, the same
+adopt-on-first-sight path `AdoptReloaded`/`handleSpawnChild`'s
+parent-lookup fallback already use) and re-runs it exactly like a
+settled-but-unreaped child — `budgetedByChild` surviving `Reap` by design
+is what stops that re-adopt from double-crediting its already-spent
+usage. `status`/`log` serve the disk-loaded state directly
+(`durableSnapshot`/`deriveSettledStatus`) WITHOUT re-adopting: a
+read-only, poll-shaped verb must not have the side effect of pinning a
+reaped descendant back into memory. `cancel` on a reaped target is a
+no-op success (nothing left to interrupt) reporting its real terminal
+status, never `StatusCanceled`. The disk-bound half of this resolution
+runs with `m.mu` released — one slow disk read must never stall every
+other session's `Info`/`Reap`/`Spawn`/`Send` call — and re-validates
+`m.nodes[targetID]` on reacquiring the lock, so a concurrent adopt of the
+same id (another `Spawn`, `AdoptReloaded`, or a second racing revival)
+always wins single-handedly: whichever adoption reaches `m.nodes` first
+is authoritative, and the loser's own "already managed" is ignored, the
+same rule `AdoptReloaded`'s existing callers already follow for that
+race.
+
 A parent can read a dead child's tail. The `task` tool's `log` verb
 (`runTaskLog`, `engine/task_tool.go`, over
 `SessionManager.DescendantTranscript`) returns the last N transcript
 entries of a descendant, LIVING OR DEAD, under the same ancestor gate
-(`isDescendantLocked`) cancel/status/send use — a terminal node keeps its
-`*Session`, history included, until `Reap`, so no reload and no disk read
-is involved; a REAPED descendant answers "no such session" like every
-other verb. It is bounded on three axes, because its output lands in the
+(`isDescendantLocked`, or the disk-backed lineage check above once
+`Reap` has removed the live node) cancel/status/send use — a terminal
+node keeps its `*Session`, history included, until `Reap`, so no reload
+and no disk read is involved for a still-tracked descendant. It is
+bounded on three axes, because its output lands in the
 PARENT's context and replays on every later turn: `tail` (default 20,
 clamped at 100, a negative value is an error), a per-entry rune cap, and a
 total rune budget filled NEWEST-first so the messages nearest a death

@@ -18,6 +18,14 @@ import (
 //
 // Plugin processes stay warm for the session, so module-level caches (token
 // TTL caches, compiled matchers, per-session state) are expected and fine.
+//
+// A hook function must be SAFE FOR CONCURRENT USE. The harness keeps several
+// requests in flight on one connection (see PROTOCOL.md, "Concurrency"), and
+// this SDK serves each incoming request on its own goroutine, so two calls of
+// the same hook — or of two different hooks — can run at the same time. Guard
+// any shared cache. A plugin that cannot be made reentrant may serialize its
+// own handlers with a mutex; the harness stays correct and is only throttled.
+// Tool functions in Tools below follow the same rule.
 type Hooks struct {
 	Event             func(ctx context.Context, c *Client, events []Event)
 	ChatParams        func(ctx context.Context, c *Client, req *ChatParamsRequest) (*ChatParamsResponse, error)

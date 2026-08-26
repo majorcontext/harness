@@ -582,6 +582,90 @@ const (
 	goalRetryableMaxAttempts = 12
 )
 
+// goalProviderExhaustedMaxAttempts bounds a single turn's provider-exhausted
+// attempts (see provider.AsProviderExhausted, provider/errors.go) before
+// promptTurnWithRetry gives up and PursueGoal parks the turn — the same
+// weather-shaped budget goalRetryableMaxAttempts uses for ordinary
+// overloaded/rate_limited/server_error weather, kept as its own named
+// constant (and its own attempt counter — see promptTurnWithRetry) so a
+// concurrent overload spell and an account wall in the same turn never
+// share, and silently steal from, one another's budget.
+//
+// Before this constant existed, a provider-exhausted error was wrapped
+// provider.MarkPermanent by the adapter (see provider/anthropic/anthropic.go:
+// an account-level usage-limit rejection has no distinct HTTP status or wire
+// error type, so the adapter can only classify it after regex-matching the
+// message) and promptTurnWithRetry's fail-fast permanent branch treated it
+// exactly like a structurally malformed request: ONE attempt, no backoff,
+// immediate park. That is correct for a malformed request (retrying an
+// identical request fails identically forever) but wrong here — an account
+// wall lifts on its own, unchanged, the moment the provider's own clock
+// rolls over (see provider.ErrKindProviderExhausted's doc comment) — so
+// fail-fast silently killed goal supervision on the very first usage-limit
+// rejection instead of giving the wall any chance to clear. Live evidence:
+// box bx-01m0x8996 parked after "1 permanent-tier attempt(s)" on "You have
+// reached your specified API usage limits" and never resumed without an
+// operator DELETE + re-register.
+//
+// RecoverHint (the provider's own "you regain access on <date>" statement)
+// is deliberately NEVER parsed into a wait duration — see
+// provider.Error.RecoverHint's doc comment: the format varies by provider
+// and by plan, so computing an exact wake time from it would be guessing
+// dressed as precision. This tier instead rides the exact same jittered
+// backoff schedule (goalRetryableBackoff/waitGoalRetryableBackoff) ordinary
+// weather uses. goalRetryableMaxAttempts' own doc comment already argues
+// this shape correctly: it trades a bounded, generous wait (~30 minutes
+// worst case) against the alternative of an unbounded, unattended hold on
+// the run slot for however long a quota happens to be spent — a wall that
+// clears in seconds (a burst rate limit that reached this classification)
+// or minutes resumes automatically within this budget; a wall measured in
+// hours or days still exhausts it and parks, honestly classified (see
+// goalClassProviderExhausted/classifyGoalWorkerError) rather than either
+// pinning the run slot for the outage's full, unknown duration (the exact
+// GitHub issue #61 shape this package's Round 7 rework rejected — see
+// goalRetryableExhaustedError's doc comment) or silently dying on attempt
+// one as it did before this fix.
+const goalProviderExhaustedMaxAttempts = goalRetryableMaxAttempts
+
+// classifyProviderExhausted re-derives retryable/class for a
+// provider-exhausted error into the goal loop's local classification
+// bookkeeping (see goalClassProviderExhausted's doc comment below), shared
+// by promptTurnWithRetry and PursueGoal's worker-turn error handling so the
+// two sites can never independently drift on what counts as
+// provider-exhausted or which class value marks it — a review finding on
+// the fix that introduced this tier: the override was duplicated verbatim
+// at both call sites. retryable/class are the caller's own
+// provider.AsRetryable(err) result, passed through unchanged when err is
+// not provider-exhausted; providerExhausted reports which branch fired, for
+// callers (promptTurnWithRetry) that need it for their own dispatch beyond
+// just retryable/class.
+func classifyProviderExhausted(err error, retryable bool, class provider.RetryableClass) (newRetryable bool, newClass provider.RetryableClass, providerExhausted bool) {
+	if _, ok := provider.AsProviderExhausted(err); ok {
+		return true, goalClassProviderExhausted, true
+	}
+	return retryable, class, false
+}
+
+// goalClassProviderExhausted is the local provider.RetryableClass marker
+// used to record a provider-exhausted worker-turn failure through the
+// EXISTING retryable/class bookkeeping (goalWorkerParkedError,
+// recordGoalParked, classifyGoalWorkerError, the goal.stalled/goal.parked
+// records and their matching events) instead of adding a fourth boolean or
+// a new record field throughout this file. provider.AsRetryable(err) itself
+// never returns this — a provider-exhausted error is wrapped
+// provider.MarkPermanent, not provider.MarkRetryable (see
+// provider.ErrKindProviderExhausted's doc comment: adapters mark it
+// permanent for ordinary HTTP-retry purposes, since no short backoff
+// schedule outlives a monthly quota) — but for THIS package's purposes it
+// behaves like weather, not a doomed request, so promptTurnWithRetry and
+// PursueGoal's worker-turn handling both fold it into their local
+// retryable/class variables explicitly (see the "provider-exhausted" branch
+// in each). It is not one of provider/retryable.go's real RetryableClass
+// values, so a reader of a goal.stalled/goal.parked record's
+// RetryableClass field sees it clearly labeled apart from
+// overloaded/rate_limited/server_error/stream_truncated.
+const goalClassProviderExhausted provider.RetryableClass = "provider_exhausted"
+
 // goalRetryableDelay returns the base (pre-jitter) backoff for the given
 // 1-indexed retryable-class attempt that just failed, doubling each time up
 // to goalRetryableBackoffCap — the same shape as goalRetryDelay, just a
@@ -712,8 +796,10 @@ func IsGoalEvaluatorExhausted(err error) bool {
 }
 
 // goalWorkerParkedError is returned by PursueGoal when a worker turn
-// exhausts either exhaustion tier — deterministic (goalWorkerRetries) or
-// retryable-class (goalRetryableMaxAttempts) — and the loop exit-parks
+// exhausts any exhaustion tier — deterministic (goalWorkerRetries),
+// retryable-class (goalRetryableMaxAttempts), stream-truncated
+// (goalStreamTruncatedMaxAttempts), or provider-exhausted
+// (goalProviderExhaustedMaxAttempts) — and the loop exit-parks
 // instead of clearing the goal. See PursueGoal's doc comment and the
 // package doc's "Round 7" section: unlike goalEvaluatorExhaustedError
 // above, reaching this sentinel is NOT a durable "give up" terminal — the
@@ -748,6 +834,8 @@ type goalWorkerParkedError struct {
 func (e *goalWorkerParkedError) Error() string {
 	tier := "deterministic"
 	switch {
+	case e.class == goalClassProviderExhausted:
+		tier = "provider-exhausted"
 	case e.permanent:
 		tier = "permanent"
 	case e.retryable:
@@ -793,6 +881,14 @@ func IsGoalWorkerParked(err error) bool {
 // only one ever did. Only ever true when retryable is false.
 func classifyGoalWorkerError(retryable, permanent bool, class provider.RetryableClass) string {
 	switch {
+	case class == goalClassProviderExhausted:
+		// Named explicitly, ahead of the generic retryable case below, so
+		// an operator reading goal.parked never confuses this with ordinary
+		// overload/rate-limit weather: this is an account-level usage/quota
+		// wall (see goalProviderExhaustedMaxAttempts' doc comment), still
+		// resumable, just parked longer than this turn's budget could ride
+		// out.
+		return "provider account usage limit exhausted the retry budget"
 	case retryable:
 		return fmt.Sprintf("provider %s errors exhausted the retry budget", class)
 	case permanent:
@@ -803,7 +899,7 @@ func classifyGoalWorkerError(retryable, permanent bool, class provider.Retryable
 }
 
 // recordGoalParked records goal.parked: the terminal PursueGoal reaches
-// when a worker turn exhausts either exhaustion tier without clearing the
+// when a worker turn exhausts any exhaustion tier without clearing the
 // goal (see PursueGoal's exit-park branches and classifyGoalWorkerError for
 // why this record's Reason is classified rather than the raw error text
 // goal.stalled/goal.eval_failed carry). Deliberately does NOT touch
@@ -1171,6 +1267,19 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			// accurately, exactly as goal.stalled already does for the same
 			// failing attempt (see promptTurnWithRetry).
 			class, retryable := provider.AsRetryable(err)
+			// classifyProviderExhausted (shared with promptTurnWithRetry's
+			// own call below, so the two sites can never drift): by the time
+			// promptTurnWithRetry returns an error here for a
+			// provider-exhausted failure, its own tier budget
+			// (goalProviderExhaustedMaxAttempts) has already been spent
+			// retrying it, so this IS a genuine exhaustion, not the
+			// fail-fast-on-attempt-one shape the pre-fix permanent branch
+			// produced. Reclassifying it as retryable/goalClassProviderExhausted
+			// here — rather than leaving it to fall into the permanent branch
+			// below — keeps the resulting goal.parked record and
+			// classifyGoalWorkerError reason honest: "provider capacity
+			// exhausted", never "permanent provider error".
+			retryable, class, _ = classifyProviderExhausted(err, retryable, class)
 			if !retryable && provider.IsContextOverflow(err) {
 				// Issue #62, layer 1: a deterministic context/prompt
 				// overflow gets its own distinct clear reason instead of a
@@ -1380,16 +1489,20 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 // later — there is no bound on how many times this can recur short of
 // Prompt gaining a resumable, sub-turn checkpoint, which it does not have.
 //
-// # Three independent budgets, chosen by error classification
+// # Four independent budgets, chosen by error classification
 //
 // Every failed attempt is first classified via provider.AsRetryable (never
-// by matching error text — see provider/retryable.go). A DETERMINISTIC
-// failure (not classified retryable) runs the fast path exactly as
-// described above: goalWorkerRetries additional attempts, goalRetryDelay's
-// short backoff. A RETRYABLE failure runs one of two further loops,
-// depending on its class, and neither increments the deterministic counter,
-// so surviving either kind of failure costs a turn nothing against
-// goalWorkerRetries:
+// by matching error text — see provider/retryable.go), then re-checked via
+// provider.AsProviderExhausted (see goalClassProviderExhausted's doc
+// comment) since an exhausted error is wrapped provider.MarkPermanent, not
+// provider.MarkRetryable, and needs its own local override to be treated as
+// weather rather than a doomed request. A DETERMINISTIC failure (not
+// classified retryable, not provider-exhausted) runs the fast path exactly
+// as described above: goalWorkerRetries additional attempts, goalRetryDelay's
+// short backoff. A RETRYABLE (or provider-exhausted) failure runs one of
+// three further loops, depending on its class, and none of them increments
+// the deterministic counter, so surviving any of them costs a turn nothing
+// against goalWorkerRetries:
 //
 //   - provider.RetryableStreamTruncated (a response stream that died before
 //     its terminal event) runs its OWN, much smaller loop, up to
@@ -1398,25 +1511,34 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 //     doc comment for why: waiting longer can never raise a stream ceiling,
 //     so this class must not be allowed to ride the long weather schedule
 //     below.
+//   - a provider-exhausted failure (an account-level usage/quota wall) runs
+//     its own loop, up to goalProviderExhaustedMaxAttempts attempts, on the
+//     SAME long jittered schedule (goalRetryableBackoff) ordinary weather
+//     uses — see goalProviderExhaustedMaxAttempts' doc comment for why it
+//     needs its own counter rather than sharing retryableAttempt below.
 //   - every other retryable class runs its own loop, up to
 //     goalRetryableMaxAttempts attempts, spaced by goalRetryableBackoff's
 //     much longer jittered schedule (see the doc comment on that function).
 //
-// If either retryable budget is exhausted, this function returns a
-// *goalRetryableExhaustedError wrapping the last error, which PursueGoal
-// recognizes and parks the turn instead of clearing the goal (see
-// PursueGoal's doc comment and goalRetryableExhaustedError's).
+// If any of the three budgets is exhausted, this function returns an error
+// PursueGoal recognizes and parks the turn instead of clearing the goal (see
+// PursueGoal's doc comment): the ordinary retryable and stream-truncated
+// tiers wrap it in *goalRetryableExhaustedError first (see that type's doc
+// comment); the provider-exhausted tier returns the bare err, since
+// PursueGoal's caller reclassifies it directly via
+// provider.AsProviderExhausted rather than needing a dedicated wrapper.
 //
 // The non-idempotency gate below (stop retrying once a tool has executed
-// this attempt) applies identically to BOTH budgets: retrying after a tool
-// call ran is unsafe regardless of why the subsequent call failed.
+// this attempt) applies identically to all three retry-shaped budgets:
+// retrying after a tool call ran is unsafe regardless of why the subsequent
+// call failed.
 //
 // gen is the calling turn's goalSnapshot generation, threaded straight
 // through to recordGoalStalled so a stall record for an attempt is never
 // journaled once an UpdateGoal has moved the goal past this turn's
 // generation — see recordGoalStalled and PursueGoal's stale-discard handling.
 func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, turn int, gen uint64) (attempts int, err error) {
-	var deterministicAttempt, retryableAttempt, truncatedAttempt int
+	var deterministicAttempt, retryableAttempt, truncatedAttempt, exhaustedAttempt int
 	// anchorID identifies the message directiveReuseEligible and
 	// dropUnansweredDirective both measure their tail from — the point
 	// immediately before whichever directive is CURRENTLY this turn's live,
@@ -1488,11 +1610,28 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 			return attempts, err
 		}
 		class, retryable := provider.AsRetryable(err)
+		// A provider-exhausted error (an account-level usage/quota wall,
+		// provider.ErrKindProviderExhausted) is wrapped provider.MarkPermanent
+		// by the adapter, not provider.MarkRetryable — provider.AsRetryable
+		// above already returned false for it — but for the GOAL LOOP it
+		// behaves like weather, not a doomed request: the wall lifts on its
+		// own (see goalProviderExhaustedMaxAttempts' doc comment for the
+		// live incident this closes). classifyProviderExhausted (shared with
+		// PursueGoal's own identical call above, so the two sites can never
+		// drift) folds it into the local retryable/class variables here,
+		// rather than adding a fourth classification threaded separately
+		// through every branch below, reusing the exact same tier-dispatch,
+		// stall-recording, and park-recording machinery the other three
+		// tiers already exercise.
+		retryable, class, providerExhausted := classifyProviderExhausted(err, retryable, class)
 		// Stream truncation is retryable-CLASS (it parks on exhaustion,
 		// carries its class on every stall record, and never spends the
 		// deterministic budget) but runs its OWN, much smaller budget on
 		// the SHORT schedule — see goalStreamTruncatedMaxAttempts for why
-		// it must ride neither of the other two tiers.
+		// it must ride neither of the other two tiers. Provider-exhausted
+		// gets its own budget for the same reason: it must never share a
+		// counter with, and be silently starved or padded by, ordinary
+		// overload/rate-limit weather in the same turn.
 		truncated := class == provider.RetryableStreamTruncated
 		// exhausted decides, for a retryable failure, whether THIS attempt
 		// is the one that exhausts its tier's budget — computed before the
@@ -1500,7 +1639,8 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 		// "one more than the retries already spent, including this one,
 		// would meet or exceed the ceiling".
 		exhausted := retryable && ((truncated && truncatedAttempt+1 >= goalStreamTruncatedMaxAttempts) ||
-			(!truncated && retryableAttempt+1 >= goalRetryableMaxAttempts))
+			(providerExhausted && exhaustedAttempt+1 >= goalProviderExhaustedMaxAttempts) ||
+			(!truncated && !providerExhausted && retryableAttempt+1 >= goalRetryableMaxAttempts))
 		// The tool-execution gate is evaluated BEFORE the stall is
 		// journaled so the record's waiting flag tells the truth: an
 		// attempt that ran a tool and then failed is about to stop
@@ -1525,7 +1665,7 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 			// comment).
 			return attempts, err
 		}
-		if provider.AsPermanent(err) {
+		if !providerExhausted && provider.AsPermanent(err) {
 			// NEP-5272 defect 1: a provider error classified permanent (an
 			// HTTP 400 invalid_request_error naming a structurally
 			// malformed request — e.g. an orphaned tool_use left over from
@@ -1548,6 +1688,14 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 			// PursueGoal's error handling: retryable is false and
 			// IsContextOverflow is false, so this reaches the "every
 			// remaining case parks" branch unmodified).
+			//
+			// providerExhausted is excluded from this branch even though
+			// provider.AsPermanent(err) is ALSO true for it (see
+			// goalClassProviderExhausted's doc comment: the adapter wraps
+			// it provider.MarkPermanent too) — an account wall is not a
+			// malformed request, and must not fail fast on attempt one. It
+			// falls through to the tier-dispatch section below instead,
+			// where the providerExhausted branch handles it.
 			return attempts, err
 		}
 		if toolGateStops {
@@ -1591,6 +1739,31 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 			// LONG turns, so attempts are naturally minutes apart already
 			// — the wait only needs to clear a momentary network blip.
 			if werr := waitGoalRetryBackoff(ctx, truncatedAttempt); werr != nil {
+				return attempts, werr
+			}
+			continue
+		}
+		if providerExhausted {
+			exhaustedAttempt++
+			if exhausted {
+				// Budget exhausted: return the bare underlying err (never
+				// wrapped) so PursueGoal's caller — which classifies
+				// directly via provider.AsProviderExhausted(err), the same
+				// as it does for provider.AsRetryable(err) — sees straight
+				// through to the real classification without needing a
+				// dedicated sentinel type. goalRetryableExhaustedError exists
+				// only so promptTurnWithRetry can signal its OWN budget gave
+				// out to its own tests (see that type's doc comment);
+				// provider-exhausted's own tests can assert directly on
+				// exhaustedAttempt/attempts instead.
+				return attempts, err
+			}
+			// Same long jittered schedule ordinary weather uses (see
+			// goalProviderExhaustedMaxAttempts' doc comment for why: an
+			// account wall is worth waiting out, exactly like overload/
+			// rate-limit weather, and RecoverHint is deliberately never
+			// parsed into an exact wake time).
+			if werr := waitGoalRetryableBackoff(ctx, exhaustedAttempt); werr != nil {
 				return attempts, werr
 			}
 			continue
@@ -1835,6 +2008,17 @@ func isInterruptedToolResultMessage(m message.Message) bool {
 // still within its budget ("waiting out provider weather") and false for
 // the final retryable stall that reports the budget exhausted (the turn is
 // about to park — see PursueGoal's doc comment).
+//
+// Reason is err.Error() verbatim for every class except
+// goalClassProviderExhausted — a review finding on the fix that introduced
+// that class: err.Error() for a provider-exhausted error starts with
+// "[permanent] ..." (the adapter wraps it provider.MarkPermanent — see that
+// constant's doc comment), which reads as self-contradicting next to this
+// SAME record's own Retryable:true/RetryableClass:"provider_exhausted"
+// fields. That one class instead renders through classifyGoalWorkerError,
+// the same classified rendering recordGoalParked already uses, so a
+// goal.stalled record for this class reads consistently with its own
+// classification fields instead of echoing raw permanent-branch text.
 func (s *Session) recordGoalStalled(err error, turn, attempt int, retryable bool, class provider.RetryableClass, waiting bool, gen uint64) bool {
 	s.mu.Lock()
 	if !s.goalActive || s.goalGen != gen {
@@ -1842,6 +2026,9 @@ func (s *Session) recordGoalStalled(err error, turn, attempt int, retryable bool
 		return false
 	}
 	reason := err.Error()
+	if class == goalClassProviderExhausted {
+		reason = classifyGoalWorkerError(retryable, false, class)
+	}
 	s.persistGoalLocked(recGoalStalled, goalRecord{
 		Reason:         reason,
 		Turn:           turn,
@@ -2242,7 +2429,11 @@ func (s *Session) runEvaluator(ctx context.Context, condition string, evaluator 
 	if err != nil {
 		return "", err
 	}
-	content := "GOAL CONDITION:\n" + condition + "\n\nCONVERSATION TRANSCRIPT:\n" + renderConversation(s.History())
+	transcript, truncated := renderConversationBounded(s.History(), goalEvaluatorTranscriptBudgetBytes(evaluator))
+	if truncated {
+		transcript = goalEvaluatorTruncationNotice + transcript
+	}
+	content := "GOAL CONDITION:\n" + condition + "\n\nCONVERSATION TRANSCRIPT:\n" + transcript
 	req := &provider.Request{
 		Model:  evaluator,
 		System: []string{systemPrompt},
@@ -2355,19 +2546,173 @@ func goalGuidance(condition, reason string) string {
 }
 
 // renderConversation renders history compactly for the evaluator: each message
-// role-labeled, each part rendered as text and capped at goalPartCap.
+// role-labeled, each part rendered as text and capped at goalPartCap. This
+// has no length bound of its own — see renderConversationBounded, which
+// runEvaluator actually calls, for the evaluator-model-sized budget.
 func renderConversation(history []message.Message) string {
 	var b strings.Builder
 	for _, m := range history {
-		b.WriteString(strings.ToUpper(string(m.Role)))
-		b.WriteString(":\n")
-		for _, p := range m.Parts {
-			b.WriteString(truncateForGoal(renderPart(p)))
-			b.WriteByte('\n')
-		}
-		b.WriteByte('\n')
+		b.WriteString(renderMessageBlock(m))
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// renderMessageBlock renders one message exactly as renderConversation's
+// loop body did before this function was split out — role-labeled, each
+// part capped at goalPartCap — so both renderConversation and
+// renderConversationBounded share one rendering rule instead of drifting.
+func renderMessageBlock(m message.Message) string {
+	var b strings.Builder
+	b.WriteString(strings.ToUpper(string(m.Role)))
+	b.WriteString(":\n")
+	for _, p := range m.Parts {
+		b.WriteString(truncateForGoal(renderPart(p)))
+		b.WriteByte('\n')
+	}
+	b.WriteByte('\n')
+	return b.String()
+}
+
+// goalEvaluatorTruncationNotice prefixes a bounded transcript
+// (renderConversationBounded) whenever it actually dropped earlier
+// messages, so the evaluator — and an operator reading a goal.eval record
+// later — never mistakes a truncated transcript for the whole session.
+const goalEvaluatorTruncationNotice = "[earlier conversation omitted to fit the evaluator's context budget]\n\n"
+
+// renderConversationBounded is renderConversation's budget-aware sibling:
+// the fix for the live incident on box bx-01m0x8996, whose evaluator died
+// with "context exhausted: prompt 245332 tokens > limit ..." because
+// renderConversation(s.History()) has no bound at all — it grows with the
+// WHOLE session transcript forever, while the main session is protected by
+// automatic compaction (engine/compact.go) and the evaluator never was.
+//
+// It walks history from the NEWEST message backward, accumulating rendered
+// blocks (renderMessageBlock — the exact same per-part goalPartCap rendering
+// renderConversation uses, so nothing here changes how one message renders,
+// only how many are kept) until the next block would push the running total
+// past budgetBytes, then stops and reverses the kept slice back into
+// chronological order.
+//
+// "Prefer summary + tail" falls out of this walk for free rather than
+// needing a second summarization path of its own: Compact (engine/
+// compact.go) splices its summary message directly into s.history in place
+// of the range it folded, tagged with the compactionSummaryIDTag prefix
+// (isCompactionSummaryID). The backward walk here stops the INSTANT it
+// includes such a message — even with budget still unspent — because that
+// message already IS the compacted record of everything before it walking
+// further back would just render already-summarized content a second time.
+// So whenever automatic compaction has run at all, the evaluator naturally
+// gets exactly "the latest compaction summary plus every raw message after
+// it, bounded to what fits" with no new summarization call, no new stored
+// field, and no coupling to compaction's internals beyond the one ID-prefix
+// helper it already exports to this package.
+//
+// The newest message is always kept, however large, rather than dropped
+// outright: an evaluator call with an empty transcript could never assess
+// anything. A single oversized message still gets its own per-part cap from
+// renderMessageBlock/truncateForGoal, so this is bounded too, just not by
+// budgetBytes.
+func renderConversationBounded(history []message.Message, budgetBytes int) (transcript string, truncated bool) {
+	if len(history) == 0 {
+		return "", false
+	}
+	kept := make([]message.Message, 0, len(history))
+	used := 0
+	for i := len(history) - 1; i >= 0; i-- {
+		block := renderMessageBlock(history[i])
+		if len(kept) > 0 && budgetBytes > 0 && used+len(block) > budgetBytes {
+			break
+		}
+		kept = append(kept, history[i])
+		used += len(block)
+		if isCompactionSummaryID(history[i].ID) {
+			break
+		}
+	}
+	for l, r := 0, len(kept)-1; l < r; l, r = l+1, r-1 {
+		kept[l], kept[r] = kept[r], kept[l]
+	}
+	return renderConversation(kept), len(kept) < len(history)
+}
+
+// goalEvaluatorReserveTokens sets aside room, in the evaluator model's OWN
+// token budget, for everything in the request besides the transcript: the
+// system prompt (goalEvaluatorSystem/goalEvaluatorStrictSystem, both well
+// under 700 bytes), the "GOAL CONDITION" preamble and condition text, and
+// the 256-token MaxTokens output reply. Deliberately generous relative to
+// those actual sizes — goalEvaluatorContextBudgetFraction below is what
+// does the real safety work; this constant only keeps a degenerate tiny
+// window (goalEvaluatorFallbackContextWindowTokens) from computing a
+// negative or implausibly small transcript budget.
+const goalEvaluatorReserveTokens = 2048
+
+// goalEvaluatorContextBudgetFraction bounds the evaluator transcript to this
+// fraction of the evaluator model's context window, after
+// goalEvaluatorReserveTokens is set aside — the same "stay well under the
+// hard limit, don't cut it exactly at the edge" shape
+// defaultCompactionThreshold (engine/compact.go) uses for the main session.
+// A fraction well under 1.0 matters more here than it does there:
+// bytesPerTokenEstimate's 4-bytes/token conversion (reused from compact.go,
+// not reinvented — see goalEvaluatorTranscriptBudgetBytes) is a crude
+// heuristic, not the provider's real tokenizer, and this budget has no
+// second line of defense the way compaction's threshold-then-hard-overflow
+// does: an evaluator call that still overflows has nothing left to retry
+// into.
+const goalEvaluatorContextBudgetFraction = 0.5
+
+// goalEvaluatorFallbackContextWindowTokens is the transcript budget's floor
+// for an evaluator model modelmeta has NO ENTRY for at all (an unrecognized
+// ref, a custom gateway alias) — mirrors minAutoContextWindowTokens
+// (engine/context_window.go), the exact same floor automatic compaction
+// refuses to ARM below. A genuinely unrecognized evaluator model still gets
+// a real, bounded budget from this floor instead of falling back to the
+// fully unbounded renderConversation(s.History()) that produced the "prompt
+// 245332 tokens > limit" evaluator failure on bx-01m0x8996 in the first
+// place.
+//
+// This floor must NOT be reused as a stand-in for "the model's real window
+// is small" — see goalEvaluatorTranscriptBudgetBytes's doc comment for why
+// resolveContextWindow (which folds that case into this same floor, for
+// automatic-compaction-ARMING purposes) is deliberately NOT what this
+// function calls.
+const goalEvaluatorFallbackContextWindowTokens = minAutoContextWindowTokens
+
+// goalEvaluatorTranscriptBudgetBytes returns the byte budget
+// renderConversationBounded must fit the rendered CONVERSATION TRANSCRIPT
+// field inside, derived from the EVALUATOR model's own context window —
+// never the main session model's, which can be (and on bx-01m0x8996, was —
+// a 1,000,000-token model against an evaluator whose own limit the incident
+// error names) far larger than the evaluator's own.
+//
+// This calls modelContextWindowLookup (modelmeta.ContextWindow) DIRECTLY —
+// deliberately NOT resolveContextWindow, despite that function existing
+// for exactly this "look up a model's context window" job and this
+// function's own earlier revision having called it. A review finding
+// caught why that was wrong: resolveContextWindow's minAutoContextWindowTokens
+// floor answers "should automatic compaction ARM for this window" — a
+// window below the floor is treated as bogus/untrustworthy metadata and the
+// function reports (0, disabled), identically to a model with NO metadata
+// at all. Calling it here silently conflated two different evaluator
+// models: a genuinely UNRECOGNIZED one (no table entry — this really
+// should fall back to a floor) and a REAL, SMALL, KNOWN one (gpt-4's
+// documented 8_192-token window is the table's own example of a legitimate
+// entry under the 16k floor) — both funneled into the SAME
+// goalEvaluatorFallbackContextWindowTokens (16k) fallback, so a real
+// 8_192-token evaluator got a budget roughly TWICE its actual window: the
+// exact overflow class this whole fix exists to close. Calling
+// modelContextWindowLookup directly and trusting ANY positive, KNOWN
+// window — however small — fixes that: the floor here applies only to a
+// true "no entry at all" miss, never to "the real entry is small."
+func goalEvaluatorTranscriptBudgetBytes(evaluator message.ModelRef) int {
+	windowTokens, ok := modelContextWindowLookup(evaluator)
+	if !ok || windowTokens <= 0 {
+		windowTokens = goalEvaluatorFallbackContextWindowTokens
+	}
+	budgetTokens := int(float64(windowTokens)*goalEvaluatorContextBudgetFraction) - goalEvaluatorReserveTokens
+	if budgetTokens < goalEvaluatorReserveTokens {
+		budgetTokens = goalEvaluatorReserveTokens
+	}
+	return budgetTokens * bytesPerTokenEstimate
 }
 
 func renderPart(p message.Part) string {

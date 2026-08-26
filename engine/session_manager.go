@@ -8,8 +8,11 @@ import (
 	"sync"
 	"time"
 
+	"bufio"
+	"encoding/json"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
+	"os"
 )
 
 // SessionStatus is a session's lifecycle state as tracked by a
@@ -1198,6 +1201,81 @@ func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
 	u.CacheReadTokens += delta.CacheReadTokens
 	u.CacheWriteTokens += delta.CacheWriteTokens
 	m.usageByRoot[n.rootID] = u
+}
+
+// deriveSettledStatus computes a session's terminal lifecycle facts —
+// status, result, fail reason, fail kind — purely from ITS OWN durable
+// state (committedTurnOutcome, or the HasHistoryOrSpawnedChildren/
+// settledSuccessResult legacy fallback), with NO SessionManager
+// bookkeeping touched: no sessionNode field set, no budget map folded, no
+// markChangedLocked. It is the read-only counterpart to
+// restoreKnownStatusLocked's own identical classification (same two
+// signals, same nodeStatusForOutcome/settledSuccessResult/
+// unknownLegacyOutcomeFailReason primitives, in the same preference
+// order — see that method's own doc comment for the full reasoning behind
+// each branch, which this function deliberately does not repeat), used by
+// durableSnapshot to answer the task tool's status/log verbs for a
+// descendant Reap has already removed from the live tree WITHOUT
+// re-adopting it (see resolveOrReviveDescendantLocked's own doc comment
+// for why a read-only verb must not mutate the tree the way send's own
+// revival deliberately does).
+//
+// ok is false only when NEITHER signal proves s ever ran a turn at all —
+// genuinely fresh, with nothing settled to report; each caller applies
+// its own "genuinely fresh" default (StatusIdle) rather than this
+// function guessing one on the caller's behalf.
+func deriveSettledStatus(s *Session) (status SessionStatus, result, failReason, failKind string, ok bool) {
+	if committed, has := s.committedTurnOutcome(); has {
+		switch nodeStatusForOutcome(committed) {
+		case StatusCanceled:
+			// Mirrors restoreKnownStatusLocked's identical Canceled case:
+			// result/failReason/failKind stay empty. Restoring
+			// committed.FailReason ("canceled", the fixed text
+			// finalizeTurn's alreadyCanceled branch puts in the
+			// PARENT-facing notification) here would invent a value a
+			// live cancellation never actually sets.
+			return StatusCanceled, "", "", "", true
+		case StatusDone:
+			return StatusDone, committed.Result, "", "", true
+		default:
+			return StatusFailed, "", committed.FailReason, committed.FailKind, true
+		}
+	}
+	if s.HasHistoryOrSpawnedChildren() {
+		if result, has := s.settledSuccessResult(); has {
+			return StatusDone, result, "", "", true
+		}
+		return StatusFailed, "", unknownLegacyOutcomeFailReason, "", true
+	}
+	return "", "", "", "", false
+}
+
+// durableSnapshot builds a read-only SessionNode directly from a
+// disk-loaded, NOT tree-adopted *Session — sessionNode.snapshot()'s
+// counterpart for a descendant that only exists on disk right now (see
+// resolveOrReviveDescendantLocked). Children is durable-only
+// (sess.SpawnedChildIDs()): there is no live half to union via
+// mergeChildIDs, since sess was never adopted into m.nodes.
+func durableSnapshot(id, parentID string, depth int, sess *Session) SessionNode {
+	children := sess.SpawnedChildIDs()
+	if children == nil {
+		children = []string{}
+	}
+	snap := SessionNode{
+		ID:        id,
+		ParentID:  parentID,
+		Depth:     depth,
+		Status:    StatusIdle,
+		Children:  children,
+		AgentType: sess.TaskAgentType(),
+	}
+	if status, result, failReason, failKind, ok := deriveSettledStatus(sess); ok {
+		snap.Status = status
+		snap.Result = result
+		snap.FailReason = failReason
+		snap.FailKind = failKind
+	}
+	return snap
 }
 
 // recoverCrashedChildrenLocked sweeps n's own durably-recorded children
@@ -3008,6 +3086,185 @@ func (m *SessionManager) isDescendantLocked(ancestorID, targetID string) bool {
 	return false
 }
 
+// durableAncestorChainHas reports whether callerID appears anywhere in a
+// disk-resolved descendant's own durable TaskParentID chain, starting from
+// startParentID (the descendant's own TaskParentID) and walking strictly
+// through LoadSession — never the live tree, never m.mu — so it is safe to
+// call from resolveOrReviveDescendantLocked's UNLOCKED window (see that
+// method's own doc comment for why the disk-bound half of a revival must
+// not hold m.mu).
+//
+// TaskParentID is set once, durably, at Spawn time and never changes
+// afterward (Config.TaskParentID's own doc comment), so this answer is
+// exactly as authoritative as isDescendantLocked's live-tree walk is for a
+// still-tracked chain — it is simply reading the SAME lineage fact from
+// disk instead of from memory, for the hops Reap has already erased from
+// memory.
+//
+// maxHops bounds the walk at m.maxDepth: Spawn's own depth-limit gate
+// (ErrDepthLimit) makes a genuine chain at most m.maxDepth hops long, so a
+// walk that has not reached "" or callerID within that many hops cannot be
+// a real lineage — the bound stops the function from following however a
+// corrupted or adversarial TaskParentID chain might otherwise be shaped,
+// rather than trusting disk content to be well-formed indefinitely.
+func durableAncestorChainHas(cfg Config, startParentID, callerID string, maxHops int) bool {
+	parentID := startParentID
+	for hops := 0; parentID != "" && hops <= maxHops; hops++ {
+		if parentID == callerID {
+			return true
+		}
+		// Header-only read, not LoadSession: this walk needs exactly one
+		// field per hop (the next TaskParentID), and LoadSession replays
+		// the WHOLE log — O(chain depth) full-transcript parses in the
+		// unlocked window for deep chains (a review finding). The header
+		// record is the first line of every log (ensureLog writes it
+		// first, in the same atomic buffer as the model record), so one
+		// bounded line read per hop suffices.
+		next, err := loadSessionTaskParent(cfg, parentID)
+		if err != nil {
+			return false
+		}
+		parentID = next
+	}
+	return false
+}
+
+// loadSessionTaskParent reads a session log's durable TaskParentID from its
+// header record alone — the first line of the file — without replaying the
+// log. A file whose first record is not a recSession header (impossible for
+// a log this engine wrote, ensureLog's single-write ordering) reports an
+// error rather than guessing.
+func loadSessionTaskParent(cfg Config, id string) (string, error) {
+	if !ValidSessionID(id) {
+		return "", fmt.Errorf("%w: %q", ErrInvalidSessionID, id)
+	}
+	f, err := os.Open(sessionPath(cfg.SessionDir, id))
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	// One bounded line: headers are small (a recSession record), but a
+	// generous cap keeps a pathological first line from slurping a huge
+	// log into memory.
+	r := bufio.NewReaderSize(f, 64*1024)
+	line, err := r.ReadString('\n')
+	if err != nil && line == "" {
+		return "", err
+	}
+	var rec record
+	if err := json.Unmarshal([]byte(line), &rec); err != nil {
+		return "", fmt.Errorf("session %s: unparseable header line: %w", id, err)
+	}
+	if rec.Type != recSession {
+		return "", fmt.Errorf("session %s: first record is %q, want %q", id, rec.Type, recSession)
+	}
+	return rec.TaskParentID, nil
+}
+
+// resolveOrReviveDescendantLocked resolves targetID against m's live tree,
+// falling back to disk when Reap has already collected it as a terminal
+// leaf — Reap's own doc comment: a done/failed/canceled child is eligible
+// the instant it settles, which races a caller (the `task` tool's own
+// cancel/status/send/log verbs) that spawned it and asks about it again
+// before it can observe that timing. Before this method existed, that race
+// answered "no such session" — internal reap timing the caller has no way
+// to observe, turning a documented "send a follow-up to a settled child"
+// flow into a coin flip. Every one of the four verbs now shares this same
+// "live miss -> disk fallback" step, so a caller cannot tell a
+// settled-but-unreaped child apart from a reaped one by how the reply
+// differs.
+//
+// callerID MUST already be confirmed tracked by the caller (every verb's
+// own first check, unchanged) — this method assumes it and does not
+// re-verify: callerID is definitionally the session driving THIS very
+// tool call, StatusRunning for the call's whole duration, and Reap never
+// removes a running node.
+//
+// # Two return shapes
+//
+//   - node non-nil, loaded nil: targetID is live-tracked, exactly the
+//     unchanged fast path every existing caller/test already covers. The
+//     caller still owns the ancestry check (isDescendantLocked) — this
+//     method does not run it for a live node, so a live sibling or an
+//     unrelated live session is returned here too, same as before this
+//     fix, for the caller to reject.
+//   - node nil, loaded non-nil: targetID was NOT live-tracked and has been
+//     resolved from disk instead, with ancestry ALREADY confirmed against
+//     its own durable TaskParentID chain (durableAncestorChainHas) — the
+//     caller does not need to (and must not, for a read-only verb — see
+//     each verb's own doc comment) run isDescendantLocked again, since
+//     there is no live node to run it against. depth is the disk-resolved
+//     descendant's own depth, computed with the identical preference order
+//     adoptReloadedLocked's own doc comment documents (durable TaskDepth
+//     first, else a tracked live parent's depth+1, else the maxDepth
+//     refusal sentinel) — needed by the read-only verbs' durableSnapshot,
+//     and redundant-but-harmless for send's own adoptReloadedLocked call,
+//     which recomputes it the same way internally.
+//
+// # Locking — "Locked" despite not holding m.mu throughout
+//
+// Called with m.mu held; always RETURNS with m.mu held, so every caller
+// treats this as an ordinary *Locked method regardless of which path it
+// took — mirrors recoverCrashedChildrenLocked's own identical convention
+// (see its doc comment's "Not actually held throughout" section) for the
+// same reason: the live-tree fast path above does no I/O and never
+// unlocks, but the disk fallback below calls LoadSession (real disk I/O,
+// potentially several times across durableAncestorChainHas' own walk) and
+// releases m.mu for that entire span, so one slow disk read cannot stall
+// every other session's Info/Reap/Spawn/Send call in the process.
+//
+// # Single-winner under a concurrent adopt of the SAME id
+//
+// m.mu is re-acquired before this method returns, and targetID is
+// re-checked against m.nodes immediately on reacquiring it: if some other
+// path (a concurrent Spawn, AdoptReloaded, or another goroutine's own call
+// into this same method for the same id) adopted targetID while this one
+// was reading disk, THAT live node is authoritative and is returned
+// instead of the disk copy this call just loaded — never both. This is the
+// same "already managed... a concurrent adopt may have won the race, use
+// its winner instead" rule AdoptReloaded's own callers already follow
+// (handleSpawnChild, server/session_tree.go) rather than a second, bespoke
+// race primitive: whichever adoption reaches m.nodes[targetID] first, by
+// construction only ever one thing can occupy that map entry at a time, so
+// there is no window left in which two different *Session objects could
+// both end up backing the same on-disk log.
+func (m *SessionManager) resolveOrReviveDescendantLocked(callerID, targetID string) (node *sessionNode, loaded *Session, depth int, err error) {
+	if n, ok := m.nodes[targetID]; ok {
+		return n, nil, 0, nil
+	}
+	cfg := m.nodes[callerID].session.configSnapshot()
+	m.mu.Unlock()
+	sess, lerr := LoadSession(cfg, targetID)
+	var ancestorOK bool
+	if lerr == nil {
+		ancestorOK = sess.hasTaskParent() && durableAncestorChainHas(cfg, sess.TaskParentID(), callerID, m.maxDepth)
+	}
+	m.mu.Lock()
+	if n, ok := m.nodes[targetID]; ok {
+		// Someone else adopted targetID while this call was reading disk —
+		// single winner: use it, exactly like AdoptReloaded's own callers
+		// treat this identical race (see this method's own doc comment).
+		return n, nil, 0, nil
+	}
+	if lerr != nil {
+		return nil, nil, 0, fmt.Errorf("%w: %s", ErrUnknownSession, targetID)
+	}
+	if !ancestorOK {
+		return nil, nil, 0, fmt.Errorf("%w: %s", ErrNotDescendant, targetID)
+	}
+	// Same depth-resolution preference order as adoptReloadedLocked's own
+	// doc comment documents — see this method's own doc comment for why
+	// duplicating it here (rather than only inside adoptReloadedLocked) is
+	// required: the read-only verbs need a depth WITHOUT adopting anything.
+	depth = m.maxDepth
+	if d := sess.TaskDepth(); d > 0 {
+		depth = d
+	} else if p, ok := m.nodes[sess.TaskParentID()]; ok {
+		depth = p.depth + 1
+	}
+	return nil, sess, depth, nil
+}
+
 // CancelDescendant cancels targetID's entire subtree on callerID's
 // behalf, after confirming callerID is a live ancestor of targetID (see
 // isDescendantLocked) — the SessionManager side of the `task` tool's
@@ -3041,17 +3298,45 @@ func (m *SessionManager) isDescendantLocked(ancestorID, targetID string) bool {
 // the outcome inside the same critical section that produced it closes
 // that gap by construction rather than papering over it with a guess.
 //
-// Returns ErrUnknownSession if either id is not tracked, ErrNotDescendant
-// if targetID is not callerID's descendant.
+// A target Reap has already collected (see resolveOrReviveDescendantLocked)
+// is a NO-OP success, never an error and never re-adopted: Reap only ever
+// removes an ALREADY-terminal, ALREADY-finalized leaf (its own doc
+// comment) — a live subtree with anything genuinely still running could
+// never have been eligible in the first place — so "cancel" against a
+// disk-revived id can never actually be interrupting real in-flight work.
+// Reporting its real terminal status (never StatusCanceled — this call did
+// not, in fact, cancel anything) mirrors cancelOneNodeLocked's own
+// "already-terminal -> status left untouched" rule for a LIVE target (see
+// its own doc comment): the disk-revived case is simply that same rule
+// extended past the point Reap removed the node, and — like status/log,
+// unlike send — needs no re-adoption to answer it: an operation whose
+// whole point is "stop something" has nothing left to mutate once the
+// target is confirmed to be sitting completely idle on disk.
+//
+// Returns ErrUnknownSession if either id is not tracked live and not
+// resolvable from disk, ErrNotDescendant if targetID's durable lineage
+// does not reach callerID.
 func (m *SessionManager) CancelDescendant(callerID, targetID string) (SessionStatus, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.nodes[callerID]; !ok {
 		return "", fmt.Errorf("%w: %s", ErrUnknownSession, callerID)
 	}
-	n, ok := m.nodes[targetID]
-	if !ok {
-		return "", fmt.Errorf("%w: %s", ErrUnknownSession, targetID)
+	n, loaded, _, err := m.resolveOrReviveDescendantLocked(callerID, targetID)
+	if err != nil {
+		return "", err
+	}
+	if n == nil {
+		status, _, _, _, ok := deriveSettledStatus(loaded)
+		if !ok {
+			// Reap can only ever have collected an already-finalized leaf,
+			// so this is unreachable in practice — kept as a defensive
+			// default (matching adoptLocked's own StatusIdle default for a
+			// node with nothing yet to report) rather than an assumption a
+			// future disk-resolution caller might rely on silently.
+			status = StatusIdle
+		}
+		return status, nil
 	}
 	if !m.isDescendantLocked(callerID, targetID) {
 		return "", fmt.Errorf("%w: %s", ErrNotDescendant, targetID)
@@ -3072,17 +3357,31 @@ func (m *SessionManager) CancelDescendant(callerID, targetID string) (SessionSta
 // already establishes for this package — so it reflects targetID's
 // current total, not a stale or partial snapshot.
 //
-// Returns ErrUnknownSession if either id is not tracked, ErrNotDescendant
-// if targetID is not callerID's descendant.
+// A target Reap has already collected (see resolveOrReviveDescendantLocked)
+// is served straight from its own disk-loaded state, WITHOUT re-adopting
+// it into the tree: status is a read-only, poll-shaped verb, and a caller
+// asking about a descendant's outcome must not have the side effect of
+// pinning that descendant back into m.nodes (and, via the send-verb-only
+// budget fold, extending its usageByRoot credit window) purely for having
+// looked at it. Contrast SendToDescendant, which DOES re-adopt a revived
+// target — see that method's own doc comment for why a send genuinely
+// needs a live node to act through and a status read does not.
+//
+// Returns ErrUnknownSession if either id is not tracked live and not
+// resolvable from disk, ErrNotDescendant if targetID's durable lineage
+// does not reach callerID.
 func (m *SessionManager) DescendantInfo(callerID, targetID string) (SessionNode, provider.Usage, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.nodes[callerID]; !ok {
 		return SessionNode{}, provider.Usage{}, fmt.Errorf("%w: %s", ErrUnknownSession, callerID)
 	}
-	n, ok := m.nodes[targetID]
-	if !ok {
-		return SessionNode{}, provider.Usage{}, fmt.Errorf("%w: %s", ErrUnknownSession, targetID)
+	n, loaded, depth, err := m.resolveOrReviveDescendantLocked(callerID, targetID)
+	if err != nil {
+		return SessionNode{}, provider.Usage{}, err
+	}
+	if n == nil {
+		return durableSnapshot(targetID, loaded.TaskParentID(), depth, loaded), loaded.Usage(), nil
 	}
 	if !m.isDescendantLocked(callerID, targetID) {
 		return SessionNode{}, provider.Usage{}, fmt.Errorf("%w: %s", ErrNotDescendant, targetID)
@@ -3123,14 +3422,22 @@ func (m *SessionManager) DescendantInfo(callerID, targetID string) (SessionNode,
 // collects it, and its *Session — history included — stays with it. A
 // parent whose child died therefore reads the child's own last messages
 // through the same call it would use on a running one, with no session
-// reload and no disk read. A REAPED descendant is gone from the tree and
-// answers ErrUnknownSession, exactly as it does for every other verb; the
-// child's durable log still exists on disk for an operator to read out of
-// band.
+// reload and no disk read.
+//
+// A REAPED descendant is resolved from disk instead (see
+// resolveOrReviveDescendantLocked) and its history read straight off that
+// disk-loaded *Session, WITHOUT re-adopting it into the tree — log is a
+// read-only, poll-shaped verb exactly like status, and DescendantInfo's
+// own doc comment explains why a read must not have the side effect of
+// pinning a Reaped descendant back into m.nodes. The child's durable log
+// existing on disk is what makes this possible at all; only the "which
+// object reads it" story differs from the still-tracked case.
 //
 // History is read through n.session.History() (which takes s.mu) while
 // m.mu is still held — m.mu outer, session mu inner, the same nesting
-// DescendantInfo's own Usage() read establishes.
+// DescendantInfo's own Usage() read establishes — or, for a disk-revived
+// target, straight off the freshly loaded *Session, which no other
+// goroutine can yet observe.
 //
 // tail <= 0 returns no messages rather than the whole history: the caller
 // decides the bound, and a zero must never silently mean "everything" on
@@ -3143,23 +3450,31 @@ func (m *SessionManager) DescendantInfo(callerID, targetID string) (SessionNode,
 // survived the bound — and a separate follow-up read could race the
 // descendant's own next turn appending to it.
 //
-// Returns ErrUnknownSession if either id is not tracked, ErrNotDescendant
-// if targetID is not callerID's descendant.
+// Returns ErrUnknownSession if either id is not tracked live and not
+// resolvable from disk, ErrNotDescendant if targetID's durable lineage
+// does not reach callerID.
 func (m *SessionManager) DescendantTranscript(callerID, targetID string, tail int) (node SessionNode, msgs []message.Message, total int, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.nodes[callerID]; !ok {
 		return SessionNode{}, nil, 0, fmt.Errorf("%w: %s", ErrUnknownSession, callerID)
 	}
-	n, ok := m.nodes[targetID]
-	if !ok {
-		return SessionNode{}, nil, 0, fmt.Errorf("%w: %s", ErrUnknownSession, targetID)
+	n, loaded, depth, rerr := m.resolveOrReviveDescendantLocked(callerID, targetID)
+	if rerr != nil {
+		return SessionNode{}, nil, 0, rerr
 	}
-	if !m.isDescendantLocked(callerID, targetID) {
-		return SessionNode{}, nil, 0, fmt.Errorf("%w: %s", ErrNotDescendant, targetID)
+	var snap SessionNode
+	var history []message.Message
+	if n == nil {
+		snap = durableSnapshot(targetID, loaded.TaskParentID(), depth, loaded)
+		history = loaded.History()
+	} else {
+		if !m.isDescendantLocked(callerID, targetID) {
+			return SessionNode{}, nil, 0, fmt.Errorf("%w: %s", ErrNotDescendant, targetID)
+		}
+		snap = n.snapshot()
+		history = n.session.History()
 	}
-	snap := n.snapshot()
-	history := n.session.History()
 	total = len(history)
 	if tail <= 0 {
 		return snap, nil, total, nil
@@ -3261,11 +3576,33 @@ func mergeChildIDs(durable, live []string) []string {
 //     eliminating the window entirely rather than merely narrowing or
 //     documenting it.
 //
-// Returns ErrUnknownSession if either id is not tracked, ErrNotDescendant
-// if targetID is not callerID's descendant, ErrSessionCanceled if
-// targetID is canceled, or ErrConcurrencyLimit if the tree is already at
-// its running-children cap (settled-target restart path only — a
-// running target's enqueue never touches this budget).
+// A target Reap has already collected is REVIVED, not refused: resolved
+// from disk and re-adopted into the tree via adoptReloadedLocked — the
+// SAME adopt-on-first-sight machinery AdoptReloaded's public wrapper and
+// handleSpawnChild's own parent-lookup fallback already use for a cold
+// reload resolved from a caller-supplied id (server/session_tree.go), not
+// a second, bespoke adoption path — so a revived settled child re-runs
+// through EXACTLY the settled-target restart path documented below, the
+// same as a settled child Reap simply had not gotten to yet. Unlike the
+// read-only status/log verbs (see DescendantInfo's own doc comment for
+// why THEY must not do this), send has no read-only option: delivering a
+// message means starting a turn, and a turn needs a live node to run
+// through — reserveSendLocked, drainQueueAndPrompt, and finalizeTurn all
+// operate on a *sessionNode, not a bare *Session. recover=true (matching
+// AdoptReloaded's own public wrapper) restores the revived node's real
+// terminal status/result from its own committed outcome
+// (restoreKnownStatusLocked) and folds its already-spent usage into the
+// tree budget through budgetedByChild, which survives Reap by design
+// exactly so this fold cannot double-credit it (see that field's own doc
+// comment) — the revived node is indistinguishable, from here on, from a
+// settled child Reap simply had not collected yet.
+//
+// Returns ErrUnknownSession if either id is not tracked live and not
+// resolvable from disk, ErrNotDescendant if targetID's durable lineage
+// does not reach callerID, ErrSessionCanceled if targetID is canceled, or
+// ErrConcurrencyLimit if the tree is already at its running-children cap
+// (settled-target restart path only — a running target's enqueue never
+// touches this budget).
 func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queued bool, err error) {
 	// Validate and trim ONCE, before either delivery path — a review
 	// finding: the running-target branch rejected blank text while the
@@ -3284,12 +3621,20 @@ func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queu
 		m.mu.Unlock()
 		return false, fmt.Errorf("%w: %s", ErrUnknownSession, callerID)
 	}
-	n, ok := m.nodes[targetID]
-	if !ok {
+	n, loaded, _, rerr := m.resolveOrReviveDescendantLocked(callerID, targetID)
+	if rerr != nil {
 		m.mu.Unlock()
-		return false, fmt.Errorf("%w: %s", ErrUnknownSession, targetID)
+		return false, rerr
 	}
-	if !m.isDescendantLocked(callerID, targetID) {
+	if n == nil {
+		// loaded != nil: a disk revival, ancestry already durably
+		// confirmed by resolveOrReviveDescendantLocked — adopt it directly
+		// via the *Locked variant (not the public AdoptReloaded, which
+		// would re-acquire m.mu) since resolveOrReviveDescendantLocked's
+		// own re-check on reacquiring m.mu already proved targetID is NOT
+		// currently tracked.
+		n = m.adoptReloadedLocked(loaded, true)
+	} else if !m.isDescendantLocked(callerID, targetID) {
 		m.mu.Unlock()
 		return false, fmt.Errorf("%w: %s", ErrNotDescendant, targetID)
 	}

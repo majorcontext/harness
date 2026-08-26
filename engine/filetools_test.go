@@ -455,15 +455,180 @@ func TestWriteFileCreatesNestedDirs(t *testing.T) {
 	}
 }
 
-func TestWriteFileOverwrites(t *testing.T) {
+// TestWriteFileUnreadExistingFileErrors is the red-verified regression guard
+// for the core defect this feature closes: before the read-before-overwrite
+// guard existed, write_file overwrote ANY existing file unconditionally — a
+// model could destroy a file it never opened. Reverting the os.Stat/
+// readHashFor block in writeFileTool's Run (engine/filetools.go) makes this
+// test fail (write_file silently succeeds and "new" clobbers "old"),
+// confirming the guard, not something else, is what this test exercises.
+func TestWriteFileUnreadExistingFileErrors(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "a.txt"), "old")
-	if _, err := runTool(t, writeFileTool(), dir, `{"path":"a.txt","content":"new"}`); err != nil {
-		t.Fatal(err)
+
+	_, err := runTool(t, writeFileTool(), dir, `{"path":"a.txt","content":"new"}`)
+	if err == nil {
+		t.Fatal("want error overwriting an existing file never read this session")
+	}
+	wantSubstr := "exists and has not been read this session; read it first (or use edit_file)"
+	if !strings.Contains(err.Error(), wantSubstr) {
+		t.Errorf("error = %q, want it to contain %q", err, wantSubstr)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "a.txt"))
+	if string(got) != "old" {
+		t.Errorf("content = %q, want unchanged %q", got, "old")
+	}
+}
+
+// TestWriteFileReadThenWriteSucceeds is the happy path the guard must not
+// block: read_file the existing content, then write_file succeeds and
+// overwrites it. runTool builds a fresh session per call, so both tool
+// invocations must share the SAME session for the guard to see the read.
+func TestWriteFileReadThenWriteSucceeds(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "a.txt"), "old")
+	s := NewSession(Config{WorkDir: dir})
+
+	if _, err := readFileTool().Run(context.Background(), s, json.RawMessage(`{"path":"a.txt"}`)); err != nil {
+		t.Fatalf("read_file: %v", err)
+	}
+	if _, err := writeFileTool().Run(context.Background(), s, json.RawMessage(`{"path":"a.txt","content":"new"}`)); err != nil {
+		t.Fatalf("write_file: %v", err)
 	}
 	got, _ := os.ReadFile(filepath.Join(dir, "a.txt"))
 	if string(got) != "new" {
-		t.Errorf("content = %q", got)
+		t.Errorf("content = %q, want %q", got, "new")
+	}
+}
+
+// TestWriteFileChangedSinceReadErrors proves the guard's second check: even
+// with a recorded read, write_file refuses to overwrite a file that changed
+// on disk since that read (a concurrent writer, another tool, an external
+// process) — trusting only the "was it ever read" bit would let a write
+// through against content the session's last read no longer describes.
+func TestWriteFileChangedSinceReadErrors(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	writeTestFile(t, path, "old")
+	s := NewSession(Config{WorkDir: dir})
+
+	if _, err := readFileTool().Run(context.Background(), s, json.RawMessage(`{"path":"a.txt"}`)); err != nil {
+		t.Fatalf("read_file: %v", err)
+	}
+	// Simulate an external change landing after the read, bypassing every
+	// tool this session tracks.
+	writeTestFile(t, path, "externally changed")
+
+	_, err := writeFileTool().Run(context.Background(), s, json.RawMessage(`{"path":"a.txt","content":"new"}`))
+	if err == nil {
+		t.Fatal("want error overwriting a file changed on disk since it was read")
+	}
+	wantSubstr := "changed on disk since it was read; read it again before overwriting"
+	if !strings.Contains(err.Error(), wantSubstr) {
+		t.Errorf("error = %q, want it to contain %q", err, wantSubstr)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "externally changed" {
+		t.Errorf("content = %q, want unchanged %q", got, "externally changed")
+	}
+}
+
+// TestWriteFileCreateNewUnguarded proves the guard is scoped to EXISTING
+// files only: creating a brand-new path never requires a prior read_file,
+// since there is no existing content to protect. TestWriteFileCreatesNestedDirs
+// above already covers this same path with a fresh runTool session per
+// call; this test makes the "never read this session" condition explicit.
+func TestWriteFileCreateNewUnguarded(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{WorkDir: dir})
+
+	if _, err := writeFileTool().Run(context.Background(), s, json.RawMessage(`{"path":"new.txt","content":"hello"}`)); err != nil {
+		t.Fatalf("write_file on a new path: %v", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "new.txt"))
+	if string(got) != "hello" {
+		t.Errorf("content = %q, want %q", got, "hello")
+	}
+}
+
+// TestEditFileUpdatesReadGuardHash proves requirement 3 of the guard design:
+// a successful edit_file updates the tracked hash to the post-edit content,
+// so an edit-then-write sequence on the SAME path never has to read_file
+// again — edit_file's own exact-match requirement already proves the model
+// saw the pre-edit content, and the file now holds exactly what this
+// session just wrote.
+func TestEditFileUpdatesReadGuardHash(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "a.txt"), "hello world\n")
+	s := NewSession(Config{WorkDir: dir})
+
+	if _, err := readFileTool().Run(context.Background(), s, json.RawMessage(`{"path":"a.txt"}`)); err != nil {
+		t.Fatalf("read_file: %v", err)
+	}
+	if _, err := editFileTool().Run(context.Background(), s, json.RawMessage(`{"path":"a.txt","old_string":"world","new_string":"there"}`)); err != nil {
+		t.Fatalf("edit_file: %v", err)
+	}
+	// No read_file call between edit_file and write_file: the guard must
+	// trust edit_file's own hash update, not require a fresh read.
+	if _, err := writeFileTool().Run(context.Background(), s, json.RawMessage(`{"path":"a.txt","content":"replaced entirely"}`)); err != nil {
+		t.Fatalf("write_file after edit_file with no intervening read_file: %v", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "a.txt"))
+	if string(got) != "replaced entirely" {
+		t.Errorf("content = %q, want %q", got, "replaced entirely")
+	}
+}
+
+// TestReloadClearsReadGuardSet proves requirement 4: the read set is
+// runtime-only and never persisted. A session that read a path, then was
+// persisted and reloaded via LoadSession (a fresh process resuming a
+// session, or this same process after a restart), must NOT remember that
+// read — write_file on the same path in the reloaded session requires a
+// fresh read_file, exactly as if the path had never been read at all.
+func TestReloadClearsReadGuardSet(t *testing.T) {
+	dir := t.TempDir()
+	sessionDir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "a.txt"), "old")
+
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "ok"}),
+	}}
+	cfg := Config{
+		WorkDir:    dir,
+		SessionDir: sessionDir,
+		Providers:  provider.Registry{prov.name: prov},
+		Model:      message.ModelRef{Provider: prov.name, Model: "m1"},
+	}
+	s := NewSession(cfg)
+	// A real turn so LoadSession below has a persisted log to find.
+	if _, err := s.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PersistErr(); err != nil {
+		t.Fatalf("PersistErr = %v", err)
+	}
+
+	if _, err := readFileTool().Run(context.Background(), s, json.RawMessage(`{"path":"a.txt"}`)); err != nil {
+		t.Fatalf("read_file: %v", err)
+	}
+	// Confirm the guard is actually satisfied on the live session before
+	// reloading, so the reload assertion below means what it claims.
+	if _, err := writeFileTool().Run(context.Background(), s, json.RawMessage(`{"path":"a.txt","content":"live session can overwrite"}`)); err != nil {
+		t.Fatalf("write_file on live session after read_file: %v", err)
+	}
+	writeTestFile(t, filepath.Join(dir, "a.txt"), "old again") // restore for the reloaded check below
+
+	reloaded, err := LoadSession(cfg, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = writeFileTool().Run(context.Background(), reloaded, json.RawMessage(`{"path":"a.txt","content":"new"}`))
+	if err == nil {
+		t.Fatal("want error: reloaded session's read set must be empty")
+	}
+	wantSubstr := "exists and has not been read this session"
+	if !strings.Contains(err.Error(), wantSubstr) {
+		t.Errorf("error = %q, want it to contain %q", err, wantSubstr)
 	}
 }
 
@@ -556,5 +721,69 @@ func TestFileToolsOfferedToProvider(t *testing.T) {
 		if !contains(names, want) {
 			t.Errorf("tool %q not offered; got %v", want, names)
 		}
+	}
+}
+
+// TestWriteFileFailedReadDoesNotUnlock proves a read_file that ERRORED
+// (offset past end-of-file) does not authorize an overwrite: the guard
+// records a hash only at a return that handed the model content.
+func TestWriteFileFailedReadDoesNotUnlock(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "a.txt"), "line1\nline2\n")
+	s := NewSession(Config{WorkDir: dir})
+
+	if _, err := readFileTool().Run(context.Background(), s, json.RawMessage(`{"path":"a.txt","offset":99}`)); err == nil {
+		t.Fatal("want read_file error for offset past end of file")
+	}
+	_, err := writeFileTool().Run(context.Background(), s, json.RawMessage(`{"path":"a.txt","content":"new"}`))
+	if err == nil {
+		t.Fatal("want write_file refusal: the only read of this file errored")
+	}
+	if !strings.Contains(err.Error(), "has not been read this session") {
+		t.Errorf("error = %q, want the unread-file refusal", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "a.txt"))
+	if string(got) != "line1\nline2\n" {
+		t.Errorf("content = %q, want unchanged", got)
+	}
+}
+
+// TestWriteFileStatErrorRefuses proves a stat failure OTHER than not-exist
+// refuses the write: an unreadable path cannot prove no protected file
+// exists there, so falling through to unguarded-create would be a hole.
+func TestWriteFileStatErrorRefuses(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("permission-based stat failure cannot be produced as root")
+	}
+	dir := t.TempDir()
+	locked := filepath.Join(dir, "locked")
+	if err := os.Mkdir(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(locked, "a.txt"), "old")
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	_, err := writeFileTool().Run(context.Background(), NewSession(Config{WorkDir: dir}), json.RawMessage(`{"path":"locked/a.txt","content":"new"}`))
+	if err == nil {
+		t.Fatal("want write_file refusal on a stat error that is not not-exist")
+	}
+	if !strings.Contains(err.Error(), "cannot stat") {
+		t.Errorf("error = %q, want the cannot-stat refusal", err)
+	}
+}
+
+// TestWriteFileSpecialFileUnguarded proves the guard's scope is REGULAR
+// files, as documented: writing to a device file like /dev/null (a common
+// discard idiom) needs no prior read.
+func TestWriteFileSpecialFileUnguarded(t *testing.T) {
+	if _, err := os.Stat("/dev/null"); err != nil {
+		t.Skip("/dev/null unavailable")
+	}
+	dir := t.TempDir()
+	if _, err := writeFileTool().Run(context.Background(), NewSession(Config{WorkDir: dir}), json.RawMessage(`{"path":"/dev/null","content":"discard"}`)); err != nil {
+		t.Fatalf("write_file to /dev/null: %v", err)
 	}
 }
