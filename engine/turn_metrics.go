@@ -57,28 +57,28 @@ type TurnMetrics struct {
 	ToolsCount int
 }
 
-// defaultTurnMetricsStdout is the JSON handler every default turn_metrics
+// defaultTurnMetricsStderr is the JSON handler every default turn_metrics
 // emit writes through. It is a package-level var (never per-Session) so a
 // test that swaps Config.OnTurnMetrics for a recorder pays nothing for it,
 // and so every session in one process shares one handler exactly like
-// slog.Default() would, but pinned to os.Stdout regardless of what
+// slog.Default() would, but pinned to os.Stderr regardless of what
 // slog.SetDefault has been called with elsewhere.
 //
-// This deliberately targets stdout, not the stderr every other structured
+// This deliberately targets stderr, not the stderr every other structured
 // log line in this repo uses (see cmd/harness/main.go's serveCmd/runCmd
 // "Structured logging: JSON to stderr" comment) — a per-turn line is
 // operational telemetry a deployment's log pipeline scrapes from a
-// process's stdout stream (see the architecture note "event streams on
-// stdout" in AGENTS.md), not a diagnostic a human tails on the terminal
+// process's stderr stream (see the architecture note "event streams on
+// stderr" in AGENTS.md), not a diagnostic a human tails on the terminal
 // alongside everything else on stderr.
-var defaultTurnMetricsStdout = slog.New(slog.NewJSONHandler(os.Stdout, nil))
+var defaultTurnMetricsStderr = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 // defaultTurnMetricsLog is Config.OnTurnMetrics's default when the embedder
 // sets none: one structured "turn_metrics" line per completed model call.
 // Field names match the wire vocabulary a log query (grep, a BetterStack/
 // Vector-style query) is expected to filter on.
 func defaultTurnMetricsLog(m TurnMetrics) {
-	defaultTurnMetricsStdout.Info("turn_metrics",
+	defaultTurnMetricsStderr.Info("turn_metrics",
 		"session_id", m.SessionID,
 		"model", m.Model.String(),
 		"ttft_ms", m.TTFTMillis,
@@ -97,7 +97,7 @@ func defaultTurnMetricsLog(m TurnMetrics) {
 // defaultTurnMetricsLog when the embedder configured none. Unlike OnRequest
 // (nil means "no observer, skip the call entirely"), turn metrics always go
 // somewhere: a box or CLI process with no embedder-supplied callback still
-// gets the stdout line, which is the whole point of the seam — see the
+// gets the stderr line, which is the whole point of the seam — see the
 // Config.OnTurnMetrics doc comment.
 func (s *Session) emitTurnMetrics(m TurnMetrics) {
 	cb := s.cfg.OnTurnMetrics

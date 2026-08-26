@@ -293,7 +293,7 @@ or is interrupted mid-stream (see `interruptedTurnError` above) reports
 nothing, since there is no finished call to summarize. This is the box-fleet
 answer to "why does this session feel slow": TTFT and stream duration, token
 and prompt-cache accounting, and request shape, greppable straight off a
-process's stdout.
+process's stderr.
 
 Fields: `session_id`, `model` (full `provider/model` ref), `ttft_ms` (elapsed
 from just before `prov.Stream` to the first non-`EventActivity` stream event
@@ -308,7 +308,7 @@ was on when this call completed; 1 for a turn that succeeded on its first
 try). `system_len` is computed identically to the server's `request.meta`
 record (`len(strings.Join(req.System, "\n"))`, see `server/journal.go`'s
 `OnRequest`) — deliberately, not coincidentally: `session_id` + `model` +
-`system_len` together are a natural join key between a `turn_metrics` stdout
+`system_len` together are a natural join key between a `turn_metrics` stderr
 line and the durable `request.meta` record for the same request, with no new
 ID threaded through the provider boundary.
 
@@ -319,8 +319,8 @@ NOT "disabled": `emitTurnMetrics` substitutes `defaultTurnMetricsLog`
 `os.Stdout` specifically — not the `os.Stderr` every other structured log
 line in this repo uses (see `cmd/harness/main.go`'s "Structured logging: JSON
 to stderr" comment) — because a per-turn line is operational telemetry a
-deployment's log pipeline scrapes off a process's stdout stream (the
-"event streams on stdout" architecture priority above), not a diagnostic a
+deployment's log pipeline scrapes off a process's stderr stream (the
+"event streams on stderr" architecture priority above), not a diagnostic a
 human tails on the terminal. A plain `harness run`/`harness serve` process
 with no embedder wiring therefore still emits this line by default; an
 embedder that wants a different sink (an OTel exporter, an in-memory test
@@ -335,8 +335,8 @@ instead of depending on real elapsed wall-clock time between two in-process
 calls with nothing to wait on between them, per the Testing rule against real
 sleeps.
 
-This was built for a deployment that ships a served process's stdout to a
-log pipeline (a fleet of boxes running `harness serve`, each pod's stdout
+This was built for a deployment that ships a served process's stderr to a
+log pipeline (a fleet of boxes running `harness serve`, each pod's stderr
 collected by a Vector-style agent into BetterStack or an equivalent log
 store). The intended query there filters `msg: "turn_metrics"` and groups by
 `model`/`session_id` to compare TTFT and stream-duration distributions across
