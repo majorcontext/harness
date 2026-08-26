@@ -48,6 +48,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/modelmeta"
+
 	"github.com/majorcontext/harness/provider"
 )
 
@@ -234,6 +237,10 @@ func (s *Session) mcpToolUseImpliesSelection(name string) bool {
 // -- the call that triggers a server's first connect attempt -- still
 // happens exactly once per request.
 type mcpToolPlan struct {
+	// native reports that deferral was handed to the provider: the defs
+	// carry DeferLoading and catalog is empty by construction (see
+	// planMCPToolsForModel).
+	native bool
 	// defs are the MCP tool defs that belong in this request's tools array,
 	// in the registry's own (server, then tool) order.
 	defs []provider.ToolDef
@@ -264,6 +271,25 @@ func (s *Session) planMCPTools(ctx context.Context) mcpToolPlan {
 	return s.planMCPToolsFrom(s.cfg.MCP.Tools(ctx), renderCatalogSegment)
 }
 
+// nativeToolSearch reports whether THIS session should hand deferral to the
+// provider instead of running harness's own catalog-and-select mechanism.
+//
+// Two conditions, and both are per-request rather than per-session: the
+// session must want deferral at all (sessionCanDefer -- the same predicate
+// the client-side path uses), and the model that will actually serve this
+// request must support server-side tool search
+// (modelmeta.SupportsToolSearch). The second is read fresh because a
+// mid-session SetModel swap can move a session between the two mechanisms,
+// and the one that must never happen is a session left deferring with no
+// discovery path at all.
+//
+// The model is the SESSION's current model. streamTurn passes the effective
+// model separately when a chat.params hook has rewritten it; see
+// planMCPToolsForModel.
+func (s *Session) nativeToolSearch(model message.ModelRef) bool {
+	return s.sessionCanDefer() && modelmeta.SupportsToolSearch(model)
+}
+
 // catalogRender selects whether planMCPToolsFrom renders the stage-1
 // segment. A caller that only needs the DEFS -- the mcp tool's search
 // action, computing which tools are loaded -- would otherwise re-render up
@@ -281,6 +307,28 @@ const (
 // the mcp tool's search action, which ranks over everything while reporting
 // what is loaded -- pays for one MCPRegistry.Tools call, not two.
 func (s *Session) planMCPToolsFrom(all []provider.ToolDef, render catalogRender) mcpToolPlan {
+	return s.planMCPToolsForModel(all, render, s.Model())
+}
+
+// planMCPToolsForModel is planMCPToolsFrom against an explicit model, which
+// decides whether deferral is handed to the provider (native) or run by
+// harness (client-side). See nativeToolSearch.
+//
+// NATIVE mode differs from client-side mode in three ways, and every one of
+// them is a deliberate non-action:
+//
+//   - Every MCP tool def is returned, deferred or not. The API needs the
+//     full definition of a deferred tool to search it and to expand the
+//     tool_reference it returns, so withholding one would make that tool
+//     undiscoverable.
+//   - No catalog segment is rendered. The API keeps deferred definitions
+//     out of the context window itself; a harness catalog would be a second
+//     copy of the same list, spending the tokens deferral exists to save.
+//   - The selected set is not consulted and not reaped. Discovery is the
+//     API's job, and a tool_reference is expanded throughout the
+//     conversation history, so a natively-discovered tool needs no harness
+//     bookkeeping to stay usable -- across later turns or across a reload.
+func (s *Session) planMCPToolsForModel(all []provider.ToolDef, render catalogRender, model message.ModelRef) mcpToolPlan {
 	if len(all) == 0 {
 		return mcpToolPlan{}
 	}
@@ -288,6 +336,10 @@ func (s *Session) planMCPToolsFrom(all []provider.ToolDef, render catalogRender)
 	deferring := s.sessionCanDefer()
 	if !deferring {
 		return mcpToolPlan{defs: all}
+	}
+
+	if modelmeta.SupportsToolSearch(model) {
+		return s.nativeMCPPlan(all)
 	}
 
 	selected := s.reapMCPSelections(all)
@@ -318,6 +370,27 @@ func (s *Session) planMCPToolsFrom(all []provider.ToolDef, render catalogRender)
 		return mcpToolPlan{defs: defs}
 	}
 	return mcpToolPlan{defs: defs, catalog: mcpCatalogSegment(deferred)}
+}
+
+// nativeMCPPlan marks the tools this session defers with DeferLoading and
+// sends every definition, letting the provider run discovery (see
+// planMCPToolsForModel).
+//
+// The threshold and the per-server overrides decide the same thing they
+// decide client-side -- WHICH tools defer -- so a server pinned eager is
+// loaded up front here too, which is exactly the "keep your 3-5 most used
+// tools non-deferred" shape the provider's own guidance asks for.
+func (s *Session) nativeMCPPlan(all []provider.ToolDef) mcpToolPlan {
+	overThreshold := len(all) > s.mcpDeferThreshold()
+	defs := make([]provider.ToolDef, 0, len(all))
+	for _, d := range all {
+		server, _, ok := splitMCPToolName(d.Name)
+		if ok && s.resolveMCPLoading(server, overThreshold) == MCPToolLoadingLazy {
+			d.DeferLoading = true
+		}
+		defs = append(defs, d)
+	}
+	return mcpToolPlan{defs: defs, native: true}
 }
 
 // resolveMCPLoading reports one server's EFFECTIVE mode for this request:

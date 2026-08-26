@@ -2056,7 +2056,7 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 		return nil, "", provider.Usage{}, err
 	}
 
-	tools, mcpCatalog := s.toolDefsWithCatalog(ctx)
+	tools, mcpCatalog := s.toolDefsWithCatalogForModel(ctx, params.Model)
 
 	system := append([]string(nil), s.cfg.System...)
 	// Project instructions sit after the base system prompt and before any
@@ -2593,12 +2593,25 @@ func (s *Session) toolDefs(ctx context.Context) []provider.ToolDef {
 // The catalog is "" whenever nothing is deferred, which includes every
 // session that did not opt into deferral at all.
 func (s *Session) toolDefsWithCatalog(ctx context.Context) ([]provider.ToolDef, string) {
+	return s.toolDefsWithCatalogForModel(ctx, s.Model())
+}
+
+// toolDefsWithCatalogForModel is toolDefsWithCatalog against the model that
+// will actually serve this request, which is what decides whether MCP
+// deferral is handed to the provider or run by harness (see
+// engine/mcp_lazy.go's planMCPToolsForModel). streamTurn passes
+// params.Model, so a chat.params hook that rewrites the model moves the
+// session onto the right mechanism for the model it actually calls.
+func (s *Session) toolDefsWithCatalogForModel(ctx context.Context, model message.ModelRef) ([]provider.ToolDef, string) {
 	defs := make([]provider.ToolDef, 0, len(s.tools))
 	for _, t := range s.tools {
 		defs = append(defs, t.Def)
 	}
 	sort.Slice(defs, func(i, j int) bool { return defs[i].Name < defs[j].Name })
-	plan := s.planMCPTools(ctx)
+	plan := mcpToolPlan{}
+	if s.cfg.MCP != nil {
+		plan = s.planMCPToolsForModel(s.cfg.MCP.Tools(ctx), renderCatalogSegment, model)
+	}
 	defs = append(defs, plan.defs...)
 	if s.cfg.Hooks != nil {
 		for _, d := range s.cfg.Hooks.Tools() {
