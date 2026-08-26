@@ -95,10 +95,30 @@ type mcpSelectResult struct {
 	Note    string   `json:"note"`
 }
 
-// mcpSelectNote states when a selection takes effect. runAgenticLoop
-// rebuilds the request on every tool round, so a select made mid-turn is
-// live on the very next round of that same turn.
-const mcpSelectNote = "selected tools are callable from the next request in this turn"
+// The select note is CONDITIONAL on what the batch produced, because the
+// model acts on it. runAgenticLoop rebuilds the request on every tool
+// round, so a selected tool is live on the very next round of that same
+// turn -- but a PENDING name is not: its server is down, so its schema
+// enters no tools array until that server reconnects. An unconditional
+// "callable next request" would send the model straight into calling a
+// tool of a degraded server.
+const (
+	mcpSelectNoteCallable = "selected tools are callable from the next request in this turn"
+	mcpSelectNotePending  = "no tool was loaded: every name you selected belongs to a server that is not connected. They load once that server reconnects; see the mcp tool's status and connect actions"
+	mcpSelectNoteNone     = "no tool was loaded"
+)
+
+// mcpSelectNoteFor picks the note for one batch's outcome.
+func mcpSelectNoteFor(res mcpSelectResult) string {
+	switch {
+	case len(res.Selected) > 0:
+		return mcpSelectNoteCallable
+	case len(res.Pending) > 0:
+		return mcpSelectNotePending
+	default:
+		return mcpSelectNoteNone
+	}
+}
 
 // runMCPSearch implements the search action: rank the live catalog by
 // keyword and report what is loaded.
@@ -236,7 +256,6 @@ func runMCPSelect(ctx context.Context, s *Session, names []string) (message.Part
 		Already:  []string{},
 		Pending:  []string{},
 		Missing:  []string{},
-		Note:     mcpSelectNote,
 	}
 	var toAdd []string
 	seen := map[string]bool{}
@@ -250,15 +269,28 @@ func runMCPSelect(ctx context.Context, s *Session, names []string) (message.Part
 			out.Already = append(out.Already, name)
 		case mcpBucketSelected:
 			out.Selected = append(out.Selected, name)
-			toAdd = append(toAdd, name)
+			// Both writers of the record apply the SAME per-server gate
+			// (see mcpToolUseImpliesSelection): a record exists only to
+			// survive a flip to deferred, so "can this server ever flip"
+			// must have one answer whichever writer asks. A server pinned
+			// eager can never flip, so its tool is reported selected -- it
+			// is loaded and callable, which is what the model asked for --
+			// and nothing is recorded, because the record could never pay
+			// for itself.
+			if s.mcpToolUseImpliesSelection(name) {
+				toAdd = append(toAdd, name)
+			}
 		case mcpBucketPending:
 			out.Pending = append(out.Pending, name)
-			toAdd = append(toAdd, name)
+			if s.mcpToolUseImpliesSelection(name) {
+				toAdd = append(toAdd, name)
+			}
 		default:
 			out.Missing = append(out.Missing, name)
 		}
 	}
 	s.markMCPToolsSelected(toAdd...)
+	out.Note = mcpSelectNoteFor(out)
 	return jsonResult(out)
 }
 

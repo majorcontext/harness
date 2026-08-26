@@ -1220,9 +1220,11 @@ blank query errors rather than dumping the catalog. `select(tools)` loads
 schemas, and every name lands in exactly one bucket, tested TOP TO BOTTOM:
 `already`, `selected`, `pending` (its server is configured but not
 connected — it arms on reconnect), `missing` (no connected server holds it,
-or the name is malformed). `select` returns NO schemas: the tools array is
-the one authoritative copy, and echoing them would write every schema a
-second time into durable history.
+or the name is malformed). Its `note` is conditional on that outcome: a
+`pending`-only batch must not claim its tools are callable next request.
+`select` returns NO schemas: the tools array is the one authoritative copy,
+and echoing them would write every schema a second time into durable
+history.
 
 **Use implies selection.** An MCP tool call that ROUTES records its own
 name. Without it, a tool of an eager server — which needs no `select`, and
@@ -1231,6 +1233,13 @@ which the model is told not to select — would lose its schema the moment an
 session: a server pinned `eager` can never flip, so a record for its tools
 could never pay for itself, even in a session that defers a different
 server. A plain `eager` config therefore records nothing at all.
+
+**Both writers of the record apply that same gate.** `select` records a
+name only when its server could ever defer, exactly as a routed call does.
+A record exists only to survive a flip, so "can this server ever flip" has
+one answer whichever writer asks. A pinned-`eager` server's tool is still
+reported `selected` — it is loaded and callable — and simply records
+nothing.
 
 Full design, including the durable record: `docs/design/mcp-lazy-tools.md`.
 

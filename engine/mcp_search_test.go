@@ -302,13 +302,15 @@ func TestMCPSelectBuckets(t *testing.T) {
 }
 
 // TestMCPSelectOfLoadedToolIsRecorded keeps a tool the model is using
-// loaded across an auto flip: an eager server's tool is selected and
-// recorded like any other, and the array does not change, so no cached
-// prefix is invalidated by the call.
+// loaded across an auto flip: a tool whose server resolves eager TODAY
+// (catalog under the threshold) but whose mode is auto can flip, so
+// selecting it is recorded, and the record carries it across the flip. The
+// array does not move for such a select, so it invalidates no cached
+// prefix.
 func TestMCPSelectOfLoadedToolIsRecorded(t *testing.T) {
 	s, _ := searchSession(t)
-	s.cfg.MCPToolLoading = MCPToolLoadingEager
-	s.cfg.MCPToolLoadingByServer = map[string]MCPToolLoading{"github": MCPToolLoadingEager}
+	s.cfg.MCPToolLoading = MCPToolLoadingAuto
+	s.cfg.MCPToolLoadingThreshold = 10 // 3 tools: nothing defers yet
 	ctx := context.Background()
 
 	before, err := json.Marshal(s.toolDefs(ctx))
@@ -318,7 +320,10 @@ func TestMCPSelectOfLoadedToolIsRecorded(t *testing.T) {
 	var res mcpSelectResult
 	runMCPAction(t, s, `{"action":"select","tools":["mcp__github__create_issue"]}`, &res)
 	if len(res.Selected) != 1 {
-		t.Fatalf("selected = %v, want the eager server's tool recorded", res.Selected)
+		t.Fatalf("selected = %v, want the already-loaded tool recorded", res.Selected)
+	}
+	if !s.mcpToolSelected("mcp__github__create_issue") {
+		t.Fatal("a tool whose server can still flip was not recorded")
 	}
 	after, err := json.Marshal(s.toolDefs(ctx))
 	if err != nil {
@@ -328,12 +333,78 @@ func TestMCPSelectOfLoadedToolIsRecorded(t *testing.T) {
 		t.Fatal("selecting an already-loaded tool changed the tools array; it must invalidate no cached prefix")
 	}
 
-	// The flip: the server goes lazy, and the recorded selection keeps the
-	// tool loaded.
-	s.cfg.MCPToolLoadingByServer = map[string]MCPToolLoading{"github": MCPToolLoadingLazy}
+	// The flip: the catalog crosses the threshold, so the server defers —
+	// and the recorded selection keeps the tool loaded.
+	s.cfg.MCPToolLoadingThreshold = 1
 	got := mcpDefNames(s.toolDefs(ctx))
 	if len(got) != 1 || got[0] != "mcp__github__create_issue" {
 		t.Fatalf("after the flip defs = %v, want the recorded tool still loaded", got)
+	}
+}
+
+// TestMCPSelectOfPinnedEagerToolIsNotRecorded is the other half of the
+// per-server gate, and the reason both writers of the record must agree: a
+// server pinned eager by MCPToolLoadingByServer can NEVER flip, so a record
+// for its tools could never pay for itself. The select still reports the
+// tool as selected — it is loaded and callable, which is what the model
+// asked for — but nothing enters the set.
+func TestMCPSelectOfPinnedEagerToolIsNotRecorded(t *testing.T) {
+	s, _ := lazySession(t, Config{
+		MCPToolLoading:         MCPToolLoadingLazy,
+		MCPToolLoadingByServer: map[string]MCPToolLoading{"pinned": MCPToolLoadingEager},
+	}, map[string]int{"pinned": 1, "deferred": 1})
+	ctx := context.Background()
+	pinned := mcpToolName("pinned", "tool00")
+
+	var res mcpSelectResult
+	runMCPAction(t, s, `{"action":"select","tools":["`+pinned+`"]}`, &res)
+	if len(res.Selected) != 1 || res.Selected[0] != pinned {
+		t.Fatalf("selected = %v, want [%s] — the tool IS loaded", res.Selected, pinned)
+	}
+	if s.mcpToolSelected(pinned) {
+		t.Fatalf("%q entered the selected set, but its server can never flip", pinned)
+	}
+	// It is callable either way, which is the point.
+	if got := mcpDefNames(s.toolDefs(ctx)); len(got) != 1 || got[0] != pinned {
+		t.Fatalf("defs = %v, want the pinned server's tool loaded", got)
+	}
+	// A repeat select reports selected again, never already: no set
+	// membership was ever needed to make that tool callable.
+	runMCPAction(t, s, `{"action":"select","tools":["`+pinned+`"]}`, &res)
+	if len(res.Selected) != 1 || len(res.Already) != 0 {
+		t.Fatalf("repeat select = selected %v already %v, want it reported selected again", res.Selected, res.Already)
+	}
+}
+
+// TestMCPSelectNoteIsConditional pins the note to the batch's real outcome.
+// An unconditional "callable from the next request" lies for a pending-only
+// batch — those tools' server is down — and a model acting on it calls a
+// tool that cannot be there.
+func TestMCPSelectNoteIsConditional(t *testing.T) {
+	s, reg := searchSession(t)
+	reg.names = append(reg.names, "down")
+	reg.connected["down"] = false
+
+	var res mcpSelectResult
+	runMCPAction(t, s, `{"action":"select","tools":["mcp__github__create_issue"]}`, &res)
+	if res.Note != mcpSelectNoteCallable {
+		t.Fatalf("note for a selected-bearing batch = %q, want the callable note", res.Note)
+	}
+
+	runMCPAction(t, s, `{"action":"select","tools":["mcp__down__later"]}`, &res)
+	if len(res.Pending) != 1 {
+		t.Fatalf("pending = %v, want the unconnected server's tool", res.Pending)
+	}
+	if res.Note != mcpSelectNotePending {
+		t.Fatalf("note for a pending-only batch = %q, want the reconnect note", res.Note)
+	}
+	if strings.Contains(res.Note, "callable from the next request") {
+		t.Fatalf("a pending-only batch claims its tools are callable next request: %q", res.Note)
+	}
+
+	runMCPAction(t, s, `{"action":"select","tools":["mcp__github__no_such_tool"]}`, &res)
+	if res.Note != mcpSelectNoteNone {
+		t.Fatalf("note for a missing-only batch = %q, want the no-tool-loaded note", res.Note)
 	}
 }
 
