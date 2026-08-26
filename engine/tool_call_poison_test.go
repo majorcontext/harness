@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/majorcontext/harness/message"
@@ -48,32 +49,23 @@ import (
 // safeArguments' own defense-in-depth): PersistErr is non-nil with exactly
 // the production error text, and json.Marshal(s.History()) — what
 // GET /message does — fails mentioning message.Parts. After the fix: the
-// turn persists cleanly and the reloaded log matches in-memory history
-// exactly.
+// turn persists cleanly, the tool name and call ID survive (only the
+// unusable truncated arguments are dropped, replaced with an empty object —
+// the same normalization already applied to a legitimately empty
+// Arguments), the reloaded log matches in-memory history exactly, and a
+// following worker turn — which now transcodes a clean history — succeeds
+// instead of dying identically on every retry.
 //
-// # NEP-5272 update, then superseded: StopMaxTokens-with-a-ToolCall now
-// drops the call outright
+// # NEP-5272 update: this exact stop reason is now paired, not left orphaned
 //
-// StopMaxTokens-with-a-ToolCall was, for a time, exactly the shape
+// StopMaxTokens-with-a-ToolCall is precisely the shape
 // appendUnexecutedToolCallResults exists for (see its doc comment and
-// unexecutedToolCallStopReasonTextFmt's incident writeup): the tool name and
-// call ID were kept, Arguments cleared to empty, and a synthetic is_error
-// tool-role result appended for it. A later adversarial review of the
-// max_tokens auto-continue feature (PR #193) found that shape still
-// replayed a hollow, argument-less tool_use the model never actually
-// finished emitting — indistinguishable, once the real Arguments are gone,
-// from a call the model genuinely intended to make with no arguments. The
-// design changed again: dropInvalidPartialToolCall (engine.go) now removes
-// a StopMaxTokens turn's TRAILING ToolCall part entirely, in place, before
-// it is ever appended to history, when its Arguments do not parse as valid
-// JSON — see that function's own doc comment. No synthetic result is
-// generated for a dropped call either: there is no usable intent left to
-// report as failed. Both changes are compatible with THIS test's actual
-// point (the marshal-failure incident): dropping the part before append
-// means Normalize's own invalid-Arguments clearing (still exercised by any
-// OTHER producer that bypasses this engine-level guard, per its own doc
-// comment) never even needs to run for this path, and persisting still
-// never fails.
+// unexecutedToolCallStopReasonTextFmt's incident writeup): the engine still
+// never executes truncated arguments, but Session.Prompt now appends a
+// synthetic is_error tool-role result for tc1 immediately after the
+// assistant message, so the ToolCall this test cares about is the
+// second-to-last history entry, not the last — history no longer ends
+// with a dangling tool_use at all.
 func TestPersistTruncatedToolCallArguments(t *testing.T) {
 	dir := t.TempDir()
 	truncated := toolCall("tc1", "bash", `{"command":"echo hel`) // cut off mid-argument, non-empty, invalid JSON
@@ -101,31 +93,48 @@ func TestPersistTruncatedToolCallArguments(t *testing.T) {
 		t.Fatalf("json.Marshal(History()) = %v, want success (this is what GET /message does)", err)
 	}
 
-	// The invalid partial call is gone entirely -- see
-	// dropInvalidPartialToolCall's doc comment: a genuinely mid-emission
-	// call carries no usable intent, so it is dropped outright rather than
-	// kept with its Arguments cleared. The assistant's other content (the
-	// "running" text it managed to emit before the cutoff) survives; no
-	// synthetic tool-role result is generated for the dropped call, so
-	// history ends on the assistant message itself.
+	// The tool call's identity survives; only the unusable truncated
+	// arguments are gone, normalized the same way empty Arguments already
+	// are (see ToolCall.safeArguments) rather than dropping the whole part
+	// and losing which tool the model was calling. The assistant message is
+	// now the second-to-last entry, not the last (see the NEP-5272 update
+	// above): appendUnexecutedToolCallResults appends a synthetic tool-role
+	// result for tc1 right after it, so history never ends on a dangling
+	// tool_use.
 	h := s.History()
-	if len(h) != 2 {
-		t.Fatalf("history len = %d, want 2 (user, assistant(text only, partial tool call dropped)): %+v", len(h), h)
+	if len(h) != 3 {
+		t.Fatalf("history len = %d, want 3 (user, assistant(tool_call), synthetic tool result): %+v", len(h), h)
 	}
-	assistant := h[1]
-	if assistant.Role != message.RoleAssistant {
-		t.Fatalf("h[1].Role = %s, want assistant", assistant.Role)
-	}
-	if got := assistant.Parts.Text(); got != "running" {
-		t.Errorf("assistant text = %q, want %q (unaffected by dropping the tool call)", got, "running")
-	}
+	assistant := h[len(h)-2]
+	var found *message.ToolCall
 	for _, p := range assistant.Parts {
 		if tc, ok := p.(*message.ToolCall); ok {
-			t.Errorf("assistant message still carries a ToolCall part %+v, want the invalid partial call dropped entirely", tc)
+			found = tc
 		}
 	}
-	if got := s.toolExecutions(); got != 0 {
-		t.Errorf("toolExecutions() = %d, want 0 (a truncated call must never actually run)", got)
+	if found == nil {
+		t.Fatalf("assistant message lost its ToolCall part entirely: %+v", assistant)
+	}
+	if found.CallID != "tc1" || found.Name != "bash" {
+		t.Errorf("ToolCall identity not preserved: %+v", found)
+	}
+	if len(found.Arguments) != 0 {
+		t.Errorf("ToolCall.Arguments = %s, want cleared (truncated JSON is unusable)", found.Arguments)
+	}
+
+	// The synthetic pairing itself: the last message is now a tool-role
+	// result for tc1, is_error true — the engine still never executed the
+	// truncated call, it just no longer leaves it orphaned.
+	synth := h[len(h)-1]
+	if synth.Role != message.RoleTool {
+		t.Fatalf("h[len(h)-1].Role = %s, want tool (the synthetic unexecuted-call result)", synth.Role)
+	}
+	tr, ok := synth.Parts[0].(*message.ToolResult)
+	if !ok || tr.CallID != "tc1" || !tr.IsError {
+		t.Fatalf("synthetic tool result = %+v, want an is_error ToolResult for tc1", synth.Parts[0])
+	}
+	if want := fmt.Sprintf(unexecutedToolCallStopReasonTextFmt, provider.StopMaxTokens); tr.Content.Text() != want {
+		t.Errorf("synthetic tool result Content = %q, want %q", tr.Content.Text(), want)
 	}
 
 	// The session log is loadable and agrees with in-memory history — the

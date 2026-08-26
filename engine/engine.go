@@ -2060,26 +2060,6 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 			s.emitSessionError(err)
 			return nil, err
 		}
-		if stop == provider.StopMaxTokens {
-			// The provider cut this turn off mid-emission, before its own
-			// content_block_stop ever assembled a complete tool_use block
-			// (provider/anthropic/anthropic.go's assembledBlock.toolCall
-			// reuses whatever partial_json accumulated so far) -- so a
-			// TRAILING ToolCall part can carry non-empty but syntactically
-			// invalid Arguments, e.g. `{"comm`. dropInvalidPartialToolCall
-			// must run BEFORE asst is appended below: appendWithUsage's
-			// Normalize would otherwise coerce those same invalid Arguments
-			// to nil in place (Normalize mutates the *ToolCall this asst
-			// pointer already shares, not a copy) and leave a hollow,
-			// argument-less call sitting in history instead of removing it,
-			// and appendUnexecutedToolCallResults below would still
-			// synthesize an is_error result for that hollow call -- neither
-			// of which the model can do anything useful with. See
-			// dropInvalidPartialToolCall's own doc comment (an adversarial
-			// review finding on the PR that introduced max_tokens
-			// auto-continue).
-			dropInvalidPartialToolCall(asst)
-		}
 		// This attempt succeeded and its result is about to be kept
 		// (appended below) — whatever was checked out for it really was
 		// delivered in the request that produced asst. Commit BEFORE
@@ -2097,10 +2077,7 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 			// production boxes -- asst just got appended two lines above,
 			// so if it carries any ToolCall parts, this appends their
 			// synthetic results before Prompt ever returns, closing the
-			// hole instead of leaving them orphaned in history. The
-			// dropInvalidPartialToolCall call above already removed a
-			// genuinely mid-emission call, so this only ever synthesizes a
-			// result for a COMPLETE call the engine chose not to execute.
+			// hole instead of leaving them orphaned in history.
 			s.appendUnexecutedToolCallResults(asst, stop)
 			if stop == provider.StopMaxTokens {
 				// The provider cut this turn off mid-emission rather than
@@ -2699,45 +2676,6 @@ func (s *Session) appendUnexecutedToolCallResults(asst *message.Message, stop pr
 		return
 	}
 	s.append(syntheticUnexecutedToolResults(asst, fmt.Sprintf(unexecutedToolCallStopReasonTextFmt, stop)))
-}
-
-// dropInvalidPartialToolCall removes asst's TRAILING ToolCall part in place
-// when its Arguments do not parse as valid JSON — the shape a provider's
-// max_tokens cutoff leaves behind when it lands before the stream's own
-// content_block_stop ever assembled a complete tool_use block (see
-// provider/anthropic/anthropic.go's assembledBlock.toolCall, which reuses
-// whatever partial_json accumulated so far). Arguments in that shape can be
-// truncated mid-token, e.g. `{"comm` — non-empty but syntactically invalid.
-//
-// The caller (runAgenticLoop) must call this BEFORE asst is appended to
-// history. message.Message.Normalize (run by appendWithUsage on every
-// append) already coerces the identical invalid-Arguments shape to nil, as
-// defense in depth against a marshal failure — but Normalize mutates the
-// *ToolCall in place through the same pointer asst.Parts already holds, so
-// by the time appendUnexecutedToolCallResults runs, that coercion alone
-// would leave a hollow, argument-less ToolCall sitting in history and get a
-// synthetic is_error result synthesized for it. That is the wrong outcome
-// for a call that never genuinely finished: unlike a COMPLETE call the
-// engine chose not to execute (which keeps its ToolCall part and an
-// is_error result, so the model can see exactly what failed and why),
-// a mid-emission call's Name may be right but its Arguments are truncated
-// mid-token — there is no usable intent to show the model as "this call
-// failed". Dropping the part outright, with no synthetic result at all,
-// lets the model simply re-issue the call, complete, once it continues.
-//
-// Only the trailing part is ever checked: every earlier tool_use block in
-// the same message already reached its own content_block_stop before the
-// provider's cutoff arrived, so only the last one can be mid-emission.
-func dropInvalidPartialToolCall(asst *message.Message) {
-	n := len(asst.Parts)
-	if n == 0 {
-		return
-	}
-	tc, ok := asst.Parts[n-1].(*message.ToolCall)
-	if !ok || json.Valid(tc.Arguments) {
-		return
-	}
-	asst.Parts = asst.Parts[:n-1]
 }
 
 // maxTokensContinuationNudgeFmt is the max_tokens auto-continuation nudge

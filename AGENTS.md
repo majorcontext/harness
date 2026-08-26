@@ -310,27 +310,31 @@ behavior is to let the turn end and rely on the user re-prompting) gets the
 same auto-continue an autonomous harness session needs, not a human-facing
 half-answer.
 
-**A genuinely mid-emission tool call is dropped, never replayed.**
-`dropInvalidPartialToolCall` (`engine/engine.go`) runs before `asst` is
-appended to history whenever `stop == provider.StopMaxTokens`: if the
-TRAILING part is a `*message.ToolCall` whose `Arguments` do not parse as
-valid JSON — the shape Anthropic's `assembledBlock.toolCall`
+**A genuinely mid-emission tool call keeps its identity; only its Arguments
+are cleared.** A cross-model adversarial review of this PR raised a
+CRITICAL finding: a `StopMaxTokens` turn's trailing `ToolCall` can carry
+non-empty but syntactically invalid `Arguments` — the raw, truncated
+`partial_json` Anthropic's `assembledBlock.toolCall`
 (`provider/anthropic/anthropic.go`) leaves behind when `max_tokens` lands
-before the block's own `content_block_stop`, e.g. `{"comm` — that part is
-removed in place. No synthetic unexecuted-call result is generated for it
-either: unlike a COMPLETE call the engine chose not to execute (which keeps
-its `ToolCall` part and gets an is_error result via
-`appendUnexecutedToolCallResults`, so the model can see exactly what failed),
-a mid-emission call carries no usable intent to report as failed. The model
-simply re-issues the call, complete, once it continues. This supersedes an
-earlier design (still correct for every OTHER invalid-Arguments producer —
-see `message.Message.Normalize`'s own doc comment) that kept the call's
-identity and cleared only its Arguments; see
-`TestPersistTruncatedToolCallArguments`'s doc comment
-(`engine/tool_call_poison_test.go`) for the full history. Only the trailing
-part is ever checked — every earlier `tool_use` block in the same message
-already reached its own `content_block_stop` before the cutoff, so only the
-last one can be mid-emission.
+before the block's own `content_block_stop`, e.g. `{"comm` — and claimed
+replaying that into the continuation request fails `json.Marshal` before it
+reaches the provider. That premise does NOT hold: `message.Message.Normalize`
+(`Session.append`'s `appendWithUsage`, run on every append) already coerces
+the identical invalid-Arguments shape to nil in place, through the SAME
+`*ToolCall` pointer `asst.Parts` already holds — so by the time the
+continuation request is built, `Arguments` is already safe. This is not
+incidental; it is the deliberate, incident-tested fix for a real production
+defect (two goal sessions dead at "json: error calling MarshalJSON... "; see
+`TestPersistTruncatedToolCallArguments`, `engine/tool_call_poison_test.go`).
+The finding is REBUTTED WITH EVIDENCE, not implemented: no code change. See
+`TestMaxTokensPartialJSONMarshalsThroughRealTranscoder`
+(`engine/max_tokens_wire_test.go`), which drives a genuinely truncated
+`partial_json` tool call through a REAL `anthropic.Client` (`provider/anthropic`,
+via an `httptest` server, not a hand-rolled stand-in) and proves the
+continuation request the client actually sends decodes cleanly server-side,
+with the truncated call's identity preserved and its `Arguments` cleared —
+this is the test that pins the rebuttal and must go red before any future
+"drop the call entirely" change lands unchallenged.
 
 **The continuation nudge is a genuine new turn, never assistant prefill.**
 The follow-up call carries the synthetic unexecuted-tool-call result (for
@@ -409,9 +413,7 @@ turn ends immediately on the first `max_tokens` stop). The config/CLI layer
 (`config.Config.MaxTokensContinuations *int`, key
 `max_tokens_continuations`, resolved via `MaxTokensContinuationsValue`)
 supplies the product default of 3; an explicit `0` disables it the same way
-`prompt_retries: 0` disables base-loop retry. `dropInvalidPartialToolCall`
-runs regardless of this setting — even with auto-continue disabled, a
-mid-emission call must never sit in history with unusable arguments.
+`prompt_retries: 0` disables base-loop retry.
 
 A task child runs its turn through this exact same `runAgenticLoop` — a
 child `Session` is a full `NewSession(childCfg)`
