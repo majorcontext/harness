@@ -105,14 +105,26 @@ type mcpSelectResult struct {
 // tool of a degraded server.
 const (
 	mcpSelectNoteCallable = "selected tools are callable from the next request in this turn"
+	mcpSelectNoteMixed    = "the loaded tools are callable from the next request in this turn; the pending ones load once their server reconnects"
 	mcpSelectNotePending  = "no tool was loaded: every name you selected belongs to a server that is not connected. They load once that server reconnects; see the mcp tool's status and connect actions"
 	mcpSelectNoteNone     = "no tool was loaded"
 )
 
-// mcpSelectNoteFor picks the note for one batch's outcome.
+// mcpSelectNoteFor picks the note for one batch's outcome. Four cases, and
+// the split is by CALLABILITY rather than by bucket name:
+//
+//   - already counts as loaded. Those tools were selected on an earlier
+//     call and are in the tools array right now, so a batch of nothing but
+//     already-selected names must not report "no tool was loaded" -- that
+//     reads as "nothing is available" about tools the model can call.
+//   - pending counts as not loaded, whatever else the batch contains, so a
+//     batch holding both says both things rather than only the happy half.
 func mcpSelectNoteFor(res mcpSelectResult) string {
+	loaded := len(res.Selected) > 0 || len(res.Already) > 0
 	switch {
-	case len(res.Selected) > 0:
+	case loaded && len(res.Pending) > 0:
+		return mcpSelectNoteMixed
+	case loaded:
 		return mcpSelectNoteCallable
 	case len(res.Pending) > 0:
 		return mcpSelectNotePending

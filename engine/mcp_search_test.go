@@ -406,6 +406,25 @@ func TestMCPSelectNoteIsConditional(t *testing.T) {
 	if res.Note != mcpSelectNoteNone {
 		t.Fatalf("note for a missing-only batch = %q, want the no-tool-loaded note", res.Note)
 	}
+
+	// An ALREADY-only batch: those tools were loaded by the first call, so
+	// the note must not say nothing was loaded.
+	runMCPAction(t, s, `{"action":"select","tools":["mcp__github__create_issue"]}`, &res)
+	if len(res.Already) != 1 || len(res.Selected) != 0 {
+		t.Fatalf("second select = selected %v already %v, want it reported already", res.Selected, res.Already)
+	}
+	if res.Note != mcpSelectNoteCallable {
+		t.Fatalf("note for an already-only batch = %q, want the callable note — those tools ARE loaded", res.Note)
+	}
+
+	// A batch with both: it must say both things, not only the happy half.
+	runMCPAction(t, s, `{"action":"select","tools":["mcp__github__list_issues","mcp__down__other"]}`, &res)
+	if len(res.Selected) != 1 || len(res.Pending) != 1 {
+		t.Fatalf("mixed select = selected %v pending %v, want one of each", res.Selected, res.Pending)
+	}
+	if res.Note != mcpSelectNoteMixed {
+		t.Fatalf("note for a mixed batch = %q, want the mixed note", res.Note)
+	}
 }
 
 func TestMCPSelectEmptyToolsErrors(t *testing.T) {
