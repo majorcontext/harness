@@ -103,7 +103,7 @@ func (s *Server) handleSpawnChild(w http.ResponseWriter, parentID, agent, prompt
 		} else {
 			// ErrDepthLimit, ErrConcurrencyLimit, ErrSessionCanceled: all
 			// short, fixed, secret-free sentinel strings — safe to surface
-			// directly (see classifySpawnError's doc comment for the same
+			// directly (see classifySpawnFailure's doc comment for the same
 			// reasoning on the `task` tool's identical error set).
 			writeErr(w, http.StatusConflict, err.Error())
 		}
@@ -514,7 +514,7 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 		} else {
 			// ErrSessionBusy/ErrConcurrencyLimit/ErrSessionCanceled: all
 			// short, fixed, secret-free sentinel strings — safe to
-			// surface directly (see classifySpawnError's doc comment for
+			// surface directly (see classifySpawnFailure's doc comment for
 			// the same reasoning on this error set elsewhere).
 			writeErr(w, http.StatusConflict, err.Error())
 		}

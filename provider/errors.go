@@ -43,6 +43,29 @@ const (
 	// adapter sets it yet; it exists here so the enum has a fixed home for
 	// it the moment that branch lands — see the type doc comment above.
 	ErrKindRetryable
+
+	// ErrKindProviderExhausted marks an ACCOUNT-level supply wall: the API
+	// key's usage limit, credit balance, quota, or spend cap is spent, so
+	// the provider refuses the request until its own clock rolls over.
+	// This is a THIRD thing, distinct from both neighbors it would
+	// otherwise be filed under:
+	//
+	//   - Not deterministic-permanent. A malformed request fails the same
+	//     way forever; this one succeeds again, unchanged, once the wall
+	//     lifts. Adapters still mark it permanent for RETRY purposes (no
+	//     backoff schedule outlives a monthly quota), but the work is
+	//     resumable, not doomed.
+	//   - Not transient weather. An overload or a burst rate limit clears
+	//     in seconds and a second request may well succeed; this one is
+	//     ACCOUNT-wide, so every concurrent session on the same key hits
+	//     the identical wall at the identical moment.
+	//
+	// That last property is why the engine needs the classification at
+	// all: a supervising parent whose child dies on provider weather may
+	// reasonably retry or respawn, and a parent whose child dies on an
+	// account wall must do neither — it must preserve the child and resume
+	// it later (see engine's FailKindProviderExhausted).
+	ErrKindProviderExhausted
 )
 
 // Error is a classified provider error. Adapters construct it only when they
@@ -69,6 +92,20 @@ type Error struct {
 	// entirely).
 	PromptTokens int
 	TokenLimit   int
+
+	// RecoverHint is the provider's own statement of WHEN access returns
+	// ("2026-09-01 at 00:00 UTC"), parsed from the message when
+	// Kind==ErrKindProviderExhausted and the adapter could extract it.
+	// Empty otherwise, including for an exhaustion whose message names no
+	// time at all — the classification never depends on the hint, so a
+	// wording change upstream costs the hint, never the classification
+	// (the same degrade rule PromptTokens/TokenLimit follow).
+	//
+	// Verbatim provider text, quoted into model-visible guidance by the
+	// engine. It is never parsed into a time.Time: the formats vary by
+	// plan and by endpoint, and a parent only needs to know roughly when
+	// to come back, not to schedule against it.
+	RecoverHint string
 }
 
 // Error renders a human-readable message. For a classified context overflow
@@ -97,4 +134,18 @@ func (e *Error) Unwrap() error { return nil }
 func IsContextOverflow(err error) bool {
 	var pe *Error
 	return errors.As(err, &pe) && pe.Kind == ErrKindContextOverflow
+}
+
+// AsProviderExhausted reports whether err is (or wraps, via errors.As) a
+// *provider.Error classified as ErrKindProviderExhausted, returning it so
+// a caller can read RecoverHint. The IsContextOverflow precedent applied
+// to the second classification the engine consumes: the adapter that owns
+// the wire format decides, the engine only reads the typed value, and no
+// engine code ever matches a provider message itself.
+func AsProviderExhausted(err error) (*Error, bool) {
+	var pe *Error
+	if errors.As(err, &pe) && pe.Kind == ErrKindProviderExhausted {
+		return pe, true
+	}
+	return nil, false
 }

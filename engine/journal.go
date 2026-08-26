@@ -123,7 +123,11 @@ type JournalRecord struct {
 	Agent          string `json:"agent,omitempty"`
 	TaskStatus     string `json:"task_status,omitempty"`
 	TaskFailReason string `json:"task_fail_reason,omitempty"`
-	TaskCanceled   bool   `json:"task_canceled,omitempty"`
+	// TaskFailKind is the structured classification of TaskFailReason
+	// (engine.FailKindProviderExhausted, or empty) — engine-generated from
+	// a fixed vocabulary, never provider text, so it is not sanitized.
+	TaskFailKind string `json:"task_fail_kind,omitempty"`
+	TaskCanceled bool   `json:"task_canceled,omitempty"`
 
 	// Compaction (Type == recCompact). The folded summary message's own
 	// content is not repeated here -- it already flowed through a preceding
@@ -231,6 +235,7 @@ func projectJournalRecord(seq int, rec record) JournalRecord {
 			out.Agent = rec.TaskNotify.Agent
 			out.TaskStatus = string(rec.TaskNotify.Status)
 			out.TaskFailReason = plugin.SanitizeSessionError(rec.TaskNotify.FailReason)
+			out.TaskFailKind = rec.TaskNotify.FailKind
 			out.TaskCanceled = rec.TaskNotify.Canceled
 		}
 	case recCompact:

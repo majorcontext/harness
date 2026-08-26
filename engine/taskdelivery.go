@@ -20,17 +20,35 @@ type taskNotification struct {
 	Status  SessionStatus // StatusDone or StatusFailed; nothing else is ever queued
 	Result  string        // the child's final text — set for StatusDone
 	// FailReason is set for StatusFailed: a fixed classified prefix, then
-	// the masked, capped provider cause — see classifySpawnError
+	// the masked, capped provider cause — see classifySpawnFailure
 	// (session_manager.go) for both halves and the #82 leak rule they
 	// satisfy together.
 	FailReason string
-	Usage      provider.Usage
+	// FailKind classifies FailReason: empty for an ordinary failure,
+	// FailKindProviderExhausted for an account-level provider wall. It
+	// selects the guidance renderTaskNotifications gives the parent, and
+	// it rides the durable record so a reloaded parent gets the same
+	// guidance a live one would.
+	FailKind string
+	// RecoverHint is the provider's own statement of when access returns
+	// ("2026-09-01 at 00:00 UTC"), for FailKindProviderExhausted only, and
+	// only when the provider gave one. Masked and capped like every other
+	// piece of provider text on this surface (boundedProviderText, see
+	// classifySpawnFailure).
+	//
+	// Durable, not runtime-only: taskFailureGuidance's "after <hint>" is
+	// the ONE canonical statement of the recover time (FailReason names
+	// the classification, not the time — see exhaustionReason), so a
+	// notification restored from the log would otherwise lose the fact
+	// entirely rather than merely repeat it less.
+	RecoverHint string
+	Usage       provider.Usage
 	// Canceled distinguishes a child that was explicitly Cancel()ed from
 	// an ordinarily failed one — deliberately NOT folded into Status
 	// (which stays exactly Done/Failed, unchanged, for every existing
 	// parent-facing consumer: the queued/delivered wire shape, the
 	// [tasks:] rendering, etc.) and NOT inferable from FailReason=="canceled"
-	// either: classifySpawnError (below) also produces that exact string
+	// either: classifySpawnFailure (below) also produces that exact string
 	// for a genuinely FAILED turn whose own context was canceled for some
 	// OTHER reason (e.g. an ancestor's context propagating), which is a
 	// real StatusFailed outcome, not a StatusCanceled one — string-matching
@@ -438,17 +456,47 @@ func renderTaskNotifications(pending []taskNotification) string {
 			fmt.Fprintf(&b, "%s (agent=%s) done: %s (usage: %d in / %d out)",
 				n.ChildID, n.Agent, neutralizeNotificationText(truncateTaskResult(n.Result)), n.Usage.InputTokens, n.Usage.OutputTokens)
 		case StatusFailed:
-			fmt.Fprintf(&b, "%s (agent=%s) failed: %s (usage: %d in / %d out)",
-				n.ChildID, n.Agent, neutralizeNotificationText(n.FailReason), n.Usage.InputTokens, n.Usage.OutputTokens)
+			fmt.Fprintf(&b, "%s (agent=%s) failed: %s (usage: %d in / %d out)%s",
+				n.ChildID, n.Agent, neutralizeNotificationText(n.FailReason), n.Usage.InputTokens, n.Usage.OutputTokens,
+				taskFailureGuidance(n))
 		}
 	}
 	b.WriteString("\n]")
 	return b.String()
 }
 
+// taskFailureGuidance is the actionable half of a failed child's
+// notification line: what the PARENT should do next, as opposed to
+// FailReason's description of what happened. Empty for an ordinary
+// failure, where the parent's ordinary judgment (retry, respawn, give up,
+// report) is exactly right and the engine has nothing to add.
+//
+// FailKindProviderExhausted is the one kind that needs it. A parent
+// reading only "failed: provider capacity exhausted..." still had two
+// plausible moves, and a live incident measured it choosing the wrong one:
+// it spawned a replacement child, which hit the identical account wall
+// seconds later. The three facts it was missing are stated here — the
+// child is preserved, a replacement is pointless, and `task send` re-runs
+// this same child — because the notification is the only surface the
+// parent is guaranteed to read.
+//
+// Appended to the SAME line, never a new one: renderTaskNotifications'
+// one-line-per-notification rule is a forgery defense, not formatting.
+func taskFailureGuidance(n taskNotification) string {
+	if n.FailKind != FailKindProviderExhausted {
+		return ""
+	}
+	when := ""
+	if n.RecoverHint != "" {
+		when = " after " + neutralizeNotificationText(n.RecoverHint)
+	}
+	return " — provider exhausted, child preserved: do not spawn a replacement (every session on this provider account hits the same wall); resume this child" +
+		when + " with task send on session_id " + n.ChildID
+}
+
 // neutralizeNotificationText collapses newlines to spaces — see
 // renderTaskNotifications' doc comment for why. FailReason is always
-// engine-generated (classifySpawnError, or the fixed "canceled" string —
+// engine-generated (classifySpawnFailure, or the fixed "canceled" string —
 // never raw CHILD text), but it does now carry the provider's own error
 // message as its cause half, and a provider error can be multi-line, so
 // this pass is load-bearing for FailReason too, not only for a child's

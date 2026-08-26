@@ -1381,6 +1381,15 @@ components:
         task_fail_reason:
           type: string
           description: Only on the same records as task_status. Sanitized.
+        task_fail_kind:
+          type: string
+          description: >-
+            Structured classification of task_fail_reason, on the same
+            records as task_status. Engine-generated from a fixed
+            vocabulary, so it is not sanitized. Absent for an ordinary
+            failure; "provider_exhausted" means the provider ACCOUNT is
+            walled, so the child is intact and re-runnable and a
+            replacement child would hit the same wall.
         task_canceled:
           type: boolean
           description: Only on the same records as task_status.

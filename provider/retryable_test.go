@@ -175,3 +175,38 @@ func TestPermanentAndRetryableAreMutuallyExclusive(t *testing.T) {
 		t.Errorf("AsPermanent(MarkRetryable(...)) = true, want false")
 	}
 }
+
+// TestAsProviderExhaustedSeesThroughWrappers proves the classification
+// travels as a typed value, exactly like AsRetryable/AsPermanent: an
+// adapter marks it once, and every wrapping layer between the adapter and
+// the engine's failure site keeps it readable.
+func TestAsProviderExhaustedSeesThroughWrappers(t *testing.T) {
+	base := &Error{Kind: ErrKindProviderExhausted, Raw: "anthropic: usage limit", RecoverHint: "2026-09-01"}
+	wrapped := fmt.Errorf("engine: turn failed: %w", MarkPermanent(base))
+
+	pe, ok := AsProviderExhausted(wrapped)
+	if !ok {
+		t.Fatalf("AsProviderExhausted(%v) = false, want true", wrapped)
+	}
+	if pe.RecoverHint != "2026-09-01" {
+		t.Errorf("RecoverHint = %q, want %q", pe.RecoverHint, "2026-09-01")
+	}
+	if !AsPermanent(wrapped) {
+		t.Error("AsPermanent = false, want true: an exhaustion is never worth an in-turn retry")
+	}
+}
+
+// TestAsProviderExhaustedIgnoresOtherKinds is the surplus-direction guard:
+// a context overflow is also a *Error, and must not read as exhaustion.
+func TestAsProviderExhaustedIgnoresOtherKinds(t *testing.T) {
+	overflow := &Error{Kind: ErrKindContextOverflow, Raw: "anthropic: prompt is too long", PromptTokens: 10, TokenLimit: 5}
+	if _, ok := AsProviderExhausted(overflow); ok {
+		t.Error("AsProviderExhausted(context overflow) = true, want false")
+	}
+	if _, ok := AsProviderExhausted(errors.New("plain")); ok {
+		t.Error("AsProviderExhausted(plain error) = true, want false")
+	}
+	if _, ok := AsProviderExhausted(nil); ok {
+		t.Error("AsProviderExhausted(nil) = true, want false")
+	}
+}
