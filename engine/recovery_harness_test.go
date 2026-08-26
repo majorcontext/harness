@@ -226,3 +226,39 @@ func (c *resumeClaims) waitSettled(t *testing.T, mgr *SessionManager, id string)
 	c.wantClaim(t, id)
 	waitForStatus(t, mgr, id, StatusIdle, time.Second)
 }
+
+// TestResumeClaimWakeupsAreBroadcastNotStolen pins the property
+// resumeClaims depends on: ONE recorded claim wakes EVERY armed waiter,
+// not just the first one to reach the channel.
+//
+// Claims are matched per target id, so two waiters can be blocked on one
+// resumeClaims at the same time, each looking for a different target. A
+// wakeup implemented as a single buffered token cannot serve them: the
+// first waiter to receive consumes it, finds no claim for ITS id, and
+// re-blocks — while the waiter whose claim actually landed sleeps on with
+// the wakeup already spent. Before testResumeClaimedHook moved into
+// triggerResumeLocked a claim for another target was not even reachable
+// from most tests, so this only became a real shape once the hook started
+// covering every claim path.
+//
+// The test arms two waiters, records once, and requires both released.
+// Against a buffered-token record only the first receive succeeds, so the
+// second check falls through to its default and fails.
+func TestResumeClaimWakeupsAreBroadcastNotStolen(t *testing.T) {
+	c := &resumeClaims{sig: make(chan struct{})}
+	first, second := c.wake(), c.wake()
+	c.record("ses_a")
+	for i, wake := range []<-chan struct{}{first, second} {
+		select {
+		case <-wake:
+		default:
+			t.Errorf("waiter %d was not woken by a recorded claim — the wakeup was stolen by another waiter", i)
+		}
+	}
+	if !c.take("ses_a") {
+		t.Error("take(ses_a) = false, want the recorded claim")
+	}
+	if c.take("ses_b") {
+		t.Error("take(ses_b) = true, want false — a claim must only satisfy its own target")
+	}
+}

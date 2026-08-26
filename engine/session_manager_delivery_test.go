@@ -1468,7 +1468,7 @@ func TestDrainAllTaskNotificationsPersistsDeliverySoReloadDoesNotResurrectIt(t *
 	// The same hazard exists in production for a real crash-restart, and
 	// store.go's fold comment claims an order-independence it does not
 	// have. That is a separate finding, filed rather than fixed here.
-	flushes.waitUntil(t, 2*time.Second, "test setup: the grandchild's queued notification never landed on mid's own log", func() bool {
+	flushes.waitUntilMsg(t, "test setup: the grandchild's queued notification never landed on mid's own log", func() bool {
 		return countRecordType(t, sessionPath(dir, midID), recTaskNotifyQueued) == 1
 	})
 
