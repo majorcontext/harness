@@ -2129,6 +2129,45 @@ func waitForReap(t *testing.T, mgr *SessionManager, want int, timeout time.Durat
 	}
 }
 
+// waitForFinalized blocks until id's node carries finalized=true, or fails
+// the test once timeout elapses.
+//
+// Same Changed-driven, sample-free shape as waitForStatus: finalizeTurn
+// sets the flag and runs markChangedLocked under m.mu, so a waiter that
+// arms Changed before its own read cannot miss it.
+//
+// It answers a question no status wait can. A node Cancel() marked
+// terminal reaches its terminal status SYNCHRONOUSLY, inside the Cancel
+// call, while its own Prompt goroutine is still parked in the provider.
+// That goroutine only finishes later, in finalizeTurn, and finalized is
+// the flag finalizeTurn sets. A test that must not return while that
+// goroutine still runs — it would outlive the test and race the next
+// test's freshly allocated provider — waits here, not on the status it
+// already has.
+func waitForFinalized(t *testing.T, mgr *SessionManager, id string, timeout time.Duration) {
+	t.Helper()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		changed := mgr.Changed()
+		mgr.mu.Lock()
+		n, ok := mgr.nodes[id]
+		done := ok && n.finalized
+		mgr.mu.Unlock()
+		if !ok {
+			t.Fatalf("waitForFinalized(%s): node not tracked", id)
+		}
+		if done {
+			return
+		}
+		select {
+		case <-changed:
+		case <-timer.C:
+			t.Fatalf("node %s never finalized within %s — its turn goroutine is still running", id, timeout)
+		}
+	}
+}
+
 // TestUnlockAndFlushPersistRunsThunksAfterReleasingLock is the regression
 // test for a live review finding: session-log disk writes (task-
 // notification queued/delivered records, the task-spawn audit record)
