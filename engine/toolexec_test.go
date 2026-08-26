@@ -1061,3 +1061,155 @@ func (p *lockedProvider) Stream(context.Context, *provider.Request) (provider.St
 	p.mu.Unlock()
 	return &scriptedStream{events: asstTurn(provider.StopEndTurn, &message.Text{Text: p.text})}, nil
 }
+
+// TestBatchKeyWaiterDoesNotHoldAPoolSlot is the head-of-line finding from
+// the cross-model review. A call waiting for its same-key predecessor must
+// not occupy a pool slot while it waits, or an unrelated later call is
+// refused admission behind a goroutine that is doing nothing.
+//
+// The batch is [k1-a, k1-b, free], with a cap of two. k1-a stays inside
+// its tool; k1-b can only wait. "free" shares no key with either, so it
+// must still be admitted. The test blocks until "free" runs, which an
+// executor that admits on the submitting goroutine can never satisfy —
+// its two slots are held by k1-a and the waiting k1-b.
+func TestBatchKeyWaiterDoesNotHoldAPoolSlot(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		freeRan := make(chan struct{})
+		holdA := make(chan struct{})
+		aIn := make(chan struct{})
+
+		keyed := func(name, key string) Tool {
+			return Tool{
+				Def: provider.ToolDef{Name: name, Description: "d", InputSchema: json.RawMessage(`{}`)},
+				Key: func(*Session, json.RawMessage) string { return key },
+				Run: func(_ context.Context, _ *Session, args json.RawMessage) (message.Parts, error) {
+					var in struct {
+						Call string `json:"call"`
+					}
+					_ = json.Unmarshal(args, &in)
+					switch in.Call {
+					case "a":
+						close(aIn)
+						<-holdA
+					case "free":
+						close(freeRan)
+					}
+					return message.Parts{&message.Text{Text: in.Call}}, nil
+				},
+			}
+		}
+
+		s := NewSession(Config{ToolConcurrency: 2})
+		s.tools["k1"] = keyed("k1", "shared")
+		s.tools["free"] = keyed("free", "")
+
+		calls := []*message.ToolCall{
+			batchCall("k1", "a"), batchCall("k1", "b"), batchCall("free", "free"),
+		}
+		var results message.Parts
+		go func() {
+			results = s.runToolCalls(context.Background(), asstWith(calls...))
+		}()
+
+		<-aIn
+		// The unrelated call must get in while k1-a still holds the key
+		// and k1-b is still waiting for it.
+		<-freeRan
+		close(holdA)
+		synctest.Wait()
+
+		wantOrder(t, results, calls...)
+	})
+}
+
+// TestBatchPanicInToolYieldsOneErrorResult proves the one-result-per-call
+// guarantee survives a panicking tool. A panic in a worker goroutine
+// cannot be recovered by the join, so without the guard it takes the
+// process down and leaves the assistant message's tool_use blocks
+// unanswered forever. The panicking call must instead return one error
+// result, and its siblings must still return their own.
+func TestBatchPanicInToolYieldsOneErrorResult(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		concurrency int
+	}{
+		{"parallel", 8},
+		{"sequential", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewSession(Config{ToolConcurrency: tc.concurrency})
+			s.tools["ok"] = batchTool("ok", nil)
+			s.tools["panics"] = Tool{
+				Def: provider.ToolDef{Name: "panics", Description: "d", InputSchema: json.RawMessage(`{}`)},
+				Run: func(context.Context, *Session, json.RawMessage) (message.Parts, error) {
+					panic("tool exploded")
+				},
+			}
+			calls := []*message.ToolCall{
+				batchCall("ok", "c0"),
+				{CallID: "tc_panic", Name: "panics", Arguments: json.RawMessage(`{}`)},
+				batchCall("ok", "c2"),
+			}
+			results := s.runToolCalls(context.Background(), asstWith(calls...))
+
+			wantOrder(t, results, calls...)
+			for _, p := range results {
+				tr := p.(*message.ToolResult)
+				wantErr := tr.CallID == "tc_panic"
+				if tr.IsError != wantErr {
+					t.Errorf("%s IsError = %v, want %v", tr.CallID, tr.IsError, wantErr)
+				}
+				if wantErr && !strings.Contains(tr.Content.Text(), toolCallPanicText) {
+					t.Errorf("%s = %q, want it to name the panic", tr.CallID, tr.Content.Text())
+				}
+			}
+		})
+	}
+}
+
+// TestBatchPanickingKeyStillSerializes proves a Key that panics cannot take
+// the batch down with no results at all. Key runs on the submitting
+// goroutine, before any result slot is filled, so its fallback must be a
+// real key — never "", which would silently drop the exclusion the tool
+// asked for.
+func TestBatchPanickingKeyStillSerializes(t *testing.T) {
+	s := NewSession(Config{ToolConcurrency: 8})
+	s.tools["bad"] = Tool{
+		Def: provider.ToolDef{Name: "bad", Description: "d", InputSchema: json.RawMessage(`{}`)},
+		Key: func(*Session, json.RawMessage) string { panic("key exploded") },
+		Run: func(context.Context, *Session, json.RawMessage) (message.Parts, error) {
+			return message.Parts{&message.Text{Text: "ran"}}, nil
+		},
+	}
+	if got := s.toolKey("bad", json.RawMessage(`{}`)); got == "" {
+		t.Fatal("a panicking Key fell back to no key: the tool's exclusion would be dropped")
+	}
+	calls := []*message.ToolCall{
+		{CallID: "tc1", Name: "bad", Arguments: json.RawMessage(`{}`)},
+		{CallID: "tc2", Name: "bad", Arguments: json.RawMessage(`{}`)},
+	}
+	wantOrder(t, s.runToolCalls(context.Background(), asstWith(calls...)), calls...)
+}
+
+// TestFilePathKeyIsAbsoluteUnderRelativeWorkDir is the third cross-model
+// finding. resolvePath joins a relative argument onto Config.WorkDir, and
+// WorkDir itself may be relative, so cleaning alone left one file with two
+// keys — and a write could then race an edit on it.
+func TestFilePathKeyIsAbsoluteUnderRelativeWorkDir(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewSession(Config{WorkDir: "."})
+	args := func(path string) json.RawMessage {
+		return json.RawMessage(fmt.Sprintf(`{"path":%q}`, path))
+	}
+	rel := s.toolKey("edit_file", args("a.txt"))
+	abs := s.toolKey("write_file", args(filepath.Join(cwd, "a.txt")))
+	if rel != abs {
+		t.Errorf("relative key %q != absolute key %q: one file must take one key", rel, abs)
+	}
+	if !strings.HasPrefix(rel, filePathKeyPrefix+"/") {
+		t.Errorf("key %q is not absolute", rel)
+	}
+}

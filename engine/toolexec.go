@@ -169,6 +169,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 
 	"github.com/majorcontext/harness/message"
@@ -226,7 +227,7 @@ func (s *Session) runToolBatch(ctx context.Context, asst *message.Message) messa
 		// it, and per-key exclusion is likewise moot with one call in
 		// flight at a time.
 		for i, tc := range calls {
-			outputs[i], errs[i] = s.admitAndRun(ctx, tc)
+			outputs[i], errs[i] = s.runOneGuarded(ctx, tc)
 			done[i] = true
 		}
 	} else {
@@ -287,6 +288,7 @@ func (s *Session) runToolBatch(ctx context.Context, asst *message.Message) messa
 const (
 	toolCallCanceledText = "tool call not started: the turn was canceled"
 	toolCallNoResultText = "tool call produced no result"
+	toolCallPanicText    = "tool call failed: the tool panicked"
 )
 
 // admitAndRun is the ONE admission gate every call passes through. A call
@@ -311,6 +313,31 @@ func (s *Session) admitAndRun(ctx context.Context, tc *message.ToolCall) (messag
 		return message.Parts{&message.Text{Text: toolCallCanceledText}}, true
 	}
 	return s.runToolCall(ctx, tc)
+}
+
+// runOneGuarded is the single execution wrapper every path uses. It turns a
+// PANIC inside a tool, or inside a hook the tool's dispatch calls, into one
+// ordinary error result.
+//
+// Without it the one-result-per-call guarantee is not true. A panic in a
+// worker goroutine cannot be recovered by the join, so it takes the whole
+// process down and the batch's other results die with it — and the
+// assistant message's tool_use blocks are already in history, so the next
+// load of that session meets unanswered tool calls. A recovered panic
+// keeps the session honest instead: the model gets a real error result for
+// the call that failed, and its siblings still return their own.
+//
+// This also changes sequential mode, which previously let a tool panic
+// unwind through Prompt. That is deliberate: the guarantee must not depend
+// on which execution mode a session runs in.
+func (s *Session) runOneGuarded(ctx context.Context, tc *message.ToolCall) (out message.Parts, isErr bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			out = message.Parts{&message.Text{Text: fmt.Sprintf("%s: %v", toolCallPanicText, r)}}
+			isErr = true
+		}
+	}()
+	return s.admitAndRun(ctx, tc)
 }
 
 // toolCallsOf extracts asst's ToolCall parts in order.
@@ -370,11 +397,23 @@ func (s *Session) toolIsSerial(name string) bool {
 
 // toolKey computes name's resource key for one call's args, or "" if the
 // tool has no Key func. See the Tool struct's Key field doc comment.
-func (s *Session) toolKey(name string, args json.RawMessage) string {
+func (s *Session) toolKey(name string, args json.RawMessage) (key string) {
 	t, ok := s.tools[name]
 	if !ok || t.Key == nil {
 		return ""
 	}
+	// A panicking Key runs on the SUBMITTING goroutine, before any result
+	// slot is filled, so it would take down the batch with no results at
+	// all. Fall back to one shared per-tool key instead: conservative,
+	// because every call whose key could not be computed then serializes
+	// with every other one, exactly like filePathKey's own unparsed
+	// fallback. Never fall back to "" — that would silently drop the
+	// exclusion the tool asked for.
+	defer func() {
+		if r := recover(); r != nil {
+			key = "panicking-key:" + name
+		}
+	}()
 	return t.Key(s, args)
 }
 
@@ -385,7 +424,7 @@ func (s *Session) runToolBatchParallel(ctx context.Context, calls []*message.Too
 	for _, seg := range s.splitBatch(calls) {
 		if seg.serial {
 			i := seg.idx[0]
-			outputs[i], errs[i] = s.admitAndRun(ctx, seg.calls[0])
+			outputs[i], errs[i] = s.runOneGuarded(ctx, seg.calls[0])
 			done[i] = true
 			continue
 		}
@@ -445,27 +484,42 @@ func (s *Session) runParallelSegment(ctx context.Context, seg batchSegment, outp
 		jobs[i] = job{idx: seg.idx[i], tc: tc, key: key, predecessor: pred, release: rel}
 	}
 
-	// slots shadows nothing: naming this `cap` would shadow the builtin.
+	// The pool bounds EXECUTION, not goroutine count. Each job gets its
+	// goroutine immediately; that goroutine waits for its baton FIRST and
+	// only then takes a pool slot.
+	//
+	// The order matters, and an earlier cut had it the other way round
+	// (slot taken on the submitting goroutine, baton awaited inside). That
+	// shape lets a same-key waiter sit on a slot it cannot use while an
+	// unrelated later call is refused admission — head-of-line blocking
+	// that scales with how many same-key calls a batch carries. It could
+	// not deadlock, because a predecessor is always submitted earlier and
+	// so always holds a slot before its successor is even created, but a
+	// slot held by a goroutine that is only waiting is pure waste. Waiting
+	// for the baton before admission removes the whole class.
+	//
+	// A batch is bounded by one assistant message, so the goroutine count
+	// is bounded too, and a parked goroutine costs a few kilobytes.
 	slots := min(s.toolConcurrency, len(jobs))
 	sem := make(chan struct{}, slots)
 	var wg sync.WaitGroup
 	for _, j := range jobs {
 		wg.Add(1)
-		sem <- struct{}{}
 		go func(j job) {
 			defer wg.Done()
-			defer func() { <-sem }()
 			// Release the baton on the way out, whatever happens inside:
 			// a same-key successor must never wait forever on a
-			// predecessor that died. release is idempotent-by-position
-			// (each call closes only its OWN channel, exactly once).
+			// predecessor that died. Each call closes only its OWN
+			// channel, exactly once.
 			if j.release != nil {
 				defer j.release()
 			}
 			if j.predecessor != nil {
 				<-j.predecessor
 			}
-			outputs[j.idx], errs[j.idx] = s.admitAndRun(ctx, j.tc)
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			outputs[j.idx], errs[j.idx] = s.runOneGuarded(ctx, j.tc)
 			done[j.idx] = true
 		}(j)
 	}

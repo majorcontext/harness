@@ -204,7 +204,23 @@ func filePathKey(s *Session, args json.RawMessage) string {
 	if err := json.Unmarshal(args, &in); err != nil || in.Path == "" {
 		return filePathKeyPrefix + "<unparsed>"
 	}
-	// Clean the resolved path, so "a/../x" and "x" key the SAME file.
+	// Make the resolved path ABSOLUTE, then clean it, so every spelling of
+	// one file produces one key.
+	//
+	// Cleaning alone is not enough. resolvePath joins a relative argument
+	// onto Config.WorkDir, and WorkDir itself may be relative — an
+	// embedder sets that field directly. With WorkDir "." the argument
+	// "a.txt" resolves to "a.txt" while "/cwd/a.txt" resolves to itself,
+	// so one file would take two keys and a write could race an edit on
+	// it. filepath.Abs resolves against the process working directory,
+	// which is the same directory the tools' own os.Open/os.WriteFile
+	// calls resolve against, so the key always names the file the tool
+	// actually touches. Abs also cleans, which is what collapses the
+	// "a/../x" alias.
+	//
+	// Abs fails only when the process working directory cannot be read.
+	// Fall back to the cleaned path then: still correct whenever WorkDir
+	// is absolute, which is what cmd/harness always passes.
 	// resolvePath returns an absolute argument verbatim, and filepath.Join
 	// cleans only the relative branch, so the key would otherwise miss a
 	// dot-dot alias on an absolute path. The tools themselves open both
@@ -217,7 +233,12 @@ func filePathKey(s *Session, args json.RawMessage) string {
 	// which is a syscall on the batch's hot path and fails on a path that
 	// does not exist yet — a write_file target routinely does not. This is
 	// an accepted, documented residual, not an oversight.
-	return filePathKeyPrefix + filepath.Clean(s.resolvePath(in.Path))
+	resolved := s.resolvePath(in.Path)
+	abs, err := filepath.Abs(resolved)
+	if err != nil {
+		return filePathKeyPrefix + filepath.Clean(resolved)
+	}
+	return filePathKeyPrefix + abs
 }
 
 func readFileTool() Tool {
