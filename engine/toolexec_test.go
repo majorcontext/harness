@@ -1213,3 +1213,43 @@ func TestFilePathKeyIsAbsoluteUnderRelativeWorkDir(t *testing.T) {
 		t.Errorf("key %q is not absolute", rel)
 	}
 }
+
+// TestFilePathKeySeesThroughSymlinks proves a valid filesystem alias
+// cannot bypass same-file exclusion. Two calls naming a file directly and
+// through a symlink must take ONE key, or a write_file could race an
+// edit_file against the same bytes.
+//
+// The second case is the one a lexical fix cannot reach: a file that does
+// not exist yet, inside a symlinked directory — a routine write_file
+// target.
+func TestFilePathKeySeesThroughSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real.txt")
+	if err := os.WriteFile(real, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.txt")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	realDir := filepath.Join(dir, "d")
+	if err := os.Mkdir(realDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkDir := filepath.Join(dir, "dlink")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewSession(Config{WorkDir: dir})
+	key := func(path string) string {
+		return s.toolKey("edit_file", json.RawMessage(fmt.Sprintf(`{"path":%q}`, path)))
+	}
+	if got, want := key("link.txt"), key("real.txt"); got != want {
+		t.Errorf("symlink key %q != real key %q: a write could race an edit on one file", got, want)
+	}
+	// Not-yet-created file inside a symlinked directory.
+	if got, want := key("dlink/new.txt"), key("d/new.txt"); got != want {
+		t.Errorf("key through a symlinked dir %q != %q", got, want)
+	}
+}

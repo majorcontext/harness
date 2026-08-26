@@ -199,6 +199,37 @@ func (s *Session) resolvePath(path string) string {
 // Tool.Key field doc comment (engine.go) for the general contract.
 const filePathKeyPrefix = "path:"
 
+// canonicalFileKeyPath resolves symlinks in abs, so two spellings that
+// reach ONE file take one key.
+//
+// It tries the whole path first, which covers the dangerous case: an
+// existing file reached both directly and through a symlink, where a
+// write_file could otherwise race an edit_file on the same bytes. That
+// fails for a path that does not exist yet — a write_file target
+// routinely does not — so it then resolves the PARENT directory and
+// rejoins the base name, which covers a not-yet-created file inside a
+// symlinked directory. If neither resolves, the absolute path stands.
+//
+// Cost is one or two lstat-walks per keyed call, against a tool call that
+// does real file I/O anyway. An earlier cut skipped this and documented
+// the alias as an accepted residual; review pushed back that a valid
+// filesystem alias is not a residual, and the syscall is cheap enough
+// that the pushback is right.
+//
+// A HARD link still aliases: two names for one inode with no symlink to
+// follow. Closing that needs a stat and an inode comparison against every
+// other key in the batch, which is quadratic and still races a file
+// created mid-batch. That one stays a documented residual.
+func canonicalFileKeyPath(abs string) string {
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		return real
+	}
+	if dir, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
+		return filepath.Join(dir, filepath.Base(abs))
+	}
+	return abs
+}
+
 // filePathKey resolves a read_file/write_file/edit_file call's "path"
 // argument against s's working directory (s.resolvePath), so a relative
 // and an absolute argument naming the same file produce the same key. A
@@ -247,7 +278,7 @@ func filePathKey(s *Session, args json.RawMessage) string {
 	if err != nil {
 		return filePathKeyPrefix + filepath.Clean(resolved)
 	}
-	return filePathKeyPrefix + abs
+	return filePathKeyPrefix + canonicalFileKeyPath(abs)
 }
 
 func readFileTool() Tool {

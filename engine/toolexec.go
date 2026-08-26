@@ -103,6 +103,18 @@
 //     for the binding lookup (RLock) and delegates the actual call to
 //     callTool, which opens its own request over the connected client —
 //     ordinary concurrent-safe client usage. Safe for concurrent calls.
+//     Note that a namespaced mcp__server__tool call is NOT a Serial
+//     barrier: only the built-in `mcp` tool is, because only it mutates
+//     the session's own schema selection. Two calls to one MCP SERVER
+//     therefore overlap. That is safe on our side for the same two
+//     reasons the plugin transport is: mcp/conn.go is id-multiplexed
+//     (nextID plus a pending map, responses routed by id), and the
+//     MCPManager is a per-process singleton shared by every session
+//     (cmd/harness builds one), so concurrent calls to one server already
+//     happen today across sessions. A third-party server that cannot
+//     answer two requests at once is non-conformant with JSON-RPC's own
+//     id correlation; HARNESS_SEQUENTIAL_TOOLS=1 is the operator's answer
+//     if one turns up.
 //
 // # Design
 //
@@ -170,9 +182,11 @@
 //     behavior change for the default configuration, and
 //     HARNESS_SEQUENTIAL_TOOLS=1 is the operator's answer for a workload
 //     that cannot tolerate it.
-//  2. A symlink or hard link reaching one inode under two paths keys as
-//     two resources. See filePathKey for why resolving that is not worth
-//     a syscall on the batch's hot path.
+//  2. A HARD link. filePathKey resolves symlinks (see
+//     canonicalFileKeyPath), so a symlinked alias keys correctly, but two
+//     hard links to one inode have no link to follow. Closing that needs
+//     an inode comparison against every other key in the batch, which is
+//     quadratic and still races a file created mid-batch.
 //
 // # Cancellation and the orphan-result invariant
 //

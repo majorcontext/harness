@@ -22,6 +22,25 @@ import (
 
 // Hooks is the slice of the plugin host the engine uses. *plugin.Host
 // satisfies it; tests use fakes. A nil Hooks disables all hook dispatch.
+//
+// Every method MUST be safe for concurrent use, and CROSS-CALL ORDER IS
+// NOT GUARANTEED. One assistant message's tool calls run as a concurrent
+// batch (toolexec.go), so ToolExecuteBefore/ToolExecuteAfter/ExecuteTool
+// for two different calls can be in flight at the same moment, and
+// before(B) can precede before(A) for calls the model listed as A then B.
+//
+// What IS guaranteed is PER-CALL order: for any one call id, before runs,
+// then the tool, then after. After-hooks across sibling calls are
+// completion-ordered.
+//
+// This is a change from the pre-parallel engine, where call A's whole
+// before/tool/after sequence finished before call B started. A hook
+// implementation that keeps cross-call state — a running quota, an audit
+// chain, a policy that reads the previous call — must key that state by
+// call id or serialize itself; plugin/PROTOCOL.md's "Concurrency" section
+// states the same contract for out-of-process plugins. A deployment that
+// cannot adapt sets HARNESS_SEQUENTIAL_TOOLS=1, which restores
+// one-at-a-time execution and with it the old hook order.
 type Hooks interface {
 	ChatParams(ctx context.Context, req *plugin.ChatParamsRequest) plugin.ChatParams
 	SystemTransform(ctx context.Context, req *plugin.SystemTransformRequest) []string
