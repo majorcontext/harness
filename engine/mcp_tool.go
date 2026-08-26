@@ -116,6 +116,11 @@ func mcpTool(canDefer bool) Tool {
 	}
 	return Tool{
 		Def: def,
+		// Serial: a select/connect action mutates s.mcpSelected and the
+		// session's MCP registry state (see runMCPTool). A barrier keeps a
+		// sibling call in the same batch from reading tool definitions
+		// mid-mutation.
+		Serial: true,
 		Run: func(ctx context.Context, s *Session, args json.RawMessage) (message.Parts, error) {
 			return runMCPTool(ctx, s, args)
 		},

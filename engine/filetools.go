@@ -178,6 +178,35 @@ func (s *Session) resolvePath(path string) string {
 	return filepath.Join(s.cfg.WorkDir, path)
 }
 
+// filePathKeyPrefix namespaces the resource key read_file, write_file, and
+// edit_file share (see filePathKey). All three key on the same
+// RESOLVED absolute path, so same-path calls across any of the three
+// tools serialize together in call order, while different paths still run
+// concurrently — a deliberate in-class widening of the approved
+// "edit_file serializes per path" design: read_file and write_file join
+// the same namespace because a read racing a concurrent write or edit to
+// the SAME file is exactly the same same-file hazard class, just missing
+// the "corruption" half (a stale read is still a wrong answer). See the
+// Tool.Key field doc comment (engine.go) for the general contract.
+const filePathKeyPrefix = "path:"
+
+// filePathKey resolves a read_file/write_file/edit_file call's "path"
+// argument against s's working directory (s.resolvePath), so a relative
+// and an absolute argument naming the same file produce the same key. A
+// call whose args do not parse, or carry no path, falls back to a fixed
+// sentinel key rather than panicking — conservative because it still
+// serializes every unparseable call against every other one, never
+// against a well-formed call to an unrelated path.
+func filePathKey(s *Session, args json.RawMessage) string {
+	var in struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(args, &in); err != nil || in.Path == "" {
+		return filePathKeyPrefix + "<unparsed>"
+	}
+	return filePathKeyPrefix + s.resolvePath(in.Path)
+}
+
 func readFileTool() Tool {
 	return Tool{
 		Def: provider.ToolDef{
@@ -193,6 +222,7 @@ func readFileTool() Tool {
 				"required": ["path"]
 			}`),
 		},
+		Key: filePathKey,
 		Run: func(ctx context.Context, s *Session, args json.RawMessage) (message.Parts, error) {
 			var in struct {
 				Path   string `json:"path"`
@@ -281,6 +311,7 @@ func writeFileTool() Tool {
 				"required": ["path", "content"]
 			}`),
 		},
+		Key: filePathKey,
 		Run: func(ctx context.Context, s *Session, args json.RawMessage) (message.Parts, error) {
 			var in struct {
 				Path    string  `json:"path"`
@@ -318,6 +349,7 @@ func editFileTool() Tool {
 				"required": ["path", "old_string", "new_string"]
 			}`),
 		},
+		Key: filePathKey,
 		Run: func(ctx context.Context, s *Session, args json.RawMessage) (message.Parts, error) {
 			var in struct {
 				Path       string `json:"path"`

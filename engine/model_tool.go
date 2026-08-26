@@ -75,6 +75,11 @@ func modelTool() Tool {
 				"required": ["action"]
 			}`),
 		},
+		// Serial: set swaps s.model via SetModel, which every later call in
+		// the batch (and every later request) must see consistently. A
+		// barrier keeps a sibling call from running against a model that
+		// is about to change mid-batch.
+		Serial: true,
 		Run: func(_ context.Context, s *Session, args json.RawMessage) (message.Parts, error) {
 			return runModelTool(s, args)
 		},

@@ -72,6 +72,10 @@ func goalTool() Tool {
 				"required": ["action"]
 			}`),
 		},
+		// Serial: set/adjust mutate the session's active goal (RegisterGoal/
+		// UpdateGoal) — a barrier keeps a sibling call from racing a goal
+		// state change mid-batch.
+		Serial: true,
 		Run: func(_ context.Context, s *Session, args json.RawMessage) (message.Parts, error) {
 			return runGoalTool(s, args)
 		},

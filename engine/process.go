@@ -79,10 +79,32 @@ func processTool(reg ProcessRegistry) Tool {
 				"required": ["action"]
 			}`),
 		},
+		// Key: serializes per process name — start/stop/restart/declare/
+		// undeclare on the SAME name must run in call order, never
+		// concurrently with each other, while calls naming different
+		// processes (or "list", which names none) run alongside them.
+		Key: processToolKey,
 		Run: func(ctx context.Context, s *Session, args json.RawMessage) (message.Parts, error) {
 			return runProcessTool(ctx, reg, args)
 		},
 	}
+}
+
+// processToolKey resolves a process tool call's resource key: its "name"
+// argument, or "" (no key) when args do not carry one — "list" and a call
+// whose args fail to parse both fall through to "", which is a safe
+// fallback here (unlike a path-keyed tool, an unparseable process call has
+// no risk of colliding with a real process name) since runProcessTool's
+// own json.Unmarshal error path already rejects it before touching any
+// process.
+func processToolKey(_ *Session, args json.RawMessage) string {
+	var in struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(args, &in); err != nil || in.Name == "" {
+		return ""
+	}
+	return "process:" + in.Name
 }
 
 // processToolDescription lists the config-declared roster (name, command,
