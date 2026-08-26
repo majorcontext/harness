@@ -23,6 +23,28 @@ import (
 
 // Hooks is the slice of the plugin host the engine uses. *plugin.Host
 // satisfies it; tests use fakes. A nil Hooks disables all hook dispatch.
+//
+// Every method MUST be safe for concurrent use, and CROSS-CALL ORDER IS
+// NOT GUARANTEED. One assistant message's tool calls run as a concurrent
+// batch (toolexec.go), so ToolExecuteBefore/ToolExecuteAfter/ExecuteTool
+// for two different calls can be in flight at the same moment, and
+// before(B) can precede before(A) for calls the model listed as A then B.
+//
+// What IS guaranteed is PER-CALL order: for any one call id, before runs,
+// then the tool, then after. After-hooks across sibling calls are
+// completion-ordered.
+//
+// This is a change from the pre-parallel engine, where call A's whole
+// before/tool/after sequence finished before call B started. A hook
+// implementation that keeps cross-call state — a running quota, an audit
+// chain, a policy that reads the previous call — must key that state by
+// call id or serialize itself. The same contract binds an out-of-process
+// plugin: its hook dispatches ride the connection plugin/PROTOCOL.md
+// specifies, which is id-multiplexed and already carries several requests
+// in flight at once, so a plugin must never assume its hooks are called
+// one at a time. A deployment that cannot adapt sets
+// HARNESS_SEQUENTIAL_TOOLS=1, which restores one-at-a-time execution and
+// with it the old hook order.
 type Hooks interface {
 	ChatParams(ctx context.Context, req *plugin.ChatParamsRequest) plugin.ChatParams
 	SystemTransform(ctx context.Context, req *plugin.SystemTransformRequest) []string
@@ -39,9 +61,46 @@ type Hooks interface {
 }
 
 // Tool is a built-in (in-process) tool.
+//
+// Serial and Key both default to their Go zero value (false, nil), which is
+// exactly today's behavior for every existing built-in and for every
+// plugin/MCP tool (neither ever sets them) — see toolexec.go for the batch
+// executor that reads them.
 type Tool struct {
 	Def provider.ToolDef
 	Run func(ctx context.Context, s *Session, args json.RawMessage) (message.Parts, error)
+
+	// Serial marks this tool as a BARRIER inside one assistant message's
+	// batch of tool calls (see toolexec.go's splitBatch). A batch splits
+	// into runs around a Serial call: every call before it finishes before
+	// it starts, and it finishes before any call after it starts. Set true
+	// only for a tool that mutates session-wide state in a way a plain
+	// s.mu-guarded write cannot make safe to interleave with a sibling call
+	// — e.g. a model or goal swap mid-batch. See mcpTool, modelTool,
+	// goalTool for the three built-ins that set it, each with a one-line
+	// comment naming the state it mutates.
+	Serial bool
+
+	// Key, when non-nil, computes a resource key from the running session
+	// and one call's raw arguments. Two calls in the same batch that
+	// produce the same non-empty key run mutually exclusive, in CALL
+	// order — never concurrently with each other, though still
+	// concurrently with calls that key differently or key empty. An empty
+	// string means "no key": the call runs alongside everything else in
+	// its segment, exactly as today.
+	//
+	// Key takes the Session (not just args) because a path-based key must
+	// resolve a relative path against the session's own working directory
+	// (s.resolvePath) to match an absolute path naming the same file — see
+	// editFileTool/writeFileTool/readFileTool. Key must never panic; a
+	// tool whose args fail to parse must return a key it has chosen
+	// deliberately, never a panic. The two built-in shapes differ on
+	// purpose: filePathKey returns a FIXED fallback key, so every
+	// unparseable file call serializes against every other one, while
+	// processToolKey returns "" (no key), because an unparseable process
+	// call cannot collide with a real process name and runProcessTool
+	// rejects it before touching any process anyway.
+	Key func(s *Session, args json.RawMessage) string
 }
 
 // Event is one entry in the session's event stream. Event types follow ACP
@@ -383,6 +442,22 @@ type Config struct {
 	// concurrent ClearGoal/evaluation race — so OnEvent must NEVER call back
 	// into the Session that raised the event (Prompt, ClearGoal, ActiveGoal,
 	// etc.), which would deadlock on that same mutex.
+	//
+	// The engine MAY call OnEvent from SEVERAL goroutines AT ONCE: one
+	// assistant message's batch of tool calls now runs concurrently (see
+	// toolexec.go), and EventToolStart/EventToolEnd fire from whichever
+	// goroutine is running that call, so two calls in one batch can each be
+	// inside OnEvent at the same moment. This was already true before
+	// toolexec.go existed, for a different reason — a `task` child's own
+	// background turn (SessionManager.Spawn) can call the SAME OnEvent
+	// concurrently with its parent's turn, since configSnapshot copies the
+	// func value by value into every child's Config (see
+	// TestRunOnEventHandlerSerializesConcurrentCallers, cmd/harness). A
+	// caller whose OnEvent is not naturally reentrant (writes a shared
+	// buffer, encodes to one io.Writer) MUST serialize its own body — see
+	// server.Publish/publishLive (routes every event through a session-
+	// keyed s.mu) and cmd/harness's newRunOnEventHandler (wraps its body in
+	// a mutex) for the two in-repo patterns.
 	OnEvent func(Event)
 
 	// OnStorePhase, when non-nil, receives one call per ENDED phase of the
@@ -745,6 +820,41 @@ type Config struct {
 	// the ceiling. Config key `tool_result_retained_bytes`, product default
 	// 4194304.
 	ToolResultRetainedBytes int
+
+	// ToolConcurrency bounds how many of one assistant message's tool calls
+	// runToolCalls (toolexec.go) runs at once. Resolved ONCE, in newSession,
+	// into Session's own toolConcurrency field — see resolveToolConcurrency
+	// (toolexec.go), which follows resolveContextWindow's exact
+	// precedence shape (context_window.go).
+	//
+	// Precedence: 0 (the zero value, "unset") resolves to the package
+	// default, defaultToolConcurrency (8) — a batch runs in parallel, capped
+	// at 8 calls in flight. 1 resolves to strictly SEQUENTIAL execution:
+	// one call at a time, in call order, including for a serial tool (a
+	// barrier is a no-op when nothing ever runs beside it). A value above
+	// 1 is the cap verbatim. A negative value is clamped to 1 (sequential)
+	// — never treated as "unlimited".
+	//
+	// 1 restores the pre-parallel ORDER, not the pre-parallel behavior in
+	// every respect, and an operator reaching for it as an exact revert
+	// should know the two deliberate differences: runOneGuarded turns a
+	// panicking tool into one error result instead of letting it unwind
+	// through Prompt, and admitAndRun refuses to START a call once the
+	// turn is canceled, where the old loop ran every remaining call.
+	// Neither depends on the mode, by design — the one-result-per-call
+	// guarantee must hold identically however a batch executes. See the
+	// sequential branch in toolexec.go, which states the same thing.
+	//
+	// The engine itself never reads an environment variable (see
+	// session_manager.go's own "the engine itself never reads environment
+	// variables" rule) — this field is the ONLY seam. cmd/harness's
+	// toolConcurrency() turns the HARNESS_SEQUENTIAL_TOOLS=1 kill switch
+	// and the HARNESS_TOOL_CONCURRENCY=<n> cap into this field before it
+	// builds Config, for both `harness run` and `harness serve`; this
+	// package neither reads nor knows about either variable. An embedder
+	// that builds Config itself sets the field directly and gets no
+	// environment handling at all.
+	ToolConcurrency int
 }
 
 // Session is one conversation: an in-memory history plus the agent loop.
@@ -1006,6 +1116,15 @@ type Session struct {
 	contextWindowExplicit bool
 	contextWindowSource   string
 
+	// toolConcurrency is the resolved (never-zero, never-negative) cap on
+	// how many of one batch's tool calls run at once — see
+	// Config.ToolConcurrency and resolveToolConcurrency (toolexec.go). Set
+	// once in newSession and never changed again for the session's
+	// lifetime; unlike the context window, no runtime event re-derives it.
+	// 1 means strictly sequential. Read-only after construction, so no
+	// lock is needed to read it from a running batch.
+	toolConcurrency int
+
 	// compactCount/lastCompactedAt track how many times this session has
 	// been compacted and when the most recent one landed — durable via the
 	// compact journal record (see store.go), so GET /session can show a UI
@@ -1158,6 +1277,7 @@ func newSession(cfg Config) *Session {
 		contextWindowSource:   contextWindowSource,
 		toolResultNextID:      1,
 		toolResults:           make(map[string]toolResultMeta),
+		toolConcurrency:       resolveToolConcurrency(cfg.ToolConcurrency),
 		readHashes:            make(map[string][sha256.Size]byte),
 	}
 	for _, t := range []Tool{bashTool(cfg.BashTimeout, cfg.BashOutputCap), readFileTool(), writeFileTool(), editFileTool(), sessionInfoTool(), globTool(), grepTool(), lsTool()} {
@@ -2998,40 +3118,63 @@ func (s *Session) toolDefsWithCatalog(ctx context.Context) ([]provider.ToolDef, 
 	return defs, plan.catalog
 }
 
-// runToolCalls executes every tool call in an assistant message, in order,
-// and returns the ToolResult parts.
-//
-// This is retention's single call site (maybeRetainToolResult, see
-// toolresult.go): an oversized TEXT result is swapped for a preview plus a
-// trh_N handle HERE, before the ToolResult is built and long before
-// Session.append, message.NormalizeForWire, or any transcoder sees it. That
-// placement is why tool-result handles need no wire-format change at all —
-// every downstream layer still sees an ordinary ToolResult carrying ordinary
-// Text parts.
-//
-// Retention runs on the post-hook output (runToolCall already applied
-// ToolExecuteAfter), so a plugin that rewrites or enlarges a result has its
-// final bytes measured, not the tool's originals. It is a total no-op when
-// retention is disabled or the result is within the limit.
+// runToolCalls executes every tool call in an assistant message and returns
+// the ToolResult parts, one per call, in CALL order. See toolexec.go for the
+// executor itself (batch splitting, concurrency, per-key ordering, and the
+// join where retention runs).
 func (s *Session) runToolCalls(ctx context.Context, asst *message.Message) message.Parts {
-	var results message.Parts
-	for _, p := range asst.Parts {
-		tc, ok := p.(*message.ToolCall)
-		if !ok {
-			continue
-		}
-		out, isErr := s.runToolCall(ctx, tc)
-		results = append(results, &message.ToolResult{
-			CallID:  tc.CallID,
-			Content: s.maybeRetainToolResult(tc.Name, out),
-			IsError: isErr,
-		})
-	}
-	return results
+	return s.runToolBatch(ctx, asst)
 }
 
-func (s *Session) runToolCall(ctx context.Context, tc *message.ToolCall) (message.Parts, bool) {
+// runToolCall runs one call end to end: the before-hook chain, the tool
+// itself, the after-hook chain, and the four events that bracket them.
+//
+// It recovers a PANIC from the tool or from either hook chain. The recover
+// lives here, rather than only in toolexec.go's runOneGuarded, because
+// this is the one frame that knows WHICH events have already been emitted.
+// EventToolStart fires before anything can panic, so a panic unwinding
+// past this function would otherwise leave a dangling tool.start on the
+// live event stream forever — a subscriber that pairs start and end by
+// call id (the session monitor's reducer, an ACP tool node, a plugin
+// audit trail) would wait on an end that never comes. History stayed
+// correct either way, because runOneGuarded still produces one error
+// result; the event stream is the half it cannot fix from outside.
+//
+// execEndOwed tracks whether a tool.execute.start is OUTSTANDING, which
+// is the only question the recover can answer correctly in both
+// directions. The plugin-facing pair does not bracket the same region as
+// the engine-facing one: emitToolExecuteStart fires AFTER the before-hook
+// chain and emitToolExecuteEnd fires BEFORE the after-hook chain. So a
+// panic in ToolExecuteBefore owes no tool.execute.end — emitting one
+// would be a phantom end for a call that never started, the inverse of
+// the dangling start this recover exists to prevent, and it would
+// contradict emitToolExecuteStart's own rule that a denied call fires
+// neither. A panic in ToolExecuteAfter owes none either, because the end
+// already fired; emitting a second would hand every plugin a duplicate
+// for one call. Only a panic between the two owes one. A boolean that
+// merely recorded "the end was emitted" got the first case wrong.
+//
+// This path is new with concurrent execution. Before runOneGuarded a tool
+// panic killed the process, so "the session survives a panic" never
+// existed and neither did the unbalanced pair.
+func (s *Session) runToolCall(ctx context.Context, tc *message.ToolCall) (out message.Parts, isErr bool) {
 	s.emit(Event{Type: EventToolStart, ToolCall: tc})
+
+	execEndOwed, toolEndEmitted := false, false
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		out = message.Parts{&message.Text{Text: fmt.Sprintf("%s: %v", toolCallPanicText, r)}}
+		isErr = true
+		if execEndOwed {
+			s.emitToolExecuteEnd(tc.Name, tc.CallID, false)
+		}
+		if !toolEndEmitted {
+			s.emit(Event{Type: EventToolEnd, ToolCall: tc, Output: out, IsError: true})
+		}
+	}()
 
 	args := tc.Arguments
 	if s.cfg.Hooks != nil {
@@ -3039,9 +3182,10 @@ func (s *Session) runToolCall(ctx context.Context, tc *message.ToolCall) (messag
 			SessionID: s.ID, CallID: tc.CallID, Tool: tc.Name, Args: args,
 		})
 		if deny != "" {
-			out := message.Parts{&message.Text{Text: deny}}
-			s.emit(Event{Type: EventToolEnd, ToolCall: tc, Output: out, IsError: true})
-			return out, true
+			denied := message.Parts{&message.Text{Text: deny}}
+			toolEndEmitted = true
+			s.emit(Event{Type: EventToolEnd, ToolCall: tc, Output: denied, IsError: true})
+			return denied, true
 		}
 		if newArgs != nil {
 			args = newArgs
@@ -3049,18 +3193,21 @@ func (s *Session) runToolCall(ctx context.Context, tc *message.ToolCall) (messag
 	}
 
 	s.emitToolExecuteStart(tc.Name, tc.CallID)
+	execEndOwed = true
 	s.mu.Lock()
 	s.toolExecCount++
 	s.mu.Unlock()
 
-	out, isErr := s.executeTool(ctx, tc, args)
+	out, isErr = s.executeTool(ctx, tc, args)
 	s.emitToolExecuteEnd(tc.Name, tc.CallID, !isErr)
+	execEndOwed = false
 
 	if s.cfg.Hooks != nil {
 		out = s.cfg.Hooks.ToolExecuteAfter(ctx, &plugin.ToolExecuteAfterRequest{
 			SessionID: s.ID, CallID: tc.CallID, Tool: tc.Name, Args: args, Output: out,
 		})
 	}
+	toolEndEmitted = true
 	s.emit(Event{Type: EventToolEnd, ToolCall: tc, Output: out, IsError: isErr})
 	return out, isErr
 }

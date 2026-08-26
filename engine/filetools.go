@@ -172,13 +172,114 @@ func readPathContent(path string) (fileContent, error) {
 	return fileContent{IsImage: true, ImageData: full, MediaType: mediaType, Width: cfg.Width, Height: cfg.Height}, nil
 }
 
-// resolvePath resolves a tool path argument against the session working
-// directory. Absolute paths pass through unchanged.
+// resolvePath maps a tool argument to the path the tool opens, resolving
+// a relative argument against the session working directory; an absolute
+// argument passes through unchanged. Every file tool MUST route its path
+// argument through it.
+//
+// That is load-bearing beyond convenience: filePathKey builds the batch
+// executor's per-file exclusion key from resolvePath's own output (see
+// filePathKey), so the key names the file a tool touches only while every
+// tool resolves the same way. A new file tool that resolved a path by any
+// other route would key one file under two names, and a concurrent write
+// and edit on it would stop being serialized.
 func (s *Session) resolvePath(path string) string {
 	if filepath.IsAbs(path) {
 		return path
 	}
 	return filepath.Join(s.cfg.WorkDir, path)
+}
+
+// filePathKeyPrefix namespaces the resource key read_file, write_file, and
+// edit_file share (see filePathKey). All three key on the same
+// RESOLVED absolute path, so same-path calls across any of the three
+// tools serialize together in call order, while different paths still run
+// concurrently — a deliberate in-class widening of the approved
+// "edit_file serializes per path" design: read_file and write_file join
+// the same namespace because a read racing a concurrent write or edit to
+// the SAME file is exactly the same same-file hazard class, just missing
+// the "corruption" half (a stale read is still a wrong answer). See the
+// Tool.Key field doc comment (engine.go) for the general contract.
+const filePathKeyPrefix = "path:"
+
+// canonicalFileKeyPath resolves symlinks in abs, so two spellings that
+// reach ONE file take one key.
+//
+// It tries the whole path first, which covers the dangerous case: an
+// existing file reached both directly and through a symlink, where a
+// write_file could otherwise race an edit_file on the same bytes. That
+// fails for a path that does not exist yet — a write_file target
+// routinely does not — so it then resolves the PARENT directory and
+// rejoins the base name, which covers a not-yet-created file inside a
+// symlinked directory. If neither resolves, the absolute path stands.
+//
+// Cost is one or two lstat-walks per keyed call, against a tool call that
+// does real file I/O anyway. An earlier cut skipped this and documented
+// the alias as an accepted residual; review pushed back that a valid
+// filesystem alias is not a residual, and the syscall is cheap enough
+// that the pushback is right.
+//
+// A HARD link still aliases: two names for one inode with no symlink to
+// follow. Closing that needs a stat and an inode comparison against every
+// other key in the batch, which is quadratic and still races a file
+// created mid-batch. That one stays a documented residual.
+func canonicalFileKeyPath(abs string) string {
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		return real
+	}
+	if dir, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
+		return filepath.Join(dir, filepath.Base(abs))
+	}
+	return abs
+}
+
+// filePathKey resolves a read_file/write_file/edit_file call's "path"
+// argument against s's working directory (s.resolvePath), so a relative
+// and an absolute argument naming the same file produce the same key. A
+// call whose args do not parse, or carry no path, falls back to a fixed
+// sentinel key rather than panicking — conservative because it still
+// serializes every unparseable call against every other one, never
+// against a well-formed call to an unrelated path.
+func filePathKey(s *Session, args json.RawMessage) string {
+	var in struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(args, &in); err != nil || in.Path == "" {
+		return filePathKeyPrefix + "<unparsed>"
+	}
+	// Make the resolved path ABSOLUTE, then clean it, so every spelling of
+	// one file produces one key.
+	//
+	// Cleaning alone is not enough. resolvePath joins a relative argument
+	// onto Config.WorkDir, and WorkDir itself may be relative — an
+	// embedder sets that field directly. With WorkDir "." the argument
+	// "a.txt" resolves to "a.txt" while "/cwd/a.txt" resolves to itself,
+	// so one file would take two keys and a write could race an edit on
+	// it. filepath.Abs resolves against the process working directory,
+	// which is the same directory the tools' own os.Open/os.WriteFile
+	// calls resolve against, so the key always names the file the tool
+	// actually touches. Abs also cleans, which is what collapses the
+	// "a/../x" alias.
+	//
+	// Abs fails only when the process working directory cannot be read.
+	// Fall back to the cleaned path then: still correct whenever WorkDir
+	// is absolute, which is what cmd/harness always passes.
+	// resolvePath returns an absolute argument verbatim, and filepath.Join
+	// cleans only the relative branch, so the key would otherwise miss a
+	// dot-dot alias on an absolute path. The tools themselves open both
+	// spellings through the same resolvePath, so cleaning here can only
+	// merge two keys that name one file, never split one file into two.
+	//
+	// A SYMLINK alias is closed separately, by canonicalFileKeyPath below,
+	// which this function calls. A HARD link is the one remaining
+	// residual: two names for one inode with no link to follow. See
+	// canonicalFileKeyPath for why closing that is not worth it.
+	resolved := s.resolvePath(in.Path)
+	abs, err := filepath.Abs(resolved)
+	if err != nil {
+		return filePathKeyPrefix + filepath.Clean(resolved)
+	}
+	return filePathKeyPrefix + canonicalFileKeyPath(abs)
 }
 
 // recordRead records that this session has seen resolvedPath's raw on-disk
@@ -232,6 +333,7 @@ func readFileTool() Tool {
 				"required": ["path"]
 			}`),
 		},
+		Key: filePathKey,
 		Run: func(ctx context.Context, s *Session, args json.RawMessage) (message.Parts, error) {
 			var in struct {
 				Path   string `json:"path"`
@@ -334,6 +436,7 @@ func writeFileTool() Tool {
 				"required": ["path", "content"]
 			}`),
 		},
+		Key: filePathKey,
 		Run: func(ctx context.Context, s *Session, args json.RawMessage) (message.Parts, error) {
 			var in struct {
 				Path    string  `json:"path"`
@@ -402,6 +505,7 @@ func editFileTool() Tool {
 				"required": ["path", "old_string", "new_string"]
 			}`),
 		},
+		Key: filePathKey,
 		Run: func(ctx context.Context, s *Session, args json.RawMessage) (message.Parts, error) {
 			var in struct {
 				Path       string `json:"path"`
