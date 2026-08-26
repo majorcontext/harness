@@ -6,6 +6,7 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -995,6 +996,24 @@ type Session struct {
 	// rather than a per-process one. Guarded by mu.
 	toolResultBytes int
 
+	// readHashes backs the write_file read-before-overwrite guard (see the
+	// "write_file read-before-overwrite guard" section of AGENTS.md and
+	// writeFileTool's doc comment in filetools.go). It maps a resolved
+	// absolute path (s.resolvePath's output, never a raw relative tool
+	// argument) to the sha256 hash of that path's raw on-disk bytes as of
+	// the last time this session read it (read_file) or wrote it
+	// (write_file/edit_file). write_file refuses to overwrite an existing
+	// file whose path is absent here, or whose current on-disk hash no
+	// longer matches the recorded one. Deliberately in-memory and
+	// per-live-Session only: never persisted, never folded by LoadSession,
+	// and never copied by configSnapshot (it lives on Session state, not
+	// Config, so a spawned child starts with its own empty set) — a
+	// reloaded or spawned session has read nothing yet, so starting empty
+	// is the conservative, correct default rather than a gap. Guarded by
+	// mu, like toolResults above; see filetools.go's recordRead/readHashFor
+	// for the only accessors.
+	readHashes map[string][sha256.Size]byte
+
 	// taskNotifications is this session's pending queue of child-completion
 	// signals not yet checked out for an in-flight turn attempt (see
 	// taskdelivery.go): SessionManager.finalizeTurn appends to it from
@@ -1068,6 +1087,7 @@ func newSession(cfg Config) *Session {
 		contextWindowSource:   contextWindowSource,
 		toolResultNextID:      1,
 		toolResults:           make(map[string]toolResultMeta),
+		readHashes:            make(map[string][sha256.Size]byte),
 	}
 	for _, t := range []Tool{bashTool(cfg.BashTimeout, cfg.BashOutputCap), readFileTool(), writeFileTool(), editFileTool(), sessionInfoTool(), globTool(), grepTool(), lsTool()} {
 		s.tools[t.Def.Name] = t
