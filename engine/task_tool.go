@@ -754,7 +754,13 @@ func boundedPartsText(ps message.Parts, n int) (text string, cut bool) {
 	written := 0
 	for _, p := range ps {
 		t, ok := p.(*message.Text)
-		if !ok {
+		// An EMPTY Text part is skipped before the budget check, not
+		// after: it contributes nothing, so letting it reach the check
+		// made a result whose parts summed to exactly n report a
+		// truncation that dropped nothing (a review finding). The error
+		// was conservative — complete text marked incomplete — but a flag
+		// that cries wolf is worth less than one that does not.
+		if !ok || t.Text == "" {
 			continue
 		}
 		if written >= n {

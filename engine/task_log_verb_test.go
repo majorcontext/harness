@@ -453,3 +453,22 @@ func TestTaskLogBoundsToolResultTextAtThePart(t *testing.T) {
 		t.Errorf("boundedPartsText = (%q, %v), want (%q, false) — identical to Parts.Text() under the cap", got, cut, ps.Text())
 	}
 }
+
+// TestBoundedPartsTextExactBoundary proves text that exactly fills the cap
+// is not reported as truncated. A review finding: a trailing empty Text
+// part reached the budget check and appended a truncation marker though
+// nothing had been dropped.
+func TestBoundedPartsTextExactBoundary(t *testing.T) {
+	exact := strings.Repeat("e", 10)
+
+	got, cut := boundedPartsText(message.Parts{&message.Text{Text: exact}, &message.Text{Text: ""}}, 10)
+	if cut || got != exact {
+		t.Errorf("boundedPartsText(exact + empty part) = (%q, %v), want (%q, false)", got, cut, exact)
+	}
+
+	// The same boundary with REAL text after it is a genuine cut.
+	got, cut = boundedPartsText(message.Parts{&message.Text{Text: exact}, &message.Text{Text: "more"}}, 10)
+	if !cut {
+		t.Errorf("boundedPartsText(exact + more text) = (%q, %v), want cut = true", got, cut)
+	}
+}
