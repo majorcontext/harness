@@ -306,6 +306,24 @@ func envInt(name string) int {
 	return n
 }
 
+// toolConcurrency resolves engine.Config.ToolConcurrency from the two
+// operator knobs. The engine never reads an environment variable itself
+// (see engine/session_manager.go), so this is where the variables become
+// a value.
+//
+// HARNESS_SEQUENTIAL_TOOLS=1 wins: it is the kill switch that restores
+// strictly one-at-a-time tool execution, for a box whose plugin depends
+// on the pre-parallel cross-call hook order, or for any workload a
+// concurrent batch upsets. HARNESS_TOOL_CONCURRENCY=<n> otherwise sets
+// the cap. Neither set leaves 0, which the engine resolves to its own
+// default.
+func toolConcurrency() int {
+	if os.Getenv("HARNESS_SEQUENTIAL_TOOLS") == "1" {
+		return 1
+	}
+	return envInt("HARNESS_TOOL_CONCURRENCY")
+}
+
 // sessionDir resolves where session logs live, in precedence order:
 // -no-save (yields "", persistence disabled) > $HARNESS_SESSION_DIR >
 // configDir (config session_dir) > $HOME/.harness/sessions. Nothing is
@@ -680,6 +698,7 @@ func runCmd(args []string) error {
 		// engine checks itself.
 		ToolResultInlineBytes:   cfg.ToolResultInlineBytesValue(),
 		ToolResultRetainedBytes: cfg.ToolResultRetainedBytesValue(),
+		ToolConcurrency:         toolConcurrency(),
 		// GoalTool mirrors serveCmd's mkCfg below: the `goal` session tool is
 		// only useful once an evaluator is actually configured to drive a
 		// goal loop against (-goal itself resolves and validates its own
@@ -1390,6 +1409,7 @@ func serveCmd(args []string) error {
 			// gets it unless an operator sets a non-positive inline value.
 			ToolResultInlineBytes:   cfg.ToolResultInlineBytesValue(),
 			ToolResultRetainedBytes: cfg.ToolResultRetainedBytesValue(),
+			ToolConcurrency:         toolConcurrency(),
 			// GoalTool enables the `goal` session tool (status/set/adjust)
 			// whenever an evaluator is configured to drive a goal loop
 			// against — the same condition server.Options.GoalEvaluator

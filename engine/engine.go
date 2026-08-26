@@ -70,9 +70,13 @@ type Tool struct {
 	// resolve a relative path against the session's own working directory
 	// (s.resolvePath) to match an absolute path naming the same file — see
 	// editFileTool/writeFileTool/readFileTool. Key must never panic; a
-	// tool whose args fail to parse returns a conservative fallback key
-	// instead (see processTool, which falls back to a fixed key when a
-	// call's name argument cannot be read).
+	// tool whose args fail to parse must return a key it has chosen
+	// deliberately, never a panic. The two built-in shapes differ on
+	// purpose: filePathKey returns a FIXED fallback key, so every
+	// unparseable file call serializes against every other one, while
+	// processToolKey returns "" (no key), because an unparseable process
+	// call cannot collide with a real process name and runProcessTool
+	// rejects it before touching any process anyway.
 	Key func(s *Session, args json.RawMessage) string
 }
 
@@ -725,11 +729,13 @@ type Config struct {
 	//
 	// The engine itself never reads an environment variable (see
 	// session_manager.go's own "the engine itself never reads environment
-	// variables" rule) — this field is the ONLY seam. The operator knobs
-	// HARNESS_SEQUENTIAL_TOOLS=1 and HARNESS_TOOL_CONCURRENCY=<n> are
-	// resolved by cmd/harness, which turns them into this field before
-	// building Config; this package neither reads nor knows about either
-	// variable.
+	// variables" rule) — this field is the ONLY seam. cmd/harness's
+	// toolConcurrency() turns the HARNESS_SEQUENTIAL_TOOLS=1 kill switch
+	// and the HARNESS_TOOL_CONCURRENCY=<n> cap into this field before it
+	// builds Config, for both `harness run` and `harness serve`; this
+	// package neither reads nor knows about either variable. An embedder
+	// that builds Config itself sets the field directly and gets no
+	// environment handling at all.
 	ToolConcurrency int
 }
 

@@ -222,10 +222,19 @@ func (s *Session) runToolBatch(ctx context.Context, asst *message.Message) messa
 	done := make([]bool, len(calls))
 
 	if s.toolConcurrency <= 1 {
-		// Sequential mode: the pre-parallel path, byte for byte. A Serial
+		// Sequential mode: one call at a time, in call order. A Serial
 		// tool's barrier is a no-op here since nothing ever runs beside
 		// it, and per-key exclusion is likewise moot with one call in
 		// flight at a time.
+		//
+		// This is the pre-parallel ORDER, not the pre-parallel behavior in
+		// every respect. Two guarantees this file adds apply here too, by
+		// design: runOneGuarded turns a panicking tool into one error
+		// result instead of killing the process, and admitAndRun refuses
+		// to start a call after the turn is canceled, where the old loop
+		// ran every remaining call unconditionally. An operator who sets
+		// ToolConcurrency 1 to escape concurrency gets exactly that —
+		// serial execution — not a revert of the whole change.
 		for i, tc := range calls {
 			outputs[i], errs[i] = s.runOneGuarded(ctx, tc)
 			done[i] = true
@@ -444,8 +453,13 @@ func (s *Session) runToolBatchParallel(ctx context.Context, calls []*message.Too
 // keyChain is the per-key hand-off chain for one segment: the channel a
 // waiting call blocks on, closed by its predecessor when done, and the
 // channel the NEXT same-key call will wait on in turn.
+// It carries no lock. wait is called only from runParallelSegment's setup
+// loop, which runs entirely on the submitting goroutine before any worker
+// starts; a worker only closes its own channel and reads its own
+// predecessor. A mutex here would imply a concurrency contract that does
+// not exist. If a future change ever calls wait from a worker, add the
+// lock back with it.
 type keyChain struct {
-	mu   sync.Mutex
 	tail map[string]chan struct{}
 }
 
@@ -455,14 +469,12 @@ type keyChain struct {
 // doc comment's "Per-key mutual exclusion invariant" for why this hand-off
 // is built synchronously, before any worker runs.
 func (c *keyChain) wait(key string) (predecessor <-chan struct{}, release func()) {
-	c.mu.Lock()
 	predecessor = c.tail[key]
 	mine := make(chan struct{})
 	if c.tail == nil {
 		c.tail = make(map[string]chan struct{})
 	}
 	c.tail[key] = mine
-	c.mu.Unlock()
 	return predecessor, func() { close(mine) }
 }
 
