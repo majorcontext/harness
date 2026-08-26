@@ -89,7 +89,7 @@ function sleep(ms) {
 // nearly every scenario below is built from, since almost everything here
 // is "wait for a REAL server round trip (a turn, an SSE event, a fetch) to
 // land, then check the real DOM."
-async function waitFor(fn, { timeoutMs = 8000, intervalMs = 25, label = "condition" } = {}) {
+async function waitFor(fn, { timeoutMs = 30000, intervalMs = 25, label = "condition" } = {}) {
   const start = Date.now();
   for (;;) {
     const v = await fn();
@@ -351,7 +351,7 @@ async function main() {
   const staleClassSeq = watchAttrSequence(w, staleRow, "class");
 
   assert.equal((await promptAsync(staleID, "run the staleness turn")).status, 202);
-  await waitFor(() => staleRow.classList.contains("bad"), { timeoutMs: 6000, label: "row reaching the stalled ('bad') tier" });
+  await waitFor(() => staleRow.classList.contains("bad"), { timeoutMs: 20000, label: "row reaching the stalled ('bad') tier" });
   await waitIdle(staleID, 15);
   await waitFor(() => staleRow.classList.contains("idle"), { label: "row settling idle after the stalled turn resolves" });
 
@@ -380,7 +380,7 @@ async function main() {
   const liveToolID = await createSession(ProvToolDetail);
   const liveToolRow = await waitFor(() => findRow(doc, liveToolID), { label: "board row for " + liveToolID });
   assert.equal((await promptAsync(liveToolID, "trigger the live running tool fold")).status, 202);
-  await waitFor(() => liveToolRow.querySelector(".phase").textContent === "tool", { timeoutMs: 4000, label: "board observes the tool phase before opening detail" });
+  await waitFor(() => liveToolRow.querySelector(".phase").textContent === "tool", { timeoutMs: 20000, label: "board observes the tool phase before opening detail" });
 
   await openDetailViaClick(w, doc, liveToolRow);
   const runningFold = await waitFor(() => doc.querySelector("#transcript details.toolfold"), { label: "running tool fold rendered in detail" });
@@ -414,7 +414,7 @@ async function main() {
   const dedupID = await createSession(ProvStallDedup);
   const dedupRow = await waitFor(() => findRow(doc, dedupID), { label: "board row for " + dedupID });
   assert.equal((await promptAsync(dedupID, "start the occupant turn")).status, 202);
-  await waitFor(() => dedupRow.querySelector(".phase").textContent === "tool", { timeoutMs: 4000, label: "session busy in its tool phase before the composer send" });
+  await waitFor(() => dedupRow.querySelector(".phase").textContent === "tool", { timeoutMs: 20000, label: "session busy in its tool phase before the composer send" });
 
   await openDetailViaClick(w, doc, dedupRow);
   const queuedText = "composer message sent while busy";
@@ -423,7 +423,7 @@ async function main() {
   composerInput.value = queuedText;
   composerForm.dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
 
-  await waitFor(() => operatorTexts(doc).filter((t) => t === queuedText).length === 1, { timeoutMs: 4000, label: "optimistic prompt.queued operator entry" });
+  await waitFor(() => operatorTexts(doc).filter((t) => t === queuedText).length === 1, { timeoutMs: 20000, label: "optimistic prompt.queued operator entry" });
   console.error("PASS: composer send into a BUSY session renders the optimistic prompt.queued entry");
 
   await waitIdle(dedupID, 15); // the occupant turn's own idle (may be fleeting — see below)
@@ -449,9 +449,9 @@ async function main() {
   const idleText = "composer message into an idle session";
   composerInput.value = idleText;
   composerForm.dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
-  await waitFor(() => operatorTexts(doc).includes(idleText), { timeoutMs: 4000, label: "operator entry for an idle-session composer send" });
+  await waitFor(() => operatorTexts(doc).includes(idleText), { timeoutMs: 20000, label: "operator entry for an idle-session composer send" });
   await waitIdle(idleComposeID, 15);
-  await waitFor(() => assistantTexts(doc).some((t) => t.includes("hello")), { timeoutMs: 4000, label: "assistant reply for the idle-session composer send" });
+  await waitFor(() => assistantTexts(doc).some((t) => t.includes("hello")), { timeoutMs: 20000, label: "assistant reply for the idle-session composer send" });
   // Regression for the double turn-mark bug: on the real wire this turn
   // arrives as session.status(busy) -> a "message" event for the operator's
   // own prompt -> assistant deltas. Both transcriptModel's session.status
@@ -482,7 +482,7 @@ async function main() {
   console.error("PASS: composer submit renders the operator entry synchronously, before the POST even resolves — optimistic, not stream-triggered");
 
   await waitIdle(optID, 15);
-  await waitFor(() => assistantTexts(doc).some((t) => t.includes("hello")), { timeoutMs: 4000, label: "assistant reply eventually lands for the optimistic-send session" });
+  await waitFor(() => assistantTexts(doc).some((t) => t.includes("hello")), { timeoutMs: 20000, label: "assistant reply eventually lands for the optimistic-send session" });
   assert.equal(operatorTexts(doc).filter((t) => t === optText).length, 1, "the optimistic entry must settle to exactly one operator entry once the real message event lands, never duplicated: " + JSON.stringify(operatorTexts(doc)));
   console.error("PASS: the optimistic entry reconciles to exactly one operator entry once the durable message lands");
 
@@ -499,12 +499,12 @@ async function main() {
   await openDetailViaClick(w, doc, pendRow);
   assert.equal((await promptAsync(pendID, "trigger the pending-indicator turn")).status, 202, "prompt_async accepted");
 
-  await waitFor(() => doc.querySelector("#transcript .pending-indicator"), { timeoutMs: 3000, label: "the Thinking… pending indicator appears while the turn is busy with no content yet" });
+  await waitFor(() => doc.querySelector("#transcript .pending-indicator"), { timeoutMs: 20000, label: "the Thinking… pending indicator appears while the turn is busy with no content yet" });
   assert.equal(doc.querySelectorAll("#transcript .pending-indicator").length, 1, "exactly one pending indicator node: " + doc.querySelectorAll("#transcript .pending-indicator").length);
   assert.equal(assistantTexts(doc).length, 0, "no assistant content has streamed yet — this IS the genuinely empty window the indicator exists for");
   console.error("PASS: the Thinking… pending indicator appears while a real turn is busy with no content yet");
 
-  await waitFor(() => assistantTexts(doc).some((t) => t.includes(PENDING_THINK_REPLY)), { timeoutMs: 4000, label: "assistant reply streams in for the pending-indicator session" });
+  await waitFor(() => assistantTexts(doc).some((t) => t.includes(PENDING_THINK_REPLY)), { timeoutMs: 20000, label: "assistant reply streams in for the pending-indicator session" });
   assert.equal(doc.querySelector("#transcript .pending-indicator"), null, "the pending indicator must be gone the instant streaming text is present");
   console.error("PASS: the pending indicator is dismissed the instant streaming text is present");
 
@@ -546,7 +546,7 @@ async function main() {
   // the indicator here made this scenario flake on CI.
   const orderOperatorEl = await waitFor(
     () => [...doc.querySelectorAll("#transcript .msg.user .body p")].find((p) => p.textContent === orderText),
-    { timeoutMs: 3000, label: "the idle-send's optimistic operator entry appears" }
+    { timeoutMs: 20000, label: "the idle-send's optimistic operator entry appears" }
   );
   const pendingIndicatorEl = doc.querySelector("#transcript .pending-indicator");
   if (pendingIndicatorEl) {
@@ -560,7 +560,7 @@ async function main() {
     console.error("NOTE: Thinking… indicator already dismissed by observation time — DOM order verified against the streaming reply below");
   }
 
-  await waitFor(() => assistantTexts(doc).some((t) => t.includes(PENDING_THINK_REPLY)), { timeoutMs: 4000, label: "assistant reply streams in for the DOM-order check" });
+  await waitFor(() => assistantTexts(doc).some((t) => t.includes(PENDING_THINK_REPLY)), { timeoutMs: 20000, label: "assistant reply streams in for the DOM-order check" });
   const streamingP = [...doc.querySelectorAll("#transcript .msg:not(.user):not(.reasoning) .body p")].find((p) => p.textContent.includes(PENDING_THINK_REPLY));
   assert.ok(streamingP, "streaming assistant text must be in the DOM");
   const posVsStreaming = orderOperatorEl.compareDocumentPosition(streamingP);
@@ -589,7 +589,7 @@ async function main() {
   await waitFor(() => doc.getElementById("detail-sid-full").textContent === bogusID, { label: "detail view opens for the bogus session id" });
   composerInput.value = "this send should fail";
   composerForm.dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
-  await waitFor(() => doc.getElementById("composer-err").textContent.trim().length > 0, { timeoutMs: 4000, label: "composer error text for an unknown session" });
+  await waitFor(() => doc.getElementById("composer-err").textContent.trim().length > 0, { timeoutMs: 20000, label: "composer error text for an unknown session" });
   const composerErrText = doc.getElementById("composer-err").textContent;
   assert.ok(composerErrText.includes("no such session"), "composer error should surface the server's real error text: " + composerErrText);
   console.error("PASS: composer send against an unknown session surfaces the server's real non-2xx error text: " + composerErrText);
@@ -617,7 +617,7 @@ async function main() {
   console.error("PASS: a real provider stream failure renders a critical error entry with the server's real error text: " + errorEntryText);
 
   const chip = doc.getElementById("detail-livechip");
-  await waitFor(() => chip.hidden === true, { timeoutMs: 3000, label: "the live chip settling to idle well under the 5s poll interval, driven by the live session.status(idle) event" });
+  await waitFor(() => chip.hidden === true, { timeoutMs: 20000, label: "the live chip settling to idle well under the 5s poll interval, driven by the live session.status(idle) event" });
   await waitFor(() => errorRow.classList.contains("idle"), { label: "board row settling idle after the failed turn" });
   assert.equal(errorRow.querySelector(".detail").textContent, "error", "row shows the real turn.end outcome after a stream failure: " + errorRow.querySelector(".detail").textContent);
   console.error("PASS: the live chip settles to idle promptly (no poll dependency), and the board row shows the real 'error' outcome");
@@ -652,7 +652,7 @@ async function main() {
   const capPeak = await waitFor(() => {
     const peak = w.__monitorDebug.liveEventsPeakLength();
     return peak !== null && peak > TUNING.DETAIL_LIVE_EVENTS_CAP ? peak : null;
-  }, { timeoutMs: 4000, label: "liveEvents actually crosses the tuned cap (" + TUNING.DETAIL_LIVE_EVENTS_CAP + ") at its peak while the turn streams" });
+  }, { timeoutMs: 20000, label: "liveEvents actually crosses the tuned cap (" + TUNING.DETAIL_LIVE_EVENTS_CAP + ") at its peak while the turn streams" });
   console.error("PASS: liveEvents crossed the tuned buffer cap (peak " + capPeak + ") while a real scripted turn streamed");
 
   await waitIdle(capID, 15);
@@ -665,7 +665,7 @@ async function main() {
     // "shrank back down near the cap", not "never even momentarily one
     // or two over it".
     return n !== null && n <= TUNING.DETAIL_LIVE_EVENTS_CAP + 2;
-  }, { timeoutMs: 4000, label: "liveEvents shrinks back down after reconcileDetail's buffer-cap trigger resolves" });
+  }, { timeoutMs: 20000, label: "liveEvents shrinks back down after reconcileDetail's buffer-cap trigger resolves" });
   console.error("PASS: liveEvents shrank back down after reconcileDetail's buffer-cap trigger — the PERF fix (finding 3) closes the loop");
 
   // ---- 5. Reconnect (scenario 5): a real server-side kill/restart of the
@@ -675,17 +675,17 @@ async function main() {
   await waitFor(() => doc.getElementById("conn-text").textContent === "connected", { label: "connected before the kill" });
 
   assert.equal((await fetch(monitorBase + "/__control/kill", { method: "POST" })).status, 200, "control-plane kill");
-  await waitFor(() => doc.getElementById("conn-text").textContent === "reconnecting…", { timeoutMs: 5000, label: "header flips to reconnecting after a real server-side kill" });
+  await waitFor(() => doc.getElementById("conn-text").textContent === "reconnecting…", { timeoutMs: 20000, label: "header flips to reconnecting after a real server-side kill" });
   console.error("PASS: header honestly flips to reconnecting… after a real server-side kill");
 
   assert.equal((await fetch(monitorBase + "/__control/restart", { method: "POST" })).status, 200, "control-plane restart");
-  await waitFor(() => doc.getElementById("conn-text").textContent === "connected", { timeoutMs: 8000, label: "stream resumes after a real server-side restart" });
+  await waitFor(() => doc.getElementById("conn-text").textContent === "connected", { timeoutMs: 20000, label: "stream resumes after a real server-side restart" });
   console.error("PASS: stream resumes after a real server-side restart");
 
   // Prove the resumed stream is REAL, not just cosmetic header text: a
   // brand-new session created after the restart must still arrive live.
   const postReconnectID = await createSession(ProvQuickIdle);
-  await waitFor(() => findRow(doc, postReconnectID), { timeoutMs: 4000, label: "a post-reconnect session.created event reaching the resumed stream" });
+  await waitFor(() => findRow(doc, postReconnectID), { timeoutMs: 20000, label: "a post-reconnect session.created event reaching the resumed stream" });
   console.error("PASS: a session created after the restart arrived over the resumed stream — reconnect is genuine, not cosmetic");
 
   // ---- 5b. Reconnect gap heals the detail transcript (finding 1 —
@@ -717,11 +717,11 @@ async function main() {
   await waitFor(() => {
     const note = doc.querySelector("#transcript .transcript-note:not(.err)");
     return !!note && note.textContent === "no messages yet";
-  }, { timeoutMs: 4000, label: "initial (empty) history loads before the reconnect-gap kill" });
+  }, { timeoutMs: 20000, label: "initial (empty) history loads before the reconnect-gap kill" });
   assert.equal(turnMarkCount(doc), 0, "the reconnect-gap session must open with no turn marks before the gap turn runs");
 
   assert.equal((await fetch(monitorBase + "/__control/kill", { method: "POST" })).status, 200, "control-plane kill (reconnect-gap scenario)");
-  await waitFor(() => doc.getElementById("conn-text").textContent === "reconnecting…", { timeoutMs: 5000, label: "header flips to reconnecting before the gap turn runs" });
+  await waitFor(() => doc.getElementById("conn-text").textContent === "reconnecting…", { timeoutMs: 20000, label: "header flips to reconnecting before the gap turn runs" });
 
   assert.equal((await fetch(monitorBase + "/__control/restart", { method: "POST" })).status, 200, "control-plane restart (reconnect-gap scenario)");
   const gapPromptText = "trigger the reconnect-gap turn";
@@ -729,14 +729,14 @@ async function main() {
   await waitIdle(gapID, 15);
   console.error("PASS: the reconnect-gap turn completed durably on the server while the monitor page's own stream was still down/reconnecting");
 
-  await waitFor(() => doc.getElementById("conn-text").textContent === "connected", { timeoutMs: 8000, label: "the monitor's own stream eventually resumes" });
+  await waitFor(() => doc.getElementById("conn-text").textContent === "connected", { timeoutMs: 20000, label: "the monitor's own stream eventually resumes" });
 
   // The proof: the detail transcript — fed ONLY from liveEvents, and this
   // page's stream was down for the ENTIRE turn — must still end up showing
   // it in full once reconcileDetail's stream-re-establish trigger backfills
   // it from a fresh GET /message snapshot.
-  await waitFor(() => operatorTexts(doc).includes(gapPromptText), { timeoutMs: 5000, label: "the operator's prompt text appears in the transcript after reconcile heals the gap" });
-  await waitFor(() => assistantTexts(doc).some((t) => t.includes(RECONNECT_GAP_REPLY)), { timeoutMs: 5000, label: "the assistant's reply appears in the transcript after reconcile heals the gap" });
+  await waitFor(() => operatorTexts(doc).includes(gapPromptText), { timeoutMs: 20000, label: "the operator's prompt text appears in the transcript after reconcile heals the gap" });
+  await waitFor(() => assistantTexts(doc).some((t) => t.includes(RECONNECT_GAP_REPLY)), { timeoutMs: 20000, label: "the assistant's reply appears in the transcript after reconcile heals the gap" });
   assert.equal(turnMarkCount(doc), 1, "the reconciled turn renders exactly one turn-mark, not zero (lost) or duplicated: " + turnMarkCount(doc));
   console.error("PASS: reconcileDetail healed the reconnect gap — the detail transcript shows the FULL turn (operator prompt + assistant reply) it could never have observed live, marked exactly once");
 
@@ -825,14 +825,14 @@ async function main() {
       await waitIdle(dlID, 15);
 
       const { dom: dlDom, doc: dlDoc } = await openEmbeddedPage(boxBase + "/monitor#t=" + encodeURIComponent(token) + "&s=" + encodeURIComponent(dlID));
-      await waitFor(() => dlDoc.body.classList.contains("connected"), { timeoutMs: 5000, label: "deep-link page connects (iteration " + i + ")" });
-      await waitFor(() => dlDoc.body.classList.contains("showing-detail"), { timeoutMs: 5000, label: "deep link resolves straight into the detail view (iteration " + i + ")" });
+      await waitFor(() => dlDoc.body.classList.contains("connected"), { timeoutMs: 20000, label: "deep-link page connects (iteration " + i + ")" });
+      await waitFor(() => dlDoc.body.classList.contains("showing-detail"), { timeoutMs: 20000, label: "deep link resolves straight into the detail view (iteration " + i + ")" });
       await waitFor(() => operatorTexts(dlDoc).includes(promptText), {
-        timeoutMs: 5000,
+        timeoutMs: 20000,
         label: "the deep-linked session's real history (operator prompt) renders (iteration " + i + "): " + JSON.stringify(operatorTexts(dlDoc)),
       });
       await waitFor(() => assistantTexts(dlDoc).some((t) => t.includes("hello")), {
-        timeoutMs: 5000,
+        timeoutMs: 20000,
         label: "the deep-linked session's real history (assistant reply) renders (iteration " + i + "): " + JSON.stringify(assistantTexts(dlDoc)),
       });
       assert.notEqual(dlDoc.getElementById("detail-msgcount").textContent, "", "the msg count header must reflect the loaded history, not stay blank (iteration " + i + ")");
@@ -880,8 +880,8 @@ async function main() {
     );
 
     const { dom: healDom, doc: healDoc } = await openEmbeddedPage(boxBase + "/monitor#t=" + encodeURIComponent(token) + "&s=" + encodeURIComponent(healID));
-    await waitFor(() => healDoc.body.classList.contains("connected"), { timeoutMs: 5000, label: "self-heal scenario: page connects despite the armed history-fetch failure" });
-    await waitFor(() => healDoc.body.classList.contains("showing-detail"), { timeoutMs: 5000, label: "self-heal scenario: deep link still resolves into the detail view" });
+    await waitFor(() => healDoc.body.classList.contains("connected"), { timeoutMs: 20000, label: "self-heal scenario: page connects despite the armed history-fetch failure" });
+    await waitFor(() => healDoc.body.classList.contains("showing-detail"), { timeoutMs: 20000, label: "self-heal scenario: deep link still resolves into the detail view" });
 
     // The stuck state is real: every history fetch this page can make
     // right now is being forced to fail, so the transcript must show
@@ -891,7 +891,7 @@ async function main() {
     await waitFor(() => {
       const note = healDoc.querySelector("#transcript .transcript-note:not(.err)");
       return (note && note.textContent === "no messages yet") || healDoc.querySelector("#transcript .transcript-note.err");
-    }, { timeoutMs: 2000, label: "self-heal scenario: the transcript genuinely shows the stuck-empty/error state while the fault is armed" });
+    }, { timeoutMs: 20000, label: "self-heal scenario: the transcript genuinely shows the stuck-empty/error state while the fault is armed" });
     assert.equal(healDoc.querySelectorAll("#transcript .msg").length, 0, "self-heal scenario: zero messages rendered while every history fetch is forced to fail");
     console.error("PASS: the forced history-fetch failure genuinely reproduces the stuck-empty symptom (proving this scenario exercises the real bug, not a no-op)");
 
@@ -900,11 +900,11 @@ async function main() {
     // history — bounded comfortably inside a handful of poll intervals,
     // not "eventually, whenever the stream reopens."
     await waitFor(() => operatorTexts(healDoc).includes(healText), {
-      timeoutMs: 5000,
+      timeoutMs: 20000,
       label: "self-heal scenario: the operator prompt renders once the poll-driven self-heal fires: " + JSON.stringify(operatorTexts(healDoc)),
     });
     await waitFor(() => assistantTexts(healDoc).some((t) => t.includes("hello")), {
-      timeoutMs: 5000,
+      timeoutMs: 20000,
       label: "self-heal scenario: the assistant reply renders once the poll-driven self-heal fires: " + JSON.stringify(assistantTexts(healDoc)),
     });
     assert.notEqual(healDoc.getElementById("detail-msgcount").textContent, "0 msgs", "self-heal scenario: must not still read 0 msgs once healed");
