@@ -834,10 +834,11 @@ type Session struct {
 	index   indexFold
 	logSize int64
 	// indexFile is the sidecar's handle, opened beside the log in
-	// ensureLog and rewritten in place from then on. It follows logFile's
-	// own lifetime rule exactly: a Session never closes either one, and an
-	// evicted session's handles are released when the object is collected.
-	// One session therefore holds two descriptors rather than one.
+	// ensureLog and rewritten in place from then on. A session holds two
+	// descriptors, its journal and this one, and ReleaseFiles (store.go)
+	// drops both: the server calls it when it evicts a session from
+	// residency. Either handle reopens on the next persist, through
+	// ensureLog, so releasing them never ends a session.
 	indexFile *os.File
 	// lastIndexErr holds the most recent sidecar write failure. It is
 	// deliberately NOT lastPersistErr: the index is a cache, and its loss

@@ -3,9 +3,11 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -904,5 +906,118 @@ func TestSessionIndexPinsTheRequestedID(t *testing.T) {
 	}
 	if again.Messages != ix.Messages {
 		t.Errorf("second read = %d messages, want %d from the stored index", again.Messages, ix.Messages)
+	}
+}
+
+// TestIndexFoldWorkIsConstantPerRecord is the cost guard for the WRITE
+// path. Session.writeRecord folds and flushes after every record, so any
+// work here that grows with history length is O(n^2) over a session's life
+// — an index that makes reads cheap and writes quadratic is a net loss on
+// exactly the long sessions it exists for. A review caught that shape.
+//
+// Bytes allocated, not elapsed time, are the measurement: they are
+// deterministic under a fixed input, and they separate constant work from a
+// re-fold cleanly. Object COUNT does not: a re-fold of a skeleton with no
+// orphan returns the same slice and allocates one copy, so it looks
+// constant while copying the whole history.
+//
+// The ratio, not an absolute, is the assertion. A skeleton forty times
+// longer must not cost anything like forty times as much per record.
+func TestIndexFoldWorkIsConstantPerRecord(t *testing.T) {
+	build := func(n int) *indexFold {
+		f := &indexFold{header: true}
+		for i := 0; i < n; i++ {
+			role := message.RoleUser
+			if i%2 == 1 {
+				role = message.RoleAssistant
+			}
+			f.appendMessage(message.Message{ID: fmt.Sprintf("m%d", i), Role: role})
+		}
+		return f
+	}
+	bytesPerOp := func(f *indexFold) uint64 {
+		const runs = 200
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		for i := 0; i < runs; i++ {
+			f.snapshot(1, time.Time{})
+		}
+		runtime.ReadMemStats(&after)
+		return (after.TotalAlloc - before.TotalAlloc) / runs
+	}
+	small := bytesPerOp(build(100))
+	large := bytesPerOp(build(4000))
+	// 40x the history. Constant work stays flat; a re-fold copies the whole
+	// skeleton every time. Four is generous for the first and unreachable
+	// for the second.
+	if small > 0 && large > small*4 {
+		t.Errorf("snapshot costs %d bytes at 100 messages and %d at 4000: work grows with history length", small, large)
+	}
+}
+
+// TestIndexFoldRepairCountMatchesAFullRecount: the repair count is
+// maintained as records arrive, and a full recount is the truth it must
+// equal. This is the drift the incremental path can develop and the oracle
+// test cannot see on its own, because a shape whose incremental and full
+// answers agree by luck passes both.
+func TestIndexFoldRepairCountMatchesAFullRecount(t *testing.T) {
+	call := func(id string) message.Parts {
+		return message.Parts{&message.ToolCall{CallID: id}}
+	}
+	result := func(id string) message.Parts {
+		return message.Parts{&message.ToolResult{CallID: id}}
+	}
+	shapes := map[string][]message.Message{
+		"plain turns": {
+			{ID: "u1", Role: message.RoleUser},
+			{ID: "a1", Role: message.RoleAssistant},
+		},
+		"matched tool call": {
+			{ID: "u1", Role: message.RoleUser},
+			{ID: "a1", Role: message.RoleAssistant, Parts: call("tc1")},
+			{ID: "t1", Role: message.RoleTool, Parts: result("tc1")},
+		},
+		"orphan at the tail": {
+			{ID: "u1", Role: message.RoleUser},
+			{ID: "a1", Role: message.RoleAssistant, Parts: call("tc1")},
+		},
+		"orphan mid-history": {
+			{ID: "u1", Role: message.RoleUser},
+			{ID: "a1", Role: message.RoleAssistant, Parts: call("tc1")},
+			{ID: "u2", Role: message.RoleUser},
+			{ID: "a2", Role: message.RoleAssistant, Parts: call("tc2")},
+			{ID: "t2", Role: message.RoleTool, Parts: result("tc2")},
+		},
+		"partial results": {
+			{ID: "a1", Role: message.RoleAssistant, Parts: message.Parts{&message.ToolCall{CallID: "tc1"}, &message.ToolCall{CallID: "tc2"}}},
+			{ID: "t1", Role: message.RoleTool, Parts: result("tc1")},
+		},
+		"two orphans in a row": {
+			{ID: "a1", Role: message.RoleAssistant, Parts: call("tc1")},
+			{ID: "a2", Role: message.RoleAssistant, Parts: call("tc2")},
+			{ID: "u1", Role: message.RoleUser},
+		},
+	}
+	for name, msgs := range shapes {
+		t.Run(name, func(t *testing.T) {
+			f := &indexFold{header: true}
+			// Check after EVERY append, not only at the end: the
+			// incremental update runs once per message, and a shape that
+			// converges at the end can still be wrong in the middle, which
+			// is what a reader of a live session would see.
+			for i := range msgs {
+				f.appendMessage(msgs[i])
+				incremental := f.repairs
+				f.recountRepairs()
+				if incremental != f.repairs {
+					t.Fatalf("after %d messages: incremental count %d, full recount %d", i+1, incremental, f.repairs)
+				}
+				repaired := message.ResolveOrphanToolCalls(append([]message.Message(nil), f.messages...))
+				if want := len(repaired) - len(f.messages); f.repairs != want {
+					t.Fatalf("after %d messages: count %d, but the repair inserts %d", i+1, f.repairs, want)
+				}
+			}
+		})
 	}
 }
