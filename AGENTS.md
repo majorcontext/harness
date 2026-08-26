@@ -308,33 +308,98 @@ instead of returning. This applies identically whether or not `asst` carried
 a `ToolCall` part — a pure-text `max_tokens` truncation (Claude Code's own
 behavior is to let the turn end and rely on the user re-prompting) gets the
 same auto-continue an autonomous harness session needs, not a human-facing
-half-answer. The follow-up call carries the synthetic unexecuted-tool-call
-result (if any) plus a one-shot nudge —
-`s.pendingContinuationNudge`/`continuationNudgeSegment`, rendered through
-the same `message.EngineContext`/`withAmbientStatus` idiom every other
-ambient status segment uses (process, MCP, goal-parked, identity — see
-"Ambient engine context" above) — telling the model its last turn hit the
-ceiling and it should continue in smaller pieces. The nudge rides every
-attempt a transient-error retry makes for that ONE follow-up call (mirroring
+half-answer.
+
+**A genuinely mid-emission tool call is dropped, never replayed.**
+`dropInvalidPartialToolCall` (`engine/engine.go`) runs before `asst` is
+appended to history whenever `stop == provider.StopMaxTokens`: if the
+TRAILING part is a `*message.ToolCall` whose `Arguments` do not parse as
+valid JSON — the shape Anthropic's `assembledBlock.toolCall`
+(`provider/anthropic/anthropic.go`) leaves behind when `max_tokens` lands
+before the block's own `content_block_stop`, e.g. `{"comm` — that part is
+removed in place. No synthetic unexecuted-call result is generated for it
+either: unlike a COMPLETE call the engine chose not to execute (which keeps
+its `ToolCall` part and gets an is_error result via
+`appendUnexecutedToolCallResults`, so the model can see exactly what failed),
+a mid-emission call carries no usable intent to report as failed. The model
+simply re-issues the call, complete, once it continues. This supersedes an
+earlier design (still correct for every OTHER invalid-Arguments producer —
+see `message.Message.Normalize`'s own doc comment) that kept the call's
+identity and cleared only its Arguments; see
+`TestPersistTruncatedToolCallArguments`'s doc comment
+(`engine/tool_call_poison_test.go`) for the full history. Only the trailing
+part is ever checked — every earlier `tool_use` block in the same message
+already reached its own `content_block_stop` before the cutoff, so only the
+last one can be mid-emission.
+
+**The continuation nudge is a genuine new turn, never assistant prefill.**
+The follow-up call carries the synthetic unexecuted-tool-call result (for
+any COMPLETE call the engine chose not to execute) plus a one-shot nudge —
+`s.pendingContinuationNudge`/`continuationNudgeSegment`. Unlike every other
+ambient status segment (process, MCP, goal-parked, identity, task
+notifications — see "Ambient engine context" above), this one is NOT glued
+onto an existing message via `withAmbientStatus`:
+`appendContinuationNudgeMessage` appends a genuine NEW `message.RoleUser`
+message, carrying the nudge as its own `*message.EngineContext` part, to the
+END of `streamTurn`'s own throwaway per-request message copy.
+`withAmbientStatus` scans backward for the newest EXISTING `RoleUser`
+message, which by the time a continuation request is built is an EARLIER
+message than the just-truncated assistant turn (and its synthetic tool
+result, if any) — leaving the canonical request ending in `RoleAssistant` or
+`RoleTool`. Anthropic serializes that as assistant PREFILL: some models
+reject it with a permanent 400, and even an accepting model sees a
+"continue" instruction that chronologically precedes the output it refers
+to. `appendContinuationNudgeMessage` never touches `s.history` — same as
+every ambient segment — so a session reload, or any later unrelated
+request, never sees the nudge. It still rides every attempt a
+transient-error retry makes for that ONE follow-up call (mirroring
 `checkoutTaskNotificationsSegment`'s idempotent-reread shape,
 `taskdelivery.go`) and is cleared by `runAgenticLoop` the instant that whole
 `streamTurnWithRetry` call returns, so it never bleeds into a later,
 unrelated turn.
 
-Loop safety is the critical part: `runAgenticLoop`'s local `maxTokensStreak`
-counts CONSECUTIVE `max_tokens` stops, bounded by
-`Config.MaxTokensContinuations`. A model can pathologically re-emit
-oversized output turn after turn; `maxTokensStreak+1` such stops in a row —
-none completing normally in between — trips the bound.
-`maybeAutoContinueMaxTokens` then returns a `*maxTokensContinuationExhaustedError`
-naming the bound instead of arming yet another doomed attempt;
-`runAgenticLoop` emits `session.error` and returns it, the same
-"honest terminal, never a silent success" shape `emptyTurnError`'s own
-budget exhaustion uses (see "Base loop retry" above). The streak resets to
-zero the moment any turn in the same loop completes with a stop reason
-other than `max_tokens` — a genuine `tool_use` turn, an `end_turn`, a
-`refusal` — so an isolated `max_tokens` stop can never count against a
-later, unrelated one.
+**Queued operator input is drained before every continuation, not only at
+tool-call boundaries.** `drainQueuedPromptsIntoHistory` (`engine/engine.go`)
+is the shared implementation behind the tool-call-boundary drain (after a
+`StopToolUse` round actually runs a tool) and the max_tokens continuation
+branch (right before looping back for another follow-up call) — both are
+points where `runAgenticLoop` is about to issue another provider request in
+the SAME `Prompt` call, so both are valid mid-turn steering opportunities.
+An operator prompt queued while a long truncated response streams is
+delivered on the very next continuation request, not left undelivered for
+the whole continuation chain.
+
+Loop safety is the critical part: `runAgenticLoop`'s local `maxTokensUsed`
+is a PER-PROMPT BUDGET, spent by every continuation issued in the loop and
+NEVER reset — including across an intervening `StopToolUse` round. (An
+earlier version of this counter, `maxTokensStreak`, DID reset on any
+non-`max_tokens` stop, which let a model alternate `max_tokens` and
+`tool_use` — including denied, unknown, or failing tool calls, none of
+which touch `toolExecCount` — indefinitely inside one `Prompt` call,
+spending an unbounded number of continuations without ever tripping
+`Config.MaxTokensContinuations`.) `maxTokensUsed` is bounded by
+`Config.MaxTokensContinuations`: `Config.MaxTokensContinuations+1`
+max_tokens stops used within the loop trips the bound.
+`maybeAutoContinueMaxTokens` then returns a
+`*maxTokensContinuationExhaustedError` naming the bound, wrapped
+`provider.MarkPermanent`, instead of arming yet another doomed attempt;
+`runAgenticLoop` emits `session.error` and returns it, the same "honest
+terminal, never a silent success" shape `emptyTurnError`'s own budget
+exhaustion uses (see "Base loop retry" above).
+
+**A goal-loop retry must never re-run an already-exhausted continuation
+chain.** With the default bound of 3, one worker attempt that exhausts the
+budget already makes 4 completed, fully billed `max_tokens` calls before
+`*maxTokensContinuationExhaustedError` is even returned.
+`maybeAutoContinueMaxTokens` wraps every value of that type
+`provider.MarkPermanent` at its one construction site, so
+`promptTurnWithRetry`'s existing `provider.AsPermanent` fail-fast branch
+(`engine/goal.go`) stops after that ONE attempt instead of re-running the
+whole exhausted chain up to `goalWorkerRetries` (2) additional times — which
+would otherwise multiply 4 calls into 12 for one goal boundary. Like every
+other permanent-classified worker error, this PARKS the goal (stays
+resumable) rather than clearing it: the condition that produced the
+exhaustion might not recur on a later resume.
 
 `Config.MaxTokensContinuations` follows `PromptRetries`'s own
 unset-vs-zero config idiom: the engine field's zero value DISABLES
@@ -344,7 +409,9 @@ turn ends immediately on the first `max_tokens` stop). The config/CLI layer
 (`config.Config.MaxTokensContinuations *int`, key
 `max_tokens_continuations`, resolved via `MaxTokensContinuationsValue`)
 supplies the product default of 3; an explicit `0` disables it the same way
-`prompt_retries: 0` disables base-loop retry.
+`prompt_retries: 0` disables base-loop retry. `dropInvalidPartialToolCall`
+runs regardless of this setting — even with auto-continue disabled, a
+mid-emission call must never sit in history with unusable arguments.
 
 A task child runs its turn through this exact same `runAgenticLoop` — a
 child `Session` is a full `NewSession(childCfg)`
