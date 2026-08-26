@@ -743,11 +743,21 @@ type Config struct {
 	//
 	// Precedence: 0 (the zero value, "unset") resolves to the package
 	// default, defaultToolConcurrency (8) — a batch runs in parallel, capped
-	// at 8 calls in flight. 1 resolves to strictly SEQUENTIAL execution: the
-	// pre-parallel in-call-order path, byte-for-byte, including for a
-	// serial tool (a barrier is a no-op when nothing ever runs beside it).
-	// A value above 1 is the cap verbatim. A negative value is clamped to 1
-	// (sequential) — never treated as "unlimited".
+	// at 8 calls in flight. 1 resolves to strictly SEQUENTIAL execution:
+	// one call at a time, in call order, including for a serial tool (a
+	// barrier is a no-op when nothing ever runs beside it). A value above
+	// 1 is the cap verbatim. A negative value is clamped to 1 (sequential)
+	// — never treated as "unlimited".
+	//
+	// 1 restores the pre-parallel ORDER, not the pre-parallel behavior in
+	// every respect, and an operator reaching for it as an exact revert
+	// should know the two deliberate differences: runOneGuarded turns a
+	// panicking tool into one error result instead of letting it unwind
+	// through Prompt, and admitAndRun refuses to START a call once the
+	// turn is canceled, where the old loop ran every remaining call.
+	// Neither depends on the mode, by design — the one-result-per-call
+	// guarantee must hold identically however a batch executes. See the
+	// sequential branch in toolexec.go, which states the same thing.
 	//
 	// The engine itself never reads an environment variable (see
 	// session_manager.go's own "the engine itself never reads environment
