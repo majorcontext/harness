@@ -1841,14 +1841,49 @@ stops reporting a wall it already got past; `finalizeTurn`'s
 keep snapshotting a classification no live cancellation sets and
 `restoreKnownStatusLocked` restores as empty.
 
+A REAPED descendant is still resolvable, not "no such session." `Reap`
+collects a done/failed/canceled LEAF the instant it settles (its own doc
+comment), which a caller that spawned it has no way to observe before
+asking about it again — a live incident hit exactly this: `task send` to
+a settled child answered `no such session` depending on internal reap
+timing the parent could not see. `resolveOrReviveDescendantLocked`
+(`engine/session_manager.go`), the shared first step of all four verbs,
+falls back to disk when a live-tree lookup misses: `LoadSession` the
+target, then confirm ancestry from its own DURABLE `task_parent_id`
+chain (`durableAncestorChainHas`) — never from live state alone, which is
+exactly what `Reap` already erased. Only a target with no session log on
+disk either, or whose durable lineage does not reach the caller, still
+answers `ErrUnknownSession`/`ErrNotDescendant`. The four verbs then
+diverge on what a successful disk resolution does: `send` RE-ADOPTS the
+revived child into the tree (`adoptReloadedLocked`, the same
+adopt-on-first-sight path `AdoptReloaded`/`handleSpawnChild`'s
+parent-lookup fallback already use) and re-runs it exactly like a
+settled-but-unreaped child — `budgetedByChild` surviving `Reap` by design
+is what stops that re-adopt from double-crediting its already-spent
+usage. `status`/`log` serve the disk-loaded state directly
+(`durableSnapshot`/`deriveSettledStatus`) WITHOUT re-adopting: a
+read-only, poll-shaped verb must not have the side effect of pinning a
+reaped descendant back into memory. `cancel` on a reaped target is a
+no-op success (nothing left to interrupt) reporting its real terminal
+status, never `StatusCanceled`. The disk-bound half of this resolution
+runs with `m.mu` released — one slow disk read must never stall every
+other session's `Info`/`Reap`/`Spawn`/`Send` call — and re-validates
+`m.nodes[targetID]` on reacquiring the lock, so a concurrent adopt of the
+same id (another `Spawn`, `AdoptReloaded`, or a second racing revival)
+always wins single-handedly: whichever adoption reaches `m.nodes` first
+is authoritative, and the loser's own "already managed" is ignored, the
+same rule `AdoptReloaded`'s existing callers already follow for that
+race.
+
 A parent can read a dead child's tail. The `task` tool's `log` verb
 (`runTaskLog`, `engine/task_tool.go`, over
 `SessionManager.DescendantTranscript`) returns the last N transcript
 entries of a descendant, LIVING OR DEAD, under the same ancestor gate
-(`isDescendantLocked`) cancel/status/send use — a terminal node keeps its
-`*Session`, history included, until `Reap`, so no reload and no disk read
-is involved; a REAPED descendant answers "no such session" like every
-other verb. It is bounded on three axes, because its output lands in the
+(`isDescendantLocked`, or the disk-backed lineage check above once
+`Reap` has removed the live node) cancel/status/send use — a terminal
+node keeps its `*Session`, history included, until `Reap`, so no reload
+and no disk read is involved for a still-tracked descendant. It is
+bounded on three axes, because its output lands in the
 PARENT's context and replays on every later turn: `tail` (default 20,
 clamped at 100, a negative value is an error), a per-entry rune cap, and a
 total rune budget filled NEWEST-first so the messages nearest a death
