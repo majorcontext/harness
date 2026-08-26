@@ -1344,6 +1344,38 @@ func TestPanicKeepsToolEventsBalanced(t *testing.T) {
 		}
 	})
 
+	// A panic in the BEFORE chain owes no tool.execute.end at all: the
+	// start never fired, because emitToolExecuteStart runs after that
+	// chain. Emitting one would be a phantom end for a call that never
+	// executed — the inverse of the dangling start above — and would
+	// break emitToolExecuteStart's own rule that a denied call fires
+	// neither event.
+	t.Run("before-hook panics, no phantom execute-end", func(t *testing.T) {
+		hooks := &panickingAfterHooks{beforePanics: true}
+		s := NewSession(Config{Hooks: hooks})
+		s.tools["ok"] = batchTool("ok", nil)
+		call := batchCall("ok", "c0")
+		wantOrder(t, s.runToolCalls(context.Background(), asstWith(call)), call)
+
+		hooks.mu.Lock()
+		defer hooks.mu.Unlock()
+		starts, ends := 0, 0
+		for _, e := range hooks.emitted {
+			switch e {
+			case plugin.EventToolExecuteStart:
+				starts++
+			case plugin.EventToolExecuteEnd:
+				ends++
+			}
+		}
+		if starts != 0 {
+			t.Errorf("tool.execute.start emitted %d times, want 0: the call never executed", starts)
+		}
+		if ends != 0 {
+			t.Errorf("tool.execute.end emitted %d times, want 0: a phantom end with no start", ends)
+		}
+	})
+
 	t.Run("after-hook panics, no duplicate execute-end", func(t *testing.T) {
 		hooks := &panickingAfterHooks{}
 		s := NewSession(Config{Hooks: hooks})
@@ -1368,6 +1400,8 @@ func TestPanicKeepsToolEventsBalanced(t *testing.T) {
 // panickingAfterHooks panics in ToolExecuteAfter and records every plugin
 // event type the engine emits, so a duplicate tool.execute.end is visible.
 type panickingAfterHooks struct {
+	beforePanics bool
+
 	mu      sync.Mutex
 	emitted []string
 }
@@ -1385,9 +1419,15 @@ func (h *panickingAfterHooks) ShellEnv(context.Context, *plugin.ShellEnvRequest)
 	return nil
 }
 func (h *panickingAfterHooks) ToolExecuteBefore(context.Context, *plugin.ToolExecuteBeforeRequest) (json.RawMessage, string) {
+	if h.beforePanics {
+		panic("before-hook exploded")
+	}
 	return nil, ""
 }
-func (h *panickingAfterHooks) ToolExecuteAfter(context.Context, *plugin.ToolExecuteAfterRequest) message.Parts {
+func (h *panickingAfterHooks) ToolExecuteAfter(_ context.Context, req *plugin.ToolExecuteAfterRequest) message.Parts {
+	if h.beforePanics {
+		return req.Output
+	}
 	panic("after-hook exploded")
 }
 func (h *panickingAfterHooks) ExecuteTool(_ context.Context, req *plugin.ToolExecuteRequest) (*plugin.ToolExecuteResponse, error) {

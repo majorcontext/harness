@@ -2848,10 +2848,19 @@ func (s *Session) runToolCalls(ctx context.Context, asst *message.Message) messa
 // correct either way, because runOneGuarded still produces one error
 // result; the event stream is the half it cannot fix from outside.
 //
-// The two flags matter: emitToolExecuteEnd fires BEFORE the after-hook
-// chain and EventToolEnd fires after it, so a panic inside
-// ToolExecuteAfter must emit only the second. Emitting both would hand
-// plugins a duplicate tool.execute.end for one call.
+// execEndOwed tracks whether a tool.execute.start is OUTSTANDING, which
+// is the only question the recover can answer correctly in both
+// directions. The plugin-facing pair does not bracket the same region as
+// the engine-facing one: emitToolExecuteStart fires AFTER the before-hook
+// chain and emitToolExecuteEnd fires BEFORE the after-hook chain. So a
+// panic in ToolExecuteBefore owes no tool.execute.end — emitting one
+// would be a phantom end for a call that never started, the inverse of
+// the dangling start this recover exists to prevent, and it would
+// contradict emitToolExecuteStart's own rule that a denied call fires
+// neither. A panic in ToolExecuteAfter owes none either, because the end
+// already fired; emitting a second would hand every plugin a duplicate
+// for one call. Only a panic between the two owes one. A boolean that
+// merely recorded "the end was emitted" got the first case wrong.
 //
 // This path is new with concurrent execution. Before runOneGuarded a tool
 // panic killed the process, so "the session survives a panic" never
@@ -2859,7 +2868,7 @@ func (s *Session) runToolCalls(ctx context.Context, asst *message.Message) messa
 func (s *Session) runToolCall(ctx context.Context, tc *message.ToolCall) (out message.Parts, isErr bool) {
 	s.emit(Event{Type: EventToolStart, ToolCall: tc})
 
-	execEndEmitted, toolEndEmitted := false, false
+	execEndOwed, toolEndEmitted := false, false
 	defer func() {
 		r := recover()
 		if r == nil {
@@ -2867,7 +2876,7 @@ func (s *Session) runToolCall(ctx context.Context, tc *message.ToolCall) (out me
 		}
 		out = message.Parts{&message.Text{Text: fmt.Sprintf("%s: %v", toolCallPanicText, r)}}
 		isErr = true
-		if !execEndEmitted {
+		if execEndOwed {
 			s.emitToolExecuteEnd(tc.Name, tc.CallID, false)
 		}
 		if !toolEndEmitted {
@@ -2892,13 +2901,14 @@ func (s *Session) runToolCall(ctx context.Context, tc *message.ToolCall) (out me
 	}
 
 	s.emitToolExecuteStart(tc.Name, tc.CallID)
+	execEndOwed = true
 	s.mu.Lock()
 	s.toolExecCount++
 	s.mu.Unlock()
 
 	out, isErr = s.executeTool(ctx, tc, args)
 	s.emitToolExecuteEnd(tc.Name, tc.CallID, !isErr)
-	execEndEmitted = true
+	execEndOwed = false
 
 	if s.cfg.Hooks != nil {
 		out = s.cfg.Hooks.ToolExecuteAfter(ctx, &plugin.ToolExecuteAfterRequest{
