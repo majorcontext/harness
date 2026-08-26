@@ -707,15 +707,18 @@ func renderTaskLogEntry(m message.Message) taskLogEntry {
 		switch part := p.(type) {
 		case *message.Text:
 			// An empty Text part writes nothing: a blank line spends
-			// budget and tells a reader less than no line at all.
+			// budget and tells a reader less than no line at all. Bounded
+			// at the part level like the tool branches below — a huge
+			// assistant message must not ride into the builder whole just
+			// for the entry cap to cut it afterwards.
 			if part.Text != "" {
-				writeLine(part.Text)
+				writeLine(capInner(part.Text, taskLogEntryCap))
 			}
 		case *message.EngineContext:
-			writeLine("[engine_context] " + part.Text)
+			writeLine("[engine_context] " + capInner(part.Text, taskLogEntryCap))
 		case *message.Reasoning:
 			if part.Text != "" {
-				writeLine("[reasoning] " + part.Text)
+				writeLine("[reasoning] " + capInner(part.Text, taskLogEntryCap))
 			}
 		case *message.ToolCall:
 			writeLine("[tool_call] " + part.Name + "(" + capInner(string(part.Arguments), taskLogArgsCap) + ")")
@@ -730,7 +733,8 @@ func renderTaskLogEntry(m message.Message) taskLogEntry {
 			// copy tens of MB into this builder just to discard almost
 			// all of it. boundedPartsText stops reading at the cap, the
 			// same inline-cap shape the tool-call arguments above use.
-			text, cut := boundedPartsText(part.SafeContent(), taskLogEntryCap)
+			content := part.SafeContent()
+			text, cut := boundedPartsText(content, taskLogEntryCap)
 			inner = inner || cut
 			writeLine(label + " " + text)
 			// Parts.Text() renders Text parts only, so an image a tool
@@ -739,7 +743,7 @@ func renderTaskLogEntry(m message.Message) taskLogEntry {
 			// top-level blobs: a reader diagnosing a death should see
 			// that the child received a picture, not silently read a
 			// one-line summary as the whole result.
-			blobs += countBlobs(part.SafeContent())
+			blobs += countBlobs(content)
 		case *message.Blob:
 			blobs++
 		}
@@ -755,7 +759,13 @@ func renderTaskLogEntry(m message.Message) taskLogEntry {
 // boundedPartsText renders ps's Text parts joined by newlines, exactly as
 // message.Parts.Text() does, but stops once n runes are written — so a
 // huge tool result is never materialized in full just to be cut
-// afterwards. cut reports whether anything was dropped.
+// afterwards (the copy-free cut is runePrefix; a review round caught this
+// function []rune-ing the first part whole, defeating its own point). cut
+// reports whether anything was dropped. The inter-part newline is charged
+// against the budget DELIBERATELY: content whose text plus separators
+// exceeds n is cut even when the text alone would fit exactly — the
+// conservative direction, a complete-looking entry never silently spends
+// more than n runes of the log.
 func boundedPartsText(ps message.Parts, n int) (text string, cut bool) {
 	var b strings.Builder
 	written := 0
@@ -777,13 +787,13 @@ func boundedPartsText(ps message.Parts, n int) (text string, cut bool) {
 			b.WriteByte('\n')
 			written++
 		}
-		r := []rune(t.Text)
-		if len(r) > n-written {
-			b.WriteString(string(r[:n-written]))
+		prefix, runes, cutHere := runePrefix(t.Text, n-written)
+		if cutHere {
+			b.WriteString(prefix)
 			return b.String() + taskLogTruncationMarker, true
 		}
 		b.WriteString(t.Text)
-		written += len(r)
+		written += runes
 	}
 	return b.String(), false
 }
@@ -801,10 +811,29 @@ func countBlobs(ps message.Parts) int {
 
 // capRunes cuts s to at most n runes, marking a cut in the text and
 // reporting it to the caller (which folds it into taskLogEntry.Truncated).
+// It scans for the cut point instead of materializing []rune(s) — a
+// review finding: the copy doubled a potentially huge input's memory just
+// to measure it. truncateTaskResult (taskdelivery.go) delegates here so
+// the marker and cut semantics live in one place.
 func capRunes(s string, n int) (text string, cut bool) {
-	r := []rune(s)
-	if len(r) <= n {
+	prefix, _, wasCut := runePrefix(s, n)
+	if !wasCut {
 		return s, false
 	}
-	return string(r[:n]) + taskLogTruncationMarker, true
+	return prefix + taskLogTruncationMarker, true
+}
+
+// runePrefix returns s cut to at most n runes without allocating: the
+// prefix is a subslice of s, and the scan stops at the cut point. runes
+// reports how many runes the prefix holds; cut whether anything was
+// dropped.
+func runePrefix(s string, n int) (prefix string, runes int, cut bool) {
+	count := 0
+	for i := range s {
+		if count == n {
+			return s[:i], count, true
+		}
+		count++
+	}
+	return s, count, false
 }
