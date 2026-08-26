@@ -200,6 +200,34 @@ func (s *Session) mcpPolicyCanDefer() bool {
 	return false
 }
 
+// mcpToolUseImpliesSelection reports whether a routed call to name should
+// record name in the selected set (see executeTool, engine.go, and
+// docs/design/mcp-lazy-tools.md §3 "Use implies selection").
+//
+// The gate is per SERVER, not per session, and that is load-bearing rather
+// than cosmetic. The record exists only so a tool the model is USING keeps
+// its schema across a flip to deferred. A server pinned eager by
+// MCPToolLoadingByServer can never flip -- the override is absolute -- so a
+// record for its tools could never pay for itself. A session-level gate
+// would still write one for every tool of that pinned server, merely
+// because some OTHER server in the same session is lazy.
+//
+// auto counts as "can defer", since a catalog can cross the threshold at
+// any moment. The session must also hold the mcp tool: a session that
+// cannot select cannot defer either (see sessionCanDefer), so recording
+// there is pure waste too. A malformed name records nothing, matching
+// markMCPToolsSelected's own guard.
+func (s *Session) mcpToolUseImpliesSelection(name string) bool {
+	if _, ok := s.tools[mcpSessionToolName]; !ok {
+		return false
+	}
+	server, _, ok := splitMCPToolName(name)
+	if !ok {
+		return false
+	}
+	return s.mcpPolicyMode(server) != MCPToolLoadingEager
+}
+
 // mcpToolPlan is one request's decision about MCP tools: which defs enter
 // the tools array, and what the stage-1 catalog segment says. streamTurn
 // computes it ONCE per request and uses both halves, so MCPRegistry.Tools

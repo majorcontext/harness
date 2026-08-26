@@ -2706,9 +2706,14 @@ func (s *Session) executeTool(ctx context.Context, tc *message.ToolCall, args js
 		// both return an error above and record nothing. A tool-level
 		// failure (isErr) DID route and is recorded, and so is a call whose
 		// transport failed on a later attempt -- the next successful call
-		// records it. A session that can defer nothing records nothing at
-		// all, so a plain eager config pays for none of this.
-		if s.sessionCanDefer() {
+		// records it.
+		//
+		// The gate is per SERVER (see mcpToolUseImpliesSelection): a server
+		// pinned eager can never flip, so a record for its tools could
+		// never pay for itself. A plain eager config therefore records
+		// nothing at all, and neither does a defer-capable session on a
+		// call to one of its pinned-eager servers.
+		if s.mcpToolUseImpliesSelection(tc.Name) {
 			s.markMCPToolsSelected(tc.Name)
 		}
 		return out, isErr

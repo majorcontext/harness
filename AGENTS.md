@@ -1225,11 +1225,12 @@ the one authoritative copy, and echoing them would write every schema a
 second time into durable history.
 
 **Use implies selection.** An MCP tool call that ROUTES records its own
-name, in a session that can defer. Without it, a tool of an eager server —
-which needs no `select`, and which the model is told not to select — would
-lose its schema the moment an `auto` flip deferred its server mid-task.
-The gate keeps this off the default path entirely: a plain `eager` config
-can never flip, so it records nothing.
+name. Without it, a tool of an eager server — which needs no `select`, and
+which the model is told not to select — would lose its schema the moment an
+`auto` flip deferred its server mid-task. The gate is per SERVER, not per
+session: a server pinned `eager` can never flip, so a record for its tools
+could never pay for itself, even in a session that defers a different
+server. A plain `eager` config therefore records nothing at all.
 
 Full design, including the durable record: `docs/design/mcp-lazy-tools.md`.
 

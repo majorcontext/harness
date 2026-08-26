@@ -525,3 +525,33 @@ func TestMCPToolDefByteStableAcrossRequests(t *testing.T) {
 		t.Fatalf("mcp tool def moved:\nfirst: %s\ngot:   %s", first, got)
 	}
 }
+
+// TestRoutedCallRecordsNothingForAPinnedEagerServer pins the gate to the
+// SERVER rather than the session. A server pinned eager can never flip to
+// deferred, so a record for its tools could never pay for itself — even in
+// a session that defers some OTHER server.
+func TestRoutedCallRecordsNothingForAPinnedEagerServer(t *testing.T) {
+	s, _ := lazySession(t, Config{
+		MCPToolLoading:         MCPToolLoadingLazy,
+		MCPToolLoadingByServer: map[string]MCPToolLoading{"pinned": MCPToolLoadingEager},
+	}, map[string]int{"pinned": 1, "deferred": 1})
+	ctx := context.Background()
+
+	pinned := mcpToolName("pinned", "tool00")
+	deferred := mcpToolName("deferred", "tool00")
+
+	if _, isErr := s.executeTool(ctx, &message.ToolCall{CallID: "c1", Name: pinned, Arguments: []byte(`{}`)}, []byte(`{}`)); isErr {
+		t.Fatal("routed call to the pinned server reported an error")
+	}
+	if s.mcpToolSelected(pinned) {
+		t.Fatalf("%q was recorded, but its server can never flip to deferred", pinned)
+	}
+
+	// The same session still records a call to a server that CAN defer.
+	if _, isErr := s.executeTool(ctx, &message.ToolCall{CallID: "c2", Name: deferred, Arguments: []byte(`{}`)}, []byte(`{}`)); isErr {
+		t.Fatal("routed call to the deferred server reported an error")
+	}
+	if !s.mcpToolSelected(deferred) {
+		t.Fatalf("%q was not recorded by its own routed call", deferred)
+	}
+}
