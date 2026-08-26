@@ -245,6 +245,18 @@ func (c *conn) serveRequest(msg rpcMessage) {
 
 // call sends a request and decodes the peer's result into result (which may
 // be nil to discard it).
+//
+// Concurrent calls on one conn are safe and expected: each call takes its
+// own id from nextID, parks its own channel in pending, and the read loop
+// (dispatch) routes each response by that id. Response ORDER is therefore
+// irrelevant — a peer may answer a later request first. conn.write holds
+// wmu across the whole frame, so two callers can never interleave bytes on
+// the stream. Two sessions already dispatch hooks to one plugin this way,
+// because Host is a box-scoped singleton. Parallel tool execution in the
+// engine will depend on the same property within ONE session: one assistant
+// message's tool calls will dispatch their tool.execute.before/after hooks
+// to one plugin at the same time. See PROTOCOL.md, "Concurrency", and
+// plugin/concurrency_test.go.
 func (c *conn) call(ctx context.Context, method string, params, result any) error {
 	id := c.nextID.Add(1)
 	ch := make(chan rpcMessage, 1)
