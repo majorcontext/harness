@@ -204,7 +204,20 @@ func filePathKey(s *Session, args json.RawMessage) string {
 	if err := json.Unmarshal(args, &in); err != nil || in.Path == "" {
 		return filePathKeyPrefix + "<unparsed>"
 	}
-	return filePathKeyPrefix + s.resolvePath(in.Path)
+	// Clean the resolved path, so "a/../x" and "x" key the SAME file.
+	// resolvePath returns an absolute argument verbatim, and filepath.Join
+	// cleans only the relative branch, so the key would otherwise miss a
+	// dot-dot alias on an absolute path. The tools themselves open both
+	// spellings through the same resolvePath, so cleaning here can only
+	// merge two keys that name one file, never split one file into two.
+	//
+	// A symlink or a hard link that reaches one inode under two different
+	// paths still keys as two resources. Resolving that needs a
+	// filepath.EvalSymlinks (or a stat for inode identity) on every key,
+	// which is a syscall on the batch's hot path and fails on a path that
+	// does not exist yet — a write_file target routinely does not. This is
+	// an accepted, documented residual, not an oversight.
+	return filePathKeyPrefix + filepath.Clean(s.resolvePath(in.Path))
 }
 
 func readFileTool() Tool {

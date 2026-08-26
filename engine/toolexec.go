@@ -212,6 +212,13 @@ func (s *Session) runToolBatch(ctx context.Context, asst *message.Message) messa
 
 	outputs := make([]message.Parts, len(calls))
 	errs := make([]bool, len(calls))
+	// done is the ONE-RESULT-PER-CALL ledger. A result slot exists for
+	// every call before anything is scheduled, and every execution path
+	// marks its own slot. The backfill below then turns "no path marked
+	// this slot" into a real error result instead of an orphan tool_use.
+	// outputs[i] alone cannot serve as the ledger: a tool may legitimately
+	// return nil parts.
+	done := make([]bool, len(calls))
 
 	if s.toolConcurrency <= 1 {
 		// Sequential mode: the pre-parallel path, byte for byte. A Serial
@@ -219,15 +226,49 @@ func (s *Session) runToolBatch(ctx context.Context, asst *message.Message) messa
 		// it, and per-key exclusion is likewise moot with one call in
 		// flight at a time.
 		for i, tc := range calls {
-			outputs[i], errs[i] = s.runToolCall(ctx, tc)
+			outputs[i], errs[i] = s.admitAndRun(ctx, tc)
+			done[i] = true
 		}
 	} else {
-		s.runToolBatchParallel(ctx, calls, outputs, errs)
+		s.runToolBatchParallel(ctx, calls, outputs, errs, done)
 	}
 
-	// The join: retention runs here, in call order, over the whole batch —
-	// see the package doc comment's maybeRetainToolResult section for why
-	// this is the correct side of the boundary.
+	// Backfill: no call may leave this function without a result. See
+	// "Cancellation and the orphan-result invariant" in the package doc
+	// comment. Nothing reaches this loop today — every path above marks
+	// its slot — and that is the point: it is the structural guarantee,
+	// not a live code path.
+	for i := range calls {
+		if !done[i] {
+			outputs[i] = message.Parts{&message.Text{Text: toolCallNoResultText}}
+			errs[i] = true
+		}
+	}
+
+	// The join. This is retention's single call site
+	// (maybeRetainToolResult, toolresult.go): an oversized TEXT result is
+	// swapped for a preview plus a trh_N handle HERE, before the
+	// ToolResult is built and long before Session.append,
+	// message.NormalizeForWire, or any transcoder sees it. That placement
+	// is why tool-result handles need no wire-format change at all — every
+	// downstream layer still sees an ordinary ToolResult carrying ordinary
+	// Text parts. Retention runs on the post-hook output (runToolCall
+	// already applied ToolExecuteAfter), so a plugin that rewrites or
+	// enlarges a result has its final bytes measured, not the tool's
+	// originals. It is a total no-op when retention is disabled or the
+	// result is within the limit.
+	//
+	// Running it here, on the join goroutine, in call order, is also what
+	// keeps maybeRetainToolResult SINGLE-THREADED. That matters beyond
+	// handle numbering: its per-session retained-bytes ceiling is a
+	// check-then-act split across two separate s.mu sections (it reads
+	// s.toolResultBytes, unlocks, writes the sidecar, then adds the bytes
+	// back under a second acquisition). Concurrent callers could each
+	// observe the ceiling as uncrossed and all proceed, overshooting the
+	// configured cap by up to the concurrency factor. The join removes the
+	// concurrency instead of re-locking the ceiling: with one caller there
+	// is no window to race. Do NOT move retention back inside the worker
+	// without first making that reserve-and-mint one atomic section.
 	results := make(message.Parts, len(calls))
 	for i, tc := range calls {
 		results[i] = &message.ToolResult{
@@ -237,6 +278,39 @@ func (s *Session) runToolBatch(ctx context.Context, asst *message.Message) messa
 		}
 	}
 	return results
+}
+
+// toolCallCanceledText and toolCallNoResultText are the two synthesized
+// results the executor can produce without the tool running at all. Both
+// exist to hold the pairing invariant: a tool_use block with no
+// tool_result wedges a session permanently (AGENTS.md, NEP-5272).
+const (
+	toolCallCanceledText = "tool call not started: the turn was canceled"
+	toolCallNoResultText = "tool call produced no result"
+)
+
+// admitAndRun is the ONE admission gate every call passes through. A call
+// admitted while ctx is already canceled does not run: it returns a
+// synthesized canceled result instead.
+//
+// This deliberately CHANGES the pre-parallel behavior, which ran every
+// remaining call after an abort. Two reasons. A batch has calls queued
+// behind the concurrency cap, so an abort that arrives early would
+// otherwise keep starting fresh work for as long as the batch is wide.
+// And several built-ins commit their side effect without consulting ctx
+// at all — write_file writes the file — so "the tool decides" is not a
+// real gate for them. The turn is over; a canceled turn's results are
+// discarded anyway, so the only thing still running work can produce is
+// an unwanted side effect.
+//
+// A call ALREADY RUNNING when the abort lands is not interrupted here: it
+// owns its own ctx and returns whatever it returns. This gate governs
+// admission only.
+func (s *Session) admitAndRun(ctx context.Context, tc *message.ToolCall) (message.Parts, bool) {
+	if ctx.Err() != nil {
+		return message.Parts{&message.Text{Text: toolCallCanceledText}}, true
+	}
+	return s.runToolCall(ctx, tc)
 }
 
 // toolCallsOf extracts asst's ToolCall parts in order.
@@ -307,18 +381,19 @@ func (s *Session) toolKey(name string, args json.RawMessage) string {
 // runToolBatchParallel executes calls' segments in order, filling outputs/
 // errs by original batch index. Caller has already checked
 // s.toolConcurrency > 1.
-func (s *Session) runToolBatchParallel(ctx context.Context, calls []*message.ToolCall, outputs []message.Parts, errs []bool) {
+func (s *Session) runToolBatchParallel(ctx context.Context, calls []*message.ToolCall, outputs []message.Parts, errs []bool, done []bool) {
 	for _, seg := range s.splitBatch(calls) {
 		if seg.serial {
 			i := seg.idx[0]
-			outputs[i], errs[i] = s.runToolCall(ctx, seg.calls[0])
+			outputs[i], errs[i] = s.admitAndRun(ctx, seg.calls[0])
+			done[i] = true
 			continue
 		}
-		s.runParallelSegment(ctx, seg, outputs, errs)
+		s.runParallelSegment(ctx, seg, outputs, errs, done)
 	}
 }
 
-// keyBaton is one pending hand-off for a resource key: the channel a
+// keyChain is the per-key hand-off chain for one segment: the channel a
 // waiting call blocks on, closed by its predecessor when done, and the
 // channel the NEXT same-key call will wait on in turn.
 type keyChain struct {
@@ -347,7 +422,7 @@ func (c *keyChain) wait(key string) (predecessor <-chan struct{}, release func()
 // s.toolConcurrency in flight, honoring per-key exclusion. Every call gets
 // exactly one result, in outputs/errs at its ORIGINAL batch index, even if
 // ctx is already cancelled.
-func (s *Session) runParallelSegment(ctx context.Context, seg batchSegment, outputs []message.Parts, errs []bool) {
+func (s *Session) runParallelSegment(ctx context.Context, seg batchSegment, outputs []message.Parts, errs []bool, done []bool) {
 	// Baton hand-off is wired up front, on THIS goroutine, for every call
 	// in the segment before any worker starts — see the invariant in the
 	// package doc comment.
@@ -370,11 +445,9 @@ func (s *Session) runParallelSegment(ctx context.Context, seg batchSegment, outp
 		jobs[i] = job{idx: seg.idx[i], tc: tc, key: key, predecessor: pred, release: rel}
 	}
 
-	cap := s.toolConcurrency
-	if cap > len(jobs) {
-		cap = len(jobs)
-	}
-	sem := make(chan struct{}, cap)
+	// slots shadows nothing: naming this `cap` would shadow the builtin.
+	slots := min(s.toolConcurrency, len(jobs))
+	sem := make(chan struct{}, slots)
 	var wg sync.WaitGroup
 	for _, j := range jobs {
 		wg.Add(1)
@@ -382,13 +455,18 @@ func (s *Session) runParallelSegment(ctx context.Context, seg batchSegment, outp
 		go func(j job) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			// Release the baton on the way out, whatever happens inside:
+			// a same-key successor must never wait forever on a
+			// predecessor that died. release is idempotent-by-position
+			// (each call closes only its OWN channel, exactly once).
+			if j.release != nil {
+				defer j.release()
+			}
 			if j.predecessor != nil {
 				<-j.predecessor
 			}
-			outputs[j.idx], errs[j.idx] = s.runToolCall(ctx, j.tc)
-			if j.release != nil {
-				j.release()
-			}
+			outputs[j.idx], errs[j.idx] = s.admitAndRun(ctx, j.tc)
+			done[j.idx] = true
 		}(j)
 	}
 	wg.Wait()
