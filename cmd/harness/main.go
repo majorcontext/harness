@@ -854,9 +854,10 @@ func loadConfig() (*config.Config, error) {
 // values. Auth is read here but validated only on first send. Adding
 // another built-in provider family is a two-line change: resolve its config
 // with providerAuth and add one entry to the returned map. Any config
-// providers entry with type "openai-compat" needs no code at all — see
-// registerOpenAICompatProviders — and OpenRouter itself needs no config
-// entry either, see ensureDefaultOpenRouter.
+// providers entry with type "openai-compat" or "openai" needs no code at
+// all — see registerOpenAICompatProviders and registerOpenAIProviders —
+// and OpenRouter itself needs no config entry either, see
+// ensureDefaultOpenRouter.
 //
 // registry does not assume cfg came from config.LoadProject (the load path
 // that guarantees nativeDefaultProviders fields are filled in — see
@@ -874,11 +875,64 @@ func registry(cfg *config.Config) provider.Registry {
 	okey, obase := providerAuth(cfg, openai.Family, "OPENAI_API_KEY")
 	reg := provider.Registry{
 		anthropic.Family: &anthropic.Client{APIKey: akey, BaseURL: abase, CacheTTL: anthropicCacheTTL(cfg)},
-		openai.Family:    &openai.Client{APIKey: okey, BaseURL: obase},
+		// The built-in openai entry deliberately leaves Family empty: it IS
+		// the package default, and naming it here would only invite the two
+		// to drift. Its ResponsesPath comes from the native entry, if any.
+		openai.Family: &openai.Client{APIKey: okey, BaseURL: obase, ResponsesPath: nativeResponsesPath(cfg)},
 	}
 	registerOpenAICompatProviders(reg, cfg)
+	registerOpenAIProviders(reg, cfg)
 	ensureDefaultOpenRouter(reg, cfg)
 	return reg
+}
+
+// registerOpenAIProviders builds a native provider/openai (Responses API)
+// client for every config.Providers entry of config.TypeOpenAI, keyed by
+// its providers map name — that name is what routes "name/model" refs to
+// it, exactly like an openai-compat entry, and it is also the client's own
+// Family, so the entry's opaque reasoning attachments are tagged and
+// replayed under the key that identifies its endpoint rather than under the
+// shared package constant.
+//
+// It runs AFTER registerOpenAICompatProviders for the same reason that one
+// runs after the built-in entries: config.validateProviders has already
+// rejected every entry that could produce two adapters for one key, so the
+// order is a formality, not a precedence rule.
+func registerOpenAIProviders(reg provider.Registry, cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	for name, p := range cfg.Providers {
+		if p.Type != config.TypeOpenAI {
+			continue
+		}
+		var apiKey string
+		if p.APIKeyEnv != "" {
+			apiKey = os.Getenv(p.APIKeyEnv)
+		}
+		reg[name] = &openai.Client{
+			Family:        name,
+			APIKey:        apiKey,
+			BaseURL:       p.BaseURL,
+			ResponsesPath: p.ResponsesPath,
+		}
+	}
+}
+
+// nativeResponsesPath reads the request path configured on the NATIVE
+// "openai" entry (map key "openai", no type — the shape
+// config.validateProviders permits responses_path on). Empty leaves the
+// adapter's own /v1/responses default in place. A keyed type:"openai" entry
+// carries its own path and is wired by registerOpenAIProviders instead.
+func nativeResponsesPath(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	p := cfg.Providers[openai.Family]
+	if p.Type != "" {
+		return ""
+	}
+	return p.ResponsesPath
 }
 
 // registerOpenAICompatProviders builds a provider/openaicompat client for
