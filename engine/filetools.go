@@ -354,7 +354,7 @@ func writeFileTool() Tool {
 			if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
 				return nil, fmt.Errorf("write_file: cannot stat %s to check the read-before-overwrite guard: %v", path, statErr)
 			}
-			if statErr == nil && !info.IsDir() {
+			if statErr == nil && info.Mode().IsRegular() {
 				recorded, everRead := s.readHashFor(path)
 				if !everRead {
 					return nil, fmt.Errorf("write_file: %s exists and has not been read this session; read it first (or use edit_file)", path)

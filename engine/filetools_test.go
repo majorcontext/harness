@@ -774,3 +774,16 @@ func TestWriteFileStatErrorRefuses(t *testing.T) {
 		t.Errorf("error = %q, want the cannot-stat refusal", err)
 	}
 }
+
+// TestWriteFileSpecialFileUnguarded proves the guard's scope is REGULAR
+// files, as documented: writing to a device file like /dev/null (a common
+// discard idiom) needs no prior read.
+func TestWriteFileSpecialFileUnguarded(t *testing.T) {
+	if _, err := os.Stat("/dev/null"); err != nil {
+		t.Skip("/dev/null unavailable")
+	}
+	dir := t.TempDir()
+	if _, err := writeFileTool().Run(context.Background(), NewSession(Config{WorkDir: dir}), json.RawMessage(`{"path":"/dev/null","content":"discard"}`)); err != nil {
+		t.Fatalf("write_file to /dev/null: %v", err)
+	}
+}
