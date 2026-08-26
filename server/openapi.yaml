@@ -615,6 +615,47 @@ components:
           type: string
           description: The encoding/json error raised while marshaling this message.
 
+    MessagePage:
+      type: object
+      description: >
+        One bounded page of a session's durable message sequence, oldest
+        first — the response shape of GET /session/{id}/message when the
+        request names `before_seq` or `limit`.
+
+        A message's sequence number is its 1-based ordinal in the DURABLE
+        sequence: message records in log order, with each compaction's fold
+        applied (the folded range replaced by that compaction's summary).
+        Compaction renumbers, so a client paging across one can see two
+        pages overlap; message ids are stable and are the way to
+        de-duplicate.
+      required: [messages, first_seq, last_seq, total, has_more]
+      properties:
+        messages:
+          type: array
+          description: The page, oldest first. Empty when nothing sits at or below the requested point.
+          items:
+            oneOf:
+              - $ref: "#/components/schemas/Message"
+              - $ref: "#/components/schemas/MessagePlaceholder"
+        first_seq:
+          type: integer
+          description: Sequence number of the first message in the page; 0 for an empty page. Pass it back as `before_seq` for the next older page.
+        last_seq:
+          type: integer
+          description: Sequence number of the last message in the page; 0 for an empty page.
+        total:
+          type: integer
+          description: >
+            The session's whole durable message count — the sequence number
+            of its newest message. It can be lower than Session.messages,
+            which also counts the synthetic tool results a replay derives
+            for a tool call whose result never reached the log: a derived
+            message has no record, so it has no sequence number and no page
+            carries it.
+        has_more:
+          type: boolean
+          description: Whether at least one message older than `first_seq` exists.
+
     Part:
       type: object
       required: [type]
@@ -1680,6 +1721,11 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
+    BadRequest:
+      description: A malformed request parameter or body.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
     ProcessNotFound:
       description: No declared process with that name.
       content:
@@ -1846,31 +1892,65 @@ paths:
   /session/{id}/message:
     get:
       operationId: getMessages
-      summary: Full canonical message history (bootstrap for renderers).
+      summary: Canonical message history — whole, or one bounded page.
       description: >
-        Marshals each resident message independently: a single message that
-        fails to marshal (e.g. a Reasoning part carrying an invalid
-        provider-native attachment that ingest-time normalization does not
-        catch) is replaced in the response by a MessagePlaceholder rather
-        than failing the whole request — this endpoint always returns 200
-        with as much of the transcript as is actually renderable, never a
-        500 for one bad message.
+        Two response shapes, chosen by the request. WITHOUT `before_seq` and
+        `limit` the response is the bare array of the whole history it has
+        always been, unchanged for every existing caller. WITH either
+        parameter the response is a MessagePage envelope: one bounded page
+        of the session's durable message sequence, newest page by default,
+        read from the journal's tail rather than its whole length.
+
+        Either way, each message is marshaled independently: a single
+        message that fails to marshal (e.g. a Reasoning part carrying an
+        invalid provider-native attachment that ingest-time normalization
+        does not catch) is replaced in the response by a MessagePlaceholder
+        rather than failing the whole request — this endpoint always returns
+        200 with as much of the transcript as is actually renderable, never
+        a 500 for one bad message.
+
+        A page reports messages VERBATIM from the durable log. Unlike the
+        unparameterized read, it never adds the load-time repair that
+        synthesizes an is_error tool result for a tool call whose result
+        never reached the log: that repair exists to keep a provider REQUEST
+        valid, and fabricating a tool failure in a read view has caused a
+        console to render a healthy in-flight call as failed.
       parameters:
         - $ref: "#/components/parameters/sessionID"
+        - name: before_seq
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0 }
+          description: >
+            Return the messages immediately BEFORE this sequence number.
+            Omitted (or 0) means the newest page. A client pages backwards by
+            passing the previous response's `first_seq`.
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 100, maximum: 1000 }
+          description: >
+            Maximum messages in the page. 0 or omitted means 100; a larger
+            value is capped at 1000 rather than rejected.
       responses:
         "200":
           description: OK
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  description: >
-                    A Message, or a MessagePlaceholder in place of any
-                    message that failed to marshal.
-                  oneOf:
-                    - $ref: "#/components/schemas/Message"
-                    - $ref: "#/components/schemas/MessagePlaceholder"
+                oneOf:
+                  - type: array
+                    description: >
+                      The whole history, for a request that names no page.
+                    items:
+                      description: >
+                        A Message, or a MessagePlaceholder in place of any
+                        message that failed to marshal.
+                      oneOf:
+                        - $ref: "#/components/schemas/Message"
+                        - $ref: "#/components/schemas/MessagePlaceholder"
+                  - $ref: "#/components/schemas/MessagePage"
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
