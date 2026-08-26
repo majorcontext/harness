@@ -285,6 +285,64 @@ the outer weather tier ever counts it, so a goal loop rides a brief provider
 blip without spending an outer attempt. `PromptRetries` 0 disables the inner
 budget for a host that wants the outer tiers to be the only retry.
 
+### Per-turn metrics
+
+`streamTurn` (`engine/engine.go`) emits one structured `turn_metrics` line per
+COMPLETED model call — a stream that reached `EventDone`; a turn that errors
+or is interrupted mid-stream (see `interruptedTurnError` above) reports
+nothing, since there is no finished call to summarize. This is the box-fleet
+answer to "why does this session feel slow": TTFT and stream duration, token
+and prompt-cache accounting, and request shape, greppable straight off a
+process's stderr.
+
+Fields: `session_id`, `model` (full `provider/model` ref), `ttft_ms` (elapsed
+from just before `prov.Stream` to the first non-`EventActivity` stream event
+— `EventActivity` carries no content, so a keep-alive ping or an in-progress
+tool-argument chunk must never be mistaken for "first byte"; if `EventDone`
+itself is the first event, `ttft_ms` covers the whole call and `stream_ms` is
+0), `stream_ms` (first delta to `EventDone`), `input_tokens`/`output_tokens`/
+`cache_read_tokens`/`cache_write_tokens` (passed through from
+`provider.Usage` verbatim), `system_len`/`tools_count`, and `retry` (the
+1-indexed attempt number `streamTurnWithRetry` — `engine/prompt_retry.go` —
+was on when this call completed; 1 for a turn that succeeded on its first
+try). `system_len` is computed identically to the server's `request.meta`
+record (`len(strings.Join(req.System, "\n"))`, see `server/journal.go`'s
+`OnRequest`) — deliberately, not coincidentally: `session_id` + `model` +
+`system_len` together are a natural join key between a `turn_metrics` stderr
+line and the durable `request.meta` record for the same request, with no new
+ID threaded through the provider boundary.
+
+`Config.OnTurnMetrics func(TurnMetrics)` is the seam. Unlike every other
+`On*` callback in `Config` (`OnEvent`, `OnRequest`, `OnStorePhase`), nil is
+NOT "disabled": `emitTurnMetrics` substitutes `defaultTurnMetricsLog`
+(`engine/turn_metrics.go`), a `slog.NewJSONHandler` line written to
+`os.Stderr` — the same stream every other structured log line in this repo
+uses (see `cmd/harness/main.go`'s "Structured logging: JSON to stderr"
+comment). Stderr keeps the line out of `harness run`'s stdout, which is
+the model's answer channel, while a deployment's log pipeline (Kubernetes
+captures both streams) scrapes it identically. A plain `harness run`/`harness serve` process
+with no embedder wiring therefore still emits this line by default; an
+embedder that wants a different sink (an OTel exporter, an in-memory test
+recorder) sets `OnTurnMetrics` and never needs to suppress the default
+first.
+
+`Config.Now func() time.Time` is the clock this measurement reads (nil
+resolves to `time.Now` in `newSession`), scoped to this one seam rather than
+a general engine clock — every other timestamp in the package still reads
+`time.Now` directly. It exists so a test can script an exact instant sequence
+instead of depending on real elapsed wall-clock time between two in-process
+calls with nothing to wait on between them, per the Testing rule against real
+sleeps.
+
+This was built for a deployment that ships a served process's stderr to a
+log pipeline (a fleet of boxes running `harness serve`, each pod's stderr
+collected by a Vector-style agent into BetterStack or an equivalent log
+store). The intended query there filters `msg: "turn_metrics"` and groups by
+`model`/`session_id` to compare TTFT and stream-duration distributions across
+sessions — quantifying, with real numbers instead of a feeling, whether a
+session "feels slow" because of provider latency, prompt-cache misses, or
+something else entirely.
+
 ### Goal loop
 
 `Session.PursueGoal(ctx, condition, GoalOptions)` drives the ordinary `Prompt`

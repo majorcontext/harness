@@ -446,6 +446,38 @@ type Config struct {
 	// safely (see newSessionFn/loadSessionFn).
 	OnRequest func(sessionID string, turn int, req *provider.Request)
 
+	// OnTurnMetrics, when non-nil, is invoked once per COMPLETED streamTurn
+	// call (a stream that reached EventDone; a turn that errors or is
+	// interrupted mid-stream emits nothing, since there is no finished call
+	// to report) with a TurnMetrics summarizing its latency and usage. Called
+	// synchronously from streamTurn, immediately after EventDone and before
+	// streamTurn returns — keep it fast, and never call back into the
+	// Session (same rule as OnEvent/OnStorePhase above).
+	//
+	// Unlike every other On* callback in this Config, nil is NOT "disabled":
+	// emitTurnMetrics (turn_metrics.go) substitutes defaultTurnMetricsLog, a
+	// stderr JSON slog line, so a plain `harness run`/`harness serve` process
+	// with no embedder wiring still emits per-turn telemetry by default. An
+	// embedder that wants a different sink (an in-memory recorder for a
+	// test, an OTel exporter) sets this field; it never needs to suppress
+	// the default first.
+	OnTurnMetrics func(TurnMetrics)
+
+	// Now is the clock TurnMetrics timing reads: streamTurn calls it just
+	// before the provider call, at the first non-activity stream event, and
+	// at EventDone, to compute TTFTMillis/StreamMillis (see TurnMetrics).
+	// Nil (the default) resolves to time.Now in newSession. This exists so a
+	// test can inject a scripted sequence of instants instead of depending
+	// on real elapsed wall-clock time between two calls to a fake stream's
+	// Next() — the AGENTS.md testing rule against real sleeps in tests
+	// applies here exactly as it does to any other timer-dependent code, and
+	// a real duration between two in-process function calls with no actual
+	// I/O between them would otherwise round to ~0 and prove nothing. Scoped
+	// to this one measurement, not a general engine clock seam: every other
+	// timestamp in this package (CreatedAt, etc.) still reads time.Now
+	// directly.
+	Now func() time.Time
+
 	// Instructions controls project-instruction (AGENTS.md) injection into
 	// the system prompt. A nil value is the default: auto-discover AGENTS.md
 	// by walking up from WorkDir. See InstructionsConfig.
@@ -1012,6 +1044,9 @@ func newSession(cfg Config) *Session {
 	}
 	if cfg.BashTimeout <= 0 {
 		cfg.BashTimeout = 2 * time.Minute
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
 	}
 	// contextWindowExplicit records whether the CALLER set
 	// Config.ContextWindowTokens, captured from the ORIGINAL value before
@@ -2019,7 +2054,12 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 
 // streamTurn makes one model call and returns the assembled assistant
 // message.
-func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.StopReason, provider.Usage, error) {
+// attempt is streamTurnWithRetry's 1-indexed attempt counter for this turn
+// (1 on a turn's first call), threaded through purely so the turn_metrics
+// emit at EventDone (see the end of this function and TurnMetrics.Attempt)
+// can report whether this completed call was a retry, without streamTurn
+// itself needing to know anything else about the retry budget or policy.
+func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message, provider.StopReason, provider.Usage, error) {
 	// Assembly order matters, and three steps are pinned:
 	//
 	//  1. chat.params runs first: it fixes params.Model, which both the
@@ -2178,6 +2218,10 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 	// abort takes through the adapter's HTTP body read.
 	ctx, watch, release := s.armIdleWatchdog(ctx)
 	defer release()
+	// sentAt anchors TurnMetrics.TTFTMillis (see the EventDone case below):
+	// captured immediately before the provider dial, mirroring where
+	// OnRequest above already hands the same req to an observer.
+	sentAt := s.cfg.Now()
 	stream, err := prov.Stream(ctx, req)
 	if err != nil {
 		return nil, "", provider.Usage{}, watch.explain(err)
@@ -2191,6 +2235,14 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 	// why.
 	var text strings.Builder
 	var toolCalls []*message.ToolCall
+	// firstDeltaAt is set once, on the first non-EventActivity event this
+	// stream yields (see provider.EventActivity's doc comment: it carries no
+	// content, so it must not count as "first byte"). If EventDone is
+	// itself that first event — a provider that streams nothing before its
+	// terminal event — firstDeltaAt lands on EventDone too, and
+	// TurnMetrics.StreamMillis below comes out zero.
+	var firstDeltaAt time.Time
+	var gotFirstDelta bool
 	for {
 		ev, err := stream.Next()
 		if err != nil {
@@ -2211,6 +2263,10 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 			}
 		}
 		watch.kick()
+		if !gotFirstDelta && ev.Type != provider.EventActivity {
+			firstDeltaAt = s.cfg.Now()
+			gotFirstDelta = true
+		}
 		switch ev.Type {
 		case provider.EventTextDelta:
 			text.WriteString(ev.Text)
@@ -2228,6 +2284,24 @@ func (s *Session) streamTurn(ctx context.Context) (*message.Message, provider.St
 			// or error still has this call's identity to work with.
 			toolCalls = append(toolCalls, ev.ToolCall)
 		case provider.EventDone:
+			doneAt := s.cfg.Now()
+			s.emitTurnMetrics(TurnMetrics{
+				SessionID:        s.ID,
+				Model:            params.Model,
+				Attempt:          attempt,
+				TTFTMillis:       firstDeltaAt.Sub(sentAt).Milliseconds(),
+				StreamMillis:     doneAt.Sub(firstDeltaAt).Milliseconds(),
+				InputTokens:      ev.Usage.InputTokens,
+				OutputTokens:     ev.Usage.OutputTokens,
+				CacheReadTokens:  ev.Usage.CacheReadTokens,
+				CacheWriteTokens: ev.Usage.CacheWriteTokens,
+				// SystemLen mirrors server/journal.go's OnRequest computation
+				// exactly (len of the "\n"-joined system slice) so the two
+				// records join on session_id+model+system_len — see
+				// TurnMetrics's doc comment.
+				SystemLen:  len(strings.Join(system, "\n")),
+				ToolsCount: len(tools),
+			})
 			return ev.Message, ev.StopReason, ev.Usage, nil
 		}
 	}

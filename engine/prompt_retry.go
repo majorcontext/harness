@@ -132,7 +132,7 @@ func waitBasePromptRetryBackoff(ctx context.Context, attempt int) error {
 // function's doc comment for why lastUsage is deliberately left untouched.
 func (s *Session) streamTurnWithRetry(ctx context.Context) (*message.Message, provider.StopReason, provider.Usage, error) {
 	for attempt := 1; ; attempt++ {
-		asst, stop, usage, err := s.streamTurn(ctx)
+		asst, stop, usage, err := s.streamTurn(ctx, attempt)
 		if err == nil {
 			if !turnHasActionableContent(asst) {
 				s.accumulateDiscardedTurnUsage(usage)
