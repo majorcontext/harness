@@ -270,3 +270,79 @@ func stripBedrockAnthropicPrefix(model string) (suffix string, isAnthropic bool)
 	}
 	return rest, true
 }
+
+// anthropicToolSearchModels is the set of first-party Anthropic model IDs
+// that support the SERVER-side tool search tool
+// (tool_search_tool_regex_20251119 / tool_search_tool_bm25_20251119), from
+// the model-compatibility table in
+// platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool.
+// Both variants ship on exactly the same models, so one set answers for
+// either.
+//
+// A set, not a table of versions: harness picks the variant (see
+// provider/anthropic), so the only question this package answers is whether
+// the ref can do server-side tool search at all. Claude Opus 4.1 and
+// earlier cannot.
+//
+// Undated aliases are keyed alongside the dated IDs for the same reason
+// anthropicContextWindows keys both: a config may name either form.
+var anthropicToolSearchModels = map[string]bool{
+	"claude-fable-5": true,
+	// claude-mythos-5 is in the tool-search compatibility table but has no
+	// models.dev entry (checked live: the anthropic provider's model map
+	// has no mythos key at all) and no route this repo talks to serves it,
+	// so anthropicContextWindows cannot key it either. Keeping it here is
+	// the accurate answer if such a ref ever appears, and costs nothing
+	// meanwhile; see TestToolSearchModelsAreKnownToContextWindow for the
+	// self-retiring exemption that keeps the two tables honest.
+	"claude-mythos-5":            true,
+	"claude-haiku-4-5":           true,
+	"claude-haiku-4-5-20251001":  true,
+	"claude-opus-4-5":            true,
+	"claude-opus-4-5-20251101":   true,
+	"claude-opus-4-6":            true,
+	"claude-opus-4-7":            true,
+	"claude-opus-4-8":            true,
+	"claude-opus-5":              true,
+	"claude-sonnet-4-5":          true,
+	"claude-sonnet-4-5-20250929": true,
+	"claude-sonnet-4-6":          true,
+	"claude-sonnet-5":            true,
+}
+
+// SupportsToolSearch reports whether ref can use Anthropic's server-side
+// tool search tool. It is the gate provider/anthropic gives native
+// delegation: a ref this answers false for keeps harness's own client-side
+// deferral (the catalog segment plus the mcp tool's search/select actions),
+// which works on every provider.
+//
+// Two deliberate fail-safe-off rules, both of which make an unknown ref
+// keep the client-side mechanism rather than emit a tool the route may
+// reject:
+//
+//   - Only ref.Provider "anthropic" can be true. The openai and
+//     openai-compat routes reach a Chat Completions surface, which has no
+//     tool_search at all (OpenAI's own tool search is Responses-API only),
+//     and a gateway that proxies Anthropic under some other provider name
+//     is not something this package can recognize.
+//   - A BEDROCK-STYLE anthropic ref is false, whatever model it names.
+//     Server-side tool search on Amazon Bedrock is available only through
+//     InvokeModel, not the Converse API, and nothing in a ref says which
+//     API the gateway in front of it uses. Guessing wrong costs a rejected
+//     request on every turn; guessing off costs a catalog segment that
+//     already works. Same conservative posture bedrockAnthropicContextWindows
+//     takes for a family its snapshot does not key.
+//
+// The Bifrost routing-namespace segment is stripped exactly as
+// ContextWindow strips it (lastPathSegment), so a boxes ref like
+// "anthropic/claude-opus-5" resolves.
+func SupportsToolSearch(ref message.ModelRef) bool {
+	if ref.Provider != "anthropic" {
+		return false
+	}
+	model := lastPathSegment(ref.Model)
+	if _, isBedrockStyle := stripBedrockAnthropicPrefix(model); isBedrockStyle {
+		return false
+	}
+	return anthropicToolSearchModels[model]
+}

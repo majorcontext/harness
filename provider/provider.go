@@ -21,6 +21,20 @@ type ToolDef struct {
 	Name        string
 	Description string
 	InputSchema json.RawMessage // JSON Schema
+
+	// DeferLoading asks the PROVIDER to keep this tool's schema out of the
+	// model's context until the model discovers it, instead of loading it
+	// up front. The definition is still sent on every request: deferral
+	// controls what enters the context window, not what the wire carries.
+	//
+	// Only an adapter whose API has a native deferral mechanism acts on
+	// this; provider/anthropic emits defer_loading plus a server-side tool
+	// search tool (see its transcoder). Every other adapter IGNORES the
+	// field, which is the safe default -- a tool with no way to be
+	// discovered would otherwise be unreachable -- so the engine sets it
+	// only for a route it knows can honor it, and keeps its own
+	// client-side deferral everywhere else.
+	DeferLoading bool
 }
 
 // Request is one model call. System and Messages are canonical; the adapter
