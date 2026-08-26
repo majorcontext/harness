@@ -43,10 +43,10 @@ import (
 // never revisits an autonomous, fire-and-forget child (the PARENT gets the
 // completion notification, not the child), so nothing ever backfills it.
 //
-// The fix (resolveSessForSync, server/journal.go): fall back to
-// s.sessMgr.Session(sessionID) — SessionManager's OWN live node, which
-// Spawn registers synchronously, before the child's turn ever starts —
-// whenever s.sessions has nothing. This test reproduces the exact reported
+// The fix (Server.liveSessionObject, server/live.go): fall back to
+// SessionManager's OWN live node — which Spawn registers synchronously,
+// before the child's turn ever starts, read as one atomic pair through
+// SessionAndInfo — whenever s.sessions has nothing. This test reproduces the exact reported
 // sequence deterministically, entirely inside a synctest bubble (no real
 // listener, no time.Sleep — see AGENTS.md's test time.Sleep ban): create
 // root, evict it from residency by exceeding MaxResident

@@ -840,7 +840,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
-	writeJSON(w, http.StatusCreated, s.buildSession(sess, "idle"))
+	writeJSON(w, http.StatusCreated, s.buildSession(s.resolveLive(sess.ID).withLoaded(sess)))
 }
 
 // reportCreatePhase forwards elapsed to Options.OnCreatePhase, nil-guarded.
@@ -966,7 +966,11 @@ func (s *Server) handleList(w http.ResponseWriter, _ *http.Request) {
 	out := []sessionJSON{}
 	seen := make(map[string]bool)
 	for _, m := range mem {
-		out = append(out, s.buildSession(m.sess, statusStr(m.running)))
+		// Built from the bulk residency read above rather than a second
+		// per-session s.mu hold: m.sess and m.running already come from
+		// ONE hold, which is the pairing rule liveSession needs. Only the
+		// manager half (for the lineage block) is read here.
+		out = append(out, s.buildSession(liveFromResident(m.sess.ID, m.sess, m.running).withManager(s.sessMgr)))
 		seen[m.sess.ID] = true
 	}
 	infos, err := engine.ListSessions(s.opts.SessionDir)
@@ -978,11 +982,18 @@ func (s *Server) handleList(w http.ResponseWriter, _ *http.Request) {
 		if seen[info.ID] {
 			continue
 		}
-		sess, err := s.opts.LoadSession(info.ID)
-		if err != nil {
+		// Server.lookup, not a bare LoadSession: an id on disk can still
+		// be live in this process — a Spawn-driven child is never a
+		// residency key, so it lands in this branch, and its status and
+		// lineage must come from SessionManager's own node. lookup reads
+		// the log only when nothing live holds the id (a live review
+		// finding: the old unconditional load re-read and then discarded
+		// such a child's whole log on every listing).
+		lv, ok := s.lookup(info.ID)
+		if !ok {
 			continue
 		}
-		out = append(out, s.buildSession(sess, "idle"))
+		out = append(out, s.buildSession(lv))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	writeJSON(w, http.StatusOK, out)
@@ -993,12 +1004,12 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	sess, status, ok := s.lookup(id)
+	lv, ok := s.lookup(id)
 	if !ok {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.buildSession(sess, status))
+	writeJSON(w, http.StatusOK, s.buildSession(lv))
 }
 
 // messagePlaceholder substitutes for a resident message that fails to
@@ -1031,7 +1042,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	sess, _, ok := s.lookup(id)
+	sess, ok := s.lookupSession(id)
 	if !ok {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
@@ -2805,7 +2816,7 @@ func (s *Server) handleQueueGet(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	sess, _, ok := s.lookup(id)
+	sess, ok := s.lookupSession(id)
 	if !ok {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
@@ -3076,8 +3087,17 @@ func (s *Server) sessionOnDisk(id string) bool {
 	return false
 }
 
-// lookup resolves a session for read endpoints: the in-memory session (with
-// live status) if present, else a transparent load from disk (always idle).
+// lookup resolves a session for read endpoints and returns its whole
+// liveSession snapshot: the in-memory session (with live status) if
+// present, else a transparent load from disk (always idle).
+//
+// It returns the snapshot rather than a bare (session, status) pair so a
+// handler that also needs the session's lineage — buildSession, via
+// lineageJSONFor — reads it out of the SAME snapshot instead of taking a
+// second, later SessionManager read of its own. GET /session used to do
+// exactly that: the body's session fields came from lookup's manager read
+// and its lineage block from lineageJSONFor's, so a Reap landing between
+// the two described two different nodes in one response.
 //
 // Order matters, and used to be wrong for every child. A root goes through
 // s.sessions (this server's own residency bookkeeping) first, unchanged. For
@@ -3116,28 +3136,37 @@ func (s *Server) sessionOnDisk(id string) bool {
 // and no repair artifacts. Only an id sessMgr has never adopted (or has
 // since forgotten — e.g. this process restarted and the id has not been
 // re-adopted onto a NEW node yet) ever reaches the disk-load fallback below.
-func (s *Server) lookup(id string) (*engine.Session, string, bool) {
-	s.mu.Lock()
-	st := s.sessions[id]
-	var running bool
-	if st != nil {
-		running = st.running
+// lookupSession resolves id for a read that needs the session object and
+// nothing else — no status, no lineage: the same three tiers lookup uses
+// (residency, SessionManager, disk), minus the manager read when residency
+// already answers. handleMessages, handleQueueGet, handleJournal, and the
+// plugin client API all discard the rest of the snapshot, and two of them
+// are polled, so paying the box-global SessionManager.mu and a discarded
+// SessionNode copy per poll is waste (a live review finding — the same
+// class already fixed on syncMessages and waitSnapshot).
+//
+// A caller that renders lineage must use lookup instead: lineageJSONFor
+// reads the manager half even for a resident session.
+func (s *Server) lookupSession(id string) (*engine.Session, bool) {
+	if sess := s.liveSessionObject(id); sess != nil {
+		return sess, true
 	}
-	s.mu.Unlock()
-	if st != nil {
-		return st.sess, statusStr(running), true
+	sess, err := s.opts.LoadSession(id)
+	if err != nil {
+		return nil, false
 	}
-	if childSess, info, ok := s.sessMgr.SessionAndInfo(id); ok {
-		status := "idle"
-		if info.Status == engine.StatusRunning {
-			status = "busy"
-		}
-		return childSess, status, true
+	return sess, true
+}
+
+func (s *Server) lookup(id string) (liveSession, bool) {
+	lv := s.resolveLive(id)
+	if lv.session() != nil {
+		return lv, true
 	}
 	if sess, err := s.opts.LoadSession(id); err == nil {
-		return sess, "idle", true
+		return lv.withLoaded(sess), true
 	}
-	return nil, "", false
+	return liveSession{}, false
 }
 
 // residentSession returns the resident *engine.Session for id, or nil if the
@@ -3391,7 +3420,24 @@ func (s *Server) teardownWorktree(sessionID string, wt *worktreeInfo) {
 
 // buildSession assembles the Session shape without holding s.mu across engine
 // calls: session fields come from the engine, seq from the journal.
-func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
+//
+// It takes the caller's whole liveSession snapshot, not a (session, status)
+// pair, so the response body and its lineage block describe ONE instant —
+// see lookup's own doc comment for the split-instant response that shape
+// replaces. A caller with no snapshot of its own builds one with
+// Server.resolveLive.
+//
+// Precondition: lv.session() is non-nil. Every caller establishes it —
+// lookup and lookupSpawned report ok only for a resolved session, and
+// handleList passes a residency entry it already read. There is
+// deliberately no nil guard: a zero *engine.Session renders a
+// plausible-looking but malformed body (blank id and model beside a
+// populated lineage block), which a live review already rejected once on
+// handleSpawnChild. A caller with no session must return an error instead
+// of calling this.
+func (s *Server) buildSession(lv liveSession) sessionJSON {
+	sess := lv.session()
+	status := lv.status()
 	id := sess.ID
 	s.mu.Lock()
 	seq := s.sessionSeqLocked(id)
@@ -3417,14 +3463,16 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 		LastCompactedAt: sess.LastCompactedAt(),
 		Plugins:         sess.Plugins(),
 		Queued:          len(sess.QueuedPrompts()),
-		Lineage:         s.lineageJSONFor(id, sess),
+		Lineage:         lineageJSONFor(lv),
 	}
 }
 
-// lineageJSONFor returns id's subagent-sessions lineage. Reads sessMgr
-// directly (its own lock, never s.mu — see Server.sessMgr's doc comment),
-// independent of whether sess itself came from s.sessions or a fresh disk
-// load: a child session's log lives in the same SessionDir a plain
+// lineageJSONFor returns lv.id's subagent-sessions lineage. It reads only
+// the caller's already-taken liveSession snapshot (see that type's own doc
+// comment) — never sessMgr again — so the lineage block always describes
+// the same node the rest of the response does. It is independent of
+// whether the session itself came from s.sessions, from SessionManager, or
+// from a fresh disk load: a child session's log lives in the same SessionDir a plain
 // LoadSession(id) already finds (Spawn's child Config inherits its
 // parent's SessionDir verbatim), so GET /session/{id} already resolves a
 // child with zero other changes — this only adds the tree metadata on
@@ -3432,7 +3480,8 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 //
 // Two sources, in order:
 //
-//  1. sessMgr.Info(id): this process currently tracks id in memory — the
+//  1. The snapshot's manager half (lv.isManaged): this process currently
+//     tracks id in memory — the
 //     full, precise lineage snapshot (live status, result/fail_reason),
 //     PLUS Depth and Children, each reconciled against sess's own durable
 //     record below rather than trusted from the live snapshot alone (see
@@ -3505,8 +3554,9 @@ func (s *Server) buildSession(sess *engine.Session, status string) sessionJSON {
 //
 // nil only when NEITHER source has anything: a genuine root (empty
 // TaskParentID) or a session predating this feature.
-func (s *Server) lineageJSONFor(id string, sess *engine.Session) *lineageJSON {
-	if info, ok := s.sessMgr.Info(id); ok {
+func lineageJSONFor(lv liveSession) *lineageJSON {
+	sess := lv.session()
+	if info := lv.info; lv.isManaged {
 		// info.Depth reported verbatim — see this function's own doc
 		// comment ("Depth:" paragraph) for why the wire must match
 		// enforcement exactly rather than re-preferring sess.TaskDepth()

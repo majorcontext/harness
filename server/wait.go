@@ -4,8 +4,6 @@ import (
 	"net/http"
 	"strconv"
 	"time"
-
-	"github.com/majorcontext/harness/engine"
 )
 
 // waiter is one in-flight GET /session/{id}/wait long-poll, registered in
@@ -193,15 +191,18 @@ func (waitTimeoutError) Error() string { return "timeout_s must be a positive in
 // so that case is unaffected here and still returns idle immediately.
 //
 // running also falls back to SessionManager's live status, but ONLY when
-// id is not resident at all (st == nil) — never merely because
-// queueDrainPending/st.running both read false. A Spawn-driven child is
+// id is not resident at all — never merely because queueDrainPending and
+// the resident running flag both read false. A Spawn-driven child is
 // never a key in s.sessions (Spawn drives its turn directly, never through
-// claimForPrompt — see resolveSessForSync's doc comment for the identical
+// claimForPrompt — see liveSession's doc comment for the identical
 // reasoning on the journaling path). Without the fallback, a mid-turn
 // child reads running=false here and until=idle returns a false "idle"
 // immediately.
 //
-// Gating on st == nil is load-bearing, not a belt-and-suspenders extra
+// liveSession.status() applies that residency gate, once, for every
+// caller: a resident session answers from its own running flag and the
+// manager half is read only for an id residency does not know at all.
+// Gating on residency is load-bearing, not a belt-and-suspenders extra
 // check — a live review finding caught a real regression from an earlier
 // revision that fell back whenever !running, resident or not.
 // freeRunSlotAndEmitIdle (handlers.go) sets st.running = false and wakes
@@ -239,22 +240,21 @@ func (waitTimeoutError) Error() string { return "timeout_s must be a positive in
 // event journal — a genuinely new cross-package notification path, not
 // this fix's residency-blindness bug class. Left as a follow-up.
 func (s *Server) waitSnapshot(id string) (string, *goalJSON) {
+	// The residency half, queueDrainPending, and goalState are read in ONE
+	// s.mu hold: they are the three inputs to one composite answer, and a
+	// second hold would let a turn start or a goal arm between them. The
+	// manager half is completed after the unlock — see liveSession's own
+	// doc comment on why the two halves cannot share one hold.
 	s.mu.Lock()
-	running := s.queueDrainPending[id]
-	st := s.sessions[id]
-	if st != nil {
-		running = running || st.running
-	}
+	lv := s.liveResidentLocked(id)
+	drainPending := s.queueDrainPending[id]
 	goal := goalJSONFrom(s.goalState[id])
 	s.mu.Unlock()
-	// The sessMgr fallback is for a NON-resident id only (st == nil) — see
-	// this function's own doc comment for why gating on residency, not
-	// merely !running, is load-bearing.
-	if st == nil {
-		if info, ok := s.sessMgr.Info(id); ok && info.Status == engine.StatusRunning {
-			running = true
-		}
-	}
+	// withManagerIfUnresolved, not withManager: a resident session answers
+	// from its own running flag, so the manager read would be a discarded
+	// global-lock acquisition on every poll (a live review finding).
+	lv = lv.withManagerIfUnresolved(s.sessMgr)
+	running := drainPending || lv.status() == "busy"
 	return compositeState(running, goal != nil && goal.Active, forcesIdlePause(goal)), goal
 }
 

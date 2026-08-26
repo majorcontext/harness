@@ -122,16 +122,17 @@ func (s *Server) handleSpawnChild(w http.ResponseWriter, parentID, agent, prompt
 		writeErr(w, http.StatusInternalServerError, "spawned child not found in session tree")
 		return
 	}
-	// "busy", not "idle": Spawn always hands the child work immediately
-	// (see its own doc comment — "a spawned child is handed work
-	// immediately, so it is never idle before running", reserving the
-	// concurrency slot and setting StatusRunning synchronously before
-	// returning). An earlier revision hard-coded "idle" here, producing
-	// a self-inconsistent 201 body: the top-level status/state claimed
-	// idle while the SAME response's own lineage block (sourced from the
-	// live SessionManager node) correctly reported "running" beside it.
-	// A live review caught this.
-	writeJSON(w, http.StatusCreated, s.buildSession(spawned, "busy"))
+	// Status comes from the child's own liveSession snapshot, so the
+	// top-level status and the lineage block in this one 201 body can
+	// never disagree — an earlier revision hard-coded "idle" beside a
+	// lineage block that (correctly) read "running", and a live review
+	// caught it. The snapshot reads "busy" for the ordinary case anyway:
+	// Spawn hands the child work immediately (see its own doc comment —
+	// "a spawned child is handed work immediately, so it is never idle
+	// before running"), setting StatusRunning synchronously before it
+	// returns. A child that already settled by the time this line runs
+	// now reports its real, settled status instead of a stale "busy".
+	writeJSON(w, http.StatusCreated, s.buildSession(spawned))
 }
 
 // reportTaskEvent forwards one handleSpawnChild outcome to
@@ -164,12 +165,15 @@ func (s *Server) reportTaskEvent(parentID, childID string, spawnErr error) {
 	s.opts.OnTaskEvent(event, parentID, childID)
 }
 
-// lookupSpawned returns the just-Spawned child by id. Spawn only just
-// registered it under s.sessMgr, so ok is false only on an internal
-// bookkeeping bug, never a caller error — see handleSpawnChild's own
-// handling of that case.
-func lookupSpawned(s *Server, id string) (*engine.Session, bool) {
-	return s.sessMgr.Session(id)
+// lookupSpawned returns the just-Spawned child's liveSession snapshot by
+// id. Spawn only just registered it under s.sessMgr, so ok is false only
+// on an internal bookkeeping bug, never a caller error — see
+// handleSpawnChild's own handling of that case. It resolves through
+// Server.resolveLive like every other read path, so the child's session,
+// its status, and its lineage all come from one snapshot.
+func lookupSpawned(s *Server, id string) (liveSession, bool) {
+	lv := s.resolveLive(id)
+	return lv, lv.session() != nil
 }
 
 // runOrQueueText claims id's run slot exactly like an ordinary

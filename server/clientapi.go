@@ -26,7 +26,7 @@ func (s *Server) ClientAPI() plugin.ClientAPI {
 
 // SessionMessages implements plugin.ClientAPI.
 func (c *clientAPI) SessionMessages(_ context.Context, req *plugin.SessionMessagesRequest) (*plugin.SessionMessagesResponse, error) {
-	sess, _, ok := c.srv.lookup(req.SessionID)
+	sess, ok := c.srv.lookupSession(req.SessionID)
 	if !ok {
 		return nil, fmt.Errorf("client API: no such session %q", req.SessionID)
 	}
