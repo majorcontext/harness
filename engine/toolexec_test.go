@@ -240,53 +240,49 @@ func TestBatchSequentialModeNeverOverlaps(t *testing.T) {
 	}
 }
 
-// TestBatchConcurrencyCapIsEnforced proves the cap both BOUNDS and is
-// REACHED. Nine calls run with a cap of three: the barrier releases only
-// once three calls are inside at the same time, so a cap that never let
-// three run together would deadlock the bubble. The observed maximum must
-// then be exactly three — an executor that ignored the cap would admit all
-// nine and record nine.
+// TestBatchConcurrencyCapIsEnforced proves the cap both BOUNDS the batch
+// and is REACHED. Nine calls run with a cap of three, and every call
+// blocks inside the tool. synctest.Wait then returns only once every
+// goroutine in the bubble is durably blocked, so the number of calls
+// inside the tool at that moment is the true in-flight maximum: exactly
+// three. An executor that ignored the cap would have all nine inside.
+//
+// Counting a running maximum instead would NOT prove this. A barrier that
+// releases each wave lets an unbounded pool look bounded, because the
+// early calls can exit before the later ones enter.
 func TestBatchConcurrencyCapIsEnforced(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const n, capacity = 9, 3
 
-		var mu sync.Mutex
-		inFlight, maxInFlight, arrived := 0, 0, 0
-		gate := make(chan struct{})
+		entered := make(chan string, n)
+		releaseAll := make(chan struct{})
 
 		s := NewSession(Config{ToolConcurrency: capacity})
-		s.tools["capped"] = batchTool("capped", func(context.Context, string) {
-			mu.Lock()
-			inFlight++
-			if inFlight > maxInFlight {
-				maxInFlight = inFlight
-			}
-			arrived++
-			mine := gate
-			if arrived%capacity == 0 {
-				close(gate)
-				gate = make(chan struct{})
-			}
-			mu.Unlock()
-
-			<-mine
-
-			mu.Lock()
-			inFlight--
-			mu.Unlock()
+		s.tools["capped"] = batchTool("capped", func(_ context.Context, call string) {
+			entered <- call
+			<-releaseAll
 		})
 
 		calls := make([]*message.ToolCall, n)
 		for i := range calls {
 			calls[i] = batchCall("capped", fmt.Sprintf("c%d", i))
 		}
-		results := s.runToolCalls(context.Background(), asstWith(calls...))
+		var results message.Parts
+		go func() {
+			results = s.runToolCalls(context.Background(), asstWith(calls...))
+		}()
+
+		synctest.Wait()
+		if got := len(entered); got != capacity {
+			t.Fatalf("%d calls were inside the tool at once, want exactly %d (the cap)", got, capacity)
+		}
+
+		close(releaseAll)
+		synctest.Wait()
 
 		wantOrder(t, results, calls...)
-		mu.Lock()
-		defer mu.Unlock()
-		if maxInFlight != capacity {
-			t.Fatalf("max calls in flight = %d, want exactly %d", maxInFlight, capacity)
+		if got := len(entered); got != n {
+			t.Errorf("%d calls ran in total, want %d", got, n)
 		}
 	})
 }
