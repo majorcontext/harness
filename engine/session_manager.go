@@ -8,8 +8,11 @@ import (
 	"sync"
 	"time"
 
+	"bufio"
+	"encoding/json"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
+	"os"
 )
 
 // SessionStatus is a session's lifecycle state as tracked by a
@@ -3110,13 +3113,52 @@ func durableAncestorChainHas(cfg Config, startParentID, callerID string, maxHops
 		if parentID == callerID {
 			return true
 		}
-		p, err := LoadSession(cfg, parentID)
+		// Header-only read, not LoadSession: this walk needs exactly one
+		// field per hop (the next TaskParentID), and LoadSession replays
+		// the WHOLE log — O(chain depth) full-transcript parses in the
+		// unlocked window for deep chains (a review finding). The header
+		// record is the first line of every log (ensureLog writes it
+		// first, in the same atomic buffer as the model record), so one
+		// bounded line read per hop suffices.
+		next, err := loadSessionTaskParent(cfg, parentID)
 		if err != nil {
 			return false
 		}
-		parentID = p.TaskParentID()
+		parentID = next
 	}
 	return false
+}
+
+// loadSessionTaskParent reads a session log's durable TaskParentID from its
+// header record alone — the first line of the file — without replaying the
+// log. A file whose first record is not a recSession header (impossible for
+// a log this engine wrote, ensureLog's single-write ordering) reports an
+// error rather than guessing.
+func loadSessionTaskParent(cfg Config, id string) (string, error) {
+	if !ValidSessionID(id) {
+		return "", fmt.Errorf("%w: %q", ErrInvalidSessionID, id)
+	}
+	f, err := os.Open(sessionPath(cfg.SessionDir, id))
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	// One bounded line: headers are small (a recSession record), but a
+	// generous cap keeps a pathological first line from slurping a huge
+	// log into memory.
+	r := bufio.NewReaderSize(f, 64*1024)
+	line, err := r.ReadString('\n')
+	if err != nil && line == "" {
+		return "", err
+	}
+	var rec record
+	if err := json.Unmarshal([]byte(line), &rec); err != nil {
+		return "", fmt.Errorf("session %s: unparseable header line: %w", id, err)
+	}
+	if rec.Type != recSession {
+		return "", fmt.Errorf("session %s: first record is %q, want %q", id, rec.Type, recSession)
+	}
+	return rec.TaskParentID, nil
 }
 
 // resolveOrReviveDescendantLocked resolves targetID against m's live tree,

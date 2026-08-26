@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/provider"
+	"os"
 )
 
 // settleAndReapChild spawns a child of parentID that immediately completes
@@ -388,4 +389,31 @@ func TestSendToDescendantRevivalSingleWinnerUnderConcurrentAdopt(t *testing.T) {
 	}
 
 	waitForStatus(t, mgr, childID, StatusDone, time.Second)
+}
+
+// TestLoadSessionTaskParentReadsHeaderOnly proves the ancestry walk's
+// header read returns the durable TaskParentID from the first line alone,
+// and fails loudly on a file whose first record is not a header.
+func TestLoadSessionTaskParentReadsHeaderOnly(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{SessionDir: dir}
+	s := NewSession(Config{SessionDir: dir, TaskParentID: "ses_parent00000000000000000"})
+	if err := s.ensureLog(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadSessionTaskParent(cfg, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "ses_parent00000000000000000" {
+		t.Fatalf("loadSessionTaskParent = %q", got)
+	}
+	// A non-header first line errors instead of guessing.
+	bad := s.ID[:len(s.ID)-1] + "x"
+	if err := os.WriteFile(sessionPath(dir, bad), []byte("{\"type\":\"model\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadSessionTaskParent(cfg, bad); err == nil {
+		t.Fatal("want error for non-header first record")
+	}
 }
