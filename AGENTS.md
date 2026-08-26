@@ -334,6 +334,48 @@ loop also emits `goal.*` engine events so the server journals them. Config
 `goal_evaluator_model` supplies the evaluator for `harness run -goal` and
 `POST /session/{id}/goal`.
 
+The evaluator's own `CONVERSATION TRANSCRIPT` field is BOUNDED, independent
+of whatever context window the MAIN session model has and independent of
+whether automatic compaction (below) has fired at all.
+`renderConversationBounded` (`engine/goal.go`, called from `runEvaluator`)
+replaced the old unconditional `renderConversation(s.History())`: box
+bx-01m0x8996, a real long session, died with "engine: goal evaluator failed
+at 5 consecutive turn boundaries: context exhausted: prompt 245332 tokens >
+limit ..." because the evaluator's prompt grows with the WHOLE session
+transcript forever — unlike the main session, which automatic compaction
+protects, the evaluator had no bound of its own at all. The budget comes
+from `goalEvaluatorTranscriptBudgetBytes`, which resolves the EVALUATOR
+model's own context window via `modelContextWindowLookup`
+(`modelmeta.ContextWindow`) — the same table automatic compaction's
+`resolveContextWindow` (`engine/context_window.go`) reads, called
+DIRECTLY rather than through `resolveContextWindow` itself: that
+function's `minAutoContextWindowTokens` floor answers "should automatic
+compaction ARM for this window," so a real, small, KNOWN window (gpt-4's
+documented 8,192 tokens) reports identically to a genuinely UNRECOGNIZED
+model (0, disabled) — conflating them would give a real small-window
+evaluator a budget roughly double its actual limit, the exact overflow
+class this fix closes. `goalEvaluatorTranscriptBudgetBytes` trusts ANY
+positive, known window from the table, however small, and falls back to
+`goalEvaluatorFallbackContextWindowTokens` (mirroring
+`minAutoContextWindowTokens`'s value) only when the model has NO entry at
+all. It also reserves headroom for the system prompt and MaxTokens' output
+budget, and applies a conservative fraction (`goalEvaluatorContextBudgetFraction`,
+0.5) on top of the same crude ~4-bytes-per-token estimate
+(`bytesPerTokenEstimate`) automatic compaction's own resilience fallback
+uses — reused, not reinvented.
+`renderConversationBounded` walks history from the NEWEST message backward,
+accumulating rendered blocks until the budget would be exceeded, and
+prefers "summary + tail" for free rather than summarizing a second time:
+Compact (`engine/compact.go`) already splices its own summary message in
+place of whatever range it folded, tagged with the `compactionSummaryIDTag`
+prefix, so the backward walk simply STOPS the instant it includes such a
+message — everything before it is already captured there. The newest
+message is always kept regardless of budget (an empty transcript can never
+be assessed); a truncated transcript is prefixed with
+`goalEvaluatorTruncationNotice` so the evaluator, and an operator reading a
+later `goal.eval` record, never mistakes a bounded view for the whole
+session.
+
 A worker-turn error (`s.Prompt` failing) is retried by `promptTurnWithRetry`
 on one of FOUR independent budgets, chosen by classification via
 `provider.AsRetryable` — never by matching error text.

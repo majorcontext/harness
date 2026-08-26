@@ -2429,7 +2429,11 @@ func (s *Session) runEvaluator(ctx context.Context, condition string, evaluator 
 	if err != nil {
 		return "", err
 	}
-	content := "GOAL CONDITION:\n" + condition + "\n\nCONVERSATION TRANSCRIPT:\n" + renderConversation(s.History())
+	transcript, truncated := renderConversationBounded(s.History(), goalEvaluatorTranscriptBudgetBytes(evaluator))
+	if truncated {
+		transcript = goalEvaluatorTruncationNotice + transcript
+	}
+	content := "GOAL CONDITION:\n" + condition + "\n\nCONVERSATION TRANSCRIPT:\n" + transcript
 	req := &provider.Request{
 		Model:  evaluator,
 		System: []string{systemPrompt},
@@ -2542,19 +2546,173 @@ func goalGuidance(condition, reason string) string {
 }
 
 // renderConversation renders history compactly for the evaluator: each message
-// role-labeled, each part rendered as text and capped at goalPartCap.
+// role-labeled, each part rendered as text and capped at goalPartCap. This
+// has no length bound of its own — see renderConversationBounded, which
+// runEvaluator actually calls, for the evaluator-model-sized budget.
 func renderConversation(history []message.Message) string {
 	var b strings.Builder
 	for _, m := range history {
-		b.WriteString(strings.ToUpper(string(m.Role)))
-		b.WriteString(":\n")
-		for _, p := range m.Parts {
-			b.WriteString(truncateForGoal(renderPart(p)))
-			b.WriteByte('\n')
-		}
-		b.WriteByte('\n')
+		b.WriteString(renderMessageBlock(m))
 	}
 	return strings.TrimSpace(b.String())
+}
+
+// renderMessageBlock renders one message exactly as renderConversation's
+// loop body did before this function was split out — role-labeled, each
+// part capped at goalPartCap — so both renderConversation and
+// renderConversationBounded share one rendering rule instead of drifting.
+func renderMessageBlock(m message.Message) string {
+	var b strings.Builder
+	b.WriteString(strings.ToUpper(string(m.Role)))
+	b.WriteString(":\n")
+	for _, p := range m.Parts {
+		b.WriteString(truncateForGoal(renderPart(p)))
+		b.WriteByte('\n')
+	}
+	b.WriteByte('\n')
+	return b.String()
+}
+
+// goalEvaluatorTruncationNotice prefixes a bounded transcript
+// (renderConversationBounded) whenever it actually dropped earlier
+// messages, so the evaluator — and an operator reading a goal.eval record
+// later — never mistakes a truncated transcript for the whole session.
+const goalEvaluatorTruncationNotice = "[earlier conversation omitted to fit the evaluator's context budget]\n\n"
+
+// renderConversationBounded is renderConversation's budget-aware sibling:
+// the fix for the live incident on box bx-01m0x8996, whose evaluator died
+// with "context exhausted: prompt 245332 tokens > limit ..." because
+// renderConversation(s.History()) has no bound at all — it grows with the
+// WHOLE session transcript forever, while the main session is protected by
+// automatic compaction (engine/compact.go) and the evaluator never was.
+//
+// It walks history from the NEWEST message backward, accumulating rendered
+// blocks (renderMessageBlock — the exact same per-part goalPartCap rendering
+// renderConversation uses, so nothing here changes how one message renders,
+// only how many are kept) until the next block would push the running total
+// past budgetBytes, then stops and reverses the kept slice back into
+// chronological order.
+//
+// "Prefer summary + tail" falls out of this walk for free rather than
+// needing a second summarization path of its own: Compact (engine/
+// compact.go) splices its summary message directly into s.history in place
+// of the range it folded, tagged with the compactionSummaryIDTag prefix
+// (isCompactionSummaryID). The backward walk here stops the INSTANT it
+// includes such a message — even with budget still unspent — because that
+// message already IS the compacted record of everything before it walking
+// further back would just render already-summarized content a second time.
+// So whenever automatic compaction has run at all, the evaluator naturally
+// gets exactly "the latest compaction summary plus every raw message after
+// it, bounded to what fits" with no new summarization call, no new stored
+// field, and no coupling to compaction's internals beyond the one ID-prefix
+// helper it already exports to this package.
+//
+// The newest message is always kept, however large, rather than dropped
+// outright: an evaluator call with an empty transcript could never assess
+// anything. A single oversized message still gets its own per-part cap from
+// renderMessageBlock/truncateForGoal, so this is bounded too, just not by
+// budgetBytes.
+func renderConversationBounded(history []message.Message, budgetBytes int) (transcript string, truncated bool) {
+	if len(history) == 0 {
+		return "", false
+	}
+	kept := make([]message.Message, 0, len(history))
+	used := 0
+	for i := len(history) - 1; i >= 0; i-- {
+		block := renderMessageBlock(history[i])
+		if len(kept) > 0 && budgetBytes > 0 && used+len(block) > budgetBytes {
+			break
+		}
+		kept = append(kept, history[i])
+		used += len(block)
+		if isCompactionSummaryID(history[i].ID) {
+			break
+		}
+	}
+	for l, r := 0, len(kept)-1; l < r; l, r = l+1, r-1 {
+		kept[l], kept[r] = kept[r], kept[l]
+	}
+	return renderConversation(kept), len(kept) < len(history)
+}
+
+// goalEvaluatorReserveTokens sets aside room, in the evaluator model's OWN
+// token budget, for everything in the request besides the transcript: the
+// system prompt (goalEvaluatorSystem/goalEvaluatorStrictSystem, both well
+// under 700 bytes), the "GOAL CONDITION" preamble and condition text, and
+// the 256-token MaxTokens output reply. Deliberately generous relative to
+// those actual sizes — goalEvaluatorContextBudgetFraction below is what
+// does the real safety work; this constant only keeps a degenerate tiny
+// window (goalEvaluatorFallbackContextWindowTokens) from computing a
+// negative or implausibly small transcript budget.
+const goalEvaluatorReserveTokens = 2048
+
+// goalEvaluatorContextBudgetFraction bounds the evaluator transcript to this
+// fraction of the evaluator model's context window, after
+// goalEvaluatorReserveTokens is set aside — the same "stay well under the
+// hard limit, don't cut it exactly at the edge" shape
+// defaultCompactionThreshold (engine/compact.go) uses for the main session.
+// A fraction well under 1.0 matters more here than it does there:
+// bytesPerTokenEstimate's 4-bytes/token conversion (reused from compact.go,
+// not reinvented — see goalEvaluatorTranscriptBudgetBytes) is a crude
+// heuristic, not the provider's real tokenizer, and this budget has no
+// second line of defense the way compaction's threshold-then-hard-overflow
+// does: an evaluator call that still overflows has nothing left to retry
+// into.
+const goalEvaluatorContextBudgetFraction = 0.5
+
+// goalEvaluatorFallbackContextWindowTokens is the transcript budget's floor
+// for an evaluator model modelmeta has NO ENTRY for at all (an unrecognized
+// ref, a custom gateway alias) — mirrors minAutoContextWindowTokens
+// (engine/context_window.go), the exact same floor automatic compaction
+// refuses to ARM below. A genuinely unrecognized evaluator model still gets
+// a real, bounded budget from this floor instead of falling back to the
+// fully unbounded renderConversation(s.History()) that produced the "prompt
+// 245332 tokens > limit" evaluator failure on bx-01m0x8996 in the first
+// place.
+//
+// This floor must NOT be reused as a stand-in for "the model's real window
+// is small" — see goalEvaluatorTranscriptBudgetBytes's doc comment for why
+// resolveContextWindow (which folds that case into this same floor, for
+// automatic-compaction-ARMING purposes) is deliberately NOT what this
+// function calls.
+const goalEvaluatorFallbackContextWindowTokens = minAutoContextWindowTokens
+
+// goalEvaluatorTranscriptBudgetBytes returns the byte budget
+// renderConversationBounded must fit the rendered CONVERSATION TRANSCRIPT
+// field inside, derived from the EVALUATOR model's own context window —
+// never the main session model's, which can be (and on bx-01m0x8996, was —
+// a 1,000,000-token model against an evaluator whose own limit the incident
+// error names) far larger than the evaluator's own.
+//
+// This calls modelContextWindowLookup (modelmeta.ContextWindow) DIRECTLY —
+// deliberately NOT resolveContextWindow, despite that function existing
+// for exactly this "look up a model's context window" job and this
+// function's own earlier revision having called it. A review finding
+// caught why that was wrong: resolveContextWindow's minAutoContextWindowTokens
+// floor answers "should automatic compaction ARM for this window" — a
+// window below the floor is treated as bogus/untrustworthy metadata and the
+// function reports (0, disabled), identically to a model with NO metadata
+// at all. Calling it here silently conflated two different evaluator
+// models: a genuinely UNRECOGNIZED one (no table entry — this really
+// should fall back to a floor) and a REAL, SMALL, KNOWN one (gpt-4's
+// documented 8_192-token window is the table's own example of a legitimate
+// entry under the 16k floor) — both funneled into the SAME
+// goalEvaluatorFallbackContextWindowTokens (16k) fallback, so a real
+// 8_192-token evaluator got a budget roughly TWICE its actual window: the
+// exact overflow class this whole fix exists to close. Calling
+// modelContextWindowLookup directly and trusting ANY positive, KNOWN
+// window — however small — fixes that: the floor here applies only to a
+// true "no entry at all" miss, never to "the real entry is small."
+func goalEvaluatorTranscriptBudgetBytes(evaluator message.ModelRef) int {
+	windowTokens, ok := modelContextWindowLookup(evaluator)
+	if !ok || windowTokens <= 0 {
+		windowTokens = goalEvaluatorFallbackContextWindowTokens
+	}
+	budgetTokens := int(float64(windowTokens)*goalEvaluatorContextBudgetFraction) - goalEvaluatorReserveTokens
+	if budgetTokens < goalEvaluatorReserveTokens {
+		budgetTokens = goalEvaluatorReserveTokens
+	}
+	return budgetTokens * bytesPerTokenEstimate
 }
 
 func renderPart(p message.Part) string {
