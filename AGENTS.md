@@ -237,6 +237,59 @@ issue #129. Until it lands, a model with no vision support receives the
 image Blob exactly as any vision-capable model does; how it handles that
 block is between the model and its provider.
 
+### Bounding concurrent-read memory
+
+`read_file`'s text path is deliberately unbounded (`readPathContent`,
+`engine/filetools.go`) — a coding agent legitimately reads whole files, and
+no byte cap is right for every file. Only the IMAGE path is capped
+(`readFileMaxImageBytes`), and `bash` caps its own output
+(`defaultBashOutputCap`).
+
+That was safe while tool calls ran strictly one at a time: peak heap held
+at most ONE file's raw bytes plus the line-numbered copy built from them.
+The concurrent executor (`engine/toolexec.go`) removed that implicit bound
+without replacing it, so a batch of N large reads holds N working sets at
+once. Measured with eight 16MB files, retention swallowing the finals so
+only the transient term shows: **~325MB peak parallel against ~73MB
+sequential — ~4.3x, bounded only by `ToolConcurrency`**, with the model
+choosing both the batch width and the file sizes.
+
+`toolReadBudget` (`engine/toolmem.go`) is the replacement bound. Each
+`read_file` reserves its file's Stat size against a per-session byte
+budget before touching the file, and holds it until the call returns —
+spanning the line-numbering too, since for a large file `strings.Split`
+is the single biggest allocation and releasing after the read would leave
+the expansion outside the bound. With the budget set to one file's size
+the same batch peaks at the SEQUENTIAL figure: ~73MB, **1.0x**. It bounds the **product** of read size and
+concurrency, which is the actual hazard: a count limit still admits two
+500MB reads, and a size limit breaks the legitimate large read. Ordinary
+work never contends — a full-width batch of kilobyte reads reserves a
+rounding error against the default and stays fully parallel
+(`TestReadBudgetKeepsSmallReadsFullyParallel`).
+
+It bounds the TRANSIENT working set, not the ACCUMULATED results:
+`runToolBatch` holds every call's output until the join in BOTH execution
+modes, so N results occupy the same memory however they were produced.
+That term is not a concurrency regression, and retention already collapses
+oversized results where configured.
+
+Three properties keep it safe. A worker takes its pool slot first and then
+reserves, which is head-of-line blocking but cannot deadlock: only a slot
+holder ever holds budget, so someone is always making progress, and a
+reservation is never held while acquiring another. A read larger than the
+whole budget is CLAMPED to it, not refused, so it waits for the budget to
+drain and runs alone — a batch always progresses. Waiters are served
+strictly FIFO, because a retry-when-there-is-room loop lets a stream of
+small reads starve one large read forever.
+
+`Config.ToolReadBudgetBytes`: 0 (the zero value) takes
+`defaultToolReadBudgetBytes` (64 MiB), a negative value DISABLES the bound,
+a positive value sets it. `HARNESS_TOOL_READ_BUDGET_MB` is the operator
+seam (megabytes; negative disables), resolved in `cmd/harness` like
+`HARNESS_TOOL_CONCURRENCY`. The budget is per SESSION: a process running
+many sessions bounds each, not their sum — a process-wide budget is the
+natural follow-up if that proves insufficient.
+
 ### write_file read-before-overwrite guard
 
 `write_file` (`engine/filetools.go`) refuses to overwrite an EXISTING file

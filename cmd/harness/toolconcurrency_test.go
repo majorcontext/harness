@@ -35,3 +35,31 @@ func TestToolConcurrencyKnobs(t *testing.T) {
 		})
 	}
 }
+
+// TestToolReadBudgetKnob pins the HARNESS_TOOL_READ_BUDGET_MB seam. The
+// engine's own default is safe, so the important cases are "unset leaves
+// the engine default" and "an explicit negative disables the bound".
+func TestToolReadBudgetKnob(t *testing.T) {
+	const mib = 1 << 20
+	for _, tc := range []struct {
+		name string
+		env  string
+		want int64
+	}{
+		{"unset leaves the engine default", "", 0},
+		{"a positive value is megabytes", "128", 128 * mib},
+		{"one megabyte", "1", mib},
+		{"zero leaves the engine default", "0", 0},
+		{"a negative value disables the bound", "-1", -1},
+		{"any negative value normalizes to -1", "-4096", -1},
+		{"a malformed value falls back to the default", "lots", 0},
+		{"an absurd value falls back to the default", "99999999999999999", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HARNESS_TOOL_READ_BUDGET_MB", tc.env)
+			if got := toolReadBudgetBytes(); got != tc.want {
+				t.Errorf("toolReadBudgetBytes() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
