@@ -234,7 +234,7 @@ func TestAdvHardLinkAliasIsNotCovered(t *testing.T) {
 	ka := filePathKey(s, json.RawMessage(fmt.Sprintf(`{"path":%q}`, a)))
 	kb := filePathKey(s, json.RawMessage(fmt.Sprintf(`{"path":%q}`, b)))
 	if ka == kb {
-		t.Fatalf("hard-link aliases now share key %q — the documented residual is CLOSED; update toolexec.go's docs", ka)
+		t.Fatalf("hard-link aliases now share key %q — the documented residual is CLOSED; update canonicalFileKeyPath's docs", ka)
 	}
 	t.Logf("documented residual confirmed: %q != %q (same inode, two keys, calls run concurrently)", ka, kb)
 }
@@ -419,9 +419,10 @@ func TestAdvAggregateBatchBytesAreIdenticalParallelVsSequential(t *testing.T) {
 // ---- Finding 8: cancellation ----
 
 // TestAdvCancelMidBatchLeaksNoGoroutines cancels a turn while a wide batch
-// is in flight and checks the three things that must hold: one result per
-// call, a balanced tool.start/tool.end event stream, and no goroutine left
-// behind once runToolCalls returns.
+// is in flight and checks the four things that must hold: no call queued
+// behind the full pool passes the post-abort admission gate, every refused
+// call gets a canceled result, started calls balance tool.start/tool.end,
+// and no goroutine remains once runToolCalls returns.
 func TestAdvCancelMidBatchLeaksNoGoroutines(t *testing.T) {
 	const n = 20
 
@@ -477,10 +478,29 @@ func TestAdvCancelMidBatchLeaksNoGoroutines(t *testing.T) {
 		}
 	}
 	nStarted := len(starts)
+	started := make(map[string]bool, nStarted)
+	for id := range starts {
+		started[id] = true
+	}
 	mu.Unlock()
 	t.Logf("cancelled batch of %d with the pool full: %d calls started (the rest were refused admission), all results present, events balanced", n, nStarted)
-	if nStarted < 8 {
-		t.Errorf("only %d calls started, want at least the cap (8) — the cancel landed before the batch was actually wide", nStarted)
+	if nStarted != 8 {
+		t.Errorf("%d calls started, want exactly the cap (8) — no call queued behind the full pool may pass the post-abort admission gate", nStarted)
+	}
+	canceled := 0
+	for i, p := range results {
+		tr := p.(*message.ToolResult)
+		if started[calls[i].CallID] {
+			continue
+		}
+		canceled++
+		if !tr.IsError || partsText(tr.Content) != toolCallCanceledText {
+			t.Errorf("unstarted call %s result = error:%v %q, want the synthetic canceled result %q",
+				calls[i].CallID, tr.IsError, partsText(tr.Content), toolCallCanceledText)
+		}
+	}
+	if canceled != n-8 {
+		t.Errorf("%d calls carried canceled results, want %d", canceled, n-8)
 	}
 
 	// Goroutines unwind asynchronously; give them a bounded chance to.
