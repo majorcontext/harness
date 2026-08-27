@@ -1115,3 +1115,88 @@ func TestTailPageHandlesAnUnusualFieldOrder(t *testing.T) {
 		t.Errorf("total = %d, want 2", page.Total)
 	}
 }
+
+// TestTailPageMatchesTheFoldOnOddFinalRecords: the final line is the one a
+// crash can leave torn, and the walk must judge it by the SAME rule the
+// fold that numbered the page used. Three shapes make that concrete: a
+// torn line whose prefix still parses a type, a line that is valid JSON but
+// fails a typed decode, and a message record with no body — the fold drops
+// all three and counts none of them, so the walk must not count them
+// either. Counting one shifts every seq in the page.
+func TestTailPageMatchesTheFoldOnOddFinalRecords(t *testing.T) {
+	for name, tail := range map[string]string{
+		"torn line with a parseable type": `{"type":"message","message":{"id":"msg_torn`,
+		"valid JSON, wrong type shape":    `{"type":123,"message":{"id":"msg_x"}}`,
+		"message record with no body":     `{"type":"message"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			sess := pagedSession(t, dir, 2) // four durable messages
+			path := filepath.Join(dir, sess.ID+".jsonl")
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.WriteString(tail); err != nil {
+				t.Fatal(err)
+			}
+			f.Close()
+
+			// The fold's own answer is the oracle: whatever it counts, the
+			// page must report.
+			ix, err := ReadSessionIndex(dir, sess.ID)
+			if err != nil {
+				t.Fatalf("ReadSessionIndex: %v", err)
+			}
+			if ix.DurableMessages != 4 {
+				t.Fatalf("the fold counted %d durable messages, want 4", ix.DurableMessages)
+			}
+			page, err := ReadMessagePage(dir, sess.ID, 0, 10)
+			if err != nil {
+				t.Fatalf("ReadMessagePage: %v", err)
+			}
+			if page.Total != 4 || len(page.Messages) != 4 {
+				t.Errorf("page = total %d with %d messages, want 4 and 4", page.Total, len(page.Messages))
+			}
+			if !sameIDs(idsOf(page.Messages), wholeSequence(t, dir, sess.ID)) {
+				t.Errorf("page ids = %v, want the durable sequence %v", idsOf(page.Messages), wholeSequence(t, dir, sess.ID))
+			}
+		})
+	}
+}
+
+// TestScanLogBackwardWhitespaceLongerThanThePrefix: a line whose leading
+// whitespace fills the prefix window is not a blank line. The forward
+// scanner trims the whole line before deciding, so this one reads it before
+// skipping it.
+func TestScanLogBackwardWhitespaceLongerThanThePrefix(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "log")
+	padded := strings.Repeat(" ", logLinePeekBytes+64) + `{"type":"model"}`
+	if err := os.WriteFile(path, []byte("first\n"+padded+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	if err := scanLogBackward(f, fi.Size(), fi.Size(), func(line logLine, _ bool) (bool, error) {
+		whole, err := line.All()
+		if err != nil {
+			return false, err
+		}
+		got = append(got, string(bytes.TrimSpace(whole)))
+		return true, nil
+	}); err != nil {
+		t.Fatalf("scanLogBackward: %v", err)
+	}
+	if len(got) != 2 || got[0] != `{"type":"model"}` || got[1] != "first" {
+		t.Errorf("lines = %v, want the padded record and then the first line", got)
+	}
+}
