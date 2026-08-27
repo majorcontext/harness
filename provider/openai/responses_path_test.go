@@ -56,9 +56,9 @@ func TestResponsesPathDefault(t *testing.T) {
 // one model family at a vendor endpoint with its own path must be able to
 // say so without the adapter appending its own suffix.
 func TestResponsesPathCustom(t *testing.T) {
-	c := &Client{ResponsesPath: "/backend-api/codex/responses"}
-	if got := recordPath(t, c); got != "/backend-api/codex/responses" {
-		t.Errorf("path = %q, want %q", got, "/backend-api/codex/responses")
+	c := &Client{ResponsesPath: "/alt/responses"}
+	if got := recordPath(t, c); got != "/alt/responses" {
+		t.Errorf("path = %q, want %q", got, "/alt/responses")
 	}
 }
 
@@ -81,9 +81,9 @@ func TestClientFamilyDefaultsToPackageFamily(t *testing.T) {
 // canonical cross-provider drop rule — rather than under a shared package
 // constant that would replay one endpoint's items to the other.
 func TestClientFamilyOverrideTagsReasoning(t *testing.T) {
-	c := &Client{Family: "codex", APIKey: "test-key"}
-	if got := c.Name(); got != "codex" {
-		t.Errorf("Name() = %q, want %q", got, "codex")
+	c := &Client{Family: "secondary", APIKey: "test-key"}
+	if got := c.Name(); got != "secondary" {
+		t.Errorf("Name() = %q, want %q", got, "secondary")
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -94,7 +94,7 @@ func TestClientFamilyOverrideTagsReasoning(t *testing.T) {
 	c.BaseURL = srv.URL
 
 	s, err := c.Stream(context.Background(), &provider.Request{
-		Model:    message.ModelRef{Provider: "codex", Model: "gpt-5"},
+		Model:    message.ModelRef{Provider: "secondary", Model: "gpt-5"},
 		Messages: []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
 	})
 	if err != nil {
@@ -120,8 +120,8 @@ func TestClientFamilyOverrideTagsReasoning(t *testing.T) {
 	if reasoning == nil {
 		t.Fatal("assembled message has no Reasoning part")
 	}
-	if _, ok := reasoning.ProviderData.Get("codex"); !ok {
-		t.Errorf("ProviderData keys = %v, want the client's own family %q", keysOf(reasoning.ProviderData), "codex")
+	if _, ok := reasoning.ProviderData.Get("secondary"); !ok {
+		t.Errorf("ProviderData keys = %v, want the client's own family %q", keysOf(reasoning.ProviderData), "secondary")
 	}
 	if _, ok := reasoning.ProviderData.Get(Family); ok {
 		t.Errorf("ProviderData is tagged %q; a keyed client must not tag under the package constant", Family)
@@ -143,9 +143,9 @@ func keysOf(pd message.ProviderData) []string {
 // DIFFERENT HOST, not merely a wrong path, which is a far worse failure
 // than the typo deserves. The adapter absorbs it.
 func TestResponsesPathNoLeadingSlash(t *testing.T) {
-	c := &Client{ResponsesPath: "backend-api/codex/responses"}
-	if got := recordPath(t, c); got != "/backend-api/codex/responses" {
-		t.Errorf("path = %q, want %q", got, "/backend-api/codex/responses")
+	c := &Client{ResponsesPath: "alt/responses"}
+	if got := recordPath(t, c); got != "/alt/responses" {
+		t.Errorf("path = %q, want %q", got, "/alt/responses")
 	}
 }
 
@@ -164,7 +164,7 @@ func TestResponsesURLNormalization(t *testing.T) {
 		{name: "no leading slash", base: "https://api.example.test", path: "backend/responses", want: "https://api.example.test/backend/responses"},
 		{name: "trailing slash on base", base: "https://api.example.test/", path: "/backend/responses", want: "https://api.example.test/backend/responses"},
 		{name: "both typos at once", base: "https://api.example.test/", path: "backend/responses", want: "https://api.example.test/backend/responses"},
-		{name: "base carries a path segment", base: "https://api.example.test/backend-api/codex", path: "/responses", want: "https://api.example.test/backend-api/codex/responses"},
+		{name: "base carries a path segment", base: "https://api.example.test/alt-api/v2", path: "/responses", want: "https://api.example.test/alt-api/v2/responses"},
 		{name: "empty base uses the default", base: "", path: "/responses", want: defaultBaseURL + "/responses"},
 	}
 	for _, tt := range tests {
