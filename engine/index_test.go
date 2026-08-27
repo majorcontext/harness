@@ -999,6 +999,28 @@ func TestIndexFoldRepairCountMatchesAFullRecount(t *testing.T) {
 			{ID: "u1", Role: message.RoleUser},
 		},
 	}
+	// Shapes a journal can hold that break an id-based lookup: repeated
+	// ids, absent ids, and an id shaped like the repair's own synthetic
+	// one. A review found the first of these reporting a NEGATIVE count.
+	shapes["duplicate ids on adjacent orphans"] = []message.Message{
+		{ID: "same", Role: message.RoleAssistant, Parts: call("tc1")},
+		{ID: "same", Role: message.RoleAssistant, Parts: call("tc2")},
+	}
+	shapes["absent ids"] = []message.Message{
+		{Role: message.RoleAssistant, Parts: call("tc1")},
+		{Role: message.RoleAssistant, Parts: call("tc2")},
+		{Role: message.RoleUser},
+	}
+	shapes["a follower wearing the repair's own id shape"] = []message.Message{
+		{ID: "a1", Role: message.RoleAssistant, Parts: call("tc1")},
+		{ID: message.SyntheticOrphanIDPrefix + "0-tc1", Role: message.RoleTool, Parts: result("tc1")},
+	}
+	shapes["duplicate ids across a matched call"] = []message.Message{
+		{ID: "dup", Role: message.RoleAssistant, Parts: call("tc1")},
+		{ID: "dup", Role: message.RoleTool, Parts: result("tc1")},
+		{ID: "dup", Role: message.RoleAssistant, Parts: call("tc2")},
+	}
+
 	for name, msgs := range shapes {
 		t.Run(name, func(t *testing.T) {
 			f := &indexFold{header: true}
@@ -1012,6 +1034,9 @@ func TestIndexFoldRepairCountMatchesAFullRecount(t *testing.T) {
 				f.recountRepairs()
 				if incremental != f.repairs {
 					t.Fatalf("after %d messages: incremental count %d, full recount %d", i+1, incremental, f.repairs)
+				}
+				if f.repairs < 0 {
+					t.Fatalf("after %d messages: repair count is negative (%d)", i+1, f.repairs)
 				}
 				repaired := message.ResolveOrphanToolCalls(append([]message.Message(nil), f.messages...))
 				if want := len(repaired) - len(f.messages); f.repairs != want {

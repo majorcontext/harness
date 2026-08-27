@@ -436,12 +436,22 @@ func (f *indexFold) addUsage(u provider.Usage) {
 // unless a tool message follows" would be a second copy of a rule this
 // repository has already been burned by copying.
 //
-// Insertions are attributed POSITIONALLY. The window's second message is
-// evaluated too, as a message with no follower of its own, and any
-// insertion it earns belongs to ITS index, not to i. The repair preserves
-// order and inserts directly after the message that earned the insertion,
-// so everything before the follower in the result is i's, and everything
-// from the follower on is not.
+// Insertions are attributed POSITIONALLY, and the follower is found by a
+// MARKER rather than by its id. The window's second message is evaluated
+// too, as a message with no follower of its own, and any insertion it earns
+// belongs to ITS index, not to i. The repair preserves order and inserts
+// directly after the message that earned the insertion, so everything
+// before the follower in the result is i's.
+//
+// Searching for the follower's id instead would break on a journal that
+// repeats one: two adjacent records with the same id — or with none, which
+// a malformed record can produce — made the search land on the FIRST
+// message and report a negative count, so the running total drifted below
+// zero and Messages fell below the durable count. A review found it. The
+// marker is a Text part appended to the copied follower; the repair reads
+// only roles and tool-call parts, so it changes no decision, and the repair
+// never moves a part between messages, so exactly one message in the result
+// carries it.
 //
 // The window is a deep copy: the repair appends parts to the messages it
 // returns, and a shallow copy would share the skeleton's own Parts backing
@@ -461,21 +471,38 @@ func (f *indexFold) repairsAt(i int) int {
 		copy(cp.Parts, m.Parts)
 		window = append(window, cp)
 	}
+	if len(window) == 2 {
+		window[1].Parts = append(window[1].Parts, &message.Text{Text: repairWindowMarker})
+	}
 	out := message.ResolveOrphanToolCalls(window)
-	if end == i+1 {
+	if len(window) == 1 {
 		// No follower: message i is the last, so every insertion is its
 		// own.
 		return len(out) - 1
 	}
-	followerID := f.messages[i+1].ID
 	for pos := range out {
-		if out[pos].ID == followerID {
+		if hasRepairWindowMarker(out[pos]) {
 			return pos - 1 // out[0] is message i; anything between is its repair
 		}
 	}
-	// Unreachable for a well-formed window: the repair never drops a
-	// message. Attribute nothing rather than guess.
+	// Unreachable: the repair never drops a message and never moves a part
+	// between messages. Attribute nothing rather than guess.
 	return 0
+}
+
+// repairWindowMarker tags the follower inside a repair window (see
+// repairsAt). It is a Text part's text, so the repair — which reads roles,
+// tool calls, and tool results — cannot see it, and it never reaches a
+// caller: the window is a throwaway copy.
+const repairWindowMarker = "\x00harness/engine: repair-window follower"
+
+func hasRepairWindowMarker(m message.Message) bool {
+	for _, p := range m.Parts {
+		if t, ok := p.(*message.Text); ok && t.Text == repairWindowMarker {
+			return true
+		}
+	}
+	return false
 }
 
 // appendMessage adds one durable message to the skeleton and keeps the
