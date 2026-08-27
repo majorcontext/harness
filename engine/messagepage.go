@@ -387,13 +387,20 @@ func classifyRecord(line logLine, isTail bool) (recordHead, bool, error) {
 		raw = whole
 	}
 	head, parsed := decodeRecordHeadFull(raw)
-	if parsed {
+	if isTail {
+		// The final line answers to the FORMAT, not to this walk's narrower
+		// shape: finalRecordComplete is the one question every reader asks
+		// about it (store.go), so the fold that numbered this page, the
+		// loader, and this walk all drop the same half-written record.
+		if !parsed || !finalRecordComplete(raw) {
+			return recordHead{}, false, nil
+		}
 		return head, true, nil
 	}
-	if isTail {
-		return recordHead{}, false, nil
+	if !parsed {
+		return recordHead{}, false, errors.New("corrupt record")
 	}
-	return recordHead{}, false, errors.New("corrupt record")
+	return head, true, nil
 }
 
 // decodeRecordHeadFull decodes a whole record line into indexRecord — the
@@ -449,6 +456,15 @@ func decodeRecordHeadFull(raw []byte) (recordHead, bool) {
 func foldedPage(data []byte, lo, hi int) ([]message.Message, error) {
 	var fold indexFold
 	// lineByID aliases data; it never copies a record.
+	//
+	// Known gap, issue #199: it keeps the FIRST line carrying each id, so a
+	// journal that repeats a message id — one occurrence folded away by a
+	// compact record, the other surviving — serves the wrong record's
+	// content under a right sequence number. Not reachable from this
+	// package's own writer (ids are per message, one writer per journal),
+	// and fixing it properly means teaching indexFold to carry each
+	// surviving message's record ordinal, so it is filed rather than
+	// patched here.
 	lineByID := make(map[string][]byte)
 	err := scanLogRaw(data, func(line []byte, n int, isLast bool) error {
 		var rec indexRecord
@@ -457,6 +473,11 @@ func foldedPage(data []byte, lo, hi int) ([]message.Message, error) {
 				return errTruncatedFinalRecord
 			}
 			return fmt.Errorf("corrupt record at line %d: %v", n, err)
+		}
+		if isLast && !finalRecordComplete(line) {
+			// Same rule as the fold and the tail walk: a final line that is
+			// not a whole record was never completely written.
+			return errTruncatedFinalRecord
 		}
 		if err := fold.applyIndexRecord(rec, isLast); err != nil {
 			return fmt.Errorf("%w at line %d", err, n)

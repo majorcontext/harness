@@ -510,6 +510,29 @@ func (info *SessionInfo) addUsage(u provider.Usage) {
 	info.Usage.CacheWriteTokens += u.CacheWriteTokens
 }
 
+// finalRecordComplete reports whether a journal's LAST line was completely
+// written, by the only definition that matters: it decodes as a record —
+// the type the writer marshals, and so the definition of the format.
+//
+// Every reader must ask this ONE question about a final line, because a
+// crash can leave it half-written and each reader would otherwise invent
+// its own tolerance from whatever subset of fields it happens to decode.
+// The index's fold reads a narrower shape (indexRecord) that ignores most
+// of a record's fields, so a final line with a malformed tool_result,
+// mcp_tools, or task_tool_names value passes that shape while LoadSession
+// drops it — and the index would then count a message the session itself
+// does not have, which is the whole class of disagreement the message-page
+// work exists to prevent.
+//
+// It is deliberately NOT used for a non-final line. There, a line that
+// fails this check is corruption mid-file: LoadSession refuses the session
+// outright, and a reader that folds anyway is offering a degraded view of
+// an unloadable journal rather than miscounting a loadable one.
+func finalRecordComplete(raw []byte) bool {
+	var rec record
+	return json.Unmarshal(bytes.TrimSpace(raw), &rec) == nil
+}
+
 func sessionPath(dir, id string) string {
 	return filepath.Join(dir, id+".jsonl")
 }

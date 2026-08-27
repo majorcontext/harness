@@ -1106,6 +1106,13 @@ func TestTailPageMatchesTheFoldOnOddFinalRecords(t *testing.T) {
 		"numeric message id":  `{"type":"message","message":{"id":123,"role":"user","parts":[{"type":"text","text":"x"}]}}`,
 		"bad goal payload":    `{"type":"message","message":{"id":"msg_ghost","role":"user","parts":[{"type":"text","text":"x"}]},"goal":"not-an-object"}`,
 		"bad compact payload": `{"type":"message","message":{"id":"msg_ghost","role":"user","parts":[{"type":"text","text":"x"}]},"compact":5}`,
+		// Fields the INDEX's narrower shape does not read at all, but the
+		// format does. A final line malformed in one of these is dropped
+		// by LoadSession, so every reader must drop it: an index that
+		// counted it would report a message the session does not have.
+		"bad task_tool_names": `{"type":"message","message":{"id":"msg_ghost","role":"user","parts":[{"type":"text","text":"x"}]},"task_tool_names":42}`,
+		"bad tool_result":     `{"type":"message","message":{"id":"msg_ghost","role":"user","parts":[{"type":"text","text":"x"}]},"tool_result":"nope"}`,
+		"bad mcp_tools":       `{"type":"message","message":{"id":"msg_ghost","role":"user","parts":[{"type":"text","text":"x"}]},"mcp_tools":{"a":1}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -1128,6 +1135,14 @@ func TestTailPageMatchesTheFoldOnOddFinalRecords(t *testing.T) {
 			}
 			if ix.DurableMessages != 4 {
 				t.Fatalf("the fold counted %d durable messages, want 4", ix.DurableMessages)
+			}
+			// The loader is the authority the index claims to match.
+			loaded, err := LoadSession(persistCfg(dir, &scriptedProvider{name: "test"}), sess.ID)
+			if err != nil {
+				t.Fatalf("LoadSession: %v", err)
+			}
+			if got := len(loaded.History()); got != ix.Messages {
+				t.Errorf("LoadSession has %d messages, the index says %d", got, ix.Messages)
 			}
 			page, err := ReadMessagePage(dir, sess.ID, 0, 10)
 			if err != nil {
