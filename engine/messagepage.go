@@ -153,6 +153,19 @@ func ReadMessagePage(dir, id string, beforeSeq, limit int) (MessagePage, error) 
 	return page, err
 }
 
+// readMessagePage takes the index through ReadSessionIndex, which memoizes
+// a refold. That write is deliberate here and not the anti-pattern a
+// LISTING has: this is one session, and without it every page request for
+// a session whose sidecar is stale refolds the whole journal again.
+//
+// It can overlap the session's own writer. The overlap is bounded and
+// benign: each writer writes a COMPLETE index of the prefix it folded,
+// carrying that prefix's own staleness key, and the checksum covers the
+// bytes (see sessionIndexFile), so a reader sees a file that is current or
+// visibly stale, never a blend. The window is also small — Session.
+// writeRecord's append and its flush are two steps under one lock — so a
+// page read only refolds when its stat and its sidecar read straddle that
+// gap.
 func readMessagePage(dir, id string, beforeSeq, limit int) (MessagePage, error) {
 	ix, err := ReadSessionIndex(dir, id)
 	if err != nil {
