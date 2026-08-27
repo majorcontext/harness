@@ -41,6 +41,13 @@ import (
 // returns, not when. Retention (toolresult.go) already collapses
 // oversized results where it is configured.
 //
+// edit_file's whole-file rewrite and write_file's read-guard hash remain
+// outside this budget; bounding them is deferred because this change scopes
+// reservations to read_file without changing either tool's I/O contract.
+// A non-regular file whose Stat size is zero also reserves nothing; bounding
+// that path is deferred until read_file has a byte cap for streams whose size
+// cannot be estimated safely.
+//
 // # Why a byte budget rather than a count
 //
 // The hazard is the PRODUCT of read size and concurrency, so bounding
@@ -81,6 +88,10 @@ type toolReadBudget struct {
 	limit   int64
 	used    int64
 	waiters []*readBudgetWaiter
+
+	// onCancel is a test seam fired after a queued reserve selects ctx.Done
+	// and before it reacquires mu. Set before use and never changed.
+	onCancel func()
 }
 
 // readBudgetWaiter is one queued reservation. granted is set under the
@@ -156,6 +167,9 @@ func (b *toolReadBudget) reserve(ctx context.Context, n int64) (func(), error) {
 	case <-w.ready:
 		return b.releaser(n), nil
 	case <-ctx.Done():
+		if b.onCancel != nil {
+			b.onCancel()
+		}
 		b.mu.Lock()
 		granted := w.granted
 		if !granted {
@@ -199,6 +213,7 @@ func (b *toolReadBudget) release(n int64) {
 		}
 		b.used += w.n
 		w.granted = true
+		b.waiters[0] = nil
 		b.waiters = b.waiters[1:]
 		close(w.ready)
 	}

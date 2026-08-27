@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/majorcontext/harness/message"
@@ -184,6 +185,93 @@ func TestReadBudgetServesWaitersFIFO(t *testing.T) {
 	}
 }
 
+// TestReadBudgetNewArrivalCannotJumpQueuedWaiter exercises the fast-path
+// half of FIFO: room for a small new arrival does not let it bypass a large
+// waiter already at the head of the queue.
+func TestReadBudgetNewArrivalCannotJumpQueuedWaiter(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b := newToolReadBudget(100)
+		hold60, err := b.reserve(context.Background(), 60)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hold40, err := b.reserve(context.Background(), 40)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		bigAdmitted := make(chan struct{}, 1)
+		releaseBig := make(chan struct{})
+		go func() {
+			release, err := b.reserve(context.Background(), 100)
+			if err != nil {
+				return
+			}
+			bigAdmitted <- struct{}{}
+			<-releaseBig
+			release()
+		}()
+		waitForWaiters(t, b, 1)
+
+		// Leave 40 bytes free. The 100-byte head cannot fit yet, but a new
+		// 10-byte arrival must queue behind it rather than jumping ahead.
+		hold40()
+		smallAdmitted := make(chan struct{}, 1)
+		releaseSmall := make(chan struct{})
+		go func() {
+			release, err := b.reserve(context.Background(), 10)
+			if err != nil {
+				return
+			}
+			smallAdmitted <- struct{}{}
+			<-releaseSmall
+			release()
+		}()
+		synctest.Wait()
+		jumped := false
+		select {
+		case <-smallAdmitted:
+			t.Error("a new small reservation jumped ahead of the queued large waiter")
+			jumped = true
+			// Let the incorrectly admitted reservation go so the test can
+			// finish cleanly while still reporting the failed invariant.
+			close(releaseSmall)
+			synctest.Wait()
+		default:
+		}
+
+		hold60()
+		synctest.Wait()
+		select {
+		case <-bigAdmitted:
+		default:
+			t.Fatal("the queued large waiter was not admitted first after the budget drained")
+		}
+		if !jumped {
+			select {
+			case <-smallAdmitted:
+				t.Fatal("the small waiter was admitted while the earlier large waiter still held the budget")
+			default:
+			}
+		}
+
+		close(releaseBig)
+		synctest.Wait()
+		if !jumped {
+			select {
+			case <-smallAdmitted:
+			default:
+				t.Fatal("the small waiter did not run after the large waiter released")
+			}
+			close(releaseSmall)
+		}
+		synctest.Wait()
+		if got := b.inFlight(); got != 0 {
+			t.Errorf("in-flight = %d after both waiters released, want 0", got)
+		}
+	})
+}
+
 // waitForWaiters blocks until the budget has at least n queued waiters, so
 // a test can order its own queue deterministically instead of sleeping.
 func waitForWaiters(t *testing.T, b *toolReadBudget, n int) {
@@ -215,6 +303,44 @@ func TestReadBudgetClampsAnOversizedReservation(t *testing.T) {
 	release()
 	if got := b.inFlight(); got != 0 {
 		t.Errorf("in-flight = %d after release, want 0", got)
+	}
+}
+
+// TestReadBudgetQueuedOversizedReservationEventuallyRuns pins the clamp on
+// the contended path: a request larger than the whole budget waits for the
+// current holder, then takes the whole budget and runs alone. Without the
+// clamp it can never fit, even after used reaches zero.
+func TestReadBudgetQueuedOversizedReservationEventuallyRuns(t *testing.T) {
+	b := newToolReadBudget(100)
+	hold, err := b.reserve(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	type outcome struct {
+		release func()
+		err     error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		release, err := b.reserve(ctx, 1000)
+		done <- outcome{release: release, err: err}
+	}()
+	waitForWaiters(t, b, 1)
+	hold()
+
+	got := <-done
+	if got.err != nil {
+		t.Fatalf("oversized waiter never ran after the budget drained: %v", got.err)
+	}
+	if inFlight := b.inFlight(); inFlight != 100 {
+		t.Fatalf("in-flight = %d, want the oversized waiter clamped to 100", inFlight)
+	}
+	got.release()
+	if inFlight := b.inFlight(); inFlight != 0 {
+		t.Errorf("in-flight = %d after oversized waiter released, want 0", inFlight)
 	}
 }
 
@@ -254,6 +380,49 @@ func TestReadBudgetCancelWhileQueuedReleasesNothing(t *testing.T) {
 	if n != 0 {
 		t.Errorf("%d waiters still queued after cancellation, want 0", n)
 	}
+}
+
+// TestReadBudgetGrantRacingCancellationReturnsGrantedBytes forces the narrow
+// race where cancellation wins the select but the waiter is granted before
+// it can reacquire the budget lock. Those bytes have already left the queue;
+// the cancel path is their only possible releaser.
+func TestReadBudgetGrantRacingCancellationReturnsGrantedBytes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b := newToolReadBudget(100)
+		if _, err := b.reserve(context.Background(), 100); err != nil {
+			t.Fatal(err)
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancelSelected := make(chan struct{})
+		b.onCancel = func() { close(cancelSelected) }
+		errc := make(chan error, 1)
+		go func() {
+			_, err := b.reserve(ctx, 50)
+			errc <- err
+		}()
+		waitForWaiters(t, b, 1)
+
+		b.mu.Lock()
+		cancel()
+		// reserve has selected ctx.Done and is now blocked reacquiring b.mu.
+		<-cancelSelected
+		w := b.waiters[0]
+		b.used = 0 // the original holder released while b.mu was held
+		b.used += w.n
+		w.granted = true
+		b.waiters[0] = nil
+		b.waiters = b.waiters[1:]
+		close(w.ready)
+		b.mu.Unlock()
+
+		if err := <-errc; err == nil {
+			t.Fatal("reserve returned nil after cancellation won the race")
+		}
+		if got := b.inFlight(); got != 0 {
+			t.Errorf("in-flight = %d, want 0: the canceled waiter leaked its raced grant", got)
+		}
+	})
 }
 
 // TestReadBudgetDisabledAndDefault pins the config resolution.
@@ -454,8 +623,8 @@ func TestReadBudgetBoundsPeakHeap(t *testing.T) {
 			float64(unbounded)/float64(sequential), float64(bounded)/float64(sequential))
 	}
 
-	if bounded >= unbounded {
-		t.Errorf("budget did not reduce peak heap: bounded %.0f MB vs unbounded %.0f MB", mb(bounded), mb(unbounded))
+	if unbounded > 0 && float64(bounded) > 0.75*float64(unbounded) {
+		t.Errorf("budget reduced peak heap by less than 25%%: bounded %.0f MB vs unbounded %.0f MB", mb(bounded), mb(unbounded))
 	}
 	if sequential > 0 && float64(bounded) > 3*float64(sequential) {
 		t.Errorf("bounded peak %.0f MB is more than 3x the sequential %.0f MB; the budget is not holding",
