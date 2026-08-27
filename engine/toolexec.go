@@ -209,9 +209,11 @@
 //     that cannot tolerate it.
 //  2. A HARD link. filePathKey resolves symlinks (see
 //     canonicalFileKeyPath), so a symlinked alias keys correctly, but two
-//     hard links to one inode have no link to follow. Closing that needs
-//     an inode comparison against every other key in the batch, which is
-//     quadratic and still races a file created mid-batch.
+//     hard links to one inode have no link to follow. An O(1) device+inode
+//     key would cover files that already exist, but a write_file target may
+//     not exist yet (and therefore has no inode), so a create racing a write
+//     through another hard link would remain. Device/inode identity is also
+//     platform-specific; see canonicalFileKeyPath for the full residual.
 //
 // # Cancellation and the orphan-result invariant
 //
