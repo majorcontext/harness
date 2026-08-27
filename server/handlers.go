@@ -1097,12 +1097,51 @@ func (s *Server) coldSessionJSON(id string, ix engine.SessionIndex, usable bool)
 		if err != nil {
 			return sessionJSON{}, false
 		}
+		// Keep it. Before this, the fallback threw the loaded session
+		// away, so the NEXT read of the same session replayed the same
+		// journal from byte 0 again — and GET /session is polled by a
+		// control-plane activity probe every ~20s, forever. A box's
+		// finished sub-agent sessions were therefore cold-replayed on that
+		// cadence for the life of the process, which is the repeating
+		// `reason=start` context-window line an operator sees
+		// (logContextWindowArmed fires once per LoadSession). Retaining
+		// makes it at most one replay per session per residency window.
+		s.retainLoaded(id, sess)
 		body = s.buildSession(liveSession{id: id}.withLoaded(sess))
 	}
 	if lv := s.resolveLive(id); lv.session() != nil {
 		body = s.buildSession(lv)
 	}
 	return body, true
+}
+
+// retainLoaded makes a session a cold READ just loaded resident, so the
+// next read of it does not replay the journal again.
+//
+// A read that mutates residency deserves its justification stated. The
+// alternative is not "no mutation": it is an unbounded full journal replay
+// on every poll of an endpoint built to be polled, which is strictly worse
+// for the same session and for every other session sharing the process's
+// disk. What is retained is bounded by exactly the same MaxResident budget
+// every other loader lives under, and the retained session is idle
+// (running/goalLoop both false), so it is immediately eviction-eligible on
+// the very next evictResidentLocked sweep — a listing can displace a warm
+// idle session, never a running one.
+//
+// The shape is claimForPrompt's and handleSetModel's, deliberately not a
+// third variant: LoadSession has already run OUTSIDE s.mu (it hits disk),
+// and this re-acquires the lock and defers to any resident that appeared
+// while it was loading, so two *engine.Session instances for one log are
+// never both retained. releaseEvicted runs after the unlock, as it must.
+func (s *Server) retainLoaded(id string, sess *engine.Session) {
+	s.mu.Lock()
+	var evicted []*engine.Session
+	if s.sessions[id] == nil {
+		s.sessions[id] = &sessionState{sess: sess, lastUsed: time.Now()}
+		evicted = s.evictResidentLocked()
+	}
+	s.mu.Unlock()
+	releaseEvicted(evicted)
 }
 
 // messagePlaceholder substitutes for a resident message that fails to
