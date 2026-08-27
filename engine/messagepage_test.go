@@ -67,6 +67,24 @@ func wholeSequence(t *testing.T, dir, id string) []string {
 				} `json:"summary"`
 			} `json:"compact"`
 		}
+		if i == len(lines)-1 {
+			// The final line is the one a crash can leave torn, and the
+			// journal FORMAT decides whether it survived: a line that does
+			// not decode as one of this package's records (store.go's
+			// record — the writer's own type, and the definition of the
+			// format) was never completely written, whatever its prefix
+			// happens to parse as. A reader must not count it.
+			//
+			// The rule is deliberately taken from the format rather than
+			// from either reader: a slim shape that checks only the fields
+			// a test cares about accepts a record with, say, a malformed
+			// usage field, and the oracle would then bless a phantom
+			// message that no real reader should serve.
+			var whole record
+			if err := json.Unmarshal([]byte(line), &whole); err != nil {
+				continue
+			}
+		}
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			if i == len(lines)-1 {
 				continue // a torn final line, which no reader counts
@@ -990,100 +1008,50 @@ func (c *pageByteCounter) ReadAt(p []byte, off int64) (int, error) {
 	return n, err
 }
 
-// TestTailPageDoesNotReadRecordsItOnlyClassifies is the byte-level cost
-// guard for the tail path. Walking back to an older page passes every
-// record after it, and pulling each of those whole — a 20 MB image blob or
-// tool result among them — to learn a type string and drop it is the cost
-// this endpoint exists to avoid. Decoding less is not enough if the bytes
-// are read anyway.
-func TestTailPageDoesNotReadRecordsItOnlyClassifies(t *testing.T) {
+// TestTailPageReadsItsSpanOnce is the byte-level cost guard for the tail
+// path. A backward walk must read the span between the page and the end of
+// the file — the line boundaries are in it, and there is no way to count
+// records without finding them — but it must read that span ABOUT ONCE. An
+// earlier revision read a fresh 64 KiB block per line, so a journal of
+// small records was read several times over: a boundary 200 bytes away
+// cost a block.
+//
+// This is the property that matters for a real journal, which is thousands
+// of small records. The separate case of one enormous record is covered by
+// TestTailPageDecodesOnlyThePage: such a record IS read when the walk
+// passes it, because classifying it any other way means guessing, but its
+// parts are never decoded.
+func TestTailPageReadsItsSpanOnce(t *testing.T) {
 	dir := t.TempDir()
-	sess := pagedSession(t, dir, 3) // six small durable messages
+	sess := pagedSession(t, dir, 60) // 120 small durable messages
 	path := filepath.Join(dir, sess.ID+".jsonl")
-
-	// One record far larger than the peek window, then a small one after
-	// it so the big record is never the tail (a torn tail is read whole by
-	// design).
-	const bigBytes = logLinePeekBytes * 40
-	beforeBig, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.WriteString(`{"type":"message","message":{"id":"msg_big","role":"user","parts":[{"type":"text","text":"` +
-		strings.Repeat("Z", bigBytes) + "\"}]}}\n"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.WriteString(`{"type":"model","model":"test/m2"}` + "\n"); err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-
 	ix, err := ReadSessionIndex(dir, sess.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ix.DurableMessages != 7 {
-		t.Fatalf("index counts %d durable messages, want 7", ix.DurableMessages)
-	}
 
-	read := func(lo, hi int) (int64, []message.Message) {
-		t.Helper()
-		jf, err := os.Open(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer jf.Close()
-		fi, err := jf.Stat()
-		if err != nil {
-			t.Fatal(err)
-		}
-		counter := &pageByteCounter{f: jf}
-		msgs, ok, err := tailPage(counter, ix.LogSize, fi.Size(), ix.DurableMessages, lo, hi)
-		if err != nil || !ok {
-			t.Fatalf("tailPage([%d,%d]) = ok %v, err %v", lo, hi, ok, err)
-		}
-		return counter.bytes, msgs
-	}
-
-	// A page of the two OLDEST messages walks past the big record. It must
-	// not pull its body: the whole journal is bigger than the big record,
-	// and a walk that read every record whole would exceed it.
-	deepBytes, deep := read(1, 2)
-	if len(deep) != 2 {
-		t.Fatalf("deep page returned %d messages, want 2", len(deep))
-	}
-	for _, m := range deep {
-		if m.ID == "msg_big" {
-			t.Fatal("the deep page carried the record it should only have classified")
-		}
-	}
-	// A backward walk must read the span between the page and the end of
-	// the file: that is where the line boundaries are, and there is no way
-	// to count records without finding them. What it must NOT do is read
-	// that span and then pull the big record's body a SECOND time to
-	// classify it. So the bound is the span, with room to spare, not twice
-	// it.
-	final, err := os.Stat(path)
+	jf, err := os.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	span := final.Size() - beforeBig.Size()
-	if deepBytes > span*3/2 {
-		t.Errorf("a page walking past the big record read %d bytes for a %d-byte span: the record's body is being read to classify it", deepBytes, span)
+	defer jf.Close()
+	fi, err := jf.Stat()
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// The page that DOES carry it reads it whole, which is what makes the
-	// number above meaningful rather than a scan that skipped everything.
-	newestBytes, newest := read(7, 7)
-	if len(newest) != 1 || newest[0].ID != "msg_big" {
-		t.Fatalf("newest page = %v, want the big record", idsOf(newest))
+	counter := &pageByteCounter{f: jf}
+	// The two OLDEST messages: the walk crosses the whole journal.
+	msgs, ok, err := tailPage(counter, ix.LogSize, fi.Size(), ix.DurableMessages, 1, 2)
+	if err != nil || !ok {
+		t.Fatalf("tailPage = ok %v, err %v", ok, err)
 	}
-	if newestBytes < bigBytes {
-		t.Errorf("the page carrying the big record read only %d bytes, want at least %d", newestBytes, bigBytes)
+	if len(msgs) != 2 {
+		t.Fatalf("returned %d messages, want 2", len(msgs))
+	}
+	// Reading the span once, plus a bounded prefix per line, is the target.
+	// Two passes over the file is the regression this catches.
+	if counter.bytes > fi.Size()*3/2 {
+		t.Errorf("a walk across a %d-byte journal read %d bytes: the span is being read more than once", fi.Size(), counter.bytes)
 	}
 }
 
@@ -1113,5 +1081,241 @@ func TestTailPageHandlesAnUnusualFieldOrder(t *testing.T) {
 	}
 	if page.Total != 2 {
 		t.Errorf("total = %d, want 2", page.Total)
+	}
+}
+
+// TestTailPageMatchesTheFoldOnOddFinalRecords: the final line is the one a
+// crash can leave torn, and the walk must judge it by the SAME rule the
+// fold that numbered the page used. Three shapes make that concrete: a
+// torn line whose prefix still parses a type, a line that is valid JSON but
+// fails a typed decode, and a message record with no body — the fold drops
+// all three and counts none of them, so the walk must not count them
+// either. Counting one shifts every seq in the page.
+func TestTailPageMatchesTheFoldOnOddFinalRecords(t *testing.T) {
+	for name, tail := range map[string]string{
+		"torn line with a parseable type": `{"type":"message","message":{"id":"msg_torn`,
+		"valid JSON, wrong type shape":    `{"type":123,"message":{"id":"msg_x"}}`,
+		"message record with no body":     `{"type":"message"}`,
+		// The fold decodes EVERY field it type-checks, so a record whose
+		// usage, goal, or message id has the wrong JSON shape fails that
+		// decode and is dropped. A classifier that looked only at the type
+		// and the message's presence would accept these and count a
+		// message the index never counted.
+		"bad usage shape":     `{"type":"message","message":{"id":"msg_ghost","role":"user","parts":[{"type":"text","text":"x"}]},"usage":"not-an-object"}`,
+		"bad usage field":     `{"type":"message","message":{"id":"msg_ghost","role":"user","parts":[{"type":"text","text":"x"}]},"usage":{"input_tokens":"lots"}}`,
+		"numeric message id":  `{"type":"message","message":{"id":123,"role":"user","parts":[{"type":"text","text":"x"}]}}`,
+		"bad goal payload":    `{"type":"message","message":{"id":"msg_ghost","role":"user","parts":[{"type":"text","text":"x"}]},"goal":"not-an-object"}`,
+		"bad compact payload": `{"type":"message","message":{"id":"msg_ghost","role":"user","parts":[{"type":"text","text":"x"}]},"compact":5}`,
+		// Fields the INDEX's narrower shape does not read at all, but the
+		// format does. A final line malformed in one of these is dropped
+		// by LoadSession, so every reader must drop it: an index that
+		// counted it would report a message the session does not have.
+		"bad task_tool_names": `{"type":"message","message":{"id":"msg_ghost","role":"user","parts":[{"type":"text","text":"x"}]},"task_tool_names":42}`,
+		"bad tool_result":     `{"type":"message","message":{"id":"msg_ghost","role":"user","parts":[{"type":"text","text":"x"}]},"tool_result":"nope"}`,
+		"bad mcp_tools":       `{"type":"message","message":{"id":"msg_ghost","role":"user","parts":[{"type":"text","text":"x"}]},"mcp_tools":{"a":1}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			sess := pagedSession(t, dir, 2) // four durable messages
+			path := filepath.Join(dir, sess.ID+".jsonl")
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.WriteString(tail); err != nil {
+				t.Fatal(err)
+			}
+			f.Close()
+
+			// The fold's own answer is the oracle: whatever it counts, the
+			// page must report.
+			ix, err := ReadSessionIndex(dir, sess.ID)
+			if err != nil {
+				t.Fatalf("ReadSessionIndex: %v", err)
+			}
+			if ix.DurableMessages != 4 {
+				t.Fatalf("the fold counted %d durable messages, want 4", ix.DurableMessages)
+			}
+			// The loader is the authority the index claims to match.
+			loaded, err := LoadSession(persistCfg(dir, &scriptedProvider{name: "test"}), sess.ID)
+			if err != nil {
+				t.Fatalf("LoadSession: %v", err)
+			}
+			if got := len(loaded.History()); got != ix.Messages {
+				t.Errorf("LoadSession has %d messages, the index says %d", got, ix.Messages)
+			}
+			page, err := ReadMessagePage(dir, sess.ID, 0, 10)
+			if err != nil {
+				t.Fatalf("ReadMessagePage: %v", err)
+			}
+			if page.Total != 4 || len(page.Messages) != 4 {
+				t.Errorf("page = total %d with %d messages, want 4 and 4", page.Total, len(page.Messages))
+			}
+			for _, m := range page.Messages {
+				if strings.HasPrefix(m.ID, "msg_ghost") || strings.HasPrefix(m.ID, "msg_torn") {
+					t.Errorf("the page served a record the fold dropped: %s", m.ID)
+				}
+			}
+			if !sameIDs(idsOf(page.Messages), wholeSequence(t, dir, sess.ID)) {
+				t.Errorf("page ids = %v, want the durable sequence %v", idsOf(page.Messages), wholeSequence(t, dir, sess.ID))
+			}
+		})
+	}
+}
+
+// TestScanLogBackwardWhitespaceLongerThanThePrefix: a line whose leading
+// whitespace fills the prefix window is not a blank line. The forward
+// scanner trims the whole line before deciding, so this one reads it before
+// skipping it.
+func TestScanLogBackwardWhitespaceLongerThanThePrefix(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "log")
+	padded := strings.Repeat(" ", logLinePeekBytes+64) + `{"type":"model"}`
+	if err := os.WriteFile(path, []byte("first\n"+padded+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	if err := scanLogBackward(f, fi.Size(), fi.Size(), func(line logLine, _ bool) (bool, error) {
+		whole, err := line.All()
+		if err != nil {
+			return false, err
+		}
+		got = append(got, string(bytes.TrimSpace(whole)))
+		return true, nil
+	}); err != nil {
+		t.Fatalf("scanLogBackward: %v", err)
+	}
+	if len(got) != 2 || got[0] != `{"type":"model"}` || got[1] != "first" {
+		t.Errorf("lines = %v, want the padded record and then the first line", got)
+	}
+}
+
+// TestTailPageMatchesTheFoldOnAmbiguousRecords covers the two shapes a
+// prefix-only classifier got wrong. Both produced a phantom message under a
+// real sequence number, which is worse than an error: a client cannot tell.
+//
+//   - A record with a SECOND top-level "type" key. encoding/json resolves
+//     last-wins, so the fold reads the second value; a scan that stopped at
+//     the first key read the first.
+//   - A message record with NO body that is no longer the final line. The
+//     full fold tolerates the shape on a final line and skips it, and the
+//     incremental write-path fold skips it without ever revisiting it — so a
+//     journal can carry one mid-file AND have a usable index. A substring
+//     search for the message key called it body-bearing.
+func TestTailPageMatchesTheFoldOnAmbiguousRecords(t *testing.T) {
+	msg := func(id, text string) string {
+		return `{"type":"message","message":{"id":"` + id + `","role":"user","parts":[{"type":"text","text":"` + text + `"}]}}`
+	}
+	for name, odd := range map[string]string{
+		"duplicate top-level type":     `{"type":"message","message":{"id":"msg_ghost","role":"user","parts":[]},"type":"model"}`,
+		"duplicate type, message last": `{"type":"model","message":{"id":"msg_ghost","role":"user","parts":[]},"type":"message"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			id := "ses_0123456789abcdef"
+			journal := `{"type":"session","id":"` + id + `","created_at":"2026-01-02T03:04:05Z","workdir":"/w"}
+{"type":"model","model":"test/m1"}
+` + msg("msg_1", "first") + "\n" + odd + "\n" + msg("msg_2", "second") + "\n"
+			if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(journal), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			// The fold is the oracle for what counts.
+			ix, err := ReadSessionIndex(dir, id)
+			if err != nil {
+				t.Skipf("the fold rejects this journal outright (%v); the page path is unreachable for it", err)
+			}
+			page, err := ReadMessagePage(dir, id, 0, 10)
+			if err != nil {
+				t.Fatalf("ReadMessagePage: %v", err)
+			}
+			if page.Total != ix.DurableMessages {
+				t.Errorf("page total %d, index counted %d", page.Total, ix.DurableMessages)
+			}
+			// Every message the page reports must sit at the seq the
+			// durable sequence puts it at. That covers both directions: a
+			// record the fold skipped must not appear, and one it counted
+			// must — which of the two a duplicate key produces depends on
+			// which value wins, and the oracle resolves that the way the
+			// format does.
+			want := wholeSequence(t, dir, id)
+			if !sameIDs(idsOf(page.Messages), want) {
+				t.Errorf("page ids = %v, want the durable sequence %v", idsOf(page.Messages), want)
+			}
+		})
+	}
+}
+
+// TestTailPageAfterACrashLeftABodylessRecord builds the state a
+// prefix-only classifier could not survive, by the route that actually
+// reaches it in production.
+//
+// A crash leaves a journal whose FINAL record is a message record with no
+// body. Both the loader and the fold tolerate that shape on a final line
+// and do not count it. The session then resumes and appends: the
+// incremental write-path fold applies only each NEW record, never
+// revisiting the one before it, and flushes a sidecar covering the whole
+// file. The journal now carries a bodyless record MID-FILE and a usable,
+// current index — so a page read serves from that index without refolding,
+// and a walk that judged the record by a substring search for the message
+// key would count a message the index never counted, shifting every
+// sequence number below it.
+func TestTailPageAfterACrashLeftABodylessRecord(t *testing.T) {
+	for name, tail := range map[string]string{
+		"no message field":         `{"type":"message"}`,
+		"explicit null message":    `{"type":"message","message":null}`,
+		"message key nested below": `{"type":"message","goal":{"condition":"mentions a message key"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			id := "ses_0123456789abcdef"
+			journal := `{"type":"session","id":"` + id + `","created_at":"2026-01-02T03:04:05Z","workdir":"/w"}
+{"type":"model","model":"test/m1"}
+{"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"before the crash"}]}}
+` + tail + "\n"
+			if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(journal), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			prov := &scriptedProvider{name: "test", turns: [][]provider.Event{compactTurn("after the crash", provider.Usage{InputTokens: 5})}}
+			cfg := persistCfg(dir, prov)
+			sess, err := LoadSession(cfg, id)
+			if err != nil {
+				t.Fatalf("LoadSession: %v", err)
+			}
+			if _, err := sess.Prompt(context.Background(), "resume"); err != nil {
+				t.Fatalf("Prompt: %v", err)
+			}
+
+			// The sidecar must be current: that is the whole point — a page
+			// read serves from it without refolding the bodyless record.
+			ix, err := ReadSessionIndex(dir, id)
+			if err != nil {
+				t.Fatalf("ReadSessionIndex: %v", err)
+			}
+			page, err := ReadMessagePage(dir, id, 0, 10)
+			if err != nil {
+				t.Fatalf("ReadMessagePage: %v", err)
+			}
+			if page.Total != ix.DurableMessages {
+				t.Errorf("page total %d, index counted %d", page.Total, ix.DurableMessages)
+			}
+			if len(page.Messages) != page.Total {
+				t.Fatalf("page returned %d messages for a total of %d", len(page.Messages), page.Total)
+			}
+			// msg_1 is the oldest durable message and must stay at seq 1.
+			if page.FirstSeq != 1 || page.Messages[0].ID != "msg_1" {
+				t.Errorf("page starts at seq %d with %s, want seq 1 with msg_1 — a phantom displaced it", page.FirstSeq, page.Messages[0].ID)
+			}
+		})
 	}
 }

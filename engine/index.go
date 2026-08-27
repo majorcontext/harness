@@ -591,7 +591,22 @@ func sessionIndexPath(dir, id string) string {
 // is an error.
 func foldJournalBytes(data []byte) (indexFold, error) {
 	var f indexFold
-	err := scanLog(data, func(rec indexRecord, line int, isLast bool) error {
+	err := scanLogRaw(data, func(raw []byte, line int, isLast bool) error {
+		var rec indexRecord
+		if err := json.Unmarshal(raw, &rec); err != nil {
+			if isLast {
+				return errTruncatedFinalRecord // crash mid-write, ignore
+			}
+			return fmt.Errorf("corrupt record at line %d: %v", line, err)
+		}
+		if isLast && !finalRecordComplete(raw) {
+			// The narrow shape above decoded, but the line is not a whole
+			// record: a crash mid-write left a field this fold does not
+			// read in a state the format does not allow. LoadSession drops
+			// it, so this fold must too, or the index counts a message the
+			// session does not have.
+			return errTruncatedFinalRecord
+		}
 		if err := f.applyIndexRecord(rec, isLast); err != nil {
 			return fmt.Errorf("%w at line %d", err, line)
 		}
