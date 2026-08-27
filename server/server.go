@@ -351,6 +351,12 @@ type Options struct {
 	// for every process. /debug/goroutines (above) needs no opt-in and
 	// stays the first step for a wedged process; these routes add the CPU,
 	// heap, block, and mutex profiles that say WHY it is wedged.
+	//
+	// These routes carry the same auth as every other route, which means
+	// Unauthenticated exposes them to anything that can reach the listen
+	// address, exactly like /session and /debug/goroutines. Enable this
+	// only where that reachability is already the trusted gate the
+	// Unauthenticated opt-in asserts.
 	PProf bool
 }
 

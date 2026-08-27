@@ -110,7 +110,11 @@ func newLongPauses(h *metrics.Float64Histogram, prev []uint64, threshold time.Du
 		}
 		// Buckets[i] is bucket i's lower bound; a bucket qualifies only
 		// when its whole range is at or past the threshold, so a pause
-		// under the threshold can never be reported as one past it.
+		// under the threshold can never be reported as one past it. The
+		// cost is a blind spot as wide as the straddling bucket: this
+		// runtime's boundaries around 200ms are 0.167772 and 0.201327, so
+		// a pause between 200ms and 201.3ms goes unreported. Under-
+		// reporting by a millisecond at the edge beats a false pause.
 		lower := h.Buckets[i]
 		if lower < cutoff {
 			continue

@@ -30,6 +30,12 @@ const unmatchedRoute = "unmatched"
 // wants: the event stream and the wait long-poll. A duration means nothing
 // for them, so they are never timed — otherwise every healthy client would
 // produce a warn.
+//
+// POST /session/{id}/compact is deliberately NOT here. It runs a model call
+// synchronously, so it can exceed the threshold on a healthy server, but it
+// is an explicit, rare call and a compaction that runs for minutes is worth
+// the line. Add a route here only when its duration is set by the CALLER,
+// not by the work.
 var longLivedRoutes = map[string]bool{
 	"GET /event":             true,
 	"GET /session/{id}/wait": true,
