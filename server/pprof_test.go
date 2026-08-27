@@ -42,7 +42,7 @@ func TestPProf_NotRegisteredOnDefaultServeMux(t *testing.T) {
 func TestPProf_OffByDefault(t *testing.T) {
 	srv := newServer(t, t.TempDir(), &scriptedProvider{name: "test"}, 0)
 
-	for _, path := range []string{"/debug/pprof/", "/debug/pprof/heap", "/debug/pprof/cmdline", "/debug/pprof/profile"} {
+	for _, path := range []string{"/debug/pprof/", "/debug/pprof/heap", "/debug/pprof/cmdline", "/debug/pprof/profile?seconds=1"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.Header.Set("Authorization", "Bearer secret-run-token")
 		w := httptest.NewRecorder()
@@ -59,7 +59,7 @@ func TestPProf_OffByDefault(t *testing.T) {
 func TestPProf_EnabledRequiresAuth(t *testing.T) {
 	srv := pprofServer(t)
 
-	for _, path := range []string{"/debug/pprof/", "/debug/pprof/heap", "/debug/pprof/cmdline", "/debug/pprof/profile", "/debug/pprof/trace"} {
+	for _, path := range []string{"/debug/pprof/", "/debug/pprof/heap", "/debug/pprof/cmdline", "/debug/pprof/profile?seconds=1", "/debug/pprof/trace?seconds=1"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		w := httptest.NewRecorder()
 		srv.ServeHTTP(w, req)
@@ -215,4 +215,67 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// TestPProf_ConflictIsCleanJSON proves a refused profile answers as an
+// error, not as a truncated download. The download headers are set BEFORE
+// the profile starts — a CPU profile writes to the response as samples
+// arrive, so they cannot be set after — which means the refusal path has to
+// take them back off.
+func TestPProf_ConflictIsCleanJSON(t *testing.T) {
+	srv := pprofServer(t)
+	if err := pprof.StartCPUProfile(io.Discard); err != nil {
+		t.Fatalf("starting the conflicting profile: %v", err)
+	}
+	t.Cleanup(pprof.StopCPUProfile)
+
+	w := pprofGet(t, srv, "/debug/pprof/profile?seconds=1")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("answered %d, want 409", w.Code)
+	}
+	if got := w.Header().Get("Content-Disposition"); got != "" {
+		t.Errorf("a 409 carries Content-Disposition %q; a browser would save the error as a profile file", got)
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+	if !strings.Contains(w.Body.String(), `"error"`) {
+		t.Errorf("body is not an error object: %s", w.Body.String())
+	}
+}
+
+// TestPProf_EveryRegisteredRouteIsAuthed enumerates the profiling routes the
+// mux actually holds and proves each one 401s without a token. A route added
+// to registerPProf without the auth wrapper would pass every other test in
+// this file.
+func TestPProf_EveryRegisteredRouteIsAuthed(t *testing.T) {
+	srv := pprofServer(t)
+	// profile and trace carry seconds=1: if a regression drops the auth
+	// wrapper, this test must FAIL in a second rather than hang for the
+	// 30-second default duration of two real profiles.
+	paths := []string{
+		"/debug/pprof/",
+		"/debug/pprof/goroutine",
+		"/debug/pprof/heap",
+		"/debug/pprof/allocs",
+		"/debug/pprof/block",
+		"/debug/pprof/mutex",
+		"/debug/pprof/threadcreate",
+		"/debug/pprof/cmdline",
+		"/debug/pprof/profile?seconds=1",
+		"/debug/pprof/trace?seconds=1",
+		"/debug/pprof/no-such-profile",
+		"/debug/pprof/a/b",
+	}
+	for _, path := range paths {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		w := httptest.NewRecorder()
+		srv.ServeHTTP(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("unauthenticated %s answered %d, want 401", path, w.Code)
+		}
+		if strings.Contains(w.Body.String(), "profiles:") {
+			t.Errorf("unauthenticated %s leaked the profile index", path)
+		}
+	}
 }

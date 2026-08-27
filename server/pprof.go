@@ -132,8 +132,14 @@ func serveCPUProfile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Set the download headers BEFORE starting: a CPU profile writes to w
+	// as samples arrive, so the first write can land before any later
+	// header set would take effect. The refusal path therefore has to take
+	// them back off — otherwise a browser saves the JSON error as a profile
+	// file.
 	setProfileDownloadHeaders(w, "profile")
 	if err := pprof.StartCPUProfile(w); err != nil {
+		clearProfileDownloadHeaders(w)
 		writeErr(w, http.StatusConflict, "a CPU profile is already running: "+err.Error())
 		return
 	}
@@ -150,6 +156,7 @@ func serveTrace(w http.ResponseWriter, r *http.Request) {
 	}
 	setProfileDownloadHeaders(w, "trace")
 	if err := trace.Start(w); err != nil {
+		clearProfileDownloadHeaders(w)
 		writeErr(w, http.StatusConflict, "a trace is already running: "+err.Error())
 		return
 	}
@@ -177,6 +184,14 @@ func setProfileDownloadHeaders(w http.ResponseWriter, name string) {
 	// The body length is unknown until the profile finishes, and a stale
 	// Content-Length would truncate it.
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+}
+
+// clearProfileDownloadHeaders undoes setProfileDownloadHeaders, for a
+// profile that never started. writeJSON sets its own Content-Type, so only
+// the download markers need removing.
+func clearProfileDownloadHeaders(w http.ResponseWriter) {
+	w.Header().Del("Content-Disposition")
+	w.Header().Del("X-Content-Type-Options")
 }
 
 // profileSeconds is the ?seconds= duration. An absent parameter takes the
