@@ -1029,7 +1029,24 @@ func (s *Server) handleList(w http.ResponseWriter, _ *http.Request) {
 		// that window the same way. The two must not disagree about a
 		// session's liveness. A session neither path can render is skipped,
 		// exactly as this listing always has.
-		if body, ok := s.coldSessionJSON(id, ix, ixErr == nil && ix.Complete); ok {
+		//
+		// Lifecycle status from SessionManager: for a managed session, use
+		// its terminal or running status; for an unmanaged session that is
+		// not resident, fall back to "idle". lv.isManaged tells us whether
+		// SessionAndInfo found an entry; lv.info.Status holds the terminal
+		// status if it did.
+		status := "idle"
+		if lv.isManaged {
+			status = statusStr(lv.info.Status == engine.StatusRunning)
+			// For terminal managed sessions, use the terminal status
+			// directly (done, failed, canceled) rather than "running" or
+			// "idle". statusStr only handles the running/idle binary; for
+			// terminal statuses, use the literal SessionNode.Status.
+			if lv.info.Status == engine.StatusDone || lv.info.Status == engine.StatusFailed || lv.info.Status == engine.StatusCanceled {
+				status = string(lv.info.Status)
+			}
+		}
+		if body, ok := s.coldSessionJSON(id, ix, ixErr == nil && ix.Complete, status); ok {
 			out = append(out, body)
 		}
 	}
@@ -1058,7 +1075,17 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ix, err := engine.ReadSessionIndex(s.opts.SessionDir, id)
-	if body, ok := s.coldSessionJSON(id, ix, err == nil && ix.Complete); ok {
+	// Lifecycle status from SessionManager: for a managed session, use its
+	// terminal or running status; otherwise fall back to empty and let
+	// coldSessionJSON use the default (idle).
+	status := ""
+	if lv.isManaged {
+		status = statusStr(lv.info.Status == engine.StatusRunning)
+		if lv.info.Status == engine.StatusDone || lv.info.Status == engine.StatusFailed || lv.info.Status == engine.StatusCanceled {
+			status = string(lv.info.Status)
+		}
+	}
+	if body, ok := s.coldSessionJSON(id, ix, err == nil && ix.Complete, status); ok {
 		writeJSON(w, http.StatusOK, body)
 		return
 	}
@@ -1088,7 +1115,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 // the false-idle answer an orchestrator acts on. The re-check does not
 // close the window — nothing can, without holding a lock across a disk read
 // — but it narrows it to the width of one map lookup.
-func (s *Server) coldSessionJSON(id string, ix engine.SessionIndex, usable bool) (sessionJSON, bool) {
+func (s *Server) coldSessionJSON(id string, ix engine.SessionIndex, usable bool, managerStatus string) (sessionJSON, bool) {
 	var body sessionJSON
 	if usable {
 		body = s.buildSessionFromIndex(ix)
@@ -1101,6 +1128,10 @@ func (s *Server) coldSessionJSON(id string, ix engine.SessionIndex, usable bool)
 	}
 	if lv := s.resolveLive(id); lv.session() != nil {
 		body = s.buildSession(lv)
+	} else if managerStatus != "" {
+		// Session is managed but not resident and not loadable. Use the
+		// manager's lifecycle status for the response.
+		body.Status = managerStatus
 	}
 	return body, true
 }

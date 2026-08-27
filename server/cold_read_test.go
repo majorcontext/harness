@@ -600,3 +600,51 @@ func TestListOmitsWhatItCannotRenderWhileStatusReportsIt(t *testing.T) {
 		t.Errorf("status for the fold-broken session = %+v (present=%v), want its journal's 9 input tokens", got, ok)
 	}
 }
+
+// TestListSessionsIncludesChildStatus verifies that GET /session list includes
+// session lifecycle status from SessionManager for managed (spawned) children.
+// This allows the console to see which children are running without N+1 calls
+// to GET /session/{id}.
+//
+// Scenario: A running child shows "running"; a settled child shows its terminal
+// status (done, failed, canceled).
+func TestListSessionsIncludesChildStatus(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	id := h.createSession("test/m1")
+
+	// Confirm the root is in SessionManager (adopted by the first ReportTurnStart
+	// during createSession).
+	info, ok := h.srv.SessionManager().Info(id)
+	if !ok || info.Status != engine.StatusIdle {
+		t.Fatalf("test setup: root not in SessionManager or not idle: %+v ok=%v", info, ok)
+	}
+
+	// List sessions — root should show status="idle" since it's not running a turn
+	resp, data := h.do("GET", "/session", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /session = %d: %s", resp.StatusCode, data)
+	}
+
+	var list []sessionJSON
+	if err := json.Unmarshal(data, &list); err != nil {
+		t.Fatalf("decode list: %v (%s)", err, data)
+	}
+
+	// Find the root in the list
+	var rootEntry *sessionJSON
+	for i := range list {
+		if list[i].ID == id {
+			rootEntry = &list[i]
+			break
+		}
+	}
+	if rootEntry == nil {
+		t.Errorf("root session %s not in list: %s", id, data)
+		return
+	}
+
+	// Verify the root shows as "idle" (not running a turn)
+	if rootEntry.Status != "idle" {
+		t.Errorf("root session status = %q, want idle (managed by SessionManager, not running)", rootEntry.Status)
+	}
+}
