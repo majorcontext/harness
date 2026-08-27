@@ -426,28 +426,23 @@ func decodeRecordHeadFull(raw []byte) (recordHead, bool) {
 
 // foldedPage is the general path, for a journal that carries at least one
 // compact record. It folds the journal exactly as LoadSession does — the
-// same indexFold, so the same applyCompactRecord — to learn WHICH message
-// ids occupy seqs lo..hi, then decodes just those records.
+// same compactRecordBounds and spliceCompactBounds — to learn WHICH message
+// occurrences occupy seqs lo..hi, then decodes just those records.
 //
 // One pass, two decode depths. Every line is folded through indexRecord:
 // ids, roles, timestamps, and tool-call ids, never a message body. The same
-// pass keeps each record's raw line, keyed by the id that record
-// contributes, as a subslice of data rather than a copy. Only the handful
-// of lines a page actually carries is then decoded in full.
+// pass keeps each contributing record's raw line, keyed by its journal
+// ordinal, as a subslice of data rather than a copy. indexFold carries that
+// occurrence-aware ordinal beside every surviving skeleton message, so even
+// repeated message IDs resolve to the exact record the fold retained. Only
+// the handful of lines a page actually carries is then decoded in full.
 //
-// The line map holds one entry per message record in the folded prefix, not
-// one per message in the resulting sequence: a record a compaction folded
-// away keeps its entry. That is deliberate. Each entry is an id string and
-// a slice header beside a prefix this function already holds in memory in
-// full, so pruning would trade a few percent of that for a pass per
-// compaction.
-//
-// An id that appears on two records keeps the FIRST. Engine-minted ids are
-// unique, and the one production source of a repeat is a provider-derived
-// id hashed from the message's own text (message.ProviderCallID), where the
-// two records carry the same content anyway. A journal that repeats an id
-// with DIFFERENT content is damaged, and this renders the first of them
-// rather than the last.
+// The line map holds one entry per contributing message/compact record in
+// the folded prefix, not one per message in the resulting sequence: a record
+// a compaction folded away keeps its entry. That is deliberate. Each entry
+// is an integer ordinal and a slice header beside a prefix this function
+// already holds in memory in full, so pruning would trade little memory for
+// a pass per compaction.
 //
 // An earlier revision ran a SECOND scanLog over the journal, decoding every
 // line into a full record to find the wanted ones. That decoded every
@@ -455,17 +450,9 @@ func decodeRecordHeadFull(raw []byte) (recordHead, bool) {
 // avoid — a review caught it. The raw-line map is what removes it.
 func foldedPage(data []byte, lo, hi int) ([]message.Message, error) {
 	var fold indexFold
-	// lineByID aliases data; it never copies a record.
-	//
-	// Known gap, issue #199: it keeps the FIRST line carrying each id, so a
-	// journal that repeats a message id — one occurrence folded away by a
-	// compact record, the other surviving — serves the wrong record's
-	// content under a right sequence number. Not reachable from this
-	// package's own writer (ids are per message, one writer per journal),
-	// and fixing it properly means teaching indexFold to carry each
-	// surviving message's record ordinal, so it is filed rather than
-	// patched here.
-	lineByID := make(map[string][]byte)
+	// lineByOrdinal aliases data; it never copies a record. Ordinals are the
+	// fold's own occurrence identity, not user/provider-controlled message IDs.
+	lineByOrdinal := make(map[int][]byte)
 	err := scanLogRaw(data, func(line []byte, n int, isLast bool) error {
 		var rec indexRecord
 		if err := json.Unmarshal(line, &rec); err != nil {
@@ -492,9 +479,7 @@ func foldedPage(data []byte, lo, hi int) ([]message.Message, error) {
 			contributes = rec.Compact.Summary.ID
 		}
 		if contributes != "" {
-			if _, seen := lineByID[contributes]; !seen {
-				lineByID[contributes] = line
-			}
+			lineByOrdinal[fold.recordOrdinal] = line
 		}
 		return nil
 	})
@@ -507,12 +492,16 @@ func foldedPage(data []byte, lo, hi int) ([]message.Message, error) {
 	if hi > len(fold.messages) {
 		return nil, fmt.Errorf("message page [%d,%d]: journal folds to %d messages", lo, hi, len(fold.messages))
 	}
+	if len(fold.messageRecordOrdinals) != len(fold.messages) {
+		return nil, errors.New("message page: journal fold lost record provenance")
+	}
 	out := make([]message.Message, hi-lo+1)
 	for seq := lo; seq <= hi; seq++ {
 		id := fold.messages[seq-1].ID
-		line, ok := lineByID[id]
+		ordinal := fold.messageRecordOrdinals[seq-1]
+		line, ok := lineByOrdinal[ordinal]
 		if !ok {
-			return nil, fmt.Errorf("message page [%d,%d]: no record for message %q at seq %d", lo, hi, id, seq)
+			return nil, fmt.Errorf("message page [%d,%d]: no record %d for message %q at seq %d", lo, hi, ordinal, id, seq)
 		}
 		var rec record
 		if err := json.Unmarshal(line, &rec); err != nil {
@@ -527,6 +516,9 @@ func foldedPage(data []byte, lo, hi int) ([]message.Message, error) {
 		}
 		if msg == nil {
 			return nil, fmt.Errorf("message page [%d,%d]: record for message %q carries no message", lo, hi, id)
+		}
+		if msg.ID != id {
+			return nil, fmt.Errorf("message page [%d,%d]: record %d carries message %q, want %q", lo, hi, ordinal, msg.ID, id)
 		}
 		m := *msg
 		// The same ingest-time repair LoadSession applies to every message

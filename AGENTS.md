@@ -1177,9 +1177,14 @@ and both are numbered by the same index:
   it meets a compact record, because the messages a fold KEPT sit in the log
   between the folded range and the compact record itself — undoing that
   backwards would be a second, subtly different implementation of a fold.
-- The **fold path** then reuses `indexFold` — the same forward fold, so the
-  same `applyCompactRecord` — to learn which ids occupy the requested seqs,
-  and reads back just those records. It costs one slim pass (ids and roles,
+- The **fold path** then reuses `indexFold` — the same forward fold and the
+  same compact-range occurrence selection — to learn which messages occupy
+  the requested seqs. `indexFold` carries each surviving message's journal
+  record ordinal beside its skeleton; `foldedPage` reads back by that ordinal,
+  never by message ID alone. This matters for hand-written or externally
+  assembled journals that repeat an ID: one occurrence can be compacted away
+  while another survives, and the surviving sequence entry must decode the
+  surviving record. The path costs one slim pass (ids, roles, and ordinals,
   never message bodies), which is still three orders of magnitude below
   materializing the history.
 

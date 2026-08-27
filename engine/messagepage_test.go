@@ -457,6 +457,40 @@ func TestReadMessagePageTailAndFoldPathsAgree(t *testing.T) {
 	}
 }
 
+// TestFoldedPageUsesSurvivingRecordOccurrence reproduces issue #199: the
+// first of two records carrying one message ID is folded away, while the
+// second survives. Sequence identity alone is ambiguous; the page must decode
+// the surviving record occurrence, not the first raw line with that ID.
+func TestFoldedPageUsesSurvivingRecordOccurrence(t *testing.T) {
+	dir := t.TempDir()
+	id := "ses_0123456789abcdef"
+	journal := `{"type":"session","id":"ses_0123456789abcdef","created_at":"2026-01-02T03:04:05Z","workdir":"/w"}
+{"type":"model","model":"test/m1"}
+{"type":"message","message":{"id":"msg_repeat","role":"user","parts":[{"type":"text","text":"OLD folded occurrence"}]}}
+{"type":"message","message":{"id":"msg_fold_end","role":"assistant","parts":[{"type":"text","text":"fold me"}]}}
+{"type":"compact","compact":{"first_id":"msg_repeat","last_id":"msg_fold_end","turns_folded":1,"summary":{"id":"msg_summary","role":"user","parts":[{"type":"text","text":"SUMMARY"}]}}}
+{"type":"message","message":{"id":"msg_repeat","role":"assistant","parts":[{"type":"text","text":"NEW surviving occurrence"}]}}
+`
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(journal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := ReadMessagePage(dir, id, 0, 2)
+	if err != nil {
+		t.Fatalf("ReadMessagePage: %v", err)
+	}
+	if got := idsOf(page.Messages); !sameIDs(got, []string{"msg_summary", "msg_repeat"}) {
+		t.Fatalf("page ids = %v, want [msg_summary msg_repeat]", got)
+	}
+	if page.Messages[1].Role != message.RoleAssistant {
+		t.Errorf("repeated message role = %q, want assistant from surviving occurrence", page.Messages[1].Role)
+	}
+	text, ok := page.Messages[1].Parts[0].(*message.Text)
+	if !ok || text.Text != "NEW surviving occurrence" {
+		t.Fatalf("repeated message content = %#v, want NEW surviving occurrence", page.Messages[1].Parts)
+	}
+}
+
 // TestReadMessagePageSkipsDerivedRepairMessages: a journal whose last turn
 // died between a tool call and its result. A full load repairs it with a
 // synthetic tool result, and GET /session counts that message. A page must

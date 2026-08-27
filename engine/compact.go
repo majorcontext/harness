@@ -644,6 +644,17 @@ func (s *Session) runCompactionSummary(ctx context.Context, model message.ModelR
 // apart. firstID/lastID not found (in order) within history is corruption —
 // an explicit error, never a silent best-effort guess.
 func spliceCompact(history []message.Message, firstID, lastID string, summary message.Message) ([]message.Message, error) {
+	start, end, err := compactBounds(history, firstID, lastID)
+	if err != nil {
+		return nil, err
+	}
+	return spliceCompactBounds(history, start, end, summary), nil
+}
+
+// compactBounds returns the exact occurrence range spliceCompact selects.
+// Keeping occurrence selection separate from the splice lets indexFold apply
+// the identical range to its parallel record-provenance slice.
+func compactBounds(history []message.Message, firstID, lastID string) (int, int, error) {
 	start, end := -1, -1
 	for i, m := range history {
 		if start == -1 && m.ID == firstID {
@@ -655,13 +666,17 @@ func spliceCompact(history []message.Message, firstID, lastID string, summary me
 		}
 	}
 	if start == -1 || end == -1 {
-		return nil, fmt.Errorf("engine: compact record range [%s, %s] not found in history", firstID, lastID)
+		return 0, 0, fmt.Errorf("engine: compact record range [%s, %s] not found in history", firstID, lastID)
 	}
+	return start, end, nil
+}
+
+func spliceCompactBounds(history []message.Message, start, end int, summary message.Message) []message.Message {
 	out := make([]message.Message, 0, len(history)-(end-start+1)+1)
 	out = append(out, history[:start]...)
 	out = append(out, summary)
 	out = append(out, history[end+1:]...)
-	return out, nil
+	return out
 }
 
 // indexOfMessageID returns the index of the first message in history whose
@@ -731,12 +746,25 @@ func healCompactFoldEnd(history []message.Message, firstID string, turnsFolded i
 // for it. A failed heal falls through unchanged, so spliceCompact returns
 // its usual loud error rather than a silent best-effort guess.
 func applyCompactRecord(history []message.Message, firstID, lastID string, turnsFolded int, summary message.Message) ([]message.Message, error) {
+	start, end, err := compactRecordBounds(history, firstID, lastID, turnsFolded)
+	if err != nil {
+		return nil, err
+	}
+	return spliceCompactBounds(history, start, end, summary), nil
+}
+
+// compactRecordBounds is applyCompactRecord's occurrence-aware half: it
+// performs the same missing-last-id heal, then returns the exact range that
+// will be replaced. indexFold uses these bounds for both its message skeleton
+// and the parallel journal-record provenance, so repeated IDs cannot make the
+// two slices select different occurrences.
+func compactRecordBounds(history []message.Message, firstID, lastID string, turnsFolded int) (int, int, error) {
 	if _, found := indexOfMessageID(history, lastID); !found {
 		if healed, err := healCompactFoldEnd(history, firstID, turnsFolded); err == nil {
 			lastID = healed
 		}
 	}
-	return spliceCompact(history, firstID, lastID, summary)
+	return compactBounds(history, firstID, lastID)
 }
 
 // bytesPerTokenEstimate is the standard ~4-bytes-per-token heuristic used by
