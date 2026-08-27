@@ -1043,11 +1043,23 @@ func (s *Session) ensureLog() error {
 		}
 	}
 	s.logStarted = true
-	// A fold marked broken by a failed record write is re-seeded here, from
+	// A fold marked broken by a failed record write is RE-SEEDED here, from
 	// the journal as the repair above left it. Without this, one transient
 	// write failure disabled the index for the rest of the session object's
 	// life: every later read of that session refolded the whole journal,
 	// which is the cost the index exists to remove. A review caught it.
+	//
+	// Re-seed, never merely clear the flag. That distinction is the whole
+	// correctness argument, and a maintainer who "simplifies" this to
+	// `s.index.broken = false` reintroduces a silent wrong-index bug. A
+	// failed Write can land the record's bytes and not its trailing
+	// newline. The tail repair above then takes its case-2 branch: the tail
+	// parses, so it terminates the record and KEEPS it. The fold never saw
+	// that record. Clearing the flag would resume flushing a sidecar that
+	// is short by one message while claiming, through logSize, to cover the
+	// whole file — a stale index that reads as current. Folding the file
+	// again is what makes the fold agree with the bytes on disk, whichever
+	// branch the repair took.
 	//
 	// This runs on a reopen, which a failed write forces (see writeRecord),
 	// so it costs one slim fold per failure rather than per record. A fold
