@@ -357,6 +357,12 @@ type Options struct {
 	// address, exactly like /session and /debug/goroutines. Enable this
 	// only where that reachability is already the trusted gate the
 	// Unauthenticated opt-in asserts.
+	//
+	// This flag is the ONLY way profiling becomes reachable: server/pprof.go
+	// implements the handlers on runtime/pprof directly and never imports
+	// net/http/pprof, whose init would register /debug/pprof/* on
+	// http.DefaultServeMux for the whole linked binary regardless of this
+	// field. See that file's header.
 	PProf bool
 }
 

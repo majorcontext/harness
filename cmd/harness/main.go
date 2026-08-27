@@ -1265,7 +1265,7 @@ func serveCmd(args []string) error {
 		return nil
 	})
 	var enablePProf bool
-	fs.BoolVar(&enablePProf, "pprof", false, "serve the net/http/pprof profiles under /debug/pprof/, behind the same bearer check as every other route; off by default")
+	fs.BoolVar(&enablePProf, "pprof", false, "serve the Go runtime profiles under /debug/pprof/, behind the same bearer check as every other route; off by default")
 	var agentDefDirs []string
 	fs.Func("agent-def-dir", "directory of custom task-tool agent definitions to advertise (repeatable); overrides config agent_defs_dirs", func(v string) error {
 		agentDefDirs = append(agentDefDirs, v)

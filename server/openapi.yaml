@@ -2715,11 +2715,15 @@ paths:
         Present ONLY when this instance was started with `harness serve
         -pprof`; it 404s otherwise, exactly as any other unmatched path.
         Authed like every other route. A diagnostic surface, not a stable
-        API: the response is whatever net/http/pprof produces for the named
-        profile — a binary pprof profile by default, or plain text with
-        `?debug=1`. Omit the path segment (`/debug/pprof/`) for the HTML
-        index. `profile` additionally accepts `cmdline`, `profile` (CPU,
-        `?seconds=N`), `symbol`, and `trace`.
+        API: the response is a binary pprof profile by default, or plain
+        text with `?debug=1`. Omit the path segment (`/debug/pprof/`) for a
+        plain-text listing of the profiles this server serves. Besides the
+        runtime's own profiles (`goroutine`, `heap`, `allocs`, `block`,
+        `mutex`, `threadcreate`), `profile` names accepted here are
+        `profile` (CPU) and `trace`, both taking `?seconds=N` clamped to
+        1-60 (default 30), and `cmdline`. A second concurrent CPU profile or
+        trace answers 409. `symbol` is NOT served: `go tool pprof`
+        symbolizes against the binary a profile came from.
       parameters:
         - name: profile
           in: path
@@ -2731,6 +2735,18 @@ paths:
           required: false
           schema: { type: integer }
           description: 1 or 2 for plain text instead of the binary format.
+        - name: seconds
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 60 }
+          description: >
+            Duration for `profile` and `trace`, clamped to 1-60, default 30.
+            A malformed or repeated value is a 400.
+        - name: gc
+          in: query
+          required: false
+          schema: { type: integer }
+          description: 1 runs a garbage collection before reading `heap`.
       responses:
         "200":
           description: OK — a pprof profile.
@@ -2739,7 +2755,22 @@ paths:
               schema: { type: string, format: binary }
             text/plain:
               schema: { type: string }
+        "400":
+          description: A query parameter was malformed or repeated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: No such profile, or this instance was started without `-pprof`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: A CPU profile or trace is already running in this process.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /:
     get:
