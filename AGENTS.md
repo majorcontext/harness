@@ -1143,6 +1143,82 @@ The sidecar never gets an `fsync`: losing it in a crash costs one refold.
 Plugins are process configuration, not durable session state, and a cold
 read has no `Session` to ask.
 
+### Journal snapshotting
+
+`LoadSession` does not always replay a whole journal. Beside the log sits
+`<id>.snap`, a **seq-anchored checkpoint**: the fold-produced state as of
+journal line N, plus a CRC-32 and a format version. Recovery loads the
+snapshot, applies the session HEADER record (line 1, always — it is what
+carries `created_at`, workdir, and task lineage, whose restore rules turn on
+absent-versus-present and are not worth reproducing twice), and then replays
+only lines `> N`. The tail scan reads through `scanLogRaw`, so a covered
+record is never DECODED: skipping the decode of a message record's whole
+part tree is where the saving is. Design:
+docs/design/journal-snapshotting.md.
+
+The snapshot schema is EXPLICIT (`sessionSnapshot`, `engine/snapshot.go`),
+never `json.Marshal` of a `*Session`: every field but `ID` is unexported,
+and the config carries live callbacks, a `SessionManager` pointer, and open
+file handles that must never be serialized. The rule for what belongs in it
+is **exactly what the folds reconstruct** — a fold added without a matching
+snapshot field is silently dropped, which is what
+`TestSnapshotCarriesEveryFoldedField` and the replay-equivalence tests pin.
+Two exclusions are deliberate: header-derived state (replayed instead), and
+`turn`/`lastSystem`, which have NO durable source at all — capturing them
+would make a snapshot-loaded session disagree with a full replay of the same
+journal and make an observable field depend on whether a snapshot happened
+to exist.
+
+The invariant is `state(snapshot@N) + replay(N+1..head) ≡
+full-replay(0..head)`. Every doubt falls back to a full replay: no snapshot,
+a torn one, a checksum mismatch, a wrong version, another session's id, a
+`seq` ahead of the journal head, or a journal whose first record is not a
+session header. **Slower, never wrong.** The journal is never truncated;
+snapshots are derived and can be deleted at any time.
+
+**The trigger is at the APPEND BOUNDARY, never inside `writeRecord`.** A
+snapshot pairs a memory image with a journal position, and inside
+`writeRecord` the two do not yet agree: some callers persist their record
+BEFORE applying their own memory mutation (`EnqueuePromptDurable`,
+deliberately), so a capture there would anchor past a record whose effect
+memory has not applied — and the reload would skip that record and lose the
+effect forever. `appendWithUsage` (after `persistMessage`, still under
+`s.mu`) and the on-idle trigger (`runAgenticLoop`'s defer, and
+`ReleaseFiles` on eviction) are the two boundaries where the caller has
+completed both halves.
+
+The OPPOSITE direction is guarded by `snapshotSafeLocked`:
+`SessionManager` splits some mutations into an in-memory half and a
+DEFERRED durable half (`appendMemoryOnly`/`persistAppendedMessage`,
+`enqueueTaskNotificationMemoryOnly*`/`persistQueuedTaskNotification`,
+`queueRecordDeferredLocked`), so memory can be AHEAD of the journal. A
+snapshot taken in that window carries the mutation AND leaves its record in
+the tail, and the reload applies it twice — a duplicated message, or a
+child-completion notification the parent renders to the model twice.
+`Session.durableDebt` counts the outstanding halves; a capture is refused
+while any is open, which merely postpones the snapshot to the next
+boundary. The debt clamps at zero: a leaked increment stops this session
+snapshotting (degrading to today's full replay), where a negative count
+would ARM a capture in exactly the unsafe window.
+
+`Config.SnapshotEveryRecords` is the cadence. Zero — the engine zero value —
+disables snapshot WRITING, so a bare embedder-built `engine.Config` keeps
+the pre-snapshot behavior; the config/CLI layer supplies the product default
+of 64 (`snapshot_every_records`), the same unset-versus-explicit-zero split
+`prompt_retries` uses. READING a snapshot is never gated on it: recovery is
+a property of the files on disk, not of the loading Config. A snapshot write
+is background, coalesced (one in flight per session), and atomic (temp →
+fsync → rename), and its failure lands in `lastSnapshotErr`, never
+`lastPersistErr` — a snapshot is derived acceleration, not a durability
+promise.
+
+A load that takes the snapshot path marks the metadata-index fold BROKEN
+rather than building a partial one: the index summarizes EVERY record, and
+this load deliberately did not see most of them. The index is a cache with
+no repair path, so a reader that finds none refolds and `ensureLog` re-seeds
+the fold from the journal on this session's next write. Snapshotting the
+index fold itself is the obvious follow-up; nothing may guess at it.
+
 ### Paginated message reads
 
 `GET /session/{id}/message?before_seq=N&limit=K` answers one bounded page of

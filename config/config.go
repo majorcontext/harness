@@ -143,6 +143,20 @@ type Config struct {
 	// like PromptRetries above. Resolve it with
 	// MaxTokensContinuationsValue.
 	MaxTokensContinuations *int `json:"max_tokens_continuations,omitempty"`
+	// SnapshotEveryRecords sets engine.Config.SnapshotEveryRecords: how
+	// many journal records a session appends before it checkpoints its
+	// state into a <session-id>.snap file beside the journal, so a later
+	// load replays only the records after that checkpoint instead of the
+	// whole log (see package engine's snapshot.go and
+	// docs/design/journal-snapshotting.md). A nil value (the field
+	// omitted) leaves the product default of 64 in place; an explicit 0
+	// disables snapshot WRITING entirely, reverting to a full replay on
+	// every load. Reading an existing snapshot is never gated on this
+	// key — recovery is a property of the files on disk. A *int
+	// distinguishes "unset" (64) from "0" (off) across the project-config
+	// merge, exactly like PromptRetries above. Resolve it with
+	// SnapshotEveryRecordsValue.
+	SnapshotEveryRecords *int `json:"snapshot_every_records,omitempty"`
 	// StreamIdleTimeoutS sets engine.Config.StreamIdleTimeout (in seconds)
 	// for every session this process creates: how long a streamed response
 	// may go without a delta before the engine's idle-stream watchdog aborts
@@ -1003,6 +1017,9 @@ func merge(base, over *Config) *Config {
 	if over.MaxTokensContinuations != nil {
 		out.MaxTokensContinuations = over.MaxTokensContinuations
 	}
+	if over.SnapshotEveryRecords != nil {
+		out.SnapshotEveryRecords = over.SnapshotEveryRecords
+	}
 	if over.StreamIdleTimeoutS != 0 {
 		out.StreamIdleTimeoutS = over.StreamIdleTimeoutS
 	}
@@ -1260,6 +1277,25 @@ func (c *Config) MaxTokensContinuationsValue() int {
 		return defaultMaxTokensContinuations
 	}
 	return *c.MaxTokensContinuations
+}
+
+// defaultSnapshotEveryRecords is the product default journal-snapshot
+// cadence when `snapshot_every_records` is unset (see
+// SnapshotEveryRecordsValue and engine.Config.SnapshotEveryRecords). It
+// lives here, not in engine.Config's zero value, so an embedder building a
+// bare engine.Config keeps the pre-snapshot behavior — the same split
+// defaultPromptRetries uses.
+const defaultSnapshotEveryRecords = 64
+
+// SnapshotEveryRecordsValue reports the journal-snapshot cadence. The
+// default is defaultSnapshotEveryRecords (64): only an explicit
+// `snapshot_every_records: 0` turns snapshot writing off. A nil receiver
+// (no config) uses the default too.
+func (c *Config) SnapshotEveryRecordsValue() int {
+	if c == nil || c.SnapshotEveryRecords == nil {
+		return defaultSnapshotEveryRecords
+	}
+	return *c.SnapshotEveryRecords
 }
 
 // defaultToolResultInlineBytes / defaultToolResultRetainedBytes are the

@@ -139,6 +139,10 @@ func (s *Session) enqueueTaskNotification(n taskNotification) {
 func (s *Session) enqueueTaskNotificationMemoryOnly(n taskNotification) {
 	s.mu.Lock()
 	s.taskNotifications = append(s.taskNotifications, n)
+	// Memory ahead of the journal until persistQueuedTaskNotification runs
+	// — see snapshotSafeLocked (snapshot.go) for why a snapshot must not be
+	// captured in this window.
+	s.durableDebt++
 	s.mu.Unlock()
 }
 
@@ -172,6 +176,9 @@ func (s *Session) enqueueTaskNotificationMemoryOnlyDeduped(n taskNotification) b
 		}
 	}
 	s.taskNotifications = append(s.taskNotifications, n)
+	// Same debt as enqueueTaskNotificationMemoryOnly, and only on the
+	// branch whose caller goes on to persist.
+	s.durableDebt++
 	return true
 }
 
@@ -188,6 +195,9 @@ func (s *Session) enqueueTaskNotificationMemoryOnlyDeduped(n taskNotification) b
 func (s *Session) persistQueuedTaskNotification(n taskNotification) {
 	s.mu.Lock()
 	s.persistTaskNotifyLocked(recTaskNotifyQueued, n)
+	// The journal has caught up with the memory-only enqueue this pairs
+	// with — see snapshotSafeLocked (snapshot.go).
+	s.settleDurableDebtLocked()
 	s.mu.Unlock()
 }
 

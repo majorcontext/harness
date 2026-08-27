@@ -753,6 +753,7 @@ func runCmd(args []string) error {
 		StreamIdleTimeout:       time.Duration(cfg.StreamIdleTimeoutS) * time.Second,
 		PromptRetries:           cfg.PromptRetriesValue(),
 		MaxTokensContinuations:  cfg.MaxTokensContinuationsValue(),
+		SnapshotEveryRecords:    cfg.SnapshotEveryRecordsValue(),
 		CompactionThreshold:     cfg.CompactionThreshold,
 		CompactionKeepTurns:     cfg.CompactionKeepTurns,
 		// Tool-result retention (config keys tool_result_inline_bytes /
@@ -1562,6 +1563,7 @@ func serveCmd(args []string) error {
 			StreamIdleTimeout:       time.Duration(cfg.StreamIdleTimeoutS) * time.Second,
 			PromptRetries:           cfg.PromptRetriesValue(),
 			MaxTokensContinuations:  cfg.MaxTokensContinuationsValue(),
+			SnapshotEveryRecords:    cfg.SnapshotEveryRecordsValue(),
 			CompactionThreshold:     cfg.CompactionThreshold,
 			CompactionKeepTurns:     cfg.CompactionKeepTurns,
 			// Tool-result retention, same keys and defaults as runCmd

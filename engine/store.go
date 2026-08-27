@@ -1038,6 +1038,10 @@ func (s *Session) ensureLog() error {
 		for _, rec := range headerRecs {
 			s.index.applyIndexRecordBestEffort(indexRecordOf(rec), false)
 		}
+		// Same reason the fold is applied here: these records bypass
+		// writeRecord, so the snapshot anchor must count them here or every
+		// seq this session ever takes is short by the header's length.
+		s.recordsWritten += int64(len(headerRecs))
 		// A file fsync (as EnqueuePromptDurable does before attesting
 		// durability — see queue.go) commits the file's *contents* but not
 		// its directory entry: POSIX leaves the entry itself up to the
@@ -1148,6 +1152,13 @@ func (s *Session) ensureLog() error {
 func (s *Session) ReleaseFiles() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Eviction is the on-idle trigger's other half (docs/design/journal-
+	// snapshotting.md §4.6): the caller has already decided this session
+	// is idle and will be reloaded from disk, so checkpointing now is
+	// exactly what makes that reload cheap. Background, coalesced, and a
+	// no-op when nothing has been written since the last snapshot — see
+	// snapshot.go.
+	s.snapshotIdleLocked()
 	if s.logFile != nil {
 		s.logFile.Close()
 		s.logFile = nil
@@ -1193,8 +1204,24 @@ func (s *Session) writeRecord(rec record) error {
 		return err
 	}
 	s.logSize += int64(n)
+	// The journal head advanced by exactly one record, so the snapshot
+	// anchor does too (see Session.recordsWritten). Only a record that
+	// actually landed counts: the failed-write branch above returns before
+	// this line, so a torn line can never be named by a snapshot's seq.
+	s.recordsWritten++
 	s.index.applyIndexRecordBestEffort(indexRecordOf(rec), false)
 	s.flushIndexLocked()
+	// Deliberately NO snapshot trigger here, though this is the single
+	// record choke point and so the obvious place for one. A snapshot
+	// captures MEMORY and anchors it to a JOURNAL POSITION, and inside
+	// this function the two do not yet agree: several callers persist
+	// their record BEFORE they apply their own in-memory mutation
+	// (EnqueuePromptDurable, deliberately — see queue.go), so a capture
+	// taken here would anchor past a record whose effect memory has not
+	// applied, and the reload would skip that record and lose the effect
+	// permanently. The trigger lives at the append boundary instead (see
+	// Session.maybeSnapshotLocked call sites), where the caller has
+	// completed both halves.
 	return nil
 }
 
@@ -1279,13 +1306,45 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 	s.ID = id
 	s.logStarted = true
 
-	// The prompt queue folds through promptQueueFold (queue.go), seeded
-	// from this fresh session's own counters and written back after the
-	// scan — the same fold the metadata index uses, so the two can never
-	// drift on the torn-write and ID-burn rules it holds.
-	qf := promptQueueFold{nextID: s.promptQueueNextID, seq: s.enqueueSeq}
+	// The journal head, in LINES. It is the domain the snapshot anchor
+	// lives in (see Session.recordsWritten) and it costs a byte scan, no
+	// decoding. It can exceed the number of records the scan below
+	// actually applies by one, when a crash mid-write left a torn final
+	// line; the loop corrects s.recordsWritten to the last line genuinely
+	// applied, so a session resumed over a torn tail keeps taking anchors
+	// that agree with the line numbers a later load will see.
+	head := countJournalRecords(data)
 
-	err = scanLog(data, func(rec record, line int, isLast bool) error {
+	// Snapshot-aware recovery (snapshot.go and docs/design/journal-
+	// snapshotting.md §4.3). startAfter is the last journal line a valid
+	// snapshot covers — 0 when there is no usable one, which is a full
+	// replay and exactly the behavior this function had before snapshots
+	// existed. snapshotStartAfter has already applied the session header
+	// and restored the snapshot's state by the time it returns non-zero.
+	startAfter := s.snapshotStartAfter(cfg.SessionDir, id, data, head)
+	if startAfter > 0 {
+		s.snapshotSeq = startAfter
+		// The metadata index (index.go) is a fold of EVERY record, and
+		// this load is deliberately not going to see most of them. Mark it
+		// broken rather than build a partial fold that would flush a
+		// sidecar claiming to summarize the whole journal while describing
+		// its tail. The index is a cache with no repair path: a reader
+		// that finds none refolds, and this session's next write re-seeds
+		// the fold from the journal in ensureLog. Snapshotting the index
+		// fold itself is a possible follow-up; nothing here may guess at
+		// it.
+		s.index.broken = true
+	}
+
+	// The prompt queue folds through promptQueueFold (queue.go), seeded
+	// from this fresh session's own counters — or from the snapshot's
+	// restored queue, so the tail's prompt.queued/prompt.dequeued records
+	// fold onto the state the snapshot already holds — and written back
+	// after the scan. It is the same fold the metadata index uses, so the
+	// two can never drift on the torn-write and ID-burn rules it holds.
+	qf := promptQueueFold{queue: s.promptQueue, nextID: s.promptQueueNextID, seq: s.enqueueSeq}
+
+	apply := func(rec record, line int, isLast bool) error {
 		// Seed the session's metadata-index fold from the same records
 		// (index.go). A resumed session keeps writing that index through
 		// on every later record, so it must start from the state this
@@ -1295,67 +1354,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 		s.index.applyIndexRecordBestEffort(indexRecordOf(rec), isLast)
 		switch rec.Type {
 		case recSession:
-			s.createdAt = rec.CreatedAt
-			// A restored WorkDir wins over the loading Config.WorkDir: the
-			// header is the durable truth for a resumed session. A legacy
-			// header (written before this field existed) omits it, so an
-			// empty value here means "nothing to restore" — the loading
-			// Config.WorkDir is kept unchanged.
-			if rec.WorkDir != "" {
-				s.cfg.WorkDir = rec.WorkDir
-			}
-			// Same restore rule as WorkDir above: the header is the durable
-			// truth for a resumed session, and an empty value here means
-			// nothing to restore (legacy header, or no lineage recorded),
-			// never "clear the loading Config's ParentSession".
-			if rec.ParentSession != "" {
-				s.cfg.ParentSession = rec.ParentSession
-			}
-			// Same restore rule, but see Config.TaskParentID's doc comment
-			// for why this is a different field entirely from
-			// ParentSession above.
-			if rec.TaskParentID != "" {
-				s.cfg.TaskParentID = rec.TaskParentID
-			}
-			// Same restore rule again — see Config.TaskAgentType/
-			// TaskToolNames's own doc comment.
-			if rec.TaskAgentType != "" {
-				s.cfg.TaskAgentType = rec.TaskAgentType
-			}
-			if rec.TaskToolNames != nil {
-				s.cfg.TaskToolNames = *rec.TaskToolNames
-			}
-			// Same restore rule again — see Config.TaskDepth's own doc
-			// comment. 0 means "this header genuinely predates the field"
-			// (a real depth is always >= 1) — but unlike ParentSession/
-			// TaskAgentType above, the loading Config's OWN TaskDepth is
-			// NOT always safe to leave untouched on that branch: it is not
-			// guaranteed unpopulated the way this restore rule assumes
-			// elsewhere. SessionManager's crash-recovery sweep
-			// (recoverCrashedChildrenLocked, session_manager.go) calls
-			// LoadSession with a Config built from configSnapshot() of the
-			// PARENT node currently being adopted — which, since
-			// configSnapshot copies Config by value, carries THAT PARENT's
-			// own live TaskDepth. A legacy child (this header predates the
-			// field) loaded under that Config would otherwise silently
-			// inherit its parent's depth instead of correctly falling back
-			// to adoptReloadedLocked's own m.maxDepth refusal sentinel.
-			// Reset to 0 unconditionally whenever s.cfg.TaskParentID is
-			// non-empty (this IS a task-tool child, restored above either
-			// from this record or the loading Config) but this specific
-			// header recorded no depth, so the sentinel fallback always
-			// applies for a genuinely legacy child regardless of what the
-			// loading Config happened to carry in for an unrelated reason.
-			// A genuine root (TaskParentID empty either way) is unaffected
-			// either branch — TaskDepth is never read for one.
-			if rec.TaskDepth > 0 {
-				s.cfg.TaskDepth = rec.TaskDepth
-			} else if s.cfg.TaskParentID != "" {
-				s.cfg.TaskDepth = 0
-			}
-			// The effort at create time. Omitted (EffortUnset) on a legacy
-			// header, which restores as the provider default — unchanged.
-			s.effort = rec.Effort
+			s.applySessionHeader(rec)
 		case recMessage:
 			if rec.Message == nil {
 				if isLast {
@@ -1670,9 +1669,48 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			}
 		}
 		return nil
+	}
+
+	// The tail scan. scanLogRaw, not scanLog, so a record the snapshot
+	// already covers is never DECODED — skipping the decode is where the
+	// saving is, since decoding a message record builds its whole part
+	// tree. The decode below reproduces scanLog's corruption discipline
+	// verbatim (a corrupt or truncated FINAL line ends the scan silently;
+	// corruption anywhere else is an error, with the same message text) so
+	// the two paths cannot drift.
+	//
+	// A corrupt record at or before the anchor is not detected on the
+	// snapshot path. That is the accepted consequence of not reading it:
+	// the snapshot was DERIVED from those exact records by the process
+	// that wrote them, so its state already reflects them.
+	err = scanLogRaw(data, func(raw []byte, line int, isLast bool) error {
+		if int64(line) <= startAfter {
+			s.recordsWritten = int64(line)
+			return nil // covered by the snapshot; the header is already applied
+		}
+		var rec record
+		if err := json.Unmarshal(raw, &rec); err != nil {
+			if isLast {
+				return errTruncatedFinalRecord // crash mid-write, ignore
+			}
+			return fmt.Errorf("corrupt record at line %d: %v", line, err)
+		}
+		s.replayedRecords++
+		// Only a line that DECODED counts toward the head: a torn final
+		// line returns above, and ensureLog's own tail repair removes it
+		// from the file before this session appends again.
+		s.recordsWritten = int64(line)
+		return apply(rec, line, isLast)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: session %s: %w", id, err)
+	}
+	if startAfter > 0 {
+		// The header record this load applied without folding it into the
+		// tail scan (see snapshotStartAfter) is still a record this load
+		// decoded, and the bounded-replay guarantee is stated over records
+		// decoded, not over records folded in one particular place.
+		s.replayedRecords++
 	}
 	s.promptQueue, s.promptQueueNextID, s.enqueueSeq = qf.queue, qf.nextID, qf.seq
 	// A log from an older binary or an external writer can carry an
@@ -1743,6 +1781,78 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 		s.tools[readToolResultToolName] = readToolResultTool()
 	}
 	return s, nil
+}
+
+// applySessionHeader restores the state a session's header record carries
+// into s: its creation time and the Config fields the header is the durable
+// truth for. Factored out of LoadSession's own recSession fold case because
+// snapshot recovery (snapshot.go) applies the header WITHOUT replaying any
+// other record — the header is line 1 of every journal, so replaying it
+// unconditionally is cheaper than reproducing these restore rules, each of
+// which turns on the difference between "this header omitted the field" and
+// "the loading Config already has a value", in a second place.
+func (s *Session) applySessionHeader(rec record) {
+	s.createdAt = rec.CreatedAt
+	// A restored WorkDir wins over the loading Config.WorkDir: the
+	// header is the durable truth for a resumed session. A legacy
+	// header (written before this field existed) omits it, so an
+	// empty value here means "nothing to restore" — the loading
+	// Config.WorkDir is kept unchanged.
+	if rec.WorkDir != "" {
+		s.cfg.WorkDir = rec.WorkDir
+	}
+	// Same restore rule as WorkDir above: the header is the durable
+	// truth for a resumed session, and an empty value here means
+	// nothing to restore (legacy header, or no lineage recorded),
+	// never "clear the loading Config's ParentSession".
+	if rec.ParentSession != "" {
+		s.cfg.ParentSession = rec.ParentSession
+	}
+	// Same restore rule, but see Config.TaskParentID's doc comment
+	// for why this is a different field entirely from
+	// ParentSession above.
+	if rec.TaskParentID != "" {
+		s.cfg.TaskParentID = rec.TaskParentID
+	}
+	// Same restore rule again — see Config.TaskAgentType/
+	// TaskToolNames's own doc comment.
+	if rec.TaskAgentType != "" {
+		s.cfg.TaskAgentType = rec.TaskAgentType
+	}
+	if rec.TaskToolNames != nil {
+		s.cfg.TaskToolNames = *rec.TaskToolNames
+	}
+	// Same restore rule again — see Config.TaskDepth's own doc
+	// comment. 0 means "this header genuinely predates the field"
+	// (a real depth is always >= 1) — but unlike ParentSession/
+	// TaskAgentType above, the loading Config's OWN TaskDepth is
+	// NOT always safe to leave untouched on that branch: it is not
+	// guaranteed unpopulated the way this restore rule assumes
+	// elsewhere. SessionManager's crash-recovery sweep
+	// (recoverCrashedChildrenLocked, session_manager.go) calls
+	// LoadSession with a Config built from configSnapshot() of the
+	// PARENT node currently being adopted — which, since
+	// configSnapshot copies Config by value, carries THAT PARENT's
+	// own live TaskDepth. A legacy child (this header predates the
+	// field) loaded under that Config would otherwise silently
+	// inherit its parent's depth instead of correctly falling back
+	// to adoptReloadedLocked's own m.maxDepth refusal sentinel.
+	// Reset to 0 unconditionally whenever s.cfg.TaskParentID is
+	// non-empty (this IS a task-tool child, restored above either
+	// from this record or the loading Config) but this specific
+	// header recorded no depth, so the sentinel fallback always
+	// applies for a genuinely legacy child regardless of what the
+	// loading Config happened to carry in for an unrelated reason.
+	// A genuine root (TaskParentID empty either way) is unaffected
+	// either branch — TaskDepth is never read for one.
+	if rec.TaskDepth > 0 {
+		s.cfg.TaskDepth = rec.TaskDepth
+	} else if s.cfg.TaskParentID != "" {
+		s.cfg.TaskDepth = 0
+	}
+	// The effort at create time. Omitted (EffortUnset) on a legacy
+	// header, which restores as the provider default — unchanged.
+	s.effort = rec.Effort
 }
 
 // toolResultHandleInTextPattern matches a canonical trh_N handle token

@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/majorcontext/harness/message"
@@ -879,6 +880,29 @@ type Config struct {
 	// bounds each of them, not their sum; a process-wide budget is the
 	// natural follow-up if that proves insufficient.
 	ToolReadBudgetBytes int64
+
+	// SnapshotEveryRecords is the journal-snapshot cadence: after this
+	// many records have been appended since the last snapshot, the session
+	// writes a new checkpoint beside its journal, so a later LoadSession
+	// replays only the records after it instead of the whole log. See
+	// snapshot.go and docs/design/journal-snapshotting.md.
+	//
+	// Zero or negative — the zero value — DISABLES snapshot WRITING
+	// entirely: an embedder building a bare engine.Config gets exactly the
+	// pre-snapshot behavior, with no .snap file ever created. The
+	// config/CLI layer supplies the product default of 64 (config key
+	// `snapshot_every_records`), the same unset-versus-explicit-zero split
+	// PromptRetries and MaxTokensContinuations use.
+	//
+	// READING a snapshot is never gated on this field. Recovery is a
+	// property of the files on disk, not of the loading Config: a session
+	// checkpointed by a process that had snapshotting on must load fast in
+	// a process that has it off, and a stale snapshot must be validated
+	// (and rejected) whatever this value is.
+	//
+	// Snapshot writing additionally requires SessionDir: with no session
+	// directory there is no journal to accelerate.
+	SnapshotEveryRecords int
 }
 
 // Session is one conversation: an in-memory history plus the agent loop.
@@ -1006,6 +1030,53 @@ type Session struct {
 	logFile        *os.File // session log; nil until first write (see store.go)
 	logStarted     bool     // the log file exists on disk
 	lastPersistErr error
+
+	// recordsWritten is the journal's head SEQ: the count of records this
+	// session's journal holds, which — because the log is append-only and
+	// never rewritten — is also the 1-based LINE NUMBER of its last
+	// record. It is the anchor a snapshot is taken at (see snapshot.go and
+	// docs/design/journal-snapshotting.md §4.3, decision 3: a live counter
+	// rather than a persisted per-record seq). Bumped under s.mu by
+	// writeRecord for every record that actually lands, by ensureLog for
+	// the header records that bypass writeRecord, and set by LoadSession
+	// to the head of the journal it replayed. Guarded by mu.
+	recordsWritten int64
+	// snapshotSeq is the anchor of the most recently SCHEDULED snapshot —
+	// see startSnapshotLocked for why it advances at scheduling time
+	// rather than on a successful write. snapshotting is the coalescing
+	// flag: at most one snapshot write is in flight per session.
+	// lastSnapshotErr holds the most recent snapshot write failure, and is
+	// deliberately NOT lastPersistErr: a snapshot is derived acceleration,
+	// never a durability promise. All three guarded by mu.
+	snapshotSeq     int64
+	snapshotting    bool
+	lastSnapshotErr error
+	// snapshotWG tracks in-flight snapshot writes so a caller can wait for
+	// a settled disk (waitSnapshots). snapshotWrites/snapshotInFlight/
+	// snapshotConcurrentPeak are the counters the coalescing invariant
+	// (rule 4) is asserted against; they are atomics because the
+	// background writer touches them while holding no lock.
+	snapshotWG             sync.WaitGroup
+	snapshotWrites         atomic.Int64
+	snapshotInFlight       atomic.Int64
+	snapshotConcurrentPeak atomic.Int64
+	// replayedRecords is how many journal records the LoadSession call
+	// that produced this session actually decoded and folded — the whole
+	// journal for a full replay, and only the header plus the post-anchor
+	// tail when a snapshot was used. It is the measurement the bounded-
+	// replay guarantee is stated over.
+	replayedRecords int64
+	// durableDebt counts in-memory mutations whose durable record has been
+	// DEFERRED and has not landed yet — SessionManager's
+	// appendMemoryOnly/persistAppendedMessage and
+	// enqueueTaskNotificationMemoryOnly*/persistQueuedTaskNotification
+	// pairs, which split the two halves so the disk write happens after
+	// m.mu releases (see unlockAndFlushPersist). While it is non-zero,
+	// memory is AHEAD of the journal and no snapshot may be captured: one
+	// taken in that window would carry the mutation AND leave its record
+	// in the tail for a reload to apply a second time. See
+	// snapshotSafeLocked. Guarded by mu.
+	durableDebt int
 
 	// index is the running fold of every record this session has written
 	// or replayed, and logSize the journal length that fold covers (see
@@ -1936,6 +2007,12 @@ func (s *Session) appendWithUsage(m message.Message, usage *provider.Usage) {
 		s.haveLastUsage = true
 	}
 	s.persistMessage(&m, usage)
+	// The append boundary (snapshot.go, rule 2): history, usage, and the
+	// journal all agree right here, and s.mu is already held, so this is
+	// where the every-K snapshot trigger belongs — not inside writeRecord,
+	// which runs before some callers have applied their own memory
+	// mutation. See maybeSnapshotLocked.
+	s.maybeSnapshotLocked()
 	s.mu.Unlock()
 }
 
@@ -1966,6 +2043,12 @@ func (s *Session) appendMemoryOnly(m message.Message) message.Message {
 	}
 	s.mu.Lock()
 	s.history = append(s.history, m)
+	// This append is MEMORY AHEAD OF THE JOURNAL until
+	// persistAppendedMessage runs, so a snapshot taken in between would
+	// capture the message AND leave its record in the tail for a reload to
+	// append a second time. Record the debt; snapshotSafeLocked refuses to
+	// capture while any is outstanding. See snapshot.go.
+	s.durableDebt++
 	// See turnUnsettled's own doc comment — same as appendWithUsage.
 	// recoverInterruptedTurnLocked's own closing-message append (this
 	// method's one caller) relies on calling markTurnSettled AFTER this,
@@ -1989,6 +2072,9 @@ func (s *Session) appendMemoryOnly(m message.Message) message.Message {
 func (s *Session) persistAppendedMessage(m message.Message) {
 	s.mu.Lock()
 	s.persistMessage(&m, nil)
+	// The journal has caught up with appendMemoryOnly's in-memory append
+	// — see the debt this settles there and in snapshotSafeLocked.
+	s.settleDurableDebtLocked()
 	s.mu.Unlock()
 }
 
@@ -2204,6 +2290,14 @@ func (s *Session) PromptWithOrigin(ctx context.Context, text string, origin stri
 func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) {
 	s.emitStatus("busy")
 	defer s.emitStatus("idle")
+	// The on-idle snapshot trigger (snapshot.go and docs/design/journal-
+	// snapshotting.md §4.4): a turn that has just finished is the
+	// quiescent moment — no append is in flight — and it is also the state
+	// a wake-from-hibernation or post-eviction reload starts from, so
+	// checkpointing here is what makes that next cold load cheap. It
+	// coalesces with the every-K trigger (one snapshot in flight per
+	// session) and is a no-op when nothing was written since the last one.
+	defer s.snapshotOnIdle()
 
 	// maxTokensUsed counts every max_tokens auto-continuation issued in THIS
 	// loop — i.e. across one Prompt call — never across a whole Session's
