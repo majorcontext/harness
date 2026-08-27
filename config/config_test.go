@@ -1720,3 +1720,70 @@ func TestLoadProjectWithInfoSessionSync(t *testing.T) {
 		t.Errorf("LoadInfo.SessionSync = %q, want %q", info.SessionSync, "volume")
 	}
 }
+
+// TestSnapshotEveryRecords covers the snapshot_every_records config field:
+// a *int on the same unset-versus-explicit-zero split PromptRetries uses,
+// so unset means the product default (64) and an explicit 0 turns journal
+// snapshot writing off. A project value overrides the user layer.
+func TestSnapshotEveryRecords(t *testing.T) {
+	t.Run("unset uses default 64", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.SnapshotEveryRecords != nil {
+			t.Errorf("SnapshotEveryRecords = %v, want nil (unset)", c.SnapshotEveryRecords)
+		}
+		if got := c.SnapshotEveryRecordsValue(); got != 64 {
+			t.Errorf("SnapshotEveryRecordsValue = %d, want 64 (default)", got)
+		}
+	})
+	t.Run("explicit zero disables", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"snapshot_every_records": 0}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.SnapshotEveryRecords == nil || *c.SnapshotEveryRecords != 0 {
+			t.Fatalf("SnapshotEveryRecords = %v, want explicit 0", c.SnapshotEveryRecords)
+		}
+		if got := c.SnapshotEveryRecordsValue(); got != 0 {
+			t.Errorf("SnapshotEveryRecordsValue = %d, want 0 (disabled)", got)
+		}
+	})
+	t.Run("explicit value", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"snapshot_every_records": 16}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got := c.SnapshotEveryRecordsValue(); got != 16 {
+			t.Errorf("SnapshotEveryRecordsValue = %d, want 16", got)
+		}
+	})
+	t.Run("nil receiver uses default", func(t *testing.T) {
+		var c *Config
+		if got := c.SnapshotEveryRecordsValue(); got != 64 {
+			t.Errorf("nil SnapshotEveryRecordsValue = %d, want 64", got)
+		}
+	})
+	t.Run("project overrides user", func(t *testing.T) {
+		zero := 0
+		base := &Config{SnapshotEveryRecords: intPtr(32)}
+		merged := merge(base, &Config{SnapshotEveryRecords: &zero})
+		if merged.SnapshotEveryRecords == nil || *merged.SnapshotEveryRecords != 0 {
+			t.Errorf("merged = %v, want project override 0", merged.SnapshotEveryRecords)
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		base := &Config{SnapshotEveryRecords: intPtr(32)}
+		merged := merge(base, &Config{})
+		if merged.SnapshotEveryRecords == nil || *merged.SnapshotEveryRecords != 32 {
+			t.Errorf("merged = %v, want inherited 32", merged.SnapshotEveryRecords)
+		}
+	})
+}
