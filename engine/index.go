@@ -307,13 +307,20 @@ func indexMessageOf(m message.Message) *indexMessage {
 // It keeps a message SKELETON — one message.Message per durable message,
 // carrying id, role, and timestamp and no parts — rather than a plain
 // counter, because compaction folds a RANGE of messages named by their
-// first and last id. Holding the skeleton lets the fold call the same
-// spliceCompact and healCompactFoldEnd that LoadSession calls (compact.go),
-// so the two can never disagree about what a compact record does to a
-// history.
+// first and last id. Holding the skeleton lets the fold use the same
+// compactRecordBounds and spliceCompactBounds that LoadSession uses
+// (compact.go), so the two can never disagree about what a compact record
+// does to a history.
 type indexFold struct {
 	ix       SessionIndex
 	messages []message.Message
+	// messageRecordOrdinals is parallel to messages. Each entry identifies
+	// the journal record that contributed that surviving message; unlike a
+	// message ID, it remains unambiguous when a damaged/external journal
+	// repeats an ID. foldedPage consumes it to decode the right raw line.
+	messageRecordOrdinals []int
+	// recordOrdinal advances once per record applied to this fold.
+	recordOrdinal int
 	// repairs is how many messages message.ResolveOrphanToolCalls would
 	// insert into the skeleton, maintained as records arrive so snapshot
 	// stays constant time. See appendMessage.
@@ -332,9 +339,10 @@ type indexFold struct {
 
 // applyIndexRecord folds one record. It mirrors LoadSession's own switch
 // (store.go) case for case, and shares its helpers for the three folds with
-// real state machines behind them: compaction (applyCompactRecord),
+// real state machines behind them: compaction (compactRecordBounds),
 // goals (applyGoalRecord), and the prompt queue (promptQueueFold).
 func (f *indexFold) applyIndexRecord(rec indexRecord, isLast bool) error {
+	f.recordOrdinal++
 	switch rec.Type {
 	case recSession:
 		f.header = true
@@ -380,7 +388,7 @@ func (f *indexFold) applyIndexRecord(rec indexRecord, isLast bool) error {
 		if rec.Compact == nil {
 			return errors.New("compact record without payload")
 		}
-		spliced, err := applyCompactRecord(f.messages, rec.Compact.FirstID, rec.Compact.LastID, rec.Compact.TurnsFolded, rec.Compact.Summary.skeleton())
+		start, end, err := compactRecordBounds(f.messages, rec.Compact.FirstID, rec.Compact.LastID, rec.Compact.TurnsFolded)
 		if err != nil {
 			// The same corruption LoadSession fails on. Mark the fold
 			// broken rather than returning: a listing must still report
@@ -389,7 +397,8 @@ func (f *indexFold) applyIndexRecord(rec indexRecord, isLast bool) error {
 			f.broken = true
 			return nil
 		}
-		f.messages = spliced
+		f.messages = spliceCompactBounds(f.messages, start, end, rec.Compact.Summary.skeleton())
+		f.messageRecordOrdinals = spliceOrdinalBounds(f.messageRecordOrdinals, start, end, f.recordOrdinal)
 		f.recountRepairs()
 		f.ix.CompactionCount++
 		f.ix.LastCompactedAt = rec.CreatedAt
@@ -505,6 +514,16 @@ func hasRepairWindowMarker(m message.Message) bool {
 	return false
 }
 
+// spliceOrdinalBounds applies a compact record's already-resolved message
+// range to the parallel record-provenance slice.
+func spliceOrdinalBounds(ordinals []int, start, end, summaryOrdinal int) []int {
+	out := make([]int, 0, len(ordinals)-(end-start+1)+1)
+	out = append(out, ordinals[:start]...)
+	out = append(out, summaryOrdinal)
+	out = append(out, ordinals[end+1:]...)
+	return out
+}
+
 // appendMessage adds one durable message to the skeleton and keeps the
 // running repair count in step.
 //
@@ -523,6 +542,7 @@ func (f *indexFold) appendMessage(m message.Message) {
 	last := len(f.messages) - 1
 	f.repairs -= f.repairsAt(last)
 	f.messages = append(f.messages, m)
+	f.messageRecordOrdinals = append(f.messageRecordOrdinals, f.recordOrdinal)
 	f.repairs += f.repairsAt(last) + f.repairsAt(last+1)
 }
 
