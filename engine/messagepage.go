@@ -292,10 +292,14 @@ func tailPage(src io.ReaderAt, logSize, size int64, total, lo, hi int) ([]messag
 			return false, nil
 		case recMessage:
 			if !head.hasMessage {
-				// A message record with no body. The fold tolerates this
-				// shape on the FINAL line only, and does not count it, so
-				// neither may this walk — counting it would shift every
-				// seq in the page by one.
+				// A message record with no body. No fold counts one: the
+				// full fold tolerates the shape on a final line and skips
+				// it, and the incremental write-path fold marks itself
+				// broken and skips it too — and because that fold never
+				// revisits an earlier record, a journal CAN carry a
+				// bodyless record that is no longer final and still have a
+				// usable index. Counting it here would shift every seq in
+				// the page by one.
 				return true, nil
 			}
 			if cur >= lo && cur <= hi {
@@ -344,112 +348,67 @@ type recordHead struct {
 	hasMessage bool
 }
 
-// classifyRecord decides what a line is, reading as little of it as it can.
+// classifyRecord decides what a line is, reading as little of it as it can
+// WITHOUT guessing.
 //
-// ok is false only for a line that does not parse at all AND is the file's
-// final line — a crash mid-write, which the forward scanner drops and this
-// walk drops with it. A non-final line that does not parse is an error: the
-// fold that numbered this page would have failed on it, so the index this
-// page reads would not exist.
+// It decodes into indexRecord — the type the fold decodes into — so the two
+// agree by construction on every question: which records parse, which key
+// wins when one is repeated, and whether a message record has a body. A
+// classifier that answered any of those from a cheaper signal answered a
+// different question, and a page numbered by one rule and walked by
+// another serves real messages under wrong sequence numbers.
 //
-// The final line is always read whole and decoded with the SAME typed shape
-// the fold uses. A torn line's prefix can still parse a type, and a line
-// that is valid JSON can still fail a typed decode ({"type":123}), and the
-// fold drops both — so judging that line by any other rule would either
-// reject a record the index already dropped or count one it did not.
+// The saving is that a record whose bytes already fit in the prefix — every
+// ordinary record — is decoded from those bytes, with no second read. A
+// record larger than the prefix window is read whole. It is still never
+// MATERIALIZED: indexRecord carries indexMessage, which decodes a message's
+// identity and skips its parts, so walking past a 20 MB image blob costs a
+// scan of its bytes and no allocation of its content.
+//
+// An earlier revision classified from the prefix alone: the first key for
+// the type, and a substring search for the message body. Both were
+// unsound. A second top-level "type" key beyond the window resolves
+// last-wins for the fold and first-wins for a prefix scan, and a nested
+// "message" key made a bodyless record look body-bearing. Each produced a
+// phantom message under a real sequence number. Reading a large record is
+// the price of never doing that; the block window below is what keeps an
+// ordinary journal cheap.
+//
+// ok is false only for a line that does not parse AND is the file's final
+// line — a crash mid-write, which the forward scanner drops and this walk
+// drops with it. A non-final line that does not parse is an error.
 func classifyRecord(line logLine, isTail bool) (recordHead, bool, error) {
-	if isTail {
+	raw := line.Prefix()
+	if !line.Complete() {
 		whole, err := line.All()
 		if err != nil {
 			return recordHead{}, false, err
 		}
-		head, parsed := decodeRecordHeadFull(whole)
-		return head, parsed, nil
+		raw = whole
 	}
-	if head, decided := decodeRecordHeadPrefix(line.Prefix()); decided {
+	head, parsed := decodeRecordHeadFull(raw)
+	if parsed {
 		return head, true, nil
 	}
-	// The prefix did not decide: it can end mid-key, or the record can
-	// carry its fields in another order. Read the line and decode it the
-	// way the fold does.
-	whole, err := line.All()
-	if err != nil {
-		return recordHead{}, false, err
+	if isTail {
+		return recordHead{}, false, nil
 	}
-	head, parsed := decodeRecordHeadFull(whole)
-	if !parsed {
-		return recordHead{}, false, errors.New("corrupt record")
-	}
-	return head, true, nil
-}
-
-// decodeRecordHeadPrefix reads a record's type from the START of its bytes,
-// without decoding the rest, and reports whether it DECIDED.
-//
-// Type is the first field of every record this package writes (see record,
-// store.go), so this returns after one key and one value. It declines when
-// the prefix ends mid-key or the record carries its fields in another
-// order, and the caller then decodes the whole line the way the fold does.
-//
-// One shape it cannot see: a record with a SECOND top-level "type" key,
-// which encoding/json resolves last-wins while this reads the first. That
-// is an accepted residual, not a case to slow every page read for. No
-// writer here produces duplicate keys — encoding/json does not emit them —
-// and a session journal has one writer by contract. Detecting it would
-// cost a full lex of every record the walk passes, which is the cost this
-// function exists to avoid, and a nested "type" (every message part has
-// one) makes a cheap byte count useless.
-func decodeRecordHeadPrefix(raw []byte) (recordHead, bool) {
-	trimmed := bytes.TrimSpace(raw)
-	dec := json.NewDecoder(bytes.NewReader(trimmed))
-	tok, err := dec.Token()
-	if err != nil || tok != json.Delim('{') {
-		return recordHead{}, false
-	}
-	key, err := dec.Token()
-	if err != nil {
-		return recordHead{}, false
-	}
-	name, isString := key.(string)
-	if !isString || name != "type" {
-		return recordHead{}, false
-	}
-	value, err := dec.Token()
-	if err != nil {
-		return recordHead{}, false
-	}
-	recordType, isString := value.(string)
-	if !isString {
-		return recordHead{}, false
-	}
-	if recordType != recMessage {
-		// Only a message record's body matters to a walk that counts
-		// messages; every other type is classified by its name alone.
-		return recordHead{Type: recordType}, true
-	}
-	// A message record needs one more fact: whether it HAS a message. The
-	// fold tolerates a bodyless one on the final line and does not count
-	// it. Look for the key within the prefix; anything else declines to
-	// the full decode.
-	if bytes.Contains(trimmed, []byte(`"message"`)) {
-		return recordHead{Type: recordType, hasMessage: true}, true
-	}
-	return recordHead{}, false
+	return recordHead{}, false, errors.New("corrupt record")
 }
 
 // decodeRecordHeadFull decodes a whole record line into indexRecord — the
 // SAME type the fold decodes into (see foldSessionJournal's scanLog call) —
-// so parsed is false exactly where the fold's own decode fails.
+// so parsed is false exactly where the fold's own decode fails, and
+// hasMessage is exactly the fold's own test for a body.
 //
-// The type must stay indexRecord, not a slimmer shape that happens to
-// carry the two fields this returns. The fold's tolerance is a property of
-// EVERY field it type-checks: a final record whose usage, goal, prompt, or
-// compact payload has the wrong JSON shape fails that decode and is
-// dropped as a torn write. A slimmer shape here ignores those fields,
-// accepts the record, and counts a message the index never counted — a
-// phantom that displaces a real message and shifts every seq in the page.
-// Sharing the fold's type makes the two agree by construction rather than
-// by a list of fields someone has to keep in step.
+// The type must stay indexRecord, not a slimmer shape that happens to carry
+// the two fields this returns. The fold's tolerance is a property of EVERY
+// field it type-checks: a record whose usage, goal, prompt, or compact
+// payload has the wrong JSON shape fails that decode. A slimmer shape here
+// ignores those fields, accepts the record, and counts a message the index
+// never counted — a phantom that displaces a real message and shifts every
+// seq in the page. Sharing the fold's type makes the two agree by
+// construction rather than by a list of fields someone has to keep in step.
 func decodeRecordHeadFull(raw []byte) (recordHead, bool) {
 	var rec indexRecord
 	if err := json.Unmarshal(bytes.TrimSpace(raw), &rec); err != nil {
