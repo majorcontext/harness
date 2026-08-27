@@ -2417,6 +2417,13 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 	tools, mcpCatalog := s.toolDefsWithCatalog(ctx)
 
 	system := append([]string(nil), s.cfg.System...)
+	// Tool-batching guidance sits with the base system prompt, ahead of
+	// project instructions: it describes how this engine executes tools,
+	// not anything about the project. Empty for a session that runs tools
+	// one at a time (see toolBatchingSegment in toolexec.go).
+	if seg := s.toolBatchingSegment(); seg != "" {
+		system = append(system, seg)
+	}
 	// Project instructions sit after the base system prompt and before any
 	// hook-contributed segments (see ensureInstructions in instructions.go).
 	if seg := s.instructionSegment(); seg != "" {

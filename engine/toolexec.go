@@ -630,3 +630,31 @@ func (s *Session) runParallelSegment(ctx context.Context, seg batchSegment, outp
 	}
 	wg.Wait()
 }
+
+// toolBatchingSegment is the system-prompt segment that tells the model to
+// put independent tool calls in ONE message, so this file's executor
+// actually has a batch to run in parallel. Without it the executor is
+// unclaimed capacity: a model that emits one call per turn never produces
+// a batch wider than one, however high the cap is.
+//
+// It is gated on the session's REAL resolved concurrency, and returns ""
+// at 1. A session running strictly sequentially — an operator who set the
+// kill switch, or an embedder who set ToolConcurrency 1 — must not be told
+// its calls run concurrently, because for that session they do not.
+//
+// The cap is rendered from s.toolConcurrency rather than hardcoded, so the
+// number the model reads is the number the executor enforces.
+//
+// The second sentence is as load-bearing as the first: it stops the model
+// batching calls whose arguments depend on an earlier call's result, which
+// no amount of executor correctness can repair.
+func (s *Session) toolBatchingSegment() string {
+	if s.toolConcurrency <= 1 {
+		return ""
+	}
+	return fmt.Sprintf("If you intend to call multiple tools and there are no "+
+		"dependencies between the calls, make all of the independent calls in "+
+		"the same message: harness runs one message's tool calls concurrently, "+
+		"up to %d at a time. Otherwise you MUST wait for previous calls to "+
+		"finish first to determine the dependent values.", s.toolConcurrency)
+}

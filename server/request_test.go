@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -117,8 +118,8 @@ func TestRequestMetaJournaled(t *testing.T) {
 	if rm.SystemHash == "" {
 		t.Error("system_hash empty")
 	}
-	if rm.Segments != 1 {
-		t.Errorf("segments = %d, want 1 (base only)", rm.Segments)
+	if rm.Segments != 2 {
+		t.Errorf("segments = %d, want 2 (base + the engine's tool-batching segment)", rm.Segments)
 	}
 	if rm.SystemLen == 0 {
 		t.Error("system_len = 0")
@@ -130,8 +131,8 @@ func TestRequestMetaJournaled(t *testing.T) {
 		t.Errorf("tools = %v, want to include session_info and bash", rm.Tools)
 	}
 	// First appearance of this hash carries the full system.
-	if len(rm.System) != 1 || rm.System[0] != "base" {
-		t.Errorf("system = %v, want [base] on first request.meta", rm.System)
+	if len(rm.System) != 2 || rm.System[0] != "base" || !isBatchingSegment(rm.System[1]) {
+		t.Errorf("system = %v, want [base, tool-batching] on first request.meta", rm.System)
 	}
 }
 
@@ -236,8 +237,8 @@ func TestRequestEndpoint(t *testing.T) {
 	if rq.Model != (message.ModelRef{Provider: "test", Model: "m1"}) {
 		t.Errorf("model = %v", rq.Model)
 	}
-	if len(rq.System) != 1 || rq.System[0] != "base" {
-		t.Errorf("system = %v, want [base]", rq.System)
+	if len(rq.System) != 2 || rq.System[0] != "base" || !isBatchingSegment(rq.System[1]) {
+		t.Errorf("system = %v, want [base, tool-batching]", rq.System)
 	}
 	if !containsName(rq.Tools, "session_info") {
 		t.Errorf("tools = %v, want session_info", rq.Tools)
@@ -358,4 +359,12 @@ func TestRequestSnapshotEvictedWithSession(t *testing.T) {
 	if resp.StatusCode != 404 {
 		t.Errorf("evicted session /request = %d, want 404", resp.StatusCode)
 	}
+}
+
+// isBatchingSegment reports whether seg is the engine's tool-batching
+// system segment, which every default-configured session carries (see
+// engine's toolBatchingSegment). Matched by prefix so a wording change
+// does not break these tests; the engine package pins the exact text.
+func isBatchingSegment(seg string) bool {
+	return strings.HasPrefix(seg, "If you intend to call multiple tools")
 }

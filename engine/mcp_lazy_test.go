@@ -624,17 +624,17 @@ func TestCatalogSegmentPositionInAssembledSystem(t *testing.T) {
 		t.Fatalf("OnRequest fired %d times, want 1", len(seen))
 	}
 	sys := seen[0].system
-	if len(sys) != 5 {
-		t.Fatalf("system has %d segments, want 5 (base, instructions, skills, mcp catalog, hook):\n%q", len(sys), sys)
+	if len(sys) != 6 {
+		t.Fatalf("system has %d segments, want 6 (base, tool-batching, instructions, skills, mcp catalog, hook):\n%q", len(sys), sys)
 	}
-	if sys[0] != "base" || !strings.Contains(sys[1], "instr body") || !strings.Contains(sys[2], "Skill one") {
-		t.Fatalf("segments 0-2 are not base/instructions/skills:\n%q", sys)
+	if sys[0] != "base" || !isBatchingSegment(sys[1]) || !strings.Contains(sys[2], "instr body") || !strings.Contains(sys[3], "Skill one") {
+		t.Fatalf("segments 0-3 are not base/tool-batching/instructions/skills:\n%q", sys)
 	}
-	if !strings.HasPrefix(sys[3], mcpCatalogHeader) {
-		t.Fatalf("segment 3 is not the MCP catalog:\n%q", sys[3])
+	if !strings.HasPrefix(sys[4], mcpCatalogHeader) {
+		t.Fatalf("segment 4 is not the MCP catalog:\n%q", sys[4])
 	}
-	if sys[4] != "hook seg" {
-		t.Fatalf("segment 4 is not the hook segment:\n%q", sys[4])
+	if sys[5] != "hook seg" {
+		t.Fatalf("segment 5 is not the hook segment:\n%q", sys[5])
 	}
 	for _, name := range seen[0].tools {
 		if isMCPToolName(name) {

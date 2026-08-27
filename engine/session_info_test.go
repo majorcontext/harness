@@ -133,8 +133,8 @@ func TestSessionInfoNothingInjected(t *testing.T) {
 		t.Errorf("plugins must serialize as [], got %q", rawSessionInfoPlugins(t, info))
 	}
 	// System still carries the base segment.
-	if len(info.System) != 1 || info.System[0] != "base" {
-		t.Errorf("system = %v, want [base]", info.System)
+	if len(info.System) != 2 || info.System[0] != "base" || !isBatchingSegment(info.System[1]) {
+		t.Errorf("system = %v, want [base, tool-batching]", info.System)
 	}
 	// Effort was never set: report it honestly as EffortUnset ("", the
 	// provider default), not omitted and not an invented level.

@@ -30,10 +30,10 @@ func TestSkillsInjectedIntoSystem(t *testing.T) {
 
 	prov := instrSession(t, Config{WorkDir: work, SkillsDirs: []string{skills}, Instructions: &InstructionsConfig{Disabled: true}}, 1)
 	sys := prov.requests[0].System
-	if len(sys) != 2 {
-		t.Fatalf("system = %v, want [base, skills]", sys)
+	if len(sys) != 3 {
+		t.Fatalf("system = %v, want [base, tool-batching, skills]", sys)
 	}
-	seg := sys[1]
+	seg := sys[2]
 	// Header must instruct reading SKILL.md before use.
 	if !strings.Contains(seg, "read_file") || !strings.Contains(strings.ToLower(seg), "skill.md") {
 		t.Errorf("skills header must mention reading SKILL.md with read_file: %q", seg)
@@ -63,20 +63,23 @@ func TestSkillsSegmentOrder(t *testing.T) {
 
 	prov := instrSession(t, Config{WorkDir: work, SkillsDirs: []string{skills}, Hooks: hooks}, 1)
 	sys := prov.requests[0].System
-	if len(sys) != 4 {
-		t.Fatalf("system = %v, want [base, instructions, skills, hook seg]", sys)
+	if len(sys) != 5 {
+		t.Fatalf("system = %v, want [base, tool-batching, instructions, skills, hook seg]", sys)
 	}
 	if sys[0] != "base" {
 		t.Errorf("sys[0] = %q, want base", sys[0])
 	}
-	if !strings.Contains(sys[1], "instr body") {
-		t.Errorf("sys[1] = %q, want instructions", sys[1])
+	if !isBatchingSegment(sys[1]) {
+		t.Errorf("sys[1] = %q, want the tool-batching segment", sys[1])
 	}
-	if !strings.Contains(sys[2], "one — Skill one") {
-		t.Errorf("sys[2] = %q, want skills", sys[2])
+	if !strings.Contains(sys[2], "instr body") {
+		t.Errorf("sys[2] = %q, want instructions", sys[2])
 	}
-	if sys[3] != "hook seg" {
-		t.Errorf("sys[3] = %q, want hook seg", sys[3])
+	if !strings.Contains(sys[3], "one — Skill one") {
+		t.Errorf("sys[3] = %q, want skills", sys[3])
+	}
+	if sys[4] != "hook seg" {
+		t.Errorf("sys[4] = %q, want hook seg", sys[4])
 	}
 }
 
@@ -87,11 +90,11 @@ func TestSkillsDefaultDir(t *testing.T) {
 	// nil SkillsDirs uses <WorkDir>/.agents/skills when it exists.
 	prov := instrSession(t, Config{WorkDir: work, Instructions: &InstructionsConfig{Disabled: true}}, 1)
 	sys := prov.requests[0].System
-	if len(sys) != 2 {
-		t.Fatalf("system = %v, want [base, skills] from default dir", sys)
+	if len(sys) != 3 {
+		t.Fatalf("system = %v, want [base, tool-batching, skills] from default dir", sys)
 	}
-	if !strings.Contains(sys[1], "deflt — Default dir skill") {
-		t.Errorf("sys[1] = %q, want default-dir skill", sys[1])
+	if !strings.Contains(sys[2], "deflt — Default dir skill") {
+		t.Errorf("sys[2] = %q, want default-dir skill", sys[2])
 	}
 }
 
@@ -102,8 +105,8 @@ func TestSkillsEmptySliceDisables(t *testing.T) {
 	// Explicit empty slice disables discovery even though the default exists.
 	prov := instrSession(t, Config{WorkDir: work, SkillsDirs: []string{}, Instructions: &InstructionsConfig{Disabled: true}}, 1)
 	sys := prov.requests[0].System
-	if len(sys) != 1 || sys[0] != "base" {
-		t.Errorf("system = %v, want only [base] when skills explicitly disabled", sys)
+	if len(sys) != 2 || sys[0] != "base" || !isBatchingSegment(sys[1]) {
+		t.Errorf("system = %v, want [base, tool-batching] when skills are explicitly disabled", sys)
 	}
 }
 
@@ -116,8 +119,8 @@ func TestSkillsMissingDirNoSegment(t *testing.T) {
 		Instructions: &InstructionsConfig{Disabled: true},
 	}, 1)
 	sys := prov.requests[0].System
-	if len(sys) != 1 || sys[0] != "base" {
-		t.Errorf("system = %v, want only [base] when skills dir missing", sys)
+	if len(sys) != 2 || sys[0] != "base" || !isBatchingSegment(sys[1]) {
+		t.Errorf("system = %v, want [base, tool-batching] when the skills dir is missing", sys)
 	}
 }
 

@@ -293,7 +293,7 @@ func TestHooksIntegration(t *testing.T) {
 	}
 
 	// system.transform segments appended after base.
-	if sys := prov.requests[0].System; len(sys) != 2 || sys[1] != "injected rules" {
+	if sys := prov.requests[0].System; len(sys) != 3 || sys[2] != "injected rules" {
 		t.Errorf("system = %v", sys)
 	}
 	// shell.env consulted for the bash command.

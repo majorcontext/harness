@@ -69,20 +69,23 @@ func TestOnRequestFiresPerTurnWithAssembledSystem(t *testing.T) {
 	}
 
 	sys := seen[0].system
-	if len(sys) != 4 {
-		t.Fatalf("system = %v, want [base, instructions, skills, hook seg]", sys)
+	if len(sys) != 5 {
+		t.Fatalf("system = %v, want [base, tool-batching, instructions, skills, hook seg]", sys)
 	}
 	if sys[0] != "base" {
 		t.Errorf("sys[0] = %q, want base", sys[0])
 	}
-	if !strings.Contains(sys[1], "instr body") {
-		t.Errorf("sys[1] = %q, want instructions", sys[1])
+	if !isBatchingSegment(sys[1]) {
+		t.Errorf("sys[1] = %q, want the tool-batching segment", sys[1])
 	}
-	if !strings.Contains(sys[2], "one — Skill one") {
-		t.Errorf("sys[2] = %q, want skills", sys[2])
+	if !strings.Contains(sys[2], "instr body") {
+		t.Errorf("sys[2] = %q, want instructions", sys[2])
 	}
-	if sys[3] != "hook seg" {
-		t.Errorf("sys[3] = %q, want hook seg", sys[3])
+	if !strings.Contains(sys[3], "one — Skill one") {
+		t.Errorf("sys[3] = %q, want skills", sys[3])
+	}
+	if sys[4] != "hook seg" {
+		t.Errorf("sys[4] = %q, want hook seg", sys[4])
 	}
 }
 

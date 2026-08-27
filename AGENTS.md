@@ -134,6 +134,34 @@ never written to the session log — a resumed session rediscovers them. Config
 `skills_dirs` (array; a non-empty project value overrides the user value
 entirely) and the repeatable `-skills-dir` run/serve flag drive it.
 
+### Tool-batching guidance
+
+The engine executes one assistant message's tool calls concurrently
+(`engine/toolexec.go`, capped by `Config.ToolConcurrency`), but a model
+that emits one call per turn never produces a batch wider than one. The
+executor is only as useful as the model's willingness to batch, so the
+engine asks for it: `toolBatchingSegment` (`engine/toolexec.go`) injects
+one system segment telling the model to put independent calls in the same
+message, and to wait when a call's arguments depend on an earlier call's
+result. Both halves matter — the second is what stops a model
+parallelizing genuinely dependent work, which no amount of executor
+correctness can repair.
+
+The segment sits immediately after `Config.System` and before the
+instructions segment (`engine/engine.go`): it describes how this engine
+runs tools, not anything about the project. It is **gated on the
+session's resolved concurrency and is empty at 1** — an operator who set
+`HARNESS_SEQUENTIAL_TOOLS=1`, or an embedder who set `ToolConcurrency: 1`,
+must not be told calls run concurrently when for that session they do not.
+The cap in the text is rendered from `s.toolConcurrency`, so the number
+the model reads is the number the executor enforces. Like every other
+engine-injected segment it is never written to the session log.
+
+Adding a base segment shifts every later segment's index, so the
+segment-layout assertions across `engine/*_test.go` pin it explicitly via
+`isBatchingSegment` (`engine/toolbatching_test.go`); only that file pins
+the wording itself.
+
 ### read_file image support
 
 The built-in `read_file` tool (`engine/filetools.go`) can return an image
