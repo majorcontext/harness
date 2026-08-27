@@ -142,3 +142,113 @@ func TestFailedRecordWriteDropsTheLogHandle(t *testing.T) {
 		t.Errorf("journal is no longer loadable after a failed write: %v", err)
 	}
 }
+
+// TestIndexRecoversAfterAFailedWrite: a failed record write marks the
+// session's fold broken, because the fold no longer knows what the journal
+// holds. It must not stay broken for the life of the session object — every
+// later read would refold the whole journal, which is the cost the index
+// exists to remove. The reopen a failed write forces (see writeRecord)
+// re-seeds the fold from the repaired journal.
+func TestIndexRecoversAfterAFailedWrite(t *testing.T) {
+	dir := t.TempDir()
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10}),
+		compactTurn("two", provider.Usage{InputTokens: 20}),
+	}}
+	cfg := persistCfg(dir, prov)
+	s := NewSession(cfg)
+	runTurns(t, s, 1)
+
+	// Make the next write fail, at the OS level, through the production
+	// persist path.
+	s.mu.Lock()
+	s.logFile.Close()
+	s.mu.Unlock()
+	if err := s.RegisterGoal("a goal whose record cannot be written"); err != nil {
+		t.Fatalf("RegisterGoal: %v", err)
+	}
+	if s.PersistErr() == nil {
+		t.Fatal("test setup: the record write did not fail")
+	}
+	s.mu.Lock()
+	broken := s.index.broken
+	s.mu.Unlock()
+	if !broken {
+		t.Fatal("test setup: the failed write did not mark the fold broken")
+	}
+
+	// The next turn reopens the log, and the fold must come back with it.
+	// PersistErr is deliberately not checked: it is sticky, so it still
+	// reports the failure this test injected.
+	runTurns(t, s, 1)
+	s.mu.Lock()
+	broken = s.index.broken
+	s.mu.Unlock()
+	if broken {
+		t.Error("the fold is still broken after a reopen; the session writes no index for the rest of its life")
+	}
+
+	// And the sidecar it writes must be current: corrupt the journal at an
+	// unchanged staleness key, so only a current sidecar can answer.
+	corruptJournalKeepingSize(t, dir, s.ID)
+	ix, err := ReadSessionIndex(dir, s.ID)
+	if err != nil {
+		t.Fatalf("ReadSessionIndex: %v", err)
+	}
+	if ix.Messages != 4 {
+		t.Errorf("Messages = %d, want 4 (the re-seeded fold must cover the whole journal)", ix.Messages)
+	}
+}
+
+// TestIndexRecoveryCountsARecordTheFoldNeverSaw is the sharp edge of the
+// recovery above. A failed Write can land a record's bytes and not its
+// trailing newline. ensureLog's tail repair then takes its case-2 branch:
+// the tail parses, so the record is terminated and KEPT. The fold never saw
+// it.
+//
+// Re-seeding from the file is what makes the fold agree with those bytes.
+// Merely clearing the broken flag would resume flushing a sidecar short by
+// one message, while logSize claimed the whole file — a stale index that
+// reads as current, which no reader would ever refold.
+func TestIndexRecoveryCountsARecordTheFoldNeverSaw(t *testing.T) {
+	dir := t.TempDir()
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10}),
+		compactTurn("two", provider.Usage{InputTokens: 20}),
+	}}
+	cfg := persistCfg(dir, prov)
+	s := NewSession(cfg)
+	runTurns(t, s, 1) // two durable messages
+
+	// The exact shape of a write that landed its bytes and not its
+	// newline, with the session's fold left broken by that failure.
+	path := sessionPath(dir, s.ID)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"type":"message","message":{"id":"msg_landed","role":"user","parts":[{"type":"text","text":"hi"}]}}`); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	s.mu.Lock()
+	s.index.broken = true
+	s.logFile.Close()
+	s.logFile = nil
+	s.mu.Unlock()
+
+	// The next turn reopens, repairs (case 2: the record is kept), and
+	// re-seeds the fold.
+	runTurns(t, s, 1) // two more durable messages
+
+	// Only a CURRENT sidecar can answer once the journal is unreadable at
+	// an unchanged staleness key.
+	corruptJournalKeepingSize(t, dir, s.ID)
+	ix, err := ReadSessionIndex(dir, s.ID)
+	if err != nil {
+		t.Fatalf("ReadSessionIndex: %v", err)
+	}
+	if ix.Messages != 5 {
+		t.Errorf("Messages = %d, want 5: two turns of two, plus the record the repair kept", ix.Messages)
+	}
+}

@@ -585,12 +585,11 @@ func sessionIndexPath(dir, id string) string {
 	return filepath.Join(dir, id+sessionIndexSuffix)
 }
 
-// foldSessionJournal folds an entire journal's bytes. It is the refold path
-// — the one ReadSessionIndex takes whenever a stored index is missing or
-// stale — and it applies scanLog's corruption discipline unchanged: a
-// corrupt final line is a crash mid-write and ends the fold silently,
-// corruption anywhere else is an error.
-func foldSessionJournal(data []byte, modTime time.Time) (SessionIndex, error) {
+// foldJournalBytes folds an entire journal's bytes into a fresh fold. It
+// applies scanLog's corruption discipline unchanged: a corrupt final line
+// is a crash mid-write and ends the fold silently, corruption anywhere else
+// is an error.
+func foldJournalBytes(data []byte) (indexFold, error) {
 	var f indexFold
 	err := scanLog(data, func(rec indexRecord, line int, isLast bool) error {
 		if err := f.applyIndexRecord(rec, isLast); err != nil {
@@ -598,6 +597,17 @@ func foldSessionJournal(data []byte, modTime time.Time) (SessionIndex, error) {
 		}
 		return nil
 	})
+	if err != nil {
+		return indexFold{}, err
+	}
+	return f, nil
+}
+
+// foldSessionJournal folds an entire journal's bytes into an index — the
+// refold path, the one ReadSessionIndex takes whenever a stored index is
+// missing or stale.
+func foldSessionJournal(data []byte, modTime time.Time) (SessionIndex, error) {
+	f, err := foldJournalBytes(data)
 	if err != nil {
 		return SessionIndex{}, err
 	}
@@ -823,6 +833,38 @@ func writeIndexTo(f *os.File, ix SessionIndex) error {
 	}
 	_, err = f.WriteAt(b, 0)
 	return err
+}
+
+// ListSessionIDs returns the id of every session journal in dir, unsorted,
+// reading no journal and no sidecar — one directory scan.
+//
+// It exists for a caller that resolves its own per-session state before
+// deciding what to read. GET /session renders a session this process holds
+// live from that live object, so reading an index for it would be work
+// thrown away; worse, a stale sidecar for a live session would be refolded
+// and written back by the listing while the session's own writer holds it.
+// The ids come from file names, so a name that is not a valid session id is
+// skipped here rather than reaching the filesystem again.
+func ListSessionIDs(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		id := strings.TrimSuffix(e.Name(), ".jsonl")
+		if !ValidSessionID(id) {
+			continue // events.jsonl, or any file that is not a session log
+		}
+		out = append(out, id)
+	}
+	return out, nil
 }
 
 // ListSessionIndexes returns the index of every persisted session in dir,
