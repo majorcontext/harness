@@ -1086,3 +1086,32 @@ func TestTailPageDoesNotReadRecordsItOnlyClassifies(t *testing.T) {
 		t.Errorf("the page carrying the big record read only %d bytes, want at least %d", newestBytes, bigBytes)
 	}
 }
+
+// TestTailPageHandlesAnUnusualFieldOrder: the prefix scan reads one key, so
+// it answers only for a record whose FIRST field is the type — which is
+// every record this package writes today. A record with another field
+// order is not corrupt, and a page that failed on one would make a fast
+// path into a format requirement.
+func TestTailPageHandlesAnUnusualFieldOrder(t *testing.T) {
+	dir := t.TempDir()
+	id := "ses_0123456789abcdef"
+	// The third record puts "message" before "type".
+	journal := `{"type":"session","id":"` + id + `","created_at":"2026-01-02T03:04:05Z","workdir":"/w"}
+{"type":"model","model":"test/m1"}
+{"message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"first"}]},"type":"message"}
+{"type":"message","message":{"id":"msg_2","role":"assistant","parts":[{"type":"text","text":"second"}]}}
+`
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(journal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	page, err := ReadMessagePage(dir, id, 0, 10)
+	if err != nil {
+		t.Fatalf("ReadMessagePage: %v", err)
+	}
+	if !sameIDs(idsOf(page.Messages), []string{"msg_1", "msg_2"}) {
+		t.Errorf("page ids = %v, want both messages", idsOf(page.Messages))
+	}
+	if page.Total != 2 {
+		t.Errorf("total = %d, want 2", page.Total)
+	}
+}

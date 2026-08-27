@@ -312,7 +312,23 @@ func tailPage(src io.ReaderAt, logSize, size int64, total, lo, hi int) ([]messag
 			head, ok = decodeRecordHead(raw)
 		}
 		if !ok {
-			return false, errors.New("corrupt record")
+			// The prefix scan reads ONE key, so it answers only for a
+			// record whose first field is the type — which is every record
+			// this package writes today (see record, store.go). A record
+			// with another field order is not corrupt, so fall back to a
+			// decode that finds the type wherever it sits. The fast path
+			// stays an optimization rather than a format requirement.
+			whole, err := line.All()
+			if err != nil {
+				return false, err
+			}
+			var slim struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(bytes.TrimSpace(whole), &slim); err != nil || slim.Type == "" {
+				return false, errors.New("corrupt record")
+			}
+			head = slim.Type
 		}
 		switch head {
 		case recCompact:
