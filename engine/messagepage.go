@@ -437,15 +437,21 @@ func decodeRecordHeadPrefix(raw []byte) (recordHead, bool) {
 	return recordHead{}, false
 }
 
-// decodeRecordHeadFull decodes a whole record line with the same typed
-// shape the fold uses, so the two agree on what parses and on which key
-// wins when one is repeated. parsed is false exactly where the fold's own
-// decode fails.
+// decodeRecordHeadFull decodes a whole record line into indexRecord — the
+// SAME type the fold decodes into (see foldSessionJournal's scanLog call) —
+// so parsed is false exactly where the fold's own decode fails.
+//
+// The type must stay indexRecord, not a slimmer shape that happens to
+// carry the two fields this returns. The fold's tolerance is a property of
+// EVERY field it type-checks: a final record whose usage, goal, prompt, or
+// compact payload has the wrong JSON shape fails that decode and is
+// dropped as a torn write. A slimmer shape here ignores those fields,
+// accepts the record, and counts a message the index never counted — a
+// phantom that displaces a real message and shifts every seq in the page.
+// Sharing the fold's type makes the two agree by construction rather than
+// by a list of fields someone has to keep in step.
 func decodeRecordHeadFull(raw []byte) (recordHead, bool) {
-	var rec struct {
-		Type    string    `json:"type"`
-		Message *struct{} `json:"message"`
-	}
+	var rec indexRecord
 	if err := json.Unmarshal(bytes.TrimSpace(raw), &rec); err != nil {
 		return recordHead{}, false
 	}

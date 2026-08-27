@@ -67,6 +67,24 @@ func wholeSequence(t *testing.T, dir, id string) []string {
 				} `json:"summary"`
 			} `json:"compact"`
 		}
+		if i == len(lines)-1 {
+			// The final line is the one a crash can leave torn, and the
+			// journal FORMAT decides whether it survived: a line that does
+			// not decode as one of this package's records (store.go's
+			// record — the writer's own type, and the definition of the
+			// format) was never completely written, whatever its prefix
+			// happens to parse as. A reader must not count it.
+			//
+			// The rule is deliberately taken from the format rather than
+			// from either reader: a slim shape that checks only the fields
+			// a test cares about accepts a record with, say, a malformed
+			// usage field, and the oracle would then bless a phantom
+			// message that no real reader should serve.
+			var whole record
+			if err := json.Unmarshal([]byte(line), &whole); err != nil {
+				continue
+			}
+		}
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			if i == len(lines)-1 {
 				continue // a torn final line, which no reader counts
@@ -1128,6 +1146,16 @@ func TestTailPageMatchesTheFoldOnOddFinalRecords(t *testing.T) {
 		"torn line with a parseable type": `{"type":"message","message":{"id":"msg_torn`,
 		"valid JSON, wrong type shape":    `{"type":123,"message":{"id":"msg_x"}}`,
 		"message record with no body":     `{"type":"message"}`,
+		// The fold decodes EVERY field it type-checks, so a record whose
+		// usage, goal, or message id has the wrong JSON shape fails that
+		// decode and is dropped. A classifier that looked only at the type
+		// and the message's presence would accept these and count a
+		// message the index never counted.
+		"bad usage shape":     `{"type":"message","message":{"id":"msg_ghost","role":"user","parts":[{"type":"text","text":"x"}]},"usage":"not-an-object"}`,
+		"bad usage field":     `{"type":"message","message":{"id":"msg_ghost","role":"user","parts":[{"type":"text","text":"x"}]},"usage":{"input_tokens":"lots"}}`,
+		"numeric message id":  `{"type":"message","message":{"id":123,"role":"user","parts":[{"type":"text","text":"x"}]}}`,
+		"bad goal payload":    `{"type":"message","message":{"id":"msg_ghost","role":"user","parts":[{"type":"text","text":"x"}]},"goal":"not-an-object"}`,
+		"bad compact payload": `{"type":"message","message":{"id":"msg_ghost","role":"user","parts":[{"type":"text","text":"x"}]},"compact":5}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -1157,6 +1185,11 @@ func TestTailPageMatchesTheFoldOnOddFinalRecords(t *testing.T) {
 			}
 			if page.Total != 4 || len(page.Messages) != 4 {
 				t.Errorf("page = total %d with %d messages, want 4 and 4", page.Total, len(page.Messages))
+			}
+			for _, m := range page.Messages {
+				if strings.HasPrefix(m.ID, "msg_ghost") || strings.HasPrefix(m.ID, "msg_torn") {
+					t.Errorf("the page served a record the fold dropped: %s", m.ID)
+				}
 			}
 			if !sameIDs(idsOf(page.Messages), wholeSequence(t, dir, sess.ID)) {
 				t.Errorf("page ids = %v, want the durable sequence %v", idsOf(page.Messages), wholeSequence(t, dir, sess.ID))
