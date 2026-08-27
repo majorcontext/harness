@@ -602,15 +602,15 @@ func TestListOmitsWhatItCannotRenderWhileStatusReportsIt(t *testing.T) {
 }
 
 // TestListSessionsIncludesChildStatus verifies that GET /session list includes
-// lineage.status (SessionManager lifecycle state) for managed non-resident
-// sessions. This exercises the COLD path my PR adds. The list must show
-// "running" vs terminal values without N+1 calls, and must agree with
-// GET /session/{id}.
+// lineage.status from the SessionManager snapshot for managed children. The
+// list must show running vs terminal values without N+1 calls, and must agree
+// with GET /session/{id}.
 //
-// Scenario: Create root as resident, then create two cold child sessions
-// on disk. Adopt them into SessionManager, then remove their Session objects
-// from SessionManager's cache (simulating a child created in another process).
-// Assert GET /session list shows correct lineage.status from the manager.
+// The children begin as disk fixtures and are then adopted into SessionManager,
+// matching the reloaded-child path. SessionManager retains their Session
+// objects, so handleList intentionally renders them through the existing warm
+// path; this test is a regression guard for that existing contract, not a
+// synthetic cold-manager state the production manager cannot represent.
 func TestListSessionsIncludesChildStatus(t *testing.T) {
 	h := newHarness(t, &scriptedProvider{name: "test"})
 	rootID := h.createSession("test/m1")
@@ -659,9 +659,9 @@ func TestListSessionsIncludesChildStatus(t *testing.T) {
 		t.Fatalf("test setup: done not StatusDone: %+v", info)
 	}
 
-	// Test 1: GET /session list includes correct lineage.status.
-	// These children are non-resident (not in h.srv.sessions), only in
-	// SessionManager, so handleList's cold path must be exercised.
+	// Test 1: GET /session list includes the manager-backed lineage.status.
+	// The children are absent from h.srv.sessions but resident in
+	// SessionManager, which is the authoritative warm source resolveLive uses.
 	resp, data := h.do("GET", "/session", nil)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /session = %d: %s", resp.StatusCode, data)

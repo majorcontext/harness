@@ -1029,18 +1029,7 @@ func (s *Server) handleList(w http.ResponseWriter, _ *http.Request) {
 		// that window the same way. The two must not disagree about a
 		// session's liveness. A session neither path can render is skipped,
 		// exactly as this listing always has.
-		//
-		// Lineage.status (SessionManager lifecycle) for a managed session:
-		// when lv.isManaged, use lv.info.Status (running/idle/done/failed/
-		// canceled). This is passed through to buildSessionFromIndex and
-		// coldLineageJSON to populate the lineage.status field on the cold
-		// path. For unmanaged non-resident sessions, lineage.status is nil
-		// (omitted on wire).
-		var managerStatus string
-		if lv.isManaged {
-			managerStatus = string(lv.info.Status)
-		}
-		if body, ok := s.coldSessionJSON(id, ix, ixErr == nil && ix.Complete, managerStatus, lv); ok {
+		if body, ok := s.coldSessionJSON(id, ix, ixErr == nil && ix.Complete); ok {
 			out = append(out, body)
 		}
 	}
@@ -1069,14 +1058,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ix, err := engine.ReadSessionIndex(s.opts.SessionDir, id)
-	// Lineage.status (SessionManager lifecycle) for a managed session:
-	// when lv.isManaged, pass lv.info.Status so coldSessionJSON can
-	// populate lineage.status on the cold path.
-	var managerStatus string
-	if lv.isManaged {
-		managerStatus = string(lv.info.Status)
-	}
-	if body, ok := s.coldSessionJSON(id, ix, err == nil && ix.Complete, managerStatus, lv); ok {
+	if body, ok := s.coldSessionJSON(id, ix, err == nil && ix.Complete); ok {
 		writeJSON(w, http.StatusOK, body)
 		return
 	}
@@ -1106,10 +1088,10 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 // the false-idle answer an orchestrator acts on. The re-check does not
 // close the window — nothing can, without holding a lock across a disk read
 // — but it narrows it to the width of one map lookup.
-func (s *Server) coldSessionJSON(id string, ix engine.SessionIndex, usable bool, managerStatus string, lv liveSession) (sessionJSON, bool) {
+func (s *Server) coldSessionJSON(id string, ix engine.SessionIndex, usable bool) (sessionJSON, bool) {
 	var body sessionJSON
 	if usable {
-		body = s.buildSessionFromIndex(ix, managerStatus)
+		body = s.buildSessionFromIndex(ix)
 	} else {
 		sess, err := s.opts.LoadSession(id)
 		if err != nil {
@@ -1119,14 +1101,6 @@ func (s *Server) coldSessionJSON(id string, ix engine.SessionIndex, usable bool,
 	}
 	if lv := s.resolveLive(id); lv.session() != nil {
 		body = s.buildSession(lv)
-	} else if managerStatus != "" {
-		// Session is managed but not resident and not loadable. Populate
-		// lineage.status from the manager's lifecycle state. This is the
-		// cold path analog of lineageJSONFor's warm branch (line 3992).
-		if body.Lineage == nil {
-			body.Lineage = &lineageJSON{}
-		}
-		body.Lineage.Status = managerStatus
 	}
 	return body, true
 }
@@ -3825,25 +3799,12 @@ func (s *Server) buildSession(lv liveSession) sessionJSON {
 // Plugins come from Options.Plugins, because plugins are process
 // configuration rather than durable session state, and an index has no
 // Session to ask.
-func (s *Server) buildSessionFromIndex(ix engine.SessionIndex, managerStatus string) sessionJSON {
+func (s *Server) buildSessionFromIndex(ix engine.SessionIndex) sessionJSON {
 	s.mu.Lock()
 	seq := s.sessionSeqLocked(ix.ID)
 	goal := goalJSONFrom(s.goalState[ix.ID])
 	lastTurn := s.lastTurnJSONLocked(ix.ID)
 	s.mu.Unlock()
-	// Lineage.status: When a managed session has no current residency in this
-	// process (the cold path), populate lineage.status from SessionManager's
-	// own lifecycle state. This mirrors the warm path (lineageJSONFor, line 3992).
-	lineage := coldLineageJSON(ix.TaskParentID, ix.TaskAgentType, ix.TaskDepth, ix.SpawnedChildIDs)
-	if managerStatus != "" {
-		if lineage == nil {
-			// A managed session with no durable parent info still has a
-			// lifecycle status from SessionManager. Create a minimal
-			// lineage block just to carry that status.
-			lineage = &lineageJSON{}
-		}
-		lineage.Status = managerStatus
-	}
 	return sessionJSON{
 		ID:        ix.ID,
 		CreatedAt: ix.CreatedAt,
@@ -3870,7 +3831,7 @@ func (s *Server) buildSessionFromIndex(ix engine.SessionIndex, managerStatus str
 		LastCompactedAt: ix.LastCompactedAt,
 		Plugins:         s.pluginInfo(ix.ID),
 		Queued:          ix.Queued,
-		Lineage:         lineage,
+		Lineage:         coldLineageJSON(ix.TaskParentID, ix.TaskAgentType, ix.TaskDepth, ix.SpawnedChildIDs),
 	}
 }
 
