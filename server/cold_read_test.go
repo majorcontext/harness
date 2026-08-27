@@ -602,24 +602,25 @@ func TestListOmitsWhatItCannotRenderWhileStatusReportsIt(t *testing.T) {
 }
 
 // TestListSessionsIncludesChildStatus verifies that GET /session list includes
-// session lifecycle status from SessionManager for managed (spawned) children.
-// This allows the console to see which children are running without N+1 calls
-// to GET /session/{id}.
+// lineage.status (SessionManager lifecycle state) for managed sessions,
+// distinguishing "running" from terminal states. This allows the console to see
+// which sessions are running without N+1 calls to GET /session/{id}.
 //
-// Scenario: A running child shows "running"; a settled child shows its terminal
-// status (done, failed, canceled).
+// Scenario: A running session shows lineage.status="running"; a settled session
+// shows the terminal value (done, failed, or canceled).
 func TestListSessionsIncludesChildStatus(t *testing.T) {
 	h := newHarness(t, &scriptedProvider{name: "test"})
-	id := h.createSession("test/m1")
+	
+	// Create a root session (managed and resident).
+	rootID := h.createSession("test/m1")
+	mgr := h.srv.SessionManager()
 
-	// Confirm the root is in SessionManager (adopted by the first ReportTurnStart
-	// during createSession).
-	info, ok := h.srv.SessionManager().Info(id)
-	if !ok || info.Status != engine.StatusIdle {
-		t.Fatalf("test setup: root not in SessionManager or not idle: %+v ok=%v", info, ok)
+	// Verify root is in SessionManager (adopted on first prompt).
+	if info, ok := mgr.Info(rootID); !ok || info.Status != engine.StatusIdle {
+		t.Fatalf("test setup: root not in SessionManager or not idle: %+v", info)
 	}
 
-	// List sessions — root should show status="idle" since it's not running a turn
+	// List sessions and verify the root's lineage.status reflects SessionManager state.
 	resp, data := h.do("GET", "/session", nil)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /session = %d: %s", resp.StatusCode, data)
@@ -630,21 +631,24 @@ func TestListSessionsIncludesChildStatus(t *testing.T) {
 		t.Fatalf("decode list: %v (%s)", err, data)
 	}
 
-	// Find the root in the list
+	// Find the root in the list.
 	var rootEntry *sessionJSON
 	for i := range list {
-		if list[i].ID == id {
+		if list[i].ID == rootID {
 			rootEntry = &list[i]
 			break
 		}
 	}
+
 	if rootEntry == nil {
-		t.Errorf("root session %s not in list: %s", id, data)
-		return
+		t.Fatalf("root session %s not in list", rootID)
 	}
 
-	// Verify the root shows as "idle" (not running a turn)
-	if rootEntry.Status != "idle" {
-		t.Errorf("root session status = %q, want idle (managed by SessionManager, not running)", rootEntry.Status)
+	// Verify lineage.status correctly reflects SessionManager's lifecycle state
+	// (idle for a managed session not running a turn). This proves the list
+	// includes lifecycle status from SessionManager, not just busy/idle from
+	// residency.
+	if rootEntry.Lineage == nil || rootEntry.Lineage.Status != "idle" {
+		t.Errorf("root child lineage.status = %+v, want Status='idle'", rootEntry.Lineage)
 	}
 }
