@@ -121,6 +121,21 @@ type Config struct {
 	// derivation was added to close: ContextWindowTokens was opt-in and set
 	// nowhere on the boxes platform, so compaction never armed on any box.
 	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
+	// ContextWindowRequired sets engine.Config.RequireContextWindow: a model
+	// the context-window registry does not recognize is a hard refusal at
+	// session creation, model set, and every Prompt, instead of a session
+	// that silently runs with no context management and later dies with
+	// "context exhausted". A nil value (the field omitted) leaves the
+	// product default of TRUE in place; an explicit false allows the old
+	// silent-degradation behavior for an operator running a model the
+	// registry cannot know (a local or gateway-fronted one) who does not
+	// want to name its window. Naming it with `context_window_tokens`
+	// satisfies the requirement for any model and is the better answer,
+	// since that value is what automatic compaction needs anyway. A *bool
+	// distinguishes "unset" (true) from "false" (off) across the
+	// project-config merge, like PromptRetries' *int. Resolve it with
+	// ContextWindowRequiredValue.
+	ContextWindowRequired *bool `json:"context_window_required,omitempty"`
 	// PromptRetries sets engine.Config.PromptRetries: how many ADDITIONAL
 	// attempts the base interactive Prompt loop makes when a model call fails
 	// with a transient, retryable provider error (an HTTP 5xx/429/529 or a
@@ -1011,6 +1026,9 @@ func merge(base, over *Config) *Config {
 	if over.ContextWindowTokens != 0 {
 		out.ContextWindowTokens = over.ContextWindowTokens
 	}
+	if over.ContextWindowRequired != nil {
+		out.ContextWindowRequired = over.ContextWindowRequired
+	}
 	if over.PromptRetries != nil {
 		out.PromptRetries = over.PromptRetries
 	}
@@ -1259,6 +1277,18 @@ func (c *Config) PromptRetriesValue() int {
 		return defaultPromptRetries
 	}
 	return *c.PromptRetries
+}
+
+// ContextWindowRequiredValue reports whether an unrecognized model is a
+// hard refusal. The default is TRUE: only an explicit
+// `context_window_required: false` allows a model with no known context
+// window to run with compaction silently disabled. A nil receiver (no
+// config) uses the default too.
+func (c *Config) ContextWindowRequiredValue() bool {
+	if c == nil || c.ContextWindowRequired == nil {
+		return true
+	}
+	return *c.ContextWindowRequired
 }
 
 // defaultMaxTokensContinuations is the product default for how many

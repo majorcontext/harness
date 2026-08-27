@@ -1787,3 +1787,62 @@ func TestSnapshotEveryRecords(t *testing.T) {
 		}
 	})
 }
+
+// TestContextWindowRequired covers the context_window_required config
+// field: a *bool on the same unset-versus-explicit split PromptRetries
+// uses, so unset means the product default (TRUE — an unrecognized model is
+// a hard refusal) and an explicit false restores the old silent
+// compaction-disabled behavior.
+func TestContextWindowRequired(t *testing.T) {
+	t.Run("unset requires a known context window", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.ContextWindowRequired != nil {
+			t.Errorf("ContextWindowRequired = %v, want nil (unset)", c.ContextWindowRequired)
+		}
+		if !c.ContextWindowRequiredValue() {
+			t.Error("ContextWindowRequiredValue = false, want true (default)")
+		}
+	})
+	t.Run("explicit false allows an unknown model", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"context_window_required": false}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.ContextWindowRequired == nil || *c.ContextWindowRequired {
+			t.Fatalf("ContextWindowRequired = %v, want explicit false", c.ContextWindowRequired)
+		}
+		if c.ContextWindowRequiredValue() {
+			t.Error("ContextWindowRequiredValue = true, want false (explicitly off)")
+		}
+	})
+	t.Run("nil receiver uses default", func(t *testing.T) {
+		var c *Config
+		if !c.ContextWindowRequiredValue() {
+			t.Error("nil ContextWindowRequiredValue = false, want true")
+		}
+	})
+	t.Run("project overrides user", func(t *testing.T) {
+		no := false
+		yes := true
+		base := &Config{ContextWindowRequired: &yes}
+		merged := merge(base, &Config{ContextWindowRequired: &no})
+		if merged.ContextWindowRequired == nil || *merged.ContextWindowRequired {
+			t.Errorf("merged = %v, want project override false", merged.ContextWindowRequired)
+		}
+	})
+	t.Run("unset project inherits user", func(t *testing.T) {
+		no := false
+		base := &Config{ContextWindowRequired: &no}
+		merged := merge(base, &Config{})
+		if merged.ContextWindowRequired == nil || *merged.ContextWindowRequired {
+			t.Errorf("merged = %v, want inherited false", merged.ContextWindowRequired)
+		}
+	})
+}

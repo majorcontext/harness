@@ -1528,6 +1528,51 @@ session (404), or an empty model (400) — the same validation as the tool — t
 calls `SetModel`. Aliases are not resolved at this endpoint; resolve them
 client-side, as the CLI does.
 
+### An unknown model's context window is a refusal, not a shrug
+
+`modelmeta.ContextWindow` answers "how big is this model's context window".
+When it does not recognize a ref, `resolveContextWindow`
+(`engine/context_window.go`) used to fold that into the SAME answer a
+deliberate opt-out produces: source `disabled`, `compaction_armed=false`, and
+a session that started anyway and ran with **no context management at all** —
+until it died with "context exhausted" instead of compacting. An unrecognized
+model is not a state to degrade into; it is a configuration an operator has to
+fix.
+
+`resolveContextWindow` now REPORTS the miss (an error wrapping
+`ErrUnknownContextWindow`, whose text always names the offending ref) instead
+of swallowing it, and does not decide what to do about it.
+`Config.RequireContextWindow` does, through the single policy point
+`requiredContextWindowErr` — so the definition of a miss lives in one place
+and the policy lives with the session that must honor it, and the ERROR log
+line fires once per miss however it was reached.
+
+Only a REGISTRY MISS refuses. Four ways to have no window stay legitimate and
+silent: an explicit positive `ContextWindowTokens` (naming the window IS the
+missing information, so it satisfies the requirement for any model), an
+explicit NEGATIVE one (`contextWindowSourceOptOut` — a stated choice, told
+apart from `disabled` precisely because `disabled` can mean "unrecognized"), a
+ZERO model ref (nothing to look up; the refusal belongs to whatever later
+names a model), and a model the registry KNOWS whose window is below
+`minAutoContextWindowTokens` (a known model, not a gap).
+
+The refusal is recorded at the earliest point of use and surfaced everywhere a
+model starts being used: `newSession`, `SetModel`, and `LoadSession`'s
+post-replay re-derive set `Session.contextWindowErr`; `ContextWindowErr()` lets
+a create route refuse before the session is durable or resident; `CheckModel`
+is `ModelSupported`'s sibling gate, called at the same three `SetModel` routes
+BEFORE the swap so a rejected ref never reaches the durable `recModel` record;
+and every `Prompt` returns it before touching history, the provider, or the
+instructions read. A RESUME is deliberately not fatal: a session that cannot
+load cannot be listed, read, or exported either, and an operator would lose the
+transcript along with the ability to fix the config.
+
+`Config.RequireContextWindow` false — the engine zero value — keeps the
+pre-fix behavior, so a bare embedder-built `engine.Config` and every test in
+the package are unaffected; the config/CLI layer supplies the product default
+of TRUE (`context_window_required`), the same unset-versus-explicit split
+`prompt_retries` uses.
+
 ### Reasoning effort
 
 `message.Effort` is the unified, provider-agnostic reasoning-effort level:

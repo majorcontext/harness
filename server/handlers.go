@@ -782,6 +782,18 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.reportCreatePhase(sess.ID, "new_session", time.Since(phaseStart))
+	// Refuse a model with no known context window at CREATE time, before
+	// the session becomes durable or resident: a session that can never
+	// run one Prompt is worse than a 400, because it looks created. The
+	// session object is simply dropped — nothing has been journaled or
+	// registered for it yet. See engine.Config.RequireContextWindow.
+	if err := sess.ContextWindowErr(); err != nil {
+		if wt != nil {
+			s.discardWorktree(wt)
+		}
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	// Report "total" on every return past this point — success or error —
 	// not just the success tail below. Without this, a failure after
 	// new_session (recordWorktreeOwner, Persist) never reports "total", and
@@ -1697,6 +1709,13 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		if !st.sess.ModelSupported(body.Model) {
 			s.releasePromptClaim(st)
 			writeErr(w, http.StatusBadRequest, fmt.Sprintf("provider %q is not configured", body.Model.Provider))
+			return
+		}
+		// Same gate, same place, for the third SetModel route — see
+		// handleSetModel's own call and engine.Session.CheckModel.
+		if err := st.sess.CheckModel(body.Model); err != nil {
+			s.releasePromptClaim(st)
+			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		// SetModel emits EventModelChanged on a real change, which Publish
@@ -2932,6 +2951,15 @@ func (s *Server) handleSetModel(w http.ResponseWriter, r *http.Request) {
 
 	if !st.sess.ModelSupported(body.Model) {
 		writeErr(w, http.StatusBadRequest, fmt.Sprintf("provider %q is not configured", body.Model.Provider))
+		return
+	}
+	// The context-window gate, checked BEFORE the swap for the same reason
+	// as the provider gate above: a model with no known context window runs
+	// with no context management at all, and SetModel would already have
+	// persisted the durable recModel record by the time the first Prompt
+	// failed. See engine.Session.CheckModel.
+	if err := st.sess.CheckModel(body.Model); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	st.sess.SetModel(body.Model)

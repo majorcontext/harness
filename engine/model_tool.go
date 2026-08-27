@@ -116,6 +116,14 @@ func runModelTool(s *Session, raw json.RawMessage) (message.Parts, error) {
 		if !s.ModelSupported(ref) {
 			return nil, fmt.Errorf("model: provider %q is not configured (%s)", ref.Provider, s.modelChoicesHint())
 		}
+		// And that a context window is known for it, for the same
+		// before-the-swap reason: CheckModel is the sibling gate every
+		// SetModel route shares (see Config.RequireContextWindow), so a
+		// model with no known window is refused here instead of silently
+		// leaving the session with no context management.
+		if err := s.CheckModel(ref); err != nil {
+			return nil, fmt.Errorf("model: %w", err)
+		}
 		s.SetModel(ref)
 		return jsonResult(s.modelToolStatus())
 

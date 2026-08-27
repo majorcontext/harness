@@ -1740,7 +1740,14 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 	// no recModel record, or explicit config), so this never double-logs the
 	// sanity-floor warning for the unchanged case.
 	if !s.contextWindowExplicit && s.model != cfg.Model {
-		s.cfg.ContextWindowTokens, s.contextWindowSource = resolveContextWindow(0, s.model)
+		var miss error
+		s.cfg.ContextWindowTokens, s.contextWindowSource, miss = resolveContextWindow(0, s.model)
+		// A resume must not be FATAL for an unrecognized model: a session
+		// that cannot load cannot be listed, read, or exported either, and
+		// the operator would lose the transcript along with the ability to
+		// fix the config. Record the refusal instead — every Prompt against
+		// this session returns it, so it still cannot silently run.
+		s.contextWindowErr = requiredContextWindowErr(s.cfg, s.model, miss, "session_resume")
 	}
 	logContextWindowArmed(s.ID, s.model, s.cfg.ContextWindowTokens, s.contextWindowSource, "start")
 	// Review finding (round 5): advance toolResultNextID past every trh_N

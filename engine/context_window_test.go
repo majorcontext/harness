@@ -46,7 +46,7 @@ func testContextWindowTable() map[message.ModelRef]int {
 func TestResolveContextWindowExplicitConfigWinsOverModel(t *testing.T) {
 	stubContextWindowLookup(t, testContextWindowTable())
 
-	tokens, source := resolveContextWindow(50_000, modelKnownBig)
+	tokens, source, _ := resolveContextWindow(50_000, modelKnownBig)
 	if tokens != 50_000 || source != contextWindowSourceConfig {
 		t.Fatalf("resolveContextWindow(50000, big) = %d, %q; want 50000, %q", tokens, source, contextWindowSourceConfig)
 	}
@@ -55,7 +55,7 @@ func TestResolveContextWindowExplicitConfigWinsOverModel(t *testing.T) {
 func TestResolveContextWindowModelDerivedWhenUnset(t *testing.T) {
 	stubContextWindowLookup(t, testContextWindowTable())
 
-	tokens, source := resolveContextWindow(0, modelKnownBig)
+	tokens, source, _ := resolveContextWindow(0, modelKnownBig)
 	if tokens != 500_000 || source != contextWindowSourceModelDerived {
 		t.Fatalf("resolveContextWindow(0, big) = %d, %q; want 500000, %q", tokens, source, contextWindowSourceModelDerived)
 	}
@@ -64,7 +64,7 @@ func TestResolveContextWindowModelDerivedWhenUnset(t *testing.T) {
 func TestResolveContextWindowUnknownModelDisabled(t *testing.T) {
 	stubContextWindowLookup(t, testContextWindowTable())
 
-	tokens, source := resolveContextWindow(0, modelUnknown)
+	tokens, source, _ := resolveContextWindow(0, modelUnknown)
 	if tokens != 0 || source != contextWindowSourceDisabled {
 		t.Fatalf("resolveContextWindow(0, unknown) = %d, %q; want 0, %q", tokens, source, contextWindowSourceDisabled)
 	}
@@ -79,7 +79,7 @@ func TestResolveContextWindowUnknownModelDisabled(t *testing.T) {
 func TestResolveContextWindowFloorRejectsBogusValue(t *testing.T) {
 	stubContextWindowLookup(t, testContextWindowTable())
 
-	tokens, source := resolveContextWindow(0, modelBogusTiny)
+	tokens, source, _ := resolveContextWindow(0, modelBogusTiny)
 	if tokens != 0 || source != contextWindowSourceDisabled {
 		t.Fatalf("resolveContextWindow(0, bogus-tiny) = %d, %q; want 0, %q (floor must reject it)", tokens, source, contextWindowSourceDisabled)
 	}
@@ -89,7 +89,7 @@ func TestResolveContextWindowFloorBoundary(t *testing.T) {
 	stubContextWindowLookup(t, map[message.ModelRef]int{
 		modelKnownSmall: minAutoContextWindowTokens, // exactly at the floor
 	})
-	tokens, source := resolveContextWindow(0, modelKnownSmall)
+	tokens, source, _ := resolveContextWindow(0, modelKnownSmall)
 	if tokens != minAutoContextWindowTokens || source != contextWindowSourceModelDerived {
 		t.Fatalf("resolveContextWindow(0, exactly-floor) = %d, %q; want %d, %q (floor is inclusive)",
 			tokens, source, minAutoContextWindowTokens, contextWindowSourceModelDerived)
@@ -98,7 +98,7 @@ func TestResolveContextWindowFloorBoundary(t *testing.T) {
 	stubContextWindowLookup(t, map[message.ModelRef]int{
 		modelKnownSmall: minAutoContextWindowTokens - 1,
 	})
-	tokens, source = resolveContextWindow(0, modelKnownSmall)
+	tokens, source, _ = resolveContextWindow(0, modelKnownSmall)
 	if tokens != 0 || source != contextWindowSourceDisabled {
 		t.Fatalf("resolveContextWindow(0, one-under-floor) = %d, %q; want 0, %q", tokens, source, contextWindowSourceDisabled)
 	}
