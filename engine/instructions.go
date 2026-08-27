@@ -21,6 +21,7 @@ package engine
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,13 +32,11 @@ import (
 // directory, in preference order (AGENTS.md wins over the singular AGENT.md).
 var instructionsFilenames = []string{"AGENTS.md", "AGENT.md"}
 
-// maxInstructionsBytes caps how much of an instruction file is read into the
-// system prompt. Content beyond the cap is dropped and replaced with
-// truncationMarker.
-const maxInstructionsBytes = 64 * 1024
-
-// truncationMarker is appended when an instruction file exceeds the cap.
-const truncationMarker = "[... truncated: AGENTS.md exceeds 64 KiB ...]"
+// defaultMaxInstructionsBytes caps how much of an instruction file is read
+// into the system prompt when InstructionsConfig.MaxBytes is unset. Content
+// beyond the cap is dropped and replaced with the marker
+// formatTruncationMarker builds.
+const defaultMaxInstructionsBytes = 64 * 1024
 
 // InstructionsConfig controls project-instruction (AGENTS.md) injection. As a
 // field on Config it has three meaningful states:
@@ -52,6 +51,47 @@ type InstructionsConfig struct {
 	// Path, when non-empty, is a specific instruction file to load instead of
 	// auto-discovering AGENTS.md.
 	Path string
+	// MaxBytes caps the instruction bytes injected into the system prompt.
+	// Zero (the zero value) takes defaultMaxInstructionsBytes (64 KiB); a
+	// positive value sets the cap; a NEGATIVE value disables the cap, so the
+	// whole file is injected however large it is. Truncation is always loud —
+	// see truncateInstructions.
+	MaxBytes int
+}
+
+// resolveInstructionsMaxBytes reports the instruction byte cap for ic. A nil
+// ic, or a zero MaxBytes, takes the default; a negative MaxBytes is passed
+// through unchanged and disables the cap.
+func resolveInstructionsMaxBytes(ic *InstructionsConfig) int {
+	if ic == nil || ic.MaxBytes == 0 {
+		return defaultMaxInstructionsBytes
+	}
+	return ic.MaxBytes
+}
+
+// formatTruncationMarker builds the in-band marker that replaces the dropped
+// tail of an oversize instruction file. The marker is VISIBLE to the model on
+// purpose: an instruction file cut in half without a word is
+// indistinguishable from a file that simply ends there, so a model follows a
+// half specification and believes it read the whole one. The marker names the
+// path, the three byte counts, and the tool that reads the rest, so the model
+// can recover the dropped content itself.
+//
+// The `[... ... ...]` bracket form is this repository's own marker
+// convention (see engine/messagepage.go and engine/toolresult_tool.go). It
+// serves the same purpose as the fx harness's inline <context_limit> markers:
+// a truncation the reader can see.
+//
+// path is the ABSOLUTE path, while the segment header above it
+// (formatInstructions) shows the short display path. The two differ on
+// purpose: the header names the file for a reader, the marker names an
+// argument the model gives to read_file, and an absolute path resolves the
+// same from any working directory.
+func formatTruncationMarker(path string, total, kept int) string {
+	return fmt.Sprintf(
+		"[... truncated: %s is %d bytes. The first %d bytes are above. %d bytes are not shown. Read the full file with the read_file tool. ...]",
+		path, total, kept, total-kept,
+	)
 }
 
 // loadInstructions searches from workDir upward for AGENTS.md (falling back to
@@ -59,11 +99,12 @@ type InstructionsConfig struct {
 // relative to workDir. The walk stops at the first directory containing a .git
 // entry — that directory is checked for an instructions file before stopping —
 // or at the filesystem root. A missing file yields empty strings and no error.
-func loadInstructions(workDir string) (content, path string, err error) {
+// maxBytes is the resolved byte cap (see resolveInstructionsMaxBytes).
+func loadInstructions(workDir string, maxBytes int) (content, path string, err error) {
 	dir := workDir
 	for {
 		if p, data, found := readInstructionFile(dir); found {
-			body, err := validateInstructions(p, data)
+			body, err := validateInstructions(p, data, maxBytes)
 			if err != nil {
 				return "", "", err
 			}
@@ -102,23 +143,45 @@ func readInstructionFile(dir string) (path string, data []byte, found bool) {
 // UTF-8, or empty/whitespace-only) is a hard error — the project meant to
 // supply instructions and the agent must not silently run without them. Size
 // is not malformedness: an oversize file is truncated, not rejected.
-func validateInstructions(path string, data []byte) (string, error) {
+func validateInstructions(path string, data []byte, maxBytes int) (string, error) {
 	if !utf8.Valid(data) {
 		return "", fmt.Errorf("engine: instructions file %s is not valid UTF-8", path)
 	}
 	if strings.TrimSpace(string(data)) == "" {
 		return "", fmt.Errorf("engine: instructions file %s is empty", path)
 	}
-	if len(data) > maxInstructionsBytes {
-		// Trim any trailing partial rune so the truncated body stays valid
-		// UTF-8 (the full data is already known valid above).
-		capped := data[:maxInstructionsBytes]
-		for len(capped) > 0 && !utf8.Valid(capped) {
-			capped = capped[:len(capped)-1]
-		}
-		return string(capped) + "\n" + truncationMarker, nil
+	return truncateInstructions(path, data, maxBytes), nil
+}
+
+// truncateInstructions applies the byte cap to an already-validated
+// instruction file. It is LOUD on both channels: the model reads the in-band
+// marker formatTruncationMarker builds, and the operator reads one WARN log
+// line with the original and the kept byte counts. Neither channel existed
+// before: a 408 KiB AGENTS.md was cut to 64 KiB in silence, and no reader —
+// model or operator — could tell the file was incomplete.
+//
+// A negative maxBytes disables the cap. A file at or under the cap is
+// returned verbatim, with no marker and no log line. The instruction file is
+// read once per session (ensureInstructions caches the segment), so an
+// oversize file writes one WARN line per session, never one per request.
+func truncateInstructions(path string, data []byte, maxBytes int) string {
+	if maxBytes < 0 || len(data) <= maxBytes {
+		return string(data)
 	}
-	return string(data), nil
+	// Trim any trailing partial rune so the truncated body stays valid
+	// UTF-8 (the full data is already known valid by the caller).
+	capped := data[:maxBytes]
+	for len(capped) > 0 && !utf8.Valid(capped) {
+		capped = capped[:len(capped)-1]
+	}
+	slog.Warn("engine: instructions file truncated",
+		"path", path,
+		"original_bytes", len(data),
+		"kept_bytes", len(capped),
+		"dropped_bytes", len(data)-len(capped),
+		"limit_bytes", maxBytes,
+	)
+	return string(capped) + "\n" + formatTruncationMarker(path, len(data), len(capped))
 }
 
 // isDir reports whether path is a directory.
@@ -171,6 +234,7 @@ func (s *Session) buildInstructionSegment() (string, error) {
 	if ic != nil && ic.Disabled {
 		return "", nil
 	}
+	maxBytes := resolveInstructionsMaxBytes(ic)
 	if ic != nil && ic.Path != "" {
 		// A relative override resolves against the session's WorkDir, not
 		// the process cwd — embedders may set WorkDir independently.
@@ -182,14 +246,14 @@ func (s *Session) buildInstructionSegment() (string, error) {
 		if err != nil {
 			return "", nil // missing/unreadable override: no segment, no error
 		}
-		body, err := validateInstructions(path, data)
+		body, err := validateInstructions(path, data, maxBytes)
 		if err != nil {
 			return "", err
 		}
 		s.instrPath = ic.Path
 		return formatInstructions(ic.Path, body), nil
 	}
-	content, path, err := loadInstructions(s.cfg.WorkDir)
+	content, path, err := loadInstructions(s.cfg.WorkDir, maxBytes)
 	if err != nil {
 		return "", err
 	}

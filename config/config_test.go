@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -628,6 +629,24 @@ func TestMergeInstructions(t *testing.T) {
 		}
 		if merged.InstructionsPath != "user/AGENTS.md" {
 			t.Errorf("merged InstructionsPath = %q, want inherited user/AGENTS.md", merged.InstructionsPath)
+		}
+	})
+	t.Run("max bytes: project overrides, zero inherits", func(t *testing.T) {
+		base := &Config{InstructionsMaxBytes: 4096}
+		if got := merge(base, &Config{InstructionsMaxBytes: -1}).InstructionsMaxBytes; got != -1 {
+			t.Errorf("merged InstructionsMaxBytes = %d, want -1 (project no-cap wins)", got)
+		}
+		if got := merge(base, &Config{}).InstructionsMaxBytes; got != 4096 {
+			t.Errorf("merged InstructionsMaxBytes = %d, want inherited 4096", got)
+		}
+	})
+	t.Run("max bytes parses from JSON", func(t *testing.T) {
+		var c Config
+		if err := json.Unmarshal([]byte(`{"instructions_max_bytes": 131072}`), &c); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if c.InstructionsMaxBytes != 131072 {
+			t.Errorf("InstructionsMaxBytes = %d, want 131072", c.InstructionsMaxBytes)
 		}
 	})
 }

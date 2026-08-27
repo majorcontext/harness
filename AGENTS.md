@@ -110,9 +110,27 @@ session, and never written to the session log (loaded fresh on resume).
 
 A present-but-unusable file (invalid UTF-8, or empty/whitespace-only) fails the
 first `Prompt` — a project that meant to supply instructions must not run
-silently without them. A missing file is fine. Oversize files are truncated at
-64 KiB with a marker. Disable with `-no-instructions`, config `instructions:
-false`, or point at a specific file with config `instructions_path`.
+silently without them. A missing file is fine. Disable with
+`-no-instructions`, config `instructions: false`, or point at a specific file
+with config `instructions_path`.
+
+An oversize file is truncated, and the truncation is LOUD on both channels.
+`truncateInstructions` (`engine/instructions.go`) appends the in-band marker
+`formatTruncationMarker` builds — it names the path, the original size, the
+kept size, the dropped size, and the `read_file` tool that reads the rest —
+and writes one WARN log line with the same counts. A silent cut was the
+earlier behavior: a 408 KiB `AGENTS.md` reached the model as 64 KiB with no
+sign of the missing 344 KiB, so the model followed a half specification and
+believed it read the whole one. A truncated instruction file must always
+announce itself; never make this cut quiet again.
+
+`InstructionsConfig.MaxBytes` sets the cap: 0 (the zero value) takes
+`defaultMaxInstructionsBytes` (64 KiB), a positive value sets it, a NEGATIVE
+value disables the cap so the whole file is injected. Config key
+`instructions_max_bytes` (bytes) and the operator seam
+`HARNESS_INSTRUCTIONS_MAX_KB` (kilobytes; negative disables) resolve it in
+`cmd/harness`, the environment variable winning — the engine never reads an
+environment variable itself.
 
 ### Agent Skills
 

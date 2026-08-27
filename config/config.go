@@ -42,6 +42,15 @@ type Config struct {
 	// InstructionsPath overrides the auto-discovered AGENTS.md with a specific
 	// file to load instead of walking up from the working directory.
 	InstructionsPath string `json:"instructions_path,omitempty"`
+	// InstructionsMaxBytes sets engine.InstructionsConfig.MaxBytes: how many
+	// bytes of the instruction file reach the system prompt. Zero (omitted,
+	// the default) keeps the engine default of 64 KiB. A positive value sets
+	// the cap. A NEGATIVE value disables the cap, so the whole file is
+	// injected — a project with a large AGENTS.md and a large context window
+	// can pay for the whole file. Truncation is always loud: the model reads
+	// an in-band marker and the operator reads a WARN log line.
+	// HARNESS_INSTRUCTIONS_MAX_KB overrides this key (see cmd/harness).
+	InstructionsMaxBytes int `json:"instructions_max_bytes,omitempty"`
 	// SkillsDirs lists directories scanned for Agent Skills (agentskills.io).
 	// A nil (omitted) value leaves the engine default in place: use
 	// <WorkDir>/.agents/skills when it exists. In the project-config merge a
@@ -828,6 +837,8 @@ func Path() string {
 //   - Model, SessionDir, InstructionsPath, GoalEvaluatorModel, SessionSync: a
 //     non-empty project value overrides the user value. Instructions and
 //     ModelTool (*bool): a non-nil project value overrides.
+//     InstructionsMaxBytes: a non-zero project value overrides, so a project
+//     sets its own cap (or -1 for no cap) over the user value.
 //   - SkillsDirs, AgentDefsDirs: a non-empty project slice replaces the user
 //     slice entirely (arrays override, they do not concatenate); an
 //     empty/omitted project value inherits the user value.
@@ -962,6 +973,9 @@ func merge(base, over *Config) *Config {
 	}
 	if over.InstructionsPath != "" {
 		out.InstructionsPath = over.InstructionsPath
+	}
+	if over.InstructionsMaxBytes != 0 {
+		out.InstructionsMaxBytes = over.InstructionsMaxBytes
 	}
 	if over.GoalEvaluatorModel != "" {
 		out.GoalEvaluatorModel = over.GoalEvaluatorModel
