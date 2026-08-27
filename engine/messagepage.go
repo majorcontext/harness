@@ -257,46 +257,65 @@ func pageError(f *os.File, id string, ix SessionIndex, cause error) error {
 // that in reverse is exactly the kind of second, subtly different
 // implementation of a fold this repository forbids, so the general path
 // below reuses the forward fold instead.
-func tailPage(f *os.File, logSize, size int64, total, lo, hi int) ([]message.Message, bool, error) {
+func tailPage(src io.ReaderAt, logSize, size int64, total, lo, hi int) ([]message.Message, bool, error) {
 	cur := total
 	var out []message.Message
 	compacted := false
 
-	err := scanLogBackward(f, logSize, size, func(line []byte, isTail bool) (bool, error) {
-		// Slim first. Every record the walk passes on its way back to the
-		// page gets this decode — a type, and a message's id — and only a
-		// record INSIDE the page is decoded in full. Full-decoding on the
-		// way past cost one message body per record newer than the page,
-		// which is the same O(n) the fold path was rewritten to remove, and
-		// it turned any record a newer binary wrote into a failed page read
-		// even when no page asked for it.
-		var head struct {
-			Type    string        `json:"type"`
-			Message *indexMessage `json:"message,omitempty"`
-		}
-		if err := json.Unmarshal(line, &head); err != nil {
-			if isTail {
-				// A torn final line is a crash mid-write. scanLog's forward
-				// discipline ignores it; so does this one, and the index
-				// this page is numbered against ignored it too.
+	err := scanLogBackward(src, logSize, size, func(line logLine, isTail bool) (bool, error) {
+		// Classify from the line's PREFIX. Walking back to an older page
+		// passes every record after it, and reading each of those whole —
+		// a 20 MB image blob or tool result among them — to learn a type
+		// string and drop it is the cost this endpoint exists to avoid.
+		//
+		// The type is the first field of every record this package writes
+		// (see record), so a prefix answers it. A prefix that does not
+		// parse is inconclusive rather than corrupt, and the line is read
+		// whole before any verdict.
+		if isTail {
+			// The newest line is the one a crash can leave torn, and a
+			// TORN line's prefix still parses a type — the type is its
+			// first field. Read this one whole and require the whole thing
+			// to parse, exactly as the fold that numbered this page did.
+			// Otherwise a record the index never counted would shift every
+			// seq in the page.
+			whole, err := line.All()
+			if err != nil {
+				return false, err
+			}
+			if !json.Valid(bytes.TrimSpace(whole)) {
 				return true, nil
 			}
+		}
+		raw := line.Prefix()
+		head, ok := decodeRecordHead(raw)
+		if !ok && !line.Complete() {
+			// Inconclusive rather than corrupt: a prefix can end mid-key.
+			whole, err := line.All()
+			if err != nil {
+				return false, err
+			}
+			raw = whole
+			head, ok = decodeRecordHead(raw)
+		}
+		if !ok {
 			return false, errors.New("corrupt record")
 		}
-		switch head.Type {
+		switch head {
 		case recCompact:
 			compacted = true
 			return false, nil
 		case recMessage:
-			if head.Message == nil {
-				return true, nil
-			}
 			if cur >= lo && cur <= hi {
+				whole, err := line.All()
+				if err != nil {
+					return false, err
+				}
 				var rec struct {
 					Message *message.Message `json:"message"`
 				}
-				if err := json.Unmarshal(line, &rec); err != nil || rec.Message == nil {
-					return false, fmt.Errorf("message %q: %v", head.Message.ID, err)
+				if err := json.Unmarshal(whole, &rec); err != nil || rec.Message == nil {
+					return false, fmt.Errorf("message record at offset %d: %v", line.start, err)
 				}
 				msg := *rec.Message
 				// The same ingest-time repair LoadSession applies to every
@@ -306,6 +325,10 @@ func tailPage(f *os.File, logSize, size int64, total, lo, hi int) ([]message.Mes
 				msg.Normalize()
 				out = append(out, msg)
 			}
+			// A message record with no message body would make this count
+			// wrong. It cannot reach here: the index that numbered this
+			// page folds such a record as an error, so a journal carrying
+			// one has no index and this path never runs for it.
 			cur--
 		}
 		return cur >= lo, nil
@@ -324,6 +347,35 @@ func tailPage(f *os.File, logSize, size int64, total, lo, hi int) ([]message.Mes
 	}
 	reverseMessages(out)
 	return out, true, nil
+}
+
+// decodeRecordHead reads a record's type from the START of its bytes,
+// without decoding the rest. ok is false when the bytes do not (yet) parse
+// as an object whose first key is "type", which for a PREFIX means
+// inconclusive — read more — and for a whole line means corrupt.
+//
+// Type is the first field of every record this package writes (see record,
+// store.go), so this returns after one key and one value.
+func decodeRecordHead(raw []byte) (recordType string, ok bool) {
+	dec := json.NewDecoder(bytes.NewReader(bytes.TrimSpace(raw)))
+	tok, err := dec.Token()
+	if err != nil || tok != json.Delim('{') {
+		return "", false
+	}
+	key, err := dec.Token()
+	if err != nil {
+		return "", false
+	}
+	name, isString := key.(string)
+	if !isString || name != "type" {
+		return "", false
+	}
+	value, err := dec.Token()
+	if err != nil {
+		return "", false
+	}
+	recordType, isString = value.(string)
+	return recordType, isString
 }
 
 // foldedPage is the general path, for a journal that carries at least one
@@ -433,6 +485,44 @@ func reverseMessages(msgs []message.Message) {
 	}
 }
 
+// logLine is one line the backward scan found, handed to a callback as a
+// PREFIX plus the means to read the rest.
+//
+// A page reader classifies most of the records it walks and keeps almost
+// none of them: walking back to an older page passes every record after it.
+// Reading each of those whole cost the bytes of a 20 MB image blob or tool
+// result to learn a type string and drop it. The prefix answers that
+// question, and All reads the body only for a record the page carries.
+type logLine struct {
+	src    io.ReaderAt
+	start  int64
+	length int64
+	prefix []byte
+}
+
+// Prefix returns the line's first bytes — the whole line when it is short.
+func (l logLine) Prefix() []byte { return l.prefix }
+
+// Complete reports whether Prefix already holds the whole line.
+func (l logLine) Complete() bool { return int64(len(l.prefix)) == l.length }
+
+// All reads the whole line.
+func (l logLine) All() ([]byte, error) {
+	if l.Complete() {
+		return l.prefix, nil
+	}
+	buf := make([]byte, l.length)
+	if _, err := l.src.ReadAt(buf, l.start); err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
+
+// logLinePeekBytes bounds the prefix read. It is far larger than a record
+// head — a type, and a message's identity fields — and far smaller than the
+// large records this exists to avoid reading.
+const logLinePeekBytes = 4 << 10
+
 // scanLogBackward calls fn for each non-empty line in [0, end) of f, newest
 // first, stopping when fn returns false or an error, or at byte 0. isTail is
 // true only for the file's final line, which is the one a crash can leave
@@ -445,46 +535,34 @@ func reverseMessages(msgs []message.Message) {
 // does.
 //
 // It works in offsets, never in an accumulating buffer. Each block read
-// searches backwards for a newline; the line it delimits is then read once,
-// by offset, at its exact length. An earlier version instead prepended each
-// block to a carry buffer, which copies the whole partial line per block: a
-// single 20 MB record spans hundreds of blocks and copied gigabytes before
-// decoding one message. Journals carry records that large — a tool result
-// or an image Blob — so the cost was reachable from an ordinary page
-// request.
-func scanLogBackward(f *os.File, end, size int64, fn func(line []byte, isTail bool) (bool, error)) error {
+// searches backwards for a newline, and the line it delimits is then read
+// once — bounded to logLinePeekBytes unless the callback asks for the rest.
+// An earlier revision prepended each block to a carry buffer, which copies
+// the whole partial line per block: one 20 MB record spans hundreds of
+// blocks and copied gigabytes before decoding one message.
+// src is an io.ReaderAt rather than an *os.File so a test can measure what
+// a page read actually reads: the whole point of the prefix is that a deep
+// page does not pull the bytes of the records it walks past, and only a
+// counting reader can prove that.
+func scanLogBackward(src io.ReaderAt, end, size int64, fn func(line logLine, isTail bool) (bool, error)) error {
 	if end > size {
 		end = size
 	}
 	if end <= 0 {
 		return nil
 	}
-	// lineEnd is the offset just past the line under consideration. Every
-	// read below stays inside [0, end), so a journal that grew after the
-	// caller chose end is never read past it.
+	// One block stays in memory, and the walk moves backwards through it.
+	// Every line whose newline search and prefix fall inside it is served
+	// without touching the file again. A block per LINE — which an earlier
+	// revision did — reads a 64 KiB block to find a boundary 200 bytes
+	// away, so a journal of small records was read several times over.
+	win := newBackwardWindow(src)
 	lineEnd := end
-	block := make([]byte, revChunkBytes)
 	first := true
 	for lineEnd > 0 {
-		// Find the newline that starts this line, walking backwards a block
-		// at a time.
-		lineStart := int64(0)
-		searchEnd := lineEnd
-		for searchEnd > 0 {
-			n := int64(revChunkBytes)
-			if n > searchEnd {
-				n = searchEnd
-			}
-			pos := searchEnd - n
-			buf := block[:n]
-			if _, err := f.ReadAt(buf, pos); err != nil {
-				return err
-			}
-			if i := bytes.LastIndexByte(buf, '\n'); i >= 0 {
-				lineStart = pos + int64(i) + 1
-				break
-			}
-			searchEnd = pos
+		lineStart, err := win.newlineBefore(lineEnd)
+		if err != nil {
+			return err
 		}
 		if lineStart >= lineEnd {
 			// An empty line: the terminator of the line before it. Step
@@ -492,13 +570,19 @@ func scanLogBackward(f *os.File, end, size int64, fn func(line []byte, isTail bo
 			lineEnd = lineStart - 1
 			continue
 		}
-		line := make([]byte, lineEnd-lineStart)
-		if _, err := f.ReadAt(line, lineStart); err != nil {
+		length := lineEnd - lineStart
+		peek := length
+		if peek > logLinePeekBytes {
+			peek = logLinePeekBytes
+		}
+		prefix, err := win.at(lineStart, peek)
+		if err != nil {
 			return err
 		}
+		line := logLine{src: src, start: lineStart, length: length, prefix: prefix}
 		lineEnd = lineStart - 1 // step over the newline itself
-		if trimmed := bytes.TrimSpace(line); len(trimmed) > 0 {
-			cont, err := fn(trimmed, first)
+		if len(bytes.TrimSpace(prefix)) > 0 {
+			cont, err := fn(line, first)
 			first = false
 			if err != nil || !cont {
 				return err
@@ -506,4 +590,72 @@ func scanLogBackward(f *os.File, end, size int64, fn func(line []byte, isTail bo
 		}
 	}
 	return nil
+}
+
+// backwardWindow holds one block of a file and serves reads that fall
+// inside it, refilling backwards as a scan moves towards byte 0. It exists
+// so a backward scan reads each byte of the span it walks about once.
+type backwardWindow struct {
+	src   io.ReaderAt
+	buf   []byte
+	start int64 // file offset of buf[0]
+}
+
+func newBackwardWindow(src io.ReaderAt) *backwardWindow {
+	return &backwardWindow{src: src, buf: nil, start: -1}
+}
+
+// covers reports whether [off, off+n) lies inside the block in memory.
+func (w *backwardWindow) covers(off, n int64) bool {
+	return w.start >= 0 && off >= w.start && off+n <= w.start+int64(len(w.buf))
+}
+
+// fillEndingAt loads the block of up to revChunkBytes that ENDS at end.
+func (w *backwardWindow) fillEndingAt(end int64) error {
+	n := int64(revChunkBytes)
+	if n > end {
+		n = end
+	}
+	start := end - n
+	buf := make([]byte, n)
+	if _, err := w.src.ReadAt(buf, start); err != nil {
+		return err
+	}
+	w.buf, w.start = buf, start
+	return nil
+}
+
+// newlineBefore returns the offset just past the closest newline before
+// end, or 0 when the span back to byte 0 holds none.
+func (w *backwardWindow) newlineBefore(end int64) (int64, error) {
+	searchEnd := end
+	for searchEnd > 0 {
+		if !w.covers(searchEnd-1, 1) {
+			if err := w.fillEndingAt(searchEnd); err != nil {
+				return 0, err
+			}
+		}
+		// Search only the part of the block below searchEnd.
+		hi := searchEnd - w.start
+		if i := bytes.LastIndexByte(w.buf[:hi], '\n'); i >= 0 {
+			return w.start + int64(i) + 1, nil
+		}
+		searchEnd = w.start
+	}
+	return 0, nil
+}
+
+// at returns n bytes at off, from the block when it covers them and from
+// the file otherwise. The result is a copy: the block is refilled as the
+// scan moves on.
+func (w *backwardWindow) at(off, n int64) ([]byte, error) {
+	out := make([]byte, n)
+	if w.covers(off, n) {
+		copy(out, w.buf[off-w.start:off-w.start+n])
+		return out, nil
+	}
+	if _, err := w.src.ReadAt(out, off); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

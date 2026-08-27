@@ -533,8 +533,12 @@ func TestScanLogBackwardBoundaries(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := scanLogBackward(f, end, fi.Size(), func(line []byte, _ bool) (bool, error) {
-				got = append(got, string(line))
+			if err := scanLogBackward(f, end, fi.Size(), func(line logLine, _ bool) (bool, error) {
+				whole, err := line.All()
+				if err != nil {
+					return false, err
+				}
+				got = append(got, string(bytes.TrimSpace(whole)))
 				return true, nil
 			}); err != nil {
 				t.Fatalf("scanLogBackward: %v", err)
@@ -573,9 +577,13 @@ func TestScanLogBackwardMarksOnlyTheFinalLineAsTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := scanLogBackward(f, 15, fi.Size(), func(line []byte, isTail bool) (bool, error) {
+	if err := scanLogBackward(f, 15, fi.Size(), func(line logLine, isTail bool) (bool, error) {
 		if isTail {
-			tails = append(tails, string(line))
+			whole, err := line.All()
+			if err != nil {
+				return false, err
+			}
+			tails = append(tails, string(bytes.TrimSpace(whole)))
 		}
 		return true, nil
 	}); err != nil {
@@ -965,5 +973,116 @@ func TestTailPageDecodesOnlyThePage(t *testing.T) {
 	}
 	if page.FirstSeq != 1 || page.LastSeq != 2 || len(page.Messages) != 2 {
 		t.Fatalf("page = [%d,%d] with %d messages, want [1,2] with 2", page.FirstSeq, page.LastSeq, len(page.Messages))
+	}
+}
+
+// pageByteCounter records how many bytes a scan actually pulls from a
+// file. It is the only way to prove the claim the prefix exists for: a page
+// deep in history must not read the bodies of the records it walks past.
+type pageByteCounter struct {
+	f     *os.File
+	bytes int64
+}
+
+func (c *pageByteCounter) ReadAt(p []byte, off int64) (int, error) {
+	n, err := c.f.ReadAt(p, off)
+	c.bytes += int64(n)
+	return n, err
+}
+
+// TestTailPageDoesNotReadRecordsItOnlyClassifies is the byte-level cost
+// guard for the tail path. Walking back to an older page passes every
+// record after it, and pulling each of those whole — a 20 MB image blob or
+// tool result among them — to learn a type string and drop it is the cost
+// this endpoint exists to avoid. Decoding less is not enough if the bytes
+// are read anyway.
+func TestTailPageDoesNotReadRecordsItOnlyClassifies(t *testing.T) {
+	dir := t.TempDir()
+	sess := pagedSession(t, dir, 3) // six small durable messages
+	path := filepath.Join(dir, sess.ID+".jsonl")
+
+	// One record far larger than the peek window, then a small one after
+	// it so the big record is never the tail (a torn tail is read whole by
+	// design).
+	const bigBytes = logLinePeekBytes * 40
+	beforeBig, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"type":"message","message":{"id":"msg_big","role":"user","parts":[{"type":"text","text":"` +
+		strings.Repeat("Z", bigBytes) + "\"}]}}\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"type":"model","model":"test/m2"}` + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	ix, err := ReadSessionIndex(dir, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ix.DurableMessages != 7 {
+		t.Fatalf("index counts %d durable messages, want 7", ix.DurableMessages)
+	}
+
+	read := func(lo, hi int) (int64, []message.Message) {
+		t.Helper()
+		jf, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer jf.Close()
+		fi, err := jf.Stat()
+		if err != nil {
+			t.Fatal(err)
+		}
+		counter := &pageByteCounter{f: jf}
+		msgs, ok, err := tailPage(counter, ix.LogSize, fi.Size(), ix.DurableMessages, lo, hi)
+		if err != nil || !ok {
+			t.Fatalf("tailPage([%d,%d]) = ok %v, err %v", lo, hi, ok, err)
+		}
+		return counter.bytes, msgs
+	}
+
+	// A page of the two OLDEST messages walks past the big record. It must
+	// not pull its body: the whole journal is bigger than the big record,
+	// and a walk that read every record whole would exceed it.
+	deepBytes, deep := read(1, 2)
+	if len(deep) != 2 {
+		t.Fatalf("deep page returned %d messages, want 2", len(deep))
+	}
+	for _, m := range deep {
+		if m.ID == "msg_big" {
+			t.Fatal("the deep page carried the record it should only have classified")
+		}
+	}
+	// A backward walk must read the span between the page and the end of
+	// the file: that is where the line boundaries are, and there is no way
+	// to count records without finding them. What it must NOT do is read
+	// that span and then pull the big record's body a SECOND time to
+	// classify it. So the bound is the span, with room to spare, not twice
+	// it.
+	final, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	span := final.Size() - beforeBig.Size()
+	if deepBytes > span*3/2 {
+		t.Errorf("a page walking past the big record read %d bytes for a %d-byte span: the record's body is being read to classify it", deepBytes, span)
+	}
+
+	// The page that DOES carry it reads it whole, which is what makes the
+	// number above meaningful rather than a scan that skipped everything.
+	newestBytes, newest := read(7, 7)
+	if len(newest) != 1 || newest[0].ID != "msg_big" {
+		t.Fatalf("newest page = %v, want the big record", idsOf(newest))
+	}
+	if newestBytes < bigBytes {
+		t.Errorf("the page carrying the big record read only %d bytes, want at least %d", newestBytes, bigBytes)
 	}
 }
