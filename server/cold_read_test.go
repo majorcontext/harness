@@ -602,25 +602,66 @@ func TestListOmitsWhatItCannotRenderWhileStatusReportsIt(t *testing.T) {
 }
 
 // TestListSessionsIncludesChildStatus verifies that GET /session list includes
-// lineage.status (SessionManager lifecycle state) for managed sessions,
-// distinguishing "running" from terminal states. This allows the console to see
-// which sessions are running without N+1 calls to GET /session/{id}.
+// lineage.status (SessionManager lifecycle state) for managed non-resident
+// sessions. This exercises the COLD path my PR adds. The list must show
+// "running" vs terminal values without N+1 calls, and must agree with
+// GET /session/{id}.
 //
-// Scenario: A running session shows lineage.status="running"; a settled session
-// shows the terminal value (done, failed, or canceled).
+// Scenario: Create root as resident, then create two cold child sessions
+// on disk. Adopt them into SessionManager, then remove their Session objects
+// from SessionManager's cache (simulating a child created in another process).
+// Assert GET /session list shows correct lineage.status from the manager.
 func TestListSessionsIncludesChildStatus(t *testing.T) {
 	h := newHarness(t, &scriptedProvider{name: "test"})
-
-	// Create a root session (managed and resident).
 	rootID := h.createSession("test/m1")
 	mgr := h.srv.SessionManager()
 
-	// Verify root is in SessionManager (adopted on first prompt).
-	if info, ok := mgr.Info(rootID); !ok || info.Status != engine.StatusIdle {
-		t.Fatalf("test setup: root not in SessionManager or not idle: %+v", info)
+	// Create two cold (disk-only) child sessions with TaskParentID set.
+	runningID := coldSession(t, h.dir, func(cfg *engine.Config) {
+		cfg.ParentSession = rootID
+		cfg.TaskParentID = rootID
+		cfg.TaskAgentType = "explore"
+		cfg.TaskDepth = 1
+	}).ID
+
+	doneID := coldSession(t, h.dir, func(cfg *engine.Config) {
+		cfg.ParentSession = rootID
+		cfg.TaskParentID = rootID
+		cfg.TaskAgentType = "explore"
+		cfg.TaskDepth = 1
+	}).ID
+
+	// Load and adopt children into manager, setting their statuses.
+	runSess, err := h.srv.opts.LoadSession(runningID)
+	if err != nil {
+		t.Fatalf("load running: %v", err)
+	}
+	if err := mgr.AdoptReloaded(runSess); err != nil {
+		t.Fatalf("adopt running: %v", err)
+	}
+	mgr.ReportTurnStart(runSess)
+
+	doneSess, err := h.srv.opts.LoadSession(doneID)
+	if err != nil {
+		t.Fatalf("load done: %v", err)
+	}
+	if err := mgr.AdoptReloaded(doneSess); err != nil {
+		t.Fatalf("adopt done: %v", err)
+	}
+	mgr.ReportTurnStart(doneSess)
+	mgr.ReportTurnEnd(doneID, nil, nil)
+
+	// Verify setup: both children have correct status in manager.
+	if info, ok := mgr.Info(runningID); !ok || info.Status != engine.StatusRunning {
+		t.Fatalf("test setup: running not StatusRunning: %+v", info)
+	}
+	if info, ok := mgr.Info(doneID); !ok || info.Status != engine.StatusDone {
+		t.Fatalf("test setup: done not StatusDone: %+v", info)
 	}
 
-	// List sessions and verify the root's lineage.status reflects SessionManager state.
+	// Test 1: GET /session list includes correct lineage.status.
+	// These children are non-resident (not in h.srv.sessions), only in
+	// SessionManager, so handleList's cold path must be exercised.
 	resp, data := h.do("GET", "/session", nil)
 	if resp.StatusCode != 200 {
 		t.Fatalf("GET /session = %d: %s", resp.StatusCode, data)
@@ -631,24 +672,44 @@ func TestListSessionsIncludesChildStatus(t *testing.T) {
 		t.Fatalf("decode list: %v (%s)", err, data)
 	}
 
-	// Find the root in the list.
-	var rootEntry *sessionJSON
-	for i := range list {
-		if list[i].ID == rootID {
-			rootEntry = &list[i]
-			break
+	findInList := func(id string) *sessionJSON {
+		for i := range list {
+			if list[i].ID == id {
+				return &list[i]
+			}
 		}
+		return nil
 	}
 
-	if rootEntry == nil {
-		t.Fatalf("root session %s not in list", rootID)
+	runningEntry := findInList(runningID)
+	if runningEntry == nil {
+		t.Fatalf("running child %s not in list", runningID)
+	}
+	if runningEntry.Lineage == nil || runningEntry.Lineage.Status != "running" {
+		t.Errorf("list: running child lineage.status = %+v, want 'running'", runningEntry.Lineage)
 	}
 
-	// Verify lineage.status correctly reflects SessionManager's lifecycle state
-	// (idle for a managed session not running a turn). This proves the list
-	// includes lifecycle status from SessionManager, not just busy/idle from
-	// residency.
-	if rootEntry.Lineage == nil || rootEntry.Lineage.Status != "idle" {
-		t.Errorf("root child lineage.status = %+v, want Status='idle'", rootEntry.Lineage)
+	doneEntry := findInList(doneID)
+	if doneEntry == nil {
+		t.Fatalf("done child %s not in list", doneID)
+	}
+	if doneEntry.Lineage == nil || doneEntry.Lineage.Status != "done" {
+		t.Errorf("list: done child lineage.status = %+v, want 'done'", doneEntry.Lineage)
+	}
+
+	// Test 2: GET /session/{id} for each child AGREES with list.
+	// Property: list and single-session handler must never disagree.
+	for childID, expectedStatus := range map[string]string{runningID: "running", doneID: "done"} {
+		resp, data := h.do("GET", "/session/"+childID, nil)
+		if resp.StatusCode != 200 {
+			t.Fatalf("GET /session/%s = %d: %s", childID, resp.StatusCode, data)
+		}
+		var single sessionJSON
+		if err := json.Unmarshal(data, &single); err != nil {
+			t.Fatalf("decode /session/%s: %v (%s)", childID, err, data)
+		}
+		if single.Lineage == nil || single.Lineage.Status != expectedStatus {
+			t.Errorf("/session/%s: lineage.status = %+v, want '%s'", childID, single.Lineage, expectedStatus)
+		}
 	}
 }
