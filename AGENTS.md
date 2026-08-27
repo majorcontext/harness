@@ -2351,6 +2351,50 @@ needing any other side channel to agree on identity. Harness itself never
 reads this variable — it is a contract between the hub and deployment
 tooling, documented in `docs/design/fleet-model.md` §8.
 
+## Serve-mode latency diagnostics
+
+A caller that waits seconds for a reply cannot tell, from outside the
+process, whether `harness serve` was slow, the network in front of it was
+slow, or the whole process was stopped by garbage collection. Three
+threshold-gated WARN lines answer that, and nothing runs always-on.
+
+- **`slow request`** (`server/timing.go`). `serveTimed` wraps the mux
+  dispatch in `Server.ServeHTTP` and warns when this process took longer
+  than `slowRequestThreshold` (500ms) to answer, with `method`, `route`,
+  `status`, `duration_ms`, and the caller's `X-Request-Id` as
+  `request_id`. The route is `http.Request.Pattern`, which the mux sets
+  during the dispatch, so a session id never reaches a log line; a request
+  that matched no route logs the fixed `unmatched` label, because the path
+  is caller-controlled. `requestID` drops a header value over 64 bytes or
+  carrying anything outside one printable ASCII token — it is untrusted
+  input that lands in a log line. `longLivedRoutes` exempts `GET /event`
+  and `GET /session/{id}/wait`: both run for as long as their caller
+  wants, so timing them would warn for every healthy client. Keep that map
+  in step with any new streaming or long-poll route.
+- **`long gc pause`** (`cmd/harness/gcwatch.go`). A stop-the-world pause
+  stops every goroutine, so the process logs nothing at all while it lasts
+  and looks exactly like a wedged handler. `gcWatcher` samples the
+  runtime's `/gc/pauses:seconds` histogram every 5 seconds and warns about
+  a new pause at or past 200ms. It reads `runtime/metrics`, never
+  `runtime.ReadMemStats` — `ReadMemStats` itself stops the world, so
+  sampling it would add the pause this watcher exists to find.
+  `longest_pause_ms` is the LOWER bound of the highest bucket that gained
+  a pause, since a histogram records a range. The first sample reports
+  nothing: the counts are cumulative for the whole process life. Same
+  lifecycle as `inFlightWatchdog` — one cancelable context, cancelled when
+  `serveCmd` returns.
+- **`/debug/pprof/`** (`server/pprof.go`, `Options.PProf`, `harness serve
+  -pprof`). OFF by default, and authed like every other route when on. It
+  is the third step, not the first: `GET /debug/goroutines` needs no flag
+  and already answers "what is this process blocked on". Turn `-pprof` on
+  for a process under investigation when the CPU, heap, block, or mutex
+  profile is what is missing. Importing `net/http/pprof` also registers
+  these handlers on `http.DefaultServeMux`; this binary never serves that
+  mux, so the authed routes here stay the only reachable surface.
+
+No metrics, no tracing, no always-on profiling. A new diagnostic in this
+area is a threshold-gated log line or it does not land.
+
 ## Startup Speed Rules
 
 - Nothing touches network, subprocesses, or disk beyond one config file before first paint. Provider auth validates on first message send, not at boot.

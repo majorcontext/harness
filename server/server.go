@@ -343,12 +343,25 @@ type Options struct {
 	// embedding this package (e.g. tests) that wants no such logging
 	// simply leaves this zero.
 	Logger *slog.Logger
+	// PProf registers the net/http/pprof routes under /debug/pprof/,
+	// behind the same bearer check as every other route. Off by default:
+	// a profile exposes function names and allocation sites, and a CPU
+	// profile costs sampling overhead for as long as it runs, so an
+	// operator turns this on for a process being investigated rather than
+	// for every process. /debug/goroutines (above) needs no opt-in and
+	// stays the first step for a wedged process; these routes add the CPU,
+	// heap, block, and mutex profiles that say WHY it is wedged.
+	PProf bool
 }
 
 // Server implements http.Handler for the harness serve API.
 type Server struct {
 	opts Options
 	mux  *http.ServeMux
+
+	// now is the clock serveTimed measures with. Always time.Now in
+	// production; a test replaces it to make a duration exact.
+	now func() time.Time
 
 	// wg tracks in-flight runPrompt goroutines. They are decoupled from their
 	// HTTP handlers (the 202 returns immediately), so http.Server.Shutdown does
@@ -822,6 +835,7 @@ func New(opts Options) (*Server, error) {
 		waiters:           make(map[*waiter]struct{}),
 		closing:           make(chan struct{}),
 		sessMgr:           sessMgr,
+		now:               time.Now,
 	}
 	// SetExternalRunner before anything else touches sessMgr: it is what
 	// makes a SessionManager-initiated resume turn on a ROOT session go
@@ -938,6 +952,9 @@ func (s *Server) routes() {
 	// inspecting a wedged box in environments where signaling/exec-ing into
 	// the process is awkward or unavailable.
 	mux.HandleFunc("GET /debug/goroutines", s.auth(s.handleGoroutines))
+	if s.opts.PProf {
+		registerPProf(mux, s.auth)
+	}
 	if s.opts.MonitorPage != nil {
 		mux.HandleFunc("GET /monitor", s.handleMonitor)
 		mux.HandleFunc("GET /monitor/", s.handleMonitor)
@@ -991,7 +1008,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
 	}
-	s.mux.ServeHTTP(w, r)
+	s.serveTimed(w, r)
 }
 
 // emptySessionIDPrefix is the one path shape isEmptySessionIDPath matches:

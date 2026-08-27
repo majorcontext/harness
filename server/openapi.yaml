@@ -2707,6 +2707,40 @@ paths:
               schema: { type: string }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /debug/pprof/{profile}:
+    get:
+      operationId: debugPProf
+      summary: Go runtime profiles (CPU, heap, block, mutex, and the rest).
+      description: >
+        Present ONLY when this instance was started with `harness serve
+        -pprof`; it 404s otherwise, exactly as any other unmatched path.
+        Authed like every other route. A diagnostic surface, not a stable
+        API: the response is whatever net/http/pprof produces for the named
+        profile — a binary pprof profile by default, or plain text with
+        `?debug=1`. Omit the path segment (`/debug/pprof/`) for the HTML
+        index. `profile` additionally accepts `cmdline`, `profile` (CPU,
+        `?seconds=N`), `symbol`, and `trace`.
+      parameters:
+        - name: profile
+          in: path
+          required: true
+          schema: { type: string }
+          description: Profile name, e.g. `goroutine`, `heap`, `block`, `mutex`.
+        - name: debug
+          in: query
+          required: false
+          schema: { type: integer }
+          description: 1 or 2 for plain text instead of the binary format.
+      responses:
+        "200":
+          description: OK — a pprof profile.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+            text/plain:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /:
     get:
       operationId: monitorRootRedirect
