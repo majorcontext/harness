@@ -28,7 +28,7 @@ func mkdirAll(t *testing.T, path string) {
 func TestLoadInstructionsFoundInWorkDir(t *testing.T) {
 	dir := t.TempDir()
 	writeInstr(t, filepath.Join(dir, "AGENTS.md"), "be terse")
-	content, path, err := loadInstructions(dir)
+	content, path, err := loadInstructions(dir, defaultMaxInstructionsBytes)
 	if err != nil {
 		t.Fatalf("loadInstructions: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestLoadInstructionsWalksUp(t *testing.T) {
 	writeInstr(t, filepath.Join(root, "AGENTS.md"), "root rules")
 	sub := filepath.Join(root, "a", "b")
 	mkdirAll(t, sub)
-	content, path, err := loadInstructions(sub)
+	content, path, err := loadInstructions(sub, defaultMaxInstructionsBytes)
 	if err != nil {
 		t.Fatalf("loadInstructions: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestLoadInstructionsGitRoot(t *testing.T) {
 		mkdirAll(t, filepath.Join(repo, ".git"))
 		sub := filepath.Join(repo, "pkg")
 		mkdirAll(t, sub)
-		content, path, err := loadInstructions(sub)
+		content, path, err := loadInstructions(sub, defaultMaxInstructionsBytes)
 		if err != nil {
 			t.Fatalf("loadInstructions: %v", err)
 		}
@@ -81,7 +81,7 @@ func TestLoadInstructionsGitRoot(t *testing.T) {
 		writeInstr(t, filepath.Join(repo, "AGENTS.md"), "repo rules")
 		sub := filepath.Join(repo, "pkg")
 		mkdirAll(t, sub)
-		content, _, err := loadInstructions(sub)
+		content, _, err := loadInstructions(sub, defaultMaxInstructionsBytes)
 		if err != nil {
 			t.Fatalf("loadInstructions: %v", err)
 		}
@@ -95,7 +95,7 @@ func TestLoadInstructionsMissing(t *testing.T) {
 	dir := t.TempDir()
 	// Bound the walk with a .git so it cannot escape to a real AGENTS.md.
 	mkdirAll(t, filepath.Join(dir, ".git"))
-	content, path, err := loadInstructions(dir)
+	content, path, err := loadInstructions(dir, defaultMaxInstructionsBytes)
 	if err != nil {
 		t.Fatalf("loadInstructions: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestLoadInstructionsAgentMdFallback(t *testing.T) {
 		dir := t.TempDir()
 		mkdirAll(t, filepath.Join(dir, ".git"))
 		writeInstr(t, filepath.Join(dir, "AGENT.md"), "singular fallback")
-		content, path, err := loadInstructions(dir)
+		content, path, err := loadInstructions(dir, defaultMaxInstructionsBytes)
 		if err != nil {
 			t.Fatalf("loadInstructions: %v", err)
 		}
@@ -125,7 +125,7 @@ func TestLoadInstructionsAgentMdFallback(t *testing.T) {
 		mkdirAll(t, filepath.Join(dir, ".git"))
 		writeInstr(t, filepath.Join(dir, "AGENTS.md"), "plural wins")
 		writeInstr(t, filepath.Join(dir, "AGENT.md"), "singular loses")
-		content, path, err := loadInstructions(dir)
+		content, path, err := loadInstructions(dir, defaultMaxInstructionsBytes)
 		if err != nil {
 			t.Fatalf("loadInstructions: %v", err)
 		}
@@ -143,32 +143,12 @@ func TestLoadInstructionsFollowsSymlink(t *testing.T) {
 	if err := os.Symlink(real, filepath.Join(dir, "AGENTS.md")); err != nil {
 		t.Skipf("symlink unsupported: %v", err)
 	}
-	content, _, err := loadInstructions(dir)
+	content, _, err := loadInstructions(dir, defaultMaxInstructionsBytes)
 	if err != nil {
 		t.Fatalf("loadInstructions: %v", err)
 	}
 	if content != "via symlink" {
 		t.Errorf("content = %q, want via symlink (ReadFile must follow symlinks)", content)
-	}
-}
-
-func TestLoadInstructionsTruncatesAtCap(t *testing.T) {
-	dir := t.TempDir()
-	body := strings.Repeat("x", 70*1024)
-	writeInstr(t, filepath.Join(dir, "AGENTS.md"), body)
-	content, _, err := loadInstructions(dir)
-	if err != nil {
-		t.Fatalf("loadInstructions: %v", err)
-	}
-	if !strings.HasPrefix(content, strings.Repeat("x", 64*1024)) {
-		t.Errorf("expected 64 KiB of body before the marker")
-	}
-	if !strings.HasSuffix(content, "\n"+truncationMarker) {
-		t.Errorf("expected trailing truncation marker, got %d bytes", len(content))
-	}
-	capped := strings.TrimSuffix(content, "\n"+truncationMarker)
-	if len(capped) != 64*1024 {
-		t.Errorf("body not capped at 64 KiB: got %d bytes before marker", len(capped))
 	}
 }
 
@@ -179,7 +159,7 @@ func TestLoadInstructionsMalformed(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte{0xff, 0xfe, 0xfd}, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		_, _, err := loadInstructions(dir)
+		_, _, err := loadInstructions(dir, defaultMaxInstructionsBytes)
 		if err == nil {
 			t.Fatal("expected error for invalid UTF-8")
 		}
@@ -191,7 +171,7 @@ func TestLoadInstructionsMalformed(t *testing.T) {
 		dir := t.TempDir()
 		mkdirAll(t, filepath.Join(dir, ".git"))
 		writeInstr(t, filepath.Join(dir, "AGENTS.md"), "  \n\t  \n")
-		_, _, err := loadInstructions(dir)
+		_, _, err := loadInstructions(dir, defaultMaxInstructionsBytes)
 		if err == nil {
 			t.Fatal("expected error for whitespace-only file")
 		}

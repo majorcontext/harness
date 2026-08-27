@@ -1759,22 +1759,57 @@ func loadSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.
 // instructionsConfig translates the -no-instructions flag and config file
 // fields into the engine's InstructionsConfig. Precedence: the flag disables
 // unconditionally; otherwise config `instructions: false` disables, config
-// `instructions_path` names an override, and anything else returns nil (the
-// engine default: auto-discover AGENTS.md by walking up from WorkDir).
+// `instructions_path` names an override, `instructions_max_bytes` (or
+// HARNESS_INSTRUCTIONS_MAX_KB) sets the injection cap, and a config that sets
+// none of them returns nil (the engine default: auto-discover AGENTS.md by
+// walking up from WorkDir, capped at 64 KiB).
 func instructionsConfig(cfg *config.Config, noInstructions bool) *engine.InstructionsConfig {
 	if noInstructions {
 		return &engine.InstructionsConfig{Disabled: true}
 	}
 	if cfg == nil {
-		return nil
+		// A nil config still honors the environment knob: the caller has no
+		// config file, not a demand for the default cap.
+		cfg = &config.Config{}
 	}
 	if cfg.Instructions != nil && !*cfg.Instructions {
 		return &engine.InstructionsConfig{Disabled: true}
 	}
-	if cfg.InstructionsPath != "" {
-		return &engine.InstructionsConfig{Path: cfg.InstructionsPath}
+	maxBytes := instructionsMaxBytes(cfg)
+	if cfg.InstructionsPath == "" && maxBytes == 0 {
+		return nil
 	}
-	return nil
+	return &engine.InstructionsConfig{Path: cfg.InstructionsPath, MaxBytes: maxBytes}
+}
+
+// instructionsMaxBytes resolves engine.InstructionsConfig.MaxBytes from the
+// operator knob HARNESS_INSTRUCTIONS_MAX_KB and the config key
+// `instructions_max_bytes`. The engine never reads an environment variable
+// itself, so this is the seam (same shape as toolReadBudgetBytes above).
+//
+// The environment variable counts KILOBYTES, because an instruction file is
+// a human-sized document and the engine default reads as "64 KiB" everywhere.
+// A positive value sets the cap, a NEGATIVE value disables it (the whole file
+// is injected), and unset/zero/malformed falls through to the config key.
+// Zero from both leaves the engine default of 64 KiB.
+func instructionsMaxBytes(cfg *config.Config) int {
+	raw := os.Getenv("HARNESS_INSTRUCTIONS_MAX_KB")
+	if n, err := strconv.Atoi(raw); err == nil && n != 0 {
+		if n < 0 {
+			// Any negative value means "no cap"; normalize to -1 rather
+			// than passing a large negative through as a byte count.
+			return -1
+		}
+		const kib = 1 << 10
+		if n > (1<<62)/kib {
+			return 0 // absurd; fall back to the config key or the default
+		}
+		return n * kib
+	}
+	if cfg.InstructionsMaxBytes < 0 {
+		return -1
+	}
+	return cfg.InstructionsMaxBytes
 }
 
 // skillsDirs resolves the effective Agent Skills directories for the engine.
