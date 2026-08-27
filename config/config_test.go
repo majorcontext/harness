@@ -640,6 +640,15 @@ func TestMergeInstructions(t *testing.T) {
 			t.Errorf("merged InstructionsMaxBytes = %d, want inherited 4096", got)
 		}
 	})
+	t.Run("mode: project overrides, empty inherits", func(t *testing.T) {
+		base := &Config{InstructionsMode: "full"}
+		if got := merge(base, &Config{InstructionsMode: "auto"}).InstructionsMode; got != "auto" {
+			t.Errorf("merged InstructionsMode = %q, want auto (project wins)", got)
+		}
+		if got := merge(base, &Config{}).InstructionsMode; got != "full" {
+			t.Errorf("merged InstructionsMode = %q, want inherited full", got)
+		}
+	})
 	t.Run("max bytes parses from JSON", func(t *testing.T) {
 		var c Config
 		if err := json.Unmarshal([]byte(`{"instructions_max_bytes": 131072}`), &c); err != nil {
@@ -647,6 +656,13 @@ func TestMergeInstructions(t *testing.T) {
 		}
 		if c.InstructionsMaxBytes != 131072 {
 			t.Errorf("InstructionsMaxBytes = %d, want 131072", c.InstructionsMaxBytes)
+		}
+		var m Config
+		if err := json.Unmarshal([]byte(`{"instructions_mode": "full"}`), &m); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if m.InstructionsMode != "full" {
+			t.Errorf("InstructionsMode = %q, want full", m.InstructionsMode)
 		}
 	})
 }

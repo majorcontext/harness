@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/engine"
 )
 
 // TestInstructionsMaxBytesKnob pins the instruction cap seam:
@@ -93,6 +94,46 @@ func TestInstructionsMaxBytesNeverEnablesDisabled(t *testing.T) {
 			ic := instructionsConfig(tc.cfg, tc.noInstructions)
 			if ic == nil || !ic.Disabled {
 				t.Fatalf("ic = %+v, want disabled", ic)
+			}
+		})
+	}
+}
+
+// TestInstructionsModeKnob pins the render-mode seam: HARNESS_INSTRUCTIONS_MODE
+// overrides config `instructions_mode`, only "full" turns the outline off, and
+// an unreadable value keeps the outline.
+func TestInstructionsModeKnob(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		cfg  string
+		want engine.InstructionsMode
+	}{
+		{name: "unset is auto", want: engine.InstructionsModeAuto},
+		{name: "config full", cfg: "full", want: engine.InstructionsModeFull},
+		{name: "config auto", cfg: "auto", want: engine.InstructionsModeAuto},
+		{name: "env full wins", env: "full", cfg: "auto", want: engine.InstructionsModeFull},
+		{name: "env auto wins", env: "auto", cfg: "full", want: engine.InstructionsModeAuto},
+		{name: "case insensitive", cfg: "FULL", want: engine.InstructionsModeFull},
+		{name: "unknown value keeps the outline", cfg: "outline-please", want: engine.InstructionsModeAuto},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HARNESS_INSTRUCTIONS_MODE", tc.env)
+			t.Setenv("HARNESS_INSTRUCTIONS_MAX_KB", "")
+			got := instructionsMode(&config.Config{InstructionsMode: tc.cfg})
+			if got != tc.want {
+				t.Errorf("instructionsMode = %q, want %q", got, tc.want)
+			}
+			ic := instructionsConfig(&config.Config{InstructionsMode: tc.cfg}, false)
+			if tc.want == engine.InstructionsModeFull {
+				if ic == nil || ic.Mode != engine.InstructionsModeFull {
+					t.Errorf("ic = %+v, want Mode full", ic)
+				}
+				return
+			}
+			if ic != nil && ic.Mode != engine.InstructionsModeAuto {
+				t.Errorf("ic = %+v, want Mode auto", ic)
 			}
 		})
 	}

@@ -1,6 +1,8 @@
 # Nested, on-demand instruction loading
 
-Status: design, for review. No implementation yet.
+Status: the head-plus-outline half is IMPLEMENTED
+(`engine/instructions_outline.go`). The nested attach-on-read half, ported
+from opencode's `resolve()`, is still design only — see "Proposed split".
 
 ## Problem
 
@@ -152,9 +154,36 @@ the session, and never written to the session log.
 
 ## Proposed split
 
-PR 2 is the head, the outline, and the mode switch — the system-prompt side
-that the 408 KiB file needs. PR 3 is the nested attach-on-read port of
-`resolve()`. They touch different paths (system prompt versus tool result),
-carry different failure modes, and each one is small enough to review to zero.
-Landing them together would put a prompt-assembly change and a tool-result
-change under one review.
+The head, the outline, and the mode switch land first — the system-prompt side
+that the 408 KiB file needs. The nested attach-on-read port of `resolve()`
+follows in its own change. They touch different paths (system prompt versus
+tool result), carry different failure modes, and each one is small enough to
+review to zero. Landing them together would put a prompt-assembly change and a
+tool-result change under one review.
+
+## What the implementation changed against this design
+
+Two details moved during implementation, both recorded here so the document
+matches the code.
+
+The head is cut at the last section that fits WHOLE under the cap, and the
+outline lists every section after it — the design said the same, but did not
+state what happens when the FIRST section alone exceeds the cap. It now takes
+the loud path: the head is that section truncated by `truncateInstructionsOf`,
+which reports the whole file's byte size (not the section's), so the marker
+and the WARN line both fire while the outline still lists every later section.
+
+The outline budget degrades in one step, not two. `formatOutline` builds the
+block with teasers, and rebuilds it without teasers when the block exceeds
+`outlineMaxBytes` (8 KiB). It never drops a section: a listed section is
+always reachable, which is the property the loud-truncation rule demands.
+
+Fence tracking needed the full CommonMark rule, not a boolean. A fence closes
+only on the same character it opened with, and only on at least as many of
+them. An instruction file that documents Markdown wraps a three-backtick
+example in a four-backtick fence, and a boolean toggle closes the outer fence
+on the inner one, then reads the rest of the document as sections.
+`fenceState` in `engine/instructions_outline.go` carries the open fence's
+character and run length. A review of the implementation raised this shape;
+this repository's own AGENTS.md does not hold such a fence today, so the rule
+is hardening for other projects' files, not a fix for an observed break.

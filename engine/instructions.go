@@ -57,6 +57,11 @@ type InstructionsConfig struct {
 	// whole file is injected however large it is. Truncation is always loud —
 	// see truncateInstructions.
 	MaxBytes int
+	// Mode selects how an OVERSIZE file is rendered: InstructionsModeAuto
+	// (the zero value) splits it into a head plus an outline of the sections
+	// the head does not carry, and InstructionsModeFull keeps the
+	// head-plus-marker rendering. See engine/instructions_outline.go.
+	Mode InstructionsMode
 }
 
 // resolveInstructionsMaxBytes reports the instruction byte cap for ic. A nil
@@ -99,12 +104,18 @@ func formatTruncationMarker(path string, total, kept int) string {
 // relative to workDir. The walk stops at the first directory containing a .git
 // entry — that directory is checked for an instructions file before stopping —
 // or at the filesystem root. A missing file yields empty strings and no error.
-// maxBytes is the resolved byte cap (see resolveInstructionsMaxBytes).
+// maxBytes is the resolved byte cap (see resolveInstructionsMaxBytes). It
+// renders in InstructionsModeAuto; loadInstructionsMode selects another mode.
 func loadInstructions(workDir string, maxBytes int) (content, path string, err error) {
+	return loadInstructionsMode(workDir, maxBytes, InstructionsModeAuto)
+}
+
+// loadInstructionsMode is loadInstructions with an explicit render mode.
+func loadInstructionsMode(workDir string, maxBytes int, mode InstructionsMode) (content, path string, err error) {
 	dir := workDir
 	for {
 		if p, data, found := readInstructionFile(dir); found {
-			body, err := validateInstructions(p, data, maxBytes)
+			body, err := validateInstructions(p, data, maxBytes, mode)
 			if err != nil {
 				return "", "", err
 			}
@@ -143,14 +154,14 @@ func readInstructionFile(dir string) (path string, data []byte, found bool) {
 // UTF-8, or empty/whitespace-only) is a hard error — the project meant to
 // supply instructions and the agent must not silently run without them. Size
 // is not malformedness: an oversize file is truncated, not rejected.
-func validateInstructions(path string, data []byte, maxBytes int) (string, error) {
+func validateInstructions(path string, data []byte, maxBytes int, mode InstructionsMode) (string, error) {
 	if !utf8.Valid(data) {
 		return "", fmt.Errorf("engine: instructions file %s is not valid UTF-8", path)
 	}
 	if strings.TrimSpace(string(data)) == "" {
 		return "", fmt.Errorf("engine: instructions file %s is empty", path)
 	}
-	return truncateInstructions(path, data, maxBytes), nil
+	return renderInstructions(path, data, maxBytes, mode), nil
 }
 
 // truncateInstructions applies the byte cap to an already-validated
@@ -165,6 +176,15 @@ func validateInstructions(path string, data []byte, maxBytes int) (string, error
 // read once per session (ensureInstructions caches the segment), so an
 // oversize file writes one WARN line per session, never one per request.
 func truncateInstructions(path string, data []byte, maxBytes int) string {
+	return truncateInstructionsOf(path, data, maxBytes, len(data))
+}
+
+// truncateInstructionsOf is truncateInstructions over a PREFIX of a larger
+// file: total is the whole file's byte size, which the marker and the log
+// line report. The outline path truncates the first section alone
+// (renderInstructions), and a marker that reported that slice's size would
+// tell the model the file is far smaller than it is.
+func truncateInstructionsOf(path string, data []byte, maxBytes, total int) string {
 	if maxBytes < 0 || len(data) <= maxBytes {
 		return string(data)
 	}
@@ -176,12 +196,12 @@ func truncateInstructions(path string, data []byte, maxBytes int) string {
 	}
 	slog.Warn("engine: instructions file truncated",
 		"path", path,
-		"original_bytes", len(data),
+		"original_bytes", total,
 		"kept_bytes", len(capped),
-		"dropped_bytes", len(data)-len(capped),
+		"dropped_bytes", total-len(capped),
 		"limit_bytes", maxBytes,
 	)
-	return string(capped) + "\n" + formatTruncationMarker(path, len(data), len(capped))
+	return string(capped) + "\n" + formatTruncationMarker(path, total, len(capped))
 }
 
 // isDir reports whether path is a directory.
@@ -235,6 +255,10 @@ func (s *Session) buildInstructionSegment() (string, error) {
 		return "", nil
 	}
 	maxBytes := resolveInstructionsMaxBytes(ic)
+	mode := InstructionsModeAuto
+	if ic != nil {
+		mode = ic.Mode
+	}
 	if ic != nil && ic.Path != "" {
 		// A relative override resolves against the session's WorkDir, not
 		// the process cwd — embedders may set WorkDir independently.
@@ -246,14 +270,14 @@ func (s *Session) buildInstructionSegment() (string, error) {
 		if err != nil {
 			return "", nil // missing/unreadable override: no segment, no error
 		}
-		body, err := validateInstructions(path, data, maxBytes)
+		body, err := validateInstructions(path, data, maxBytes, mode)
 		if err != nil {
 			return "", err
 		}
 		s.instrPath = ic.Path
 		return formatInstructions(ic.Path, body), nil
 	}
-	content, path, err := loadInstructions(s.cfg.WorkDir, maxBytes)
+	content, path, err := loadInstructionsMode(s.cfg.WorkDir, maxBytes, mode)
 	if err != nil {
 		return "", err
 	}
