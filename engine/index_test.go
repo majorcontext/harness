@@ -1046,3 +1046,134 @@ func TestIndexFoldRepairCountMatchesAFullRecount(t *testing.T) {
 		})
 	}
 }
+
+// TestListSessionsNeverDropsASession: the journals are what exist. The
+// index is an acceleration over them, never the source of truth about
+// existence — a session whose fold breaks has no index, and a listing that
+// dropped it would lie to every caller that asks what is here.
+//
+// The probe is a journal with a compact record naming a range that is not
+// in it. That folds to an error, so the index cannot answer, and the
+// session must still be listed from a direct scan.
+func TestListSessionsNeverDropsASession(t *testing.T) {
+	dir := t.TempDir()
+	healthy := "ses_0123456789abcdef"
+	broken := "ses_fedcba9876543210"
+	if err := os.WriteFile(filepath.Join(dir, healthy+".jsonl"), []byte(
+		`{"type":"session","id":"`+healthy+`","created_at":"2026-01-02T03:04:05Z","workdir":"/w"}
+{"type":"model","model":"test/m1"}
+{"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"hi"}]},"usage":{"input_tokens":7}}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, broken+".jsonl"), []byte(
+		`{"type":"session","id":"`+broken+`","created_at":"2026-01-02T03:04:06Z","workdir":"/w"}
+{"type":"model","model":"test/m1"}
+{"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"hi"}]},"usage":{"input_tokens":9}}
+{"type":"compact","compact":{"first_id":"absent_first","last_id":"absent_last","turns_folded":1,"summary":{"id":"cmpsum_x","role":"user"}}}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The broken one has no index to serve.
+	if _, err := ReadSessionIndex(dir, broken); err == nil {
+		t.Fatal("test setup: the broken journal folded cleanly")
+	}
+
+	infos, err := ListSessions(dir)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	got := map[string]SessionInfo{}
+	for _, info := range infos {
+		got[info.ID] = info
+	}
+	if _, ok := got[healthy]; !ok {
+		t.Errorf("the healthy session is missing from the listing: %+v", infos)
+	}
+	if info, ok := got[broken]; !ok {
+		t.Errorf("a session whose fold breaks was dropped from the listing: %+v", infos)
+	} else if info.Messages != 1 || info.Usage.InputTokens != 9 {
+		t.Errorf("the fallback scan reported %d messages and %d input tokens, want 1 and 9", info.Messages, info.Usage.InputTokens)
+	}
+}
+
+// TestListingNeverWritesSidecars: a read must not mutate. Listing a
+// directory used to refold and write back a sidecar for every session whose
+// index was stale — including sessions another writer holds — so the list
+// path repaired what only the write path should.
+func TestListingNeverWritesSidecars(t *testing.T) {
+	dir := t.TempDir()
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10}),
+	}}
+	cfg := persistCfg(dir, prov)
+	s := NewSession(cfg)
+	runTurns(t, s, 1)
+	sidecar := filepath.Join(dir, s.ID+sessionIndexSuffix)
+	if err := os.Remove(sidecar); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, call := range []struct {
+		name string
+		run  func() error
+	}{
+		{"ListSessions", func() error { _, err := ListSessions(dir); return err }},
+		{"ListSessionIndexes", func() error { _, err := ListSessionIndexes(dir); return err }},
+	} {
+		if err := call.run(); err != nil {
+			t.Fatalf("%s: %v", call.name, err)
+		}
+		if _, err := os.Stat(sidecar); err == nil {
+			t.Fatalf("%s wrote a sidecar; a listing must not repair one", call.name)
+		}
+	}
+
+	// A single-session read still memoizes: that is one fold, and it makes
+	// the next read of that session a stat and a small read.
+	if _, err := ReadSessionIndex(dir, s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(sidecar); err != nil {
+		t.Errorf("ReadSessionIndex did not write the sidecar back: %v", err)
+	}
+}
+
+// TestListSessionsFallbackCountsCompactUsage: the fallback scan reports the
+// numbers the index would have reported, not the numbers the pre-index scan
+// did. A compact record carries the summarization call's own spend;
+// LoadSession adds it to cumulative usage and so does the index, so the
+// fallback does too. LastInputTokens still moves for message records only.
+func TestListSessionsFallbackCountsCompactUsage(t *testing.T) {
+	dir := t.TempDir()
+	id := "ses_0123456789abcdef"
+	// A journal whose compact record names an absent range: the fold
+	// breaks, so the listing must take its fallback path.
+	journal := `{"type":"session","id":"` + id + `","created_at":"2026-01-02T03:04:05Z","workdir":"/w"}
+{"type":"model","model":"test/m1"}
+{"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"hi"}]},"usage":{"input_tokens":11,"output_tokens":3}}
+{"type":"compact","usage":{"input_tokens":5,"output_tokens":2},"compact":{"first_id":"absent","last_id":"absent","turns_folded":1,"summary":{"id":"cmpsum_x","role":"user"}}}
+`
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(journal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadSessionIndex(dir, id); err == nil {
+		t.Fatal("test setup: the journal folded cleanly, so the fallback never runs")
+	}
+
+	infos, err := ListSessions(dir)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("listed %d sessions, want 1", len(infos))
+	}
+	got := infos[0]
+	if got.Usage.InputTokens != 16 || got.Usage.OutputTokens != 5 {
+		t.Errorf("usage = %d in / %d out, want 16 and 5 (the message plus the compaction)", got.Usage.InputTokens, got.Usage.OutputTokens)
+	}
+	if got.LastInputTokens != 11 {
+		t.Errorf("last_input_tokens = %d, want 11 (a compact record must not move it)", got.LastInputTokens)
+	}
+}

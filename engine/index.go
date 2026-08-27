@@ -642,7 +642,7 @@ func ReadSessionIndex(dir, id string) (SessionIndex, error) {
 	if !ValidSessionID(id) {
 		return SessionIndex{}, fmt.Errorf("%w: %q", ErrInvalidSessionID, id)
 	}
-	return readSessionIndexAt(dir, id)
+	return readSessionIndexAt(dir, id, true)
 }
 
 // errNotSessionJournal marks a .jsonl file in the session directory that is
@@ -654,7 +654,15 @@ var errNotSessionJournal = errors.New("engine: not a session journal")
 // readSessionIndexAt is ReadSessionIndex without the id validation, for
 // ListSessionIndexes, whose ids come from directory entries (which cannot
 // contain a path separator) rather than from a caller.
-func readSessionIndexAt(dir, id string) (SessionIndex, error) {
+//
+// cache selects whether a REFOLD writes its result back. A single-session
+// read memoizes: one session, one fold, and the next read of it is a stat
+// and a small read. A LISTING does not. It would refold and rewrite a
+// sidecar for every session in the directory, including sessions this
+// process holds live — racing their own writers — and a read that mutates
+// N files as a side effect of listing them is the wrong shape whatever the
+// race. The write path repairs the sidecar; the list path only reads it.
+func readSessionIndexAt(dir, id string, cache bool) (SessionIndex, error) {
 	path := sessionPath(dir, id)
 	fi, err := os.Stat(path)
 	if err != nil {
@@ -695,7 +703,9 @@ func readSessionIndexAt(dir, id string) (SessionIndex, error) {
 	// and every later read would refold, since readStoredIndex requires the
 	// stored id to match.
 	ix.ID = id
-	writeSessionIndex(dir, id, ix)
+	if cache {
+		writeSessionIndex(dir, id, ix)
+	}
 	return ix, nil
 }
 
@@ -883,12 +893,20 @@ func ListSessionIDs(dir string) ([]string, error) {
 	return out, nil
 }
 
-// ListSessionIndexes returns the index of every persisted session in dir,
-// sorted by creation time — the read behind GET /session. A missing
-// directory yields an empty list, not an error, and a file that is
-// unreadable, corrupt, or not a session journal at all (events.jsonl, the
-// server's own event journal, lives in the same directory) is skipped
-// rather than failing the whole listing.
+// ListSessionIndexes returns the index of every persisted session in dir
+// whose index can be read, sorted by creation time. A missing directory
+// yields an empty list, not an error, and a file that is unreadable,
+// corrupt, or not a session journal at all (events.jsonl, the server's own
+// event journal, lives in the same directory) is skipped rather than
+// failing the whole listing.
+//
+// It never writes. A refold here answers this call and is then dropped, so
+// listing a directory cannot rewrite the sidecar of a session another
+// goroutine or process is writing.
+//
+// A caller that must not MISS a session cannot use this alone: a journal
+// whose fold breaks has no index and is skipped here. ListSessions pairs it
+// with a direct scan for exactly that reason.
 func ListSessionIndexes(dir string) ([]SessionIndex, error) {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -905,7 +923,7 @@ func ListSessionIndexes(dir string) ([]SessionIndex, error) {
 		// The id comes from the directory entry, so it names this exact
 		// file; sessionIndexSuffix keeps a sidecar from ever matching the
 		// ".jsonl" test above.
-		ix, err := readSessionIndexAt(dir, strings.TrimSuffix(e.Name(), ".jsonl"))
+		ix, err := readSessionIndexAt(dir, strings.TrimSuffix(e.Name(), ".jsonl"), false)
 		if err != nil {
 			continue
 		}

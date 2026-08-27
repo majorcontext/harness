@@ -499,3 +499,43 @@ func TestSessionExistenceCheckIsOneStat(t *testing.T) {
 		t.Error("the existence check refolded and wrote a sidecar")
 	}
 }
+
+// TestStatusAndListAgreeOnWhichSessionsExist: GET /session/status and GET
+// /session must not disagree about which sessions are there. Both resolve
+// ids first and then take the same index-then-scan path, so a session whose
+// fold breaks — no usable index, a readable journal — appears in both.
+func TestStatusAndListAgreeOnWhichSessionsExist(t *testing.T) {
+	dir := t.TempDir()
+	healthy := coldSession(t, dir, nil)
+	const broken = "ses_fedcba9876543210"
+	// A compact record naming an absent range: the fold fails, the journal
+	// reads fine.
+	journal := `{"type":"session","id":"` + broken + `","created_at":"2026-01-02T03:04:06Z","workdir":"/w"}
+{"type":"model","model":"test/m1"}
+{"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"hi"}]},"usage":{"input_tokens":9}}
+{"type":"compact","compact":{"first_id":"absent","last_id":"absent","turns_folded":1,"summary":{"id":"cmpsum_x","role":"user"}}}
+`
+	if err := os.WriteFile(filepath.Join(dir, broken+".jsonl"), []byte(journal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := newHarnessDir(t, dir, &scriptedProvider{name: "test"})
+
+	resp, data := h.do("GET", "/session/status", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /session/status = %d: %s", resp.StatusCode, data)
+	}
+	var status map[string]struct {
+		Usage usageJSON `json:"usage"`
+	}
+	if err := json.Unmarshal(data, &status); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{healthy.ID, broken} {
+		if _, ok := status[id]; !ok {
+			t.Errorf("status is missing session %s: %s", id, data)
+		}
+	}
+	if got := status[broken].Usage.InputTokens; got != 9 {
+		t.Errorf("status usage for the fold-broken session = %d, want 9 from its journal", got)
+	}
+}

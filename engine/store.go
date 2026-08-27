@@ -14,10 +14,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/majorcontext/harness/message"
@@ -1821,31 +1823,145 @@ func scanLogRaw(data []byte, fn func(raw []byte, line int, isLast bool) error) e
 // ListSessions lists persisted sessions in dir, sorted by creation time. A
 // missing directory yields an empty list, not an error.
 //
-// It is a projection of ListSessionIndexes (index.go): every field
-// SessionInfo carries is a field the metadata index already folds, so a
-// listing costs one small sidecar read per session instead of a scan of
-// every journal in the directory. A session whose sidecar is missing or
-// stale is refolded on the spot, which is still cheaper than the full
-// LoadSession every caller of this used to pay downstream.
+// The session JOURNALS are what exist. The metadata index (index.go) is an
+// acceleration over them, never the source of truth about existence: a
+// session whose sidecar is missing, stale, or unusable — or whose fold
+// breaks on a damaged compact record — is still a session, and a listing
+// that dropped it would lie to every caller that asks "what is here". So
+// each journal is answered by its index when the index can answer, and by
+// a direct scan of the journal when it cannot. Only a file that is not a
+// session log at all is skipped.
 //
-// One semantic changed with that projection, deliberately: Messages now
-// counts durable messages AFTER compaction splices, where the previous
-// header-only scan counted every message record ever written and so
-// over-reported a compacted session. See SessionIndex.Messages.
+// The index path never writes. Listing a directory must not rewrite the
+// sidecar of a session another writer holds; the write path repairs it.
+//
+// One semantic follows from the two answers. Messages counts messages
+// after compaction folds on the index path, which is what a full load
+// reports. The fallback scan cannot fold — a broken fold is why it ran —
+// so for that session it counts message records instead, the number the
+// previous header-only scan always reported.
 func ListSessions(dir string) ([]SessionInfo, error) {
-	indexes, err := ListSessionIndexes(dir)
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
 	var infos []SessionInfo
-	for _, ix := range indexes {
-		infos = append(infos, SessionInfo{
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		// The file NAME, not a validated id: a listing has always reported
+		// any *.jsonl carrying a session header, whatever it is called.
+		info, err := sessionInfoAt(dir, strings.TrimSuffix(e.Name(), ".jsonl"))
+		if err != nil {
+			continue // unreadable, or not a session log: not listable
+		}
+		infos = append(infos, info)
+	}
+	sort.Slice(infos, func(i, j int) bool { return infos[i].CreatedAt.Before(infos[j].CreatedAt) })
+	return infos, nil
+}
+
+// ReadSessionInfo returns one session's listing summary: its index when
+// that index can answer, and a direct scan of its journal when it cannot.
+//
+// It is the single-session form of ListSessions, for a caller that already
+// knows which sessions it wants — GET /session/status walks ids it resolved
+// itself. Sharing this one path is what keeps that endpoint and a listing
+// from disagreeing about which sessions exist: a session whose fold breaks
+// must appear in both, or in neither.
+//
+// Like a listing, it never writes: a refold here answers this call and is
+// dropped. The write path repairs a sidecar.
+func ReadSessionInfo(dir, id string) (SessionInfo, error) {
+	if dir == "" {
+		return SessionInfo{}, errors.New("engine: ReadSessionInfo requires a session dir")
+	}
+	if !ValidSessionID(id) {
+		return SessionInfo{}, fmt.Errorf("%w: %q", ErrInvalidSessionID, id)
+	}
+	return sessionInfoAt(dir, id)
+}
+
+// sessionInfoAt is ReadSessionInfo without the id validation, for
+// ListSessions, whose ids are directory entries rather than caller input.
+func sessionInfoAt(dir, id string) (SessionInfo, error) {
+	if ix, err := readSessionIndexAt(dir, id, false); err == nil {
+		return SessionInfo{
 			ID:              ix.ID,
 			CreatedAt:       ix.CreatedAt,
 			Messages:        ix.Messages,
 			Usage:           ix.Usage,
 			LastInputTokens: ix.LastInputTokens,
-		})
+		}, nil
 	}
-	return infos, nil
+	// No usable index. Read the journal itself rather than report nothing.
+	return readSessionInfo(sessionPath(dir, id))
+}
+
+// readSessionInfo scans one journal for the fields a listing needs. It is
+// ListSessions' fallback for a journal the index cannot answer for, and it
+// decodes only record heads — never message bodies — so it stays cheap on a
+// large session.
+//
+// It does not fold compaction: a compact record's own payload is skipped
+// like any other unknown field, so Messages counts message RECORDS. That is
+// the number this scan has always reported, and it runs only where the fold
+// that would have corrected it is the thing that failed.
+//
+// It DOES count a compact record's usage, which the pre-index version of
+// this scan did not. A compact record carries the summarization call's own
+// spend, LoadSession adds it to cumulative usage, and so does the index. A
+// fallback should report the number its fast path would have reported, so
+// this one follows the index rather than its own history. LastInputTokens
+// still moves for message records only — the same rule LoadSession applies,
+// so a reload never reports the small summarization call as the session's
+// last request size.
+func readSessionInfo(path string) (SessionInfo, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return SessionInfo{}, err
+	}
+	type headRecord struct {
+		Type      string          `json:"type"`
+		ID        string          `json:"id"`
+		CreatedAt time.Time       `json:"created_at"`
+		Usage     *provider.Usage `json:"usage,omitempty"`
+	}
+	var info SessionInfo
+	first := true
+	err = scanLog(data, func(rec headRecord, line int, isLast bool) error {
+		if first {
+			if rec.Type != recSession {
+				return fmt.Errorf("engine: %s: missing session header", path)
+			}
+			info.ID = rec.ID
+			info.CreatedAt = rec.CreatedAt
+			first = false
+			return nil
+		}
+		if rec.Type == recMessage {
+			info.Messages++
+		}
+		if rec.Usage != nil {
+			info.Usage.InputTokens += rec.Usage.InputTokens
+			info.Usage.OutputTokens += rec.Usage.OutputTokens
+			info.Usage.CacheReadTokens += rec.Usage.CacheReadTokens
+			info.Usage.CacheWriteTokens += rec.Usage.CacheWriteTokens
+			if rec.Type == recMessage {
+				info.LastInputTokens = rec.Usage.InputTokens
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return SessionInfo{}, err
+	}
+	if first {
+		return SessionInfo{}, fmt.Errorf("engine: %s: empty session file", path)
+	}
+	return info, nil
 }

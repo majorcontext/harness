@@ -253,10 +253,10 @@ func usageJSONForSession(sess *engine.Session) usageJSON {
 	return out
 }
 
-// usageJSONForInfo builds usageJSON from a cheap engine.SessionInfo (no full
-// session load) — used by handleStatus's non-resident branch, where paying
-// for a full LoadSession per listed session would defeat the point of a
-// lightweight status endpoint.
+// usageJSONForInfo builds usageJSON from a cheap engine.SessionInfo — the
+// non-resident branch of GET /session/status, where paying for a full
+// LoadSession per listed session would defeat the point of a lightweight
+// status endpoint.
 func usageJSONForInfo(info engine.SessionInfo) usageJSON {
 	return usageJSON{
 		InputTokens:      info.Usage.InputTokens,
@@ -1419,19 +1419,31 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 			Usage:    usageJSONForSession(m.sess),
 		}
 	}
-	infos, err := engine.ListSessions(s.opts.SessionDir)
+	// Ids first, indexes second — the same rule GET /session follows. A
+	// session already answered from memory above needs no index, and
+	// reading one for it would refold and rewrite the sidecar of a session
+	// this process holds live, racing that session's own writer.
+	ids, err := engine.ListSessionIDs(s.opts.SessionDir)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "cannot list sessions")
 		return
 	}
-	for _, info := range infos {
-		if _, ok := result[info.ID]; !ok {
-			result[info.ID] = entry{
-				Type:     "idle",
-				State:    s.compositeStateFor(info.ID, false),
-				LastTurn: s.lastTurnFor(info.ID),
-				Usage:    usageJSONForInfo(info),
-			}
+	for _, id := range ids {
+		if _, ok := result[id]; ok {
+			continue
+		}
+		// The same index-then-scan path a listing takes, so this endpoint
+		// and GET /session never disagree about which sessions exist: a
+		// session whose fold breaks appears in both, from its journal.
+		info, err := engine.ReadSessionInfo(s.opts.SessionDir, id)
+		if err != nil {
+			continue // unreadable or not a session journal: not listable
+		}
+		result[id] = entry{
+			Type:     "idle",
+			State:    s.compositeStateFor(id, false),
+			LastTurn: s.lastTurnFor(id),
+			Usage:    usageJSONForInfo(info),
 		}
 	}
 	writeJSON(w, http.StatusOK, result)

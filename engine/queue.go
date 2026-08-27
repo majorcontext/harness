@@ -86,9 +86,15 @@ type promptQueueFold struct {
 // dequeue-by-ID would remove an arbitrary one. Skip the record; same
 // defensive posture as message.ResolveOrphanToolCalls at this layer.
 //
-// nextID advances past every ID seen — folded or skipped — because IDs are
-// burned on failed durable writes, so advancing past every ID that ever
-// reached the log is what keeps a resumed session's counter collision-free.
+// nextID advances past every ID this fold ACCEPTS, which is what keeps a
+// resumed session's counter collision-free: IDs are burned on failed
+// durable writes, so a counter must clear every ID that ever reached the
+// log. A SKIPPED record does not advance it, and does not need to. A
+// duplicate ID was already cleared by the record that folded first, and an
+// ID at or below zero can never reach a counter that starts at 1. Do not
+// "fix" this by hoisting the advance above the validity guard: that would
+// let a malformed record's ID move the counter, which is exactly what the
+// guard rejects it for.
 func (f *promptQueueFold) queued(p promptRecord) {
 	q := QueuedPrompt{ID: p.ID, Text: p.Text, Seq: p.Seq}
 	valid := q.ID > 0
