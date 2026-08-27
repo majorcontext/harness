@@ -337,6 +337,37 @@ func toolConcurrency() int {
 	return envInt("HARNESS_TOOL_CONCURRENCY")
 }
 
+// toolReadBudgetBytes resolves engine.Config.ToolReadBudgetBytes from
+// HARNESS_TOOL_READ_BUDGET_MB. The engine never reads an environment
+// variable itself, so this is the seam (same shape as toolConcurrency
+// above).
+//
+// The engine's own default is already safe, so this knob exists for
+// tuning, not for turning the bound on: a positive value sets the budget
+// in MEGABYTES, an explicit negative value DISABLES the bound for a
+// deployment with its own memory discipline, and unset/zero/malformed
+// leaves 0 so the engine applies its default.
+func toolReadBudgetBytes() int64 {
+	raw := os.Getenv("HARNESS_TOOL_READ_BUDGET_MB")
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0
+	}
+	if n < 0 {
+		// Any negative value means "disabled"; normalize to -1 rather
+		// than passing a large negative through as a byte count.
+		return -1
+	}
+	const mib = 1 << 20
+	if n > (1<<62)/mib {
+		return 0 // absurd; fall back to the engine default
+	}
+	return n * mib
+}
+
 // sessionDir resolves where session logs live, in precedence order:
 // -no-save (yields "", persistence disabled) > $HARNESS_SESSION_DIR >
 // configDir (config session_dir) > $HOME/.harness/sessions. Nothing is
@@ -713,6 +744,7 @@ func runCmd(args []string) error {
 		ToolResultInlineBytes:   cfg.ToolResultInlineBytesValue(),
 		ToolResultRetainedBytes: cfg.ToolResultRetainedBytesValue(),
 		ToolConcurrency:         toolConcurrency(),
+		ToolReadBudgetBytes:     toolReadBudgetBytes(),
 		// GoalTool mirrors serveCmd's mkCfg below: the `goal` session tool is
 		// only useful once an evaluator is actually configured to drive a
 		// goal loop against (-goal itself resolves and validates its own
@@ -1519,6 +1551,7 @@ func serveCmd(args []string) error {
 			ToolResultInlineBytes:   cfg.ToolResultInlineBytesValue(),
 			ToolResultRetainedBytes: cfg.ToolResultRetainedBytesValue(),
 			ToolConcurrency:         toolConcurrency(),
+			ToolReadBudgetBytes:     toolReadBudgetBytes(),
 			// GoalTool enables the `goal` session tool (status/set/adjust)
 			// whenever an evaluator is configured to drive a goal loop
 			// against — the same condition server.Options.GoalEvaluator

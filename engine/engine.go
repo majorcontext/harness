@@ -855,6 +855,30 @@ type Config struct {
 	// that builds Config itself sets the field directly and gets no
 	// environment handling at all.
 	ToolConcurrency int
+
+	// ToolReadBudgetBytes bounds the total ESTIMATED bytes this session's
+	// in-flight tool reads may hold at once, across a concurrent batch.
+	//
+	// It exists because read_file's text path is deliberately unbounded
+	// (a coding agent reads whole files) and the concurrent executor
+	// removed the implicit one-at-a-time bound that made that safe: a
+	// batch of N large reads holds N working sets instead of one. See
+	// toolmem.go for the measurement and the full rationale.
+	//
+	// Zero (the zero value, and the recommended setting) takes the
+	// package default, defaultToolReadBudgetBytes. A negative value
+	// DISABLES the budget, restoring the unbounded behavior for a caller
+	// that has its own memory discipline. A positive value sets the
+	// budget in bytes.
+	//
+	// Ordinary work never contends: kilobyte-sized reads reserve a
+	// rounding error against the default and a full-width batch of them
+	// still runs fully parallel. Only genuinely large reads queue.
+	//
+	// The budget is per SESSION. A process running many sessions at once
+	// bounds each of them, not their sum; a process-wide budget is the
+	// natural follow-up if that proves insufficient.
+	ToolReadBudgetBytes int64
 }
 
 // Session is one conversation: an in-memory history plus the agent loop.
@@ -1151,6 +1175,14 @@ type Session struct {
 	// lock is needed to read it from a running batch.
 	toolConcurrency int
 
+	// readBudget bounds the estimated bytes this session's in-flight tool
+	// reads hold at once — the replacement for the implicit bound strictly
+	// sequential execution used to provide. See Config.ToolReadBudgetBytes
+	// and toolmem.go. Nil means unlimited. Set once in newSession; the
+	// value is internally synchronized, so a running batch reserves
+	// against it from several goroutines without further locking.
+	readBudget *toolReadBudget
+
 	// compactCount/lastCompactedAt track how many times this session has
 	// been compacted and when the most recent one landed — durable via the
 	// compact journal record (see store.go), so GET /session can show a UI
@@ -1304,6 +1336,7 @@ func newSession(cfg Config) *Session {
 		toolResultNextID:      1,
 		toolResults:           make(map[string]toolResultMeta),
 		toolConcurrency:       resolveToolConcurrency(cfg.ToolConcurrency),
+		readBudget:            newToolReadBudget(cfg.ToolReadBudgetBytes),
 		readHashes:            make(map[string][sha256.Size]byte),
 	}
 	for _, t := range []Tool{bashTool(cfg.BashTimeout, cfg.BashOutputCap), readFileTool(), writeFileTool(), editFileTool(), sessionInfoTool(), globTool(), grepTool(), lsTool()} {

@@ -352,6 +352,20 @@ func readFileTool() Tool {
 				return nil, fmt.Errorf("read_file: %s is a directory", path)
 			}
 
+			// Reserve this read's estimated memory before touching the
+			// file, and hold it until this call returns. The reservation
+			// must span the line-numbering below, not just the read: for a
+			// large file strings.Split is the single biggest allocation
+			// here, so releasing after readPathContent would leave the
+			// expansion — the very thing being bounded — outside the
+			// bound. info comes from the stat above, so this costs no
+			// extra syscall. See toolmem.go for why an estimate is sound.
+			release, err := s.readBudget.reserve(ctx, info.Size())
+			if err != nil {
+				return nil, fmt.Errorf("read_file: %s: %w", path, err)
+			}
+			defer release()
+
 			content, err := readPathContent(path)
 			if err != nil {
 				return nil, fmt.Errorf("read_file: %s: %w", path, err)
