@@ -174,7 +174,7 @@ func readMessagePageWithIndex(dir, id string, ix SessionIndex, beforeSeq, limit 
 		return MessagePage{}, ErrStaleMessagePage
 	}
 
-	msgs, ok, err := tailPage(f, ix.LogSize, ix.DurableMessages, lo, hi)
+	msgs, ok, err := tailPage(f, ix.LogSize, fi.Size(), ix.DurableMessages, lo, hi)
 	if err != nil {
 		return MessagePage{}, pageError(f, id, ix, err)
 	}
@@ -234,12 +234,12 @@ func pageError(f *os.File, id string, ix SessionIndex, cause error) error {
 // that in reverse is exactly the kind of second, subtly different
 // implementation of a fold this repository forbids, so the general path
 // below reuses the forward fold instead.
-func tailPage(f *os.File, logSize int64, total, lo, hi int) ([]message.Message, bool, error) {
+func tailPage(f *os.File, logSize, size int64, total, lo, hi int) ([]message.Message, bool, error) {
 	cur := total
 	var out []message.Message
 	compacted := false
 
-	err := scanLogBackward(f, logSize, func(line []byte, isTail bool) (bool, error) {
+	err := scanLogBackward(f, logSize, size, func(line []byte, isTail bool) (bool, error) {
 		var rec struct {
 			Type    string           `json:"type"`
 			Message *message.Message `json:"message,omitempty"`
@@ -402,10 +402,11 @@ func reverseMessages(msgs []message.Message) {
 // true only for the file's final line, which is the one a crash can leave
 // torn — the same rule scanLog applies reading forward.
 //
-// end is clamped to the file's current size, so a caller that names a
-// bound from a stale index reads the file's real bytes rather than an EOF.
-// A caller whose SEQUENCE NUMBERS depend on that bound must check the size
-// itself; ReadMessagePage does.
+// size is the file's current length, which the caller has already stat'd;
+// end is clamped to it, so a caller that names a bound from a stale index
+// reads the file's real bytes rather than an EOF. A caller whose SEQUENCE
+// NUMBERS depend on that bound must compare the two itself; ReadMessagePage
+// does.
 //
 // It works in offsets, never in an accumulating buffer. Each block read
 // searches backwards for a newline; the line it delimits is then read once,
@@ -415,16 +416,9 @@ func reverseMessages(msgs []message.Message) {
 // decoding one message. Journals carry records that large — a tool result
 // or an image Blob — so the cost was reachable from an ordinary page
 // request.
-func scanLogBackward(f *os.File, end int64, fn func(line []byte, isTail bool) (bool, error)) error {
-	if end <= 0 {
-		return nil
-	}
-	fi, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	if end > fi.Size() {
-		end = fi.Size()
+func scanLogBackward(f *os.File, end, size int64, fn func(line []byte, isTail bool) (bool, error)) error {
+	if end > size {
+		end = size
 	}
 	if end <= 0 {
 		return nil

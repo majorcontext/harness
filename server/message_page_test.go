@@ -312,3 +312,70 @@ func TestMessagePageKeepsTheDurableContractWhenAJournalIsUnreadable(t *testing.T
 		t.Errorf("unreadable journal for a LIVE session = %d: %s; want 500, never resident history under durable seqs", resp.StatusCode, data)
 	}
 }
+
+// TestMessagePageFallbackNumbersTheDurableSequence: the resident fallback
+// is the one place a page is numbered from memory rather than from records,
+// and it must number the SAME sequence a journal page would. This drives a
+// live session whose journal is gone — the only case the fallback serves —
+// and checks the page carries the durable seqs, not a memory-only count.
+func TestMessagePageFallbackNumbersTheDurableSequence(t *testing.T) {
+	dir := t.TempDir()
+	h := newHarnessDir(t, dir, &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("one")}})
+	id := h.createSession("")
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "go"}},
+	})
+	if resp.StatusCode != 202 {
+		t.Fatalf("prompt_async = %d: %s", resp.StatusCode, data)
+	}
+	h.waitIdle(id)
+
+	// A page from the journal, then the same page with the journal gone.
+	fromJournal := getPage(t, h, id, "?limit=10")
+	if err := os.Remove(filepath.Join(dir, id+".jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, id+".index.json")); err != nil {
+		t.Fatal(err)
+	}
+	fromMemory := getPage(t, h, id, "?limit=10")
+
+	if fromMemory.Total != fromJournal.Total {
+		t.Errorf("total = %d from memory, %d from the journal", fromMemory.Total, fromJournal.Total)
+	}
+	if fromMemory.FirstSeq != fromJournal.FirstSeq || fromMemory.LastSeq != fromJournal.LastSeq {
+		t.Errorf("seqs = [%d,%d] from memory, [%d,%d] from the journal",
+			fromMemory.FirstSeq, fromMemory.LastSeq, fromJournal.FirstSeq, fromJournal.LastSeq)
+	}
+	if len(fromMemory.Messages) != len(fromJournal.Messages) {
+		t.Fatalf("%d messages from memory, %d from the journal", len(fromMemory.Messages), len(fromJournal.Messages))
+	}
+	for i := range fromMemory.Messages {
+		if fromMemory.Messages[i].ID != fromJournal.Messages[i].ID {
+			t.Errorf("message %d: %q from memory, %q from the journal", i, fromMemory.Messages[i].ID, fromJournal.Messages[i].ID)
+		}
+	}
+}
+
+// TestDurableOnlyDropsDerivedRepairMessages pins the filter the fallback
+// leans on. message.ResolveOrphanToolCalls derives a tool result for a call
+// whose result never reached the log; that message has no record, so it has
+// no byte offset and no sequence number. A page must never give it one.
+func TestDurableOnlyDropsDerivedRepairMessages(t *testing.T) {
+	history := []message.Message{
+		{ID: "msg_u1", Role: message.RoleUser},
+		{ID: "msg_a1", Role: message.RoleAssistant},
+		{ID: message.SyntheticOrphanIDPrefix + "1-tc1", Role: message.RoleTool},
+		{ID: "msg_u2", Role: message.RoleUser},
+	}
+	got := durableOnly(history)
+	want := []string{"msg_u1", "msg_a1", "msg_u2"}
+	if len(got) != len(want) {
+		t.Fatalf("durableOnly returned %d messages, want %d", len(got), len(want))
+	}
+	for i := range got {
+		if got[i].ID != want[i] {
+			t.Errorf("message %d = %q, want %q", i, got[i].ID, want[i])
+		}
+	}
+}

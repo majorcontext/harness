@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1119,8 +1120,9 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if r.URL.Query().Has("before_seq") || r.URL.Query().Has("limit") {
-		s.handleMessagePage(w, r, id)
+	query := r.URL.Query()
+	if query.Has("before_seq") || query.Has("limit") {
+		s.handleMessagePage(w, query, id)
 		return
 	}
 	sess, ok := s.lookupSession(id)
@@ -1198,12 +1200,12 @@ type messagePageJSON struct {
 // A session with no journal at all — created and never persisted — has no
 // durable sequence to page. It falls back to the resident history, which
 // for such a session is exactly the durable sequence it would have had.
-func (s *Server) handleMessagePage(w http.ResponseWriter, r *http.Request, id string) {
-	beforeSeq, ok := intParam(w, r, "before_seq")
+func (s *Server) handleMessagePage(w http.ResponseWriter, query url.Values, id string) {
+	beforeSeq, ok := intParam(w, query, "before_seq")
 	if !ok {
 		return
 	}
-	limit, ok := intParam(w, r, "limit")
+	limit, ok := intParam(w, query, "limit")
 	if !ok {
 		return
 	}
@@ -1254,7 +1256,12 @@ func (s *Server) messagePageFallback(w http.ResponseWriter, id string, beforeSeq
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
 	}
-	msgs := sess.History()
+	// Number the same sequence the journal path numbers: durable messages
+	// only. A session with no journal has no repair applied to its history
+	// today — the repair runs at load, and this session was never loaded —
+	// but filtering makes the two paths agree by CONSTRUCTION rather than
+	// by an argument about which shapes can reach here.
+	msgs := durableOnly(sess.History())
 	total := len(msgs)
 	if limit <= 0 {
 		limit = engine.DefaultMessagePageLimit
@@ -1283,16 +1290,34 @@ func (s *Server) messagePageFallback(w http.ResponseWriter, id string, beforeSeq
 	})
 }
 
+// durableOnly drops the messages a load-time repair derives
+// (message.ResolveOrphanToolCalls) from a resident history. Such a message
+// has no record in the journal, so it has no byte offset and no sequence
+// number — see engine/messagepage.go's package comment. A page must never
+// give one a seq, whichever path produced the page.
+func durableOnly(msgs []message.Message) []message.Message {
+	out := make([]message.Message, 0, len(msgs))
+	for _, m := range msgs {
+		if message.IsSyntheticOrphanID(m.ID) {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
 // intParam reads a non-negative integer query parameter, writing 400 and
 // returning ok=false when it is present but not one. An absent parameter is
-// 0, which every caller reads as "unset".
+// 0, which every caller reads as "unset". It takes the already-parsed
+// query: url.URL.Query() re-parses the raw string on every call, and a page
+// request asks for two parameters after testing for two more.
 //
 // A repeated parameter is a 400, not a silent choice of the first value:
 // "?limit=2&limit=nonsense" names two different intentions, and answering
 // one of them hides a client bug. An explicitly empty value ("?limit=") is
 // a 400 for the same reason: it is present, and it is not an integer.
-func intParam(w http.ResponseWriter, r *http.Request, name string) (int, bool) {
-	values := r.URL.Query()[name]
+func intParam(w http.ResponseWriter, query url.Values, name string) (int, bool) {
+	values := query[name]
 	if len(values) == 0 {
 		return 0, true
 	}

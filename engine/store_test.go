@@ -798,27 +798,21 @@ func TestLoadSessionRepairsOrphanedToolCalls(t *testing.T) {
 func TestScanLogRawAbsorbsOnlyItsOwnSentinel(t *testing.T) {
 	data := []byte("{\"type\":\"session\"}\n{\"type\":\"model\"}\n")
 	wrapped := fmt.Errorf("cannot update index: %w", errTruncatedFinalRecord)
+	unrelated := errors.New("disk on fire")
 	cases := map[string]struct {
 		give error
-		want error
+		want error // nil means the scan must end cleanly
 	}{
 		"the sentinel itself ends the scan": {give: errTruncatedFinalRecord, want: nil},
 		"a wrapped sentinel propagates":     {give: wrapped, want: wrapped},
-		"an unrelated error propagates":     {give: errors.New("disk on fire"), want: nil},
+		"an unrelated error propagates":     {give: unrelated, want: unrelated},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			give := tc.give
-			err := scanLogRaw(data, func([]byte, int, bool) error { return give })
-			switch {
-			case tc.want == nil && name == "the sentinel itself ends the scan":
-				if err != nil {
-					t.Errorf("scanLogRaw = %v, want a clean end", err)
-				}
-			default:
-				if err == nil {
-					t.Errorf("scanLogRaw swallowed %v, want it propagated", give)
-				}
+			got := scanLogRaw(data, func([]byte, int, bool) error { return give })
+			if got != tc.want { //nolint:errorlint // identity: the callback returns these exact values
+				t.Errorf("scanLogRaw = %v, want %v", got, tc.want)
 			}
 		})
 	}

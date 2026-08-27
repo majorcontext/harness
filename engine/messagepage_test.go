@@ -528,7 +528,11 @@ func TestScanLogBackwardBoundaries(t *testing.T) {
 				end += 4096
 			}
 			var got []string
-			if err := scanLogBackward(f, end, func(line []byte, _ bool) (bool, error) {
+			fi, err := f.Stat()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := scanLogBackward(f, end, fi.Size(), func(line []byte, _ bool) (bool, error) {
 				got = append(got, string(line))
 				return true, nil
 			}); err != nil {
@@ -564,7 +568,11 @@ func TestScanLogBackwardMarksOnlyTheFinalLineAsTail(t *testing.T) {
 	}
 	defer f.Close()
 	var tails []string
-	if err := scanLogBackward(f, 15, func(line []byte, isTail bool) (bool, error) {
+	fi, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := scanLogBackward(f, 15, fi.Size(), func(line []byte, isTail bool) (bool, error) {
 		if isTail {
 			tails = append(tails, string(line))
 		}
