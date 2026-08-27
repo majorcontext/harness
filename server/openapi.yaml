@@ -2734,19 +2734,26 @@ paths:
           in: query
           required: false
           schema: { type: integer }
-          description: 1 or 2 for plain text instead of the binary format.
+          description: >
+            1 or 2 for plain text instead of the binary format. Read by the
+            runtime profiles only; `profile`, `trace`, and `cmdline` ignore
+            it.
         - name: seconds
           in: query
           required: false
-          schema: { type: integer, minimum: 1, maximum: 60 }
+          schema: { type: integer }
           description: >
-            Duration for `profile` and `trace`, clamped to 1-60, default 30.
-            A malformed or repeated value is a 400.
+            Duration for `profile` and `trace`, in seconds. Default 30. A
+            well-formed value outside 1-60 is CLAMPED into that range, not
+            rejected — no schema minimum/maximum is declared here for that
+            reason. A malformed, empty, or repeated value IS a 400.
         - name: gc
           in: query
           required: false
           schema: { type: integer }
-          description: 1 runs a garbage collection before reading `heap`.
+          description: >
+            1 runs a garbage collection before reading `heap`. Ignored by
+            every other profile.
       responses:
         "200":
           description: OK — a pprof profile.

@@ -2399,15 +2399,31 @@ threshold-gated WARN lines answer that, and nothing runs always-on.
     there is no way to take the handlers without the side effect. So
     `server/pprof.go` implements them on `runtime/pprof` and
     `runtime/trace` directly.
-    `TestPProf_NotRegisteredOnDefaultServeMux` asserts the absence for the
-    whole test binary and is the regression guard: a 404 test through this
-    server's own mux passes WITH the bad import and proves nothing.
+    `TestPProf_NotRegisteredOnDefaultServeMux` asserts the absence and is
+    the regression guard: a 404 test through this server's own mux passes
+    WITH the bad import and proves nothing. It exists TWICE, in `server/`
+    and in `cmd/harness/`, because each only covers its own package's
+    import graph — the binary links the engine, providers, plugins, MCP and
+    the tools, and any one of them pulling in `net/http/pprof` would
+    publish the endpoints for the whole process.
   - `?seconds=N` on `profile`/`trace` is clamped to 1-60 (default 30); a
     malformed or repeated value is a 400, through the same `intParam` every
     other integer parameter uses. A second concurrent CPU profile or trace
-    is a 409, not a 500 — only one of each can run in a process. A client
+    is a 409, not a 500 — only one of each can run in a process — and the
+    refusal removes the download headers it had to set before starting, so
+    the error is JSON rather than a file a browser saves. A client
     disconnect ends the profile early rather than holding a runtime-wide
     lock for an abandoned request.
+  - `GET /debug/pprof/{name}` is in `longLivedRoutes` (`server/timing.go`):
+    a profile runs for exactly as long as the caller's `?seconds` asks, so
+    timing it would log a 30-second "slow request" every time an operator
+    ran `go tool pprof` against a box — their own tooling in the logs they
+    are reading. The index stays timed; it returns at once.
+  - The UNSLASHED `/debug/pprof` is registered explicitly, behind auth.
+    Left to the mux it takes an automatic 308 redirect issued before any
+    handler, which told an unauthenticated caller whether profiling is
+    enabled. Authed, the two states are 401-vs-404 — the shape every other
+    route in this API already has.
   - `/debug/pprof/symbol` is deliberately not served: `go tool pprof`
     symbolizes against the binary a profile came from.
 

@@ -45,13 +45,22 @@ const (
 func registerPProf(mux *http.ServeMux, auth func(http.HandlerFunc) http.HandlerFunc) {
 	mux.HandleFunc("GET /debug/pprof/", auth(handlePProfIndex))
 	mux.HandleFunc("GET /debug/pprof/{name}", auth(handlePProfNamed))
+	// The bare path, WITHOUT the trailing slash, is registered explicitly
+	// and behind auth. Left to the mux it gets an automatic 308 redirect to
+	// the slashed form, issued before any handler — so an unauthenticated
+	// caller saw a redirect here and a 404 with the flag off, learning
+	// whether profiling is enabled without holding the token. Answering it
+	// under auth makes the two states 401-vs-404, the same shape every
+	// other route in this API already has.
+	mux.HandleFunc("GET /debug/pprof", auth(handlePProfIndex))
 }
 
 // handlePProfIndex lists the profiles this server can serve. It answers the
-// collection path exactly; a deeper path that reached here matched no
-// profile route, so it is a 404 rather than a redirect to this listing.
+// collection path, with or without the trailing slash; a DEEPER path that
+// reached here matched no profile route (the {name} wildcard matches one
+// segment), so it is a 404 rather than a redirect to this listing.
 func handlePProfIndex(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/debug/pprof/" {
+	if p := r.URL.Path; p != "/debug/pprof/" && p != "/debug/pprof" {
 		writeErr(w, http.StatusNotFound, "no such profile")
 		return
 	}
@@ -67,8 +76,9 @@ func handlePProfIndex(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&b, "\t/debug/pprof/%s\n", name)
 	}
 	b.WriteString("\nprofile and trace take ?seconds=N (")
-	fmt.Fprintf(&b, "%d-%d, default %d)\n", int(minProfileSeconds.Seconds()), int(maxProfileSeconds.Seconds()), int(defaultProfileSeconds.Seconds()))
-	b.WriteString("every other profile takes ?debug=1 or ?debug=2 for text; heap takes ?gc=1\n")
+	fmt.Fprintf(&b, "%d-%d, clamped, default %d)\n", int(minProfileSeconds.Seconds()), int(maxProfileSeconds.Seconds()), int(defaultProfileSeconds.Seconds()))
+	b.WriteString("a runtime profile takes ?debug=1 or ?debug=2 for text; heap also takes ?gc=1\n")
+	b.WriteString("cmdline takes neither\n")
 	b.WriteString("symbolize with `go tool pprof <binary> <url>`\n")
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")

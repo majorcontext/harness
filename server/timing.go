@@ -31,6 +31,9 @@ const unmatchedRoute = "unmatched"
 // for them, so they are never timed — otherwise every healthy client would
 // produce a warn.
 //
+// GET /debug/pprof/ (the index) is deliberately NOT here: it lists profile
+// names and returns at once, so a slow one is a real finding.
+//
 // POST /session/{id}/compact is deliberately NOT here. It runs a model call
 // synchronously, so it can exceed the threshold on a healthy server, but it
 // is an explicit, rare call and a compaction that runs for minutes is worth
@@ -39,6 +42,12 @@ const unmatchedRoute = "unmatched"
 var longLivedRoutes = map[string]bool{
 	"GET /event":             true,
 	"GET /session/{id}/wait": true,
+	// A profile runs for exactly as long as its ?seconds asks (pprof.go),
+	// so its duration is the caller's own choice — the same reason the two
+	// routes above are here. Without this, `go tool pprof` against a box
+	// would log a 30-second "slow request" every time, and the operator
+	// investigating a stall would be reading their own tooling.
+	"GET /debug/pprof/{name}": true,
 }
 
 // maxRequestIDLen bounds the caller-supplied X-Request-Id a log line

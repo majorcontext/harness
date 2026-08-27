@@ -126,10 +126,15 @@ func TestSlowRequest_QuietUnderThreshold(t *testing.T) {
 // routes never warn. Both run for as long as their caller wants, so timing
 // them would log a warn for every healthy client.
 func TestSlowRequest_SkipsLongLivedRoutes(t *testing.T) {
-	for _, route := range []string{"GET /event", "GET /session/{id}/wait"} {
+	for _, route := range []string{"GET /event", "GET /session/{id}/wait", "GET /debug/pprof/{name}"} {
 		if !longLivedRoutes[route] {
 			t.Errorf("route %q must be exempt from slow-request logging", route)
 		}
+	}
+	// The profile index is NOT exempt: it returns at once, so a slow one is
+	// a real finding.
+	if longLivedRoutes["GET /debug/pprof/"] {
+		t.Error(`"GET /debug/pprof/" must stay timed: it is a listing, not a profile`)
 	}
 
 	var logBuf bytes.Buffer
@@ -222,4 +227,26 @@ func hasLogField(line, pair string) bool {
 		}
 	}
 	return false
+}
+
+// TestSlowRequest_SkipsProfileRoutes proves a profile the caller asked to
+// run for N seconds does not log a slow-request warn. An operator running
+// `go tool pprof` against a stalled process must not have their own tooling
+// appear in the logs they are reading.
+func TestSlowRequest_SkipsProfileRoutes(t *testing.T) {
+	var logBuf bytes.Buffer
+	srv := newSlowServer(t, slog.New(slog.NewTextHandler(&logBuf, nil)), 30*time.Second)
+	srv.opts.PProf = true
+	srv.routes()
+
+	req := httptest.NewRequest(http.MethodGet, "/debug/pprof/goroutine?debug=1", nil)
+	req.Header.Set("Authorization", "Bearer secret-run-token")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("profile read answered %d, want 200", w.Code)
+	}
+	if strings.Contains(logBuf.String(), slowRequestMsg) {
+		t.Errorf("a profile route warned: %s", logBuf.String())
+	}
 }
