@@ -539,3 +539,64 @@ func TestStatusAndListAgreeOnWhichSessionsExist(t *testing.T) {
 		t.Errorf("status usage for the fold-broken session = %d, want 9 from its journal", got)
 	}
 }
+
+// TestListOmitsWhatItCannotRenderWhileStatusReportsIt pins a deliberate
+// asymmetry, so a later reader finds it stated rather than discovers it.
+//
+// A journal whose fold breaks and whose load fails cannot be rendered as a
+// listing entry: that entry names a model, a workdir, and lineage, and none
+// of those survive a load that fails. GET /session/{id} 404s for the same
+// session, so omitting it keeps the listing and the single-session read
+// consistent. GET /session/status promises only counts, which a direct
+// journal scan still supplies, so it reports the session.
+//
+// This is main's behavior, not something the metadata index introduced —
+// verified directly against main, where the same journal is absent from
+// GET /session and present in GET /session/status.
+func TestListOmitsWhatItCannotRenderWhileStatusReportsIt(t *testing.T) {
+	dir := t.TempDir()
+	healthy := coldSession(t, dir, nil)
+	const broken = "ses_fedcba9876543210"
+	journal := `{"type":"session","id":"` + broken + `","created_at":"2026-01-02T03:04:06Z","workdir":"/w"}
+{"type":"model","model":"test/m1"}
+{"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"hi"}]},"usage":{"input_tokens":9}}
+{"type":"compact","compact":{"first_id":"absent","last_id":"absent","turns_folded":1,"summary":{"id":"cmpsum_x","role":"user"}}}
+`
+	if err := os.WriteFile(filepath.Join(dir, broken+".jsonl"), []byte(journal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := newHarnessDir(t, dir, &scriptedProvider{name: "test"})
+
+	resp, data := h.do("GET", "/session", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /session = %d: %s", resp.StatusCode, data)
+	}
+	var list []sessionJSON
+	if err := json.Unmarshal(data, &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].ID != healthy.ID {
+		t.Fatalf("listing = %s, want only the renderable session %s", data, healthy.ID)
+	}
+
+	// The single-session read agrees with the listing.
+	resp, _ = h.do("GET", "/session/"+broken, nil)
+	if resp.StatusCode != 404 {
+		t.Errorf("GET /session/%s = %d, want 404: the listing omits what this cannot render", broken, resp.StatusCode)
+	}
+
+	// Status reports it, from the journal scan.
+	resp, data = h.do("GET", "/session/status", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /session/status = %d: %s", resp.StatusCode, data)
+	}
+	var status map[string]struct {
+		Usage usageJSON `json:"usage"`
+	}
+	if err := json.Unmarshal(data, &status); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := status[broken]; !ok || got.Usage.InputTokens != 9 {
+		t.Errorf("status for the fold-broken session = %+v (present=%v), want its journal's 9 input tokens", got, ok)
+	}
+}

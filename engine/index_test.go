@@ -1177,3 +1177,67 @@ func TestListSessionsFallbackCountsCompactUsage(t *testing.T) {
 		t.Errorf("last_input_tokens = %d, want 11 (a compact record must not move it)", got.LastInputTokens)
 	}
 }
+
+// TestListSessionsFallbackIgnoresStrayUsage: two record types carry usage a
+// reader counts — a message record and a compact record — because those are
+// the two LoadSession reads. A usage field on any other record, which a
+// future build could write, must not inflate a listing past what the
+// authoritative load reports.
+func TestListSessionsFallbackIgnoresStrayUsage(t *testing.T) {
+	dir := t.TempDir()
+	id := "ses_0123456789abcdef"
+	journal := `{"type":"session","id":"` + id + `","created_at":"2026-01-02T03:04:05Z","workdir":"/w"}
+{"type":"model","model":"test/m1"}
+{"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"hi"}]},"usage":{"input_tokens":11}}
+{"type":"goal.set","goal":{"condition":"x"},"usage":{"input_tokens":500}}
+{"type":"compact","compact":{"first_id":"absent","last_id":"absent","turns_folded":1,"summary":{"id":"cmpsum_x","role":"user"}}}
+`
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(journal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadSessionIndex(dir, id); err == nil {
+		t.Fatal("test setup: the journal folded cleanly, so the fallback never runs")
+	}
+	infos, err := ListSessions(dir)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("listed %d sessions, want 1", len(infos))
+	}
+	if infos[0].Usage.InputTokens != 11 {
+		t.Errorf("usage = %d, want 11: a goal record's usage is not a reader's to count", infos[0].Usage.InputTokens)
+	}
+}
+
+// TestListSessionsPinsTheFilenameID: the filename names the session on BOTH
+// answers. LoadSession pins the same way, and so does the index, so a
+// journal copied to a new name reports the new name however it was read.
+func TestListSessionsPinsTheFilenameID(t *testing.T) {
+	dir := t.TempDir()
+	const named = "ses_0123456789abcdef"
+	// The header names a DIFFERENT session, and the fold breaks, so the
+	// fallback answers.
+	journal := `{"type":"session","id":"ses_fedcba9876543210","created_at":"2026-01-02T03:04:05Z","workdir":"/w"}
+{"type":"model","model":"test/m1"}
+{"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"hi"}]}}
+{"type":"compact","compact":{"first_id":"absent","last_id":"absent","turns_folded":1,"summary":{"id":"cmpsum_x","role":"user"}}}
+`
+	if err := os.WriteFile(filepath.Join(dir, named+".jsonl"), []byte(journal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	infos, err := ListSessions(dir)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(infos) != 1 || infos[0].ID != named {
+		t.Fatalf("listing reported %+v, want the filename id %s", infos, named)
+	}
+	info, err := ReadSessionInfo(dir, named)
+	if err != nil {
+		t.Fatalf("ReadSessionInfo: %v", err)
+	}
+	if info.ID != named {
+		t.Errorf("ReadSessionInfo reported %q, want the filename id %q", info.ID, named)
+	}
+}

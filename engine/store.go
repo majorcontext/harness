@@ -502,6 +502,14 @@ type SessionInfo struct {
 	LastInputTokens int
 }
 
+// addUsage accumulates one record's usage into a listing summary.
+func (info *SessionInfo) addUsage(u provider.Usage) {
+	info.Usage.InputTokens += u.InputTokens
+	info.Usage.OutputTokens += u.OutputTokens
+	info.Usage.CacheReadTokens += u.CacheReadTokens
+	info.Usage.CacheWriteTokens += u.CacheWriteTokens
+}
+
 func sessionPath(dir, id string) string {
 	return filepath.Join(dir, id+".jsonl")
 }
@@ -1899,7 +1907,17 @@ func sessionInfoAt(dir, id string) (SessionInfo, error) {
 		}, nil
 	}
 	// No usable index. Read the journal itself rather than report nothing.
-	return readSessionInfo(sessionPath(dir, id))
+	info, err := readSessionInfo(sessionPath(dir, id))
+	if err != nil {
+		return SessionInfo{}, err
+	}
+	// The FILENAME names the session, on both paths. LoadSession pins the
+	// same way, and so does the index (see readSessionIndexAt), so a
+	// journal copied to a new name reports the new name however it was
+	// read. Without this, a listing could report one id from its index and
+	// another from its fallback for the same file.
+	info.ID = id
+	return info, nil
 }
 
 // readSessionInfo scans one journal for the fields a listing needs. It is
@@ -1943,16 +1961,23 @@ func readSessionInfo(path string) (SessionInfo, error) {
 			first = false
 			return nil
 		}
-		if rec.Type == recMessage {
+		// Two record types carry usage a reader counts, and only two: a
+		// message record and a compact record. LoadSession reads exactly
+		// those, so a stray usage field on any other record — a goal
+		// record written by a future build, say — must not inflate a
+		// listing that the authoritative load would not.
+		switch rec.Type {
+		case recMessage:
 			info.Messages++
-		}
-		if rec.Usage != nil {
-			info.Usage.InputTokens += rec.Usage.InputTokens
-			info.Usage.OutputTokens += rec.Usage.OutputTokens
-			info.Usage.CacheReadTokens += rec.Usage.CacheReadTokens
-			info.Usage.CacheWriteTokens += rec.Usage.CacheWriteTokens
-			if rec.Type == recMessage {
+			if rec.Usage != nil {
+				info.addUsage(*rec.Usage)
 				info.LastInputTokens = rec.Usage.InputTokens
+			}
+		case recCompact:
+			if rec.Usage != nil {
+				// Cumulative only. LastInputTokens must not move for a
+				// summarization call — see record.Usage's doc comment.
+				info.addUsage(*rec.Usage)
 			}
 		}
 		return nil

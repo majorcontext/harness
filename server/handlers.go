@@ -1010,6 +1010,15 @@ func (s *Server) handleList(w http.ResponseWriter, _ *http.Request) {
 			continue
 		}
 		ix, ixErr := engine.ReadSessionIndex(s.opts.SessionDir, id)
+		// A session neither the index nor a load can render is omitted
+		// here, while GET /session/status still reports its usage from a
+		// direct journal scan. That asymmetry predates this index — see
+		// TestListOmitsWhatItCannotRenderWhileStatusReportsIt — and it is
+		// what the two endpoints promise: a listing entry names a session's
+		// model, workdir, and lineage, which a journal that will not load
+		// cannot supply, and GET /session/{id} 404s for the same session.
+		// Status promises only counts, which a scan can still give.
+		//
 		// coldSessionJSON for BOTH cases, index-backed and load-backed. It
 		// renders from the index when that index can answer, falls back to
 		// the authoritative load path when it cannot (see
