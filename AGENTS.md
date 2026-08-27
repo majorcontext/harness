@@ -940,6 +940,131 @@ The goal loop is a **plan-artifact-free, gate-free** control loop: it is
 mode, and no permission gate. It does not violate the no-plan-mode decision
 below.
 
+### Session metadata index
+
+`GET /session` and `GET /session/{id}` do not replay a session journal. Each
+session log has a sidecar `<id>.index.json` holding one
+`engine.SessionIndex`. The index carries every wire `Session` field with a
+durable source: timestamps, model, effort, workdir, parent session, task
+lineage, message count, usage, durable goal state, queue depth, and
+compaction counters.
+
+Before the index, a read of a non-live session called `LoadSession`. That
+call decodes every message body and rebuilds the whole history. The handler
+then reported a dozen scalars and dropped the rest. The list endpoint paid
+that cost once per non-live session (meetneptune/boxes
+`docs/design/console-read-path.md`, workstream 1).
+
+The index is a fold of the journal (`engine/index.go`). Three rules keep it
+honest.
+
+**It folds records, not memory.** `Session.writeRecord` folds every record
+it appends. `ensureLog` folds the header records it writes directly, which
+is the one write that does not pass `writeRecord`. Memory is never the
+source: `EnqueuePromptDurable` writes its record before it mutates the
+queue, so a fold of memory at that instant would disagree with the log it
+claims to summarize.
+
+**It is a cache, never an authority.** `ReadSessionIndex` serves a stored
+index only when three checks pass: a checksum over the stored bytes, the
+journal's byte length, and the journal's modification time. Anything else
+refolds from byte 0. There is no repair path, so no repair path can be
+wrong. The checksum catches a torn read — both writers replace the sidecar
+in place, and a reader in another process can otherwise mix old bytes with
+new ones that parse. Length and modification time are a staleness key, not a
+proof: they rest on the journal's own contract of one writer and append-only
+writes.
+
+**It reports what a full load reports.** `Messages` and `LastActivityAt` run
+through `message.ResolveOrphanToolCalls`, over a skeleton of ids, roles, and
+tool-call ids. A crash between a tool call and its result therefore counts
+the same on both paths. `DurableMessages` counts the records alone, for a
+reader that must map a message to a byte offset; paginated message reads are
+numbered against it.
+
+Some journals cannot be answered by a fold at all. A legacy header records
+no workdir, and a crash can tear away the initial model record. `LoadSession`
+answers those from the loading `Config`; a fold has no `Config`.
+`SessionIndex.Complete` reports the difference, and
+`Server.coldSessionJSON` uses the authoritative load path for such a
+session.
+
+Three folds have real state machines. Each has one implementation, shared by
+`LoadSession` and the index: `applyCompactRecord` (`compact.go`),
+`applyGoalRecord` (`store.go`), and `promptQueueFold` (`queue.go`).
+`engine/index_test.go`'s oracle test pins every index field against a full
+`LoadSession`.
+
+A refold is far cheaper than a full `LoadSession`, and a current index is
+cheaper again. Write-through costs one marshal and one rewrite per record.
+The sidecar never gets an `fsync`: losing it in a crash costs one refold.
+
+`server.Options.Plugins` supplies a session's plugins to a cold read.
+Plugins are process configuration, not durable session state, and a cold
+read has no `Session` to ask.
+
+### Paginated message reads
+
+`GET /session/{id}/message?before_seq=N&limit=K` answers one bounded page of
+a session's messages, read from the journal's tail. The unparameterized call
+is unchanged, byte for byte: no `before_seq` and no `limit` still returns the
+bare array of the whole history every existing caller expects. A request that
+names either parameter gets a `MessagePage` envelope instead — `messages`,
+`first_seq`, `last_seq`, `total`, `has_more` — because a client that pages
+needs the page's position and a client that does not must not have to learn a
+new shape. A console loads the tail and pages older messages in on scroll
+(meetneptune/boxes `docs/design/console-read-path.md`, workstream 2 and
+directive 1). Before this, every console open transferred the whole
+transcript.
+
+**Seq is an ordinal over the DURABLE message sequence**: message records in
+log order, with each compact record's fold applied (the folded range replaced
+by that record's summary). `SessionIndex.DurableMessages` counts that same
+sequence, so the newest message's seq equals it. `SessionIndex.Messages` can
+be larger — it also counts the synthetic tool results
+`message.ResolveOrphanToolCalls` derives — and a derived message has no
+record, so it has no seq and no page carries it. This definition is what
+makes a bounded read possible: an ordinal over durable records can be counted
+backwards from the end of a file, while an ordinal over a materialized
+history cannot be known without materializing it.
+
+`engine.ReadMessagePage` (`engine/messagepage.go`) serves a page two ways,
+and both are numbered by the same index:
+
+- The **tail walk** reads `revChunkBytes` blocks backwards from
+  `SessionIndex.LogSize` and numbers message records down from the total. It
+  touches only the tail however long the journal is. It gives up the moment
+  it meets a compact record, because the messages a fold KEPT sit in the log
+  between the folded range and the compact record itself — undoing that
+  backwards would be a second, subtly different implementation of a fold.
+- The **fold path** then reuses `indexFold` — the same forward fold, so the
+  same `applyCompactRecord` — to learn which ids occupy the requested seqs,
+  and reads back just those records. It costs one slim pass (ids and roles,
+  never message bodies), which is still three orders of magnitude below
+  materializing the history.
+
+The scan is bounded by `SessionIndex.LogSize`, never the file's current size,
+so a turn appending records while a page is read cannot renumber that page
+under it.
+
+Two properties are deliberate. A page carries durable messages **verbatim**:
+it never runs `message.ResolveOrphanToolCalls`. That repair exists to keep a
+provider REQUEST valid, this endpoint builds no request, and fabricating a
+tool failure in a read view has real production history (see `Server.lookup`'s
+doc comment: a healthy child's in-flight tool call rendered as failed in the
+console for as long as it kept running). And compaction **renumbers** — a fold
+replaces N messages with one summary, so every later seq shifts down by N-1.
+A client paging across a compaction can see one page overlap another; message
+ids are stable and are the way to de-duplicate.
+
+A page is read from the durable records even when the session is resident, so
+one seq definition covers both cases: a resident history can carry messages
+the log does not (load-time repairs, recovery's memory-only closers), and
+numbering those would give one message two different seqs depending on
+residency. A session with no journal at all — created through the API and
+never prompted — falls back to its resident history, which for such a session
+IS the durable sequence.
+
 ### Prompt queue
 
 `POST /session/{id}/prompt_async` against a session already busy (another

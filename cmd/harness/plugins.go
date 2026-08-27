@@ -415,6 +415,22 @@ func pluginHooks(host *plugin.Host) engine.Hooks {
 	return host
 }
 
+// pluginInfoFn adapts a possibly-nil *plugin.Host to
+// server.Options.Plugins: the list of configured plugins a read of a
+// NON-LIVE session reports (see that field's doc comment — such a read is
+// answered from the session's metadata index, which has no Session to ask).
+// A nil host reports no plugins, the same answer a session with no hooks
+// gives through engine.Session.Plugins.
+func pluginInfoFn(host *plugin.Host) func(string) []plugin.Info {
+	if host == nil {
+		return nil
+	}
+	// harness serve wires ONE host for every session it runs, so the id is
+	// not consulted. The parameter exists for an embedder whose own
+	// NewSession/LoadSession wrappers vary hooks per session.
+	return func(string) []plugin.Info { return host.Plugins() }
+}
+
 // pluginCmd dispatches `harness plugin <subcommand>`.
 func pluginCmd(args []string) error {
 	if len(args) == 0 {

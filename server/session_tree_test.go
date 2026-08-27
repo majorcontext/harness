@@ -260,6 +260,10 @@ func TestSessionCreateWithParentIDFiresOnTaskEvent(t *testing.T) {
 	if resp.StatusCode != 201 {
 		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
 	}
+	var child struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &child)
 
 	mu.Lock()
 	got := append([]string(nil), events...)
@@ -267,6 +271,13 @@ func TestSessionCreateWithParentIDFiresOnTaskEvent(t *testing.T) {
 	if len(got) != 1 || got[0] != "spawned" {
 		t.Errorf("events = %v, want [spawned]", got)
 	}
+
+	// Spawn returns before the child's turn runs. Wait for it to settle:
+	// that turn creates and writes the child's durable files, and a test
+	// that returns first leaves those writes racing t.TempDir's cleanup,
+	// which then fails with "directory not empty". waitForLineageStatus
+	// blocks on SessionManager.Changed, the production seam, not a sleep.
+	waitForLineageStatus(t, h, child.ID, "done", 5*time.Second)
 }
 
 // TestReportTaskEventClassifiesEachSentinel proves reportTaskEvent's

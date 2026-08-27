@@ -992,23 +992,27 @@ func (s *Server) reconcile() error {
 	}
 	s.jf = f
 
-	infos, err := engine.ListSessions(s.opts.SessionDir)
+	// Ids only. This pass loads every session in full anyway, so reading
+	// each session's metadata index first would be pure waste — and it
+	// would refold and rewrite a stale sidecar for every session in the
+	// directory before the load that supersedes it.
+	ids, err := engine.ListSessionIDs(s.opts.SessionDir)
 	if err != nil {
 		return err
 	}
-	for _, info := range infos {
-		sess, err := s.opts.LoadSession(info.ID)
+	for _, id := range ids {
+		sess, err := s.opts.LoadSession(id)
 		if err != nil {
 			continue // unreadable log: skip, do not fail the whole boot
 		}
 		history := sess.History()
 		for i := range history {
 			m := history[i]
-			if s.isSeenLocked(info.ID, m.ID) {
+			if s.isSeenLocked(id, m.ID) {
 				continue
 			}
-			s.markSeenLocked(info.ID, m.ID)
-			s.emitDurableLocked(&Event{Type: evtMessage, SessionID: info.ID, Message: &m})
+			s.markSeenLocked(id, m.ID)
+			s.emitDurableLocked(&Event{Type: evtMessage, SessionID: id, Message: &m})
 		}
 	}
 	return nil

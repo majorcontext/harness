@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -786,5 +787,33 @@ func TestLoadSessionRepairsOrphanedToolCalls(t *testing.T) {
 	}
 	if got := tr.Content.Text(); got != message.SyntheticOrphanResultText {
 		t.Errorf("synthetic result text = %q, want %q", got, message.SyntheticOrphanResultText)
+	}
+}
+
+// TestScanLogRawAbsorbsOnlyItsOwnSentinel: scanLogRaw ends a scan cleanly
+// at errTruncatedFinalRecord, which its decoder raises for a corrupt final
+// line. It must not do that for a callback's own failure that merely wraps
+// the sentinel — "cannot update index: %w" is a real error, and reporting
+// it as a clean scan would drop it silently.
+func TestScanLogRawAbsorbsOnlyItsOwnSentinel(t *testing.T) {
+	data := []byte("{\"type\":\"session\"}\n{\"type\":\"model\"}\n")
+	wrapped := fmt.Errorf("cannot update index: %w", errTruncatedFinalRecord)
+	unrelated := errors.New("disk on fire")
+	cases := map[string]struct {
+		give error
+		want error // nil means the scan must end cleanly
+	}{
+		"the sentinel itself ends the scan": {give: errTruncatedFinalRecord, want: nil},
+		"a wrapped sentinel propagates":     {give: wrapped, want: wrapped},
+		"an unrelated error propagates":     {give: unrelated, want: unrelated},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			give := tc.give
+			got := scanLogRaw(data, func([]byte, int, bool) error { return give })
+			if got != tc.want { //nolint:errorlint // identity: the callback returns these exact values
+				t.Errorf("scanLogRaw = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

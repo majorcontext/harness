@@ -130,4 +130,11 @@ func TestLegacySessionIDOverHTTP(t *testing.T) {
 	if resp.StatusCode != 202 {
 		t.Fatalf("prompt_async on legacy session status = %d: %s", resp.StatusCode, data)
 	}
+	// prompt_async returns before the turn runs. Wait for it: the turn
+	// writes durable records — its journal appends, and the session's
+	// sidecar index — and a test that returns first leaves those writes
+	// racing t.TempDir's own cleanup, which then fails with "directory not
+	// empty". GET /wait is the production seam for this (AGENTS.md's
+	// in-process-state rule), not a sleep.
+	h.waitIdle(legacyID)
 }
