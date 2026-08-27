@@ -600,3 +600,116 @@ func TestListOmitsWhatItCannotRenderWhileStatusReportsIt(t *testing.T) {
 		t.Errorf("status for the fold-broken session = %+v (present=%v), want its journal's 9 input tokens", got, ok)
 	}
 }
+
+// TestListSessionsIncludesChildStatus verifies that GET /session list includes
+// lineage.status from the SessionManager snapshot for managed children. The
+// list must show running vs terminal values without N+1 calls, and must agree
+// with GET /session/{id}.
+//
+// The children begin as disk fixtures and are then adopted into SessionManager,
+// matching the reloaded-child path. SessionManager retains their Session
+// objects, so handleList intentionally renders them through the existing warm
+// path; this test is a regression guard for that existing contract, not a
+// synthetic cold-manager state the production manager cannot represent.
+func TestListSessionsIncludesChildStatus(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	rootID := h.createSession("test/m1")
+	mgr := h.srv.SessionManager()
+
+	// Create two cold (disk-only) child sessions with TaskParentID set.
+	runningID := coldSession(t, h.dir, func(cfg *engine.Config) {
+		cfg.ParentSession = rootID
+		cfg.TaskParentID = rootID
+		cfg.TaskAgentType = "explore"
+		cfg.TaskDepth = 1
+	}).ID
+
+	doneID := coldSession(t, h.dir, func(cfg *engine.Config) {
+		cfg.ParentSession = rootID
+		cfg.TaskParentID = rootID
+		cfg.TaskAgentType = "explore"
+		cfg.TaskDepth = 1
+	}).ID
+
+	// Load and adopt children into manager, setting their statuses.
+	runSess, err := h.srv.opts.LoadSession(runningID)
+	if err != nil {
+		t.Fatalf("load running: %v", err)
+	}
+	if err := mgr.AdoptReloaded(runSess); err != nil {
+		t.Fatalf("adopt running: %v", err)
+	}
+	mgr.ReportTurnStart(runSess)
+
+	doneSess, err := h.srv.opts.LoadSession(doneID)
+	if err != nil {
+		t.Fatalf("load done: %v", err)
+	}
+	if err := mgr.AdoptReloaded(doneSess); err != nil {
+		t.Fatalf("adopt done: %v", err)
+	}
+	mgr.ReportTurnStart(doneSess)
+	mgr.ReportTurnEnd(doneID, nil, nil)
+
+	// Verify setup: both children have correct status in manager.
+	if info, ok := mgr.Info(runningID); !ok || info.Status != engine.StatusRunning {
+		t.Fatalf("test setup: running not StatusRunning: %+v", info)
+	}
+	if info, ok := mgr.Info(doneID); !ok || info.Status != engine.StatusDone {
+		t.Fatalf("test setup: done not StatusDone: %+v", info)
+	}
+
+	// Test 1: GET /session list includes the manager-backed lineage.status.
+	// The children are absent from h.srv.sessions but resident in
+	// SessionManager, which is the authoritative warm source resolveLive uses.
+	resp, data := h.do("GET", "/session", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /session = %d: %s", resp.StatusCode, data)
+	}
+
+	var list []sessionJSON
+	if err := json.Unmarshal(data, &list); err != nil {
+		t.Fatalf("decode list: %v (%s)", err, data)
+	}
+
+	findInList := func(id string) *sessionJSON {
+		for i := range list {
+			if list[i].ID == id {
+				return &list[i]
+			}
+		}
+		return nil
+	}
+
+	runningEntry := findInList(runningID)
+	if runningEntry == nil {
+		t.Fatalf("running child %s not in list", runningID)
+	}
+	if runningEntry.Lineage == nil || runningEntry.Lineage.Status != "running" {
+		t.Errorf("list: running child lineage.status = %+v, want 'running'", runningEntry.Lineage)
+	}
+
+	doneEntry := findInList(doneID)
+	if doneEntry == nil {
+		t.Fatalf("done child %s not in list", doneID)
+	}
+	if doneEntry.Lineage == nil || doneEntry.Lineage.Status != "done" {
+		t.Errorf("list: done child lineage.status = %+v, want 'done'", doneEntry.Lineage)
+	}
+
+	// Test 2: GET /session/{id} for each child AGREES with list.
+	// Property: list and single-session handler must never disagree.
+	for childID, expectedStatus := range map[string]string{runningID: "running", doneID: "done"} {
+		resp, data := h.do("GET", "/session/"+childID, nil)
+		if resp.StatusCode != 200 {
+			t.Fatalf("GET /session/%s = %d: %s", childID, resp.StatusCode, data)
+		}
+		var single sessionJSON
+		if err := json.Unmarshal(data, &single); err != nil {
+			t.Fatalf("decode /session/%s: %v (%s)", childID, err, data)
+		}
+		if single.Lineage == nil || single.Lineage.Status != expectedStatus {
+			t.Errorf("/session/%s: lineage.status = %+v, want '%s'", childID, single.Lineage, expectedStatus)
+		}
+	}
+}
