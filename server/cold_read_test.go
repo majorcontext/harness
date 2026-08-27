@@ -610,7 +610,7 @@ func TestListOmitsWhatItCannotRenderWhileStatusReportsIt(t *testing.T) {
 // shows the terminal value (done, failed, or canceled).
 func TestListSessionsIncludesChildStatus(t *testing.T) {
 	h := newHarness(t, &scriptedProvider{name: "test"})
-	
+
 	// Create a root session (managed and resident).
 	rootID := h.createSession("test/m1")
 	mgr := h.srv.SessionManager()
