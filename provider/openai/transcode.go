@@ -149,8 +149,21 @@ func wireCallID(id string) string {
 	return message.ProviderCallID("call_", id, 64)
 }
 
-// transcodeRequest maps a canonical request to the OpenAI Responses API.
+// transcodeRequest maps a canonical request to the OpenAI Responses API
+// under the package Family constant — the default for a client that
+// configures no family of its own.
 func transcodeRequest(req *provider.Request) (*apiRequest, error) {
+	return transcodeRequestFamily(req, Family)
+}
+
+// transcodeRequestFamily is transcodeRequest with the ProviderData tag made
+// explicit. family is the calling client's resolved family key: the tag
+// stored reasoning attachments are replayed FROM, so a second Responses
+// endpoint configured under its own providers-map key reads back only the
+// items it produced itself, and drops the other endpoint's (the canonical
+// cross-family rule — those items are opaque, usually encrypted, and
+// endpoint-scoped).
+func transcodeRequestFamily(req *provider.Request, family string) (*apiRequest, error) {
 	out := &apiRequest{
 		Model:           req.Model.Model,
 		Instructions:    strings.Join(req.System, "\n\n"),
@@ -227,7 +240,7 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 	messages := imageclamp.Clamp(message.NormalizeForWire(req.Messages), imageLimits)
 	for i := range messages {
 		m := &messages[i]
-		items, err := transcodeMessage(m, stripReasoning)
+		items, err := transcodeMessage(m, stripReasoning, family)
 		if err != nil {
 			return nil, fmt.Errorf("openai: message %s: %w", m.ID, err)
 		}
@@ -245,8 +258,9 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 // stripReasoning reports whether stored reasoning items must be dropped (see
 // the Reasoning case). It is true ONLY for an explicit EffortOff, never for
 // the default EffortUnset — an unset session replays stored reasoning items,
-// which gpt-5 stateless multi-turn tool use requires.
-func transcodeMessage(m *message.Message, stripReasoning bool) ([]json.RawMessage, error) {
+// which gpt-5 stateless multi-turn tool use requires. family is the calling
+// client's ProviderData tag (see transcodeRequestFamily).
+func transcodeMessage(m *message.Message, stripReasoning bool, family string) ([]json.RawMessage, error) {
 	role := "user"
 	if m.Role == message.RoleAssistant {
 		role = "assistant"
@@ -362,7 +376,7 @@ func transcodeMessage(m *message.Message, stripReasoning bool) ([]json.RawMessag
 				// from the intact history.
 				continue
 			}
-			raw, ok := v.ProviderData.Get(Family)
+			raw, ok := v.ProviderData.Get(family)
 			if !ok {
 				// Another provider's reasoning, or a present-but-empty
 				// entry (see message.ProviderData.Get — this is the

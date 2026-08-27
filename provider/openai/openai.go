@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/majorcontext/harness/message"
@@ -17,21 +18,66 @@ import (
 
 const defaultBaseURL = "https://api.openai.com"
 
+// defaultResponsesPath is the request path the OpenAI Responses API
+// documents, and the only path this adapter could reach before
+// Client.ResponsesPath existed. An empty ResponsesPath resolves to it, so
+// every pre-existing caller's wire is unchanged.
+const defaultResponsesPath = "/v1/responses"
+
 // Client is a provider.Provider for the OpenAI Responses API. The zero value
 // plus APIKey is usable; nothing touches the network until Stream.
 type Client struct {
-	APIKey     string
-	BaseURL    string       // defaults to https://api.openai.com
+	APIKey  string
+	BaseURL string // defaults to https://api.openai.com
+	// ResponsesPath is the request path appended to BaseURL, defaulting to
+	// defaultResponsesPath. It is configurable because the Responses wire
+	// format is spoken by endpoints that do not serve it at OpenAI's own
+	// path: a vendor may expose an equivalent endpoint under a path of its
+	// own, which "<base>/v1/responses" cannot reach no matter how BaseURL
+	// is written.
+	ResponsesPath string
+	// Family overrides the provider family key this client reports from
+	// Name() and uses as its ProviderData tag. Empty (the default) means
+	// the package Family constant, so every existing caller is unchanged.
+	//
+	// It is configurable for the same reason provider/openaicompat's is:
+	// more than one distinct endpoint can speak this wire, and two of them
+	// may be configured at once under different providers-map keys. The tag
+	// matters beyond routing. Reasoning items on this API are opaque,
+	// typically ENCRYPTED, endpoint-scoped state replayed verbatim on every
+	// later request. Tagging both clients "openai" would make the canonical
+	// format's family match succeed across two endpoints that do not share
+	// a key, so a session that switched between them would replay one
+	// endpoint's ciphertext to the other. Per-client families make that a
+	// cross-family drop instead — the canonical crossing rule, which costs
+	// a turn of reasoning continuity and nothing else.
+	Family     string
 	HTTPClient *http.Client // defaults to http.DefaultClient
 }
 
-func (c *Client) Name() string { return Family }
+// familyOrDefault resolves a configured family override to the family key
+// actually used on the wire and in ProviderData: an empty override means
+// the package Family constant. It is the single place that default lives,
+// shared by Client (which configures it) and stream (which is also built
+// directly, without a Client, by the fuzz harness).
+func familyOrDefault(family string) string {
+	if family != "" {
+		return family
+	}
+	return Family
+}
+
+// family resolves the provider family key for this client: the configured
+// override, or the package constant when unset.
+func (c *Client) family() string { return familyOrDefault(c.Family) }
+
+func (c *Client) Name() string { return c.family() }
 
 func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
 	if c.APIKey == "" {
 		return nil, fmt.Errorf("openai: no API key configured (set OPENAI_API_KEY)")
 	}
-	wire, err := transcodeRequest(req)
+	wire, err := transcodeRequestFamily(req, c.family())
 	if err != nil {
 		return nil, err
 	}
@@ -40,11 +86,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 		return nil, err
 	}
 
-	base := c.BaseURL
-	if base == "" {
-		base = defaultBaseURL
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/responses", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, responsesURL(c.BaseURL, c.ResponsesPath), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -65,10 +107,37 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 		return nil, apiError(resp)
 	}
 	return &stream{
-		body:  resp.Body,
-		r:     bufio.NewReader(resp.Body),
-		model: req.Model,
+		body:   resp.Body,
+		r:      bufio.NewReader(resp.Body),
+		model:  req.Model,
+		family: c.family(),
 	}, nil
+}
+
+// responsesURL joins a base URL and a request path, applying each field's
+// default and normalizing the separator between them to exactly one slash.
+//
+// Both halves are caller-supplied configuration now, so both of the obvious
+// typos have to be absorbed. A path missing its leading slash is the
+// dangerous one: "https://host" + "backend/responses" is not a wrong path,
+// it is a request aimed at the host "hostbackend" — a different server
+// entirely, and one an attacker could conceivably register. A trailing
+// slash on the base is the harmless mirror image, normalized here for the
+// same reason.
+//
+// The join is deliberately string-level rather than url.JoinPath: JoinPath
+// re-encodes path segments, and this adapter must keep the default path
+// byte-identical to the string it has always sent. Trimming every leading
+// slash before re-adding one also rules out a "//..." path, which a URL
+// parser reads as the start of an authority rather than as a path.
+func responsesURL(base, path string) string {
+	if base == "" {
+		base = defaultBaseURL
+	}
+	if path == "" {
+		path = defaultResponsesPath
+	}
+	return strings.TrimRight(base, "/") + "/" + strings.TrimLeft(path, "/")
 }
 
 func apiError(resp *http.Response) error {
@@ -146,6 +215,12 @@ type stream struct {
 	body  io.Closer
 	r     *bufio.Reader
 	model message.ModelRef
+	// family is the client's resolved provider family: the ProviderData tag
+	// this stream writes reasoning attachments under. Empty means the
+	// package Family constant (see familyOrDefault), which keeps a stream
+	// built directly in a test — the fuzz harness does exactly that —
+	// behaving as it always has.
+	family string
 
 	respID      string
 	items       []*assembledItem
@@ -496,7 +571,7 @@ func (s *stream) assemble() *message.Message {
 			}
 			msg.Parts = append(msg.Parts, &message.Reasoning{
 				Text:         it.text.String(),
-				ProviderData: message.ProviderData{Family: it.raw},
+				ProviderData: message.ProviderData{familyOrDefault(s.family): it.raw},
 			})
 		case "function_call":
 			msg.Parts = append(msg.Parts, it.toolCall())

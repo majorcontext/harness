@@ -352,9 +352,21 @@ type PluginSpec struct {
 
 // TypeOpenAICompat selects the generic OpenAI-compatible chat-completions
 // adapter (provider/openaicompat) for a Provider config entry — the wire
-// format spoken by OpenRouter, Ollama, vLLM, and similar deployments. It is
-// the only non-empty Provider.Type value Load accepts today.
+// format spoken by OpenRouter, Ollama, vLLM, and similar deployments. See
+// TypeOpenAI for the other non-empty Provider.Type value Load accepts.
 const TypeOpenAICompat = "openai-compat"
+
+// TypeOpenAI selects the native OpenAI Responses API adapter
+// (provider/openai) for a Provider config entry under ANY providers map
+// key. It exists because the bare "openai" key (empty Type — see
+// nativeProviderKeys) can name only ONE Responses endpoint, and a
+// deployment may need a second: another vendor speaking the same wire, at
+// its own base URL and its own request path, while "openai" keeps pointing
+// somewhere else. Like TypeOpenAICompat, the map key becomes the provider
+// family — routed by the first segment of a "provider/model" ref — and
+// BaseURL is required, since an arbitrary endpoint has no sensible
+// built-in default.
+const TypeOpenAI = "openai"
 
 // nativeProviderKeys are the only providers map keys allowed an empty Type
 // with no further defaulting: the built-in adapters cmd/harness's registry
@@ -450,17 +462,20 @@ type Provider struct {
 	// (see nativeProviderKeys). TypeOpenAICompat ("openai-compat") builds a
 	// generic provider/openaicompat client instead: the providers map key
 	// becomes the new provider family, routed by the first segment of a
-	// "provider/model" ref exactly like any built-in family. Any other
-	// value, or an empty value on any other key, fails Load loudly — a
-	// typo'd or missing type must not silently produce no adapter at
-	// startup.
+	// "provider/model" ref exactly like any built-in family. TypeOpenAI
+	// ("openai") does the same for the native provider/openai Responses
+	// adapter, so a second Responses endpoint can be configured beside the
+	// bare "openai" key. Any other value, or an empty value on any other
+	// key, fails Load loudly — a typo'd or missing type must not silently
+	// produce no adapter at startup.
 	Type string `json:"type,omitempty"`
 	// APIKeyEnv names the environment variable to read the API key from.
 	APIKeyEnv string `json:"api_key_env,omitempty"`
 	// BaseURL overrides the provider's default API base URL when non-empty.
-	// Required when Type is TypeOpenAICompat — there is no built-in default
-	// base URL for an arbitrary compat entry (the one exception, the
-	// built-in "openrouter" entry, is supplied by cmd/harness, not here).
+	// Required when Type is TypeOpenAICompat or TypeOpenAI — there is no
+	// built-in default base URL for an arbitrary entry under a caller-chosen
+	// key (the one exception, the built-in "openrouter" entry, is supplied
+	// by cmd/harness, not here).
 	BaseURL string `json:"base_url,omitempty"`
 	// Family overrides the ProviderData tag / wire-quirk key the
 	// openaicompat adapter uses (some deployments need family-specific
@@ -490,6 +505,21 @@ type Provider struct {
 	// same layer as its base_url. Use a *bool here only if a real
 	// two-layer override of this one field appears.
 	NoPromptCacheKey bool `json:"no_prompt_cache_key,omitempty"`
+	// ResponsesPath overrides the request path the native OpenAI Responses
+	// adapter POSTs to, appended to BaseURL. Empty (the default) uses
+	// "/v1/responses", the path the OpenAI Responses API documents and the
+	// only path this adapter could reach before. It exists because a
+	// Responses-API-compatible endpoint need not live at that path: a
+	// vendor may serve the identical wire format under a path of its own,
+	// and appending "/v1/responses" to its base URL reaches nothing.
+	//
+	// Valid ONLY on an entry that builds the Responses adapter — the
+	// native "openai" key with an empty Type, or a TypeOpenAI entry under
+	// any key. No other adapter reads it, so validateProviders rejects it
+	// elsewhere rather than ignoring it, the same rule NoPromptCacheKey and
+	// CacheTTL follow. Merge semantics are additive like every other
+	// Provider field (see NoPromptCacheKey's doc comment).
+	ResponsesPath string `json:"responses_path,omitempty"`
 	// CacheTTL selects the Anthropic prompt-cache breakpoint lifetime:
 	// "5m" (the Anthropic API default) or "1h" (the extended TTL, beta
 	// extended-cache-ttl-2025-04-11). Empty (the default) leaves the
@@ -573,16 +603,16 @@ func validateProviders(providers map[string]Provider) error {
 		switch p.Type {
 		case "":
 			if !nativeProviderKeys[name] {
-				return fmt.Errorf("providers.%s: type is required (empty type is only valid for the built-in %q/%q entries); valid types: \"\" (native anthropic/openai override), %q", name, "anthropic", "openai", TypeOpenAICompat)
+				return fmt.Errorf("providers.%s: type is required (empty type is only valid for the built-in %q/%q entries); valid types: \"\" (native anthropic/openai override), %q, %q", name, "anthropic", "openai", TypeOpenAICompat, TypeOpenAI)
 			}
 			// Legacy/native provider entry (anthropic or openai); no
 			// further validation here.
-		case TypeOpenAICompat:
+		case TypeOpenAICompat, TypeOpenAI:
 			if p.BaseURL == "" {
-				return fmt.Errorf("providers.%s: base_url is required for type %q", name, TypeOpenAICompat)
+				return fmt.Errorf("providers.%s: base_url is required for type %q", name, p.Type)
 			}
 		default:
-			return fmt.Errorf("providers.%s: unknown type %q", name, p.Type)
+			return fmt.Errorf("providers.%s: unknown type %q (valid types: \"\" (native anthropic/openai override), %q, %q)", name, p.Type, TypeOpenAICompat, TypeOpenAI)
 		}
 		if err := validateCacheTTL(name, p); err != nil {
 			return err
@@ -590,6 +620,42 @@ func validateProviders(providers map[string]Provider) error {
 		if p.NoPromptCacheKey && p.Type != TypeOpenAICompat {
 			return fmt.Errorf("providers.%s: no_prompt_cache_key is only valid on a %q entry (only the openaicompat adapter reads it)", name, TypeOpenAICompat)
 		}
+		if err := validateResponsesPath(name, p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// buildsResponsesAdapter reports whether a providers entry builds the
+// native OpenAI Responses adapter (provider/openai) — the one adapter that
+// reads ResponsesPath.
+//
+// Like validateCacheTTL, it matches on IDENTITY rather than on the map key
+// alone: the key "openai" with type "openai-compat" builds an openaicompat
+// client, and cmd/harness's registerOpenAICompatProviders overwrites the
+// native client registered under that same key, so no Responses adapter
+// would ever read the value. Two shapes qualify: the native "openai" key
+// with no type, and a TypeOpenAI entry under any key.
+func buildsResponsesAdapter(name string, p Provider) bool {
+	if p.Type == TypeOpenAI {
+		return true
+	}
+	return p.Type == "" && name == "openai"
+}
+
+// validateResponsesPath fails loudly on a responses_path set on any entry
+// that does not build the Responses adapter. Only that adapter reads the
+// field, so a value elsewhere would vanish into a client that never looks
+// at it — the same silent-misconfiguration class validateCacheTTL and the
+// no_prompt_cache_key check refuse to allow. Empty is always valid: it
+// means "adapter default" (/v1/responses).
+func validateResponsesPath(name string, p Provider) error {
+	if p.ResponsesPath == "" {
+		return nil
+	}
+	if !buildsResponsesAdapter(name, p) {
+		return fmt.Errorf("providers.%s: responses_path is only valid on an entry that builds the OpenAI Responses adapter (map key %q with no type, or any key with type %q); no other adapter reads it", name, "openai", TypeOpenAI)
 	}
 	return nil
 }
@@ -995,6 +1061,9 @@ func merge(base, over *Config) *Config {
 				}
 				if v.CacheTTL != "" {
 					ex.CacheTTL = v.CacheTTL
+				}
+				if v.ResponsesPath != "" {
+					ex.ResponsesPath = v.ResponsesPath
 				}
 				if v.NoPromptCacheKey {
 					ex.NoPromptCacheKey = true

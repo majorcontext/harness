@@ -854,9 +854,10 @@ func loadConfig() (*config.Config, error) {
 // values. Auth is read here but validated only on first send. Adding
 // another built-in provider family is a two-line change: resolve its config
 // with providerAuth and add one entry to the returned map. Any config
-// providers entry with type "openai-compat" needs no code at all — see
-// registerOpenAICompatProviders — and OpenRouter itself needs no config
-// entry either, see ensureDefaultOpenRouter.
+// providers entry with type "openai-compat" or "openai" needs no code at
+// all — see registerOpenAICompatProviders and registerOpenAIProviders —
+// and OpenRouter itself needs no config entry either, see
+// ensureDefaultOpenRouter.
 //
 // registry does not assume cfg came from config.LoadProject (the load path
 // that guarantees nativeDefaultProviders fields are filled in — see
@@ -866,19 +867,100 @@ func loadConfig() (*config.Config, error) {
 // {"openrouter": {"api_key_env": "..."}} entry identically to one that went
 // through the full config-loading choke point, rather than silently
 // registering no adapter for it at all.
+// defaultOpenAIKeyEnv is the environment variable every provider/openai
+// client reads when its entry names none of its own. One constant, so the
+// built-in entry (providerAuth, above) and a configured type:"openai" entry
+// (registerOpenAIProviders) cannot drift to different defaults.
+const defaultOpenAIKeyEnv = "OPENAI_API_KEY"
+
 func registry(cfg *config.Config) provider.Registry {
 	if cfg != nil {
 		config.EnsureProviderDefaults(cfg.Providers)
 	}
 	akey, abase := providerAuth(cfg, anthropic.Family, "ANTHROPIC_API_KEY")
-	okey, obase := providerAuth(cfg, openai.Family, "OPENAI_API_KEY")
+	okey, obase := providerAuth(cfg, openai.Family, defaultOpenAIKeyEnv)
 	reg := provider.Registry{
 		anthropic.Family: &anthropic.Client{APIKey: akey, BaseURL: abase, CacheTTL: anthropicCacheTTL(cfg)},
-		openai.Family:    &openai.Client{APIKey: okey, BaseURL: obase},
+		// The built-in openai entry deliberately leaves Family empty: it IS
+		// the package default, and naming it here would only invite the two
+		// to drift. Its ResponsesPath comes from the native entry, if any.
+		openai.Family: &openai.Client{APIKey: okey, BaseURL: obase, ResponsesPath: nativeResponsesPath(cfg)},
 	}
 	registerOpenAICompatProviders(reg, cfg)
+	registerOpenAIProviders(reg, cfg)
 	ensureDefaultOpenRouter(reg, cfg)
 	return reg
+}
+
+// registerOpenAIProviders builds a native provider/openai (Responses API)
+// client for every config.Providers entry of config.TypeOpenAI, keyed by
+// its providers map name — that name is what routes "name/model" refs to
+// it, exactly like an openai-compat entry, and it is also the client's own
+// Family, so the entry's opaque reasoning attachments are tagged and
+// replayed under the key that identifies its endpoint rather than under the
+// shared package constant.
+//
+// Registration order IS a precedence rule, not a formality, and the earlier
+// version of this comment claimed otherwise. config.validateProviders does
+// NOT reject an entry that collides with a built-in key: type:"openai" is
+// valid under ANY map key, including "openai" and "anthropic". What it
+// rejects is an unknown type, and an empty type on a key that is neither
+// native nor native-default.
+//
+// So the guarantee is narrower and comes from the map, not from validation:
+// a providers map key has exactly one entry, hence exactly one type, so
+// registerOpenAICompatProviders and this function can never both claim the
+// same key. Where an entry names a built-in key, it deliberately REPLACES
+// the built-in adapter, and running last is what makes the explicit entry
+// win. Its API key falls back to the same environment variable the built-in
+// entry reads, so replacing the built-in this way never silently
+// unauthenticates it.
+func registerOpenAIProviders(reg provider.Registry, cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	for name, p := range cfg.Providers {
+		if p.Type != config.TypeOpenAI {
+			continue
+		}
+		// An entry that names no api_key_env is asking for this adapter's
+		// DEFAULT key source, not for no key: the built-in "openai" entry
+		// has always read defaultOpenAIKeyEnv (providerAuth), and an entry
+		// keyed "openai" replaces that client outright. Without the same
+		// fallback, adding a type to an existing entry would silently
+		// unauthenticate every request it makes. A deployment that must
+		// keep its OpenAI key away from a third-party endpoint names its
+		// own api_key_env, which wins here — and an unset named variable
+		// resolves empty rather than falling back, so naming a variable is
+		// always the stricter choice.
+		keyEnv := p.APIKeyEnv
+		if keyEnv == "" {
+			keyEnv = defaultOpenAIKeyEnv
+		}
+		apiKey := os.Getenv(keyEnv)
+		reg[name] = &openai.Client{
+			Family:        name,
+			APIKey:        apiKey,
+			BaseURL:       p.BaseURL,
+			ResponsesPath: p.ResponsesPath,
+		}
+	}
+}
+
+// nativeResponsesPath reads the request path configured on the NATIVE
+// "openai" entry (map key "openai", no type — the shape
+// config.validateProviders permits responses_path on). Empty leaves the
+// adapter's own /v1/responses default in place. A keyed type:"openai" entry
+// carries its own path and is wired by registerOpenAIProviders instead.
+func nativeResponsesPath(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	p := cfg.Providers[openai.Family]
+	if p.Type != "" {
+		return ""
+	}
+	return p.ResponsesPath
 }
 
 // registerOpenAICompatProviders builds a provider/openaicompat client for

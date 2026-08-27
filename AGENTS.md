@@ -1496,6 +1496,45 @@ by construction: one build, one live probe, or one subagent runs longer than
 the window, and a user reads an answer before sending the next turn. The
 commit that introduced this default carries the measured evidence.
 
+### A second native Responses provider
+
+`provider/openai` speaks the OpenAI Responses API. Other vendors speak the
+same wire at their own host, under their own request path. Two config
+fields let a deployment reach one without new adapter code.
+
+`Provider.Type` accepts `"openai"` (`config.TypeOpenAI`) under ANY providers
+map key. The key becomes the provider family, routed by the first segment of
+a `provider/model` ref, exactly like an `"openai-compat"` entry.
+`cmd/harness`'s `registerOpenAIProviders` builds one `openai.Client` per such
+entry. `base_url` is required: an arbitrary endpoint under a caller-chosen
+key has no sensible built-in default, the same rule `"openai-compat"`
+follows. The bare `openai` key with an empty type keeps its own built-in
+default and is unchanged.
+
+`Provider.ResponsesPath` (`responses_path`) sets `Client.ResponsesPath`, the
+path appended to the base URL. Empty means `/v1/responses`, the path the
+Responses API documents and the only path this adapter could reach before.
+The field is valid ONLY on an entry that builds this adapter — the native
+`openai` key with an empty type, or any key with type `"openai"`.
+`config.validateResponsesPath` rejects it elsewhere, matching on IDENTITY
+(`buildsResponsesAdapter`) rather than on the map key alone, for the reason
+`validateCacheTTL` already documents: the key `openai` with type
+`"openai-compat"` builds an openaicompat client that would never read the
+value.
+
+`openai.Client.Family` overrides the family key `Name()` reports AND the
+`ProviderData` tag the transcoder reads and the stream writes. Empty means
+the package `Family` constant, so every existing caller is unchanged;
+`registerOpenAIProviders` sets it to the providers map key. The tag matters
+beyond routing. A Responses reasoning item is opaque, usually ENCRYPTED, and
+scoped to the endpoint that minted it, and history replays it verbatim on
+every later request. One shared `"openai"` tag across two endpoints would
+make the canonical family match succeed between them, so a session that
+swapped models would replay one endpoint's ciphertext to the other. A
+per-client family makes that a cross-family DROP instead — the canonical
+crossing rule — which costs one turn of reasoning continuity and nothing
+else.
+
 ### Lazy MCP tools (deferred schemas)
 
 An MCP server's tools reach the model as full JSON Schemas in the tools

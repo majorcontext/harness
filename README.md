@@ -56,5 +56,31 @@ and `api_key_env` above, so `"model": "openrouter/anthropic/claude-sonnet-5"`
 works as soon as `OPENROUTER_API_KEY` is set. Any `openrouter` entry in
 config — even a partial one — overrides the built-in default entirely.
 
-An unrecognized `type`, or an `openai-compat` entry missing `base_url`, fails
-config loading loudly rather than silently registering nothing.
+An endpoint that speaks the OpenAI **Responses** API rather than
+chat-completions uses `type: "openai"`, which builds the same native adapter
+the built-in `openai` family uses. It works under any map key, so a second
+Responses endpoint can sit beside the built-in one, and `responses_path`
+points it at an endpoint that does not serve `/v1/responses`:
+
+```json
+{
+  "providers": {
+    "vendor": {
+      "type": "openai",
+      "base_url": "https://api.vendor.example",
+      "api_key_env": "VENDOR_API_KEY",
+      "responses_path": "/backend/responses"
+    }
+  }
+}
+```
+
+`"model": "vendor/some-model"` then routes there, passing `some-model`
+through as the model id. `responses_path` defaults to `/v1/responses` and is
+also accepted on the built-in `openai` entry; it is rejected on any other
+kind of entry, since no other adapter reads it.
+
+An unrecognized `type`, an `openai-compat` or `openai` entry missing
+`base_url`, or a `responses_path` on an entry that builds neither Responses
+adapter, fails config loading loudly rather than silently registering
+nothing.
