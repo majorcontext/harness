@@ -228,17 +228,20 @@ func TestInstructionsInjectedIntoSystem(t *testing.T) {
 	writeInstr(t, filepath.Join(dir, "AGENTS.md"), "project says hi")
 	prov := instrSession(t, Config{WorkDir: dir}, 1)
 	sys := prov.requests[0].System
-	if len(sys) != 2 {
-		t.Fatalf("system = %v, want 2 segments", sys)
+	if len(sys) != 3 {
+		t.Fatalf("system = %v, want 3 segments", sys)
 	}
 	if sys[0] != "base" {
 		t.Errorf("sys[0] = %q, want base", sys[0])
 	}
-	if !strings.HasPrefix(sys[1], "Project instructions from AGENTS.md:") {
-		t.Errorf("sys[1] header = %q", sys[1])
+	if !isBatchingSegment(sys[1]) {
+		t.Errorf("sys[1] = %q, want the tool-batching segment", sys[1])
 	}
-	if !strings.Contains(sys[1], "project says hi") {
-		t.Errorf("sys[1] body = %q", sys[1])
+	if !strings.HasPrefix(sys[2], "Project instructions from AGENTS.md:") {
+		t.Errorf("sys[2] header = %q", sys[2])
+	}
+	if !strings.Contains(sys[2], "project says hi") {
+		t.Errorf("sys[2] body = %q", sys[2])
 	}
 }
 
@@ -247,8 +250,8 @@ func TestInstructionsDisabled(t *testing.T) {
 	writeInstr(t, filepath.Join(dir, "AGENTS.md"), "should be ignored")
 	prov := instrSession(t, Config{WorkDir: dir, Instructions: &InstructionsConfig{Disabled: true}}, 1)
 	sys := prov.requests[0].System
-	if len(sys) != 1 || sys[0] != "base" {
-		t.Errorf("system = %v, want only [base] when disabled", sys)
+	if len(sys) != 2 || sys[0] != "base" || !isBatchingSegment(sys[1]) {
+		t.Errorf("system = %v, want [base, tool-batching] when instructions are disabled", sys)
 	}
 }
 
@@ -257,8 +260,8 @@ func TestInstructionsMissingNoSegment(t *testing.T) {
 	mkdirAll(t, filepath.Join(dir, ".git"))
 	prov := instrSession(t, Config{WorkDir: dir}, 1)
 	sys := prov.requests[0].System
-	if len(sys) != 1 || sys[0] != "base" {
-		t.Errorf("system = %v, want only [base] when no AGENTS.md", sys)
+	if len(sys) != 2 || sys[0] != "base" || !isBatchingSegment(sys[1]) {
+		t.Errorf("system = %v, want [base, tool-batching] when there is no AGENTS.md", sys)
 	}
 }
 
@@ -269,17 +272,17 @@ func TestInstructionsPathOverride(t *testing.T) {
 	writeInstr(t, override, "override rules")
 	prov := instrSession(t, Config{WorkDir: dir, Instructions: &InstructionsConfig{Path: override}}, 1)
 	sys := prov.requests[0].System
-	if len(sys) != 2 {
-		t.Fatalf("system = %v, want 2 segments", sys)
+	if len(sys) != 3 {
+		t.Fatalf("system = %v, want 3 segments", sys)
 	}
-	if !strings.Contains(sys[1], "override rules") {
-		t.Errorf("sys[1] = %q, want override rules", sys[1])
+	if !strings.Contains(sys[2], "override rules") {
+		t.Errorf("sys[2] = %q, want override rules", sys[2])
 	}
-	if strings.Contains(sys[1], "default file") {
-		t.Errorf("override ignored the discovered AGENTS.md: %q", sys[1])
+	if strings.Contains(sys[2], "default file") {
+		t.Errorf("override ignored the discovered AGENTS.md: %q", sys[2])
 	}
-	if !strings.Contains(sys[1], override) {
-		t.Errorf("sys[1] should name the override path %q: %q", override, sys[1])
+	if !strings.Contains(sys[2], override) {
+		t.Errorf("sys[2] should name the override path %q: %q", override, sys[2])
 	}
 }
 
@@ -290,7 +293,7 @@ func TestInstructionsPathOverrideRelative(t *testing.T) {
 	writeInstr(t, filepath.Join(dir, "custom.md"), "relative override rules")
 	prov := instrSession(t, Config{WorkDir: dir, Instructions: &InstructionsConfig{Path: "custom.md"}}, 1)
 	sys := prov.requests[0].System
-	if len(sys) != 2 || !strings.Contains(sys[1], "relative override rules") {
+	if len(sys) != 3 || !strings.Contains(sys[2], "relative override rules") {
 		t.Fatalf("system = %v, want relative override injected", sys)
 	}
 }
@@ -320,8 +323,8 @@ func TestInstructionsLoadedOncePerSession(t *testing.T) {
 	if len(prov.requests) != 2 {
 		t.Fatalf("requests = %d, want 2", len(prov.requests))
 	}
-	seg0 := prov.requests[0].System[1]
-	seg1 := prov.requests[1].System[1]
+	seg0 := prov.requests[0].System[2]
+	seg1 := prov.requests[1].System[2]
 	if seg0 != seg1 {
 		t.Errorf("segment changed between prompts:\n%q\n%q", seg0, seg1)
 	}
@@ -336,17 +339,20 @@ func TestInstructionsBeforeHookSegments(t *testing.T) {
 	hooks := &fakeHooks{segments: []string{"hook seg"}}
 	prov := instrSession(t, Config{WorkDir: dir, Hooks: hooks}, 1)
 	sys := prov.requests[0].System
-	if len(sys) != 3 {
-		t.Fatalf("system = %v, want [base, instructions, hook seg]", sys)
+	if len(sys) != 4 {
+		t.Fatalf("system = %v, want [base, tool-batching, instructions, hook seg]", sys)
 	}
 	if sys[0] != "base" {
 		t.Errorf("sys[0] = %q, want base", sys[0])
 	}
-	if !strings.Contains(sys[1], "instr body") {
-		t.Errorf("sys[1] = %q, want instructions segment", sys[1])
+	if !isBatchingSegment(sys[1]) {
+		t.Errorf("sys[1] = %q, want the tool-batching segment", sys[1])
 	}
-	if sys[2] != "hook seg" {
-		t.Errorf("sys[2] = %q, want hook seg (hooks run after instructions)", sys[2])
+	if !strings.Contains(sys[2], "instr body") {
+		t.Errorf("sys[2] = %q, want instructions segment", sys[2])
+	}
+	if sys[3] != "hook seg" {
+		t.Errorf("sys[3] = %q, want hook seg (hooks run after instructions)", sys[3])
 	}
 }
 
