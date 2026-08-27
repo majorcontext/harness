@@ -377,3 +377,49 @@ func openDescriptors(t *testing.T) int {
 	}
 	return len(entries)
 }
+
+// TestListDoesNotReadIndexesForLiveSessions: GET /session renders a live
+// session from its live object, so reading that session's index is work
+// thrown away — and a stale sidecar would be refolded and written back by
+// the listing while the session's own writer holds it.
+//
+// The probe removes a live session's sidecar and leaves its journal intact.
+// A listing that reads indexes for every file would refold this one and
+// write the sidecar back. A listing that resolves residency first never
+// touches it, so the sidecar stays absent.
+func TestListDoesNotReadIndexesForLiveSessions(t *testing.T) {
+	dir := t.TempDir()
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("one")}}
+	h := newHarnessDir(t, dir, prov)
+	id := h.createSession("")
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "go"}},
+	})
+	if resp.StatusCode != 202 {
+		t.Fatalf("prompt_async = %d: %s", resp.StatusCode, data)
+	}
+	h.waitIdle(id)
+
+	if err := os.Remove(filepath.Join(dir, id+".index.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, data = h.do("GET", "/session", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /session = %d: %s", resp.StatusCode, data)
+	}
+	var list []sessionJSON
+	if err := json.Unmarshal(data, &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].ID != id {
+		t.Fatalf("listing = %s, want the one live session %s", data, id)
+	}
+	if list[0].Messages != 2 {
+		t.Errorf("messages = %d, want 2 from the live object", list[0].Messages)
+	}
+	// The listing must not have written a sidecar for it either.
+	if _, err := os.Stat(filepath.Join(dir, id+".index.json")); err == nil {
+		t.Error("the listing refolded and wrote a sidecar for a live session")
+	}
+}

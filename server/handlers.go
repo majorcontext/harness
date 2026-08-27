@@ -982,13 +982,17 @@ func (s *Server) handleList(w http.ResponseWriter, _ *http.Request) {
 		out = append(out, s.buildSession(liveFromResident(m.sess.ID, m.sess, m.running).withManager(s.sessMgr)))
 		seen[m.sess.ID] = true
 	}
-	indexes, err := engine.ListSessionIndexes(s.opts.SessionDir)
+	// Ids first, indexes second. A session this loop renders from a live
+	// object needs no index at all, and reading one for it is work thrown
+	// away — and a stale sidecar would be refolded and written back here
+	// while that session's own writer holds it.
+	ids, err := engine.ListSessionIDs(s.opts.SessionDir)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "cannot list sessions")
 		return
 	}
-	for _, ix := range indexes {
-		if seen[ix.ID] {
+	for _, id := range ids {
+		if seen[id] {
 			continue
 		}
 		// resolveLive first, index second. An id on disk can still be live
@@ -997,9 +1001,15 @@ func (s *Server) handleList(w http.ResponseWriter, _ *http.Request) {
 		// from SessionManager's own node. Only an id nothing live holds is
 		// rendered from its index, which is the case this listing used to
 		// pay a full LoadSession for, per session, on every call.
-		lv := s.resolveLive(ix.ID)
+		lv := s.resolveLive(id)
 		if lv.session() != nil {
 			out = append(out, s.buildSession(lv))
+			continue
+		}
+		ix, ixErr := engine.ReadSessionIndex(s.opts.SessionDir, id)
+		if ixErr != nil {
+			// Unreadable, or not a session journal at all. Skip it, exactly
+			// as this listing always has.
 			continue
 		}
 		if !ix.Complete {

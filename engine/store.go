@@ -1043,6 +1043,22 @@ func (s *Session) ensureLog() error {
 		}
 	}
 	s.logStarted = true
+	// A fold marked broken by a failed record write is re-seeded here, from
+	// the journal as the repair above left it. Without this, one transient
+	// write failure disabled the index for the rest of the session object's
+	// life: every later read of that session refolded the whole journal,
+	// which is the cost the index exists to remove. A review caught it.
+	//
+	// This runs on a reopen, which a failed write forces (see writeRecord),
+	// so it costs one slim fold per failure rather than per record. A fold
+	// that fails again leaves broken set, exactly as before.
+	if s.index.broken {
+		if data, rerr := os.ReadFile(sessionPath(s.cfg.SessionDir, s.ID)); rerr == nil {
+			if reseeded, ferr := foldJournalBytes(data); ferr == nil {
+				s.index = reseeded
+			}
+		}
+	}
 	// The sidecar index handle is opened beside the log, once, and rewritten
 	// in place from then on (see writeIndexTo). A failure to open it is
 	// never a session failure: the index is a cache, and a reader that
