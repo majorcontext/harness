@@ -94,6 +94,42 @@ type MessagePage struct {
 // journal a page read touches at all.
 const revChunkBytes = 64 << 10
 
+// MessagePageWindow resolves a page request against a total, returning the
+// inclusive sequence range [lo, hi] the page covers and the limit actually
+// applied. hi < lo means an empty page: nothing sits at or below the
+// requested point.
+//
+// beforeSeq <= 0 means "the newest page". limit <= 0 means
+// DefaultMessagePageLimit, and a limit above MaxMessagePageLimit is capped
+// to it — an engine caller gets a bounded answer rather than an error. The
+// HTTP boundary is stricter: it rejects an oversized limit, because its
+// published schema names a maximum and a client generator enforces it.
+//
+// It is exported because the server computes the same window when it pages
+// a resident history for a session with no journal. Two copies of this
+// arithmetic drifting apart would give one session two different
+// paginations depending on which path answered.
+func MessagePageWindow(total, beforeSeq, limit int) (lo, hi, appliedLimit int) {
+	if limit <= 0 {
+		limit = DefaultMessagePageLimit
+	}
+	if limit > MaxMessagePageLimit {
+		limit = MaxMessagePageLimit
+	}
+	hi = total
+	if beforeSeq > 0 && beforeSeq-1 < hi {
+		hi = beforeSeq - 1
+	}
+	if hi < 1 {
+		return 1, 0, limit // empty page
+	}
+	lo = hi - limit + 1
+	if lo < 1 {
+		lo = 1
+	}
+	return lo, hi, limit
+}
+
 // ReadMessagePage returns the durable messages immediately BEFORE
 // beforeSeq, at most limit of them, reading only the journal bytes it needs.
 //
@@ -130,23 +166,10 @@ func readMessagePage(dir, id string, beforeSeq, limit int) (MessagePage, error) 
 // checks exist for opens between taking an index and reading the journal,
 // which nothing outside can drive through the public call.
 func readMessagePageWithIndex(dir, id string, ix SessionIndex, beforeSeq, limit int) (MessagePage, error) {
-	if limit <= 0 {
-		limit = DefaultMessagePageLimit
-	}
-	if limit > MaxMessagePageLimit {
-		limit = MaxMessagePageLimit
-	}
 	page := MessagePage{Total: ix.DurableMessages}
-	hi := ix.DurableMessages
-	if beforeSeq > 0 && beforeSeq-1 < hi {
-		hi = beforeSeq - 1
-	}
-	if hi < 1 {
+	lo, hi, _ := MessagePageWindow(ix.DurableMessages, beforeSeq, limit)
+	if hi < lo {
 		return page, nil
-	}
-	lo := hi - limit + 1
-	if lo < 1 {
-		lo = 1
 	}
 
 	f, err := os.Open(sessionPath(dir, id))
@@ -240,11 +263,18 @@ func tailPage(f *os.File, logSize, size int64, total, lo, hi int) ([]message.Mes
 	compacted := false
 
 	err := scanLogBackward(f, logSize, size, func(line []byte, isTail bool) (bool, error) {
-		var rec struct {
-			Type    string           `json:"type"`
-			Message *message.Message `json:"message,omitempty"`
+		// Slim first. Every record the walk passes on its way back to the
+		// page gets this decode — a type, and a message's id — and only a
+		// record INSIDE the page is decoded in full. Full-decoding on the
+		// way past cost one message body per record newer than the page,
+		// which is the same O(n) the fold path was rewritten to remove, and
+		// it turned any record a newer binary wrote into a failed page read
+		// even when no page asked for it.
+		var head struct {
+			Type    string        `json:"type"`
+			Message *indexMessage `json:"message,omitempty"`
 		}
-		if err := json.Unmarshal(line, &rec); err != nil {
+		if err := json.Unmarshal(line, &head); err != nil {
 			if isTail {
 				// A torn final line is a crash mid-write. scanLog's forward
 				// discipline ignores it; so does this one, and the index
@@ -253,15 +283,21 @@ func tailPage(f *os.File, logSize, size int64, total, lo, hi int) ([]message.Mes
 			}
 			return false, errors.New("corrupt record")
 		}
-		switch rec.Type {
+		switch head.Type {
 		case recCompact:
 			compacted = true
 			return false, nil
 		case recMessage:
-			if rec.Message == nil {
+			if head.Message == nil {
 				return true, nil
 			}
 			if cur >= lo && cur <= hi {
+				var rec struct {
+					Message *message.Message `json:"message"`
+				}
+				if err := json.Unmarshal(line, &rec); err != nil || rec.Message == nil {
+					return false, fmt.Errorf("message %q: %v", head.Message.ID, err)
+				}
 				msg := *rec.Message
 				// The same ingest-time repair LoadSession applies to every
 				// message it replays (message.Message.Normalize's doc

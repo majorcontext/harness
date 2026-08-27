@@ -379,3 +379,63 @@ func TestDurableOnlyDropsDerivedRepairMessages(t *testing.T) {
 		}
 	}
 }
+
+// TestMessagePageRejectsAnOversizedLimit: the published schema names a
+// maximum for `limit`, and a generated client or a gateway enforces it.
+// Answering a larger request with a smaller page would make the server
+// disagree with its own spec, so the boundary rejects rather than clamps.
+// The engine API still clamps, for a caller with no schema to honor.
+func TestMessagePageRejectsAnOversizedLimit(t *testing.T) {
+	dir := t.TempDir()
+	sess := coldMessages(t, dir, 2)
+	h := newHarnessDir(t, dir, &scriptedProvider{name: "test"})
+
+	resp, data := h.do("GET", fmt.Sprintf("/session/%s/message?limit=%d", sess.ID, engine.MaxMessagePageLimit+1), nil)
+	if resp.StatusCode != 400 {
+		t.Errorf("limit above the maximum = %d: %s; want 400", resp.StatusCode, data)
+	}
+	// The maximum itself is accepted.
+	resp, data = h.do("GET", fmt.Sprintf("/session/%s/message?limit=%d", sess.ID, engine.MaxMessagePageLimit), nil)
+	if resp.StatusCode != 200 {
+		t.Errorf("limit at the maximum = %d: %s; want 200", resp.StatusCode, data)
+	}
+}
+
+// TestMessagePageWindowIsSharedWithTheJournalPath: the resident fallback
+// and the journal path must paginate identically. Both call
+// engine.MessagePageWindow, and this pins the observable half — the same
+// request against the same session yields the same window either way.
+func TestMessagePageWindowIsSharedWithTheJournalPath(t *testing.T) {
+	dir := t.TempDir()
+	h := newHarnessDir(t, dir, &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("a"), asstTurn("b"), asstTurn("c")}})
+	id := h.createSession("")
+	for i := 0; i < 3; i++ {
+		resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+			"parts": []map[string]string{{"type": "text", "text": fmt.Sprintf("go %d", i)}},
+		})
+		if resp.StatusCode != 202 {
+			t.Fatalf("prompt_async = %d: %s", resp.StatusCode, data)
+		}
+		h.waitIdle(id)
+	}
+
+	queries := []string{"?limit=2", "?limit=2&before_seq=5", "?limit=100", "?before_seq=1&limit=2"}
+	fromJournal := make([]pageResponse, 0, len(queries))
+	for _, q := range queries {
+		fromJournal = append(fromJournal, getPage(t, h, id, q))
+	}
+	if err := os.Remove(filepath.Join(dir, id+".jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, id+".index.json")); err != nil {
+		t.Fatal(err)
+	}
+	for i, q := range queries {
+		got := getPage(t, h, id, q)
+		want := fromJournal[i]
+		if got.FirstSeq != want.FirstSeq || got.LastSeq != want.LastSeq || got.Total != want.Total || got.HasMore != want.HasMore {
+			t.Errorf("%s: memory page [%d,%d] total=%d more=%v, journal page [%d,%d] total=%d more=%v",
+				q, got.FirstSeq, got.LastSeq, got.Total, got.HasMore, want.FirstSeq, want.LastSeq, want.Total, want.HasMore)
+		}
+	}
+}

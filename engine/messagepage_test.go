@@ -374,8 +374,9 @@ func TestReadMessagePageEmptySession(t *testing.T) {
 	}
 }
 
-// TestReadMessagePageCapsLimit: the endpoint exists to bound a read, so an
-// oversized limit is capped rather than honored.
+// TestReadMessagePageCapsLimit: the ENGINE API bounds a read rather than
+// erroring, for a caller with no schema to honor. The HTTP boundary is
+// stricter — see TestMessagePageRejectsAnOversizedLimit.
 func TestReadMessagePageCapsLimit(t *testing.T) {
 	dir := t.TempDir()
 	sess := pagedSession(t, dir, 2)
@@ -904,5 +905,65 @@ func TestFoldedPageDecodesOnlyThePage(t *testing.T) {
 	}
 	if !sameIDs(idsOf(page.Messages), wholeSequence(t, dir, s.ID)) {
 		t.Errorf("page ids = %v, want the whole durable sequence", idsOf(page.Messages))
+	}
+}
+
+// TestTailPageDecodesOnlyThePage is the fold path's cost guard, applied to
+// the tail path. Walking back to page K passes every record newer than it,
+// and it must not decode those in full: that is one message body per record
+// after the page, the same O(n) the fold path was rewritten to remove. It
+// is also a failure surface — a record a newer binary wrote would fail a
+// page that never asked for it.
+//
+// Same probe as the fold path's guard: a record carrying a part of an
+// unknown type is valid JSON, so a slim decode walks past it, while a full
+// decode fails.
+func TestTailPageDecodesOnlyThePage(t *testing.T) {
+	dir := t.TempDir()
+	sess := pagedSession(t, dir, 4) // 8 durable messages, no compaction
+
+	path := filepath.Join(dir, sess.ID+".jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	// Rewrite the NEWEST message record: the tail walk passes it on its way
+	// back to an older page.
+	rewritten := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		var probe struct {
+			Type    string `json:"type"`
+			Message *struct {
+				ID string `json:"id"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(lines[i]), &probe) != nil || probe.Type != recMessage || probe.Message == nil {
+			continue
+		}
+		lines[i] = `{"type":"message","message":{"id":"` + probe.Message.ID +
+			`","role":"assistant","parts":[{"type":"from_a_newer_binary","text":"x"}]}}`
+		rewritten = i
+		break
+	}
+	if rewritten < 0 {
+		t.Fatal("test setup: no message record to rewrite")
+	}
+	var full record
+	if err := json.Unmarshal([]byte(lines[rewritten]), &full); err == nil {
+		t.Fatal("the probe record decodes in full, so passing it proves nothing")
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(dir, sess.ID+sessionIndexSuffix))
+
+	// A page of the OLDEST messages: the walk passes the rewritten record.
+	page, err := ReadMessagePage(dir, sess.ID, 3, 2)
+	if err != nil {
+		t.Fatalf("ReadMessagePage: %v", err)
+	}
+	if page.FirstSeq != 1 || page.LastSeq != 2 || len(page.Messages) != 2 {
+		t.Fatalf("page = [%d,%d] with %d messages, want [1,2] with 2", page.FirstSeq, page.LastSeq, len(page.Messages))
 	}
 }

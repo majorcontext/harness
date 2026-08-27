@@ -1215,6 +1215,15 @@ func (s *Server) handleMessagePage(w http.ResponseWriter, query url.Values, id s
 	if !ok {
 		return
 	}
+	// Reject, do not clamp. The published schema names a maximum, and a
+	// generated client or a gateway enforces it, so silently answering a
+	// larger request with a smaller page would make the server disagree
+	// with its own spec. engine.MessagePageWindow still clamps for a
+	// direct engine caller, which has no schema to honor.
+	if limit > engine.MaxMessagePageLimit {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("limit must be at most %d", engine.MaxMessagePageLimit))
+		return
+	}
 	page, err := engine.ReadMessagePage(s.opts.SessionDir, id, beforeSeq, limit)
 	if err != nil {
 		s.messagePageFallback(w, id, beforeSeq, limit, err)
@@ -1269,23 +1278,13 @@ func (s *Server) messagePageFallback(w http.ResponseWriter, id string, beforeSeq
 	// by an argument about which shapes can reach here.
 	msgs := durableOnly(sess.History())
 	total := len(msgs)
-	if limit <= 0 {
-		limit = engine.DefaultMessagePageLimit
-	}
-	if limit > engine.MaxMessagePageLimit {
-		limit = engine.MaxMessagePageLimit
-	}
-	hi := total
-	if beforeSeq > 0 && beforeSeq-1 < hi {
-		hi = beforeSeq - 1
-	}
-	if hi < 1 {
+	// The same window arithmetic the journal path uses, from the same
+	// helper: two copies would give one session two different paginations
+	// depending on which path answered it.
+	lo, hi, _ := engine.MessagePageWindow(total, beforeSeq, limit)
+	if hi < lo {
 		writeJSON(w, http.StatusOK, messagePageJSON{Messages: []json.RawMessage{}, Total: total})
 		return
-	}
-	lo := hi - limit + 1
-	if lo < 1 {
-		lo = 1
 	}
 	writeJSON(w, http.StatusOK, messagePageJSON{
 		Messages: marshalMessages(msgs[lo-1 : hi]),

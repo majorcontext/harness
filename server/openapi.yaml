@@ -1930,8 +1930,10 @@ paths:
           required: false
           schema: { type: integer, minimum: 0, default: 100, maximum: 1000 }
           description: >
-            Maximum messages in the page. 0 or omitted means 100; a larger
-            value is capped at 1000 rather than rejected.
+            Maximum messages in the page. 0 or omitted means 100. A value
+            above the maximum is REJECTED with 400, not clamped, so a
+            generated client that enforces the schema and this server agree
+            on what a request means.
       responses:
         "200":
           description: OK
