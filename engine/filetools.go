@@ -220,9 +220,21 @@ const filePathKeyPrefix = "path:"
 // that the pushback is right.
 //
 // A HARD link still aliases: two names for one inode with no symlink to
-// follow. Closing that needs a stat and an inode comparison against every
-// other key in the batch, which is quadratic and still races a file
-// created mid-batch. That one stays a documented residual.
+// follow, so two names for one file take two keys and their calls run
+// concurrently. That one stays a documented residual —
+// TestAdvHardLinkAliasIsNotCovered pins the current behavior and fails if
+// it is ever closed.
+//
+// Closing it would mean keying on the inode (a stat, then a
+// device+inode key) rather than comparing keys pairwise — O(1) per call,
+// about what EvalSymlinks above already costs. Two things, not cost, are
+// why it is still open. A write_file target routinely does not exist yet,
+// so it has no inode to key on and must fall back to this lexical path;
+// a batch that pairs a create with a hard-linked write then still takes
+// two keys, and the file created mid-batch races exactly as it does now.
+// And st_dev/st_ino are Unix-shaped, so a portable version needs a
+// second implementation for Windows. The gap is narrow and the fix is
+// only partial, which is why it waits for a demonstrated need.
 func canonicalFileKeyPath(abs string) string {
 	if real, err := filepath.EvalSymlinks(abs); err == nil {
 		return real
