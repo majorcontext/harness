@@ -135,3 +135,43 @@ func keysOf(pd message.ProviderData) []string {
 	}
 	return out
 }
+
+// TestResponsesPathNoLeadingSlash is the malformed-URL case. ResponsesPath
+// is caller-supplied configuration, so "backend/responses" is a typo an
+// operator will eventually write. Concatenated naively onto a base with no
+// trailing slash it yields "https://hostbackend/responses" — a request to a
+// DIFFERENT HOST, not merely a wrong path, which is a far worse failure
+// than the typo deserves. The adapter absorbs it.
+func TestResponsesPathNoLeadingSlash(t *testing.T) {
+	c := &Client{ResponsesPath: "backend-api/codex/responses"}
+	if got := recordPath(t, c); got != "/backend-api/codex/responses" {
+		t.Errorf("path = %q, want %q", got, "/backend-api/codex/responses")
+	}
+}
+
+// TestResponsesURLNormalization pins the joining rule itself, including the
+// mirror-image typo (a trailing slash on the base) that would otherwise
+// produce a doubled separator.
+func TestResponsesURLNormalization(t *testing.T) {
+	tests := []struct {
+		name string
+		base string
+		path string
+		want string
+	}{
+		{name: "default path", base: "https://api.example.test", want: "https://api.example.test/v1/responses"},
+		{name: "leading slash", base: "https://api.example.test", path: "/backend/responses", want: "https://api.example.test/backend/responses"},
+		{name: "no leading slash", base: "https://api.example.test", path: "backend/responses", want: "https://api.example.test/backend/responses"},
+		{name: "trailing slash on base", base: "https://api.example.test/", path: "/backend/responses", want: "https://api.example.test/backend/responses"},
+		{name: "both typos at once", base: "https://api.example.test/", path: "backend/responses", want: "https://api.example.test/backend/responses"},
+		{name: "base carries a path segment", base: "https://api.example.test/backend-api/codex", path: "/responses", want: "https://api.example.test/backend-api/codex/responses"},
+		{name: "empty base uses the default", base: "", path: "/responses", want: defaultBaseURL + "/responses"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := responsesURL(tt.base, tt.path); got != tt.want {
+				t.Errorf("responsesURL(%q, %q) = %q, want %q", tt.base, tt.path, got, tt.want)
+			}
+		})
+	}
+}

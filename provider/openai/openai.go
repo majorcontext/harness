@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/majorcontext/harness/message"
@@ -85,15 +86,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 		return nil, err
 	}
 
-	base := c.BaseURL
-	if base == "" {
-		base = defaultBaseURL
-	}
-	path := c.ResponsesPath
-	if path == "" {
-		path = defaultResponsesPath
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, responsesURL(c.BaseURL, c.ResponsesPath), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -119,6 +112,32 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 		model:  req.Model,
 		family: c.family(),
 	}, nil
+}
+
+// responsesURL joins a base URL and a request path, applying each field's
+// default and normalizing the separator between them to exactly one slash.
+//
+// Both halves are caller-supplied configuration now, so both of the obvious
+// typos have to be absorbed. A path missing its leading slash is the
+// dangerous one: "https://host" + "backend/responses" is not a wrong path,
+// it is a request aimed at the host "hostbackend" — a different server
+// entirely, and one an attacker could conceivably register. A trailing
+// slash on the base is the harmless mirror image, normalized here for the
+// same reason.
+//
+// The join is deliberately string-level rather than url.JoinPath: JoinPath
+// re-encodes path segments, and this adapter must keep the default path
+// byte-identical to the string it has always sent. Trimming every leading
+// slash before re-adding one also rules out a "//..." path, which a URL
+// parser reads as the start of an authority rather than as a path.
+func responsesURL(base, path string) string {
+	if base == "" {
+		base = defaultBaseURL
+	}
+	if path == "" {
+		path = defaultResponsesPath
+	}
+	return strings.TrimRight(base, "/") + "/" + strings.TrimLeft(path, "/")
 }
 
 func apiError(resp *http.Response) error {
