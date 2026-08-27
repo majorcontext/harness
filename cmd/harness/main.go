@@ -368,6 +368,25 @@ func toolReadBudgetBytes() int64 {
 	return n * mib
 }
 
+// instructionsMode resolves engine.InstructionsConfig.Mode from the operator
+// knob HARNESS_INSTRUCTIONS_MODE and the config key `instructions_mode`, the
+// environment variable winning (same shape as instructionsMaxBytes above).
+//
+// "auto" and an empty value both mean the head-plus-outline rendering for an
+// oversize file. Only the exact value "full" selects the head-plus-marker
+// rendering; any other value falls back to auto, because an unreadable knob
+// must not quietly drop the outline an operator never asked to lose.
+func instructionsMode(cfg *config.Config) engine.InstructionsMode {
+	raw := os.Getenv("HARNESS_INSTRUCTIONS_MODE")
+	if raw == "" {
+		raw = cfg.InstructionsMode
+	}
+	if strings.EqualFold(strings.TrimSpace(raw), string(engine.InstructionsModeFull)) {
+		return engine.InstructionsModeFull
+	}
+	return engine.InstructionsModeAuto
+}
+
 // sessionDir resolves where session logs live, in precedence order:
 // -no-save (yields "", persistence disabled) > $HARNESS_SESSION_DIR >
 // configDir (config session_dir) > $HOME/.harness/sessions. Nothing is
@@ -1776,10 +1795,11 @@ func instructionsConfig(cfg *config.Config, noInstructions bool) *engine.Instruc
 		return &engine.InstructionsConfig{Disabled: true}
 	}
 	maxBytes := instructionsMaxBytes(cfg)
-	if cfg.InstructionsPath == "" && maxBytes == 0 {
+	mode := instructionsMode(cfg)
+	if cfg.InstructionsPath == "" && maxBytes == 0 && mode == engine.InstructionsModeAuto {
 		return nil
 	}
-	return &engine.InstructionsConfig{Path: cfg.InstructionsPath, MaxBytes: maxBytes}
+	return &engine.InstructionsConfig{Path: cfg.InstructionsPath, MaxBytes: maxBytes, Mode: mode}
 }
 
 // instructionsMaxBytes resolves engine.InstructionsConfig.MaxBytes from the

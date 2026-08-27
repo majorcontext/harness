@@ -132,6 +132,47 @@ value disables the cap so the whole file is injected. Config key
 `cmd/harness`, the environment variable winning — the engine never reads an
 environment variable itself.
 
+An oversize file is not merely marked, it is SPLIT.
+`renderInstructions` (`engine/instructions_outline.go`) injects a HEAD plus an
+OUTLINE: the head is every section that fits whole under the cap, and the
+outline lists every section the head does not carry — one line each with the
+heading, the exact `read_file` range that reads it
+(`read_file(path=<abs>, offset=<line>, limit=<count>)`), and a short teaser
+from the section body. The model pulls a section with `read_file`, whose
+`offset`/`limit` are already 1-based line numbers, so this adds NO tool and no
+schema to any request. The shape is the Agent Skills stage-1/stage-2 split
+below, applied to one file: the outline is an index the model MUST read
+through before it relies on a section. This file is itself over the cap, so
+this file is itself split: the head carries the sections that fit, and every
+later section — including this one — reaches the model only when it reads the
+advertised range. Nothing is out of reach, where the marker alone left the
+whole tail unreachable.
+
+`scanSections` tracks fenced code blocks by FENCE CHARACTER AND RUN LENGTH,
+not with a boolean. A `#` comment inside a ```` ```bash ```` block read as a
+heading would advertise a range that points at a shell comment. The character
+and run-length rules cover the next shape up: an instruction file that
+documents Markdown wraps a three-backtick example in a four-backtick fence,
+which a naive toggle closes early, turning the rest of the document into
+false sections.
+
+The split composes with the cap in ONE direction: the cap decides what is
+EAGER, the outline makes everything else REACHABLE, and nothing is dropped in
+silence either way. Three shapes keep the marker. A file with fewer than two
+sections (no heading, or one giant section) has nothing to outline and takes
+the `truncateInstructions` path unchanged. `InstructionsConfig.Mode`
+`InstructionsModeFull` selects that path for every file. And a file whose
+FIRST section alone exceeds the cap has no boundary to cut on, so the head is
+that truncated first section — marker and WARN line both firing, through
+`truncateInstructionsOf`, which reports the WHOLE file's size and not the
+first section's — with the outline still listing every later section. Never
+let the head lose its marker in that shape: it is the one place where an
+outline could hide a cut. Config key `instructions_mode` and the operator seam
+`HARNESS_INSTRUCTIONS_MODE` resolve the mode in `cmd/harness`; only the value
+`full` (case-insensitive) turns the outline off, because an unreadable knob
+must not quietly drop an outline nobody asked to lose. Design:
+docs/design/nested-instruction-loading.md.
+
 ### Agent Skills
 
 The engine advertises [Agent Skills](https://agentskills.io) in the system

@@ -51,6 +51,13 @@ type Config struct {
 	// an in-band marker and the operator reads a WARN log line.
 	// HARNESS_INSTRUCTIONS_MAX_KB overrides this key (see cmd/harness).
 	InstructionsMaxBytes int `json:"instructions_max_bytes,omitempty"`
+	// InstructionsMode selects how an OVERSIZE instruction file is rendered:
+	// "auto" (omitted, the default) splits it into a head plus an outline of
+	// the sections the head does not carry, each outline line naming the
+	// exact read_file range that reads it; "full" keeps the head-plus-marker
+	// rendering with no outline. HARNESS_INSTRUCTIONS_MODE overrides this key
+	// (see cmd/harness). See engine.InstructionsMode.
+	InstructionsMode string `json:"instructions_mode,omitempty"`
 	// SkillsDirs lists directories scanned for Agent Skills (agentskills.io).
 	// A nil (omitted) value leaves the engine default in place: use
 	// <WorkDir>/.agents/skills when it exists. In the project-config merge a
@@ -839,6 +846,7 @@ func Path() string {
 //     ModelTool (*bool): a non-nil project value overrides.
 //     InstructionsMaxBytes: a non-zero project value overrides, so a project
 //     sets its own cap (or -1 for no cap) over the user value.
+//     InstructionsMode: a non-empty project value overrides.
 //   - SkillsDirs, AgentDefsDirs: a non-empty project slice replaces the user
 //     slice entirely (arrays override, they do not concatenate); an
 //     empty/omitted project value inherits the user value.
@@ -976,6 +984,9 @@ func merge(base, over *Config) *Config {
 	}
 	if over.InstructionsMaxBytes != 0 {
 		out.InstructionsMaxBytes = over.InstructionsMaxBytes
+	}
+	if over.InstructionsMode != "" {
+		out.InstructionsMode = over.InstructionsMode
 	}
 	if over.GoalEvaluatorModel != "" {
 		out.GoalEvaluatorModel = over.GoalEvaluatorModel
