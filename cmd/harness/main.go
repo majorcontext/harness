@@ -867,12 +867,18 @@ func loadConfig() (*config.Config, error) {
 // {"openrouter": {"api_key_env": "..."}} entry identically to one that went
 // through the full config-loading choke point, rather than silently
 // registering no adapter for it at all.
+// defaultOpenAIKeyEnv is the environment variable every provider/openai
+// client reads when its entry names none of its own. One constant, so the
+// built-in entry (providerAuth, above) and a configured type:"openai" entry
+// (registerOpenAIProviders) cannot drift to different defaults.
+const defaultOpenAIKeyEnv = "OPENAI_API_KEY"
+
 func registry(cfg *config.Config) provider.Registry {
 	if cfg != nil {
 		config.EnsureProviderDefaults(cfg.Providers)
 	}
 	akey, abase := providerAuth(cfg, anthropic.Family, "ANTHROPIC_API_KEY")
-	okey, obase := providerAuth(cfg, openai.Family, "OPENAI_API_KEY")
+	okey, obase := providerAuth(cfg, openai.Family, defaultOpenAIKeyEnv)
 	reg := provider.Registry{
 		anthropic.Family: &anthropic.Client{APIKey: akey, BaseURL: abase, CacheTTL: anthropicCacheTTL(cfg)},
 		// The built-in openai entry deliberately leaves Family empty: it IS
@@ -894,10 +900,21 @@ func registry(cfg *config.Config) provider.Registry {
 // replayed under the key that identifies its endpoint rather than under the
 // shared package constant.
 //
-// It runs AFTER registerOpenAICompatProviders for the same reason that one
-// runs after the built-in entries: config.validateProviders has already
-// rejected every entry that could produce two adapters for one key, so the
-// order is a formality, not a precedence rule.
+// Registration order IS a precedence rule, not a formality, and the earlier
+// version of this comment claimed otherwise. config.validateProviders does
+// NOT reject an entry that collides with a built-in key: type:"openai" is
+// valid under ANY map key, including "openai" and "anthropic". What it
+// rejects is an unknown type, and an empty type on a key that is neither
+// native nor native-default.
+//
+// So the guarantee is narrower and comes from the map, not from validation:
+// a providers map key has exactly one entry, hence exactly one type, so
+// registerOpenAICompatProviders and this function can never both claim the
+// same key. Where an entry names a built-in key, it deliberately REPLACES
+// the built-in adapter, and running last is what makes the explicit entry
+// win. Its API key falls back to the same environment variable the built-in
+// entry reads, so replacing the built-in this way never silently
+// unauthenticates it.
 func registerOpenAIProviders(reg provider.Registry, cfg *config.Config) {
 	if cfg == nil {
 		return
@@ -906,10 +923,21 @@ func registerOpenAIProviders(reg provider.Registry, cfg *config.Config) {
 		if p.Type != config.TypeOpenAI {
 			continue
 		}
-		var apiKey string
-		if p.APIKeyEnv != "" {
-			apiKey = os.Getenv(p.APIKeyEnv)
+		// An entry that names no api_key_env is asking for this adapter's
+		// DEFAULT key source, not for no key: the built-in "openai" entry
+		// has always read defaultOpenAIKeyEnv (providerAuth), and an entry
+		// keyed "openai" replaces that client outright. Without the same
+		// fallback, adding a type to an existing entry would silently
+		// unauthenticate every request it makes. A deployment that must
+		// keep its OpenAI key away from a third-party endpoint names its
+		// own api_key_env, which wins here — and an unset named variable
+		// resolves empty rather than falling back, so naming a variable is
+		// always the stricter choice.
+		keyEnv := p.APIKeyEnv
+		if keyEnv == "" {
+			keyEnv = defaultOpenAIKeyEnv
 		}
+		apiKey := os.Getenv(keyEnv)
 		reg[name] = &openai.Client{
 			Family:        name,
 			APIKey:        apiKey,

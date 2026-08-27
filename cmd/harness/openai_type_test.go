@@ -217,3 +217,62 @@ func TestRegistryNativeOpenAIHonorsResponsesPath(t *testing.T) {
 		t.Errorf("Family = %q, want the package default for the built-in entry", c.Family)
 	}
 }
+
+// TestRegistryTypeOpenAIFallsBackToDefaultKeyEnv: an entry that names no
+// api_key_env is asking for the adapter's default key source, not for no
+// key at all. The bare "openai" entry has always read OPENAI_API_KEY that
+// way (providerAuth), and a type:"openai" entry keyed "openai" REPLACES
+// that built-in client — so without the same fallback, adding a type to an
+// existing entry would silently unauthenticate every request it makes.
+//
+// An entry that must NOT receive that key names its own api_key_env; the
+// case immediately below pins that.
+func TestRegistryTypeOpenAIFallsBackToDefaultKeyEnv(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "sk-builtin")
+	reg := registry(&config.Config{Providers: map[string]config.Provider{
+		"openai": {Type: config.TypeOpenAI, BaseURL: "https://gateway.example"},
+	}})
+	c, ok := reg[openai.Family].(*openai.Client)
+	if !ok {
+		t.Fatalf("openai provider is %T, want *openai.Client", reg[openai.Family])
+	}
+	if c.APIKey != "sk-builtin" {
+		t.Errorf("APIKey = %q, want the OPENAI_API_KEY fallback %q", c.APIKey, "sk-builtin")
+	}
+}
+
+// TestRegistryTypeOpenAIKeyedEntryFallsBackToDefaultKeyEnv holds the same
+// rule for a non-native key, so the fallback is a property of the adapter
+// rather than of one map key.
+func TestRegistryTypeOpenAIKeyedEntryFallsBackToDefaultKeyEnv(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "sk-builtin")
+	reg := registry(&config.Config{Providers: map[string]config.Provider{
+		"secondary": {Type: config.TypeOpenAI, BaseURL: "https://gateway.example"},
+	}})
+	c, ok := reg["secondary"].(*openai.Client)
+	if !ok {
+		t.Fatalf("secondary provider is %T, want *openai.Client", reg["secondary"])
+	}
+	if c.APIKey != "sk-builtin" {
+		t.Errorf("APIKey = %q, want the OPENAI_API_KEY fallback %q", c.APIKey, "sk-builtin")
+	}
+}
+
+// TestRegistryTypeOpenAIExplicitKeyEnvWins is the other half: an explicit
+// api_key_env is how a deployment keeps its real OpenAI key away from a
+// third-party endpoint. It must win over the fallback, and an unset named
+// variable must resolve empty rather than silently borrowing OPENAI_API_KEY.
+func TestRegistryTypeOpenAIExplicitKeyEnvWins(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "sk-builtin")
+	t.Setenv("SECONDARY_API_KEY", "sk-secondary")
+	reg := registry(&config.Config{Providers: map[string]config.Provider{
+		"secondary": {Type: config.TypeOpenAI, BaseURL: "https://gateway.example", APIKeyEnv: "SECONDARY_API_KEY"},
+		"tertiary":  {Type: config.TypeOpenAI, BaseURL: "https://other.example", APIKeyEnv: "UNSET_API_KEY"},
+	}})
+	if c := reg["secondary"].(*openai.Client); c.APIKey != "sk-secondary" {
+		t.Errorf("secondary APIKey = %q, want sk-secondary", c.APIKey)
+	}
+	if c := reg["tertiary"].(*openai.Client); c.APIKey != "" {
+		t.Errorf("tertiary APIKey = %q, want empty: an entry naming an unset variable must not borrow the default key", c.APIKey)
+	}
+}
