@@ -423,3 +423,79 @@ func TestListDoesNotReadIndexesForLiveSessions(t *testing.T) {
 		t.Error("the listing refolded and wrote a sidecar for a live session")
 	}
 }
+
+// TestListAndGetAgreeOnLiveness: GET /session and GET /session/{id} must
+// not disagree about whether a session is running.
+//
+// Both cold paths now render through coldSessionJSON, which re-checks
+// residency after reading the index. That window — a session going live
+// between the residency check and the index read — is not reachable
+// deterministically from a test, so the guarantee is structural: one
+// shared path, rather than two that must be kept in step. This test pins
+// the observable half, that the two endpoints agree.
+func TestListAndGetAgreeOnLiveness(t *testing.T) {
+	prov := newBlockingProvider("test")
+	h := newHarness(t, prov)
+	id := h.createSession("")
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "go"}},
+	})
+	if resp.StatusCode != 202 {
+		t.Fatalf("prompt_async = %d: %s", resp.StatusCode, data)
+	}
+	<-prov.started
+	defer prov.releaseAll()
+
+	resp, data = h.do("GET", "/session/"+id, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /session/%s = %d: %s", id, resp.StatusCode, data)
+	}
+	fromGet := decodeSession(t, data)
+
+	resp, data = h.do("GET", "/session", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /session = %d: %s", resp.StatusCode, data)
+	}
+	var list []sessionJSON
+	if err := json.Unmarshal(data, &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("listed %d sessions, want 1", len(list))
+	}
+	if list[0].Status != fromGet.Status || list[0].State != fromGet.State {
+		t.Errorf("listing says %q/%q, GET says %q/%q", list[0].Status, list[0].State, fromGet.Status, fromGet.State)
+	}
+	if fromGet.Status != "busy" {
+		t.Errorf("status = %q, want busy", fromGet.Status)
+	}
+}
+
+// TestSessionExistenceCheckIsOneStat: abort, end, and wait ask only whether
+// a session's journal is there. That check must not walk the directory,
+// fold every journal in it, or write sidecars back — and it must answer YES
+// for a journal that exists but cannot be read, because a damaged session
+// is still a session that exists.
+func TestSessionExistenceCheckIsOneStat(t *testing.T) {
+	dir := t.TempDir()
+	sess := coldSession(t, dir, nil)
+	h := newHarnessDir(t, dir, &scriptedProvider{name: "test"})
+
+	// Corrupt the journal so nothing can fold it, and drop its sidecar.
+	if err := os.Remove(filepath.Join(dir, sess.ID+".index.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, sess.ID+".jsonl"), []byte("{\"type\":\"session\"}\n{not json\n{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// POST /abort answers from the existence check alone.
+	resp, data := h.do("POST", "/session/"+sess.ID+"/abort", nil)
+	if resp.StatusCode != 204 {
+		t.Errorf("POST abort on an existing but unreadable session = %d: %s; want 204", resp.StatusCode, data)
+	}
+	// And no sidecar was written for it by that check.
+	if _, err := os.Stat(filepath.Join(dir, sess.ID+".index.json")); err == nil {
+		t.Error("the existence check refolded and wrote a sidecar")
+	}
+}
