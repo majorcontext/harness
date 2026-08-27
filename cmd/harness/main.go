@@ -227,7 +227,8 @@ func usage() {
                                     pursue a goal until an evaluator judges it
                                     met (exit 0 achieved, 3 not achieved)
   harness serve [-addr host:port] [-cors-origin origin] [-no-instructions]
-                [-unauthenticated] [-skills-dir dir ...] [-agent-def-dir dir ...]
+                [-unauthenticated] [-pprof] [-skills-dir dir ...]
+                [-agent-def-dir dir ...]
                                     serve the HTTP+SSE session API
   harness plugin probe              re-probe configured plugins and refresh
                                     the manifest cache
@@ -1263,6 +1264,8 @@ func serveCmd(args []string) error {
 		skillDirs = append(skillDirs, v)
 		return nil
 	})
+	var enablePProf bool
+	fs.BoolVar(&enablePProf, "pprof", false, "serve the Go runtime profiles under /debug/pprof/, behind the same bearer check as every other route; off by default")
 	var agentDefDirs []string
 	fs.Func("agent-def-dir", "directory of custom task-tool agent definitions to advertise (repeatable); overrides config agent_defs_dirs", func(v string) error {
 		agentDefDirs = append(agentDefDirs, v)
@@ -1378,6 +1381,16 @@ func serveCmd(args []string) error {
 	watchdogCtx, stopWatchdog := context.WithCancel(context.Background())
 	defer stopWatchdog()
 	go watchdog.run(watchdogCtx)
+
+	// A stop-the-world garbage collection pause stops every goroutine, so
+	// the process logs nothing at all while it lasts — indistinguishable
+	// from a wedged handler until something reports the pause itself. Same
+	// lifecycle as the watchdog above: one cancelable context, cancelled
+	// the moment serveCmd returns by any path.
+	gcWatch := newGCWatcher(logger)
+	gcCtx, stopGCWatch := context.WithCancel(context.Background())
+	defer stopGCWatch()
+	go gcWatch.run(gcCtx)
 
 	// The event journal owner needs each engine session to report events to
 	// it, so the session wrappers wire OnEvent to the server's Publish.
@@ -1563,6 +1576,9 @@ func serveCmd(args []string) error {
 		// comment for why this is the ONE place that ever sets it (server
 		// itself never infers it from RunToken alone).
 		Unauthenticated: unauthenticated,
+		// PProf: the -pprof opt-in. Off by default; see
+		// server.Options.PProf.
+		PProf: enablePProf,
 		// Logger: the same JSON stderr logger built above for the
 		// config-load summary and "serve start" lines now also drives
 		// server.Options.Logger's turn-lifecycle/goal-lifecycle logging

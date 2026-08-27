@@ -2707,6 +2707,78 @@ paths:
               schema: { type: string }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /debug/pprof/{profile}:
+    get:
+      operationId: debugPProf
+      summary: Go runtime profiles (CPU, heap, block, mutex, and the rest).
+      description: >
+        Present ONLY when this instance was started with `harness serve
+        -pprof`; it 404s otherwise, exactly as any other unmatched path.
+        Authed like every other route. A diagnostic surface, not a stable
+        API: the response is a binary pprof profile by default, or plain
+        text with `?debug=1`. Omit the path segment (`/debug/pprof/`) for a
+        plain-text listing of the profiles this server serves. Besides the
+        runtime's own profiles (`goroutine`, `heap`, `allocs`, `block`,
+        `mutex`, `threadcreate`), `profile` names accepted here are
+        `profile` (CPU) and `trace`, both taking `?seconds=N` clamped to
+        1-60 (default 30), and `cmdline`. A second concurrent CPU profile or
+        trace answers 409. `symbol` is NOT served: `go tool pprof`
+        symbolizes against the binary a profile came from.
+      parameters:
+        - name: profile
+          in: path
+          required: true
+          schema: { type: string }
+          description: Profile name, e.g. `goroutine`, `heap`, `block`, `mutex`.
+        - name: debug
+          in: query
+          required: false
+          schema: { type: integer }
+          description: >
+            1 or 2 for plain text instead of the binary format. Read by the
+            runtime profiles only; `profile`, `trace`, and `cmdline` ignore
+            it.
+        - name: seconds
+          in: query
+          required: false
+          schema: { type: integer }
+          description: >
+            Duration for `profile` and `trace`, in seconds. Default 30. A
+            well-formed value outside 1-60 is CLAMPED into that range, not
+            rejected — no schema minimum/maximum is declared here for that
+            reason. A malformed, empty, or repeated value IS a 400.
+        - name: gc
+          in: query
+          required: false
+          schema: { type: integer }
+          description: >
+            1 runs a garbage collection before reading `heap`. Ignored by
+            every other profile.
+      responses:
+        "200":
+          description: OK — a pprof profile.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+            text/plain:
+              schema: { type: string }
+        "400":
+          description: A query parameter was malformed or repeated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: No such profile, or this instance was started without `-pprof`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: A CPU profile or trace is already running in this process.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /:
     get:
       operationId: monitorRootRedirect

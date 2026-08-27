@@ -2379,6 +2379,85 @@ needing any other side channel to agree on identity. Harness itself never
 reads this variable — it is a contract between the hub and deployment
 tooling, documented in `docs/design/fleet-model.md` §8.
 
+## Serve-mode latency diagnostics
+
+A caller that waits seconds for a reply cannot tell, from outside the
+process, whether `harness serve` was slow, the network in front of it was
+slow, or the whole process was stopped by garbage collection. Three
+threshold-gated WARN lines answer that, and nothing runs always-on.
+
+- **`slow request`** (`server/timing.go`). `serveTimed` wraps the mux
+  dispatch in `Server.ServeHTTP` and warns when this process took longer
+  than `slowRequestThreshold` (500ms) to answer, with `method`, `route`,
+  `status`, `duration_ms`, and the caller's `X-Request-Id` as
+  `request_id`. The route is `http.Request.Pattern`, which the mux sets
+  during the dispatch, so a session id never reaches a log line; a request
+  that matched no route logs the fixed `unmatched` label, because the path
+  is caller-controlled. `requestID` drops a header value over 64 bytes or
+  carrying anything outside one printable ASCII token — it is untrusted
+  input that lands in a log line. `longLivedRoutes` exempts `GET /event`
+  and `GET /session/{id}/wait`: both run for as long as their caller
+  wants, so timing them would warn for every healthy client. Keep that map
+  in step with any new streaming or long-poll route.
+- **`long gc pause`** (`cmd/harness/gcwatch.go`). A stop-the-world pause
+  stops every goroutine, so the process logs nothing at all while it lasts
+  and looks exactly like a wedged handler. `gcWatcher` samples the
+  runtime's `/gc/pauses:seconds` histogram every 5 seconds and warns about
+  a new pause at or past 200ms. It reads `runtime/metrics`, never
+  `runtime.ReadMemStats` — `ReadMemStats` itself stops the world, so
+  sampling it would add the pause this watcher exists to find.
+  `longest_pause_ms` is the LOWER bound of the highest bucket that gained
+  a pause, since a histogram records a range. The first sample reports
+  nothing: the counts are cumulative for the whole process life. Same
+  lifecycle as `inFlightWatchdog` — one cancelable context, cancelled when
+  `serveCmd` returns.
+- **`/debug/pprof/`** (`server/pprof.go`, `Options.PProf`, `harness serve
+  -pprof`). OFF by default, and authed like every other route when on. It
+  is the third step, not the first: `GET /debug/goroutines` needs no flag
+  and already answers "what is this process blocked on". Turn `-pprof` on
+  for a process under investigation when the CPU, heap, block, or mutex
+  profile is what is missing.
+  - **Never import `net/http/pprof` in this repository.** That package's
+    `init` registers `/debug/pprof/*` on `http.DefaultServeMux` for the
+    whole linked binary, so importing it — even to borrow its handler
+    functions behind this flag — exposes profiling in ANY program that
+    links `server` and serves the default mux
+    (`http.ListenAndServe(addr, nil)`), with no opt-in and no way for
+    `Options.PProf` to prevent it. Go runs a package's `init` on import;
+    there is no way to take the handlers without the side effect. So
+    `server/pprof.go` implements them on `runtime/pprof` and
+    `runtime/trace` directly.
+    `TestPProf_NotRegisteredOnDefaultServeMux` asserts the absence and is
+    the regression guard: a 404 test through this server's own mux passes
+    WITH the bad import and proves nothing. It exists TWICE, in `server/`
+    and in `cmd/harness/`, because each only covers its own package's
+    import graph — the binary links the engine, providers, plugins, MCP and
+    the tools, and any one of them pulling in `net/http/pprof` would
+    publish the endpoints for the whole process.
+  - `?seconds=N` on `profile`/`trace` is clamped to 1-60 (default 30); a
+    malformed or repeated value is a 400, through the same `intParam` every
+    other integer parameter uses. A second concurrent CPU profile or trace
+    is a 409, not a 500 — only one of each can run in a process — and the
+    refusal removes the download headers it had to set before starting, so
+    the error is JSON rather than a file a browser saves. A client
+    disconnect ends the profile early rather than holding a runtime-wide
+    lock for an abandoned request.
+  - `GET /debug/pprof/{name}` is in `longLivedRoutes` (`server/timing.go`):
+    a profile runs for exactly as long as the caller's `?seconds` asks, so
+    timing it would log a 30-second "slow request" every time an operator
+    ran `go tool pprof` against a box — their own tooling in the logs they
+    are reading. The index stays timed; it returns at once.
+  - The UNSLASHED `/debug/pprof` is registered explicitly, behind auth.
+    Left to the mux it takes an automatic 308 redirect issued before any
+    handler, which told an unauthenticated caller whether profiling is
+    enabled. Authed, the two states are 401-vs-404 — the shape every other
+    route in this API already has.
+  - `/debug/pprof/symbol` is deliberately not served: `go tool pprof`
+    symbolizes against the binary a profile came from.
+
+No metrics, no tracing, no always-on profiling. A new diagnostic in this
+area is a threshold-gated log line or it does not land.
+
 ## Startup Speed Rules
 
 - Nothing touches network, subprocesses, or disk beyond one config file before first paint. Provider auth validates on first message send, not at boot.
