@@ -297,9 +297,23 @@ func tailPage(f *os.File, logSize int64, total, lo, hi int) ([]message.Message, 
 //
 // One pass, two decode depths. Every line is folded through indexRecord:
 // ids, roles, timestamps, and tool-call ids, never a message body. The same
-// pass keeps each record's raw line, by the id it contributes to the
-// sequence, as a subslice of data rather than a copy. Only the handful of
-// lines a page actually carries is then decoded in full.
+// pass keeps each record's raw line, keyed by the id that record
+// contributes, as a subslice of data rather than a copy. Only the handful
+// of lines a page actually carries is then decoded in full.
+//
+// The line map holds one entry per message record in the folded prefix, not
+// one per message in the resulting sequence: a record a compaction folded
+// away keeps its entry. That is deliberate. Each entry is an id string and
+// a slice header beside a prefix this function already holds in memory in
+// full, so pruning would trade a few percent of that for a pass per
+// compaction.
+//
+// An id that appears on two records keeps the FIRST. Engine-minted ids are
+// unique, and the one production source of a repeat is a provider-derived
+// id hashed from the message's own text (message.ProviderCallID), where the
+// two records carry the same content anyway. A journal that repeats an id
+// with DIFFERENT content is damaged, and this renders the first of them
+// rather than the last.
 //
 // An earlier revision ran a SECOND scanLog over the journal, decoding every
 // line into a full record to find the wanted ones. That decoded every
@@ -320,13 +334,19 @@ func foldedPage(data []byte, lo, hi int) ([]message.Message, error) {
 		if err := fold.applyIndexRecord(rec, isLast); err != nil {
 			return fmt.Errorf("%w at line %d", err, n)
 		}
+		var contributes string
 		switch {
 		case rec.Type == recMessage && rec.Message != nil:
-			lineByID[rec.Message.ID] = line
+			contributes = rec.Message.ID
 		case rec.Type == recCompact && rec.Compact != nil:
 			// A compact record contributes its summary to the sequence,
 			// and the summary lives inside that record's own line.
-			lineByID[rec.Compact.Summary.ID] = line
+			contributes = rec.Compact.Summary.ID
+		}
+		if contributes != "" {
+			if _, seen := lineByID[contributes]; !seen {
+				lineByID[contributes] = line
+			}
 		}
 		return nil
 	})

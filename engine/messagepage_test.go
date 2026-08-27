@@ -841,6 +841,7 @@ func TestFoldedPageDecodesOnlyThePage(t *testing.T) {
 	}
 	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
 	var poisonedID string
+	poisonedLine := -1
 	for i, line := range lines {
 		var probe struct {
 			Type    string `json:"type"`
@@ -853,7 +854,7 @@ func TestFoldedPageDecodesOnlyThePage(t *testing.T) {
 		}
 		lines[i] = `{"type":"message","message":{"id":"` + probe.Message.ID +
 			`","role":"user","parts":[{"type":"from_a_newer_binary","text":"x"}]}}`
-		poisonedID = probe.Message.ID
+		poisonedID, poisonedLine = probe.Message.ID, i
 		break
 	}
 	if poisonedID == "" {
@@ -861,6 +862,15 @@ func TestFoldedPageDecodesOnlyThePage(t *testing.T) {
 	}
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+
+	// Assert the probe's premise directly: the rewritten line must be
+	// foldable and NOT fully decodable. If canonical message decoding ever
+	// accepts an unknown part type, this fails loudly here rather than
+	// quietly turning the guard below into a test that passes from birth.
+	var full record
+	if err := json.Unmarshal([]byte(lines[poisonedLine]), &full); err == nil {
+		t.Fatal("the probe record decodes in full, so excluding it proves nothing")
 	}
 
 	// The slim fold must still accept the journal: this probe is only

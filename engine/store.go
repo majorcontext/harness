@@ -1750,6 +1750,12 @@ func scanLog[T any](data []byte, fn func(rec T, line int, isLast bool) error) er
 // scanLog's documented tolerance for a crash mid-write. scanLogRaw absorbs
 // it, so a caller sees the same clean end scanLog has always returned.
 // Every OTHER error propagates.
+//
+// scanLogRaw compares it by IDENTITY, never with errors.Is. A callback that
+// wrapped this sentinel into a genuine failure — "cannot update index: %w"
+// — would otherwise have that failure read as a torn final record and
+// reported as a clean scan. Identity keeps the signal to the one decoder
+// that raises it.
 var errTruncatedFinalRecord = errors.New("engine: truncated final record")
 
 // scanLogRaw is scanLog without the decode: it hands fn each non-empty line
@@ -1775,7 +1781,7 @@ func scanLogRaw(data []byte, fn func(raw []byte, line int, isLast bool) error) e
 			continue
 		}
 		if err := fn(line, i+1, i == last); err != nil {
-			if errors.Is(err, errTruncatedFinalRecord) {
+			if err == errTruncatedFinalRecord { //nolint:errorlint // identity on purpose; see the sentinel's doc comment
 				return nil
 			}
 			return err

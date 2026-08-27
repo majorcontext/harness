@@ -1963,8 +1963,10 @@ paths:
         "500":
           description: >
             A page request whose journal exists but cannot be read: a
-            corrupt record, an I/O error, or a journal that keeps changing
-            under the read. Error text "cannot read session messages".
+            corrupt NON-FINAL record, an I/O error, or a journal that keeps
+            changing under the read. Error text "cannot read session
+            messages". A corrupt FINAL record is a crash mid-write, which
+            every reader ignores, and does not produce this.
 
             A live session is answered from its resident history for ONE
             case only — a session that has no durable journal at all — so a
