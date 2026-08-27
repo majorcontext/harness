@@ -1260,7 +1260,7 @@ func TestMaybeAutoCompactTriggersAndHysteresisPreventsThrash(t *testing.T) {
 		compactTurn("t4", under), // call 4: lastUsage(t3)=over but on cooldown, no trigger
 		compactTurn("t5", over),  // call 5: lastUsage(t4)=under, cooldown clears, no trigger (not over)
 		compactSummaryTurn("gist-2", provider.Usage{InputTokens: 5}), // triggered before call 6 (lastUsage(t5)=over)
-		compactTurn("t6", under), // call 6's own turn (post second compaction)
+		compactTurn("t6", under),                                     // call 6's own turn (post second compaction)
 	}}
 	s := NewSession(Config{
 		Providers:           provider.Registry{"test": prov},
