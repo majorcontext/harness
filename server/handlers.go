@@ -1007,23 +1007,19 @@ func (s *Server) handleList(w http.ResponseWriter, _ *http.Request) {
 			continue
 		}
 		ix, ixErr := engine.ReadSessionIndex(s.opts.SessionDir, id)
-		if ixErr != nil {
-			// Unreadable, or not a session journal at all. Skip it, exactly
-			// as this listing always has.
-			continue
+		// coldSessionJSON for BOTH cases, index-backed and load-backed. It
+		// renders from the index when that index can answer, falls back to
+		// the authoritative load path when it cannot (see
+		// SessionIndex.Complete), and re-checks residency at the end. The
+		// re-check is why this listing does not build from the index
+		// directly: claimForPrompt can make a session live between the
+		// resolveLive above and this call, and GET /session/{id} closes
+		// that window the same way. The two must not disagree about a
+		// session's liveness. A session neither path can render is skipped,
+		// exactly as this listing always has.
+		if body, ok := s.coldSessionJSON(id, ix, ixErr == nil && ix.Complete); ok {
+			out = append(out, body)
 		}
-		if !ix.Complete {
-			// The journal did not record every field a reader needs — see
-			// coldSessionJSON. Answer from the authoritative load path, or
-			// omit the session if even that fails, exactly as this listing
-			// always has. The index this loop already holds is passed
-			// through, never re-read.
-			if body, ok := s.coldSessionJSON(ix.ID, ix, false); ok {
-				out = append(out, body)
-			}
-			continue
-		}
-		out = append(out, s.buildSessionFromIndex(ix))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	writeJSON(w, http.StatusOK, out)
@@ -3192,19 +3188,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 // sessionOnDisk reports whether a session log for id exists in the session
 // directory, without loading the session.
 func (s *Server) sessionOnDisk(id string) bool {
-	if s.opts.SessionDir == "" {
-		return false
-	}
-	infos, err := engine.ListSessions(s.opts.SessionDir)
-	if err != nil {
-		return false
-	}
-	for _, info := range infos {
-		if info.ID == id {
-			return true
-		}
-	}
-	return false
+	return engine.SessionExists(s.opts.SessionDir, id)
 }
 
 // lookup resolves a session for read endpoints and returns its whole

@@ -835,6 +835,22 @@ func writeIndexTo(f *os.File, ix SessionIndex) error {
 	return err
 }
 
+// SessionExists reports whether dir holds a journal for id: one stat, no
+// read of any kind.
+//
+// It is the existence check for a hot path — an abort, an end, a wait — and
+// it answers presence, not readability. A journal that exists but cannot be
+// folded is still a session that exists, and a caller asking "is there a
+// session here" must not be told no because its bytes are damaged. An
+// invalid id is false without touching the filesystem.
+func SessionExists(dir, id string) bool {
+	if dir == "" || !ValidSessionID(id) {
+		return false
+	}
+	fi, err := os.Stat(sessionPath(dir, id))
+	return err == nil && !fi.IsDir()
+}
+
 // ListSessionIDs returns the id of every session journal in dir, unsorted,
 // reading no journal and no sidecar — one directory scan.
 //
