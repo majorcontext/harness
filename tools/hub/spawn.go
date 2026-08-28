@@ -16,15 +16,15 @@ import (
 )
 
 // boxNameEnv is the environment variable the spawn command's own process
-// sees the hub-chosen (or operator-chosen) box NAME in — see AGENTS.md's
-// spawn contract section and docs/design/fleet-model.md §8. Deployment
+// sees the hub-chosen (or operator-chosen) box NAME in — see tools/AGENTS.md's
+// "Spawn-command contract" and docs/design/fleet-model.md §8. Deployment
 // tooling invoked by -spawn-command reads this to derive per-name storage
 // (e.g. HARNESS_SESSION_DIR); harness's own code never reads it.
 const boxNameEnv = "HARNESS_HUB_BOX_NAME"
 
 // spawnEvent is one frame of the /spawn SSE stream, JSON-encoded as the
 // `data:` payload. This is the entire spawn-output contract described in
-// AGENTS.md: a "stdout" event per line of the spawn command's combined
+// tools/AGENTS.md: a "stdout" event per line of the spawn command's combined
 // stdout+stderr, and exactly one terminal "done" event carrying the exit
 // status plus whatever TUNNEL_URL / RUN_TOKEN lines were found along the
 // way. The page needs nothing else to add the new box to its own state.

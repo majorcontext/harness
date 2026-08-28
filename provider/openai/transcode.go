@@ -50,7 +50,8 @@ type apiRequest struct {
 	// so the model runs its own default.
 	Reasoning *apiReasoning `json:"reasoning,omitempty"`
 	// PromptCacheKey is the Responses API's documented routing/cache-affinity
-	// hint, set from Request.SessionKey (see AGENTS.md, "Session affinity"
+	// hint, set from Request.SessionKey (see docs/models-and-providers.md,
+	// "Session affinity"
 	// section, for the Fireworks/Bifrost measured evidence this mechanism is
 	// modeled on). OpenAI combines it with the prefix hash to raise the
 	// chance repeat requests land on the same cache-holding backend. Empty

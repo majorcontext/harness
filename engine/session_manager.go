@@ -96,7 +96,8 @@ var (
 	// A live review finding: an earlier version of this gate compared
 	// only input+output against the budget, while usageByRoot itself
 	// already accumulated all four fields — a cache-heavy tree (the
-	// openaicompat/Fireworks and anthropic routes AGENTS.md calls out,
+	// openaicompat/Fireworks and anthropic routes described in
+	// docs/models-and-providers.md,
 	// where a large prompt resent every turn reads mostly from cache)
 	// could keep spawning children well past the operator's real
 	// intended ceiling, because the largest component of its actual

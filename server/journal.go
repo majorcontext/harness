@@ -558,8 +558,8 @@ func (s *Server) publishGoal(ev engine.Event) {
 	// waiting on external activity to resume it, exactly the "operator
 	// tailing the log concluded the box was dead" scenario, so both log at
 	// WARN with the same turn/attempt/reason/retry-budget shape the
-	// AGENTS.md brief asks for (mirroring Codex's structured stream-retry
-	// warn!). set/achieved/cleared are ordinary lifecycle transitions, not
+	// docs/goal-loop.md's structured-logging contract requires. The
+	// set/achieved/cleared transitions are ordinary lifecycle transitions, not
 	// failures, so INFO.
 	//
 	// goal.eval also logs at INFO, one line per completed worker turn (the

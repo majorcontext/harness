@@ -232,7 +232,8 @@ func TestGrepToolSkipsBinaryFiles(t *testing.T) {
 // file). The oversized file is skipped entirely, bounded via
 // io.LimitReader(f, maxGrepFileBytes+1) over one open handle (not a
 // separately captured os.Stat size — an earlier revision used exactly
-// that TOCTOU-prone shape, which AGENTS.md's read_file guidance forbids,
+// that TOCTOU-prone shape, which docs/engine-request-cycle.md's read_file
+// guidance forbids,
 // and a second review round caught it); a small file alongside it still
 // matches normally.
 func TestGrepToolSkipsOversizedFiles(t *testing.T) {

@@ -53,7 +53,7 @@ const (
 	// against a separately captured os.Stat size a concurrently growing
 	// file (a live log, a build artifact still being written) could
 	// outrun between the stat and a later read — the exact TOCTOU shape
-	// AGENTS.md's read_file guidance forbids, and an earlier revision of
+	// docs/engine-request-cycle.md's read_file guidance forbids, and an earlier revision of
 	// this file used. A file over the cap is skipped entirely — grep's
 	// job is finding SMALL, textual matches, not partially searching one
 	// giant file, so skipping is the right trade, not a truncated read.

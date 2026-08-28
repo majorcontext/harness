@@ -7,7 +7,7 @@
 // next turn until the condition is met or the turn budget runs out.
 //
 // This is a plan-artifact-free, gate-free loop: it introduces no plan mode and
-// no permission gate (see AGENTS.md, "Deliberately absent"). It is a control
+// no permission gate (see docs/goal-loop.md). It is a control
 // loop over Prompt plus a read-only evaluator call, nothing more.
 //
 // Durable goal.* records land in the session log so a resumed session can tell
@@ -63,7 +63,8 @@
 // (ses_41813d5a411c2ba5.jsonl, ses_55e4ae35d8344540.jsonl): each died right
 // after a "goal not met" guidance message was appended, mid-turn, with no
 // goal.eval and no error record — the log simply stopped, for hours, until a
-// human forced a goal.cleared. See docs/goal-loop.md for the write-up.
+// human forced a goal.cleared. See docs/history/goal-loop-resilience.md for
+// the write-up.
 //
 // # Round 3: the same escape path, the other half of the loop
 //
@@ -298,7 +299,7 @@
 // closes the second bullet above: a queued prompt dispatches as a normal
 // turn the instant the slot is free, and the server's PRE-EXISTING
 // activity-driven auto-arm (maybeAutoArmGoal, upstream of this package —
-// see AGENTS.md's "Prompt queue" section) re-enters the loop with a fresh
+// see docs/session-storage-and-queue.md) re-enters the loop with a fresh
 // PursueGoal call the next time any ordinary prompt turn completes — no new
 // timer, no new resume machinery, the same mechanism an ordinary idle goal
 // already relies on.
@@ -1916,7 +1917,7 @@ func (s *Session) lastMessageID() string {
 // touch the durable session log. Prompt's own append already persisted a
 // recMessage record for the interrupted-turn trio via appendWithUsage
 // before promptTurnWithRetry ever saw the failure — that record is on disk,
-// and the append-only session log (see AGENTS.md's core invariants) has no
+// and the append-only session log (see docs/session-storage-and-queue.md) has no
 // sanctioned mechanism this package can reach for retracting or amending an
 // already-journaled record without engine.go/store.go changes, which
 // docs/design/goal-retry-directive-reuse.md §4 rejects outright (a new
@@ -2447,8 +2448,8 @@ func (s *Session) runEvaluator(ctx context.Context, condition string, evaluator 
 		// a routing/cache-affinity hint (see provider.Request.SessionKey).
 		SessionKey: s.ID,
 		// The evaluator is a classifier, not a reasoning task: it always
-		// pins EffortOff, never the session's own level (see AGENTS.md's
-		// "Goal loop" section). Since a7c5cce, EffortOff sends the literal
+		// pins EffortOff, never the session's own level (see docs/goal-loop.md).
+		// Since a7c5cce, EffortOff sends the literal
 		// "off" on openaicompat and no thinking block on anthropic — both
 		// routes now spend none of the evaluator's MaxTokens 256 budget on
 		// reasoning. openai Responses is a known residual: reasoningEffort

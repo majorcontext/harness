@@ -7,7 +7,9 @@ A fast, extensible, composable agent harness in Go.
 - **Composable** — headless engine, event streams, client/server, MCP both directions
 - **Model-fluid** — swap providers/models mid-session or per-subagent with no migration
 
-See [AGENTS.md](AGENTS.md) for architecture and design decisions.
+See [AGENTS.md](AGENTS.md) for repository-wide rules and the scoped
+instruction index. Each major subsystem has its own concise `AGENTS.md`.
+See [docs/README.md](docs/README.md) for technical documentation.
 
 ## Configuration
 

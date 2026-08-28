@@ -136,8 +136,8 @@ func (w *streamWatchdog) stop() {
 // context.Canceled arriving in the same instant the timer fires is a real
 // provider failure that must keep its own identity — most pointedly a
 // context-overflow classification, whose deliberate clear-don't-park
-// semantics (see AGENTS.md) would otherwise be laundered into a retryable
-// truncation.
+// semantics (see docs/goal-loop.md) would otherwise be laundered into a
+// retryable truncation.
 func (w *streamWatchdog) explain(err error) error {
 	if w == nil || err == nil || !w.fired.Load() || !errors.Is(err, context.Canceled) {
 		return err

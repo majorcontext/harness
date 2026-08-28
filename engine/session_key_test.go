@@ -14,8 +14,8 @@ import (
 // builds, so an adapter that forwards it (openaicompat's "user" field) can
 // pin a session's requests to one provider replica for prompt-cache
 // affinity. This drives the same Session.Prompt entry point production
-// calls, not a hand-built Request (see AGENTS.md, "Verification drives the
-// production entry point").
+// calls, not a hand-built Request (see the root AGENTS.md "Testing"
+// section).
 func TestPromptSetsSessionKeyOnRequest(t *testing.T) {
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		asstTurn(provider.StopEndTurn, &message.Text{Text: "done"}),

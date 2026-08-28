@@ -14,7 +14,7 @@
 
 ## Locked design decisions
 
-- **Both tiers exit-park.** Deterministic (3 attempts, ~5s) and retryable (12 attempts, ~30min in-turn backoff) exhaustion both journal `goal.parked` + return the sentinel. This CHANGES #61's retryable-exhausted semantics from continue-in-loop to exit — deliberately: exiting frees the run slot during long outages (queued prompts run as normal turns instead of only injecting), and resume-on-activity re-enters the loop cleanly. Document the supersession in goal.go's round-history style and docs/goal-loop.md.
+- **Both tiers exit-park.** Deterministic (3 attempts, ~5s) and retryable (12 attempts, ~30min in-turn backoff) exhaustion both journal `goal.parked` + return the sentinel. This CHANGES #61's retryable-exhausted semantics from continue-in-loop to exit — deliberately: exiting frees the run slot during long outages (queued prompts run as normal turns instead of only injecting), and resume-on-activity re-enters the loop cleanly. Document the supersession in goal.go's round-history style and `docs/history/goal-loop-resilience.md`.
 - **`goal.parked` is an ENGINE record/event** (`recGoalParked`/`EventGoalParked`), persisted+emitted under `s.mu` before `PursueGoal` returns, carrying `{Reason: <classified error — reuse/extend the #82 classifier family; NEVER raw provider error text on this surface>, Attempts, RetryableClass?}` — distinct from the boot-only server-synthesized `goal.paused` (which stays as-is). Generation-gated like `goal.stalled` (a park racing `UpdateGoal` → stale-discard, loop continues against the new condition instead of parking).
 - **The goal stays armed**: no `clearGoal`, `ActiveGoal()` true, LoadSession replay unchanged (goal.parked folds as trace; active goal restores; boot pause presentation then applies as today).
 - **Server terminal is loud + distinct**: sentinel + exported `engine.IsGoalWorkerParked` predicate (the #81 evaluator_exhausted wiring pattern end-to-end): `runGoal` default-branch emits `session.error` and `turn.end outcome=worker_parked`; openapi outcome enum + Event docs updated. Event order: goal.parked < session.error < turn.end < idle.
@@ -62,7 +62,7 @@ Session.goalParked lifecycle + third ambient occupant + tests (invariant 6). Com
 
 ### Task 4: Docs, review, e2e, PR
 
-AGENTS.md (goal-loop section: park-both-tiers, supersede the #61 in-loop-park description; the deliberate context-overflow asymmetry), docs/goal-loop.md new section, full gates, Opus review, live incident replay (stub provider returning 404s → park not clear → GET shows worker_failure → prompt the box → auto-arm resumes → flip healthy → achieves; also retryable-tier park under synctest-less live with short schedule if feasible, else covered by tests), PR, converge, merge on approval.
+Record park-both-tiers, the superseded #61 in-loop behavior, and the deliberate context-overflow asymmetry in `docs/history/goal-loop-resilience.md`; full gates, Opus review, live incident replay (stub provider returning 404s → park not clear → GET shows worker_failure → prompt the box → auto-arm resumes → flip healthy → achieves; also retryable-tier park under synctest-less live with short schedule if feasible, else covered by tests), PR, converge, merge on approval.
 
 ## Execution notes
 

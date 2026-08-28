@@ -19,7 +19,7 @@ import (
 // runs, git logs, file dumps) while bounding the worst case — an apt-get or
 // npm install storm that would otherwise dump megabytes into a single
 // message, bloating the session log and the next provider request built from
-// it (see AGENTS.md and docs/goal-loop.md for the incident this fixed).
+// it (see docs/history/goal-loop-resilience.md for the incident this fixed).
 const defaultBashOutputCap = 96 * 1024
 
 // bashWaitDelay bounds how long cmd.Wait may block on the command's output

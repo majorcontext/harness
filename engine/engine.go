@@ -105,7 +105,7 @@ type Tool struct {
 }
 
 // Event is one entry in the session's event stream. Event types follow ACP
-// naming where a choice is arbitrary (see AGENTS.md).
+// naming where a choice is arbitrary (see docs/plugins-and-protocols.md).
 type Event struct {
 	Type       string              `json:"type"`
 	SessionID  string              `json:"session_id"`
@@ -546,9 +546,10 @@ type Config struct {
 	// Nil (the default) resolves to time.Now in newSession. This exists so a
 	// test can inject a scripted sequence of instants instead of depending
 	// on real elapsed wall-clock time between two calls to a fake stream's
-	// Next() — the AGENTS.md testing rule against real sleeps in tests
-	// applies here exactly as it does to any other timer-dependent code, and
-	// a real duration between two in-process function calls with no actual
+	// Next(). The per-turn metrics contract in docs/engine-request-cycle.md
+	// requires tests to avoid real sleeps, and it applies here exactly as it
+	// does to any other timer-dependent code. A real duration between two
+	// in-process function calls with no actual
 	// I/O between them would otherwise round to ~0 and prove nothing. Scoped
 	// to this one measurement, not a general engine clock seam: every other
 	// timestamp in this package (CreatedAt, etc.) still reads time.Now
@@ -637,7 +638,7 @@ type Config struct {
 	// (the default) installs no `goal` tool at all, exactly like a nil
 	// Config.Processes installs no `process` tool. The server/CLI wiring
 	// that sets this true when a goal evaluator is configured is a later
-	// task (see docs/design/2026-07-19-goal-self-adjust.md) — this field
+	// task (see docs/plans/2026-07-19-goal-self-adjust.md) — this field
 	// only gates registration.
 	GoalTool bool
 
@@ -1348,8 +1349,8 @@ type Session struct {
 	// rather than a per-process one. Guarded by mu.
 	toolResultBytes int
 
-	// readHashes backs the write_file read-before-overwrite guard (see the
-	// "write_file read-before-overwrite guard" section of AGENTS.md and
+	// readHashes backs the write_file read-before-overwrite guard (see
+	// docs/engine-request-cycle.md and
 	// writeFileTool's doc comment in filetools.go). It maps a resolved
 	// absolute path (s.resolvePath's output, never a raw relative tool
 	// argument) to the sha256 hash of that path's raw on-disk bytes as of
@@ -2163,7 +2164,7 @@ func (s *Session) persistAppendedMessage(m message.Message) {
 // This mirrors the accounting compact.go's errEmptyCompactionSummary skip
 // path already established for the sibling "the call ran and cost real
 // tokens even though it produced nothing usable" shape (see runCompaction's
-// doc comment and AGENTS.md's "An empty summary is a graceful no-op..."):
+// doc comment and docs/models-and-providers.md):
 // the call was real, the provider billed it in full (for an empty turn,
 // typically a full input prefill plus the entire max_tokens output
 // ceiling), and no tokens were refunded just because streamTurnWithRetry

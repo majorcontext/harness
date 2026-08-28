@@ -15,7 +15,7 @@ func collectSpawn(t *testing.T, ctx context.Context, command string) []spawnEven
 }
 
 // collectSpawnNamed is collectSpawn plus the box-name passthrough (see
-// TestRunSpawnSetsBoxNameEnv below and AGENTS.md's spawn contract section).
+// TestRunSpawnSetsBoxNameEnv below and tools/AGENTS.md's "Spawn-command contract").
 func collectSpawnNamed(t *testing.T, ctx context.Context, command, name string) []spawnEvent {
 	t.Helper()
 	var mu sync.Mutex
@@ -166,7 +166,7 @@ func TestRunSpawnCancelKillsProcess(t *testing.T) {
 }
 
 // TestRunSpawnSetsBoxNameEnv verifies the box-name passthrough documented in
-// AGENTS.md's spawn contract section and docs/design/fleet-model.md §8: a
+// tools/AGENTS.md's "Spawn-command contract" and docs/design/fleet-model.md §8: a
 // non-empty name is set as HARNESS_HUB_BOX_NAME in the spawn command's own
 // environment (not just some sidecar field), visible to the child process
 // like any other env var — this is what lets deployment tooling invoked by

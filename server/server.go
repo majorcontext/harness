@@ -276,7 +276,7 @@ type Options struct {
 	Processes engine.ProcessRegistry
 	// MonitorPage, when non-nil, is served verbatim at GET /monitor (and
 	// /monitor/) — the single-file board+detail+composer UI documented in
-	// AGENTS.md's "Session monitor" section, letting a box serve its own
+	// docs/development-interfaces.md's "Session monitor" section, letting a box serve its own
 	// copy same-origin instead of requiring a separately hosted one. Nil
 	// (the default) registers no route at all: GET /monitor 404s exactly
 	// as it always has, so an existing deployment that never sets this is
@@ -491,7 +491,8 @@ type Server struct {
 	//
 	// queueDrainPending is what lets waitSnapshot (wait.go) tell this
 	// transient, self-resolving window apart from a session resumed after
-	// a restart with a non-empty queue and nothing running — AGENTS.md:
+	// a restart with a non-empty queue and nothing running — see
+	// docs/session-storage-and-queue.md's "Prompt queue" section:
 	// "Boot never auto-dispatches a resumed queue... it sits there until
 	// the next natural drain trigger." That case has no pending drain
 	// trigger at all (freeRunSlotAndEmitIdle, the only setter, never runs

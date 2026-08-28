@@ -15,8 +15,8 @@
 // about how the engine BUILT the result, never a new part kind, never a new
 // wire shape.
 //
-// It is also why retention does not violate AGENTS.md's additive-only
-// live-repair rule. That rule governs a repair that runs over live or
+// It is also why retention does not violate docs/engine-request-cycle.md's
+// additive-only live-repair rule. That rule governs a repair that runs over live or
 // persisted history (ResolveOrphanToolCalls). Retention is not a repair: it
 // runs once, on a message that does not yet exist in history, at the one
 // point the engine already decides what the ToolResult's content is.

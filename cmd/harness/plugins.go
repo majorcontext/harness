@@ -43,10 +43,9 @@ func pluginCachePath() string {
 	return filepath.Join(filepath.Dir(config.Path()), "plugin_cache.json")
 }
 
-// pluginManifestCache is the on-disk manifest cache named in AGENTS.md:
-// "harness plugin install runs the binary once and caches its manifest ...
-// keyed by binary hash". Entries are keyed by plugin name *and* a digest of
-// the plugin's Config/Env/Dir (see pluginCacheKey/pluginSpecDigest) so a
+// pluginManifestCache is the on-disk probe cache described in
+// plugin/AGENTS.md. Entries are keyed by plugin name *and* a digest of the
+// plugin's Config/Env/Dir (see pluginCacheKey/pluginSpecDigest) so a
 // renamed config entry, or a plugin whose config/env/dir changed since it
 // was last probed, both re-probe rather than silently reusing an unrelated
 // or stale manifest. The binary's own identity (content hash, size, mtime)

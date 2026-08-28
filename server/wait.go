@@ -185,7 +185,8 @@ func (waitTimeoutError) Error() string { return "timeout_s must be a positive in
 // OPPOSITE order) — made the running/queued reads non-atomic, a narrower
 // version of the same false-idle. And gating naively on queue depth alone
 // (empty or not) is simply wrong: a session resumed after a restart with a
-// non-empty queue and nothing running is genuinely idle right now (AGENTS.md:
+// non-empty queue and nothing running is genuinely idle right now (see
+// docs/session-storage-and-queue.md's "Prompt queue" section:
 // "Boot never auto-dispatches a resumed queue... it sits there until the
 // next natural drain trigger") — loadJournal never sets queueDrainPending,
 // so that case is unaffected here and still returns idle immediately.

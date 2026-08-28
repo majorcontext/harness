@@ -212,8 +212,7 @@ func TestSessionInfoReportsEffortAfterSetEffort(t *testing.T) {
 }
 
 // rawSessionInfoPlugins re-marshals just the plugins field so the test can
-// assert the empty case serializes as [] (not null) — the NoToolOutputText /
-// empty-slice trap AGENTS.md warns about.
+// assert the empty case serializes as [] (not null).
 func rawSessionInfoPlugins(t *testing.T, info decodedSessionInfo) string {
 	t.Helper()
 	b, err := json.Marshal(info.Plugins)

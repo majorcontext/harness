@@ -328,8 +328,8 @@ func TestMarkMCPToolsSelectedRejectsMalformedNames(t *testing.T) {
 }
 
 // TestToolDefsByteStableUnderDeferral is the prompt-cache property, asserted
-// on BYTES rather than membership (see AGENTS.md, "The tool array is
-// byte-stable across requests"): repeated builds that change no selection
+// on BYTES rather than membership (see docs/mcp-tool-loading.md, "The tool
+// array is byte-stable across requests"): repeated builds that change no selection
 // must serialize identically, and one selection must change the array
 // exactly once and then hold still again.
 func TestToolDefsByteStableUnderDeferral(t *testing.T) {

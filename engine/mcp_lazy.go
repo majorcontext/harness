@@ -28,8 +28,8 @@
 //
 // Two properties this file must not break:
 //
-//   - The tools array is byte-stable across requests (see AGENTS.md and
-//     Session.toolDefs). The partition preserves the registry's order, and
+//   - The tools array is byte-stable across requests (see
+//     docs/mcp-tool-loading.md and Session.toolDefs). The partition preserves the registry's order, and
 //     the catalog listing is sorted by full tool name -- by THIS file, not
 //     inherited from the registry -- so identical state always renders
 //     identical bytes.

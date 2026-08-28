@@ -795,7 +795,8 @@ func TestWaitDisconnectDoesNotLeakWaiter(t *testing.T) {
 // TestWaitUntilIdleDoesNotWakeEarlyOnQueuedFollowUp (queue_test.go): gating
 // until=idle naively on "is the queue non-empty" is wrong for a session
 // resumed after a restart with a prompt still durably queued and nothing
-// running — AGENTS.md: "Boot never auto-dispatches a resumed queue... it
+// running — server/AGENTS.md: "Never auto-dispatch a restored queue during
+// boot. Leave it for the next natural drain trigger"; it
 // sits there until the next natural drain trigger (an idle prompt, the next
 // tool-call boundary inside a running turn, or a goal loop's next turn
 // boundary)." That session has no pending drain trigger at all and is

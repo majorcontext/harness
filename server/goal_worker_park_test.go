@@ -547,7 +547,7 @@ func TestGoalWorkerParkFreesRunSlotForQueuedPrompt(t *testing.T) {
 // TestGoalWorkerParkResumesOnNextPromptActivity is invariant 4: after a
 // worker-park, a plain prompt completing auto-arms the still-active goal
 // (maybeAutoArmGoal, the pre-existing activity-driven resume mechanism —
-// see AGENTS.md's "Resume needs zero new machinery" design note), the
+// see server/AGENTS.md's "Goal and turn state" section), the
 // paused/worker_failure presentation resets, and a now-healthy provider
 // lets the goal achieve. It also proves the anti-churn property: with an
 // EMPTY queue, nothing re-arms the goal immediately at park time — runGoal's

@@ -1,6 +1,6 @@
 # Journal Snapshotting — design
 
-**Status:** draft for review (2026-08-27). Author: coordinator, via brainstorm with Andy.
+**Status:** Harness Layer B implemented (2026-08-27); Boxes Layer A remains proposed here.
 **Repos:** harness (`majorcontext/harness`, Layer B) + boxes (`meetneptune/boxes`, Layer A).
 **Extends:** `boxes/docs/design/console-read-path.md` (this is the source-level fix its workstream 1 gestured at, and the seam its workstream 5 mirror plugs into).
 

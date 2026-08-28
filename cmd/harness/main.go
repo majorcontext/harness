@@ -1,7 +1,7 @@
 // Command harness is the CLI for the harness agent engine.
 //
-// Startup speed is a budget (see AGENTS.md): nothing here touches the
-// network, spawns processes, or reads more than flags before first output.
+// Startup speed is a budget (see cmd/harness/AGENTS.md): nothing here touches
+// the network or spawns processes before the selected command needs it.
 // Provider auth is validated on first message send, not at boot. Session
 // persistence is lazy too: the engine creates the session directory and log
 // file on first message append, and the CLI reads the directory only when
@@ -235,7 +235,7 @@ func usage() {
   harness sessions [--json]         list persisted sessions
   harness hub [-addr host:port] [-spawn-command cmd]
                                     serve the local fleet hub UI (see
-                                    AGENTS.md's "Development hub" section)
+                                    tools/AGENTS.md's "Development hub" section)
   harness version                   print version
 
 run flags:
@@ -1622,7 +1622,7 @@ func serveCmd(args []string) error {
 		Plugins: pluginInfoFn(pluginHost),
 		// MonitorPage: every `harness serve` box offers its own same-origin
 		// monitor at GET /monitor — no CORS/-cors-origin dance, no
-		// separately hosted copy required (see AGENTS.md's "Session
+		// separately hosted copy required (see tools/AGENTS.md's "Session
 		// monitor" section). tools/monitor.Page embeds the exact committed
 		// tools/monitor/index.html; the static/file:// hosting path it
 		// documents keeps working unchanged alongside this.
