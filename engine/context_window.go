@@ -9,6 +9,8 @@
 package engine
 
 import (
+	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/majorcontext/harness/message"
@@ -31,7 +33,39 @@ const (
 	// no usable model metadata was found — automatic compaction is disarmed,
 	// identical to today's behavior before this file existed.
 	contextWindowSourceDisabled = "disabled"
+	// contextWindowSourceOptOut: the operator DELIBERATELY disabled
+	// automatic compaction with a negative Config.ContextWindowTokens. It
+	// is told apart from contextWindowSourceDisabled on purpose: "disabled"
+	// can mean the registry did not recognize the model, which
+	// Config.RequireContextWindow turns into a hard refusal, while this is
+	// a stated choice that never refuses. See resolveContextWindow.
+	contextWindowSourceOptOut = "disabled-by-config"
 )
+
+// ErrUnknownContextWindow marks a model ref the context-window registry
+// (package modelmeta) does not recognize, so no context window can be
+// derived for it.
+//
+// It exists because the old answer to that lookup was SILENCE: source
+// "disabled", compaction_armed=false, and a session that ran anyway with
+// no context management at all — until it died with "context exhausted"
+// instead of compacting. An unrecognized model is not a state to degrade
+// into, it is a configuration the operator has to fix, and
+// Config.RequireContextWindow turns it into a loud refusal at the earliest
+// point of use. Errors returned for it wrap this sentinel, and their text
+// always names the offending ref.
+var ErrUnknownContextWindow = errors.New("engine: no context window configured for model")
+
+// unknownContextWindowError builds the operator-facing refusal for ref. The
+// text names the ref, says plainly what is missing, and names both ways out
+// — an explicit window, or turning the requirement off — because an error
+// that only reports a problem makes an operator go read source to act on
+// it.
+func unknownContextWindowError(ref message.ModelRef) error {
+	return fmt.Errorf("%w: unknown model %q: refusing to run without a context window "+
+		"(set context_window_tokens for this model, or context_window_required=false to allow it)",
+		ErrUnknownContextWindow, ref.String())
+}
 
 // minAutoContextWindowTokens is the sanity floor a model-derived context
 // window must clear to arm automatic compaction. A metadata value below
@@ -55,13 +89,33 @@ var modelContextWindowLookup = modelmeta.ContextWindow
 // never the already-resolved value from a previous call); model is the ref
 // to derive from when explicitTokens is 0. Returns the effective window (0
 // when disabled) and which source produced it.
-func resolveContextWindow(explicitTokens int, model message.ModelRef) (tokens int, source string) {
+// A registry MISS is reported through miss (wrapping
+// ErrUnknownContextWindow) INSTEAD of being folded into a silent
+// "disabled" answer. resolveContextWindow does not decide what to do about
+// it: the caller does, from Config.RequireContextWindow, so the definition
+// of a miss lives in exactly one place and the policy lives with the
+// session that has to honor it. miss is nil for every legitimate way to
+// end up without a window — an explicit operator window, an explicit
+// opt-out, no model at all, or a model the registry knows whose window is
+// simply below the auto-arm floor.
+func resolveContextWindow(explicitTokens int, model message.ModelRef) (tokens int, source string, miss error) {
 	if explicitTokens > 0 {
-		return explicitTokens, contextWindowSourceConfig
+		return explicitTokens, contextWindowSourceConfig, nil
+	}
+	if explicitTokens < 0 {
+		// A stated choice, not a gap: the operator asked for no automatic
+		// compaction. Never a miss, whatever the model is.
+		return 0, contextWindowSourceOptOut, nil
+	}
+	if model.IsZero() {
+		// No model to look up. An embedder that has not chosen one yet is
+		// not running anything against it either, so there is nothing to
+		// refuse — the refusal belongs to whatever later names a model.
+		return 0, contextWindowSourceDisabled, nil
 	}
 	got, ok := modelContextWindowLookup(model)
 	if !ok {
-		return 0, contextWindowSourceDisabled
+		return 0, contextWindowSourceDisabled, unknownContextWindowError(model)
 	}
 	if got < minAutoContextWindowTokens {
 		// INFO, not WARN: the table legitimately keeps some genuinely
@@ -72,9 +126,35 @@ func resolveContextWindow(explicitTokens int, model message.ModelRef) (tokens in
 		// starts on or switches to such a model.
 		slog.Info("engine: model-derived context window below auto-compaction floor; compaction disabled",
 			"model", model.String(), "tokens", got, "floor", minAutoContextWindowTokens)
-		return 0, contextWindowSourceDisabled
+		return 0, contextWindowSourceDisabled, nil
 	}
-	return got, contextWindowSourceModelDerived
+	return got, contextWindowSourceModelDerived, nil
+}
+
+// requiredContextWindowErr turns a resolveContextWindow miss into this
+// session's refusal, or into nothing at all.
+//
+// It is the ONE place Config.RequireContextWindow is consulted, so the
+// policy cannot drift between session start, a model switch, and a resume.
+// The ERROR log line fires here rather than at each call site, for the same
+// reason: an operator gets the same message with the same fields however
+// the miss was reached, and gets it even if the caller ignores the returned
+// error entirely. reason names which of those the caller was, mirroring
+// logContextWindowArmed's own reason field.
+//
+// A miss with the requirement OFF is not silent either — it is the state
+// logContextWindowArmed already reports as source=disabled,
+// compaction_armed=false — so nothing is logged here for it.
+func requiredContextWindowErr(cfg Config, ref message.ModelRef, miss error, reason string) error {
+	if miss == nil || !cfg.RequireContextWindow {
+		return nil
+	}
+	slog.Error("engine: refusing to run: model has no known context window",
+		"model", ref.String(),
+		"reason", reason,
+		"error", miss.Error(),
+	)
+	return miss
 }
 
 // logContextWindowArmed emits the one operator-facing INFO line stating

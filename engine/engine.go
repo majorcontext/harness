@@ -785,6 +785,32 @@ type Config struct {
 	// context-compaction.md and, for the derivation itself,
 	// context_window.go's package doc comment.
 	ContextWindowTokens int
+	// RequireContextWindow makes an UNRECOGNIZED model a hard refusal
+	// instead of a silent degradation.
+	//
+	// Without it, a model the context-window registry (package modelmeta)
+	// does not know resolves to source "disabled": the session starts, runs
+	// with NO context management at all, and dies later with "context
+	// exhausted" instead of compacting. That silence is the bug. With it,
+	// the miss is recorded at the earliest point of use — NewSession,
+	// LoadSession, SetModel — logged at ERROR naming the ref, surfaced by
+	// ContextWindowErr/CheckModel so a create or model-set route can refuse
+	// up front, and returned by every Prompt before it touches history or
+	// the provider.
+	//
+	// False — the zero value — keeps the pre-fix behavior, so an embedder
+	// building a bare engine.Config (and every test in this package) is
+	// unaffected. The config/CLI layer supplies the product default of true
+	// (config key `context_window_required`), the same unset-versus-explicit
+	// split PromptRetries uses.
+	//
+	// Only a REGISTRY MISS refuses. An explicit positive
+	// ContextWindowTokens satisfies it for any model (naming the window IS
+	// the missing information), an explicit NEGATIVE one is a deliberate
+	// opt-out, a zero model ref has nothing to look up, and a model the
+	// registry knows whose window is below the auto-arm floor is a known
+	// model, not a gap.
+	RequireContextWindow bool
 	// CompactionThreshold is the fraction of ContextWindowTokens at which
 	// automatic compaction triggers. Zero defaults to 0.8, mirroring
 	// newSession's existing zero-fills-a-default pattern for BashTimeout.
@@ -1237,6 +1263,13 @@ type Session struct {
 	contextWindowExplicit bool
 	contextWindowSource   string
 
+	// contextWindowErr is the refusal a registry MISS produces when
+	// Config.RequireContextWindow is set — see that field's doc comment.
+	// Set by newSession, by LoadSession's post-replay re-derive, and by
+	// SetModel; cleared by a switch back to a model the registry knows.
+	// Every Prompt returns it before appending anything. Guarded by mu.
+	contextWindowErr error
+
 	// toolConcurrency is the resolved (never-zero, never-negative) cap on
 	// how many of one batch's tool calls run at once — see
 	// Config.ToolConcurrency and resolveToolConcurrency (toolexec.go). Set
@@ -1394,7 +1427,9 @@ func newSession(cfg Config) *Session {
 	// comment and resolveContextWindow's precedence.
 	contextWindowExplicit := cfg.ContextWindowTokens > 0
 	var contextWindowSource string
-	cfg.ContextWindowTokens, contextWindowSource = resolveContextWindow(cfg.ContextWindowTokens, cfg.Model)
+	var contextWindowMiss error
+	cfg.ContextWindowTokens, contextWindowSource, contextWindowMiss = resolveContextWindow(cfg.ContextWindowTokens, cfg.Model)
+	contextWindowErr := requiredContextWindowErr(cfg, cfg.Model, contextWindowMiss, "session_start")
 	s := &Session{
 		cfg:                   cfg,
 		model:                 cfg.Model,
@@ -1404,6 +1439,7 @@ func newSession(cfg Config) *Session {
 		promptQueueNextID:     1,
 		contextWindowExplicit: contextWindowExplicit,
 		contextWindowSource:   contextWindowSource,
+		contextWindowErr:      contextWindowErr,
 		toolResultNextID:      1,
 		toolResults:           make(map[string]toolResultMeta),
 		toolConcurrency:       resolveToolConcurrency(cfg.ToolConcurrency),
@@ -1489,7 +1525,13 @@ func (s *Session) SetModel(ref message.ModelRef) {
 	s.model = ref
 	s.persistModel(ref)
 	if !s.contextWindowExplicit {
-		nextTokens, nextSource := resolveContextWindow(0, ref)
+		nextTokens, nextSource, miss := resolveContextWindow(0, ref)
+		// Re-derived, so it REPLACES whatever the previous model left:
+		// switching to a model the registry knows clears an earlier
+		// refusal, and switching away to one it does not arms a new one.
+		// A config-pinned window (the branch this sits in) never depends
+		// on the registry at all, so it can never miss.
+		s.contextWindowErr = requiredContextWindowErr(s.cfg, ref, miss, "model_switch")
 		if nextTokens != s.cfg.ContextWindowTokens || nextSource != s.contextWindowSource {
 			s.cfg.ContextWindowTokens, s.contextWindowSource = nextTokens, nextSource
 			s.compactHysteresis = false
@@ -1507,6 +1549,40 @@ func (s *Session) SetModel(ref message.ModelRef) {
 func (s *Session) ModelSupported(ref message.ModelRef) bool {
 	_, err := s.cfg.Providers.For(ref)
 	return err == nil
+}
+
+// ContextWindowErr reports this session's context-window refusal, or nil.
+// It is non-nil only when Config.RequireContextWindow is set AND the
+// session's current model is one the registry does not recognize — see that
+// field's doc comment.
+//
+// A create route calls it right after NewSession, and a resume route after
+// LoadSession, to refuse up front instead of handing back a session whose
+// every Prompt will fail. Prompt returns the same error, so a caller that
+// does not check still cannot run the model silently.
+func (s *Session) ContextWindowErr() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.contextWindowErr
+}
+
+// CheckModel reports whether this session may switch to ref: nil when it
+// may, a refusal wrapping ErrUnknownContextWindow when ref has no known
+// context window and Config.RequireContextWindow is set.
+//
+// It is ModelSupported's sibling and is called at the same three SetModel
+// routes, for the same reason: validate BEFORE the swap, so a rejected ref
+// never reaches the durable recModel record. A session whose window is
+// config-pinned accepts any ref — an explicit window does not depend on the
+// registry.
+func (s *Session) CheckModel(ref message.ModelRef) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.contextWindowExplicit {
+		return nil
+	}
+	_, _, miss := resolveContextWindow(0, ref)
+	return requiredContextWindowErr(s.cfg, ref, miss, "model_check")
 }
 
 // Model returns the session's current model.
@@ -2236,6 +2312,17 @@ func (s *Session) PromptEngineResume(ctx context.Context, text string) (*message
 // the caller already made. One parameterized entry point for the value
 // means a future third Origin value is handled in exactly one place.
 func (s *Session) PromptWithOrigin(ctx context.Context, text string, origin string) (*message.Message, error) {
+	// Refuse a model with no known context window, before anything else
+	// happens: no history append, no provider call, no instructions read.
+	// Running one anyway is running with NO context management at all,
+	// which ends in "context exhausted" rather than a compaction — see
+	// Config.RequireContextWindow. Same shape as the instructions check
+	// below: a present-but-unusable configuration fails every Prompt
+	// identically, loudly, and without recording a user message.
+	if err := s.ContextWindowErr(); err != nil {
+		s.emitSessionError(err)
+		return nil, err
+	}
 	// Load project instructions once, before mutating history: a
 	// present-but-unusable AGENTS.md fails the prompt without recording a
 	// user message or calling the provider.

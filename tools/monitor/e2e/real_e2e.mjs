@@ -565,7 +565,17 @@ async function main() {
   );
   const pendingIndicatorEl = await waitFor(
     () => doc.querySelector("#transcript .pending-indicator"),
-    { timeoutMs: 3000, label: "the idle-send's own pending indicator appears (its turn is gated, so it cannot have streamed yet)" }
+    // 20000 like every other wait in this file, not a shorter budget of its
+    // own. The gate is what makes the indicator's PRESENCE reliable (see the
+    // comment above); the timeout is only a failure bound, so a short one
+    // adds no strictness — it cannot make this assertion catch anything the
+    // long one misses, because the indicator stays up until this scenario
+    // releases the gate below. What it did add was a false failure: on a
+    // loaded 2-core runner the SSE round trip plus the jsdom re-render can
+    // take longer than 3s, and CI failed here with the turn correctly gated
+    // and the indicator correctly on its way. That is the guessed deadline
+    // AGENTS.md's "no guessed deadlines" rule is about.
+    { timeoutMs: 20000, label: "the idle-send's own pending indicator appears (its turn is gated, so it cannot have streamed yet)" }
   );
   {
     const posVsPending = orderOperatorEl.compareDocumentPosition(pendingIndicatorEl);
