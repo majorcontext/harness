@@ -1356,6 +1356,13 @@ components:
         task_agent_type:
           type: string
           description: Only on `session` records.
+        task_depth:
+          type: integer
+          description: >-
+            Only on `session` records. The child's durable task-tree depth,
+            recorded at spawn time (see Config.TaskDepth). Omitted (0) on a
+            session predating this field — never a real child's true depth,
+            which is always >= 1.
         message_id:
           type: string
           description: Only on `message` records. Identity only — never content.
