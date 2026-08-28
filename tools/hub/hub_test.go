@@ -184,7 +184,7 @@ func TestHandleSpawnStreamsSSEFrames(t *testing.T) {
 // TestHandleSpawnPassesNameAsBoxNameEnv is the HTTP-level half of
 // TestRunSpawnSetsBoxNameEnv (spawn_test.go): POST /spawn's JSON body
 // {"name": "..."} must reach the spawn command's own environment as
-// HARNESS_HUB_BOX_NAME — see AGENTS.md's spawn contract section.
+// HARNESS_HUB_BOX_NAME — see tools/AGENTS.md's "Spawn-command contract".
 func TestHandleSpawnPassesNameAsBoxNameEnv(t *testing.T) {
 	srv := httptest.NewServer(NewHandler(Options{SpawnCommand: `echo "NAME=$HARNESS_HUB_BOX_NAME"`}))
 	defer srv.Close()

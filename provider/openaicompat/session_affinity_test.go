@@ -10,8 +10,8 @@ import (
 
 // TestSessionKeySetsUserField: a non-empty Request.SessionKey sets the
 // top-level "user" field to the same string, for Fireworks-style
-// per-replica prompt-cache affinity through a gateway (see AGENTS.md,
-// "Session affinity" section).
+// per-replica prompt-cache affinity through a gateway (see
+// docs/models-and-providers.md, "Session affinity" section).
 func TestSessionKeySetsUserField(t *testing.T) {
 	req := baseRequest(message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}})
 	req.SessionKey = "sess_abc"

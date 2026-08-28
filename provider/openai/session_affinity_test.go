@@ -10,8 +10,8 @@ import (
 
 // TestSessionKeySetsPromptCacheKey: a non-empty Request.SessionKey sets the
 // Responses API top-level "prompt_cache_key" field to the same string, for
-// per-replica prompt-cache routing affinity (see AGENTS.md, "Session
-// affinity" section). This adapter uses prompt_cache_key, the Responses
+// per-replica prompt-cache routing affinity (see docs/models-and-providers.md,
+// "Session affinity" section). This adapter uses prompt_cache_key, the Responses
 // API's own routing hint — NOT the "user" field the openaicompat adapter
 // uses for a generic chat-completions gateway.
 func TestSessionKeySetsPromptCacheKey(t *testing.T) {

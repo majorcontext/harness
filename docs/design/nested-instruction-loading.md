@@ -4,6 +4,12 @@ Status: the head-plus-outline half is IMPLEMENTED
 (`engine/instructions_outline.go`). The nested attach-on-read half, ported
 from opencode's `resolve()`, is still design only — see "Proposed split".
 
+This repository does not depend on the unimplemented half. Its root
+`AGENTS.md` lists each scoped file and tells an agent to read the matching
+scope before an edit. Each scoped file links back to the root because the
+current loader selects only one closest file. This is an instruction
+convention, not automatic nested attachment.
+
 ## Problem
 
 `engine/instructions.go` injects one project instruction file into the system
@@ -12,10 +18,12 @@ is now loud on both channels: the model reads a marker, the operator reads a
 WARN line. Loud is not enough. The content past the cap is still absent from
 the prompt, and the model must guess that it needs the rest.
 
-Two files make this concrete. The boxes repository has a 408 KiB `AGENTS.md`:
-84% of it never reaches the model. This repository's own `AGENTS.md` is
-180,631 bytes over 2,866 lines with 51 headings: 116 KiB of binding
-specification is dropped from every session today.
+Two files made this concrete. The boxes repository had a 408 KiB
+`AGENTS.md`: 84% of it never reached the model. This repository also had one
+root instruction file above 180 KiB and 2,800 lines. Harness later split that
+file into a concise root index, scoped files, and subject-based documentation.
+The measurements below refer to the former monolithic fixture, not the
+current root file.
 
 ## What the model sees
 
@@ -31,7 +39,7 @@ does not fully contain, each line carrying the heading text, the exact
 `read_file` line range, and a short teaser from the section body:
 
 ```
-Project instructions from AGENTS.md (sections 17-51 are not in this prompt).
+Project instructions from AGENTS.md (later sections are not in this prompt).
 Read a section with the read_file tool before you rely on it:
   read_file(path: /repo/AGENTS.md, offset: <first>, limit: <count>)
 
@@ -96,7 +104,7 @@ invariant the loud-truncation change established holds unchanged.
 
 The outline has its own budget so a pathological file cannot spend the prompt
 on an index: teasers are dropped first, then the list degrades to headings and
-ranges only. Measured on this repository's `AGENTS.md`: 35 outlined sections
+ranges only. Measured on the former monolithic `AGENTS.md`: 35 outlined sections
 cost 5,965 bytes with teasers, 1,424 bytes without. A 408 KiB file with the
 same heading density holds roughly 115 sections, so its outline lands near
 19 KiB with teasers and near 4.7 KiB without — the budget picks the second.
@@ -104,7 +112,7 @@ same heading density holds roughly 115 sections, so its outline lands near
 ## The 408 KiB boxes AGENTS.md, concretely
 
 Eager: the head, the first sections up to the last heading boundary under
-64 KiB. Measured on this repository's file, that boundary is byte 41,648 —
+64 KiB. In the former monolithic fixture, that boundary was byte 41,648 —
 sections 1-16 of 51. Cutting on a heading costs 23 KiB of eager text against
 a raw byte cut, and buys a head that never ends mid-sentence; the sections
 that pay that cost are listed in the outline, so they are reachable, not lost.
@@ -139,10 +147,10 @@ the session, and never written to the session log.
    The test drives the real `read_file` tool with the outline's own ranges and
    compares the returned lines against the file, rather than comparing the
    outline to itself.
-2. **Fenced code blocks.** This repository's `AGENTS.md` holds ```` ```bash ````
-   blocks whose comment lines start with `#`. A naive heading scan reads them
-   as sections and emits ranges that point at shell comments. The scanner
-   tracks fences; a test file with a `#` line inside a fence pins it.
+2. **Fenced code blocks.** A synthetic instruction file puts a shell comment
+   that starts with `#` inside a fenced block. A naive heading scan reads the
+   comment as a section and emits a wrong range. The scanner tracks fences;
+   the synthetic file pins the behavior.
 3. **Head boundary.** The head must end on a heading boundary and must never
    exceed `MaxBytes`. A file whose first heading is past the cap has no
    boundary to cut on and falls back to the marker path.
@@ -185,5 +193,5 @@ example in a four-backtick fence, and a boolean toggle closes the outer fence
 on the inner one, then reads the rest of the document as sections.
 `fenceState` in `engine/instructions_outline.go` carries the open fence's
 character and run length. A review of the implementation raised this shape;
-this repository's own AGENTS.md does not hold such a fence today, so the rule
-is hardening for other projects' files, not a fix for an observed break.
+the original fixture did not hold such a fence, so the rule is hardening for
+other projects' files, not a fix for an observed break.

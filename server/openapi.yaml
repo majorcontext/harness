@@ -2818,7 +2818,7 @@ paths:
       description: >
         Present only when this instance was started with the monitor page
         embedded (cmd/harness's `serve` always does this; see
-        tools/monitor's AGENTS.md section); a box that omits it 404s here
+        docs/development-interfaces.md); a box that omits it 404s here
         exactly as it always has. Serves tools/monitor/index.html verbatim,
         byte for byte — the same static, build-free, credential-free page
         that can also be opened via file:// or hosted separately.

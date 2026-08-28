@@ -1896,8 +1896,8 @@ func TestSpawnBudgetExceeded(t *testing.T) {
 // InputTokens+OutputTokens against SetMaxTreeTokens, while usageByRoot
 // itself already accumulated all four provider.Usage fields — a
 // cache-heavy child (a large prompt resent every turn, reading mostly
-// from cache, the shape AGENTS.md calls out for the openaicompat/
-// Fireworks and anthropic routes) could spend well past the operator's
+// from cache, the shape docs/models-and-providers.md describes for the
+// openaicompat/Fireworks and anthropic routes) could spend well past the operator's
 // real intended ceiling with the gate never noticing, because cache
 // read/write tokens were silently exempt from the very check meant to
 // bound them. Gives a child a small input+output total (20) but a large

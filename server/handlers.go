@@ -602,7 +602,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 // origin-agnostic (it drives arbitrary, operator-added box origins it keeps
 // no state about); the embedded monitor is the opposite — GET /monitor
 // exists specifically so a box can offer a same-origin, zero-CORS way to
-// watch ITSELF (see AGENTS.md's "Session monitor" section), so this CSP
+// watch ITSELF (see docs/development-interfaces.md's "Session monitor"
+// section), so this CSP
 // scopes fetch/EventSource targets to that one origin, blocking it from
 // being used to reach anywhere else even if the served copy were somehow
 // pointed at a different base URL. An operator who genuinely wants
@@ -1690,7 +1691,8 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	// retargeted the session's model even when a DIFFERENT, already-queued
 	// head was what actually got dispatched — contradicting the documented
 	// "a per-request model override is silently dropped when the prompt is
-	// queued" rule (see AGENTS.md's Prompt queue section and
+	// queued" rule (see docs/session-storage-and-queue.md's "Prompt queue"
+	// section and
 	// enqueueOrDispatch's identical rule for the same-session-busy branch).
 	// See TestQueuedArrivalDoesNotRetargetSessionModel.
 	if !body.Model.IsZero() {

@@ -96,9 +96,9 @@ const compactionSummaryIDTag = "cmpsum"
 // the worst case (the summarizer returns empty for that one old-style
 // range) is now bounded to a single extra billed call, not an unbounded
 // loop: SkipReasonSummarizerEmpty latches maybeAutoCompact's hysteresis
-// immediately. This repo is pre-production (see AGENTS.md's "Do not
-// over-engineer a pre-production system"), so no persisted session
-// predates this PR's own compaction feature — there is nothing to migrate.
+// immediately. No persisted session predates this PR's own compaction
+// feature, so there is no old session shape to migrate (see
+// docs/design/context-compaction.md).
 func isCompactionSummaryID(id string) bool {
 	return strings.HasPrefix(id, compactionSummaryIDTag+"_")
 }
@@ -561,10 +561,10 @@ func (s *Session) runCompactionSummary(ctx context.Context, model message.ModelR
 		// EffortUnset here — this only forwards, never overrides. (Issue
 		// #124.)
 		//
-		// Known residual, deliberately not addressed here (see AGENTS.md's
-		// scope-discipline rule): a non-off level lets the anthropic and
-		// openai adapters raise this request's effective output cap above
-		// compactionMaxTokens (anthropic's thinking-budget bump, openai's
+		// Known residual, deliberately not addressed here (see the root
+		// AGENTS.md "Change discipline" section): a non-off level lets the
+		// anthropic and openai adapters raise this request's effective output
+		// cap above compactionMaxTokens (anthropic's thinking-budget bump, openai's
 		// reasoningOutputFloor — up to ~20480 tokens at EffortHigh, versus
 		// the documented 1024 cap), and openaicompat sends reasoning_effort
 		// with no such floor at all, so a reasoning-heavy summary can be

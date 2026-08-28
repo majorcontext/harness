@@ -46,7 +46,7 @@
 - Reason pairing: `reason`/`reasonGen` :529-532, 577-584, 755-756; `goalAdjustedNotice` :1265.
 - Server: `runGoal` error classification server/handlers.go:1426-1458; `turnEndOutcome` server/journal.go:218-228 (add the new outcome alongside `outcomeContextExhausted`); Publish switch :234-258; `publishGoal` :286-362 / `foldGoalRecordLocked` :751-804 (lockstep); `goalTracker` server/server.go:289-308; `goalJSON` server/handlers.go:194-237; openapi Event enum :623-638, GoalSummary :290-368.
 - Tests changing meaning: `TestPursueGoalUnparseableTwice` (engine/goal_test.go:329), `TestPursueGoalUnparseableTwiceClearsGoal` (:361), `TestClearGoalDuringPendingEvaluatorFailureIsCleanStop` (:914 — its doc comment locks in the old asymmetry; rewrite deliberately). `TestPursueGoalUnparseableThenRecovers` (:414) survives but re-check against the stricter re-ask.
-- Doc drift to fix while there: `docs/goal-loop.md:84-92` says evaluator path "unchanged" — stale relative to current code; update alongside AGENTS.md.
+- Doc drift fixed during implementation: the former `docs/goal-loop.md:84-92` said the evaluator path was "unchanged." The superseded text and incident sequence now live in `docs/history/goal-loop-resilience.md`.
 
 ---
 
@@ -66,7 +66,7 @@ Commit: `feat(server): surface goal.eval_failed and the evaluator_exhausted term
 
 ### Task 3: Docs + review + validation
 
-`AGENTS.md` goal-loop section (evaluator resilience paragraph: advisory evaluation, N-boundary horizon, loud terminal); fix `docs/goal-loop.md`'s stale "unchanged" claim; hub check (unknown `goal.eval_failed` event must not break rendering — same three dispatch sites as prior PRs; add `eval_failures` display ONLY if trivially cheap, else skip). Full gates + `node --test tools/hub/*_test.mjs`. Then Opus full-branch review; then live e2e (drive a real serve with an evaluator pointed at a garbage-returning stub via openaicompat to force unparseable output against a REAL working model doing the work — prove the box keeps working through evaluator failure and terminates loudly at the horizon).
+Record the evaluator resilience contract and incident sequence in `docs/history/goal-loop-resilience.md`; hub check (unknown `goal.eval_failed` event must not break rendering — same three dispatch sites as prior PRs; add `eval_failures` display ONLY if trivially cheap, else skip). Full gates + `node --test tools/hub/*_test.mjs`. Then Opus full-branch review; then live e2e (drive a real serve with an evaluator pointed at a garbage-returning stub via openaicompat to force unparseable output against a REAL working model doing the work — prove the box keeps working through evaluator failure and terminates loudly at the horizon).
 
 ---
 

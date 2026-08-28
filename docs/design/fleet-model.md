@@ -14,10 +14,10 @@ identifies a box, what survives its death, what a client can rely on across
 a restart, and the one environment-variable contract a hub and a box's
 deployment tooling share. It is a build spec in the same register as
 `docs/design/context-compaction.md` — states, wire fields, invariants, a
-test list — except most of what it specifies is **already implemented**
-(session lineage and goal pausing shipped alongside this document); only
-§8's hub-side half is deliberately deferred. `docs/design/managed-
-processes.md` is a later doc in the same register: dev/support processes
+test list — except most of what it specifies is **already implemented**.
+Session lineage, goal pausing, and the §8 hub-side contract have shipped.
+`docs/design/managed-processes.md` is a later doc in the same register:
+dev/support processes
 (`pnpm dev` and the like) are explicitly box-scoped state, exactly like
 everything else this document describes — a managed process does not
 survive its box's death, and nothing in that design tries to make it.
@@ -231,10 +231,9 @@ retryable && waiting) — see §9 and `server/openapi.yaml`.
 
 ## 8. The hub spawn contract: `HARNESS_HUB_BOX_NAME`
 
-This section documents a contract; **it is not implemented in this repo**
-(the hub itself is out of scope here and lands on another branch). It is
-recorded now so the deployment side of the model in §1–§2 has one concrete
-handle to build against.
+`tools/hub` implements this contract. Deployment-specific provisioning stays
+outside Harness: the operator supplies the spawn command, and Harness passes
+the selected box name through the environment described below.
 
 When a hub spawns a box, it generates or selects the box's NAME (§1) and
 passes it to the spawn command's environment as `HARNESS_HUB_BOX_NAME`.
@@ -250,8 +249,8 @@ the latter (see `cmd/harness/main.go`'s `sessionDir`) and has no notion of
 run unmodified whether it was spawned by a hub, a human running a script by
 hand (who sets `HARNESS_SESSION_DIR` directly), or a test harness.
 
-See `AGENTS.md`'s "Fleet model (the deploy story)" section for the
-short-form cross-reference back to this document.
+Scoped implementation rules live in `engine/AGENTS.md`, `server/AGENTS.md`,
+and `tools/AGENTS.md`.
 
 ## 9. Wire fields (summary)
 

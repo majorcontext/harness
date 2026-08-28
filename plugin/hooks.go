@@ -33,9 +33,9 @@ const (
 func (h Hook) method() string { return hookMethodPrefix + string(h) }
 
 // Manifest describes a plugin: what it's called, which hooks it subscribes
-// to, and which tools it provides. The harness caches manifests at install
-// time (keyed by binary hash) so that routing is known at startup without
-// spawning anything.
+// to, and which tools it provides. The harness caches probed manifests with
+// executable and plugin-spec identity so routing is known before the
+// long-lived plugin process starts.
 type Manifest struct {
 	Name            string    `json:"name"`
 	Version         string    `json:"version,omitempty"`

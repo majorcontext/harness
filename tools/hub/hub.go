@@ -20,7 +20,7 @@ import (
 var indexHTML []byte
 
 // defaultAddr is deliberately loopback-only: the hub is a local, single-
-// operator dev tool (see AGENTS.md, "Development hub") and never listens on
+// operator dev tool (see tools/AGENTS.md, "Development hub") and never listens on
 // every interface by default.
 const defaultAddr = "localhost:7777"
 
@@ -54,7 +54,7 @@ type Options struct {
 }
 
 // NewHandler builds the hub's HTTP handler: the embedded page at "/" and
-// the single POST /spawn API described in AGENTS.md. Everything else the
+// the single POST /spawn API described in tools/AGENTS.md. Everything else the
 // page needs (session state, box CRUD) is client-side — see index.html.
 func NewHandler(opts Options) http.Handler {
 	mux := http.NewServeMux()
@@ -83,7 +83,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 
 // spawnRequest is POST /spawn's optional JSON body: {"name": "..."} passes
 // the box name the page generated (or is re-using for a Respawn/ADOPT) —
-// see AGENTS.md's spawn contract section and runSpawn's `name` parameter.
+// see tools/AGENTS.md's "Spawn-command contract" and runSpawn's `name` parameter.
 // A missing or empty body is fine (no name passthrough), matching every
 // spawn command that predates this field.
 type spawnRequest struct {
@@ -191,7 +191,7 @@ func Run(args []string) error {
 	var addr string
 	fs.StringVar(&addr, "addr", defaultAddr, "listen address (loopback by default — this is a local, single-operator tool)")
 	var spawnCommand string
-	fs.StringVar(&spawnCommand, "spawn-command", "", "shell command (run via `sh -c`) that POST /spawn execs to bring up a new box; falls back to $"+spawnCommandEnv+"; see AGENTS.md's spawn-command contract")
+	fs.StringVar(&spawnCommand, "spawn-command", "", "shell command (run via `sh -c`) that POST /spawn execs to bring up a new box; falls back to $"+spawnCommandEnv+"; see docs/design/fleet-model.md for the spawn contract")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

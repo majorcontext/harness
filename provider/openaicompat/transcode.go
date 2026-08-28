@@ -47,7 +47,8 @@ type apiRequest struct {
 	// gateway (Bifrost) maps it to the upstream provider's own thinking knob.
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	// User is the OpenAI-compatible top-level routing/cache-affinity hint,
-	// set from Request.SessionKey (see AGENTS.md, "Session affinity"
+	// set from Request.SessionKey (see docs/models-and-providers.md,
+	// "Session affinity"
 	// section, for the Fireworks per-replica prompt-cache evidence). Empty
 	// sends no field.
 	User string `json:"user,omitempty"`

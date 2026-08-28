@@ -36,8 +36,8 @@ var ErrGenerateNotImplemented = errors.New("plugin: generate not implemented yet
 
 // Spec configures one plugin for a Host.
 //
-// Manifest comes from the install-time cache (see Probe), which is what lets
-// the Host route hooks and advertise tools without spawning anything: a
+// Manifest comes from the probe cache (see ProbeSpec), which lets the Host
+// route hooks and advertise tools without starting the long-lived process. A
 // plugin process starts on its first hook dispatch or tool call, then stays
 // warm.
 type Spec struct {
@@ -783,9 +783,9 @@ func NewTestSpec(name string, hooks *Hooks) Spec {
 
 // ProbeSpec spawns a plugin binary using the full spec — command, Env, Dir,
 // and Config — performs the initialize handshake, and returns its manifest.
-// This is the install-time step ("harness plugin install") that populates
-// the manifest cache; the cache should be keyed by binary hash so a changed
-// binary is re-probed.
+// This is the bounded probe used by `harness plugin probe` and by a run/serve
+// cache miss. The command layer records executable identity and plugin-spec
+// identity so a changed binary or spec is re-probed.
 //
 // Probing with the full spec (rather than the bare command — see Probe)
 // matters: a plugin can behave differently (even report a different

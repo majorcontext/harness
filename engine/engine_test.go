@@ -282,10 +282,11 @@ func TestHooksIntegration(t *testing.T) {
 		afterSuffix: "[annotated]",
 	}
 	s := NewSession(Config{
-		Providers: provider.Registry{"test": prov},
-		Model:     message.ModelRef{Provider: "test", Model: "m1"},
-		System:    []string{"base"},
-		Hooks:     hooks,
+		Providers:    provider.Registry{"test": prov},
+		Model:        message.ModelRef{Provider: "test", Model: "m1"},
+		System:       []string{"base"},
+		Hooks:        hooks,
+		Instructions: &InstructionsConfig{Disabled: true},
 	})
 
 	if _, err := s.Prompt(context.Background(), "go"); err != nil {

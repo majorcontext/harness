@@ -39,16 +39,18 @@ jobs:
             Use the /code-review skill to review this pull request.
 
             This is a Go agent harness (engine, provider transcoders, plugin
-            protocol). Read AGENTS.md first and review with these priorities:
+            protocol). Read the root AGENTS.md first. Then read every scoped
+            AGENTS.md that governs a changed path. Review with these priorities:
             - Race conditions, deadlocks, missing synchronization — the engine,
               plugin host, and streams are heavily concurrent
             - Protocol correctness (plugin JSON-RPC framing, hook chaining
               semantics, manifest/lazy-spawn invariants)
             - Transcoding correctness (canonical <-> provider wire formats,
               ProviderData replay/drop rules, tool-call ID stability)
-            - Startup-speed regressions: any init-time network, disk, or
-              subprocess work is a bug per AGENTS.md
-            - Testing rules from AGENTS.md: TDD, no raw sleeps, synctest for
+            - Startup-speed regressions: init-time network or subprocess work,
+              and disk reads beyond the permitted user/project config path,
+              are bugs per the root and cmd/harness scoped AGENTS.md files
+            - Testing rules from the root AGENTS.md: TDD, no raw sleeps, synctest for
               timer logic
             - Bugs, logic errors, nil/zero-value pitfalls, unchecked errors
 

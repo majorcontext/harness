@@ -300,7 +300,7 @@ func filePathKey(s *Session, args json.RawMessage) string {
 // s.resolvePath output — every caller in this file passes one, so the map
 // never keys on a raw, unresolved tool argument. See the readHashes field
 // doc comment (engine.go) and the "write_file read-before-overwrite guard"
-// section of AGENTS.md for the full design.
+// section of docs/engine-request-cycle.md for the full design.
 func (s *Session) recordRead(resolvedPath string, hash [sha256.Size]byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -477,7 +477,7 @@ func writeFileTool() Tool {
 			// gated — creation is write_file's main job, so a path that
 			// does not exist falls straight through unguarded. Any OTHER
 			// stat failure refuses the write: it cannot prove no protected
-			// file exists there. See AGENTS.md's "write_file
+			// file exists there. See docs/engine-request-cycle.md's "write_file
 			// read-before-overwrite guard" section for the full design.
 			info, statErr := os.Stat(path)
 			if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {

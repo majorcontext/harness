@@ -14,8 +14,9 @@ turn, before the model has read one word of the user's request.
 The cost is structural, not incidental:
 
 - Tool schemas sit at the FRONT of the cached prefix on every provider
-  (Anthropic caches tools, then system, then messages — see AGENTS.md,
-  "The tool array is byte-stable across requests"). A large catalog
+  (Anthropic caches tools, then system, then messages — see
+  `docs/mcp-tool-loading.md`, "The tool array is byte-stable across requests").
+  A large catalog
   inflates every cache write and every cache read for the life of the
   session.
 - A catalog the model never uses still competes for attention with the
@@ -312,8 +313,9 @@ plan to after it, so two things change for that hook:
   `system.transform` is handed the session id and the model, never the
   tools array or the system slice.
 
-Both are behaviour changes outside the opt-in path, so they land documented
-in AGENTS.md and pinned by a test, not silently.
+Both are behavior changes outside the opt-in path. Record them in
+`docs/mcp-tool-loading.md` and `docs/engine-request-cycle.md`, and pin them
+with regression tests.
 
 Shape:
 
@@ -812,10 +814,10 @@ The action gate, in both directions: a global-`eager` session
 
 ## 10. Non-goals
 
-- **No provider-side tool search.** Anthropic's server-side tool-search
-  beta solves this inside one vendor's API. Harness is provider-agnostic,
-  and a per-provider mechanism would not serve the openai, openaicompat,
-  or gemini routes.
+- **Do not make provider-side tool search the portable contract.** The
+  Anthropic adapter delegates deferred schemas to supported first-party
+  models through server-side tool search. Other provider routes still use
+  Harness's `mcp` catalog, `search`, and `select` flow.
 - **No deselect, no eviction, no TTL** on a selected tool (§4).
 - **No cached catalog for an unconnected server.** `search` ranks over
   live tools only (§4).

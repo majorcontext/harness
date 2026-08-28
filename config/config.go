@@ -901,7 +901,7 @@ func LoadProject(dir string) (*Config, error) {
 // LoadInfo describes which config file LoadProjectWithInfo actually found
 // (if any) and summarizes the resulting merged config, for the one boot-
 // time observability log line `harness serve`/`harness run` emit (see
-// AGENTS.md's startup-config-observability rule). It carries no
+// config/AGENTS.md's "Layering and merge" section). It carries no
 // behavior — Path is purely which file to report to an operator, never
 // re-parsed or re-read.
 type LoadInfo struct {

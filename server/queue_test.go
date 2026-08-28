@@ -1209,8 +1209,8 @@ func TestIdlePromptWithQueueDispatchDoesNotRaceQueuedCountInResponse(t *testing.
 // even though a DIFFERENT, already-queued head is what actually gets
 // dispatched into the run slot -- contradicting the documented "a per-request
 // model override is silently dropped when the prompt is queued" rule (see
-// AGENTS.md's Prompt queue section and enqueueOrDispatch's identical rule for
-// the same-session-busy branch).
+// docs/session-storage-and-queue.md's "Prompt queue" section and
+// enqueueOrDispatch's identical rule for the same-session-busy branch).
 //
 // The override here names a provider that is NOT registered
 // ("bogus/doesnotexist"): if the leak were still present, the dispatched

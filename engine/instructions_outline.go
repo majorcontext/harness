@@ -69,9 +69,9 @@ type section struct {
 // line and byte accounting stays complete.
 //
 // The scan tracks fenced code blocks: a "# ..." line inside a ``` fence is
-// body text, never a heading. This repository's own AGENTS.md holds bash
-// blocks whose comments start with '#', and reading one as a section would
-// advertise a range that points at a shell comment.
+// body text, never a heading. The regression fixture puts a shell comment in
+// such a block; reading it as a section would advertise a range that points at
+// the comment.
 func scanSections(data []byte) []section {
 	lines := strings.Split(string(data), "\n")
 	// A trailing newline produces one empty final element; it is not a line.
@@ -113,10 +113,9 @@ func scanSections(data []byte) []section {
 // Both rules are load-bearing for an instruction file that documents
 // Markdown: such a file wraps a three-backtick example in a four-backtick
 // fence, and a naive toggle closes the OUTER fence on the inner one, then
-// reads the rest of the document as headings. This repository's own AGENTS.md
-// does not currently hold such a fence — it holds bash blocks, which the
-// simpler rule already handles — so this is hardening against a shape any
-// documentation-heavy project produces, not a fix for an observed break.
+// reads the rest of the document as headings. This is hardening against a
+// shape any documentation-heavy project can produce, not a fix for an
+// observed repository break.
 type fenceState struct {
 	open  bool
 	char  byte

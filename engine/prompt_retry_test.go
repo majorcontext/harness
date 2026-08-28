@@ -514,9 +514,8 @@ func emptyMaxTokensTurnUsage(usage provider.Usage) []provider.Event {
 // not a provider failure — the call ran to completion and billed real
 // tokens (a full input prefill plus the max_tokens output ceiling) — so
 // those tokens must still land in cumulative Session.Usage(), exactly like
-// the #136 empty-compaction-summary precedent AGENTS.md documents ("the
-// call's real usage is still accumulated into cumulative Usage() ... it was
-// a billed call even though it produced nothing"). Dropping it silently
+// the discarded-empty-attempt contract in docs/engine-request-cycle.md (the
+// call's real usage still accumulates because it was billed). Dropping it silently
 // would undercount GET /session by the full cost of every discarded
 // attempt.
 //

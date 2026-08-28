@@ -11,9 +11,9 @@ own requests independently.
 
 ## Lifecycle
 
-1. Harness spawns the plugin process (lazily, on first hook dispatch or tool
-   call — never at startup; manifests are cached at install time, keyed by
-   binary hash).
+1. Harness spawns the long-lived plugin process lazily on the first hook
+   dispatch or tool call. Before host construction, a matching cached manifest
+   is reused; a missing or stale entry gets one bounded probe.
 2. Harness → `initialize` (request) with `InitializeParams`. Plugin responds
    with its `Manifest`. A protocol-version mismatch is an initialize error.
    The harness verifies the live manifest matches the cached one.
@@ -30,15 +30,15 @@ API to reach. See "Trust model" below.
 ### Trust model
 
 Plugins are **trusted local processes**, not third parties: the harness
-spawns them itself, over stdio, from a manifest cached at install time
-(binary-hash keyed). `run_token` is therefore the exact same bearer token
+spawns them itself over stdio from a probed and validated manifest.
+`run_token` is therefore the exact same bearer token
 the orchestrator holds for this run — not a separate, narrower-scoped
 credential minted per plugin. A plugin that can reach `serve_url` can do
 anything the orchestrator can do over the HTTP API for this process (create
 sessions, prompt, abort, read any session it owns). This mirrors the
 `shell.env` hook, which already hands plugins a seat at env-var injection
-for tool commands, and the "no auth hooks" decision in AGENTS.md (credential
-scoping happens at the network layer, not inside the harness). A plugin
+for tool commands. Credential scoping happens at the network layer, not inside
+the harness. A plugin
 that should not have this reach simply should not be installed.
 
 A plugin that fails to start or errors on a dispatch is skipped — **hook
@@ -90,10 +90,10 @@ dispatch path and type-checks end to end, but is not implemented yet:
 provider-layer routing for plugin-initiated LLM calls is a separate PR, and
 it returns a clear RPC error until then.
 
-Any language implementing this protocol (the Go SDK in this package, a
-future TypeScript SDK, etc.) gets `serve_url`/`run_token` for free once it
-decodes `InitializeParams` — no protocol-version bump was needed since they
-are additive, optional fields (see Versioning below).
+Any language implementing this protocol (the Go helpers in this package, the
+TypeScript SDK under `sdk/typescript`, etc.) gets `serve_url`/`run_token` for
+free once it decodes `InitializeParams` — no protocol-version bump was needed
+since they are additive, optional fields (see Versioning below).
 
 ## Chaining semantics
 
@@ -179,12 +179,10 @@ The rules, for a plugin in any language:
 Concurrency is not new to this version. `plugin.Host` is a box-scoped
 singleton shared by every session, so two sessions have always been able to
 dispatch a hook to one plugin at the same time. Parallel tool execution in
-the engine will add the same concurrency WITHIN one session: the tool calls
-of one assistant message will run as a batch, so their
-`tool.execute.before` and `tool.execute.after` dispatches will overlap.
-Today the engine still runs those calls one at a time
-(`Session.runToolCalls`), so a plugin sees within-session overlap only
-after that change lands.
+the engine also creates concurrency WITHIN one session: the tool calls of one
+assistant message run as a bounded batch, so their `tool.execute.before` and
+`tool.execute.after` dispatches can overlap. A plugin must therefore tolerate
+overlap both across sessions and across independent calls in one session.
 
 This section documents an existing wire property. It changes no payload
 shape, so `ProtocolVersion` stays 1.
@@ -204,5 +202,5 @@ new optional fields) bump the minor behavior but not the version — unknown
 hooks are simply never subscribed, and unknown fields are ignored. Breaking
 changes to existing payload shapes bump the version.
 
-Deliberately absent from this protocol, by design (see AGENTS.md): permission
-hooks, plan mode, and auth hooks.
+Deliberately absent from this protocol by design: permission hooks, plan mode,
+and auth hooks.

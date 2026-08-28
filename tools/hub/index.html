@@ -316,7 +316,7 @@
   .overflow-menu button { border: none; border-bottom: 1px solid var(--border); text-align: left; width: 100%; }
   .overflow-menu button:last-child { border-bottom: none; }
   button.respawn { border-color: var(--warn); color: var(--warn); }
-  /* PROCESS STRIP: a compact row per managed process (see AGENTS.md/this
+  /* PROCESS STRIP: a compact row per managed process (see tools/AGENTS.md and this
      page's header comment). Hidden entirely (display:none, set in JS) when
      a box reports no processes or doesn't serve GET /process at all.
      Green stays reserved for goal execution: a ready process is lit
@@ -711,7 +711,7 @@ function usageSummary(usage) {
 // §7: goal.paused — boot-time, always "restart"; goal.stalled while
 // goal_retryable && goal_waiting — "provider-backoff"; goal.parked — always
 // "worker_failure" (a worker turn exit-parked the goal instead of
-// clearing it, see AGENTS.md's Goal loop section) — all three carry
+// clearing it, see docs/goal-loop.md) — all three carry
 // goal_paused/goal_pause_reason). Non-goal events return prev unchanged
 // (same reference); goal events return a fresh object so the input is
 // never mutated. An unrecognized future goal.* event type falls through
@@ -1112,7 +1112,7 @@ function sessionRowSignature(session, selected) {
 }
 
 // canRedispatch reports whether a session is a candidate for the
-// Re-dispatch action (distinct from in-place Re-arm, see AGENTS.md/this
+// Re-dispatch action (distinct from in-place Re-arm, see tools/AGENTS.md and this
 // page's header comment): it must be idle in the composite sense — not
 // currently busy or driving a goal — which covers both a plainly-ended
 // session and one whose last turn errored out.
@@ -1251,7 +1251,7 @@ function rearmNeeded(active, condition, paused, pauseReason) {
 }
 
 // normalizePorts tolerates every shape a managed process's not-yet-final
-// "ports" field (arriving on a parallel branch — see AGENTS.md/this page's
+// "ports" field (arriving on a parallel branch — see tools/AGENTS.md and this page's
 // header comment) might take: absent entirely, an array of port numbers or
 // numeric strings, or an object keyed by port. Always returns an array of
 // port strings; never throws.
@@ -1761,7 +1761,7 @@ function createBoxCardEntry(boxId) {
   const busyChip = el("span", { class: "count-chip busy" });
   const goalChip = el("span", { class: "count-chip goal-running" });
   const counts = el("div", { class: "box-counts" }, idleChip, busyChip, goalChip);
-  // procStrip: the PROCESS STRIP (see AGENTS.md/this page's header comment)
+  // procStrip: the PROCESS STRIP (see tools/AGENTS.md and this page's header comment)
   // — one compact row per managed process this box reports via GET
   // /process. Absent/removed entirely for a box that doesn't serve that
   // endpoint at all (older boxes) — see updateProcessStrip.
@@ -1957,7 +1957,7 @@ function toggleExpanded(id) {
 const expandedLineages = new Set();
 
 // updateSessList reconciles the session rows under one (expanded) box card.
-// LINEAGE GROUPING (see AGENTS.md/this page's header comment,
+// LINEAGE GROUPING (see tools/AGENTS.md and this page's header comment,
 // docs/design/fleet-model.md §6): sessions sharing a parent_session chain
 // collapse into one "task" row keyed by the lineage's TIP (most recent)
 // session — buildLineages does the pure grouping; a lone session (no
@@ -2207,7 +2207,7 @@ function updateSessionRowEl(node, boxId, s, selected, earlier) {
    `/event?from=0&session=<id>` — distinct from the box-wide stream used for
    fleet cards above. That replays the session's ENTIRE durable history
    (every message + every goal.* record, in order) before continuing live,
-   which is exactly the narrative the goal workflow wants (see AGENTS.md's
+   which is exactly the narrative the goal workflow wants (see tools/AGENTS.md's
    "Development hub" section) and lets the drill-down bootstrap itself from
    one stream instead of juggling a separate REST fetch plus a filtered
    live tail. */
@@ -2501,7 +2501,7 @@ function renderGoalNarrativeItem(ev) {
     case "goal.parked": {
       // Round 7, live event: a worker turn exhausted either exhaustion
       // tier and PursueGoal exit-parked instead of clearing (see
-      // AGENTS.md's Goal loop section) — always pause_reason
+      // docs/goal-loop.md) — always pause_reason
       // "worker_failure", never calm (unlike provider-backoff, this loop
       // has genuinely exited; it resumes on the next ordinary activity,
       // not on its own next retry).

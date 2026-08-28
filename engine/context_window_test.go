@@ -294,8 +294,8 @@ func TestSetModelClearsStaleHysteresisOnWindowChange(t *testing.T) {
 }
 
 // TestSetModelSameWindowDoesNotLog is the red-first regression test for
-// Finding 5: context_window.go's logContextWindowArmed doc comment (and the
-// AGENTS.md addendum) promise the "model_switch" INFO line fires only when
+// Finding 5: context_window.go's logContextWindowArmed doc comment and
+// docs/models-and-providers.md promise the "model_switch" INFO line fires only when
 // the effective window actually changes, but SetModel logged on every
 // non-no-op model change regardless — two models that happen to share the
 // same modelmeta-derived window still produce a spurious "model_switch"

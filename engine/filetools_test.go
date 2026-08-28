@@ -223,8 +223,7 @@ func runToolParts(t *testing.T, tool Tool, workDir, args string) (message.Parts,
 }
 
 // tinyPNG builds a real, compliant, tiny PNG — a 2x2 solid image — so image
-// tests exercise genuine image bytes without a committed binary fixture
-// (AGENTS.md's fixture-size lesson from #101: keep test images tiny).
+// tests exercise genuine image bytes without a committed binary fixture.
 func tinyPNG(t *testing.T) []byte {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
@@ -318,7 +317,8 @@ func TestReadFileImageExtensionLieTextNamedPNGStaysText(t *testing.T) {
 // TestReadFileImageExtensionLiePNGNamedTxtIsSniffedAsImage is the missing-
 // direction half: a file named .txt that actually holds PNG magic bytes must
 // still be recognized as an image. Extension is a hint only; magic bytes are
-// authoritative (AGENTS.md: read_file classifies "never by its extension").
+// authoritative (see docs/engine-request-cycle.md's "read_file image
+// support" section).
 func TestReadFileImageExtensionLiePNGNamedTxtIsSniffedAsImage(t *testing.T) {
 	dir := t.TempDir()
 	data := tinyPNG(t)
@@ -398,8 +398,8 @@ func TestReadFileImageTruncatedPNGFallsBackToText(t *testing.T) {
 // closing the gap between the engine-level Tool.Run tests above and the
 // transcode-level golden test in provider/anthropic/transcode_test.go,
 // which hand-builds a ToolResult shaped like read_file's output rather than
-// obtaining one from read_file itself (AGENTS.md's "verification drives
-// the production entry point" rule).
+// obtaining one from read_file itself (see the root AGENTS.md testing rule
+// to drive the production entry point).
 func TestReadFileImageToolCallProducesBlobToolResult(t *testing.T) {
 	dir := t.TempDir()
 	data := tinyPNG(t)

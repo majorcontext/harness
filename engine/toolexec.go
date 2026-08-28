@@ -219,8 +219,9 @@
 //
 // ctx cancellation (an aborted turn) cancels every in-flight call's own
 // context, but every call still yields exactly one ToolResult — the
-// NEP-5272 invariant (AGENTS.md's "empty tool result" rule, and the
-// orphan tool_use rule generally) holds regardless of how the batch ends.
+// NEP-5272 invariant (docs/engine-request-cycle.md's empty-tool-result rule,
+// and the orphan tool_use rule generally) holds regardless of how the batch
+// ends.
 // A call whose ctx is already cancelled before it starts still runs
 // (executeTool/runToolCall are unchanged; a cancelled context is not a
 // license to skip a call, only a signal the call's own logic may check —
@@ -358,8 +359,8 @@ func (s *Session) runToolBatch(ctx context.Context, asst *message.Message) messa
 // tool did not return a normal result: the call was refused after the
 // turn was canceled, no execution path filled its slot, or the tool
 // panicked. All three exist to hold the pairing invariant: a tool_use
-// block with no tool_result wedges a session permanently (AGENTS.md,
-// NEP-5272).
+// block with no tool_result wedges a session permanently (see
+// docs/engine-request-cycle.md, NEP-5272).
 const (
 	toolCallCanceledText = "tool call not started: the turn was canceled"
 	toolCallNoResultText = "tool call produced no result"
