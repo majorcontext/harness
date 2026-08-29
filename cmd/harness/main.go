@@ -937,8 +937,9 @@ func registry(cfg *config.Config) provider.Registry {
 		anthropic.Family: &anthropic.Client{APIKey: akey, BaseURL: abase, CacheTTL: anthropicCacheTTL(cfg)},
 		// The built-in openai entry deliberately leaves Family empty: it IS
 		// the package default, and naming it here would only invite the two
-		// to drift. Its ResponsesPath comes from the native entry, if any.
-		openai.Family: &openai.Client{APIKey: okey, BaseURL: obase, ResponsesPath: nativeResponsesPath(cfg)},
+		// to drift. Its ResponsesPath/OmitResponseParams come from the
+		// native entry, if any.
+		openai.Family: &openai.Client{APIKey: okey, BaseURL: obase, ResponsesPath: nativeResponsesPath(cfg), OmitResponseParams: nativeOmitResponseParams(cfg)},
 	}
 	registerOpenAICompatProviders(reg, cfg)
 	registerOpenAIProviders(reg, cfg)
@@ -993,10 +994,11 @@ func registerOpenAIProviders(reg provider.Registry, cfg *config.Config) {
 		}
 		apiKey := os.Getenv(keyEnv)
 		reg[name] = &openai.Client{
-			Family:        name,
-			APIKey:        apiKey,
-			BaseURL:       p.BaseURL,
-			ResponsesPath: p.ResponsesPath,
+			Family:             name,
+			APIKey:             apiKey,
+			BaseURL:            p.BaseURL,
+			ResponsesPath:      p.ResponsesPath,
+			OmitResponseParams: p.OmitResponseParams,
 		}
 	}
 }
@@ -1015,6 +1017,23 @@ func nativeResponsesPath(cfg *config.Config) string {
 		return ""
 	}
 	return p.ResponsesPath
+}
+
+// nativeOmitResponseParams reads omit_response_params configured on the
+// NATIVE "openai" entry (map key "openai", no type — the same shape
+// config.validateProviders permits omit_response_params on). Empty leaves
+// the adapter sending every param it always has. A keyed type:"openai"
+// entry carries its own list and is wired by registerOpenAIProviders
+// instead. Mirrors nativeResponsesPath exactly.
+func nativeOmitResponseParams(cfg *config.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	p := cfg.Providers[openai.Family]
+	if p.Type != "" {
+		return nil
+	}
+	return p.OmitResponseParams
 }
 
 // registerOpenAICompatProviders builds a provider/openaicompat client for

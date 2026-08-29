@@ -154,7 +154,7 @@ func wireCallID(id string) string {
 // under the package Family constant — the default for a client that
 // configures no family of its own.
 func transcodeRequest(req *provider.Request) (*apiRequest, error) {
-	return transcodeRequestFamily(req, Family)
+	return transcodeRequestFamily(req, Family, nil)
 }
 
 // transcodeRequestFamily is transcodeRequest with the ProviderData tag made
@@ -163,8 +163,12 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 // endpoint configured under its own providers-map key reads back only the
 // items it produced itself, and drops the other endpoint's (the canonical
 // cross-family rule — those items are opaque, usually encrypted, and
-// endpoint-scoped).
-func transcodeRequestFamily(req *provider.Request, family string) (*apiRequest, error) {
+// endpoint-scoped). omitParams names optional request params to leave off
+// the wire entirely (Client.OmitResponseParams / config.Provider's field of
+// the same name) — applied last, after every other field of out is
+// computed, so it always wins over the reasoning-floor bump and every other
+// adjustment above.
+func transcodeRequestFamily(req *provider.Request, family string, omitParams []string) (*apiRequest, error) {
 	out := &apiRequest{
 		Model:           req.Model.Model,
 		Instructions:    strings.Join(req.System, "\n\n"),
@@ -250,7 +254,39 @@ func transcodeRequestFamily(req *provider.Request, family string) (*apiRequest, 
 	if len(out.Input) == 0 {
 		return nil, fmt.Errorf("openai: request has no transcodable messages")
 	}
+	applyOmitResponseParams(out, omitParams)
 	return out, nil
+}
+
+// applyOmitResponseParams clears each field named in omitParams so its
+// omitempty tag drops it from the marshaled request — the same allowlist
+// config.OmitResponseParamValues validates. Applied last, it always wins
+// over every earlier adjustment (e.g. the reasoning-floor bump raising
+// MaxOutputTokens): an entry that lists max_output_tokens sends none, even
+// for a reasoning turn that would otherwise raise it.
+//
+// harness's own accounting is untouched — this only ever mutates the wire
+// copy (out), never req or the engine's internal MaxTokens/Temperature/TopP
+// bookkeeping, and the fields it can clear are all optional on the
+// Responses API; nothing here can drop a required field like model or
+// input.
+//
+// "metadata" is accepted by config validation (it is a known-bad param on
+// at least one real upstream) but apiRequest has no Metadata field yet —
+// harness never emits it regardless of this list, so there is nothing to
+// clear for it here. Listing it is still valid and cheap future-proofing;
+// add a case here if a Metadata field is ever added.
+func applyOmitResponseParams(out *apiRequest, omitParams []string) {
+	for _, p := range omitParams {
+		switch p {
+		case "max_output_tokens":
+			out.MaxOutputTokens = 0
+		case "temperature":
+			out.Temperature = nil
+		case "top_p":
+			out.TopP = nil
+		}
+	}
 }
 
 // transcodeMessage expands one canonical message into a sequence of Responses
