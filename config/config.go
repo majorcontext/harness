@@ -565,6 +565,32 @@ type Provider struct {
 	// CacheTTL follow. Merge semantics are additive like every other
 	// Provider field (see NoPromptCacheKey's doc comment).
 	ResponsesPath string `json:"responses_path,omitempty"`
+	// OmitResponseParams names optional Responses request params the native
+	// openai adapter must NOT send on the wire for this provider. Each entry
+	// must be one of OmitResponseParamValues (max_output_tokens, temperature,
+	// top_p, metadata) — an unknown name fails validation loudly rather than
+	// silently doing nothing, the same "typo must not vanish" rule every
+	// other allowlisted field in this struct follows.
+	//
+	// It exists because some Responses-API-compatible endpoints reject
+	// params the OpenAI API itself accepts: the ChatGPT Codex backend
+	// 400s on all four (verified against a live probe), and this adapter
+	// always sent max_output_tokens (engine defaults MaxTokens=8192), so a
+	// provider routed there 400s on every turn with no way to stop it.
+	// Omitting a param here is wire-only — harness keeps its internal
+	// MaxTokens/Temperature/TopP for accounting and continuation logic
+	// regardless of what an entry omits (see provider/openai/transcode.go).
+	//
+	// Valid ONLY on an entry that builds the Responses adapter, exactly
+	// like ResponsesPath — the same buildsResponsesAdapter identity check
+	// gates both fields, and validateOmitResponseParams follows
+	// validateResponsesPath's shape. Merge semantics are additive like
+	// every other Provider field (see NoPromptCacheKey's doc comment): a
+	// non-empty project-layer list replaces the user-layer list wholesale,
+	// the same rule SkillsDirs and Plugins follow, rather than merging
+	// entry by entry (a project layer un-listing a param the user layer
+	// added would otherwise be unrepresentable).
+	OmitResponseParams []string `json:"omit_response_params,omitempty"`
 	// CacheTTL selects the Anthropic prompt-cache breakpoint lifetime:
 	// "5m" (the Anthropic API default) or "1h" (the extended TTL, beta
 	// extended-cache-ttl-2025-04-11). Empty (the default) leaves the
@@ -583,6 +609,31 @@ const (
 	CacheTTL5m = "5m"
 	CacheTTL1h = "1h"
 )
+
+// OmitResponseParam* name the optional OpenAI Responses request params the
+// native openai adapter can conditionally omit on Provider.OmitResponseParams.
+// This is a BOUNDED allowlist, not an arbitrary-field-name mechanism: it
+// names the specific optional params a real upstream is known to reject
+// (the ChatGPT Codex backend 400s on all four), so a config typo cannot
+// silently ask the adapter to drop a REQUIRED field like model or input.
+const (
+	OmitResponseParamMaxOutputTokens = "max_output_tokens"
+	OmitResponseParamTemperature     = "temperature"
+	OmitResponseParamTopP            = "top_p"
+	OmitResponseParamMetadata        = "metadata"
+)
+
+// OmitResponseParamValues returns every value validateOmitResponseParams
+// accepts, in a fresh slice. validateOmitResponseParams iterates this same
+// list, so the set and the validator cannot drift from each other.
+func OmitResponseParamValues() []string {
+	return []string{
+		OmitResponseParamMaxOutputTokens,
+		OmitResponseParamTemperature,
+		OmitResponseParamTopP,
+		OmitResponseParamMetadata,
+	}
+}
 
 // Load reads a single config file. A missing file yields a zero-value Config
 // and a nil error (config is optional). Malformed JSON or an unknown field
@@ -668,6 +719,9 @@ func validateProviders(providers map[string]Provider) error {
 		if err := validateResponsesPath(name, p); err != nil {
 			return err
 		}
+		if err := validateOmitResponseParams(name, p); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -701,6 +755,28 @@ func validateResponsesPath(name string, p Provider) error {
 	}
 	if !buildsResponsesAdapter(name, p) {
 		return fmt.Errorf("providers.%s: responses_path is only valid on an entry that builds the OpenAI Responses adapter (map key %q with no type, or any key with type %q); no other adapter reads it", name, "openai", TypeOpenAI)
+	}
+	return nil
+}
+
+// validateOmitResponseParams fails loudly on an omit_response_params entry
+// that cannot possibly be honored: a name outside OmitResponseParamValues (a
+// typo that would otherwise silently keep sending the very param the
+// deployment configured it to stop sending), or any value at all on an
+// entry that does not build the Responses adapter — the same
+// buildsResponsesAdapter identity check validateResponsesPath uses, since
+// only that adapter reads the field. Empty (the default) is always valid.
+func validateOmitResponseParams(name string, p Provider) error {
+	if len(p.OmitResponseParams) == 0 {
+		return nil
+	}
+	if !buildsResponsesAdapter(name, p) {
+		return fmt.Errorf("providers.%s: omit_response_params is only valid on an entry that builds the OpenAI Responses adapter (map key %q with no type, or any key with type %q); no other adapter reads it", name, "openai", TypeOpenAI)
+	}
+	for _, param := range p.OmitResponseParams {
+		if !slices.Contains(OmitResponseParamValues(), param) {
+			return fmt.Errorf("providers.%s: unknown omit_response_params entry %q (valid values: %q)", name, param, OmitResponseParamValues())
+		}
 	}
 	return nil
 }
@@ -1092,16 +1168,20 @@ func merge(base, over *Config) *Config {
 	if n := len(base.Providers) + len(over.Providers); n > 0 {
 		m := make(map[string]Provider, n)
 		for k, v := range base.Providers {
-			// Deep-copy ExtraHeaders here too: a base-only key (never
-			// touched by the loop below, e.g. no matching over.Providers
-			// entry) would otherwise leave m[k] aliasing base's map, so
-			// mutating the merged config's headers would corrupt base's.
+			// Deep-copy ExtraHeaders and OmitResponseParams here too: a
+			// base-only key (never touched by the loop below, e.g. no
+			// matching over.Providers entry) would otherwise leave m[k]
+			// aliasing base's map/slice, so mutating the merged config's
+			// copy would corrupt base's.
 			if len(v.ExtraHeaders) > 0 {
 				hm := make(map[string]string, len(v.ExtraHeaders))
 				for hk, hv := range v.ExtraHeaders {
 					hm[hk] = hv
 				}
 				v.ExtraHeaders = hm
+			}
+			if len(v.OmitResponseParams) > 0 {
+				v.OmitResponseParams = append([]string(nil), v.OmitResponseParams...)
 			}
 			m[k] = v
 		}
@@ -1125,6 +1205,9 @@ func merge(base, over *Config) *Config {
 				if v.ResponsesPath != "" {
 					ex.ResponsesPath = v.ResponsesPath
 				}
+				if len(v.OmitResponseParams) > 0 {
+					ex.OmitResponseParams = append([]string(nil), v.OmitResponseParams...)
+				}
 				if v.NoPromptCacheKey {
 					ex.NoPromptCacheKey = true
 				}
@@ -1146,6 +1229,9 @@ func merge(base, over *Config) *Config {
 						hm[hk] = hv
 					}
 					v.ExtraHeaders = hm
+				}
+				if len(v.OmitResponseParams) > 0 {
+					v.OmitResponseParams = append([]string(nil), v.OmitResponseParams...)
 				}
 				m[k] = v
 			}

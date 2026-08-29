@@ -53,6 +53,15 @@ type Client struct {
 	// a turn of reasoning continuity and nothing else.
 	Family     string
 	HTTPClient *http.Client // defaults to http.DefaultClient
+	// OmitResponseParams names optional Responses request params this
+	// client must NOT send on the wire, e.g. "max_output_tokens",
+	// "temperature", "top_p", "metadata" — see config.Provider's field of
+	// the same name for the full rationale (some Responses-API-compatible
+	// endpoints, e.g. the ChatGPT Codex backend, reject params the OpenAI
+	// API itself accepts). This is wire-only: it never affects the
+	// canonical provider.Request this client is handed, only the JSON body
+	// transcodeRequestFamily builds from it.
+	OmitResponseParams []string
 }
 
 // familyOrDefault resolves a configured family override to the family key
@@ -77,7 +86,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	if c.APIKey == "" {
 		return nil, fmt.Errorf("openai: no API key configured (set OPENAI_API_KEY)")
 	}
-	wire, err := transcodeRequestFamily(req, c.family())
+	wire, err := transcodeRequestFamily(req, c.family(), c.OmitResponseParams)
 	if err != nil {
 		return nil, err
 	}
