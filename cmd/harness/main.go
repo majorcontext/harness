@@ -32,6 +32,7 @@ import (
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 	"github.com/majorcontext/harness/provider/anthropic"
+	"github.com/majorcontext/harness/provider/claudecode"
 	"github.com/majorcontext/harness/provider/openai"
 	"github.com/majorcontext/harness/provider/openaicompat"
 	"github.com/majorcontext/harness/server"
@@ -778,6 +779,7 @@ func runCmd(args []string) error {
 		ModelTool:      cfg.ModelToolEnabled(),
 		ModelAliases:   cfg.Aliases,
 		SessionManager: sessMgr,
+		ClaudeCode:     claudeCodeConfigFor(cfg, claudecode.Family),
 	}, opts.resume, opts.cont, modelSet)
 	if err != nil {
 		return err
@@ -943,8 +945,58 @@ func registry(cfg *config.Config) provider.Registry {
 	}
 	registerOpenAICompatProviders(reg, cfg)
 	registerOpenAIProviders(reg, cfg)
+	registerClaudeCodeProviders(reg, cfg)
 	ensureDefaultOpenRouter(reg, cfg)
 	return reg
+}
+
+// registerClaudeCodeProviders registers a claudecode.Client — a
+// provider.Provider stand-in never expected to actually stream, see that
+// package's own doc comment — for every config.Providers entry of
+// config.TypeClaudeCodeCLI, keyed by its providers map name, exactly like
+// registerOpenAICompatProviders. This is what makes Session.ModelSupported
+// (engine/engine.go, consulted by the `model` tool, POST
+// /session/{id}/model, and Spawn's model-override validation) accept a
+// swap to a claude-code model ref: without an entry in the registry under
+// that key, ModelSupported would reject the very refs
+// engine.ClaudeCodeProviderFamily's delegated-turn dispatch exists to
+// serve, even though that dispatch never actually calls into this
+// registered client's Stream method.
+func registerClaudeCodeProviders(reg provider.Registry, cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	for name, p := range cfg.Providers {
+		if p.Type != config.TypeClaudeCodeCLI {
+			continue
+		}
+		reg[name] = claudecode.Client{}
+	}
+}
+
+// claudeCodeConfigFor resolves the engine.ClaudeCodeConfig for the given
+// providers-map key (by convention claudecode.Family, "claude-code") from a
+// config.TypeClaudeCodeCLI entry, translating config.Provider's
+// BinaryPath/ExtraArgs/PermissionMode fields into their engine.Config
+// counterpart. Absent (no such entry, or cfg nil) yields the zero value,
+// which engine.newSession defaults BinaryPath from ("claude" — see that
+// function). Package engine deliberately does not import package config
+// (see engine.Config's own field-by-field translation precedent, e.g.
+// SessionSync/ContextWindowTokens above), so this narrow translation lives
+// here, at the one boundary that already does it for every other field.
+func claudeCodeConfigFor(cfg *config.Config, name string) engine.ClaudeCodeConfig {
+	if cfg == nil {
+		return engine.ClaudeCodeConfig{}
+	}
+	p, ok := cfg.Providers[name]
+	if !ok || p.Type != config.TypeClaudeCodeCLI {
+		return engine.ClaudeCodeConfig{}
+	}
+	return engine.ClaudeCodeConfig{
+		BinaryPath:     p.BinaryPath,
+		ExtraArgs:      p.ExtraArgs,
+		PermissionMode: p.PermissionMode,
+	}
 }
 
 // registerOpenAIProviders builds a native provider/openai (Responses API)
@@ -1606,6 +1658,11 @@ func serveCmd(args []string) error {
 			// tool-driven `set` resolves an alias like the CLI does.
 			ModelTool:    cfg.ModelToolEnabled(),
 			ModelAliases: cfg.Aliases,
+			// ClaudeCode carries the BinaryPath/ExtraArgs/PermissionMode a
+			// config.TypeClaudeCodeCLI entry configures (see
+			// claudeCodeConfigFor); zero value when none is configured,
+			// which engine.newSession defaults BinaryPath from ("claude").
+			ClaudeCode: claudeCodeConfigFor(cfg, claudecode.Family),
 		}
 	}
 	// monitorPage is a named local (rather than inlining monitor.Page below)

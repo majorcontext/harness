@@ -209,9 +209,38 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 		if suffix, isAnthropic := stripBedrockAnthropicPrefix(model); isAnthropic {
 			tokens, ok = bedrockAnthropicContextWindows[stripBedrockVersionSuffix(suffix)]
 		}
+	case claudeCodeProvider:
+		// A turn delegated to the Claude Code CLI (see
+		// engine/claude_code_backend.go) is driven entirely by that CLI's
+		// OWN context management: it runs its own tool loop and its own
+		// compaction over its own history, never harness's. This entry
+		// exists ONLY so engine.Config.RequireContextWindow (default true
+		// — an unrecognized model is a hard session-create refusal, see
+		// engine/context_window.go) does not refuse a claude-code model
+		// ref outright; harness's OWN automatic-compaction threshold is
+		// unconditionally skipped for a delegated turn regardless of what
+		// this reports (see PromptWithOrigin's early dispatch), so the
+		// exact figure here drives no real behavior. claudeCodeContextWindow
+		// (200,000, Sonnet's advertised first-party window) is a stand-in
+		// chosen only to be an honest, plausible-sounding number rather
+		// than an arbitrary placeholder like 0 or MaxInt.
+		tokens, ok = claudeCodeContextWindow, true
 	}
 	return tokens, ok
 }
+
+// claudeCodeProvider is the message.ModelRef.Provider value that selects
+// the Claude Code CLI delegated-turn backend (engine/claude_code_backend.go
+// and config.TypeClaudeCodeCLI) — duplicated here, rather than imported,
+// because package modelmeta must not depend on package engine (engine
+// already depends on modelmeta for this very function). Kept in sync by
+// engine's TestClaudeCodeProviderFamilyMatchesModelmeta.
+const claudeCodeProvider = "claude-code"
+
+// claudeCodeContextWindow is the stand-in context-window figure reported
+// for claudeCodeProvider — see the ContextWindow case above for why its
+// exact value carries no real weight.
+const claudeCodeContextWindow = 200_000
 
 // lastPathSegment returns the substring of model after its last '/', or
 // model unchanged if it contains no '/'. message.ModelRef.Model may itself

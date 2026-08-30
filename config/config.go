@@ -413,6 +413,21 @@ const TypeOpenAICompat = "openai-compat"
 // built-in default.
 const TypeOpenAI = "openai"
 
+// TypeClaudeCodeCLI selects the Claude Code CLI delegated-turn backend
+// (engine/claude_code_backend.go) for a Provider config entry, under
+// whatever providers map key names it (by convention "claude-code" — that
+// key becomes the ModelRef.Provider a session's model ref must name to be
+// routed to it, e.g. "claude-code/sonnet").
+//
+// Unlike TypeOpenAICompat/TypeOpenAI, this is NOT an HTTP adapter: the
+// engine spawns the `claude` binary as a child process and bridges its
+// `--output-format stream-json` event stream into the session's own
+// journal/event pipeline directly (see that file's package doc) — it never
+// goes through provider.Provider.Stream in normal operation. BaseURL is
+// therefore never required for this type (see validateProviders); the
+// fields it DOES read are BinaryPath, ExtraArgs, and PermissionMode, below.
+const TypeClaudeCodeCLI = "claude-code-cli"
+
 // nativeProviderKeys are the only providers map keys allowed an empty Type
 // with no further defaulting: the built-in adapters cmd/harness's registry
 // wires directly by name (provider/anthropic.Family and
@@ -599,6 +614,47 @@ type Provider struct {
 	// ONLY on the native "anthropic" entry: no other adapter reads it, so
 	// validateProviders rejects it elsewhere rather than ignoring it.
 	CacheTTL string `json:"cache_ttl,omitempty"`
+
+	// BinaryPath is the executable this entry's Claude Code CLI child
+	// process is spawned from — resolved via PATH like any exec, exactly
+	// as PluginSpec.Command's Command[0]. Empty (the default) spawns
+	// "claude", the CLI's own published binary name. Valid ONLY on a
+	// TypeClaudeCodeCLI entry — no other adapter spawns a process at all —
+	// so validateProviders rejects it elsewhere, the same rule every other
+	// type-scoped field in this struct follows.
+	BinaryPath string `json:"binary_path,omitempty"`
+	// ExtraArgs are appended verbatim to the `claude` invocation, after
+	// every flag the engine itself constructs (--input-format,
+	// --output-format, --verbose, --model, --resume, --permission-mode —
+	// see engine/claude_code_backend.go). This is the escape hatch for a
+	// flag this Provider struct has no dedicated field for (e.g.
+	// --append-system-prompt, --mcp-config, --allowedTools) — the engine
+	// deliberately does not auto-populate either of those two itself for
+	// v1 (see that file's package doc for why). Valid ONLY on a
+	// TypeClaudeCodeCLI entry. Merge semantics are additive like every
+	// other Provider slice field (see NoPromptCacheKey's doc comment): a
+	// non-empty project-layer list replaces the user-layer list wholesale.
+	ExtraArgs []string `json:"extra_args,omitempty"`
+	// PermissionMode selects the `claude` child's --permission-mode flag
+	// (one of ClaudeCodePermissionModeValues — "default", "acceptEdits",
+	// "bypassPermissions", "plan"; see the Claude Code CLI's own
+	// documentation for what each does). Empty (the default) omits the
+	// flag entirely, leaving the CLI's own default in place. Valid ONLY on
+	// a TypeClaudeCodeCLI entry.
+	PermissionMode string `json:"permission_mode,omitempty"`
+}
+
+// ClaudeCodePermissionModeValues returns every value validatePermissionMode
+// accepts, in a fresh slice — the Claude Code CLI's own --permission-mode
+// choices. validatePermissionMode iterates this same list, so the set and
+// the validator cannot drift from each other.
+func ClaudeCodePermissionModeValues() []string {
+	return []string{
+		"default",
+		"acceptEdits",
+		"bypassPermissions",
+		"plan",
+	}
 }
 
 // Cache TTL values accepted by Provider.CacheTTL. They mirror
@@ -699,7 +755,7 @@ func validateProviders(providers map[string]Provider) error {
 		switch p.Type {
 		case "":
 			if !nativeProviderKeys[name] {
-				return fmt.Errorf("providers.%s: type is required (empty type is only valid for the built-in %q/%q entries); valid types: \"\" (native anthropic/openai override), %q, %q", name, "anthropic", "openai", TypeOpenAICompat, TypeOpenAI)
+				return fmt.Errorf("providers.%s: type is required (empty type is only valid for the built-in %q/%q entries); valid types: \"\" (native anthropic/openai override), %q, %q, %q", name, "anthropic", "openai", TypeOpenAICompat, TypeOpenAI, TypeClaudeCodeCLI)
 			}
 			// Legacy/native provider entry (anthropic or openai); no
 			// further validation here.
@@ -707,8 +763,12 @@ func validateProviders(providers map[string]Provider) error {
 			if p.BaseURL == "" {
 				return fmt.Errorf("providers.%s: base_url is required for type %q", name, p.Type)
 			}
+		case TypeClaudeCodeCLI:
+			// No base_url requirement: this type spawns a child process
+			// (engine/claude_code_backend.go), it never dials an HTTP
+			// endpoint — see TypeClaudeCodeCLI's own doc comment.
 		default:
-			return fmt.Errorf("providers.%s: unknown type %q (valid types: \"\" (native anthropic/openai override), %q, %q)", name, p.Type, TypeOpenAICompat, TypeOpenAI)
+			return fmt.Errorf("providers.%s: unknown type %q (valid types: \"\" (native anthropic/openai override), %q, %q, %q)", name, p.Type, TypeOpenAICompat, TypeOpenAI, TypeClaudeCodeCLI)
 		}
 		if err := validateCacheTTL(name, p); err != nil {
 			return err
@@ -722,6 +782,37 @@ func validateProviders(providers map[string]Provider) error {
 		if err := validateOmitResponseParams(name, p); err != nil {
 			return err
 		}
+		if err := validateClaudeCodeFields(name, p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateClaudeCodeFields fails loudly on BinaryPath/ExtraArgs/
+// PermissionMode set on any entry that is not TypeClaudeCodeCLI — no other
+// adapter reads them, the same silent-misconfiguration class
+// validateResponsesPath and validateCacheTTL refuse to allow — and on an
+// unrecognized PermissionMode value on an entry that IS that type (a typo
+// would otherwise reach the `claude` child's --permission-mode flag
+// verbatim and fail there instead, far from the config that caused it).
+// Empty PermissionMode is always valid: it omits the flag, leaving the
+// CLI's own default in place.
+func validateClaudeCodeFields(name string, p Provider) error {
+	if p.Type == TypeClaudeCodeCLI {
+		if p.PermissionMode != "" && !slices.Contains(ClaudeCodePermissionModeValues(), p.PermissionMode) {
+			return fmt.Errorf("providers.%s: unknown permission_mode %q (valid values: %q)", name, p.PermissionMode, ClaudeCodePermissionModeValues())
+		}
+		return nil
+	}
+	if p.BinaryPath != "" {
+		return fmt.Errorf("providers.%s: binary_path is only valid on a %q entry (only the Claude Code CLI backend spawns a process)", name, TypeClaudeCodeCLI)
+	}
+	if len(p.ExtraArgs) > 0 {
+		return fmt.Errorf("providers.%s: extra_args is only valid on a %q entry", name, TypeClaudeCodeCLI)
+	}
+	if p.PermissionMode != "" {
+		return fmt.Errorf("providers.%s: permission_mode is only valid on a %q entry", name, TypeClaudeCodeCLI)
 	}
 	return nil
 }
@@ -1183,6 +1274,9 @@ func merge(base, over *Config) *Config {
 			if len(v.OmitResponseParams) > 0 {
 				v.OmitResponseParams = append([]string(nil), v.OmitResponseParams...)
 			}
+			if len(v.ExtraArgs) > 0 {
+				v.ExtraArgs = append([]string(nil), v.ExtraArgs...)
+			}
 			m[k] = v
 		}
 		for k, v := range over.Providers {
@@ -1211,6 +1305,15 @@ func merge(base, over *Config) *Config {
 				if v.NoPromptCacheKey {
 					ex.NoPromptCacheKey = true
 				}
+				if v.BinaryPath != "" {
+					ex.BinaryPath = v.BinaryPath
+				}
+				if len(v.ExtraArgs) > 0 {
+					ex.ExtraArgs = append([]string(nil), v.ExtraArgs...)
+				}
+				if v.PermissionMode != "" {
+					ex.PermissionMode = v.PermissionMode
+				}
 				if n := len(ex.ExtraHeaders) + len(v.ExtraHeaders); n > 0 {
 					hm := make(map[string]string, n)
 					for hk, hv := range ex.ExtraHeaders {
@@ -1232,6 +1335,9 @@ func merge(base, over *Config) *Config {
 				}
 				if len(v.OmitResponseParams) > 0 {
 					v.OmitResponseParams = append([]string(nil), v.OmitResponseParams...)
+				}
+				if len(v.ExtraArgs) > 0 {
+					v.ExtraArgs = append([]string(nil), v.ExtraArgs...)
 				}
 				m[k] = v
 			}

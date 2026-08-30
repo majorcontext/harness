@@ -42,6 +42,20 @@ const (
 // notification is ready to deliver.
 const OriginEngine = "engine"
 
+// OriginClaudeCode marks a Message produced by a turn delegated to the
+// Claude Code CLI (see engine/claude_code_backend.go) rather than a
+// message this engine's own native provider loop produced or a human
+// typed. Every assistant and tool message a delegated turn appends carries
+// this Origin. Unlike OriginEngine (defined only for a RoleUser trigger
+// message), this applies to RoleAssistant and RoleTool messages — but the
+// same rule OriginEngine's own doc comment establishes still holds: this
+// is presentation metadata only, read by a client (boxes' console)
+// choosing how to RENDER a message, and it must never change how a
+// transcoder or a model treats it. A session that later switches back to
+// a native provider still sends these messages exactly like any other
+// history — no transcoder reads this field.
+const OriginClaudeCode = "claude_code"
+
 // Message is one entry in a session's history.
 //
 // The system prompt is deliberately not part of history: it is assembled per
