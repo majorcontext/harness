@@ -606,6 +606,29 @@ type Provider struct {
 	// entry by entry (a project layer un-listing a param the user layer
 	// added would otherwise be unrepresentable).
 	OmitResponseParams []string `json:"omit_response_params,omitempty"`
+	// SanitizeToolSchemas rewrites every tool's JSON Schema parameters
+	// through an allowlist rebuild before this provider's Responses request
+	// is sent, dropping keywords the target's tool-schema validator does
+	// not support (notably "pattern", "format", and length/numeric
+	// constraints — see provider/openai's sanitizeToolSchema, ported from
+	// opencode's sanitizeOpenAISchema).
+	//
+	// It exists because the ChatGPT Codex backend's tool-schema validator
+	// is STRICTER than the OpenAI platform API: it 400s on a regex
+	// `pattern` using lookaround (confirmed on a live box; harness#213
+	// flagged this exact gap), and harness forwards tool schemas
+	// unsanitized. The default (false) sends every schema unchanged, so a
+	// normal openai/anthropic/bifrost provider — which accepts richer
+	// schemas and would only lose expressiveness from the rewrite — is
+	// unaffected.
+	//
+	// Valid ONLY on an entry that builds the Responses adapter, exactly
+	// like ResponsesPath and OmitResponseParams — the same
+	// buildsResponsesAdapter identity check gates all three. Merge
+	// semantics are non-clearable like NoPromptCacheKey (see its doc
+	// comment): a project layer can set this to true, but cannot flip an
+	// inherited true back to false.
+	SanitizeToolSchemas bool `json:"sanitize_tool_schemas,omitempty"`
 	// CacheTTL selects the Anthropic prompt-cache breakpoint lifetime:
 	// "5m" (the Anthropic API default) or "1h" (the extended TTL, beta
 	// extended-cache-ttl-2025-04-11). Empty (the default) leaves the
@@ -782,6 +805,9 @@ func validateProviders(providers map[string]Provider) error {
 		if err := validateOmitResponseParams(name, p); err != nil {
 			return err
 		}
+		if err := validateSanitizeToolSchemas(name, p); err != nil {
+			return err
+		}
 		if err := validateClaudeCodeFields(name, p); err != nil {
 			return err
 		}
@@ -868,6 +894,21 @@ func validateOmitResponseParams(name string, p Provider) error {
 		if !slices.Contains(OmitResponseParamValues(), param) {
 			return fmt.Errorf("providers.%s: unknown omit_response_params entry %q (valid values: %q)", name, param, OmitResponseParamValues())
 		}
+	}
+	return nil
+}
+
+// validateSanitizeToolSchemas fails loudly on sanitize_tool_schemas set on
+// any entry that does not build the Responses adapter — the same
+// buildsResponsesAdapter identity check validateResponsesPath and
+// validateOmitResponseParams use, since only that adapter reads the field.
+// false (the default) is always valid.
+func validateSanitizeToolSchemas(name string, p Provider) error {
+	if !p.SanitizeToolSchemas {
+		return nil
+	}
+	if !buildsResponsesAdapter(name, p) {
+		return fmt.Errorf("providers.%s: sanitize_tool_schemas is only valid on an entry that builds the OpenAI Responses adapter (map key %q with no type, or any key with type %q); no other adapter reads it", name, "openai", TypeOpenAI)
 	}
 	return nil
 }
@@ -1304,6 +1345,9 @@ func merge(base, over *Config) *Config {
 				}
 				if v.NoPromptCacheKey {
 					ex.NoPromptCacheKey = true
+				}
+				if v.SanitizeToolSchemas {
+					ex.SanitizeToolSchemas = true
 				}
 				if v.BinaryPath != "" {
 					ex.BinaryPath = v.BinaryPath

@@ -62,6 +62,16 @@ type Client struct {
 	// canonical provider.Request this client is handed, only the JSON body
 	// transcodeRequestFamily builds from it.
 	OmitResponseParams []string
+	// SanitizeToolSchemas rewrites every tool's JSON Schema parameters
+	// through sanitizeToolParameterSchema before this client sends a
+	// request — see config.Provider's field of the same name for the full
+	// rationale (the ChatGPT Codex backend's tool-schema validator rejects
+	// keywords the OpenAI platform API accepts, e.g. a regex `pattern`
+	// using lookaround). This is wire-only: it never affects the canonical
+	// provider.Request this client is handed, only the JSON body
+	// transcodeRequestFamily builds from it. Default false leaves every
+	// tool schema byte-identical to req.Tools.
+	SanitizeToolSchemas bool
 }
 
 // familyOrDefault resolves a configured family override to the family key
@@ -86,7 +96,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	if c.APIKey == "" {
 		return nil, fmt.Errorf("openai: no API key configured (set OPENAI_API_KEY)")
 	}
-	wire, err := transcodeRequestFamily(req, c.family(), c.OmitResponseParams)
+	wire, err := transcodeRequestFamily(req, c.family(), c.OmitResponseParams, c.SanitizeToolSchemas)
 	if err != nil {
 		return nil, err
 	}
