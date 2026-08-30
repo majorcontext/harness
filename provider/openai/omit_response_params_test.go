@@ -20,7 +20,7 @@ func TestOmitResponseParamsNoneListedUnchanged(t *testing.T) {
 	req.Temperature = float64Ptr(0.5)
 	req.TopP = float64Ptr(0.9)
 
-	out, err := transcodeRequestFamily(req, Family, nil)
+	out, err := transcodeRequestFamily(req, Family, nil, false)
 	if err != nil {
 		t.Fatalf("transcodeRequestFamily: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestOmitResponseParamsAllFourOmitsFromWire(t *testing.T) {
 	req.TopP = float64Ptr(0.9)
 
 	omit := []string{"max_output_tokens", "temperature", "top_p", "metadata"}
-	out, err := transcodeRequestFamily(req, Family, omit)
+	out, err := transcodeRequestFamily(req, Family, omit, false)
 	if err != nil {
 		t.Fatalf("transcodeRequestFamily: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestOmitResponseParamsPartialList(t *testing.T) {
 	req := baseRequest(message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}})
 	req.Temperature = float64Ptr(0.5)
 
-	out, err := transcodeRequestFamily(req, Family, []string{"max_output_tokens"})
+	out, err := transcodeRequestFamily(req, Family, []string{"max_output_tokens"}, false)
 	if err != nil {
 		t.Fatalf("transcodeRequestFamily: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestOmitResponseParamsPartialList(t *testing.T) {
 func TestOmitResponseParamsWinsOverReasoningFloor(t *testing.T) {
 	req := reasoningRequest(message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}})
 
-	out, err := transcodeRequestFamily(req, Family, []string{"max_output_tokens"})
+	out, err := transcodeRequestFamily(req, Family, []string{"max_output_tokens"}, false)
 	if err != nil {
 		t.Fatalf("transcodeRequestFamily: %v", err)
 	}

@@ -939,9 +939,9 @@ func registry(cfg *config.Config) provider.Registry {
 		anthropic.Family: &anthropic.Client{APIKey: akey, BaseURL: abase, CacheTTL: anthropicCacheTTL(cfg)},
 		// The built-in openai entry deliberately leaves Family empty: it IS
 		// the package default, and naming it here would only invite the two
-		// to drift. Its ResponsesPath/OmitResponseParams come from the
-		// native entry, if any.
-		openai.Family: &openai.Client{APIKey: okey, BaseURL: obase, ResponsesPath: nativeResponsesPath(cfg), OmitResponseParams: nativeOmitResponseParams(cfg)},
+		// to drift. Its ResponsesPath/OmitResponseParams/SanitizeToolSchemas
+		// come from the native entry, if any.
+		openai.Family: &openai.Client{APIKey: okey, BaseURL: obase, ResponsesPath: nativeResponsesPath(cfg), OmitResponseParams: nativeOmitResponseParams(cfg), SanitizeToolSchemas: nativeSanitizeToolSchemas(cfg)},
 	}
 	registerOpenAICompatProviders(reg, cfg)
 	registerOpenAIProviders(reg, cfg)
@@ -1046,11 +1046,12 @@ func registerOpenAIProviders(reg provider.Registry, cfg *config.Config) {
 		}
 		apiKey := os.Getenv(keyEnv)
 		reg[name] = &openai.Client{
-			Family:             name,
-			APIKey:             apiKey,
-			BaseURL:            p.BaseURL,
-			ResponsesPath:      p.ResponsesPath,
-			OmitResponseParams: p.OmitResponseParams,
+			Family:              name,
+			APIKey:              apiKey,
+			BaseURL:             p.BaseURL,
+			ResponsesPath:       p.ResponsesPath,
+			OmitResponseParams:  p.OmitResponseParams,
+			SanitizeToolSchemas: p.SanitizeToolSchemas,
 		}
 	}
 }
@@ -1086,6 +1087,23 @@ func nativeOmitResponseParams(cfg *config.Config) []string {
 		return nil
 	}
 	return p.OmitResponseParams
+}
+
+// nativeSanitizeToolSchemas reads sanitize_tool_schemas configured on the
+// NATIVE "openai" entry (map key "openai", no type — the same shape
+// config.validateProviders permits sanitize_tool_schemas on). false leaves
+// the adapter sending every tool schema unchanged. A keyed type:"openai"
+// entry carries its own value and is wired by registerOpenAIProviders
+// instead. Mirrors nativeOmitResponseParams exactly.
+func nativeSanitizeToolSchemas(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	p := cfg.Providers[openai.Family]
+	if p.Type != "" {
+		return false
+	}
+	return p.SanitizeToolSchemas
 }
 
 // registerOpenAICompatProviders builds a provider/openaicompat client for

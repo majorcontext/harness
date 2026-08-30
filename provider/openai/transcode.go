@@ -154,7 +154,7 @@ func wireCallID(id string) string {
 // under the package Family constant — the default for a client that
 // configures no family of its own.
 func transcodeRequest(req *provider.Request) (*apiRequest, error) {
-	return transcodeRequestFamily(req, Family, nil)
+	return transcodeRequestFamily(req, Family, nil, false)
 }
 
 // transcodeRequestFamily is transcodeRequest with the ProviderData tag made
@@ -167,8 +167,12 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 // the wire entirely (Client.OmitResponseParams / config.Provider's field of
 // the same name) — applied last, after every other field of out is
 // computed, so it always wins over the reasoning-floor bump and every other
-// adjustment above.
-func transcodeRequestFamily(req *provider.Request, family string, omitParams []string) (*apiRequest, error) {
+// adjustment above. sanitizeSchemas, when true, rewrites every tool's
+// parameter schema through sanitizeToolParameterSchema before it is placed
+// on out.Tools (Client.SanitizeToolSchemas / config.Provider's field of the
+// same name) — false (the default) leaves every schema byte-identical to
+// req.Tools, matching this adapter's behavior before the field existed.
+func transcodeRequestFamily(req *provider.Request, family string, omitParams []string, sanitizeSchemas bool) (*apiRequest, error) {
 	out := &apiRequest{
 		Model:           req.Model.Model,
 		Instructions:    strings.Join(req.System, "\n\n"),
@@ -221,11 +225,15 @@ func transcodeRequestFamily(req *provider.Request, family string, omitParams []s
 	}
 
 	for _, t := range req.Tools {
+		params := t.InputSchema
+		if sanitizeSchemas {
+			params = sanitizeToolParameterSchema(params)
+		}
 		out.Tools = append(out.Tools, apiToolDef{
 			Type:        "function",
 			Name:        t.Name,
 			Description: t.Description,
-			Parameters:  t.InputSchema,
+			Parameters:  params,
 		})
 	}
 
