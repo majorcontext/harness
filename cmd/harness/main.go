@@ -939,9 +939,10 @@ func registry(cfg *config.Config) provider.Registry {
 		anthropic.Family: &anthropic.Client{APIKey: akey, BaseURL: abase, CacheTTL: anthropicCacheTTL(cfg)},
 		// The built-in openai entry deliberately leaves Family empty: it IS
 		// the package default, and naming it here would only invite the two
-		// to drift. Its ResponsesPath/OmitResponseParams/SanitizeToolSchemas
-		// come from the native entry, if any.
-		openai.Family: &openai.Client{APIKey: okey, BaseURL: obase, ResponsesPath: nativeResponsesPath(cfg), OmitResponseParams: nativeOmitResponseParams(cfg), SanitizeToolSchemas: nativeSanitizeToolSchemas(cfg)},
+		// to drift. Its ResponsesPath/OmitResponseParams/
+		// SanitizeToolSchemas/UseWebSocketTransport come from the native
+		// entry, if any.
+		openai.Family: &openai.Client{APIKey: okey, BaseURL: obase, ResponsesPath: nativeResponsesPath(cfg), OmitResponseParams: nativeOmitResponseParams(cfg), SanitizeToolSchemas: nativeSanitizeToolSchemas(cfg), UseWebSocketTransport: nativeUseWebSocketTransport(cfg)},
 	}
 	registerOpenAICompatProviders(reg, cfg)
 	registerOpenAIProviders(reg, cfg)
@@ -1046,12 +1047,13 @@ func registerOpenAIProviders(reg provider.Registry, cfg *config.Config) {
 		}
 		apiKey := os.Getenv(keyEnv)
 		reg[name] = &openai.Client{
-			Family:              name,
-			APIKey:              apiKey,
-			BaseURL:             p.BaseURL,
-			ResponsesPath:       p.ResponsesPath,
-			OmitResponseParams:  p.OmitResponseParams,
-			SanitizeToolSchemas: p.SanitizeToolSchemas,
+			Family:                name,
+			APIKey:                apiKey,
+			BaseURL:               p.BaseURL,
+			ResponsesPath:         p.ResponsesPath,
+			OmitResponseParams:    p.OmitResponseParams,
+			SanitizeToolSchemas:   p.SanitizeToolSchemas,
+			UseWebSocketTransport: p.UseWebSocketTransport,
 		}
 	}
 }
@@ -1104,6 +1106,23 @@ func nativeSanitizeToolSchemas(cfg *config.Config) bool {
 		return false
 	}
 	return p.SanitizeToolSchemas
+}
+
+// nativeUseWebSocketTransport reads use_websocket_transport configured on
+// the NATIVE "openai" entry (map key "openai", no type — the same shape
+// config.validateProviders permits use_websocket_transport on). false
+// leaves the adapter on the HTTP + SSE transport. A keyed type:"openai"
+// entry carries its own value and is wired by registerOpenAIProviders
+// instead. Mirrors nativeOmitResponseParams exactly.
+func nativeUseWebSocketTransport(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	p := cfg.Providers[openai.Family]
+	if p.Type != "" {
+		return false
+	}
+	return p.UseWebSocketTransport
 }
 
 // registerOpenAICompatProviders builds a provider/openaicompat client for

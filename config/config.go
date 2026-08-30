@@ -629,6 +629,33 @@ type Provider struct {
 	// comment): a project layer can set this to true, but cannot flip an
 	// inherited true back to false.
 	SanitizeToolSchemas bool `json:"sanitize_tool_schemas,omitempty"`
+	// UseWebSocketTransport routes the native OpenAI Responses adapter's
+	// calls over a pooled wss:// connection (one persistent socket per
+	// harness session, see provider/openai's ws.go/ws_pool.go) instead of
+	// an HTTP POST + SSE stream per turn.
+	//
+	// It exists because the ChatGPT Codex backend speaks its OWN
+	// websocket transport for the Responses API — a per-session
+	// persistent connection the reference client (opencode) always
+	// prefers over HTTP for that backend. Any failure along the way
+	// (dial failure, a frame larger than the server will send over ws,
+	// too many consecutive stream failures, a concurrent request on a
+	// session whose socket is already busy) falls back to the existing
+	// HTTP path for that request, so turning this on can only add a
+	// transport, never remove the working one. Default false leaves
+	// every provider on HTTP exactly as before this field existed. Tool
+	// schemas sent over that transport are still whatever
+	// SanitizeToolSchemas above already made them — the wire body ws
+	// sends is the SAME transcoded body the HTTP path would send, so
+	// nothing here duplicates that sanitization.
+	//
+	// Valid ONLY on an entry that builds the Responses adapter, exactly
+	// like ResponsesPath and OmitResponseParams — the same
+	// buildsResponsesAdapter identity check gates all three. Merge
+	// semantics are non-clearable like NoPromptCacheKey (see its doc
+	// comment): a project layer can turn this on, but cannot flip an
+	// inherited true back to false.
+	UseWebSocketTransport bool `json:"use_websocket_transport,omitempty"`
 	// CacheTTL selects the Anthropic prompt-cache breakpoint lifetime:
 	// "5m" (the Anthropic API default) or "1h" (the extended TTL, beta
 	// extended-cache-ttl-2025-04-11). Empty (the default) leaves the
@@ -808,6 +835,9 @@ func validateProviders(providers map[string]Provider) error {
 		if err := validateSanitizeToolSchemas(name, p); err != nil {
 			return err
 		}
+		if err := validateUseWebSocketTransport(name, p); err != nil {
+			return err
+		}
 		if err := validateClaudeCodeFields(name, p); err != nil {
 			return err
 		}
@@ -872,6 +902,21 @@ func validateResponsesPath(name string, p Provider) error {
 	}
 	if !buildsResponsesAdapter(name, p) {
 		return fmt.Errorf("providers.%s: responses_path is only valid on an entry that builds the OpenAI Responses adapter (map key %q with no type, or any key with type %q); no other adapter reads it", name, "openai", TypeOpenAI)
+	}
+	return nil
+}
+
+// validateUseWebSocketTransport fails loudly on use_websocket_transport set
+// on any entry that does not build the Responses adapter — the same
+// buildsResponsesAdapter identity check validateResponsesPath and
+// validateOmitResponseParams use, since only that adapter reads the field.
+// false (the default) is always valid.
+func validateUseWebSocketTransport(name string, p Provider) error {
+	if !p.UseWebSocketTransport {
+		return nil
+	}
+	if !buildsResponsesAdapter(name, p) {
+		return fmt.Errorf("providers.%s: use_websocket_transport is only valid on an entry that builds the OpenAI Responses adapter (map key %q with no type, or any key with type %q); no other adapter reads it", name, "openai", TypeOpenAI)
 	}
 	return nil
 }
@@ -1348,6 +1393,9 @@ func merge(base, over *Config) *Config {
 				}
 				if v.SanitizeToolSchemas {
 					ex.SanitizeToolSchemas = true
+				}
+				if v.UseWebSocketTransport {
+					ex.UseWebSocketTransport = true
 				}
 				if v.BinaryPath != "" {
 					ex.BinaryPath = v.BinaryPath

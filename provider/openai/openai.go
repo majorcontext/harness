@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/majorcontext/harness/message"
@@ -72,6 +73,30 @@ type Client struct {
 	// transcodeRequestFamily builds from it. Default false leaves every
 	// tool schema byte-identical to req.Tools.
 	SanitizeToolSchemas bool
+	// UseWebSocketTransport routes this client's calls over a pooled
+	// wss:// connection (see ws.go/ws_pool.go) instead of HTTP POST + SSE
+	// — see config.Provider's field of the same name for the full
+	// rationale. Any failure along the way falls back to the HTTP path
+	// below for that request, so this can only add a transport, never
+	// remove the working one. Default false is byte-identical to this
+	// client's behavior before the field existed. Note this client
+	// already sanitizes tool schemas (SanitizeToolSchemas) and omits
+	// params (OmitResponseParams) BEFORE the wire body is built, so the
+	// websocket path — which sends that same already-transcoded body —
+	// inherits both with no duplicated logic.
+	UseWebSocketTransport bool
+
+	wsPoolOnce sync.Once
+	wsPoolVal  *wsPool
+}
+
+// wsPoolFor lazily builds this client's websocket pool on first use, one
+// per Client instance (not global) — a Client is already the unit main.go
+// registers one per provider entry, so this scopes pooled connections to
+// the same boundary API keys and base URLs are already scoped to.
+func (c *Client) wsPoolFor() *wsPool {
+	c.wsPoolOnce.Do(func() { c.wsPoolVal = newWSPool() })
+	return c.wsPoolVal
 }
 
 // familyOrDefault resolves a configured family override to the family key
@@ -92,6 +117,18 @@ func (c *Client) family() string { return familyOrDefault(c.Family) }
 
 func (c *Client) Name() string { return c.family() }
 
+// httpClient returns the *http.Client this adapter makes every request
+// with — c.HTTPClient, or http.DefaultClient when unset. Both the HTTP POST
+// path and the websocket dial (see Stream, wsPoolFor) use this exact value,
+// which is what makes the two transports' proxy/TLS behavior identical by
+// construction rather than by two configurations kept in sync by hand.
+func (c *Client) httpClient() *http.Client {
+	if c.HTTPClient != nil {
+		return c.HTTPClient
+	}
+	return http.DefaultClient
+}
+
 func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
 	if c.APIKey == "" {
 		return nil, fmt.Errorf("openai: no API key configured (set OPENAI_API_KEY)")
@@ -105,18 +142,43 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 		return nil, err
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, responsesURL(c.BaseURL, c.ResponsesPath), bytes.NewReader(body))
+	url := responsesURL(c.BaseURL, c.ResponsesPath)
+	headers := http.Header{
+		"Content-Type":  []string{"application/json"},
+		"Accept":        []string{"text/event-stream"},
+		"Authorization": []string{"Bearer " + c.APIKey},
+	}
+	hc := c.httpClient()
+
+	// The websocket transport sends this SAME url/headers/body — the
+	// Authorization header included — so whatever credential injection
+	// applies to the HTTP path below (a box's gatekeeper proxy swapping
+	// this dummy bearer for a real OAuth one) applies identically to the
+	// ws dial, since both go through hc's own Transport (proxy + TLS
+	// trust store), and no separate code path could plausibly relay
+	// different credentials for the same client. Any failure at all —
+	// no SessionKey, a busy or previously-broken session, dial/send/
+	// first-frame failure — falls through to the HTTP POST unchanged.
+	if c.UseWebSocketTransport && req.SessionKey != "" {
+		if st, ok := c.wsPoolFor().stream(ctx, wsStreamRequest{
+			SessionKey: req.SessionKey,
+			URL:        url,
+			Headers:    headers,
+			Body:       body,
+			Model:      req.Model,
+			Family:     c.family(),
+			HTTPClient: hc,
+		}); ok {
+			return st, nil
+		}
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "text/event-stream")
-	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	httpReq.Header = headers.Clone()
 
-	hc := c.HTTPClient
-	if hc == nil {
-		hc = http.DefaultClient
-	}
 	resp, err := hc.Do(httpReq)
 	if err != nil {
 		return nil, err
@@ -231,9 +293,15 @@ type assembledItem struct {
 // forwards deltas as they arrive and assembles the canonical assistant
 // message, delivered with EventDone on response.completed.
 type stream struct {
-	body  io.Closer
-	r     *bufio.Reader
-	model message.ModelRef
+	body io.Closer
+	r    *bufio.Reader
+	// wsConn is non-nil for a websocket-delivered response (see wsPool.
+	// stream) and nil for the HTTP+SSE path — exactly one of {r, wsConn}
+	// is set. Next/Close dispatch on it instead of duplicating the SSE
+	// decode loop and event mapping for the ws case: stream.handle below
+	// is shared, unmodified, between both transports.
+	wsConn *wsFrameSource
+	model  message.ModelRef
 	// family is the client's resolved provider family: the ProviderData tag
 	// this stream writes reasoning attachments under. Empty means the
 	// package Family constant (see familyOrDefault), which keeps a stream
@@ -250,7 +318,29 @@ type stream struct {
 	done  bool
 }
 
-func (s *stream) Close() error { return s.body.Close() }
+// Close releases this stream's transport. For a websocket-delivered
+// response, whether the underlying connection is actually torn down or
+// kept pooled for the session's next turn was already decided when the
+// terminal event was read (see wsFrameSource.close) — Close here just
+// tells that decision whether it is being reached cleanly (s.done, the
+// same flag Next uses to return io.EOF) or because the caller is
+// abandoning the stream early.
+func (s *stream) Close() error {
+	if s.wsConn != nil {
+		return s.wsConn.close(s.done)
+	}
+	return s.body.Close()
+}
+
+// readEvent returns the next (name, data) pair from whichever transport
+// this stream is reading — the ws frame source's buffered/live frames, or
+// readSSE's HTTP+SSE decode — so handle below never needs to know which.
+func (s *stream) readEvent() (string, []byte, error) {
+	if s.wsConn != nil {
+		return s.wsConn.next()
+	}
+	return s.readSSE()
+}
 
 func (s *stream) Next() (provider.Event, error) {
 	for {
@@ -262,7 +352,7 @@ func (s *stream) Next() (provider.Event, error) {
 		if s.done {
 			return provider.Event{}, io.EOF
 		}
-		name, data, err := s.readSSE()
+		name, data, err := s.readEvent()
 		if err != nil {
 			// Reaching this read at all means response.completed has not
 			// been seen (s.done, checked above, would have returned the
