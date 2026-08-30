@@ -298,6 +298,16 @@ type Config struct {
 	MaxTokens int              // per-response cap; defaults to 8192
 	WorkDir   string           // working directory for built-in tools
 
+	// ClaudeCode configures the delegated-turn backend a session whose
+	// Model.Provider is ClaudeCodeProviderFamily is driven through (see
+	// engine/claude_code_backend.go) — the non-HTTP counterpart to
+	// Providers above for that one family. The zero value is usable: an
+	// empty BinaryPath defaults to "claude" (newSession), and empty
+	// ExtraArgs/PermissionMode simply add nothing to the child's argv.
+	// Irrelevant, and never read, for any session whose model names a
+	// different provider.
+	ClaudeCode ClaudeCodeConfig
+
 	// SessionDir is where session logs are persisted, one JSONL file per
 	// session. Empty disables persistence entirely.
 	SessionDir string
@@ -1034,6 +1044,19 @@ type Session struct {
 	// above has something to read.
 	committedOutcome *taskNotification
 
+	// claudeCodeCLISessionID is the Claude Code CLI's OWN session id for a
+	// delegated session (see engine/claude_code_backend.go): captured from
+	// the CLI's `system`/`init` stream-json event on this session's FIRST
+	// delegated turn, and passed back as --resume on every later one so
+	// the CLI continues the SAME conversation it already holds — the CLI
+	// owns that history, not this package's s.history, which exists only
+	// so the console/read-path see a mirrored transcript. Empty until the
+	// first delegated turn completes an init event; irrelevant for a
+	// session never delegated. Persisted (recClaudeCodeSessionID,
+	// store.go) and restored by LoadSession so --resume survives a process
+	// restart.
+	claudeCodeCLISessionID string
+
 	// spawnedChildIDs is every child id this session has ever Spawn'd —
 	// appended to live (Spawn, session_manager.go) and folded back from
 	// the durable recTaskSpawned audit trail on reload (store.go's
@@ -1416,6 +1439,9 @@ func newSession(cfg Config) *Session {
 	}
 	if cfg.BashTimeout <= 0 {
 		cfg.BashTimeout = 2 * time.Minute
+	}
+	if cfg.ClaudeCode.BinaryPath == "" {
+		cfg.ClaudeCode.BinaryPath = defaultClaudeCodeBinaryPath
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -2313,6 +2339,29 @@ func (s *Session) PromptEngineResume(ctx context.Context, text string) (*message
 // the caller already made. One parameterized entry point for the value
 // means a future third Origin value is handled in exactly one place.
 func (s *Session) PromptWithOrigin(ctx context.Context, text string, origin string) (*message.Message, error) {
+	// A session delegated to the Claude Code CLI (ClaudeCodeProviderFamily
+	// — see engine/claude_code_backend.go) dispatches here, FIRST, before
+	// every check and assembly step below: ContextWindowErr,
+	// ensureInstructions, ensureSkills, and maybeAutoCompact are all
+	// native-loop-only concerns (harness's own context-window bookkeeping,
+	// AGENTS.md/Agent-Skills injection into a system prompt this path
+	// never sends, and harness's own auto-compaction) that make no sense
+	// for a turn Claude Code drives end to end with its own context
+	// management. Appending the user message and handing off to
+	// runAgenticLoop is the entire job here; runAgenticLoop's own
+	// identical claudeCodeDelegated check (its doc comment explains why
+	// BOTH checks exist) is what also catches the goal-loop's direct
+	// runAgenticLoop retry call, which never reaches this function at all.
+	if s.claudeCodeDelegated() {
+		s.append(message.Message{
+			ID:        newID("msg"),
+			Role:      message.RoleUser,
+			Parts:     message.Parts{&message.Text{Text: text}},
+			CreatedAt: time.Now().UTC(),
+			Origin:    origin,
+		})
+		return s.runAgenticLoop(ctx)
+	}
 	// Refuse a model with no known context window, before anything else
 	// happens: no history append, no provider call, no instructions read.
 	// Running one anyway is running with NO context management at all,
@@ -2375,7 +2424,37 @@ func (s *Session) PromptWithOrigin(ctx context.Context, text string, origin stri
 // instead of Prompt, so the retried attempt answers the existing message
 // rather than duplicating it — see
 // docs/design/goal-retry-directive-reuse.md.
+//
+// A session whose model names ClaudeCodeProviderFamily dispatches to
+// runClaudeCodeTurn (engine/claude_code_backend.go) instead, at the very
+// top, before any of the native-loop machinery below runs: maxTokensUsed
+// accounting, streamTurnWithRetry, runToolCalls, and
+// drainQueuedPromptsIntoHistory's tool-call-boundary drain are ALL native-
+// provider-call concepts that make no sense for a turn Claude Code itself
+// is driving end to end (it runs its own tool loop, its own retries, and
+// its own mid-turn steering). Checking here — not only in
+// PromptWithOrigin's own early dispatch below — is what keeps
+// promptTurnWithRetry's directive-reuse retry (the doc comment above) from
+// falling through to the native path for a delegated session: that caller
+// reaches runAgenticLoop directly, bypassing PromptWithOrigin's dispatch
+// entirely, so THIS is the one choke point every route into the agentic
+// loop — fresh Prompt call or goal-loop retry alike — actually shares.
 func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) {
+	if s.claudeCodeDelegated() {
+		s.emitStatus("busy")
+		defer s.emitStatus("idle")
+		defer s.snapshotOnIdle()
+		msg, err := s.runClaudeCodeTurn(ctx)
+		if err != nil {
+			// Mirrors the native path's own error handling below
+			// (emitSessionError before returning) — a plugin host
+			// watching for session errors must see a delegated turn's
+			// failure exactly like a native one's.
+			s.emitSessionError(err)
+			return nil, err
+		}
+		return msg, nil
+	}
 	s.emitStatus("busy")
 	defer s.emitStatus("idle")
 	// The on-idle snapshot trigger (snapshot.go and docs/design/journal-

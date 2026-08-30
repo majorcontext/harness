@@ -184,6 +184,25 @@ const (
 	// DIFFERENT payload than the one the parent may already have
 	// received.
 	recTaskOutcomeCommitted = "task.outcome_committed"
+	// recClaudeCodeSessionID records the Claude Code CLI's OWN session id
+	// for a delegated session (see engine/claude_code_backend.go and
+	// Session.claudeCodeCLISessionID's own doc comment) — written once,
+	// the first time a delegated turn's system/init event reports it, and
+	// folded back on LoadSession so --resume keeps naming the same CLI
+	// session across a process restart. Mirrors recModel/recEffort
+	// exactly: a no-op record type with no lifecycle meaning beyond "the
+	// value changed", replayed last-writer-wins.
+	recClaudeCodeSessionID = "claude_code.session_id"
+	// recClaudeCodeUsage carries one delegated turn's AGGREGATE Usage (see
+	// Session.applyClaudeCodeUsage's own doc comment for why this is a
+	// dedicated record rather than riding a recMessage the way a native
+	// turn's usage does) — one per completed delegated turn's "result"
+	// event. Mirrors recCompact's own "Usage independent of any single
+	// message" precedent (record.Usage's doc comment), except this DOES
+	// fold into lastUsage on replay, unlike recCompact — see
+	// applyClaudeCodeUsage's doc comment for why that divergence is safe
+	// here.
+	recClaudeCodeUsage = "claude_code.usage"
 )
 
 // record is one line of a session log file.
@@ -297,6 +316,10 @@ type record struct {
 	// namespaced tool names this record adds to the session's selected set.
 	// nil on every other record type.
 	MCPTools []string `json:"mcp_tools,omitempty"`
+	// ClaudeCodeSessionID carries a recClaudeCodeSessionID record's
+	// payload: the Claude Code CLI's own session id (see
+	// Session.claudeCodeCLISessionID). Empty on every other record type.
+	ClaudeCodeSessionID string `json:"claude_code_session_id,omitempty"`
 }
 
 // applyGoalRecord folds one goal.* record into the durable goal state a
@@ -633,6 +656,38 @@ func (s *Session) persistEffort(e message.Effort) {
 		return
 	}
 	if err := s.writeRecord(record{Type: recEffort, Effort: e}); err != nil {
+		s.lastPersistErr = err
+	}
+}
+
+// persistClaudeCodeSessionID appends a claude_code.session_id record to the
+// session log. It mirrors persistModel/persistEffort exactly: a no-op
+// until the log exists (lazy creation), caller holds s.mu.
+func (s *Session) persistClaudeCodeSessionID(id string) {
+	if s.cfg.SessionDir == "" || !s.logStarted {
+		return
+	}
+	if err := s.ensureLog(); err != nil {
+		s.lastPersistErr = err
+		return
+	}
+	if err := s.writeRecord(record{Type: recClaudeCodeSessionID, ClaudeCodeSessionID: id}); err != nil {
+		s.lastPersistErr = err
+	}
+}
+
+// persistClaudeCodeUsage appends a claude_code.usage record to the session
+// log. It mirrors persistModel/persistEffort exactly: a no-op until the
+// log exists (lazy creation), caller holds s.mu.
+func (s *Session) persistClaudeCodeUsage(usage provider.Usage) {
+	if s.cfg.SessionDir == "" || !s.logStarted {
+		return
+	}
+	if err := s.ensureLog(); err != nil {
+		s.lastPersistErr = err
+		return
+	}
+	if err := s.writeRecord(record{Type: recClaudeCodeUsage, Usage: &usage}); err != nil {
 		s.lastPersistErr = err
 	}
 }
@@ -1441,6 +1496,20 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			s.model = rec.Model
 		case recEffort:
 			s.effort = rec.Effort
+		case recClaudeCodeSessionID:
+			s.claudeCodeCLISessionID = rec.ClaudeCodeSessionID
+		case recClaudeCodeUsage:
+			// See Session.applyClaudeCodeUsage's own doc comment for why
+			// this folds into BOTH cumulative usage and lastUsage, unlike
+			// recCompact's cumulative-only replay.
+			if rec.Usage != nil {
+				s.usage.InputTokens += rec.Usage.InputTokens
+				s.usage.OutputTokens += rec.Usage.OutputTokens
+				s.usage.CacheReadTokens += rec.Usage.CacheReadTokens
+				s.usage.CacheWriteTokens += rec.Usage.CacheWriteTokens
+				s.lastUsage = *rec.Usage
+				s.haveLastUsage = true
+			}
 		case recMCPToolsSelected:
 			// Union every record, in log order, into the restored selected
 			// set (see mcp_lazy.go). Replay is defensive, like
