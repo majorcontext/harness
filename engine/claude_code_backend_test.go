@@ -996,25 +996,32 @@ func TestClaudeCodeSucceedsDespiteInputWriteBrokenPipe(t *testing.T) {
 }
 
 // TestClaudeCodeReturnsOnResultDespiteLeakedDescendantFD reproduces the
-// `claude --bg` wedge consumeClaudeCodeStream's early return on "result"
-// fixes: a delegated turn must complete as soon as the direct `claude`
-// child prints its terminal "result" event, even when some OTHER process
-// still holds the same stdout pipe's write end open. Before the fix,
+// `claude --bg` wedge that consumeClaudeCodeStream's early return on
+// "result" PLUS runClaudeCodeTurn's stderr handling both have to fix: a
+// delegated turn must complete as soon as the direct `claude` child prints
+// its terminal "result" event, even when some OTHER process still holds
+// stdout OR stderr's pipe write end open. Before the stdout fix,
 // consumeClaudeCodeStream kept calling scanner.Scan() looking for EOF,
-// which only arrives once EVERY holder of the write end closes it — and
-// `claude --bg`'s own detached daemon (or a further child of its own,
-// e.g. a dev server) is designed to keep running, and can inherit that fd,
-// after the direct child has already exited. That wedges the whole
-// harness turn forever, unkillably, even though the turn's own result was
-// already in hand.
+// which only arrives once EVERY holder of the write end closes it. Before
+// the stderr fix, that same class of bug survived one layer down: Cmd's
+// own internal copying goroutine for a plain cmd.Stderr = io.Writer target
+// (this file used cmd.Stderr = &capBuffer) makes cmd.Wait() block until
+// STDERR's pipe sees EOF too — so a leaked descendant that inherits fd 2
+// (a real dev server commonly inherits its parent's whole stdio, not just
+// fd 1) could still wedge the turn through Wait() even once stdout no
+// longer could. `claude --bg`'s own detached daemon (or a further child of
+// its own) is designed to keep running after the direct child exits, and
+// can inherit either or both fds — that wedges the whole harness turn
+// forever, unkillably, even though the turn's own result was already in
+// hand.
 //
 // fakeclaude's "bg_leak" mode stands in for exactly that: it emits a
-// normal assistant/result pair, THEN spawns a grandchild that inherits its
-// stdout and sleeps for an hour (never emitting anything, never exiting on
-// its own within any sane test bound) before the direct child itself
-// returns. The select below is this test's hard timeout guard: if a
-// regression reintroduces the EOF-wait, this test fails loudly as a
-// TIMEOUT rather than hanging the suite.
+// normal assistant/result pair, THEN spawns a grandchild that inherits
+// BOTH its stdout and stderr and sleeps for an hour (never emitting
+// anything, never exiting on its own within any sane test bound) before
+// the direct child itself returns. The select below is this test's hard
+// timeout guard: if a regression reintroduces either EOF-wait, this test
+// fails loudly as a TIMEOUT rather than hanging the suite.
 func TestClaudeCodeReturnsOnResultDespiteLeakedDescendantFD(t *testing.T) {
 	s, _ := claudeCodeTestSession(t, "bg_leak")
 	pidFile := filepath.Join(t.TempDir(), "leaked.pid")

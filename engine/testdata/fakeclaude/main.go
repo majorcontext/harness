@@ -26,9 +26,9 @@
 // false, overageResetsAt 0 — proving mapClaudeCodeRateLimit leaves
 // SubscriptionUsage.Overage nil rather than a hollow zero-value object),
 // and "bg_leak" (reproduces a `claude --bg` turn whose detached child
-// inherits this process's stdout and outlives it — see its own comment
-// below and claude_code_backend.go's consumeClaudeCodeStream doc comment
-// for the wedge this proves fixed).
+// inherits this process's stdout AND stderr and outlives it — see its own
+// comment below and claude_code_backend.go's consumeClaudeCodeStream/
+// runClaudeCodeTurn doc comments for the wedge this proves fixed).
 package main
 
 import (
@@ -48,12 +48,13 @@ func main() {
 		// The detached grandchild "bg_leak" mode spawns below, standing in
 		// for `claude --bg`'s own daemon (or a further child of its own,
 		// e.g. a dev server) that inherits the direct `claude` child's
-		// stdout and outlives it. This process emits nothing at all — it
-		// exists solely to hold that inherited fd (this process's own
-		// os.Stdout, which IS the harness-owned pipe's write end) open far
-		// past any sane test timeout, so a test can prove the driver
-		// returns without ever waiting for this fd's EOF. The test kills
-		// it by PID once it has proved that.
+		// stdout AND stderr and outlives it. This process emits nothing at
+		// all — it exists solely to hold both inherited fds (this
+		// process's own os.Stdout/os.Stderr, which ARE the harness-owned
+		// pipes' write ends) open far past any sane test timeout, so a
+		// test can prove the driver returns without ever waiting for
+		// either fd's EOF. The test kills it by PID once it has proved
+		// that.
 		time.Sleep(time.Hour)
 		return
 	}
@@ -306,21 +307,28 @@ func main() {
 			},
 		})
 		// Simulate `claude --bg`'s detached child inheriting this
-		// process's stdout fd (the harness-owned pipe's write end) and
-		// outliving THIS direct child — see claude_code_backend.go's
-		// consumeClaudeCodeStream doc comment for the wedge this
-		// reproduces. Spawn a grandchild that inherits os.Stdout verbatim
-		// and sleeps well past any sane test timeout, holding the pipe's
-		// write end open long after this process (the direct `claude`
-		// child harness itself manages) exits right below. A minimal,
-		// explicit Env — not this process's own os.Environ() — keeps the
-		// grandchild out of FAKE_CLAUDE_LOG's invocation log, since it is
-		// not a `claude` invocation a test should count. The test kills
-		// the grandchild by PID (recorded via FAKE_CLAUDE_LEAK_PID_FILE)
-		// once it has proved the driver did not wait for it.
+		// process's stdout AND stderr fds (the harness-owned pipes' write
+		// ends) and outliving THIS direct child — see
+		// claude_code_backend.go's consumeClaudeCodeStream and
+		// runClaudeCodeTurn doc comments for the wedge this reproduces.
+		// BOTH fds matter here, not just stdout: a real leaked descendant
+		// (a dev server started by a background task, say) commonly
+		// inherits its parent's whole stdio, not a hand-picked subset, so
+		// a test that only leaks stdout would miss a driver that still
+		// wedges through stderr alone. Spawn a grandchild that inherits
+		// os.Stdout AND os.Stderr verbatim and sleeps well past any sane
+		// test timeout, holding both pipes' write ends open long after
+		// this process (the direct `claude` child harness itself manages)
+		// exits right below. A minimal, explicit Env — not this process's
+		// own os.Environ() — keeps the grandchild out of FAKE_CLAUDE_LOG's
+		// invocation log, since it is not a `claude` invocation a test
+		// should count. The test kills the grandchild by PID (recorded via
+		// FAKE_CLAUDE_LEAK_PID_FILE) once it has proved the driver did not
+		// wait for it.
 		leaker := exec.Command(os.Args[0])
 		leaker.Env = []string{"FAKE_CLAUDE_MODE=bg_leak_child"}
 		leaker.Stdout = os.Stdout
+		leaker.Stderr = os.Stderr
 		if err := leaker.Start(); err == nil {
 			if pidFile := os.Getenv("FAKE_CLAUDE_LEAK_PID_FILE"); pidFile != "" {
 				_ = os.WriteFile(pidFile, []byte(strconv.Itoa(leaker.Process.Pid)), 0o644)
