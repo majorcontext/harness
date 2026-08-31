@@ -6,6 +6,14 @@
 // environment variable, so the driver's event-mapping, resume, and usage
 // logic can be tested against a REAL child process and REAL pipes without
 // depending on an actual Anthropic subscription or the real binary.
+//
+// Beyond "normal"/"hang"/"error", a handful of narrower modes each cover
+// exactly one of the gaps claude_code_backend.go closes: "thinking" (a
+// thinking content block plus the result event's own ttft_ms/duration_ms
+// timing fields), "subagent" (a null-then-set parent_tool_use_id pair),
+// "rate_limit_error"/"deterministic_error" (a result event this file's own
+// claudeCodeRetryableClass must classify retryable/not-retryable,
+// respectively).
 package main
 
 import (
@@ -68,6 +76,12 @@ func main() {
 		// race.
 		time.Sleep(time.Hour)
 		return
+	case "crash":
+		// Exits nonzero without ever emitting a "result" event — the
+		// non-deterministic child-failure shape runClaudeCodeTurn's own
+		// waitErr branch must classify retryable (a crash, not a
+		// deterministic domain failure the CLI itself reported).
+		os.Exit(1)
 	case "error":
 		emit(map[string]any{
 			"type":     "result",
@@ -77,6 +91,114 @@ func main() {
 			"usage": map[string]any{
 				"input_tokens":  11,
 				"output_tokens": 3,
+			},
+		})
+		return
+	case "rate_limit_error":
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "error_during_execution",
+			"is_error": true,
+			"result":   "rate_limit_error: please retry later",
+			"usage": map[string]any{
+				"input_tokens":  6,
+				"output_tokens": 1,
+			},
+		})
+		return
+	case "deterministic_error":
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "error_max_turns",
+			"is_error": true,
+			"result":   "exceeded maximum turns",
+			"usage": map[string]any{
+				"input_tokens":  8,
+				"output_tokens": 2,
+			},
+		})
+		return
+	case "thinking":
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "thinking", "thinking": "Let me reason about this.", "signature": "sig-abc"},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "Here is my answer."},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "success",
+			"is_error": false,
+			"result":   "Here is my answer.",
+			"usage": map[string]any{
+				"input_tokens":  20,
+				"output_tokens": 10,
+			},
+			"ttft_ms":     120,
+			"duration_ms": 800,
+		})
+		return
+	case "subagent":
+		emit(map[string]any{
+			"type":               "assistant",
+			"parent_tool_use_id": nil,
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "tool_use", "id": "toolu_parent", "name": "Task", "input": map[string]any{}},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":               "assistant",
+			"parent_tool_use_id": "toolu_parent",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "Working inside the subagent."},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":               "user",
+			"parent_tool_use_id": "toolu_parent",
+			"message": map[string]any{
+				"role": "user",
+				"content": []map[string]any{
+					{"type": "tool_result", "tool_use_id": "toolu_parent", "content": "subagent done"},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":               "assistant",
+			"parent_tool_use_id": nil,
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "All done."},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "success",
+			"is_error": false,
+			"result":   "All done.",
+			"usage": map[string]any{
+				"input_tokens":  30,
+				"output_tokens": 15,
 			},
 		})
 		return
@@ -133,5 +255,7 @@ func main() {
 			"cache_creation_input_tokens": 5,
 		},
 		"total_cost_usd": 0.0123,
+		"ttft_ms":        50,
+		"duration_ms":    400,
 	})
 }

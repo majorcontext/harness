@@ -406,3 +406,314 @@ func TestClaudeCodeDefaultBinaryPath(t *testing.T) {
 		t.Errorf("ClaudeCode.BinaryPath = %q, want %q", s.cfg.ClaudeCode.BinaryPath, defaultClaudeCodeBinaryPath)
 	}
 }
+
+// TestClaudeCodeMCPConfigFileWritesConfiguredServers proves
+// Session.claudeCodeMCPConfigFile translates a session's configured MCP
+// servers (a stdio server and an HTTP server) into the CLI's own
+// --mcp-config JSON shape, and that its cleanup func actually removes the
+// file.
+func TestClaudeCodeMCPConfigFileWritesConfiguredServers(t *testing.T) {
+	mgr := NewMCPManager(map[string]MCPServerConfig{
+		"fs":     {Command: []string{"mcp-fs", "--root", "/work"}, Env: []string{"FOO=bar"}},
+		"remote": {URL: "https://example.com/mcp", Headers: map[string]string{"Authorization": "Bearer tok"}},
+	})
+	s := NewSession(Config{
+		Model: message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "sonnet"},
+		MCP:   mgr,
+	})
+
+	path, cleanup, err := s.claudeCodeMCPConfigFile()
+	if err != nil {
+		t.Fatalf("claudeCodeMCPConfigFile: %v", err)
+	}
+	if path == "" {
+		t.Fatal("claudeCodeMCPConfigFile returned an empty path for a session with configured MCP servers")
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading mcp-config file: %v", err)
+	}
+	var got claudeCodeMCPConfig
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("decoding mcp-config file: %v", err)
+	}
+
+	fs, ok := got.MCPServers["fs"]
+	if !ok {
+		t.Fatalf(`mcp-config missing "fs" server: %+v`, got.MCPServers)
+	}
+	if fs.Type != "" || fs.Command != "mcp-fs" || len(fs.Args) != 2 || fs.Args[0] != "--root" || fs.Args[1] != "/work" {
+		t.Errorf("fs server = %+v, want a stdio server: command mcp-fs, args [--root /work]", fs)
+	}
+	if fs.Env["FOO"] != "bar" {
+		t.Errorf("fs server Env = %+v, want FOO=bar", fs.Env)
+	}
+
+	remote, ok := got.MCPServers["remote"]
+	if !ok {
+		t.Fatalf(`mcp-config missing "remote" server: %+v`, got.MCPServers)
+	}
+	if remote.Type != "http" || remote.URL != "https://example.com/mcp" || remote.Headers["Authorization"] != "Bearer tok" {
+		t.Errorf("remote server = %+v, want an http server naming example.com with its Authorization header", remote)
+	}
+
+	cleanup()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("mcp-config file %q still exists after cleanup", path)
+	}
+}
+
+// TestClaudeCodeMCPConfigFileEmptyWithNoServers proves a session with no
+// configured MCP servers (nil Config.MCP, the default) gets no
+// --mcp-config file at all — MCP passthrough is opt-in, never a hard
+// requirement for a delegated turn.
+func TestClaudeCodeMCPConfigFileEmptyWithNoServers(t *testing.T) {
+	s := NewSession(Config{Model: message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "sonnet"}})
+	path, cleanup, err := s.claudeCodeMCPConfigFile()
+	if err != nil {
+		t.Fatalf("claudeCodeMCPConfigFile: %v", err)
+	}
+	defer cleanup()
+	if path != "" {
+		t.Errorf("claudeCodeMCPConfigFile path = %q, want empty for a session with no configured MCP servers", path)
+	}
+}
+
+// TestClaudeCodeMCPConfigForwardedToChildArgv proves runClaudeCodeTurn
+// actually appends --mcp-config (naming a real, readable file) and
+// --strict-mcp-config to the child's argv when the session has configured
+// MCP servers.
+func TestClaudeCodeMCPConfigForwardedToChildArgv(t *testing.T) {
+	s, logPath := claudeCodeTestSession(t, "normal")
+	s.cfg.MCP = NewMCPManager(map[string]MCPServerConfig{
+		"fs": {Command: []string{"mcp-fs"}},
+	})
+	// s.cfg.MCP is read fresh by claudeCodeMCPConfigFile at turn time (see
+	// claudeCodeTestSession's OnEvent precedent above): safe to set
+	// directly here, pre-Prompt, before anything else touches the session.
+
+	if _, err := s.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	invocations := readInvocations(t, logPath)
+	if len(invocations) != 1 {
+		t.Fatalf("invocations = %d, want 1: %+v", len(invocations), invocations)
+	}
+	path, ok := argvValueAfter(invocations[0], "--mcp-config")
+	if !ok || path == "" {
+		t.Fatalf("argv has no non-empty --mcp-config value: %v", invocations[0])
+	}
+	if !argvContains(invocations[0], "--strict-mcp-config") {
+		t.Errorf("argv missing --strict-mcp-config: %v", invocations[0])
+	}
+}
+
+// TestClaudeCodeEffortForwardedToChildArgv proves runClaudeCodeTurn reads
+// s.Effort() at turn time and forwards it as --effort, mapped through
+// claudeCodeEffortArg exactly as that function's own doc comment promises.
+func TestClaudeCodeEffortForwardedToChildArgv(t *testing.T) {
+	tests := []struct {
+		name   string
+		effort message.Effort
+		want   string
+	}{
+		{"off maps to the CLI floor", message.EffortOff, "low"},
+		{"minimal maps to the CLI floor", message.EffortMinimal, "low"},
+		{"low maps to low", message.EffortLow, "low"},
+		{"medium maps to medium", message.EffortMedium, "medium"},
+		{"high maps to high", message.EffortHigh, "high"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, logPath := claudeCodeTestSession(t, "normal")
+			s.SetEffort(tt.effort)
+			if _, err := s.Prompt(context.Background(), "hi"); err != nil {
+				t.Fatalf("Prompt: %v", err)
+			}
+			invocations := readInvocations(t, logPath)
+			got, ok := argvValueAfter(invocations[0], "--effort")
+			if !ok {
+				t.Fatalf("argv has no --effort: %v", invocations[0])
+			}
+			if got != tt.want {
+				t.Errorf("--effort = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestClaudeCodeEffortUnsetOmitsFlag proves a session that never called
+// SetEffort (message.EffortUnset, the zero value) sends no --effort flag at
+// all, mirroring how an unset provider.Request.Effort sends no reasoning
+// control to a native provider.
+func TestClaudeCodeEffortUnsetOmitsFlag(t *testing.T) {
+	s, logPath := claudeCodeTestSession(t, "normal")
+	if _, err := s.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	invocations := readInvocations(t, logPath)
+	if argvContains(invocations[0], "--effort") {
+		t.Errorf("argv unexpectedly carries --effort for EffortUnset: %v", invocations[0])
+	}
+}
+
+// TestClaudeCodeThinkingBlockDecodesToReasoningPart proves a "thinking"
+// content block — previously silently dropped (see claudeCodeContentBlock's
+// switch in claudeCodeAssistantMessage) — decodes into a message.Reasoning
+// part, is appended to history, and is emitted as EventReasoningDelta.
+func TestClaudeCodeThinkingBlockDecodesToReasoningPart(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "thinking")
+
+	var events []Event
+	s.cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+
+	msg, err := s.Prompt(context.Background(), "think about it")
+	if err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if got := msg.Parts.Text(); got != "Here is my answer." {
+		t.Errorf("final message text = %q", got)
+	}
+
+	hist := s.History()
+	// user prompt, assistant(thinking), assistant(text) = 3 messages.
+	if len(hist) != 3 {
+		t.Fatalf("History() len = %d, want 3: %+v", len(hist), hist)
+	}
+	reasoning, ok := hist[1].Parts[0].(*message.Reasoning)
+	if hist[1].Role != message.RoleAssistant || !ok || reasoning.Text != "Let me reason about this." {
+		t.Fatalf("hist[1] = %+v, want an assistant Reasoning(%q)", hist[1], "Let me reason about this.")
+	}
+	if len(reasoning.ProviderData) == 0 {
+		t.Error("Reasoning.ProviderData is empty, want the thinking block's signature carried through")
+	}
+
+	var sawReasoningDelta bool
+	for _, ev := range events {
+		if ev.Type == EventReasoningDelta && ev.Text == "Let me reason about this." {
+			sawReasoningDelta = true
+		}
+	}
+	if !sawReasoningDelta {
+		t.Error("no EventReasoningDelta for the thinking block")
+	}
+}
+
+// TestClaudeCodeParentToolUseIDCarriedOntoMessage proves the envelope's own
+// parent_tool_use_id (null at top level, set to the spawning tool_use id
+// inside a subagent's own turn) rides onto Message.ParentToolUseID for
+// both an "assistant" and a "user" (tool_result) event.
+func TestClaudeCodeParentToolUseIDCarriedOntoMessage(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "subagent")
+
+	if _, err := s.Prompt(context.Background(), "spawn a subagent"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	hist := s.History()
+	// user, assistant(tool_use Task, top-level), assistant(text, nested),
+	// tool(tool_result, nested), assistant(text, top-level) = 5 messages.
+	if len(hist) != 5 {
+		t.Fatalf("History() len = %d, want 5: %+v", len(hist), hist)
+	}
+	if got := hist[1].ParentToolUseID; got != "" {
+		t.Errorf("hist[1] (top-level tool_use) ParentToolUseID = %q, want empty", got)
+	}
+	if got := hist[2].ParentToolUseID; got != "toolu_parent" {
+		t.Errorf("hist[2] (nested assistant text) ParentToolUseID = %q, want toolu_parent", got)
+	}
+	if got := hist[3].ParentToolUseID; got != "toolu_parent" {
+		t.Errorf("hist[3] (nested tool result) ParentToolUseID = %q, want toolu_parent", got)
+	}
+	if got := hist[4].ParentToolUseID; got != "" {
+		t.Errorf("hist[4] (final top-level text) ParentToolUseID = %q, want empty", got)
+	}
+}
+
+// TestClaudeCodeTurnMetricsEmittedForDelegatedTurn proves runClaudeCodeTurn
+// emits exactly one OnTurnMetrics record per delegated turn, built from the
+// "result" event's own ttft_ms/duration_ms and the usage
+// applyClaudeCodeUsage already maps — engine.go's native streamTurn emits
+// one per completed turn too (see its own EventDone case), and a delegated
+// turn getting none at all was one of this backend's v1 gaps.
+func TestClaudeCodeTurnMetricsEmittedForDelegatedTurn(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "normal")
+
+	var metrics []TurnMetrics
+	s.cfg.OnTurnMetrics = func(m TurnMetrics) { metrics = append(metrics, m) }
+
+	if _, err := s.Prompt(context.Background(), "please run echo hi"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if len(metrics) != 1 {
+		t.Fatalf("OnTurnMetrics called %d times, want 1: %+v", len(metrics), metrics)
+	}
+	m := metrics[0]
+	if m.SessionID != s.ID {
+		t.Errorf("SessionID = %q, want %q", m.SessionID, s.ID)
+	}
+	if m.TTFTMillis != 50 {
+		t.Errorf("TTFTMillis = %d, want 50 (fakeclaude's own canned ttft_ms)", m.TTFTMillis)
+	}
+	if m.StreamMillis != 350 {
+		t.Errorf("StreamMillis = %d, want 350 (duration_ms 400 - ttft_ms 50)", m.StreamMillis)
+	}
+	if m.InputTokens != 101 || m.OutputTokens != 42 {
+		t.Errorf("TurnMetrics usage = {input:%d output:%d}, want {101 42} (fakeclaude's own canned usage)", m.InputTokens, m.OutputTokens)
+	}
+}
+
+// TestClaudeCodeRetryableClassification proves a "result" event this file
+// can actually name as transient provider weather (a rate-limit signal) is
+// wrapped provider.RetryableError, while a genuinely deterministic result
+// (max turns reached) is not — goal.go's promptTurnWithRetry uses exactly
+// this distinction (provider.AsRetryable) to decide whether to back off and
+// retry or fail fast.
+func TestClaudeCodeRetryableClassification(t *testing.T) {
+	t.Run("a rate-limit result is retryable", func(t *testing.T) {
+		s, _ := claudeCodeTestSession(t, "rate_limit_error")
+		_, err := s.Prompt(context.Background(), "do something")
+		if err == nil {
+			t.Fatal("Prompt returned no error for an is_error result")
+		}
+		class, ok := provider.AsRetryable(err)
+		if !ok {
+			t.Fatalf("provider.AsRetryable(%v) = false, want a retryable classification", err)
+		}
+		if class != provider.RetryableRateLimited {
+			t.Errorf("class = %q, want %q", class, provider.RetryableRateLimited)
+		}
+	})
+	t.Run("a deterministic max-turns result is not retryable", func(t *testing.T) {
+		s, _ := claudeCodeTestSession(t, "deterministic_error")
+		_, err := s.Prompt(context.Background(), "do something")
+		if err == nil {
+			t.Fatal("Prompt returned no error for an is_error result")
+		}
+		if _, ok := provider.AsRetryable(err); ok {
+			t.Errorf("provider.AsRetryable(%v) = true, want false for a deterministic max-turns failure", err)
+		}
+	})
+}
+
+// TestClaudeCodeChildCrashWithoutResultIsRetryable proves a child that
+// exits nonzero WITHOUT ever emitting a clean "result" event (a crash, an
+// OOM kill — non-deterministic child-process weather, not a domain-level
+// failure the CLI itself reported) is also wrapped provider.RetryableError,
+// via runClaudeCodeTurn's own waitErr branch rather than
+// claudeCodeRetryableClass.
+func TestClaudeCodeChildCrashWithoutResultIsRetryable(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "crash")
+	_, err := s.Prompt(context.Background(), "do something")
+	if err == nil {
+		t.Fatal("Prompt returned no error for a child that exited without a result event")
+	}
+	class, ok := provider.AsRetryable(err)
+	if !ok {
+		t.Fatalf("provider.AsRetryable(%v) = false, want retryable for a non-deterministic child crash", err)
+	}
+	if class != provider.RetryableServerError {
+		t.Errorf("class = %q, want %q", class, provider.RetryableServerError)
+	}
+}

@@ -55,60 +55,83 @@
 //     (claudeCodeCLISessionID) for --resume on this harness session's next
 //     delegated turn. Any other subtype (e.g. "api_retry") is activity
 //     only — observed, never fatal.
-//   - "assistant": one COMPLETE API-level assistant message (text and/or
-//     tool_use content blocks together) — NOT a token-by-token delta; this
-//     driver does not pass --include-partial-messages, so there is nothing
-//     more granular to forward. Decoded into one message.Message (Text and
-//     ToolCall parts, in order), appended via plain Session.append (no
-//     usage — see the usage-mapping note below) and emitted as
-//     EventMessage, with one EventTextDelta per non-empty text part
-//     (folding the whole block's text into the message in a single
-//     "delta", the closest honest match to the native EventTextDelta
-//     contract given the CLI hands over complete blocks) and one
-//     EventToolStart per tool_use part.
+//   - "assistant": one COMPLETE API-level assistant message (text, thinking,
+//     and/or tool_use content blocks together) — NOT a token-by-token
+//     delta; this driver does not pass --include-partial-messages, so
+//     there is nothing more granular to forward. Decoded into one
+//     message.Message (Reasoning, Text, and ToolCall parts, in order),
+//     appended via plain Session.append (no usage — see the usage-mapping
+//     note below) and emitted as EventMessage, with one EventReasoningDelta
+//     per non-empty thinking part, one EventTextDelta per non-empty text
+//     part (folding the whole block's text into the message in a single
+//     "delta", the closest honest match to the native
+//     EventTextDelta/EventReasoningDelta contract given the CLI hands over
+//     complete blocks), and one EventToolStart per tool_use part. The
+//     envelope's own parent_tool_use_id (null at top level, the spawning
+//     tool_use id inside a subagent's own turn) rides onto the appended
+//     message as Message.ParentToolUseID, unmodified.
 //   - "user": Claude Code's own tool execution results, arriving in the
 //     Anthropic API's own convention of a "user"-role message carrying
 //     tool_result content blocks (Claude Code executes its OWN tools here
 //     — this package never calls runToolCalls for a delegated turn).
 //     Decoded into one RoleTool message.Message (one ToolResult part per
-//     block), appended and emitted as EventMessage, with one EventToolEnd
-//     per part.
+//     block, Message.ParentToolUseID set the same way as the "assistant"
+//     case above), appended and emitted as EventMessage, with one
+//     EventToolEnd per part.
 //   - "result": the turn's terminal event. Never itself appended as a
 //     message (the assistant text it summarizes was already appended by
 //     the last "assistant" event above) — it instead carries the turn's
 //     AGGREGATE usage, applied once via applyClaudeCodeUsage (a durable,
-//     message-independent record — see recClaudeCodeUsage in store.go).
-//     An IsError result becomes this call's returned error; TotalCostUSD
-//     has no home in provider.Usage (no adapter carries a cost field —
-//     every consumer derives cost from token counts) and is deliberately
+//     message-independent record — see recClaudeCodeUsage in store.go),
+//     and this turn's timing, emitted once via emitTurnMetrics (ttft_ms/
+//     duration_ms, permissively zero-valued if the CLI's own build does not
+//     send them). An IsError result becomes this call's returned error —
+//     wrapped provider.RetryableError for a known-transient shape (see
+//     claudeCodeRetryableClass), a plain error otherwise. TotalCostUSD has
+//     no home in provider.Usage (no adapter carries a cost field — every
+//     consumer derives cost from token counts) and is deliberately
 //     dropped, not persisted.
 //
-// # Deferred for v1 (flagged, not silently skipped)
+// # Formerly deferred, now closed
 //
-//   - MCP passthrough (`--mcp-config`): a delegated turn does not forward
-//     harness's configured MCP servers to the `claude` child. Wiring this
-//     correctly means translating engine/mcp.go's server specs into the
-//     CLI's own --mcp-config JSON shape and reconciling two independent
-//     permission/tool-approval models — real, separable follow-on work.
-//   - `--append-system-prompt`: not auto-populated from s.cfg.System.
-//     Harness's system-prompt assembly (project instructions, Agent
-//     Skills, tool-batching guidance) is deliberately native-loop-only
-//     (see PromptWithOrigin's dispatch comment) — Claude Code already
-//     discovers its own CLAUDE.md/AGENTS.md in the box workspace, and
-//     re-injecting harness's OWN native-tool-shaped instructions into a
-//     CLI that has different tools would be actively misleading. An
-//     operator who wants extra injected wording can still reach the flag
-//     via config.Provider.ExtraArgs.
-//   - Full goal-loop support: the directive-reuse retry path (see above)
-//     IS dispatched correctly, so a goal loop driving a delegated session
-//     does not error out — but goal.go's retryable-error CLASSIFICATION
-//     (provider.RetryableError, promptTurnWithRetry's backoff/park
-//     decisions) is shaped entirely around native provider.Stream errors.
-//     An error this file returns is a plain error, never classified
-//     retryable, so a goal loop treats every delegated-turn failure as a
-//     deterministic stall rather than transient provider weather. Basic
-//     interactive Prompt-driven delegation is the verified, supported
-//     shape for v1.
+// The v1 doc above (see git history for its original wording) flagged five
+// gaps this package now closes:
+//
+//   - MCP passthrough (`--mcp-config`): runClaudeCodeTurn now translates
+//     the session's configured MCP servers (via the mcpServerLister seam
+//     below) into the CLI's own --mcp-config JSON and passes
+//     --strict-mcp-config alongside it — see buildClaudeCodeMCPConfig.
+//   - `--effort`: runClaudeCodeTurn reads s.Effort() and forwards it as
+//     --effort, mapped through claudeCodeEffortArg.
+//   - "thinking" content blocks: claudeCodeAssistantMessage now decodes
+//     them into message.Reasoning parts instead of dropping them.
+//   - parent_tool_use_id: captured on the envelope and carried onto the
+//     appended message.Message (Message.ParentToolUseID) so a subagent
+//     turn's nesting survives into the journal.
+//   - turn_metrics: consumeClaudeCodeStream now emits an OnTurnMetrics
+//     record from the "result" event's own timing/usage fields.
+//
+// `--append-system-prompt` remains NOT auto-populated from s.cfg.System —
+// see the original reasoning, unchanged: harness's system-prompt assembly
+// is deliberately native-loop-only (PromptWithOrigin's dispatch comment),
+// Claude Code already discovers its own CLAUDE.md/AGENTS.md in the box
+// workspace, and re-injecting harness's own native-tool-shaped instructions
+// into a CLI with different tools would be actively misleading. An operator
+// who wants extra injected wording can still reach the flag via
+// config.Provider.ExtraArgs.
+//
+// Full goal-loop support is now PARTIAL rather than absent: a delegated
+// turn's error is wrapped provider.RetryableError (see
+// claudeCodeRetryableClass and the process-exit branch in
+// runClaudeCodeTurn) for the known-transient shapes a "result" event or a
+// child crash can report — a rate-limit/overload signal, the CLI's own
+// "error_during_execution" catch-all, or the child process exiting without
+// ever emitting a clean result at all — so goal.go's promptTurnWithRetry
+// gives those the same backoff-and-retry treatment a native provider's
+// weather gets. A deterministic failure (max turns reached, a genuine
+// refusal) still surfaces as a plain error, exactly as before, so the goal
+// loop still fails fast on those rather than burning a retry budget on a
+// request that will fail identically every time.
 package engine
 
 import (
@@ -119,6 +142,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"syscall"
@@ -266,6 +290,17 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	}
 	model := s.Model()
 
+	// The --mcp-config file (if s.cfg.MCP has any servers to describe) is
+	// written before the args slice below so its path can be included, and
+	// removed unconditionally on every return path via cleanupMCPConfig —
+	// see claudeCodeMCPConfigFile's own doc comment for why this rides a
+	// temp file rather than an inline argv value.
+	mcpConfigPath, cleanupMCPConfig, err := s.claudeCodeMCPConfigFile()
+	if err != nil {
+		return nil, err
+	}
+	defer cleanupMCPConfig()
+
 	args := []string{
 		"--input-format", "stream-json",
 		"--output-format", "stream-json",
@@ -279,6 +314,18 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	}
 	if cfg.PermissionMode != "" {
 		args = append(args, "--permission-mode", cfg.PermissionMode)
+	}
+	if effort, ok := claudeCodeEffortArg(s.Effort()); ok {
+		args = append(args, "--effort", effort)
+	}
+	if mcpConfigPath != "" {
+		// --strict-mcp-config: only harness's own configured servers are
+		// visible to the child, never whatever a project-local .mcp.json or
+		// the operator's own ~/.claude.json might additionally define —
+		// harness's config is the single source of truth for what tools a
+		// delegated turn can reach, exactly like the native loop's own
+		// toolDefs assembly.
+		args = append(args, "--mcp-config", mcpConfigPath, "--strict-mcp-config")
 	}
 	args = append(args, cfg.ExtraArgs...)
 
@@ -391,7 +438,17 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		if tail := stderr.String(); tail != "" {
 			msg += fmt.Sprintf(" (stderr: %s)", tail)
 		}
-		return nil, errors.New(msg)
+		// The child exited without ever emitting a clean "result" event at
+		// all (consumeClaudeCodeStream returned turnErr == nil, so this
+		// is not the deterministic IsError shape claudeCodeRetryableClass
+		// classifies above) — a crash, an OOM kill, a signal from
+		// something other than this call's own abort cascade (ctx.Err()
+		// was already checked nil above). That is exactly the same kind of
+		// non-deterministic, worth-a-retry provider weather
+		// MarkStreamTruncated marks for a native adapter's stream that dies
+		// mid-body, so goal.go's promptTurnWithRetry gives it the same
+		// backoff-and-retry treatment rather than parking on attempt 1.
+		return nil, provider.MarkRetryable(errors.New(msg), provider.RetryableServerError)
 	}
 	if finalMsg == nil {
 		return nil, errors.New("engine: claude-code: turn ended with no assistant message")
@@ -452,7 +509,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			// requires no action — see the package doc's event-mapping
 			// section.
 		case "assistant":
-			msg := claudeCodeAssistantMessage(env.Message, model)
+			msg := claudeCodeAssistantMessage(env.Message, model, env.ParentToolUseID)
 			if len(msg.Parts) == 0 {
 				continue
 			}
@@ -464,13 +521,17 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 					if part.Text != "" {
 						s.emit(Event{Type: EventTextDelta, Text: part.Text})
 					}
+				case *message.Reasoning:
+					if part.Text != "" {
+						s.emit(Event{Type: EventReasoningDelta, Text: part.Text})
+					}
 				case *message.ToolCall:
 					s.emit(Event{Type: EventToolStart, ToolCall: part})
 				}
 			}
 			finalMsg = &msg
 		case "user":
-			msg := claudeCodeToolResultMessage(env.Message)
+			msg := claudeCodeToolResultMessage(env.Message, env.ParentToolUseID)
 			if msg == nil {
 				continue
 			}
@@ -487,9 +548,34 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 				}
 			}
 		case "result":
-			s.applyClaudeCodeUsage(mapClaudeCodeUsage(env.Usage))
+			usage := mapClaudeCodeUsage(env.Usage)
+			s.applyClaudeCodeUsage(usage)
+			streamMillis := env.DurationMillis - env.TTFTMillis
+			if streamMillis < 0 {
+				// A CLI build that sends duration_ms but not ttft_ms (or
+				// vice versa) must never produce a negative StreamMillis —
+				// see TurnMetrics.StreamMillis's own "zero when EventDone
+				// was itself the first delta" precedent for the native
+				// path; here it means "no usable breakdown", not "the
+				// turn took negative time".
+				streamMillis = 0
+			}
+			s.emitTurnMetrics(TurnMetrics{
+				SessionID:        s.ID,
+				Model:            model,
+				Attempt:          1, // see this file's package doc: Claude Code retries internally, invisible to harness
+				TTFTMillis:       env.TTFTMillis,
+				StreamMillis:     streamMillis,
+				InputTokens:      usage.InputTokens,
+				OutputTokens:     usage.OutputTokens,
+				CacheReadTokens:  usage.CacheReadTokens,
+				CacheWriteTokens: usage.CacheWriteTokens,
+			})
 			if env.IsError {
 				turnErr = fmt.Errorf("engine: claude-code: turn ended in error (subtype %q): %s", env.Subtype, env.Result)
+				if class, ok := claudeCodeRetryableClass(env.Subtype, env.Result); ok {
+					turnErr = provider.MarkRetryable(turnErr, class)
+				}
 			}
 			// TotalCostUSD is intentionally dropped here — see the
 			// package doc's "result" bullet: provider.Usage has no cost
@@ -518,6 +604,23 @@ type claudeCodeEnvelope struct {
 	// whole delegated turn — read but deliberately never mapped onto
 	// anything (see this file's package doc, "result" bullet).
 	TotalCostUSD float64 `json:"total_cost_usd,omitempty"`
+	// ParentToolUseID is null (so absent, or explicit JSON null — either
+	// decodes to "" for a plain string field, encoding/json's documented
+	// no-op-on-null behavior for a non-pointer target) at the top level of
+	// a delegated turn's own events, and set to the spawning tool_use id
+	// inside a subagent's own turn — see the package doc's event-mapping
+	// section. Carried verbatim onto the appended message.Message
+	// (Message.ParentToolUseID) by claudeCodeAssistantMessage/
+	// claudeCodeToolResultMessage.
+	ParentToolUseID string `json:"parent_tool_use_id,omitempty"`
+	// TTFTMillis and DurationMillis are a "result" event's own timing
+	// fields (time to first token, and this turn's total wall time),
+	// forwarded into emitTurnMetrics's TTFTMillis/StreamMillis — see the
+	// package doc's "result" bullet. Zero, never an error, if a particular
+	// `claude` build does not send them (this file's usual permissive-
+	// decoding philosophy).
+	TTFTMillis     int64 `json:"ttft_ms,omitempty"`
+	DurationMillis int64 `json:"duration_ms,omitempty"`
 }
 
 // claudeCodeUsage is a "result" event's usage object.
@@ -587,6 +690,16 @@ type claudeCodeContentBlock struct {
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   json.RawMessage `json:"content,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
+	// Thinking and Signature are set on a "thinking" block — the raw
+	// Anthropic Messages API shape Claude Code's own "assistant" events
+	// reuse verbatim (see provider/anthropic/anthropic.go's identical
+	// content_block_start/content_block_delta fields for the API this
+	// mirrors). Signature is opaque, provider-native reasoning state,
+	// carried into message.Reasoning.ProviderData rather than dropped —
+	// see claudeCodeAssistantMessage's "thinking" case and
+	// claudeCodeReasoningProviderData.
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
 }
 
 // decodeClaudeCodeContentBlocks decodes raw as either a JSON array of
@@ -639,13 +752,38 @@ func claudeCodeContentText(raw json.RawMessage) string {
 	return string(raw)
 }
 
+// claudeCodeReasoningFamily tags a "thinking" block's opaque Signature under
+// message.Reasoning.ProviderData, keyed the same way provider/anthropic's
+// own Family constant names it ("anthropic") — a delegated turn's thinking
+// blocks are Anthropic's own wire shape verbatim (see
+// claudeCodeContentBlock's "thinking"/"signature" doc comment), so tagging
+// them under the same family a future transcode of this history would
+// expect is the honest key, even though this file cannot import
+// provider/anthropic to reference its constant directly (package engine
+// does not import a specific provider package — see
+// ClaudeCodeProviderFamily's own doc comment for the same duplication-over-
+// import precedent with provider/claudecode.Family).
+const claudeCodeReasoningFamily = "anthropic"
+
+// claudeCodeReasoningData is the JSON shape stored under
+// message.Reasoning.ProviderData[claudeCodeReasoningFamily] — mirrors
+// provider/anthropic/transcode.go's anthropicReasoningData one-for-one
+// (Signature only; a delegated turn never sees a "redacted_thinking" block
+// on its own stream-json output, so there is no Redacted field to carry).
+type claudeCodeReasoningData struct {
+	Signature string `json:"signature,omitempty"`
+}
+
 // claudeCodeAssistantMessage decodes an "assistant" event's message field
-// into a canonical message.Message: one Text part per non-empty "text"
-// content block, one ToolCall part per "tool_use" block, in the CLI's own
-// order. A decode failure or a message with no recognized blocks yields a
-// Message with a nil Parts, which consumeClaudeCodeStream's caller treats
-// as "nothing to append".
-func claudeCodeAssistantMessage(raw json.RawMessage, model message.ModelRef) message.Message {
+// into a canonical message.Message: one Reasoning part per "thinking"
+// block, one Text part per non-empty "text" content block, one ToolCall
+// part per "tool_use" block, in the CLI's own order. parentToolUseID rides
+// straight onto the returned Message (see claudeCodeEnvelope.
+// ParentToolUseID's own doc comment) — empty for a top-level delegated
+// turn's own messages. A decode failure or a message with no recognized
+// blocks yields a Message with a nil Parts, which consumeClaudeCodeStream's
+// caller treats as "nothing to append".
+func claudeCodeAssistantMessage(raw json.RawMessage, model message.ModelRef, parentToolUseID string) message.Message {
 	var cm claudeCodeMessage
 	_ = json.Unmarshal(raw, &cm) // best-effort; a failure just yields no blocks below
 	var parts message.Parts
@@ -655,6 +793,12 @@ func claudeCodeAssistantMessage(raw json.RawMessage, model message.ModelRef) mes
 			if b.Text != "" {
 				parts = append(parts, &message.Text{Text: b.Text})
 			}
+		case "thinking":
+			data, _ := json.Marshal(claudeCodeReasoningData{Signature: b.Signature})
+			parts = append(parts, &message.Reasoning{
+				Text:         b.Thinking,
+				ProviderData: message.ProviderData{claudeCodeReasoningFamily: data},
+			})
 		case "tool_use":
 			args := b.Input
 			if len(args) == 0 {
@@ -664,25 +808,27 @@ func claudeCodeAssistantMessage(raw json.RawMessage, model message.ModelRef) mes
 		}
 	}
 	return message.Message{
-		ID:        newID("msg"),
-		Role:      message.RoleAssistant,
-		Parts:     parts,
-		Model:     model,
-		Origin:    message.OriginClaudeCode,
-		CreatedAt: time.Now().UTC(),
+		ID:              newID("msg"),
+		Role:            message.RoleAssistant,
+		Parts:           parts,
+		Model:           model,
+		Origin:          message.OriginClaudeCode,
+		CreatedAt:       time.Now().UTC(),
+		ParentToolUseID: parentToolUseID,
 	}
 }
 
 // claudeCodeToolResultMessage decodes a "user" event's message field —
 // Claude Code's own tool_result delivery, in the raw Anthropic API's
 // "user"-role convention — into a canonical RoleTool message.Message: one
-// ToolResult part per "tool_result" content block. Returns nil when the
-// message decodes to no tool_result blocks at all (an ordinary human-
-// authored "user" event never reaches this driver — Session.History's
-// tail is the only user input a delegated turn ever sends, over stdin, not
-// stdout — so an empty result here means an unrecognized shape, not a
-// real turn boundary to silently drop).
-func claudeCodeToolResultMessage(raw json.RawMessage) *message.Message {
+// ToolResult part per "tool_result" content block. parentToolUseID rides
+// onto the returned Message exactly like claudeCodeAssistantMessage's own
+// parameter. Returns nil when the message decodes to no tool_result blocks
+// at all (an ordinary human-authored "user" event never reaches this
+// driver — Session.History's tail is the only user input a delegated turn
+// ever sends, over stdin, not stdout — so an empty result here means an
+// unrecognized shape, not a real turn boundary to silently drop).
+func claudeCodeToolResultMessage(raw json.RawMessage, parentToolUseID string) *message.Message {
 	var cm claudeCodeMessage
 	if err := json.Unmarshal(raw, &cm); err != nil {
 		return nil
@@ -702,12 +848,201 @@ func claudeCodeToolResultMessage(raw json.RawMessage) *message.Message {
 		return nil
 	}
 	return &message.Message{
-		ID:        newID("msg"),
-		Role:      message.RoleTool,
-		Parts:     parts,
-		Origin:    message.OriginClaudeCode,
-		CreatedAt: time.Now().UTC(),
+		ID:              newID("msg"),
+		Role:            message.RoleTool,
+		Parts:           parts,
+		Origin:          message.OriginClaudeCode,
+		CreatedAt:       time.Now().UTC(),
+		ParentToolUseID: parentToolUseID,
 	}
+}
+
+// claudeCodeEffortArg maps harness's message.Effort to the `claude` CLI's
+// own --effort values (low/medium/high — the CLI has no "off"/"minimal"
+// level of its own). EffortOff and EffortMinimal both collapse onto the
+// CLI's floor, "low" — the same "cap at the nearest coarser level the
+// target enum actually offers" precedent provider/openai/transcode.go's
+// reasoningEffort and provider/anthropic/transcode.go's thinkingBudget
+// already follow for their own, differently-shaped target enums (xhigh/max
+// are similarly unreachable through harness's four-level Effort enum, so
+// there is no higher tier to cap at here). ok is false for
+// message.EffortUnset — send no --effort flag at all, mirroring how an
+// unset provider.Request.Effort sends no reasoning control to a native
+// provider — and for any value message.Effort.Valid does not recognize.
+func claudeCodeEffortArg(e message.Effort) (string, bool) {
+	switch e {
+	case message.EffortOff, message.EffortMinimal, message.EffortLow:
+		return "low", true
+	case message.EffortMedium:
+		return "medium", true
+	case message.EffortHigh:
+		return "high", true
+	default:
+		return "", false
+	}
+}
+
+// claudeCodeRetryableClass classifies a "result" event's own reported
+// failure — subtype plus the human-readable result text — as provider-
+// weather retryable, mirroring how a native adapter classifies an HTTP
+// status or inline API-error event (see provider.RetryableClass). This is
+// deliberately NOT "every is_error result is retryable": a genuine
+// deterministic outcome (max turns reached, a refusal) must still fail
+// fast so goal.go's promptTurnWithRetry does not burn its retry budget on
+// a request that will fail identically every time — only a signal this
+// file can actually name as transient provider weather gets wrapped.
+func claudeCodeRetryableClass(subtype, result string) (provider.RetryableClass, bool) {
+	hay := strings.ToLower(subtype + " " + result)
+	switch {
+	case strings.Contains(hay, "rate_limit") || strings.Contains(hay, "rate limit"):
+		return provider.RetryableRateLimited, true
+	case strings.Contains(hay, "overloaded"):
+		return provider.RetryableOverloaded, true
+	case subtype == "error_during_execution":
+		// The CLI's own catch-all subtype for an infrastructure-side
+		// hiccup during its turn (e.g. a transient API error surfaced
+		// mid-execution, not a deterministic domain failure) — mirrors
+		// provider/anthropic's inline "error" SSE event mapping to
+		// RetryableServerError.
+		return provider.RetryableServerError, true
+	default:
+		return "", false
+	}
+}
+
+// claudeCodeMCPServerLister is the seam runClaudeCodeTurn uses to read a
+// session's configured MCP server definitions for --mcp-config. Kept
+// separate from the MCPRegistry interface itself (Tools/CallTool/
+// CallServerTool) deliberately: extending MCPRegistry would force every
+// existing fake implementation across this package, cmd/harness, and
+// server to grow a new method just to keep compiling, for a capability
+// only this one call site needs. Only *MCPManager (the production
+// implementation, see its own Servers method in mcp.go) and any test fake
+// that chooses to implement it need to; an s.cfg.MCP that does not (nil, or
+// a fake with no reason to care) simply contributes no MCP passthrough,
+// the same fail-open philosophy as an MCP server that never connects (see
+// engine/mcp.go's package doc).
+type claudeCodeMCPServerLister interface {
+	Servers() map[string]MCPServerConfig
+}
+
+// claudeCodeMCPServers returns reg's configured MCP servers, or nil if reg
+// is nil or does not implement claudeCodeMCPServerLister — see that
+// interface's own doc comment.
+func claudeCodeMCPServers(reg MCPRegistry) map[string]MCPServerConfig {
+	lister, ok := reg.(claudeCodeMCPServerLister)
+	if !ok {
+		return nil
+	}
+	return lister.Servers()
+}
+
+// claudeCodeMCPConfig is the `claude` CLI's own --mcp-config JSON shape: a
+// top-level "mcpServers" object of server definitions (see
+// https://code.claude.com/docs's MCP configuration file contract) — a
+// stdio server names a command/args/env, an HTTP server names a type/url
+// and optional headers.
+type claudeCodeMCPConfig struct {
+	MCPServers map[string]claudeCodeMCPServerSpec `json:"mcpServers"`
+}
+
+// claudeCodeMCPServerSpec is one server entry of claudeCodeMCPConfig. Type
+// is omitted for a stdio server (the CLI's own default) and "http" for a
+// Streamable HTTP server, in which case Command/Args/Env are unset and
+// URL/Headers carry the server's endpoint instead — see
+// claudeCodeMCPServerSpecFor.
+type claudeCodeMCPServerSpec struct {
+	Type    string            `json:"type,omitempty"`
+	Command string            `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// claudeCodeMCPServerSpecFor translates one engine MCPServerConfig into its
+// --mcp-config wire shape. Exactly one of spec.Command/spec.URL is ever
+// set — see MCPServerConfig's own doc comment; validateMCPServers enforces
+// this at config-load time, well before a value can ever reach here — so
+// checking URL first and falling through to the stdio shape otherwise
+// never mismatches a server's actual kind.
+func claudeCodeMCPServerSpecFor(spec MCPServerConfig) claudeCodeMCPServerSpec {
+	if spec.URL != "" {
+		return claudeCodeMCPServerSpec{Type: "http", URL: spec.URL, Headers: spec.Headers}
+	}
+	out := claudeCodeMCPServerSpec{Env: claudeCodeMCPServerEnv(spec.Env)}
+	if len(spec.Command) > 0 {
+		out.Command = spec.Command[0]
+		if len(spec.Command) > 1 {
+			out.Args = append([]string(nil), spec.Command[1:]...)
+		}
+	}
+	return out
+}
+
+// claudeCodeMCPServerEnv converts MCPServerConfig.Env's "KEY=VALUE" argv-
+// style entries into the map object --mcp-config's JSON shape expects. An
+// entry with no "=" is skipped rather than failing the whole turn over one
+// malformed entry — this file's usual permissive-decoding philosophy
+// applied to config translation instead of CLI output.
+func claudeCodeMCPServerEnv(env []string) map[string]string {
+	if len(env) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(env))
+	for _, kv := range env {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// claudeCodeMCPConfigFile writes s's configured MCP servers (if any) to a
+// fresh temp file in the CLI's own --mcp-config JSON shape, returning its
+// path plus a cleanup func that removes it (always non-nil, a no-op when
+// path is ""). A temp FILE, not an inline JSON string on the command line,
+// deliberately: an MCPServerConfig can carry Headers/Env holding real
+// credential material, and argv is visible to any other process on the box
+// (via /proc or ps) — writing to a file only this process's own return
+// value names, then removing it once this call returns (the child has
+// already read it by then; it only needs the file at startup), keeps that
+// material out of the process list. len(servers) == 0 (MCP unconfigured,
+// or s.cfg.MCP does not implement claudeCodeMCPServerLister — see
+// claudeCodeMCPServers) returns "", a no-op cleanup, and a nil error: MCP
+// passthrough is opt-in, never a hard requirement for a delegated turn to
+// proceed.
+func (s *Session) claudeCodeMCPConfigFile() (path string, cleanup func(), err error) {
+	noop := func() {}
+	servers := claudeCodeMCPServers(s.cfg.MCP)
+	if len(servers) == 0 {
+		return "", noop, nil
+	}
+	cfg := claudeCodeMCPConfig{MCPServers: make(map[string]claudeCodeMCPServerSpec, len(servers))}
+	for name, spec := range servers {
+		cfg.MCPServers[name] = claudeCodeMCPServerSpecFor(spec)
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return "", noop, fmt.Errorf("engine: claude-code: encoding --mcp-config: %w", err)
+	}
+	f, err := os.CreateTemp("", "harness-claude-code-mcp-*.json")
+	if err != nil {
+		return "", noop, fmt.Errorf("engine: claude-code: creating --mcp-config file: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return "", noop, fmt.Errorf("engine: claude-code: writing --mcp-config file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(f.Name())
+		return "", noop, fmt.Errorf("engine: claude-code: closing --mcp-config file: %w", err)
+	}
+	name := f.Name()
+	return name, func() { _ = os.Remove(name) }, nil
 }
 
 // claudeCodeInputMessage is the stdin stream-json shape this driver writes
