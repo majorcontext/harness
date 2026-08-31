@@ -967,6 +967,18 @@ type Session struct {
 	lastUsage     provider.Usage
 	haveLastUsage bool
 
+	// subscriptionUsage is this session's most recently captured
+	// subscription-lane rate-limit/quota snapshot (see
+	// message.SubscriptionUsage's own doc comment for what captures one
+	// and why) — nil until a turn in THIS process has carried the signal.
+	// Deliberately process-local only, like lastSystem/committedOutcome
+	// below: a per-process latest-value cache, not folded into cumulative
+	// state and not replayed by LoadSession. GET /session reports null
+	// rather than a stale value from a prior process, which is honest —
+	// the provider will resend the signal on this session's very next
+	// delegated/subscription turn regardless.
+	subscriptionUsage *message.SubscriptionUsage
+
 	// turnUnsettled is SessionManager.recoverInterruptedTurnLocked's
 	// restart-recovery signal, replacing an earlier, unreliable
 	// heuristic (hasUnansweredTurn, since removed) that tried to infer
@@ -2002,6 +2014,37 @@ func (s *Session) LastUsage() (usage provider.Usage, ok bool) {
 	return s.lastUsage, s.haveLastUsage
 }
 
+// applySubscriptionUsage records u as this session's latest subscription-
+// usage snapshot (see message.SubscriptionUsage's own doc comment) — the
+// single choke point both subscription lanes go through: engine/
+// claude_code_backend.go's consumeClaudeCodeStream for a "rate_limit_event",
+// and streamTurn's EventDone case for a codex-family provider.Event that
+// carried one. CapturedAt is always stamped here from s.cfg.Now(), not
+// trusted from the caller, so every consumer sees a harness-clock
+// timestamp regardless of which lane captured the underlying signal.
+func (s *Session) applySubscriptionUsage(u message.SubscriptionUsage) {
+	u.CapturedAt = s.cfg.Now().Unix()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subscriptionUsage = &u
+}
+
+// SubscriptionUsage returns this session's most recently captured
+// subscription-usage snapshot (see applySubscriptionUsage), or nil if no
+// turn in this process has carried the signal yet — see
+// subscriptionUsage's own doc comment for why this never falls back to a
+// durable source.
+func (s *Session) SubscriptionUsage() *message.SubscriptionUsage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.subscriptionUsage == nil {
+		return nil
+	}
+	cp := *s.subscriptionUsage
+	cp.Windows = append([]message.SubscriptionUsageWindow(nil), s.subscriptionUsage.Windows...)
+	return &cp
+}
+
 // LastActivityAt returns the timestamp of the most recently appended
 // message (user, assistant, or tool), or CreatedAt if no message has been
 // appended yet.
@@ -2932,6 +2975,13 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 				SystemLen:  len(strings.Join(system, "\n")),
 				ToolsCount: len(tools),
 			})
+			if ev.SubscriptionUsage != nil {
+				// See provider.Event.SubscriptionUsage's own doc comment:
+				// only a subscription-lane adapter (provider/openai's codex
+				// family today) ever sets this, and only when its own
+				// response actually carried the signal.
+				s.applySubscriptionUsage(*ev.SubscriptionUsage)
+			}
 			return ev.Message, ev.StopReason, ev.Usage, nil
 		}
 	}

@@ -700,6 +700,56 @@ func TestClaudeCodeTurnMetricsEmittedForDelegatedTurn(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeRateLimitEventCapturesSubscriptionUsage drives a turn
+// through fakeclaude's "rate_limit_event" mode (a rate_limit_event ahead of
+// the turn's final assistant text — the CLI's own documented ordering, see
+// this file's package doc) and asserts Session.SubscriptionUsage() —
+// exactly what buildSession (server/handlers.go) reads for GET /session's
+// subscription_usage field — carries the mapped provider, windows, and
+// overage.
+func TestClaudeCodeRateLimitEventCapturesSubscriptionUsage(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "rate_limit_event")
+
+	if got := s.SubscriptionUsage(); got != nil {
+		t.Fatalf("SubscriptionUsage() before any turn = %+v, want nil", got)
+	}
+
+	if _, err := s.Prompt(context.Background(), "how am I doing on quota?"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	usage := s.SubscriptionUsage()
+	if usage == nil {
+		t.Fatal("SubscriptionUsage() after the turn = nil, want a captured snapshot")
+	}
+	if usage.Provider != "claude" {
+		t.Errorf("Provider = %q, want claude", usage.Provider)
+	}
+	if usage.Plan != "" {
+		t.Errorf("Plan = %q, want \"\" (not cheaply available from rate_limit_event)", usage.Plan)
+	}
+	if usage.CapturedAt == 0 {
+		t.Error("CapturedAt = 0, want a stamped Unix timestamp")
+	}
+	if len(usage.Windows) != 2 {
+		t.Fatalf("Windows = %+v, want 2 entries", usage.Windows)
+	}
+	// Sorted by key (mapClaudeCodeRateLimit): "five_hour" before "seven_day".
+	fh, sd := usage.Windows[0], usage.Windows[1]
+	if fh.Key != "five_hour" || fh.Label != "5-hour" || fh.UsedPercent != 2 || fh.ResetsAt != 1788785267 {
+		t.Errorf("Windows[0] = %+v, want {five_hour 5-hour 2 1788785267}", fh)
+	}
+	if sd.Key != "seven_day" || sd.Label != "Weekly" || sd.UsedPercent != 13 || sd.ResetsAt != 1789200000 {
+		t.Errorf("Windows[1] = %+v, want {seven_day Weekly 13 1789200000}", sd)
+	}
+	if usage.Overage == nil {
+		t.Fatal("Overage = nil, want a mapped overage object")
+	}
+	if usage.Overage.InUse || usage.Overage.Status != "allowed" || usage.Overage.ResetsAt != 1789000000 {
+		t.Errorf("Overage = %+v, want {false allowed 1789000000}", usage.Overage)
+	}
+}
+
 // TestClaudeCodeRetryableClassification proves a "result" event this file
 // can actually name as transient provider weather (a rate-limit signal) is
 // wrapped provider.RetryableError, while a genuinely deterministic result

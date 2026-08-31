@@ -91,6 +91,14 @@
 //     no home in provider.Usage (no adapter carries a cost field — every
 //     consumer derives cost from token counts) and is deliberately
 //     dropped, not persisted.
+//   - "rate_limit_event": the CLI's own subscription rate-limit/quota
+//     signal, typically the SECOND event of a turn (right after
+//     "system"/"init"). Never appended as a message — it carries no
+//     conversational content — but mapped via mapClaudeCodeRateLimit and
+//     applied to the session via applySubscriptionUsage (engine.go),
+//     process-local only, surfaced on GET /session as
+//     subscription_usage. See mapClaudeCodeRateLimit's own doc comment
+//     for the field-by-field mapping.
 //
 // # Formerly deferred, now closed
 //
@@ -144,6 +152,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -668,6 +677,16 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			// TotalCostUSD is intentionally dropped here — see the
 			// package doc's "result" bullet: provider.Usage has no cost
 			// field for it to occupy.
+		case "rate_limit_event":
+			// The CLI's own subscription rate-limit/quota signal — see
+			// mapClaudeCodeRateLimit's own doc comment for the wire shape
+			// and mapping. Typically the SECOND event of a turn (right
+			// after "system"/"init"), but this file reacts to it whenever
+			// it arrives, and to every occurrence, not only the first: a
+			// long-running turn can see its own limits shift mid-turn.
+			if usage, ok := mapClaudeCodeRateLimit(env.RateLimitInfo); ok {
+				s.applySubscriptionUsage(usage)
+			}
 		}
 		// Any other top-level "type" (this driver has none documented
 		// beyond the four above) is inert activity, per the package doc.
@@ -709,6 +728,89 @@ type claudeCodeEnvelope struct {
 	// decoding philosophy).
 	TTFTMillis     int64 `json:"ttft_ms,omitempty"`
 	DurationMillis int64 `json:"duration_ms,omitempty"`
+	// RateLimitInfo is a "rate_limit_event" envelope's own payload — see
+	// mapClaudeCodeRateLimit. nil for every other event type.
+	RateLimitInfo *claudeCodeRateLimitInfo `json:"rate_limit_info,omitempty"`
+}
+
+// claudeCodeRateLimitInfo is a "rate_limit_event" envelope's own
+// rate_limit_info object — the `claude` CLI's subscription rate-limit/quota
+// signal, typically the SECOND stream-json message of every turn. See
+// mapClaudeCodeRateLimit for how this becomes message.SubscriptionUsage.
+type claudeCodeRateLimitInfo struct {
+	Status          string                               `json:"status,omitempty"`
+	ResetsAt        int64                                `json:"resetsAt,omitempty"`
+	RateLimitType   string                               `json:"rateLimitType,omitempty"`
+	OverageStatus   string                               `json:"overageStatus,omitempty"`
+	OverageResetsAt int64                                `json:"overageResetsAt,omitempty"`
+	IsUsingOverage  bool                                 `json:"isUsingOverage,omitempty"`
+	UnifiedWindows  map[string]claudeCodeRateLimitWindow `json:"unifiedWindows,omitempty"`
+}
+
+// claudeCodeRateLimitWindow is one entry of a claudeCodeRateLimitInfo's own
+// unifiedWindows map — one rate-limit window (e.g. "five_hour",
+// "seven_day"), keyed by the CLI's own window name.
+type claudeCodeRateLimitWindow struct {
+	Utilization float64 `json:"utilization"`
+	ResetsAt    int64   `json:"resetsAt"`
+}
+
+// claudeCodeRateLimitWindowLabel maps a unifiedWindows key to the human
+// label message.SubscriptionUsageWindow.Label reports — the two keys a real
+// `claude` binary sends today. An unrecognized key (a future CLI addition
+// this file has not seen) falls back to the key itself: an honest label
+// beats a hardcoded guess for a window this file cannot yet name.
+func claudeCodeRateLimitWindowLabel(key string) string {
+	switch key {
+	case "five_hour":
+		return "5-hour"
+	case "seven_day":
+		return "Weekly"
+	default:
+		return key
+	}
+}
+
+// mapClaudeCodeRateLimit converts a "rate_limit_event" envelope's own
+// rate_limit_info object into message.SubscriptionUsage: provider "claude";
+// Plan left "" (the CLI's event carries no plan field, and this file does
+// not shell out to `claude auth status` just to learn one — see this
+// package's own CONSTRAINTS); one window per unifiedWindows entry, sorted
+// by key for byte-stable output across turns (map iteration order is not);
+// Overage mapped straight from the event's own overage fields. CapturedAt
+// is left zero — applySubscriptionUsage stamps it from s.cfg.Now(), the
+// single clock every consumer of Session.SubscriptionUsage sees. ok is
+// false for a nil info (a rate_limit_event with no rate_limit_info at all —
+// not expected from a real `claude` binary, but this file decodes
+// permissively throughout, per its own package doc).
+func mapClaudeCodeRateLimit(info *claudeCodeRateLimitInfo) (message.SubscriptionUsage, bool) {
+	if info == nil {
+		return message.SubscriptionUsage{}, false
+	}
+	keys := make([]string, 0, len(info.UnifiedWindows))
+	for k := range info.UnifiedWindows {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	windows := make([]message.SubscriptionUsageWindow, 0, len(keys))
+	for _, k := range keys {
+		w := info.UnifiedWindows[k]
+		windows = append(windows, message.SubscriptionUsageWindow{
+			Key:         k,
+			Label:       claudeCodeRateLimitWindowLabel(k),
+			UsedPercent: w.Utilization * 100,
+			ResetsAt:    w.ResetsAt,
+		})
+	}
+	return message.SubscriptionUsage{
+		Provider: "claude",
+		Windows:  windows,
+		Overage: &message.SubscriptionOverage{
+			InUse:    info.IsUsingOverage,
+			Status:   info.OverageStatus,
+			ResetsAt: info.OverageResetsAt,
+		},
+	}, true
 }
 
 // claudeCodeUsage is a "result" event's usage object.
