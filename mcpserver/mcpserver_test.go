@@ -68,8 +68,26 @@ func TestRegistryInitializeReturnsCapabilities(t *testing.T) {
 	if result.Capabilities.Tools == nil {
 		t.Error("Capabilities.Tools is nil, want a non-nil tools capability")
 	}
-	if result.ProtocolVersion != "2025-11-25" {
-		t.Errorf("ProtocolVersion = %q, want the client's own requested 2025-11-25 echoed back", result.ProtocolVersion)
+	if result.ProtocolVersion != protocolVersion {
+		t.Errorf("ProtocolVersion = %q, want this server's own supported version %q", result.ProtocolVersion, protocolVersion)
+	}
+}
+
+// TestRegistryInitializeReportsOwnVersionNotClientsUnsupportedOne proves
+// initialize never echoes back a client-requested protocolVersion this
+// server does not actually implement — it always reports its own single
+// supported revision (protocolVersion), regardless of what the client
+// asked for. Echoing an arbitrary client value would falsely claim
+// support for a revision this server may not speak at all.
+func TestRegistryInitializeReportsOwnVersionNotClientsUnsupportedOne(t *testing.T) {
+	reg := NewRegistry("test-server", "1.0.0")
+	_, resp := post(t, reg, methodInitialize, "1", map[string]any{"protocolVersion": "1999-01-01"})
+	var result mcp.InitializeResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("decoding InitializeResult: %v", err)
+	}
+	if result.ProtocolVersion != protocolVersion {
+		t.Errorf("ProtocolVersion = %q, want this server's own supported version %q, not the client's unsupported request", result.ProtocolVersion, protocolVersion)
 	}
 }
 

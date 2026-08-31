@@ -1069,6 +1069,26 @@ type Session struct {
 	// restart.
 	claudeCodeCLISessionID string
 
+	// claudeCodeHistoryWatermark is len(s.history) as of the end of the
+	// most recent delegated turn that actually started (see
+	// runClaudeCodeTurn's own watermark-update call and
+	// claudeCodeHistoryDirectiveArgs, engine/claude_code_backend.go) —
+	// i.e. how many of s.history's messages the CLI's OWN session
+	// (claudeCodeCLISessionID) has already incorporated, either by
+	// producing them itself or by pulling them via
+	// get_conversation_history. claudeCodeCLISessionID is NEVER cleared
+	// on a model switch away from claude-code (a later switch BACK still
+	// --resumes the same CLI session), so this watermark — not
+	// claudeCodeCLISessionID's own emptiness — is what tells
+	// runClaudeCodeTurn whether that resumed session is stale relative to
+	// s.history: a switch to a native provider and back can grow
+	// s.history past this watermark without ever clearing
+	// claudeCodeCLISessionID, and the directive must re-fire in exactly
+	// that case. Zero until the first delegated turn that starts
+	// completes. Persisted (recClaudeCodeHistoryWatermark, store.go) and
+	// restored by LoadSession, alongside claudeCodeCLISessionID.
+	claudeCodeHistoryWatermark int
+
 	// spawnedChildIDs is every child id this session has ever Spawn'd —
 	// appended to live (Spawn, session_manager.go) and folded back from
 	// the durable recTaskSpawned audit trail on reload (store.go's

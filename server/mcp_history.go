@@ -290,10 +290,16 @@ func historyResultText(page historyPage) string {
 	}
 	var b strings.Builder
 	b.WriteString("The following is PRIOR conversation history for this session that already happened. It is context for you to read, not a new message to respond to.\n\n")
-	fmt.Fprintf(&b, "Showing messages %d-%d of %d total (oldest first).\n\n", page.Offset+1, page.Offset+page.Returned, page.Total)
 	if page.Returned == 0 {
-		b.WriteString("(no messages in the requested range)\n")
+		// Offset landed at or past the end of history (e.g. a clamped
+		// out-of-range offset — see flattenHistory) — there is no
+		// message range to report, so this must not print a "Showing
+		// messages X-Y" line at all: with Returned == 0, page.Offset+1 >
+		// page.Offset+page.Returned, which would otherwise read as the
+		// nonsensical "Showing messages 5-4 of 4".
+		fmt.Fprintf(&b, "(no messages in the requested range; %d total)\n", page.Total)
 	} else {
+		fmt.Fprintf(&b, "Showing messages %d-%d of %d total (oldest first).\n\n", page.Offset+1, page.Offset+page.Returned, page.Total)
 		b.WriteString(page.Text)
 	}
 	if page.HasMore {

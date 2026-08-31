@@ -179,6 +179,30 @@ func TestHistoryResultTextEmptyHistory(t *testing.T) {
 	}
 }
 
+// TestHistoryResultTextClampedOffsetOmitsNonsensicalShowingLine proves an
+// offset clamped to (or past) the end of history — flattenHistory's own
+// clamp, e.g. an offset a prior call's next_offset hint no longer covers
+// after the history shrank, or one a model simply got wrong — renders as
+// an explicit "no messages" line, never a "Showing messages X-Y of N"
+// line with X > Y (Returned == 0 makes page.Offset+1 > page.Offset+0).
+func TestHistoryResultTextClampedOffsetOmitsNonsensicalShowingLine(t *testing.T) {
+	msgs := seedMessages() // 4 messages total
+	page := flattenHistory(msgs, 10, 5)
+	if page.Returned != 0 || page.Total != 4 {
+		t.Fatalf("page = %+v, want Returned=0 Total=4 (offset clamped past the end)", page)
+	}
+	text := historyResultText(page)
+	if strings.Contains(text, "Showing messages") {
+		t.Errorf("result text = %q, want no \"Showing messages\" line when Returned is 0", text)
+	}
+	if !strings.Contains(text, "no messages") {
+		t.Errorf("result text = %q, want an explicit \"no messages\" line", text)
+	}
+	if !strings.Contains(text, "4") {
+		t.Errorf("result text = %q, want the total (4) still mentioned somewhere", text)
+	}
+}
+
 // --- HTTP wiring: POST /session/{id}/mcp ---
 
 // TestHandleSessionMCPFullLifecycle drives initialize, tools/list, and

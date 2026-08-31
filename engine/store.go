@@ -193,6 +193,16 @@ const (
 	// exactly: a no-op record type with no lifecycle meaning beyond "the
 	// value changed", replayed last-writer-wins.
 	recClaudeCodeSessionID = "claude_code.session_id"
+	// recClaudeCodeHistoryWatermark records
+	// Session.claudeCodeHistoryWatermark (see its own doc comment) —
+	// written at the end of every delegated turn that actually started,
+	// folded back on LoadSession alongside recClaudeCodeSessionID so a
+	// process restart does not lose track of how much history the CLI's
+	// resumed session has already incorporated. Mirrors
+	// recClaudeCodeSessionID exactly: a no-op record type with no
+	// lifecycle meaning beyond "the value changed", replayed
+	// last-writer-wins.
+	recClaudeCodeHistoryWatermark = "claude_code.history_watermark"
 	// recClaudeCodeUsage carries one delegated turn's AGGREGATE Usage (see
 	// Session.applyClaudeCodeUsage's own doc comment for why this is a
 	// dedicated record rather than riding a recMessage the way a native
@@ -320,6 +330,13 @@ type record struct {
 	// payload: the Claude Code CLI's own session id (see
 	// Session.claudeCodeCLISessionID). Empty on every other record type.
 	ClaudeCodeSessionID string `json:"claude_code_session_id,omitempty"`
+	// ClaudeCodeHistoryWatermark carries a recClaudeCodeHistoryWatermark
+	// record's payload (see Session.claudeCodeHistoryWatermark). Zero on
+	// every other record type; also indistinguishable from an explicit
+	// watermark of 0, which is harmless — persistClaudeCodeHistoryWatermark
+	// is never called with 0 in practice (a delegated turn always appends
+	// at least the pending trigger message before this is recorded).
+	ClaudeCodeHistoryWatermark int `json:"claude_code_history_watermark,omitempty"`
 }
 
 // applyGoalRecord folds one goal.* record into the durable goal state a
@@ -672,6 +689,23 @@ func (s *Session) persistClaudeCodeSessionID(id string) {
 		return
 	}
 	if err := s.writeRecord(record{Type: recClaudeCodeSessionID, ClaudeCodeSessionID: id}); err != nil {
+		s.lastPersistErr = err
+	}
+}
+
+// persistClaudeCodeHistoryWatermark appends a
+// claude_code.history_watermark record to the session log. It mirrors
+// persistClaudeCodeSessionID exactly: a no-op until the log exists (lazy
+// creation), caller holds s.mu.
+func (s *Session) persistClaudeCodeHistoryWatermark(n int) {
+	if s.cfg.SessionDir == "" || !s.logStarted {
+		return
+	}
+	if err := s.ensureLog(); err != nil {
+		s.lastPersistErr = err
+		return
+	}
+	if err := s.writeRecord(record{Type: recClaudeCodeHistoryWatermark, ClaudeCodeHistoryWatermark: n}); err != nil {
 		s.lastPersistErr = err
 	}
 }
@@ -1498,6 +1532,8 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			s.effort = rec.Effort
 		case recClaudeCodeSessionID:
 			s.claudeCodeCLISessionID = rec.ClaudeCodeSessionID
+		case recClaudeCodeHistoryWatermark:
+			s.claudeCodeHistoryWatermark = rec.ClaudeCodeHistoryWatermark
 		case recClaudeCodeUsage:
 			// See Session.applyClaudeCodeUsage's own doc comment for why
 			// this folds into BOTH cumulative usage and lastUsage, unlike

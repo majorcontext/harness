@@ -290,6 +290,28 @@ func (s *Session) recordClaudeCodeSessionID(id string) {
 	s.persistClaudeCodeSessionID(id)
 }
 
+// claudeCodeHistoryWatermarkCount returns Session.claudeCodeHistoryWatermark
+// — see its own doc comment.
+func (s *Session) claudeCodeHistoryWatermarkCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.claudeCodeHistoryWatermark
+}
+
+// recordClaudeCodeHistoryWatermark durably records n as this session's
+// claudeCodeHistoryWatermark — see that field's own doc comment. A no-op
+// when n already matches the recorded value, so a turn that leaves
+// s.History()'s length unchanged never writes a redundant journal record.
+func (s *Session) recordClaudeCodeHistoryWatermark(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.claudeCodeHistoryWatermark == n {
+		return
+	}
+	s.claudeCodeHistoryWatermark = n
+	s.persistClaudeCodeHistoryWatermark(n)
+}
+
 // applyClaudeCodeUsage folds a delegated turn's AGGREGATE usage (the
 // "result" event's own usage field, covering every internal API call
 // Claude Code made across the whole turn — not just the closing one) into
@@ -378,14 +400,16 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	if model.Model != "" {
 		args = append(args, "--model", model.Model)
 	}
-	resumeID := s.claudeCodeSessionID()
-	if resumeID != "" {
+	if resumeID := s.claudeCodeSessionID(); resumeID != "" {
 		args = append(args, "--resume", resumeID)
 	}
 	// See claudeCodeHistoryDirectiveArgs's own doc comment: nil (a no-op
-	// append) except on a session's first-ever delegated turn that already
-	// has prior conversation history to catch up on.
-	args = append(args, claudeCodeHistoryDirectiveArgs(resumeID, history)...)
+	// append) unless history holds conversation the CLI's own resumed
+	// session (if any) has not already incorporated — deliberately
+	// independent of resumeID above, since a model switch away from
+	// claude-code and back leaves the CLI session id in place but can
+	// still leave it stale relative to history.
+	args = append(args, claudeCodeHistoryDirectiveArgs(history, s.claudeCodeHistoryWatermarkCount())...)
 	if cfg.PermissionMode != "" {
 		args = append(args, "--permission-mode", cfg.PermissionMode)
 	}
@@ -540,6 +564,20 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	}()
 
 	finalMsg, started, turnErr := s.consumeClaudeCodeStream(stdout, model)
+	if started {
+		// The CLI's own session actually came up for this turn — whether
+		// or not turnErr is set (see claudeCodeTurnResult's own o.started
+		// branch for the identical "started but errored is still real
+		// activity" reasoning) — so by now it has incorporated everything
+		// currently in s.History(): either it produced those messages
+		// itself this turn, or an earlier turn's get_conversation_history
+		// pull already covered the rest. Recording that here, not only on
+		// a successful result, is what lets claudeCodeHistoryDirectiveArgs
+		// tell a genuinely stale resumed session (history grew via an
+		// intervening native-provider turn) apart from one that is merely
+		// mid-turn.
+		s.recordClaudeCodeHistoryWatermark(len(s.History()))
+	}
 
 	// cmd.Wait() below does NOT reintroduce the EOF wait that
 	// consumeClaudeCodeStream's early return on "result" just avoided, on
@@ -691,6 +729,17 @@ func claudeCodeTurnResult(o claudeCodeTurnOutcome) (*message.Message, error) {
 // unanswered RoleUser message at the tail — this reads it back rather than
 // threading the text through an extra parameter, so both call sites (a
 // fresh append, and a retry that appends nothing new) share one path.
+func lastUserMessageText(history []message.Message) string {
+	if len(history) == 0 {
+		return ""
+	}
+	last := history[len(history)-1]
+	if last.Role != message.RoleUser {
+		return ""
+	}
+	return last.Parts.Text()
+}
+
 // claudeCodeHistoryDirective is the --append-system-prompt text
 // runClaudeCodeTurn appends exactly once per delegated session — see
 // claudeCodeHistoryDirectiveArgs. It tells the CLI to call the
@@ -706,39 +755,43 @@ func claudeCodeTurnResult(o claudeCodeTurnOutcome) (*message.Message, error) {
 const claudeCodeHistoryDirective = "You are continuing a conversation that happened on another model. Before responding, call the get_conversation_history tool to read what happened so far."
 
 // claudeCodeHistoryDirectiveArgs returns the --append-system-prompt argv
-// pair (flag plus value) when, and only when, THIS is the first-ever
-// claude-code turn for a session that already has prior conversation
-// history to catch up on: resumeID == "" (no Claude Code CLI session
-// recorded yet — see claudeCodeSessionID) AND history holds more than the
-// single pending trigger message runClaudeCodeTurn is about to answer
-// (lastUserMessageText's own caller contract: history's last element is
-// always that pending message). nil in every other case:
+// pair (flag plus value) whenever history holds conversation the CLI's own
+// resumed session (if any) has NOT already incorporated — priorCount >
+// watermark, where priorCount is len(history) minus the single pending
+// trigger message runClaudeCodeTurn is about to answer (lastUserMessageText's
+// own caller contract: history's last element is always that pending
+// message) and watermark is Session.claudeCodeHistoryWatermarkCount(), the
+// message count as of the end of whichever delegated turn last ran. nil
+// (priorCount <= watermark) in two cases:
 //
-//   - resumeID != "": a later turn on an already-delegated session. The
-//     CLI's own --resume'd session already carries forward the
-//     get_conversation_history tool_result from whichever earlier turn
-//     pulled it — re-appending the directive on every turn would just
-//     waste a pull the CLI has no reason to repeat (see this file's
-//     package doc, "one call suffices").
-//   - len(history) <= 1: a session's genuine first-ever message. There is
-//     no prior conversation to catch up on, so calling
-//     get_conversation_history would return nothing useful.
-func claudeCodeHistoryDirectiveArgs(resumeID string, history []message.Message) []string {
-	if resumeID != "" || len(history) <= 1 {
+//   - A session's genuine first-ever message: watermark is 0 (no delegated
+//     turn has ever run) and priorCount is also 0 (no prior history at
+//     all). Calling get_conversation_history would return nothing useful.
+//   - Consecutive claude-code turns with nothing new in between: the
+//     previous turn's own watermark update already accounts for
+//     everything currently in history, including that turn's own answer.
+//     The CLI's --resume'd session already carries forward whichever
+//     earlier turn's own get_conversation_history tool_result — re-pulling
+//     here would waste a call the CLI has no reason to repeat (see this
+//     file's package doc, "one call suffices").
+//
+// This is deliberately NOT gated on Session.claudeCodeSessionID() (whether a
+// CLI session id is recorded at all): a model switch away from claude-code
+// and back leaves claudeCodeCLISessionID untouched (see its own doc
+// comment), so a resumed CLI session can still be stale relative to
+// s.history even though resumeID != "" — exactly the case an intervening
+// native-provider turn (or several) produces. watermark, not resumeID's
+// emptiness, is what actually answers "has the CLI's session seen
+// everything currently in history".
+func claudeCodeHistoryDirectiveArgs(history []message.Message, watermark int) []string {
+	priorCount := len(history) - 1
+	if priorCount < 0 {
+		priorCount = 0
+	}
+	if priorCount <= watermark {
 		return nil
 	}
 	return []string{"--append-system-prompt", claudeCodeHistoryDirective}
-}
-
-func lastUserMessageText(history []message.Message) string {
-	if len(history) == 0 {
-		return ""
-	}
-	last := history[len(history)-1]
-	if last.Role != message.RoleUser {
-		return ""
-	}
-	return last.Parts.Text()
 }
 
 // consumeClaudeCodeStream reads newline-delimited stream-json events from r

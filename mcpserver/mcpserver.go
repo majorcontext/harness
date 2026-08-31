@@ -53,20 +53,12 @@ type rpcMessage struct {
 
 func (m rpcMessage) isNotification() bool { return m.Method != "" && len(m.ID) == 0 }
 
-// initializeParams and listToolsParams/callToolParams are this server's
-// own request-payload shapes for the three methods it handles — the
-// server-role mirror of mcp/types.go's identically-shaped, unexported
-// client-role structs.
-type initializeParams struct {
-	ProtocolVersion string                 `json:"protocolVersion"`
-	Capabilities    mcp.ClientCapabilities `json:"capabilities"`
-	ClientInfo      mcp.Implementation     `json:"clientInfo"`
-}
-
-type listToolsParams struct {
-	Cursor string `json:"cursor,omitempty"`
-}
-
+// callToolParams is this server's own tools/call request-payload shape —
+// the server-role mirror of mcp/types.go's identically-shaped, unexported
+// client-role callToolParams. initialize's own request body is never
+// decoded at all (see the methodInitialize case below) and tools/list
+// takes no params this server reads (no pagination — see dispatch's own
+// methodToolsList case), so neither gets a params struct of its own.
 type callToolParams struct {
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
@@ -184,15 +176,17 @@ func (reg *Registry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (reg *Registry) dispatch(ctx context.Context, method string, params json.RawMessage) (any, *mcp.RPCError) {
 	switch method {
 	case methodInitialize:
-		var req initializeParams
-		_ = json.Unmarshal(params, &req) // permissive: every field below has a fallback
-
-		v := req.ProtocolVersion
-		if v == "" {
-			v = protocolVersion
-		}
+		// The request body (initializeParams) is intentionally not even
+		// decoded: this server implements exactly one protocol revision
+		// (protocolVersion) and always reports THAT version, never the
+		// client's own requested one. Per the transport spec, a server
+		// that does not support the client's requested version responds
+		// with a version it DOES support so the client can decide whether
+		// to proceed — echoing the client's request back unconditionally
+		// would claim support for a revision this server may not actually
+		// implement.
 		return mcp.InitializeResult{
-			ProtocolVersion: v,
+			ProtocolVersion: protocolVersion,
 			Capabilities:    mcp.ServerCapabilities{Tools: &mcp.ToolsCapability{}},
 			ServerInfo:      reg.serverInfo,
 			Instructions:    reg.instructions,
