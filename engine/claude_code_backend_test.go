@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -509,6 +510,41 @@ func TestClaudeCodeMCPConfigForwardedToChildArgv(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeMCPConfigCredentialsNeverInChildArgv locks in the reason
+// claudeCodeMCPConfigFile writes a temp FILE rather than passing an inline
+// --mcp-config JSON string: a server's Headers/Env can carry real
+// credential material, and argv is visible to any other process on the
+// box via /proc or ps. This configures a server with a bearer-token header
+// and a secret-bearing env entry, drives one real turn, and asserts the
+// secret value never appears in ANY element of the child's own argv — see
+// TestClaudeCodeMCPConfigFileWritesConfiguredServers for the companion
+// assertion that the same secret DOES reach the server correctly, via the
+// (by-then-removed) config file's own JSON content.
+func TestClaudeCodeMCPConfigCredentialsNeverInChildArgv(t *testing.T) {
+	const secret = "sk-super-secret-token-do-not-leak"
+	s, logPath := claudeCodeTestSession(t, "normal")
+	s.cfg.MCP = NewMCPManager(map[string]MCPServerConfig{
+		"remote": {URL: "https://example.com/mcp", Headers: map[string]string{"Authorization": "Bearer " + secret}},
+		"fs":     {Command: []string{"mcp-fs"}, Env: []string{"MCP_FS_TOKEN=" + secret}},
+	})
+
+	if _, err := s.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	invocations := readInvocations(t, logPath)
+	if len(invocations) != 1 {
+		t.Fatalf("invocations = %d, want 1: %+v", len(invocations), invocations)
+	}
+	for _, arg := range invocations[0] {
+		if strings.Contains(arg, secret) {
+			t.Fatalf("child argv leaked the MCP credential (%q): %v", secret, invocations[0])
+		}
+	}
+	if _, ok := argvValueAfter(invocations[0], "--mcp-config"); !ok {
+		t.Fatalf("argv has no --mcp-config at all: %v", invocations[0])
+	}
+}
+
 // TestClaudeCodeEffortForwardedToChildArgv proves runClaudeCodeTurn reads
 // s.Effort() at turn time and forwards it as --effort, mapped through
 // claudeCodeEffortArg exactly as that function's own doc comment promises.
@@ -698,11 +734,14 @@ func TestClaudeCodeRetryableClassification(t *testing.T) {
 }
 
 // TestClaudeCodeChildCrashWithoutResultIsRetryable proves a child that
-// exits nonzero WITHOUT ever emitting a clean "result" event (a crash, an
-// OOM kill — non-deterministic child-process weather, not a domain-level
-// failure the CLI itself reported) is also wrapped provider.RetryableError,
-// via runClaudeCodeTurn's own waitErr branch rather than
-// claudeCodeRetryableClass.
+// emitted at least one "system" event (so a session genuinely started) and
+// THEN exits nonzero WITHOUT ever emitting a clean "result" event (a
+// crash, an OOM kill — non-deterministic child-process weather, not a
+// domain-level failure the CLI itself reported) is wrapped
+// provider.RetryableError, via runClaudeCodeTurn's own waitErr branch
+// rather than claudeCodeRetryableClass. See
+// TestClaudeCodeChildExitBeforeAnySystemEventIsNotRetryable for the
+// opposite case this same branch must get right.
 func TestClaudeCodeChildCrashWithoutResultIsRetryable(t *testing.T) {
 	s, _ := claudeCodeTestSession(t, "crash")
 	_, err := s.Prompt(context.Background(), "do something")
@@ -715,5 +754,26 @@ func TestClaudeCodeChildCrashWithoutResultIsRetryable(t *testing.T) {
 	}
 	if class != provider.RetryableServerError {
 		t.Errorf("class = %q, want %q", class, provider.RetryableServerError)
+	}
+}
+
+// TestClaudeCodeChildExitBeforeAnySystemEventIsNotRetryable proves a child
+// that exits nonzero WITHOUT ever emitting even a "system" event — the
+// deterministic-startup-failure shape (an unknown flag on an older
+// `claude` build, a malformed --mcp-config command, an invalid --model
+// value) — is NOT wrapped provider.RetryableError. Marking a deterministic
+// startup failure retryable would have a PursueGoal loop burn its entire
+// retryable budget with backoff before parking, delaying the surfacing of
+// a config error no amount of waiting will fix. Contrast
+// TestClaudeCodeChildCrashWithoutResultIsRetryable, whose child DOES get
+// as far as "system" before dying.
+func TestClaudeCodeChildExitBeforeAnySystemEventIsNotRetryable(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "crash_before_init")
+	_, err := s.Prompt(context.Background(), "do something")
+	if err == nil {
+		t.Fatal("Prompt returned no error for a child that exited before any system event")
+	}
+	if _, ok := provider.AsRetryable(err); ok {
+		t.Errorf("provider.AsRetryable(%v) = true, want false for a child that never started", err)
 	}
 }

@@ -13,7 +13,10 @@
 // timing fields), "subagent" (a null-then-set parent_tool_use_id pair),
 // "rate_limit_error"/"deterministic_error" (a result event this file's own
 // claudeCodeRetryableClass must classify retryable/not-retryable,
-// respectively).
+// respectively), and "crash"/"crash_before_init" (a child that exits
+// nonzero with no "result" event, AFTER vs. BEFORE ever emitting a
+// "system" event — runClaudeCodeTurn's waitErr branch must classify only
+// the former retryable).
 package main
 
 import (
@@ -59,6 +62,15 @@ func main() {
 		out.Flush()
 	}
 
+	if os.Getenv("FAKE_CLAUDE_MODE") == "crash_before_init" {
+		// Exits nonzero WITHOUT ever emitting so much as a "system" event —
+		// the deterministic-startup-failure shape (an unknown flag, a
+		// malformed --mcp-config command, an invalid --model) that
+		// runClaudeCodeTurn's waitErr branch must NOT classify retryable,
+		// unlike "crash" below (which starts normally and dies later).
+		os.Exit(1)
+	}
+
 	emit(map[string]any{
 		"type":       "system",
 		"subtype":    "init",
@@ -77,10 +89,12 @@ func main() {
 		time.Sleep(time.Hour)
 		return
 	case "crash":
-		// Exits nonzero without ever emitting a "result" event — the
-		// non-deterministic child-failure shape runClaudeCodeTurn's own
-		// waitErr branch must classify retryable (a crash, not a
-		// deterministic domain failure the CLI itself reported).
+		// Emitted "system"/"init" above, THEN exits nonzero without ever
+		// emitting a "result" event — the non-deterministic mid-session
+		// child-failure shape runClaudeCodeTurn's own waitErr branch must
+		// classify retryable (a crash, not a deterministic domain failure
+		// the CLI itself reported). Contrast crash_before_init above,
+		// which never gets this far.
 		os.Exit(1)
 	case "error":
 		emit(map[string]any{

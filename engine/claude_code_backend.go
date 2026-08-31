@@ -418,7 +418,7 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		_ = proc.Kill()
 	}()
 
-	finalMsg, turnErr := s.consumeClaudeCodeStream(stdout, model)
+	finalMsg, started, turnErr := s.consumeClaudeCodeStream(stdout, model)
 
 	waitErr := cmd.Wait()
 
@@ -438,17 +438,35 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		if tail := stderr.String(); tail != "" {
 			msg += fmt.Sprintf(" (stderr: %s)", tail)
 		}
-		// The child exited without ever emitting a clean "result" event at
-		// all (consumeClaudeCodeStream returned turnErr == nil, so this
-		// is not the deterministic IsError shape claudeCodeRetryableClass
-		// classifies above) — a crash, an OOM kill, a signal from
-		// something other than this call's own abort cascade (ctx.Err()
-		// was already checked nil above). That is exactly the same kind of
-		// non-deterministic, worth-a-retry provider weather
-		// MarkStreamTruncated marks for a native adapter's stream that dies
-		// mid-body, so goal.go's promptTurnWithRetry gives it the same
-		// backoff-and-retry treatment rather than parking on attempt 1.
-		return nil, provider.MarkRetryable(errors.New(msg), provider.RetryableServerError)
+		err := error(errors.New(msg))
+		if started {
+			// The child got far enough to emit at least one "system" event
+			// — the CLI's own protocol came up, so a session genuinely
+			// started — and then exited without ever emitting a clean
+			// "result" event (consumeClaudeCodeStream returned turnErr ==
+			// nil, so this is not the deterministic IsError shape
+			// claudeCodeRetryableClass classifies above): a crash, an OOM
+			// kill, a signal from something other than this call's own
+			// abort cascade (ctx.Err() was already checked nil above).
+			// That is exactly the same kind of non-deterministic, worth-a-
+			// retry provider weather MarkStreamTruncated marks for a
+			// native adapter's stream that dies mid-body, so goal.go's
+			// promptTurnWithRetry gives it the same backoff-and-retry
+			// treatment rather than parking on attempt 1.
+			err = provider.MarkRetryable(err, provider.RetryableServerError)
+		}
+		// !started means the child never even got its own protocol off the
+		// ground — an unknown flag on an older `claude` build, a malformed
+		// --mcp-config command, an invalid --model value, a missing
+		// binary's exec succeeding but the binary itself refusing to run —
+		// deterministic startup failures that will fail identically on
+		// every retry. Marking THOSE retryable would have a PursueGoal
+		// loop burn its entire retryable budget (goalRetryableMaxAttempts,
+		// goal.go) with backoff before parking, delaying the surfacing of
+		// what is really a config error nothing will fix by waiting. Left
+		// a plain error here, exactly like every other deterministic
+		// failure this file returns.
+		return nil, err
 	}
 	if finalMsg == nil {
 		return nil, errors.New("engine: claude-code: turn ended with no assistant message")
@@ -477,17 +495,19 @@ func lastUserMessageText(history []message.Message) string {
 // consumeClaudeCodeStream reads newline-delimited stream-json events from
 // r (the `claude` child's stdout) until EOF, appending/emitting each
 // decoded event per this file's package-doc mapping, and returns the last
-// assistant message.Message it appended (nil if none) plus any turn-
-// ending error a "result" event's IsError reported.
-func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (*message.Message, error) {
+// assistant message.Message it appended (nil if none), whether the child
+// got far enough to emit at least one "system" event (see the started
+// return value's own use in runClaudeCodeTurn's waitErr branch: it is what
+// tells a child that never even started apart from one that started and
+// later crashed), and any turn-ending error a "result" event's IsError
+// reported.
+func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (finalMsg *message.Message, started bool, turnErr error) {
 	scanner := bufio.NewScanner(r)
 	// A tool call's arguments or a large tool result can exceed
 	// bufio.Scanner's 64KiB default token size; 8MiB comfortably covers
 	// any realistic single stream-json line without an unbounded read.
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 
-	var finalMsg *message.Message
-	var turnErr error
 	for scanner.Scan() {
 		line := bytes.TrimSpace(scanner.Bytes())
 		if len(line) == 0 {
@@ -502,6 +522,13 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 		}
 		switch env.Type {
 		case "system":
+			// ANY "system" event — not only subtype "init" — is proof the
+			// child's stream-json protocol actually came up: init is
+			// documented as the first event a real `claude` binary ever
+			// emits, so seeing one at all (whatever its subtype) means the
+			// session started. See the started return value's own doc
+			// comment above.
+			started = true
 			if env.Subtype == "init" {
 				s.recordClaudeCodeSessionID(env.SessionID)
 			}
@@ -584,7 +611,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 		// Any other top-level "type" (this driver has none documented
 		// beyond the four above) is inert activity, per the package doc.
 	}
-	return finalMsg, turnErr
+	return finalMsg, started, turnErr
 }
 
 // claudeCodeEnvelope is the outer discriminator every line of `claude
@@ -868,7 +895,7 @@ func claudeCodeToolResultMessage(raw json.RawMessage, parentToolUseID string) *m
 // there is no higher tier to cap at here). ok is false for
 // message.EffortUnset — send no --effort flag at all, mirroring how an
 // unset provider.Request.Effort sends no reasoning control to a native
-// provider — and for any value message.Effort.Valid does not recognize.
+// provider — and for any value message.ParseEffort would not recognize.
 func claudeCodeEffortArg(e message.Effort) (string, bool) {
 	switch e {
 	case message.EffortOff, message.EffortMinimal, message.EffortLow:

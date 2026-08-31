@@ -312,15 +312,18 @@ func (m *MCPManager) ConfiguredNames() []string {
 	return names
 }
 
-// Servers returns a copy of every server this manager was constructed
-// with, WITHOUT connecting to any of them — same "m.servers is immutable
-// after NewMCPManager, no lock needed" reasoning as ConfiguredNames, one
-// map copy deep to keep a caller from being able to mutate m's own
-// configuration through the returned value. It exists for
-// claudeCodeMCPServerLister (claude_code_backend.go): the delegated-turn
-// backend's one consumer of a session's RAW server definitions (command,
-// env, url, headers), as opposed to Tools' post-connect, tool-schema-only
-// view.
+// Servers returns a SHALLOW copy of every server this manager was
+// constructed with, WITHOUT connecting to any of them — same "m.servers is
+// immutable after NewMCPManager, no lock needed" reasoning as
+// ConfiguredNames. The returned map is a fresh map (a caller mutating it,
+// or adding/removing an entry, never touches m.servers), but each
+// MCPServerConfig value's own Command/Env slices and Headers map are
+// shared with m.servers, not copied again. That is safe today because this
+// method's one caller, claudeCodeMCPServerLister (claude_code_backend.go),
+// only ever reads a returned MCPServerConfig to build a --mcp-config JSON
+// payload — it never mutates Command/Env/Headers in place. A future
+// caller that DOES need to mutate a server's own nested fields must deep-
+// copy them itself; this method does not promise that.
 func (m *MCPManager) Servers() map[string]MCPServerConfig {
 	if m == nil {
 		return nil
