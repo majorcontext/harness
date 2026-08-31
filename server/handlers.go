@@ -125,6 +125,19 @@ type sessionJSON struct {
 	// cancellation, and completion delivery. The two are unrelated
 	// concepts that happen to share the word "parent."
 	Lineage *lineageJSON `json:"lineage,omitempty"`
+	// SubscriptionUsage is this session's most recently captured
+	// subscription-lane rate-limit/quota snapshot (see
+	// engine.Session.SubscriptionUsage / message.SubscriptionUsage's own
+	// doc comments for the two lanes that capture one and the exact field
+	// mapping). Deliberately NOT omitempty: null on the wire until a turn
+	// in THIS process has carried the signal — a session that has never
+	// delegated a turn through either lane, or has but this process
+	// hasn't seen its first one yet — rather than omitted, so a caller can
+	// unmarshal into a fixed struct without special-casing key presence.
+	// Process-local only, like LastTurn/Goal above: never re-derived from
+	// a durable source on a cold read (buildSessionFromIndex), since
+	// persisting it is not required for GET /session's own contract here.
+	SubscriptionUsage *message.SubscriptionUsage `json:"subscription_usage"`
 }
 
 // lineageJSON is sessionJSON's subagent-sessions extension, sourced from
@@ -3826,25 +3839,26 @@ func (s *Server) buildSession(lv liveSession) sessionJSON {
 	lastTurn := s.lastTurnJSONLocked(id)
 	s.mu.Unlock()
 	return sessionJSON{
-		ID:              id,
-		CreatedAt:       sess.CreatedAt(),
-		Model:           sess.Model(),
-		Effort:          sess.Effort(),
-		Status:          status,
-		State:           compositeState(status == "busy", goal != nil && goal.Active, forcesIdlePause(goal)),
-		Messages:        len(sess.History()),
-		Seq:             seq,
-		Goal:            goal,
-		WorkDir:         sess.WorkDir(),
-		LastTurn:        lastTurn,
-		Usage:           usageJSONForSession(sess),
-		LastActivityAt:  sess.LastActivityAt(),
-		ParentSession:   sess.ParentSession(),
-		CompactionCount: sess.CompactionCount(),
-		LastCompactedAt: sess.LastCompactedAt(),
-		Plugins:         sess.Plugins(),
-		Queued:          len(sess.QueuedPrompts()),
-		Lineage:         lineageJSONFor(lv),
+		ID:                id,
+		CreatedAt:         sess.CreatedAt(),
+		Model:             sess.Model(),
+		Effort:            sess.Effort(),
+		Status:            status,
+		State:             compositeState(status == "busy", goal != nil && goal.Active, forcesIdlePause(goal)),
+		Messages:          len(sess.History()),
+		Seq:               seq,
+		Goal:              goal,
+		WorkDir:           sess.WorkDir(),
+		LastTurn:          lastTurn,
+		Usage:             usageJSONForSession(sess),
+		LastActivityAt:    sess.LastActivityAt(),
+		ParentSession:     sess.ParentSession(),
+		CompactionCount:   sess.CompactionCount(),
+		LastCompactedAt:   sess.LastCompactedAt(),
+		Plugins:           sess.Plugins(),
+		Queued:            len(sess.QueuedPrompts()),
+		Lineage:           lineageJSONFor(lv),
+		SubscriptionUsage: sess.SubscriptionUsage(),
 	}
 }
 
@@ -3901,6 +3915,9 @@ func (s *Server) buildSessionFromIndex(ix engine.SessionIndex) sessionJSON {
 		Plugins:         s.pluginInfo(ix.ID),
 		Queued:          ix.Queued,
 		Lineage:         coldLineageJSON(ix.TaskParentID, ix.TaskAgentType, ix.TaskDepth, ix.SpawnedChildIDs),
+		// SubscriptionUsage has no durable source (see sessionJSON's own
+		// field doc comment) — null on every cold read, by construction.
+		SubscriptionUsage: nil,
 	}
 }
 

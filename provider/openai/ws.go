@@ -47,7 +47,16 @@ func toWebSocketURL(rawURL string) string {
 // client is already configured with, identically to every HTTP request
 // this adapter makes. There is no separate proxy/CA plumbing to add here;
 // reusing httpClient IS the proxy/CA support.
-func dialResponsesWebSocket(ctx context.Context, url string, headers http.Header, httpClient *http.Client, timeout time.Duration) (*websocket.Conn, error) {
+// dialResponsesWebSocket's second return value is the raw HTTP upgrade
+// response — coder/websocket's own Dial return, non-nil on a successful
+// upgrade (a normal 101 Switching Protocols) and often non-nil even on a
+// failed one (a rejected upgrade the server answered with an ordinary HTTP
+// error). wsPool.stream reads its Header off this for the x-codex-*
+// subscription-usage headers (see codexSubscriptionUsageFromHeaders) —
+// the Codex backend sends them on this same upgrade response, not inside
+// any websocket frame, so there is no other point in this transport where
+// they are ever visible.
+func dialResponsesWebSocket(ctx context.Context, url string, headers http.Header, httpClient *http.Client, timeout time.Duration) (*websocket.Conn, *http.Response, error) {
 	dialCtx := ctx
 	var cancel context.CancelFunc
 	if timeout > 0 {
@@ -67,12 +76,12 @@ func dialResponsesWebSocket(ctx context.Context, url string, headers http.Header
 	// stripping it keeps the outgoing header set honest.
 	hdr.Del("Content-Length")
 
-	conn, _, err := websocket.Dial(dialCtx, url, &websocket.DialOptions{
+	conn, resp, err := websocket.Dial(dialCtx, url, &websocket.DialOptions{
 		HTTPClient: httpClient,
 		HTTPHeader: hdr,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("openai: websocket dial: %w", err)
+		return nil, resp, fmt.Errorf("openai: websocket dial: %w", err)
 	}
 	// A single oversized frame (tool output, a huge pasted file) must not
 	// silently kill the connection: without raising this, coder/websocket's
@@ -82,7 +91,7 @@ func dialResponsesWebSocket(ctx context.Context, url string, headers http.Header
 	// documented per-request body cap, so nothing legitimate is still cut
 	// short.
 	conn.SetReadLimit(64 << 20)
-	return conn, nil
+	return conn, resp, nil
 }
 
 // sendResponseCreate frames body (the same JSON the HTTP path POSTs,

@@ -122,6 +122,15 @@ type Event struct {
 	Message    *message.Message
 	StopReason StopReason
 	Usage      Usage
+	// SubscriptionUsage carries a subscription lane's captured rate-limit/
+	// quota snapshot (see message.SubscriptionUsage's own doc comment),
+	// set only on EventDone by an adapter that captured one on THIS call —
+	// nil for every other event, and nil on EventDone itself unless the
+	// adapter is a subscription lane that found the signal on this
+	// response (provider/openai's codex family reads it from x-codex-*
+	// response headers; see engine.streamTurn's EventDone case for where
+	// this rides onto Session.SubscriptionUsage).
+	SubscriptionUsage *message.SubscriptionUsage
 }
 
 // Stream yields events for one model call. Next returns io.EOF after the
