@@ -20,6 +20,7 @@ table to load scoped instructions before it edits a subsystem.
 | `engine/` | `engine/AGENTS.md` |
 | `imageclamp/` | `imageclamp/AGENTS.md` |
 | `mcp/` | `mcp/AGENTS.md` |
+| `mcpserver/` | `mcpserver/AGENTS.md` |
 | `message/` | `message/AGENTS.md` |
 | `modelmeta/` | `modelmeta/AGENTS.md` |
 | `provider/` | `provider/AGENTS.md` |

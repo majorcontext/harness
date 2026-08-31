@@ -1699,7 +1699,25 @@ func serveCmd(args []string) error {
 			// config.TypeClaudeCodeCLI entry configures (see
 			// claudeCodeConfigFor); zero value when none is configured,
 			// which engine.newSession defaults BinaryPath from ("claude").
-			ClaudeCode: claudeCodeConfigFor(cfg, claudecode.Family),
+			// HTTPBaseURL/HTTPAuthToken are added on top, not part of
+			// claudeCodeConfigFor itself: they name THIS process's own
+			// `harness serve` HTTP API (serveURLForAddr(addr), the same
+			// loopback-rewritten URL the plugin host above already uses,
+			// and token, this process's own RunToken — "" when
+			// unauthenticated) so a delegated turn's synthetic
+			// get_conversation_history MCP server entry
+			// (claudeCodeMCPConfigFile) can reach back into this same
+			// process. claudeCodeConfigFor has no addr/token to work with
+			// (cmd/harness's `run` subcommand shares it but serves no HTTP
+			// API at all — see engine.ClaudeCodeConfig.HTTPBaseURL's own
+			// doc comment for why an empty value there is correct, not a
+			// gap), so this is the one place that adds them.
+			ClaudeCode: func() engine.ClaudeCodeConfig {
+				cc := claudeCodeConfigFor(cfg, claudecode.Family)
+				cc.HTTPBaseURL = serveURLForAddr(addr)
+				cc.HTTPAuthToken = token
+				return cc
+			}(),
 		}
 	}
 	// monitorPage is a named local (rather than inlining monitor.Page below)

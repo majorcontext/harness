@@ -546,6 +546,223 @@ func TestClaudeCodeMCPConfigCredentialsNeverInChildArgv(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeMCPConfigFileIncludesHistoryServer proves a session
+// configured with ClaudeCodeConfig.HTTPBaseURL (the harness HTTP server's
+// own loopback base URL — see cmd/harness's serve wiring) gets a synthetic
+// "harness-history" entry in --mcp-config naming this session's own
+// /session/{id}/mcp endpoint, alongside whatever servers Config.MCP itself
+// configured. This is the fix for the bug this change closes: without this
+// entry, a delegated turn has no way to reach get_conversation_history at
+// all, so a session that switches to claude-code mid-conversation (or on
+// its first-ever claude-code turn) starts blind.
+func TestClaudeCodeMCPConfigFileIncludesHistoryServer(t *testing.T) {
+	mgr := NewMCPManager(map[string]MCPServerConfig{
+		"fs": {Command: []string{"mcp-fs"}},
+	})
+	s := NewSession(Config{
+		Model: message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "sonnet"},
+		MCP:   mgr,
+		ClaudeCode: ClaudeCodeConfig{
+			HTTPBaseURL:   "http://127.0.0.1:4096",
+			HTTPAuthToken: "run-token-123",
+		},
+	})
+
+	path, cleanup, err := s.claudeCodeMCPConfigFile()
+	if err != nil {
+		t.Fatalf("claudeCodeMCPConfigFile: %v", err)
+	}
+	defer cleanup()
+	if path == "" {
+		t.Fatal("claudeCodeMCPConfigFile returned an empty path with HTTPBaseURL set")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading mcp-config file: %v", err)
+	}
+	var got claudeCodeMCPConfig
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("decoding mcp-config file: %v", err)
+	}
+
+	// The pre-existing configured server must still be present.
+	if _, ok := got.MCPServers["fs"]; !ok {
+		t.Errorf(`mcp-config missing "fs" server: %+v`, got.MCPServers)
+	}
+
+	hist, ok := got.MCPServers[claudeCodeHistoryServerName]
+	if !ok {
+		t.Fatalf("mcp-config missing %q server: %+v", claudeCodeHistoryServerName, got.MCPServers)
+	}
+	wantURL := "http://127.0.0.1:4096/session/" + s.ID + "/mcp"
+	if hist.Type != "http" || hist.URL != wantURL {
+		t.Errorf("history server = %+v, want an http server naming %s", hist, wantURL)
+	}
+	if hist.Headers["Authorization"] != "Bearer run-token-123" {
+		t.Errorf("history server Headers = %+v, want Authorization: Bearer run-token-123", hist.Headers)
+	}
+}
+
+// TestClaudeCodeMCPConfigFileHistoryServerWithNoConfiguredServers proves the
+// synthetic history server entry is written even when Config.MCP has no
+// servers of its own configured — HTTPBaseURL alone is enough to trigger a
+// --mcp-config file, unlike len(servers)==0 with no HTTPBaseURL (see
+// TestClaudeCodeMCPConfigFileEmptyWithNoServers, unchanged by this).
+func TestClaudeCodeMCPConfigFileHistoryServerWithNoConfiguredServers(t *testing.T) {
+	s := NewSession(Config{
+		Model:      message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "sonnet"},
+		ClaudeCode: ClaudeCodeConfig{HTTPBaseURL: "http://127.0.0.1:4096"},
+	})
+	path, cleanup, err := s.claudeCodeMCPConfigFile()
+	if err != nil {
+		t.Fatalf("claudeCodeMCPConfigFile: %v", err)
+	}
+	defer cleanup()
+	if path == "" {
+		t.Fatal("claudeCodeMCPConfigFile returned an empty path with HTTPBaseURL set and no other servers")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading mcp-config file: %v", err)
+	}
+	var got claudeCodeMCPConfig
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("decoding mcp-config file: %v", err)
+	}
+	if len(got.MCPServers) != 1 {
+		t.Fatalf("mcp-config servers = %+v, want exactly the history server", got.MCPServers)
+	}
+	if _, ok := got.MCPServers[claudeCodeHistoryServerName]; !ok {
+		t.Errorf("mcp-config missing %q server: %+v", claudeCodeHistoryServerName, got.MCPServers)
+	}
+}
+
+// TestClaudeCodeMCPConfigFileHistoryServerNoAuthHeaderWhenTokenEmpty proves
+// an unset HTTPAuthToken (e.g. an Unauthenticated loopback-only serve, per
+// server.Options.Unauthenticated) omits the Authorization header entirely
+// rather than sending an empty bearer value.
+func TestClaudeCodeMCPConfigFileHistoryServerNoAuthHeaderWhenTokenEmpty(t *testing.T) {
+	s := NewSession(Config{
+		Model:      message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "sonnet"},
+		ClaudeCode: ClaudeCodeConfig{HTTPBaseURL: "http://127.0.0.1:4096"},
+	})
+	path, cleanup, err := s.claudeCodeMCPConfigFile()
+	if err != nil {
+		t.Fatalf("claudeCodeMCPConfigFile: %v", err)
+	}
+	defer cleanup()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading mcp-config file: %v", err)
+	}
+	var got claudeCodeMCPConfig
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("decoding mcp-config file: %v", err)
+	}
+	if _, ok := got.MCPServers[claudeCodeHistoryServerName].Headers["Authorization"]; ok {
+		t.Errorf("history server Headers = %+v, want no Authorization header", got.MCPServers[claudeCodeHistoryServerName].Headers)
+	}
+}
+
+// TestClaudeCodeHistoryDirectiveArgs is a pure-function table test of
+// claudeCodeHistoryDirectiveArgs's own three-way branch: a resumed session
+// never gets the directive (the CLI's own --resume'd session already
+// carries the get_conversation_history tool_result forward — see this
+// file's package doc, "one call suffices"); a brand-new session with no
+// prior history has nothing to catch up on; only a first-ever delegated
+// turn that already has prior conversation history gets it.
+func TestClaudeCodeHistoryDirectiveArgs(t *testing.T) {
+	priorHistory := []message.Message{
+		{ID: "1", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "earlier question"}}},
+		{ID: "2", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "earlier answer"}}},
+		{ID: "3", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "the pending message"}}},
+	}
+	onlyPending := []message.Message{
+		{ID: "3", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "the pending message"}}},
+	}
+
+	tests := []struct {
+		name     string
+		resumeID string
+		history  []message.Message
+		want     []string
+	}{
+		{"first turn with prior history gets the directive", "", priorHistory, []string{"--append-system-prompt", claudeCodeHistoryDirective}},
+		{"first turn with no prior history gets nothing", "", onlyPending, nil},
+		{"resumed session gets nothing even with prior history", "fake-session-1", priorHistory, nil},
+		{"resumed session with no prior history gets nothing", "fake-session-1", onlyPending, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := claudeCodeHistoryDirectiveArgs(tt.resumeID, tt.history)
+			if !slicesEqual(got, tt.want) {
+				t.Errorf("claudeCodeHistoryDirectiveArgs(%q, len=%d) = %v, want %v", tt.resumeID, len(tt.history), got, tt.want)
+			}
+		})
+	}
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestClaudeCodeHistoryDirectiveForwardedOnFirstTurnWithPriorHistory drives
+// a REAL delegated turn (via fakeclaude) on a session that already carries
+// prior conversation history — as if it had just switched from a native
+// provider to claude-code, or was reloaded mid-conversation — and asserts
+// the child's argv carries --append-system-prompt with the catch-up
+// directive text.
+func TestClaudeCodeHistoryDirectiveForwardedOnFirstTurnWithPriorHistory(t *testing.T) {
+	s, logPath := claudeCodeTestSession(t, "normal")
+	s.append(message.Message{
+		ID:    "msg_prior_user",
+		Role:  message.RoleUser,
+		Parts: message.Parts{&message.Text{Text: "earlier question"}},
+	})
+	s.append(message.Message{
+		ID:    "msg_prior_assistant",
+		Role:  message.RoleAssistant,
+		Parts: message.Parts{&message.Text{Text: "earlier answer"}},
+	})
+
+	if _, err := s.Prompt(context.Background(), "follow up"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	invocations := readInvocations(t, logPath)
+	if len(invocations) != 1 {
+		t.Fatalf("invocations = %d, want 1: %+v", len(invocations), invocations)
+	}
+	got, ok := argvValueAfter(invocations[0], "--append-system-prompt")
+	if !ok || got != claudeCodeHistoryDirective {
+		t.Errorf("--append-system-prompt = %q, ok=%v, want %q", got, ok, claudeCodeHistoryDirective)
+	}
+}
+
+// TestClaudeCodeHistoryDirectiveAbsentWithNoPriorHistory proves a session's
+// very first message ever (nothing precedes the pending trigger message)
+// gets no directive at all — there is no prior conversation to catch up
+// on. TestClaudeCodeSessionIDResumedAcrossTurns already proves the second
+// turn (resumeID != "") carries no --append-system-prompt; this covers the
+// first turn's own "no prior history" branch explicitly.
+func TestClaudeCodeHistoryDirectiveAbsentWithNoPriorHistory(t *testing.T) {
+	s, logPath := claudeCodeTestSession(t, "normal")
+	if _, err := s.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	invocations := readInvocations(t, logPath)
+	if argvContains(invocations[0], "--append-system-prompt") {
+		t.Errorf("argv unexpectedly carries --append-system-prompt on a session's first-ever message: %v", invocations[0])
+	}
+}
+
 // TestClaudeCodeEffortForwardedToChildArgv proves runClaudeCodeTurn reads
 // s.Effort() at turn time and forwards it as --effort, mapped through
 // claudeCodeEffortArg exactly as that function's own doc comment promises.

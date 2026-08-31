@@ -937,6 +937,15 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /session/{id}/message", s.auth(s.handleMessages))
 	mux.HandleFunc("GET /session/{id}/journal", s.auth(s.handleJournal))
 	mux.HandleFunc("GET /session/{id}/request", s.auth(s.handleRequest))
+	// The MCP server role for sess's own harness-hosted tools (currently
+	// get_conversation_history — see mcp_history.go's package doc). A
+	// delegated Claude Code CLI turn is handed this endpoint's own URL in
+	// its --mcp-config (engine.ClaudeCodeConfig.HTTPBaseURL), so it carries
+	// the same s.auth bearer-token gate as every other route: an operator
+	// wiring HTTPAuthToken (or an Unauthenticated loopback bind) is what
+	// makes the delegated child able to reach it, exactly like any other
+	// authenticated route.
+	mux.HandleFunc("POST /session/{id}/mcp", s.auth(s.handleSessionMCP))
 	mux.HandleFunc("POST /session/{id}/prompt_async", s.auth(s.handlePrompt))
 	mux.HandleFunc("POST /session/{id}/enqueue", s.auth(s.handleEnqueue))
 	mux.HandleFunc("GET /session/{id}/queue", s.auth(s.handleQueueGet))
