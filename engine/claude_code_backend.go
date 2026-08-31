@@ -115,7 +115,11 @@
 //     them into message.Reasoning parts instead of dropping them.
 //   - parent_tool_use_id: captured on the envelope and carried onto the
 //     appended message.Message (Message.ParentToolUseID) so a subagent
-//     turn's nesting survives into the journal.
+//     turn's nesting survives into the journal. The CLI only sets this
+//     field on subagent assistant/user frames when told to with
+//     --forward-subagent-text (default off); runClaudeCodeTurn now
+//     always passes that flag alongside --verbose, so this mapping has
+//     real subagent frames to read.
 //   - turn_metrics: consumeClaudeCodeStream now emits an OnTurnMetrics
 //     record from the "result" event's own timing/usage fields.
 //
@@ -314,6 +318,17 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		"--input-format", "stream-json",
 		"--output-format", "stream-json",
 		"--verbose",
+		// The CLI defaults subagent (Task) assistant/user frames to a flat,
+		// unparented stream unless told otherwise. Without this flag, a
+		// subagent's activity carries no parent_tool_use_id, so a consumer
+		// like the boxes console can't nest it under its spawning Task and
+		// renders it inline instead. --forward-subagent-text makes the CLI
+		// set parent_tool_use_id on those frames, which this driver already
+		// reads onto Message.ParentToolUseID (see the package doc above).
+		// It is gated only on --print/--output-format=stream-json, both of
+		// which this driver always sets, so it is safe to pass
+		// unconditionally.
+		"--forward-subagent-text",
 	}
 	if model.Model != "" {
 		args = append(args, "--model", model.Model)

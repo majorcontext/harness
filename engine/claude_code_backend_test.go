@@ -594,6 +594,22 @@ func TestClaudeCodeEffortUnsetOmitsFlag(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeForwardSubagentTextAlwaysSet proves runClaudeCodeTurn always
+// sends --forward-subagent-text. The CLI defaults this off, so a subagent's
+// assistant/user frames would otherwise carry no parent_tool_use_id, and a
+// consumer like the boxes console would render subagent work inline instead
+// of nested under its spawning Task.
+func TestClaudeCodeForwardSubagentTextAlwaysSet(t *testing.T) {
+	s, logPath := claudeCodeTestSession(t, "normal")
+	if _, err := s.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	invocations := readInvocations(t, logPath)
+	if !argvContains(invocations[0], "--forward-subagent-text") {
+		t.Errorf("argv missing --forward-subagent-text: %v", invocations[0])
+	}
+}
+
 // TestClaudeCodeThinkingBlockDecodesToReasoningPart proves a "thinking"
 // content block — previously silently dropped (see claudeCodeContentBlock's
 // switch in claudeCodeAssistantMessage) — decodes into a message.Reasoning
