@@ -188,11 +188,25 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 		return nil, apiError(resp)
 	}
 	return &stream{
-		body:   resp.Body,
-		r:      bufio.NewReader(resp.Body),
-		model:  req.Model,
-		family: c.family(),
+		body:     resp.Body,
+		r:        bufio.NewReader(resp.Body),
+		model:    req.Model,
+		family:   c.family(),
+		subUsage: c.codexSubscriptionUsage(resp.Header),
 	}, nil
+}
+
+// codexSubscriptionUsage reads h for the x-codex-* subscription-usage
+// headers (see codexSubscriptionUsageFromHeaders), but only for a client
+// configured under CodexFamily — see that constant's own doc comment for
+// why family is the gate: an ordinary "openai" entry never even looks at
+// these headers, whether or not a proxy in front of it happens to echo
+// some of the same header names.
+func (c *Client) codexSubscriptionUsage(h http.Header) *message.SubscriptionUsage {
+	if c.family() != CodexFamily {
+		return nil
+	}
+	return codexSubscriptionUsageFromHeaders(h)
 }
 
 // responsesURL joins a base URL and a request path, applying each field's
@@ -313,6 +327,12 @@ type stream struct {
 	items       []*assembledItem
 	usage       provider.Usage
 	hasToolCall bool
+	// subUsage is this response's captured subscription-usage snapshot —
+	// set only for a CodexFamily client (see Client.codexSubscriptionUsage
+	// and wsPool.stream, the two sources), nil otherwise. Carried onto the
+	// EventDone event queued in the "response.completed"/"response.
+	// incomplete" case below.
+	subUsage *message.SubscriptionUsage
 
 	queue []provider.Event
 	done  bool
@@ -576,10 +596,11 @@ func (s *stream) handle(name string, data []byte) error {
 			stop = provider.StopEndTurn
 		}
 		s.queue = append(s.queue, provider.Event{
-			Type:       provider.EventDone,
-			Message:    s.assemble(),
-			StopReason: stop,
-			Usage:      s.usage,
+			Type:              provider.EventDone,
+			Message:           s.assemble(),
+			StopReason:        stop,
+			Usage:             s.usage,
+			SubscriptionUsage: s.subUsage,
 		})
 		s.done = true
 

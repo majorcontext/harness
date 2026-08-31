@@ -40,6 +40,15 @@ type wsPoolEntry struct {
 	busy           bool
 	fallback       bool // permanent: this session never uses ws again
 	streamFailures int
+	// subUsage is the subscription-usage snapshot captured off conn's own
+	// dial (upgrade response) headers — see codexSubscriptionUsageFromHeaders
+	// and dialResponsesWebSocket's doc comment. Only ever set for a
+	// CodexFamily request (see stream below); nil otherwise. Refreshed only
+	// when conn itself is re-dialed, not on every reused-connection turn:
+	// the Codex backend sends these headers on the websocket upgrade
+	// response, not on any later frame, so a pooled connection's snapshot
+	// necessarily ages until its next redial.
+	subUsage *message.SubscriptionUsage
 }
 
 // wsPool is a per-Client pool of persistent Codex Responses websocket
@@ -61,7 +70,7 @@ type wsPool struct {
 	// dial is overridden by tests that point it at an httptest server
 	// instead of the real chatgpt.com endpoint. Production always uses
 	// dialResponsesWebSocket via newWSPool's default assignment.
-	dial func(ctx context.Context, url string, headers http.Header, httpClient *http.Client, timeout time.Duration) (*websocket.Conn, error)
+	dial func(ctx context.Context, url string, headers http.Header, httpClient *http.Client, timeout time.Duration) (*websocket.Conn, *http.Response, error)
 
 	mu      sync.Mutex
 	entries map[string]*wsPoolEntry
@@ -138,19 +147,32 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 	conn := entry.conn
 	entry.mu.Unlock()
 
+	var subUsage *message.SubscriptionUsage
 	if !reuse {
 		p.invalidate(entry)
-		newConn, err := p.dial(ctx, req.URL, req.Headers, req.HTTPClient, p.connectTimeout)
+		newConn, resp, err := p.dial(ctx, req.URL, req.Headers, req.HTTPClient, p.connectTimeout)
 		if err != nil {
 			p.recordFailure(entry)
 			p.release(entry)
 			return nil, false
 		}
+		// Only a CodexFamily request captures the x-codex-* subscription-
+		// usage headers off the upgrade response — see CodexFamily's own
+		// doc comment for why family is the gate, mirroring Client.
+		// codexSubscriptionUsage's identical check on the HTTP path.
+		if req.Family == CodexFamily && resp != nil {
+			subUsage = codexSubscriptionUsageFromHeaders(resp.Header)
+		}
 		entry.mu.Lock()
 		entry.conn = newConn
 		entry.connectedAt = time.Now()
+		entry.subUsage = subUsage
 		entry.mu.Unlock()
 		conn = newConn
+	} else {
+		entry.mu.Lock()
+		subUsage = entry.subUsage
+		entry.mu.Unlock()
 	}
 
 	if err := sendResponseCreate(ctx, conn, req.Body); err != nil {
@@ -192,9 +214,10 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 	}
 
 	return &stream{
-		wsConn: src,
-		model:  req.Model,
-		family: req.Family,
+		wsConn:   src,
+		model:    req.Model,
+		family:   req.Family,
+		subUsage: subUsage,
 	}, true
 }
 
