@@ -777,3 +777,129 @@ func TestClaudeCodeChildExitBeforeAnySystemEventIsNotRetryable(t *testing.T) {
 		t.Errorf("provider.AsRetryable(%v) = true, want false for a child that never started", err)
 	}
 }
+
+// TestClaudeCodeTurnResult table-drives claudeCodeTurnResult directly —
+// the exact precedence between a caller abort, a classified result error,
+// a process-exit error (started vs. not), and a benign input-write race —
+// without needing to force any of these interleavings out of a real child
+// process. The last two cases are this test's whole reason to exist: they
+// lock in the "input-write EPIPE + have-result -> ignore; input-write
+// error + no-result -> real error" rule a real subprocess race can only
+// exercise probabilistically (see TestClaudeCodeSucceedsDespiteInputWriteBrokenPipe
+// below for that best-effort integration-level companion).
+func TestClaudeCodeTurnResult(t *testing.T) {
+	ctxCanceled := context.Canceled
+	turnErr := errors.New("boom: turn error")
+	waitErr := errors.New("exit status 1")
+	inputErr := errors.New("engine: claude-code: writing turn input: write |1: broken pipe")
+	okMsg := &message.Message{ID: "msg_ok"}
+
+	tests := []struct {
+		name        string
+		outcome     claudeCodeTurnOutcome
+		wantMsg     *message.Message
+		wantErrIs   error  // set when the returned error must be exactly (or wrap) this value
+		wantErrText string // set when the returned error is freshly constructed; substring to require instead
+		wantRetry   bool
+	}{
+		{
+			name:      "a caller abort wins over everything else",
+			outcome:   claudeCodeTurnOutcome{ctxErr: ctxCanceled, turnErr: turnErr, waitErr: waitErr, inputErr: inputErr, finalMsg: okMsg},
+			wantErrIs: ctxCanceled,
+		},
+		{
+			name:      "a classified result error returns as-is",
+			outcome:   claudeCodeTurnOutcome{turnErr: turnErr},
+			wantErrIs: turnErr,
+		},
+		{
+			name:        "a process exit after the child started is retryable",
+			outcome:     claudeCodeTurnOutcome{waitErr: waitErr, started: true},
+			wantErrText: waitErr.Error(),
+			wantRetry:   true,
+		},
+		{
+			name:        "a process exit before the child ever started is NOT retryable",
+			outcome:     claudeCodeTurnOutcome{waitErr: waitErr, started: false},
+			wantErrText: waitErr.Error(),
+		},
+		{
+			name:        "no result and no input error is the generic no-assistant-message error",
+			outcome:     claudeCodeTurnOutcome{},
+			wantErrText: "turn ended with no assistant message",
+		},
+		{
+			name:      "no result AND an input-write error surfaces the input-write error",
+			outcome:   claudeCodeTurnOutcome{inputErr: inputErr},
+			wantErrIs: inputErr,
+		},
+		{
+			name:    "a usable result suppresses a benign input-write error",
+			outcome: claudeCodeTurnOutcome{inputErr: inputErr, finalMsg: okMsg},
+			wantMsg: okMsg,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg, err := claudeCodeTurnResult(tt.outcome)
+			if msg != tt.wantMsg {
+				t.Errorf("msg = %v, want %v", msg, tt.wantMsg)
+			}
+			if tt.wantErrIs == nil && tt.wantErrText == "" {
+				if err != nil {
+					t.Fatalf("err = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("err = nil, want an error")
+			}
+			if tt.wantErrIs != nil && !errors.Is(err, tt.wantErrIs) {
+				t.Errorf("err = %q, want one wrapping %q", err, tt.wantErrIs)
+			}
+			if tt.wantErrText != "" && !strings.Contains(err.Error(), tt.wantErrText) {
+				t.Errorf("err = %q, want it to contain %q", err, tt.wantErrText)
+			}
+			if _, ok := provider.AsRetryable(err); ok != tt.wantRetry {
+				t.Errorf("provider.AsRetryable(%v) = %v, want %v", err, ok, tt.wantRetry)
+			}
+		})
+	}
+}
+
+// TestClaudeCodeSucceedsDespiteInputWriteBrokenPipe proves runClaudeCodeTurn
+// tolerates a broken-pipe/closed-pipe error writing (or closing) the
+// turn's stdin input when the child has ALREADY produced — or is about
+// to produce — a complete, valid result: a fast/trivial turn's child can
+// legitimately finish and exit, closing its own end of the pipe, before
+// this call finishes writing/closing its side. This reproduces a real CI
+// failure (go test -race caught it; a non-race run is fast enough that
+// the write usually wins the race instead) where a delegated turn failed
+// with "writing turn input: write |1: broken pipe" even though the child
+// had already produced a perfectly good result.
+//
+// fakeclaude's "fast_no_drain" mode reliably wins this race deliberately
+// (see its own doc comment): it closes its own stdin immediately, before
+// doing anything else, and runs at native speed since buildFakeClaude
+// compiles it without -race, while harness's own -race-instrumented write
+// path is comparatively slow. The turn must still succeed end to end:
+// final message present, no error, and (since the fix's whole point is
+// that a benign inputErr never surfaces once the turn has a usable
+// result) OnTurnMetrics still fires exactly once.
+func TestClaudeCodeSucceedsDespiteInputWriteBrokenPipe(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "fast_no_drain")
+
+	var metrics []TurnMetrics
+	s.cfg.OnTurnMetrics = func(m TurnMetrics) { metrics = append(metrics, m) }
+
+	msg, err := s.Prompt(context.Background(), "hi")
+	if err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if msg == nil || msg.Parts.Text() != "Done before you finished writing." {
+		t.Fatalf("Prompt returned %+v, want fakeclaude's own canned final message", msg)
+	}
+	if len(metrics) != 1 {
+		t.Errorf("OnTurnMetrics called %d times, want 1: %+v", len(metrics), metrics)
+	}
+}

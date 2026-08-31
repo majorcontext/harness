@@ -13,10 +13,12 @@
 // timing fields), "subagent" (a null-then-set parent_tool_use_id pair),
 // "rate_limit_error"/"deterministic_error" (a result event this file's own
 // claudeCodeRetryableClass must classify retryable/not-retryable,
-// respectively), and "crash"/"crash_before_init" (a child that exits
-// nonzero with no "result" event, AFTER vs. BEFORE ever emitting a
-// "system" event — runClaudeCodeTurn's waitErr branch must classify only
-// the former retryable).
+// respectively), "crash"/"crash_before_init" (a child that exits nonzero
+// with no "result" event, AFTER vs. BEFORE ever emitting a "system" event
+// — runClaudeCodeTurn's waitErr branch must classify only the former
+// retryable), and "fast_no_drain" (closes its own stdin immediately,
+// without ever draining it, to reliably win the race against harness's
+// own turn-input write — see runClaudeCodeTurn's inputErr handling).
 package main
 
 import (
@@ -28,6 +30,23 @@ import (
 )
 
 func main() {
+	mode := os.Getenv("FAKE_CLAUDE_MODE")
+
+	if mode == "fast_no_drain" {
+		// Close our OWN stdin's read end IMMEDIATELY — before doing
+		// anything else, including the argv log write below — to
+		// deterministically win the race this mode's own test regresses:
+		// harness's own turn-input Write/Close must tolerate a broken-pipe/
+		// closed-pipe error when the child has already (or is about to)
+		// exit with a complete, valid result, exactly the shape a fast/
+		// trivial real turn can hit. fakeclaude runs at native speed
+		// (buildFakeClaude compiles it without -race); harness's own
+		// -race-instrumented write path is comparatively slow, so closing
+		// this early reliably beats it. Skips the shared stdin-drain
+		// goroutine below entirely — there is nothing left to drain.
+		_ = os.Stdin.Close()
+	}
+
 	if logPath := os.Getenv("FAKE_CLAUDE_LOG"); logPath != "" {
 		// Record this invocation's full argv for the test to inspect
 		// afterward (the resume test's only way to see whether --resume
@@ -40,15 +59,18 @@ func main() {
 		}
 	}
 
-	// Drain (don't require) exactly one stdin line — the real driver
-	// writes one turn message and closes stdin; reading it keeps this
-	// stand-in honest about the protocol without validating its content.
-	go func() {
-		scanner := bufio.NewScanner(os.Stdin)
-		for scanner.Scan() {
-			// discard
-		}
-	}()
+	if mode != "fast_no_drain" {
+		// Drain (don't require) exactly one stdin line — the real driver
+		// writes one turn message and closes stdin; reading it keeps this
+		// stand-in honest about the protocol without validating its
+		// content.
+		go func() {
+			scanner := bufio.NewScanner(os.Stdin)
+			for scanner.Scan() {
+				// discard
+			}
+		}()
+	}
 
 	sessionID := os.Getenv("FAKE_CLAUDE_SESSION_ID")
 	if sessionID == "" {
@@ -62,7 +84,7 @@ func main() {
 		out.Flush()
 	}
 
-	if os.Getenv("FAKE_CLAUDE_MODE") == "crash_before_init" {
+	if mode == "crash_before_init" {
 		// Exits nonzero WITHOUT ever emitting so much as a "system" event —
 		// the deterministic-startup-failure shape (an unknown flag, a
 		// malformed --mcp-config command, an invalid --model) that
@@ -77,7 +99,28 @@ func main() {
 		"session_id": sessionID,
 	})
 
-	switch os.Getenv("FAKE_CLAUDE_MODE") {
+	switch mode {
+	case "fast_no_drain":
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "Done before you finished writing."},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "success",
+			"is_error": false,
+			"result":   "Done before you finished writing.",
+			"usage": map[string]any{
+				"input_tokens":  4,
+				"output_tokens": 6,
+			},
+		})
+		return
 	case "hang":
 		// No signal handlers installed: an unhandled SIGINT/SIGTERM uses
 		// Go's own default disposition, which terminates the process —

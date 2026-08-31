@@ -367,20 +367,34 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		_ = cmd.Wait()
 		return nil, fmt.Errorf("engine: claude-code: encoding turn input: %w", err)
 	}
+	// inputErr captures a failure writing or closing stdin WITHOUT killing
+	// the child or returning early: a fast/trivial turn's child can
+	// legitimately finish its whole result and exit (closing its own end
+	// of the pipe) before this call finishes writing/closing its side,
+	// which turns an otherwise-harmless race into a broken-pipe/closed-
+	// pipe error right here. That is not a real failure — the child still
+	// has a complete, valid result waiting on stdout — so this call must
+	// keep going and read it: only if the turn ends with NO usable result
+	// at all does inputErr get promoted to the actual returned error,
+	// below. Deliberately not stdin.Close() after a failed Write: closing
+	// an already-broken pipe has nothing useful to report, and calling it
+	// anyway would risk overwriting a meaningful inputErr with a second,
+	// less informative one.
+	var inputErr error
 	if _, err := stdin.Write(append(inputLine, '\n')); err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return nil, fmt.Errorf("engine: claude-code: writing turn input: %w", err)
-	}
-	// Close stdin: this driver sends exactly one turn per `claude` child
-	// (continuity across harness turns is --resume, not a long-lived
-	// child — see this file's package doc), and an unclosed stdin would
-	// leave the CLI waiting indefinitely for a second message that is
-	// never coming, wedging cmd.Wait() below forever.
-	if err := stdin.Close(); err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return nil, fmt.Errorf("engine: claude-code: closing stdin: %w", err)
+		inputErr = fmt.Errorf("engine: claude-code: writing turn input: %w", err)
+	} else if err := stdin.Close(); err != nil {
+		// Close stdin: this driver sends exactly one turn per `claude`
+		// child (continuity across harness turns is --resume, not a long-
+		// lived child — see this file's package doc), and an unclosed
+		// stdin would leave the CLI waiting indefinitely for a second
+		// message that is never coming, wedging cmd.Wait() below forever —
+		// but a Close failing is itself just as benign as a Write failing,
+		// for the exact same reason (the read end may already be gone
+		// because the child already finished), so it gets the same
+		// deferred treatment as the Write error above rather than an
+		// immediate kill-and-return.
+		inputErr = fmt.Errorf("engine: claude-code: closing stdin: %w", err)
 	}
 
 	// The signal-abort cascade: SIGINT first (Claude Code's own docs
@@ -422,56 +436,103 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 
 	waitErr := cmd.Wait()
 
-	if ctx.Err() != nil {
+	return claudeCodeTurnResult(claudeCodeTurnOutcome{
+		ctxErr:   ctx.Err(),
+		turnErr:  turnErr,
+		waitErr:  waitErr,
+		inputErr: inputErr,
+		started:  started,
+		finalMsg: finalMsg,
+		binary:   binary,
+		stderr:   stderr.String(),
+	})
+}
+
+// claudeCodeTurnOutcome collects everything runClaudeCodeTurn learns about
+// one delegated turn's process/stream lifecycle — see claudeCodeTurnResult,
+// the sole consumer, for what each field decides.
+type claudeCodeTurnOutcome struct {
+	ctxErr   error
+	turnErr  error
+	waitErr  error
+	inputErr error
+	started  bool
+	finalMsg *message.Message
+	binary   string
+	stderr   string
+}
+
+// claudeCodeTurnResult turns one claudeCodeTurnOutcome into runClaudeCodeTurn's
+// own (*message.Message, error) return. Split out from runClaudeCodeTurn as
+// its own pure function so the precedence between a caller abort, a
+// classified result error, a process-exit error, and a benign input-write
+// race is unit-testable directly (TestClaudeCodeTurnResult) without having
+// to force each interleaving out of a real child process.
+func claudeCodeTurnResult(o claudeCodeTurnOutcome) (*message.Message, error) {
+	if o.ctxErr != nil {
 		// An abort/shutdown-driven cancellation always wins over whatever
 		// the stream decoded — the same precedence the native path's
 		// context.Canceled handling gives ctx (engine.go's
 		// streamTurnWithRetry/runAgenticLoop treat a canceled context as a
 		// deliberate stop, not an ordinary failure).
-		return nil, ctx.Err()
+		return nil, o.ctxErr
 	}
-	if turnErr != nil {
-		return nil, turnErr
+	if o.turnErr != nil {
+		return nil, o.turnErr
 	}
-	if waitErr != nil {
-		msg := fmt.Sprintf("engine: claude-code: %q exited with error: %v", binary, waitErr)
-		if tail := stderr.String(); tail != "" {
-			msg += fmt.Sprintf(" (stderr: %s)", tail)
+	if o.waitErr != nil {
+		msg := fmt.Sprintf("engine: claude-code: %q exited with error: %v", o.binary, o.waitErr)
+		if o.stderr != "" {
+			msg += fmt.Sprintf(" (stderr: %s)", o.stderr)
 		}
 		err := error(errors.New(msg))
-		if started {
+		if o.started {
 			// The child got far enough to emit at least one "system" event
 			// — the CLI's own protocol came up, so a session genuinely
 			// started — and then exited without ever emitting a clean
-			// "result" event (consumeClaudeCodeStream returned turnErr ==
-			// nil, so this is not the deterministic IsError shape
-			// claudeCodeRetryableClass classifies above): a crash, an OOM
-			// kill, a signal from something other than this call's own
-			// abort cascade (ctx.Err() was already checked nil above).
-			// That is exactly the same kind of non-deterministic, worth-a-
-			// retry provider weather MarkStreamTruncated marks for a
-			// native adapter's stream that dies mid-body, so goal.go's
-			// promptTurnWithRetry gives it the same backoff-and-retry
-			// treatment rather than parking on attempt 1.
+			// "result" event (o.turnErr == nil, so this is not the
+			// deterministic IsError shape claudeCodeRetryableClass
+			// classifies above): a crash, an OOM kill, a signal from
+			// something other than this call's own abort cascade (o.ctxErr
+			// was already checked nil above). That is exactly the same
+			// kind of non-deterministic, worth-a-retry provider weather
+			// MarkStreamTruncated marks for a native adapter's stream that
+			// dies mid-body, so goal.go's promptTurnWithRetry gives it the
+			// same backoff-and-retry treatment rather than parking on
+			// attempt 1.
 			err = provider.MarkRetryable(err, provider.RetryableServerError)
 		}
-		// !started means the child never even got its own protocol off the
-		// ground — an unknown flag on an older `claude` build, a malformed
-		// --mcp-config command, an invalid --model value, a missing
-		// binary's exec succeeding but the binary itself refusing to run —
-		// deterministic startup failures that will fail identically on
-		// every retry. Marking THOSE retryable would have a PursueGoal
-		// loop burn its entire retryable budget (goalRetryableMaxAttempts,
-		// goal.go) with backoff before parking, delaying the surfacing of
-		// what is really a config error nothing will fix by waiting. Left
-		// a plain error here, exactly like every other deterministic
-		// failure this file returns.
+		// !o.started means the child never even got its own protocol off
+		// the ground — an unknown flag on an older `claude` build, a
+		// malformed --mcp-config command, an invalid --model value, a
+		// missing binary's exec succeeding but the binary itself refusing
+		// to run — deterministic startup failures that will fail
+		// identically on every retry. Marking THOSE retryable would have a
+		// PursueGoal loop burn its entire retryable budget
+		// (goalRetryableMaxAttempts, goal.go) with backoff before parking,
+		// delaying the surfacing of what is really a config error nothing
+		// will fix by waiting. Left a plain error here, exactly like every
+		// other deterministic failure this file returns.
 		return nil, err
 	}
-	if finalMsg == nil {
+	if o.finalMsg == nil {
+		if o.inputErr != nil {
+			// No usable result at all, AND writing/closing stdin itself
+			// failed: the write error is almost certainly the actual root
+			// cause here (the child never got the turn's own prompt to
+			// answer), so surface it in place of the generic "no assistant
+			// message" error below.
+			return nil, o.inputErr
+		}
 		return nil, errors.New("engine: claude-code: turn ended with no assistant message")
 	}
-	return finalMsg, nil
+	// o.finalMsg != nil: the child produced a complete, usable result
+	// despite any o.inputErr recorded above (see runClaudeCodeTurn's own
+	// inputErr doc comment). A benign broken-pipe/closed-pipe race
+	// resolves itself once the turn's own output proves the child got
+	// everything it needed; o.inputErr is deliberately dropped here, never
+	// surfaced once the turn otherwise succeeded.
+	return o.finalMsg, nil
 }
 
 // lastUserMessageText returns the Text of the LAST message in history if
