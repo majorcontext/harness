@@ -73,6 +73,11 @@ type JournalRecord struct {
 	MessageID      string `json:"message_id,omitempty"`
 	MessageRole    string `json:"message_role,omitempty"`
 	RecoveryMarker bool   `json:"recovery_marker,omitempty"`
+	// ParentToolUseID mirrors message.Message.ParentToolUseID (see its own
+	// doc comment): the spawning tool_use id of a Claude Code CLI subagent
+	// turn, letting a journal reader reconstruct subagent nesting for a
+	// delegated session without fetching the message's full content.
+	ParentToolUseID string `json:"parent_tool_use_id,omitempty"`
 
 	// Model (Type == recSession or recModel) / effort (Type == recSession or
 	// recEffort).
@@ -199,6 +204,7 @@ func projectJournalRecord(seq int, rec record) JournalRecord {
 			out.MessageRole = string(rec.Message.Role)
 			out.CreatedAt = rec.Message.CreatedAt
 			out.RecoveryMarker = isRecoverySyntheticCloser(*rec.Message)
+			out.ParentToolUseID = rec.Message.ParentToolUseID
 		}
 	case recModel:
 		out.Model = rec.Model
