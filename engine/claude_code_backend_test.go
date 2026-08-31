@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -991,5 +992,111 @@ func TestClaudeCodeSucceedsDespiteInputWriteBrokenPipe(t *testing.T) {
 	}
 	if len(metrics) != 1 {
 		t.Errorf("OnTurnMetrics called %d times, want 1: %+v", len(metrics), metrics)
+	}
+}
+
+// TestClaudeCodeReturnsOnResultDespiteLeakedDescendantFD reproduces the
+// `claude --bg` wedge consumeClaudeCodeStream's early return on "result"
+// fixes: a delegated turn must complete as soon as the direct `claude`
+// child prints its terminal "result" event, even when some OTHER process
+// still holds the same stdout pipe's write end open. Before the fix,
+// consumeClaudeCodeStream kept calling scanner.Scan() looking for EOF,
+// which only arrives once EVERY holder of the write end closes it — and
+// `claude --bg`'s own detached daemon (or a further child of its own,
+// e.g. a dev server) is designed to keep running, and can inherit that fd,
+// after the direct child has already exited. That wedges the whole
+// harness turn forever, unkillably, even though the turn's own result was
+// already in hand.
+//
+// fakeclaude's "bg_leak" mode stands in for exactly that: it emits a
+// normal assistant/result pair, THEN spawns a grandchild that inherits its
+// stdout and sleeps for an hour (never emitting anything, never exiting on
+// its own within any sane test bound) before the direct child itself
+// returns. The select below is this test's hard timeout guard: if a
+// regression reintroduces the EOF-wait, this test fails loudly as a
+// TIMEOUT rather than hanging the suite.
+func TestClaudeCodeReturnsOnResultDespiteLeakedDescendantFD(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "bg_leak")
+	pidFile := filepath.Join(t.TempDir(), "leaked.pid")
+	t.Setenv("FAKE_CLAUDE_LEAK_PID_FILE", pidFile)
+
+	var metrics []TurnMetrics
+	s.cfg.OnTurnMetrics = func(m TurnMetrics) { metrics = append(metrics, m) }
+
+	type outcome struct {
+		msg *message.Message
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		msg, err := s.Prompt(context.Background(), "start a background job")
+		done <- outcome{msg, err}
+	}()
+
+	select {
+	case res := <-done:
+		if res.err != nil {
+			t.Fatalf("Prompt: %v", res.err)
+		}
+		if res.msg == nil || res.msg.Parts.Text() != "Starting a background job." {
+			t.Fatalf("Prompt returned %+v, want fakeclaude's own canned final message", res.msg)
+		}
+	case <-time.After(10 * time.Second):
+		// Cleaning up here too: if this branch ever fires, the leaked
+		// grandchild would otherwise outlive the test.
+		killLeakedFakeClaude(t, pidFile)
+		t.Fatal("Prompt did not return within 10s of the child's \"result\" event — " +
+			"consumeClaudeCodeStream is waiting for stdout EOF instead of returning " +
+			"on \"result\" (the claude --bg wedge this test guards against)")
+	}
+
+	// The lingering grandchild's own stdout never got read as turn stream:
+	// it emits nothing at all, so any observable content past "result"
+	// (there is none here) would have to come from the direct child, and
+	// finalMsg/History already prove that ended cleanly at "Starting a
+	// background job." — see the assertions above and below.
+	usage := s.Usage()
+	if usage.InputTokens != 12 || usage.OutputTokens != 5 {
+		t.Errorf("Usage() = %+v, want {12 5 0 0} (the result event's own usage)", usage)
+	}
+	if len(metrics) != 1 {
+		t.Errorf("OnTurnMetrics called %d times, want 1: %+v", len(metrics), metrics)
+	}
+	hist := s.History()
+	if len(hist) != 2 {
+		t.Fatalf("History() len = %d, want 2 (user prompt + one assistant message): %+v", len(hist), hist)
+	}
+
+	// cmd.Wait() (runClaudeCodeTurn) only returns once the DIRECT
+	// fakeclaude child has fully exited — which happens after its own
+	// "bg_leak" case has already spawned the grandchild and written its
+	// pid to pidFile, both of which run before that case's own return
+	// statement. So by the time s.Prompt() above has returned, pidFile is
+	// guaranteed to exist already: no polling or sleep needed to read it.
+	killLeakedFakeClaude(t, pidFile)
+}
+
+// killLeakedFakeClaude reads the pid fakeclaude's "bg_leak" mode wrote to
+// pidFile and kills that process, so this test does not leave its stand-in
+// background daemon running after the test exits.
+func killLeakedFakeClaude(t *testing.T, pidFile string) {
+	t.Helper()
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Logf("killLeakedFakeClaude: reading %s: %v (leaked grandchild not cleaned up)", pidFile, err)
+		return
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Logf("killLeakedFakeClaude: parsing pid %q: %v", data, err)
+		return
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		t.Logf("killLeakedFakeClaude: FindProcess(%d): %v", pid, err)
+		return
+	}
+	if err := proc.Kill(); err != nil {
+		t.Logf("killLeakedFakeClaude: Kill(%d): %v (may have already exited)", pid, err)
 	}
 }

@@ -78,19 +78,21 @@
 //     block, Message.ParentToolUseID set the same way as the "assistant"
 //     case above), appended and emitted as EventMessage, with one
 //     EventToolEnd per part.
-//   - "result": the turn's terminal event. Never itself appended as a
-//     message (the assistant text it summarizes was already appended by
-//     the last "assistant" event above) — it instead carries the turn's
-//     AGGREGATE usage, applied once via applyClaudeCodeUsage (a durable,
-//     message-independent record — see recClaudeCodeUsage in store.go),
-//     and this turn's timing, emitted once via emitTurnMetrics (ttft_ms/
-//     duration_ms, permissively zero-valued if the CLI's own build does not
-//     send them). An IsError result becomes this call's returned error —
-//     wrapped provider.RetryableError for a known-transient shape (see
-//     claudeCodeRetryableClass), a plain error otherwise. TotalCostUSD has
-//     no home in provider.Usage (no adapter carries a cost field — every
-//     consumer derives cost from token counts) and is deliberately
-//     dropped, not persisted.
+//   - "result": the turn's terminal event. consumeClaudeCodeStream RETURNS
+//     as soon as this event is handled — it does not keep scanning for
+//     stdout EOF (see that function's own doc comment for why this
+//     matters). Never itself appended as a message (the assistant text it
+//     summarizes was already appended by the last "assistant" event
+//     above) — it instead carries the turn's AGGREGATE usage, applied once
+//     via applyClaudeCodeUsage (a durable, message-independent record —
+//     see recClaudeCodeUsage in store.go), and this turn's timing, emitted
+//     once via emitTurnMetrics (ttft_ms/duration_ms, permissively zero-
+//     valued if the CLI's own build does not send them). An IsError result
+//     becomes this call's returned error — wrapped provider.RetryableError
+//     for a known-transient shape (see claudeCodeRetryableClass), a plain
+//     error otherwise. TotalCostUSD has no home in provider.Usage (no
+//     adapter carries a cost field — every consumer derives cost from
+//     token counts) and is deliberately dropped, not persisted.
 //   - "rate_limit_event": the CLI's own subscription rate-limit/quota
 //     signal, typically the SECOND event of a turn (right after
 //     "system"/"init"). Never appended as a message — it carries no
@@ -458,6 +460,33 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 
 	finalMsg, started, turnErr := s.consumeClaudeCodeStream(stdout, model)
 
+	// cmd.Wait() below does NOT reintroduce the EOF wait that
+	// consumeClaudeCodeStream's early return on "result" just avoided, and
+	// it does not touch (let alone kill) a surviving `claude --bg` daemon:
+	//
+	//   - Wait() waits on c.Process.Wait(), i.e. waitpid(2) on the DIRECT
+	//     `claude` child's own PID. That is a wait for one specific
+	//     process's exit status, never a wait for the pipe's write end to
+	//     see every holder close it. The direct child has already printed
+	//     its "result" and exited by the time consumeClaudeCodeStream
+	//     returns, so this waitpid returns immediately.
+	//   - stdout here came from cmd.StdoutPipe(), not a plain cmd.Stdout
+	//     io.Writer, so Cmd never started an internal copying goroutine for
+	//     it (Cmd.goroutineErr stays nil) — Wait()'s own awaitGoroutines
+	//     step has nothing to wait for on this fd either.
+	//   - Go's os/exec source (os/exec/exec.go, StdoutPipe) records the
+	//     pipe's READ end (the `stdout` this call reads) in
+	//     Cmd.parentIOPipes, and Wait() closes parentIOPipes itself right
+	//     after the waitpid above returns. So Wait() actively closes our
+	//     read end for us; it never blocks on it.
+	//   - The leaked grandchild only ever held the pipe's WRITE end (a
+	//     duplicated fd inherited across fork/exec). Wait() closing our
+	//     read end does not signal or touch that process at all — the
+	//     background daemon keeps running untouched, exactly as `claude
+	//     --bg` intends. A later write of its own may see EPIPE/SIGPIPE
+	//     once nothing is left to read that fd, which is the same fate any
+	//     well-behaved detached daemon should already tolerate by
+	//     redirecting its own stdio, not a signal this call sends it.
 	waitErr := cmd.Wait()
 
 	return claudeCodeTurnResult(claudeCodeTurnOutcome{
@@ -577,15 +606,35 @@ func lastUserMessageText(history []message.Message) string {
 	return last.Parts.Text()
 }
 
-// consumeClaudeCodeStream reads newline-delimited stream-json events from
-// r (the `claude` child's stdout) until EOF, appending/emitting each
-// decoded event per this file's package-doc mapping, and returns the last
-// assistant message.Message it appended (nil if none), whether the child
-// got far enough to emit at least one "system" event (see the started
-// return value's own use in runClaudeCodeTurn's waitErr branch: it is what
-// tells a child that never even started apart from one that started and
-// later crashed), and any turn-ending error a "result" event's IsError
-// reported.
+// consumeClaudeCodeStream reads newline-delimited stream-json events from r
+// (the `claude` child's stdout), appending/emitting each decoded event per
+// this file's package-doc mapping, and returns the last assistant
+// message.Message it appended (nil if none), whether the child got far
+// enough to emit at least one "system" event (see the started return
+// value's own use in runClaudeCodeTurn's waitErr branch: it is what tells a
+// child that never even started apart from one that started and later
+// crashed), and any turn-ending error a "result" event's IsError reported.
+//
+// It returns as soon as it handles the "result" event rather than reading
+// on to stdout's EOF, because "result" IS the turn's documented terminal
+// event (see this file's package doc) and EOF is not a safe thing to wait
+// for: EOF on a pipe only arrives once EVERY process holding the write end
+// open has exited, and the direct `claude` child is not the only process
+// that can hold it. `claude --bg` — the CLI's own sanctioned pattern for a
+// long-running background task — spawns a daemon that reparents to PID 1
+// and is meant to keep running after the turn ends; that daemon (or a
+// further child of its own, e.g. a dev server it starts) inherits this
+// process's file descriptors, including stdout, unless it explicitly
+// closes or redirects them. The direct `claude` child still prints its own
+// "result" and exits right on schedule, but the leaked descendant keeps
+// the pipe's write end open indefinitely, so a scan loop that waits for
+// EOF blocks forever — wedging the harness turn (and the whole session)
+// while the surviving daemon keeps running exactly as designed. Returning
+// on "result" decouples turn completion from every descendant's fd
+// lifetime, which is also why this must never be "solved" by killing the
+// child's process group: that would kill the very background session
+// --bg exists to keep alive. See runClaudeCodeTurn's own comment on why
+// its subsequent cmd.Wait() does not reintroduce this wait.
 func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (finalMsg *message.Message, started bool, turnErr error) {
 	scanner := bufio.NewScanner(r)
 	// A tool call's arguments or a large tool result can exceed
@@ -692,6 +741,16 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			// TotalCostUSD is intentionally dropped here — see the
 			// package doc's "result" bullet: provider.Usage has no cost
 			// field for it to occupy.
+			//
+			// Return NOW rather than falling through to another
+			// scanner.Scan(): "result" is the documented terminal event
+			// (package doc above), and continuing to scan would instead
+			// wait for stdout's EOF — which a `claude --bg` turn's leaked
+			// descendant fd can withhold forever. See this function's own
+			// doc comment for the full reasoning. Any bytes a lingering
+			// writer emits after this point are simply never read by this
+			// call; they are not folded into the turn in any way.
+			return finalMsg, started, turnErr
 		case "rate_limit_event":
 			// The CLI's own subscription rate-limit/quota signal — see
 			// mapClaudeCodeRateLimit's own doc comment for the wire shape
