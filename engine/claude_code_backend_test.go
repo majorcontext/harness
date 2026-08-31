@@ -750,6 +750,30 @@ func TestClaudeCodeRateLimitEventCapturesSubscriptionUsage(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeRateLimitEventWithNoOverageOmitsOverage proves
+// mapClaudeCodeRateLimit leaves SubscriptionUsage.Overage nil — omitted on
+// the wire, per message.SubscriptionUsage.Overage's own doc comment —
+// when a rate_limit_event's own overage fields report no overage in play
+// at all (overageStatus "", isUsingOverage false, overageResetsAt 0), the
+// counterpart to TestClaudeCodeRateLimitEventCapturesSubscriptionUsage
+// above, whose fixture's overageStatus "allowed" is itself a real (if
+// benign) overage signal and so is a case that test cannot cover.
+func TestClaudeCodeRateLimitEventWithNoOverageOmitsOverage(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "rate_limit_event_no_overage")
+
+	if _, err := s.Prompt(context.Background(), "how am I doing on quota?"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	usage := s.SubscriptionUsage()
+	if usage == nil {
+		t.Fatal("SubscriptionUsage() after the turn = nil, want a captured snapshot")
+	}
+	if usage.Overage != nil {
+		t.Errorf("Overage = %+v, want nil (no overage in play)", usage.Overage)
+	}
+}
+
 // TestClaudeCodeRetryableClassification proves a "result" event this file
 // can actually name as transient provider weather (a rate-limit signal) is
 // wrapped provider.RetryableError, while a genuinely deterministic result

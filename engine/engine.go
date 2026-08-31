@@ -2042,6 +2042,14 @@ func (s *Session) SubscriptionUsage() *message.SubscriptionUsage {
 	}
 	cp := *s.subscriptionUsage
 	cp.Windows = append([]message.SubscriptionUsageWindow(nil), s.subscriptionUsage.Windows...)
+	if s.subscriptionUsage.Overage != nil {
+		// Deep-copy Overage too, not just Windows: the struct copy above
+		// (cp := *s.subscriptionUsage) only copies the pointer value, so
+		// without this a caller mutating the returned snapshot's Overage
+		// would mutate this session's own stored one.
+		overage := *s.subscriptionUsage.Overage
+		cp.Overage = &overage
+	}
 	return &cp
 }
 

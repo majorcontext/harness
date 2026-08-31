@@ -43,11 +43,22 @@ type wsPoolEntry struct {
 	// subUsage is the subscription-usage snapshot captured off conn's own
 	// dial (upgrade response) headers — see codexSubscriptionUsageFromHeaders
 	// and dialResponsesWebSocket's doc comment. Only ever set for a
-	// CodexFamily request (see stream below); nil otherwise. Refreshed only
-	// when conn itself is re-dialed, not on every reused-connection turn:
-	// the Codex backend sends these headers on the websocket upgrade
-	// response, not on any later frame, so a pooled connection's snapshot
-	// necessarily ages until its next redial.
+	// CodexFamily request (see stream below); nil otherwise.
+	//
+	// KNOWN STALENESS: the Codex backend sends these headers on the
+	// websocket upgrade response only, never on any later frame, so this
+	// is refreshed exclusively when conn itself is re-dialed — NOT on
+	// every turn a reused connection serves. On an actively-reused
+	// connection, the value can therefore lag the account's real usage by
+	// up to the connection's own reuse window: idleTimeout (5 minutes of
+	// no traffic invalidates it) or maxConnectionAge (55 minutes, whichever
+	// comes first — see wsPool's own tunables above). Contrast the HTTP
+	// path (Client.codexSubscriptionUsage), which re-reads fresh headers
+	// on every single request with no such lag. This is a deliberate,
+	// accepted limitation, not a bug: a caller showing this value (e.g.
+	// boxes rendering it in a UI) also has SubscriptionUsage.CapturedAt,
+	// so staleness is always visible rather than silently assumed live.
+	// No periodic redial or separate query exists to force a refresh.
 	subUsage *message.SubscriptionUsage
 }
 

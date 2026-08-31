@@ -21,7 +21,10 @@
 // own turn-input write — see runClaudeCodeTurn's inputErr handling), and
 // "rate_limit_event" (a subscription rate-limit/quota event ahead of the
 // final assistant text, mapped by mapClaudeCodeRateLimit onto
-// Session.SubscriptionUsage).
+// Session.SubscriptionUsage), and "rate_limit_event_no_overage" (the same
+// event with no overage in play at all — overageStatus "", isUsingOverage
+// false, overageResetsAt 0 — proving mapClaudeCodeRateLimit leaves
+// SubscriptionUsage.Overage nil rather than a hollow zero-value object).
 package main
 
 import (
@@ -264,21 +267,32 @@ func main() {
 		return
 	}
 
-	if mode == "rate_limit_event" {
-		emit(map[string]any{
-			"type": "rate_limit_event",
-			"rate_limit_info": map[string]any{
-				"status":          "allowed",
-				"resetsAt":        1788785267,
-				"rateLimitType":   "five_hour",
-				"overageStatus":   "allowed",
-				"overageResetsAt": 1789000000,
-				"isUsingOverage":  false,
-				"unifiedWindows": map[string]any{
-					"five_hour": map[string]any{"utilization": 0.02, "resetsAt": 1788785267},
-					"seven_day": map[string]any{"utilization": 0.13, "resetsAt": 1789200000},
-				},
+	if mode == "rate_limit_event" || mode == "rate_limit_event_no_overage" {
+		info := map[string]any{
+			"status":          "allowed",
+			"resetsAt":        1788785267,
+			"rateLimitType":   "five_hour",
+			"overageStatus":   "allowed",
+			"overageResetsAt": 1789000000,
+			"isUsingOverage":  false,
+			"unifiedWindows": map[string]any{
+				"five_hour": map[string]any{"utilization": 0.02, "resetsAt": 1788785267},
+				"seven_day": map[string]any{"utilization": 0.13, "resetsAt": 1789200000},
 			},
+		}
+		if mode == "rate_limit_event_no_overage" {
+			// No overage in play at all — overageStatus empty,
+			// isUsingOverage false, overageResetsAt 0 — the shape
+			// mapClaudeCodeRateLimit must leave Overage nil for (see
+			// TestClaudeCodeRateLimitEventWithNoOverageOmitsOverage), unlike
+			// the "rate_limit_event" mode above, whose overageStatus:
+			// "allowed" is itself a real (if benign) overage signal.
+			info["overageStatus"] = ""
+			info["overageResetsAt"] = 0
+		}
+		emit(map[string]any{
+			"type":            "rate_limit_event",
+			"rate_limit_info": info,
 		})
 		emit(map[string]any{
 			"type": "assistant",

@@ -114,6 +114,13 @@ func codexWindow(prefix string, h http.Header) (message.SubscriptionUsageWindow,
 // non-Codex OpenAI-compatible endpoint by misconfiguration, or an older
 // backend build that has not shipped these headers yet — so a caller only
 // ever applies a genuinely captured signal, never a hollow zero-value one.
+//
+// Freshness differs by caller: the HTTP path (Client.codexSubscriptionUsage)
+// calls this on every single request, so its result is always current as
+// of that turn. The websocket path (wsPool.stream) calls this only when
+// its pooled connection is dialed, NOT on every turn the connection then
+// serves — see wsPoolEntry.subUsage's own doc comment for the resulting
+// staleness bound on an actively-reused connection.
 func codexSubscriptionUsageFromHeaders(h http.Header) *message.SubscriptionUsage {
 	plan := h.Get("x-codex-plan-type")
 	windows := []message.SubscriptionUsageWindow{}

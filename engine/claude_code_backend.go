@@ -777,12 +777,17 @@ func claudeCodeRateLimitWindowLabel(key string) string {
 // not shell out to `claude auth status` just to learn one — see this
 // package's own CONSTRAINTS); one window per unifiedWindows entry, sorted
 // by key for byte-stable output across turns (map iteration order is not);
-// Overage mapped straight from the event's own overage fields. CapturedAt
-// is left zero — applySubscriptionUsage stamps it from s.cfg.Now(), the
-// single clock every consumer of Session.SubscriptionUsage sees. ok is
-// false for a nil info (a rate_limit_event with no rate_limit_info at all —
-// not expected from a real `claude` binary, but this file decodes
-// permissively throughout, per its own package doc).
+// Overage is set only when the event actually carries one — IsUsingOverage
+// true, or a non-empty OverageStatus (a status can legitimately describe an
+// overage state, e.g. "approaching", even while IsUsingOverage is still
+// false) — so a turn with no overage in play leaves it nil, matching
+// message.SubscriptionUsage.Overage's own doc comment (omitted on the
+// wire, never a hollow zero-value object). CapturedAt is left zero —
+// applySubscriptionUsage stamps it from s.cfg.Now(), the single clock
+// every consumer of Session.SubscriptionUsage sees. ok is false for a nil
+// info (a rate_limit_event with no rate_limit_info at all — not expected
+// from a real `claude` binary, but this file decodes permissively
+// throughout, per its own package doc).
 func mapClaudeCodeRateLimit(info *claudeCodeRateLimitInfo) (message.SubscriptionUsage, bool) {
 	if info == nil {
 		return message.SubscriptionUsage{}, false
@@ -802,15 +807,18 @@ func mapClaudeCodeRateLimit(info *claudeCodeRateLimitInfo) (message.Subscription
 			ResetsAt:    w.ResetsAt,
 		})
 	}
-	return message.SubscriptionUsage{
+	out := message.SubscriptionUsage{
 		Provider: "claude",
 		Windows:  windows,
-		Overage: &message.SubscriptionOverage{
+	}
+	if info.IsUsingOverage || info.OverageStatus != "" {
+		out.Overage = &message.SubscriptionOverage{
 			InUse:    info.IsUsingOverage,
 			Status:   info.OverageStatus,
 			ResetsAt: info.OverageResetsAt,
-		},
-	}, true
+		}
+	}
+	return out, true
 }
 
 // claudeCodeUsage is a "result" event's usage object.
