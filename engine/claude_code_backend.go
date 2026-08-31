@@ -78,19 +78,21 @@
 //     block, Message.ParentToolUseID set the same way as the "assistant"
 //     case above), appended and emitted as EventMessage, with one
 //     EventToolEnd per part.
-//   - "result": the turn's terminal event. Never itself appended as a
-//     message (the assistant text it summarizes was already appended by
-//     the last "assistant" event above) — it instead carries the turn's
-//     AGGREGATE usage, applied once via applyClaudeCodeUsage (a durable,
-//     message-independent record — see recClaudeCodeUsage in store.go),
-//     and this turn's timing, emitted once via emitTurnMetrics (ttft_ms/
-//     duration_ms, permissively zero-valued if the CLI's own build does not
-//     send them). An IsError result becomes this call's returned error —
-//     wrapped provider.RetryableError for a known-transient shape (see
-//     claudeCodeRetryableClass), a plain error otherwise. TotalCostUSD has
-//     no home in provider.Usage (no adapter carries a cost field — every
-//     consumer derives cost from token counts) and is deliberately
-//     dropped, not persisted.
+//   - "result": the turn's terminal event. consumeClaudeCodeStream RETURNS
+//     as soon as this event is handled — it does not keep scanning for
+//     stdout EOF (see that function's own doc comment for why this
+//     matters). Never itself appended as a message (the assistant text it
+//     summarizes was already appended by the last "assistant" event
+//     above) — it instead carries the turn's AGGREGATE usage, applied once
+//     via applyClaudeCodeUsage (a durable, message-independent record —
+//     see recClaudeCodeUsage in store.go), and this turn's timing, emitted
+//     once via emitTurnMetrics (ttft_ms/duration_ms, permissively zero-
+//     valued if the CLI's own build does not send them). An IsError result
+//     becomes this call's returned error — wrapped provider.RetryableError
+//     for a known-transient shape (see claudeCodeRetryableClass), a plain
+//     error otherwise. TotalCostUSD has no home in provider.Usage (no
+//     adapter carries a cost field — every consumer derives cost from
+//     token counts) and is deliberately dropped, not persisted.
 //   - "rate_limit_event": the CLI's own subscription rate-limit/quota
 //     signal, typically the SECOND event of a turn (right after
 //     "system"/"init"). Never appended as a message — it carries no
@@ -158,6 +160,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -371,13 +374,46 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	if err != nil {
 		return nil, fmt.Errorf("engine: claude-code: creating stdout pipe: %w", err)
 	}
+	// stderr is deliberately read via cmd.StderrPipe(), NOT handed to Cmd
+	// as a plain cmd.Stderr = io.Writer, even though the latter reads
+	// simpler. Assigning a non-*os.File io.Writer makes Cmd allocate its
+	// OWN internal pipe and copying goroutine (os/exec's writerDescriptor)
+	// and register that goroutine so cmd.Wait() BLOCKS on it via
+	// awaitGoroutines — i.e. Wait() would not return until stderr's pipe
+	// sees EOF, which reintroduces exactly the hazard this file's fix to
+	// consumeClaudeCodeStream just removed from stdout: a `claude --bg`
+	// turn's leaked descendant (a dev server, say) commonly inherits BOTH
+	// fd 1 AND fd 2, so it can wedge Wait() through stderr even once
+	// stdout no longer can. StderrPipe's read end instead lands in
+	// Cmd.parentIOPipes, which Wait() only CLOSES, never waits on (see
+	// this call's own comment on cmd.Wait(), below) — so this file must
+	// drain it itself, in the anonymous goroutine started right after
+	// Start() below.
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("engine: claude-code: creating stderr pipe: %w", err)
+	}
 	var stderr capBuffer
 	stderr.cap = claudeCodeStderrCap
-	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("engine: claude-code: starting %q: %w", binary, err)
 	}
+
+	// Drain stderrPipe into stderr for as long as it stays open, same as
+	// Cmd's own now-avoided internal copying goroutine would have —
+	// capturing a real crash's full stderr text (bounded by
+	// claudeCodeStderrCap) for the ordinary case where the direct child is
+	// the pipe's only writer and closes it on exit. This goroutine is
+	// deliberately NEVER joined by the rest of this call (see cmd.Wait()'s
+	// own comment on why that is safe rather than a leak): io.Copy's
+	// blocked Read ends on its own, promptly, the moment cmd.Wait() closes
+	// stderrPipe's read end below — whether that close finds EOF already
+	// pending (the ordinary case) or a leaked descendant still holding the
+	// write end open (the `--bg` case this file's package doc describes).
+	go func() {
+		_, _ = io.Copy(&stderr, stderrPipe)
+	}()
 
 	inputLine, err := json.Marshal(claudeCodeInputMessage{
 		Type: "user",
@@ -458,6 +494,48 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 
 	finalMsg, started, turnErr := s.consumeClaudeCodeStream(stdout, model)
 
+	// cmd.Wait() below does NOT reintroduce the EOF wait that
+	// consumeClaudeCodeStream's early return on "result" just avoided, on
+	// EITHER stdout or stderr, and it does not touch (let alone kill) a
+	// surviving `claude --bg` daemon:
+	//
+	//   - Wait() waits on c.Process.Wait(), i.e. waitpid(2) on the DIRECT
+	//     `claude` child's own PID. That is a wait for one specific
+	//     process's exit status, never a wait for a pipe's write end to
+	//     see every holder close it. The direct child has already printed
+	//     its "result" and exited by the time consumeClaudeCodeStream
+	//     returns, so this waitpid returns immediately.
+	//   - Both stdout and stderr here came from Cmd's own *Pipe methods
+	//     (cmd.StdoutPipe() above, cmd.StderrPipe() further above) rather
+	//     than a plain cmd.Stdout/cmd.Stderr io.Writer. That distinction is
+	//     load-bearing: os/exec's writerDescriptor allocates an internal
+	//     pipe AND a copying goroutine ONLY for a plain io.Writer target,
+	//     and registers that goroutine in Cmd.goroutineErr, which Wait()'s
+	//     own awaitGoroutines step explicitly BLOCKS on until it finishes
+	//     (i.e. until that pipe sees EOF). This file used to hand stderr to
+	//     Cmd exactly that way (cmd.Stderr = &capBuffer), which — even
+	//     after stdout's own fix above — still let a leaked `--bg`
+	//     descendant that inherits fd 2 (a dev server commonly inherits
+	//     BOTH fd 1 and fd 2, not just fd 1) wedge Wait() through stderr
+	//     alone. Both pipes are now read by THIS file's own code instead
+	//     (consumeClaudeCodeStream for stdout, the anonymous drain
+	//     goroutine started right after cmd.Start() above for stderr), so
+	//     Cmd.goroutineErr stays nil and awaitGoroutines has nothing to
+	//     block on for either fd.
+	//   - Go's os/exec source (os/exec/exec.go, StdoutPipe/StderrPipe)
+	//     records each pipe's READ end (the `stdout` and `stderrPipe`
+	//     variables this call reads) in Cmd.parentIOPipes, and Wait()
+	//     closes every entry of parentIOPipes itself right after the
+	//     waitpid above returns. So Wait() actively closes both of our
+	//     read ends for us; it never blocks on either.
+	//   - The leaked grandchild only ever held the pipes' WRITE ends (fds
+	//     duplicated across fork/exec). Wait() closing our read ends does
+	//     not signal or touch that process at all — the background daemon
+	//     keeps running untouched, exactly as `claude --bg` intends. A
+	//     later write of its own may see EPIPE/SIGPIPE once nothing is
+	//     left to read that fd, which is the same fate any well-behaved
+	//     detached daemon should already tolerate by redirecting its own
+	//     stdio, not a signal this call sends it.
 	waitErr := cmd.Wait()
 
 	return claudeCodeTurnResult(claudeCodeTurnOutcome{
@@ -577,15 +655,35 @@ func lastUserMessageText(history []message.Message) string {
 	return last.Parts.Text()
 }
 
-// consumeClaudeCodeStream reads newline-delimited stream-json events from
-// r (the `claude` child's stdout) until EOF, appending/emitting each
-// decoded event per this file's package-doc mapping, and returns the last
-// assistant message.Message it appended (nil if none), whether the child
-// got far enough to emit at least one "system" event (see the started
-// return value's own use in runClaudeCodeTurn's waitErr branch: it is what
-// tells a child that never even started apart from one that started and
-// later crashed), and any turn-ending error a "result" event's IsError
-// reported.
+// consumeClaudeCodeStream reads newline-delimited stream-json events from r
+// (the `claude` child's stdout), appending/emitting each decoded event per
+// this file's package-doc mapping, and returns the last assistant
+// message.Message it appended (nil if none), whether the child got far
+// enough to emit at least one "system" event (see the started return
+// value's own use in runClaudeCodeTurn's waitErr branch: it is what tells a
+// child that never even started apart from one that started and later
+// crashed), and any turn-ending error a "result" event's IsError reported.
+//
+// It returns as soon as it handles the "result" event rather than reading
+// on to stdout's EOF, because "result" IS the turn's documented terminal
+// event (see this file's package doc) and EOF is not a safe thing to wait
+// for: EOF on a pipe only arrives once EVERY process holding the write end
+// open has exited, and the direct `claude` child is not the only process
+// that can hold it. `claude --bg` — the CLI's own sanctioned pattern for a
+// long-running background task — spawns a daemon that reparents to PID 1
+// and is meant to keep running after the turn ends; that daemon (or a
+// further child of its own, e.g. a dev server it starts) inherits this
+// process's file descriptors, including stdout, unless it explicitly
+// closes or redirects them. The direct `claude` child still prints its own
+// "result" and exits right on schedule, but the leaked descendant keeps
+// the pipe's write end open indefinitely, so a scan loop that waits for
+// EOF blocks forever — wedging the harness turn (and the whole session)
+// while the surviving daemon keeps running exactly as designed. Returning
+// on "result" decouples turn completion from every descendant's fd
+// lifetime, which is also why this must never be "solved" by killing the
+// child's process group: that would kill the very background session
+// --bg exists to keep alive. See runClaudeCodeTurn's own comment on why
+// its subsequent cmd.Wait() does not reintroduce this wait.
 func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (finalMsg *message.Message, started bool, turnErr error) {
 	scanner := bufio.NewScanner(r)
 	// A tool call's arguments or a large tool result can exceed
@@ -692,6 +790,25 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			// TotalCostUSD is intentionally dropped here — see the
 			// package doc's "result" bullet: provider.Usage has no cost
 			// field for it to occupy.
+			//
+			// Return NOW rather than falling through to another
+			// scanner.Scan(): "result" is the documented terminal event
+			// (package doc above), and continuing to scan would instead
+			// wait for stdout's EOF — which a `claude --bg` turn's leaked
+			// descendant fd can withhold forever. See this function's own
+			// doc comment for the full reasoning. Any bytes a lingering
+			// writer emits after this point are simply never read by this
+			// call; they are not folded into the turn in any way.
+			//
+			// This is safe for "rate_limit_event" specifically, not just
+			// documented that way: live-verified against a real `claude`
+			// 2.1.252 binary (two separate turns, one plain and one with a
+			// tool call) that "result" is the LAST line the direct child
+			// ever emits — rate_limit_event, when present, arrived before
+			// it both times, never after. Nothing observed contradicts the
+			// package doc's "result" bullet calling it the turn's terminal
+			// event.
+			return finalMsg, started, turnErr
 		case "rate_limit_event":
 			// The CLI's own subscription rate-limit/quota signal — see
 			// mapClaudeCodeRateLimit's own doc comment for the wire shape
@@ -1278,12 +1395,23 @@ type claudeCodeInputInnerMessage struct {
 // claudeCodeStderrCap), without letting a runaway or malicious child
 // exhaust memory buffering an unbounded stream nothing ever reads back in
 // full.
+//
+// mu guards buf because runClaudeCodeTurn's stderr drain goroutine (see
+// its own comment on why stderr is read via cmd.StderrPipe rather than
+// handed to Cmd as a plain io.Writer) writes here concurrently with the
+// main goroutine's eventual String() call once the turn ends — that call
+// is deliberately NOT sequenced after the drain goroutine's own exit (see
+// runClaudeCodeTurn), so both sides need their own synchronization rather
+// than relying on happens-before through some other event.
 type capBuffer struct {
+	mu  sync.Mutex
 	buf bytes.Buffer
 	cap int
 }
 
 func (c *capBuffer) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if room := c.cap - c.buf.Len(); room > 0 {
 		if len(p) > room {
 			c.buf.Write(p[:room])
@@ -1298,4 +1426,8 @@ func (c *capBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (c *capBuffer) String() string { return strings.TrimSpace(c.buf.String()) }
+func (c *capBuffer) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return strings.TrimSpace(c.buf.String())
+}

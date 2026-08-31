@@ -21,10 +21,14 @@
 // own turn-input write — see runClaudeCodeTurn's inputErr handling), and
 // "rate_limit_event" (a subscription rate-limit/quota event ahead of the
 // final assistant text, mapped by mapClaudeCodeRateLimit onto
-// Session.SubscriptionUsage), and "rate_limit_event_no_overage" (the same
+// Session.SubscriptionUsage), "rate_limit_event_no_overage" (the same
 // event with no overage in play at all — overageStatus "", isUsingOverage
 // false, overageResetsAt 0 — proving mapClaudeCodeRateLimit leaves
-// SubscriptionUsage.Overage nil rather than a hollow zero-value object).
+// SubscriptionUsage.Overage nil rather than a hollow zero-value object),
+// and "bg_leak" (reproduces a `claude --bg` turn whose detached child
+// inherits this process's stdout AND stderr and outlives it — see its own
+// comment below and claude_code_backend.go's consumeClaudeCodeStream/
+// runClaudeCodeTurn doc comments for the wedge this proves fixed).
 package main
 
 import (
@@ -32,11 +36,28 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"strconv"
 	"time"
 )
 
 func main() {
 	mode := os.Getenv("FAKE_CLAUDE_MODE")
+
+	if mode == "bg_leak_child" {
+		// The detached grandchild "bg_leak" mode spawns below, standing in
+		// for `claude --bg`'s own daemon (or a further child of its own,
+		// e.g. a dev server) that inherits the direct `claude` child's
+		// stdout AND stderr and outlives it. This process emits nothing at
+		// all — it exists solely to hold both inherited fds (this
+		// process's own os.Stdout/os.Stderr, which ARE the harness-owned
+		// pipes' write ends) open far past any sane test timeout, so a
+		// test can prove the driver returns without ever waiting for
+		// either fd's EOF. The test kills it by PID once it has proved
+		// that.
+		time.Sleep(time.Hour)
+		return
+	}
 
 	if mode == "fast_no_drain" {
 		// Close our OWN stdin's read end IMMEDIATELY — before doing
@@ -264,6 +285,56 @@ func main() {
 				"output_tokens": 15,
 			},
 		})
+		return
+	case "bg_leak":
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "Starting a background job."},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "success",
+			"is_error": false,
+			"result":   "Starting a background job.",
+			"usage": map[string]any{
+				"input_tokens":  12,
+				"output_tokens": 5,
+			},
+		})
+		// Simulate `claude --bg`'s detached child inheriting this
+		// process's stdout AND stderr fds (the harness-owned pipes' write
+		// ends) and outliving THIS direct child — see
+		// claude_code_backend.go's consumeClaudeCodeStream and
+		// runClaudeCodeTurn doc comments for the wedge this reproduces.
+		// BOTH fds matter here, not just stdout: a real leaked descendant
+		// (a dev server started by a background task, say) commonly
+		// inherits its parent's whole stdio, not a hand-picked subset, so
+		// a test that only leaks stdout would miss a driver that still
+		// wedges through stderr alone. Spawn a grandchild that inherits
+		// os.Stdout AND os.Stderr verbatim and sleeps well past any sane
+		// test timeout, holding both pipes' write ends open long after
+		// this process (the direct `claude` child harness itself manages)
+		// exits right below. A minimal, explicit Env — not this process's
+		// own os.Environ() — keeps the grandchild out of FAKE_CLAUDE_LOG's
+		// invocation log, since it is not a `claude` invocation a test
+		// should count. The test kills the grandchild by PID (recorded via
+		// FAKE_CLAUDE_LEAK_PID_FILE) once it has proved the driver did not
+		// wait for it.
+		leaker := exec.Command(os.Args[0])
+		leaker.Env = []string{"FAKE_CLAUDE_MODE=bg_leak_child"}
+		leaker.Stdout = os.Stdout
+		leaker.Stderr = os.Stderr
+		if err := leaker.Start(); err == nil {
+			if pidFile := os.Getenv("FAKE_CLAUDE_LEAK_PID_FILE"); pidFile != "" {
+				_ = os.WriteFile(pidFile, []byte(strconv.Itoa(leaker.Process.Pid)), 0o644)
+			}
+			_ = leaker.Process.Release()
+		}
 		return
 	}
 
