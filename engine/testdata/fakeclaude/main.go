@@ -6,6 +6,19 @@
 // environment variable, so the driver's event-mapping, resume, and usage
 // logic can be tested against a REAL child process and REAL pipes without
 // depending on an actual Anthropic subscription or the real binary.
+//
+// Beyond "normal"/"hang"/"error", a handful of narrower modes each cover
+// exactly one of the gaps claude_code_backend.go closes: "thinking" (a
+// thinking content block plus the result event's own ttft_ms/duration_ms
+// timing fields), "subagent" (a null-then-set parent_tool_use_id pair),
+// "rate_limit_error"/"deterministic_error" (a result event this file's own
+// claudeCodeRetryableClass must classify retryable/not-retryable,
+// respectively), "crash"/"crash_before_init" (a child that exits nonzero
+// with no "result" event, AFTER vs. BEFORE ever emitting a "system" event
+// — runClaudeCodeTurn's waitErr branch must classify only the former
+// retryable), and "fast_no_drain" (closes its own stdin immediately,
+// without ever draining it, to reliably win the race against harness's
+// own turn-input write — see runClaudeCodeTurn's inputErr handling).
 package main
 
 import (
@@ -17,6 +30,23 @@ import (
 )
 
 func main() {
+	mode := os.Getenv("FAKE_CLAUDE_MODE")
+
+	if mode == "fast_no_drain" {
+		// Close our OWN stdin's read end IMMEDIATELY — before doing
+		// anything else, including the argv log write below — to
+		// deterministically win the race this mode's own test regresses:
+		// harness's own turn-input Write/Close must tolerate a broken-pipe/
+		// closed-pipe error when the child has already (or is about to)
+		// exit with a complete, valid result, exactly the shape a fast/
+		// trivial real turn can hit. fakeclaude runs at native speed
+		// (buildFakeClaude compiles it without -race); harness's own
+		// -race-instrumented write path is comparatively slow, so closing
+		// this early reliably beats it. Skips the shared stdin-drain
+		// goroutine below entirely — there is nothing left to drain.
+		_ = os.Stdin.Close()
+	}
+
 	if logPath := os.Getenv("FAKE_CLAUDE_LOG"); logPath != "" {
 		// Record this invocation's full argv for the test to inspect
 		// afterward (the resume test's only way to see whether --resume
@@ -29,15 +59,18 @@ func main() {
 		}
 	}
 
-	// Drain (don't require) exactly one stdin line — the real driver
-	// writes one turn message and closes stdin; reading it keeps this
-	// stand-in honest about the protocol without validating its content.
-	go func() {
-		scanner := bufio.NewScanner(os.Stdin)
-		for scanner.Scan() {
-			// discard
-		}
-	}()
+	if mode != "fast_no_drain" {
+		// Drain (don't require) exactly one stdin line — the real driver
+		// writes one turn message and closes stdin; reading it keeps this
+		// stand-in honest about the protocol without validating its
+		// content.
+		go func() {
+			scanner := bufio.NewScanner(os.Stdin)
+			for scanner.Scan() {
+				// discard
+			}
+		}()
+	}
 
 	sessionID := os.Getenv("FAKE_CLAUDE_SESSION_ID")
 	if sessionID == "" {
@@ -51,13 +84,43 @@ func main() {
 		out.Flush()
 	}
 
+	if mode == "crash_before_init" {
+		// Exits nonzero WITHOUT ever emitting so much as a "system" event —
+		// the deterministic-startup-failure shape (an unknown flag, a
+		// malformed --mcp-config command, an invalid --model) that
+		// runClaudeCodeTurn's waitErr branch must NOT classify retryable,
+		// unlike "crash" below (which starts normally and dies later).
+		os.Exit(1)
+	}
+
 	emit(map[string]any{
 		"type":       "system",
 		"subtype":    "init",
 		"session_id": sessionID,
 	})
 
-	switch os.Getenv("FAKE_CLAUDE_MODE") {
+	switch mode {
+	case "fast_no_drain":
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "Done before you finished writing."},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "success",
+			"is_error": false,
+			"result":   "Done before you finished writing.",
+			"usage": map[string]any{
+				"input_tokens":  4,
+				"output_tokens": 6,
+			},
+		})
+		return
 	case "hang":
 		// No signal handlers installed: an unhandled SIGINT/SIGTERM uses
 		// Go's own default disposition, which terminates the process —
@@ -68,6 +131,14 @@ func main() {
 		// race.
 		time.Sleep(time.Hour)
 		return
+	case "crash":
+		// Emitted "system"/"init" above, THEN exits nonzero without ever
+		// emitting a "result" event — the non-deterministic mid-session
+		// child-failure shape runClaudeCodeTurn's own waitErr branch must
+		// classify retryable (a crash, not a deterministic domain failure
+		// the CLI itself reported). Contrast crash_before_init above,
+		// which never gets this far.
+		os.Exit(1)
 	case "error":
 		emit(map[string]any{
 			"type":     "result",
@@ -77,6 +148,114 @@ func main() {
 			"usage": map[string]any{
 				"input_tokens":  11,
 				"output_tokens": 3,
+			},
+		})
+		return
+	case "rate_limit_error":
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "error_during_execution",
+			"is_error": true,
+			"result":   "rate_limit_error: please retry later",
+			"usage": map[string]any{
+				"input_tokens":  6,
+				"output_tokens": 1,
+			},
+		})
+		return
+	case "deterministic_error":
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "error_max_turns",
+			"is_error": true,
+			"result":   "exceeded maximum turns",
+			"usage": map[string]any{
+				"input_tokens":  8,
+				"output_tokens": 2,
+			},
+		})
+		return
+	case "thinking":
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "thinking", "thinking": "Let me reason about this.", "signature": "sig-abc"},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "Here is my answer."},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "success",
+			"is_error": false,
+			"result":   "Here is my answer.",
+			"usage": map[string]any{
+				"input_tokens":  20,
+				"output_tokens": 10,
+			},
+			"ttft_ms":     120,
+			"duration_ms": 800,
+		})
+		return
+	case "subagent":
+		emit(map[string]any{
+			"type":               "assistant",
+			"parent_tool_use_id": nil,
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "tool_use", "id": "toolu_parent", "name": "Task", "input": map[string]any{}},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":               "assistant",
+			"parent_tool_use_id": "toolu_parent",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "Working inside the subagent."},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":               "user",
+			"parent_tool_use_id": "toolu_parent",
+			"message": map[string]any{
+				"role": "user",
+				"content": []map[string]any{
+					{"type": "tool_result", "tool_use_id": "toolu_parent", "content": "subagent done"},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":               "assistant",
+			"parent_tool_use_id": nil,
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "All done."},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "success",
+			"is_error": false,
+			"result":   "All done.",
+			"usage": map[string]any{
+				"input_tokens":  30,
+				"output_tokens": 15,
 			},
 		})
 		return
@@ -133,5 +312,7 @@ func main() {
 			"cache_creation_input_tokens": 5,
 		},
 		"total_cost_usd": 0.0123,
+		"ttft_ms":        50,
+		"duration_ms":    400,
 	})
 }

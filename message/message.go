@@ -86,6 +86,17 @@ type Message struct {
 	// like any other user message, Origin untouched and untransmitted (no
 	// transcoder reads this field).
 	Origin string `json:"origin,omitempty"`
+	// ParentToolUseID identifies the tool_use call that spawned the Claude
+	// Code CLI subagent turn which produced this message — set only on a
+	// message OriginClaudeCode appended from a stream-json event whose own
+	// parent_tool_use_id was non-null (see engine/claude_code_backend.go's
+	// package doc, "parent_tool_use_id"). Empty for a top-level delegated
+	// turn's own messages, and for every message no delegated turn
+	// produced. Like Origin, this is presentation/lineage metadata only —
+	// read by a client (boxes' console) to reconstruct subagent nesting in
+	// a delegated turn's transcript — never sent to a model and never
+	// interpreted by a transcoder.
+	ParentToolUseID string `json:"parent_tool_use_id,omitempty"`
 }
 
 // Normalize scrubs known encoding/json footguns from m's parts in place. It
