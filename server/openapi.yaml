@@ -99,7 +99,7 @@ components:
 
     Session:
       type: object
-      required: [id, created_at, model, status, state, messages, workdir, usage, last_activity_at, plugins, queued]
+      required: [id, created_at, model, status, state, messages, workdir, usage, last_activity_at, plugins, queued, subscription_usage]
       properties:
         id:
           type: string
@@ -238,6 +238,87 @@ components:
             session's own prompt.queued/prompt.dequeued log records), but
             never dispatches on its own — the same "boot never auto-runs"
             rule goals follow.
+        subscription_usage:
+          $ref: "#/components/schemas/SubscriptionUsage"
+          nullable: true
+          description: >
+            The session's most recently captured subscription-lane rate-
+            limit/quota snapshot, for a session whose turns run against a
+            user's own model subscription rather than metered API access
+            (the Claude Code CLI delegated backend, or a "codex"-family
+            native OpenAI Responses provider). Captured from a signal the
+            provider already sends on every turn — never an extra outbound
+            request. null until a turn has carried the signal in THIS
+            process (never re-derived from a durable source on a cold
+            read), and always null for a session that never uses either
+            lane.
+
+    SubscriptionUsage:
+      type: object
+      description: >
+        A normalized subscription rate-limit/quota snapshot — see
+        Session.subscription_usage.
+      required: [provider, plan, windows, captured_at]
+      properties:
+        provider:
+          type: string
+          enum: [claude, codex]
+          description: Which subscription lane captured this snapshot.
+        plan:
+          type: string
+          description: >
+            The subscription tier ("max"/"pro" for codex, from its own
+            plan-type response header). Empty when the capturing lane has
+            no cheap source for it (the claude lane today).
+        windows:
+          type: array
+          items:
+            $ref: "#/components/schemas/SubscriptionUsageWindow"
+          description: >
+            One entry per rate-limit window the provider reported on this
+            turn, in the provider's own order. Empty, never null.
+        overage:
+          $ref: "#/components/schemas/SubscriptionOverage"
+          description: >
+            A pay-as-you-go overage state riding on top of the
+            subscription. Absent when not applicable — always absent for
+            provider "codex", present only when the claude lane's own
+            signal carried one.
+        captured_at:
+          type: integer
+          description: When this snapshot was captured, Unix seconds.
+
+    SubscriptionUsageWindow:
+      type: object
+      required: [key, label, used_percent, resets_at]
+      properties:
+        key:
+          type: string
+          description: >
+            The capturing lane's own stable window identifier (e.g.
+            "five_hour", "primary"). Track one window turn over turn by
+            this, not label.
+        label:
+          type: string
+          description: A short human-readable window name (e.g. "5-hour", "Weekly").
+        used_percent:
+          type: number
+          description: This window's utilization, 0-100.
+        resets_at:
+          type: integer
+          description: When this window resets, Unix seconds.
+
+    SubscriptionOverage:
+      type: object
+      required: [in_use, status, resets_at]
+      properties:
+        in_use:
+          type: boolean
+        status:
+          type: string
+        resets_at:
+          type: integer
+          description: Unix seconds.
 
     PluginInfo:
       type: object

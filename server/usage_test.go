@@ -21,10 +21,11 @@ type usageJSONForTest struct {
 }
 
 type sessionJSONForTest struct {
-	ID             string           `json:"id"`
-	Messages       int              `json:"messages"`
-	Usage          usageJSONForTest `json:"usage"`
-	LastActivityAt time.Time        `json:"last_activity_at"`
+	ID                string                     `json:"id"`
+	Messages          int                        `json:"messages"`
+	Usage             usageJSONForTest           `json:"usage"`
+	LastActivityAt    time.Time                  `json:"last_activity_at"`
+	SubscriptionUsage *message.SubscriptionUsage `json:"subscription_usage"`
 }
 
 func withUsageTurn(text string, in, out int) []provider.Event {
