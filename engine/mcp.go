@@ -312,6 +312,26 @@ func (m *MCPManager) ConfiguredNames() []string {
 	return names
 }
 
+// Servers returns a copy of every server this manager was constructed
+// with, WITHOUT connecting to any of them — same "m.servers is immutable
+// after NewMCPManager, no lock needed" reasoning as ConfiguredNames, one
+// map copy deep to keep a caller from being able to mutate m's own
+// configuration through the returned value. It exists for
+// claudeCodeMCPServerLister (claude_code_backend.go): the delegated-turn
+// backend's one consumer of a session's RAW server definitions (command,
+// env, url, headers), as opposed to Tools' post-connect, tool-schema-only
+// view.
+func (m *MCPManager) Servers() map[string]MCPServerConfig {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]MCPServerConfig, len(m.servers))
+	for name, spec := range m.servers {
+		out[name] = spec
+	}
+	return out
+}
+
 // mcpConnectFunc is the seam ensureConnected/retryServer call to perform
 // one connect attempt. Production always uses connectMCPServer; tests that
 // need to assert a backoff SCHEDULE inside a testing/synctest bubble
