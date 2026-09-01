@@ -47,13 +47,14 @@ type QueuedPrompt struct {
 	// field existed — PromptWithOrigin's own mint site resolves that case
 	// exactly like any other unset id, at dispatch time.
 	MessageID string
-	// Blobs are the prompt's attachments (an uploaded image, today), kept
-	// beside Text rather than folded into it because a Blob is binary
-	// content a provider transcodes as its own wire block — see
-	// message.Blob. They are persisted with the queued prompt
-	// (promptRecord.Blobs) and delivered as Blob parts of the user message
-	// this prompt becomes, so a prompt that waited behind a running turn,
-	// or behind a process restart, still arrives with its picture.
+	// Blobs are the prompt's attachments — an uploaded image or PDF, the
+	// set server/prompt_parts.go admits — kept beside Text rather than
+	// folded into it because a Blob is binary content a provider
+	// transcodes as its own wire block — see message.Blob. They are
+	// persisted with the queued prompt (promptRecord.Blobs) and delivered
+	// as Blob parts of the user message this prompt becomes, so a prompt
+	// that waited behind a running turn, or behind a process restart,
+	// still arrives with its files.
 	//
 	// Nil for every text-only prompt, which is still the overwhelming
 	// majority: a queued prompt was text-only by contract until image
@@ -637,21 +638,27 @@ const (
 // only goal.go's OWN turn-boundary drain, which is actually building a
 // goal directive, uses the goal wording.
 // A prompt carrying attachments renders its own count marker
-// ("[N image attachment(s) attached below]", the wording message/
-// wire_normalize.go already uses for the same situation): this block is
-// TEXT, so the bytes themselves ride as separate Blob parts of whatever
-// message the drain site builds around it (see queuedBlobs and
-// drainQueuedPromptsIntoHistory). The marker is what ties the numbered
-// entry to the picture that follows it, so the model can tell which
-// operator message the image belongs to instead of finding an unexplained
-// blob at the end.
+// ("[N attachment(s) attached below]"): this block is TEXT, so the bytes
+// themselves ride as separate Blob parts of whatever message the drain site
+// builds around it (see queuedBlobs and drainQueuedPromptsIntoHistory). The
+// marker is what ties the numbered entry to the files that follow it, so the
+// model can tell which operator message an attachment belongs to instead of
+// finding an unexplained blob at the end.
+//
+// The marker names no MEDIA TYPE, deliberately. message/wire_normalize.go
+// spells the same situation two ways -- "[N image attachment(s) attached
+// below]" on a path that only ever carries images, and a generic
+// "[N attachment(s) omitted: ...]" where the type varies -- and this drain
+// is the second kind: a queued prompt carries whatever
+// server/prompt_parts.go admits, images and PDFs alike. Saying "image"
+// here would tell the model a queued PDF is a picture.
 func operatorMessagesBlock(prompts []QueuedPrompt, ctx operatorContext) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "OPERATOR MESSAGES (address these, then continue the %s):\n", ctx)
 	for i, p := range prompts {
 		fmt.Fprintf(&b, "%d. %s\n", i+1, p.Text)
 		if len(p.Blobs) > 0 {
-			fmt.Fprintf(&b, "   [%d image attachment(s) attached below]\n", len(p.Blobs))
+			fmt.Fprintf(&b, "   [%d attachment(s) attached below]\n", len(p.Blobs))
 		}
 	}
 	b.WriteString("\n")

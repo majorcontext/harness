@@ -1658,7 +1658,8 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "parts must be non-empty")
 		return
 	}
-	// Text parts and image blob parts, decoded and fully validated before
+	// Text parts and attachment blob parts (images and PDFs), decoded and
+	// fully validated before
 	// any run slot is claimed or anything is enqueued — see
 	// decodePromptParts (prompt_parts.go) for why an attachment harness
 	// cannot deliver must be refused HERE rather than persisted first.

@@ -326,16 +326,17 @@ in-flight turn's context).
 
 A queued prompt carries **text and file attachments** (images and PDFs, the
 set every provider lane delivers): `QueuedPrompt{ID, Text, Blobs}`, persisted together on the `prompt.queued` record
-(`promptRecord.Blobs`), so an image sent while a turn was running still
+(`promptRecord.Blobs`), so a file sent while a turn was running still
 reaches the model when the queue drains — across a process restart included.
 The bytes ride only on `prompt.queued`, never on `prompt.dequeued`, which
 names its entry by ID. Every drain site delivers both halves: idle dispatch
 and the tool-call boundary append the blobs as `Blob` parts of the user
 message they build, and the goal loop's turn-boundary injection passes them
 into its worker turn. The rendered `OPERATOR MESSAGES` block is text, so each
-prompt that carries attachments announces them (`[N image attachment(s)
-attached below]`) — the marker names which numbered message the picture
-belongs to.
+prompt that carries attachments announces them (`[N attachment(s) attached
+below]`) — the marker names which numbered message an attachment belongs to.
+It names no media type, because a queued prompt carries images and PDFs
+alike.
 
 One v1 limit is still deliberate, not a gap: **a per-request `model` override
 is silently dropped when the prompt is queued** — there is no slot in

@@ -959,10 +959,10 @@ components:
             $ref: "#/components/schemas/TextPart"
           description: >
             Text parts only. Unlike PromptRequest, this write-ahead route
-            takes no image attachments: its callers are machine relays
+            takes no attachments at all: its callers are machine relays
             (an inbox poller, a coordinator) whose upstream ack rides on the
-            durable-accept contract, not the interactive composer that
-            uploads pictures.
+            durable-accept contract, not the interactive composer a person
+            attaches a file to.
         seq:
           type: integer
           format: int64

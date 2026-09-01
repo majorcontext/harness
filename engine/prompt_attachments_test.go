@@ -158,7 +158,7 @@ func TestOperatorMessagesBlockAnnouncesAttachments(t *testing.T) {
 		{ID: 2, Text: "with a shot", Blobs: []*message.Blob{testBlob()}},
 	}
 	block := operatorMessagesBlock(prompts, operatorContextTask)
-	if !bytes.Contains([]byte(block), []byte("2. with a shot\n   [1 image attachment(s) attached below]")) {
+	if !bytes.Contains([]byte(block), []byte("2. with a shot\n   [1 attachment(s) attached below]")) {
 		t.Fatalf("block = %q, want the attachment marker under its own message", block)
 	}
 	if bytes.Contains([]byte(block), []byte("1. plain\n   [")) {

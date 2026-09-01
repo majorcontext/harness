@@ -18,8 +18,8 @@ import (
 )
 
 // Prompt attachments: the parsing and validation half of "a person can send
-// a picture", shared by every handler that accepts a prompt body's `parts`
-// array.
+// a file" -- an image or a PDF, the set promptAttachmentTypes admits below --
+// shared by every handler that accepts a prompt body's `parts` array.
 //
 // The wire shape is message.Blob's own JSON, verbatim
 // ({"type":"blob","media_type":...,"data":<base64>}), so a caller building a
