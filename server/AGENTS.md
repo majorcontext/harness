@@ -49,8 +49,15 @@ Another session that owns the workdir still conflicts.
   natural drain trigger.
 - Dispatch queued input before goal auto-arm.
 - Keep abort independent from queue clear.
-- Keep `POST /enqueue` write-ahead and idempotent.
+- Keep `POST /enqueue` write-ahead and idempotent. Keep it text-only.
 - Keep `GET /queue` as the reconciliation surface.
+
+## Prompt attachments
+
+`prompt_async` takes image blob parts beside its text parts. Validate every
+attachment before the run slot is claimed: allowed media type, inline data,
+data that decodes as the claimed type, and the size cap. Reject in the
+handler. Never persist an attachment a provider cannot render.
 
 ## Goal and turn state
 

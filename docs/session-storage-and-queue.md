@@ -324,13 +324,24 @@ empty queue, and never touches a currently running turn — `POST /abort` is
 unrelated and does not touch the queue either way (it only cancels the
 in-flight turn's context).
 
-Two v1 limits are deliberate, not gaps: **text-only** (queued prompts carry a
-plain string — `QueuedPrompt{ID, Text}` — no attachment machinery, matching
-the plain-prompt contract's `parts` being text-only already), and **a
-per-request `model` override is silently dropped when the prompt is queued**
-— there is no slot in `QueuedPrompt` to carry it through to a future drain, so
-a caller that needs a model swap to take effect must re-issue the request once
-it is confirmed `started`.
+A queued prompt carries **text and image attachments**: `QueuedPrompt{ID,
+Text, Blobs}`, persisted together on the `prompt.queued` record
+(`promptRecord.Blobs`), so an image sent while a turn was running still
+reaches the model when the queue drains — across a process restart included.
+The bytes ride only on `prompt.queued`, never on `prompt.dequeued`, which
+names its entry by ID. Every drain site delivers both halves: idle dispatch
+and the tool-call boundary append the blobs as `Blob` parts of the user
+message they build, and the goal loop's turn-boundary injection passes them
+into its worker turn. The rendered `OPERATOR MESSAGES` block is text, so each
+prompt that carries attachments announces them (`[N image attachment(s)
+attached below]`) — the marker names which numbered message the picture
+belongs to.
+
+One v1 limit is still deliberate, not a gap: **a per-request `model` override
+is silently dropped when the prompt is queued** — there is no slot in
+`QueuedPrompt` to carry it through to a future drain, so a caller that needs a
+model swap to take effect must re-issue the request once it is confirmed
+`started`.
 
 `POST /session/{id}/enqueue` (docs/plans/2026-07-21-durable-enqueue.md) is
 `prompt_async`'s durable, idempotent sibling for a caller whose own upstream
@@ -360,8 +371,10 @@ the pending queue (FIFO, `seq` present only on durable-enqueue entries), for
 an upstream recovering from its own crash to check what's already inside the
 durability domain instead of re-sending blind. `prompt_async` remains the
 right choice for an interactive client that has no upstream ack to protect —
-it is not going away, and `POST /session/{id}/enqueue` adds no new limits
-beyond what queued prompts already have (text-only, no model override).
+it is not going away, and `POST /session/{id}/enqueue` adds one limit of its
+own beyond what queued prompts have: **text parts only**. Its callers are
+machine relays, not the interactive composer that uploads images, so the
+durable-accept contract stays a string contract.
 
 The `fsync` in "write-ahead durability" above is itself mode-selectable:
 config's `session_sync` ("fsync", the default, or "volume") gates both this

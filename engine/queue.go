@@ -21,6 +21,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/majorcontext/harness/message"
 )
 
 // QueuedPrompt is one pending prompt in a session's durable FIFO queue (see
@@ -45,6 +47,18 @@ type QueuedPrompt struct {
 	// field existed — PromptWithOrigin's own mint site resolves that case
 	// exactly like any other unset id, at dispatch time.
 	MessageID string
+	// Blobs are the prompt's attachments (an uploaded image, today), kept
+	// beside Text rather than folded into it because a Blob is binary
+	// content a provider transcodes as its own wire block — see
+	// message.Blob. They are persisted with the queued prompt
+	// (promptRecord.Blobs) and delivered as Blob parts of the user message
+	// this prompt becomes, so a prompt that waited behind a running turn,
+	// or behind a process restart, still arrives with its picture.
+	//
+	// Nil for every text-only prompt, which is still the overwhelming
+	// majority: a queued prompt was text-only by contract until image
+	// input landed (see docs/session-storage-and-queue.md).
+	Blobs []*message.Blob
 }
 
 // promptQueueFold replays prompt.queued/prompt.dequeued records into the
@@ -106,7 +120,7 @@ type promptQueueFold struct {
 // let a malformed record's ID move the counter, which is exactly what the
 // guard rejects it for.
 func (f *promptQueueFold) queued(p promptRecord) {
-	q := QueuedPrompt{ID: p.ID, Text: p.Text, Seq: p.Seq, MessageID: p.MessageID}
+	q := QueuedPrompt{ID: p.ID, Text: p.Text, Seq: p.Seq, MessageID: p.MessageID, Blobs: p.Blobs}
 	valid := q.ID > 0
 	for _, existing := range f.queue {
 		if existing.ID == q.ID {
@@ -186,15 +200,21 @@ var ErrEmptyPromptText = errors.New("engine: prompt text must not be empty or wh
 // The enqueued prompt does not touch s.history and is not visible to any
 // provider request started before it is actually delivered (see
 // DequeuePrompt/dequeueAllLocked) — see the package doc comment.
-func (s *Session) EnqueuePrompt(text string, messageID string) (id int64, resolvedMessageID string, err error) {
+// blobs are the prompt's attachments, carried through the queue with it (see
+// QueuedPrompt.Blobs). They are variadic so every existing text-only caller
+// and its call sites stay untouched — one entry point still owns the enqueue
+// rule, rather than a second near-identical method growing beside it. A
+// prompt carrying at least one blob is valid with EMPTY text: an uploaded
+// screenshot with nothing typed beside it is a real prompt, not an empty one.
+func (s *Session) EnqueuePrompt(text string, messageID string, blobs ...*message.Blob) (id int64, resolvedMessageID string, err error) {
 	trimmed := strings.TrimSpace(text)
-	if trimmed == "" {
+	if trimmed == "" && len(blobs) == 0 {
 		return 0, "", ErrEmptyPromptText
 	}
 	resolved := ResolveMessageID(messageID)
 	s.mu.Lock()
-	p := s.enqueueMemoryOnlyLocked(trimmed, resolved)
-	s.persistPromptQueueLocked(recPromptQueued, promptRecord{ID: p.ID, Text: p.Text, MessageID: p.MessageID})
+	p := s.enqueueMemoryOnlyLocked(trimmed, resolved, blobs...)
+	s.persistPromptQueueLocked(recPromptQueued, promptRecord{ID: p.ID, Text: p.Text, MessageID: p.MessageID, Blobs: p.Blobs})
 	// Emit while still holding s.mu (see ClearGoal in goal.go): keeps event
 	// order matching log order under a concurrent dequeue. OnEvent must not
 	// call back into this Session — that would deadlock on s.mu, held here.
@@ -234,10 +254,10 @@ func (s *Session) EnqueuePrompt(text string, messageID string) (id int64, resolv
 // for a caller (SendToDescendant) with no client message ID of its own,
 // left for PromptWithOrigin to resolve at dispatch time. Caller holds
 // s.mu.
-func (s *Session) enqueueMemoryOnlyLocked(text string, messageID string) QueuedPrompt {
+func (s *Session) enqueueMemoryOnlyLocked(text string, messageID string, blobs ...*message.Blob) QueuedPrompt {
 	id := s.promptQueueNextID
 	s.promptQueueNextID++
-	p := QueuedPrompt{ID: id, Text: text, MessageID: messageID}
+	p := QueuedPrompt{ID: id, Text: text, MessageID: messageID, Blobs: blobs}
 	s.promptQueue = append(s.promptQueue, p)
 	return p
 }
@@ -616,12 +636,38 @@ const (
 // need to) that its enclosing Prompt call is being driven by PursueGoal;
 // only goal.go's OWN turn-boundary drain, which is actually building a
 // goal directive, uses the goal wording.
+// A prompt carrying attachments renders its own count marker
+// ("[N image attachment(s) attached below]", the wording message/
+// wire_normalize.go already uses for the same situation): this block is
+// TEXT, so the bytes themselves ride as separate Blob parts of whatever
+// message the drain site builds around it (see queuedBlobs and
+// drainQueuedPromptsIntoHistory). The marker is what ties the numbered
+// entry to the picture that follows it, so the model can tell which
+// operator message the image belongs to instead of finding an unexplained
+// blob at the end.
 func operatorMessagesBlock(prompts []QueuedPrompt, ctx operatorContext) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "OPERATOR MESSAGES (address these, then continue the %s):\n", ctx)
 	for i, p := range prompts {
 		fmt.Fprintf(&b, "%d. %s\n", i+1, p.Text)
+		if len(p.Blobs) > 0 {
+			fmt.Fprintf(&b, "   [%d image attachment(s) attached below]\n", len(p.Blobs))
+		}
 	}
 	b.WriteString("\n")
 	return b.String()
+}
+
+// queuedBlobs collects every drained prompt's attachments, in FIFO prompt
+// order, for a drain site that renders the batch's TEXT through
+// operatorMessagesBlock above and must deliver the bytes alongside it. Nil
+// when no drained prompt carried an attachment — the common case, and the
+// one that keeps an injected operator message byte-identical to what it was
+// before attachments existed.
+func queuedBlobs(prompts []QueuedPrompt) []*message.Blob {
+	var blobs []*message.Blob
+	for _, p := range prompts {
+		blobs = append(blobs, p.Blobs...)
+	}
+	return blobs
 }

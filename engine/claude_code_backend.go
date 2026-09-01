@@ -359,8 +359,8 @@ func (s *Session) applyClaudeCodeUsage(usage provider.Usage) {
 // interruptedTurnError partial-append behavior (engine.go).
 func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, error) {
 	history := s.History()
-	text := lastUserMessageText(history)
-	if text == "" {
+	text, blobs := lastUserMessageContent(history)
+	if text == "" && len(blobs) == 0 {
 		return nil, errors.New("engine: claude-code delegated turn found no pending user message to answer")
 	}
 	// Deliver any pending task notifications (a settled child's Done/Failed
@@ -607,7 +607,7 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		// task-notification segment, above) — sent through the SAME
 		// writer as every later mid-turn injection, never a separate
 		// one-off path.
-		firstWriteErrCh <- writeClaudeCodeInputMessage(stdin, text)
+		firstWriteErrCh <- writeClaudeCodeInputMessage(stdin, text, blobs)
 		for {
 			select {
 			case <-wake:
@@ -633,7 +633,7 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 					Parts:     message.Parts{&message.Text{Text: block}},
 					CreatedAt: time.Now().UTC(),
 				})
-				if err := writeClaudeCodeInputMessage(stdin, block); err != nil {
+				if err := writeClaudeCodeInputMessage(stdin, block, nil); err != nil {
 					// Best-effort, exactly like the first write's own
 					// inputErr contract below: the prompt is already
 					// dequeued AND durably in s.history by the append
@@ -909,22 +909,31 @@ func claudeCodeTurnResult(o claudeCodeTurnOutcome) (*message.Message, error) {
 	return o.finalMsg, nil
 }
 
-// lastUserMessageText returns the Text of the LAST message in history if
-// it is a RoleUser message, or "" otherwise. runClaudeCodeTurn's one
+// lastUserMessageContent returns the text and the attachments (Blob parts,
+// in order) of the LAST message in history if it is a RoleUser message, or
+// "", nil otherwise. Both halves matter: Parts.Text() drops every non-text
+// part, so reading text alone would silently strip an uploaded image on the
+// way to the CLI. runClaudeCodeTurn's one
 // caller-contract requirement is that its caller has already appended
 // (or, for the goal-loop directive-reuse retry, left in place) exactly one
 // unanswered RoleUser message at the tail — this reads it back rather than
 // threading the text through an extra parameter, so both call sites (a
 // fresh append, and a retry that appends nothing new) share one path.
-func lastUserMessageText(history []message.Message) string {
+func lastUserMessageContent(history []message.Message) (string, []*message.Blob) {
 	if len(history) == 0 {
-		return ""
+		return "", nil
 	}
 	last := history[len(history)-1]
 	if last.Role != message.RoleUser {
-		return ""
+		return "", nil
 	}
-	return last.Parts.Text()
+	var blobs []*message.Blob
+	for _, p := range last.Parts {
+		if b, ok := p.(*message.Blob); ok {
+			blobs = append(blobs, b)
+		}
+	}
+	return last.Parts.Text(), blobs
 }
 
 // claudeCodeHistoryDirective is the --append-system-prompt text
@@ -945,7 +954,7 @@ const claudeCodeHistoryDirective = "You are continuing a conversation that happe
 // pair (flag plus value) whenever history holds conversation the CLI's own
 // resumed session (if any) has NOT already incorporated — priorCount >
 // watermark, where priorCount is len(history) minus the single pending
-// trigger message runClaudeCodeTurn is about to answer (lastUserMessageText's
+// trigger message runClaudeCodeTurn is about to answer (lastUserMessageContent's
 // own caller contract: history's last element is always that pending
 // message) and watermark is Session.claudeCodeHistoryWatermarkCount(), the
 // message count as of the end of whichever delegated turn last ran. nil
@@ -1745,24 +1754,85 @@ type claudeCodeInputMessage struct {
 	Message claudeCodeInputInnerMessage `json:"message"`
 }
 
+// Content is a plain string for a text-only turn — the shape this driver
+// has always written, kept byte-identical for the overwhelmingly common
+// case — or the CLI's own content-block array when the turn's user message
+// carries attachments. See claudeCodeInputContent.
 type claudeCodeInputInnerMessage struct {
 	Role    string `json:"role"`
-	Content string `json:"content"`
+	Content any    `json:"content"`
 }
 
-// writeClaudeCodeInputMessage marshals text as one stream-json user input
-// line and writes it to w — mirrors the Claude Agent SDK's
-// ProcessTransport.write (sdk.mjs: JSON.stringify(message) + "\n"). Used
-// for both a turn's first, driving message and every later mid-turn
-// queued-prompt injection, so the child's stdin only ever sees this one
-// wire shape (see runClaudeCodeTurn's stdin-writer pump doc comment for
-// the construct this mirrors).
-func writeClaudeCodeInputMessage(w io.Writer, text string) error {
+// claudeCodeInputBlock is one element of the content-block array form of
+// claudeCodeInputInnerMessage.Content: the CLI accepts the Anthropic
+// Messages API's own block shapes on its stream-json stdin, so an image
+// rides as {"type":"image","source":{"type":"base64",...}} exactly as it
+// would in a native provider request. Text is set on a "text" block and
+// Source on an "image" block; the other stays nil/empty and is omitted.
+type claudeCodeInputBlock struct {
+	Type   string                      `json:"type"`
+	Text   string                      `json:"text,omitempty"`
+	Source *claudeCodeInputImageSource `json:"source,omitempty"`
+}
+
+// claudeCodeInputImageSource is an image block's inline base64 payload.
+// Data is []byte so encoding/json emits standard base64 — the same
+// encoding message.Blob.Data uses on the wire.
+type claudeCodeInputImageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      []byte `json:"data"`
+}
+
+// claudeCodeInputContent renders one turn's input for the CLI's stdin: the
+// bare string when the turn carries no attachments (unchanged wire shape),
+// or a text block followed by one image block per attachment when it does.
+//
+// A blob with no inline Data is SKIPPED rather than sent: the CLI's input
+// protocol has no URL image source, and a source object with an empty
+// payload is worse than an honest omission — the model would be told an
+// image exists and shown nothing. Every blob reaching a delegated turn
+// arrives from a path that requires inline data (see the server's prompt
+// validation), so this is a guard, not a routine case.
+func claudeCodeInputContent(text string, blobs []*message.Blob) any {
+	var blocks []claudeCodeInputBlock
+	for _, b := range blobs {
+		if b == nil || len(b.Data) == 0 {
+			continue
+		}
+		blocks = append(blocks, claudeCodeInputBlock{
+			Type:   "image",
+			Source: &claudeCodeInputImageSource{Type: "base64", MediaType: b.MediaType, Data: b.Data},
+		})
+	}
+	if len(blocks) == 0 {
+		return text
+	}
+	if text == "" {
+		return blocks
+	}
+	return append([]claudeCodeInputBlock{{Type: "text", Text: text}}, blocks...)
+}
+
+// writeClaudeCodeInputMessage marshals one stream-json user input line and
+// writes it to w — mirrors the Claude Agent SDK's ProcessTransport.write
+// (sdk.mjs: JSON.stringify(message) + "\n"). Used for both a turn's first,
+// driving message and every later mid-turn queued-prompt injection, so the
+// child's stdin only ever sees this one wire shape (see runClaudeCodeTurn's
+// stdin-writer pump doc comment for the construct this mirrors).
+//
+// blobs are the attachments to carry alongside text, and only the turn's
+// FIRST message has any: a mid-turn injection arrives through the prompt
+// queue as text (EnqueuePrompt is text-only), so that call site passes nil.
+// claudeCodeInputContent decides the content shape from them — a bare
+// string when there are none, keeping the wire byte-identical to what this
+// function sent before attachments existed.
+func writeClaudeCodeInputMessage(w io.Writer, text string, blobs []*message.Blob) error {
 	line, err := json.Marshal(claudeCodeInputMessage{
 		Type: "user",
 		Message: claudeCodeInputInnerMessage{
 			Role:    "user",
-			Content: text,
+			Content: claudeCodeInputContent(text, blobs),
 		},
 	})
 	if err != nil {

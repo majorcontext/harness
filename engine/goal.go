@@ -1220,7 +1220,12 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			// the condition string itself stays clean.
 			directive = operatorMessagesBlock(queued, operatorContextGoal) + directive
 		}
-		if attempts, err := s.promptTurnWithRetry(ctx, directive, turn, snap.gen); err != nil {
+		// The drained batch's attachments ride to the worker turn beside
+		// that block: operatorMessagesBlock renders text only and announces
+		// each prompt's attachment count, so these bytes are what the count
+		// refers to. An image an operator sent mid-goal would otherwise be
+		// dropped at exactly this boundary — see queuedBlobs (queue.go).
+		if attempts, err := s.promptTurnWithRetry(ctx, directive, turn, snap.gen, queuedBlobs(queued)...); err != nil {
 			if errors.Is(err, context.Canceled) {
 				// Deliberate abort: leave the goal exactly as it is (a
 				// drain must be resumable), no goal.stalled, no clear.
@@ -1538,7 +1543,14 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 // through to recordGoalStalled so a stall record for an attempt is never
 // journaled once an UpdateGoal has moved the goal past this turn's
 // generation — see recordGoalStalled and PursueGoal's stale-discard handling.
-func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, turn int, gen uint64) (attempts int, err error) {
+// blobs are the attachments PursueGoal's turn-boundary drain collected for
+// this turn (nil on every turn with no operator mail). They ride with the
+// directive on the attempts that actually APPEND one — attempt 1 and the
+// fallback branch below — and are deliberately absent from the
+// directive-reuse branch, which appends nothing at all: that branch re-runs
+// the previous attempt's still-unanswered message, which already carries
+// these very blob parts.
+func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, turn int, gen uint64, blobs ...*message.Blob) (attempts int, err error) {
 	var deterministicAttempt, retryableAttempt, truncatedAttempt, exhaustedAttempt int
 	// anchorID identifies the message directiveReuseEligible and
 	// dropUnansweredDirective both measure their tail from — the point
@@ -1571,7 +1583,7 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 		case attempts == 1:
 			// Nothing to reuse yet: the ordinary path appends the directive
 			// as history's first mention of it this turn.
-			_, perr = s.Prompt(ctx, directive)
+			_, perr = s.PromptWithOrigin(ctx, directive, "", "", blobs...)
 		case s.directiveReuseEligible(anchorID):
 			// The tail after anchorID is exactly the previous attempt's own
 			// unanswered directive (see directiveReuseEligible) — reuse it
@@ -1601,7 +1613,7 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 			// happens from here on, never the residue this fallback is
 			// leaving behind for good.
 			anchorID = s.lastMessageID()
-			_, perr = s.Prompt(ctx, directive)
+			_, perr = s.PromptWithOrigin(ctx, directive, "", "", blobs...)
 		}
 		if perr == nil {
 			return attempts, nil

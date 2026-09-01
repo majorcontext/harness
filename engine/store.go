@@ -464,9 +464,8 @@ type goalRecord struct {
 }
 
 // promptRecord carries the durable payload of a prompt.queued/
-// prompt.dequeued record (see queue.go). String-only, mirroring goalRecord —
-// v1's prompt contract is text parts only (see AGENTS.md), so no attachment
-// machinery is needed here. ID is the queue-assigned, session-monotonic
+// prompt.dequeued record (see queue.go). ID is the queue-assigned,
+// session-monotonic
 // prompt ID. Text is the queued prompt, carried on BOTH record types (not
 // just prompt.queued) so a prompt.dequeued record is self-describing without
 // cross-referencing the matching prompt.queued one earlier in the log.
@@ -492,6 +491,18 @@ type promptRecord struct {
 	// like any other unset id, at dispatch time — a backward-compatible
 	// fallback, not a replay error.
 	MessageID string `json:"message_id,omitempty"`
+	// Blobs are the queued prompt's attachments (see QueuedPrompt.Blobs),
+	// written on prompt.queued ONLY — never on prompt.dequeued, unlike Text
+	// above. A dequeued record exists to name which queue entry left the
+	// queue, and it is matched by ID (promptQueueFold.dequeued), so copying
+	// an image's bytes into it would double every attachment in the journal
+	// for no reader.
+	//
+	// Omitted (nil) on every text-only prompt and on every record written
+	// before prompt attachments existed, which folds back to a QueuedPrompt
+	// with no attachments — the pre-feature behavior exactly, not a replay
+	// error.
+	Blobs []*message.Blob `json:"blobs,omitempty"`
 }
 
 // taskSpawnRecord is a recTaskSpawned record's payload — see that

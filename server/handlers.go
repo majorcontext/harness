@@ -1638,11 +1638,8 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Parts []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"parts"`
-		Model message.ModelRef `json:"model"`
+		Parts []promptPartInput `json:"parts"`
+		Model message.ModelRef  `json:"model"`
 		// ID is an OPTIONAL client-minted ID for the user message this
 		// prompt becomes — the console pre-mints one to render its own
 		// optimistic bubble, then reconciles it by ID once the real message
@@ -1661,15 +1658,16 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "parts must be non-empty")
 		return
 	}
-	var texts []string
-	for _, p := range body.Parts {
-		if p.Type != "text" {
-			writeErr(w, http.StatusBadRequest, "v1 accepts text parts only")
-			return
-		}
-		texts = append(texts, p.Text)
+	// Text parts and image blob parts, decoded and fully validated before
+	// any run slot is claimed or anything is enqueued — see
+	// decodePromptParts (prompt_parts.go) for why an attachment harness
+	// cannot deliver must be refused HERE rather than persisted first.
+	parts, code, err := decodePromptParts(body.Parts)
+	if err != nil {
+		writeErr(w, code, err.Error())
+		return
 	}
-	text := strings.Join(texts, "\n")
+	text, blobs := parts.Text, parts.Blobs
 	// Resolved ONCE, here, regardless of which branch below actually ends
 	// up delivering this prompt (immediate dispatch, or enqueued behind a
 	// busy/non-empty queue): every branch reports this SAME value as its
@@ -1690,7 +1688,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, code, fmt.Sprintf("workdir busy: held by session %s", holder))
 		case code == http.StatusConflict:
 			// Same-session busy: queue-on-busy (invariant 9), not a 409.
-			s.enqueueOrDispatch(w, id, text, msgID)
+			s.enqueueOrDispatch(w, id, text, msgID, blobs...)
 		case code == http.StatusServiceUnavailable:
 			writeErr(w, code, "server shutting down")
 		default:
@@ -1711,7 +1709,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		// text) into the run slot just claimed above. See
 		// dispatchQueueHead and enqueueOrDispatch's identical shape for the
 		// same-session-BUSY counterpart of this same rule.
-		ourID, _, err := st.sess.EnqueuePrompt(text, msgID)
+		ourID, _, err := st.sess.EnqueuePrompt(text, msgID, blobs...)
 		if err != nil {
 			// handlePrompt already rejects an empty parts list and joins
 			// non-empty text above, so this is not reachable in practice;
@@ -1810,7 +1808,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 
-	go s.runPrompt(ctx, id, st, text, "", msgID)
+	go s.runPrompt(ctx, id, st, text, "", msgID, blobs...)
 	writeJSON(w, http.StatusAccepted, promptAsyncResponse{Seq: fromSeq, Status: "started", MessageID: msgID})
 }
 
@@ -1846,9 +1844,9 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 // queue position, only "is my own prompt running or not, right now".
 //
 // A model override on a request whose prompt gets queued (either branch) is
-// silently NOT applied: QueuedPrompt carries only ID and Text (see the plan's
-// "text-only" locked decision — no attachment machinery), so there is no
-// slot to carry a per-prompt model override through to a future drain. A
+// silently NOT applied: QueuedPrompt carries the prompt's own text,
+// attachments, and ids — not a model ref — so there is no slot to carry a
+// per-prompt model override through to a future drain. A
 // caller that needs a model swap to take effect should re-issue it once its
 // prompt is confirmed "started".
 //
@@ -1857,7 +1855,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 // of handlePrompt's two branches runs, so this function's own response
 // promises the SAME id EnqueuePrompt persists and PromptWithOrigin later
 // uses at dispatch.
-func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string, msgID string) {
+func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string, msgID string, blobs ...*message.Blob) {
 	sess := s.residentSession(id)
 	if sess == nil {
 		// Benign race window, identical to handleGoalBusy's (see its doc
@@ -1869,7 +1867,7 @@ func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string
 		writeErr(w, http.StatusConflict, "session is busy with another prompt")
 		return
 	}
-	ourID, _, err := sess.EnqueuePrompt(text, msgID)
+	ourID, _, err := sess.EnqueuePrompt(text, msgID, blobs...)
 	if err != nil {
 		// handlePrompt already rejects an empty parts list and joins
 		// non-empty text, so this is not reachable in practice; fail closed
@@ -2256,7 +2254,7 @@ func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Cont
 	// deliberately dispatches the QUEUE HEAD instead of its own trigger
 	// text, exactly so a real queued message is never displaced by the
 	// resume trigger — see runOrQueueText's own doc comment.
-	go s.runPrompt(ctx, id, st, head.Text, "", head.MessageID)
+	go s.runPrompt(ctx, id, st, head.Text, "", head.MessageID, head.Blobs...)
 	if s.dispatchQueueHeadRace != nil {
 		// Test-only seam — see its own doc comment (server.go).
 		s.dispatchQueueHeadRace()
@@ -2288,7 +2286,7 @@ func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Cont
 // runOrQueueText's synthetic resume trigger, which has no client message id
 // of its own — PromptWithOrigin's own mint site resolves either case
 // identically.
-func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, text string, origin string, msgID string) {
+func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, text string, origin string, msgID string, blobs ...*message.Blob) {
 	defer s.wg.Done()
 	// ReportTurnStart/ReportTurnEnd bracket the ONE choke point every
 	// ordinary (non-goal-loop) turn on a resident session funnels through
@@ -2303,7 +2301,7 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	// hits, closing the "task tool broken after restart" gap a live
 	// review caught.
 	s.sessMgr.ReportTurnStart(st.sess)
-	msg, err := st.sess.PromptWithOrigin(ctx, text, origin, msgID)
+	msg, err := st.sess.PromptWithOrigin(ctx, text, origin, msgID, blobs...)
 	s.syncMessages(id) // catch any message not yet journaled
 	switch {
 	case err == nil:

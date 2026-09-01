@@ -914,8 +914,24 @@ components:
           type: array
           minItems: 1
           items:
-            $ref: "#/components/schemas/TextPart"
-          description: v1 accepts text parts only.
+            oneOf:
+              - $ref: "#/components/schemas/TextPart"
+              - $ref: "#/components/schemas/BlobPart"
+          description: >
+            Text parts and image attachments. Text parts are joined by
+            newlines into the prompt's text; each blob part becomes a Blob
+            part of the user message, after the text, in the order given.
+
+
+            An attachment must be an image (image/png, image/jpeg,
+            image/gif, or image/webp — the same set read_file returns as a
+            blob), must carry inline base64 `data` rather than a `url`, must
+            decode as the media type it claims, and must not exceed
+            20971520 bytes. Anything else is rejected with 400 before the
+            prompt is accepted, because a blob no provider can render would
+            otherwise be persisted into the durable transcript and re-sent
+            on every later turn. A prompt carrying at least one attachment
+            is valid with no text part at all.
         model:
           $ref: "#/components/schemas/ModelRef"
           description: >
@@ -924,11 +940,11 @@ components:
             as the CLI -model flag) — but ONLY when this prompt starts
             running immediately. When the session is busy and this request's
             prompt is durably queued instead (see prompt_async's 202
-            `status: queued`), the override is silently dropped: `QueuedPrompt`
-            carries text only (docs/plans/2026-07-19-prompt-queue.md's
-            text-only v1 limit), so there is no slot to carry a per-prompt
-            override through to a future drain. Re-issue the request once it
-            is confirmed `started` if the override must take effect.
+            `status: queued`), the override is silently dropped: a queued
+            prompt carries its own text, attachments, and ids — not a model
+            ref — so there is no slot to carry a per-prompt override through
+            to a future drain. Re-issue the request once it is confirmed
+            `started` if the override must take effect.
 
     EnqueueRequest:
       type: object
@@ -939,7 +955,12 @@ components:
           minItems: 1
           items:
             $ref: "#/components/schemas/TextPart"
-          description: v1 accepts text parts only, same as PromptRequest.
+          description: >
+            Text parts only. Unlike PromptRequest, this write-ahead route
+            takes no image attachments: its callers are machine relays
+            (an inbox poller, a coordinator) whose upstream ack rides on the
+            durable-accept contract, not the interactive composer that
+            uploads pictures.
         seq:
           type: integer
           format: int64
@@ -950,10 +971,10 @@ components:
             (the watermark simply jumps to it), but an out-of-order FRESH
             seq is indistinguishable from a duplicate and is silently
             dropped — see EnqueueResponse's `duplicate` status. No `model`
-            field: a durably-enqueued prompt is subject to the exact same
-            text-only, no-override limit as a queued PromptRequest (see
-            PromptRequest's `model` description) — there is simply no slot
-            to offer one here.
+            field: a durably-enqueued prompt is subject to the same
+            no-override limit as a queued PromptRequest (see PromptRequest's
+            `model` description) — there is simply no slot to offer one
+            here.
 
     EnqueueResponse:
       type: object
