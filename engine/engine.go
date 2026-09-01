@@ -1412,6 +1412,28 @@ type Session struct {
 	// order. Guarded by mu.
 	deferredQueueRecords []deferredQueueRecord
 
+	// claudeCodeQueueWake, when non-nil, is a wake channel a currently
+	// running runClaudeCodeTurn (claude_code_backend.go) has registered
+	// for itself — its own stdin-writer pump's ONE way to learn that
+	// EnqueuePrompt/EnqueuePromptDurable/the deferred-flush path just
+	// added something to s.promptQueue, so it can drain and inject it
+	// into the live `claude` child's still-open stdin without polling
+	// (see emit's own EventPromptQueued case below, and
+	// runClaudeCodeTurn's doc comment for the Claude Agent SDK construct
+	// this pump mirrors). nil for every native-provider turn and for a
+	// claude-code turn that has not started its pump yet. Set at pump
+	// start and cleared at pump exit by runClaudeCodeTurn itself, via
+	// atomic.Pointer so a concurrent emit() (from ANY goroutine — see
+	// OnEvent's own "several goroutines at once" note above) can read it
+	// without taking s.mu, which emit() must not do (EnqueuePrompt calls
+	// it WHILE HOLDING s.mu). The pointed-to channel is buffered(1) and
+	// only ever sent to non-blocking (default: case) — a coalesced,
+	// dropped, or missed wake is harmless: the pump drains the ENTIRE
+	// queue on every wake it does see (DequeueAllPrompts), and anything
+	// still queued when the turn ends is picked up exactly as before this
+	// change, by the server's ordinary tail dispatch (maybeDispatchQueued).
+	claudeCodeQueueWake atomic.Pointer[chan struct{}]
+
 	// enqueueSeq is the durable-enqueue idempotency high-water mark (see
 	// EnqueuePromptDurable in queue.go and promptRecord.Seq in store.go):
 	// the largest caller-issued seq durably accepted. Monotonic; a seq at or
@@ -2365,6 +2387,21 @@ func (s *Session) accumulateDiscardedTurnUsage(usage provider.Usage) {
 
 func (s *Session) emit(ev Event) {
 	ev.SessionID = s.ID
+	if ev.Type == EventPromptQueued {
+		// Wake a running claude-code turn's stdin-writer pump, if one is
+		// registered — see claudeCodeQueueWake's own doc comment. This is
+		// the ONE choke point every enqueue path (EnqueuePrompt,
+		// EnqueuePromptDurable, and the deferred-flush path's own
+		// flushQueueRecordsLocked) already shares to emit this exact
+		// event, so hooking it here — instead of at each call site —
+		// covers all of them by construction.
+		if ch := s.claudeCodeQueueWake.Load(); ch != nil {
+			select {
+			case *ch <- struct{}{}:
+			default:
+			}
+		}
+	}
 	if s.cfg.OnEvent != nil {
 		s.cfg.OnEvent(ev)
 	}

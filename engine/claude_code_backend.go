@@ -542,47 +542,99 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		_, _ = io.Copy(&stderr, stderrPipe)
 	}()
 
-	inputLine, err := json.Marshal(claudeCodeInputMessage{
-		Type: "user",
-		Message: claudeCodeInputInnerMessage{
-			Role:    "user",
-			Content: text,
-		},
-	})
-	if err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return nil, fmt.Errorf("engine: claude-code: encoding turn input: %w", err)
-	}
-	// inputErr captures a failure writing or closing stdin WITHOUT killing
-	// the child or returning early: a fast/trivial turn's child can
-	// legitimately finish its whole result and exit (closing its own end
-	// of the pipe) before this call finishes writing/closing its side,
-	// which turns an otherwise-harmless race into a broken-pipe/closed-
-	// pipe error right here. That is not a real failure — the child still
-	// has a complete, valid result waiting on stdout — so this call must
-	// keep going and read it: only if the turn ends with NO usable result
-	// at all does inputErr get promoted to the actual returned error,
-	// below. Deliberately not stdin.Close() after a failed Write: closing
-	// an already-broken pipe has nothing useful to report, and calling it
-	// anyway would risk overwriting a meaningful inputErr with a second,
-	// less informative one.
-	var inputErr error
-	if _, err := stdin.Write(append(inputLine, '\n')); err != nil {
-		inputErr = fmt.Errorf("engine: claude-code: writing turn input: %w", err)
-	} else if err := stdin.Close(); err != nil {
-		// Close stdin: this driver sends exactly one turn per `claude`
-		// child (continuity across harness turns is --resume, not a long-
-		// lived child — see this file's package doc), and an unclosed
-		// stdin would leave the CLI waiting indefinitely for a second
-		// message that is never coming, wedging cmd.Wait() below forever —
-		// but a Close failing is itself just as benign as a Write failing,
-		// for the exact same reason (the read end may already be gone
-		// because the child already finished), so it gets the same
-		// deferred treatment as the Write error above rather than an
-		// immediate kill-and-return.
-		inputErr = fmt.Errorf("engine: claude-code: closing stdin: %w", err)
-	}
+	// The stdin-writer pump: mirrors the Claude Agent SDK's own streaming-
+	// input construct rather than inventing a bespoke protocol —
+	// @anthropic-ai/claude-agent-sdk's Query.streamInput (sdk.mjs): its
+	// ProcessTransport keeps a `claude` child's stdin open for the whole
+	// session and never closes it after one write; streamInput pumps an
+	// app-supplied async-iterable of input messages into it one at a time
+	// (`for await (n of e) transport.write(JSON.stringify(n)+"\n")`) and
+	// calls `transport.endInput()` (closes stdin) only once THAT
+	// iterable is exhausted — as opposed to the SDK's plain single-string
+	// query() path, whose Query.readMessages instead calls endInput() the
+	// moment the FIRST "result" event arrives, because a one-shot call has
+	// nothing further to send.
+	//
+	// This driver's own turn is a hybrid of those two SDK shapes for one
+	// child: it starts with exactly one message (the turn's own driving
+	// text) like the single-string path, but a prompt queued mid-turn
+	// (EnqueuePrompt et al.) is exactly the further input the SDK's
+	// streaming-input mode exists to carry into an ALREADY RUNNING child
+	// rather than a fresh one. So the goroutine below plays BOTH SDK
+	// roles for this one child: it is the input source (draining
+	// s.promptQueue, woken by EventPromptQueued — see
+	// Session.claudeCodeQueueWake's own doc comment, engine.go) AND the
+	// thing that pumps each item to the child's stdin, closing stdin
+	// (mirrors endInput()) only once THIS driver's own "no more input"
+	// signal fires: stopPump, closed by the code below right after
+	// consumeClaudeCodeStream returns (i.e. once the child's OWN terminal
+	// "result" event arrives) — the exact moment the single-string SDK
+	// path's own endInput() call fires, just reached from a longer-lived
+	// writer instead of a one-off write.
+	//
+	// One writer, ever: this goroutine is the ONLY thing that touches
+	// stdin from the moment it starts until it returns (having already
+	// closed stdin itself on every exit path), so the rest of this
+	// function never writes to or closes stdin directly — it only closes
+	// stopPump and waits on pumpDone before doing anything else with the
+	// child (cmd.Wait(), below).
+	firstWriteErrCh := make(chan error, 1)
+	wake := make(chan struct{}, 1)
+	s.claudeCodeQueueWake.Store(&wake)
+	stopPump := make(chan struct{})
+	pumpDone := make(chan struct{})
+	go func() {
+		defer close(pumpDone)
+		defer s.claudeCodeQueueWake.Store(nil)
+		// The turn's own driving text (already carries any spliced
+		// task-notification segment, above) — sent through the SAME
+		// writer as every later mid-turn injection, never a separate
+		// one-off path.
+		firstWriteErrCh <- writeClaudeCodeInputMessage(stdin, text)
+		for {
+			select {
+			case <-wake:
+				queued := s.DequeueAllPrompts("injected")
+				if len(queued) == 0 {
+					// A concurrent DELETE /session/{id}/queue, or a wake
+					// coalesced behind one this same loop already
+					// drained: nothing left to send this time around.
+					continue
+				}
+				// Same rendering, and the same "append into real,
+				// durable history before anything else" shape,
+				// drainQueuedPromptsIntoHistory (engine.go) uses for the
+				// native loop's own mid-turn drain — a queued prompt's
+				// delivered text is identical whichever path answers it,
+				// and this append is what makes the delivery visible in
+				// the session transcript.
+				block := strings.TrimSuffix(operatorMessagesBlock(queued, operatorContextTask), "\n")
+				s.append(message.Message{
+					ID:        newID("msg"),
+					Role:      message.RoleUser,
+					Parts:     message.Parts{&message.Text{Text: block}},
+					CreatedAt: time.Now().UTC(),
+				})
+				if err := writeClaudeCodeInputMessage(stdin, block); err != nil {
+					// Best-effort, exactly like the first write's own
+					// inputErr contract below: the prompt is already
+					// dequeued AND durably in s.history by the append
+					// just above, so a live write failure here only means
+					// THIS running child never saw it mid-turn — the next
+					// claude-code turn's claudeCodeHistoryDirectiveArgs
+					// detects the gap and feeds it via --resume, a delay
+					// never a loss (see engine/AGENTS.md: "Deliver each
+					// item once across tool and goal-turn drains"). The
+					// pipe is presumably gone either way, so stop pumping.
+					_ = stdin.Close()
+					return
+				}
+			case <-stopPump:
+				_ = stdin.Close()
+				return
+			}
+		}
+	}()
 
 	// The signal-abort cascade: SIGINT first (Claude Code's own docs
 	// describe this as ending the current turn gracefully, leaving it
@@ -620,6 +672,25 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	}()
 
 	finalMsg, started, turnErr := s.consumeClaudeCodeStream(stdout, model)
+	// No more input is coming for this child (mirrors the single-string
+	// SDK path's own endInput()-on-first-"result" call — see the pump
+	// goroutine's own doc comment above): signal it to stop and wait for
+	// it to actually exit BEFORE this goroutine touches the child again
+	// (cmd.Wait(), below) — see the pump's "one writer, ever" note for
+	// why this ordering matters.
+	close(stopPump)
+	<-pumpDone
+	// inputErr captures a failure on the FIRST write specifically — see
+	// its use in claudeCodeTurnResult below, whose contract is "no usable
+	// result at all, AND the turn's own driving text never reached the
+	// child" (a later, mid-turn queued-prompt write failure is always
+	// best-effort per the pump's own comment above, and by the time one
+	// could happen finalMsg is already non-nil, so claudeCodeTurnResult
+	// never consults inputErr for that case anyway).
+	inputErr := <-firstWriteErrCh
+	if inputErr != nil {
+		inputErr = fmt.Errorf("engine: claude-code: writing turn input: %w", inputErr)
+	}
 	if started {
 		// The CLI's own session actually came up for this turn — whether
 		// or not turnErr is set (see claudeCodeTurnResult's own o.started
@@ -1602,10 +1673,13 @@ func (s *Session) claudeCodeMCPConfigFile() (path string, cleanup func(), err er
 	return name, func() { _ = os.Remove(name) }, nil
 }
 
-// claudeCodeInputMessage is the stdin stream-json shape this driver writes
-// — one line, one turn (see runClaudeCodeTurn's own doc comment on why a
-// child is spawned fresh per harness turn rather than kept alive across
-// several).
+// claudeCodeInputMessage is the stdin stream-json shape this driver
+// writes — one per line. A harness turn still spawns exactly one `claude`
+// child (see runClaudeCodeTurn's own doc comment on why continuity across
+// harness turns is --resume, not a long-lived child), but that one child
+// can now receive SEVERAL of these lines across its lifetime: the turn's
+// own driving text first, then zero or more prompts queued mid-turn — see
+// runClaudeCodeTurn's stdin-writer pump.
 type claudeCodeInputMessage struct {
 	Type    string                      `json:"type"`
 	Message claudeCodeInputInnerMessage `json:"message"`
@@ -1614,6 +1688,28 @@ type claudeCodeInputMessage struct {
 type claudeCodeInputInnerMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+}
+
+// writeClaudeCodeInputMessage marshals text as one stream-json user input
+// line and writes it to w — mirrors the Claude Agent SDK's
+// ProcessTransport.write (sdk.mjs: JSON.stringify(message) + "\n"). Used
+// for both a turn's first, driving message and every later mid-turn
+// queued-prompt injection, so the child's stdin only ever sees this one
+// wire shape (see runClaudeCodeTurn's stdin-writer pump doc comment for
+// the construct this mirrors).
+func writeClaudeCodeInputMessage(w io.Writer, text string) error {
+	line, err := json.Marshal(claudeCodeInputMessage{
+		Type: "user",
+		Message: claudeCodeInputInnerMessage{
+			Role:    "user",
+			Content: text,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("engine: claude-code: encoding turn input: %w", err)
+	}
+	_, err = w.Write(append(line, '\n'))
+	return err
 }
 
 // capBuffer is an io.Writer that retains at most cap bytes, silently

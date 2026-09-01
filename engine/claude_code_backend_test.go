@@ -1566,3 +1566,123 @@ func killLeakedFakeClaude(t *testing.T, pidFile string) {
 		t.Logf("killLeakedFakeClaude: Kill(%d): %v (may have already exited)", pid, err)
 	}
 }
+
+// TestClaudeCodeQueueInjectedMidTurnViaOpenStdin is the regression test for
+// the live production bug reported as "queue doesn't seem to be working in
+// opus subscription sessions" (box box_01m1f4g92bfb0a3e5863hqgbpw, session
+// ses_01m1f4hbpee1nvwzam39b7fwm3): a prompt enqueued via POST
+// .../sessions/{id}/send while a claude-code-lane turn was busy sat
+// durably queued, undelivered, for the ENTIRE remainder of that turn —
+// live-reproduced sitting queued 6+ minutes with the underlying `claude`
+// turn still actively running — because runClaudeCodeTurn used to write
+// its ONE input line and close stdin immediately, so a prompt queued after
+// that close could never reach the already-running child; only the
+// server's ordinary end-of-turn tail dispatch (a NEW turn) ever delivered
+// it. A native-provider session on the same box, by contrast, delivers a
+// mid-turn queued prompt within seconds via drainQueuedPromptsIntoHistory
+// at the next tool-call boundary.
+//
+// This proves the fix directly against the mechanism: runClaudeCodeTurn's
+// stdin-writer pump keeps the CLI child's stdin OPEN across the whole
+// turn and writes a prompt queued via EnqueuePrompt to it as a SECOND
+// stream-json input line, delivered to the SAME running child, before
+// that child's own terminal "result" event — not after the process exits
+// and a fresh one is dispatched.
+//
+// fakeclaude's "queue_injection" mode (testdata/fakeclaude/main.go) emits
+// a "WAITING_FOR_QUEUE" marker message and then blocks reading a SECOND
+// stdin line. This test waits for that marker via OnEvent — a
+// deterministic, non-sleep synchronization point: by the time the driver
+// has mapped that event, the child is already blocked in its second
+// read — before calling EnqueuePrompt. If the fix were absent (a driver
+// that still closes stdin right after its first write), fakeclaude's
+// second read would see an immediate EOF (a closed pipe never blocks) and
+// report "no second message received" instead of echoing the queued
+// text — so an unfixed driver fails this test on WRONG CONTENT, not a
+// timeout.
+func TestClaudeCodeQueueInjectedMidTurnViaOpenStdin(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "queue_injection")
+	stdinLog := filepath.Join(t.TempDir(), "stdin.log")
+	t.Setenv("FAKE_CLAUDE_STDIN_LOG", stdinLog)
+
+	waiting := make(chan struct{})
+	var waitingOnce sync.Once
+	s.cfg.OnEvent = func(ev Event) {
+		if ev.Type == EventMessage && ev.Message != nil && ev.Message.Parts.Text() == "WAITING_FOR_QUEUE" {
+			waitingOnce.Do(func() { close(waiting) })
+		}
+	}
+
+	type outcome struct {
+		msg *message.Message
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		msg, err := s.Prompt(context.Background(), "start")
+		done <- outcome{msg, err}
+	}()
+
+	select {
+	case res := <-done:
+		t.Fatalf("Prompt returned (%+v, %v) before fakeclaude ever emitted WAITING_FOR_QUEUE", res.msg, res.err)
+	case <-waiting:
+	case <-time.After(10 * time.Second):
+		t.Fatal("fakeclaude never emitted WAITING_FOR_QUEUE within 10s")
+	}
+
+	// The turn is now mid-flight — Prompt has NOT returned, and
+	// fakeclaude is blocked on its own second stdin read. Enqueue while
+	// busy, exactly like the live bug's POST /session/{id}/send arriving
+	// while a claude-code turn is running.
+	if _, _, err := s.EnqueuePrompt("QUEUE-MARKER: please continue", ""); err != nil {
+		t.Fatalf("EnqueuePrompt: %v", err)
+	}
+
+	var res outcome
+	select {
+	case res = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Prompt did not return within 10s of EnqueuePrompt — the queued prompt was never " +
+			"delivered to the running child (fakeclaude stayed blocked on its second stdin read)")
+	}
+	if res.err != nil {
+		t.Fatalf("Prompt: %v", res.err)
+	}
+	if res.msg == nil || !strings.Contains(res.msg.Parts.Text(), "QUEUE-MARKER: please continue") {
+		t.Fatalf("Prompt's final message = %+v, want it to echo the mid-turn queued prompt's text "+
+			"(proves fakeclaude's SAME process received line two)", res.msg)
+	}
+
+	// The queue itself must be empty afterward: delivered, not stranded.
+	if q := s.QueuedPrompts(); len(q) != 0 {
+		t.Errorf("QueuedPrompts() after delivery = %+v, want empty", q)
+	}
+
+	// The injected prompt must be visible in the session transcript —
+	// mirrors the native path's own drainQueuedPromptsIntoHistory, and is
+	// what lets the console render the delivery.
+	found := false
+	for _, m := range s.History() {
+		if m.Role == message.RoleUser && strings.Contains(m.Parts.Text(), "QUEUE-MARKER: please continue") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("session history has no user message carrying the queued prompt's text — mid-turn delivery did not append into the transcript")
+	}
+
+	// The actual bytes reached the CLI's stdin as a genuine SECOND line,
+	// not just harness-side bookkeeping.
+	stdinBytes, err := os.ReadFile(stdinLog)
+	if err != nil {
+		t.Fatalf("reading captured CLI stdin: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(stdinBytes), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("CLI stdin carried %d lines, want 2 (initial turn text + the mid-turn injected prompt): %q", len(lines), string(stdinBytes))
+	}
+	if !strings.Contains(lines[1], "QUEUE-MARKER: please continue") {
+		t.Errorf("CLI stdin's second line = %q, want it to carry the queued prompt's text", lines[1])
+	}
+}
