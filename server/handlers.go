@@ -1609,6 +1609,13 @@ type promptAsyncResponse struct {
 	Seq    int64  `json:"seq"`
 	Status string `json:"status"`
 	Queued int    `json:"queued,omitempty"`
+	// MessageID is the ID this request's own prompt was actually recorded
+	// under — the caller's own `id` echoed back verbatim, or a freshly
+	// minted one when `id` was empty or a reserved-prefix collision (see
+	// engine.ResolveMessageID) — so a caller that pre-minted an id for its
+	// own optimistic render can confirm which id to reconcile against,
+	// whether this prompt started immediately or is still queued.
+	MessageID string `json:"message_id"`
 }
 
 // handlePrompt is POST /session/{id}/prompt_async (see docs/plans/2026-07-19-
@@ -1636,6 +1643,15 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 			Text string `json:"text"`
 		} `json:"parts"`
 		Model message.ModelRef `json:"model"`
+		// ID is an OPTIONAL client-minted ID for the user message this
+		// prompt becomes — the console pre-mints one to render its own
+		// optimistic bubble, then reconciles it by ID once the real message
+		// arrives over SSE, rather than by fragile text-matching. This
+		// server is reached only by a trusted, authenticated first-party
+		// caller, so ID is used verbatim with exactly one fail-safe guard
+		// (see msgID/engine.ResolveMessageID below) — never validated for
+		// uniqueness and never a reason to reject the prompt.
+		ID string `json:"id"`
 	}
 	if err := decodeBody(r, &body); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -1654,6 +1670,15 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		texts = append(texts, p.Text)
 	}
 	text := strings.Join(texts, "\n")
+	// Resolved ONCE, here, regardless of which branch below actually ends
+	// up delivering this prompt (immediate dispatch, or enqueued behind a
+	// busy/non-empty queue): every branch reports this SAME value as its
+	// response's message_id, and threads it through to whichever call
+	// (EnqueuePrompt, or runPrompt directly) actually appends the user
+	// message — so the caller's response is never a promise that a LATER,
+	// second, differently-minted id ends up in the transcript instead. See
+	// engine.ResolveMessageID's own doc comment.
+	msgID := engine.ResolveMessageID(body.ID)
 
 	// Resolve the session and atomically claim its prompt slot (also does the
 	// wg.Add under the admission gate). See claimForPrompt for the ordering that
@@ -1665,7 +1690,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, code, fmt.Sprintf("workdir busy: held by session %s", holder))
 		case code == http.StatusConflict:
 			// Same-session busy: queue-on-busy (invariant 9), not a 409.
-			s.enqueueOrDispatch(w, id, text)
+			s.enqueueOrDispatch(w, id, text, msgID)
 		case code == http.StatusServiceUnavailable:
 			writeErr(w, code, "server shutting down")
 		default:
@@ -1686,7 +1711,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		// text) into the run slot just claimed above. See
 		// dispatchQueueHead and enqueueOrDispatch's identical shape for the
 		// same-session-BUSY counterpart of this same rule.
-		ourID, err := st.sess.EnqueuePrompt(text)
+		ourID, _, err := st.sess.EnqueuePrompt(text, msgID)
 		if err != nil {
 			// handlePrompt already rejects an empty parts list and joins
 			// non-empty text above, so this is not reachable in practice;
@@ -1722,7 +1747,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 			// promptAsyncResponse's queued field doc for why depth 0 is
 			// possible here.
 			writeJSON(w, http.StatusAccepted, promptAsyncResponse{
-				Seq: fromSeq, Status: "queued", Queued: len(st.sess.QueuedPrompts()),
+				Seq: fromSeq, Status: "queued", Queued: len(st.sess.QueuedPrompts()), MessageID: msgID,
 			})
 			return
 		}
@@ -1730,7 +1755,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		if head.ID == ourID {
 			status = "started"
 		}
-		resp := promptAsyncResponse{Seq: fromSeq, Status: status}
+		resp := promptAsyncResponse{Seq: fromSeq, Status: status, MessageID: msgID}
 		if status == "queued" {
 			// remaining, not a fresh QueuedPrompts() re-read — see
 			// dispatchQueueHead's own doc comment for the race that used
@@ -1785,8 +1810,8 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 
-	go s.runPrompt(ctx, id, st, text, "")
-	writeJSON(w, http.StatusAccepted, promptAsyncResponse{Seq: fromSeq, Status: "started"})
+	go s.runPrompt(ctx, id, st, text, "", msgID)
+	writeJSON(w, http.StatusAccepted, promptAsyncResponse{Seq: fromSeq, Status: "started", MessageID: msgID})
 }
 
 // enqueueOrDispatch implements handlePrompt's same-session-busy branch:
@@ -1826,7 +1851,13 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 // slot to carry a per-prompt model override through to a future drain. A
 // caller that needs a model swap to take effect should re-issue it once its
 // prompt is confirmed "started".
-func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string) {
+//
+// msgID is handlePrompt's own already-resolved message id (see
+// engine.ResolveMessageID) for text — resolved exactly once, before either
+// of handlePrompt's two branches runs, so this function's own response
+// promises the SAME id EnqueuePrompt persists and PromptWithOrigin later
+// uses at dispatch.
+func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string, msgID string) {
 	sess := s.residentSession(id)
 	if sess == nil {
 		// Benign race window, identical to handleGoalBusy's (see its doc
@@ -1838,7 +1869,7 @@ func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string
 		writeErr(w, http.StatusConflict, "session is busy with another prompt")
 		return
 	}
-	ourID, err := sess.EnqueuePrompt(text)
+	ourID, _, err := sess.EnqueuePrompt(text, msgID)
 	if err != nil {
 		// handlePrompt already rejects an empty parts list and joins
 		// non-empty text, so this is not reachable in practice; fail closed
@@ -1856,7 +1887,7 @@ func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string
 		// Lost the retry: still queued, whatever already occupies the slot
 		// keeps running undisturbed.
 		writeJSON(w, http.StatusAccepted, promptAsyncResponse{
-			Seq: s.currentSeq(), Status: "queued", Queued: len(sess.QueuedPrompts()),
+			Seq: s.currentSeq(), Status: "queued", Queued: len(sess.QueuedPrompts()), MessageID: msgID,
 		})
 		return
 	}
@@ -1876,7 +1907,7 @@ func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string
 		// rather than a 500, which would misrepresent a benign, documented
 		// race as a server bug. See TestQueueClearRaceDuringDispatchIsNotAnError.
 		writeJSON(w, http.StatusAccepted, promptAsyncResponse{
-			Seq: s.currentSeq(), Status: "queued", Queued: len(sess.QueuedPrompts()),
+			Seq: s.currentSeq(), Status: "queued", Queued: len(sess.QueuedPrompts()), MessageID: msgID,
 		})
 		return
 	}
@@ -1885,7 +1916,7 @@ func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string
 	if head.ID == ourID {
 		status = "started"
 	}
-	resp := promptAsyncResponse{Seq: s.currentSeq(), Status: status}
+	resp := promptAsyncResponse{Seq: s.currentSeq(), Status: status, MessageID: msgID}
 	if status == "queued" {
 		// remaining, not a fresh QueuedPrompts() re-read — see
 		// dispatchQueueHead's own doc comment for the race that used to
@@ -2225,7 +2256,7 @@ func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Cont
 	// deliberately dispatches the QUEUE HEAD instead of its own trigger
 	// text, exactly so a real queued message is never displaced by the
 	// resume trigger — see runOrQueueText's own doc comment.
-	go s.runPrompt(ctx, id, st, head.Text, "")
+	go s.runPrompt(ctx, id, st, head.Text, "", head.MessageID)
 	if s.dispatchQueueHeadRace != nil {
 		// Test-only seam — see its own doc comment (server.go).
 		s.dispatchQueueHeadRace()
@@ -2250,7 +2281,14 @@ func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Cont
 // (dispatchQueueHead, whether or not the drain was itself provoked by a
 // resume trigger — see that function's own doc comment), or a session.send
 // delivery (sendTextToRoot).
-func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, text string, origin string) {
+//
+// msgID is likewise forwarded to PromptWithOrigin verbatim: the caller's
+// own already-resolved message id (handlePrompt's msgID, or a dequeued
+// QueuedPrompt.MessageID) for an ordinary or queued prompt, or "" for
+// runOrQueueText's synthetic resume trigger, which has no client message id
+// of its own — PromptWithOrigin's own mint site resolves either case
+// identically.
+func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, text string, origin string, msgID string) {
 	defer s.wg.Done()
 	// ReportTurnStart/ReportTurnEnd bracket the ONE choke point every
 	// ordinary (non-goal-loop) turn on a resident session funnels through
@@ -2265,7 +2303,7 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	// hits, closing the "task tool broken after restart" gap a live
 	// review caught.
 	s.sessMgr.ReportTurnStart(st.sess)
-	msg, err := st.sess.PromptWithOrigin(ctx, text, origin)
+	msg, err := st.sess.PromptWithOrigin(ctx, text, origin, msgID)
 	s.syncMessages(id) // catch any message not yet journaled
 	switch {
 	case err == nil:

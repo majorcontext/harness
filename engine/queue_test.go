@@ -17,7 +17,7 @@ func TestEnqueuePromptPersistsAndEmits(t *testing.T) {
 	var evs []Event
 	s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
 
-	id, err := s.EnqueuePrompt("do the thing")
+	id, _, err := s.EnqueuePrompt("do the thing", "")
 	if err != nil {
 		t.Fatalf("EnqueuePrompt = %v", err)
 	}
@@ -61,7 +61,7 @@ func TestEnqueuePromptPersistsAndEmits(t *testing.T) {
 
 func TestEnqueueRejectsEmpty(t *testing.T) {
 	s := NewSession(Config{})
-	if _, err := s.EnqueuePrompt("   \n\t "); err == nil {
+	if _, _, err := s.EnqueuePrompt("   \n\t ", ""); err == nil {
 		t.Fatal("EnqueuePrompt with whitespace-only text should error")
 	}
 	if len(s.QueuedPrompts()) != 0 {
@@ -75,11 +75,11 @@ func TestDequeueFIFOAndJournalsReason(t *testing.T) {
 	var evs []Event
 	s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
 
-	id1, err := s.EnqueuePrompt("first")
+	id1, _, err := s.EnqueuePrompt("first", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	id2, err := s.EnqueuePrompt("second")
+	id2, _, err := s.EnqueuePrompt("second", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestQueuedPromptsAbsentFromHistory(t *testing.T) {
 		System:    []string{"base"},
 	})
 
-	if _, err := s.EnqueuePrompt("queued text should never appear"); err != nil {
+	if _, _, err := s.EnqueuePrompt("queued text should never appear", ""); err != nil {
 		t.Fatal(err)
 	}
 	if h := s.History(); len(h) != 0 {
@@ -205,14 +205,14 @@ func TestLoadSessionRefoldsQueue(t *testing.T) {
 	dir := t.TempDir()
 	s := NewSession(Config{SessionDir: dir})
 
-	if _, err := s.EnqueuePrompt("a"); err != nil {
+	if _, _, err := s.EnqueuePrompt("a", ""); err != nil {
 		t.Fatal(err)
 	}
-	id2, err := s.EnqueuePrompt("b")
+	id2, _, err := s.EnqueuePrompt("b", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	id3, err := s.EnqueuePrompt("c")
+	id3, _, err := s.EnqueuePrompt("c", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestLoadSessionRefoldsQueue(t *testing.T) {
 
 	// The next-ID counter must continue past the highest folded ID, never
 	// reissuing an ID already used on disk.
-	id4, err := loaded.EnqueuePrompt("d")
+	id4, _, err := loaded.EnqueuePrompt("d", "")
 	if err != nil {
 		t.Fatal(err)
 	}

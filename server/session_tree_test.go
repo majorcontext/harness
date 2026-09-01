@@ -896,7 +896,7 @@ func TestSessionSendToRootWithStrandedQueueIsNotLost(t *testing.T) {
 	if st == nil {
 		t.Fatal("root not resident right after creation")
 	}
-	if _, err := st.sess.EnqueuePrompt("stranded head"); err != nil {
+	if _, _, err := st.sess.EnqueuePrompt("stranded head", ""); err != nil {
 		t.Fatalf("EnqueuePrompt: %v", err)
 	}
 

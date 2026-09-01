@@ -828,10 +828,10 @@ func TestGoalInjectsQueuedPromptsAtBoundary(t *testing.T) {
 
 	<-entered // turn 1's worker call is genuinely in flight
 
-	if _, err := s.EnqueuePrompt("first operator message"); err != nil {
+	if _, _, err := s.EnqueuePrompt("first operator message", ""); err != nil {
 		t.Fatalf("EnqueuePrompt = %v", err)
 	}
-	if _, err := s.EnqueuePrompt("second operator message"); err != nil {
+	if _, _, err := s.EnqueuePrompt("second operator message", ""); err != nil {
 		t.Fatalf("EnqueuePrompt = %v", err)
 	}
 
@@ -920,7 +920,7 @@ func TestGoalInjectionSurvivesConditionUpdate(t *testing.T) {
 			if err := s.UpdateGoal("the NEW condition"); err != nil {
 				t.Fatalf("UpdateGoal = %v", err)
 			}
-			if _, err := s.EnqueuePrompt("operator says hi"); err != nil {
+			if _, _, err := s.EnqueuePrompt("operator says hi", ""); err != nil {
 				t.Fatalf("EnqueuePrompt = %v", err)
 			}
 		}
@@ -983,7 +983,7 @@ func TestInjectedPromptsNotRedeliveredAfterStaleDiscard(t *testing.T) {
 	if err := s.RegisterGoal("original condition"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.EnqueuePrompt("do not lose me"); err != nil {
+	if _, _, err := s.EnqueuePrompt("do not lose me", ""); err != nil {
 		t.Fatal(err)
 	}
 

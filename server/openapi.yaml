@@ -888,11 +888,28 @@ components:
             prompt, before it could be dispatched. That is not an error —
             the prompt was durably accepted and journaled, it simply never
             ran — so this case is still a 202, never a 500.
+        message_id:
+          type: string
+          description: >
+            The id of the user message this prompt created — the caller's own
+            `id` when it supplied a usable one, otherwise the server-minted
+            `msg_...` id. Echoed so a client that pre-minted the id can confirm
+            it, and so a client that did not can learn it. The message also
+            arrives on /event carrying this same id.
 
     PromptRequest:
       type: object
       required: [parts]
       properties:
+        id:
+          type: string
+          description: >
+            Optional client-supplied id for the user message this prompt
+            creates, so a client can pre-mint the id and reconcile its
+            optimistic render by id. Used verbatim when usable; a reserved
+            prefix or an empty value is ignored and the server mints a fresh
+            id (reported back as `message_id`). Never drives ordering — the
+            server journal sequence does.
         parts:
           type: array
           minItems: 1

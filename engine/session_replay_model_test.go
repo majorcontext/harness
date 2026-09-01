@@ -263,7 +263,7 @@ func (m *sessionModel) DurableEnqueue(t *rapid.T) {
 // PlainEnqueue mirrors queueModel.PlainEnqueue.
 func (m *sessionModel) PlainEnqueue(t *rapid.T) {
 	text := fmt.Sprintf("plain-%d", rapid.IntRange(0, 1<<20).Draw(t, "textSeed"))
-	if _, err := m.s.EnqueuePrompt(text); err != nil {
+	if _, _, err := m.s.EnqueuePrompt(text, ""); err != nil {
 		t.Fatalf("EnqueuePrompt: %v", err)
 	}
 }

@@ -694,7 +694,7 @@ func TestQueueRestartRefoldNoAutoDispatch(t *testing.T) {
 	if st == nil {
 		t.Fatal("session not resident right after creation")
 	}
-	if _, err := st.sess.EnqueuePrompt("queued before restart"); err != nil {
+	if _, _, err := st.sess.EnqueuePrompt("queued before restart", ""); err != nil {
 		t.Fatalf("EnqueuePrompt: %v", err)
 	}
 
@@ -1022,10 +1022,10 @@ func TestIdlePromptWithQueueGoesFIFO(t *testing.T) {
 	if st == nil {
 		t.Fatal("session not resident right after creation")
 	}
-	if _, err := st.sess.EnqueuePrompt("q1"); err != nil {
+	if _, _, err := st.sess.EnqueuePrompt("q1", ""); err != nil {
 		t.Fatalf("EnqueuePrompt q1: %v", err)
 	}
-	if _, err := st.sess.EnqueuePrompt("q2"); err != nil {
+	if _, _, err := st.sess.EnqueuePrompt("q2", ""); err != nil {
 		t.Fatalf("EnqueuePrompt q2: %v", err)
 	}
 
@@ -1152,10 +1152,10 @@ func TestIdlePromptWithQueueDispatchDoesNotRaceQueuedCountInResponse(t *testing.
 	if st == nil {
 		t.Fatal("session not resident right after creation")
 	}
-	if _, err := st.sess.EnqueuePrompt("q1"); err != nil {
+	if _, _, err := st.sess.EnqueuePrompt("q1", ""); err != nil {
 		t.Fatalf("EnqueuePrompt q1: %v", err)
 	}
-	if _, err := st.sess.EnqueuePrompt("q2"); err != nil {
+	if _, _, err := st.sess.EnqueuePrompt("q2", ""); err != nil {
 		t.Fatalf("EnqueuePrompt q2: %v", err)
 	}
 
@@ -1233,7 +1233,7 @@ func TestQueuedArrivalDoesNotRetargetSessionModel(t *testing.T) {
 	if st == nil {
 		t.Fatal("session not resident right after creation")
 	}
-	if _, err := st.sess.EnqueuePrompt("q1"); err != nil {
+	if _, _, err := st.sess.EnqueuePrompt("q1", ""); err != nil {
 		t.Fatalf("EnqueuePrompt q1: %v", err)
 	}
 

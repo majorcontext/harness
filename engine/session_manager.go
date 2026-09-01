@@ -3689,8 +3689,12 @@ func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queu
 		// then resurrected the delivered prompt.
 		s := n.session
 		s.mu.Lock()
-		p := s.enqueueMemoryOnlyLocked(text)
-		s.queueRecordDeferredLocked(recPromptQueued, promptRecord{ID: p.ID, Text: p.Text},
+		// "": SendToDescendant carries no client message ID of its own (a
+		// task-tool descendant delivery, not an HTTP prompt/send caller) —
+		// PromptWithOrigin's own mint site resolves it at dispatch time,
+		// exactly like a pre-this-feature session log record would.
+		p := s.enqueueMemoryOnlyLocked(text, "")
+		s.queueRecordDeferredLocked(recPromptQueued, promptRecord{ID: p.ID, Text: p.Text, MessageID: p.MessageID},
 			Event{Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue)})
 		s.mu.Unlock()
 		m.deferQueueRecordFlush(s)

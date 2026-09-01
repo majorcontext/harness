@@ -484,6 +484,14 @@ type promptRecord struct {
 	// the recPromptQueued replay case for why that heals torn fsync
 	// failures.
 	Seq int64 `json:"seq,omitempty"`
+	// MessageID is the resolved ID (see ResolveMessageID) the queued
+	// prompt's eventual user message will carry — set on prompt.queued,
+	// carried through to QueuedPrompt.MessageID by promptQueueFold.queued
+	// on replay. Omitted (empty) on a record written before this field
+	// existed; PromptWithOrigin's own mint site resolves that case exactly
+	// like any other unset id, at dispatch time — a backward-compatible
+	// fallback, not a replay error.
+	MessageID string `json:"message_id,omitempty"`
 }
 
 // taskSpawnRecord is a recTaskSpawned record's payload — see that

@@ -35,7 +35,7 @@ func TestQueueClearRaceDuringIdleDispatchIsNotAnError(t *testing.T) {
 	if st == nil {
 		t.Fatal("session not resident right after creation")
 	}
-	if _, err := st.sess.EnqueuePrompt("q1"); err != nil {
+	if _, _, err := st.sess.EnqueuePrompt("q1", ""); err != nil {
 		t.Fatalf("EnqueuePrompt q1: %v", err)
 	}
 
