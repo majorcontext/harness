@@ -583,6 +583,23 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	s.claudeCodeQueueWake.Store(&wake)
 	stopPump := make(chan struct{})
 	pumpDone := make(chan struct{})
+	// injectionFailedAtLen, when >= 0, is the session-history length
+	// (len(s.History())) recorded IMMEDIATELY BEFORE the mid-turn
+	// injected message whose stdin write then failed — the watermark
+	// recorded below must never advance PAST this point, or a failed
+	// injection is silently and permanently lost: the message sits in
+	// s.history (honest bookkeeping — the append below always runs
+	// before the write is even attempted) but claudeCodeHistoryDirectiveArgs
+	// would see priorCount == watermark on the NEXT claude-code turn and
+	// never re-fire the get_conversation_history pull that message's
+	// only remaining path to the model depends on (an adversarial review
+	// finding on #231: "a delay, never a loss" was not actually true for
+	// this path). -1 means no injection ever failed to write this turn.
+	// Written only by the pump goroutine below; read only after
+	// <-pumpDone (this function's own tail) — the channel close
+	// establishes happens-before, so no lock is needed for this plain
+	// int despite the two different goroutines touching it.
+	injectionFailedAtLen := -1
 	go func() {
 		defer close(pumpDone)
 		defer s.claudeCodeQueueWake.Store(nil)
@@ -608,6 +625,7 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 				// delivered text is identical whichever path answers it,
 				// and this append is what makes the delivery visible in
 				// the session transcript.
+				beforeAppendLen := len(s.History())
 				block := strings.TrimSuffix(operatorMessagesBlock(queued, operatorContextTask), "\n")
 				s.append(message.Message{
 					ID:        newID("msg"),
@@ -624,13 +642,20 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 					// claude-code turn's claudeCodeHistoryDirectiveArgs
 					// detects the gap and feeds it via --resume, a delay
 					// never a loss (see engine/AGENTS.md: "Deliver each
-					// item once across tool and goal-turn drains"). The
-					// pipe is presumably gone either way, so stop pumping.
-					_ = stdin.Close()
+					// item once across tool and goal-turn drains") —
+					// PROVIDED the watermark recorded below stays capped
+					// at beforeAppendLen, which is exactly what recording
+					// it here accomplishes. Does NOT close stdin itself —
+					// see the outer goroutine's own comment on why stdin
+					// has exactly one closer now.
+					injectionFailedAtLen = beforeAppendLen
 					return
 				}
 			case <-stopPump:
-				_ = stdin.Close()
+				// Does NOT close stdin here — see the outer goroutine's
+				// own comment below for why stdin has exactly one
+				// closer, and why that closer runs BEFORE, not after,
+				// this select even has a chance to observe stopPump.
 				return
 			}
 		}
@@ -674,11 +699,31 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	finalMsg, started, turnErr := s.consumeClaudeCodeStream(stdout, model)
 	// No more input is coming for this child (mirrors the single-string
 	// SDK path's own endInput()-on-first-"result" call — see the pump
-	// goroutine's own doc comment above): signal it to stop and wait for
-	// it to actually exit BEFORE this goroutine touches the child again
-	// (cmd.Wait(), below) — see the pump's "one writer, ever" note for
-	// why this ordering matters.
+	// goroutine's own doc comment above): signal it to stop, THEN close
+	// stdin — in that order, but both from THIS goroutine, before ever
+	// waiting on pumpDone.
+	//
+	// stdin has exactly ONE closer now: this goroutine, here, never the
+	// pump itself (see its own two return paths above). That is what
+	// makes this safe against the wedge an adversarial review found on
+	// #231 (majorcontext/harness#231, commit 7918b6d): the pump can be
+	// BLOCKED inside stdin.Write when stopPump closes — a `claude --bg`
+	// leaked grandchild holding stdin's read end open, or simply a full
+	// pipe buffer at the exact turn-boundary instant — and a goroutine
+	// blocked in a syscall never reaches its own select to observe a
+	// closed channel. Go's os.File.Close, for a pipe-backed file like
+	// this one, safely interrupts any OTHER goroutine's concurrent
+	// Read/Write on the SAME *os.File (the runtime integrates pipe fds
+	// with its own poller for exactly this), so THIS Close call —
+	// running concurrently with a stuck pump Write — unblocks it with an
+	// error immediately, same as the pump's own ordinary write-failure
+	// path already tolerates. Without this, <-pumpDone below could block
+	// indefinitely (nothing but ctx cancellation would ever rescue it),
+	// which is the same class of wedge the StdoutPipe/StderrPipe
+	// handling elsewhere in this function exists to prevent — just one
+	// pipe over, on stdin instead of stdout/stderr.
 	close(stopPump)
+	_ = stdin.Close()
 	<-pumpDone
 	// inputErr captures a failure on the FIRST write specifically — see
 	// its use in claudeCodeTurnResult below, whose contract is "no usable
@@ -703,7 +748,22 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		// tell a genuinely stale resumed session (history grew via an
 		// intervening native-provider turn) apart from one that is merely
 		// mid-turn.
-		s.recordClaudeCodeHistoryWatermark(len(s.History()))
+		//
+		// Capped at injectionFailedAtLen when a mid-turn injection's own
+		// write failed (see the pump's own doc comment above): the CLI
+		// almost certainly did NOT incorporate that message or anything
+		// appended after it (its stdin write never landed), so recording
+		// the FULL current length here would tell
+		// claudeCodeHistoryDirectiveArgs the resumed session is caught up
+		// when it is not, permanently stranding the failed message —
+		// exactly the gap TestClaudeCodeMidTurnInjectionWriteFailureDoesNotStrandWatermark
+		// regresses. injectionFailedAtLen is always <= len(s.History())
+		// here (nothing removes history), so the min is just the cap.
+		n := len(s.History())
+		if injectionFailedAtLen >= 0 && injectionFailedAtLen < n {
+			n = injectionFailedAtLen
+		}
+		s.recordClaudeCodeHistoryWatermark(n)
 	}
 
 	// cmd.Wait() below does NOT reintroduce the EOF wait that
