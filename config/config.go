@@ -58,6 +58,18 @@ type Config struct {
 	// rendering with no outline. HARNESS_INSTRUCTIONS_MODE overrides this key
 	// (see cmd/harness). See engine.InstructionsMode.
 	InstructionsMode string `json:"instructions_mode,omitempty"`
+	// AppendSystemPrompt lists operator-supplied environment facts that the
+	// agent cannot discover. Do not use it for tool instructions or project
+	// instructions. The engine places entries after System and before its own
+	// generated segments. Claude Code receives one blank-line-joined
+	// --append-system-prompt value.
+	//
+	// Merge is additive: base segments come first, then project segments.
+	// This rule differs from every other slice field. In box deployments, the
+	// base file belongs to the platform and the project file belongs to the
+	// cloned repository. Override semantics would let the repository remove a
+	// platform environment fact. Keep this field additive.
+	AppendSystemPrompt []string `json:"append_system_prompt,omitempty"`
 	// SkillsDirs lists directories scanned for Agent Skills (agentskills.io).
 	// A nil (omitted) value leaves the engine default in place: use
 	// <WorkDir>/.agents/skills when it exists. In the project-config merge a
@@ -673,17 +685,14 @@ type Provider struct {
 	// so validateProviders rejects it elsewhere, the same rule every other
 	// type-scoped field in this struct follows.
 	BinaryPath string `json:"binary_path,omitempty"`
-	// ExtraArgs are appended verbatim to the `claude` invocation, after
-	// every flag the engine itself constructs (--input-format,
-	// --output-format, --verbose, --model, --resume, --permission-mode —
-	// see engine/claude_code_backend.go). This is the escape hatch for a
-	// flag this Provider struct has no dedicated field for (e.g.
-	// --append-system-prompt, --mcp-config, --allowedTools) — the engine
-	// deliberately does not auto-populate either of those two itself for
-	// v1 (see that file's package doc for why). Valid ONLY on a
-	// TypeClaudeCodeCLI entry. Merge semantics are additive like every
-	// other Provider slice field (see NoPromptCacheKey's doc comment): a
-	// non-empty project-layer list replaces the user-layer list wholesale.
+	// ExtraArgs are appended after the flags the engine constructs. Use this
+	// escape hatch only for flags without a dedicated Provider field, such as
+	// --allowedTools. When append_system_prompt is non-empty, validation
+	// rejects --append-system-prompt and --append-system-prompt-file here.
+	// Either option would replace the managed prompt or make Claude Code reject
+	// the invocation. Without append_system_prompt, the prompt option remains a
+	// supported legacy escape hatch. Valid only on TypeClaudeCodeCLI entries.
+	// A non-empty project list replaces the base list wholesale.
 	ExtraArgs []string `json:"extra_args,omitempty"`
 	// PermissionMode selects the `claude` child's --permission-mode flag
 	// (one of ClaudeCodePermissionModeValues — "default", "acceptEdits",
@@ -1132,6 +1141,9 @@ func Path() string {
 //   - SkillsDirs, AgentDefsDirs: a non-empty project slice replaces the user
 //     slice entirely (arrays override, they do not concatenate); an
 //     empty/omitted project value inherits the user value.
+//   - AppendSystemPrompt: the ONE additive key. The user (platform) segments
+//     come first, then the project segments; neither layer can drop the
+//     other's. See the field's own doc comment.
 //   - Aliases, Providers: maps are merged key by key — project keys are added
 //     and override user keys of the same name. Within a Provider, a non-empty
 //     project field (APIKeyEnv, BaseURL) overrides the user field.
@@ -1241,7 +1253,36 @@ func mergeAndValidate(base, over *Config) (*Config, error) {
 	if err := validateProviders(out.Providers); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
+	if err := validateAppendSystemPromptArgs(out); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
 	return out, nil
+}
+
+// validateAppendSystemPromptArgs prevents ExtraArgs from replacing the managed
+// value or selecting the mutually exclusive file option.
+func validateAppendSystemPromptArgs(cfg *Config) error {
+	if len(cfg.AppendSystemPrompt) == 0 {
+		return nil
+	}
+	for name, p := range cfg.Providers {
+		if p.Type != TypeClaudeCodeCLI {
+			continue
+		}
+		for _, arg := range p.ExtraArgs {
+			if claudeCodeAppendPromptArg(arg) {
+				return fmt.Errorf("providers.%s.extra_args: %q conflicts with append_system_prompt", name, arg)
+			}
+		}
+	}
+	return nil
+}
+
+func claudeCodeAppendPromptArg(arg string) bool {
+	return arg == "--append-system-prompt" ||
+		strings.HasPrefix(arg, "--append-system-prompt=") ||
+		arg == "--append-system-prompt-file" ||
+		strings.HasPrefix(arg, "--append-system-prompt-file=")
 }
 
 // merge returns base overlaid with the non-zero fields of over. The result
@@ -1331,6 +1372,16 @@ func merge(base, over *Config) *Config {
 	}
 	if len(agentDefsSrc) > 0 {
 		out.AgentDefsDirs = append([]string(nil), agentDefsSrc...)
+	}
+	// AppendSystemPrompt CONCATENATES, base first — the one additive slice
+	// rule in this function. See the field's own doc comment for why a
+	// project layer must not be able to drop a platform-supplied segment.
+	// A fresh slice, so the merged config aliases neither input.
+	if n := len(base.AppendSystemPrompt) + len(over.AppendSystemPrompt); n > 0 {
+		segs := make([]string, 0, n)
+		segs = append(segs, base.AppendSystemPrompt...)
+		segs = append(segs, over.AppendSystemPrompt...)
+		out.AppendSystemPrompt = segs
 	}
 	if n := len(base.Aliases) + len(over.Aliases); n > 0 {
 		m := make(map[string]string, n)

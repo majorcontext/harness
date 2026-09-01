@@ -130,6 +130,47 @@ func TestClaudeCodeCLIUnknownTypeErrorListsIt(t *testing.T) {
 	}
 }
 
+func TestAppendSystemPromptValidation(t *testing.T) {
+	for _, arg := range []string{
+		"--append-system-prompt",
+		"--append-system-prompt=x",
+		"--append-system-prompt-file",
+		"--append-system-prompt-file=x",
+	} {
+		t.Run(arg, func(t *testing.T) {
+			cfg := &Config{
+				AppendSystemPrompt: []string{"platform"},
+				Providers: map[string]Provider{
+					"claude-code": {Type: TypeClaudeCodeCLI, ExtraArgs: []string{arg}},
+				},
+			}
+			if _, err := mergeAndValidate(cfg, &Config{}); err == nil {
+				t.Fatal("accepted conflicting extra_args")
+			}
+		})
+	}
+}
+
+func TestAppendSystemPromptAllowsCompatibleExtraArgs(t *testing.T) {
+	cfg := &Config{
+		AppendSystemPrompt: []string{"platform"},
+		Providers: map[string]Provider{
+			"claude-code": {Type: TypeClaudeCodeCLI, ExtraArgs: []string{"--dangerously-skip-permissions"}},
+		},
+	}
+	if _, err := mergeAndValidate(cfg, &Config{}); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg.AppendSystemPrompt = nil
+	cfg.Providers["claude-code"] = Provider{
+		Type: TypeClaudeCodeCLI, ExtraArgs: []string{"--append-system-prompt", "legacy"},
+	}
+	if _, err := mergeAndValidate(cfg, &Config{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestMergeClaudeCodeExtraArgsNotAliased mirrors
 // TestMergeProviderExtraHeadersBaseOnlyKeyNotAliased for the new slice
 // field: a base-only key's ExtraArgs must not alias the base config's own

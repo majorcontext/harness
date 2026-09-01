@@ -1208,3 +1208,74 @@ func TestServeLogsConfigSummary(t *testing.T) {
 		}
 	})
 }
+
+// TestAppendSystemPromptReachesModelOnServe drives the real serve path with
+// platform and project config layers. It asserts the complete system slice so
+// missing, reordered, duplicated, and surplus segments fail.
+func TestAppendSystemPromptReachesModelOnServe(t *testing.T) {
+	skipShort(t)
+
+	fake := newFakeAnthropic(0)
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	t.Cleanup(fake.close)
+
+	const platformSeg = "PLATFORM: bind 0.0.0.0, never 127.0.0.1."
+	const repoSeg = "REPO: the dev server runs on port 5173."
+
+	cfg := map[string]any{
+		"model": "anthropic/claude-fable-5",
+		"providers": map[string]any{
+			"anthropic": map[string]any{
+				"api_key_env": "ANTHROPIC_API_KEY",
+				"base_url":    srv.URL,
+			},
+		},
+		"append_system_prompt": []string{platformSeg},
+	}
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(cfgPath, b, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	workDir := t.TempDir()
+	projCfg := []byte(`{"append_system_prompt": ["` + repoSeg + `"]}`)
+	if err := os.WriteFile(filepath.Join(workDir, ".harness.json"), projCfg, 0o644); err != nil {
+		t.Fatalf("write project config: %v", err)
+	}
+
+	p := startServeIn(t, t.TempDir(), cfgPath, workDir)
+	id := p.createSession()
+	p.prompt(id, "hello")
+	p.waitMessages(id, 2)
+
+	resp, data := p.do(http.MethodGet, "/session/"+id+"/request", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /request status %d: %s", resp.StatusCode, data)
+	}
+	var rq struct {
+		System []string `json:"system"`
+	}
+	if err := json.Unmarshal(data, &rq); err != nil {
+		t.Fatalf("decode /request: %v (%s)", err, data)
+	}
+	if len(rq.System) != 4 {
+		t.Fatalf("assembled system has %d segments, want exactly 4: %q", len(rq.System), rq.System)
+	}
+	if rq.System[1] != platformSeg {
+		t.Errorf("system[1] = %q, want exact platform segment %q", rq.System[1], platformSeg)
+	}
+	if rq.System[2] != repoSeg {
+		t.Errorf("system[2] = %q, want exact repository segment %q", rq.System[2], repoSeg)
+	}
+	if !strings.Contains(rq.System[0], "Working directory: "+workDir) {
+		t.Errorf("system[0] is not the base prompt for %q: %q", workDir, rq.System[0])
+	}
+	if !strings.HasPrefix(rq.System[3], "If you intend to call multiple tools") {
+		t.Errorf("system[3] is not the tool-batching segment: %q", rq.System[3])
+	}
+}

@@ -22,6 +22,15 @@ value.
 Load user config first and project config second. A project value overrides the
 user value according to the field's documented merge rule.
 
+`append_system_prompt` is the one additive key: the merged value is the user
+segments followed by the project segments. Keep it additive. The user layer is
+the platform's own config and the project layer is a cloned repository's file,
+so an override rule would let a repository delete a platform segment. Do not
+copy this shape to another key without the same argument.
+
+Reject both Claude Code append-prompt options in `extra_args` when this key is
+non-empty. The CLI would replace the managed value or reject the invocation.
+
 Validate providers after merge and native-default application. A partial
 project entry can become valid through its inherited fields.
 

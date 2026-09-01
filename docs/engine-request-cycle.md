@@ -75,6 +75,37 @@ part, and never make the guidance trust bracketed text syntax again. (Fix:
 the NEP ambient trust-spoofing finding; superseded PR #113's prose-only
 stopgap.)
 
+## Appended system prompt (`append_system_prompt`)
+
+Config key `append_system_prompt` is an array of environment facts. Use it for
+facts an agent cannot discover, such as a gateway URL or required bind address.
+Do not use it for tool instructions or project instructions.
+
+The engine places entries after `Config.System` and before its generated
+segments. `serve` and `run` both set `Config.AppendSystemPrompt`. For `run`,
+configured entries come before the `-system` value.
+
+The merge is additive. User-config entries come first, then project-config
+entries. Other config slices replace the user value. This field differs because
+the user file can belong to the platform while `.harness.json` belongs to the
+cloned repository. Replacement would remove platform environment facts.
+
+`serve` loads config once from its process working directory. A session with a
+different working directory still receives that process config. Harness does
+not load another `.harness.json` for each session.
+
+Claude Code receives one blank-line-joined `--append-system-prompt` value.
+`Config.System` is not forwarded because it describes native Harness tools.
+Claude Code keeps only the last repeated prompt option. Therefore, config
+validation and the engine reject `--append-system-prompt` and
+`--append-system-prompt-file` in `ExtraArgs` when this key is present. Without
+this key, `--append-system-prompt` remains a legacy `ExtraArgs` escape hatch.
+
+The joined value crosses the operating system argument boundary. Keep these
+environment facts short. The operating system can reject an unusually large
+argument; Harness cannot derive one portable limit because the environment and
+other arguments share that limit.
+
 ## Project instructions (AGENTS.md)
 
 The engine auto-injects a project's `AGENTS.md` into the system prompt. On the

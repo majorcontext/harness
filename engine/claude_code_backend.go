@@ -130,9 +130,11 @@
 // is deliberately native-loop-only (PromptWithOrigin's dispatch comment),
 // Claude Code already discovers its own CLAUDE.md/AGENTS.md in the box
 // workspace, and re-injecting harness's own native-tool-shaped instructions
-// into a CLI with different tools would be actively misleading. An operator
-// who wants extra injected wording can still reach the flag via
-// config.Provider.ExtraArgs.
+// into a CLI with different tools would be actively misleading.
+//
+// AppendSystemPrompt is forwarded because it contains environment facts, not
+// native tool instructions. The engine sends one joined option and rejects
+// conflicting append-prompt options in ExtraArgs.
 //
 // Full goal-loop support is now PARTIAL rather than absent: a delegated
 // turn's error is wrapped provider.RetryableError (see
@@ -205,10 +207,8 @@ type ClaudeCodeConfig struct {
 	// BinaryPath is the `claude` executable to spawn, resolved via PATH
 	// like any exec. Empty defaults to "claude" (newSession).
 	BinaryPath string
-	// ExtraArgs are appended verbatim after every flag this file
-	// constructs itself. See config.Provider.ExtraArgs's doc comment for
-	// the escape-hatch flags this is for (--append-system-prompt,
-	// --mcp-config, --allowedTools, ...).
+	// ExtraArgs follow engine-owned flags. Append-prompt options conflict with
+	// AppendSystemPrompt and are rejected when that field is set.
 	ExtraArgs []string
 	// PermissionMode, if non-empty, becomes --permission-mode <value>.
 	PermissionMode string
@@ -306,6 +306,15 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	}
 	model := s.Model()
 
+	appendPrompt, haveAppendPrompt := claudeCodeAppendSystemPrompt(s.cfg.AppendSystemPrompt)
+	if haveAppendPrompt {
+		for _, arg := range cfg.ExtraArgs {
+			if claudeCodeAppendPromptArg(arg) {
+				return nil, fmt.Errorf("engine: claude-code: Config.ClaudeCode.ExtraArgs contains %q, which conflicts with Config.AppendSystemPrompt; remove the extra arg and put the text in AppendSystemPrompt", arg)
+			}
+		}
+	}
+
 	// The --mcp-config file (if s.cfg.MCP has any servers to describe) is
 	// written before the args slice below so its path can be included, and
 	// removed unconditionally on every return path via cleanupMCPConfig —
@@ -344,6 +353,9 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	}
 	if effort, ok := claudeCodeEffortArg(s.Effort()); ok {
 		args = append(args, "--effort", effort)
+	}
+	if haveAppendPrompt {
+		args = append(args, "--append-system-prompt", appendPrompt)
 	}
 	if mcpConfigPath != "" {
 		// --strict-mcp-config: only harness's own configured servers are
@@ -1210,6 +1222,22 @@ func claudeCodeEffortArg(e message.Effort) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// claudeCodeAppendSystemPrompt joins segments for the CLI's single-value
+// option. Repeating the option would make Claude Code keep only the last value.
+func claudeCodeAppendSystemPrompt(segments []string) (string, bool) {
+	if len(segments) == 0 {
+		return "", false
+	}
+	return strings.Join(segments, "\n\n"), true
+}
+
+func claudeCodeAppendPromptArg(arg string) bool {
+	return arg == "--append-system-prompt" ||
+		strings.HasPrefix(arg, "--append-system-prompt=") ||
+		arg == "--append-system-prompt-file" ||
+		strings.HasPrefix(arg, "--append-system-prompt-file=")
 }
 
 // claudeCodeRetryableClass classifies a "result" event's own reported

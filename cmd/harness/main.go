@@ -270,7 +270,7 @@ func runFlags(opts *runOptions) *flag.FlagSet {
 	fs.StringVar(&opts.goal, "goal", "", "pursue a goal: prompt this condition, then re-prompt with evaluator feedback until an independent evaluator judges it met (requires config goal_evaluator_model)")
 	fs.IntVar(&opts.goalMaxTurns, "goal-max-turns", 0, "maximum turns for -goal (0 = unlimited)")
 	fs.StringVar(&opts.model, "model", "", "model ref (provider/model) or alias; overrides the persisted model when resuming; default from config, else "+config.DefaultModel)
-	fs.StringVar(&opts.system, "system", "", "extra system prompt segment")
+	fs.StringVar(&opts.system, "system", "", "extra system prompt segment; appended after any config append_system_prompt segments")
 	fs.IntVar(&opts.maxTokens, "max-tokens", 0, "per-response output token cap")
 	fs.BoolVar(&opts.jsonOut, "json", false, "emit the event stream as JSON lines instead of text")
 	fs.BoolVar(&opts.noSave, "no-save", false, "disable session persistence")
@@ -730,9 +730,11 @@ func runCmd(args []string) error {
 	sessMgr.SetMaxTreeTokens(envInt("HARNESS_MAX_TREE_TOKENS"))
 
 	s, err := resolveSession(engine.Config{
-		Providers:               registry(cfg),
-		Model:                   model,
-		System:                  systemPrompt(workDir, opts.system),
+		Providers: registry(cfg),
+		Model:     model,
+		System:    systemPrompt(workDir, ""),
+		// Config comes first; the per-run flag is the final refinement.
+		AppendSystemPrompt:      appendSystemSegments(cfg, opts.system),
 		MaxTokens:               opts.maxTokens,
 		WorkDir:                 workDir,
 		SessionDir:              sesDir,
@@ -1638,15 +1640,16 @@ func serveCmd(args []string) error {
 	}()
 	mkCfg := func(model message.ModelRef) engine.Config {
 		return engine.Config{
-			Providers:     reg,
-			Model:         model,
-			System:        systemPrompt(workDir, ""),
-			WorkDir:       workDir,
-			SessionDir:    sesDir,
-			SessionSync:   cfg.SessionSync,
-			EngineVersion: version,
-			StartedAt:     startedAt,
-			OnEvent:       func(ev engine.Event) { srv.Publish(ev) },
+			Providers:          reg,
+			Model:              model,
+			System:             systemPrompt(workDir, ""),
+			AppendSystemPrompt: appendSystemSegments(cfg, ""),
+			WorkDir:            workDir,
+			SessionDir:         sesDir,
+			SessionSync:        cfg.SessionSync,
+			EngineVersion:      version,
+			StartedAt:          startedAt,
+			OnEvent:            func(ev engine.Event) { srv.Publish(ev) },
 			// The actual node registration (depth, lineage) happens
 			// separately, in handleCreate, right after NewSession returns
 			// (see AdoptRoot's call site there); wiring it here too means a
@@ -2008,6 +2011,19 @@ func agentDefsDirs(cfg *config.Config, flagDirs []string, workDir string) []stri
 		}
 	}
 	return out
+}
+
+// appendSystemSegments returns config segments followed by the per-run flag.
+// The result does not alias the config slice.
+func appendSystemSegments(cfg *config.Config, extra string) []string {
+	var segs []string
+	if cfg != nil && len(cfg.AppendSystemPrompt) > 0 {
+		segs = append(segs, cfg.AppendSystemPrompt...)
+	}
+	if extra != "" {
+		segs = append(segs, extra)
+	}
+	return segs
 }
 
 func systemPrompt(workDir, extra string) []string {
