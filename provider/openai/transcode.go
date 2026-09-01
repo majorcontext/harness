@@ -60,6 +60,11 @@ type apiRequest struct {
 	// gateway; this one targets the Responses API directly, whose own
 	// affinity hint is prompt_cache_key, not user.
 	PromptCacheKey string `json:"prompt_cache_key,omitempty"`
+	// ServiceTier is the Responses API's speed-tier selector, set verbatim
+	// from Request.ServiceTier (see that field's own doc comment for the
+	// pass-through/no-validation contract this adapter follows). Empty sends
+	// no field, so the account's default tier applies.
+	ServiceTier string `json:"service_tier,omitempty"`
 }
 
 // apiReasoning is the OpenAI Responses reasoning control. Effort is one of
@@ -185,6 +190,9 @@ func transcodeRequestFamily(req *provider.Request, family string, omitParams []s
 	}
 	if req.SessionKey != "" {
 		out.PromptCacheKey = req.SessionKey
+	}
+	if req.ServiceTier != "" {
+		out.ServiceTier = req.ServiceTier
 	}
 	effort, reasoningEnabled := reasoningEffort(req.Effort)
 	// stripReasoning is DELIBERATELY asymmetric with reasoningEnabled and with

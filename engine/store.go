@@ -32,6 +32,7 @@ const (
 	recMessage      = "message"
 	recModel        = "model"
 	recEffort       = "effort"
+	recServiceTier  = "service_tier"
 	recGoalSet      = "goal.set"
 	recGoalUpdated  = "goal.updated"
 	recGoalEval     = "goal.eval"
@@ -287,7 +288,14 @@ type record struct {
 	// change). Omitted when EffortUnset, so a legacy log with no effort
 	// restores as EffortUnset (provider default) — unchanged behavior.
 	Effort message.Effort `json:"effort,omitempty"`
-	Goal   *goalRecord    `json:"goal,omitempty"`
+	// ServiceTier carries the Codex speed-tier value on the session header
+	// record (the value at create time) and on a recServiceTier record (a
+	// SetServiceTier change). Omitted when empty, so a legacy log with no
+	// service_tier restores as "" (provider default) — unchanged behavior.
+	// Mirrors Effort exactly, but opaque and unvalidated (see
+	// provider.Request.ServiceTier).
+	ServiceTier string      `json:"service_tier,omitempty"`
+	Goal        *goalRecord `json:"goal,omitempty"`
 	// Prompt carries a prompt.queued/prompt.dequeued record's payload (see
 	// promptRecord and queue.go). nil on every other record type.
 	Prompt *promptRecord `json:"prompt,omitempty"`
@@ -673,6 +681,22 @@ func (s *Session) persistEffort(e message.Effort) {
 		return
 	}
 	if err := s.writeRecord(record{Type: recEffort, Effort: e}); err != nil {
+		s.lastPersistErr = err
+	}
+}
+
+// persistServiceTier appends a service_tier record to the session log. It
+// mirrors persistEffort exactly: a no-op until the log exists (lazy
+// creation), caller holds s.mu.
+func (s *Session) persistServiceTier(tier string) {
+	if s.cfg.SessionDir == "" || !s.logStarted {
+		return
+	}
+	if err := s.ensureLog(); err != nil {
+		s.lastPersistErr = err
+		return
+	}
+	if err := s.writeRecord(record{Type: recServiceTier, ServiceTier: tier}); err != nil {
 		s.lastPersistErr = err
 	}
 }
@@ -1085,7 +1109,7 @@ func (s *Session) ensureLog() error {
 		// LoadSession already tolerates.
 		var buf bytes.Buffer
 		headerRecs := []record{
-			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir, ParentSession: s.cfg.ParentSession, TaskParentID: s.cfg.TaskParentID, TaskAgentType: s.cfg.TaskAgentType, TaskToolNames: taskToolNamesPtr(s.cfg.TaskToolNames), TaskDepth: s.cfg.TaskDepth, Effort: s.effort},
+			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir, ParentSession: s.cfg.ParentSession, TaskParentID: s.cfg.TaskParentID, TaskAgentType: s.cfg.TaskAgentType, TaskToolNames: taskToolNamesPtr(s.cfg.TaskToolNames), TaskDepth: s.cfg.TaskDepth, Effort: s.effort, ServiceTier: s.serviceTier},
 			{Type: recModel, Model: s.model},
 		}
 		// A selection made before the log existed has no other durable
@@ -1530,6 +1554,8 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			s.model = rec.Model
 		case recEffort:
 			s.effort = rec.Effort
+		case recServiceTier:
+			s.serviceTier = rec.ServiceTier
 		case recClaudeCodeSessionID:
 			s.claudeCodeCLISessionID = rec.ClaudeCodeSessionID
 		case recClaudeCodeHistoryWatermark:
@@ -1965,6 +1991,10 @@ func (s *Session) applySessionHeader(rec record) {
 	// The effort at create time. Omitted (EffortUnset) on a legacy
 	// header, which restores as the provider default — unchanged.
 	s.effort = rec.Effort
+	// The service tier at create time. Omitted (empty) on a header
+	// predating this field, which restores as the provider default —
+	// unchanged. Mirrors the effort restore immediately above.
+	s.serviceTier = rec.ServiceTier
 }
 
 // toolResultHandleInTextPattern matches a canonical trh_N handle token

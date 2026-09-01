@@ -38,7 +38,14 @@ type sessionInfoResult struct {
 	// server/handlers.go). Mid-session it changes only via Session.SetEffort,
 	// the same choke point handleSetThinking calls; the create-time value
 	// comes from Config.Effort and a resumed value from the recEffort record.
-	Effort       message.Effort `json:"effort"`
+	Effort message.Effort `json:"effort"`
+	// ServiceTier is the session's current provider service tier (a Codex
+	// speed tier such as "fast"/"ultrafast"). Empty string means no tier has
+	// been sent, so the provider runs its own default — the same "" convention
+	// Effort uses. Set only via Session.SetServiceTier; the create-time value
+	// comes from Config.ServiceTier and a resumed value from the recServiceTier
+	// record.
+	ServiceTier  string         `json:"service_tier"`
 	Usage        provider.Usage `json:"usage"`
 	System       []string       `json:"system"`
 	Tools        []string       `json:"tools"`
@@ -116,6 +123,7 @@ func (s *Session) sessionInfo(ctx context.Context) sessionInfoResult {
 		SessionID:    s.ID,
 		Model:        s.model.String(),
 		Effort:       s.effort,
+		ServiceTier:  s.serviceTier,
 		Usage:        s.usage,
 		System:       system,
 		Tools:        tools,

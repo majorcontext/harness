@@ -102,8 +102,9 @@ type SessionIndex struct {
 	// predate the timestamp field.
 	LastActivityAt time.Time `json:"last_activity_at"`
 
-	Model  message.ModelRef `json:"model,omitzero"`
-	Effort message.Effort   `json:"effort,omitempty"`
+	Model       message.ModelRef `json:"model,omitzero"`
+	Effort      message.Effort   `json:"effort,omitempty"`
+	ServiceTier string           `json:"service_tier,omitempty"`
 
 	WorkDir       string `json:"workdir,omitempty"`
 	ParentSession string `json:"parent_session,omitempty"`
@@ -243,6 +244,7 @@ type indexRecord struct {
 	TaskDepth     int              `json:"task_depth,omitempty"`
 	Model         message.ModelRef `json:"model,omitzero"`
 	Effort        message.Effort   `json:"effort,omitempty"`
+	ServiceTier   string           `json:"service_tier,omitempty"`
 	Message       *indexMessage    `json:"message,omitempty"`
 	Usage         *provider.Usage  `json:"usage,omitempty"`
 	Goal          *goalRecord      `json:"goal,omitempty"`
@@ -267,6 +269,7 @@ func indexRecordOf(rec record) indexRecord {
 		TaskDepth:     rec.TaskDepth,
 		Model:         rec.Model,
 		Effort:        rec.Effort,
+		ServiceTier:   rec.ServiceTier,
 		Usage:         rec.Usage,
 		Goal:          rec.Goal,
 		Prompt:        rec.Prompt,
@@ -354,6 +357,7 @@ func (f *indexFold) applyIndexRecord(rec indexRecord, isLast bool) error {
 		f.ix.TaskAgentType = rec.TaskAgentType
 		f.ix.TaskDepth = rec.TaskDepth
 		f.ix.Effort = rec.Effort
+		f.ix.ServiceTier = rec.ServiceTier
 	case recMessage:
 		if rec.Message == nil {
 			if isLast {
@@ -370,6 +374,8 @@ func (f *indexFold) applyIndexRecord(rec indexRecord, isLast bool) error {
 		f.ix.Model = rec.Model
 	case recEffort:
 		f.ix.Effort = rec.Effort
+	case recServiceTier:
+		f.ix.ServiceTier = rec.ServiceTier
 	case recGoalSet, recGoalUpdated, recGoalAchieved, recGoalCleared:
 		f.ix.GoalActive, f.ix.GoalCondition = applyGoalRecord(f.ix.GoalActive, f.ix.GoalCondition, rec.Type, rec.Goal)
 	case recPromptQueued:

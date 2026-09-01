@@ -54,6 +54,15 @@ type Request struct {
 	// rejects surfaces as a provider error, since the adapter cannot know
 	// per-model support from the ref alone.
 	Effort message.Effort
+	// ServiceTier is an opaque, per-session speed-tier hint (e.g. Codex's
+	// "standard"/"fast"/"ultrafast"), forwarded to the provider verbatim as
+	// the wire "service_tier" field. The zero value (empty string) sends no
+	// service_tier control. Like Effort, harness does NOT validate which
+	// tiers a model or plan supports — the caller (the boxes API) owns that
+	// gating table — so an adapter maps a non-empty value straight through,
+	// and a tier the target model or plan rejects surfaces as a provider
+	// error.
+	ServiceTier string
 	// SessionKey is a stable, opaque identifier for the session this
 	// request belongs to. An adapter MAY forward it to the provider as a
 	// routing or cache-affinity hint. It is not a secret and is not

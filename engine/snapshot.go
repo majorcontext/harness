@@ -109,8 +109,9 @@ type sessionSnapshot struct {
 
 	History []message.Message `json:"history"`
 
-	Model  message.ModelRef `json:"model,omitzero"`
-	Effort message.Effort   `json:"effort,omitempty"`
+	Model       message.ModelRef `json:"model,omitzero"`
+	Effort      message.Effort   `json:"effort,omitempty"`
+	ServiceTier string           `json:"service_tier,omitempty"`
 
 	Usage         provider.Usage `json:"usage,omitzero"`
 	LastUsage     provider.Usage `json:"last_usage,omitzero"`
@@ -416,6 +417,7 @@ func (s *Session) captureSnapshotLocked() *sessionSnapshot {
 		History:           append([]message.Message(nil), s.history...),
 		Model:             s.model,
 		Effort:            s.effort,
+		ServiceTier:       s.serviceTier,
 		Usage:             s.usage,
 		LastUsage:         s.lastUsage,
 		HaveLastUsage:     s.haveLastUsage,
@@ -475,6 +477,7 @@ func (s *Session) restoreSnapshot(snap *sessionSnapshot) {
 		s.model = snap.Model
 	}
 	s.effort = snap.Effort
+	s.serviceTier = snap.ServiceTier
 	s.usage = snap.Usage
 	s.lastUsage = snap.LastUsage
 	s.haveLastUsage = snap.HaveLastUsage

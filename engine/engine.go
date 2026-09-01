@@ -136,6 +136,16 @@ type Event struct {
 	// restores the effort on LoadSession.
 	Effort message.Effort `json:"effort,omitempty"`
 
+	// ServiceTier is carried by EventServiceTierChanged only: the session's
+	// new speed-tier value after a SetServiceTier call that actually changed
+	// it (see SetServiceTier). It is the single event a service-tier swap
+	// emits, whatever the route, so the server journals each swap through
+	// one path (see server/journal.go's EventServiceTierChanged case). It is
+	// distinct from the durable recServiceTier resume record
+	// persistServiceTier writes (store.go), which restores the value on
+	// LoadSession.
+	ServiceTier string `json:"service_tier,omitempty"`
+
 	// Goal-loop fields (set on goal.* events; see goal.go and the state
 	// machine documented atop goal.go). GoalCondition is carried by
 	// goal.set and goal.updated (the new condition); GoalReason/GoalMet/GoalTurn by goal.eval; GoalReason/GoalTurn
@@ -251,6 +261,13 @@ const (
 	// (see SetEffort).
 	EventEffortChanged = "effort.changed"
 
+	// EventServiceTierChanged fires once per SetServiceTier call that
+	// actually changes the session's speed-tier value (never on a no-op set
+	// to the current value). It carries the new value in
+	// Event.ServiceTier and is the single observability event every
+	// service-tier-swap route funnels through (see SetServiceTier).
+	EventServiceTierChanged = "service_tier.changed"
+
 	// Goal-loop events (see goal.go).
 	EventGoalSet      = "goal.set"
 	EventGoalUpdated  = "goal.updated"
@@ -294,9 +311,14 @@ type Config struct {
 	Providers provider.Registry
 	Model     message.ModelRef // initial model; swap any time with SetModel
 	Effort    message.Effort   // initial reasoning-effort level; swap with SetEffort (zero = provider default)
-	System    []string         // base system prompt segments
-	MaxTokens int              // per-response cap; defaults to 8192
-	WorkDir   string           // working directory for built-in tools
+	// ServiceTier is the initial Codex speed-tier value; swap with
+	// SetServiceTier (zero = provider default). An opaque, unvalidated
+	// string forwarded verbatim — harness does not gate which tiers a
+	// model or plan supports (see provider.Request.ServiceTier).
+	ServiceTier string
+	System      []string // base system prompt segments
+	MaxTokens   int      // per-response cap; defaults to 8192
+	WorkDir     string   // working directory for built-in tools
 
 	// AppendSystemPrompt carries OPERATOR-supplied system prompt segments —
 	// environment truth the agent cannot otherwise discover (a gateway URL
@@ -966,12 +988,13 @@ type Session struct {
 	cfg   Config
 	tools map[string]Tool
 
-	mu        sync.Mutex
-	model     message.ModelRef
-	effort    message.Effort // reasoning-effort level; swap with SetEffort
-	history   []message.Message
-	usage     provider.Usage // cumulative, across every turn (see appendWithUsage)
-	createdAt time.Time
+	mu          sync.Mutex
+	model       message.ModelRef
+	effort      message.Effort // reasoning-effort level; swap with SetEffort
+	serviceTier string         // Codex speed-tier value; swap with SetServiceTier
+	history     []message.Message
+	usage       provider.Usage // cumulative, across every turn (see appendWithUsage)
+	createdAt   time.Time
 	// lastUsage/haveLastUsage carry the most recent model turn's own Usage
 	// (input/output/cache tokens for that one request), distinct from the
 	// cumulative usage field above — GET /session surfaces both (issue #62
@@ -1508,6 +1531,7 @@ func newSession(cfg Config) *Session {
 		cfg:                   cfg,
 		model:                 cfg.Model,
 		effort:                cfg.Effort,
+		serviceTier:           cfg.ServiceTier,
 		tools:                 make(map[string]Tool),
 		createdAt:             time.Now().UTC(),
 		promptQueueNextID:     1,
@@ -1714,6 +1738,37 @@ func (s *Session) Effort() message.Effort {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.effort
+}
+
+// SetServiceTier swaps the Codex speed-tier value for subsequent requests. A
+// no-op set to the current value changes nothing and emits no event. The
+// value rides every request the same way Effort does — the adapter forwards
+// it to the provider's wire shape at transcode time, so there is no
+// migration step, and harness itself never validates which tiers a model or
+// plan supports (see provider.Request.ServiceTier).
+//
+// On a real change it persists the durable recServiceTier resume record and
+// emits EventServiceTierChanged (carrying the new value), both while holding
+// s.mu so event order matches log order — the same persist-and-emit-under-
+// s.mu shape SetEffort uses. EventServiceTierChanged is the ONE event every
+// service-tier-swap route funnels through, so the server journals every swap
+// once via a single path. OnEvent must not call back into this Session.
+func (s *Session) SetServiceTier(tier string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if tier == s.serviceTier {
+		return
+	}
+	s.serviceTier = tier
+	s.persistServiceTier(tier)
+	s.emit(Event{Type: EventServiceTierChanged, ServiceTier: tier})
+}
+
+// ServiceTier returns the session's current Codex speed-tier value.
+func (s *Session) ServiceTier() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.serviceTier
 }
 
 // CreatedAt returns when the session was created (or, for a loaded session,
@@ -2928,6 +2983,13 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 		// POST /thinking; the boxes picker does this by clamping the level to the
 		// new model's supported set on switch.
 		Effort: s.Effort(),
+		// ServiceTier is read straight from session state, mirroring Effort
+		// immediately above — read fresh every request (and every tool
+		// round) so a SetServiceTier swap takes effect on the NEXT request,
+		// with no chat.params routing (same v1 scope rationale as Effort:
+		// the boxes API owns per-model/per-plan tier gating, not a harness
+		// plugin).
+		ServiceTier: s.ServiceTier(),
 		// SessionKey names this session for an adapter that forwards it as
 		// a routing/cache-affinity hint (see provider.Request.SessionKey
 		// doc comment; openaicompat sends it as the wire "user" field).

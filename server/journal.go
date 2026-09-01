@@ -38,12 +38,20 @@ type Event struct {
 	// So Publish's EventEffortChanged case ALWAYS sets it (even on a clear),
 	// and a nil pointer is omitted on every other record. This mirrors the
 	// "model" record, which never clears to empty.
-	Effort   *message.Effort   `json:"effort,omitempty"`
-	Text     string            `json:"text,omitempty"`
-	ToolCall *message.ToolCall `json:"tool_call,omitempty"`
-	Output   message.Parts     `json:"output,omitempty"`
-	IsError  bool              `json:"is_error,omitempty"`
-	Error    string            `json:"error,omitempty"`
+	Effort *message.Effort `json:"effort,omitempty"`
+	// ServiceTier is a *string, not a bare string with omitempty, mirroring
+	// Effort immediately above for the identical reason: a "service_tier"
+	// record must tell "cleared to the provider default" (an explicit
+	// "service_tier":"") apart from "this event type never carries a
+	// service-tier value" (key absent, every other record). Publish's
+	// EventServiceTierChanged case ALWAYS sets it (even on a clear), and a
+	// nil pointer is omitted on every other record type.
+	ServiceTier *string           `json:"service_tier,omitempty"`
+	Text        string            `json:"text,omitempty"`
+	ToolCall    *message.ToolCall `json:"tool_call,omitempty"`
+	Output      message.Parts     `json:"output,omitempty"`
+	IsError     bool              `json:"is_error,omitempty"`
+	Error       string            `json:"error,omitempty"`
 
 	// request.meta fields: a durable, replayable record of the assembled model
 	// request. SystemHash fingerprints the joined system segments; the full
@@ -172,13 +180,17 @@ const (
 	evtMessage        = "message"
 	evtModel          = "model"
 	evtEffort         = "effort"
-	evtRequestMeta    = "request.meta"
-	evtGoalSet        = "goal.set"
-	evtGoalUpdated    = "goal.updated"
-	evtGoalEval       = "goal.eval"
-	evtGoalStalled    = "goal.stalled"
-	evtGoalAchieved   = "goal.achieved"
-	evtGoalCleared    = "goal.cleared"
+	// evtServiceTier mirrors evtEffort: the durable observability record
+	// journaled for every SetServiceTier swap (see the
+	// engine.EventServiceTierChanged case in Publish below).
+	evtServiceTier  = "service_tier"
+	evtRequestMeta  = "request.meta"
+	evtGoalSet      = "goal.set"
+	evtGoalUpdated  = "goal.updated"
+	evtGoalEval     = "goal.eval"
+	evtGoalStalled  = "goal.stalled"
+	evtGoalAchieved = "goal.achieved"
+	evtGoalCleared  = "goal.cleared"
 	// evtGoalEvalFailed mirrors engine.EventGoalEvalFailed (see
 	// engine/goal.go's "Round 6" doc section): journaled once per
 	// failed evaluator boundary — a provider error the retryable-class
@@ -365,6 +377,16 @@ func (s *Server) Publish(ev engine.Event) {
 		// carries the "effort" key — see the Event.Effort field comment.
 		eff := ev.Effort
 		s.emitDurable(Event{Type: evtEffort, SessionID: ev.SessionID, Effort: &eff})
+	case engine.EventServiceTierChanged:
+		// Every service-tier swap funnels through SetServiceTier's single
+		// EventServiceTierChanged emit, so this ONE case journals the
+		// durable "service_tier" observability record — the same
+		// single-path shape the EventEffortChanged case above uses.
+		// ServiceTier is set explicitly (a pointer) even on a clear to "",
+		// so the record always carries the "service_tier" key — see the
+		// Event.ServiceTier field comment.
+		tier := ev.ServiceTier
+		s.emitDurable(Event{Type: evtServiceTier, SessionID: ev.SessionID, ServiceTier: &tier})
 	case engine.EventGoalSet, engine.EventGoalUpdated, engine.EventGoalEval, engine.EventGoalStalled, engine.EventGoalAchieved, engine.EventGoalCleared, engine.EventGoalEvalFailed, engine.EventGoalParked:
 		s.publishGoal(ev)
 	case engine.EventPromptQueued, engine.EventPromptDequeued:

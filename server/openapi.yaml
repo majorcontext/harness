@@ -115,6 +115,13 @@ components:
             The session's current reasoning-effort level. Absent (or empty)
             means the provider default (EffortUnset). Set it with POST
             /session/{id}/thinking.
+        service_tier:
+          $ref: "#/components/schemas/ServiceTier"
+          description: >
+            The session's current Codex speed-tier value. Absent (or empty)
+            means the provider default. Set it with POST
+            /session/{id}/service-tier. Harness forwards this value verbatim
+            and does not validate which tiers a model or plan supports.
         status:
           $ref: "#/components/schemas/SessionStatus"
           description: >
@@ -1035,6 +1042,7 @@ components:
             - message
             - model
             - effort
+            - service_tier
             - request.meta
             - goal.set
             - goal.updated
@@ -1223,6 +1231,13 @@ components:
             on an "effort" event, even on a clear: an empty string means cleared
             to the provider default (EffortUnset), never a dropped field. Absent
             on every other event type.
+        service_tier:
+          $ref: "#/components/schemas/ServiceTier"
+          description: >
+            The new Codex speed-tier value on a "service_tier" event. Always
+            present on a "service_tier" event, even on a clear: an empty
+            string means cleared to the provider default, never a dropped
+            field. Absent on every other event type.
         text:
           type: string
           description: Delta text for text.delta / reasoning.delta.
@@ -1444,6 +1459,7 @@ components:
             - message
             - model
             - effort
+            - service_tier
             - goal.set
             - goal.updated
             - goal.eval
@@ -1501,6 +1517,8 @@ components:
         model:
           $ref: "#/components/schemas/ModelRef"
         effort:
+          type: string
+        service_tier:
           type: string
         goal_condition:
           type: string
@@ -1714,6 +1732,36 @@ components:
         effort:
           $ref: "#/components/schemas/Effort"
           description: The session's reasoning-effort level after the swap.
+
+    ServiceTier:
+      type: string
+      description: >
+        An opaque, per-session Codex speed-tier value (e.g. "standard",
+        "fast", "ultrafast"). Harness does NOT validate this against a known
+        tier set — unlike Effort, it has no enum — because the caller (the
+        boxes API) owns per-model/per-plan tier gating; harness only stores
+        and forwards the value verbatim as the provider wire "service_tier"
+        field. An empty string means the provider default (no service_tier
+        control sent).
+
+    SetServiceTierRequest:
+      type: object
+      properties:
+        service_tier:
+          $ref: "#/components/schemas/ServiceTier"
+          description: >
+            The new Codex speed-tier value. An empty string OR an omitted
+            field both clear it to the provider default. Any value is
+            accepted — harness performs no validation. The field is optional
+            precisely because absent and "" are the same clear operation.
+
+    SetServiceTierResponse:
+      type: object
+      required: [service_tier]
+      properties:
+        service_tier:
+          $ref: "#/components/schemas/ServiceTier"
+          description: The session's Codex speed-tier value after the swap.
 
     Request:
       type: object
@@ -2638,6 +2686,45 @@ paths:
               schema: { $ref: "#/components/schemas/SetThinkingResponse" }
         "400":
           description: The effort value is not a valid level.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /session/{id}/service-tier:
+    post:
+      operationId: setServiceTier
+      summary: Swap a session's Codex speed-tier value.
+      description: >
+        Swaps the session's Codex speed-tier value for subsequent requests,
+        decoupled from prompting — it never claims the run slot, so it
+        applies even while a turn is running and takes effect on the NEXT
+        request. The value rides every request as the provider wire
+        "service_tier" field (OpenAI Responses API). The swap is durable (a
+        recServiceTier record restores it on resume) and journals a single
+        "service_tier" event on /event. Unlike /session/{id}/thinking there
+        is NO validation at all: the value is an opaque string harness
+        forwards verbatim, never checked against a known tier set — a
+        dashboard that gates tiers per model/plan (the boxes picker) holds
+        its own mapping. An empty string clears the value to the provider
+        default. The current value is read back on GET /session
+        ("service_tier").
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetServiceTierRequest" }
+      responses:
+        "200":
+          description: The Codex speed-tier value after the swap.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SetServiceTierResponse" }
+        "400":
+          description: The request body is malformed.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
