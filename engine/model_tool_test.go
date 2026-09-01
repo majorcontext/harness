@@ -64,6 +64,48 @@ func newModelToolSession(t *testing.T) *Session {
 	})
 }
 
+// runModelToolListAction runs the model tool's "list" action directly
+// against s and decodes the result as modelListResult. t.Fatal on a tool
+// error.
+func runModelToolListAction(t *testing.T, s *Session, args string) modelListResult {
+	t.Helper()
+	tool, ok := s.tools[modelToolName]
+	if !ok {
+		t.Fatal("model tool absent")
+	}
+	parts, err := tool.Run(context.Background(), s, []byte(args))
+	if err != nil {
+		t.Fatalf("model tool run(%s): %v", args, err)
+	}
+	text, ok := parts[0].(*message.Text)
+	if !ok {
+		t.Fatalf("model tool result is not text: %#v", parts[0])
+	}
+	var res modelListResult
+	if err := json.Unmarshal([]byte(text.Text), &res); err != nil {
+		t.Fatalf("model tool result not valid JSON: %v (%s)", err, text.Text)
+	}
+	return res
+}
+
+// TestModelToolList proves the list action reports the same configured
+// provider families and aliases modelToolStatus reads — the data a
+// delegated caller (e.g. a claude-code-lane agent over the MCP shim) needs
+// to pick a family for task's spawn(model:...) override, without a second
+// data source that could drift from status's own.
+func TestModelToolList(t *testing.T) {
+	s := newModelToolSession(t)
+
+	res := runModelToolListAction(t, s, `{"action":"list"}`)
+	want := []string{"other", "test"}
+	if strings.Join(res.Providers, ",") != strings.Join(want, ",") {
+		t.Fatalf("list providers = %v, want %v (sorted)", res.Providers, want)
+	}
+	if res.Aliases["fast"] != "test/m2" {
+		t.Fatalf("list aliases = %+v, want fast->test/m2", res.Aliases)
+	}
+}
+
 func TestModelToolStatus(t *testing.T) {
 	s := newModelToolSession(t)
 

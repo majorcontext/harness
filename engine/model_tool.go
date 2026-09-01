@@ -6,11 +6,14 @@
 // model is current (see engine.go). This tool is the model-facing surface over
 // that machinery.
 //
-// Two actions only: status (read-only) reports the current model, the
-// configured aliases, and the configured provider names; set(model) resolves a
-// one-level alias, validates the target provider is configured, and calls
-// SetModel. There is deliberately no clear action — a model always has a model;
-// there is nothing to clear.
+// Three actions: status (read-only) reports the current model, the
+// configured aliases, and the configured provider names; list (read-only) is
+// status's data minus the current model, for a caller that only wants the
+// choices — e.g. a delegated caller picking a family for another tool's own
+// model override (task's spawn action) rather than swapping THIS session's
+// model; set(model) resolves a one-level alias, validates the target
+// provider is configured, and calls SetModel. There is deliberately no clear
+// action — a model always has a model; there is nothing to clear.
 //
 // Gated by Config.ModelTool: registered in newSession only when the host opts
 // in. Unlike GoalTool (opt-in, gated on a configured evaluator), the CLI/server
@@ -34,6 +37,14 @@ import (
 // modelToolName is the session tool's fixed name.
 const modelToolName = "model"
 
+// ModelToolName exports modelToolName for a caller outside this package
+// that needs to name the SAME tool RunTool/ToolDef dispatch by —
+// server/mcp_history.go's harness-hosted MCP `model` tool entry, notably —
+// without hand-duplicating the literal "model" and risking it silently
+// drifting from this package's own internal name. Mirrors
+// engine/process.go's identical ProcessToolName export.
+const ModelToolName = modelToolName
+
 // modelToolArgs is the model tool's input shape.
 type modelToolArgs struct {
 	Action string `json:"action"`
@@ -48,6 +59,20 @@ type modelToolResult struct {
 	Model     string            `json:"model"`
 	Aliases   map[string]string `json:"aliases,omitempty"`
 	Providers []string          `json:"providers,omitempty"`
+}
+
+// modelListResult is the list action's return: the configured provider
+// families and aliases a caller can spawn or set into, WITHOUT this
+// session's current model — a delegated caller (e.g. a claude-code-lane
+// agent reaching this tool through the harness-hosted MCP shim,
+// server/mcp_history.go) asking "what models are available" is not asking
+// about this particular session's own state, unlike status. Backed by the
+// exact same configuredProviderNames()/ModelAliases data modelToolStatus
+// reads (see modelToolList) — never a second, independent data source
+// that could drift from it.
+type modelListResult struct {
+	Providers []string          `json:"providers"`
+	Aliases   map[string]string `json:"aliases,omitempty"`
 }
 
 // modelTool builds the `model` session tool. See the package doc for the
@@ -65,11 +90,14 @@ func modelTool() Tool {
 				"alias — it takes effect on the NEXT request in this session. set fails, and " +
 				"changes nothing, if the target names an unconfigured provider (the error lists the " +
 				"valid aliases and provider names). " +
+				"list() reports the configured provider families and aliases only, with no " +
+				"current-model or session state — useful to pick a family/model for another tool's " +
+				"own model override (e.g. task's spawn action) without swapping this session's own model. " +
 				"There is no action to clear the model — a session always has a model.",
 			InputSchema: json.RawMessage(`{
 				"type": "object",
 				"properties": {
-					"action": {"type": "string", "enum": ["status", "set"], "description": "The operation to perform"},
+					"action": {"type": "string", "enum": ["status", "set", "list"], "description": "The operation to perform"},
 					"model": {"type": "string", "description": "The target model: a \"provider/model\" ref or a configured alias (required for set)"}
 				},
 				"required": ["action"]
@@ -96,6 +124,9 @@ func runModelTool(s *Session, raw json.RawMessage) (message.Parts, error) {
 	switch in.Action {
 	case "status":
 		return jsonResult(s.modelToolStatus())
+
+	case "list":
+		return jsonResult(s.modelToolList())
 
 	case "set":
 		if in.Model == "" {
@@ -128,7 +159,7 @@ func runModelTool(s *Session, raw json.RawMessage) (message.Parts, error) {
 		return jsonResult(s.modelToolStatus())
 
 	default:
-		return nil, fmt.Errorf("model: unknown action %q (valid actions: status, set — there is no clear action)", in.Action)
+		return nil, fmt.Errorf("model: unknown action %q (valid actions: status, set, list — there is no clear action)", in.Action)
 	}
 }
 
@@ -149,6 +180,22 @@ func (s *Session) modelToolStatus() modelToolResult {
 		Model:     s.Model().String(),
 		Providers: s.configuredProviderNames(),
 	}
+	if len(s.cfg.ModelAliases) > 0 {
+		aliases := make(map[string]string, len(s.cfg.ModelAliases))
+		for k, v := range s.cfg.ModelAliases {
+			aliases[k] = v
+		}
+		res.Aliases = aliases
+	}
+	return res
+}
+
+// modelToolList builds the list action's result: the configured provider
+// families and aliases only — the same underlying data modelToolStatus
+// reads (configuredProviderNames/ModelAliases), just without the current
+// model field a bare "what models are available" query has no use for.
+func (s *Session) modelToolList() modelListResult {
+	res := modelListResult{Providers: s.configuredProviderNames()}
 	if len(s.cfg.ModelAliases) > 0 {
 		aliases := make(map[string]string, len(s.cfg.ModelAliases))
 		for k, v := range s.cfg.ModelAliases {
