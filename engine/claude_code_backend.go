@@ -363,6 +363,41 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	if text == "" {
 		return nil, errors.New("engine: claude-code delegated turn found no pending user message to answer")
 	}
+	// Deliver any pending task notifications (a settled child's Done/Failed
+	// result) into THIS turn's input, mirroring the native loop's own
+	// checkout step (engine.go's streamTurn, via withAmbientStatus) — see
+	// checkoutTaskNotificationsSegment's doc comment for the checkout/
+	// commit/requeue two-phase handoff this call is one leg of; the other
+	// two legs (commit on success, requeue on failure) live one layer up,
+	// in runAgenticLoop's claudeCodeDelegated branch, exactly like the
+	// native path's own commit/requeue calls.
+	//
+	// There is no EngineContext wire concept for the stream-json CLI
+	// stdin protocol this file drives (unlike a native provider request,
+	// which carries the segment as its own trust-tagged part — see
+	// withAmbientStatus), so the rendered segment is spliced directly into
+	// the plain text the CLI receives instead, on its own blank-line-
+	// separated block. Deliberately NOT wrapped in RenderEngineContext's
+	// <harness-engine-context> sentinel: that sentinel's meaning is taught
+	// by the NATIVE base system prompt's ambientContextGuidance
+	// (cmd/harness/main.go), which a delegated turn never sends — Claude
+	// Code drives this turn under its own, unrelated system prompt (see
+	// this file's package doc, "`--append-system-prompt` remains NOT
+	// auto-populated from s.cfg.System"), so the tag would reach the model
+	// as meaningless literal text rather than a recognized trust marker.
+	// The rendered segment is still self-delimited (renderTaskNotifications'
+	// own "[tasks:\n- ...\n]" shape) and still defended the same way a
+	// native request's block is: renderTaskNotifications already runs
+	// every free-text field (a child's own untrusted Result, or a
+	// provider's FailReason) through neutralizeNotificationText, which
+	// strips newlines so a child cannot manufacture a fake sibling "- ..."
+	// entry that reads as a second, forged notification — that protection
+	// is applied before this splice and does not depend on the sentinel.
+	// A no-op (text unchanged) when nothing is pending, matching
+	// withAmbientStatus's own no-op-on-empty-segment behavior.
+	if seg := s.checkoutTaskNotificationsSegment(); seg != "" {
+		text += "\n\n" + seg
+	}
 
 	cfg := s.cfg.ClaudeCode
 	binary := cfg.BinaryPath
