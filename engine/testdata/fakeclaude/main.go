@@ -25,20 +25,24 @@
 // event with no overage in play at all — overageStatus "", isUsingOverage
 // false, overageResetsAt 0 — proving mapClaudeCodeRateLimit leaves
 // SubscriptionUsage.Overage nil rather than a hollow zero-value object),
-// and "bg_leak" (reproduces a `claude --bg` turn whose detached child
+// "bg_leak" (reproduces a `claude --bg` turn whose detached child
 // inherits this process's stdout AND stderr and outlives it — see its own
 // comment below and claude_code_backend.go's consumeClaudeCodeStream/
-// runClaudeCodeTurn doc comments for the wedge this proves fixed).
+// runClaudeCodeTurn doc comments for the wedge this proves fixed), and
+// "queue_injection" (blocks for a SECOND stdin line mid-turn, proving the
+// driver's stdin-writer pump keeps stdin open and delivers a mid-turn
+// queued prompt to THIS running child instead of a fresh one — see its own
+// comment below).
 package main
 
 import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -87,26 +91,46 @@ func main() {
 		}
 	}
 
-	if mode != "fast_no_drain" {
-		// Read (and, when FAKE_CLAUDE_STDIN_LOG is set, record) the one
-		// turn-input line the real driver writes — the real driver writes
-		// its turn message and closes stdin BEFORE it ever reads this
-		// process's stdout (see runClaudeCodeTurn's own stdin write/close
-		// ordering, claude_code_backend.go), so a synchronous read-to-EOF
-		// here always completes promptly regardless of mode, with none of
-		// the goroutine-vs-process-exit race a background drain would
-		// carry for a test that actually wants the captured bytes.
-		// FAKE_CLAUDE_STDIN_LOG lets a test recover the EXACT bytes the
-		// driver sent — e.g. proving a checked-out task notification's
-		// rendered content actually reached the CLI's input, not just the
-		// bare trigger text (engine/claude_code_backend_test.go).
-		stdinBytes, _ := io.ReadAll(os.Stdin)
-		if logPath := os.Getenv("FAKE_CLAUDE_STDIN_LOG"); logPath != "" {
-			if f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
-				_, _ = f.Write(stdinBytes)
+	// stdinR is kept OPEN and read line-by-line for the rest of main(),
+	// instead of the one-shot read-to-EOF this file used before the
+	// driver started keeping its own stdin open across a whole turn (see
+	// claude_code_backend.go's runClaudeCodeTurn doc comment on the
+	// stdin-writer pump it mirrors from the Claude Agent SDK's
+	// Query.streamInput). The real `claude` binary reads its input as a
+	// stream of newline-delimited JSON lines, not a single blob ending in
+	// EOF — an io.ReadAll here would now block forever, since the driver
+	// no longer closes stdin right after its first write. readStdinLine
+	// mirrors that real streaming-read shape: one line per call, blocking
+	// until it arrives (or stdin closes), which is also what lets the
+	// "queue_injection" mode below block for a SECOND line while the
+	// first turn is still open, exactly the mid-turn steering window this
+	// stand-in exists to prove.
+	stdinR := bufio.NewReader(os.Stdin)
+	readStdinLine := func() (line string, ok bool) {
+		b, err := stdinR.ReadString('\n')
+		if logPath := os.Getenv("FAKE_CLAUDE_STDIN_LOG"); logPath != "" && b != "" {
+			// Record (append) exactly the bytes read, same shape the old
+			// one-shot read-to-EOF left behind — a test recovers the
+			// EXACT bytes the driver sent on each line, e.g. proving a
+			// checked-out task notification's rendered content actually
+			// reached the CLI's input (engine/claude_code_backend_test.go).
+			if f, ferr := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); ferr == nil {
+				_, _ = f.WriteString(b)
 				f.Close()
 			}
 		}
+		return strings.TrimRight(b, "\n"), err == nil
+	}
+
+	if mode != "fast_no_drain" {
+		// Read the ONE turn-input line every mode's own first message
+		// carries. Every mode below that does not itself read a further
+		// line (i.e. every mode except "queue_injection") never calls
+		// readStdinLine again, so its own stdin simply sits unread (but
+		// still open) until the driver eventually closes it — harmless,
+		// mirroring how the real CLI ignores stdin it has no more use for
+		// mid-turn.
+		readStdinLine()
 	}
 
 	sessionID := os.Getenv("FAKE_CLAUDE_SESSION_ID")
@@ -167,6 +191,57 @@ func main() {
 		// working cascade is what ends this process, not a wall-clock
 		// race.
 		time.Sleep(time.Hour)
+		return
+	case "queue_injection":
+		// Proves the driver keeps stdin OPEN across a turn and delivers a
+		// prompt queued mid-turn as a SECOND stream-json input line to
+		// THIS SAME running child, rather than closing stdin right after
+		// the first write (the pre-fix shape) or waiting until the whole
+		// turn ends. Emits a "WAITING_FOR_QUEUE" marker the test's OnEvent
+		// hook waits for (a deterministic, non-sleep synchronization
+		// point: the driver has finished mapping this event, so the child
+		// is now blocked in readStdinLine for line two) before the test
+		// enqueues a prompt. If a second line never arrives — a driver
+		// that still closes stdin after line one sees immediate EOF here,
+		// not a hang, since a closed pipe's read returns right away —
+		// this reports a distinguishable result instead of echoing
+		// anything, so the red run fails on content, not a timeout.
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role":    "assistant",
+				"content": []map[string]any{{"type": "text", "text": "WAITING_FOR_QUEUE"}},
+			},
+		})
+		line, ok := readStdinLine()
+		resultText := "no second message received"
+		if ok {
+			var second struct {
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+			}
+			if err := json.Unmarshal([]byte(line), &second); err == nil {
+				resultText = "received queued: " + second.Message.Content
+				emit(map[string]any{
+					"type": "assistant",
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": []map[string]any{{"type": "text", "text": resultText}},
+					},
+				})
+			}
+		}
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "success",
+			"is_error": false,
+			"result":   resultText,
+			"usage": map[string]any{
+				"input_tokens":  5,
+				"output_tokens": 5,
+			},
+		})
 		return
 	case "crash":
 		// Emitted "system"/"init" above, THEN exits nonzero without ever
