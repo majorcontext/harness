@@ -1,5 +1,5 @@
 // This file implements harness's own hosted MCP tools: get_conversation_history
-// and, when configured, the native `process` tool.
+// and, when configured, the native `process`, `task`, and `model` tools.
 //
 // # Why this exists
 //
@@ -29,21 +29,52 @@
 //
 // # Beyond history: a generalized harness-tools server
 //
-// The same endpoint also advertises harness's native `process` tool
-// (engine/process.go) when the session has one configured (Config.Processes
-// non-nil) — the tool a box's `pnpm dev`-style long-lived processes are
-// started, stopped, and inspected through. A delegated claude-code turn
-// otherwise has NO way to reach it: it drives its own tool loop entirely
-// inside the `claude` binary, never through this package's native
-// runToolCall path, so without an MCP entry a delegated turn simply could
-// not start/stop/check a managed process at all. tools/call routes through
-// engine.Session.RunTool (see its own doc comment), the SAME generic
-// external-dispatch seam a future harness-hosted tool would use — this file
-// deliberately exposes ONLY these two tools, not the redundant file tools
-// (read/write/edit/glob/grep/ls — a delegated `claude` process already has
-// its own, native equivalents) or the loop-internal ones (session_info,
-// goal, model, mcp, task, read_tool_result — meaningless outside the
-// native agentic loop this MCP surface exists to route AROUND).
+// The same endpoint also advertises three more of harness's native session
+// tools when the session has each configured: `process` (engine/process.go,
+// gated on Config.Processes non-nil) — the tool a box's `pnpm dev`-style
+// long-lived processes are started, stopped, and inspected through; `task`
+// (engine/task_tool.go, gated on Config.SessionManager) — spawn/cancel/
+// send/status/log against a child session, INCLUDING a model override
+// naming a different provider family than the one driving this delegated
+// turn (a claude-code-lane agent can spawn a `sol`/`codex`/any-configured
+// child this way); and `model` (engine/model_tool.go, gated on
+// Config.ModelTool) — but ONLY its list action (the configured provider
+// families and aliases to pick a target from), never the engine's own
+// status/set: this surface deliberately narrows `model` down from its full
+// ToolDef (see modelToolShimInputSchema/modelListOnlyMCPHandler) because
+// set re-points THIS session's own live model — a real hijack of whichever
+// lane is driving this very delegated turn, not merely an unwanted read —
+// and status leaks current-session state a delegated caller has no
+// legitimate need for; list is the one action such a caller actually
+// needs, to pick a family for task's own spawn(model:...) override
+// instead. A delegated claude-code turn otherwise has NO way to reach any
+// of the three: it drives its own tool loop entirely inside the `claude`
+// binary, never through this package's native runToolCall path, so
+// without an MCP entry a delegated turn simply could not manage a
+// process, delegate to a subagent, or discover a model family to delegate
+// to at all.
+// tools/call routes through engine.Session.RunTool (see its own doc
+// comment), the SAME generic external-dispatch seam a future harness-hosted
+// tool would use — this file deliberately exposes ONLY these four tools,
+// not the redundant file tools (read/write/edit/glob/grep/ls — a delegated
+// `claude` process already has its own, native equivalents) or the
+// remaining loop-internal ones (session_info, goal, mcp, read_tool_result —
+// still meaningless outside the native agentic loop this MCP surface exists
+// to route AROUND; task and model, by contrast, are genuinely useful to a
+// delegated caller and are exposed above).
+//
+// task's spawn action is already non-blocking (SessionManager.Spawn returns
+// the child's session id at once and runs its turn in a goroutine) and its
+// status/log actions already pull the child's live status/result directly
+// from its own settled node state (SessionManager.DescendantInfo/
+// DescendantTranscript) rather than from the native push-delivery path (the
+// EngineContext notification a child's completion normally delivers to its
+// parent's NEXT native-loop turn) — a delegated turn has no such next turn
+// this MCP surface would ever see, so status/log's pull semantics are what
+// make collecting a spawned child's result possible here at all. Neither
+// property required any change to engine/task_tool.go itself; see
+// engine.TaskToolName's own doc comment for the one export this file
+// needed.
 
 package server
 
@@ -111,27 +142,68 @@ var historyToolInputSchema = json.RawMessage(`{
 // in its own tools/list cache.
 const historyToolDescription = "Read the PRIOR conversation history for this session: messages that already happened before this turn, either on a different model or in a part of this conversation you have not seen. Call this once, before responding, whenever you are continuing a conversation you have not already read. Supports offset/limit pagination for long histories."
 
-// historyToolAnnotations and processToolAnnotations are each tool's
-// mcp.Tool.Annotations object (the spec's ToolAnnotations hints,
+// historyToolAnnotations, processToolAnnotations, taskToolAnnotations, and
+// modelToolAnnotations are each tool's mcp.Tool.Annotations object (the
+// spec's ToolAnnotations hints,
 // https://modelcontextprotocol.io/specification/2025-11-25/server/tools#annotations)
 // — 2026-era MCP client UIs surface these to a human (or gate a
 // destructive call behind confirmation), so an honest hint here is worth
-// setting even though this server does not enforce either one itself.
+// setting even though this server does not enforce any of them itself.
+//
 // get_conversation_history is read-only by construction (flattenHistory
-// never mutates sess); the `process` tool is the opposite — its
-// start/stop/restart actions can kill a running process — so it gets
-// destructiveHint instead, never readOnlyHint.
+// never mutates sess). `process`'s start/stop/restart actions can kill a
+// running process, so it gets destructiveHint instead of readOnlyHint.
+// `task` bundles spawn/cancel/send (each mutates a session — but only ones
+// the CALLER itself spawned, directly or transitively; see task_tool.go's
+// own cancel/send doc comments) alongside read-only status/log, so it gets
+// readOnlyHint false rather than destructiveHint: a task call can create or
+// stop the caller's OWN subagents, never touch anything outside that
+// caller-owned subtree, which is a materially smaller blast radius than
+// `process`'s ability to kill a shared, box-wide long-lived process.
+// `model` is readOnlyHint true — and that is honest ONLY because this
+// file's shim restricts the exposed `model` surface to the list action
+// (see modelToolShimInputSchema/modelListOnlyMCPHandler below); the
+// engine's own `model` tool also has a mutating set action (SetModel:
+// persistModel + EventModelChanged), which would make readOnlyHint a lie
+// if this shim ever passed it through.
 var (
 	historyToolAnnotations = json.RawMessage(`{"readOnlyHint": true}`)
 	processToolAnnotations = json.RawMessage(`{"destructiveHint": true}`)
+	taskToolAnnotations    = json.RawMessage(`{"readOnlyHint": false}`)
+	modelToolAnnotations   = json.RawMessage(`{"readOnlyHint": true}`)
 )
+
+// modelToolShimInputSchema and modelToolShimDescription are the `model`
+// tool's SHIM-published tools/list surface — DELIBERATELY NOT the engine's
+// own full ToolDef (status/set/list), unlike process/task just below. A
+// delegated caller only ever needs to enumerate provider families/aliases
+// to pick one for task's own spawn(model:...) override; it must never
+// reach set (re-points THIS session's own main model — the parent's live
+// delegation to whatever lane is driving this very turn, a real behavioral
+// hijack, not merely an unwanted read) or status (leaks this session's own
+// current-model state, which list's own result deliberately omits — see
+// modelListResult, engine/model_tool.go). Restricting the PUBLISHED schema
+// alone is not enough — a caller can send whatever action it wants
+// regardless of what tools/list advertised — so modelListOnlyMCPHandler
+// enforces the same restriction on every actual tools/call, before
+// dispatch.
+var modelToolShimInputSchema = json.RawMessage(`{
+	"type": "object",
+	"properties": {
+		"action": {"type": "string", "enum": ["list"], "description": "The operation to perform; only \"list\" is exposed on this surface"}
+	},
+	"required": ["action"]
+}`)
+
+const modelToolShimDescription = "List the provider families and aliases configured on this box. Use this to pick a family for task's own spawn(model:...) override when delegating to a child session. This surface exposes ONLY the list action — inspecting or changing THIS session's own current model is not available here; task's model override is the way to select a model, for a CHILD session, not this one."
 
 // newSessionMCPRegistry builds the per-request mcpserver.Registry for
 // sess's own /session/{id}/mcp endpoint (handleSessionMCP): always
-// get_conversation_history, plus the native `process` tool whenever sess
-// has one configured (Config.Processes non-nil — see
-// engine.Session.ToolDef) — see this file's package doc for why only
-// these two. version is reported as the MCP server's own implementation
+// get_conversation_history, plus the native `process`, `task`, and `model`
+// tools whenever sess has each one configured (Config.Processes non-nil,
+// Config.SessionManager set, Config.ModelTool true, respectively — see
+// engine.Session.ToolDef) — see this file's package doc for why exactly
+// these four. version is reported as the MCP server's own implementation
 // version (Options.Version — the same harness build version every other
 // endpoint already reports, not a version of the tool's own wire shape).
 func newSessionMCPRegistry(sess *engine.Session, version string) *mcpserver.Registry {
@@ -149,21 +221,46 @@ func newSessionMCPRegistry(sess *engine.Session, version string) *mcpserver.Regi
 		Annotations: historyToolAnnotations,
 	}, historyToolHandler(sess))
 
-	// def comes from the engine's OWN process tool registration
-	// (engine/process.go's processTool) via ToolDef, not a second,
-	// hand-duplicated copy of its Description/InputSchema — the two would
-	// otherwise be free to silently drift apart. ok is false exactly when
-	// Config.Processes is nil (see ToolDef's own doc comment), the same
-	// condition that hides the native `process` tool from the model
-	// entirely — this MCP surface must not advertise a tool a delegated
-	// turn could call and get "unknown tool" back from RunTool.
+	// def for process/task below comes from the engine's OWN tool
+	// registration via ToolDef, never a second, hand-duplicated copy of
+	// its Description/InputSchema — the two would otherwise be free to
+	// silently drift apart. ok is false exactly when the tool's owning
+	// Config field is unset (see each ToolDef's own doc comment), the same
+	// condition that hides the native tool from the model entirely — this
+	// MCP surface must not advertise a tool a delegated turn could call
+	// and get "unknown tool" back from RunTool.
 	if def, ok := sess.ToolDef(engine.ProcessToolName); ok {
 		reg.RegisterTool(mcp.Tool{
 			Name:        def.Name,
 			Description: def.Description,
 			InputSchema: def.InputSchema,
 			Annotations: processToolAnnotations,
-		}, processToolMCPHandler(sess))
+		}, runToolMCPHandler(sess, engine.ProcessToolName))
+	}
+	if def, ok := sess.ToolDef(engine.TaskToolName); ok {
+		reg.RegisterTool(mcp.Tool{
+			Name:        def.Name,
+			Description: def.Description,
+			InputSchema: def.InputSchema,
+			Annotations: taskToolAnnotations,
+		}, runToolMCPHandler(sess, engine.TaskToolName))
+	}
+	// model is the ONE exception to the "pass the engine's own ToolDef
+	// through verbatim" rule above: ok still gates on the real ToolDef (so
+	// this surface disappears exactly when Config.ModelTool is off,
+	// matching the native tool's own availability), but the Description/
+	// InputSchema this file PUBLISHES are the hand-written, list-only
+	// modelToolShimDescription/modelToolShimInputSchema, never the
+	// engine's full status/set/list schema — see their own doc comment for
+	// why passing that through would misrepresent (and worse, invite) a
+	// mutating call this shim must never allow.
+	if _, ok := sess.ToolDef(engine.ModelToolName); ok {
+		reg.RegisterTool(mcp.Tool{
+			Name:        engine.ModelToolName,
+			Description: modelToolShimDescription,
+			InputSchema: modelToolShimInputSchema,
+			Annotations: modelToolAnnotations,
+		}, modelListOnlyMCPHandler(sess))
 	}
 	return reg
 }
@@ -195,19 +292,58 @@ func historyToolHandler(sess *engine.Session) mcpserver.ToolHandler {
 	}
 }
 
-// processToolMCPHandler returns the mcpserver.ToolHandler for the native
-// `process` tool, closing over sess. It routes every call through
-// sess.RunTool (engine/engine.go) — the SAME generic dispatch path a
-// native-loop process-tool call goes through (hooks, events, panic
-// recovery included) — never a hand-rolled second implementation of the
-// process tool's own action switch. RunTool's error already carries the
-// tool-level failure text (e.g. "no such process"), and returning it
-// directly from this handler makes mcpserver.Registry's own dispatch turn
-// it into CallToolResult.IsError automatically — see ToolHandler's own doc
-// comment for that contract.
-func processToolMCPHandler(sess *engine.Session) mcpserver.ToolHandler {
+// runToolMCPHandler returns the mcpserver.ToolHandler for the native
+// session tool registered under name (process, task, or model — see
+// newSessionMCPRegistry), closing over sess. It routes every call through
+// sess.RunTool — the SAME generic dispatch path a native-loop call to that
+// tool goes through (hooks, events, panic recovery included) — never a
+// hand-rolled second implementation of the tool's own action switch.
+// RunTool's error already carries the tool-level failure text (e.g. "no
+// such process", "unknown action"), and returning it directly from this
+// handler makes mcpserver.Registry's own dispatch turn it into
+// CallToolResult.IsError automatically — see ToolHandler's own doc comment
+// for that contract.
+func runToolMCPHandler(sess *engine.Session, name string) mcpserver.ToolHandler {
 	return func(ctx context.Context, raw json.RawMessage) (mcp.CallToolResult, error) {
-		parts, err := sess.RunTool(ctx, engine.ProcessToolName, raw)
+		parts, err := sess.RunTool(ctx, name, raw)
+		if err != nil {
+			return mcp.CallToolResult{}, err
+		}
+		return mcp.CallToolResult{Content: partsToMCPContent(parts)}, nil
+	}
+}
+
+// modelListOnlyMCPHandler returns the mcpserver.ToolHandler for the
+// SHIM-restricted `model` tool, closing over sess: it enforces action ==
+// "list" itself, BEFORE ever dispatching through RunTool, rather than
+// trusting modelToolShimInputSchema's published enum alone — a caller can
+// send any action it likes over the wire regardless of what tools/list
+// advertised, so the schema is documentation, not enforcement. Rejecting
+// here, as an ordinary tool-level error (IsError, not a protocol failure —
+// same ToolHandler contract every other handler in this file follows),
+// is what actually closes off `set` (re-points THIS session's own live
+// model — a real hijack of whichever lane is driving this very delegated
+// turn) and `status` (leaks this session's own current-model state) — see
+// modelToolShimInputSchema's own doc comment for the full reasoning.
+// action == "list" still routes through sess.RunTool(engine.ModelToolName,
+// ...) — the SAME generic dispatch path (hooks, events, panic recovery
+// included) runToolMCPHandler's other callers use — so nothing about the
+// engine's own `model` tool changes; only what THIS shim will forward to
+// it is narrowed.
+func modelListOnlyMCPHandler(sess *engine.Session) mcpserver.ToolHandler {
+	return func(ctx context.Context, raw json.RawMessage) (mcp.CallToolResult, error) {
+		var in struct {
+			Action string `json:"action"`
+		}
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &in); err != nil {
+				return mcp.CallToolResult{}, fmt.Errorf("model: invalid arguments: %w", err)
+			}
+		}
+		if in.Action != "list" {
+			return mcp.CallToolResult{}, fmt.Errorf("model: action %q is not available on this surface (only \"list\" is exposed here — use task's own model override to select a model for a child session)", in.Action)
+		}
+		parts, err := sess.RunTool(ctx, engine.ModelToolName, raw)
 		if err != nil {
 			return mcp.CallToolResult{}, err
 		}

@@ -18,6 +18,14 @@ import (
 // see installTaskToolLocked and Spawn in session_manager.go.
 const taskToolName = "task"
 
+// TaskToolName exports taskToolName for a caller outside this package that
+// needs to name the SAME tool RunTool/ToolDef dispatch by —
+// server/mcp_history.go's harness-hosted MCP `task` tool entry, notably —
+// without hand-duplicating the literal "task" and risking it silently
+// drifting from this package's own internal name. Mirrors
+// engine/process.go's identical ProcessToolName export.
+const TaskToolName = taskToolName
+
 // The task tool's five actions. "" (the JSON zero value, so an omitted
 // action field) is treated as taskActionSpawn — the original, pre-verbs
 // shape of this tool's arguments (agent/prompt/model, no action at all)

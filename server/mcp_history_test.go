@@ -5,12 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
+	"testing/synctest"
 
+	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/mcp"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/process"
+	"github.com/majorcontext/harness/provider"
 )
 
 // seedMessages builds a small, readable history: a user question, an
@@ -279,10 +284,16 @@ func TestHandleSessionMCPFullLifecycle(t *testing.T) {
 
 // TestHandleSessionMCPToolsListOmitsProcessToolWhenNotConfigured proves a
 // session with no Config.Processes (the ordinary newHarness session, no
-// process manager wired at all) advertises ONLY get_conversation_history —
-// the same "process tool absent when unconfigured" rule the native loop
-// already follows (engine's TestProcessToolAbsentWhenNoProcessesConfigured)
-// applies identically to this MCP surface.
+// process manager wired at all) advertises get_conversation_history and
+// `task` but NEVER `process` — the same "process tool absent when
+// unconfigured" rule the native loop already follows (engine's
+// TestProcessToolAbsentWhenNoProcessesConfigured) applies identically to
+// this MCP surface. `task` is present here (unlike `model`, gated purely on
+// Config.ModelTool) because handleCreate's own h.createSession call path
+// always runs SessionManager.AdoptRoot on a freshly created session (see
+// server/handlers.go), which installs the native `task` tool unconditionally
+// — see adoptRootLocked's own doc comment — independent of whatever
+// Config.SessionManager the session was originally constructed with.
 func TestHandleSessionMCPToolsListOmitsProcessToolWhenNotConfigured(t *testing.T) {
 	h := newHarness(t, &scriptedProvider{name: "test"})
 	id := h.createSession("")
@@ -296,18 +307,26 @@ func TestHandleSessionMCPToolsListOmitsProcessToolWhenNotConfigured(t *testing.T
 	if err := json.Unmarshal(listData, &listMsg); err != nil {
 		t.Fatalf("decoding tools/list response: %v (%s)", err, listData)
 	}
-	if len(listMsg.Result.Tools) != 1 || listMsg.Result.Tools[0].Name != historyToolName {
-		t.Fatalf("tools/list Tools = %+v, want exactly [%s]", listMsg.Result.Tools, historyToolName)
+	var names []string
+	for _, tl := range listMsg.Result.Tools {
+		names = append(names, tl.Name)
+	}
+	sort.Strings(names)
+	want := []string{historyToolName, "task"}
+	if strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Fatalf("tools/list Tools = %v, want exactly %v (no process, no model)", names, want)
 	}
 }
 
 // TestHandleSessionMCPToolsListIncludesProcessToolWithAnnotations proves a
 // session WITH Config.Processes configured advertises the native
-// `process` tool alongside get_conversation_history, each carrying the
-// annotation this file's package doc promises: readOnlyHint on history,
-// destructiveHint on process — plus process's own Description/InputSchema
-// passed through from the engine's real tool definition (ToolDef), not a
-// hand-duplicated copy.
+// `process` tool alongside get_conversation_history (and `task`, always
+// present on a handleCreate-adopted session — see
+// TestHandleSessionMCPToolsListOmitsProcessToolWhenNotConfigured's own doc
+// comment), each carrying the annotation this file's package doc promises:
+// readOnlyHint on history, destructiveHint on process — plus process's own
+// Description/InputSchema passed through from the engine's real tool
+// definition (ToolDef), not a hand-duplicated copy.
 func TestHandleSessionMCPToolsListIncludesProcessToolWithAnnotations(t *testing.T) {
 	h, _ := newProcessHarness(t, map[string]process.Def{
 		"dev": {Command: []string{"sh", "-c", "true"}},
@@ -323,10 +342,14 @@ func TestHandleSessionMCPToolsListIncludesProcessToolWithAnnotations(t *testing.
 	if err := json.Unmarshal(listData, &listMsg); err != nil {
 		t.Fatalf("decoding tools/list response: %v (%s)", err, listData)
 	}
-	if len(listMsg.Result.Tools) != 2 {
-		t.Fatalf("tools/list Tools = %+v, want exactly 2 (history + process)", listMsg.Result.Tools)
-	}
-
+	// Per-name presence/absence, not a raw tool count (which drifts the
+	// moment any always-on tool — like `task`, unconditionally installed
+	// by handleCreate's own AdoptRoot call; see
+	// TestHandleSessionMCPToolsListOmitsProcessToolWhenNotConfigured's own
+	// doc comment — is added elsewhere): history and process are the
+	// tools THIS test cares about, task is expected-but-incidental here,
+	// and model must be absent (Config.ModelTool is not set by
+	// newProcessHarness).
 	var hist, proc *mcp.Tool
 	for i := range listMsg.Result.Tools {
 		switch listMsg.Result.Tools[i].Name {
@@ -334,6 +357,8 @@ func TestHandleSessionMCPToolsListIncludesProcessToolWithAnnotations(t *testing.
 			hist = &listMsg.Result.Tools[i]
 		case "process":
 			proc = &listMsg.Result.Tools[i]
+		case "model":
+			t.Fatalf("tools/list Tools = %+v, want no model (Config.ModelTool not set)", listMsg.Result.Tools)
 		}
 	}
 	if hist == nil {
@@ -469,4 +494,459 @@ func TestHandleSessionMCPRequiresAuth(t *testing.T) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401 with no Authorization header", resp.StatusCode)
 	}
+}
+
+// --- task/model tool exposure ---
+
+// newTaskModelHarness builds a harness whose sessions have BOTH the native
+// `task` tool (Config.SessionManager wired to the server's own srv.sessMgr
+// — the same wiring production's cmd/harness mkCfg uses, and the pattern
+// journal_spawn_sync_test.go's
+// TestChildJournaledAfterParentIdleEvictedAndReloaded already establishes
+// for this package's tests) and the `model` tool (Config.ModelTool true) —
+// the two tools this file's task+model MCP exposure tests need advertised
+// together. The default newHarness/newServer helper (server_test.go)
+// deliberately leaves both off (see that helper's own mkCfg), so a test
+// that needs either builds its own Options here rather than mutating the
+// shared default.
+func newTaskModelHarness(t *testing.T, reg provider.Registry, defaultModel message.ModelRef) *harness {
+	t.Helper()
+	const token = "secret-run-token"
+	dir := t.TempDir()
+	var srv *Server
+	opts := Options{
+		SessionDir: dir,
+		RunToken:   token,
+		Version:    "9.9.9",
+		NewSession: func(m message.ModelRef, workDir, parentSession string) (*engine.Session, error) {
+			if m.IsZero() {
+				m = defaultModel
+			}
+			return engine.NewSession(engine.Config{
+				Providers:      reg,
+				Model:          m,
+				WorkDir:        workDir,
+				ParentSession:  parentSession,
+				SessionDir:     dir,
+				OnEvent:        func(ev engine.Event) { srv.Publish(ev) },
+				SessionManager: srv.sessMgr,
+				ModelTool:      true,
+			}), nil
+		},
+		LoadSession: func(id string) (*engine.Session, error) {
+			return engine.LoadSession(engine.Config{
+				Providers:      reg,
+				SessionDir:     dir,
+				OnEvent:        func(ev engine.Event) { srv.Publish(ev) },
+				SessionManager: srv.sessMgr,
+				ModelTool:      true,
+			}, id)
+		},
+	}
+	var err error
+	srv, err = New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	return &harness{t: t, dir: dir, token: token, srv: srv, ts: ts}
+}
+
+// TestHandleSessionMCPToolsListIncludesTaskAndModelToolsWithAnnotations
+// proves a session with Config.SessionManager and Config.ModelTool both set
+// advertises `task` and `model` alongside get_conversation_history, each
+// carrying the annotation this file's package doc now promises: readOnlyHint
+// false on `task` (it can mutate sessions the caller itself spawned —
+// spawn/cancel/send — even though its status/log actions are read-only),
+// readOnlyHint true on `model` — and, since that hint is only honest
+// because this surface is list-only (see modelToolShimInputSchema), also
+// proves the PUBLISHED schema itself advertises action enum ["list"] only,
+// never "set" or "status". `task`'s Description/InputSchema are checked
+// against the engine's own real ToolDef (never a hand-duplicated copy);
+// `model`'s are checked against this file's own hand-written shim schema
+// instead, since `model` is the one tool this surface deliberately does NOT
+// pass the engine's full ToolDef through for.
+func TestHandleSessionMCPToolsListIncludesTaskAndModelToolsWithAnnotations(t *testing.T) {
+	rootProv := &scriptedProvider{name: "root"}
+	childProv := &scriptedProvider{name: "child"}
+	h := newTaskModelHarness(t, provider.Registry{
+		rootProv.Name():  rootProv,
+		childProv.Name(): childProv,
+	}, message.ModelRef{Provider: rootProv.Name(), Model: "m1"})
+	id := h.createSession("")
+
+	_, listData := h.do("POST", "/session/"+id+"/mcp", map[string]any{
+		"jsonrpc": "2.0", "id": "1", "method": "tools/list",
+	})
+	var listMsg struct {
+		Result mcp.ListToolsResult `json:"result"`
+	}
+	if err := json.Unmarshal(listData, &listMsg); err != nil {
+		t.Fatalf("decoding tools/list response: %v (%s)", err, listData)
+	}
+
+	// Per-name presence, not a raw tool count — see
+	// TestHandleSessionMCPToolsListIncludesProcessToolWithAnnotations's
+	// identical reasoning. `process` is correctly absent here
+	// (Config.Processes unset by newTaskModelHarness), which the switch
+	// below would catch as an unhandled case if it ever regressed.
+	var hist, task, model *mcp.Tool
+	for i := range listMsg.Result.Tools {
+		switch listMsg.Result.Tools[i].Name {
+		case historyToolName:
+			hist = &listMsg.Result.Tools[i]
+		case "task":
+			task = &listMsg.Result.Tools[i]
+		case "model":
+			model = &listMsg.Result.Tools[i]
+		case "process":
+			t.Fatalf("tools/list Tools = %+v, want no process (Config.Processes not set)", listMsg.Result.Tools)
+		}
+	}
+	if hist == nil {
+		t.Fatal("tools/list missing get_conversation_history")
+	}
+	if task == nil {
+		t.Fatal("tools/list missing task")
+	}
+	if !strings.Contains(string(task.Annotations), `"readOnlyHint":false`) {
+		t.Errorf("task Annotations = %s, want readOnlyHint false", task.Annotations)
+	}
+	if len(task.InputSchema) == 0 || !strings.Contains(task.Description, "spawn") {
+		t.Errorf("task Description/InputSchema = %q/%s, want the engine's own task-tool schema passed through", task.Description, task.InputSchema)
+	}
+	if model == nil {
+		t.Fatal("tools/list missing model")
+	}
+	if !strings.Contains(string(model.Annotations), `"readOnlyHint":true`) {
+		t.Errorf("model Annotations = %s, want readOnlyHint true", model.Annotations)
+	}
+	// The load-bearing assertion: the PUBLISHED schema's action enum is
+	// list-only. json.Marshal compacts an embedded json.RawMessage (no
+	// insignificant whitespace survives the round trip through
+	// writeResult), so the wire form is exactly `"enum":["list"]`.
+	if !strings.Contains(string(model.InputSchema), `"enum":["list"]`) {
+		t.Errorf("model InputSchema = %s, want action enum [\"list\"] only", model.InputSchema)
+	}
+	if strings.Contains(string(model.InputSchema), `"set"`) || strings.Contains(string(model.InputSchema), `"status"`) {
+		t.Errorf("model InputSchema = %s, want it to never mention set or status", model.InputSchema)
+	}
+}
+
+// TestHandleSessionMCPToolsListOmitsModelToolWhenDisabled proves a session
+// built with Config.ModelTool false (the ordinary newHarness session)
+// advertises history and `task` but never `model` — unlike `task` (always
+// installed on a handleCreate-adopted session; see
+// TestHandleSessionMCPToolsListOmitsProcessToolWhenNotConfigured's own doc
+// comment), `model` has no such adopt-time install and stays governed
+// purely by the Config.ModelTool flag the session was constructed with —
+// the same "absent when unconfigured" rule already proven for `process`.
+func TestHandleSessionMCPToolsListOmitsModelToolWhenDisabled(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	id := h.createSession("")
+
+	_, listData := h.do("POST", "/session/"+id+"/mcp", map[string]any{
+		"jsonrpc": "2.0", "id": "1", "method": "tools/list",
+	})
+	var listMsg struct {
+		Result mcp.ListToolsResult `json:"result"`
+	}
+	if err := json.Unmarshal(listData, &listMsg); err != nil {
+		t.Fatalf("decoding tools/list response: %v (%s)", err, listData)
+	}
+	for _, tl := range listMsg.Result.Tools {
+		if tl.Name == "model" {
+			t.Fatalf("tools/list Tools = %+v, want no model (Config.ModelTool false)", listMsg.Result.Tools)
+		}
+	}
+}
+
+// TestHandleSessionMCPModelToolListCallReturnsConfiguredFamilies proves
+// tools/call for the `model` tool's list action routes through
+// engine.Session.RunTool and returns the real configured provider families
+// — the data a delegated caller (e.g. a claude-code-lane agent) needs to
+// pick a family for task's own spawn(model:...) override.
+func TestHandleSessionMCPModelToolListCallReturnsConfiguredFamilies(t *testing.T) {
+	rootProv := &scriptedProvider{name: "root"}
+	childProv := &scriptedProvider{name: "sol"}
+	h := newTaskModelHarness(t, provider.Registry{
+		rootProv.Name():  rootProv,
+		childProv.Name(): childProv,
+	}, message.ModelRef{Provider: rootProv.Name(), Model: "m1"})
+	id := h.createSession("")
+
+	_, callData := h.do("POST", "/session/"+id+"/mcp", map[string]any{
+		"jsonrpc": "2.0", "id": "1", "method": "tools/call",
+		"params": map[string]any{"name": "model", "arguments": map[string]any{"action": "list"}},
+	})
+	var callMsg struct {
+		Result mcp.CallToolResult `json:"result"`
+		Error  *mcp.RPCError      `json:"error"`
+	}
+	if err := json.Unmarshal(callData, &callMsg); err != nil {
+		t.Fatalf("decoding tools/call(model list) response: %v (%s)", err, callData)
+	}
+	if callMsg.Error != nil {
+		t.Fatalf("tools/call(model list) returned a protocol error: %+v", callMsg.Error)
+	}
+	if callMsg.Result.IsError {
+		t.Fatalf("tools/call(model list) result IsError=true: %+v", callMsg.Result.Content)
+	}
+	got := callMsg.Result.Content[0].Text
+	for _, want := range []string{`"root"`, `"sol"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("model list result = %s, want it to list configured family %s", got, want)
+		}
+	}
+}
+
+// TestHandleSessionMCPModelToolSetAndStatusRejectedOverShim is the
+// regression guard for the hijack this file's `model` shim exists to
+// close: without modelListOnlyMCPHandler's own action check, a delegated
+// caller could send {"name":"model","arguments":{"action":"set", ...}}
+// over this exact endpoint and re-point the PARENT session's own live
+// model — the session actually driving this delegated turn — a real
+// behavioral hijack (the next harness turn stops delegating to whichever
+// lane issued the call), not merely an unwanted read. `status` is rejected
+// too: it leaks this session's own current-model state, which `list`
+// deliberately omits (see modelListResult, engine/model_tool.go). Both
+// must come back as an ordinary CallToolResult.IsError tool failure — the
+// same tool-level-vs-protocol-level distinction
+// TestHandleSessionMCPProcessToolCallFailureIsToolError already locks in
+// for `process` — never a protocol-level RPCError (model IS a known,
+// registered tool) and never a 200 with the session's model actually
+// changed.
+//
+// Red-verify: delete the `if in.Action != "list"` check in
+// modelListOnlyMCPHandler (server/mcp_history.go) and this test fails —
+// set's IsError assertion fails first (RunTool actually swaps the model
+// and returns success), proving this test would have caught the hijack.
+func TestHandleSessionMCPModelToolSetAndStatusRejectedOverShim(t *testing.T) {
+	rootProv := &scriptedProvider{name: "root"}
+	childProv := &scriptedProvider{name: "sol"}
+	h := newTaskModelHarness(t, provider.Registry{
+		rootProv.Name():  rootProv,
+		childProv.Name(): childProv,
+	}, message.ModelRef{Provider: rootProv.Name(), Model: "m1"})
+	id := h.createSession("")
+
+	callModel := func(args map[string]any) mcp.CallToolResult {
+		t.Helper()
+		_, callData := h.do("POST", "/session/"+id+"/mcp", map[string]any{
+			"jsonrpc": "2.0", "id": "1", "method": "tools/call",
+			"params": map[string]any{"name": "model", "arguments": args},
+		})
+		var callMsg struct {
+			Result mcp.CallToolResult `json:"result"`
+			Error  *mcp.RPCError      `json:"error"`
+		}
+		if err := json.Unmarshal(callData, &callMsg); err != nil {
+			t.Fatalf("decoding tools/call(model) response: %v (%s)", err, callData)
+		}
+		if callMsg.Error != nil {
+			t.Fatalf("tools/call(model) returned a protocol-level error for a tool-level rejection: %+v", callMsg.Error)
+		}
+		return callMsg.Result
+	}
+
+	setResult := callModel(map[string]any{"action": "set", "model": "sol/m1"})
+	if !setResult.IsError {
+		t.Fatalf("tools/call(model set) IsError = false, want true — set must never be reachable over this shim: %+v", setResult.Content)
+	}
+
+	statusResult := callModel(map[string]any{"action": "status"})
+	if !statusResult.IsError {
+		t.Fatalf("tools/call(model status) IsError = false, want true — status must never be reachable over this shim: %+v", statusResult.Content)
+	}
+
+	// The actual hijack check: the session's OWN model must be completely
+	// unaffected by the rejected set call above — read it back via the
+	// one action this shim DOES allow (list carries no current-model
+	// field, so this instead re-derives the session's live model via a
+	// direct engine-level check, the same session object the server
+	// itself is holding for id).
+	sess, ok := h.srv.sessMgr.Session(id)
+	if !ok {
+		t.Fatalf("session %s not tracked by sessMgr", id)
+	}
+	if got := sess.Model(); got != (message.ModelRef{Provider: rootProv.Name(), Model: "m1"}) {
+		t.Fatalf("session model = %v after a rejected set, want unchanged root/m1 — the shim's set rejection must be enforced BEFORE dispatch", got)
+	}
+}
+
+// TestHandleSessionMCPTaskToolCallUnknownActionIsToolError proves an
+// unknown `task` action over this MCP surface comes back as
+// CallToolResult.IsError (a tool-level failure), not a protocol-level
+// RPCError — the same distinction
+// TestHandleSessionMCPProcessToolCallFailureIsToolError already locks in
+// for `process`.
+func TestHandleSessionMCPTaskToolCallUnknownActionIsToolError(t *testing.T) {
+	rootProv := &scriptedProvider{name: "root"}
+	h := newTaskModelHarness(t, provider.Registry{rootProv.Name(): rootProv}, message.ModelRef{Provider: rootProv.Name(), Model: "m1"})
+	id := h.createSession("")
+
+	_, callData := h.do("POST", "/session/"+id+"/mcp", map[string]any{
+		"jsonrpc": "2.0", "id": "1", "method": "tools/call",
+		"params": map[string]any{"name": "task", "arguments": map[string]any{"action": "not_a_real_action"}},
+	})
+	var callMsg struct {
+		Result mcp.CallToolResult `json:"result"`
+		Error  *mcp.RPCError      `json:"error"`
+	}
+	if err := json.Unmarshal(callData, &callMsg); err != nil {
+		t.Fatalf("decoding tools/call(task) response: %v (%s)", err, callData)
+	}
+	if callMsg.Error != nil {
+		t.Fatalf("tools/call(task) returned a protocol-level error for a tool-level failure: %+v", callMsg.Error)
+	}
+	if !callMsg.Result.IsError {
+		t.Fatalf("tools/call(task) Result.IsError = false, want true for an unknown action")
+	}
+	if len(callMsg.Result.Content) != 1 || !strings.Contains(callMsg.Result.Content[0].Text, "not_a_real_action") {
+		t.Errorf("tools/call(task) Content = %+v, want it to name the unknown action", callMsg.Result.Content)
+	}
+}
+
+// TestHandleSessionMCPTaskToolSpawnIsNonBlockingAndStatusPullsResult is the
+// end-to-end proof behind this file's task exposure: tools/call(task,
+// spawn) over the MCP surface routes through engine.Session.RunTool into
+// the REAL, already-non-blocking Session.Spawn (it launches the child's own
+// turn in a goroutine and returns the child's session id at once — see
+// SessionManager.Spawn's own doc comment) with a model override selecting a
+// DIFFERENT configured family (child/m1, distinct from the root session's
+// own root/m1) — and a later tools/call(task, status) pulls the child's
+// result straight from its own settled node state
+// (SessionManager.DescendantInfo), independent of the native push-delivery
+// path this MCP surface deliberately routes around (see this file's package
+// doc).
+//
+// childProv is a blockingProvider, deliberately never released until AFTER
+// the spawn call and an immediate status check both complete: if
+// runTaskSpawn (or RunTool's dispatch of it) ever became blocking — waiting
+// on the child's own Prompt call before returning — this test would hang
+// rather than merely race, the same "prove non-blocking by parking the
+// dependency, not by guessing at scheduling order" technique
+// server_test.go's other blockingProvider tests already use. The
+// immediate-after-spawn status call is read BEFORE the child is released,
+// so it deterministically observes the child still StatusRunning (set
+// synchronously, under SessionManager's own lock, before Spawn ever
+// returns) — never a race against how fast a real child would finish.
+// synctest.Wait() then settles the child's turn (and any auto-resume
+// notification it triggers on root, hence rootProv's own scripted "noted"
+// turn) deterministically, with zero real wall-clock cost, mirroring
+// journal_spawn_sync_test.go's identical use of Wait() for this exact
+// purpose.
+func TestHandleSessionMCPTaskToolSpawnIsNonBlockingAndStatusPullsResult(t *testing.T) {
+	dir := t.TempDir()
+	synctest.Test(t, func(t *testing.T) {
+		rootProv := &scriptedProvider{name: "root", turns: [][]provider.Event{
+			asstTurn("noted"), // consumes the auto-resume notification turn.
+		}}
+		childProv := newBlockingProvider("child")
+		t.Cleanup(childProv.releaseAll)
+		reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
+
+		var srv *Server
+		opts := Options{
+			SessionDir: dir,
+			RunToken:   "secret-run-token",
+			Version:    "9.9.9",
+			NewSession: func(m message.ModelRef, workDir, parentSession string) (*engine.Session, error) {
+				return engine.NewSession(engine.Config{
+					Providers:      reg,
+					Model:          m,
+					WorkDir:        workDir,
+					ParentSession:  parentSession,
+					SessionDir:     dir,
+					OnEvent:        func(ev engine.Event) { srv.Publish(ev) },
+					SessionManager: srv.sessMgr,
+					ModelTool:      true,
+				}), nil
+			},
+			LoadSession: func(id string) (*engine.Session, error) {
+				return engine.LoadSession(engine.Config{
+					Providers:      reg,
+					SessionDir:     dir,
+					OnEvent:        func(ev engine.Event) { srv.Publish(ev) },
+					SessionManager: srv.sessMgr,
+					ModelTool:      true,
+				}, id)
+			},
+		}
+		var err error
+		srv, err = New(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		rootID := createSessionDirect(t, srv, "root/m1")
+
+		callMCP := func(body string) mcp.CallToolResult {
+			t.Helper()
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("POST", "/session/"+rootID+"/mcp", strings.NewReader(body))
+			req.SetPathValue("id", rootID)
+			srv.handleSessionMCP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("tools/call status %d: %s", rec.Code, rec.Body)
+			}
+			var msg struct {
+				Result mcp.CallToolResult `json:"result"`
+				Error  *mcp.RPCError      `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &msg); err != nil {
+				t.Fatalf("decoding tools/call response: %v (%s)", err, rec.Body)
+			}
+			if msg.Error != nil {
+				t.Fatalf("tools/call returned a protocol error: %+v", msg.Error)
+			}
+			return msg.Result
+		}
+
+		spawnResult := callMCP(`{"jsonrpc":"2.0","id":"1","method":"tools/call","params":{"name":"task","arguments":{"action":"spawn","agent":"general-purpose","prompt":"find the answer","model":"child/m1"}}}`)
+		if spawnResult.IsError {
+			t.Fatalf("tools/call(spawn) IsError=true: %+v", spawnResult.Content)
+		}
+		var spawned struct {
+			SessionID string `json:"session_id"`
+		}
+		if len(spawnResult.Content) != 1 {
+			t.Fatalf("tools/call(spawn) Content = %+v, want exactly one text item", spawnResult.Content)
+		}
+		if err := json.Unmarshal([]byte(spawnResult.Content[0].Text), &spawned); err != nil {
+			t.Fatalf("decoding spawn result: %v (%s)", err, spawnResult.Content[0].Text)
+		}
+		if spawned.SessionID == "" {
+			t.Fatal("spawn result has no session_id")
+		}
+
+		statusCall := `{"jsonrpc":"2.0","id":"2","method":"tools/call","params":{"name":"task","arguments":{"action":"status","session_id":"` + spawned.SessionID + `"}}}`
+
+		// The child is still parked on blockingStream.Next (childProv not
+		// yet released) — this proves the spawn call above did not wait
+		// for it, and DescendantInfo's live status confirms the child is
+		// tracked as running, not merely "unknown" or "idle".
+		early := callMCP(statusCall)
+		if early.IsError {
+			t.Fatalf("tools/call(status) IsError=true: %+v", early.Content)
+		}
+		if !strings.Contains(early.Content[0].Text, `"status":"running"`) {
+			t.Fatalf("status immediately after spawn = %s, want status running (child still parked on its provider)", early.Content[0].Text)
+		}
+
+		childProv.releaseAll()
+		synctest.Wait()
+
+		final := callMCP(statusCall)
+		if final.IsError {
+			t.Fatalf("tools/call(status) IsError=true: %+v", final.Content)
+		}
+		if !strings.Contains(final.Content[0].Text, `"status":"done"`) {
+			t.Fatalf("status after settling = %s, want status done", final.Content[0].Text)
+		}
+		if !strings.Contains(final.Content[0].Text, "released") {
+			t.Fatalf("status after settling = %s, want the child's own result (\"released\") pulled from its settled node state", final.Content[0].Text)
+		}
+	})
 }
