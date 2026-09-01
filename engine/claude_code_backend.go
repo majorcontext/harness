@@ -441,6 +441,14 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		// which this driver always sets, so it is safe to pass
 		// unconditionally.
 		"--forward-subagent-text",
+		// All subagent spawning in the claude-code lane must go through
+		// harness's own cross-family "task" tool (server/mcp_history.go,
+		// #223), never the CLI's native same-family equivalent — the two
+		// tools below are the CLI's only built-in ways to spawn a
+		// same-family subagent (Agent: single subagent/teammate; Workflow:
+		// a script that fans out many subagents), so both are disallowed
+		// unconditionally rather than left for the model to choose between.
+		"--disallowedTools", "Agent,Workflow",
 	}
 	if model.Model != "" {
 		args = append(args, "--model", model.Model)
