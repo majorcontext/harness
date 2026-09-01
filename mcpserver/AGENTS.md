@@ -27,6 +27,11 @@ Do not add `Mcp-Session-Id` issuance or enforcement. This transport's session
 identity is stateless by design; a caller that needs identity carries it in
 its own URL, one layer above this package.
 
+`ServeHTTP` validates the `Origin` header (the transport spec's DNS-rebinding
+MUST) before parsing a request body: absent or loopback passes, a present
+cross-origin value is rejected with 403. Do not remove this check or relax it
+to accept an arbitrary origin.
+
 ## Errors
 
 Return a JSON-RPC `RPCError` (`mcp.RPCError`) for a protocol-level failure: an

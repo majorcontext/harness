@@ -5,17 +5,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 
 	"github.com/majorcontext/harness/mcp"
 )
 
-// protocolVersion is the MCP protocol revision this server speaks —
+// protocolVersion is the ONE MCP protocol revision this server speaks —
 // matches mcp.LatestProtocolVersion (package mcp's own client), the
-// revision this repository has standardized on. A future client
-// negotiating an older, still-supported revision is answered with ITS OWN
-// requested version instead (see handleInitialize) — this server has no
-// revision-specific behavior of its own to lose by echoing back whatever
-// the client asked for.
+// revision this repository has standardized on, and initialize always
+// reports it verbatim (see dispatch's methodInitialize case), regardless
+// of whatever protocolVersion a client's own initialize request asks for.
+// This is deliberate, not a placeholder: this server implements exactly
+// this one revision, so claiming support for a client-requested version it
+// does not actually speak would be dishonest, and the transport spec's own
+// negotiation contract expects a server to report a version it genuinely
+// supports, not to echo the request. The sole intended client (a
+// delegated Claude Code CLI turn, see engine/claude_code_backend.go) is
+// documented to fall back gracefully when a server reports an older
+// revision than it asked for, so pinning this — rather than tracking
+// whatever the newest spec revision becomes — is the safer, simpler
+// choice for as long as this server's own tool surface has no need for
+// anything a newer revision adds.
 const protocolVersion = "2025-11-25"
 
 // JSON-RPC 2.0 method and error-code constants — mirrors
@@ -135,6 +145,19 @@ func (reg *Registry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if !validOrigin(r) {
+		// The transport spec's own DNS-rebinding security warning
+		// (https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#security-warning)
+		// makes Origin validation a MUST: a page loaded from an
+		// attacker's own site, opened in a victim's browser, can still
+		// issue same-machine requests to a server bound to 127.0.0.1 (the
+		// browser resolves and connects; the attacker's page just names
+		// the URL) — the Origin header is the one thing that request
+		// carries that a same-machine, non-browser caller's does not.
+		// See validOrigin's own doc comment for the accept/reject rule.
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
 
 	var msg rpcMessage
 	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
@@ -165,6 +188,45 @@ func (reg *Registry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reg.writeResult(w, msg.ID, result)
+}
+
+// validOrigin reports whether r's Origin header is safe to serve, per the
+// transport spec's DNS-rebinding security warning (see ServeHTTP's own
+// comment at its call site). Two cases pass:
+//
+//   - No Origin header at all. A browser attaches Origin to every
+//     fetch/XHR; a plain HTTP client (net/http, or whatever the `claude`
+//     CLI's own MCP client uses) ordinarily does not, unless a caller
+//     explicitly sets it. This server's sole documented consumer — a
+//     delegated Claude Code CLI subprocess calling back over loopback,
+//     see engine/claude_code_backend.go's ClaudeCodeConfig.HTTPBaseURL —
+//     is exactly that case, so requiring an Origin header at all would
+//     break the one real client this server has.
+//   - An Origin naming a loopback host (localhost, 127.0.0.1, or ::1),
+//     any port. A same-machine tool genuinely running on the user's own
+//     box is the only thing that can claim this truthfully; a remote
+//     attacker's page cannot forge the browser's own Origin header to a
+//     value other than the page's real origin.
+//
+// Anything else — a parseable Origin naming a non-loopback host, or a
+// value that fails to parse as a URL at all — is rejected: exactly the
+// shape a cross-origin browser page (the DNS-rebinding attack the spec
+// warns about) would send.
+func validOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return false
+	}
 }
 
 // dispatch routes one request method to its handler, returning either a

@@ -245,6 +245,49 @@ func TestRegistryRejectsNonPOST(t *testing.T) {
 	}
 }
 
+// postWithOrigin is post's counterpart for a caller that needs to set (or
+// deliberately omit) the Origin header itself.
+func postWithOrigin(t *testing.T, reg *Registry, origin string) int {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": "1", "method": methodInitialize})
+	if err != nil {
+		t.Fatalf("marshaling request: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(string(body)))
+	if origin != "" {
+		req.Header.Set("Origin", origin)
+	}
+	rec := httptest.NewRecorder()
+	reg.ServeHTTP(rec, req)
+	return rec.Code
+}
+
+// TestRegistryRejectsCrossOriginRequest proves a request carrying an
+// Origin header naming a non-loopback host — the shape a DNS-rebinding
+// attack (a page loaded from an attacker's own site, run in a victim's
+// browser, issuing a same-machine request to this server's loopback bind)
+// would produce — is rejected, per the transport spec's own security
+// warning (see validOrigin's doc comment).
+func TestRegistryRejectsCrossOriginRequest(t *testing.T) {
+	reg := NewRegistry("test-server", "1.0.0")
+	if code := postWithOrigin(t, reg, "https://evil.example.com"); code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 for a cross-origin request", code)
+	}
+}
+
+// TestRegistryAcceptsAbsentOrLoopbackOrigin proves the two safe cases
+// validOrigin accepts: no Origin header at all (this server's real
+// consumer, a delegated Claude Code CLI subprocess's own HTTP client —
+// see validOrigin's doc comment), and an explicit loopback Origin.
+func TestRegistryAcceptsAbsentOrLoopbackOrigin(t *testing.T) {
+	reg := NewRegistry("test-server", "1.0.0")
+	for _, origin := range []string{"", "http://127.0.0.1:4096", "http://localhost:4096", "http://[::1]:4096"} {
+		if code := postWithOrigin(t, reg, origin); code != http.StatusOK {
+			t.Errorf("origin %q: status = %d, want 200", origin, code)
+		}
+	}
+}
+
 // TestRegistryRegisterToolReplacesExistingByName proves registering the
 // same tool name twice replaces the earlier entry rather than duplicating
 // it in tools/list.

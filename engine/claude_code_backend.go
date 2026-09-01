@@ -235,13 +235,14 @@ type ClaudeCodeConfig struct {
 	HTTPAuthToken string
 }
 
-// claudeCodeHistoryServerName is the synthetic --mcp-config server name
-// claudeCodeMCPConfigFile registers for the harness-hosted
-// get_conversation_history tool (server/server.go's POST
-// /session/{id}/mcp) — see ClaudeCodeConfig.HTTPBaseURL's own doc comment.
-// A fixed, harness-namespaced name (never an operator-configured
-// Config.MCP key) so it can never collide with one.
-const claudeCodeHistoryServerName = "harness-history"
+// claudeCodeToolsServerName is the synthetic --mcp-config server name
+// claudeCodeMCPConfigFile registers for the harness-hosted MCP server
+// (server/mcp_history.go's POST /session/{id}/mcp — get_conversation_history
+// plus, when configured, the native `process` tool) — see
+// ClaudeCodeConfig.HTTPBaseURL's own doc comment. A fixed, harness-
+// namespaced name (never an operator-configured Config.MCP key) so it can
+// never collide with one.
+const claudeCodeToolsServerName = "harness-tools"
 
 // claudeCodeHistoryServerURL returns the synthetic history-server's own
 // per-session URL — <HTTPBaseURL>/session/<s.ID>/mcp — or "" when
@@ -743,9 +744,9 @@ func lastUserMessageText(history []message.Message) string {
 // claudeCodeHistoryDirective is the --append-system-prompt text
 // runClaudeCodeTurn appends exactly once per delegated session — see
 // claudeCodeHistoryDirectiveArgs. It tells the CLI to call the
-// harness-hosted get_conversation_history tool (server/server.go's POST
-// /session/{id}/mcp, advertised via the claudeCodeHistoryServerName entry
-// claudeCodeMCPConfigFile writes) before answering, so a session that
+// harness-hosted get_conversation_history tool (server/mcp_history.go's
+// POST /session/{id}/mcp, advertised via the claudeCodeToolsServerName
+// entry claudeCodeMCPConfigFile writes) before answering, so a session that
 // switches to claude-code mid-conversation (or on its first-ever
 // claude-code turn) does not start blind to everything that already
 // happened: stream-json INPUT cannot seed prior history (a "user" line
@@ -1507,7 +1508,7 @@ func (s *Session) claudeCodeMCPConfigFile() (path string, cleanup func(), err er
 		if tok := s.cfg.ClaudeCode.HTTPAuthToken; tok != "" {
 			spec.Headers = map[string]string{"Authorization": "Bearer " + tok}
 		}
-		cfg.MCPServers[claudeCodeHistoryServerName] = spec
+		cfg.MCPServers[claudeCodeToolsServerName] = spec
 	}
 	data, err := json.Marshal(cfg)
 	if err != nil {

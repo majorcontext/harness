@@ -602,9 +602,9 @@ func TestClaudeCodeMCPConfigFileIncludesHistoryServer(t *testing.T) {
 		t.Errorf(`mcp-config missing "fs" server: %+v`, got.MCPServers)
 	}
 
-	hist, ok := got.MCPServers[claudeCodeHistoryServerName]
+	hist, ok := got.MCPServers[claudeCodeToolsServerName]
 	if !ok {
-		t.Fatalf("mcp-config missing %q server: %+v", claudeCodeHistoryServerName, got.MCPServers)
+		t.Fatalf("mcp-config missing %q server: %+v", claudeCodeToolsServerName, got.MCPServers)
 	}
 	wantURL := "http://127.0.0.1:4096/session/" + s.ID + "/mcp"
 	if hist.Type != "http" || hist.URL != wantURL {
@@ -644,8 +644,8 @@ func TestClaudeCodeMCPConfigFileHistoryServerWithNoConfiguredServers(t *testing.
 	if len(got.MCPServers) != 1 {
 		t.Fatalf("mcp-config servers = %+v, want exactly the history server", got.MCPServers)
 	}
-	if _, ok := got.MCPServers[claudeCodeHistoryServerName]; !ok {
-		t.Errorf("mcp-config missing %q server: %+v", claudeCodeHistoryServerName, got.MCPServers)
+	if _, ok := got.MCPServers[claudeCodeToolsServerName]; !ok {
+		t.Errorf("mcp-config missing %q server: %+v", claudeCodeToolsServerName, got.MCPServers)
 	}
 }
 
@@ -671,8 +671,8 @@ func TestClaudeCodeMCPConfigFileHistoryServerNoAuthHeaderWhenTokenEmpty(t *testi
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("decoding mcp-config file: %v", err)
 	}
-	if _, ok := got.MCPServers[claudeCodeHistoryServerName].Headers["Authorization"]; ok {
-		t.Errorf("history server Headers = %+v, want no Authorization header", got.MCPServers[claudeCodeHistoryServerName].Headers)
+	if _, ok := got.MCPServers[claudeCodeToolsServerName].Headers["Authorization"]; ok {
+		t.Errorf("history server Headers = %+v, want no Authorization header", got.MCPServers[claudeCodeToolsServerName].Headers)
 	}
 }
 

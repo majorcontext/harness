@@ -3680,6 +3680,66 @@ func (s *Session) MCPCall(ctx context.Context, server, tool string, args json.Ra
 	return s.cfg.MCP.CallServerTool(ctx, server, tool, args)
 }
 
+// ToolDef returns the provider.ToolDef (Name, Description, InputSchema) of
+// the native session tool registered under name — e.g. "process" — or
+// ok=false if no such tool is registered on this session (its owning
+// Config field unset, e.g. Config.Processes nil for "process"; or name
+// simply unrecognized). s.tools is populated once, at session construction
+// (newSession), and never mutated afterward — see executeTool's own
+// unsynchronized read of the same map — so this needs no locking either.
+//
+// This is the read half of RunTool's generic external-dispatch seam: a
+// caller outside the native agentic loop (the harness-hosted MCP server,
+// server/mcp_history.go) uses it to advertise a native tool's OWN
+// Description/InputSchema in tools/list, rather than hand-duplicating a
+// second copy of the schema that could silently drift from the real one.
+func (s *Session) ToolDef(name string) (def provider.ToolDef, ok bool) {
+	t, ok := s.tools[name]
+	if !ok {
+		return provider.ToolDef{}, false
+	}
+	return t.Def, true
+}
+
+// RunTool synthesizes a *message.ToolCall for name/args and drives it
+// through runToolCall — the same hook (ToolExecuteBefore/ToolExecuteAfter),
+// event (EventToolStart/EventToolEnd, tool.execute.start/end), and
+// panic-recovery path every native-loop tool call goes through (see
+// runToolCall's own doc comment). It is RunTool's write half of the same
+// generic external-dispatch seam ToolDef reads from: the harness-hosted MCP
+// server's `process` tool (server/mcp_history.go) is the first caller
+// outside the native agentic loop, invoking a native harness tool by name
+// on behalf of a REMOTE MCP client (a delegated Claude Code CLI turn)
+// rather than this session's own model.
+//
+// Unlike a native-loop tool call, the synthesized ToolCall/its ToolResult
+// are never appended to s.History(): there is no corresponding assistant
+// message in THIS session's own transcript to pair them with, mirroring
+// MCPCall's identical "pass through, do not persist" contract for an
+// MCP-registry-routed call, just above.
+//
+// The returned error collapses runToolCall's separate isErr flag into one
+// Go error (out's own text, wrapped) — matching mcpserver.ToolHandler's
+// contract exactly (server/mcp_history.go's process-tool handler passes
+// RunTool's own return straight through: any error becomes
+// CallToolResult.IsError, never a protocol-level failure) — so a genuine
+// TOOL failure (e.g. "no such process") and this call's own inability to
+// dispatch at all (there isn't one today; s.tools falls back to an
+// "unknown tool" text result, not a panic or an error return) are both
+// reported the same, simple way.
+func (s *Session) RunTool(ctx context.Context, name string, args json.RawMessage) (message.Parts, error) {
+	tc := &message.ToolCall{
+		CallID:    newID("call"),
+		Name:      name,
+		Arguments: args,
+	}
+	out, isErr := s.runToolCall(ctx, tc)
+	if isErr {
+		return nil, fmt.Errorf("engine: tool %q: %s", name, out.Text())
+	}
+	return out, nil
+}
+
 // shellEnv collects env additions from the shell.env hook chain.
 func (s *Session) shellEnv(ctx context.Context, tool, command string) map[string]string {
 	if s.cfg.Hooks == nil {

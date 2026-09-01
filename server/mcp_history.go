@@ -1,5 +1,5 @@
-// This file implements the harness-hosted get_conversation_history MCP
-// tool.
+// This file implements harness's own hosted MCP tools: get_conversation_history
+// and, when configured, the native `process` tool.
 //
 // # Why this exists
 //
@@ -14,18 +14,36 @@
 // native-loop history already behind it — has no way to hand that history
 // to the CLI on stdin.
 //
-// The fix is pull, not push: this file registers one MCP tool,
-// get_conversation_history, on the per-session Streamable HTTP endpoint
-// POST /session/{id}/mcp (see handleSessionMCP and its routes() entry),
-// backed by package mcpserver's generic JSON-RPC dispatch. The delegated
-// `claude` process is handed this endpoint in its own --mcp-config (see
-// engine.ClaudeCodeConfig.HTTPBaseURL and claudeCodeMCPConfigFile) and, on
-// its first delegated turn with prior history to catch up on, a short
-// --append-system-prompt directive (engine's claudeCodeHistoryDirective)
-// tells it to call the tool before answering. Once it does, the tool_result
-// lands in the CLI's OWN session — --resume then carries it forward on
-// every later turn for free, so this tool needs to be called at most once
-// per delegated session, not once per turn.
+// The fix is pull, not push: this file registers get_conversation_history
+// on the per-session Streamable HTTP endpoint POST /session/{id}/mcp (see
+// handleSessionMCP and its routes() entry), backed by package mcpserver's
+// generic JSON-RPC dispatch. The delegated `claude` process is handed this
+// endpoint in its own --mcp-config (see engine.ClaudeCodeConfig.HTTPBaseURL
+// and claudeCodeMCPConfigFile) and, on its first delegated turn with prior
+// history to catch up on, a short --append-system-prompt directive
+// (engine's claudeCodeHistoryDirective) tells it to call the tool before
+// answering. Once it does, the tool_result lands in the CLI's OWN session
+// — --resume then carries it forward on every later turn for free, so this
+// tool needs to be called at most once per delegated session, not once per
+// turn.
+//
+// # Beyond history: a generalized harness-tools server
+//
+// The same endpoint also advertises harness's native `process` tool
+// (engine/process.go) when the session has one configured (Config.Processes
+// non-nil) — the tool a box's `pnpm dev`-style long-lived processes are
+// started, stopped, and inspected through. A delegated claude-code turn
+// otherwise has NO way to reach it: it drives its own tool loop entirely
+// inside the `claude` binary, never through this package's native
+// runToolCall path, so without an MCP entry a delegated turn simply could
+// not start/stop/check a managed process at all. tools/call routes through
+// engine.Session.RunTool (see its own doc comment), the SAME generic
+// external-dispatch seam a future harness-hosted tool would use — this file
+// deliberately exposes ONLY these two tools, not the redundant file tools
+// (read/write/edit/glob/grep/ls — a delegated `claude` process already has
+// its own, native equivalents) or the loop-internal ones (session_info,
+// goal, model, mcp, task, read_tool_result — meaningless outside the
+// native agentic loop this MCP surface exists to route AROUND).
 
 package server
 
@@ -93,19 +111,60 @@ var historyToolInputSchema = json.RawMessage(`{
 // in its own tools/list cache.
 const historyToolDescription = "Read the PRIOR conversation history for this session: messages that already happened before this turn, either on a different model or in a part of this conversation you have not seen. Call this once, before responding, whenever you are continuing a conversation you have not already read. Supports offset/limit pagination for long histories."
 
-// newHistoryRegistry builds the per-request mcpserver.Registry for sess's
-// own /session/{id}/mcp endpoint (handleSessionMCP). version is reported
-// as the MCP server's own implementation version (Options.Version — the
-// same harness build version every other endpoint already reports, not a
-// version of the tool's own wire shape).
-func newHistoryRegistry(sess *engine.Session, version string) *mcpserver.Registry {
-	reg := mcpserver.NewRegistry("harness-history", version)
+// historyToolAnnotations and processToolAnnotations are each tool's
+// mcp.Tool.Annotations object (the spec's ToolAnnotations hints,
+// https://modelcontextprotocol.io/specification/2025-11-25/server/tools#annotations)
+// — 2026-era MCP client UIs surface these to a human (or gate a
+// destructive call behind confirmation), so an honest hint here is worth
+// setting even though this server does not enforce either one itself.
+// get_conversation_history is read-only by construction (flattenHistory
+// never mutates sess); the `process` tool is the opposite — its
+// start/stop/restart actions can kill a running process — so it gets
+// destructiveHint instead, never readOnlyHint.
+var (
+	historyToolAnnotations = json.RawMessage(`{"readOnlyHint": true}`)
+	processToolAnnotations = json.RawMessage(`{"destructiveHint": true}`)
+)
+
+// newSessionMCPRegistry builds the per-request mcpserver.Registry for
+// sess's own /session/{id}/mcp endpoint (handleSessionMCP): always
+// get_conversation_history, plus the native `process` tool whenever sess
+// has one configured (Config.Processes non-nil — see
+// engine.Session.ToolDef) — see this file's package doc for why only
+// these two. version is reported as the MCP server's own implementation
+// version (Options.Version — the same harness build version every other
+// endpoint already reports, not a version of the tool's own wire shape).
+func newSessionMCPRegistry(sess *engine.Session, version string) *mcpserver.Registry {
+	// "harness-tools" is this server's own self-reported Implementation.Name
+	// (initialize's ServerInfo) — cosmetic identification only, unrelated
+	// to (if conveniently matching) engine's claudeCodeToolsServerName,
+	// the --mcp-config MAP KEY the delegated `claude` process's own client
+	// uses to reach this endpoint at all.
+	reg := mcpserver.NewRegistry("harness-tools", version)
 	reg.SetInstructions("Call get_conversation_history before responding if you have not already read this session's prior conversation history.")
 	reg.RegisterTool(mcp.Tool{
 		Name:        historyToolName,
 		Description: historyToolDescription,
 		InputSchema: historyToolInputSchema,
+		Annotations: historyToolAnnotations,
 	}, historyToolHandler(sess))
+
+	// def comes from the engine's OWN process tool registration
+	// (engine/process.go's processTool) via ToolDef, not a second,
+	// hand-duplicated copy of its Description/InputSchema — the two would
+	// otherwise be free to silently drift apart. ok is false exactly when
+	// Config.Processes is nil (see ToolDef's own doc comment), the same
+	// condition that hides the native `process` tool from the model
+	// entirely — this MCP surface must not advertise a tool a delegated
+	// turn could call and get "unknown tool" back from RunTool.
+	if def, ok := sess.ToolDef(engine.ProcessToolName); ok {
+		reg.RegisterTool(mcp.Tool{
+			Name:        def.Name,
+			Description: def.Description,
+			InputSchema: def.InputSchema,
+			Annotations: processToolAnnotations,
+		}, processToolMCPHandler(sess))
+	}
 	return reg
 }
 
@@ -134,6 +193,37 @@ func historyToolHandler(sess *engine.Session) mcpserver.ToolHandler {
 			Content: []mcp.Content{{Type: mcp.ContentTypeText, Text: historyResultText(page)}},
 		}, nil
 	}
+}
+
+// processToolMCPHandler returns the mcpserver.ToolHandler for the native
+// `process` tool, closing over sess. It routes every call through
+// sess.RunTool (engine/engine.go) — the SAME generic dispatch path a
+// native-loop process-tool call goes through (hooks, events, panic
+// recovery included) — never a hand-rolled second implementation of the
+// process tool's own action switch. RunTool's error already carries the
+// tool-level failure text (e.g. "no such process"), and returning it
+// directly from this handler makes mcpserver.Registry's own dispatch turn
+// it into CallToolResult.IsError automatically — see ToolHandler's own doc
+// comment for that contract.
+func processToolMCPHandler(sess *engine.Session) mcpserver.ToolHandler {
+	return func(ctx context.Context, raw json.RawMessage) (mcp.CallToolResult, error) {
+		parts, err := sess.RunTool(ctx, engine.ProcessToolName, raw)
+		if err != nil {
+			return mcp.CallToolResult{}, err
+		}
+		return mcp.CallToolResult{Content: partsToMCPContent(parts)}, nil
+	}
+}
+
+// partsToMCPContent flattens a native tool's message.Parts result into MCP
+// Content items. Every native session tool (process included) answers
+// with a single *message.Text part carrying a JSON- or plain-text result
+// (see engine/process.go's jsonResult), so Parts.Text()'s own
+// newline-joining rule already produces exactly the one string an MCP
+// tool_result needs — this wraps it as the transport's required Content
+// item rather than reimplementing Parts' own text-extraction logic.
+func partsToMCPContent(parts message.Parts) []mcp.Content {
+	return []mcp.Content{{Type: mcp.ContentTypeText, Text: parts.Text()}}
 }
 
 // historyPage is flattenHistory's result: a rendered page of a session's
@@ -309,11 +399,12 @@ func historyResultText(page historyPage) string {
 }
 
 // handleSessionMCP implements POST /session/{id}/mcp: the MCP server role's
-// Streamable HTTP endpoint for sess's own harness-hosted tools (currently
-// just get_conversation_history — see this file's package doc). A fresh
-// mcpserver.Registry is built per request rather than cached: registration
-// is cheap (one map entry) and this keeps the handler free of any registry
-// lifecycle to manage across a session's possibly-long resident lifetime.
+// Streamable HTTP endpoint for sess's own harness-hosted tools
+// (get_conversation_history, plus `process` when configured — see this
+// file's package doc). A fresh mcpserver.Registry is built per request
+// rather than cached: registration is cheap (at most two map entries) and
+// this keeps the handler free of any registry lifecycle to manage across a
+// session's possibly-long resident lifetime.
 func (s *Server) handleSessionMCP(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
@@ -324,5 +415,5 @@ func (s *Server) handleSessionMCP(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
 	}
-	newHistoryRegistry(sess, s.opts.Version).ServeHTTP(w, r)
+	newSessionMCPRegistry(sess, s.opts.Version).ServeHTTP(w, r)
 }

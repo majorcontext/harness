@@ -10,6 +10,7 @@ import (
 
 	"github.com/majorcontext/harness/mcp"
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/process"
 )
 
 // seedMessages builds a small, readable history: a user question, an
@@ -273,6 +274,161 @@ func TestHandleSessionMCPFullLifecycle(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("tools/call text missing %q from the session's real history:\n%s", want, got)
 		}
+	}
+}
+
+// TestHandleSessionMCPToolsListOmitsProcessToolWhenNotConfigured proves a
+// session with no Config.Processes (the ordinary newHarness session, no
+// process manager wired at all) advertises ONLY get_conversation_history —
+// the same "process tool absent when unconfigured" rule the native loop
+// already follows (engine's TestProcessToolAbsentWhenNoProcessesConfigured)
+// applies identically to this MCP surface.
+func TestHandleSessionMCPToolsListOmitsProcessToolWhenNotConfigured(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	id := h.createSession("")
+
+	_, listData := h.do("POST", "/session/"+id+"/mcp", map[string]any{
+		"jsonrpc": "2.0", "id": "1", "method": "tools/list",
+	})
+	var listMsg struct {
+		Result mcp.ListToolsResult `json:"result"`
+	}
+	if err := json.Unmarshal(listData, &listMsg); err != nil {
+		t.Fatalf("decoding tools/list response: %v (%s)", err, listData)
+	}
+	if len(listMsg.Result.Tools) != 1 || listMsg.Result.Tools[0].Name != historyToolName {
+		t.Fatalf("tools/list Tools = %+v, want exactly [%s]", listMsg.Result.Tools, historyToolName)
+	}
+}
+
+// TestHandleSessionMCPToolsListIncludesProcessToolWithAnnotations proves a
+// session WITH Config.Processes configured advertises the native
+// `process` tool alongside get_conversation_history, each carrying the
+// annotation this file's package doc promises: readOnlyHint on history,
+// destructiveHint on process — plus process's own Description/InputSchema
+// passed through from the engine's real tool definition (ToolDef), not a
+// hand-duplicated copy.
+func TestHandleSessionMCPToolsListIncludesProcessToolWithAnnotations(t *testing.T) {
+	h, _ := newProcessHarness(t, map[string]process.Def{
+		"dev": {Command: []string{"sh", "-c", "true"}},
+	})
+	id := h.createSession("")
+
+	_, listData := h.do("POST", "/session/"+id+"/mcp", map[string]any{
+		"jsonrpc": "2.0", "id": "1", "method": "tools/list",
+	})
+	var listMsg struct {
+		Result mcp.ListToolsResult `json:"result"`
+	}
+	if err := json.Unmarshal(listData, &listMsg); err != nil {
+		t.Fatalf("decoding tools/list response: %v (%s)", err, listData)
+	}
+	if len(listMsg.Result.Tools) != 2 {
+		t.Fatalf("tools/list Tools = %+v, want exactly 2 (history + process)", listMsg.Result.Tools)
+	}
+
+	var hist, proc *mcp.Tool
+	for i := range listMsg.Result.Tools {
+		switch listMsg.Result.Tools[i].Name {
+		case historyToolName:
+			hist = &listMsg.Result.Tools[i]
+		case "process":
+			proc = &listMsg.Result.Tools[i]
+		}
+	}
+	if hist == nil {
+		t.Fatal("tools/list missing get_conversation_history")
+	}
+	// json.Marshal compacts an embedded json.RawMessage (no insignificant
+	// whitespace survives the round trip through writeResult), so the
+	// wire form is "readOnlyHint":true, not "readOnlyHint": true.
+	if !strings.Contains(string(hist.Annotations), `"readOnlyHint":true`) {
+		t.Errorf("get_conversation_history Annotations = %s, want readOnlyHint true", hist.Annotations)
+	}
+	if proc == nil {
+		t.Fatal("tools/list missing process")
+	}
+	if !strings.Contains(string(proc.Annotations), `"destructiveHint":true`) {
+		t.Errorf("process Annotations = %s, want destructiveHint true", proc.Annotations)
+	}
+	if !strings.Contains(proc.Description, "long-lived") {
+		t.Errorf("process Description = %q, want it to describe managing long-lived box processes", proc.Description)
+	}
+	if len(proc.InputSchema) == 0 {
+		t.Error("process InputSchema is empty, want the engine's own process-tool schema passed through")
+	}
+}
+
+// TestHandleSessionMCPProcessToolCallStartsRealProcess proves tools/call
+// for the process tool routes all the way through
+// engine.Session.RunTool -- a "start" call over MCP leaves the process
+// RUNNING in the same Manager a native-loop call would have used, not
+// merely returning a plausible-looking response.
+func TestHandleSessionMCPProcessToolCallStartsRealProcess(t *testing.T) {
+	h, mgr := newProcessHarness(t, map[string]process.Def{
+		"dev": {Command: []string{"sh", "-c", `echo "Ready in 5ms"; sleep 100`}, ReadyRegex: "Ready in .*ms"},
+	})
+	id := h.createSession("")
+
+	_, callData := h.do("POST", "/session/"+id+"/mcp", map[string]any{
+		"jsonrpc": "2.0", "id": "1", "method": "tools/call",
+		"params": map[string]any{"name": "process", "arguments": map[string]any{"action": "start", "name": "dev"}},
+	})
+	var callMsg struct {
+		Result mcp.CallToolResult `json:"result"`
+		Error  *mcp.RPCError      `json:"error"`
+	}
+	if err := json.Unmarshal(callData, &callMsg); err != nil {
+		t.Fatalf("decoding tools/call response: %v (%s)", err, callData)
+	}
+	if callMsg.Error != nil {
+		t.Fatalf("tools/call returned a protocol error: %+v", callMsg.Error)
+	}
+	if callMsg.Result.IsError {
+		t.Fatalf("tools/call result IsError = true: %+v", callMsg.Result.Content)
+	}
+
+	st, err := mgr.Status("dev")
+	if err != nil {
+		t.Fatalf("mgr.Status: %v", err)
+	}
+	if st.State != process.StateReady {
+		t.Fatalf("mgr.Status(dev) = %+v, want ready — tools/call must have actually started the process via RunTool", st)
+	}
+}
+
+// TestHandleSessionMCPProcessToolCallFailureIsToolError proves a process
+// tool call that fails at the ACTION level (an unknown action here) comes
+// back as a successful JSON-RPC response carrying CallToolResult.IsError —
+// the same TOOL-level-vs-protocol-level distinction
+// TestRegistryToolsCallHandlerErrorBecomesIsErrorResult already locks in
+// for mcpserver generically — never a protocol-level RPCError, since
+// "process" IS a known, registered tool.
+func TestHandleSessionMCPProcessToolCallFailureIsToolError(t *testing.T) {
+	h, _ := newProcessHarness(t, map[string]process.Def{
+		"dev": {Command: []string{"sh", "-c", "true"}},
+	})
+	id := h.createSession("")
+
+	_, callData := h.do("POST", "/session/"+id+"/mcp", map[string]any{
+		"jsonrpc": "2.0", "id": "1", "method": "tools/call",
+		"params": map[string]any{"name": "process", "arguments": map[string]any{"action": "not_a_real_action", "name": "dev"}},
+	})
+	var callMsg struct {
+		Result mcp.CallToolResult `json:"result"`
+		Error  *mcp.RPCError      `json:"error"`
+	}
+	if err := json.Unmarshal(callData, &callMsg); err != nil {
+		t.Fatalf("decoding tools/call response: %v (%s)", err, callData)
+	}
+	if callMsg.Error != nil {
+		t.Fatalf("tools/call returned a protocol-level error for a tool-level failure: %+v", callMsg.Error)
+	}
+	if !callMsg.Result.IsError {
+		t.Fatalf("tools/call Result.IsError = false, want true for an unknown action")
+	}
+	if len(callMsg.Result.Content) != 1 || !strings.Contains(callMsg.Result.Content[0].Text, "not_a_real_action") {
+		t.Errorf("tools/call Content = %+v, want it to name the unknown action", callMsg.Result.Content)
 	}
 }
 

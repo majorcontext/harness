@@ -164,6 +164,13 @@ func newServer(t *testing.T, dir string, prov provider.Provider, maxResident int
 			SessionDir: dir,
 			OnEvent:    func(ev engine.Event) { srv.Publish(ev) },
 			GoalTool:   !opts.GoalEvaluator.IsZero(),
+			// Processes mirrors production's own mkCfg (cmd/harness/main.go):
+			// every session gets the SAME Options.Processes a mutate func
+			// may have set, so a session created live (handleCreate) or
+			// cold-loaded (LoadSession) both see the native `process` tool
+			// exactly like a real served box does — see
+			// TestHandleSessionMCPProcessTool.
+			Processes: opts.Processes,
 		}
 	}
 	opts = Options{
