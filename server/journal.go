@@ -952,6 +952,30 @@ func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, 
 // self-correcting by message ID), never lost — whereas letting the summary
 // slip above the watermark is unrecoverable. See
 // TestTranscriptStreamFrom_CompactionDuringSnapshotStaysRecoverable.
+//
+// # The two-emit sandwich window
+//
+// A compaction does not journal its summary and its reconciliation record
+// atomically: engine/compact.go emits the summary as an ordinary evtMessage
+// first, then EventHistoryCompacted separately, and server-side each goes
+// through its own Publish call — its own separate s.mu critical section.
+// A bootstrap read can acquire s.mu in the gap between the two: it observes
+// the summary's evtMessage (so any stale-history message journaled after it
+// in that same gap can raise `highest` past the summary's seq) but not yet
+// the evtHistoryCompacted record, so pendingCeilings above is empty and the
+// paragraph's cap never engages — stream_from would land above the summary
+// while the summary is itself excluded from history, exactly the
+// unrecoverable gap this function exists to prevent. Closing this requires
+// no second event: a summary excluded from history is identifiable from its
+// OWN evtMessage record via engine.IsCompactionSummaryID, independent of
+// whether its evtHistoryCompacted record has arrived yet. summaryCeiling
+// below captures that directly, in the same first pass, from the message's
+// own seq — and is folded into the final cap alongside pendingCeilings, the
+// lower of the two winning. The two mechanisms stay complementary rather
+// than redundant: pendingCeilings still covers a summary loaded from store
+// (its evtHistoryCompacted record present without a matching in-memory
+// evtMessage), and summaryCeiling covers the newly-widened sandwich window
+// above. See TestTranscriptWatermarkLocked_CompactionSummarySandwich.
 // Caller holds s.mu.
 func (s *Server) transcriptWatermarkLocked(sessionID string, history []message.Message) int64 {
 	inHistory := make(map[string]bool, len(history))
@@ -965,13 +989,24 @@ func (s *Server) transcriptWatermarkLocked(sessionID string, history []message.M
 	// seq is looked up in a second pass below, once highest is known, so the
 	// common (no concurrent compaction) case never pays for the lookup.
 	var pendingCeilings []string
+	// summaryCeiling caps the watermark directly from a compaction summary's
+	// own evtMessage record, without waiting for its evtHistoryCompacted
+	// record — see the "two-emit sandwich window" section above. -1 means no
+	// absent summary evtMessage was seen.
+	summaryCeiling := int64(-1)
 	for _, ev := range s.journal {
 		if ev.SessionID != sessionID {
 			continue
 		}
 		switch ev.Type {
 		case evtMessage:
-			if ev.Message == nil || !inHistory[ev.Message.ID] {
+			if ev.Message == nil {
+				continue
+			}
+			if !inHistory[ev.Message.ID] {
+				if engine.IsCompactionSummaryID(ev.Message.ID) && (summaryCeiling == -1 || ev.Seq < summaryCeiling) {
+					summaryCeiling = ev.Seq
+				}
 				continue
 			}
 			if ev.Seq > highest {
@@ -983,18 +1018,16 @@ func (s *Server) transcriptWatermarkLocked(sessionID string, history []message.M
 			}
 		}
 	}
-	if len(pendingCeilings) == 0 {
-		return highest
-	}
-
-	ceiling := int64(-1)
-	for _, ev := range s.journal {
-		if ev.Type != evtMessage || ev.SessionID != sessionID || ev.Message == nil {
-			continue
-		}
-		for _, id := range pendingCeilings {
-			if ev.Message.ID == id && (ceiling == -1 || ev.Seq < ceiling) {
-				ceiling = ev.Seq
+	ceiling := summaryCeiling
+	if len(pendingCeilings) > 0 {
+		for _, ev := range s.journal {
+			if ev.Type != evtMessage || ev.SessionID != sessionID || ev.Message == nil {
+				continue
+			}
+			for _, id := range pendingCeilings {
+				if ev.Message.ID == id && (ceiling == -1 || ev.Seq < ceiling) {
+					ceiling = ev.Seq
+				}
 			}
 		}
 	}

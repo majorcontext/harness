@@ -330,6 +330,65 @@ func TestTranscriptStreamFrom_CompactionDuringSnapshotStaysRecoverable(t *testin
 	}
 }
 
+// TestTranscriptWatermarkLocked_CompactionSummarySandwich is the regression
+// test for the narrower race TestTranscriptStreamFrom_CompactionDuringSnapshotStaysRecoverable
+// above cannot reach: that test's seam runs the whole POST /compact
+// synchronously, so by the time the racing GET observes anything, BOTH the
+// summary's evtMessage record and its paired evtHistoryCompacted record are
+// already journaled — pendingCeilings always has something to cap on. In
+// production the two are journaled in separate Publish calls (separate s.mu
+// sections; see engine/compact.go's Compact and transcriptWatermarkLocked's
+// own doc comment), so a bootstrap read can land in the gap between them:
+// summary evtMessage present, evtHistoryCompacted absent. There is no
+// existing seam that stalls a real compaction between its two Publish
+// calls, so this constructs that exact journal state directly — via the
+// same emitDurableLocked production code path syncMessages itself uses, not
+// hand-rolled Event literals — and calls transcriptWatermarkLocked
+// directly, the narrowest production-faithful entry point for a state that
+// has no HTTP-level trigger yet.
+func TestTranscriptWatermarkLocked_CompactionSummarySandwich(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	const sessionID = "sess_sandwich"
+
+	// An ordinary message already in history, journaled before the summary.
+	first := message.Message{ID: "msg_first", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "first"}}}
+	// The compaction summary: a real cmpsum_-prefixed ID (engine.IsCompactionSummaryID
+	// gates on exactly this prefix — see compactionSummaryIDTag), journaled as
+	// a plain evtMessage. It is EXCLUDED from history below (compaction
+	// spliced it in, replacing the folded range) and — this is the sandwich —
+	// its evtHistoryCompacted record has NOT been journaled yet.
+	summary := message.Message{ID: "cmpsum_test", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: engine.CompactionSummaryBanner + "summary"}}}
+	// A stale-history message journaled AFTER the summary, in the gap — the
+	// exact shape that pushes `highest` past the summary's own seq when
+	// nothing caps it.
+	stale := message.Message{ID: "msg_stale", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "stale"}}}
+
+	firstEv := &Event{Type: evtMessage, SessionID: sessionID, Message: &first}
+	summaryEv := &Event{Type: evtMessage, SessionID: sessionID, Message: &summary}
+	staleEv := &Event{Type: evtMessage, SessionID: sessionID, Message: &stale}
+
+	h.srv.mu.Lock()
+	h.srv.emitDurableLocked(firstEv)
+	h.srv.emitDurableLocked(summaryEv)
+	h.srv.emitDurableLocked(staleEv)
+	// Deliberately no evtHistoryCompacted record: this is the gap between
+	// compaction's two separate emits, before the second one lands.
+	got := h.srv.transcriptWatermarkLocked(sessionID, []message.Message{first, stale})
+	h.srv.mu.Unlock()
+
+	if staleEv.Seq <= summaryEv.Seq {
+		t.Fatalf("test setup invariant broken: stale seq %d must be > summary seq %d", staleEv.Seq, summaryEv.Seq)
+	}
+
+	want := summaryEv.Seq - 1
+	if got != want {
+		t.Errorf("transcriptWatermarkLocked = %d, want %d (summary %s's own seq %d minus one) — "+
+			"a summary absent from history must cap the watermark even with no evtHistoryCompacted "+
+			"record yet, or its future history.compacted record becomes an unrecoverable dangling reference",
+			got, want, summary.ID, summaryEv.Seq)
+	}
+}
+
 // TestTranscriptStreamFrom_EmptyHistoryReportsZero pins the deliberate
 // choice for a session with nothing journaled yet: stream_from is 0, not
 // some higher "current instant" value (e.g. the server's global seq
