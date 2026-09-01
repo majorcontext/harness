@@ -198,21 +198,37 @@ Agent Skills discovered under `<WorkDir>/.agents/skills` (or config
 `skills_dirs` / the repeatable `-skills-dir` flag) are advertised the same way,
 so a cloned repo's skills are offered to box sessions automatically.
 
+### Telling box sessions about the environment
+
+Config `append_system_prompt` is an array of environment facts for every
+session created by `serve` or `run`. Use it for facts an agent cannot discover,
+such as a gateway URL template or a required `0.0.0.0` bind address.
+
+The key merges additively. Platform entries come first, then entries from the
+cloned repository's `.harness.json`. A repository can add facts but cannot
+remove platform entries through this key. A `claude-code/*` session sends the
+entries as one `--append-system-prompt` value. Do not also put either Claude
+Code append-prompt option in provider `extra_args`; Harness rejects that
+conflict. See [engine-request-cycle.md](engine-request-cycle.md).
+
 ### Verifying what reaches the model
 
-Because the box injects instructions and skills silently, you sometimes want to
-confirm they actually landed in the prompt. Three surfaces answer that without
-guesswork: `GET /session/{id}/request` returns the exact request the process
-most recently assembled for a session — the ordered system segments, offered
-tool names, message count, and sampling params — read from memory (full requests
-are never persisted, so a session that has not prompted this process is `404`).
-Every turn also journals a durable `request.meta` event carrying the system
-hash, segment/tool/message counts, and (only when the hash changes) the full
-system, so a `from=0` replay reconstructs exactly what each turn sent. And the
-built-in `session_info` tool lets the model itself report the instructions
-provenance, discovered skills, and system segments it received this turn. The
-`e2e/` suite asserts a real repo's `AGENTS.md` body and skill catalog line reach
-the assembled system, in that order, so this contract is CI-enforced.
+For native providers, three surfaces show what Harness assembled:
+`GET /session/{id}/request`, durable `request.meta` events, and the built-in
+`session_info` tool. The request endpoint contains the ordered system segments,
+tool names, message count, and sampling parameters. Harness stores full requests
+in memory only, so a session that has not prompted in this process returns
+`404`. A `request.meta` event includes the system hash and counts. It includes
+the full system only when the hash changes.
+
+Delegated Claude Code turns do not use Harness request assembly. They therefore
+do not populate these three native-request surfaces. Use child-process argv
+logging or Claude Code diagnostics to verify its effective appended prompt.
+The engine tests assert the exact managed CLI option.
+
+The `e2e/` suite verifies that a native request contains the exact configured
+segments in their expected positions. It also verifies project instructions
+and the skill catalog in their expected order.
 
 ## Inspecting sessions
 

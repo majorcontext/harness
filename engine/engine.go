@@ -298,6 +298,21 @@ type Config struct {
 	MaxTokens int              // per-response cap; defaults to 8192
 	WorkDir   string           // working directory for built-in tools
 
+	// AppendSystemPrompt carries OPERATOR-supplied system prompt segments —
+	// environment truth the agent cannot otherwise discover (a gateway URL
+	// template, a required bind address), not tool shape. Each entry becomes
+	// one system segment, in order, directly after System and before every
+	// engine-assembled segment (tool batching, instructions, skills, the MCP
+	// catalog, plugin transforms). Config key `append_system_prompt` (see
+	// config.Config, whose merge for this key is additive so a project layer
+	// cannot drop a platform segment).
+	//
+	// Unlike System, these segments DO travel to the delegated Claude Code
+	// CLI, as one blank-line-joined --append-system-prompt value — see
+	// runClaudeCodeTurn and claude_code_backend.go's package doc for why the
+	// two are treated differently.
+	AppendSystemPrompt []string
+
 	// ClaudeCode configures the delegated-turn backend a session whose
 	// Model.Provider is ClaudeCodeProviderFamily is driven through (see
 	// engine/claude_code_backend.go) — the non-HTTP counterpart to
@@ -2762,6 +2777,11 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 	tools, mcpCatalog := s.toolDefsWithCatalog(ctx)
 
 	system := append([]string(nil), s.cfg.System...)
+	// Operator-supplied environment segments (config `append_system_prompt`)
+	// sit with the base prompt, ahead of every engine-assembled segment:
+	// they describe the environment the session runs in, which the model
+	// needs before it reads anything about tools, the project, or skills.
+	system = append(system, s.cfg.AppendSystemPrompt...)
 	// Tool-batching guidance sits with the base system prompt, ahead of
 	// project instructions: it describes how this engine executes tools,
 	// not anything about the project. Empty for a session that runs tools
