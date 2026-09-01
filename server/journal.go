@@ -866,6 +866,20 @@ func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, 
 	s.mu.Lock()
 	for i := range history {
 		m := history[i]
+		// A message.IsSyntheticOrphanID entry (message.ResolveOrphanToolCalls'
+		// load-time repair, folded into sess.History() for a cold-loaded
+		// session — see engine.LoadSession) exists only to keep a REQUEST
+		// protocol-valid; it is never itself persisted to the session's own
+		// log, so it has no durable identity to journal against. Giving it a
+		// seq would violate the same rule durableOnly (handlers.go) already
+		// enforces for the before_seq/limit page — "a page must never give
+		// one a seq, whichever path produced the page" — and, worse, is not
+		// even idempotent the way a real message's journaling is: nothing
+		// backs its "seen" mark across a restart, since it is re-derived
+		// fresh on every load rather than replayed from events.jsonl.
+		if message.IsSyntheticOrphanID(m.ID) {
+			continue
+		}
 		if s.isSeenLocked(id, m.ID) {
 			continue
 		}

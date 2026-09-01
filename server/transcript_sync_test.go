@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/majorcontext/harness/engine"
@@ -381,6 +383,70 @@ func TestTranscriptStreamFrom_RejectsCombinationWithPaging(t *testing.T) {
 		if resp.StatusCode != 400 {
 			t.Errorf("GET message%s = %d, want 400: %s", query, resp.StatusCode, data)
 		}
+	}
+}
+
+// TestTranscriptStreamFrom_SyntheticOrphanRepairNeverJournaled: a
+// message.ResolveOrphanToolCalls repair (LoadSession's load-time patch for
+// an assistant tool_call with no matching tool_result anywhere a provider's
+// wire protocol requires one — see message.IsSyntheticOrphanID) exists only
+// in this process's in-memory history; it is never itself persisted to the
+// session's own log (see engine/store.go's LoadSession). It must still
+// appear in the returned `messages` — this endpoint mirrors the
+// unparameterized bare-array shape, which already includes it, unlike the
+// before_seq/limit page (handleMessagePage's own doc comment: a page
+// "never adds the load-time repair," reading verbatim from the durable log
+// instead) — but it must never receive a durable seq: durableOnly
+// (handlers.go) already enforces "a page must never give one a seq,
+// whichever path produced the page" for the identical reason, and nothing
+// backs its "seen" mark across a restart, since LoadSession re-derives it
+// fresh on every load rather than replaying it from events.jsonl.
+//
+// The fixture file is written to disk AFTER the harness boots (like
+// TestTranscriptStreamFrom_ConsistentWithSnapshot), not before: writing it
+// first would let boot-time reconcile() — a separate, PRE-EXISTING loop
+// with this exact same characteristic, unrelated to this change — journal
+// the repair before transcriptSyncedThrough ever runs, which would pass or
+// fail this test on reconcile()'s behavior instead of the code this test
+// exists to cover.
+func TestTranscriptStreamFrom_SyntheticOrphanRepairNeverJournaled(t *testing.T) {
+	dir := t.TempDir()
+	h := newHarnessDir(t, dir, &scriptedProvider{name: "test"})
+
+	id := "ses_5292000000000099"
+	// msg_2 is an assistant tool_call with no following tool-role result —
+	// the exact orphan shape message.ResolveOrphanToolCalls repairs, mirrors
+	// engine/compact_test.go's nep5292FixtureLines.
+	fixture := `{"type":"session","id":"` + id + `","created_at":"2025-01-02T03:04:05Z"}
+{"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"task 1"}]}}
+{"type":"message","message":{"id":"msg_2","role":"assistant","parts":[{"type":"tool_call","call_id":"A","name":"bash","arguments":{}}]}}
+{"type":"message","message":{"id":"msg_3","role":"user","parts":[{"type":"text","text":"task 2"}]}}
+{"type":"message","message":{"id":"msg_4","role":"assistant","parts":[{"type":"text","text":"done"}]}}
+`
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(fixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, meta := getTranscript(t, h, id)
+	if meta.status != 200 {
+		t.Fatalf("GET stream_from = %d: %s", meta.status, meta.body)
+	}
+	if len(got.Messages) != 5 {
+		t.Fatalf("got %d messages, want 5 (4 raw + 1 synthetic repair)", len(got.Messages))
+	}
+	var orphanID string
+	for _, m := range got.Messages {
+		if message.IsSyntheticOrphanID(m.ID) {
+			orphanID = m.ID
+		}
+	}
+	if orphanID == "" {
+		t.Fatal("no synthetic orphan-repair message in the returned messages — fixture did not trigger the repair")
+	}
+
+	seqs := journalSeqByMessageID(h.srv, id)
+	if _, journaled := seqs[orphanID]; journaled {
+		t.Errorf("synthetic orphan-repair message %s was journaled with a durable seq — it has no durable identity to journal against", orphanID)
 	}
 }
 
