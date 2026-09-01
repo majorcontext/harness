@@ -9,6 +9,7 @@ import (
 	_ "image/jpeg" // register JPEG decoder for image.DecodeConfig
 	_ "image/png"  // register PNG decoder for image.DecodeConfig
 	"net/http"
+	"sort"
 	"strings"
 
 	_ "golang.org/x/image/webp" // register WebP decoder for image.DecodeConfig
@@ -38,36 +39,74 @@ import (
 // handles the ones nothing can repair — a type no provider decodes, bytes
 // that are not the image they claim to be, an attachment with no payload.
 
-// promptBlobMediaTypes is the set of attachment media types a prompt may
-// carry. It matches engine's own read_file image set
-// (engine/filetools.go's readFileImageMediaTypes) deliberately: those are
-// the formats every provider adapter transcodes and imageclamp can decode
-// and downscale, so an uploaded image and a model-read image are the same
-// class of thing everywhere downstream.
+// promptAttachmentTypes is the set of attachment media types a prompt may
+// carry, each paired with the check that proves the bytes really are that
+// type. A media type belongs here only when EVERY provider lane harness can
+// dispatch to actually delivers it, because a session switches models
+// freely and the attachment stays in its history forever:
 //
-// Documents (application/pdf) are NOT in this set even though Anthropic
-// accepts them: imageclamp cannot clamp a PDF, and provider support is
-// uneven (see provider/openaicompat's blobURL restrictions), so accepting
-// one here would be a promise this server cannot keep on every model a
-// session can switch to.
-var promptBlobMediaTypes = map[string]bool{
-	"image/png":  true,
-	"image/jpeg": true,
-	"image/gif":  true,
-	"image/webp": true,
+//   - Images (the same set engine's read_file returns as a blob, see
+//     readFileImageMediaTypes): anthropic and claude-code send an image
+//     block, openai an input_image, openaicompat a data URL. imageclamp can
+//     also decode and downscale them, so an oversized one heals rather than
+//     wedging a session.
+//   - application/pdf: anthropic and claude-code send a document block,
+//     openai an input_file. Verified against the real claude-code CLI, which
+//     read a PDF's text back through its stream-json stdin.
+//
+// Everything else stays out for a concrete reason, not caution: a
+// text/plain or docx blob reaches openai's transcodeBlob as "unsupported
+// blob media type" and openaicompat's blobURL the same way, so accepting
+// one here would be a promise two lanes cannot keep. Widening this set is a
+// row plus a verifier — and a check that every provider adapter transcodes
+// the new type.
+var promptAttachmentTypes = map[string]func(mediaType string, data []byte) error{
+	"image/png":       verifyImageBytes,
+	"image/jpeg":      verifyImageBytes,
+	"image/gif":       verifyImageBytes,
+	"image/webp":      verifyImageBytes,
+	"application/pdf": verifyPDFBytes,
 }
 
-// promptBlobMaxBytes bounds ONE decoded attachment. It matches engine's
-// read_file image ceiling (readFileMaxImageBytes) for the same reason the
-// media-type set does: one limit for "an image harness will hold in a
-// session", however it arrived.
+// promptAttachmentMaxBytes bounds ONE decoded attachment. For an image it
+// matches engine's read_file ceiling (readFileMaxImageBytes): one limit for
+// "a picture harness will hold in a session", however it arrived.
 //
-// This is not the provider wire limit — imageclamp enforces those per
-// adapter at transcode time, downscaling rather than rejecting. This cap
-// exists so a single request cannot make the server hold an unbounded
-// decoded payload, and so a caller sending something absurd learns
-// immediately instead of after a resize it never asked for.
-const promptBlobMaxBytes = 20 * 1024 * 1024
+// For a PDF the cap does more work, and is the only protection there is:
+// imageclamp decodes and downscales an oversized IMAGE at transcode time,
+// but it cannot rewrite a document, so a PDF past a provider's own request
+// ceiling (Anthropic's is 32MB) would fail every turn from inside a durable
+// transcript with nothing able to repair it. This ceiling sits below that.
+const promptAttachmentMaxBytes = 20 * 1024 * 1024
+
+// verifyImageBytes proves data decodes as the image type it claims. It
+// reads the header only (dimensions, not pixels), so a 20MB image costs a
+// header parse rather than a full decode.
+func verifyImageBytes(mediaType string, data []byte) error {
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("does not decode as %s: %v", mediaType, err)
+	}
+	if "image/"+format != mediaType {
+		return fmt.Errorf("does not decode as %s: the data is %s", mediaType, format)
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 {
+		return fmt.Errorf("does not decode as %s: it reports a %dx%d size", mediaType, cfg.Width, cfg.Height)
+	}
+	return nil
+}
+
+// verifyPDFBytes proves data is a PDF by its header. A PDF file begins with
+// %PDF- followed by its version (ISO 32000-1 §7.5.2); this is a
+// mislabeling check, not a validity check — a structurally broken PDF is
+// the provider's business, while a JPEG labeled application/pdf is this
+// server's.
+func verifyPDFBytes(mediaType string, data []byte) error {
+	if !bytes.HasPrefix(data, []byte("%PDF-")) {
+		return fmt.Errorf("does not begin with a %%PDF- header, so it is not a %s", mediaType)
+	}
+	return nil
+}
 
 // promptParts is one decoded prompt body: the caller's text (every text
 // part joined by newlines, exactly as the text-only contract always did)
@@ -132,8 +171,9 @@ func decodePromptParts(parts []promptPartInput) (promptParts, int, error) {
 // never how to fix the request format, because the caller here is a UI
 // forwarding a file a person chose.
 func decodePromptBlob(p promptPartInput) (*message.Blob, error) {
-	if !promptBlobMediaTypes[p.MediaType] {
-		return nil, fmt.Errorf("unsupported blob media type %q: prompt attachments must be image/png, image/jpeg, image/gif, or image/webp", p.MediaType)
+	verify, ok := promptAttachmentTypes[p.MediaType]
+	if !ok {
+		return nil, fmt.Errorf("unsupported blob media type %q: prompt attachments must be one of %s", p.MediaType, promptAttachmentTypeList())
 	}
 	if len(p.Data) == 0 {
 		if p.URL != "" {
@@ -146,33 +186,26 @@ func decodePromptBlob(p promptPartInput) (*message.Blob, error) {
 		}
 		return nil, errors.New("blob has neither data nor url")
 	}
-	if len(p.Data) > promptBlobMaxBytes {
-		return nil, fmt.Errorf("attachment is %d bytes, which exceeds the %d-byte limit for one prompt attachment", len(p.Data), promptBlobMaxBytes)
+	if len(p.Data) > promptAttachmentMaxBytes {
+		return nil, fmt.Errorf("attachment is %d bytes, which exceeds the %d-byte limit for one prompt attachment", len(p.Data), promptAttachmentMaxBytes)
 	}
-	// Decode the header, not just the magic bytes: a truncated or corrupt
-	// image passes a prefix check and then fails at the provider, on every
-	// later turn, from inside a durable transcript. DecodeConfig reads the
-	// dimensions only, so this costs a header parse rather than a full
-	// decode of a 20MB image.
-	cfg, format, err := image.DecodeConfig(bytes.NewReader(p.Data))
-	if err != nil {
-		return nil, fmt.Errorf("attachment does not decode as %s: %v", p.MediaType, err)
-	}
-	if !formatMatchesMediaType(format, p.MediaType) {
-		return nil, fmt.Errorf("attachment does not decode as %s: the data is %s", p.MediaType, format)
-	}
-	if cfg.Width <= 0 || cfg.Height <= 0 {
-		return nil, fmt.Errorf("attachment does not decode as %s: it reports a %dx%d size", p.MediaType, cfg.Width, cfg.Height)
+	// Prove the bytes are the type they claim BEFORE the prompt is accepted:
+	// a mislabeled or truncated file passes a media-type string check and
+	// then fails at the provider, on every later turn, from inside a durable
+	// transcript. Each type brings its own verifier (promptAttachmentTypes).
+	if err := verify(p.MediaType, p.Data); err != nil {
+		return nil, fmt.Errorf("attachment %v", err)
 	}
 	return &message.Blob{MediaType: p.MediaType, Data: p.Data}, nil
 }
 
-// formatMatchesMediaType reports whether image.DecodeConfig's format name
-// (the registered decoder's own name: "png", "jpeg", "gif", "webp") is the
-// one the caller's media type claims. A mismatch is not pedantry: a JPEG
-// labeled image/png reaches the provider as a lie about its own bytes, and
-// the provider — not harness — is the one that rejects it, one turn later
-// and from inside a durable transcript.
-func formatMatchesMediaType(format, mediaType string) bool {
-	return "image/"+format == mediaType
+// promptAttachmentTypeList renders the accepted media types for an error
+// message, sorted so the same request always names them in the same order.
+func promptAttachmentTypeList() string {
+	types := make([]string, 0, len(promptAttachmentTypes))
+	for mediaType := range promptAttachmentTypes {
+		types = append(types, mediaType)
+	}
+	sort.Strings(types)
+	return strings.Join(types, ", ")
 }

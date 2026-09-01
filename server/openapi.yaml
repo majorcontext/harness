@@ -918,20 +918,22 @@ components:
               - $ref: "#/components/schemas/TextPart"
               - $ref: "#/components/schemas/BlobPart"
           description: >
-            Text parts and image attachments. Text parts are joined by
+            Text parts and file attachments. Text parts are joined by
             newlines into the prompt's text; each blob part becomes a Blob
             part of the user message, after the text, in the order given.
 
 
-            An attachment must be an image (image/png, image/jpeg,
-            image/gif, or image/webp — the same set read_file returns as a
-            blob), must carry inline base64 `data` rather than a `url`, must
-            decode as the media type it claims, and must not exceed
-            20971520 bytes. Anything else is rejected with 400 before the
-            prompt is accepted, because a blob no provider can render would
-            otherwise be persisted into the durable transcript and re-sent
-            on every later turn. A prompt carrying at least one attachment
-            is valid with no text part at all.
+            An attachment must be one of image/png, image/jpeg, image/gif,
+            image/webp, or application/pdf — every media type each provider
+            lane can actually deliver (an image block, or a document block
+            for a PDF). It must carry inline base64 `data` rather than a
+            `url`, must really be the type it claims (an image is decoded, a
+            PDF must carry its %PDF- header), and must not exceed 20971520
+            bytes. Anything else is rejected with 400 before the prompt is
+            accepted, because a blob no provider can render would otherwise
+            be persisted into the durable transcript and re-sent on every
+            later turn. A prompt carrying at least one attachment is valid
+            with no text part at all.
         model:
           $ref: "#/components/schemas/ModelRef"
           description: >

@@ -324,8 +324,8 @@ empty queue, and never touches a currently running turn — `POST /abort` is
 unrelated and does not touch the queue either way (it only cancels the
 in-flight turn's context).
 
-A queued prompt carries **text and image attachments**: `QueuedPrompt{ID,
-Text, Blobs}`, persisted together on the `prompt.queued` record
+A queued prompt carries **text and file attachments** (images and PDFs, the
+set every provider lane delivers): `QueuedPrompt{ID, Text, Blobs}`, persisted together on the `prompt.queued` record
 (`promptRecord.Blobs`), so an image sent while a turn was running still
 reaches the model when the queue drains — across a process restart included.
 The bytes ride only on `prompt.queued`, never on `prompt.dequeued`, which

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -34,6 +35,35 @@ func testPNG(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
+}
+
+// testPDF returns a small, structurally valid PDF carrying one line of text
+// — the document counterpart of testPNG. Real bytes for the same reason: the
+// handler proves an attachment is the type it claims.
+func testPDF(t *testing.T) []byte {
+	t.Helper()
+	content := []byte("BT /F1 24 Tf 72 700 Td (attachment test) Tj ET")
+	objs := [][]byte{
+		[]byte("<< /Type /Catalog /Pages 2 0 R >>"),
+		[]byte("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+		[]byte("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>"),
+		[]byte("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
+		fmt.Appendf(nil, "<< /Length %d >>\nstream\n%s\nendstream", len(content), content),
+	}
+	var out bytes.Buffer
+	out.WriteString("%PDF-1.4\n")
+	offsets := make([]int, 0, len(objs))
+	for i, o := range objs {
+		offsets = append(offsets, out.Len())
+		fmt.Fprintf(&out, "%d 0 obj\n%s\nendobj\n", i+1, o)
+	}
+	xref := out.Len()
+	fmt.Fprintf(&out, "xref\n0 %d\n0000000000 65535 f \n", len(objs)+1)
+	for _, off := range offsets {
+		fmt.Fprintf(&out, "%010d 00000 n \n", off)
+	}
+	fmt.Fprintf(&out, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objs)+1, xref)
+	return out.Bytes()
 }
 
 // capturingProvider is scriptedProvider plus a copy of every request it was
@@ -89,8 +119,8 @@ func blobParts(ps message.Parts) []*message.Blob {
 	return blobs
 }
 
-// imagePart builds one prompt_async blob part body for data.
-func imagePart(mediaType string, data []byte) map[string]any {
+// attachmentPart builds one prompt_async blob part body for data.
+func attachmentPart(mediaType string, data []byte) map[string]any {
 	return map[string]any{
 		"type":       "blob",
 		"media_type": mediaType,
@@ -113,7 +143,7 @@ func TestPromptAsyncAcceptsImageBlobPart(t *testing.T) {
 	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
 		"parts": []any{
 			map[string]any{"type": "text", "text": "what color is this?"},
-			imagePart("image/png", pngBytes),
+			attachmentPart("image/png", pngBytes),
 		},
 	})
 	if resp.StatusCode != http.StatusAccepted {
@@ -156,7 +186,7 @@ func TestPromptAsyncAcceptsImageOnlyPrompt(t *testing.T) {
 	pngBytes := testPNG(t)
 
 	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
-		"parts": []any{imagePart("image/png", pngBytes)},
+		"parts": []any{attachmentPart("image/png", pngBytes)},
 	})
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("prompt_async status %d: %s", resp.StatusCode, data)
@@ -175,6 +205,45 @@ func TestPromptAsyncAcceptsImageOnlyPrompt(t *testing.T) {
 	}
 }
 
+// TestPromptAsyncAcceptsPDFAttachment proves the contract is attachments,
+// not images: a PDF is accepted, kept whole in the durable transcript, and
+// handed to the provider as its own blob part. The claude-code lane sends it
+// as a document block (claudeCodeInputContent); the native adapters already
+// transcode a non-image blob as a document/input_file.
+func TestPromptAsyncAcceptsPDFAttachment(t *testing.T) {
+	prov := newCapturingProvider(asstTurn("read it"))
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+	pdfBytes := testPDF(t)
+
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []any{
+			map[string]any{"type": "text", "text": "what does this say?"},
+			attachmentPart("application/pdf", pdfBytes),
+		},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt_async status %d: %s", resp.StatusCode, data)
+	}
+	h.waitIdle(id)
+
+	users := h.userMessages(id)
+	if len(users) != 1 {
+		t.Fatalf("user messages = %d, want 1", len(users))
+	}
+	blobs := blobParts(users[0].Parts)
+	if len(blobs) != 1 || blobs[0].MediaType != "application/pdf" {
+		t.Fatalf("transcript blobs = %+v, want the pdf", blobs)
+	}
+	if !bytes.Equal(blobs[0].Data, pdfBytes) {
+		t.Errorf("blob data = %d bytes, want the %d uploaded bytes", len(blobs[0].Data), len(pdfBytes))
+	}
+	sent := blobParts(prov.lastUserParts(t))
+	if len(sent) != 1 || !bytes.Equal(sent[0].Data, pdfBytes) {
+		t.Fatalf("provider request carried %d blob parts, want the pdf", len(sent))
+	}
+}
+
 // TestPromptAsyncRejectsUnusableBlob proves each rejection the handler owns,
 // and proves it rejects BEFORE anything runs: no user message is appended
 // and the provider is never called. A blob the provider would reject later
@@ -190,12 +259,17 @@ func TestPromptAsyncRejectsUnusableBlob(t *testing.T) {
 	}{
 		{
 			name: "unsupported media type",
-			part: imagePart("application/zip", []byte("PK\x03\x04not a zip")),
+			part: attachmentPart("application/zip", []byte("PK\x03\x04not a zip")),
 			want: "unsupported blob media type",
 		},
 		{
+			name: "document that is not a pdf",
+			part: attachmentPart("application/pdf", []byte("just text, no header")),
+			want: "%PDF- header",
+		},
+		{
 			name: "data does not decode as the claimed type",
-			part: imagePart("image/png", []byte("this is plain text, not a PNG")),
+			part: attachmentPart("image/png", []byte("this is plain text, not a PNG")),
 			want: "does not decode",
 		},
 		{
@@ -253,7 +327,7 @@ func TestPromptAsyncRejectsUnusableBlob(t *testing.T) {
 }
 
 // TestPromptAsyncOversizeBlobRejected proves the per-blob byte cap: a blob
-// past promptBlobMaxBytes is refused with a message naming the limit, so a
+// past promptAttachmentMaxBytes is refused with a message naming the limit, so a
 // caller learns to downscale instead of silently poisoning the session.
 func TestPromptAsyncOversizeBlobRejected(t *testing.T) {
 	prov := newCapturingProvider(asstTurn("never"))
@@ -263,9 +337,9 @@ func TestPromptAsyncOversizeBlobRejected(t *testing.T) {
 	// A valid PNG header followed by enough bytes to pass the cap. The size
 	// check must run BEFORE the decode, so the padding never has to be a
 	// real image.
-	oversize := append(testPNG(t), bytes.Repeat([]byte("x"), promptBlobMaxBytes)...)
+	oversize := append(testPNG(t), bytes.Repeat([]byte("x"), promptAttachmentMaxBytes)...)
 	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
-		"parts": []any{imagePart("image/png", oversize)},
+		"parts": []any{attachmentPart("image/png", oversize)},
 	})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("prompt_async status %d, want 400: %s", resp.StatusCode, data)
@@ -298,7 +372,7 @@ func TestQueuedPromptKeepsItsImage(t *testing.T) {
 	resp, data = h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
 		"parts": []any{
 			map[string]any{"type": "text", "text": "and this screenshot"},
-			imagePart("image/png", pngBytes),
+			attachmentPart("image/png", pngBytes),
 		},
 	})
 	if resp.StatusCode != http.StatusAccepted {

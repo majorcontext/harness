@@ -1765,20 +1765,21 @@ type claudeCodeInputInnerMessage struct {
 
 // claudeCodeInputBlock is one element of the content-block array form of
 // claudeCodeInputInnerMessage.Content: the CLI accepts the Anthropic
-// Messages API's own block shapes on its stream-json stdin, so an image
-// rides as {"type":"image","source":{"type":"base64",...}} exactly as it
-// would in a native provider request. Text is set on a "text" block and
-// Source on an "image" block; the other stays nil/empty and is omitted.
+// Messages API's own block shapes on its stream-json stdin, so an
+// attachment rides as {"type":"image"|"document","source":{"type":"base64",
+// ...}} exactly as it would in a native provider request. Text is set on a
+// "text" block and Source on an attachment block; the other stays
+// nil/empty and is omitted.
 type claudeCodeInputBlock struct {
-	Type   string                      `json:"type"`
-	Text   string                      `json:"text,omitempty"`
-	Source *claudeCodeInputImageSource `json:"source,omitempty"`
+	Type   string                 `json:"type"`
+	Text   string                 `json:"text,omitempty"`
+	Source *claudeCodeInputSource `json:"source,omitempty"`
 }
 
-// claudeCodeInputImageSource is an image block's inline base64 payload.
-// Data is []byte so encoding/json emits standard base64 — the same
+// claudeCodeInputSource is an image or document block's inline base64
+// payload. Data is []byte so encoding/json emits standard base64 — the same
 // encoding message.Blob.Data uses on the wire.
-type claudeCodeInputImageSource struct {
+type claudeCodeInputSource struct {
 	Type      string `json:"type"`
 	MediaType string `json:"media_type"`
 	Data      []byte `json:"data"`
@@ -1786,23 +1787,34 @@ type claudeCodeInputImageSource struct {
 
 // claudeCodeInputContent renders one turn's input for the CLI's stdin: the
 // bare string when the turn carries no attachments (unchanged wire shape),
-// or a text block followed by one image block per attachment when it does.
+// or a text block followed by one attachment block per blob when it does.
+//
+// The block TYPE follows the media type, matching the native anthropic
+// adapter's own rule (provider/anthropic's transcodeBlob): an image/* blob
+// is an "image" block, anything else — a PDF, today — is a "document"
+// block. Both shapes are verified against the real CLI: it answered from a
+// PNG's pixels and read a PDF's text back, each through this same
+// stream-json stdin.
 //
 // A blob with no inline Data is SKIPPED rather than sent: the CLI's input
-// protocol has no URL image source, and a source object with an empty
-// payload is worse than an honest omission — the model would be told an
-// image exists and shown nothing. Every blob reaching a delegated turn
-// arrives from a path that requires inline data (see the server's prompt
-// validation), so this is a guard, not a routine case.
+// protocol has no URL source, and a source object with an empty payload is
+// worse than an honest omission — the model would be told a file exists and
+// shown nothing. Every blob reaching a delegated turn arrives from a path
+// that requires inline data (see the server's prompt validation), so this
+// is a guard, not a routine case.
 func claudeCodeInputContent(text string, blobs []*message.Blob) any {
 	var blocks []claudeCodeInputBlock
 	for _, b := range blobs {
 		if b == nil || len(b.Data) == 0 {
 			continue
 		}
+		blockType := "document"
+		if strings.HasPrefix(b.MediaType, "image/") {
+			blockType = "image"
+		}
 		blocks = append(blocks, claudeCodeInputBlock{
-			Type:   "image",
-			Source: &claudeCodeInputImageSource{Type: "base64", MediaType: b.MediaType, Data: b.Data},
+			Type:   blockType,
+			Source: &claudeCodeInputSource{Type: "base64", MediaType: b.MediaType, Data: b.Data},
 		})
 	}
 	if len(blocks) == 0 {

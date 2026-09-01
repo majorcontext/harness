@@ -54,10 +54,14 @@ Another session that owns the workdir still conflicts.
 
 ## Prompt attachments
 
-`prompt_async` takes image blob parts beside its text parts. Validate every
-attachment before the run slot is claimed: allowed media type, inline data,
-data that decodes as the claimed type, and the size cap. Reject in the
-handler. Never persist an attachment a provider cannot render.
+`prompt_async` takes file blob parts beside its text parts: images and PDFs
+today. Validate every attachment before the run slot is claimed: allowed
+media type, inline data, bytes that really are the claimed type, and the
+size cap. Reject in the handler. Never persist an attachment a provider
+cannot render.
+
+Add a media type only when EVERY provider adapter transcodes it. Each
+accepted type owns a verifier in `promptAttachmentTypes`.
 
 ## Goal and turn state
 

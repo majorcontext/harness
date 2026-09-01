@@ -216,6 +216,28 @@ func TestClaudeCodeInputContentCarriesImages(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeInputContentSendsDocumentBlockForNonImage proves the block
+// TYPE follows the media type, matching the native anthropic adapter: a PDF
+// is a "document" block, not an "image" one. Verified against the real CLI,
+// which read a PDF's text back through this same stream-json shape.
+func TestClaudeCodeInputContentSendsDocumentBlockForNonImage(t *testing.T) {
+	pdf := &message.Blob{MediaType: "application/pdf", Data: []byte("%PDF-1.4 fake body")}
+	content := claudeCodeInputContent("read this", []*message.Blob{pdf, testBlob()})
+	blocks, ok := content.([]claudeCodeInputBlock)
+	if !ok {
+		t.Fatalf("content = %#v, want a content-block array", content)
+	}
+	if len(blocks) != 3 {
+		t.Fatalf("blocks = %d, want text + document + image", len(blocks))
+	}
+	if blocks[1].Type != "document" || blocks[1].Source.MediaType != "application/pdf" {
+		t.Errorf("second block = %+v, want a pdf document block", blocks[1])
+	}
+	if blocks[2].Type != "image" || blocks[2].Source.MediaType != "image/png" {
+		t.Errorf("third block = %+v, want an image block", blocks[2])
+	}
+}
+
 // TestClaudeCodeInputContentSkipsPayloadlessBlob proves a blob with no
 // inline data is omitted rather than sent as an empty source: the CLI's
 // input protocol has no URL image source, and announcing an image the model
