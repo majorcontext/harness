@@ -818,6 +818,225 @@ func (s *Server) syncMessages(sessionID string) {
 	}
 }
 
+// transcriptSyncedThrough answers the "race-closed bootstrap" a client needs
+// to tail-load a session's transcript and then resume GET /event strictly
+// after it, with no REPLAY window that can re-deliver (or, symmetrically,
+// permanently drop) a message straddling the two reads — the tail-load
+// versus live-stream race the console's duplicate-render bug traces to (see
+// the meetneptune/boxes repo's docs/console-read-path.md, and
+// handleMessages' ?stream_from=1 branch, this function's only caller).
+//
+// It is syncMessages (above) PLUS one extra locked read: sess.History() and
+// sess.PersistErr() are read in the exact same unlocked window, under the
+// exact same lock-ordering invariant, that syncMessages documents — do not
+// invert it. Every message in that snapshot not yet journaled is then
+// journaled under one s.mu hold, exactly as syncMessages does, and the
+// caller-visible watermark is sampled in that SAME critical section,
+// immediately after the journaling loop: nothing can be appended to this
+// session's journal between "the snapshot is fully durable" and "the
+// watermark was read," because emitDurableLocked never runs without s.mu.
+//
+// It returns the SAME history slice it just journaled — never a second
+// sess.History() call, and never syncMessages followed by a re-read — both
+// of which would reopen an identical race one level down instead of closing
+// it: this function's whole point is that the returned history and the
+// returned seq describe the exact same instant.
+//
+// lookupSession, not liveSessionObject: a cold (on-disk, non-resident)
+// session must answer this exactly like handleMessages' unparameterized read
+// already does. This is a GET, not a journaling trigger tied to a live turn,
+// so a caller must never be told "no such session" just because nothing in
+// this process happens to be driving it right now.
+func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, seq int64, ok bool) {
+	sess, ok := s.lookupSession(id)
+	if !ok {
+		return nil, 0, false
+	}
+	history = sess.History()
+	persistErr := sess.PersistErr()
+
+	if s.transcriptSyncRace != nil {
+		// Test-only seam: let a test force a concurrent Publish(EventMessage)
+		// call to land deterministically in the (now safe) gap between the
+		// unlocked reads above and the s.mu hold below. Always nil in
+		// production.
+		s.transcriptSyncRace()
+	}
+
+	s.mu.Lock()
+	for i := range history {
+		m := history[i]
+		// A message.IsSyntheticOrphanID entry (message.ResolveOrphanToolCalls'
+		// load-time repair, folded into sess.History() for a cold-loaded
+		// session — see engine.LoadSession) exists only to keep a REQUEST
+		// protocol-valid; it is never itself persisted to the session's own
+		// log, so it has no durable identity to journal against. Giving it a
+		// seq would violate the same rule durableOnly (handlers.go) already
+		// enforces for the before_seq/limit page — "a page must never give
+		// one a seq, whichever path produced the page" — and, worse, is not
+		// even idempotent the way a real message's journaling is: nothing
+		// backs its "seen" mark across a restart, since it is re-derived
+		// fresh on every load rather than replayed from events.jsonl.
+		if message.IsSyntheticOrphanID(m.ID) {
+			continue
+		}
+		if s.isSeenLocked(id, m.ID) {
+			continue
+		}
+		s.markSeenLocked(id, m.ID)
+		s.emitDurableLocked(&Event{Type: evtMessage, SessionID: id, Message: &m})
+	}
+	reportErr := s.checkPersistErrLocked(id, persistErr)
+	seq = s.transcriptWatermarkLocked(id, history)
+	s.mu.Unlock()
+
+	if reportErr != nil {
+		s.reportError(reportErr)
+	}
+	return history, seq, true
+}
+
+// transcriptWatermarkLocked returns the durable seq up to which sessionID's
+// message transcript is FULLY represented by history: the highest seq among
+// this session's journaled evtMessage records whose message ID appears in
+// history — capped below any compaction summary history excludes (see the
+// "compaction can reorder" section below). Returns 0 when history has
+// nothing journaled yet (a brand-new or still cold session): the safe
+// answer, not a gap — see the doc comment on transcriptSyncedThrough's only
+// caller, handleMessages, for why 0 can never itself straddle a message.
+//
+// This is deliberately NOT sessionSeqLocked(sessionID) — the plain highest
+// durable seq recorded for the session, of ANY event type. sess.History()
+// and sess.PersistErr() in transcriptSyncedThrough above are read OUTSIDE
+// s.mu (the same lock-ordering invariant syncMessages documents), so a
+// concurrent syncMessages call for the SAME session — racing in that
+// unlocked window with a FRESHER sess.History() snapshot that already
+// includes a message this call's own (now stale) snapshot does not — can win
+// the race for s.mu and durably journal that message before this call ever
+// acquires it. sessionSeqLocked's raw, type-agnostic max would then already
+// count that message's seq, even though the message is absent from the
+// `history` this call is about to return: exactly the gap a client resuming
+// GET /event?from=<that seq> would never recover from, since a message with
+// seq <= the reported watermark is never replayed (sse.go: `ev.Seq > from`).
+// See TestTranscriptStreamFrom_ConcurrentJournalDuringSnapshot, which forces
+// this exact interleaving via the transcriptSyncRace seam.
+//
+// Restricting the max to message IDs actually present in history closes
+// that gap FOR A PLAIN APPEND: every message in history was appended to the
+// session no later than this call's sess.History() snapshot, so any message
+// NOT in history was necessarily appended strictly after it, and every
+// syncMessages-family loop (this one included) journals a session's
+// messages in history ARRAY order, under one s.mu hold — so as long as
+// history only ever grows at the tail, a later-appended message can never
+// be assigned a lower seq than an earlier one, whichever call performs the
+// journaling.
+//
+// Compaction (engine/compact.go's Session.Compact) breaks that "only grows
+// at the tail" assumption: it SPLICES a new summary message into an EARLIER
+// array position, replacing the folded range, then journals the resulting
+// history in array order — so the summary can receive a LOWER seq than a
+// message that already sat later in this call's own (pre-compaction) stale
+// snapshot, even though the summary was created (compacted) after that
+// snapshot was taken. A summary excluded from history purely by this
+// reordering must still end up with seq > the returned watermark, or its
+// paired history.compacted reconciliation record (see publishHistoryCompacted)
+// would sit at seq <= watermark while absent from history — permanently
+// unrecoverable via SSE resume, unlike an ordinary excluded message, which
+// self-heals by arriving live. So: for every evtHistoryCompacted record for
+// this session whose CompactSummaryID is NOT in history, the watermark is
+// capped to strictly below that summary's own journaled seq (looked up by
+// ID) — even if that lowers it below some in-history message's already-
+// higher seq. The tradeoff is deliberate and asymmetric: a message in
+// history dropping below the cap is merely redelivered live once more (the
+// ordinary duplicate this endpoint exists to reduce, still bounded and
+// self-correcting by message ID), never lost — whereas letting the summary
+// slip above the watermark is unrecoverable. See
+// TestTranscriptStreamFrom_CompactionDuringSnapshotStaysRecoverable.
+//
+// # The two-emit sandwich window
+//
+// A compaction does not journal its summary and its reconciliation record
+// atomically: engine/compact.go emits the summary as an ordinary evtMessage
+// first, then EventHistoryCompacted separately, and server-side each goes
+// through its own Publish call — its own separate s.mu critical section.
+// A bootstrap read can acquire s.mu in the gap between the two: it observes
+// the summary's evtMessage (so any stale-history message journaled after it
+// in that same gap can raise `highest` past the summary's seq) but not yet
+// the evtHistoryCompacted record, so pendingCeilings above is empty and the
+// paragraph's cap never engages — stream_from would land above the summary
+// while the summary is itself excluded from history, exactly the
+// unrecoverable gap this function exists to prevent. Closing this requires
+// no second event: a summary excluded from history is identifiable from its
+// OWN evtMessage record via engine.IsCompactionSummaryID, independent of
+// whether its evtHistoryCompacted record has arrived yet. summaryCeiling
+// below captures that directly, in the same first pass, from the message's
+// own seq — and is folded into the final cap alongside pendingCeilings, the
+// lower of the two winning. The two mechanisms stay complementary rather
+// than redundant: pendingCeilings still covers a summary loaded from store
+// (its evtHistoryCompacted record present without a matching in-memory
+// evtMessage), and summaryCeiling covers the newly-widened sandwich window
+// above. See TestTranscriptWatermarkLocked_CompactionSummarySandwich.
+// Caller holds s.mu.
+func (s *Server) transcriptWatermarkLocked(sessionID string, history []message.Message) int64 {
+	inHistory := make(map[string]bool, len(history))
+	for i := range history {
+		inHistory[history[i].ID] = true
+	}
+
+	var highest int64
+	// pendingCeilings collects, for every evtHistoryCompacted record whose
+	// summary is absent from history, that summary's OWN message ID — its
+	// seq is looked up in a second pass below, once highest is known, so the
+	// common (no concurrent compaction) case never pays for the lookup.
+	var pendingCeilings []string
+	// summaryCeiling caps the watermark directly from a compaction summary's
+	// own evtMessage record, without waiting for its evtHistoryCompacted
+	// record — see the "two-emit sandwich window" section above. -1 means no
+	// absent summary evtMessage was seen.
+	summaryCeiling := int64(-1)
+	for _, ev := range s.journal {
+		if ev.SessionID != sessionID {
+			continue
+		}
+		switch ev.Type {
+		case evtMessage:
+			if ev.Message == nil {
+				continue
+			}
+			if !inHistory[ev.Message.ID] {
+				if engine.IsCompactionSummaryID(ev.Message.ID) && (summaryCeiling == -1 || ev.Seq < summaryCeiling) {
+					summaryCeiling = ev.Seq
+				}
+				continue
+			}
+			if ev.Seq > highest {
+				highest = ev.Seq
+			}
+		case evtHistoryCompacted:
+			if !inHistory[ev.CompactSummaryID] {
+				pendingCeilings = append(pendingCeilings, ev.CompactSummaryID)
+			}
+		}
+	}
+	ceiling := summaryCeiling
+	if len(pendingCeilings) > 0 {
+		for _, ev := range s.journal {
+			if ev.Type != evtMessage || ev.SessionID != sessionID || ev.Message == nil {
+				continue
+			}
+			for _, id := range pendingCeilings {
+				if ev.Message.ID == id && (ceiling == -1 || ev.Seq < ceiling) {
+					ceiling = ev.Seq
+				}
+			}
+		}
+	}
+	if ceiling != -1 && ceiling-1 < highest {
+		return ceiling - 1
+	}
+	return highest
+}
+
 // emitDurable assigns the next sequence number, journals the event, and fans
 // it out to connected clients.
 //

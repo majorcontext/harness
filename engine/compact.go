@@ -103,6 +103,15 @@ func isCompactionSummaryID(id string) bool {
 	return strings.HasPrefix(id, compactionSummaryIDTag+"_")
 }
 
+// IsCompactionSummaryID is isCompactionSummaryID exported for callers
+// outside this package (server/journal.go's transcriptWatermarkLocked caps
+// the SSE resume watermark below a compaction summary's own evtMessage
+// record — see that function's doc comment). Logic lives in
+// isCompactionSummaryID; this is a thin wrapper, not a second copy.
+func IsCompactionSummaryID(id string) bool {
+	return isCompactionSummaryID(id)
+}
+
 // compactionSystemPrompt is the dedicated system prompt for the tool-less
 // summarization call (see Session.Compact): concise, information-preserving,
 // never tool-call minutiae verbatim.
