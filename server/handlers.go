@@ -1205,6 +1205,18 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		s.handleMessagePage(w, query, id)
 		return
 	}
+	if query.Has("stream_from") {
+		msgs, seq, ok := s.transcriptSyncedThrough(id)
+		if !ok {
+			writeErr(w, http.StatusNotFound, "no such session")
+			return
+		}
+		writeJSON(w, http.StatusOK, transcriptJSON{
+			Messages:   marshalMessages(msgs),
+			StreamFrom: seq,
+		})
+		return
+	}
 	sess, ok := s.lookupSession(id)
 	if !ok {
 		writeErr(w, http.StatusNotFound, "no such session")
@@ -1212,6 +1224,23 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	msgs := sess.History()
 	writeJSON(w, http.StatusOK, marshalMessages(msgs))
+}
+
+// transcriptJSON is the ?stream_from=1 envelope: the session's whole message
+// history PLUS the durable event-journal seq it is synced through (see
+// transcriptSyncedThrough), so a client can open GET /event?from=<stream_from>
+// immediately after this snapshot with no REPLAY window that can re-deliver
+// or drop a message straddling the two reads — the "race-closed bootstrap"
+// that closes the tail-load-versus-live-stream race behind the console's
+// duplicate-render bug.
+//
+// A THIRD opt-in shape, alongside the bare-array default (no query
+// parameter) and the before_seq/limit messagePageJSON page: a caller that
+// never names stream_from keeps getting exactly what it always got, byte
+// for byte.
+type transcriptJSON struct {
+	Messages   []json.RawMessage `json:"messages"`
+	StreamFrom int64             `json:"stream_from"`
 }
 
 // marshalMessages renders messages for the wire, one at a time, replacing

@@ -737,6 +737,40 @@ components:
           type: boolean
           description: Whether at least one message older than `first_seq` exists.
 
+    Transcript:
+      type: object
+      description: >
+        The session's whole message history PLUS the durable event-journal
+        seq it is synced through — the response shape of GET
+        /session/{id}/message when the request names `stream_from`.
+
+        A client uses this to bootstrap a session view without a race: it
+        renders `messages`, then opens GET /event?from=<stream_from> (or
+        sends `stream_from` as the `Last-Event-ID`) to resume the live
+        stream with no window in which a message can be delivered twice
+        (already in `messages`, then replayed live) or dropped (journaled
+        between the two reads, seen by neither). See
+        transcriptSyncedThrough's doc comment (server/journal.go) for why
+        this requires one extra locked read beyond the plain message sync.
+      required: [messages, stream_from]
+      properties:
+        messages:
+          type: array
+          description: The whole history, oldest first.
+          items:
+            oneOf:
+              - $ref: "#/components/schemas/Message"
+              - $ref: "#/components/schemas/MessagePlaceholder"
+        stream_from:
+          type: integer
+          description: >
+            The durable event-journal seq `messages` is fully synced
+            through. Every message above is journaled with a seq no greater
+            than this value, and any message journaled after this call
+            returned has a seq strictly greater than it — pass it as
+            GET /event's `from` (or `Last-Event-ID`) to resume without a
+            gap or a duplicate.
+
     Part:
       type: object
       required: [type]
@@ -1980,14 +2014,19 @@ paths:
   /session/{id}/message:
     get:
       operationId: getMessages
-      summary: Canonical message history — whole, or one bounded page.
+      summary: Canonical message history — whole, one bounded page, or a race-closed bootstrap.
       description: >
-        Two response shapes, chosen by the request. WITHOUT `before_seq` and
-        `limit` the response is the bare array of the whole history it has
-        always been, unchanged for every existing caller. WITH either
-        parameter the response is a MessagePage envelope: one bounded page
-        of the session's durable message sequence, newest page by default,
-        read from the journal's tail rather than its whole length.
+        Three response shapes, chosen by the request. WITHOUT `before_seq`,
+        `limit`, or `stream_from` the response is the bare array of the
+        whole history it has always been, unchanged for every existing
+        caller. WITH `before_seq` or `limit` the response is a MessagePage
+        envelope: one bounded page of the session's durable message
+        sequence, newest page by default, read from the journal's tail
+        rather than its whole length. WITH `stream_from` the response is a
+        Transcript envelope: the whole history plus the durable
+        event-journal seq it is synced through, so a client can resume
+        GET /event strictly after it with no window that re-delivers or
+        drops a message.
 
         Either way, each message is marshaled independently: a single
         message that fails to marshal (e.g. a Reasoning part carrying an
@@ -2022,6 +2061,17 @@ paths:
             above the maximum is REJECTED with 400, not clamped, so a
             generated client that enforces the schema and this server agree
             on what a request means.
+        - name: stream_from
+          in: query
+          required: false
+          schema: { type: integer }
+          description: >
+            Any value requests the Transcript envelope instead of the bare
+            array. The value itself is ignored — the response's own
+            `stream_from` is always freshly computed for this call, never
+            echoed back. Mutually exclusive with `before_seq`/`limit` in
+            practice: a request naming `before_seq` or `limit` is served as
+            a MessagePage regardless of `stream_from`.
       responses:
         "200":
           description: OK
@@ -2031,7 +2081,8 @@ paths:
                 oneOf:
                   - type: array
                     description: >
-                      The whole history, for a request that names no page.
+                      The whole history, for a request that names no page
+                      and no stream_from.
                     items:
                       description: >
                         A Message, or a MessagePlaceholder in place of any
@@ -2040,6 +2091,7 @@ paths:
                         - $ref: "#/components/schemas/Message"
                         - $ref: "#/components/schemas/MessagePlaceholder"
                   - $ref: "#/components/schemas/MessagePage"
+                  - $ref: "#/components/schemas/Transcript"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404":

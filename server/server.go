@@ -619,6 +619,18 @@ type Server struct {
 	// Always nil in production.
 	sseRegisteredRace func()
 
+	// transcriptSyncRace is a test-only seam: when non-nil,
+	// transcriptSyncedThrough (journal.go) invokes it right after reading
+	// sess.History()/sess.PersistErr() but before acquiring s.mu — letting a
+	// test force a concurrent Publish(EventMessage) call to land
+	// deterministically in that exact gap and journal a message this call's
+	// own (now stale) history snapshot never saw, proving the returned
+	// (history, seq) pair still honors the gap-safety invariant instead of
+	// reporting a watermark past a message the snapshot omits (see
+	// TestTranscriptStreamFrom_ConcurrentJournalDuringSnapshot). Always nil
+	// in production.
+	transcriptSyncRace func()
+
 	// worktreeBase is the directory 'worktree'-isolation sessions create
 	// their per-session git worktrees under (see worktree.go): <SessionDir>/
 	// worktrees when SessionDir is durable, otherwise a process-lifetime

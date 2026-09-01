@@ -818,6 +818,121 @@ func (s *Server) syncMessages(sessionID string) {
 	}
 }
 
+// transcriptSyncedThrough answers the "race-closed bootstrap" a client needs
+// to tail-load a session's transcript and then resume GET /event strictly
+// after it, with no REPLAY window that can re-deliver (or, symmetrically,
+// permanently drop) a message straddling the two reads — the tail-load
+// versus live-stream race the console's duplicate-render bug traces to (see
+// docs/design's read-path note and handleMessages' ?stream_from=1 branch,
+// this function's only caller).
+//
+// It is syncMessages (above) PLUS one extra locked read: sess.History() and
+// sess.PersistErr() are read in the exact same unlocked window, under the
+// exact same lock-ordering invariant, that syncMessages documents — do not
+// invert it. Every message in that snapshot not yet journaled is then
+// journaled under one s.mu hold, exactly as syncMessages does, and the
+// caller-visible watermark is sampled in that SAME critical section,
+// immediately after the journaling loop: nothing can be appended to this
+// session's journal between "the snapshot is fully durable" and "the
+// watermark was read," because emitDurableLocked never runs without s.mu.
+//
+// It returns the SAME history slice it just journaled — never a second
+// sess.History() call, and never syncMessages followed by a re-read — both
+// of which would reopen an identical race one level down instead of closing
+// it: this function's whole point is that the returned history and the
+// returned seq describe the exact same instant.
+//
+// lookupSession, not liveSessionObject: a cold (on-disk, non-resident)
+// session must answer this exactly like handleMessages' unparameterized read
+// already does. This is a GET, not a journaling trigger tied to a live turn,
+// so a caller must never be told "no such session" just because nothing in
+// this process happens to be driving it right now.
+func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, seq int64, ok bool) {
+	sess, ok := s.lookupSession(id)
+	if !ok {
+		return nil, 0, false
+	}
+	history = sess.History()
+	persistErr := sess.PersistErr()
+
+	if s.transcriptSyncRace != nil {
+		// Test-only seam: let a test force a concurrent Publish(EventMessage)
+		// call to land deterministically in the (now safe) gap between the
+		// unlocked reads above and the s.mu hold below. Always nil in
+		// production.
+		s.transcriptSyncRace()
+	}
+
+	s.mu.Lock()
+	for i := range history {
+		m := history[i]
+		if s.isSeenLocked(id, m.ID) {
+			continue
+		}
+		s.markSeenLocked(id, m.ID)
+		s.emitDurableLocked(&Event{Type: evtMessage, SessionID: id, Message: &m})
+	}
+	reportErr := s.checkPersistErrLocked(id, persistErr)
+	seq = s.transcriptWatermarkLocked(id, history)
+	s.mu.Unlock()
+
+	if reportErr != nil {
+		s.reportError(reportErr)
+	}
+	return history, seq, true
+}
+
+// transcriptWatermarkLocked returns the durable seq up to which sessionID's
+// message transcript is FULLY represented by history: the highest seq among
+// this session's journaled evtMessage records whose message ID appears in
+// history.
+//
+// This is deliberately NOT sessionSeqLocked(sessionID) — the plain highest
+// durable seq recorded for the session, of ANY event type. sess.History()
+// and sess.PersistErr() in transcriptSyncedThrough above are read OUTSIDE
+// s.mu (the same lock-ordering invariant syncMessages documents), so a
+// concurrent syncMessages call for the SAME session — racing in that
+// unlocked window with a FRESHER sess.History() snapshot that already
+// includes a message this call's own (now stale) snapshot does not — can win
+// the race for s.mu and durably journal that message before this call ever
+// acquires it. sessionSeqLocked's raw, type-agnostic max would then already
+// count that message's seq, even though the message is absent from the
+// `history` this call is about to return: exactly the gap a client resuming
+// GET /event?from=<that seq> would never recover from, since a message with
+// seq <= the reported watermark is never replayed (sse.go: `ev.Seq > from`).
+// See TestTranscriptStreamFrom_ConcurrentJournalDuringSnapshot, which forces
+// this exact interleaving via the transcriptSyncRace seam.
+//
+// Restricting the max to message IDs actually present in history closes the
+// gap: every message in history was appended to the session no later than
+// this call's sess.History() snapshot, so any message NOT in history was
+// necessarily appended strictly after it. Every syncMessages-family loop
+// (this one included) journals a session's messages in history order, under
+// one s.mu hold, so a later-appended message can never be assigned a lower
+// seq than an earlier one — whichever call actually performs the
+// journaling. That guarantees seq(message not in history) > seq(any message
+// in history), so the watermark this function returns can never straddle a
+// message the snapshot omits. Caller holds s.mu.
+func (s *Server) transcriptWatermarkLocked(sessionID string, history []message.Message) int64 {
+	inHistory := make(map[string]bool, len(history))
+	for i := range history {
+		inHistory[history[i].ID] = true
+	}
+	var max int64
+	for _, ev := range s.journal {
+		if ev.Type != evtMessage || ev.SessionID != sessionID || ev.Message == nil {
+			continue
+		}
+		if !inHistory[ev.Message.ID] {
+			continue
+		}
+		if ev.Seq > max {
+			max = ev.Seq
+		}
+	}
+	return max
+}
+
 // emitDurable assigns the next sequence number, journals the event, and fans
 // it out to connected clients.
 //
