@@ -10,7 +10,11 @@
 // Beyond "normal"/"hang"/"error", a handful of narrower modes each cover
 // exactly one of the gaps claude_code_backend.go closes: "thinking" (a
 // thinking content block plus the result event's own ttft_ms/duration_ms
-// timing fields), "subagent" (a null-then-set parent_tool_use_id pair),
+// timing fields), "thinking_interleaved" (text, then thinking, then the
+// text that completes THAT thinking block's own turn segment — proves the
+// reasoning-buffer merge in consumeClaudeCodeStream attaches only forward,
+// never sweeping in an unrelated, already-flushed text message), "subagent"
+// (a null-then-set parent_tool_use_id pair),
 // "rate_limit_error"/"deterministic_error" (a result event this file's own
 // claudeCodeRetryableClass must classify retryable/not-retryable,
 // respectively), "crash"/"crash_before_init" (a child that exits nonzero
@@ -434,6 +438,52 @@ func main() {
 			},
 			"ttft_ms":     120,
 			"duration_ms": 800,
+		})
+		return
+	case "thinking_interleaved":
+		// Proves the reasoning-buffer merge (claude_code_backend.go's
+		// pendingReasoning) attaches ONLY forward, to the envelope that
+		// immediately follows a thinking block, never backward onto an
+		// unrelated text envelope that preceded it — i.e. a
+		// text-reasoning-text turn must not collapse into one giant
+		// message. Sequence: independent text, then a thinking block,
+		// then the text that completes ITS OWN turn segment.
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "First, a quick note."},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "thinking", "thinking": "Now let me reason about the rest.", "signature": "sig-def"},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "And here is the rest."},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "success",
+			"is_error": false,
+			"result":   "And here is the rest.",
+			"usage": map[string]any{
+				"input_tokens":  30,
+				"output_tokens": 15,
+			},
 		})
 		return
 	case "subagent":
