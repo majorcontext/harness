@@ -745,13 +745,21 @@ components:
         /session/{id}/message when the request names `stream_from`.
 
         A client uses this to bootstrap a session view without a race: it
-        renders `messages`, then opens GET /event?from=<stream_from> (or
-        sends `stream_from` as the `Last-Event-ID`) to resume the live
-        stream with no window in which a message can be delivered twice
-        (already in `messages`, then replayed live) or dropped (journaled
-        between the two reads, seen by neither). See
+        renders `messages`, then opens GET /event?from=<stream_from>&session=<id>
+        (or sends `stream_from` as the `Last-Event-ID`, alongside `session`)
+        to resume the live stream with no window in which a message can be
+        delivered twice (already in `messages`, then replayed live) or
+        dropped (journaled between the two reads, seen by neither). See
         transcriptSyncedThrough's doc comment (server/journal.go) for why
         this requires one extra locked read beyond the plain message sync.
+
+        ALWAYS pass GET /event's `session` filter alongside `stream_from`.
+        `stream_from` is scoped to messages, so for a session with no
+        messages yet (or few relative to the instance's overall activity)
+        it can be far below the instance-wide event journal's current
+        position — correct for THIS session (nothing to duplicate or drop),
+        but an unfiltered GET /event?from=<stream_from> would then replay
+        every OTHER session's events with a higher seq too.
       required: [messages, stream_from]
       properties:
         messages:
@@ -2069,9 +2077,10 @@ paths:
             Any value requests the Transcript envelope instead of the bare
             array. The value itself is ignored — the response's own
             `stream_from` is always freshly computed for this call, never
-            echoed back. Mutually exclusive with `before_seq`/`limit` in
-            practice: a request naming `before_seq` or `limit` is served as
-            a MessagePage regardless of `stream_from`.
+            echoed back. Mutually exclusive with `before_seq`/`limit`:
+            naming `stream_from` alongside either is REJECTED with 400, the
+            same "two intentions, pick one" rule `before_seq`/`limit`
+            already enforce against each other.
       responses:
         "200":
           description: OK

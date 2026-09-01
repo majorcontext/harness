@@ -1201,7 +1201,16 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query()
-	if query.Has("before_seq") || query.Has("limit") {
+	paged := query.Has("before_seq") || query.Has("limit")
+	if paged && query.Has("stream_from") {
+		// Two different intentions named on one request: intParam (below)
+		// already rejects this shape for a repeated before_seq/limit value
+		// for the identical reason — answering one silently hides that the
+		// caller has a bug, rather than telling it.
+		writeErr(w, http.StatusBadRequest, "stream_from cannot be combined with before_seq or limit")
+		return
+	}
+	if paged {
 		s.handleMessagePage(w, query, id)
 		return
 	}

@@ -823,8 +823,8 @@ func (s *Server) syncMessages(sessionID string) {
 // after it, with no REPLAY window that can re-deliver (or, symmetrically,
 // permanently drop) a message straddling the two reads — the tail-load
 // versus live-stream race the console's duplicate-render bug traces to (see
-// docs/design's read-path note and handleMessages' ?stream_from=1 branch,
-// this function's only caller).
+// the meetneptune/boxes repo's docs/console-read-path.md, and
+// handleMessages' ?stream_from=1 branch, this function's only caller).
 //
 // It is syncMessages (above) PLUS one extra locked read: sess.History() and
 // sess.PersistErr() are read in the exact same unlocked window, under the
@@ -885,7 +885,11 @@ func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, 
 // transcriptWatermarkLocked returns the durable seq up to which sessionID's
 // message transcript is FULLY represented by history: the highest seq among
 // this session's journaled evtMessage records whose message ID appears in
-// history.
+// history — capped below any compaction summary history excludes (see the
+// "compaction can reorder" section below). Returns 0 when history has
+// nothing journaled yet (a brand-new or still cold session): the safe
+// answer, not a gap — see the doc comment on transcriptSyncedThrough's only
+// caller, handleMessages, for why 0 can never itself straddle a message.
 //
 // This is deliberately NOT sessionSeqLocked(sessionID) — the plain highest
 // durable seq recorded for the session, of ANY event type. sess.History()
@@ -903,34 +907,87 @@ func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, 
 // See TestTranscriptStreamFrom_ConcurrentJournalDuringSnapshot, which forces
 // this exact interleaving via the transcriptSyncRace seam.
 //
-// Restricting the max to message IDs actually present in history closes the
-// gap: every message in history was appended to the session no later than
-// this call's sess.History() snapshot, so any message NOT in history was
-// necessarily appended strictly after it. Every syncMessages-family loop
-// (this one included) journals a session's messages in history order, under
-// one s.mu hold, so a later-appended message can never be assigned a lower
-// seq than an earlier one — whichever call actually performs the
-// journaling. That guarantees seq(message not in history) > seq(any message
-// in history), so the watermark this function returns can never straddle a
-// message the snapshot omits. Caller holds s.mu.
+// Restricting the max to message IDs actually present in history closes
+// that gap FOR A PLAIN APPEND: every message in history was appended to the
+// session no later than this call's sess.History() snapshot, so any message
+// NOT in history was necessarily appended strictly after it, and every
+// syncMessages-family loop (this one included) journals a session's
+// messages in history ARRAY order, under one s.mu hold — so as long as
+// history only ever grows at the tail, a later-appended message can never
+// be assigned a lower seq than an earlier one, whichever call performs the
+// journaling.
+//
+// Compaction (engine/compact.go's Session.Compact) breaks that "only grows
+// at the tail" assumption: it SPLICES a new summary message into an EARLIER
+// array position, replacing the folded range, then journals the resulting
+// history in array order — so the summary can receive a LOWER seq than a
+// message that already sat later in this call's own (pre-compaction) stale
+// snapshot, even though the summary was created (compacted) after that
+// snapshot was taken. A summary excluded from history purely by this
+// reordering must still end up with seq > the returned watermark, or its
+// paired history.compacted reconciliation record (see publishHistoryCompacted)
+// would sit at seq <= watermark while absent from history — permanently
+// unrecoverable via SSE resume, unlike an ordinary excluded message, which
+// self-heals by arriving live. So: for every evtHistoryCompacted record for
+// this session whose CompactSummaryID is NOT in history, the watermark is
+// capped to strictly below that summary's own journaled seq (looked up by
+// ID) — even if that lowers it below some in-history message's already-
+// higher seq. The tradeoff is deliberate and asymmetric: a message in
+// history dropping below the cap is merely redelivered live once more (the
+// ordinary duplicate this endpoint exists to reduce, still bounded and
+// self-correcting by message ID), never lost — whereas letting the summary
+// slip above the watermark is unrecoverable. See
+// TestTranscriptStreamFrom_CompactionDuringSnapshotStaysRecoverable.
+// Caller holds s.mu.
 func (s *Server) transcriptWatermarkLocked(sessionID string, history []message.Message) int64 {
 	inHistory := make(map[string]bool, len(history))
 	for i := range history {
 		inHistory[history[i].ID] = true
 	}
-	var max int64
+
+	var highest int64
+	// pendingCeilings collects, for every evtHistoryCompacted record whose
+	// summary is absent from history, that summary's OWN message ID — its
+	// seq is looked up in a second pass below, once highest is known, so the
+	// common (no concurrent compaction) case never pays for the lookup.
+	var pendingCeilings []string
+	for _, ev := range s.journal {
+		if ev.SessionID != sessionID {
+			continue
+		}
+		switch ev.Type {
+		case evtMessage:
+			if ev.Message == nil || !inHistory[ev.Message.ID] {
+				continue
+			}
+			if ev.Seq > highest {
+				highest = ev.Seq
+			}
+		case evtHistoryCompacted:
+			if !inHistory[ev.CompactSummaryID] {
+				pendingCeilings = append(pendingCeilings, ev.CompactSummaryID)
+			}
+		}
+	}
+	if len(pendingCeilings) == 0 {
+		return highest
+	}
+
+	ceiling := int64(-1)
 	for _, ev := range s.journal {
 		if ev.Type != evtMessage || ev.SessionID != sessionID || ev.Message == nil {
 			continue
 		}
-		if !inHistory[ev.Message.ID] {
-			continue
-		}
-		if ev.Seq > max {
-			max = ev.Seq
+		for _, id := range pendingCeilings {
+			if ev.Message.ID == id && (ceiling == -1 || ev.Seq < ceiling) {
+				ceiling = ev.Seq
+			}
 		}
 	}
-	return max
+	if ceiling != -1 && ceiling-1 < highest {
+		return ceiling - 1
+	}
+	return highest
 }
 
 // emitDurable assigns the next sequence number, journals the event, and fans
