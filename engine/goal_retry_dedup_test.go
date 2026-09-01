@@ -112,7 +112,7 @@ func (h *denyAndEnqueueHooks) ShellEnv(_ context.Context, _ *plugin.ShellEnvRequ
 func (h *denyAndEnqueueHooks) ToolExecuteBefore(_ context.Context, _ *plugin.ToolExecuteBeforeRequest) (json.RawMessage, string) {
 	if !h.enqueued {
 		h.enqueued = true
-		if _, err := h.s.EnqueuePrompt(h.text); err != nil {
+		if _, _, err := h.s.EnqueuePrompt(h.text, ""); err != nil {
 			panic("denyAndEnqueueHooks: EnqueuePrompt failed: " + err.Error())
 		}
 	}
@@ -265,7 +265,7 @@ func TestPursueGoalDeterministicParkKeepsEmbeddedOperatorMessage(t *testing.T) {
 		prov := &goalProvider{failWorker: workerErr}
 		s := goalSession(t, prov, t.TempDir())
 
-		if _, err := s.EnqueuePrompt("urgent operator directive"); err != nil {
+		if _, _, err := s.EnqueuePrompt("urgent operator directive", ""); err != nil {
 			t.Fatalf("EnqueuePrompt = %v", err)
 		}
 
@@ -301,7 +301,7 @@ func TestPursueGoalRetryableBudgetExhaustedParkKeepsEmbeddedOperatorMessage(t *t
 		}
 		s := goalSession(t, prov, t.TempDir())
 
-		if _, err := s.EnqueuePrompt("urgent operator directive"); err != nil {
+		if _, _, err := s.EnqueuePrompt("urgent operator directive", ""); err != nil {
 			t.Fatalf("EnqueuePrompt = %v", err)
 		}
 
@@ -333,7 +333,7 @@ func TestPursueGoalStreamTruncatedParkKeepsEmbeddedOperatorMessage(t *testing.T)
 		}
 		s := goalSession(t, prov, t.TempDir())
 
-		if _, err := s.EnqueuePrompt("urgent operator directive"); err != nil {
+		if _, _, err := s.EnqueuePrompt("urgent operator directive", ""); err != nil {
 			t.Fatalf("EnqueuePrompt = %v", err)
 		}
 

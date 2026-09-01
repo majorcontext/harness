@@ -258,7 +258,11 @@ func (s *Server) runOrQueueText(id, text string) engine.RunnerOutcome {
 	// above dispatches the QUEUE HEAD instead — see this function's own doc
 	// comment). Tagging it lets the console render it as a system notice
 	// rather than a human-typed bubble — see message.Message.Origin.
-	go s.runPrompt(ctx, id, st, text, message.OriginEngine)
+	// "": text here is ALWAYS taskResumeTriggerText, a synthetic engine
+	// resume trigger with no client message id of its own — see the origin
+	// comment just above. PromptWithOrigin's own mint site resolves it like
+	// any other unset id.
+	go s.runPrompt(ctx, id, st, text, message.OriginEngine, "")
 	return engine.RunnerHandled
 }
 
@@ -289,7 +293,14 @@ func (s *Server) runOrQueueText(id, text string) engine.RunnerOutcome {
 // (404 unknown session, 503 draining, 409 with holder set for a
 // workdir-held conflict, 400 for the practically-unreachable empty-text
 // case handleSessionSend already guards against).
-func (s *Server) sendTextToRoot(id, text string) (status string, queuedDepth int, errCode int, holder string) {
+//
+// msgID is handleSessionSend's own already-resolved message id (see
+// engine.ResolveMessageID) for text, resolved exactly once before this
+// call — every branch below threads that SAME value through to whichever
+// of EnqueuePrompt or runPrompt actually delivers text, so the caller's
+// own response always names the id that ends up in the transcript, never
+// a second, independently-minted one.
+func (s *Server) sendTextToRoot(id, text string, msgID string) (status string, queuedDepth int, errCode int, holder string) {
 	st, ctx, _, code, holder := s.claimForPrompt(id)
 	switch {
 	case code == http.StatusNotFound:
@@ -322,7 +333,7 @@ func (s *Server) sendTextToRoot(id, text string) (status string, queuedDepth int
 			// this reason; mirror it. A live review caught this.
 			return "", 0, http.StatusConflict, ""
 		}
-		ourID, err := sess.EnqueuePrompt(text)
+		ourID, _, err := sess.EnqueuePrompt(text, msgID)
 		if err != nil {
 			return "", 0, http.StatusBadRequest, ""
 		}
@@ -343,7 +354,7 @@ func (s *Server) sendTextToRoot(id, text string) (status string, queuedDepth int
 		return "queued", remaining, 0, ""
 	default: // code == 0: claimed cleanly
 		if len(st.sess.QueuedPrompts()) > 0 {
-			if _, err := st.sess.EnqueuePrompt(text); err != nil {
+			if _, _, err := st.sess.EnqueuePrompt(text, msgID); err != nil {
 				s.releasePromptClaim(st)
 				return "", 0, http.StatusBadRequest, ""
 			}
@@ -355,7 +366,7 @@ func (s *Server) sendTextToRoot(id, text string) (status string, queuedDepth int
 		// (an MCP send_message_to_box call, or any other operator-authored
 		// text), never the engine's own synthetic resume trigger — that one
 		// goes exclusively through runOrQueueText above.
-		go s.runPrompt(ctx, id, st, text, "")
+		go s.runPrompt(ctx, id, st, text, "", msgID)
 		return "started", 0, 0, ""
 	}
 }
@@ -396,7 +407,12 @@ func (s *Server) resumeSessionForTaskNotification(id, text string) engine.Runner
 // truthy status still sees success — but now ALSO reports "queued" with
 // a depth, honestly, exactly like prompt_async already does, rather than
 // claiming "sent" for a message that has not actually run yet.
-func (s *Server) writeSendToRootResult(w http.ResponseWriter, id, status string, queuedDepth, errCode int, holder string) {
+//
+// messageID is handleSessionSend's own already-resolved message id (see
+// engine.ResolveMessageID), reported back verbatim on every success shape
+// — "sent" and "queued" alike — mirroring promptAsyncResponse's
+// message_id field.
+func (s *Server) writeSendToRootResult(w http.ResponseWriter, id, status string, queuedDepth, errCode int, holder, messageID string) {
 	switch errCode {
 	case 0:
 		// fall through to the success response below
@@ -426,7 +442,7 @@ func (s *Server) writeSendToRootResult(w http.ResponseWriter, id, status string,
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
 	}
-	resp := map[string]any{"session_id": id, "status": "sent"}
+	resp := map[string]any{"session_id": id, "status": "sent", "message_id": messageID}
 	if status == "queued" {
 		resp["status"] = "queued"
 		resp["queued"] = queuedDepth
@@ -441,6 +457,10 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		Text string `json:"text"`
+		// ID mirrors prompt_async's optional client-minted message id (see
+		// handlePrompt's body.ID doc comment) — used verbatim with the same
+		// single fail-safe guard, never validated or rejected.
+		ID string `json:"id"`
 	}
 	if err := decodeBody(r, &body); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -450,6 +470,10 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "text is required")
 		return
 	}
+	// Resolved ONCE, exactly like handlePrompt's msgID — see its own doc
+	// comment for why every branch below must report and use this SAME
+	// value rather than resolving a second, possibly different, id later.
+	msgID := engine.ResolveMessageID(body.ID)
 	sess, ok := s.sessMgr.Session(id)
 	if !ok {
 		// Not a tracked node yet — could be a root that exists on disk but
@@ -463,8 +487,8 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 		// SessionManager registers it the instant Spawn creates it, so
 		// "not a node" here only ever means "an as-yet-unadopted root" or
 		// "genuinely unknown."
-		status, queuedDepth, errCode, holder := s.sendTextToRoot(id, body.Text)
-		s.writeSendToRootResult(w, id, status, queuedDepth, errCode, holder)
+		status, queuedDepth, errCode, holder := s.sendTextToRoot(id, body.Text, msgID)
+		s.writeSendToRootResult(w, id, status, queuedDepth, errCode, holder, msgID)
 		return
 	}
 	// sess.TaskParentID() (durable), not the live tree's ParentID — a live
@@ -487,8 +511,8 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 		// later reloaded: claimForPrompt's own cold-load path covers it,
 		// unlike an earlier version of this handler that drove a stale
 		// SessionManager-cached object in that case.
-		status, queuedDepth, errCode, holder := s.sendTextToRoot(id, body.Text)
-		s.writeSendToRootResult(w, id, status, queuedDepth, errCode, holder)
+		status, queuedDepth, errCode, holder := s.sendTextToRoot(id, body.Text, msgID)
+		s.writeSendToRootResult(w, id, status, queuedDepth, errCode, holder, msgID)
 		return
 	}
 	// Child: SessionManager is its sole scheduler, always safe. Unlike a

@@ -2455,7 +2455,7 @@ func (s *Session) emitSessionError(err error) {
 // PromptWithOrigin for the overwhelming majority of callers that never need
 // to set one.
 func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, error) {
-	return s.PromptWithOrigin(ctx, text, "")
+	return s.PromptWithOrigin(ctx, text, "", "")
 }
 
 // PromptEngineResume is Prompt's sibling for SessionManager.triggerResumeLocked's
@@ -2466,7 +2466,7 @@ func (s *Session) Prompt(ctx context.Context, text string) (*message.Message, er
 // or programmatic turn driver (the goal loop's own directive text, notably)
 // still goes through plain Prompt, unchanged.
 func (s *Session) PromptEngineResume(ctx context.Context, text string) (*message.Message, error) {
-	return s.PromptWithOrigin(ctx, text, message.OriginEngine)
+	return s.PromptWithOrigin(ctx, text, message.OriginEngine, "")
 }
 
 // PromptWithOrigin is Prompt/PromptEngineResume's shared, exported body,
@@ -2479,7 +2479,21 @@ func (s *Session) PromptEngineResume(ctx context.Context, text string) (*message
 // PromptEngineResume's own two-arm choice a second time on top of a choice
 // the caller already made. One parameterized entry point for the value
 // means a future third Origin value is handled in exactly one place.
-func (s *Session) PromptWithOrigin(ctx context.Context, text string, origin string) (*message.Message, error) {
+//
+// id is the appended user message's own ID: a caller that already holds one
+// (server.Server's prompt_async/session.send handlers, forwarding a
+// client-supplied or already-resolved ID — see engine.ResolveMessageID)
+// passes it through here; every other caller (Prompt, PromptEngineResume,
+// and every purely-internal driver — the goal loop's own directive text,
+// notably) passes "". Either way id is resolved exactly once, at the mint
+// site below, via ResolveMessageID: used verbatim when
+// usableClientMessageID accepts it, or replaced with a fresh server mint
+// otherwise — id is an identity/reconciliation key only and this resolution
+// never fails the prompt. The resolved value never drives ordering: history
+// order is (and remains) append order, never a sort on this ID — see
+// ResolveMessageID's own doc comment for why a client-minted, time-sortable
+// ID must never be trusted for chronology.
+func (s *Session) PromptWithOrigin(ctx context.Context, text string, origin string, id string) (*message.Message, error) {
 	// A session delegated to the Claude Code CLI (ClaudeCodeProviderFamily
 	// — see engine/claude_code_backend.go) dispatches here, FIRST, before
 	// every check and assembly step below: ContextWindowErr,
@@ -2495,7 +2509,7 @@ func (s *Session) PromptWithOrigin(ctx context.Context, text string, origin stri
 	// runAgenticLoop retry call, which never reaches this function at all.
 	if s.claudeCodeDelegated() {
 		s.append(message.Message{
-			ID:        newID("msg"),
+			ID:        ResolveMessageID(id),
 			Role:      message.RoleUser,
 			Parts:     message.Parts{&message.Text{Text: text}},
 			CreatedAt: time.Now().UTC(),
@@ -2538,7 +2552,7 @@ func (s *Session) PromptWithOrigin(ctx context.Context, text string, origin stri
 	// compaction never blocks the real turn (see maybeAutoCompact).
 	s.maybeAutoCompact(ctx)
 	s.append(message.Message{
-		ID:        newID("msg"),
+		ID:        ResolveMessageID(id),
 		Role:      message.RoleUser,
 		Parts:     message.Parts{&message.Text{Text: text}},
 		CreatedAt: time.Now().UTC(),

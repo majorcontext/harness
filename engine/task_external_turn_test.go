@@ -47,7 +47,7 @@ func TestReportTurnEndDoesNotReDriveQueuedPrompt(t *testing.T) {
 		t.Fatal("Session: child not found")
 	}
 	for _, text := range []string{"message A", "message B"} {
-		if _, err := child.EnqueuePrompt(text); err != nil {
+		if _, _, err := child.EnqueuePrompt(text, ""); err != nil {
 			t.Fatalf("EnqueuePrompt %q: %v", text, err)
 		}
 	}

@@ -132,7 +132,7 @@ func TestEnqueuePromptDurableDrainsParkedRecordsFirst(t *testing.T) {
 	// SendToDescendant's running-target branch, memory half: item A is in
 	// the queue, its durable record parked, its flush not run yet.
 	s.mu.Lock()
-	a := s.enqueueMemoryOnlyLocked("message A")
+	a := s.enqueueMemoryOnlyLocked("message A", "")
 	s.queueRecordDeferredLocked(recPromptQueued, promptRecord{ID: a.ID, Text: a.Text},
 		Event{Type: EventPromptQueued, QueueID: a.ID, QueueText: a.Text, QueueLen: 1})
 	s.mu.Unlock()
@@ -187,7 +187,7 @@ func TestDeferredQueuedRecordStillPrecedesItsDequeuedRecord(t *testing.T) {
 	// SendToDescendant's running-target branch, memory half: append and
 	// park the durable record under ONE s.mu hold, no disk write.
 	s.mu.Lock()
-	p := s.enqueueMemoryOnlyLocked("message A")
+	p := s.enqueueMemoryOnlyLocked("message A", "")
 	s.queueRecordDeferredLocked(recPromptQueued, promptRecord{ID: p.ID, Text: p.Text},
 		Event{Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: 1})
 	s.mu.Unlock()

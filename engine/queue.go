@@ -35,6 +35,16 @@ type QueuedPrompt struct {
 	// via EnqueuePromptDurable (see store.go's promptRecord.Seq); 0 for a
 	// plain EnqueuePrompt, which has no idempotency contract.
 	Seq int64
+	// MessageID is the ID the user message this prompt eventually becomes
+	// will carry — already resolved (see ResolveMessageID) by EnqueuePrompt
+	// at enqueue time, so it is stable and known before this prompt is ever
+	// dispatched: a caller reporting a synchronous "queued" response can
+	// promise the exact ID PromptWithOrigin will use later, at drain time,
+	// with no risk of a second, different mint for the same prompt. Empty
+	// on a record folded from an older session log written before this
+	// field existed — PromptWithOrigin's own mint site resolves that case
+	// exactly like any other unset id, at dispatch time.
+	MessageID string
 }
 
 // promptQueueFold replays prompt.queued/prompt.dequeued records into the
@@ -96,7 +106,7 @@ type promptQueueFold struct {
 // let a malformed record's ID move the counter, which is exactly what the
 // guard rejects it for.
 func (f *promptQueueFold) queued(p promptRecord) {
-	q := QueuedPrompt{ID: p.ID, Text: p.Text, Seq: p.Seq}
+	q := QueuedPrompt{ID: p.ID, Text: p.Text, Seq: p.Seq, MessageID: p.MessageID}
 	valid := q.ID > 0
 	for _, existing := range f.queue {
 		if existing.ID == q.ID {
@@ -164,23 +174,33 @@ var ErrEmptyPromptText = errors.New("engine: prompt text must not be empty or wh
 // or whitespace-only, matching RegisterGoal's non-empty-condition rule. The
 // stored/emitted text is trimmed, same as a goal condition.
 //
+// messageID is the caller's own (possibly empty, possibly client-supplied)
+// message ID for the prompt; EnqueuePrompt resolves it exactly once, via
+// ResolveMessageID, and both persists and returns that SAME resolved value
+// — never resolved a second time at dispatch, which would risk minting a
+// DIFFERENT fresh ID than whatever this call's own return value already
+// promised a caller reporting a synchronous "queued" response. Pass "" for
+// a caller with no client ID of its own (a server-minted ID is what
+// PromptWithOrigin would have chosen anyway).
+//
 // The enqueued prompt does not touch s.history and is not visible to any
 // provider request started before it is actually delivered (see
 // DequeuePrompt/dequeueAllLocked) — see the package doc comment.
-func (s *Session) EnqueuePrompt(text string) (int64, error) {
+func (s *Session) EnqueuePrompt(text string, messageID string) (id int64, resolvedMessageID string, err error) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
-		return 0, ErrEmptyPromptText
+		return 0, "", ErrEmptyPromptText
 	}
+	resolved := ResolveMessageID(messageID)
 	s.mu.Lock()
-	p := s.enqueueMemoryOnlyLocked(trimmed)
-	s.persistPromptQueueLocked(recPromptQueued, promptRecord{ID: p.ID, Text: p.Text})
+	p := s.enqueueMemoryOnlyLocked(trimmed, resolved)
+	s.persistPromptQueueLocked(recPromptQueued, promptRecord{ID: p.ID, Text: p.Text, MessageID: p.MessageID})
 	// Emit while still holding s.mu (see ClearGoal in goal.go): keeps event
 	// order matching log order under a concurrent dequeue. OnEvent must not
 	// call back into this Session — that would deadlock on s.mu, held here.
 	s.emit(Event{Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue)})
 	s.mu.Unlock()
-	return p.ID, nil
+	return p.ID, p.MessageID, nil
 }
 
 // enqueueMemoryOnlyLocked is EnqueuePrompt's memory-only half: assigns
@@ -209,12 +229,15 @@ func (s *Session) EnqueuePrompt(text string) (int64, error) {
 //
 // text is assumed already validated non-empty and trimmed — the one
 // other caller (SendToDescendant) applies the same validation
-// EnqueuePrompt does above, on its own copy of the text. Caller holds
+// EnqueuePrompt does above, on its own copy of the text. messageID is
+// stored as given — already resolved by EnqueuePrompt's own caller, or ""
+// for a caller (SendToDescendant) with no client message ID of its own,
+// left for PromptWithOrigin to resolve at dispatch time. Caller holds
 // s.mu.
-func (s *Session) enqueueMemoryOnlyLocked(text string) QueuedPrompt {
+func (s *Session) enqueueMemoryOnlyLocked(text string, messageID string) QueuedPrompt {
 	id := s.promptQueueNextID
 	s.promptQueueNextID++
-	p := QueuedPrompt{ID: id, Text: text}
+	p := QueuedPrompt{ID: id, Text: text, MessageID: messageID}
 	s.promptQueue = append(s.promptQueue, p)
 	return p
 }

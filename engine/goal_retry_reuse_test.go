@@ -217,7 +217,7 @@ func TestPursueGoalRetryReuseNeverLosesEmbeddedOperatorMessage(t *testing.T) {
 		// Enqueued BEFORE PursueGoal starts, so turn 1's OWN turn-boundary
 		// drain (before promptTurnWithRetry ever runs) bakes it into turn
 		// 1's directive string — not a separately-appended message.
-		if _, err := s.EnqueuePrompt("urgent operator directive"); err != nil {
+		if _, _, err := s.EnqueuePrompt("urgent operator directive", ""); err != nil {
 			t.Fatalf("EnqueuePrompt = %v", err)
 		}
 

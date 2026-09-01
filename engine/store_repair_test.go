@@ -108,7 +108,7 @@ func TestPlainEnqueueRepairsTornTailAfterValidRecords(t *testing.T) {
 	}
 
 	// The first write after load is where the repair actually fires.
-	id2, err := s.EnqueuePrompt("second")
+	id2, _, err := s.EnqueuePrompt("second", "")
 	if err != nil {
 		t.Fatalf("EnqueuePrompt: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestPlainEnqueueRepairsTornTailAfterValidRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first reload: %v", err)
 	}
-	id3, err := reloaded.EnqueuePrompt("third")
+	id3, _, err := reloaded.EnqueuePrompt("third", "")
 	if err != nil {
 		t.Fatalf("EnqueuePrompt on reloaded session: %v", err)
 	}

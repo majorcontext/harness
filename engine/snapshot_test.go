@@ -225,7 +225,7 @@ func TestSnapshotCarriesEveryFoldedField(t *testing.T) {
 	if err := s.RegisterGoal("ship it"); err != nil {
 		t.Fatalf("RegisterGoal: %v", err)
 	}
-	if _, err := s.EnqueuePrompt("queued one"); err != nil {
+	if _, _, err := s.EnqueuePrompt("queued one", ""); err != nil {
 		t.Fatalf("EnqueuePrompt: %v", err)
 	}
 	if _, _, err := s.EnqueuePromptDurable("queued two", 7); err != nil {

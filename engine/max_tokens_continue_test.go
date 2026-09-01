@@ -488,7 +488,7 @@ func TestMaxTokensContinuationDrainsQueuedPrompt(t *testing.T) {
 		Model:                  message.ModelRef{Provider: "test", Model: "m1"},
 		MaxTokensContinuations: 3,
 	})
-	if _, err := s.EnqueuePrompt("steer now"); err != nil {
+	if _, _, err := s.EnqueuePrompt("steer now", ""); err != nil {
 		t.Fatalf("EnqueuePrompt = %v", err)
 	}
 

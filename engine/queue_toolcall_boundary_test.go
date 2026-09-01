@@ -76,7 +76,7 @@ func TestMidTurnInjectionAtToolBoundary(t *testing.T) {
 
 	<-entered // the tool call is genuinely executing
 
-	if _, err := s.EnqueuePrompt("operator says hi mid-turn"); err != nil {
+	if _, _, err := s.EnqueuePrompt("operator says hi mid-turn", ""); err != nil {
 		t.Fatalf("EnqueuePrompt = %v", err)
 	}
 
@@ -170,7 +170,7 @@ func TestNoToolCallTurnLeavesQueueForTail(t *testing.T) {
 		System:    []string{"base"},
 	})
 
-	if _, err := s.EnqueuePrompt("still waiting"); err != nil {
+	if _, _, err := s.EnqueuePrompt("still waiting", ""); err != nil {
 		t.Fatal(err)
 	}
 

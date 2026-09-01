@@ -55,7 +55,7 @@ func TestGoalWorkerTurnInheritsMidTurnInjection(t *testing.T) {
 
 	<-entered // turn 1's tool call is genuinely executing
 
-	if _, err := s.EnqueuePrompt("operator mid worker tool"); err != nil {
+	if _, _, err := s.EnqueuePrompt("operator mid worker tool", ""); err != nil {
 		t.Fatalf("EnqueuePrompt = %v", err)
 	}
 	close(release)
