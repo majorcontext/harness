@@ -946,6 +946,28 @@ func TestClaudeCodeForwardSubagentTextAlwaysSet(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeDisallowsNativeSpawnTools proves runClaudeCodeTurn always
+// sends --disallowedTools naming every native Claude Code tool that spawns
+// a same-family subagent (Agent, Workflow). All subagent spawning in the
+// claude-code lane must go through harness's own cross-family "task" tool
+// (server/mcp_history.go, #223), never the CLI's native same-family
+// equivalent, so those tools are blocked at the argv level rather than
+// relying on the model to prefer one path over the other.
+func TestClaudeCodeDisallowsNativeSpawnTools(t *testing.T) {
+	s, logPath := claudeCodeTestSession(t, "normal")
+	if _, err := s.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	invocations := readInvocations(t, logPath)
+	got, ok := argvValueAfter(invocations[0], "--disallowedTools")
+	if !ok {
+		t.Fatalf("argv has no --disallowedTools: %v", invocations[0])
+	}
+	if want := "Agent,Workflow"; got != want {
+		t.Errorf("--disallowedTools = %q, want %q", got, want)
+	}
+}
+
 // TestClaudeCodeThinkingBlockDecodesToReasoningPart proves a "thinking"
 // content block — previously silently dropped (see claudeCodeContentBlock's
 // switch in claudeCodeAssistantMessage) — decodes into a message.Reasoning
